@@ -285,6 +285,7 @@ export default function Window({ id, title, icon: Icon, component, isMinimized, 
           initial={{ opacity: 0, scale: 0.95 }}
           animate={{ opacity: 1, scale: 1 }}
           exit={{ opacity: 0, scale: 0.95 }}
+          data-window-id={id}
           className={`window-container flex flex-col w-full h-full overflow-hidden shadow-2xl transition-all duration-200 ${isSnappedOrMax ? 'rounded-none border-0' : 'rounded-lg border'}`}
           style={{
             background: glassmorphism ? 'var(--window-bg)' : 'var(--bg-primary)',

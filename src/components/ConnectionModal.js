@@ -483,8 +483,8 @@ export default function ConnectionModal({ onClose, editConnection = null }) {
       onClose={onClose}
       zIndexClassName="z-[40000]"
       maxWidthClassName="max-w-5xl"
-      maxHeightClassName="max-h-[90vh]"
-      contentClassName="p-6"
+      maxHeightClassName="max-h-[85vh]"
+      contentClassName="p-6 overflow-y-auto custom-scrollbar"
       closeOnOverlayClick
       overlayClassName="bg-black/40 backdrop-blur-sm"
     >
@@ -922,8 +922,8 @@ export default function ConnectionModal({ onClose, editConnection = null }) {
       onClose={() => setIsUriModalOpen(false)}
       zIndexClassName="z-[45000]"
       maxWidthClassName="max-w-md"
-      maxHeightClassName="max-h-[80vh]"
-      contentClassName="p-6"
+      maxHeightClassName="max-h-[75vh]"
+      contentClassName="p-6 overflow-y-auto custom-scrollbar"
       closeOnOverlayClick
       overlayClassName="bg-black/50 backdrop-blur-sm"
     >

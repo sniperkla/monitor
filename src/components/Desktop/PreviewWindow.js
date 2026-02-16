@@ -5,6 +5,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { useState, useEffect, useRef } from 'react';
 import { X, Settings, Monitor, Maximize2, Minimize2, LayoutGrid, ChevronLeft, ChevronRight, Plus, Keyboard } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
+import { toPng, toSvg } from 'html-to-image';
 
 export default function PreviewWindow({ isOpen, onClose }) {
   const { state, focusWindow, closeWindow, toggleMinimize, toggleMaximize, switchDesktop, switchToNextDesktop, switchToPrevDesktop, saveSettings, setKeyboardShortcuts, dispatch, addDesktop, renameDesktop, removeDesktop, reorderDesktops, moveWindowToDesktop } = useOS();
@@ -12,15 +13,21 @@ export default function PreviewWindow({ isOpen, onClose }) {
   const { t } = useTranslation();
   const [isEditing, setIsEditing] = useState(false);
   const [editingWindow, setEditingWindow] = useState(null);
-  const [hoveredDesktop, setHoveredDesktop] = useState(null);
-  const [hoveredForCloseDesktop, setHoveredForCloseDesktop] = useState(null);
   const [draggedDesktopId, setDraggedDesktopId] = useState(null);
   const [dropDesktopId, setDropDesktopId] = useState(null);
   const [draggedWindow, setDraggedWindow] = useState(null); // { windowId, fromDesktopId }
   const [selectedWindowId, setSelectedWindowId] = useState(null);
+  const dragGhostRef = useRef(null);
+  const [isDragging, setIsDragging] = useState(false);
+  const windowCardRefs = useRef({});
+  const [windowThumbs, setWindowThumbs] = useState({});
+  const [isCapturing, setIsCapturing] = useState(false);
   const [renamingDesktopId, setRenamingDesktopId] = useState(null);
   const [renamingValue, setRenamingValue] = useState('');
-  const closeHoverTimerRef = useRef(null);
+  const [dragPosition, setDragPosition] = useState({ x: 0, y: 0 });
+  const [dragScale, setDragScale] = useState(1);
+  const [isCustomDragging, setIsCustomDragging] = useState(false);
+  const [customDragWindow, setCustomDragWindow] = useState(null);
   const [shortcuts, setShortcuts] = useState({
     previewWindow: 'Ctrl+Cmd+Up',
     prevDesktop: 'Ctrl+Cmd+Left',
@@ -128,6 +135,7 @@ export default function PreviewWindow({ isOpen, onClose }) {
 
   const handleDesktopDragStart = (e, desktopId) => {
     setDraggedDesktopId(desktopId);
+    setIsDragging(true);
     try {
       e.dataTransfer.effectAllowed = 'move';
       e.dataTransfer.setData('application/x-desktop-id', desktopId);
@@ -150,6 +158,7 @@ export default function PreviewWindow({ isOpen, onClose }) {
     setDraggedDesktopId(null);
     setDropDesktopId(null);
     setDraggedWindow(null);
+    setIsDragging(false);
   };
 
   const handleDesktopDragOver = (e, targetDesktopId) => {
@@ -160,25 +169,230 @@ export default function PreviewWindow({ isOpen, onClose }) {
     } catch {}
   };
 
-  const handleWindowDragStart = (e, windowId, fromDesktopId) => {
-    setDraggedWindow({ windowId, fromDesktopId });
+  const handleWindowMouseDown = (e, windowId, fromDesktopId) => {
+    e.preventDefault();
+    const card = windowCardRefs.current[windowId];
+    if (!card) return;
+    
+    const cardRect = card.getBoundingClientRect();
+    const offsetX = e.clientX - cardRect.left;
+    const offsetY = e.clientY - cardRect.top;
+    
+    setCustomDragWindow({ windowId, fromDesktopId });
     setSelectedWindowId(windowId);
-    try {
-      e.dataTransfer.effectAllowed = 'move';
-      e.dataTransfer.setData('application/x-window-id', windowId);
-      e.dataTransfer.setData('application/x-window-from-desktop', fromDesktopId);
-    } catch {}
+    setIsCustomDragging(true);
+    
+    // Create drag ghost
+    const ghost = card.cloneNode(true);
+    ghost.style.position = 'fixed';
+    ghost.style.pointerEvents = 'none';
+    ghost.style.zIndex = '9999';
+    ghost.style.opacity = '0.8';
+    ghost.style.transition = 'transform 0.2s ease-out';
+    document.body.appendChild(ghost);
+    dragGhostRef.current = ghost;
+    
+    const handleMouseMove = (moveEvent) => {
+      const x = moveEvent.clientX - offsetX;
+      const y = moveEvent.clientY - offsetY;
+      
+      // Update ghost position
+      if (dragGhostRef.current) {
+        dragGhostRef.current.style.left = `${x}px`;
+        dragGhostRef.current.style.top = `${y}px`;
+      }
+      
+      // Calculate distance to nearest desktop
+      const desktops = document.querySelectorAll('[data-desktop-id]');
+      
+      if (desktops.length === 0) {
+        setDragScale(1);
+        return;
+      }
+      
+      let minDistance = Infinity;
+      
+      desktops.forEach(desktop => {
+        const rect = desktop.getBoundingClientRect();
+        const centerX = rect.left + rect.width / 2;
+        const centerY = rect.top + rect.height / 2;
+        const distance = Math.sqrt(Math.pow(moveEvent.clientX - centerX, 2) + Math.pow(moveEvent.clientY - centerY, 2));
+        
+        if (distance < minDistance) {
+          minDistance = distance;
+        }
+      });
+      
+      // Scale based on distance to desktop (closer = smaller)
+      const maxDistance = 300;
+      const scale = Math.max(0.3, Math.min(1, minDistance / maxDistance));
+      setDragScale(scale);
+      
+      // Apply scale to ghost
+      if (dragGhostRef.current) {
+        dragGhostRef.current.style.transform = `scale(${scale})`;
+      }
+    };
+    
+    const handleMouseUp = (upEvent) => {
+      // Find which desktop we're over
+      const desktops = document.querySelectorAll('[data-desktop-id]');
+      let targetDesktop = null;
+      
+      desktops.forEach(desktop => {
+        const rect = desktop.getBoundingClientRect();
+        if (upEvent.clientX >= rect.left && upEvent.clientX <= rect.right &&
+            upEvent.clientY >= rect.top && upEvent.clientY <= rect.bottom) {
+          targetDesktop = desktop.getAttribute('data-desktop-id');
+        }
+      });
+      
+      // Move window if dropped on a different desktop
+      if (targetDesktop && targetDesktop !== fromDesktopId) {
+        moveWindowToDesktop(windowId, fromDesktopId, targetDesktop);
+      }
+      
+      // Clean up
+      if (dragGhostRef.current) {
+        document.body.removeChild(dragGhostRef.current);
+        dragGhostRef.current = null;
+      }
+      setIsCustomDragging(false);
+      setCustomDragWindow(null);
+      setDragScale(1);
+      document.removeEventListener('mousemove', handleMouseMove);
+      document.removeEventListener('mouseup', handleMouseUp);
+    };
+    
+    document.addEventListener('mousemove', handleMouseMove);
+    document.addEventListener('mouseup', handleMouseUp);
   };
+
+  // Clean up drag ghost
+  useEffect(() => {
+    if (!isCustomDragging && dragGhostRef.current) {
+      document.body.removeChild(dragGhostRef.current);
+      dragGhostRef.current = null;
+      setDragScale(1);
+    }
+  }, [isCustomDragging]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+
+    const handleDragEnd = () => {
+      setIsDragging(false);
+    };
+
+    window.addEventListener('dragend', handleDragEnd);
+    window.addEventListener('drop', handleDragEnd);
+    return () => {
+      window.removeEventListener('dragend', handleDragEnd);
+      window.removeEventListener('drop', handleDragEnd);
+    };
+  }, [isOpen]);
 
   useEffect(() => {
     if (!isOpen) {
       setSelectedWindowId(null);
+      return;
     }
+
+    // Prevent body scroll when preview is open
+    const originalStyle = window.getComputedStyle(document.body);
+    const originalOverflow = originalStyle.overflow;
+    const originalPaddingRight = originalStyle.paddingRight;
+    
+    const scrollbarWidth = window.innerWidth - document.documentElement.clientWidth;
+    
+    document.body.style.overflow = 'hidden';
+    document.body.style.paddingRight = `${scrollbarWidth}px`;
+    
+    return () => {
+      // Restore original styles
+      document.body.style.overflow = originalOverflow;
+      document.body.style.paddingRight = originalPaddingRight;
+    };
   }, [isOpen]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const list = windowsByDesktop[currentDesktopId] || [];
+
+    let cancelled = false;
+    const run = async () => {
+      setIsCapturing(true);
+      try {
+        if (!Array.isArray(list) || list.length === 0) return;
+        const entries = await Promise.all(
+          list.map(async (w) => {
+            if (!w?.id) return [null, null];
+            const node = document.querySelector(`[data-window-id="${w.id}"]`);
+            if (!node) return [w.id, null];
+
+            try {
+              // Try toPng first with minimal options
+              let dataUrl = null;
+              try {
+                dataUrl = await toPng(node, {
+                  cacheBust: true,
+                  pixelRatio: 0.3,
+                  backgroundColor: 'transparent',
+                  skipAutoScale: true,
+                  skipFonts: true,
+                });
+              } catch (pngErr) {
+                // Fallback to toSvg if toPng fails
+                try {
+                  const svgString = await toSvg(node, {
+                    backgroundColor: 'transparent',
+                    style: {
+                      transform: 'scale(0.3)',
+                      transformOrigin: 'top left'
+                    }
+                  });
+                  // Convert SVG to data URL
+                  const blob = new Blob([svgString], { type: 'image/svg+xml' });
+                  dataUrl = URL.createObjectURL(blob);
+                } catch (svgErr) {
+                  throw svgErr;
+                }
+              }
+              return [w.id, dataUrl];
+            } catch (err) {
+              console.warn('Failed to capture window preview:', err);
+              return [w.id, null];
+            }
+          })
+        );
+
+        if (!cancelled) {
+          setWindowThumbs((prev) => {
+            const next = { ...prev };
+            for (const [id, url] of entries) {
+              if (!id) continue;
+              if (url) next[id] = url;
+            }
+            return next;
+          });
+        }
+      } finally {
+        if (!cancelled) setIsCapturing(false);
+      }
+    };
+
+    // Let layout settle (avoid capturing mid-animation)
+    const t = setTimeout(run, 250);
+    return () => {
+      cancelled = true;
+      clearTimeout(t);
+    };
+  }, [isOpen, currentDesktopId, windowsByDesktop]);
 
   if (!isOpen) return null;
 
   const currentDesktopWindows = windowsByDesktop[currentDesktopId] || [];
+  const wallpaper = state.wallpaper;
 
   return (
     <AnimatePresence>
@@ -188,72 +402,104 @@ export default function PreviewWindow({ isOpen, onClose }) {
           animate={{ opacity: 1, y: 0 }}
           exit={{ opacity: 0, y: -20 }}
           transition={{ type: 'spring', damping: 25, stiffness: 300 }}
-          className="fixed top-0 left-0 right-0 z-[99999] bg-[var(--window-bg)] border-b border-[var(--border-color)] shadow-2xl"
+          className="fixed inset-0 z-[99999] bg-[var(--window-bg)]"
           style={{
-            boxShadow: '0 10px 25px -5px rgba(0,0,0,0.3), 0 0 0 1px rgba(255,255,255,0.1)',
+            boxShadow: '0 25px 60px rgba(0,0,0,0.55)',
+          }}
+          onMouseDown={(e) => {
+            // Clicking blank space should collapse preview window
+            if (e.target === e.currentTarget) {
+              if (!isDragging) onClose();
+            }
           }}
         >
-          {/* Close Button */}
-          <div className="absolute top-2 right-2 z-10">
-            <button
-              onClick={handleClose}
-              className="w-6 h-6 rounded-full bg-[#ff5f57] border border-[#e0443e]/30 flex items-center justify-center hover:bg-[#ff6b6b] transition-colors"
-              title="Close Preview and Combine Apps"
-            >
-              <X size={12} className="text-white" />
-            </button>
-          </div>
+          {/* Backdrop */}
+          <div
+            className="absolute inset-0"
+            style={{
+              backgroundImage: wallpaper ? `url(${wallpaper})` : undefined,
+              backgroundSize: 'cover',
+              backgroundPosition: 'center',
+            }}
+          />
+          <div className="absolute inset-0 bg-black/55" />
+          <div className="absolute inset-0 backdrop-blur-2xl" />
 
-          {/* Desktop Bar */}
-          <div className="flex items-center gap-4 p-4 bg-[var(--bg-tertiary)]">
-            <div className="flex items-center gap-3 flex-1 justify-center">
-              {desktops.map((desktop, index) => {
-                const desktopWindows = windowsByDesktop[desktop.id] || [];
-                const isActive = desktop.id === currentDesktopId;
-                const isHovered = hoveredDesktop === desktop.id;
-                const canRemove = desktops.length > 1;
-                const showClose = canRemove && hoveredForCloseDesktop === desktop.id;
-                const isDropTarget = dropDesktopId === desktop.id;
-                
-                return (
-                  <motion.div
-                    key={desktop.id}
-                    className="relative cursor-pointer"
-                    layout
-                    draggable={renamingDesktopId !== desktop.id}
-                    onDragStart={(e) => handleDesktopDragStart(e, desktop.id)}
-                    onDragEnd={() => {
-                      setDraggedDesktopId(null);
-                      setDropDesktopId(null);
-                    }}
-                    onDragOver={(e) => handleDesktopDragOver(e, desktop.id)}
-                    onDrop={(e) => handleDesktopDrop(e, desktop.id)}
-                    onHoverStart={() => {
-                      setHoveredDesktop(desktop.id);
-                      if (closeHoverTimerRef.current) clearTimeout(closeHoverTimerRef.current);
-                      closeHoverTimerRef.current = setTimeout(() => {
-                        setHoveredForCloseDesktop(desktop.id);
-                      }, 500);
-                    }}
-                    onHoverEnd={() => {
-                      setHoveredDesktop(null);
-                      setHoveredForCloseDesktop(null);
-                      if (closeHoverTimerRef.current) {
-                        clearTimeout(closeHoverTimerRef.current);
-                        closeHoverTimerRef.current = null;
-                      }
-                    }}
-                    onClick={() => switchDesktop(desktop.id)}
-                    onDoubleClick={(e) => {
-                      e.preventDefault();
-                      e.stopPropagation();
-                      beginRenameDesktop(desktop);
-                    }}
-                    initial={{ scale: 0.8, opacity: 0 }}
-                    animate={{ scale: 1, opacity: 1 }}
-                    whileHover={{ scale: 1.05 }}
-                    transition={{ type: "spring", damping: 25, stiffness: 300 }}
-                  >
+          <div
+            className="relative h-full w-full flex flex-col"
+            onMouseDown={(e) => {
+              // Prevent clicks inside content from closing the preview
+              e.stopPropagation();
+            }}
+          >
+            {/* Drag ghost for HTML5 DnD */}
+            <div
+              ref={dragGhostRef}
+              style={{
+                position: 'fixed',
+                top: -1000,
+                left: -1000,
+                width: 160,
+                height: 96,
+                borderRadius: 14,
+                background: 'rgba(255,255,255,0.14)',
+                border: '1px solid rgba(255,255,255,0.22)',
+                backdropFilter: 'blur(10px)',
+                WebkitBackdropFilter: 'blur(10px)',
+                boxShadow: '0 18px 38px rgba(0,0,0,0.45)',
+              }}
+            />
+
+            {/* Close Button */}
+            <div className="absolute top-2 right-2 z-10">
+              <button
+                onClick={handleClose}
+                className="w-6 h-6 rounded-full bg-[#ff5f57] border border-[#e0443e]/30 flex items-center justify-center hover:bg-[#ff6b6b] transition-colors"
+                title="Close Preview and Combine Apps"
+              >
+                <X size={12} className="text-white" />
+              </button>
+            </div>
+
+            {/* Desktop Bar */}
+            <div className="flex items-center gap-4 px-8 py-6 bg-black/20 border-b border-white/10">
+              <div className="flex items-center gap-3 flex-1 justify-center">
+                {desktops.map((desktop, index) => {
+                  const desktopWindows = windowsByDesktop[desktop.id] || [];
+                  const isActive = desktop.id === currentDesktopId;
+                  const canRemove = desktops.length > 1;
+                  const showClose = canRemove;
+                  const isDropTarget = dropDesktopId === desktop.id;
+                  
+                  return (
+                    <motion.div
+                      key={desktop.id}
+                      className="relative cursor-pointer"
+                      layout
+                      draggable={renamingDesktopId !== desktop.id}
+                      data-desktop-id={desktop.id}
+                      onDragStart={(e) => handleDesktopDragStart(e, desktop.id)}
+                      onDragEnd={() => {
+                        setDraggedDesktopId(null);
+                        setDropDesktopId(null);
+                      }}
+                      onDragOver={(e) => {
+                        handleDesktopDragOver(e, desktop.id);
+                      }}
+                      onDrop={(e) => {
+                        handleDesktopDrop(e, desktop.id);
+                      }}
+                      onClick={() => switchDesktop(desktop.id)}
+                      onDoubleClick={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        beginRenameDesktop(desktop);
+                      }}
+                      initial={{ scale: 0.8, opacity: 0 }}
+                      animate={{ scale: 1, opacity: 1 }}
+                      whileHover={{ scale: 1.05 }}
+                      transition={{ type: "spring", damping: 25, stiffness: 300 }}
+                    >
                     {showClose && (
                       <button
                         type="button"
@@ -269,7 +515,7 @@ export default function PreviewWindow({ isOpen, onClose }) {
                       </button>
                     )}
                     <div
-                      className={`w-32 h-24 rounded-xl border-2 transition-all flex flex-col items-center justify-center ${
+                      className={`w-40 h-28 rounded-2xl border-2 transition-all flex flex-col items-center justify-center ${
                         isActive
                           ? 'bg-blue-500/20 border-blue-500 text-blue-400 shadow-lg'
                           : 'bg-[var(--bg-primary)] border-[var(--border-color)] text-[var(--text-secondary)] hover:border-[var(--border-hover)] hover:shadow-lg'
@@ -308,63 +554,14 @@ export default function PreviewWindow({ isOpen, onClose }) {
                       </div>
                     </div>
                     
-                    {/* Expandable Window Preview (drag a window to another desktop) */}
-                    <AnimatePresence>
-                      {isHovered && (
-                        <motion.div
-                          initial={{ opacity: 0, y: -10, scale: 0.95 }}
-                          animate={{ opacity: 1, y: 0, scale: 1 }}
-                          exit={{ opacity: 0, y: -10, scale: 0.95 }}
-                          transition={{ duration: 0.2 }}
-                          className="absolute top-full left-1/2 transform -translate-x-1/2 mt-4 z-10"
-                        >
-                          <div className="bg-[var(--window-bg)] border border-[var(--border-color)] rounded-xl shadow-2xl p-4 min-w-[400px] max-w-[500px]">
-                            <div className="text-sm font-medium text-[var(--text-primary)] mb-3 text-center">
-                              {desktop.name}
-                            </div>
-                            {desktopWindows.length === 0 ? (
-                              <div className="text-center py-8 text-[var(--text-muted)]">
-                                <Monitor size={32} className="mx-auto mb-3 opacity-50" />
-                                <p className="text-sm">No windows</p>
-                              </div>
-                            ) : (
-                              <div className="grid grid-cols-2 gap-2">
-                                {desktopWindows.slice(0, 4).map(win => (
-                                  <div
-                                    key={win.id}
-                                    className="bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-lg p-2 cursor-pointer hover:bg-[var(--bg-card-hover)] transition-colors"
-                                    draggable
-                                    onDragStart={(e) => handleWindowDragStart(e, win.id, desktop.id)}
-                                    onClick={() => {
-                                      switchDesktop(desktop.id);
-                                      focusWindow(win.id);
-                                      onClose();
-                                    }}
-                                  >
-                                    <div className="text-xs font-medium text-[var(--text-primary)] truncate">
-                                      {win.title}
-                                    </div>
-                                  </div>
-                                ))}
-                                {desktopWindows.length > 4 && (
-                                  <div className="text-xs text-[var(--text-muted)] col-span-2 text-center py-2">
-                                    +{desktopWindows.length - 4} more windows
-                                  </div>
-                                )}
-                              </div>
-                            )}
-                          </div>
-                        </motion.div>
-                      )}
-                    </AnimatePresence>
                   </motion.div>
                 );
-              })}
+                })}
               
               {/* Add Desktop Button */}
               <motion.button
                 onClick={addDesktop}
-                className="w-32 h-24 rounded-xl border-2 border-dashed border-[var(--border-color)] bg-[var(--bg-primary)] hover:bg-[var(--bg-card-hover)] hover:border-[var(--border-hover)] transition-all flex flex-col items-center justify-center text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
+                className="w-40 h-28 rounded-2xl border-2 border-dashed border-white/20 bg-white/5 hover:bg-white/10 hover:border-white/30 transition-all flex flex-col items-center justify-center text-white/70 hover:text-white"
                 initial={{ scale: 0.8, opacity: 0 }}
                 animate={{ scale: 1, opacity: 1 }}
                 whileHover={{ scale: 1.05 }}
@@ -376,55 +573,140 @@ export default function PreviewWindow({ isOpen, onClose }) {
                   Add Desktop
                 </div>
               </motion.button>
+              </div>
             </div>
-          </div>
 
-          {/* Compact Window Thumbnails (current desktop) */}
-          <div className="px-6 pb-5 pt-2 bg-[var(--window-bg)]">
-            {currentDesktopWindows.length === 0 ? (
-              <div className="text-center py-6 text-[var(--text-muted)] text-sm">
-                No running apps
-              </div>
-            ) : (
-              <div className="flex justify-center">
-                <div className="grid grid-cols-6 gap-3 max-w-[880px] w-full">
-                  {currentDesktopWindows.map((win) => {
-                    const isSelected = selectedWindowId === win.id;
-                    return (
-                      <div
-                        key={win.id}
-                        draggable
-                        onDragStart={(e) => handleWindowDragStart(e, win.id, currentDesktopId)}
-                        onClick={(e) => {
-                          e.preventDefault();
-                          e.stopPropagation();
-                          setSelectedWindowId(win.id);
-                        }}
-                        className={`relative rounded-lg border cursor-grab active:cursor-grabbing select-none transition-all ${
-                          isSelected
-                            ? 'border-blue-500 shadow-[0_0_0_2px_rgba(59,130,246,0.35)]'
-                            : 'border-[var(--border-color)] hover:border-[var(--border-hover)]'
-                        }`}
-                        style={{
-                          background: 'var(--bg-secondary)',
-                        }}
-                        title={win.title}
-                      >
-                        <div className="h-16 rounded-t-lg bg-[var(--bg-primary)]/40" />
-                        <div className="px-2 py-2">
-                          <div className="text-xs font-medium text-[var(--text-primary)] truncate">
-                            {win.title}
-                          </div>
-                          <div className="text-[10px] text-[var(--text-muted)] truncate">
-                            {win.appType || ''}
-                          </div>
-                        </div>
-                      </div>
-                    );
-                  })}
+            {/* Mission Control Window Previews (current desktop) */}
+            <div className="flex-1 overflow-auto px-10 py-10">
+              {currentDesktopWindows.length === 0 ? (
+                <div
+                  className="text-center py-10 text-[var(--text-muted)] text-sm cursor-default"
+                  onMouseDown={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    if (!isDragging) onClose();
+                  }}
+                >
+                  No running apps
                 </div>
-              </div>
-            )}
+              ) : (
+                <motion.div layout className="mx-auto max-w-[1550px] relative">
+                  <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-10 relative">
+                    {currentDesktopWindows.map((win) => {
+                      const isSelected = selectedWindowId === win.id;
+                      return (
+                        <motion.div
+                          layout
+                          key={win.id}
+                          ref={(el) => {
+                            if (el) windowCardRefs.current[win.id] = el;
+                            else delete windowCardRefs.current[win.id];
+                          }}
+                          onMouseDown={(e) => handleWindowMouseDown(e, win.id, currentDesktopId)}
+                          onClick={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            setSelectedWindowId(win.id);
+                          }}
+                          onDoubleClick={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            focusWindow(win.id);
+                            onClose();
+                          }}
+                          className={`relative rounded-2xl border cursor-grab active:cursor-grabbing select-none transition-all overflow-hidden ${
+                            isSelected
+                              ? 'border-blue-500 shadow-[0_0_0_3px_rgba(59,130,246,0.35)]'
+                              : 'border-[var(--border-color)] hover:border-[var(--border-hover)]'
+                          }`}
+                          style={{
+                            background: 'var(--bg-secondary)',
+                            boxShadow: isSelected
+                              ? '0 14px 35px rgba(0,0,0,0.35)'
+                              : '0 10px 28px rgba(0,0,0,0.28)',
+                            opacity: customDragWindow?.windowId === win.id ? 0.3 : 1,
+                          }}
+                          title={win.title}
+                        >
+                          {/* Title Bar */}
+                          <div className="flex items-center justify-between px-3 py-2 bg-[var(--bg-tertiary)] border-b border-[var(--border-color)]">
+                            <div className="flex items-center gap-2 min-w-0">
+                              {win.icon ? (
+                                <win.icon size={14} className="text-[var(--text-secondary)]" />
+                              ) : (
+                                <Monitor size={14} className="text-[var(--text-secondary)]" />
+                              )}
+                              <div className="text-xs font-medium text-[var(--text-primary)] truncate">
+                                {win.title}
+                              </div>
+                            </div>
+                            <div className="text-[10px] text-[var(--text-muted)] ml-2 whitespace-nowrap">
+                              {win.appType || ''}
+                            </div>
+                          </div>
+
+                          {/* Preview Surface */}
+                          <div
+                            className="relative h-60 md:h-64 overflow-hidden"
+                            style={{
+                              background: 'rgba(255,255,255,0.02)',
+                            }}
+                          >
+                            {windowThumbs[win.id] ? (
+                              <img
+                                src={windowThumbs[win.id]}
+                                alt=""
+                                className="absolute inset-0 w-full h-full object-cover"
+                                draggable={false}
+                              />
+                            ) : (
+                              <>
+                                <div
+                                  className="absolute inset-0"
+                                  style={{
+                                    backgroundImage: wallpaper ? `url(${wallpaper})` : undefined,
+                                    backgroundSize: 'cover',
+                                    backgroundPosition: 'center',
+                                  }}
+                                />
+                                <div className="absolute inset-0 bg-black/35" />
+                                <div className="absolute inset-0 backdrop-blur-md" />
+                              </>
+                            )}
+
+                            {/* App Icon Badge */}
+                            <div className="absolute top-3 left-3">
+                              <div className="w-8 h-8 rounded-lg bg-white/10 border border-white/15 flex items-center justify-center">
+                                {win.icon ? (
+                                  <win.icon size={16} className="text-white/90" />
+                                ) : (
+                                  <Monitor size={16} className="text-white/90" />
+                                )}
+                              </div>
+                            </div>
+
+                            {!windowThumbs[win.id] && (
+                              <div className="absolute left-4 right-4 bottom-4">
+                                <div className="space-y-2">
+                                  <div className="h-2 rounded bg-white/20 w-3/4" />
+                                  <div className="h-2 rounded bg-white/15 w-5/6" />
+                                  <div className="h-2 rounded bg-white/10 w-2/3" />
+                                </div>
+                              </div>
+                            )}
+
+                            {/* Selected glow */}
+                            {isSelected && (
+                              <div className="absolute inset-0 ring-2 ring-blue-500/60" />
+                            )}
+                          </div>
+                        </motion.div>
+                      );
+                    })}
+                  </div>
+                </motion.div>
+              )}
+            </div>
           </div>
         </motion.div>
       )}

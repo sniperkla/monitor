@@ -2,6 +2,7 @@
 
 import { X } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
+import { useEffect } from 'react';
 
 function TrafficLightButtons({ onClose }) {
   return (
@@ -50,6 +51,29 @@ export default function MacOSModalWindow({
   const resolvedOverlayClassName = overlayClassName?.trim()
     ? overlayClassName
     : 'bg-black/40';
+
+  // Prevent body scroll when modal is open
+  useEffect(() => {
+    if (isOpen) {
+      // Save current body style
+      const originalStyle = window.getComputedStyle(document.body);
+      const originalOverflow = originalStyle.overflow;
+      const originalPaddingRight = originalStyle.paddingRight;
+      
+      // Calculate scrollbar width to prevent jump
+      const scrollbarWidth = window.innerWidth - document.documentElement.clientWidth;
+      
+      // Prevent scroll and compensate for scrollbar
+      document.body.style.overflow = 'hidden';
+      document.body.style.paddingRight = `${scrollbarWidth}px`;
+      
+      return () => {
+        // Restore original styles
+        document.body.style.overflow = originalOverflow;
+        document.body.style.paddingRight = originalPaddingRight;
+      };
+    }
+  }, [isOpen]);
 
   return (
     <AnimatePresence>
