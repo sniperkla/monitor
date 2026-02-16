@@ -9,14 +9,17 @@ import {
   Copy, Scissors, Clipboard
 } from 'lucide-react';
 import io from 'socket.io-client';
-import { toast } from 'react-hot-toast';
+import { useOS } from '@/context/OSContext';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useTranslation } from 'react-i18next';
+
+import MacOSModalWindow from '@/components/MacOSModalWindow';
 
 import { useApp } from '@/context/AppContext';
 
 export default function FileManager({ connectionId, connectionName, connection }) {
   const { state: appState, dispatch: appDispatch } = useApp();
+  const { addNotification, removeNotification, showConfirm, showPrompt } = useOS();
   const { t } = useTranslation();
   const { clipboard } = appState;
   const setClipboard = (payload) => appDispatch({ type: 'SET_CLIPBOARD', payload });
@@ -34,14 +37,14 @@ export default function FileManager({ connectionId, connectionName, connection }
   
   // Editor State
   const [editor, setEditor] = useState({ visible: false, file: null, content: '', saving: false });
-  // Create Modal State
-  const [createModal, setCreateModal] = useState({ visible: false, type: 'file', name: '' }); 
-  // Delete Confirmation Modal State
-  const [deleteModal, setDeleteModal] = useState({ visible: false, file: null });
+  // Delete Confirmation and Create modals are now handled by global OS modal system
 
   // Transfer Progress State
-  const [transfer, setTransfer] = useState(null); // { filename, progress, action }
+  const [transfer, setTransfer] = useState(null); // { filename, progress, action, waiting, countdown }
   const [isDragging, setIsDragging] = useState(false);
+  const [transferCountdown, setTransferCountdown] = useState(0);
+  const lastDownloadRef = useRef(null); // { file, offset }
+  const transferRef = useRef(null); // Keep a ref of transfer for loop cancellation
 
   // Ref to track latest currentPath and active toast
   const currentPathRef = useRef(currentPath);
@@ -112,17 +115,15 @@ export default function FileManager({ connectionId, connectionName, connection }
 
     newSocket.on('sftp:file_content', ({ path, content }) => {
        setEditor(prev => ({ ...prev, content, visible: true, saving: false }));
-       toast.dismiss(); 
+       if (toastRef.current) removeNotification(toastRef.current);
     });
 
     newSocket.on('sftp:action_success', ({ action, path }) => {
        if (toastRef.current) {
-         toast.dismiss(toastRef.current);
+         removeNotification(toastRef.current);
          toastRef.current = null;
-       } else {
-         toast.dismiss();
        }
-       toast.success(t('files.actions.success', { action }));
+       addNotification({ title: 'Success', message: t('files.actions.success', { action }), type: 'success' });
        setTransfer(null);
        // Always re-fetch the current file list using the ref (latest path)
        newSocket.emit('sftp:list', currentPathRef.current || '.');
@@ -132,7 +133,7 @@ export default function FileManager({ connectionId, connectionName, connection }
     });
 
     newSocket.on('sftp:progress', (data) => {
-      setTransfer(data);
+      setTransfer(prev => ({ ...prev, ...data }));
     });
 
     newSocket.on('sftp:download_start', ({ filename, size }) => {
@@ -140,9 +141,9 @@ export default function FileManager({ connectionId, connectionName, connection }
        setTransfer({ filename, progress: 0, action: 'download' });
     });
 
-    newSocket.on('sftp:download_chunk', ({ filename, chunk, progress }) => {
+    newSocket.on('sftp:download_chunk', ({ filename, chunk, progress, offset }) => {
        downloadBufferRef.current.push(chunk);
-       setTransfer({ filename, progress, action: 'download' });
+       setTransfer({ filename, progress, action: "download", waiting: false }); if (lastDownloadRef.current) lastDownloadRef.current.offset = offset; 
     });
 
     newSocket.on('sftp:download_done', ({ filename }) => {
@@ -155,20 +156,24 @@ export default function FileManager({ connectionId, connectionName, connection }
        window.URL.revokeObjectURL(url);
        downloadBufferRef.current = [];
        setTransfer(null);
-       toast.success(`Downloaded ${filename}`);
+       addNotification({ title: 'Download Complete', message: `Downloaded ${filename}`, type: 'success' });
     });
 
     newSocket.on('sftp:error', (err) => {
-      if (toastRef.current) {
-        toast.dismiss(toastRef.current);
-        toastRef.current = null;
-      } else {
-        toast.dismiss();
+      const msg = err?.message || (typeof err === 'string' ? err : JSON.stringify(err));
+      
+      // Handle Rate Limit specifically
+      if (err?.resetIn) {
+         const seconds = Math.ceil(err.resetIn / 1000);
+         setTransferCountdown(seconds);
+         setTransfer(prev => prev ? { ...prev, waiting: true, countdown: seconds } : null);
+         addNotification({ title: 'Rate Limited', message: `Pausing transfer. Retrying in ${seconds}s...`, type: 'warning' });
+         return;
       }
+
       setTransfer(null);
       console.error('❌ SFTP Error:', err);
-      const msg = err?.message || (typeof err === 'string' ? err : JSON.stringify(err));
-      toast.error(msg || 'SFTP Error');
+      addNotification({ title: 'SFTP Error', message: msg || 'SFTP Error', type: 'error' });
       if (status === 'connecting' || status === 'ssh_connecting') {
         setStatus('error');
         setError(msg);
@@ -210,6 +215,27 @@ export default function FileManager({ connectionId, connectionName, connection }
     
     return () => clearInterval(interval);
   }, [status, socket]);
+  
+  // Transfer Retry Countdown
+  useEffect(() => {
+    let timer;
+    if (transferCountdown > 0) {
+      timer = setInterval(() => {
+        setTransferCountdown(prev => {
+          if (prev <= 1) {
+            clearInterval(timer);
+            // Trigger Download Retry if needed
+            if (transfer?.action === 'download' && lastDownloadRef.current) {
+               handleDownload(lastDownloadRef.current.file, lastDownloadRef.current.offset);
+            }
+            return 0;
+          }
+          return prev - 1;
+        });
+      }, 1000);
+    }
+    return () => clearInterval(timer);
+  }, [transferCountdown]);
 
   // 2. Refresh on Window Focus (When user clicks back into the tab)
   useEffect(() => {
@@ -286,48 +312,115 @@ export default function FileManager({ connectionId, connectionName, connection }
     });
   };
 
-  const handleFileUpload = async (e) => {
-    const file = e.target.files[0];
+  const handleFileUpload = async (e, specificFile = null, resumeOffset = 0) => {
+    const file = specificFile || e?.target?.files[0];
     if (!file || !socket) return;
 
     const path = currentPath === '.' ? file.name : `${currentPath}/${file.name}`;
-    setTransfer({ filename: file.name, progress: 0, action: 'upload' });
+    const transferObj = { filename: file.name, progress: 0, action: 'upload', waiting: false };
+    setTransfer(transferObj);
+    transferRef.current = transferObj;
     
-    socket.emit('sftp:upload', { filename: file.name, path, size: file.size });
+    // Request start
+    socket.emit('sftp:upload', { filename: file.name, path, size: file.size, offset: resumeOffset });
 
-    // Chunk size: 64KB for optimal streaming over socket
-    // Wait for server to be ready (Handshake)
-    await new Promise(resolve => {
-      const handler = ({ filename }) => {
-        if (filename === file.name) {
+    // Wait for server handshake
+    const startData = await new Promise(resolve => {
+      const handler = (data) => {
+        if (data.filename === file.name) {
           socket.off('sftp:can_upload', handler);
-          resolve();
+          resolve(data);
         }
       };
       socket.on('sftp:can_upload', handler);
-      // Fallback in case event is missed (shouldn't happen with correct order but safe)
-      setTimeout(() => { socket.off('sftp:can_upload', handler); resolve(); }, 5000);
+      setTimeout(() => { socket.off('sftp:can_upload', handler); resolve({ offset: resumeOffset }); }, 5000);
     });
 
-    const chunkSize = 64 * 1024;
-    let offset = 0;
+    const chunkSize = 128 * 1024; // 128KB chunks
+    let offset = startData.offset || resumeOffset;
 
-    while (offset < file.size) {
-      const chunk = file.slice(offset, offset + chunkSize);
-      const buffer = await chunk.arrayBuffer();
-      socket.emit(`sftp:upload_chunk:${file.name}`, buffer);
-      offset += chunkSize;
+    try {
+        while (offset < file.size) {
+          // If transfer was closed/cancelled, stop the loop
+          if (!transferRef.current) break;
+
+          // If we are rate limited, wait for the countdown
+          if (transferCountdown > 0) {
+              await new Promise(r => {
+                  const check = setInterval(() => {
+                      if (transferCountdown === 0) {
+                          clearInterval(check);
+                          r();
+                      }
+                  }, 500);
+              });
+              // After waiting, we need to RE-START the upload session from current offset
+              socket.emit('sftp:upload', { filename: file.name, path, size: file.size, offset });
+              await new Promise(r => socket.once('sftp:can_upload', r));
+              setTransfer(prev => ({ ...prev, waiting: false, countdown: 0 }));
+          }
+
+          const chunk = file.slice(offset, offset + chunkSize);
+          const buffer = await chunk.arrayBuffer();
+          
+          // Send chunk and wait for ACK (Ensures server keeps up and allows pausing)
+          const ack = new Promise((resolve, reject) => {
+             const handler = (data) => {
+                socket.off(`sftp:upload_ack:${file.name}`, handler);
+                socket.off('sftp:error', errHandler);
+                resolve(data);
+             };
+             const errHandler = (err) => {
+                if (err.resetIn) { // Just a rate limit, don't reject the whole transfer
+                   socket.off(`sftp:upload_ack:${file.name}`, handler);
+                   socket.off('sftp:error', errHandler);
+                   resolve({ rateLimited: true });
+                } else {
+                   socket.off(`sftp:upload_ack:${file.name}`, handler);
+                   socket.off('sftp:error', errHandler);
+                   reject(err);
+                }
+             };
+             socket.on(`sftp:upload_ack:${file.name}`, handler);
+             socket.on('sftp:error', errHandler);
+          });
+
+          socket.emit(`sftp:upload_chunk:${file.name}`, buffer);
+          
+          const ackResult = await ack;
+          if (ackResult.rateLimited) {
+             // Loop will pick up transferCountdown logic on next iteration
+             continue; 
+          }
+
+          offset += chunkSize;
+          setTransfer(prev => ({ 
+            ...prev, 
+            progress: Math.round((offset / file.size) * 100),
+            waiting: false
+          }));
+        }
+
+        socket.emit(`sftp:upload_done:${file.name}`);
+        if (e) e.target.value = null; // Reset input if it was from event
+    } catch (err) {
+        console.error("Upload Loop Error:", err);
+        setTransfer(null);
     }
-
-    socket.emit(`sftp:upload_done:${file.name}`);
-    e.target.value = null; // Reset input
   };
 
-  const handleDownload = (file) => {
+  const handleDownload = (file, offset = 0) => {
      if (!socket) return;
      const path = currentPath === '.' ? file.filename : `${currentPath}/${file.filename}`;
-     toast.loading(`Preparing download for ${file.filename}...`);
-     socket.emit('sftp:download', path);
+     lastDownloadRef.current = { file, offset };
+     
+     toastRef.current = addNotification({ 
+        title: offset > 0 ? 'Resuming Download' : 'Downloading', 
+        message: `Preparing download for ${file.filename}...`, 
+        type: 'loading', 
+        duration: 0 
+     });
+     socket.emit('sftp:download', { filePath: path, offset });
   };
 
   const handleDragOver = (e) => {
@@ -366,7 +459,7 @@ export default function FileManager({ connectionId, connectionName, connection }
             ? dragData.filename 
             : `${currentPath}/${dragData.filename}`;
           
-          toastRef.current = toast.loading(`Transferring ${dragData.filename} from ${dragData.connectionName || 'source'}...`);
+          toastRef.current = addNotification({ title: 'Transferring', message: `Transferring ${dragData.filename} from ${dragData.connectionName || 'source'}...`, type: 'loading', duration: 0 });
           socket.emit('sftp:cross_server_transfer', {
             srcConnId: dragData.connectionId,
             srcPath: dragData.filePath,
@@ -381,7 +474,7 @@ export default function FileManager({ connectionId, connectionName, connection }
             : `${currentPath}/${dragData.filename}`;
           if (dragData.filePath !== destPath) {
             socket.emit('sftp:copy', { src: dragData.filePath, dest: destPath });
-            toast.loading(`Copying ${dragData.filename}...`);
+            toastRef.current = addNotification({ title: 'Copying', message: `Copying ${dragData.filename}...`, type: 'loading', duration: 0 });
           }
           return;
         }
@@ -394,36 +487,9 @@ export default function FileManager({ connectionId, connectionName, connection }
     const files = Array.from(e.dataTransfer.files);
     if (!files || files.length === 0 || !socket) return;
 
-    // Upload files sequentially for progress tracking stability
+    // Upload files sequentially using the new robust handler
     for (const file of files) {
-      const path = currentPath === '.' ? file.name : `${currentPath}/${file.name}`;
-      setTransfer({ filename: file.name, progress: 0, action: 'upload' });
-      
-      socket.emit('sftp:upload', { filename: file.name, path, size: file.size });
-
-      // Wait for server to be ready (Handshake)
-      await new Promise(resolve => {
-        const handler = ({ filename }) => {
-          if (filename === file.name) {
-            socket.off('sftp:can_upload', handler);
-            resolve();
-          }
-        };
-        socket.on('sftp:can_upload', handler);
-        setTimeout(() => { socket.off('sftp:can_upload', handler); resolve(); }, 5000);
-      });
-
-      const chunkSize = 64 * 1024;
-      let offset = 0;
-
-      while (offset < file.size) {
-        const chunk = file.slice(offset, offset + chunkSize);
-        const buffer = await chunk.arrayBuffer();
-        socket.emit(`sftp:upload_chunk:${file.name}`, buffer);
-        offset += chunkSize;
-      }
-
-      socket.emit(`sftp:upload_done:${file.name}`);
+      await handleFileUpload(null, file);
     }
   };
 
@@ -431,7 +497,7 @@ export default function FileManager({ connectionId, connectionName, connection }
     if (!createModal.name || !socket) return;
     const path = currentPath === '.' ? createModal.name : `${currentPath}/${createModal.name}`;
     
-    toast.loading(`Creating ${createModal.type}...`);
+    toastRef.current = addNotification({ title: 'Creating', message: `Creating ${createModal.type}...`, type: 'loading', duration: 0 });
     if (createModal.type === 'folder') {
       socket.emit('sftp:mkdir', path);
     } else {
@@ -442,29 +508,47 @@ export default function FileManager({ connectionId, connectionName, connection }
 
   const handleDelete = () => {
     if (!contextMenu.file || !socket) return;
-    setDeleteModal({ visible: true, file: contextMenu.file });
+    const file = contextMenu.file;
+    const path = currentPath === '.' ? file.filename : `${currentPath}/${file.filename}`;
+    
+    showConfirm(
+      `${t('files.modals.delete.confirm')} '${file.filename}'?`,
+      () => {
+        socket.emit('sftp:delete', path);
+      },
+      t('files.modals.delete.title'),
+      t('files.modals.delete.yes'),
+      t('files.modals.delete.no')
+    );
   };
 
-  const confirmDelete = () => {
-    if (!deleteModal.file || !socket) return;
-    const path = currentPath === '.' ? deleteModal.file.filename : `${currentPath}/${deleteModal.file.filename}`;
-    socket.emit('sftp:delete', path);
-    setDeleteModal({ visible: false, file: null });
-  };
-
-  const cancelDelete = () => {
-    setDeleteModal({ visible: false, file: null });
+  const handleCreatePrompt = (type) => {
+    showPrompt(
+      type === 'folder' ? t('files.modals.create.titleFolder') : t('files.modals.create.titleFile'),
+      (name) => {
+        if (!name) return;
+        const path = currentPath === '.' ? name : `${currentPath}/${name}`;
+        toastRef.current = addNotification({ title: 'Creating', message: `Creating ${type}...`, type: 'loading', duration: 0 });
+        if (type === 'folder') {
+          socket.emit('sftp:mkdir', path);
+        } else {
+          socket.emit('sftp:writeFile', { path, content: '' });
+        }
+      },
+      '',
+      type === 'folder' ? t('files.modals.create.titleFolder') : t('files.modals.create.titleFile')
+    );
   };
 
   const handleEdit = () => {
     if (!contextMenu.file || !socket) return;
     if (contextMenu.file.longname.startsWith('d')) {
-       toast.error('Cannot edit directory');
+       addNotification({ title: 'Error', message: 'Cannot edit directory', type: 'error' });
        return;
     }
     const path = currentPath === '.' ? contextMenu.file.filename : `${currentPath}/${contextMenu.file.filename}`;
     
-    toast.loading('Fetching file content...');
+    toastRef.current = addNotification({ title: 'Loading', message: 'Fetching file content...', type: 'loading', duration: 0 });
     setEditor({ visible: false, file: contextMenu.file, content: '', saving: false });
     socket.emit('sftp:readFile', path);
   };
@@ -485,7 +569,7 @@ export default function FileManager({ connectionId, connectionName, connection }
       sourcePath: path,
       connectionId: connectionId // Store source connection
     });
-    toast.success(`${action === 'copy' ? 'Copied' : 'Cut'} ${contextMenu.file.filename}`);
+    addNotification({ title: 'Success', message: `${action === 'copy' ? 'Copied' : 'Cut'} ${contextMenu.file.filename}`, type: 'success' });
     setContextMenu({ ...contextMenu, visible: false });
   };
 
@@ -501,7 +585,7 @@ export default function FileManager({ connectionId, connectionName, connection }
 
     // Check if Cross-Server Transfer
     if (clipboard.connectionId !== connectionId) {
-      toastRef.current = toast.loading(`Transferring from source...`);
+      toastRef.current = addNotification({ title: 'Transferring', message: `Transferring from source...`, type: 'loading', duration: 0 });
       socket.emit('sftp:cross_server_transfer', {
         srcConnId: clipboard.connectionId,
         srcPath: clipboard.sourcePath,
@@ -518,7 +602,7 @@ export default function FileManager({ connectionId, connectionName, connection }
       socket.emit('sftp:move', { src: clipboard.sourcePath, dest: finalDest });
       setClipboard(null); // Clear after move
     }
-    toast.loading(`Pasting to ${currentPath}...`);
+    toastRef.current = addNotification({ title: 'Pasting', message: `Pasting to ${currentPath}...`, type: 'loading', duration: 0 });
   };
 
   const filteredFiles = files
@@ -533,7 +617,7 @@ export default function FileManager({ connectionId, connectionName, connection }
     });
 
   return (
-    <div className="flex flex-col h-full bg-[#0a0e1a] text-white relative overflow-hidden">
+    <div className="flex flex-col h-full bg-[var(--bg-primary)] text-[var(--text-primary)] relative overflow-hidden">
       <AnimatePresence>
         {transfer && (
           <motion.div 
@@ -546,29 +630,45 @@ export default function FileManager({ connectionId, connectionName, connection }
               initial={{ scale: 0.9, y: 20 }}
               animate={{ scale: 1, y: 0 }}
               exit={{ scale: 0.9, y: 20 }}
-              className="w-80 bg-[#1e293b] rounded-2xl p-6 border border-white/10 shadow-2xl"
+              className="w-80 bg-[var(--bg-secondary)] rounded-2xl p-6 border border-[var(--border-color)] shadow-2xl"
             >
               <div className="flex items-center gap-4 mb-4">
                 <div className="w-10 h-10 rounded-xl bg-blue-500/20 flex items-center justify-center">
                   {transfer.action === 'upload' ? <Upload className="text-blue-400" /> : <Download className="text-blue-400" />}
                 </div>
                 <div className="flex-1 min-w-0">
-                  <h3 className="text-sm font-bold text-white truncate">{transfer.filename}</h3>
-                  <p className="text-xs text-gray-400 capitalize">{t(`files.status.${transfer.action}`)} {t('files.status.inProgress') || 'in progress...'}</p>
+                  <h3 className="text-sm font-bold text-[var(--text-primary)] truncate">{transfer.filename}</h3>
+                  <p className="text-xs text-[var(--text-muted)] capitalize">
+                    {transfer.waiting ? (
+                        <span className="text-amber-400">Rate Limited. Retrying in {transferCountdown || '...'}s</span>
+                    ) : (
+                        `${t(`files.status.${transfer.action}`)} ${t('files.status.inProgress') || 'in progress...'}`
+                    )}
+                  </p>
                 </div>
+                <button 
+                  onClick={() => {
+                    setTransfer(null);
+                    transferRef.current = null;
+                    if (socket) socket.emit(`sftp:upload_done:${transfer.filename}`); // Force end on server
+                  }}
+                  className="p-2 hover:bg-white/10 rounded-full transition-colors text-[var(--text-muted)] hover:text-rose-400"
+                >
+                  <X size={18} />
+                </button>
               </div>
               
-              <div className="h-2 bg-white/5 rounded-full overflow-hidden mb-2">
+              <div className="h-2 bg-[var(--border-color)] rounded-full overflow-hidden mb-2">
                 <motion.div 
-                  className="h-full bg-blue-500 shadow-[0_0_10px_rgba(59,130,246,0.5)]"
+                  className={`h-full ${transfer.waiting ? 'bg-amber-500' : 'bg-blue-500'} shadow-[0_0_10px_rgba(59,130,246,0.5)]`}
                   initial={{ width: 0 }}
                   animate={{ width: `${transfer.progress}%` }}
                   transition={{ duration: 0.3 }}
                 />
               </div>
-              <div className="flex justify-between text-[10px] font-mono text-gray-500">
+              <div className="flex justify-between text-[10px] font-mono text-[var(--text-muted)]">
                 <span>{transfer.progress}%</span>
-                <span>{t('files.status.doNotClose')}</span>
+                <span>{transfer.waiting ? 'Waiting for server...' : t('files.status.doNotClose')}</span>
               </div>
             </motion.div>
           </motion.div>
@@ -576,142 +676,52 @@ export default function FileManager({ connectionId, connectionName, connection }
       </AnimatePresence>
       {/* Editor Modal - Portaled to escape window transforms */}
       {editor.visible && createPortal(
-        <div className="fixed inset-0 bg-black/80 z-[9999] flex items-center justify-center p-4">
-          <div className="bg-[#1e293b] w-full max-w-4xl h-[80vh] rounded-xl flex flex-col border border-white/10 shadow-2xl">
-            <div className="px-4 py-3 border-b border-white/10 flex items-center justify-between bg-[#111827]">
-              <div className="flex items-center gap-2">
-                <FileText className="text-blue-400" size={18} />
-                <span className="font-medium text-sm text-gray-200">{editor.file?.filename}</span>
-              </div>
-              <div className="flex items-center gap-2">
-                 <button 
-                  onClick={handleSave} 
-                  disabled={editor.saving}
-                  className="px-3 py-1.5 bg-blue-600 hover:bg-blue-500 rounded text-xs flex items-center gap-1 transition-colors disabled:opacity-50"
-                 >
-                   <Save size={14} />
-                   {editor.saving ? t('files.modals.editor.saving') : t('files.modals.editor.save')}
-                 </button>
-                 <button onClick={() => setEditor({ ...editor, visible: false })} className="p-1 hover:bg-white/10 rounded">
-                   <X size={18} className="text-gray-400" />
-                 </button>
-              </div>
+        <MacOSModalWindow
+          isOpen
+          title={editor.file?.filename || (t('files.modals.editor.title') || 'Editor')}
+          icon={FileText}
+          onClose={() => setEditor({ ...editor, visible: false })}
+          zIndexClassName="z-[9999]"
+          maxWidthClassName="max-w-4xl"
+          maxHeightClassName="max-h-[80vh]"
+          contentClassName="p-4"
+          closeOnOverlayClick
+          overlayClassName="bg-black/80"
+        >
+          <div className="flex flex-col h-[70vh]">
+            <div className="flex items-center justify-end gap-2 mb-3">
+              <button
+                onClick={handleSave}
+                disabled={editor.saving}
+                className="px-3 py-1.5 bg-blue-600 hover:bg-blue-500 rounded text-xs flex items-center gap-1 transition-colors disabled:opacity-50"
+              >
+                <Save size={14} />
+                {editor.saving ? t('files.modals.editor.saving') : t('files.modals.editor.save')}
+              </button>
             </div>
+
             <div className="flex-1 relative">
-              <textarea 
-                value={editor.content} 
+              <textarea
+                value={editor.content}
                 onChange={e => setEditor(prev => ({ ...prev, content: e.target.value }))}
-                className="w-full h-full bg-[#0a0e1a] text-gray-300 font-mono text-sm p-4 focus:outline-none resize-none"
+                className="w-full h-full bg-[var(--bg-primary)] text-[var(--text-primary)] font-mono text-sm p-4 focus:outline-none resize-none rounded-xl border border-[var(--border-color)]"
                 spellCheck={false}
               />
             </div>
           </div>
-        </div>,
+        </MacOSModalWindow>,
         document.body
       )}
 
-      {/* Create File/Folder Modal */}
-      {createModal.visible && createPortal(
-        <div className="fixed inset-0 bg-black/80 z-[10000] flex items-center justify-center p-4">
-          <div className="bg-[#1e293b] w-full max-w-sm rounded-xl border border-white/10 shadow-2xl p-6">
-            <h3 className="text-lg font-medium text-white mb-4">
-              {createModal.type === 'folder' ? t('files.modals.create.titleFolder') : t('files.modals.create.titleFile')}
-            </h3>
-            <input
-              autoFocus
-              type="text"
-              placeholder={createModal.type === 'folder' ? t('files.modals.create.placeholderFolder') : t('files.modals.create.placeholderFile')}
-              value={createModal.name}
-              onChange={(e) => setCreateModal({...createModal, name: e.target.value})}
-              onKeyDown={(e) => e.key === 'Enter' && handleCreate()}
-              className="w-full bg-black/20 border border-white/10 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-blue-500 mb-4"
-            />
-            <div className="flex justify-end gap-2">
-              <button 
-                onClick={() => setCreateModal({...createModal, visible: false})}
-                className="px-3 py-1.5 hover:bg-white/10 rounded text-sm text-gray-400"
-              >
-                {t('common.cancel')}
-              </button>
-              <button 
-                onClick={handleCreate}
-                className="px-3 py-1.5 bg-blue-600 hover:bg-blue-500 rounded text-sm text-white font-medium"
-              >
-                {t('files.modals.create.create')}
-              </button>
-            </div>
-          </div>
-        </div>,
-        document.body
-      )}
 
-      {/* Delete Confirmation Modal - Windows-style */}
-      {deleteModal.visible && createPortal(
-        <div className="fixed inset-0 bg-black/60 z-[10001] flex items-center justify-center p-4">
-          <div 
-            className="bg-[#1e293b] w-full max-w-[420px] rounded-lg border border-white/10 shadow-2xl overflow-hidden"
-            style={{ boxShadow: '0 16px 48px rgba(0,0,0,0.6)' }}
-          >
-            {/* Title bar */}
-            <div className="px-4 py-2.5 bg-[#111827] border-b border-white/5 flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <Trash2 size={14} className="text-red-400" />
-                <span className="text-sm font-medium text-gray-200">{t('files.modals.delete.title')}</span>
-              </div>
-              <button 
-                onClick={cancelDelete}
-                className="w-6 h-6 flex items-center justify-center rounded hover:bg-white/10 text-gray-400 hover:text-white transition-colors"
-              >
-                <X size={14} />
-              </button>
-            </div>
-            {/* Content */}
-            <div className="p-6 flex gap-4">
-              <div className="flex-shrink-0">
-                <div className="w-12 h-12 bg-red-500/10 rounded-full flex items-center justify-center">
-                  <AlertTriangle size={24} className="text-red-400" />
-                </div>
-              </div>
-              <div className="flex-1 pt-1">
-                <p className="text-sm text-gray-200 leading-relaxed">
-                  {t('files.modals.delete.confirm')}
-                </p>
-                <p className="text-sm font-semibold text-white mt-1">
-                  &apos;{deleteModal.file?.filename}&apos;?
-                </p>
-                <p className="text-xs text-gray-500 mt-2">
-                  {t('files.modals.delete.warning')}
-                </p>
-              </div>
-            </div>
-            {/* Buttons */}
-            <div className="px-6 py-4 bg-black/20 border-t border-white/5 flex justify-end gap-2">
-              <button
-                onClick={cancelDelete}
-                className="px-5 py-2 bg-white/5 hover:bg-white/10 border border-white/10 rounded-md text-sm text-gray-300 hover:text-white font-medium transition-colors min-w-[80px]"
-              >
-                {t('files.modals.delete.no')}
-              </button>
-              <button
-                onClick={confirmDelete}
-                className="px-5 py-2 bg-red-600 hover:bg-red-500 rounded-md text-sm text-white font-medium transition-colors min-w-[80px] shadow-lg shadow-red-500/20"
-                autoFocus
-              >
-                {t('files.modals.delete.yes')}
-              </button>
-            </div>
-          </div>
-        </div>,
-        document.body
-      )}
 
       {contextMenu.visible && createPortal(
         <div 
-          className="fixed z-[20000] bg-[#1e293b] border border-white/10 rounded-lg shadow-xl py-1 min-w-[160px]"
+          className="fixed z-[20000] bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-lg shadow-xl py-1 min-w-[160px]"
           style={{ top: contextMenu.y, left: contextMenu.x }}
           onClick={(e) => e.stopPropagation()}
         >
-          <div className="px-3 py-2 border-b border-white/5 text-xs text-gray-400 font-medium truncate max-w-[200px]">
+          <div className="px-3 py-2 border-b border-[var(--border-color)] text-xs text-[var(--text-muted)] font-medium truncate max-w-[200px]">
             {contextMenu.file ? contextMenu.file.filename : 'Current Folder'}
           </div>
           
@@ -719,14 +729,14 @@ export default function FileManager({ connectionId, connectionName, connection }
             <>
               <button 
                 onClick={() => { handleEdit(); setContextMenu({ ...contextMenu, visible: false }); }}
-                className="w-full text-left px-3 py-2 text-sm hover:bg-blue-600/20 text-gray-200 hover:text-blue-400 flex items-center gap-2 transition-colors disabled:opacity-50"
+                className="w-full text-left px-3 py-2 text-sm hover:bg-blue-600/20 text-[var(--text-primary)] hover:text-blue-400 flex items-center gap-2 transition-colors disabled:opacity-50"
                 disabled={contextMenu.file?.longname.startsWith('d')}
               >
                 <Edit size={14} /> {t('files.context.edit')}
               </button>
               <button 
                 onClick={() => { handleDownload(contextMenu.file); setContextMenu({ ...contextMenu, visible: false }); }}
-                className="w-full text-left px-3 py-2 text-sm hover:bg-blue-600/20 text-gray-200 hover:text-emerald-400 flex items-center gap-2 transition-colors disabled:opacity-50"
+                className="w-full text-left px-3 py-2 text-sm hover:bg-blue-600/20 text-[var(--text-primary)] hover:text-emerald-400 flex items-center gap-2 transition-colors disabled:opacity-50"
                 disabled={contextMenu.file?.longname.startsWith('d')}
               >
                 <Download size={14} /> {t('files.context.download')}
@@ -737,16 +747,16 @@ export default function FileManager({ connectionId, connectionName, connection }
               >
                 <Trash2 size={14} /> {t('files.context.delete')}
               </button>
-              <div className="h-px bg-white/5 my-1" />
+              <div className="h-px bg-[var(--border-color)] my-1" />
               <button 
                 onClick={() => handleCopy('copy')}
-                className="w-full text-left px-3 py-2 text-sm hover:bg-white/5 text-gray-200 flex items-center gap-2 transition-colors"
+                className="w-full text-left px-3 py-2 text-sm hover:bg-[var(--border-color)] text-[var(--text-primary)] flex items-center gap-2 transition-colors"
               >
                 <Copy size={14} /> {t('files.context.copy')}
               </button>
               <button 
                 onClick={() => handleCopy('cut')}
-                className="w-full text-left px-3 py-2 text-sm hover:bg-white/5 text-gray-200 flex items-center gap-2 transition-colors"
+                className="w-full text-left px-3 py-2 text-sm hover:bg-[var(--border-color)] text-[var(--text-primary)] flex items-center gap-2 transition-colors"
               >
                 <Scissors size={14} /> {t('files.context.cut')}
               </button>
@@ -762,21 +772,21 @@ export default function FileManager({ connectionId, connectionName, connection }
                 </button>
               )}
               <button 
-                onClick={() => { setCreateModal({ visible: true, type: 'file', name: '' }); setContextMenu({ ...contextMenu, visible: false }); }}
-                className="w-full text-left px-3 py-2 text-sm hover:bg-white/5 text-gray-200 flex items-center gap-2 transition-colors"
+                onClick={() => { handleCreatePrompt('file'); setContextMenu({ ...contextMenu, visible: false }); }}
+                className="w-full text-left px-3 py-2 text-sm hover:bg-[var(--border-color)] text-[var(--text-primary)] flex items-center gap-2 transition-colors"
               >
                 <FileText size={14} /> {t('files.context.newFile')}
               </button>
               <button 
-                onClick={() => { setCreateModal({ visible: true, type: 'folder', name: '' }); setContextMenu({ ...contextMenu, visible: false }); }}
-                className="w-full text-left px-3 py-2 text-sm hover:bg-white/5 text-gray-200 flex items-center gap-2 transition-colors"
+                onClick={() => { handleCreatePrompt('folder'); setContextMenu({ ...contextMenu, visible: false }); }}
+                className="w-full text-left px-3 py-2 text-sm hover:bg-[var(--border-color)] text-[var(--text-primary)] flex items-center gap-2 transition-colors"
               >
                 <FolderPlus size={14} /> {t('files.context.newFolder')}
               </button>
-              <div className="h-px bg-white/5 my-1" />
+              <div className="h-px bg-[var(--border-color)] my-1" />
               <button 
                 onClick={() => { refreshFiles(); setContextMenu({ ...contextMenu, visible: false }); }}
-                className="w-full text-left px-3 py-2 text-sm hover:bg-white/5 text-gray-200 flex items-center gap-2 transition-colors"
+                className="w-full text-left px-3 py-2 text-sm hover:bg-[var(--border-color)] text-[var(--text-primary)] flex items-center gap-2 transition-colors"
               >
                 <RefreshCw size={14} /> {t('files.context.refresh')}
               </button>
@@ -787,29 +797,29 @@ export default function FileManager({ connectionId, connectionName, connection }
       )}
 
       {/* Toolbar */}
-      <div className="flex items-center justify-between p-4 border-b border-white/10 bg-[#111827]/50">
+      <div className="flex items-center justify-between p-4 border-b border-[var(--border-color)] bg-[var(--bg-tertiary)]/50">
         <div className="flex items-center gap-2">
-          <button onClick={goBack} disabled={currentPath === '.'} className="p-2 hover:bg-white/5 rounded-lg disabled:opacity-30">
+          <button onClick={goBack} disabled={currentPath === '.'} className="p-2 hover:bg-[var(--border-color)] rounded-lg disabled:opacity-30">
             <ChevronLeft size={18} />
           </button>
-          <div className="flex items-center gap-2 px-3 py-1.5 bg-black/20 rounded-lg border border-white/5 min-w-[300px]">
+          <div className="flex items-center gap-2 px-3 py-1.5 bg-[var(--bg-primary)]/50 rounded-lg border border-[var(--border-color)] min-w-[300px]">
             <Folder size={14} className="text-blue-400" />
             <span className="text-xs font-mono truncate">{currentPath}</span>
           </div>
-          <button onClick={() => refreshFiles()} className="p-2 hover:bg-white/5 rounded-lg">
+          <button onClick={() => refreshFiles()} className="p-2 hover:bg-[var(--border-color)] rounded-lg">
             <RefreshCw size={18} className={loading ? 'animate-spin text-blue-400' : ''} />
           </button>
         </div>
 
         <div className="flex items-center gap-4">
           <div className="relative">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" size={14} />
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--text-muted)]" size={14} />
             <input 
               type="text" 
               placeholder={t('files.toolbar.search')}
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="bg-black/20 border border-white/5 rounded-lg py-1.5 pl-9 pr-4 text-xs focus:outline-none focus:border-blue-500/50 w-48"
+              className="bg-[var(--bg-primary)]/50 border border-[var(--border-color)] rounded-lg py-1.5 pl-9 pr-4 text-xs focus:outline-none focus:border-blue-500/50 w-48 text-[var(--text-primary)]"
             />
           </div>
           {clipboard && (
@@ -821,10 +831,10 @@ export default function FileManager({ connectionId, connectionName, connection }
               <Clipboard size={14} /> {t('files.context.paste')}
             </button>
           )}
-          <div className="flex bg-white/5 p-1 rounded-lg">
+          <div className="flex bg-[var(--bg-primary)]/50 p-1 rounded-lg border border-[var(--border-color)]">
             <button 
               onClick={() => uploadInputRef.current?.click()}
-              className="p-1 text-gray-400 hover:text-white rounded hover:bg-white/5 transition-all"
+              className="p-1 text-[var(--text-muted)] hover:text-[var(--text-primary)] rounded hover:bg-[var(--border-color)] transition-all"
               title="Upload from Local Computer"
             >
               <Upload size={16} />
@@ -835,16 +845,16 @@ export default function FileManager({ connectionId, connectionName, connection }
               onChange={handleFileUpload} 
               className="hidden" 
             />
-            <div className="w-px h-4 bg-white/10 my-auto mx-1" />
+            <div className="w-px h-4 bg-[var(--border-color)] my-auto mx-1" />
             <button 
               onClick={() => setViewMode('grid')}
-              className={`p-1 rounded ${viewMode === 'grid' ? 'bg-blue-600 text-white' : 'text-gray-400 hover:text-white'}`}
+              className={`p-1 rounded ${viewMode === 'grid' ? 'bg-blue-600 text-white shadow-lg shadow-blue-500/20' : 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'}`}
             >
               <Grid size={16} />
             </button>
             <button 
               onClick={() => setViewMode('list')}
-              className={`p-1 rounded ${viewMode === 'list' ? 'bg-blue-600 text-white' : 'text-gray-400 hover:text-white'}`}
+              className={`p-1 rounded ${viewMode === 'list' ? 'bg-blue-600 text-white shadow-lg shadow-blue-500/20' : 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'}`}
             >
               <ListIcon size={16} />
             </button>
@@ -865,8 +875,8 @@ export default function FileManager({ connectionId, connectionName, connection }
           <div className="absolute inset-0 z-50 flex items-center justify-center pointer-events-none">
             <div className="bg-blue-600/20 border-2 border-dashed border-blue-500 rounded-3xl p-12 flex flex-col items-center gap-4 backdrop-blur-md">
               <Upload size={48} className="text-blue-400 animate-bounce" />
-              <span className="text-xl font-bold text-white">{t('files.status.dropToUpload') || 'Drop here'}</span>
-              <span className="text-sm text-gray-400">{connectionName} — {currentPath}</span>
+              <span className="text-xl font-bold text-[var(--text-primary)]">{t('files.status.dropToUpload') || 'Drop here'}</span>
+              <span className="text-sm text-[var(--text-muted)]">{connectionName} — {currentPath}</span>
             </div>
           </div>
         )}
@@ -875,8 +885,8 @@ export default function FileManager({ connectionId, connectionName, connection }
             <div className="w-16 h-16 bg-red-500/10 rounded-full flex items-center justify-center mb-2">
               <AlertCircle size={32} className="text-red-400" />
             </div>
-            <h3 className="text-lg font-bold text-white">{t('files.status.errorTitle')}</h3>
-            <p className="text-sm text-gray-400 max-w-md">{error}</p>
+            <h3 className="text-lg font-bold text-[var(--text-primary)]">{t('files.status.errorTitle')}</h3>
+            <p className="text-sm text-[var(--text-muted)] max-w-md">{error}</p>
             <button 
               onClick={() => {
                 setStatus('connecting');
@@ -892,10 +902,10 @@ export default function FileManager({ connectionId, connectionName, connection }
           <div className="h-full flex flex-col items-center justify-center gap-4">
             <div className="w-12 h-12 border-4 border-blue-500/20 border-t-blue-500 rounded-full animate-spin" />
             <div className="text-center">
-              <span className="text-sm text-gray-200 block mb-1">
+              <span className="text-sm text-[var(--text-secondary)] block mb-1">
                 {status === 'connecting' ? 'Establishing Socket...' : 'Initializing SSH & SFTP...'}
               </span>
-              <span className="text-xs text-gray-500 uppercase tracking-widest">{connectionName}</span>
+              <span className="text-xs text-[var(--text-muted)] uppercase tracking-widest">{connectionName}</span>
             </div>
           </div>
         ) : (
@@ -923,7 +933,7 @@ export default function FileManager({ connectionId, connectionName, connection }
                     e.dataTransfer.effectAllowed = 'copyMove';
                     // Visual drag image
                     const ghost = document.createElement('div');
-                    ghost.style.cssText = 'position:fixed;top:-100px;left:-100px;z-index:99999;background:#1e293b;color:#e2e8f0;padding:6px 14px;border-radius:8px;font-size:12px;border:1px solid rgba(255,255,255,0.1);pointer-events:none;display:flex;align-items:center;gap:6px;';
+                    ghost.style.cssText = 'position:fixed;top:-100px;left:-100px;z-index:99999;background:var(--bg-secondary);color:var(--text-primary);padding:6px 14px;border-radius:8px;font-size:12px;border:1px solid var(--border-color);pointer-events:none;display:flex;align-items:center;gap:6px;';
                     ghost.innerHTML = `${isDir ? '📁' : '📄'} ${file.filename}`;
                     document.body.appendChild(ghost);
                     e.dataTransfer.setDragImage(ghost, 0, 0);
@@ -932,8 +942,8 @@ export default function FileManager({ connectionId, connectionName, connection }
                   onDoubleClick={() => isDir ? handleFolderClick(file.filename) : null}
                   onContextMenu={(e) => handleContextMenu(e, file)}
                   className={viewMode === 'grid'
-                    ? "group flex flex-col items-center p-3 rounded-xl hover:bg-white/5 border border-transparent hover:border-white/10 transition-all cursor-grab active:cursor-grabbing"
-                    : "flex items-center gap-3 p-2 rounded-lg hover:bg-white/5 group transition-all cursor-grab active:cursor-grabbing"
+                    ? "group flex flex-col items-center p-3 rounded-xl hover:bg-[var(--border-color)] border border-transparent hover:border-[var(--border-hover)] transition-all cursor-grab active:cursor-grabbing"
+                    : "flex items-center gap-3 p-2 rounded-lg hover:bg-[var(--border-color)] group transition-all cursor-grab active:cursor-grabbing"
                   }
                 >
                   <div className={viewMode === 'grid'
@@ -943,15 +953,15 @@ export default function FileManager({ connectionId, connectionName, connection }
                     {isDir ? (
                       <Folder className="text-blue-400 drop-shadow-lg" size={viewMode === 'grid' ? 48 : 20} />
                     ) : (
-                      <File className="text-gray-400" size={viewMode === 'grid' ? 48 : 20} />
+                      <File className="text-[var(--text-muted)]" size={viewMode === 'grid' ? 48 : 20} />
                     )}
                   </div>
                   <div className={viewMode === 'grid' ? "text-center" : "flex-1 flex items-center justify-between"}>
-                    <span className="text-xs font-medium truncate max-w-[120px] block text-gray-200">
+                    <span className="text-xs font-medium truncate max-w-[120px] block text-[var(--text-primary)]">
                       {file.filename}
                     </span>
                     {viewMode === 'list' && (
-                      <div className="flex items-center gap-4 text-[10px] text-gray-500">
+                      <div className="flex items-center gap-4 text-[10px] text-[var(--text-muted)]">
                         <span>{formatSize(file.attrs.size)}</span>
                         <span className="w-32 truncate text-right">
                           {new Date(file.attrs.mtime * 1000).toLocaleDateString()}
@@ -967,7 +977,7 @@ export default function FileManager({ connectionId, connectionName, connection }
       </div>
 
       {/* Footer / Status */}
-      <div className="px-4 py-2 bg-black/40 border-t border-white/10 flex items-center justify-between text-[10px] text-gray-500">
+      <div className="px-4 py-2 bg-[var(--bg-tertiary)]/80 border-t border-[var(--border-color)] flex items-center justify-between text-[10px] text-[var(--text-muted)]">
         <div className="flex gap-4">
           <span>{filteredFiles.length} items</span>
           <span>{filteredFiles.filter(f => !f.longname.startsWith('d')).length} files</span>

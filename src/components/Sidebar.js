@@ -3,19 +3,20 @@ import { createPortal } from 'react-dom';
 import { useApp } from '@/context/AppContext';
 import {
   Server, Star, StarOff, Wifi, WifiOff, Clock, MoreVertical, Terminal, Edit, Trash2,  
-  RotateCw, Plus, Search, Filter, Key, Lock,  BarChart3, TrendingUp, Zap, RefreshCw, Folder, AlertTriangle, X
+  RotateCw, Plus, Search, Filter, Key, Lock, BarChart3, TrendingUp, Zap, RefreshCw, Folder, AlertTriangle, X, Database
 } from 'lucide-react';
 import { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
-import toast from 'react-hot-toast';
+import { useOS } from '@/context/OSContext';
 
 export default function Sidebar({ onNewConnection, onEditConnection }) {
   const { state, dispatch, fetchConnections, apiFetch } = useApp();
+  const { addNotification, showConfirm } = useOS();
   const { t } = useTranslation();
   const { connections, sidebarOpen } = state;
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState('all'); // all, favorites, online, offline
-  const [deleteModal, setDeleteModal] = useState(null);
+
 
   useEffect(() => {
     fetchConnections();
@@ -44,10 +45,30 @@ export default function Sidebar({ onNewConnection, onEditConnection }) {
       return;
     }
     
+    if (conn.type === 'database') {
+      const existing = state.activeDatabaseBrowsers.find(b => b.connectionId === conn._id);
+      if (existing) {
+        addNotification({ title: t('common.database'), message: t('ssh.toasts.alreadyConnected', { name: conn.name }), type: 'info' });
+        dispatch({ type: 'SET_VIEW', payload: 'database' });
+        return;
+      }
+      dispatch({
+        type: 'OPEN_DATABASE_BROWSER',
+        payload: {
+          id: `db-${conn._id}-${Date.now()}`,
+          connectionId: conn._id,
+          connectionName: conn.name,
+          color: conn.color,
+          connection: conn,
+        },
+      });
+      return;
+    }
+
     // Check if already running
     const existing = state.activeTerminals.find(t => t.connectionId === conn._id);
     if (existing) {
-      toast.error(t('ssh.toasts.alreadyConnected', { name: conn.name }));
+      addNotification({ title: t('ssh.dashboard'), message: t('ssh.toasts.alreadyConnected', { name: conn.name }), type: 'error' });
       dispatch({ type: 'SET_VIEW', payload: 'terminal' });
       return;
     }
@@ -72,6 +93,13 @@ export default function Sidebar({ onNewConnection, onEditConnection }) {
       return;
     }
 
+    const existing = state.activeFileManagers.find(f => f.connectionId === conn._id);
+    if (existing) {
+      addNotification({ title: t('ssh.fileGui'), message: t('ssh.toasts.alreadyConnected', { name: conn.name }), type: 'info' });
+      dispatch({ type: 'SET_VIEW', payload: 'files' });
+      return;
+    }
+
     dispatch({
       type: 'OPEN_FILE_MANAGER',
       payload: {
@@ -85,48 +113,43 @@ export default function Sidebar({ onNewConnection, onEditConnection }) {
   };
 
   const handleDelete = (id) => {
-    setDeleteModal(id);
-  };
-
-  const confirmDelete = async () => {
-    const id = deleteModal;
-    if (!id) return;
-    
     const conn = state.connections.find(c => c._id === id);
-    if (!conn) {
-      setDeleteModal(null);
-      return;
-    }
+    if (!conn) return;
 
-    if (conn.storage === 'localstorage') {
-       const saved = JSON.parse(localStorage.getItem('ssh_monitor_connections') || '[]');
-       const updated = saved.filter(c => c._id !== id);
-       localStorage.setItem('ssh_monitor_connections', JSON.stringify(updated));
-       dispatch({ type: 'REMOVE_CONNECTION', payload: id });
-       toast.success(t('ssh.toasts.deletedLocal'));
-       setDeleteModal(null);
-       return;
-    }
+    showConfirm(
+      t('ssh.deleteConfirm'),
+      async () => {
+        if (conn.storage === 'localstorage') {
+          const saved = JSON.parse(localStorage.getItem('ssh_monitor_connections') || '[]');
+          const updated = saved.filter(c => c._id !== id);
+          localStorage.setItem('ssh_monitor_connections', JSON.stringify(updated));
+          dispatch({ type: 'REMOVE_CONNECTION', payload: id });
+          addNotification({ title: 'Deleted', message: t('ssh.toasts.deletedLocal'), type: 'success' });
+          return;
+        }
 
-    if (conn.storage === 'manual') {
-       dispatch({ type: 'REMOVE_CONNECTION', payload: id });
-       toast.success(t('ssh.toasts.removedSession'));
-       setDeleteModal(null);
-       return;
-    }
+        if (conn.storage === 'manual') {
+          dispatch({ type: 'REMOVE_CONNECTION', payload: id });
+          addNotification({ title: 'Removed', message: t('ssh.toasts.removedSession'), type: 'info' });
+          return;
+        }
 
-    try {
-      const res = await apiFetch(`/api/connections/${id}`, { method: 'DELETE' });
-      const data = await res.json();
-      if (data.success) {
-        toast.success(t('ssh.toasts.deleteSuccess'));
-        dispatch({ type: 'REMOVE_CONNECTION', payload: id });
-      }
-    } catch (err) {
-      toast.error(t('ssh.toasts.deleteFail'));
-      console.error(err);
-    }
-    setDeleteModal(null);
+        try {
+          const res = await apiFetch(`/api/connections/${id}`, { method: 'DELETE' });
+          const data = await res.json();
+          if (data.success) {
+            addNotification({ title: 'Deleted', message: t('ssh.toasts.deleteSuccess'), type: 'success' });
+            dispatch({ type: 'REMOVE_CONNECTION', payload: id });
+          }
+        } catch (err) {
+          addNotification({ title: 'Error', message: t('ssh.toasts.deleteFail'), type: 'error' });
+          console.error(err);
+        }
+      },
+      t('ssh.deleteTitle'),
+      t('common.delete'),
+      t('common.cancel')
+    );
   };
 
   const handleToggleFavorite = async (id) => {
@@ -181,7 +204,7 @@ export default function Sidebar({ onNewConnection, onEditConnection }) {
         },
       });
       if (data.success) {
-        toast.success(t('common.connected'));
+        addNotification({ title: 'Connected', message: t('common.connected'), type: 'success' });
         
         // If local storage, also persist the lastConnected status
         if (conn && conn.storage === 'localstorage') {
@@ -193,7 +216,7 @@ export default function Sidebar({ onNewConnection, onEditConnection }) {
             localStorage.setItem('ssh_monitor_connections', JSON.stringify(updated));
         }
       } else {
-        toast.error(t('ssh.toasts.testFail') + ': ' + data.error);
+        addNotification({ title: 'Connection Failed', message: t('ssh.toasts.testFail') + ': ' + data.error, type: 'error' });
         if (conn && conn.storage === 'localstorage') {
             const saved = JSON.parse(localStorage.getItem('ssh_monitor_connections') || '[]');
             const updated = saved.map(c => {
@@ -204,7 +227,7 @@ export default function Sidebar({ onNewConnection, onEditConnection }) {
         }
       }
     } catch (err) {
-      toast.error(t('ssh.toasts.testFail'));
+      addNotification({ title: 'Error', message: t('ssh.toasts.testFail'), type: 'error' });
       dispatch({ type: 'UPDATE_CONNECTION', payload: { _id: id, status: 'offline' } });
     }
   };
@@ -219,8 +242,8 @@ export default function Sidebar({ onNewConnection, onEditConnection }) {
             <Terminal size={18} className="text-white" />
           </div>
           <div>
-            <h1 className="text-sm font-bold" style={{ color: 'var(--text-primary)' }}>SSH Monitor</h1>
-            <p className="text-xs" style={{ color: 'var(--text-muted)' }}>{t('ssh.manager')}</p>
+            <h1 className="text-sm font-bold" style={{ color: 'var(--text-primary)' }}>{t('common.connections') || 'Connection Manager'}</h1>
+            <p className="text-xs" style={{ color: 'var(--text-muted)' }}>{t('common.manage') || 'SSH & Databases'}</p>
           </div>
         </div>
 
@@ -228,15 +251,15 @@ export default function Sidebar({ onNewConnection, onEditConnection }) {
         <div className="flex gap-2 mb-3">
           <div className="flex-1 rounded-lg p-2 text-center" style={{ background: 'var(--bg-tertiary)' }}>
             <div className="text-lg font-bold" style={{ color: 'var(--text-primary)' }}>{stats.total}</div>
-            <div className="text-xs" style={{ color: 'var(--text-muted)' }}>{t('ssh.stats.total')}</div>
+            <div className="text-xs" style={{ color: 'var(--text-muted)' }}>{t('common.total') || 'Total'}</div>
           </div>
           <div className="flex-1 rounded-lg p-2 text-center" style={{ background: 'rgba(16, 185, 129, 0.1)' }}>
             <div className="text-lg font-bold" style={{ color: 'var(--accent-emerald)' }}>{stats.online}</div>
-            <div className="text-xs" style={{ color: 'var(--text-muted)' }}>{t('ssh.stats.online')}</div>
+            <div className="text-xs" style={{ color: 'var(--text-muted)' }}>{t('common.online') || 'Online'}</div>
           </div>
           <div className="flex-1 rounded-lg p-2 text-center" style={{ background: 'rgba(244, 63, 94, 0.1)' }}>
             <div className="text-lg font-bold" style={{ color: 'var(--accent-rose)' }}>{stats.offline}</div>
-            <div className="text-xs" style={{ color: 'var(--text-muted)' }}>{t('ssh.stats.offline')}</div>
+            <div className="text-xs" style={{ color: 'var(--text-muted)' }}>{t('common.offline') || 'Offline'}</div>
           </div>
         </div>
 
@@ -336,8 +359,11 @@ export default function Sidebar({ onNewConnection, onEditConnection }) {
                     )}
                   </div>
                   <div className="flex items-center gap-2">
+                    <span className="text-[10px] font-bold uppercase py-0.5 px-2 bg-white/5 rounded-full border border-white/10" style={{ color: conn.color }}>
+                       {conn.type === 'database' ? (conn.dbProvider || 'db').toUpperCase() : 'SSH'}
+                    </span>
                     <span className="text-xs font-mono truncate opacity-60" style={{ color: 'var(--text-muted)' }}>
-                      {conn.username}@{conn.host}
+                      {conn.username ? `${conn.username}@` : ''}{conn.host}
                     </span>
                     {conn.tags?.slice(0, 1).map(tag => (
                        <span key={tag} className="tag-pill !py-0.5 !px-1.5 !text-[10px] opacity-70">{tag}</span>
@@ -346,21 +372,43 @@ export default function Sidebar({ onNewConnection, onEditConnection }) {
                 </div>
 
                 {/* Actions (Absolute Overlay) */}
-                <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity bg-slate-800/90 p-1 rounded-lg backdrop-blur-sm shadow-lg border border-white/5">
+                <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity bg-[var(--bg-tertiary)]/90 p-1 rounded-lg backdrop-blur-sm shadow-lg border border-[var(--border-color)]">
                   <button
                     className="btn-icon p-1.5 hover:bg-white/10 rounded"
-                    title={t('ssh.modal.actions.connect')}
+                    title={conn.type === 'database' ? t('common.database') : t('ssh.modal.actions.connect')}
                     onClick={(e) => { e.stopPropagation(); handleConnect(conn); }}
                   >
-                    <Terminal size={14} className="text-emerald-400" />
+                    {conn.type === 'database' ? (
+                      state.activeDatabaseBrowsers.some(b => b.connectionId === conn._id) ? (
+                        <div className="relative">
+                          <Database size={14} className="text-indigo-400" />
+                          <div className="absolute -top-1 -right-1 w-1.5 h-1.5 bg-emerald-500 rounded-full border border-[var(--bg-tertiary)]" />
+                        </div>
+                      ) : (
+                        <Database size={14} className="text-emerald-400" />
+                      )
+                    ) : (
+                      state.activeTerminals.some(t => t.connectionId === conn._id) ? (
+                        <div className="relative">
+                          <Terminal size={14} className="text-indigo-400" />
+                          <div className="absolute -top-1 -right-1 w-1.5 h-1.5 bg-emerald-500 rounded-full border border-[var(--bg-tertiary)]" />
+                        </div>
+                      ) : (
+                        <Terminal size={14} className="text-emerald-400" />
+                      )
+                    )}
                   </button>
-                  <button
-                    className="btn-icon p-1.5 hover:bg-white/10 rounded"
-                    title={t('ssh.modal.actions.files')}
-                    onClick={(e) => { e.stopPropagation(); handleFiles(conn); }}
-                  >
-                    <Folder size={14} className="text-blue-400" />
-                  </button>
+                  
+                  {conn.type !== 'database' && (
+                    <button
+                      className="btn-icon p-1.5 hover:bg-white/10 rounded"
+                      title={t('ssh.modal.actions.files')}
+                      onClick={(e) => { e.stopPropagation(); handleFiles(conn); }}
+                    >
+                      <Folder size={14} className={state.activeFileManagers.some(f => f.connectionId === conn._id) ? "text-indigo-400" : "text-blue-400"} />
+                    </button>
+                  )}
+
                   <button
                     className="btn-icon p-1.5 hover:bg-white/10 rounded"
                     title={t('ssh.modal.actions.edit')}
@@ -388,38 +436,7 @@ export default function Sidebar({ onNewConnection, onEditConnection }) {
           <Plus size={16} /> {t('ssh.newConnection')}
         </button>
       </div>
-      {/* Delete Confirmation Modal */}
-      {deleteModal && typeof document !== 'undefined' && createPortal(
-        <div className="fixed inset-0 z-[99999] flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
-          <div className="bg-[#1e293b] border border-white/10 rounded-2xl shadow-2xl max-w-sm w-full p-6 animate-scale-up">
-            <div className="flex items-center gap-4 mb-4">
-              <div className="w-12 h-12 rounded-full bg-red-500/10 flex items-center justify-center flex-shrink-0">
-                <AlertTriangle size={24} className="text-red-500" />
-              </div>
-              <div>
-                <h3 className="text-lg font-bold text-white">{t('ssh.deleteTitle')}</h3>
-                <p className="text-sm text-gray-400">{t('ssh.deleteConfirm')}</p>
-              </div>
-            </div>
-            
-            <div className="flex gap-3 mt-6">
-              <button 
-                onClick={() => setDeleteModal(null)}
-                className="flex-1 px-4 py-2.5 rounded-xl bg-white/5 hover:bg-white/10 text-gray-300 font-medium transition-colors"
-              >
-                {t('common.cancel')}
-              </button>
-              <button 
-                onClick={confirmDelete}
-                className="flex-1 px-4 py-2.5 rounded-xl bg-red-500 hover:bg-red-600 text-white font-medium transition-colors shadow-lg shadow-red-500/20"
-              >
-                {t('common.delete')}
-              </button>
-            </div>
-          </div>
-        </div>,
-        document.body
-      )}
+
     </div>
   );
 }

@@ -8,7 +8,7 @@ import { AppRegistry } from '@/apps/AppRegistry';
 const OSContext = createContext();
 
 const initialState = {
-  windows: [], // Array of open windows { id, title, component, isMinimized, isMaximized, zIndex }
+  windows: [], // Array of open windows { id, title, component, isMinimized, isMaximized, zIndex, x, y, width, height, appType, props }
   activeWindowId: null,
   nextZIndex: 100,
   wallpaper: 'https://images.unsplash.com/photo-1451187580459-43490279c0fa?q=80&w=2072&auto=format&fit=crop',
@@ -25,11 +25,48 @@ const initialState = {
     desktop: true
   },
   language: 'en',
+  theme: 'dark', // light, dark, auto
   customWallpapers: [], // Array of URL strings
   taskbarPosition: 'bottom', // top, bottom, left, right
   selectedIconIds: [], // IDs of currently selected icons
-  windows: [], // Array of open windows { id, title, component, isMinimized, isMaximized, zIndex, x, y, width, height, appType, props }
   timestamp: 0, // Last modified timestamp for conflict resolution
+  notificationQueue: [], // Array of { id, title, message, type, timestamp }
+  modal: {
+    isOpen: false,
+    type: 'alert', // alert, confirm, prompt
+    title: '',
+    message: '',
+    confirmLabel: '',
+    cancelLabel: '',
+    defaultValue: '',
+    onConfirm: null,
+    onCancel: null
+  },
+  deferredPrompt: null,
+  exportNaming: {
+    prefix: '',
+    suffix: '',
+    includeDate: true,
+    includeTime: false,
+    includeType: true,
+  },
+  aiHistory: [],
+  // Virtual desktops
+  currentDesktopId: 'desktop-1',
+  desktops: [
+    { id: 'desktop-1', name: 'Desktop 1', wallpaper: null }
+  ],
+  windowsByDesktop: {
+    'desktop-1': []
+  },
+  // Keyboard shortcuts
+  keyboardShortcuts: {
+    previewWindow: 'Ctrl+Cmd+Up',
+    prevDesktop: 'Ctrl+Cmd+Left',
+    nextDesktop: 'Ctrl+Cmd+Right',
+    minimizeAll: 'Ctrl+Cmd+M',
+    closeAll: 'Ctrl+Cmd+W',
+  },
 };
 
 function osReducer(state, action) {
@@ -51,21 +88,25 @@ function osReducer(state, action) {
       const defaultX = 100 + cascadeOffset;
       const defaultY = 40 + cascadeOffset;
 
+      const newWindow = { 
+        ...action.payload, 
+        x: action.payload.x ?? defaultX, 
+        y: action.payload.y ?? defaultY,
+        width: action.payload.width ?? 800,
+        height: action.payload.height ?? 600,
+        isMinimized: false, 
+        isMaximized: false, 
+        zIndex: state.nextZIndex 
+      };
+
       return {
         ...state,
-        windows: [
-          ...state.windows, 
-          { 
-            ...action.payload, 
-            x: action.payload.x ?? defaultX, 
-            y: action.payload.y ?? defaultY,
-            width: action.payload.width ?? 800,
-            height: action.payload.height ?? 600,
-            isMinimized: false, 
-            isMaximized: false, 
-            zIndex: state.nextZIndex 
-          }
-        ],
+        windows: [...state.windows, newWindow],
+        // Add to current desktop
+        windowsByDesktop: {
+          ...state.windowsByDesktop,
+          [state.currentDesktopId]: [...(state.windowsByDesktop[state.currentDesktopId] || []), newWindow],
+        },
         activeWindowId: action.payload.id,
         nextZIndex: state.nextZIndex + 1,
       };
@@ -74,6 +115,13 @@ function osReducer(state, action) {
       return {
         ...state,
         windows: state.windows.filter(w => w.id !== action.payload),
+        // Remove from all desktops
+        windowsByDesktop: Object.fromEntries(
+          Object.entries(state.windowsByDesktop).map(([desktopId, windows]) => [
+            desktopId,
+            windows.filter(w => w.id !== action.payload)
+          ])
+        ),
         activeWindowId: state.activeWindowId === action.payload ? null : state.activeWindowId,
       };
     case 'MINIMIZE_WINDOW':
@@ -88,12 +136,13 @@ function osReducer(state, action) {
       return {
         ...state,
         windows: state.windows.map(w => ({ ...w, isMinimized: true })),
-        activeWindowId: null,
+        timestamp: Date.now()
       };
     case 'RESTORE_ALL':
       return {
         ...state,
         windows: state.windows.map(w => ({ ...w, isMinimized: false })),
+        timestamp: Date.now(),
         activeWindowId: state.windows.length > 0 ? state.windows[state.windows.length - 1].id : null,
       };
     case 'MAXIMIZE_WINDOW':
@@ -129,6 +178,7 @@ function osReducer(state, action) {
       return {
         ...state,
         wallpaper: action.payload,
+        timestamp: Date.now()
       };
     case 'ADD_CUSTOM_WALLPAPER': {
       const current = state.customWallpapers || [];
@@ -136,6 +186,7 @@ function osReducer(state, action) {
       return {
         ...state,
         customWallpapers: [...current, action.payload],
+        timestamp: Date.now()
       };
     }
     case 'REMOVE_CUSTOM_WALLPAPER': {
@@ -143,34 +194,57 @@ function osReducer(state, action) {
       return {
         ...state,
         customWallpapers: current.filter(w => w !== action.payload),
+        timestamp: Date.now()
       };
     }
     case 'TOGGLE_GLASS':
       return {
         ...state,
         glassmorphism: action.payload,
+        timestamp: Date.now()
       };
     case 'UPDATE_ICON_POSITIONS':
       return {
         ...state,
         iconPositions: { ...state.iconPositions, ...action.payload },
+        timestamp: Date.now()
+      };
+    case 'UPDATE_MULTIPLE_ICON_POSITIONS':
+      return {
+        ...state,
+        iconPositions: { ...state.iconPositions, ...action.payload },
+        timestamp: Date.now()
       };
     case 'SET_ICON_SIZE':
-      return { ...state, iconSize: action.payload };
+      return { ...state, iconSize: action.payload, timestamp: Date.now() };
     case 'SET_ICON_STYLE':
-      return { ...state, iconStyle: action.payload };
+      return { ...state, iconStyle: action.payload, timestamp: Date.now() };
     case 'SET_SORT_BY':
       return { ...state, sortBy: action.payload };
     case 'SET_BRIGHTNESS':
-      return { ...state, brightness: action.payload };
+      return { ...state, brightness: action.payload, timestamp: Date.now() };
     case 'SET_UI_SCALE':
-      return { ...state, uiScale: action.payload };
+      return { ...state, uiScale: action.payload, timestamp: Date.now() };
     case 'SET_NOTIFICATIONS':
-      return { ...state, notifications: { ...state.notifications, ...action.payload } };
+      return { ...state, notifications: { ...state.notifications, ...action.payload }, timestamp: Date.now() };
+    case 'ADD_NOTIFICATION':
+      return { 
+        ...state, 
+        notificationQueue: [...state.notificationQueue, action.payload] 
+      };
+    case 'REMOVE_NOTIFICATION':
+      return { 
+        ...state, 
+        notificationQueue: state.notificationQueue.filter(n => n.id !== action.payload) 
+      };
+    case 'CLEAR_NOTIFICATIONS':
+      return { ...state, notificationQueue: [] };
     case 'SET_LANGUAGE':
-      return { ...state, language: action.payload };
+      return { ...state, language: action.payload, timestamp: Date.now() };
+    case 'SET_THEME':
+      return { ...state, theme: action.payload, timestamp: Date.now() };
     case 'SET_TASKBAR_POSITION':
-      return { ...state, taskbarPosition: action.payload };
+      return { ...state, taskbarPosition: action.payload, timestamp: Date.now() };
     case 'SET_SELECTED_ICONS':
       return { ...state, selectedIconIds: action.payload };
     case 'TOGGLE_ICON_SELECTION': {
@@ -183,6 +257,24 @@ function osReducer(state, action) {
           : [...current, id]
       };
     }
+    case 'MOVE_SELECTED_ICONS': {
+      const { deltaX, deltaY, basePositions } = action.payload;
+      const newPositions = { ...state.iconPositions };
+      state.selectedIconIds.forEach(id => {
+        const base = basePositions[id];
+        if (base) {
+          newPositions[id] = { 
+            x: Math.round(base.x + deltaX), 
+            y: Math.round(base.y + deltaY) 
+          };
+        }
+      });
+      return { 
+        ...state, 
+        iconPositions: newPositions,
+        timestamp: Date.now() 
+      };
+    }
     case 'UPDATE_WINDOW_POSITION':
       return {
         ...state,
@@ -191,12 +283,24 @@ function osReducer(state, action) {
             ? { ...w, ...action.payload.position } 
             : w
         ),
+        timestamp: Date.now()
       };
-    case 'SET_INITIAL_STATE':
-      // Hydrate windows if they exist in payload
+    case 'SET_INITIAL_STATE': {
+      // Hydrate windows carefully
       let hydratedWindows = state.windows;
       if (action.payload.openWindows && Array.isArray(action.payload.openWindows)) {
         hydratedWindows = action.payload.openWindows.map(w => {
+          // Optimization: Check if window already exists with SAME props to avoid re-mounting
+          const existing = state.windows.find(ew => ew.id === w.id);
+          
+          // Verify props are actually the same (simplified comparison)
+          const propsChanged = existing && JSON.stringify(existing.props) !== JSON.stringify(w.props);
+          
+          if (existing && !propsChanged) {
+            // Merge metadata but keep the active React element/component
+            return { ...existing, ...w, component: existing.component };
+          }
+
           let Component = null;
           let Icon = null;
           
@@ -207,32 +311,243 @@ function osReducer(state, action) {
           } 
           // 2. Try to find by ID (legacy/simple apps)
           else if (AppRegistry[w.id]) {
-             Component = AppRegistry[w.id].component;
-             Icon = AppRegistry[w.id].icon;
+            Component = AppRegistry[w.id].component;
+            Icon = AppRegistry[w.id].icon;
           }
           // 3. Special case for Standalone Terminal
           else if (w.id.startsWith('term-') || w.id.startsWith('standalone-term-')) {
-             Component = AppRegistry['terminal'].component;
-             Icon = AppRegistry['terminal'].icon;
+            Component = AppRegistry['terminal'].component;
+            Icon = AppRegistry['terminal'].icon;
           }
 
           if (Component) {
-            return {
-              ...w,
-              component: <Component {...(w.props || {})} />,
-              icon: Icon,
-              // Ensure we have Component instance, but we can't save it to DB.
-              // So on hydrate we recreate it.
-            };
+            try {
+              return {
+                ...w,
+                component: <Component {...(w.props || {})} />,
+                icon: Icon,
+              };
+            } catch (e) {
+              console.error('Failed to hydrate component for', w.id, e);
+              return null;
+            }
           }
           return null;
         }).filter(Boolean);
       }
 
+      // Merge payload carefully to avoid wiping defaults with missing fields
       return {
         ...state,
         ...action.payload,
+        // Re-apply critical defaults if payload values are missing or null
+        wallpaper: action.payload.wallpaper || state.wallpaper,
+        theme: action.payload.theme || state.theme,
+        language: action.payload.language || state.language,
+        customWallpapers: action.payload.customWallpapers || state.customWallpapers || [],
+        iconPositions: action.payload.iconPositions || state.iconPositions || {},
+        aiHistory: action.payload.aiHistory || state.aiHistory || [],
+        exportNaming: action.payload.exportNaming || state.exportNaming || {
+          prefix: '',
+          suffix: '',
+          includeDate: true,
+          includeTime: false,
+          includeType: true,
+        },
         windows: hydratedWindows.length > 0 ? hydratedWindows : state.windows
+      };
+    }
+    case 'SHOW_MODAL':
+      return {
+        ...state,
+        modal: {
+          isOpen: true,
+          ...action.payload
+        }
+      };
+    case 'CLOSE_MODAL':
+      return {
+        ...state,
+        modal: {
+          ...state.modal,
+          isOpen: false,
+          onConfirm: null,
+          onCancel: null
+        }
+      };
+    case 'SET_EXPORT_NAMING':
+      return { ...state, exportNaming: { ...state.exportNaming, ...action.payload }, timestamp: Date.now() };
+    case 'SET_AI_HISTORY':
+      return { ...state, aiHistory: action.payload, timestamp: Date.now() };
+    case 'SET_DEFERRED_PROMPT':
+      return { ...state, deferredPrompt: action.payload };
+    // Virtual desktops
+    case 'SWITCH_DESKTOP':
+      return {
+        ...state,
+        currentDesktopId: action.payload,
+        activeWindowId: null,
+      };
+    case 'ADD_WINDOW_TO_DESKTOP': {
+      const { desktopId, window } = action.payload;
+      return {
+        ...state,
+        windowsByDesktop: {
+          ...state.windowsByDesktop,
+          [desktopId]: [...(state.windowsByDesktop[desktopId] || []), window],
+        },
+      };
+    }
+    case 'REMOVE_WINDOW_FROM_DESKTOP': {
+      const { desktopId, windowId } = action.payload;
+      return {
+        ...state,
+        windowsByDesktop: {
+          ...state.windowsByDesktop,
+          [desktopId]: (state.windowsByDesktop[desktopId] || []).filter(w => w.id !== windowId),
+        },
+      };
+    }
+    case 'MOVE_WINDOW_TO_DESKTOP': {
+      const { windowId, fromDesktopId, toDesktopId } = action.payload;
+      const window = state.windowsByDesktop[fromDesktopId]?.find(w => w.id === windowId);
+      if (!window) return state;
+      return {
+        ...state,
+        windowsByDesktop: {
+          ...state.windowsByDesktop,
+          [fromDesktopId]: (state.windowsByDesktop[fromDesktopId] || []).filter(w => w.id !== windowId),
+          [toDesktopId]: [...(state.windowsByDesktop[toDesktopId] || []), window],
+        },
+      };
+    }
+    case 'ADD_WINDOWS_TO_DESKTOP': {
+      const { desktopId, windows: windowsToAdd } = action.payload;
+      return {
+        ...state,
+        windowsByDesktop: {
+          ...state.windowsByDesktop,
+          [desktopId]: [...(state.windowsByDesktop[desktopId] || []), ...windowsToAdd],
+        },
+      };
+    }
+    case 'REMOVE_WINDOW_FROM_DESKTOP': {
+      const { desktopId, windowId } = action.payload;
+      return {
+        ...state,
+        windowsByDesktop: {
+          ...state.windowsByDesktop,
+          [desktopId]: (state.windowsByDesktop[desktopId] || []).filter(w => w.id !== windowId),
+        },
+      };
+    }
+    case 'ADD_DESKTOP': {
+      const newDesktop = action.payload;
+      return {
+        ...state,
+        desktops: [...state.desktops, newDesktop],
+        windowsByDesktop: {
+          ...state.windowsByDesktop,
+          [newDesktop.id]: []
+        },
+        timestamp: Date.now()
+      };
+    }
+    case 'ADD_WINDOW_TO_DESKTOP': {
+      const { desktopId, window } = action.payload;
+      return {
+        ...state,
+        windowsByDesktop: {
+          ...state.windowsByDesktop,
+          [desktopId]: [...(state.windowsByDesktop[desktopId] || []), window]
+        },
+        timestamp: Date.now()
+      };
+    }
+    case 'REMOVE_DESKTOP': {
+      const { desktopId, targetDesktopId } = action.payload;
+      // Never allow removing the last desktop
+      if ((state.desktops || []).length <= 1) return state;
+
+      const windowsToMove = state.windowsByDesktop?.[desktopId] || [];
+
+      const nextDesktops = (state.desktops || []).filter(d => d.id !== desktopId);
+      const nextWindowsByDesktop = { ...(state.windowsByDesktop || {}) };
+
+      delete nextWindowsByDesktop[desktopId];
+
+      nextWindowsByDesktop[targetDesktopId] = [
+        ...(nextWindowsByDesktop[targetDesktopId] || []),
+        ...windowsToMove,
+      ];
+
+      const nextCurrentDesktopId =
+        state.currentDesktopId === desktopId ? targetDesktopId : state.currentDesktopId;
+
+      return {
+        ...state,
+        desktops: nextDesktops,
+        windowsByDesktop: nextWindowsByDesktop,
+        currentDesktopId: nextCurrentDesktopId,
+        timestamp: Date.now(),
+      };
+    }
+    case 'RENAME_DESKTOP': {
+      const { desktopId, name } = action.payload;
+      return {
+        ...state,
+        desktops: (state.desktops || []).map(d => (d.id === desktopId ? { ...d, name } : d)),
+        timestamp: Date.now(),
+      };
+    }
+    case 'REORDER_DESKTOPS': {
+      const { sourceId, targetId } = action.payload;
+      if (!sourceId || !targetId || sourceId === targetId) return state;
+      const list = [...(state.desktops || [])];
+      const from = list.findIndex(d => d.id === sourceId);
+      const to = list.findIndex(d => d.id === targetId);
+      if (from === -1 || to === -1) return state;
+      const [moved] = list.splice(from, 1);
+      list.splice(to, 0, moved);
+      return { ...state, desktops: list, timestamp: Date.now() };
+    }
+    case 'MOVE_WINDOW_TO_DESKTOP': {
+      const { windowId, fromDesktopId, toDesktopId } = action.payload;
+      if (!windowId || !fromDesktopId || !toDesktopId || fromDesktopId === toDesktopId) return state;
+
+      const fromList = state.windowsByDesktop?.[fromDesktopId] || [];
+      const win = fromList.find(w => w.id === windowId);
+      if (!win) return state;
+
+      return {
+        ...state,
+        windowsByDesktop: {
+          ...(state.windowsByDesktop || {}),
+          [fromDesktopId]: fromList.filter(w => w.id !== windowId),
+          [toDesktopId]: [
+            ...((state.windowsByDesktop || {})[toDesktopId] || []),
+            win,
+          ],
+        },
+        currentDesktopId: toDesktopId,
+        activeWindowId: windowId,
+        timestamp: Date.now(),
+      };
+    }
+    case 'SET_KEYBOARD_SHORTCUTS': {
+      return {
+        ...state,
+        keyboardShortcuts: { ...state.keyboardShortcuts, ...action.payload },
+        timestamp: Date.now(),
+      };
+    }
+    case 'UPDATE_WINDOW_POSITION':
+      return {
+        ...state,
+        windows: state.windows.map(w =>
+          w.id === action.payload.id ? { ...w, ...action.payload.position } : w
+        ),
+        timestamp: Date.now()
       };
     default:
       return state;
@@ -241,9 +556,81 @@ function osReducer(state, action) {
 
 export function OSProvider({ children }) {
   const [state, dispatch] = useReducer(osReducer, initialState);
-
-  const { data: session } = useSession();
+  const { data: session, status: authStatus } = useSession();
   const [isInitialLoad, setIsInitialLoad] = useState(true);
+  
+  const stateRef = useRef(state);
+  stateRef.current = state;
+  const lastSavedStateRef = useRef(null);
+  // Helper for consistent serialization during sync checks
+  const serializeStateForSync = (s) => {
+    const safeDesktops = (s.desktops || []).map((d) => ({
+      id: d.id,
+      name: d.name,
+      wallpaper: d.wallpaper ?? null,
+    }));
+
+    const safeWindowsByDesktop = Object.fromEntries(
+      Object.entries(s.windowsByDesktop || {}).map(([desktopId, list]) => [
+        desktopId,
+        (list || []).map((w) => ({
+          id: w.id,
+          title: w.title,
+          x: Math.round(w.x || 0),
+          y: Math.round(w.y || 0),
+          width: Math.round(w.width || 800),
+          height: Math.round(w.height || 600),
+          isMaximized: !!w.isMaximized,
+          isMinimized: !!w.isMinimized,
+          snapSide: w.snapSide || null,
+          zIndex: w.zIndex || 100,
+          appType: w.appType || null,
+          props: w.props || {},
+        })),
+      ])
+    );
+
+    return JSON.stringify({
+      wallpaper: s.wallpaper,
+      glassmorphism: !!s.glassmorphism,
+      desktops: safeDesktops,
+      currentDesktopId: s.currentDesktopId || 'desktop-1',
+      windowsByDesktop: safeWindowsByDesktop,
+      iconPositions: s.iconPositions || {},
+      iconSize: s.iconSize || 'medium',
+      iconStyle: s.iconStyle || 'glass',
+      sortBy: s.sortBy || 'name',
+      brightness: s.brightness ?? 100,
+      uiScale: s.uiScale ?? 100,
+      notifications: s.notifications || { system: true, terminal: false, desktop: true },
+      language: s.language || 'en',
+      customWallpapers: s.customWallpapers || [],
+      taskbarPosition: s.taskbarPosition || 'bottom',
+        theme: s.theme || 'dark',
+        exportNaming: s.exportNaming || {
+          prefix: '',
+          suffix: '',
+          includeDate: true,
+          includeTime: false,
+          includeType: true,
+        },
+        aiHistory: s.aiHistory || [],
+        openWindows: (s.windows || s.openWindows || []).map(w => ({
+        id: w.id,
+        title: w.title,
+        x: Math.round(w.x || 0),
+        y: Math.round(w.y || 0),
+        width: Math.round(w.width || 800),
+        height: Math.round(w.height || 600),
+        isMaximized: !!w.isMaximized,
+        isMinimized: !!w.isMinimized,
+        snapSide: w.snapSide || null,
+        zIndex: w.zIndex || 100,
+        appType: w.appType || null,
+        props: w.props || {}
+      }))
+    });
+  };
 
   // 1. Initial Load from LocalStorage (for fast boot/guests)
   useEffect(() => {
@@ -251,22 +638,7 @@ export function OSProvider({ children }) {
     if (saved && isInitialLoad) {
       try {
         const parsed = JSON.parse(saved);
-        dispatch({ type: 'SET_INITIAL_STATE', payload: {
-          wallpaper: parsed.wallpaper || initialState.wallpaper,
-          glassmorphism: parsed.glassmorphism !== undefined ? parsed.glassmorphism : initialState.glassmorphism,
-          iconPositions: parsed.iconPositions || initialState.iconPositions,
-          iconSize: parsed.iconSize || initialState.iconSize,
-          iconStyle: parsed.iconStyle || initialState.iconStyle,
-          sortBy: parsed.sortBy || initialState.sortBy,
-          brightness: parsed.brightness !== undefined ? parsed.brightness : initialState.brightness,
-          uiScale: parsed.uiScale || initialState.uiScale,
-          notifications: parsed.notifications || initialState.notifications,
-          language: parsed.language || initialState.language,
-          customWallpapers: parsed.customWallpapers || initialState.customWallpapers,
-          taskbarPosition: parsed.taskbarPosition || initialState.taskbarPosition,
-          openWindows: parsed.openWindows || [],
-          timestamp: parsed.timestamp || 0,
-        }});
+        dispatch({ type: 'SET_INITIAL_STATE', payload: parsed });
       } catch (e) {
         console.error('Failed to load OS state', e);
       }
@@ -275,35 +647,29 @@ export function OSProvider({ children }) {
 
   // 2. Fetch from DB if logged in
   useEffect(() => {
-    if (session) {
+    const userEmail = session?.user?.email;
+    if (userEmail) {
       const fetchSettings = async () => {
         try {
           const res = await fetch('/api/user/settings');
           const data = await res.json();
           if (data.success && data.settings) {
-            // Timestamp collision detection
             const localTimestamp = stateRef.current.timestamp || 0;
             const dbTimestamp = data.settings.timestamp || 0;
 
-            console.log(`State Sync - Local: ${localTimestamp}, DB: ${dbTimestamp}`);
+            if (dbTimestamp > localTimestamp || (localTimestamp === 0 && dbTimestamp !== 0)) {
+              console.log(`🔄 [OS] Hydrating from DB (DB: ${dbTimestamp}, Local: ${localTimestamp})`);
+              
+              // Sync i18n immediately if needed to prevent flicker
+              if (data.settings.language && i18n.language !== data.settings.language) {
+                 await i18n.changeLanguage(data.settings.language).catch(console.error);
+              }
 
-            if (dbTimestamp > localTimestamp) {
-              console.log('DB is newer, hydrating from DB');
+              lastSavedStateRef.current = serializeStateForSync(data.settings);
               dispatch({ type: 'SET_INITIAL_STATE', payload: data.settings });
             } else if (localTimestamp > dbTimestamp) {
-              console.log('Local is newer, pushing local state to DB');
-              // Don't hydrate, but ensure DB gets updated eventually
-              // Trigger a save immediately to correct the DB
+              console.log('📤 [OS] Local state newer, pushing to DB');
               await saveSettings();
-            } else {
-              // Same timestamp, prefer DB or do nothing.
-              // If we have no local state (fresh login), typically localTimestamp is 0 (unless localStorage loaded).
-              // If localStorage loaded, we have valid timestamp.
-              // If equal, assume synced.
-              if (!isInitialLoad && (!stateRef.current.windows || stateRef.current.windows.length === 0)) {
-                 // If local is empty but DB has data (and timestamps match/missing), load DB
-                 dispatch({ type: 'SET_INITIAL_STATE', payload: data.settings });
-              }
             }
           }
         } catch (error) {
@@ -314,40 +680,19 @@ export function OSProvider({ children }) {
       };
       fetchSettings();
     } else {
-      setIsInitialLoad(false);
+      // If not logged in, stop loading immediately
+      if (authStatus !== 'loading') {
+        setIsInitialLoad(false);
+      }
     }
-  }, [session]);
+  }, [session?.user?.email, authStatus]);
 
   // 3. Persist to LocalStorage
   useEffect(() => {
+    const payload = serializeStateForSync(state);
     localStorage.setItem('webtop_os_state', JSON.stringify({
-      wallpaper: state.wallpaper,
-      glassmorphism: state.glassmorphism,
-      iconPositions: state.iconPositions,
-      iconSize: state.iconSize,
-      iconStyle: state.iconStyle,
-      sortBy: state.sortBy,
-      brightness: state.brightness,
-      uiScale: state.uiScale,
-      notifications: state.notifications,
-      language: state.language,
-      customWallpapers: state.customWallpapers,
-      taskbarPosition: state.taskbarPosition,
-      openWindows: state.windows.map(w => ({
-        id: w.id,
-        title: w.title,
-        x: w.x,
-        y: w.y,
-        width: w.width,
-        height: w.height,
-        isMaximized: w.isMaximized,
-        isMinimized: w.isMinimized,
-        snapSide: w.snapSide,
-        zIndex: w.zIndex,
-        appType: w.appType,
-        props: w.props
-      })),
-      timestamp: Date.now(),
+      ...JSON.parse(payload),
+      timestamp: state.timestamp || Date.now()
     }));
   }, [
     state.wallpaper, 
@@ -362,66 +707,22 @@ export function OSProvider({ children }) {
     state.language,
     state.customWallpapers,
     state.taskbarPosition,
-    state.windows // Add windows dependency
+    state.theme,
+    state.windows
   ]);
 
-  // 3b. Ref to hold latest state synchronously
-  const stateRef = useRef(state);
-  stateRef.current = state; // Update on every render to ensure freshness
 
   // Save on tab close or visibility hidden
   useEffect(() => {
+    const userEmail = session?.user?.email;
+    if (!userEmail) return;
+
     const saveOnUnload = () => {
-      if (!session) return;
-      
-      const currentState = stateRef.current;
-      
-      // Safety: Don't wipe DB if initial load pending and no windows
-      if (isInitialLoad && currentState.windows.length === 0) return;
-
-      const payload = JSON.stringify({
-        wallpaper: currentState.wallpaper,
-        glassmorphism: currentState.glassmorphism,
-        iconPositions: currentState.iconPositions,
-        iconSize: currentState.iconSize,
-        iconStyle: currentState.iconStyle,
-        sortBy: currentState.sortBy,
-        brightness: currentState.brightness,
-        uiScale: currentState.uiScale,
-        notifications: currentState.notifications,
-        language: currentState.language,
-        customWallpapers: currentState.customWallpapers,
-        taskbarPosition: currentState.taskbarPosition,
-        openWindows: currentState.windows.map(w => ({
-          id: w.id,
-          title: w.title,
-          x: w.x,
-          y: w.y,
-          width: w.width,
-          height: w.height,
-          isMaximized: w.isMaximized,
-          isMinimized: w.isMinimized,
-          snapSide: w.snapSide,
-          zIndex: w.zIndex,
-          appType: w.appType,
-          props: w.props
-        })),
-        timestamp: Date.now(),
-      });
-
-      // Use sendBeacon for reliable delivery on unload
-      const blob = new Blob([payload], { type: 'application/json' });
-      const success = navigator.sendBeacon('/api/user/settings', blob);
-
-      if (!success) {
-        // Fallback
-        fetch('/api/user/settings', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: payload,
-          keepalive: true,
-        }).catch(err => console.error('Save on unload failed', err));
-      }
+      if (isInitialLoad) return;
+      const payload = serializeStateForSync(stateRef.current);
+      const fullData = { ...JSON.parse(payload), timestamp: Date.now() };
+      const blob = new Blob([JSON.stringify(fullData)], { type: 'application/json' });
+      navigator.sendBeacon('/api/user/settings', blob);
     };
 
     const handleVisibilityChange = () => {
@@ -435,55 +736,42 @@ export function OSProvider({ children }) {
       window.removeEventListener('beforeunload', saveOnUnload);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
-  }, [session, isInitialLoad]);
+  }, [session?.user?.email, isInitialLoad]);
 
   // 4. Sync to DB if logged in (Debounced)
   useEffect(() => {
-    if (session && !isInitialLoad) {
-      const timer = setTimeout(async () => {
-        try {
-          await fetch('/api/user/settings', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              wallpaper: state.wallpaper,
-              glassmorphism: state.glassmorphism,
-              iconPositions: state.iconPositions,
-              iconSize: state.iconSize,
-              iconStyle: state.iconStyle,
-              sortBy: state.sortBy,
-              brightness: state.brightness,
-              uiScale: state.uiScale,
-              notifications: state.notifications,
-              language: state.language,
-              customWallpapers: state.customWallpapers,
-              taskbarPosition: state.taskbarPosition,
-              openWindows: state.windows.map(w => ({
-                id: w.id,
-                title: w.title,
-                x: w.x,
-                y: w.y,
-                width: w.width,
-                height: w.height,
-                isMaximized: w.isMaximized,
-                isMinimized: w.isMinimized,
-                snapSide: w.snapSide, // Persist snap state (left/right/top)
-                zIndex: w.zIndex,
-                appType: w.appType,
-                props: w.props
-              })),
-              timestamp: Date.now(),
-            })
-          });
-        } catch (error) {
-          console.error('Failed to sync settings to DB', error);
-        }
-      }, 500); // 500ms debounce
-      
-      return () => clearTimeout(timer);
+    const userEmail = session?.user?.email;
+    if (!userEmail || isInitialLoad) return;
+
+    const serialized = serializeStateForSync(state);
+    
+    // Check if state actually changed from last known DB state
+    if (lastSavedStateRef.current === serialized) {
+      return;
     }
+
+    const timer = setTimeout(async () => {
+      try {
+        console.log('💾 [OS] Syncing settings to DB...');
+        const res = await fetch('/api/user/settings', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            ...JSON.parse(serialized),
+            timestamp: Date.now(),
+          })
+        });
+        if (res.ok) {
+          lastSavedStateRef.current = serialized;
+        }
+      } catch (error) {
+        console.error('Failed to sync settings to DB', error);
+      }
+    }, 5000); // 5s debounce for stability
+      
+    return () => clearTimeout(timer);
   }, [
-    session, 
+    session?.user?.email,
     state.wallpaper, 
     state.glassmorphism, 
     state.iconPositions, 
@@ -496,53 +784,52 @@ export function OSProvider({ children }) {
     state.language,
     state.customWallpapers,
     state.taskbarPosition,
-    state.windows, // Add windows dependency
+    state.theme,
+    state.windows,
+    state.exportNaming,
+    state.aiHistory,
     isInitialLoad
   ]);
 
+
   const saveSettings = async () => {
-    if (!session) return;
+    const userEmail = session?.user?.email;
+    if (!userEmail) return;
     try {
+      const payload = serializeStateForSync(state);
       await fetch('/api/user/settings', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          wallpaper: state.wallpaper,
-          glassmorphism: state.glassmorphism,
-          iconPositions: state.iconPositions,
-          iconSize: state.iconSize,
-          iconStyle: state.iconStyle,
-          sortBy: state.sortBy,
-          brightness: state.brightness,
-          uiScale: state.uiScale,
-          notifications: state.notifications,
-          language: state.language,
-          customWallpapers: state.customWallpapers,
-          taskbarPosition: state.taskbarPosition,
-          openWindows: state.windows.map(w => ({
-            id: w.id,
-            title: w.title,
-            x: w.x,
-            y: w.y,
-            width: w.width,
-            height: w.height,
-            isMaximized: w.isMaximized,
-            isMinimized: w.isMinimized,
-            snapSide: w.snapSide,
-            zIndex: w.zIndex,
-            appType: w.appType,
-            props: w.props
-          })),
+          ...JSON.parse(payload),
           timestamp: Date.now(),
         })
       });
+      lastSavedStateRef.current = payload;
       console.log('Settings saved manually');
     } catch (error) {
       console.error('Failed to save settings manually', error);
     }
   };
 
-  // 5. Sync i18n with state language
+  // 6. Migrate existing windows to current desktop on first load
+  useEffect(() => {
+    if (state.windows.length > 0 && Object.values(state.windowsByDesktop).every(arr => arr.length === 0)) {
+      // If we have windows but no desktop assignments, migrate them to current desktop
+      const currentWindows = state.windowsByDesktop[state.currentDesktopId] || [];
+      if (currentWindows.length === 0) {
+        dispatch({
+          type: 'ADD_WINDOWS_TO_DESKTOP',
+          payload: {
+            desktopId: state.currentDesktopId,
+            windows: state.windows
+          }
+        });
+      }
+    }
+  }, [state.windows, state.windowsByDesktop, state.currentDesktopId]);
+
+  // 7. Sync i18n with state language
   useEffect(() => {
     if (state.language && i18n.language !== state.language) {
       i18n.changeLanguage(state.language);
@@ -598,9 +885,240 @@ export function OSProvider({ children }) {
     dispatch({ type: 'SET_SORT_BY', payload: sort });
   };
 
+  const setLanguage = (language) => {
+    dispatch({ type: 'SET_LANGUAGE', payload: language });
+  };
+
+  const setSelectedIcons = (iconIds) => {
+    dispatch({ type: 'SET_SELECTED_ICONS', payload: iconIds });
+  };
+
+  const setExportNaming = (naming) => {
+    dispatch({ type: 'SET_EXPORT_NAMING', payload: naming });
+  };
+
+  const setAiHistory = (history) => {
+    dispatch({ type: 'SET_AI_HISTORY', payload: history });
+  };
+
+  const setDeferredPrompt = (promptEvent) => {
+    dispatch({ type: 'SET_DEFERRED_PROMPT', payload: promptEvent });
+  };
+
+  const updateMultipleIconPositions = (positions) => {
+    dispatch({ type: 'UPDATE_MULTIPLE_ICON_POSITIONS', payload: positions });
+  };
+
   const updateWindowPosition = (id, position) => {
     dispatch({ type: 'UPDATE_WINDOW_POSITION', payload: { id, position } });
   };
+
+  const minimizeAll = () => {
+    dispatch({ type: 'MINIMIZE_ALL' });
+  };
+
+  const restoreAll = () => {
+    dispatch({ type: 'RESTORE_ALL' });
+  };
+
+  const addNotification = (notification) => {
+    // notification: { title, message, type (success/error/info), duration }
+    const id = Date.now().toString() + Math.random().toString(36).substr(2, 9);
+    dispatch({ type: 'ADD_NOTIFICATION', payload: { ...notification, id, timestamp: Date.now() } });
+    return id;
+  };
+
+  const removeNotification = (id) => {
+    dispatch({ type: 'REMOVE_NOTIFICATION', payload: id });
+  };
+
+  // Centralized Theme Management
+  useEffect(() => {
+    const applyTheme = () => {
+      const html = document.documentElement;
+      const theme = state.theme || 'dark';
+      
+      html.classList.remove('light', 'dark');
+      
+      if (theme === 'auto') {
+        const isDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+        html.classList.add(isDark ? 'dark' : 'light');
+      } else {
+        html.classList.add(theme);
+      }
+    };
+
+    applyTheme();
+
+    const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
+    const handleChange = () => {
+      if (state.theme === 'auto') applyTheme();
+    };
+
+    mediaQuery.addEventListener('change', handleChange);
+    return () => mediaQuery.removeEventListener('change', handleChange);
+  }, [state.theme]);
+
+  const showAlert = (message, title = 'Alert') => {
+    dispatch({ type: 'SHOW_MODAL', payload: { type: 'alert', title, message } });
+  };
+
+  const showConfirm = (message, onConfirm, title = 'Confirm', confirmLabel, cancelLabel) => {
+    dispatch({ type: 'SHOW_MODAL', payload: { type: 'confirm', title, message, onConfirm, confirmLabel, cancelLabel } });
+  };
+
+  const showModal = (component, title = '', options = {}) => {
+    dispatch({ type: 'SHOW_MODAL', payload: { type: 'custom', component, title, ...options } });
+  };
+
+  const showPrompt = (message, onConfirm, defaultValue = '', title = 'Prompt') => {
+    dispatch({ type: 'SHOW_MODAL', payload: { type: 'prompt', title, message, onConfirm, defaultValue } });
+  };
+
+  const closeModal = () => {
+    dispatch({ type: 'CLOSE_MODAL' });
+  };
+
+  // Virtual desktops
+  const switchDesktop = (desktopId) => {
+    dispatch({ type: 'SWITCH_DESKTOP', payload: desktopId });
+  };
+
+  const switchToNextDesktop = () => {
+    const currentIndex = state.desktops.findIndex(d => d.id === state.currentDesktopId);
+    const nextIndex = (currentIndex + 1) % state.desktops.length;
+    switchDesktop(state.desktops[nextIndex].id);
+  };
+
+  const switchToPrevDesktop = () => {
+    const currentIndex = state.desktops.findIndex(d => d.id === state.currentDesktopId);
+    const prevIndex = (currentIndex - 1 + state.desktops.length) % state.desktops.length;
+    switchDesktop(state.desktops[prevIndex].id);
+  };
+
+  const setKeyboardShortcuts = (shortcuts) => {
+    dispatch({ type: 'SET_KEYBOARD_SHORTCUTS', payload: shortcuts });
+  };
+
+  const addDesktop = () => {
+    const newId = `desktop-${Date.now()}`;
+    const newNumber = state.desktops.length + 1;
+    dispatch({ 
+      type: 'ADD_DESKTOP', 
+      payload: { 
+        id: newId, 
+        name: `Desktop ${newNumber}`,
+        wallpaper: null 
+      } 
+    });
+  };
+
+  const renameDesktop = (desktopId, name) => {
+    dispatch({ type: 'RENAME_DESKTOP', payload: { desktopId, name } });
+  };
+
+  const removeDesktop = (desktopId) => {
+    if ((state.desktops || []).length <= 1) return;
+
+    const idx = (state.desktops || []).findIndex(d => d.id === desktopId);
+    if (idx === -1) return;
+
+    // Prefer previous desktop, otherwise fallback to first non-removed desktop
+    const prev = state.desktops[idx - 1];
+    const fallback = (state.desktops || []).find(d => d.id !== desktopId);
+    const targetDesktopId = (prev && prev.id !== desktopId) ? prev.id : (fallback ? fallback.id : state.currentDesktopId);
+
+    dispatch({ type: 'REMOVE_DESKTOP', payload: { desktopId, targetDesktopId } });
+  };
+
+  const reorderDesktops = (sourceId, targetId) => {
+    dispatch({ type: 'REORDER_DESKTOPS', payload: { sourceId, targetId } });
+  };
+
+  const moveWindowToDesktop = (windowId, fromDesktopId, toDesktopId) => {
+    dispatch({ type: 'MOVE_WINDOW_TO_DESKTOP', payload: { windowId, fromDesktopId, toDesktopId } });
+  };
+
+  // Three-finger swipe and keyboard shortcuts
+  useEffect(() => {
+    let touchStartX = 0;
+    let touchStartY = 0;
+    let touchStartTime = 0;
+
+    const handleTouchStart = (e) => {
+      if (e.touches.length === 3) {
+        touchStartX = e.touches[0].clientX;
+        touchStartY = e.touches[0].clientY;
+        touchStartTime = Date.now();
+      }
+    };
+
+    const handleTouchEnd = (e) => {
+      if (e.changedTouches.length === 3 && touchStartTime) {
+        const touchEndX = e.changedTouches[0].clientX;
+        const touchEndY = e.changedTouches[0].clientY;
+        const deltaX = touchEndX - touchStartX;
+        const deltaY = touchStartY - touchEndY;
+        const deltaTime = Date.now() - touchStartTime;
+
+        // Swipe threshold and time limit
+        if (Math.abs(deltaX) > 100 && deltaTime < 500) {
+          if (deltaX > 0) {
+            switchToPrevDesktop(); // Swipe right: previous desktop
+          } else {
+            switchToNextDesktop(); // Swipe left: next desktop
+          }
+        }
+        touchStartTime = 0;
+      }
+    };
+
+    const handleKeyDown = (e) => {
+      // Do not intercept preview shortcut (Ctrl+Cmd+Up). DesktopEnvironment handles it.
+      if (e.ctrlKey && e.metaKey && e.key === 'ArrowUp') {
+        return;
+      }
+
+      // Only handle desktop switching when an arrow key is actually pressed.
+      if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') {
+        return;
+      }
+
+      // Use configurable shortcuts from state
+      const shortcuts = state.keyboardShortcuts || {
+        prevDesktop: 'Ctrl+Cmd+Left',
+        nextDesktop: 'Ctrl+Cmd+Right',
+      };
+
+      // Parse shortcut strings and check if they match
+      const isShortcut = (shortcut, key, ctrlKey, metaKey) => {
+        const parts = shortcut.toLowerCase().split('+').map(p => p.trim());
+        const hasCtrl = parts.includes('ctrl') && ctrlKey;
+        const hasCmd = parts.includes('cmd') && metaKey;
+        const hasKey = parts.includes(key.toLowerCase().replace('arrow', ''));
+        return hasCtrl && hasCmd && hasKey;
+      };
+
+      // Ctrl + Cmd + Arrow keys to switch desktops
+      if (isShortcut(shortcuts.prevDesktop, 'ArrowLeft', e.ctrlKey, e.metaKey)) {
+        e.preventDefault();
+        switchToPrevDesktop();
+      } else if (isShortcut(shortcuts.nextDesktop, 'ArrowRight', e.ctrlKey, e.metaKey)) {
+        e.preventDefault();
+        switchToNextDesktop();
+      }
+    };
+
+    window.addEventListener('touchstart', handleTouchStart, { passive: true });
+    window.addEventListener('touchend', handleTouchEnd, { passive: true });
+    window.addEventListener('keydown', handleKeyDown);
+
+    return () => {
+      window.removeEventListener('touchstart', handleTouchStart);
+      window.removeEventListener('touchend', handleTouchEnd);
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [state.currentDesktopId, state.desktops, state.keyboardShortcuts]);
 
   return (
     <OSContext.Provider value={{ 
@@ -611,27 +1129,35 @@ export function OSProvider({ children }) {
       toggleMinimize, 
       toggleMaximize,
       snapWindow, 
+      setGlassmorphism, 
+      setIconSize, 
+      setSortBy, 
       setWallpaper, 
-      setGlassmorphism,
-      updateIconPosition,
-      setIconSize,
-      setIconStyle: (s) => dispatch({ type: 'SET_ICON_STYLE', payload: s }),
-      setSortBy,
-      setBrightness: (v) => dispatch({ type: 'SET_BRIGHTNESS', payload: v }),
-      setUiScale: (v) => dispatch({ type: 'SET_UI_SCALE', payload: v }),
-      setNotifications: (v) => dispatch({ type: 'SET_NOTIFICATIONS', payload: v }),
-      setLanguage: (l) => dispatch({ type: 'SET_LANGUAGE', payload: l }),
-      addCustomWallpaper: (url) => dispatch({ type: 'ADD_CUSTOM_WALLPAPER', payload: url }),
-      removeCustomWallpaper: (url) => dispatch({ type: 'REMOVE_CUSTOM_WALLPAPER', payload: url }),
-      minimizeAll: () => dispatch({ type: 'MINIMIZE_ALL' }),
-      restoreAll: () => dispatch({ type: 'RESTORE_ALL' }),
-      setTaskbarPosition: (pos) => dispatch({ type: 'SET_TASKBAR_POSITION', payload: pos }),
-      setSelectedIcons: (ids) => dispatch({ type: 'SET_SELECTED_ICONS', payload: ids }),
-      toggleIconSelection: (id) => dispatch({ type: 'TOGGLE_ICON_SELECTION', payload: id }),
-      moveSelectedIcons: (deltaX, deltaY, basePositions) => dispatch({ type: 'MOVE_SELECTED_ICONS', payload: { deltaX, deltaY, basePositions } }),
-      updateMultipleIconPositions: (positions) => dispatch({ type: 'UPDATE_ICON_POSITIONS', payload: positions }),
+      updateIconPosition, 
+      setLanguage, 
+      setSelectedIcons, 
+      updateMultipleIconPositions,
       updateWindowPosition,
-      saveSettings,
+      minimizeAll,
+      restoreAll,
+      setExportNaming,
+      setAiHistory,
+      setDeferredPrompt,
+      showModal,
+      showConfirm,
+      showPrompt,
+      closeModal,
+      // Virtual desktops
+      switchDesktop,
+      switchToNextDesktop,
+      switchToPrevDesktop,
+      addDesktop,
+      renameDesktop,
+      removeDesktop,
+      reorderDesktops,
+      moveWindowToDesktop,
+      setKeyboardShortcuts,
+      dispatch,
     }}>
       {children}
     </OSContext.Provider>

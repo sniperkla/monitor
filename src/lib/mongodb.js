@@ -1,5 +1,6 @@
 import mongoose from "mongoose";
 import { headers } from "next/headers";
+import mysql from "mysql2/promise";
 
 /**
  * Global is used here to maintain a cached connection across hot reloads
@@ -15,7 +16,7 @@ if (!cached) {
 const connectionPool = new Map();
 
 /**
- * Extracts MongoDB URI from headers (Private Browser Mode)
+ * Extracts Database URI from headers (Private Browser Mode)
  */
 export async function getUriFromRequest() {
   try {
@@ -60,15 +61,35 @@ async function connectCenter(uri) {
 }
 
 /**
- * Connects to a specific private MongoDB URI and returns a separate connection.
+ * Connects to a specific private URI and returns a separate connection.
+ * Supports MongoDB and MySQL.
  */
 async function getDynamicConnection(uri) {
   if (!uri) throw new Error("Database URI is missing.");
+  
   if (connectionPool.has(uri)) {
     const cachedConn = connectionPool.get(uri);
-    if (cachedConn.readyState === 1) return cachedConn;
+    // For Mongoose connections
+    if (cachedConn.readyState && cachedConn.readyState === 1) return cachedConn;
+    // For MySQL pools (simple check)
+    if (cachedConn.pool && !cachedConn._closing) return cachedConn;
+    
     connectionPool.delete(uri);
   }
+
+  if (uri.startsWith('mysql://')) {
+    const pool = mysql.createPool(uri);
+    const conn = { 
+      type: 'mysql', 
+      pool,
+      // Helper to mimic mongoose query interface roughly
+      query: (sql, params) => pool.execute(sql, params)
+    };
+    connectionPool.set(uri, conn);
+    return conn;
+  }
+
+  // Default to MongoDB
   const opts = { bufferCommands: false, serverSelectionTimeoutMS: 5000 };
   const conn = await mongoose.createConnection(uri, opts).asPromise();
   connectionPool.set(uri, conn);

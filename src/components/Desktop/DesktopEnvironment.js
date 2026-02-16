@@ -6,26 +6,35 @@ import Window from '@/components/Desktop/Window';
 import Taskbar from '@/components/Desktop/Taskbar';
 import SSHApp from '@/apps/SSHApp';
 import SettingsApp from '@/apps/SettingsApp';
-import { 
-  Terminal, Settings, FolderClosed, Monitor, RefreshCw, Plus, 
+import { Terminal, Settings, FolderClosed, Monitor, RefreshCw, Plus, 
   Image as ImageIcon, Layout, Grid, List, AlignLeft, SortAsc,
-  ChevronRight, Type, Calendar, HardDrive, Palette, MonitorCog, Globe
+  ChevronRight, Type, Calendar, HardDrive, Palette, MonitorCog, Globe, Maximize, Minimize, Database
 } from 'lucide-react';
-import { Toaster, toast } from 'react-hot-toast';
+import NotificationCenter from '@/components/Desktop/NotificationCenter';
 import { useState, useEffect, useRef, cloneElement, isValidElement } from 'react';
 import ConnectionModal from '@/components/ConnectionModal';
+import DesktopModal from '@/components/Desktop/DesktopModal';
 import { useApp } from '@/context/AppContext';
 import TerminalApp from '@/apps/TerminalApp';
 import FilesApp from '@/apps/FilesApp';
 import FileManager from '@/components/FileManager';
 import { AnimatePresence, motion } from 'framer-motion';
 import { useTranslation } from 'react-i18next';
+import WikiChatWindow from './WikiChatWindow';
+import PWAHandler from './PWAHandler';
+import SpotlightSearch from './SpotlightSearch';
+import PreviewWindow from './PreviewWindow';
+import dynamic from 'next/dynamic';
+
+const DatabaseBrowser = dynamic(() => import('@/components/DatabaseBrowser'), {
+  ssr: false,
+});
 
 export default function DesktopEnvironment() {
   const { t } = useTranslation();
-  const { state: osState, openWindow, setGlassmorphism, setIconSize, setSortBy, setWallpaper, updateIconPosition, setLanguage, setSelectedIcons, updateMultipleIconPositions } = useOS();
-  const { windows, iconSize, sortBy } = osState;
-  const { fetchConnections } = useApp();
+  const { state: osState, openWindow, setGlassmorphism, setIconSize, setSortBy, setWallpaper, updateIconPosition, setLanguage, setSelectedIcons, updateMultipleIconPositions, toggleMinimize, switchToPrevDesktop, switchToNextDesktop } = useOS();
+  const { windows, iconSize, sortBy, currentDesktopId, windowsByDesktop, keyboardShortcuts } = osState;
+  const { state: appState, dispatch: appDispatch, fetchConnections } = useApp();
   
   const [contextMenu, setContextMenu] = useState(null); // { x, y }
   const [activeSubmenu, setActiveSubmenu] = useState(null);
@@ -37,12 +46,166 @@ export default function DesktopEnvironment() {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [dropMenu, setDropMenu] = useState(null); // { x, y, connection }
   const [selection, setSelection] = useState({ active: false, x1: 0, y1: 0, x2: 0, y2: 0 });
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [showPreview, setShowPreview] = useState(false);
+  const [hideDesktopContent, setHideDesktopContent] = useState(false);
 
   useEffect(() => {
     setMounted(true);
     const timer = setTimeout(() => setBooting(false), 2000);
-    return () => clearTimeout(timer);
-  }, []);
+
+    const handleFullscreenChange = () => {
+      setIsFullscreen(!!document.fullscreenElement);
+    };
+
+    document.addEventListener('fullscreenchange', handleFullscreenChange);
+
+    // Three-finger swipe and keyboard shortcuts
+    let touchStartX = 0;
+    let touchStartY = 0;
+    let touchStartTime = 0;
+    let lastSwipeUpTime = 0;
+
+    const handleTouchStart = (e) => {
+      if (e.touches.length === 3) {
+        touchStartX = e.touches[0].clientX;
+        touchStartY = e.touches[0].clientY;
+        touchStartTime = Date.now();
+      }
+    };
+
+    const handleTouchEnd = (e) => {
+      if (e.changedTouches.length === 3 && touchStartTime) {
+        const touchEndX = e.changedTouches[0].clientX;
+        const touchEndY = e.changedTouches[0].clientY;
+        const deltaX = touchEndX - touchStartX;
+        const deltaY = touchStartY - touchEndY;
+        const deltaTime = Date.now() - touchStartTime;
+        const currentTime = Date.now();
+
+        const absX = Math.abs(deltaX);
+        const absY = Math.abs(deltaY);
+
+        const currentDesktopWindows = windowsByDesktop[currentDesktopId] || [];
+
+        // Swipe up: ONLY open preview (no desktop switching as side-effect)
+        // Requirements:
+        // - strong upward intent
+        // - limited horizontal movement
+        // - ignore if preview already open
+        if (!showPreview && deltaY > 120 && absY > absX * 2.2 && deltaTime < 500) {
+          setShowPreview(true);
+
+          if (currentDesktopWindows.length === 0) {
+            // No apps: hide desktop content
+            setHideDesktopContent(true);
+          } else {
+            // Apps: minimize all to compact previews
+            setHideDesktopContent(false);
+            currentDesktopWindows.forEach((win) => {
+              if (!win.isMinimized) toggleMinimize(win.id);
+            });
+          }
+
+          lastSwipeUpTime = currentTime;
+        }
+        // Swipe left/right for desktop switching
+        else if (!showPreview && absX > 140 && absX > absY * 1.8 && deltaTime < 500) {
+          if (deltaX > 0) {
+            switchToPrevDesktop(); // Swipe right: previous desktop
+          } else {
+            switchToNextDesktop(); // Swipe left: next desktop
+          }
+        }
+        touchStartTime = 0;
+      }
+    };
+
+    const handleKeyDown = (e) => {
+      // Use configurable shortcuts from state
+      const shortcuts = keyboardShortcuts || {
+        previewWindow: 'Ctrl+Cmd+Up',
+        prevDesktop: 'Ctrl+Cmd+Left',
+        nextDesktop: 'Ctrl+Cmd+Right',
+        minimizeAll: 'Ctrl+Cmd+M',
+        closeAll: 'Ctrl+Cmd+W',
+      };
+
+      // Parse shortcut strings and check if they match
+      const isShortcut = (shortcut, pressedKey, ctrlKey, metaKey) => {
+        if (!shortcut) return false;
+        const parts = shortcut.toLowerCase().split('+').map(p => p.trim());
+        const hasCtrl = parts.includes('ctrl') && ctrlKey;
+        const hasCmd = parts.includes('cmd') && metaKey;
+
+        const k = (pressedKey || '').toLowerCase();
+        const keyToken = k.startsWith('arrow') ? k.replace('arrow', '') : k;
+
+        // Allow either 'up' or 'arrowup' style tokens in the shortcut string
+        const hasKey = parts.includes(keyToken) || parts.includes(k);
+        return hasCtrl && hasCmd && hasKey;
+      };
+
+      // Ctrl + Cmd + Up to open/close preview window
+      if (isShortcut(shortcuts.previewWindow, e.key, e.ctrlKey, e.metaKey)) {
+        e.preventDefault();
+        e.stopPropagation();
+
+        if (showPreview) return;
+
+        const currentDesktopWindows = windowsByDesktop[currentDesktopId] || [];
+        setShowPreview(true);
+
+        if (currentDesktopWindows.length === 0) {
+          setHideDesktopContent(true);
+        } else {
+          setHideDesktopContent(false);
+          currentDesktopWindows.forEach((win) => {
+            if (!win.isMinimized) toggleMinimize(win.id);
+          });
+        }
+      }
+      // Ctrl + Cmd + Left for previous desktop
+      else if (isShortcut(shortcuts.prevDesktop, e.key, e.ctrlKey, e.metaKey)) {
+        if (e.key !== 'ArrowLeft') return;
+        e.preventDefault();
+        e.stopPropagation();
+        switchToPrevDesktop();
+      }
+      // Ctrl + Cmd + Right for next desktop
+      else if (isShortcut(shortcuts.nextDesktop, e.key, e.ctrlKey, e.metaKey)) {
+        if (e.key !== 'ArrowRight') return;
+        e.preventDefault();
+        e.stopPropagation();
+        switchToNextDesktop();
+      }
+      // Escape to close preview window
+      if (e.key === 'Escape' && showPreview) {
+        setShowPreview(false);
+        setHideDesktopContent(false);
+      }
+    };
+
+    window.addEventListener('touchstart', handleTouchStart, { passive: true });
+    window.addEventListener('touchend', handleTouchEnd, { passive: true });
+    window.addEventListener('keydown', handleKeyDown);
+
+    return () => {
+      clearTimeout(timer);
+      document.removeEventListener('fullscreenchange', handleFullscreenChange);
+      window.removeEventListener('touchstart', handleTouchStart);
+      window.removeEventListener('touchend', handleTouchEnd);
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [showPreview, currentDesktopId, windowsByDesktop, keyboardShortcuts, toggleMinimize, switchToPrevDesktop, switchToNextDesktop]);
+
+  useEffect(() => {
+    if (!showPreview) {
+      setHideDesktopContent(false);
+    }
+  }, [showPreview]);
+
+
 
   // Initialize Icon Positions to prevent jump glitches
   useEffect(() => {
@@ -88,17 +251,26 @@ export default function DesktopEnvironment() {
     const GRID_X = 100;
     const GRID_Y = 110;
     const PADDING = 20;
-    const maxHeight = window.innerHeight - 100; // Account for taskbar
+    const taskbarHeight = 56;
+    const taskbarPos = osState.taskbarPosition || 'bottom';
     
-    let currentX = PADDING;
-    let currentY = PADDING;
+    let startX = PADDING;
+    let startY = PADDING;
+    
+    if (taskbarPos === 'top') startY += taskbarHeight;
+    if (taskbarPos === 'left') startX += taskbarHeight;
+
+    const maxHeight = window.innerHeight - (taskbarPos === 'bottom' ? taskbarHeight + PADDING : PADDING);
+    
+    let currentX = startX;
+    let currentY = startY;
 
     sorted.forEach((icon) => {
       updateIconPosition(icon.id, currentX, currentY);
       
       currentY += GRID_Y;
       if (currentY + GRID_Y > maxHeight) {
-        currentY = PADDING;
+        currentY = startY;
         currentX += GRID_X;
       }
     });
@@ -115,27 +287,39 @@ export default function DesktopEnvironment() {
   }, [osState.sortBy]);
 
   const handleContextMenu = (e) => {
-    e.preventDefault();
-    e.stopPropagation();
     const clickedInsideWindow = e.target.closest('.window-container');
     const clickedInsideTaskbar = e.target.closest('.taskbar');
     const clickedInsideIcon = e.target.closest('.desktop-icon');
     
-    if (!clickedInsideWindow && !clickedInsideTaskbar && !clickedInsideIcon) {
-      setActiveSubmenu(null);
-      
-      let x = e.clientX;
-      let y = e.clientY;
-      
-      const menuWidth = 256; 
-      const menuHeight = 400; 
-      
-      if (x + menuWidth > window.innerWidth) x -= menuWidth;
-      if (y + menuHeight > window.innerHeight - 48) y -= menuHeight;
-      if (y < 10) y = 10;
-      
-      setContextMenu({ x, y });
+    // Allow native context menu (Copy/Paste) inside windows
+    if (clickedInsideWindow || clickedInsideTaskbar || clickedInsideIcon) {
+      return;
     }
+
+    e.preventDefault();
+    e.stopPropagation();
+    setActiveSubmenu(null);
+    
+    let x = e.clientX;
+    let y = e.clientY;
+    
+    const menuWidth = 256; 
+    const menuHeight = 400;
+    const taskbarH = 56;
+    
+    // Bounds check
+    const rightBound = taskbarPos === 'right' ? window.innerWidth - taskbarH : window.innerWidth;
+    const bottomBound = taskbarPos === 'bottom' ? window.innerHeight - taskbarH : window.innerHeight;
+    const leftBound = taskbarPos === 'left' ? taskbarH : 0;
+    const topBound = taskbarPos === 'top' ? taskbarH : 0;
+    
+    if (x + menuWidth > rightBound) x -= menuWidth;
+    if (x < leftBound) x = leftBound + 4;
+    
+    if (y + menuHeight > bottomBound) y -= menuHeight;
+    if (y < topBound) y = topBound + 4;
+    
+    setContextMenu({ x, y });
   };
 
   const closeContext = () => { setContextMenu(null); setActiveSubmenu(null); };
@@ -172,7 +356,7 @@ export default function DesktopEnvironment() {
   };
 
   const openStandaloneTerminal = (conn) => {
-    const winId = `standalone-term-${conn._id}-${Date.now()}`;
+    const winId = `standalone-term-${conn._id}`;
     openWindow(
       winId,
       conn.name,
@@ -184,13 +368,41 @@ export default function DesktopEnvironment() {
   };
 
   const openStandaloneFiles = (conn) => {
-    const winId = `standalone-files-${conn._id}-${Date.now()}`;
+    const winId = `standalone-files-${conn._id}`;
     openWindow(
       winId,
       `Files: ${conn.name}`,
       <FilesApp onEditConnection={handleEditConnection} initialConnection={conn} />,
       FolderClosed,
       { initialWidth: 900, initialHeight: 600, appType: 'files-app', props: { initialConnection: conn } }
+    );
+    setDropMenu(null);
+  };
+
+  const handleNewConnection = () => {
+    setEditConnection(null);
+    setShowNewConnModal(true);
+  };
+
+  const openStandaloneDatabase = (conn) => {
+    const winId = `standalone-db-${conn._id}`;
+    openWindow(
+      winId,
+      `DB: ${conn.name}`,
+      <div className="h-full w-full bg-[var(--bg-primary)] p-4">
+        <DatabaseBrowser 
+          initialConnection={conn} 
+          onEditConnection={handleEditConnection} 
+          onNewConnection={handleNewConnection}
+        />
+      </div>,
+      Database,
+      { 
+        initialWidth: 1000, 
+        initialHeight: 700, 
+        appType: 'database-browser', 
+        props: { initialConnection: conn } 
+      }
     );
     setDropMenu(null);
   };
@@ -220,7 +432,7 @@ export default function DesktopEnvironment() {
       // Get offset of desktop layer for correct hit detection
       const taskbarPos = osState.taskbarPosition || 'bottom';
       const offsetX = taskbarPos === 'left' ? 64 : 0;
-      const offsetY = taskbarPos === 'top' ? 56 : 0;
+      const offsetY = taskbarPos === 'top' ? 64 : 0;
 
       // Selection rectangle in viewport coordinates
       const rect = {
@@ -269,11 +481,11 @@ export default function DesktopEnvironment() {
   const taskbarPos = osState.taskbarPosition || 'bottom';
   const getDesktopPadding = () => {
     switch (taskbarPos) {
-      case 'top': return 'pt-14';
-      case 'bottom': return 'pb-14';
+      case 'top': return 'pt-16';
+      case 'bottom': return 'pb-16';
       case 'left': return 'pl-16';
       case 'right': return 'pr-16';
-      default: return 'pb-14';
+      default: return 'pb-16';
     }
   };
 
@@ -314,7 +526,7 @@ export default function DesktopEnvironment() {
           <motion.div
             initial={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="fixed inset-0 z-[50000] bg-[#0a0e1a] flex flex-col items-center justify-center"
+            className="fixed inset-0 z-[50000] bg-[var(--bg-primary)] flex flex-col items-center justify-center"
           >
             <motion.div
               initial={{ scale: 0.8, opacity: 0 }}
@@ -333,7 +545,7 @@ export default function DesktopEnvironment() {
               transition={{ delay: 0.3 }}
               className="text-center"
             >
-              <h1 className="text-white font-bold text-xl tracking-widest uppercase mb-2">Webtop OS</h1>
+              <h1 className="text-[var(--text-primary)] font-bold text-xl tracking-widest uppercase mb-2">Webtop OS</h1>
               <div className="flex gap-1 justify-center">
                 {[0, 1, 2].map(i => (
                   <motion.div
@@ -354,8 +566,14 @@ export default function DesktopEnvironment() {
         <div 
           className="desktop-layer relative w-full h-full pointer-events-auto"
           onContextMenu={handleContextMenu}
+          onClick={() => {
+            // Collapse preview window when clicking on blank desktop area
+            if (showPreview) {
+              setShowPreview(false);
+            }
+          }}
         >
-          {DESKTOP_ICONS.map((icon, idx) => (
+          {!hideDesktopContent && DESKTOP_ICONS.map((icon, idx) => (
             <DesktopIcon
               key={`${icon.id}-${refreshKey}`}
               id={icon.id}
@@ -371,7 +589,7 @@ export default function DesktopEnvironment() {
       </div>
 
       {/* Windows Layer */}
-      {windows.map(win => {
+      {!hideDesktopContent && (windowsByDesktop[currentDesktopId] || windows).map(win => {
         let component = win.component;
         
         // Inject shared props (like onEditConnection) for restored windows
@@ -398,29 +616,42 @@ export default function DesktopEnvironment() {
         );
       })}
 
+      {/* Persistent Wiki Chat Windows */}
+      <AnimatePresence>
+        {appState.wikiChatWindows?.map(chat => (
+          <WikiChatWindow 
+            key={chat.id} 
+            id={chat.id} 
+            guide={chat.guide} 
+            onClose={(id) => appDispatch({ type: 'CLOSE_WIKI_CHAT', payload: id })}
+          />
+        ))}
+      </AnimatePresence>
+
       {/* Taskbar */}
-      <Taskbar />
+      {!showPreview && <Taskbar />}
 
       {/* Context Menu */}
-      <AnimatePresence>
-        {contextMenu && (
-          <motion.div
-            initial={{ opacity: 0, scale: 0.95, y: -4 }}
-            animate={{ opacity: 1, scale: 1, y: 0 }}
-            exit={{ opacity: 0, scale: 0.95, y: -4 }}
-            transition={{ duration: 0.12 }}
-            onContextMenu={(e) => e.preventDefault()}
-            onClick={(e) => e.stopPropagation()}
-            className="fixed z-[20000] w-64 rounded-lg border border-white/[0.08] shadow-2xl overflow-visible"
-            style={{ 
-              top: contextMenu.y, 
-              left: contextMenu.x,
-              background: osState.glassmorphism ? 'rgba(20, 27, 45, 0.95)' : '#141b2d',
-              backdropFilter: 'blur(24px)',
-              boxShadow: '0 8px 32px rgba(0,0,0,0.5), 0 0 0 1px rgba(255,255,255,0.04)'
-            }}
-          >
-            <div className="py-1.5">
+      {!showPreview && (
+        <AnimatePresence>
+          {contextMenu && (
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: -4 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: -4 }}
+              transition={{ duration: 0.12 }}
+              onContextMenu={(e) => e.preventDefault()}
+              onClick={(e) => e.stopPropagation()}
+              className="fixed z-[20000] w-64 rounded-lg border border-[var(--border-color)] shadow-2xl overflow-visible"
+              style={{ 
+                top: contextMenu.y, 
+                left: contextMenu.x,
+                background: osState.glassmorphism ? 'var(--window-bg)' : 'var(--bg-primary)',
+                backdropFilter: 'blur(24px)',
+                boxShadow: '0 8px 32px rgba(0,0,0,0.5), 0 0 0 1px rgba(255,255,255,0.04)'
+              }}
+            >
+              <div className="py-1.5">
               {/* View submenu */}
               <ContextSubmenuItem
                 icon={Grid}
@@ -461,6 +692,20 @@ export default function DesktopEnvironment() {
                 <ContextRadioItem label="简体中文 (CN)" checked={osState.language === 'cn'} onClick={() => { setLanguage('cn'); closeContext(); }} />
               </ContextSubmenuItem>
 
+              <ContextItem 
+                icon={isFullscreen ? Minimize : Maximize} 
+                label={isFullscreen ? "Exit Fullscreen" : "Enter Fullscreen"} 
+                onHover={() => setActiveSubmenu(null)}
+                onClick={() => {
+                  if (!isFullscreen) {
+                    document.documentElement.requestFullscreen().catch(e => console.error(e));
+                  } else {
+                    document.exitFullscreen().catch(e => console.error(e));
+                  }
+                  closeContext();
+                }} 
+              />
+
               <div className="h-px bg-white/[0.06] my-1.5 mx-2" />
 
               <ContextItem 
@@ -498,7 +743,10 @@ export default function DesktopEnvironment() {
                 icon={MonitorCog} 
                 label={t('desktop.context.display')} 
                 onHover={() => setActiveSubmenu(null)}
-                onClick={() => { openWindow('settings', 'Settings', <SettingsApp />, Settings); closeContext(); }} 
+                onClick={() => { 
+                  openWindow('settings', 'Settings', <SettingsApp initialTab="display" />, Settings, { initialWidth: 900, initialHeight: 700 }); 
+                  closeContext(); 
+                }} 
               />
 
               <div className="h-px bg-white/[0.06] my-1.5 mx-2" />
@@ -507,12 +755,16 @@ export default function DesktopEnvironment() {
                 icon={Settings} 
                 label={t('desktop.context.personalize')} 
                 onHover={() => setActiveSubmenu(null)}
-                onClick={() => { openWindow('settings', 'Settings', <SettingsApp />, Settings); closeContext(); }} 
+                onClick={() => { 
+                  openWindow('settings', 'Settings', <SettingsApp initialTab="personalization" />, Settings, { initialWidth: 900, initialHeight: 700 }); 
+                  closeContext(); 
+                }} 
               />
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+      )}
 
       {/* Modals */}
       {showNewConnModal && (
@@ -522,18 +774,13 @@ export default function DesktopEnvironment() {
         />
       )}
 
+      <DesktopModal />
+      <PWAHandler />
+      <SpotlightSearch />
+      <PreviewWindow isOpen={showPreview} onClose={() => setShowPreview(false)} />
+
       {/* Notifications */}
-      <Toaster
-        position="top-right"
-        toastOptions={{
-          style: {
-            background: '#1e293b',
-            color: '#fff',
-            border: '1px solid rgba(255,255,255,0.1)',
-            backdropFilter: 'blur(10px)',
-          },
-        }}
-      />
+      <NotificationCenter />
 
       {/* Drop Menu - Choose Terminal or Files */}
       <AnimatePresence>
@@ -544,45 +791,60 @@ export default function DesktopEnvironment() {
             exit={{ opacity: 0, scale: 0.9 }}
             transition={{ duration: 0.12 }}
             onClick={(e) => e.stopPropagation()}
-            className="fixed z-[30000] w-56 rounded-xl border border-white/[0.08] shadow-2xl overflow-hidden"
+            className="fixed z-[30000] w-56 rounded-xl border border-[var(--border-color)] shadow-2xl overflow-hidden"
             style={{
               top: Math.min(dropMenu.y, window.innerHeight - 200),
               left: Math.min(dropMenu.x, window.innerWidth - 240),
-              background: 'rgba(15, 23, 42, 0.97)',
+              background: 'var(--window-bg)',
               backdropFilter: 'blur(20px)',
               boxShadow: '0 8px 32px rgba(0,0,0,0.6), 0 0 0 1px rgba(255,255,255,0.04)',
             }}
           >
             {/* Header */}
-            <div className="px-4 py-3 border-b border-white/[0.06]">
+            <div className="px-4 py-3 border-b border-[var(--border-color)]/30">
               <div className="flex items-center gap-2">
                 <div className="w-2 h-2 rounded-full" style={{ background: dropMenu.connection?.color || '#6366f1' }} />
-                <span className="text-xs font-bold text-white truncate">{dropMenu.connection?.name}</span>
+                <span className="text-xs font-bold text-[var(--text-primary)] truncate">{dropMenu.connection?.name}</span>
               </div>
-              <p className="text-[10px] text-gray-500 mt-0.5 font-mono">{dropMenu.connection?.host}</p>
+              <p className="text-[10px] text-[var(--text-muted)] mt-0.5 font-mono">{dropMenu.connection?.host}</p>
             </div>
 
             <div className="py-1.5">
-              <button
-                onClick={() => openStandaloneTerminal(dropMenu.connection)}
-                className="w-full flex items-center gap-3 px-4 py-2.5 hover:bg-indigo-500/90 transition-colors group"
-              >
-                <Terminal size={16} className="text-emerald-400 group-hover:text-white" />
-                <div className="text-left">
-                  <span className="text-[13px] text-gray-200 group-hover:text-white block font-medium">Open Terminal</span>
-                  <span className="text-[10px] text-gray-500 group-hover:text-white/70">SSH shell session</span>
-                </div>
-              </button>
-              <button
-                onClick={() => openStandaloneFiles(dropMenu.connection)}
-                className="w-full flex items-center gap-3 px-4 py-2.5 hover:bg-indigo-500/90 transition-colors group"
-              >
-                <FolderClosed size={16} className="text-blue-400 group-hover:text-white" />
-                <div className="text-left">
-                  <span className="text-[13px] text-gray-200 group-hover:text-white block font-medium">Open File Manager</span>
-                  <span className="text-[10px] text-gray-500 group-hover:text-white/70">Browse remote files</span>
-                </div>
-              </button>
+              {dropMenu.connection?.type === 'database' ? (
+                <button
+                  onClick={() => openStandaloneDatabase(dropMenu.connection)}
+                  className="w-full flex items-center gap-3 px-4 py-2.5 hover:bg-emerald-500/90 transition-colors group"
+                >
+                  <Database size={16} className="text-emerald-400 group-hover:text-white" />
+                  <div className="text-left">
+                    <span className="text-[13px] text-[var(--text-secondary)] group-hover:text-white block font-medium">Open Database</span>
+                    <span className="text-[10px] text-[var(--text-muted)] group-hover:text-white/70">Manage Collections & Queries</span>
+                  </div>
+                </button>
+              ) : (
+                <>
+                  <button
+                    onClick={() => openStandaloneTerminal(dropMenu.connection)}
+                    className="w-full flex items-center gap-3 px-4 py-2.5 hover:bg-indigo-500/90 transition-colors group"
+                  >
+                    <Terminal size={16} className="text-emerald-400 group-hover:text-white" />
+                    <div className="text-left">
+                      <span className="text-[13px] text-[var(--text-secondary)] group-hover:text-white block font-medium">Open Terminal</span>
+                      <span className="text-[10px] text-[var(--text-muted)] group-hover:text-white/70">SSH shell session</span>
+                    </div>
+                  </button>
+                  <button
+                    onClick={() => openStandaloneFiles(dropMenu.connection)}
+                    className="w-full flex items-center gap-3 px-4 py-2.5 hover:bg-indigo-500/90 transition-colors group"
+                  >
+                    <FolderClosed size={16} className="text-blue-400 group-hover:text-white" />
+                    <div className="text-left">
+                      <span className="text-[13px] text-[var(--text-secondary)] group-hover:text-white block font-medium">Open File Manager</span>
+                      <span className="text-[10px] text-[var(--text-muted)] group-hover:text-white/70">Browse remote files</span>
+                    </div>
+                  </button>
+                </>
+              )}
             </div>
           </motion.div>
         )}
@@ -602,9 +864,9 @@ function ContextItem({ icon: Icon, label, onClick, onHover, shortcut }) {
       className="w-full flex items-center gap-3 px-3 py-[6px] mx-1 rounded-md hover:bg-blue-500/90 active:bg-blue-600 transition-colors group text-left"
       style={{ width: 'calc(100% - 8px)' }}
     >
-      <Icon size={15} className="text-gray-400 group-hover:text-white transition-colors flex-shrink-0" />
-      <span className="text-[13px] text-gray-200 group-hover:text-white flex-1">{label}</span>
-      {shortcut && <span className="text-[11px] text-gray-500 group-hover:text-white/70">{shortcut}</span>}
+      <Icon size={15} className="text-[var(--text-muted)] group-hover:text-white transition-colors flex-shrink-0" />
+      <span className="text-[13px] text-[var(--text-secondary)] group-hover:text-white flex-1">{label}</span>
+      {shortcut && <span className="text-[11px] text-[var(--text-muted)] group-hover:text-white/70">{shortcut}</span>}
     </button>
   );
 }
@@ -618,18 +880,18 @@ function ContextSubmenuItem({ icon: Icon, label, children, active, onHover, onLe
         }`}
         style={{ width: 'calc(100% - 8px)' }}
       >
-        <Icon size={15} className={`flex-shrink-0 transition-colors ${active ? 'text-white' : 'text-gray-400 group-hover:text-white'}`} />
-        <span className={`text-[13px] flex-1 transition-colors ${active ? 'text-white' : 'text-gray-200 group-hover:text-white'}`}>{label}</span>
-        <ChevronRight size={12} className={`flex-shrink-0 transition-colors ${active ? 'text-white' : 'text-gray-500 group-hover:text-white'}`} />
+        <Icon size={15} className={`flex-shrink-0 transition-colors ${active ? 'text-white' : 'text-[var(--text-muted)] group-hover:text-white'}`} />
+        <span className={`text-[13px] flex-1 transition-colors ${active ? 'text-white' : 'text-[var(--text-secondary)] group-hover:text-white'}`}>{label}</span>
+        <ChevronRight size={12} className={`flex-shrink-0 transition-colors ${active ? 'text-white' : 'text-[var(--text-muted)] group-hover:text-white'}`} />
       </button>
       {active && (
         <motion.div
           initial={{ opacity: 0, x: -4 }}
           animate={{ opacity: 1, x: 0 }}
           transition={{ duration: 0.1 }}
-          className="absolute left-full top-0 ml-0.5 w-52 py-1.5 rounded-lg border border-white/[0.08] shadow-2xl z-10"
+          className="absolute left-full top-0 ml-0.5 w-52 py-1.5 rounded-lg border border-[var(--border-color)] shadow-2xl z-10"
           style={{
-            background: 'rgba(20, 27, 45, 0.97)',
+            background: 'var(--window-bg)',
             backdropFilter: 'blur(24px)',
             boxShadow: '0 8px 32px rgba(0,0,0,0.5), 0 0 0 1px rgba(255,255,255,0.04)'
           }}
@@ -649,11 +911,11 @@ function ContextRadioItem({ label, checked, onClick }) {
       style={{ width: 'calc(100% - 8px)' }}
     >
       <span className={`w-4 h-4 rounded-full border flex items-center justify-center flex-shrink-0 ${
-        checked ? 'border-blue-400 bg-blue-500' : 'border-gray-500'
+        checked ? 'border-blue-400 bg-blue-500' : 'border-[var(--text-muted)]'
       }`}>
         {checked && <span className="w-1.5 h-1.5 bg-white rounded-full" />}
       </span>
-      <span className="text-[13px] text-gray-200 group-hover:text-white">{label}</span>
+      <span className="text-[13px] text-[var(--text-secondary)] group-hover:text-white">{label}</span>
     </button>
   );
 }

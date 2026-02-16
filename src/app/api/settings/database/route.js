@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import mongoose from 'mongoose';
+import mysql from 'mysql2/promise';
 import fs from 'fs';
 import path from 'path';
 
@@ -47,10 +48,13 @@ export async function POST(request) {
     }
 
     // Basic URI validation
-    if (!uri.startsWith('mongodb://') && !uri.startsWith('mongodb+srv://')) {
+    const allowedProtocols = ['mongodb://', 'mongodb+srv://', 'mysql://', 'postgres://', 'postgresql://'];
+    const isValid = allowedProtocols.some(p => uri.startsWith(p));
+    
+    if (!isValid) {
       return NextResponse.json({ 
         success: false, 
-        error: 'URI must start with mongodb:// or mongodb+srv://' 
+        error: `URI must start with one of: ${allowedProtocols.join(', ')}` 
       }, { status: 400 });
     }
 
@@ -58,36 +62,46 @@ export async function POST(request) {
     try {
       if (mongoose.connection.readyState !== 0) {
         await mongoose.disconnect();
-        console.log('🔌 Disconnected from previous MongoDB');
       }
-    } catch (e) {
-      console.error('Disconnect error (non-fatal):', e.message);
-    }
+    } catch (e) {}
 
     // 2. Clear global cache so lib/mongodb.js picks up the new URI
     if (global.mongoose) {
       global.mongoose = { conn: null, promise: null };
     }
 
-    // 3. Try connecting to the new URI
-    try {
-      await mongoose.connect(uri, { 
-        bufferCommands: false,
-        serverSelectionTimeoutMS: 5000, // 5 second timeout
-      });
-      console.log('✅ Live-connected to new MongoDB:', uri);
-    } catch (connectErr) {
-      return NextResponse.json({ 
-        success: false, 
-        error: `Connection failed: ${connectErr.message}` 
-      }, { status: 400 });
+    // 3. Try connecting
+    if (uri.startsWith('mongodb')) {
+      try {
+        await mongoose.connect(uri, { 
+          bufferCommands: false,
+          serverSelectionTimeoutMS: 5000,
+        });
+        console.log('✅ Live-connected to new MongoDB');
+      } catch (connectErr) {
+        return NextResponse.json({ 
+          success: false, 
+          error: `MongoDB connection failed: ${connectErr.message}` 
+        }, { status: 400 });
+      }
+    } else if (uri.startsWith('mysql://')) {
+      try {
+        const connection = await mysql.createConnection(uri);
+        await connection.ping();
+        await connection.end();
+        console.log('✅ Live-connected to new MySQL');
+      } catch (connectErr) {
+        return NextResponse.json({ 
+          success: false, 
+          error: `MySQL connection failed: ${connectErr.message}` 
+        }, { status: 400 });
+      }
+    } else {
+      console.log('📝 PostgreSQL selected. Configuration saved, but live sync requires specific drivers.');
     }
 
     // 4. Connection succeeded — save config
     writeConfig({ uri });
-
-    // 5. Update cache for lib/mongodb.js
-    global.mongoose = { conn: mongoose, promise: Promise.resolve(mongoose) };
 
     return NextResponse.json({ 
       success: true, 
@@ -97,3 +111,4 @@ export async function POST(request) {
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   }
 }
+

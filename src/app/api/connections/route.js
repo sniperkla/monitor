@@ -1,23 +1,26 @@
 import { NextResponse } from 'next/server';
 import connectDB from '@/lib/mongodb';
-import { getConnectionModel } from '@/models/Connection';
-
+import { ConnectionRepository } from '@/lib/repositories/ConnectionRepository';
 import { encrypt } from '@/utils/encryption';
 
 // GET all connections
 export async function GET() {
   try {
     const db = await connectDB();
-    const ConnectionModel = getConnectionModel(db);
-    const connections = await ConnectionModel.find({}).sort({ updatedAt: -1 });
+    const repo = new ConnectionRepository(db);
+    await repo.init();
+    const connections = await repo.findAll();
     
     // Sanitize - don't send sensitive data
     const sanitized = connections.map(conn => ({
       _id: conn._id,
       name: conn.name,
+      type: conn.type || 'ssh',
+      dbProvider: conn.dbProvider || 'mongodb',
       host: conn.host,
       port: conn.port,
       username: conn.username,
+      database: conn.database,
       authType: conn.authType,
       keyFileName: conn.keyFileName,
       tags: conn.tags,
@@ -32,6 +35,7 @@ export async function GET() {
 
     return NextResponse.json({ success: true, data: sanitized });
   } catch (error) {
+    console.error('API Error:', error);
     return NextResponse.json(
       { success: false, error: error.message },
       { status: 500 }
@@ -43,14 +47,18 @@ export async function GET() {
 export async function POST(request) {
   try {
     const db = await connectDB();
-    const ConnectionModel = getConnectionModel(db);
+    const repo = new ConnectionRepository(db);
+    await repo.init();
     const body = await request.json();
 
-    const connection = await ConnectionModel.create({
+    const connection = await repo.create({
       name: body.name,
+      type: body.type || 'ssh',
+      dbProvider: body.dbProvider || 'mongodb',
       host: body.host,
-      port: body.port || 22,
+      port: body.port,
       username: body.username,
+      database: body.database || null,
       authType: body.authType,
       password: body.authType === 'password' ? encrypt(body.password) : null,
       privateKey: body.authType === 'privateKey' ? encrypt(body.privateKey) : null,
@@ -72,3 +80,4 @@ export async function POST(request) {
     );
   }
 }
+

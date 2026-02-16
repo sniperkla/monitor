@@ -2,7 +2,7 @@
 
 import { useApp } from '@/context/AppContext';
 import {
-  Server, Terminal, Activity, Clock, Globe, Shield, Cpu, HardDrive,
+  Server, Terminal, Activity, Clock, Globe, Shield, Cpu, HardDrive, Database,
   BarChart3, TrendingUp, Zap, Plus, RefreshCw, ChevronRight, AlertCircle,
   CheckCircle2, AlertTriangle, Star
 } from 'lucide-react';
@@ -49,6 +49,32 @@ export default function Dashboard({ onNewConnection, onEditConnection }) {
   const handleQuickConnect = (conn) => {
     if (conn.storage === 'manual') {
       onEditConnection(conn);
+      return;
+    }
+
+    if (conn.type === 'database') {
+      const existing = state.activeDatabaseBrowsers.find(b => b.connectionId === conn._id);
+      if (existing) {
+        dispatch({ type: 'SET_VIEW', payload: 'database' });
+        return;
+      }
+      dispatch({
+        type: 'OPEN_DATABASE_BROWSER',
+        payload: {
+          id: `db-${conn._id}-${Date.now()}`,
+          connectionId: conn._id,
+          connectionName: conn.name,
+          color: conn.color,
+          connection: conn,
+        },
+      });
+      return;
+    }
+
+    // SSH Duplicate Check
+    const existing = state.activeTerminals.find(t => t.connectionId === conn._id);
+    if (existing) {
+      dispatch({ type: 'SET_VIEW', payload: 'terminal' });
       return;
     }
     
@@ -102,13 +128,13 @@ export default function Dashboard({ onNewConnection, onEditConnection }) {
         <div>
           <motion.h1 
             variants={itemVariants}
-            className="text-3xl font-extrabold tracking-tight text-white uppercase"
+            className="text-3xl font-extrabold tracking-tight text-[var(--text-primary)] uppercase"
           >
             {t('ssh.dashboard_ui.systemOverview')}
           </motion.h1>
           <motion.p 
             variants={itemVariants}
-            className="text-gray-400 mt-1 flex items-center gap-2"
+            className="text-[var(--text-muted)] mt-1 flex items-center gap-2"
           >
             <Activity size={14} className="text-emerald-500" />
             {t('ssh.dashboard_ui.monitoring')} {stats.total} {t('ssh.dashboard_ui.nodesAcross')}
@@ -116,7 +142,7 @@ export default function Dashboard({ onNewConnection, onEditConnection }) {
         </div>
         <motion.div variants={itemVariants} className="flex gap-3">
           <button
-            className="flex items-center gap-2 px-4 py-2 rounded-xl bg-white/5 border border-white/10 text-gray-300 hover:bg-white/10 transition-all active:scale-95"
+            className="flex items-center gap-2 px-4 py-2 rounded-xl bg-[var(--bg-card)] border border-[var(--border-color)] text-[var(--text-secondary)] hover:bg-[var(--bg-card-hover)] transition-all active:scale-95"
             onClick={handleRefreshAll}
             disabled={refreshing}
           >
@@ -132,6 +158,61 @@ export default function Dashboard({ onNewConnection, onEditConnection }) {
           </button>
         </motion.div>
       </div>
+
+      {/* Cloud Sync Promotion */}
+      {state.connections.some(c => c.storage === 'localstorage') && (
+        <motion.div 
+          variants={itemVariants}
+          className="mb-8 p-6 rounded-3xl bg-gradient-to-r from-indigo-600/20 to-purple-600/20 border border-indigo-500/30 backdrop-blur-xl relative overflow-hidden group"
+        >
+          <div className="absolute top-0 right-0 p-8 opacity-10 group-hover:scale-110 transition-transform">
+             <RefreshCw size={80} className="animate-spin-slow" />
+          </div>
+          <div className="relative z-10 flex flex-col md:flex-row items-center justify-between gap-6">
+            <div className="flex items-center gap-4">
+              <div className="w-14 h-14 rounded-2xl bg-indigo-600 flex items-center justify-center shadow-lg shadow-indigo-600/20">
+                <Globe size={28} className="text-white" />
+              </div>
+              <div>
+                <h2 className="text-lg font-bold text-[var(--text-primary)]">Sync Your Connections</h2>
+                <p className="text-sm text-[var(--text-muted)] max-w-lg">
+                  You have connections stored in Local Storage. Move them to your <strong>Server DB</strong> (Vault) for multi-device sync and extra security.
+                </p>
+              </div>
+            </div>
+            <button 
+              onClick={async () => {
+                const localConns = state.connections.filter(c => c.storage === 'localstorage');
+                if (localConns.length === 0) return;
+                
+                setRefreshing(true);
+                try {
+                  for (const conn of localConns) {
+                    await fetch('/api/connections', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ ...conn, storage: 'db' })
+                    });
+                    // Cleanup local storage for this item
+                    const saved = JSON.parse(localStorage.getItem('ssh_monitor_connections') || '[]');
+                    const updated = saved.filter(c => c._id !== conn._id);
+                    localStorage.setItem('ssh_monitor_connections', JSON.stringify(updated));
+                  }
+                  await fetchConnections();
+                  dispatch({ type: 'ADD_NOTIFICATION', payload: { title: 'Synced', message: 'All connections moved to Cloud', type: 'success' } });
+                } catch (e) {
+                  console.error(e);
+                } finally {
+                  setRefreshing(false);
+                }
+              }}
+              className="px-6 py-3 bg-white text-indigo-600 font-bold rounded-2xl hover:bg-slate-100 transition-all shadow-xl whitespace-nowrap"
+            >
+              Sync to Cloud
+            </button>
+          </div>
+        </motion.div>
+      )}
 
       {/* Stats Grid */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 mb-10">
@@ -169,11 +250,11 @@ export default function Dashboard({ onNewConnection, onEditConnection }) {
         {/* Quick Connect - Favorites */}
         <motion.div variants={itemVariants} className="xl:col-span-2 group">
           <div className="flex items-center justify-between mb-5 px-1">
-            <h2 className="text-lg font-bold flex items-center gap-2 text-white">
+            <h2 className="text-lg font-bold flex items-center gap-2 text-[var(--text-primary)]">
               <Zap size={20} className="text-amber-400 fill-amber-400" />
-              {t('ssh.dashboard_ui.pinnedServers')}
+              {t('ssh.pinnedServers')}
             </h2>
-            <button className="text-xs text-indigo-400 hover:text-indigo-300 font-medium transition-colors">
+            <button className="text-xs text-[var(--accent-indigo)] hover:text-[var(--accent-indigo-hover)] font-medium transition-colors">
               {t('ssh.dashboard_ui.manageFavorites')}
             </button>
           </div>
@@ -184,11 +265,11 @@ export default function Dashboard({ onNewConnection, onEditConnection }) {
                 <motion.div 
                   initial={{ opacity: 0 }}
                   animate={{ opacity: 1 }}
-                  className="col-span-2 py-10 rounded-3xl border border-dashed border-white/10 flex flex-col items-center justify-center text-center bg-white/[0.02]"
+                  className="col-span-2 py-10 rounded-3xl border border-dashed border-[var(--border-color)] flex flex-col items-center justify-center text-center bg-[var(--bg-card)]"
                 >
-                  <Star className="text-gray-600 mb-3" size={32} />
-                  <p className="text-sm text-gray-500">{t('ssh.dashboard_ui.noPinned')}</p>
-                  <p className="text-xs text-gray-600 mt-1">{t('ssh.dashboard_ui.starPrompt')}</p>
+                  <Star className="text-[var(--text-muted)] mb-3" size={32} />
+                  <p className="text-sm text-[var(--text-muted)]">{t('ssh.dashboard_ui.noPinned')}</p>
+                  <p className="text-xs text-[var(--text-muted)] opacity-60 mt-1">{t('ssh.dashboard_ui.starPrompt')}</p>
                 </motion.div>
               ) : (
                 favorites.map(conn => (
@@ -206,38 +287,44 @@ export default function Dashboard({ onNewConnection, onEditConnection }) {
         {/* Recent Activity */}
         <motion.div variants={itemVariants} className="group">
           <div className="flex items-center justify-between mb-5 px-1">
-            <h2 className="text-lg font-bold flex items-center gap-2 text-white">
-              <Clock size={20} className="text-cyan-400" />
+            <h2 className="text-lg font-bold flex items-center gap-2 text-[var(--text-primary)]">
+              <Clock size={20} className="text-[var(--text-secondary)]" />
               {t('ssh.dashboard_ui.recentLogs')}
             </h2>
           </div>
 
-          <div className="space-y-3 bg-white/[0.03] rounded-3xl p-4 border border-white/5 relative overflow-hidden">
+          <div className="space-y-3 bg-[var(--bg-card)] rounded-3xl p-4 border border-[var(--border-color)] relative overflow-hidden">
              <div className="absolute top-0 right-0 w-32 h-32 bg-cyan-500/5 blur-3xl rounded-full -mr-10 -mt-10" />
             
             {recentConnections.length === 0 ? (
               <div className="py-10 text-center">
-                <p className="text-sm text-gray-500">{t('ssh.dashboard_ui.noActivity')}</p>
+                <p className="text-sm text-[var(--text-muted)]">{t('ssh.dashboard_ui.noActivity')}</p>
               </div>
             ) : (
               recentConnections.map(conn => (
                 <motion.div
                   key={conn._id}
-                  whileHover={{ x: 4, backgroundColor: 'rgba(255,255,255,0.03)' }}
-                  className="flex items-center gap-3 p-3 rounded-2xl cursor-pointer transition-all border border-transparent hover:border-white/5 group/link"
+                  whileHover={{ x: 4, backgroundColor: 'var(--bg-card-hover)' }}
+                  className="flex items-center gap-3 p-3 rounded-2xl cursor-pointer transition-all border border-transparent hover:border-[var(--border-hover)] group/link"
                   onClick={() => handleQuickConnect(conn)}
                 >
-                  <div className="w-10 h-10 rounded-xl flex items-center justify-center relative overflow-hidden bg-gradient-to-br from-white/10 to-transparent">
+                  <div className="w-10 h-10 rounded-xl flex items-center justify-center relative overflow-hidden bg-gradient-to-br from-[var(--bg-tertiary)] to-transparent">
                      <div className="absolute inset-0 bg-cyan-500/10 opacity-0 group-hover/link:opacity-100 transition-opacity" />
-                     <Server size={18} style={{ color: conn.color }} />
+                     {conn.type === 'database' ? (
+                       <Database size={18} style={{ color: conn.color }} />
+                     ) : (
+                       <Server size={18} style={{ color: conn.color }} />
+                     )}
                   </div>
                   <div className="flex-1 min-w-0">
-                    <span className="text-sm font-semibold text-white truncate block group-hover/link:text-indigo-400 transition-colors">
+                    <span className="text-sm font-semibold text-[var(--text-primary)] truncate block group-hover/link:text-indigo-400 transition-colors">
                       {conn.name}
                     </span>
-                    <span className="text-[10px] text-gray-500 flex items-center gap-1.5 font-medium">
+                    <span className="text-[10px] text-[var(--text-muted)] flex items-center gap-1.5 font-medium">
                       <Clock size={10} />
                       {timeAgo(conn.lastConnected)}
+                      <span className="mx-1">•</span>
+                      {conn.type === 'database' ? (conn.dbProvider || 'db').toUpperCase() : 'SSH'}
                     </span>
                   </div>
                   <div className={`w-1.5 h-1.5 rounded-full ${
@@ -258,16 +345,16 @@ export default function Dashboard({ onNewConnection, onEditConnection }) {
           className="mt-10 relative group overflow-hidden"
         >
           <div className="absolute inset-0 bg-gradient-to-br from-indigo-600/20 to-purple-600/20 blur-3xl opacity-20 -z-10" />
-          <div className="rounded-3xl border border-white/10 bg-white/[0.03] p-12 text-center backdrop-blur-sm">
+          <div className="rounded-3xl border border-[var(--border-color)] bg-[var(--bg-card)] p-12 text-center backdrop-blur-sm">
             <div className="w-24 h-24 mx-auto rounded-3xl bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center mb-6 shadow-2xl shadow-indigo-500/30 transform rotate-12 group-hover:rotate-0 transition-transform duration-500">
-              <Server size={44} className="text-white" />
+               <Shield size={44} className="text-white" />
             </div>
-            <h3 className="text-2xl font-bold text-white mb-2">{t('ssh.dashboard_ui.buildNetwork')}</h3>
-            <p className="text-gray-400 mb-8 max-w-md mx-auto">
+            <h3 className="text-2xl font-bold text-[var(--text-primary)] mb-2">{t('ssh.dashboard_ui.buildNetwork')}</h3>
+            <p className="text-[var(--text-muted)] mb-8 max-w-md mx-auto">
               {t('ssh.dashboard_ui.addDescription')}
             </p>
             <button 
-              className="px-8 py-3 bg-white text-indigo-950 font-bold rounded-2xl hover:bg-gray-100 transition-all flex items-center gap-2 mx-auto shadow-xl hover:shadow-white/10" 
+              className="px-8 py-3 bg-[var(--text-primary)] text-[var(--bg-primary)] font-bold rounded-2xl hover:opacity-90 transition-all flex items-center gap-2 mx-auto shadow-xl" 
               onClick={onNewConnection}
             >
               <Plus size={20} />
@@ -296,7 +383,7 @@ function StatCard({ icon: Icon, label, value, color, subValue }) {
         visible: { scale: 1, opacity: 1 }
       }}
       whileHover={{ y: -4 }}
-      className={`relative overflow-hidden p-6 rounded-3xl bg-white/[0.03] border ${theme.border} ${theme.shadow} backdrop-blur-md group`}
+      className={`relative overflow-hidden p-6 rounded-3xl bg-[var(--bg-tertiary)]/20 border ${theme.border} ${theme.shadow} backdrop-blur-md group`}
     >
       <div className="absolute top-0 right-0 p-1 opacity-0 group-hover:opacity-100 transition-opacity">
          <div className={`w-2 h-2 rounded-full ${theme.icon.replace('text-', 'bg-')}`} />
@@ -306,11 +393,11 @@ function StatCard({ icon: Icon, label, value, color, subValue }) {
           <Icon size={24} className={theme.icon} />
         </div>
         <div className="text-right">
-          <span className="text-xs font-bold uppercase tracking-wider text-gray-500">{label}</span>
-          <div className="text-3xl font-black text-white mt-0.5 tracking-tight">{value}</div>
+          <span className="text-xs font-bold uppercase tracking-wider text-[var(--text-muted)]">{label}</span>
+          <div className="text-3xl font-black text-[var(--text-primary)] mt-0.5 tracking-tight">{value}</div>
         </div>
       </div>
-      <div className="text-xs text-gray-400 font-medium flex items-center gap-1.5 opacity-80">
+      <div className="text-xs text-[var(--text-muted)] font-medium flex items-center gap-1.5 opacity-80">
          <TrendingUp size={12} className={theme.icon} />
          {subValue}
       </div>
@@ -319,6 +406,7 @@ function StatCard({ icon: Icon, label, value, color, subValue }) {
 }
 
 function ConnectionCard({ conn, onClick }) {
+  const { t } = useTranslation();
   const isOnline = conn.status === 'online';
   
   return (
@@ -326,11 +414,14 @@ function ConnectionCard({ conn, onClick }) {
       layout
       initial={{ scale: 0.95, opacity: 0 }}
       animate={{ scale: 1, opacity: 1 }}
-      whileHover={{ scale: 1.02, backgroundColor: 'rgba(255,255,255,0.05)' }}
-      className="p-5 rounded-3xl bg-white/[0.03] border border-white/5 cursor-pointer relative group transition-all"
+      whileHover={{ scale: 1.02, backgroundColor: 'var(--bg-card-hover)' }}
+      className="p-5 rounded-3xl bg-[var(--bg-card)] border border-[var(--border-color)] cursor-pointer relative group transition-all"
       onClick={onClick}
     >
-      <div className="absolute top-4 right-4 flex gap-1">
+      <div className="absolute top-4 right-4 flex gap-1 items-center">
+         <span className="text-[9px] font-bold uppercase py-0.5 px-2 bg-white/5 rounded-full border border-white/10" style={{ color: conn.color }}>
+           {conn.type === 'database' ? (conn.dbProvider || 'db').toUpperCase() : 'SSH'}
+         </span>
          <div className={`w-2 h-2 rounded-full ${isOnline ? 'bg-emerald-500 animate-pulse' : 'bg-rose-500'}`} />
       </div>
 
@@ -338,22 +429,26 @@ function ConnectionCard({ conn, onClick }) {
         <div className="w-12 h-12 rounded-2xl flex items-center justify-center shadow-inner relative overflow-hidden" 
              style={{ background: `${conn.color}15` }}>
            <div className="absolute inset-0 opacity-10" style={{ background: conn.color }} />
-           <Server size={22} style={{ color: conn.color }} />
+           {conn.type === 'database' ? (
+             <Database size={22} style={{ color: conn.color }} />
+           ) : (
+             <Server size={22} style={{ color: conn.color }} />
+           )}
         </div>
         <div className="min-w-0 flex-1">
-          <h3 className="font-bold text-white truncate text-base tracking-tight">{conn.name}</h3>
-          <p className="text-xs text-gray-500 font-mono truncate">{conn.host}</p>
+          <h3 className="font-bold text-[var(--text-primary)] truncate text-base tracking-tight">{conn.name}</h3>
+          <p className="text-xs text-[var(--text-muted)] font-mono truncate">{conn.host || conn.database || 'Connection'}</p>
         </div>
       </div>
 
       <div className="space-y-3">
         {conn.info && (
-          <div className="px-3 py-2 rounded-xl bg-black/30 border border-white/5">
+          <div className="px-3 py-2 rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)]">
              <div className="flex items-center gap-1.5 text-indigo-400 mb-1">
                 <Shield size={10} />
                 <span className="text-[9px] font-bold uppercase tracking-widest">{t('ssh.dashboard_ui.healthState')}</span>
              </div>
-             <p className="text-[10px] text-gray-400 font-mono leading-relaxed line-clamp-1">
+             <p className="text-[10px] text-[var(--text-muted)] font-mono leading-relaxed line-clamp-1">
                {conn.info}
              </p>
           </div>
@@ -367,7 +462,7 @@ function ConnectionCard({ conn, onClick }) {
                </span>
              ))}
           </div>
-          <button className="w-8 h-8 rounded-full bg-white/5 hover:bg-white/10 flex items-center justify-center text-gray-400 hover:text-white transition-all">
+          <button className="w-8 h-8 rounded-full bg-[var(--bg-tertiary)] hover:bg-[var(--bg-card-hover)] flex items-center justify-center text-[var(--text-muted)] hover:text-[var(--text-primary)] transition-all">
             <Terminal size={14} />
           </button>
         </div>

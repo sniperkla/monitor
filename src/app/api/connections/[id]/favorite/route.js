@@ -1,31 +1,34 @@
 import { NextResponse } from 'next/server';
 import connectDB from '@/lib/mongodb';
-import { getConnectionModel } from '@/models/Connection';
+import { ConnectionRepository } from '@/lib/repositories/ConnectionRepository';
 import mongoose from 'mongoose';
 
-const isValidId = (id) => mongoose.Types.ObjectId.isValid(id);
+const isValidMongoId = (id) => mongoose.Types.ObjectId.isValid(id);
 
 // PUT toggle favorite
 export async function PUT(request, { params }) {
   try {
     const { id } = await params;
-    if (!isValidId(id)) {
+    const db = await connectDB();
+    const repo = new ConnectionRepository(db);
+
+    if (db.type !== 'mysql' && !isValidMongoId(id)) {
       return NextResponse.json({ success: false, error: 'Invalid ID' }, { status: 400 });
     }
 
-    const db = await connectDB();
-    const ConnectionModel = getConnectionModel(db);
-    const connection = await ConnectionModel.findById(id);
+    const connection = await repo.findById(id);
 
     if (!connection) {
       return NextResponse.json({ success: false, error: 'Connection not found' }, { status: 404 });
     }
 
-    connection.isFavorite = !connection.isFavorite;
-    await connection.save();
+    const newStatus = !connection.isFavorite;
+    await repo.update(id, { isFavorite: newStatus });
 
-    return NextResponse.json({ success: true, data: connection });
+    const updated = await repo.findById(id);
+    return NextResponse.json({ success: true, data: updated });
   } catch (error) {
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   }
 }
+

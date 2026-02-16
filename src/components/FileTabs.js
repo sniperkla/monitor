@@ -8,15 +8,11 @@ import { useState } from 'react';
 export default function FileTabs() {
   const { state, dispatch } = useApp();
   const { activeFileManagers } = state;
-  const [activeTab, setActiveTab] = useState(null);
+  const activeTab = state.activeFileManagerId;
 
-  // Auto-select first if no active tab
-  if (activeFileManagers.length > 0 && (!activeTab || !activeFileManagers.find(t => t.id === activeTab))) {
-    const last = activeFileManagers[activeFileManagers.length - 1];
-    if (activeTab !== last.id) {
-          setTimeout(() => setActiveTab(last.id), 0);
-    }
-  }
+  const setActiveTab = (id) => {
+    dispatch({ type: 'SET_ACTIVE_FILE_MANAGER', payload: id });
+  };
 
   const handleCloseTab = (id) => {
     dispatch({ type: 'CLOSE_FILE_MANAGER', payload: id });
@@ -120,7 +116,7 @@ export default function FileTabs() {
             <div className="w-2 h-2 rounded-full" style={{ background: fm.color || '#6366f1' }} />
             <span>{fm.connectionName}</span>
             <button
-              className="ml-1 p-0.5 rounded hover:bg-gray-700 transition-colors"
+              className="ml-1 p-0.5 rounded hover:bg-[var(--bg-secondary)] transition-colors"
               onClick={(e) => { e.stopPropagation(); handleCloseTab(fm.id); }}
             >
               <X size={12} />
@@ -130,7 +126,7 @@ export default function FileTabs() {
       </div>
 
       {/* Content */}
-      <div className="flex-1 min-h-0 bg-[#0a0e1a]">
+      <div className="flex-1 min-h-0 bg-[var(--bg-primary)]">
         {activeFileManagers.map(fm => (
           <div
             key={fm.id}

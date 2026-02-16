@@ -299,7 +299,9 @@ export function VaultProvider({ children }) {
       legacyUri,       // string (if available)
       isDismissed,     // boolean
       dismissVault,    // () => void
-      showVault        // () => void
+      showVault,        // () => void
+      isConfigured: vaultStatus !== 'setup' && vaultStatus !== 'loading',
+      isUnlocked: vaultStatus === 'unlocked'
     }}>
       {children}
     </VaultContext.Provider>

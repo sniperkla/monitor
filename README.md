@@ -63,3 +63,4 @@ A modern, web-based SSH terminal and server monitoring dashboard built with Next
 ## License
 
 MIT
+# monitor

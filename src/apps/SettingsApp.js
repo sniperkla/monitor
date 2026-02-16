@@ -4,14 +4,14 @@ import { useState, useEffect } from 'react';
 import { 
   Palette, Image as ImageIcon, Monitor, Layout, Bell, Shield, Info, 
   Database, CheckCircle, AlertCircle, RefreshCw, Zap, Wifi, WifiOff, 
-  Loader, Trash2, Lock, Unlock, Key, Mail, Code,Volume2
+  Loader, Trash2, Lock, Unlock, Key, Mail, Code, Volume2, Sun, Moon
 } from 'lucide-react';
 import { useOS } from '@/context/OSContext';
 import { useApp } from '@/context/AppContext';
 import { useVault } from '@/context/VaultContext';
 import { useSession, signIn, signOut } from 'next-auth/react';
 import { useTranslation } from 'react-i18next';
-import toast from 'react-hot-toast';
+
 import { motion, AnimatePresence } from 'framer-motion';
 
 const WALLPAPERS = [
@@ -27,11 +27,11 @@ const PRESETS = [
   { label: 'Local (localhost)', uri: 'mongodb://localhost:27017/ssh-monitor' },
 ];
 
-export default function SettingsApp() {
-  const [activeTab, setActiveTab] = useState('appearance');
+export default function SettingsApp({ initialTab }) {
+  const [activeTab, setActiveTab] = useState(initialTab || 'appearance');
   const { data: session } = useSession();
   const { t, i18n } = useTranslation();
-  const { state: osState, setWallpaper, setGlassmorphism, setIconSize, setIconStyle, setBrightness, setUiScale, setNotifications, setLanguage, addCustomWallpaper, removeCustomWallpaper, saveSettings } = useOS();
+  const { state: osState, setWallpaper, setGlassmorphism, setIconSize, setIconStyle, setBrightness, setUiScale, setNotifications, setLanguage, setTheme, setTaskbarPosition, addCustomWallpaper, removeCustomWallpaper, saveSettings, addNotification, showConfirm } = useOS();
   const { state: appState, dispatch } = useApp();
   const { vaultStatus, decryptedUri, lockVault, clearVault, setupVault, showVault } = useVault();
   const { glassmorphism, brightness, uiScale, notifications } = osState;
@@ -58,6 +58,11 @@ export default function SettingsApp() {
     }
   }, [activeTab, vaultStatus, decryptedUri]);
 
+  const setVaultPreset = (uri) => {
+    setVaultUri(uri);
+    addNotification({ title: 'Preset Applied', message: 'Localhost URI set', type: 'info' });
+  };
+
   const fetchDbConfig = async () => {
     setDbLoading(true);
     if (vaultStatus === 'unlocked' && decryptedUri) {
@@ -72,7 +77,7 @@ export default function SettingsApp() {
 
   const handleConnect = async () => {
     if (!dbUri.trim()) {
-      toast.error(t('settings_ui.db.enterUri'));
+      addNotification({ title: 'Error', message: t('settings_ui.db.enterUri'), type: 'error' });
       return;
     }
     setDbConnecting(true);
@@ -86,45 +91,53 @@ export default function SettingsApp() {
         const targetUri = dbUri.trim();
         dispatch({ type: 'SET_DB_CONFIG', payload: { uri: targetUri } });
         setDbConnected(true);
-        toast.success(t('settings_ui.db.connected'));
+        addNotification({ title: 'Connected', message: t('settings_ui.db.connected'), type: 'success' });
       } else {
         setDbConnected(false);
-        toast.error(testData.error || t('settings_ui.db.failed'));
+        addNotification({ title: 'Connection Failed', message: testData.error || t('settings_ui.db.failed'), type: 'error' });
       }
     } catch (err) {
       setDbConnected(false);
-      toast.error(t('settings_ui.db.unreachable'));
+      addNotification({ title: 'Error', message: t('settings_ui.db.unreachable'), type: 'error' });
     }
     setDbConnecting(false);
   };
 
   const handleVaultSetup = async () => {
     if (!vaultUri.trim()) {
-      toast.error(t('settings_ui.db.enterUri'));
+      addNotification({ title: 'Error', message: t('settings_ui.db.enterUri'), type: 'error' });
       return;
     }
-    if (!vaultUri.startsWith('mongodb://') && !vaultUri.startsWith('mongodb+srv://')) {
-      toast.error(t('settings_ui.db.invalidUri'));
+    const uri = vaultUri.trim();
+    const allowed = ['mongodb://', 'mongodb+srv://', 'mysql://', 'postgres://', 'postgresql://'];
+    const isValid = allowed.some(p => uri.startsWith(p));
+
+    if (!isValid) {
+      addNotification({ 
+        title: 'Invalid URI', 
+        message: 'Unsupported database protocol', 
+        type: 'error' 
+      });
       return;
     }
     if (vaultPassword.length < 8) {
-      toast.error(t('settings_ui.db.passShort'));
+      addNotification({ title: 'Error', message: t('settings_ui.db.passShort'), type: 'error' });
       return;
     }
     if (vaultPassword !== vaultConfirm) {
-      toast.error(t('settings_ui.db.passMismatch'));
+      addNotification({ title: 'Error', message: t('settings_ui.db.passMismatch'), type: 'error' });
       return;
     }
 
     setVaultSaving(true);
     try {
       await setupVault(vaultUri.trim(), vaultPassword);
-      toast.success(t('settings_ui.db.vaultCreated'));
+      addNotification({ title: 'Success', message: t('settings_ui.db.vaultCreated'), type: 'success' });
       setVaultUri('');
       setVaultPassword('');
       setVaultConfirm('');
     } catch (err) {
-      toast.error(err.message || t('settings_ui.db.failed'));
+      addNotification({ title: 'Failed', message: err.message || t('settings_ui.db.failed'), type: 'error' });
     }
     setVaultSaving(false);
   };
@@ -134,9 +147,9 @@ export default function SettingsApp() {
   };
 
   return (
-    <div className="flex h-full w-full bg-[#0f172a] text-white overflow-hidden">
+    <div className="flex h-full w-full bg-[var(--bg-primary)] text-[var(--text-primary)] border-[var(--border-color)] overflow-hidden">
       {/* Sidebar */}
-      <div className="w-52 border-r border-white/10 p-4 flex flex-col shrink-0 h-full overflow-y-auto custom-scrollbar">
+      <div className="w-52 border-r border-[var(--border-color)] p-4 flex flex-col shrink-0 h-full overflow-y-auto custom-scrollbar">
         {/* User Profile Section */}
         <div className="mb-8 px-2">
           {session ? (
@@ -152,17 +165,17 @@ export default function SettingsApp() {
                   }}
                 />
                 <div className="min-w-0">
-                  <p className="text-xs font-bold truncate">{session.user.name}</p>
-                  <p className="text-[10px] text-gray-500 truncate">{session.user.email}</p>
+                  <p className="text-xs font-bold truncate text-[var(--text-primary)]">{session.user.name}</p>
+                  <p className="text-[10px] text-[var(--text-muted)] truncate">{session.user.email}</p>
                 </div>
               </div>
               {/* Vault Status Badge */}
               <div className={`flex items-center gap-2 text-[10px] font-bold px-2 py-1 rounded-lg ${
                 vaultStatus === 'unlocked' 
-                  ? 'bg-emerald-500/10 text-emerald-400'
+                  ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'
                   : vaultStatus === 'locked' 
-                  ? 'bg-amber-500/10 text-amber-400'
-                  : 'bg-gray-500/10 text-gray-400'
+                  ? 'bg-amber-500/10 text-amber-600 dark:text-amber-400'
+                  : 'bg-gray-500/10 text-gray-600 dark:text-[var(--text-muted)]'
               }`}>
                 {vaultStatus === 'unlocked' ? (
                   <><Unlock size={10} /> {t('settings_ui.vaultStatus.unlocked')}</>
@@ -187,20 +200,20 @@ export default function SettingsApp() {
             </div>
           ) : (
             <div className="space-y-3">
-              <p className="text-[10px] font-bold text-gray-500 uppercase tracking-widest">{t('common.login')}</p>
+              <p className="text-[10px] font-bold text-[var(--text-secondary)] uppercase tracking-widest">{t('common.login')}</p>
               <button 
                 onClick={() => signIn('google')}
-                className="w-full py-2 px-3 rounded-xl bg-white text-black text-xs font-bold hover:bg-gray-200 transition-all flex items-center justify-center gap-2"
+                className="w-full py-2 px-3 rounded-xl bg-white text-gray-800 text-xs font-bold border border-gray-200 hover:bg-gray-50 hover:border-gray-300 transition-all flex items-center justify-center gap-2 shadow-sm"
               >
-                <img src="https://www.svgrepo.com/show/475656/google-color.svg" className="w-3 h-3" alt="Google" />
+                <img src="https://lh3.googleusercontent.com/COxitqgJr1sJnIDe8-jiKhxDx1FrYbtRHKJ9z_hELisAlapwE9LUPh6fcXIfb5vwpbMl4xl9H9TRFPc5NOO8Sb3VSgIBrfRYvW6cUA" className="w-4 h-4" alt="Google" />
                 {t('common.login')}
               </button>
-              <p className="text-[9px] text-center text-gray-500 px-1">{t('vault.setupDescription')}</p>
+              <p className="text-[9px] text-center text-[var(--text-secondary)] px-1">{t('vault.setupDescription')}</p>
             </div>
           )}
         </div>
 
-        <h2 className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-4 px-2">{t('common.settings')}</h2>
+        <h2 className="text-xs font-bold text-[var(--text-muted)] uppercase tracking-wider mb-4 px-2">{t('common.settings')}</h2>
         <div className="space-y-1">
           {[
             { id: 'appearance', label: t('settings.appearanceTitle'), icon: Palette, color: 'text-indigo-400', desc: t('settings.appearanceDesc') },
@@ -208,7 +221,7 @@ export default function SettingsApp() {
             { id: 'display', label: t('settings_ui.display.title'), icon: Monitor, color: 'text-blue-400', desc: t('settings_ui.display.desc') },
             { id: 'notifications', label: t('settings_ui.notifications.title'), icon: Bell, color: 'text-amber-400', desc: t('settings_ui.notifications.desc') },
             { id: 'privacy', label: t('settings_ui.privacy.title'), icon: Shield, color: 'text-emerald-400', desc: t('settings_ui.privacy.desc') },
-            { id: 'about', label: t('common.about'), icon: Info, color: 'text-gray-400', desc: t('settings_ui.about.desc') },
+            { id: 'about', label: t('common.about'), icon: Info, color: 'text-[var(--text-muted)]', desc: t('settings_ui.about.desc') },
           ].map(tab => {
             const isDisabled = tab.requireLogin && !session;
             return (
@@ -218,16 +231,16 @@ export default function SettingsApp() {
                 disabled={isDisabled}
                 className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg transition-all ${
                   activeTab === tab.id
-                    ? 'bg-indigo-500/20 text-indigo-400'
+                    ? 'bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 font-semibold'
                     : isDisabled
-                    ? 'text-gray-600 cursor-not-allowed opacity-50'
-                    : 'text-gray-400 hover:bg-white/5 hover:text-white'
+                    ? 'text-[var(--text-muted)] cursor-not-allowed opacity-50'
+                    : 'text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]'
                 }`}
               >
                 <tab.icon size={16} />
                 <span className="text-sm font-medium">{tab.label}</span>
                 {isDisabled && (
-                  <span className="ml-auto text-[8px] text-amber-400 font-bold">{t('vault.loginBtn').toUpperCase()}</span>
+                  <span className="ml-auto text-[8px] text-amber-600 dark:text-amber-400 font-bold bg-amber-500/10 px-1.5 py-0.5 rounded">{t('vault.loginBtn').toUpperCase()}</span>
                 )}
               </button>
             );
@@ -239,8 +252,8 @@ export default function SettingsApp() {
       <div className="flex-1 overflow-y-auto h-full p-8 pb-28 custom-scrollbar">
         {activeTab === 'appearance' && (
           <div className="max-w-2xl animate-in fade-in slide-in-from-bottom-2 duration-300">
-            <h1 className="text-2xl font-bold mb-2">{t('settings.appearanceTitle')}</h1>
-            <p className="text-gray-400 text-sm mb-8">{t('settings.appearanceDesc')}</p>
+            <h1 className="text-2xl font-bold mb-2 text-[var(--text-primary)]">{t('settings.appearanceTitle')}</h1>
+            <p className="text-[var(--text-secondary)] text-sm mb-8">{t('settings.appearanceDesc')}</p>
 
             <section className="space-y-6">
               <div>
@@ -363,11 +376,11 @@ export default function SettingsApp() {
                     </div>
                   ) : (
                     <div 
-                      className="h-28 rounded-xl border-dashed border-2 border-white/10 flex flex-col items-center justify-center hover:border-white/20 transition-all cursor-pointer group hover:bg-white/5"
+                      className="h-28 rounded-xl border-dashed border-2 border-[var(--border-color)] flex flex-col items-center justify-center hover:border-[var(--border-hover)] transition-all cursor-pointer group hover:bg-[var(--bg-card)]"
                       onClick={() => setShowCustomInput(true)}
                     >
-                      <PlusIcon size={20} className="text-gray-500 mb-1 group-hover:text-indigo-400 transition-colors" />
-                      <span className="text-[10px] text-gray-500 group-hover:text-gray-400 transition-colors">{t('settings_ui.appearance.customUrl')}</span>
+                      <PlusIcon size={20} className="text-[var(--text-secondary)] mb-1 group-hover:text-indigo-400 transition-colors" />
+                      <span className="text-[10px] text-[var(--text-secondary)] group-hover:text-[var(--text-muted)] transition-colors">{t('settings_ui.appearance.customUrl')}</span>
                     </div>
                   )}
                 </div>
@@ -380,14 +393,14 @@ export default function SettingsApp() {
                 </h3>
                 <div className="grid grid-cols-2 gap-4">
                   <div 
-                    className={`p-4 rounded-xl cursor-pointer transition-all border ${
-                      glassmorphism ? 'bg-indigo-500/20 border-indigo-500/50' : 'bg-white/5 border-white/10 hover:bg-white/10'
+                    className={`p-4 rounded-xl cursor-pointer transition-all border shadow-sm ${
+                      glassmorphism ? 'bg-indigo-500/10 border-indigo-500/50' : 'bg-[var(--bg-card)] border-[var(--border-color)] hover:bg-[var(--bg-card-hover)]'
                     } flex items-center justify-between`}
                     onClick={() => setGlassmorphism(true)}
                   >
                     <div>
-                      <span className="block text-sm font-medium">{t('settings_ui.appearance.glassmorphism')}</span>
-                      <span className="text-[10px] text-gray-500">{t('settings_ui.appearance.glassmorphismDesc')}</span>
+                      <span className="block text-sm font-medium text-[var(--text-primary)]">{t('settings_ui.appearance.glassmorphism')}</span>
+                      <span className="text-[10px] text-[var(--text-muted)]">{t('settings_ui.appearance.glassmorphismDesc')}</span>
                     </div>
                     {glassmorphism && (
                       <div className="w-10 h-5 bg-indigo-600 rounded-full relative">
@@ -396,14 +409,14 @@ export default function SettingsApp() {
                     )}
                   </div>
                   <div 
-                    className={`p-4 rounded-xl cursor-pointer transition-all border ${
-                      !glassmorphism ? 'bg-indigo-500/20 border-indigo-500/50' : 'bg-white/5 border-white/10 hover:bg-white/10'
+                    className={`p-4 rounded-xl cursor-pointer transition-all border shadow-sm ${
+                      !glassmorphism ? 'bg-indigo-500/10 border-indigo-500/50' : 'bg-[var(--bg-card)] border-[var(--border-color)] hover:bg-[var(--bg-card-hover)]'
                     } flex items-center justify-between`}
                     onClick={() => setGlassmorphism(false)}
                   >
                     <div>
-                      <span className="block text-sm font-medium">{t('settings_ui.appearance.opaqueMode')}</span>
-                      <span className="text-[10px] text-gray-500">{t('settings_ui.appearance.opaqueModeDesc')}</span>
+                      <span className="block text-sm font-medium text-[var(--text-primary)]">{t('settings_ui.appearance.opaqueMode')}</span>
+                      <span className="text-[10px] text-[var(--text-muted)]">{t('settings_ui.appearance.opaqueModeDesc')}</span>
                     </div>
                     {!glassmorphism && (
                       <div className="w-10 h-5 bg-indigo-600 rounded-full relative">
@@ -432,12 +445,39 @@ export default function SettingsApp() {
                       onClick={() => setIconStyle(style.id)}
                       className={`p-3 rounded-xl border transition-all text-left ${
                         osState.iconStyle === style.id 
-                          ? 'bg-indigo-500/20 border-indigo-500/50 shadow-lg shadow-indigo-500/10' 
-                          : 'bg-white/5 border-white/10 hover:bg-white/10'
+                          ? 'bg-indigo-500/10 border-indigo-500/50 shadow-lg shadow-indigo-500/10' 
+                          : 'bg-[var(--bg-card)] border-[var(--border-color)] hover:bg-[var(--bg-card-hover)]'
                       }`}
                     >
-                      <span className="block text-[11px] font-bold">{t(`settings_ui.appearance.styles.${style.id}`)}</span>
-                      <span className="text-[9px] text-gray-500 leading-tight">{t(`settings_ui.appearance.styles.${style.id}Desc`)}</span>
+                      <span className="block text-[11px] font-bold text-[var(--text-primary)]">{t(`settings_ui.appearance.styles.${style.id}`)}</span>
+                      <span className="text-[9px] text-[var(--text-muted)] leading-tight">{t(`settings_ui.appearance.styles.${style.id}Desc`)}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="pt-6 border-t border-white/10">
+                <h3 className="text-sm font-semibold mb-4 flex items-center gap-2">
+                  <Palette size={16} className="text-indigo-400" />
+                  {t('settings_ui.appearance.theme')}
+                </h3>
+                <div className="flex gap-4">
+                  {[
+                    { id: 'light', label: t('settings_ui.appearance.themes.light'), icon: Sun },
+                    { id: 'dark', label: t('settings_ui.appearance.themes.dark'), icon: Moon },
+                    { id: 'auto', label: t('settings_ui.appearance.themes.auto'), icon: Monitor },
+                  ].map(theme => (
+                    <button
+                      key={theme.id}
+                      onClick={() => setTheme(theme.id)}
+                      className={`flex-1 p-4 rounded-xl border transition-all text-left ${
+                        osState.theme === theme.id 
+                          ? 'bg-indigo-500/10 border-indigo-500/50' 
+                          : 'bg-[var(--bg-card)] border-[var(--border-color)] hover:bg-[var(--bg-card-hover)]'
+                      }`}
+                    >
+                      <theme.icon size={20} className={`mb-2 ${osState.theme === theme.id ? 'text-indigo-600 dark:text-indigo-400' : 'text-[var(--text-muted)]'}`} />
+                      <span className="block text-sm font-bold truncate text-[var(--text-primary)]">{theme.label}</span>
                     </button>
                   ))}
                 </div>
@@ -459,12 +499,62 @@ export default function SettingsApp() {
                       onClick={() => setLanguage(lang.code)}
                       className={`flex-1 p-4 rounded-xl border transition-all text-left ${
                         i18n.language === lang.code 
-                          ? 'bg-indigo-500/20 border-indigo-500/50' 
-                          : 'bg-white/5 border-white/10 hover:bg-white/10'
+                          ? 'bg-indigo-500/10 border-indigo-500/50' 
+                          : 'bg-[var(--bg-card)] border-[var(--border-color)] hover:bg-[var(--bg-card-hover)]'
                       }`}
                     >
-                      <span className="block text-sm font-bold truncate">{lang.label}</span>
-                      <span className="text-[10px] text-gray-500 uppercase tracking-widest">{lang.sub}</span>
+                      <span className="block text-sm font-bold truncate text-[var(--text-primary)]">{lang.label}</span>
+                      <span className="text-[10px] text-[var(--text-muted)] uppercase tracking-widest">{lang.sub}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Taskbar Section (Merged from Personalization) */}
+              <div className="pt-6 border-t border-white/10">
+                <h3 className="text-sm font-semibold mb-4 flex items-center gap-2">
+                  <Layout size={16} className="text-indigo-400" />
+                  {t('settings_ui.personalization.taskbarTitle')}
+                </h3>
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                  {['bottom', 'top', 'left', 'right'].map(pos => (
+                    <button
+                      key={pos}
+                      onClick={() => setTaskbarPosition(pos)}
+                      className={`py-3 rounded-xl text-xs font-bold border transition-all ${
+                        osState.taskbarPosition === pos
+                          ? 'bg-indigo-500/10 border-indigo-500/50 text-indigo-400'
+                          : 'bg-[var(--bg-tertiary)] border-[var(--border-color)] text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-card-hover)]'
+                      }`}
+                    >
+                      {t(`settings_ui.personalization.positions.${pos}`)}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Desktop Icon Size (Merged from Personalization) */}
+              <div className="pt-6 border-t border-white/10">
+                <h3 className="text-sm font-semibold mb-4 flex items-center gap-2">
+                  <Monitor size={16} className="text-emerald-400" />
+                  {t('settings_ui.personalization.desktopTitle')}
+                </h3>
+                <div className="flex gap-3">
+                  {[
+                    { id: 'small', size: 48 },
+                    { id: 'medium', size: 64 },
+                    { id: 'large', size: 80 },
+                  ].map(size => (
+                    <button
+                      key={size.id}
+                      onClick={() => setIconSize(size.id)}
+                      className={`flex-1 py-3 rounded-xl text-xs font-bold border transition-all ${
+                        osState.iconSize === size.id
+                          ? 'bg-emerald-500/10 border-emerald-500/50 text-emerald-400'
+                          : 'bg-[var(--bg-tertiary)] border-[var(--border-color)] text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-card-hover)]'
+                      }`}
+                    >
+                      {t(`desktop.context.icons.${size.id}`)}
                     </button>
                   ))}
                 </div>
@@ -472,21 +562,23 @@ export default function SettingsApp() {
             </section>
           </div>
         )}
+
+
         
         {activeTab === 'display' && (
           <div className="max-w-2xl animate-in fade-in slide-in-from-bottom-2 duration-300">
-            <h1 className="text-2xl font-bold mb-2">{t('settings_ui.display.title')}</h1>
-            <p className="text-gray-400 text-sm mb-8">{t('settings_ui.display.desc')}</p>
+            <h1 className="text-2xl font-bold mb-2 text-[var(--text-primary)]">{t('settings_ui.display.title')}</h1>
+            <p className="text-[var(--text-secondary)] text-sm mb-8">{t('settings_ui.display.desc')}</p>
 
             <section className="space-y-8">
               {/* Actual Brightness Control */}
-              <div className="p-6 bg-white/5 border border-white/10 rounded-2xl">
+              <div className="p-6 bg-[var(--bg-card)] border border-[var(--border-color)] rounded-2xl">
                 <div className="flex items-center justify-between mb-4">
-                  <h3 className="text-sm font-semibold flex items-center gap-2">
+                  <h3 className="text-sm font-semibold flex items-center gap-2 text-[var(--text-primary)]">
                     <Zap size={16} className="text-yellow-400" />
                     {t('settings_ui.display.brightness')}
                   </h3>
-                  <span className="text-xs text-gray-500 font-mono">{brightness}%</span>
+                  <span className="text-xs text-[var(--text-muted)] font-mono">{brightness}%</span>
                 </div>
                 <input 
                   type="range"
@@ -494,36 +586,36 @@ export default function SettingsApp() {
                   max="100"
                   value={brightness}
                   onChange={(e) => setBrightness(parseInt(e.target.value))}
-                  className="w-full h-1.5 bg-white/10 rounded-full appearance-none cursor-pointer accent-indigo-500 mb-6"
+                  className="w-full h-1.5 bg-[var(--bg-tertiary)] rounded-full appearance-none cursor-pointer accent-indigo-500 mb-6"
                 />
-                <div className="p-3 bg-black/20 rounded-xl border border-white/5 flex items-center gap-3">
-                   <Info size={14} className="text-gray-500" />
-                   <p className="text-[10px] text-gray-500 italic">{t('settings_ui.display.brightnessDesc')}</p>
+                <div className="p-3 bg-black/10 rounded-xl border border-[var(--border-color)] flex items-center gap-3">
+                   <Info size={14} className="text-[var(--text-muted)]" />
+                   <p className="text-[10px] text-[var(--text-muted)] italic">{t('settings_ui.display.brightnessDesc')}</p>
                 </div>
               </div>
 
               {/* UI Scaling (Realistic Resolution Replacement) */}
-              <div className="p-6 bg-white/5 border border-white/10 rounded-2xl">
-                <h4 className="text-[10px] font-bold text-gray-500 uppercase tracking-widest mb-4">{t('settings_ui.display.interfaceScaling')}</h4>
+              <div className="p-6 bg-[var(--bg-card)] border border-[var(--border-color)] rounded-2xl">
+                <h4 className="text-[10px] font-bold text-[var(--text-muted)] uppercase tracking-widest mb-4">{t('settings_ui.display.interfaceScaling')}</h4>
                 <div className="grid grid-cols-3 gap-3">
                    {[75, 100, 125].map(scale => (
                      <button 
                        key={scale} 
                        onClick={() => {
                          setUiScale(scale);
-                         toast.success(t('settings_ui.display.scalingSet', { scale }));
+                         addNotification({ title: 'UI Scale', message: t('settings_ui.display.scalingSet', { scale }), type: 'success' });
                        }}
                        className={`py-3 rounded-xl text-xs font-bold border transition-all ${
                          uiScale === scale 
                            ? 'bg-indigo-500/20 border-indigo-500/50 text-indigo-400' 
-                           : 'bg-white/5 border-white/5 text-gray-500 hover:text-white hover:bg-white/10'
+                           : 'bg-[var(--bg-tertiary)] border-[var(--border-color)] text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-card-hover)]'
                        }`}
                      >
                        {scale}%
                      </button>
                    ))}
                 </div>
-                <p className="mt-4 text-[11px] text-gray-500">{t('settings_ui.display.scalingInfo')}</p>
+                <p className="mt-4 text-[11px] text-[var(--text-muted)]">{t('settings_ui.display.scalingInfo')}</p>
               </div>
             </section>
           </div>
@@ -531,8 +623,8 @@ export default function SettingsApp() {
 
         {activeTab === 'notifications' && (
           <div className="max-w-2xl animate-in fade-in slide-in-from-bottom-2 duration-300">
-            <h1 className="text-2xl font-bold mb-2">{t('settings_ui.notifications.title')}</h1>
-            <p className="text-gray-400 text-sm mb-8">{t('settings_ui.notifications.desc')}</p>
+            <h1 className="text-2xl font-bold mb-2 text-[var(--text-primary)]">{t('settings_ui.notifications.title')}</h1>
+            <p className="text-[var(--text-secondary)] text-sm mb-8">{t('settings_ui.notifications.desc')}</p>
 
             <section className="space-y-4">
                {[
@@ -547,15 +639,15 @@ export default function SettingsApp() {
                      initial={{ opacity: 0, y: 10 }}
                      animate={{ opacity: 1, y: 0 }}
                      transition={{ delay: i * 0.1 }}
-                     className="p-4 bg-white/5 border border-white/10 rounded-2xl flex items-center justify-between group hover:bg-white/[0.07] transition-all"
+                     className="p-4 bg-[var(--bg-card)] border border-[var(--border-color)] rounded-2xl flex items-center justify-between group hover:bg-[var(--bg-card-hover)] transition-all"
                    >
                      <div className="flex items-center gap-4">
-                        <div className="w-10 h-10 rounded-xl bg-white/5 flex items-center justify-center group-hover:bg-indigo-500/10 transition-colors">
-                          <item.icon size={20} className={isActive ? 'text-indigo-400' : 'text-gray-500'} />
+                        <div className="w-10 h-10 rounded-xl bg-[var(--bg-tertiary)] flex items-center justify-center group-hover:bg-indigo-500/10 transition-colors">
+                          <item.icon size={20} className={isActive ? 'text-indigo-400' : 'text-[var(--text-muted)]'} />
                         </div>
                         <div>
-                          <h4 className="text-sm font-bold text-gray-200">{item.title}</h4>
-                          <p className="text-xs text-gray-500 italic">{item.desc}</p>
+                          <h4 className="text-sm font-bold text-[var(--text-primary)]">{item.title}</h4>
+                          <p className="text-xs text-[var(--text-muted)] italic">{item.desc}</p>
                         </div>
                      </div>
                      <div 
@@ -573,33 +665,33 @@ export default function SettingsApp() {
 
         {activeTab === 'privacy' && (
           <div className="max-w-2xl animate-in fade-in slide-in-from-bottom-2 duration-300">
-            <h1 className="text-2xl font-bold mb-2">{t('settings_ui.privacy.title')}</h1>
-            <p className="text-gray-400 text-sm mb-8">{t('settings_ui.privacy.desc')}</p>
+            <h1 className="text-2xl font-bold mb-2 text-[var(--text-primary)]">{t('settings_ui.privacy.title')}</h1>
+            <p className="text-[var(--text-secondary)] text-sm mb-8">{t('settings_ui.privacy.desc')}</p>
 
             <section className="space-y-6">
-              <div className="p-6 bg-gradient-to-br from-indigo-500/10 to-purple-500/10 border border-white/10 rounded-3xl relative overflow-hidden group">
+              <div className="p-6 bg-gradient-to-br from-indigo-500/10 to-purple-500/10 border border-[var(--border-color)] rounded-3xl relative overflow-hidden group">
                 <div className="absolute -right-10 -top-10 w-40 h-40 bg-indigo-500/10 rounded-full blur-3xl group-hover:bg-indigo-500/20 transition-all duration-700" />
                 <div className="relative z-10 flex items-start gap-4">
                   <div className="w-12 h-12 rounded-2xl bg-indigo-500 flex items-center justify-center shadow-xl shadow-indigo-500/20">
                     <Shield size={24} className="text-white" />
                   </div>
                   <div className="flex-1">
-                    <h3 className="text-lg font-bold text-white mb-1">{t('settings_ui.privacy.dashboard')}</h3>
-                    <p className="text-sm text-gray-300 leading-relaxed mb-4">
+                    <h3 className="text-lg font-bold text-[var(--text-primary)] mb-1">{t('settings_ui.privacy.dashboard')}</h3>
+                    <p className="text-sm text-[var(--text-secondary)] leading-relaxed mb-4">
                       {t('settings_ui.privacy.dashboardDesc')}
                     </p>
                     <div className="flex flex-wrap gap-2">
-                      <span className="px-3 py-1 bg-white/10 rounded-full text-[10px] font-bold uppercase text-gray-300 border border-white/10">{t('settings_ui.privacy.zeroKnowledge')}</span>
-                      <span className="px-3 py-1 bg-white/10 rounded-full text-[10px] font-bold uppercase text-gray-300 border border-white/10">{t('settings_ui.privacy.clientSideEncryption')}</span>
+                      <span className="px-3 py-1 bg-gray-500/5 dark:bg-white/10 rounded-full text-[10px] font-bold uppercase text-[var(--text-secondary)] border border-gray-500/10 dark:border-white/10">{t('settings_ui.privacy.zeroKnowledge')}</span>
+                      <span className="px-3 py-1 bg-gray-500/5 dark:bg-white/10 rounded-full text-[10px] font-bold uppercase text-[var(--text-secondary)] border border-gray-500/10 dark:border-white/10">{t('settings_ui.privacy.clientSideEncryption')}</span>
                     </div>
                   </div>
                 </div>
               </div>
 
               <div className="space-y-3">
-                  <div className="p-4 bg-white/5 border border-white/10 rounded-2xl flex items-center gap-3">
+                  <div className="p-4 bg-[var(--bg-tertiary)] border border-[var(--border-color)] rounded-2xl flex items-center gap-3">
                     <Info size={16} className="text-indigo-400" />
-                    <p className="text-xs text-gray-400 font-medium">{t('settings_ui.privacy.autoHandled')}</p>
+                    <p className="text-xs text-[var(--text-muted)] font-medium">{t('settings_ui.privacy.autoHandled')}</p>
                   </div>
                </div>
             </section>
@@ -608,11 +700,11 @@ export default function SettingsApp() {
 
         {activeTab === 'database' && (
           <div className="max-w-2xl animate-in fade-in slide-in-from-bottom-2 duration-300">
-            <h1 className="text-2xl font-bold mb-2">{t('settings.databaseTitle')}</h1>
-            <p className="text-gray-400 text-sm mb-8">{t('settings.databaseDesc')}</p>
+            <h1 className="text-2xl font-bold mb-2 text-[var(--text-primary)]">{t('settings.databaseTitle')}</h1>
+            <p className="text-[var(--text-secondary)] text-sm mb-8">{t('settings.databaseDesc')}</p>
 
             {dbLoading ? (
-              <div className="flex items-center gap-3 text-gray-400 py-12">
+              <div className="flex items-center gap-3 text-[var(--text-muted)] py-12">
                 <RefreshCw size={16} className="animate-spin" />
                 <span className="text-sm">{t('settings_ui.db.loading')}</span>
               </div>
@@ -642,7 +734,7 @@ export default function SettingsApp() {
                             onClick={() => {
                               lockVault();
                               dispatch({ type: 'SET_DB_CONFIG', payload: { uri: '' } });
-                              toast.success(t('settings_ui.db.vaultLocked'));
+                              addNotification({ title: 'Locked', message: t('settings_ui.db.vaultLocked'), type: 'info' });
                             }}
                             className="px-3 py-1.5 text-xs bg-white/5 hover:bg-white/10 rounded-lg border border-white/10 text-gray-300 flex items-center gap-1.5 transition-colors"
                           >
@@ -651,10 +743,10 @@ export default function SettingsApp() {
                         </>
                       ) : vaultStatus === 'locked' ? (
                         <>
-                          <Lock size={18} className="text-amber-400" />
+                          <Lock size={18} className="text-amber-600 dark:text-amber-400" />
                           <div className="flex-1">
-                            <span className="text-sm font-medium text-amber-400">{t('settings_ui.vaultStatus.locked')}</span>
-                            <p className="text-[11px] text-amber-400/60">{t('vault.unlockDescription')}</p>
+                            <span className="text-sm font-medium text-amber-600 dark:text-amber-400">{t('settings_ui.vaultStatus.locked')}</span>
+                            <p className="text-[11px] text-amber-600/60 dark:text-amber-400/60">{t('vault.unlockDescription')}</p>
                           </div>
                           <button
                             onClick={showVault}
@@ -665,10 +757,10 @@ export default function SettingsApp() {
                         </>
                       ) : (
                         <>
-                          <Shield size={18} className="text-indigo-400" />
+                          <Shield size={18} className="text-indigo-600 dark:text-indigo-400" />
                           <div className="flex-1">
-                            <span className="text-sm font-medium text-indigo-400">{t('settings_ui.vaultStatus.none')}</span>
-                            <p className="text-[11px] text-indigo-400/60">{t('vault.setupDescription')}</p>
+                            <span className="text-sm font-medium text-indigo-600 dark:text-indigo-400">{t('settings_ui.vaultStatus.none')}</span>
+                            <p className="text-[11px] text-indigo-600/60 dark:text-indigo-400/60">{t('vault.setupDescription')}</p>
                           </div>
                           <button
                             onClick={showVault}
@@ -682,8 +774,8 @@ export default function SettingsApp() {
 
                     {/* Connected URI (masked) when unlocked */}
                     {vaultStatus === 'unlocked' && decryptedUri && (
-                      <div className="p-4 bg-white/[0.02] border border-white/5 rounded-xl">
-                        <h3 className="text-xs font-semibold text-gray-400 mb-2 flex items-center gap-2">
+                      <div className="p-4 bg-[var(--bg-tertiary)] border border-[var(--border-color)] rounded-xl">
+                        <h3 className="text-xs font-semibold text-[var(--text-muted)] mb-2 flex items-center gap-2">
                           <Database size={14} className="text-emerald-400" />
                           {t('settings_ui.db.activeDb')}
                         </h3>
@@ -697,11 +789,16 @@ export default function SettingsApp() {
                     {vaultStatus === 'unlocked' && (
                       <div className="flex gap-3">
                         <button
-                          onClick={async () => {
-                            if (!confirm(t('settings_ui.db.deleteConfirm'))) return;
-                            await clearVault();
-                            dispatch({ type: 'SET_DB_CONFIG', payload: { uri: '' } });
-                            toast.success(t('settings_ui.db.vaultCleared'));
+                          onClick={() => {
+                            showConfirm(
+                              t('settings_ui.db.deleteConfirm'),
+                              async () => {
+                                await clearVault();
+                                dispatch({ type: 'SET_DB_CONFIG', payload: { uri: '' } });
+                                addNotification({ title: 'Cleared', message: t('settings_ui.db.vaultCleared'), type: 'info' });
+                              },
+                              t('settings_ui.db.deleteVault')
+                            );
                           }}
                           className="text-xs text-red-400/70 hover:text-red-400 font-medium px-4 py-2 rounded-xl bg-red-500/5 hover:bg-red-500/10 border border-red-500/10 transition-all flex items-center gap-2"
                         >
@@ -720,8 +817,8 @@ export default function SettingsApp() {
                             <Key size={16} className="text-indigo-400" />
                           </div>
                           <div>
-                            <p className="text-sm font-medium text-gray-200 mb-1">{t('vault.masterPassword')}</p>
-                            <p className="text-xs text-gray-500 leading-relaxed">
+                            <p className="text-sm font-medium text-[var(--text-primary)] mb-1">{t('vault.masterPassword')}</p>
+                            <p className="text-xs text-[var(--text-muted)] leading-relaxed">
                               {t('vault.privacyDesc')}
                             </p>
                           </div>
@@ -732,8 +829,8 @@ export default function SettingsApp() {
                             <Shield size={16} className="text-emerald-400" />
                           </div>
                           <div>
-                            <p className="text-sm font-medium text-gray-200 mb-1">{t('settings_ui.db.sessionOnlyMemory')}</p>
-                            <p className="text-xs text-gray-500 leading-relaxed">
+                            <p className="text-sm font-medium text-[var(--text-primary)] mb-1">{t('settings_ui.db.sessionOnlyMemory')}</p>
+                            <p className="text-xs text-[var(--text-muted)] leading-relaxed">
                               {t('settings_ui.db.sessionOnlyMemoryDesc')}
                             </p>
                           </div>
@@ -744,8 +841,8 @@ export default function SettingsApp() {
                             <Mail size={16} className="text-amber-400" />
                           </div>
                           <div>
-                            <p className="text-sm font-medium text-gray-200 mb-1">{t('settings_ui.db.emailRecovery')}</p>
-                            <p className="text-xs text-gray-500 leading-relaxed">
+                            <p className="text-sm font-medium text-[var(--text-primary)] mb-1">{t('settings_ui.db.emailRecovery')}</p>
+                            <p className="text-xs text-[var(--text-muted)] leading-relaxed">
                               {t('settings_ui.db.emailRecoveryDesc')}
                             </p>
                           </div>
@@ -772,11 +869,11 @@ export default function SettingsApp() {
                         </>
                       ) : (
                         <>
-                          <WifiOff size={18} className="text-amber-400" />
-                          <div>
-                            <span className="text-sm font-medium text-amber-400">{t('settings_ui.db.notConnected')}</span>
-                            <p className="text-[11px] text-amber-400/60">{t('settings_ui.db.notConnectedDesc')}</p>
-                          </div>
+                           <WifiOff size={18} className="text-amber-600 dark:text-amber-400" />
+                           <div>
+                             <span className="text-sm font-medium text-amber-600 dark:text-amber-400">{t('settings_ui.db.notConnected')}</span>
+                             <p className="text-[11px] text-amber-600/60 dark:text-amber-400/60">{t('settings_ui.db.notConnectedDesc')}</p>
+                           </div>
                         </>
                       )}
                     </div>
@@ -785,13 +882,44 @@ export default function SettingsApp() {
                     <div>
                       <h3 className="text-sm font-semibold mb-3 flex items-center gap-2">
                         <Database size={16} className="text-indigo-400" />
-                        {t('settings_ui.db.mongoDbUri')}
+                        {t('settings_ui.db.type') || 'Database Type'}
+                      </h3>
+                      <div className="grid grid-cols-3 gap-3 mb-6">
+                         {[
+                           { id: 'mongodb', label: 'MongoDB', color: '#10b981', icon: Database, bg: 'bg-emerald-500/10' },
+                           { id: 'mysql', label: 'MySQL', color: '#00758f', icon: Database, bg: 'bg-blue-500/10' },
+                           { id: 'postgres', label: 'Postgres', color: '#336791', icon: Database, bg: 'bg-indigo-500/10' },
+                         ].map(prov => (
+                           <button 
+                             key={prov.id}
+                             onClick={() => {
+                                if (prov.id === 'mongodb') setDbUri('mongodb://127.0.0.1:27017/ssh-monitor');
+                                if (prov.id === 'mysql') setDbUri('mysql://root:password@127.0.0.1:3306/ssh-monitor');
+                                if (prov.id === 'postgres') setDbUri('postgres://postgres:password@127.0.0.1:5432/ssh-monitor');
+                             }}
+                             className={`flex flex-col items-center gap-2 py-4 rounded-2xl border transition-all ${
+                               (dbUri.startsWith(prov.id === 'mongodb' ? 'mongodb' : prov.id) || (prov.id === 'mongodb' && dbUri === ''))
+                                 ? 'bg-indigo-500/10 border-indigo-500/50 text-indigo-600 dark:text-indigo-400'
+                                 : 'bg-gray-500/5 dark:bg-white/5 border-gray-500/10 dark:border-white/10 text-gray-500 hover:text-gray-700 dark:hover:text-gray-300'
+                             }`}
+                           >
+                              <div className={`p-2 rounded-xl ${prov.bg}`}>
+                                <prov.icon size={20} style={{ color: prov.color }} />
+                              </div>
+                              <span className="text-[11px] font-bold">{prov.label}</span>
+                           </button>
+                         ))}
+                      </div>
+
+                      <h3 className="text-sm font-semibold mb-3 flex items-center gap-2">
+                        <Lock size={16} className="text-indigo-400" />
+                        {dbUri.includes('mysql') ? 'MySQL Connection String' : dbUri.includes('postgres') ? 'PostgreSQL Connection String' : t('settings_ui.db.mongoDbUri')}
                       </h3>
                       <div className="flex gap-2">
                         <input
                           type="text"
-                          className="flex-1 px-4 py-3 bg-white/5 border border-white/10 rounded-xl text-sm font-mono text-gray-200 placeholder-gray-600 focus:outline-none focus:border-indigo-500/50 focus:ring-1 focus:ring-indigo-500/25 transition-all"
-                          placeholder="mongodb://127.0.0.1:27017/ssh-monitor"
+                          className="flex-1 px-4 py-3 bg-gray-500/5 dark:bg-white/5 border border-gray-500/10 dark:border-white/10 rounded-xl text-sm font-mono text-[var(--text-primary)] placeholder-gray-400 dark:placeholder-gray-600 focus:outline-none focus:border-indigo-500/50 focus:ring-1 focus:ring-indigo-500/25 transition-all"
+                          placeholder={dbUri.includes('mysql') ? 'mysql://user:pass@host:port/db' : dbUri.includes('postgres') ? 'postgres://user:pass@host:port/db' : 'mongodb://127.0.0.1:27017/ssh-monitor'}
                           value={dbUri}
                           onChange={(e) => setDbUri(e.target.value)}
                           onKeyDown={(e) => { if (e.key === 'Enter') handleConnect(); }}
@@ -812,14 +940,14 @@ export default function SettingsApp() {
                           )}
                         </button>
                       </div>
-                      <p className="text-[11px] text-gray-500 mt-2">
-                        {t('settings_ui.db.example')}: <code className="text-indigo-400/70">mongodb://127.0.0.1:27017/ssh-monitor</code>
+                      <p className="text-[11px] text-[var(--text-secondary)] mt-2">
+                        {t('settings_ui.db.example')}: <code className="text-indigo-400/70">{dbUri.includes('mysql') ? 'mysql://root:secret@127.0.0.1:3306/mydb' : dbUri.includes('postgres') ? 'postgres://pg:secret@127.0.0.1:5432/mydb' : 'mongodb://127.0.0.1:27017/ssh-monitor'}</code>
                       </p>
                     </div>
 
                     {/* Quick Presets */}
                     <div>
-                      <h3 className="text-sm font-semibold mb-3 text-gray-400">{t('settings_ui.db.quickPresets')}</h3>
+                      <h3 className="text-sm font-semibold mb-3 text-[var(--text-muted)]">{t('settings_ui.db.quickPresets')}</h3>
                       <div className="flex flex-wrap gap-2">
                         {PRESETS.map(preset => (
                           <button
@@ -827,8 +955,8 @@ export default function SettingsApp() {
                             onClick={() => setDbUri(preset.uri)}
                             className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-all ${
                               dbUri === preset.uri 
-                                ? 'bg-indigo-500/20 border-indigo-500/50 text-indigo-400' 
-                                : 'bg-white/5 border-white/10 text-gray-400 hover:bg-white/10 hover:text-white'
+                                ? 'bg-indigo-500/20 border-indigo-500/50 text-indigo-600 dark:text-indigo-400' 
+                                : 'bg-gray-500/5 dark:bg-white/5 border-gray-500/10 dark:border-white/10 text-[var(--text-muted)] hover:bg-gray-500/10 dark:hover:bg-white/10 hover:text-[var(--text-primary)]'
                             }`}
                           >
                             {preset.label}
@@ -851,19 +979,19 @@ export default function SettingsApp() {
             </div>
             <h2 className="text-2xl font-bold mb-1">Webtop OS</h2>
             <p className="text-indigo-400 text-sm font-medium mb-6">{t('settings_ui.about.version', { version: '1.0.5 (Beta)' })}</p>
-            <div className="bg-white/5 rounded-2xl p-6 border border-white/10 text-sm text-gray-400 leading-relaxed text-left">
+            <div className="bg-gray-500/5 dark:bg-white/5 rounded-2xl p-6 border border-gray-500/10 dark:border-white/10 text-sm text-[var(--text-primary)] leading-relaxed text-left">
               <p className="mb-4 text-xs">{t('settings_ui.about.description')}</p>
               
               <div className="space-y-4">
                 {/* Environment Info */}
                 <div className="space-y-2">
-                  <div className="flex justify-between border-b border-white/5 pb-2">
-                    <span className="font-medium text-gray-300">{t('settings_ui.about.environment')}</span>
-                    <span>{t('settings_ui.about.environmentValue')}</span>
+                  <div className="flex justify-between border-b border-gray-500/5 dark:border-white/5 pb-2">
+                    <span className="font-medium text-gray-600 dark:text-gray-300">{t('settings_ui.about.environment')}</span>
+                    <span className="text-[var(--text-primary)]">{t('settings_ui.about.environmentValue')}</span>
                   </div>
-                  <div className="flex justify-between border-b border-white/5 pb-2">
-                    <span className="font-medium text-gray-300">{t('settings_ui.about.resolution')}</span>
-                    <span>{typeof window !== 'undefined' ? `${window.innerWidth} x ${window.innerHeight}` : 'N/A'}</span>
+                  <div className="flex justify-between border-b border-gray-500/5 dark:border-white/5 pb-2">
+                    <span className="font-medium text-gray-600 dark:text-gray-300">{t('settings_ui.about.resolution')}</span>
+                    <span className="text-[var(--text-primary)]">{typeof window !== 'undefined' ? `${window.innerWidth} x ${window.innerHeight}` : 'N/A'}</span>
                   </div>
                 </div>
 
@@ -874,30 +1002,30 @@ export default function SettingsApp() {
                     <div className="flex items-center gap-2 bg-indigo-500/5 border border-indigo-500/10 rounded-lg p-2">
                       <Shield size={12} className="text-indigo-400" />
                       <div className="flex-1">
-                        <p className="text-[10px] font-bold text-gray-300 uppercase">{t('settings_ui.about.keyDerivation')}</p>
-                        <p className="text-[10px] text-gray-500">{t('settings_ui.about.keyDerivationValue')}</p>
+                        <p className="text-[10px] font-bold text-gray-600 dark:text-gray-300 uppercase">{t('settings_ui.about.keyDerivation')}</p>
+                        <p className="text-[10px] text-[var(--text-secondary)]">{t('settings_ui.about.keyDerivationValue')}</p>
                       </div>
                     </div>
                     <div className="flex items-center gap-2 bg-emerald-500/5 border border-emerald-500/10 rounded-lg p-2">
                       <Lock size={12} className="text-emerald-400" />
                       <div className="flex-1">
-                        <p className="text-[10px] font-bold text-gray-300 uppercase">{t('settings_ui.about.encryption')}</p>
-                        <p className="text-[10px] text-gray-500">{t('settings_ui.about.encryptionValue')}</p>
+                        <p className="text-[10px] font-bold text-gray-600 dark:text-gray-300 uppercase">{t('settings_ui.about.encryption')}</p>
+                        <p className="text-[10px] text-[var(--text-secondary)]">{t('settings_ui.about.encryptionValue')}</p>
                       </div>
                     </div>
                     <div className="flex items-center gap-2 bg-amber-500/5 border border-amber-500/10 rounded-lg p-2">
                       <Code size={12} className="text-amber-400" />
                       <div className="flex-1">
-                        <p className="text-[10px] font-bold text-gray-300 uppercase">{t('settings_ui.about.defense')}</p>
-                        <p className="text-[10px] text-gray-500">{t('settings_ui.about.defenseValue')}</p>
+                        <p className="text-[10px] font-bold text-gray-600 dark:text-gray-300 uppercase">{t('settings_ui.about.defense')}</p>
+                        <p className="text-[10px] text-[var(--text-secondary)]">{t('settings_ui.about.defenseValue')}</p>
                       </div>
                     </div>
                   </div>
                 </div>
 
-                <div className="flex justify-between pt-2 border-t border-white/5">
-                  <span className="font-medium text-gray-300">{t('settings_ui.about.license')}</span>
-                  <span>{t('settings_ui.about.licenseValue')}</span>
+                <div className="flex justify-between pt-2 border-t border-gray-500/5 dark:border-white/5">
+                  <span className="font-medium text-gray-600 dark:text-gray-300">{t('settings_ui.about.license')}</span>
+                  <span className="text-[var(--text-primary)] font-bold">{t('settings_ui.about.licenseValue')}</span>
                 </div>
               </div>
             </div>

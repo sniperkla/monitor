@@ -61,6 +61,7 @@ const UserSchema = new mongoose.Schema({
     customWallpapers: { type: [String], default: [] },
     taskbarPosition: { type: String, default: 'bottom' },
     openWindows: { type: [Object], default: [] }, // { id, appType, title, x, y, width, height, isMaximized, isMinimized, zIndex, props }
+    timestamp: { type: Number, default: 0 },
   }
 }, {
   timestamps: true,

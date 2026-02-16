@@ -1,9 +1,23 @@
-import { Toaster } from 'react-hot-toast';
+
 import "./globals.css";
 
 export const metadata = {
   title: "SSH Monitor — Terminal & Server Management",
   description: "A modern SSH terminal manager with real-time server monitoring, key management, and multi-session support.",
+  manifest: "/manifest.json",
+  appleWebApp: {
+    capable: true,
+    statusBarStyle: "default",
+    title: "Webtop OS",
+  },
+};
+
+export const viewport = {
+  themeColor: "#0f172a",
+  width: "device-width",
+  initialScale: 1,
+  maximumScale: 1,
+  userScalable: false,
 };
 
 import { Providers } from '@/components/Providers';
@@ -23,28 +37,6 @@ export default function RootLayout({ children }) {
         <Providers>
           {children}
         </Providers>
-        <Toaster
-          position="top-right"
-          toastOptions={{
-            style: {
-              background: '#1a1a2e',
-              color: '#fff',
-              border: '1px solid #2d2d44',
-            },
-            success: {
-              iconTheme: {
-                primary: '#10b981',
-                secondary: '#fff',
-              },
-            },
-            error: {
-              iconTheme: {
-                primary: '#f43f5e',
-                secondary: '#fff',
-              },
-            },
-          }}
-        />
       </body>
     </html>
   );

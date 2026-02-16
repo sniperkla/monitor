@@ -3,7 +3,7 @@
 import { useApp } from '@/context/AppContext';
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { io } from 'socket.io-client';
-import { Loader2, AlertCircle, CheckCircle2, XCircle } from 'lucide-react';
+import { Loader2, AlertCircle, CheckCircle2, XCircle, X, Minus, Maximize2 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 let Terminal, FitAddon, WebLinksAddon;
@@ -59,7 +59,7 @@ export default function TerminalView({ connectionId, connectionName, host, color
       fontSize: 14,
       fontFamily: "'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace",
       theme: {
-        background: '#0c0c0c',
+        background: '#0c0c0c', // Keep terminal background dark for true terminal feel
         foreground: '#e4e4e7',
         cursor: '#6366f1',
         cursorAccent: '#0c0c0c',
@@ -215,40 +215,53 @@ export default function TerminalView({ connectionId, connectionName, host, color
   return (
     <div className="h-full flex flex-col">
       {/* Terminal title bar - hidden in standalone mode since Window title shows server name */}
-      {!isStandalone && (
-      <div className="terminal-titlebar">
-        <div className="flex items-center gap-3">
-          <div className="terminal-dots">
-            <div
-              className="terminal-dot red"
-              onClick={onClose}
-              title="Close"
-            />
-            <div className="terminal-dot yellow" title="Minimize" />
-            <div className="terminal-dot green" title="Maximize" />
-          </div>
+      {isStandalone && (
+        <div className="h-10 flex items-center px-3 bg-gradient-to-b from-[var(--bg-secondary)] to-[var(--bg-tertiary)] border-b border-[var(--border-color)]">
           <div className="flex items-center gap-2">
-            <div className="w-2 h-2 rounded-full" style={{ background: color || '#6366f1' }} />
-            <span className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>
-              {connectionName}
-            </span>
-            <span className="text-xs font-mono" style={{ color: 'var(--text-muted)' }}>
-              — {host}
-            </span>
+            <button
+              type="button"
+              onClick={onClose}
+              className="w-3 h-3 rounded-full bg-[#ff5f57] border border-[#e0443e]/30 flex items-center justify-center group"
+              aria-label="Close"
+            >
+              <X size={8} className="opacity-0 group-hover:opacity-100 text-[#4d0000] transition-opacity" />
+            </button>
+            <button
+              type="button"
+              className="w-3 h-3 rounded-full bg-[#febc2e] border border-[#d89e24]/30 flex items-center justify-center group"
+              aria-label="Minimize"
+            >
+              <Minus size={8} className="opacity-0 group-hover:opacity-100 text-[#4d2d00] transition-opacity" />
+            </button>
+            <button
+              type="button"
+              className="w-3 h-3 rounded-full bg-[#28c840] border border-[#1fa530]/30 flex items-center justify-center group"
+              aria-label="Maximize"
+            >
+              <Maximize2 size={8} className="opacity-0 group-hover:opacity-100 text-[#003300] transition-opacity" />
+            </button>
+          </div>
+
+          <div className="flex-1 flex items-center justify-center select-none">
+            <div className="flex items-center gap-2 text-xs font-medium text-[var(--text-secondary)]">
+              <div className="w-2 h-2 rounded-full" style={{ background: color || '#6366f1' }} />
+              <span className="truncate max-w-[55vw]">{connectionName}</span>
+              <span className="text-[10px] font-mono text-[var(--text-muted)] truncate max-w-[35vw]">— {host}</span>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-1.5 text-xs" style={{ color: statusInfo.color }}>
+            {statusInfo.icon}
+            <span>{statusInfo.text}</span>
           </div>
         </div>
-        <div className="flex items-center gap-1.5 text-xs" style={{ color: statusInfo.color }}>
-          {statusInfo.icon}
-          <span>{statusInfo.text}</span>
-        </div>
-      </div>
       )}
 
       {/* Terminal body */}
       <div
         ref={terminalRef}
         className="flex-1"
-        style={{ background: '#0c0c0c', minHeight: 0 }}
+        style={{ background: 'var(--bg-primary)', minHeight: 0 }}
         onDragOver={(e) => {
           e.preventDefault();
           e.stopPropagation();

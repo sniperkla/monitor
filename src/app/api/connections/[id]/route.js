@@ -1,22 +1,23 @@
 import { NextResponse } from 'next/server';
 import connectDB from '@/lib/mongodb';
-import { getConnectionModel } from '@/models/Connection';
+import { ConnectionRepository } from '@/lib/repositories/ConnectionRepository';
 import { encrypt } from '@/utils/encryption';
 import mongoose from 'mongoose';
 
-const isValidId = (id) => mongoose.Types.ObjectId.isValid(id);
+const isValidMongoId = (id) => mongoose.Types.ObjectId.isValid(id);
 
 // GET single connection
 export async function GET(request, { params }) {
   try {
     const { id } = await params;
-    if (!isValidId(id)) {
+    const db = await connectDB();
+    const repo = new ConnectionRepository(db);
+
+    if (db.type !== 'mysql' && !isValidMongoId(id)) {
       return NextResponse.json({ success: false, error: 'Invalid ID' }, { status: 400 });
     }
 
-    const db = await connectDB();
-    const ConnectionModel = getConnectionModel(db);
-    const connection = await ConnectionModel.findById(id);
+    const connection = await repo.findById(id);
 
     if (!connection) {
       return NextResponse.json({ success: false, error: 'Connection not found' }, { status: 404 });
@@ -32,29 +33,27 @@ export async function GET(request, { params }) {
 export async function PUT(request, { params }) {
   try {
     const { id } = await params;
-    if (!isValidId(id)) {
+    const db = await connectDB();
+    const repo = new ConnectionRepository(db);
+
+    if (db.type !== 'mysql' && !isValidMongoId(id)) {
       return NextResponse.json({ success: false, error: 'Invalid ID' }, { status: 400 });
     }
 
-    const db = await connectDB();
-    const ConnectionModel = getConnectionModel(db);
     const body = await request.json();
 
     if (body.password) body.password = encrypt(body.password);
     if (body.privateKey) body.privateKey = encrypt(body.privateKey);
     if (body.passphrase) body.passphrase = encrypt(body.passphrase);
 
-    const connection = await ConnectionModel.findByIdAndUpdate(
-      id,
-      { ...body },
-      { new: true, runValidators: true }
-    );
+    const success = await repo.update(id, body);
 
-    if (!connection) {
-      return NextResponse.json({ success: false, error: 'Connection not found' }, { status: 404 });
+    if (!success) {
+      return NextResponse.json({ success: false, error: 'Connection not found or update failed' }, { status: 404 });
     }
 
-    return NextResponse.json({ success: true, data: connection });
+    const updated = await repo.findById(id);
+    return NextResponse.json({ success: true, data: updated });
   } catch (error) {
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   }
@@ -64,13 +63,14 @@ export async function PUT(request, { params }) {
 export async function DELETE(request, { params }) {
   try {
     const { id } = await params;
-    if (!isValidId(id)) {
+    const db = await connectDB();
+    const repo = new ConnectionRepository(db);
+
+    if (db.type !== 'mysql' && !isValidMongoId(id)) {
       return NextResponse.json({ success: false, error: 'Invalid ID' }, { status: 400 });
     }
 
-    const db = await connectDB();
-    const ConnectionModel = getConnectionModel(db);
-    const connection = await ConnectionModel.findByIdAndDelete(id);
+    const connection = await repo.delete(id);
 
     if (!connection) {
       return NextResponse.json({ success: false, error: 'Connection not found' }, { status: 404 });
@@ -81,3 +81,4 @@ export async function DELETE(request, { params }) {
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   }
 }
+

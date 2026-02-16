@@ -3,11 +3,12 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { useApp } from '@/context/AppContext';
-import toast from 'react-hot-toast';
+import { useOS } from '@/context/OSContext';
 import { useTranslation } from 'react-i18next';
 import { useSession, signIn } from 'next-auth/react';
+import MacOSModalWindow from '@/components/MacOSModalWindow';
 import {
-  X, Server, User, Lock, Key, Upload, FileKey, Hash, Tag, Palette, StickyNote, Database, HardDrive, Cpu, Eye, EyeOff
+  X, Server, User, Lock, Key, Upload, FileKey, Hash, Tag, Palette, StickyNote, Database, HardDrive, Cpu, Eye, EyeOff, Activity, RefreshCw
 } from 'lucide-react';
 
 const COLORS = [
@@ -19,6 +20,7 @@ const COLORS = [
 
 export default function ConnectionModal({ onClose, editConnection = null }) {
   const { state, dispatch, fetchConnections, apiFetch } = useApp();
+  const { addNotification, showAlert } = useOS();
   const { t } = useTranslation();
   const { data: session } = useSession();
   const fileInputRef = useRef(null);
@@ -26,37 +28,69 @@ export default function ConnectionModal({ onClose, editConnection = null }) {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [dragOver, setDragOver] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
+  const [isUriModalOpen, setIsUriModalOpen] = useState(false);
+  const [uriInput, setUriInput] = useState('');
+  const [isTesting, setIsTesting] = useState(false);
 
   useEffect(() => {
     setMounted(true);
   }, []);
 
   const [form, setForm] = useState({
+    type: editConnection?.type || 'ssh',
+    dbProvider: editConnection?.dbProvider || 'mongodb',
     name: editConnection?.name || '',
     host: editConnection?.host || '',
-    port: editConnection?.port || 22,
+    port: editConnection?.port || (editConnection?.type === 'database' ? 3306 : 22),
     username: editConnection?.username || '',
-    authType: editConnection?.authType || 'password',
     password: '',
+    database: editConnection?.database || '',
+    authType: editConnection?.authType || 'password',
     privateKey: '',
     keyFileName: editConnection?.keyFileName || '',
     passphrase: '',
     tags: editConnection?.tags?.join(', ') || '',
-    color: editConnection?.color || '#6366f1',
+    color: editConnection?.color || (editConnection?.type === 'database' ? '#10b981' : '#6366f1'),
     notes: editConnection?.notes || '',
     targetStorage: editConnection?.storage || state.storageMode || 'db',
   });
+
+  // Auto-set ports based on provider
+  useEffect(() => {
+    if (form.type === 'database' && !editConnection) {
+        if (form.dbProvider === 'mongodb') handleChange('port', 27017);
+        if (form.dbProvider === 'mysql') handleChange('port', 3306);
+        if (form.dbProvider === 'postgres') handleChange('port', 5432);
+        if (form.dbProvider === 'sqlite') handleChange('port', 0);
+    }
+  }, [form.dbProvider, form.type]);
 
   // Auto-fallback: if not logged in and default was 'db', switch to 'localstorage'
   useEffect(() => {
     if (!session && form.targetStorage === 'db' && !editConnection) {
       setForm(prev => ({ ...prev, targetStorage: 'localstorage' }));
+    } else if (session && form.targetStorage === 'localstorage' && !editConnection) {
+      // Auto-promote to cloud if logged in
+      setForm(prev => ({ ...prev, targetStorage: 'db' }));
     }
   }, [session]);
 
   const handleChange = (field, value) => {
     setForm(prev => {
       const newForm = { ...prev, [field]: value };
+      
+      // Dynamic color/port defaults when switching type
+      if (field === 'type') {
+         if (value === 'database') {
+            newForm.color = '#10b981'; // Emerald for DB
+            newForm.port = 27017;
+            newForm.dbProvider = 'mongodb';
+         } else {
+            newForm.color = '#6366f1'; // Indigo for SSH
+            newForm.port = 22;
+         }
+      }
+
       // If switching to manual mode, clear sensitive fields as requested
       if (field === 'targetStorage' && value === 'manual') {
         return {
@@ -109,6 +143,118 @@ export default function ConnectionModal({ onClose, editConnection = null }) {
     reader.readAsText(file);
   };
 
+  const handleParseURI = () => {
+    if (!uriInput) return;
+    
+    try {
+      const input = uriInput.trim();
+      // Basic validation for protocol
+      if (!input.includes('://')) {
+        throw new Error('Missing protocol');
+      }
+
+      // Handle common variations
+      const url = new URL(input);
+      const isMongo = url.protocol === 'mongodb:' || url.protocol === 'mongodb+srv:';
+      const isMongoSrv = url.protocol === 'mongodb+srv:';
+      const isMysql = url.protocol === 'mysql:';
+      const isPostgres = url.protocol === 'postgresql:' || url.protocol === 'postgres:';
+      
+      if (isMongo || isMysql || isPostgres) {
+        setForm(prev => {
+          const newForm = { ...prev };
+          newForm.type = 'database';
+          if (isMongo) {
+            newForm.dbProvider = 'mongodb';
+            newForm.isSrv = isMongoSrv;
+          }
+          else if (isMysql) newForm.dbProvider = 'mysql';
+          else if (isPostgres) newForm.dbProvider = 'postgres';
+
+          newForm.host = url.hostname;
+          if (url.port) {
+            newForm.port = parseInt(url.port);
+          } else {
+            // Defaults if port missing
+            if (isMongo) newForm.port = isMongoSrv ? 0 : 27017;
+            if (isMysql) newForm.port = 3306;
+            if (isPostgres) newForm.port = 5432;
+          }
+
+          // Always reset auth fields first, then apply if present in URI
+          newForm.username = url.username ? decodeURIComponent(url.username) : '';
+          if (url.password) {
+            newForm.password = decodeURIComponent(url.password);
+            newForm.authType = 'password';
+          } else {
+            newForm.password = '';
+            newForm.authType = 'none';
+          }
+
+          // Reset database then apply if present
+          newForm.database = '';
+          if (url.pathname && url.pathname.length > 1) {
+            newForm.database = url.pathname.substring(1).split('?')[0];
+          }
+          
+          return newForm;
+        });
+        addNotification({ title: 'Import successful', message: 'URI details have been applied.', type: 'info' });
+        setIsUriModalOpen(false);
+        setUriInput('');
+      } else {
+        showAlert('Only mongodb://, mysql:// and postgresql:// are supported.', 'Unsupported Protocol');
+      }
+    } catch (e) {
+      console.error('URI Parse Error:', e);
+      showAlert('The provided string is not a valid URI format.', 'Invalid URI');
+    }
+  };
+
+  const handleTest = async () => {
+    setIsTesting(true);
+    try {
+      const payload = {
+        connection: {
+          ...form,
+          port: parseInt(form.port) || 0,
+        }
+      };
+
+      const res = await apiFetch(`/api/connections/local-test/test`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+
+      const data = await res.json();
+      
+      if (res.status === 429) {
+        addNotification({ 
+          title: 'Rate Limited', 
+          message: data.error || 'Too many requests. Please wait.', 
+          type: 'error' 
+        });
+      } else if (data.success) {
+        addNotification({ 
+          title: 'Success', 
+          message: `${t('ssh.toasts.connectSuccess')}: ${data.info || 'Connected'}`, 
+          type: 'success' 
+        });
+      } else {
+        addNotification({ 
+          title: 'Connection Failed', 
+          message: data.error || t('ssh.toasts.connectFail'), 
+          type: 'error' 
+        });
+      }
+    } catch (err) {
+      addNotification({ title: 'Error', message: err.message, type: 'error' });
+    } finally {
+      setIsTesting(false);
+    }
+  };
+
   const handleDrop = (e) => {
     e.preventDefault();
     setDragOver(false);
@@ -122,9 +268,12 @@ export default function ConnectionModal({ onClose, editConnection = null }) {
 
     const payload = {
       name: form.name,
+      type: form.type,
+      dbProvider: form.dbProvider,
       host: form.host,
-      port: parseInt(form.port) || 22,
+      port: parseInt(form.port) || 0,
       username: form.username,
+      database: form.database || null,
       authType: form.authType,
       keyFileName: form.keyFileName || null,
       tags: form.tags.split(',').map(t => t.trim()).filter(Boolean),
@@ -178,7 +327,35 @@ export default function ConnectionModal({ onClose, editConnection = null }) {
           dispatch({ type: 'ADD_CONNECTION', payload: data.data });
         }
         localStorage.setItem('ssh_monitor_connections', JSON.stringify(updated));
-        toast.success(editConnection ? t('ssh.modal.buttons.update') : t('ssh.modal.buttons.save'));
+        addNotification({ title: 'Saved', message: editConnection ? t('ssh.modal.buttons.update') : t('ssh.modal.buttons.save'), type: 'success' });
+        
+        // AUTO-OPEN after save
+        const savedConn = data.data;
+        if (savedConn.type === 'database') {
+          dispatch({
+            type: 'OPEN_DATABASE_BROWSER',
+            payload: {
+              id: `db-${savedConn._id}-${Date.now()}`,
+              connectionId: savedConn._id,
+              connectionName: savedConn.name,
+              color: savedConn.color,
+              connection: savedConn,
+            },
+          });
+        } else {
+          dispatch({
+            type: 'OPEN_TERMINAL',
+            payload: {
+              id: `term-${savedConn._id}-${Date.now()}`,
+              connectionId: savedConn._id,
+              connectionName: savedConn.name,
+              host: savedConn.host,
+              color: savedConn.color,
+              connection: savedConn,
+            },
+          });
+        }
+
         onClose();
         return;
       }
@@ -216,7 +393,7 @@ export default function ConnectionModal({ onClose, editConnection = null }) {
           },
         });
 
-        toast.success(editConnection ? t('ssh.modal.toasts.manualUpdate') : t('ssh.modal.toasts.manualSuccess'));
+        addNotification({ title: 'Session Updated', message: editConnection ? t('ssh.toasts.manualUpdate') : t('ssh.toasts.manualSuccess'), type: 'success' });
         onClose();
         return;
       }
@@ -245,14 +422,46 @@ export default function ConnectionModal({ onClose, editConnection = null }) {
             localStorage.setItem('ssh_monitor_connections', JSON.stringify(updated));
         }
         
-        toast.success(editConnection ? t('ssh.modal.toasts.dbUpdate') : t('ssh.modal.toasts.dbSuccess'));
+        addNotification({ title: 'Saved to Cloud', message: editConnection ? t('ssh.toasts.dbUpdate') : t('ssh.toasts.dbSuccess'), type: 'success' });
         await fetchConnections();
+        
+        // AUTO-OPEN after save
+        const savedConn = { 
+          ...payload, 
+          _id: resData.data._id || (editConnection ? editConnection._id : null) 
+        };
+        
+        if (savedConn.type === 'database') {
+            dispatch({
+              type: 'OPEN_DATABASE_BROWSER',
+              payload: {
+                id: `db-${savedConn._id}-${Date.now()}`,
+                connectionId: savedConn._id,
+                connectionName: savedConn.name,
+                color: savedConn.color,
+                connection: savedConn,
+              },
+            });
+        } else {
+            dispatch({
+              type: 'OPEN_TERMINAL',
+              payload: {
+                id: `term-${savedConn._id}-${Date.now()}`,
+                connectionId: savedConn._id,
+                connectionName: savedConn.name,
+                host: savedConn.host,
+                color: savedConn.color,
+                connection: savedConn,
+              },
+            });
+        }
+
         onClose();
       } else {
-        toast.error(resData.error || t('ssh.modal.toasts.saveFail'));
+        addNotification({ title: 'Error', message: resData.error || t('ssh.toasts.saveFail'), type: 'error' });
       }
     } catch (err) {
-      toast.error(t('ssh.modal.toasts.errorPrefix') + err.message);
+      addNotification({ title: 'Error', message: t('ssh.toasts.errorPrefix') + err.message, type: 'error' });
     } finally {
       setIsSubmitting(false);
     }
@@ -266,19 +475,20 @@ export default function ConnectionModal({ onClose, editConnection = null }) {
     { id: 'manual', icon: <Cpu size={16} />, label: t('ssh.modal.storageOptions.manual'), desc: t('ssh.modal.storageOptions.manualDesc') },
   ];
 
-  return createPortal(
-    <div className="modal-overlay" onClick={(e) => e.target === e.currentTarget && onClose()}>
-      <div className="modal-content max-h-[90vh] overflow-y-auto custom-scrollbar">
-        <div className="flex items-center justify-between mb-6">
-          <h2 className="text-xl font-bold" style={{ color: 'var(--text-primary)' }}>
-            {editConnection ? t('ssh.modal.titleEdit') : t('ssh.modal.titleNew')}
-          </h2>
-          <button className="btn-icon" onClick={onClose}>
-            <X size={20} />
-          </button>
-        </div>
-
-        <form onSubmit={handleSubmit} className="space-y-6">
+  const modalJsx = createPortal(
+    <MacOSModalWindow
+      isOpen
+      title={editConnection ? t('ssh.modal.titleEdit') : t('ssh.modal.titleNew')}
+      icon={form.type === 'database' ? Database : Server}
+      onClose={onClose}
+      zIndexClassName="z-[40000]"
+      maxWidthClassName="max-w-5xl"
+      maxHeightClassName="max-h-[90vh]"
+      contentClassName="p-6"
+      closeOnOverlayClick
+      overlayClassName="bg-black/40 backdrop-blur-sm"
+    >
+      <form onSubmit={handleSubmit} className="space-y-6">
           {/* Storage Selection */}
           <div className="bg-indigo-500/5 p-4 rounded-2xl border border-indigo-500/10">
             <label className="text-xs font-bold uppercase tracking-wider text-indigo-400 mb-3 block text-center">
@@ -295,10 +505,10 @@ export default function ConnectionModal({ onClose, editConnection = null }) {
                     disabled={isDisabled}
                     className={`flex flex-col items-center justify-center p-3 rounded-xl border transition-all ${
                       form.targetStorage === opt.id
-                        ? 'bg-indigo-500/20 border-indigo-500/50 text-white'
+                        ? 'bg-indigo-500/20 border-indigo-500/50 text-[var(--text-primary)]'
                         : isDisabled
-                        ? 'bg-black/10 border-white/5 text-gray-600 cursor-not-allowed opacity-50'
-                        : 'bg-black/20 border-white/5 text-gray-500 hover:border-white/10'
+                        ? 'bg-[var(--bg-tertiary)] border-[var(--border-color)] text-[var(--text-muted)] cursor-not-allowed opacity-50'
+                        : 'bg-[var(--bg-tertiary)] border-[var(--border-color)] text-[var(--text-muted)] hover:border-[var(--text-primary)]'
                     }`}
                   >
                     <div className={`mb-1.5 ${form.targetStorage === opt.id ? 'text-indigo-400' : ''}`}>
@@ -306,7 +516,7 @@ export default function ConnectionModal({ onClose, editConnection = null }) {
                     </div>
                     <span className="text-[10px] font-bold">{opt.label}</span>
                     {isDisabled && (
-                      <span className="text-[8px] text-amber-400 mt-0.5">{t('vault.loginRequired')}</span>
+                      <span className="text-[8px] text-[var(--text-muted)] mt-0.5">{t('vault.loginRequired')}</span>
                     )}
                   </button>
                 );
@@ -319,7 +529,7 @@ export default function ConnectionModal({ onClose, editConnection = null }) {
                 <button
                   type="button"
                   onClick={() => signIn('google')}
-                  className="ml-auto px-2 py-1 bg-white text-black text-[10px] font-bold rounded hover:bg-gray-200 transition-all flex items-center gap-1.5"
+                  className="ml-auto px-2 py-1 bg-white text-black text-[10px] font-bold rounded hover:bg-slate-200 transition-all flex items-center gap-1.5"
                 >
                   <img src="https://www.svgrepo.com/show/475656/google-color.svg" className="w-2.5 h-2.5" alt="" />
                   {t('vault.loginBtn')}
@@ -327,12 +537,79 @@ export default function ConnectionModal({ onClose, editConnection = null }) {
               </div>
             )}
             {form.targetStorage === 'db' && session && (
-              <div className="flex items-start gap-2 p-2 mt-2 rounded-lg bg-indigo-500/10 border border-indigo-500/20 text-[10px] text-indigo-300">
+              <div className="flex items-start gap-2 p-2 mt-2 rounded-lg bg-[var(--glow-indigo)] border border-[var(--glow-indigo)] text-[10px] text-[var(--accent-indigo)]">
                 <Lock size={10} className="mt-0.5 shrink-0" />
                 <span className="opacity-80">{t('vault.masterKeyInfo')}</span>
               </div>
             )}
           </div>
+
+          {/* Connection Type */}
+          <div className="space-y-3">
+             <label className="text-xs font-bold uppercase tracking-wider text-[var(--text-muted)] block">
+               {t('common.type') || 'Connection Type'}
+             </label>
+             <div className="flex bg-[var(--bg-tertiary)] p-1 rounded-xl">
+               {[
+                 { id: 'ssh', label: 'SSH Server', icon: Server },
+                 { id: 'database', label: 'Database', icon: Database },
+               ].map(type => (
+                 <button
+                   key={type.id}
+                   type="button"
+                   onClick={() => handleChange('type', type.id)}
+                   className={`flex-1 flex items-center justify-center gap-2 py-2.5 text-xs font-bold rounded-lg transition-all ${
+                     form.type === type.id
+                       ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-500/30'
+                       : 'text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-white/5'
+                   }`}
+                 >
+                   <type.icon size={14} />
+                   {type.label}
+                 </button>
+               ))}
+             </div>
+          </div>
+
+          {/* Database Provider Selection (if database) */}
+          {form.type === 'database' && (
+             <div className="space-y-3 animate-in fade-in slide-in-from-top-2 duration-200">
+                <label className="text-xs font-bold uppercase tracking-wider text-[var(--accent-emerald)] block">
+                  {t('settings_ui.db.activeDb') || 'Database Provider'}
+                </label>
+                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                    {[
+                      { id: 'mongodb', label: 'MongoDB', color: '#10b981', icon: Database, bg: 'bg-emerald-500/10' },
+                      { id: 'mysql', label: 'MySQL', color: '#00758f', icon: Database, bg: 'bg-blue-500/10' },
+                      { id: 'postgres', label: 'Postgres', color: '#336791', icon: Database, bg: 'bg-indigo-500/10' },
+                      { id: 'sqlite', label: 'SQLite', color: '#003b57', icon: Database, bg: 'bg-slate-500/10' },
+                    ].map(prov => (
+                      <button 
+                        key={prov.id}
+                        type="button"
+                        onClick={() => handleChange('dbProvider', prov.id)}
+                        className={`flex flex-col items-center gap-2 py-3 rounded-xl border transition-all relative overflow-hidden group ${
+                          form.dbProvider === prov.id
+                            ? 'bg-white/5 border-indigo-500/50 scale-95 shadow-lg'
+                            : 'bg-[var(--bg-tertiary)] border-[var(--border-color)] hover:border-white/20'
+                        }`}
+                      >
+                         <div className={`p-2 rounded-lg ${prov.bg} transition-transform group-hover:scale-110`}>
+                           <prov.icon size={16} style={{ color: prov.color }} />
+                         </div>
+                         <span className={`text-[10px] font-bold ${form.dbProvider === prov.id ? 'text-white' : 'text-[var(--text-muted)]'}`}>
+                           {prov.label}
+                         </span>
+                         {form.dbProvider === prov.id && (
+                           <div className="absolute top-1 right-1">
+                             <div className="w-1.5 h-1.5 rounded-full bg-indigo-500" />
+                           </div>
+                         )}
+                      </button>
+                    ))}
+                 </div>
+              </div>
+          )}
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
              <div className="space-y-5">
@@ -340,6 +617,26 @@ export default function ConnectionModal({ onClose, editConnection = null }) {
                   <label className="flex items-center gap-2 text-sm font-medium mb-2" style={{ color: 'var(--text-secondary)' }}>
                     <StickyNote size={14} /> {t('ssh.modal.form.name')}
                   </label>
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="flex items-center gap-2">
+                      <span className="text-[10px] font-bold text-[var(--text-muted)] uppercase tracking-widest">Supported:</span>
+                      <div className="flex gap-1.5 grayscale opacity-50">
+                         <Database size={12} className="text-emerald-500" />
+                         <Database size={12} className="text-blue-500" />
+                         <Database size={12} className="text-indigo-500" />
+                         <Database size={12} className="text-slate-500" />
+                      </div>
+                    </div>
+                    {form.type === 'database' && (
+                      <button 
+                        type="button"
+                        onClick={() => setIsUriModalOpen(true)}
+                        className="text-[9px] font-bold text-indigo-400 hover:text-indigo-300 transition-colors flex items-center gap-1 bg-indigo-500/10 px-2 py-0.5 rounded border border-indigo-500/20"
+                      >
+                         <Upload size={10} /> Paste URI
+                      </button>
+                    )}
+                  </div>
                   <input
                     type="text"
                     className="input-field"
@@ -350,46 +647,97 @@ export default function ConnectionModal({ onClose, editConnection = null }) {
                   />
                 </div>
 
-                <div className="grid grid-cols-3 gap-3">
-                  <div className="col-span-2">
+                {form.dbProvider !== 'sqlite' ? (
+                  <div className="grid grid-cols-3 gap-3">
+                    <div className="col-span-2">
+                      <label className="flex items-center gap-2 text-sm font-medium mb-2" style={{ color: 'var(--text-secondary)' }}>
+                        <Server size={14} /> {t('ssh.modal.form.host')}
+                      </label>
+                      <input
+                        type="text"
+                        className="input-field"
+                        placeholder={t('ssh.modal.placeholders.host')}
+                        value={form.host}
+                        onChange={(e) => handleChange('host', e.target.value)}
+                        required
+                      />
+                      {form.type === 'database' && (
+                        <div className="flex gap-2 mt-2 px-1">
+                           <button 
+                             type="button"
+                             onClick={() => handleChange('host', '127.0.0.1')}
+                             className="text-[9px] font-bold px-2 py-0.5 rounded bg-white/5 border border-white/5 text-[var(--text-muted)] hover:text-white transition-colors"
+                           >
+                              127.0.0.1
+                           </button>
+                           <button 
+                             type="button"
+                             onClick={() => handleChange('host', 'localhost')}
+                             className="text-[9px] font-bold px-2 py-0.5 rounded bg-white/5 border border-white/5 text-[var(--text-muted)] hover:text-white transition-colors"
+                           >
+                              localhost
+                           </button>
+                        </div>
+                      )}
+                    </div>
+                    <div>
+                      <label className="flex items-center gap-2 text-sm font-medium mb-2" style={{ color: 'var(--text-secondary)' }}>
+                        <Activity size={14} /> {t('ssh.modal.form.port')}
+                      </label>
+                      <input
+                        type="number"
+                        className="input-field"
+                        placeholder="22"
+                        value={form.port}
+                        onChange={(e) => handleChange('port', e.target.value)}
+                      />
+                    </div>
+                  </div>
+                ) : (
+                  <div>
                     <label className="flex items-center gap-2 text-sm font-medium mb-2" style={{ color: 'var(--text-secondary)' }}>
-                      <Server size={14} /> {t('ssh.modal.form.host')}
+                      <Server size={14} /> SQLite File Path
                     </label>
                     <input
                       type="text"
                       className="input-field"
-                      placeholder={t('ssh.modal.placeholders.host')}
+                      placeholder="/path/to/database.sqlite"
                       value={form.host}
                       onChange={(e) => handleChange('host', e.target.value)}
                       required
                     />
                   </div>
-                  <div>
-                    <label className="flex items-center gap-2 text-sm font-medium mb-2" style={{ color: 'var(--text-secondary)' }}>
-                      <Hash size={14} /> {t('ssh.modal.form.port')}
-                    </label>
-                    <input
-                      type="number"
-                      className="input-field"
-                      value={form.port}
-                      onChange={(e) => handleChange('port', e.target.value)}
-                    />
-                  </div>
-                </div>
+                )}
 
                 <div>
                   <label className="flex items-center gap-2 text-sm font-medium mb-2" style={{ color: 'var(--text-secondary)' }}>
-                    <User size={14} /> {t('ssh.modal.form.username')}
+                    <User size={14} /> {form.type === 'database' ? 'Db User' : t('ssh.modal.form.username')}
                   </label>
                   <input
                     type="text"
                     className="input-field"
-                    placeholder={t('ssh.modal.placeholders.username')}
+                    placeholder={form.type === 'database' ? 'root' : t('ssh.modal.placeholders.username')}
                     value={form.username}
                     onChange={(e) => handleChange('username', e.target.value)}
-                    required
+                    required={(form.type !== 'database' || form.dbProvider !== 'sqlite') && form.authType !== 'none'}
                   />
                 </div>
+
+                {form.type === 'database' && (
+                  <div className="animate-in fade-in slide-in-from-top-1 duration-200">
+                    <label className="flex items-center gap-2 text-sm font-medium mb-2" style={{ color: 'var(--text-secondary)' }}>
+                      <Database size={14} /> Database Name
+                    </label>
+                    <input
+                      type="text"
+                      className="input-field"
+                      placeholder="e.g. production_db"
+                      value={form.database}
+                      onChange={(e) => handleChange('database', e.target.value)}
+                      required={form.dbProvider !== 'mongodb'}
+                    />
+                  </div>
+                )}
              </div>
 
              <div className="space-y-5">
@@ -397,13 +745,13 @@ export default function ConnectionModal({ onClose, editConnection = null }) {
                   <label className="text-sm font-medium mb-2 block" style={{ color: 'var(--text-secondary)' }}>
                     {t('ssh.modal.auth.title')}
                   </label>
-                  <div className="flex bg-white/5 p-1 rounded-lg">
+                  <div className="flex bg-[var(--bg-tertiary)] p-1 rounded-lg">
                     <button
                       type="button"
                       className={`flex-1 py-2 text-xs font-medium rounded-md transition-all ${
                         form.authType === 'password'
-                          ? 'bg-indigo-600 text-white'
-                          : 'text-gray-400 hover:text-white'
+                          ? 'bg-indigo-600 text-white shadow-lg'
+                          : 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'
                       }`}
                       onClick={() => handleChange('authType', 'password')}
                     >
@@ -413,13 +761,26 @@ export default function ConnectionModal({ onClose, editConnection = null }) {
                       type="button"
                       className={`flex-1 py-2 text-xs font-medium rounded-md transition-all ${
                         form.authType === 'privateKey'
-                          ? 'bg-indigo-600 text-white'
-                          : 'text-gray-400 hover:text-white'
+                          ? 'bg-indigo-600 text-white shadow-lg'
+                          : 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'
                       }`}
                       onClick={() => handleChange('authType', 'privateKey')}
                     >
                       {t('ssh.modal.auth.key')}
                     </button>
+                    {form.type === 'database' && (
+                      <button
+                        type="button"
+                        className={`flex-1 py-2 text-xs font-medium rounded-md transition-all ${
+                          form.authType === 'none'
+                            ? 'bg-indigo-600 text-white shadow-lg'
+                            : 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'
+                        }`}
+                        onClick={() => handleChange('authType', 'none')}
+                      >
+                        {t('common.none') || 'None'}
+                      </button>
+                    )}
                   </div>
                 </div>
 
@@ -435,17 +796,24 @@ export default function ConnectionModal({ onClose, editConnection = null }) {
                         placeholder={editConnection ? t('ssh.modal.placeholders.passwordEdit') : t('ssh.modal.placeholders.password')}
                         value={form.password}
                         onChange={(e) => handleChange('password', e.target.value)}
-                        required={!editConnection}
+                        required={!editConnection && form.authType !== 'none'}
                       />
                       <button
                         type="button"
-                        className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 hover:text-white transition-colors"
+                        className="absolute right-3 top-1/2 -translate-y-1/2 text-[var(--text-muted)] hover:text-[var(--text-primary)] transition-colors"
                         onClick={() => setShowPassword(!showPassword)}
                       >
                         {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
                       </button>
                     </div>
                   </div>
+                ) : form.authType === 'none' ? (
+                   <div className="bg-emerald-500/5 border border-emerald-500/10 p-4 rounded-xl flex items-center gap-3">
+                     <Activity size={16} className="text-emerald-400 shrink-0" />
+                     <span className="text-[10px] text-[var(--text-muted)] italic">
+                       No authentication required for this connection. Be careful with open databases.
+                     </span>
+                   </div>
                 ) : (
                   <>
                     <div>
@@ -466,11 +834,11 @@ export default function ConnectionModal({ onClose, editConnection = null }) {
                           onChange={(e) => handleFileUpload(e.target.files[0])}
                         />
                         {form.keyFileName ? (
-                          <span className="text-xs text-indigo-400 font-medium truncate max-w-full px-2">
+                          <span className="text-xs text-[var(--accent-indigo)] font-medium truncate max-w-full px-2">
                              {form.keyFileName}
                           </span>
                         ) : (
-                          <span className="text-[10px] text-gray-500 lowercase">{t('ssh.modal.placeholders.dropKey')}</span>
+                          <span className="text-[10px] text-[var(--text-muted)] lowercase text-center px-4">{t('ssh.modal.placeholders.dropKey')}</span>
                         )}
                       </div>
                     </div>
@@ -485,10 +853,10 @@ export default function ConnectionModal({ onClose, editConnection = null }) {
                     </div>
                   </>
                 )}
-             </div>
-          </div>
+              </div>
+           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-5 pt-2 border-t border-white/5">
+           <div className="grid grid-cols-1 md:grid-cols-2 gap-5 pt-2 border-t border-[var(--border-color)]">
               <div>
                 <label className="flex items-center gap-2 text-sm font-medium mb-2" style={{ color: 'var(--text-secondary)' }}>
                   <Tag size={14} /> {t('ssh.modal.form.tags')}
@@ -518,9 +886,18 @@ export default function ConnectionModal({ onClose, editConnection = null }) {
                   ))}
                 </div>
               </div>
-          </div>
+           </div>
 
-          <div className="flex gap-3 mt-6 pt-6 border-t border-white/5">
+            <div className="flex flex-wrap gap-3 mt-6 pt-6 border-t border-[var(--border-color)]">
+            <button
+              type="button"
+              onClick={handleTest}
+              disabled={isTesting || isSubmitting}
+              className="px-6 py-3 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-sm font-bold hover:bg-emerald-500/20 transition-all flex items-center justify-center gap-2 whitespace-nowrap"
+            >
+              {isTesting ? <RefreshCw size={16} className="animate-spin" /> : <Activity size={16} />}
+              {isTesting ? 'Testing...' : 'Test Connection'}
+            </button>
             <button
               type="submit"
               className="btn-primary flex-1 justify-center py-3 font-bold"
@@ -528,13 +905,82 @@ export default function ConnectionModal({ onClose, editConnection = null }) {
             >
               {isSubmitting ? t('ssh.modal.buttons.saving') : (editConnection ? t('ssh.modal.buttons.update') : t('ssh.modal.buttons.save'))}
             </button>
-            <button type="button" className="px-6 rounded-xl bg-white/5 hover:bg-white/10 transition-all text-sm font-medium" onClick={onClose}>
+            <button type="button" className="px-6 rounded-xl bg-[var(--bg-tertiary)] hover:bg-[var(--bg-tertiary)]/70 transition-all text-sm font-medium" onClick={onClose}>
               {t('common.cancel')}
             </button>
           </div>
         </form>
-      </div>
-    </div>,
+    </MacOSModalWindow>,
     document.body
+  );
+
+  const uriImportModal = isUriModalOpen && createPortal(
+    <MacOSModalWindow
+      isOpen
+      title="Import Connection URI"
+      icon={Database}
+      onClose={() => setIsUriModalOpen(false)}
+      zIndexClassName="z-[45000]"
+      maxWidthClassName="max-w-md"
+      maxHeightClassName="max-h-[80vh]"
+      contentClassName="p-6"
+      closeOnOverlayClick
+      overlayClassName="bg-black/50 backdrop-blur-sm"
+    >
+      <div className="space-y-4">
+        <p className="text-[10px] text-[var(--text-muted)]">
+          Paste string from MongoDB, MySQL or PostgreSQL
+        </p>
+
+        <div className="flex flex-wrap gap-2">
+          {[
+            { label: 'MongoDB', color: '#10b981', uri: 'mongodb://root:password@127.0.0.1:27017/admin?authSource=admin' },
+            { label: 'MySQL', color: '#00758f', uri: 'mysql://root:password@127.0.0.1:3306/my_database' },
+            { label: 'Postgres', color: '#336791', uri: 'postgresql://postgres:password@127.0.0.1:5432/postgres' },
+          ].map(preset => (
+            <button
+              key={preset.label}
+              type="button"
+              onClick={() => setUriInput(preset.uri)}
+              className="px-3 py-1.5 rounded-lg bg-white/5 border border-white/5 hover:border-white/20 hover:bg-white/10 transition-all text-[10px] font-bold flex items-center gap-2 group"
+            >
+              <div className="w-1.5 h-1.5 rounded-full" style={{ background: preset.color }} />
+              <span className="text-[var(--text-muted)] group-hover:text-[var(--text-primary)]">{preset.label}</span>
+            </button>
+          ))}
+        </div>
+
+        <textarea
+          className="w-full bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-2xl p-4 text-[11px] font-mono min-h-[120px] focus:outline-none focus:border-indigo-500/50 transition-colors custom-scrollbar"
+          placeholder="mongodb://user:pass@host:port/dbname"
+          value={uriInput}
+          onChange={(e) => setUriInput(e.target.value)}
+        />
+        
+        <div className="flex gap-3">
+          <button
+            onClick={handleParseURI}
+            disabled={!uriInput}
+            className="flex-1 btn-primary justify-center py-2.5 font-bold disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            Import Details
+          </button>
+          <button
+            onClick={() => setIsUriModalOpen(false)}
+            className="px-6 py-2.5 bg-[var(--bg-tertiary)] hover:bg-[var(--bg-tertiary)]/70 rounded-xl text-xs font-bold transition-all"
+          >
+            Cancel
+          </button>
+        </div>
+      </div>
+    </MacOSModalWindow>,
+    document.body
+  );
+
+  return (
+    <>
+      {modalJsx}
+      {uriImportModal}
+    </>
   );
 }

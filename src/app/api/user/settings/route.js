@@ -40,7 +40,7 @@ export async function POST(request) {
     const user = await User.findOneAndUpdate(
       { email: session.user.email },
       { $set: { settings: settings } },
-      { new: true, upsert: true }
+      { returnDocument: 'after', upsert: true }
     );
 
     return NextResponse.json({

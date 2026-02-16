@@ -8,15 +8,11 @@ import { useState } from 'react';
 export default function TerminalTabs() {
   const { state, dispatch } = useApp();
   const { activeTerminals } = state;
-  const [activeTab, setActiveTab] = useState(null);
+  const activeTab = state.activeTerminalId;
 
-  // Auto-select first terminal if no active tab
-  if (activeTerminals.length > 0 && (!activeTab || !activeTerminals.find(t => t.id === activeTab))) {
-    const lastTerminal = activeTerminals[activeTerminals.length - 1];
-    if (activeTab !== lastTerminal.id) {
-      setTimeout(() => setActiveTab(lastTerminal.id), 0);
-    }
-  }
+  const setActiveTab = (id) => {
+    dispatch({ type: 'SET_ACTIVE_TERMINAL', payload: id });
+  };
 
   const handleCloseTab = (termId) => {
     dispatch({ type: 'CLOSE_TERMINAL', payload: termId });
@@ -122,7 +118,7 @@ export default function TerminalTabs() {
             <span>{term.connectionName}</span>
             <span className="text-xs" style={{ color: 'var(--text-muted)' }}>{term.host}</span>
             <button
-              className="ml-1 p-0.5 rounded hover:bg-gray-700 transition-colors"
+              className="ml-1 p-0.5 rounded hover:bg-[var(--bg-secondary)] transition-colors"
               onClick={(e) => { e.stopPropagation(); handleCloseTab(term.id); }}
             >
               <X size={12} />

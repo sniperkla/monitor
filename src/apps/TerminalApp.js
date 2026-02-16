@@ -87,10 +87,10 @@ export default function TerminalApp({ onEditConnection, initialConnection }) {
   if (isStandalone) {
     const term = standaloneTerminals.find(t => t.id === standaloneTermIdRef.current);
     if (!term) {
-      return <div className="flex flex-col h-full bg-[#0c0c0c] overflow-hidden" />;
+      return <div className="flex flex-col h-full bg-[var(--bg-primary)] overflow-hidden" />;
     }
     return (
-      <div className="flex flex-col h-full bg-[#0c0c0c] overflow-hidden">
+      <div className="flex flex-col h-full bg-[var(--bg-primary)] overflow-hidden">
         <TerminalView 
           connectionId={term.connectionId}
           connectionName={term.connectionName}
@@ -105,9 +105,9 @@ export default function TerminalApp({ onEditConnection, initialConnection }) {
   }
 
   return (
-    <div className="flex flex-col h-full bg-[#0c0c0c] overflow-hidden">
+    <div className="flex flex-col h-full bg-[var(--bg-primary)] text-[var(--text-primary)] overflow-hidden">
       {/* App Tab Bar */}
-      <div className="flex items-center bg-[#1a1a2e] border-b border-white/10 px-2 h-10 shrink-0">
+      <div className="flex items-center bg-[var(--bg-secondary)] border-b border-[var(--border-color)] px-2 h-10 shrink-0">
         <div className="flex flex-1 items-center gap-1 overflow-x-auto no-scrollbar h-full">
           {standaloneTerminals.map(term => (
             <button
@@ -115,8 +115,8 @@ export default function TerminalApp({ onEditConnection, initialConnection }) {
               onClick={() => { setActiveTab(term.id); setIsSelecting(false); }}
               className={`flex items-center gap-2 px-3 h-8 mt-2 rounded-t-lg transition-all text-xs border-x border-t ${
                 activeTab === term.id && !isSelecting
-                  ? 'bg-[#0c0c0c] border-white/10 text-white shadow-[0_-2px_10px_rgba(0,0,0,0.5)]'
-                  : 'bg-transparent border-transparent text-gray-400 hover:text-gray-200'
+                  ? 'bg-[var(--bg-primary)] border-[var(--border-color)] text-[var(--text-primary)] shadow-[0_-2px_10px_rgba(0,0,0,0.5)]'
+                  : 'bg-transparent border-transparent text-[var(--text-muted)] hover:text-[var(--text-secondary)]'
               }`}
               style={{ minWidth: '120px', maxWidth: '180px' }}
             >
@@ -134,8 +134,8 @@ export default function TerminalApp({ onEditConnection, initialConnection }) {
             onClick={() => setIsSelecting(true)}
             className={`flex items-center justify-center w-8 h-8 mt-2 rounded-t-lg transition-all border-x border-t ${
               isSelecting
-                ? 'bg-[#0c0c0c] border-white/10 text-indigo-400'
-                : 'text-gray-500 hover:text-white hover:bg-white/5 border-transparent'
+                ? 'bg-[var(--bg-primary)] border-[var(--border-color)] text-indigo-400'
+                : 'text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-white/5 border-transparent'
             }`}
           >
             <Plus size={16} />
@@ -147,15 +147,15 @@ export default function TerminalApp({ onEditConnection, initialConnection }) {
       <div className="flex-1 min-h-0 relative">
         {/* Connection Picker - Layered on top if selecting */}
         {isSelecting && (
-          <div className="absolute inset-0 bg-[#0f172a] p-8 overflow-y-auto z-20">
+          <div className="absolute inset-0 bg-[var(--bg-primary)] p-8 overflow-y-auto z-20">
             <div className="max-w-2xl mx-auto">
               <div className="flex items-center gap-4 mb-8">
                 <div className="w-12 h-12 rounded-2xl bg-indigo-500/20 flex items-center justify-center">
                   <TermIcon size={24} className="text-indigo-400" />
                 </div>
                 <div>
-                  <h1 className="text-2xl font-bold text-white">{t('terminal.newSession')}</h1>
-                  <p className="text-gray-400 text-sm">{t('terminal.selectConnection')}</p>
+                  <h1 className="text-2xl font-bold text-[var(--text-primary)]">{t('terminal.newSession')}</h1>
+                  <p className="text-[var(--text-secondary)] text-sm">{t('terminal.selectConnection')}</p>
                 </div>
               </div>
 
@@ -164,16 +164,16 @@ export default function TerminalApp({ onEditConnection, initialConnection }) {
                   <div 
                     key={conn._id}
                     onClick={() => handleConnect(conn)}
-                    className="p-4 rounded-xl bg-white/5 border border-white/10 hover:border-indigo-500/50 hover:bg-white/10 transition-all cursor-pointer group"
+                    className="p-4 rounded-xl bg-[var(--bg-card)] border border-[var(--border-color)] hover:border-indigo-500/50 hover:bg-[var(--bg-card-hover)] transition-all cursor-pointer group"
                   >
                     <div className="flex items-center justify-between mb-3">
                       <div className="w-8 h-8 rounded-lg flex items-center justify-center" style={{ background: `${conn.color}20` }}>
                         <Server size={16} style={{ color: conn.color }} />
                       </div>
-                      <Zap size={14} className={conn.status === 'online' ? 'text-emerald-400 animate-pulse' : 'text-gray-600'} />
+                      <Zap size={14} className={conn.status === 'online' ? 'text-emerald-400 animate-pulse' : 'text-[var(--text-muted)]'} />
                     </div>
-                    <h3 className="font-semibold text-white mb-1 group-hover:text-indigo-400 transition-colors">{conn.name}</h3>
-                    <p className="text-xs text-gray-500 font-mono text-center truncate uppercase tracking-widest">{conn.host}</p>
+                    <h3 className="font-semibold text-[var(--text-primary)] mb-1 group-hover:text-indigo-400 transition-colors">{conn.name}</h3>
+                    <p className="text-xs text-[var(--text-muted)] font-mono text-center truncate uppercase tracking-widest">{conn.host}</p>
                   </div>
                 ))}
                 

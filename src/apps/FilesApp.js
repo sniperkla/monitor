@@ -78,9 +78,9 @@ export default function FilesApp({ onEditConnection, initialConnection }) {
   };
 
   return (
-    <div className="flex flex-col h-full bg-[#0c0c0c] overflow-hidden">
+    <div className="flex flex-col h-full bg-[var(--bg-primary)] text-[var(--text-primary)] overflow-hidden">
       {/* App Tab Bar */}
-      <div className="flex items-center bg-[#1a1a2e] border-b border-white/10 px-2 h-10 shrink-0">
+      <div className="flex items-center bg-[var(--bg-secondary)] border-b border-[var(--border-color)] px-2 h-10 shrink-0">
         <div className="flex flex-1 items-center gap-1 overflow-x-auto no-scrollbar h-full">
           {tabs.map(tab => (
             <button
@@ -88,8 +88,8 @@ export default function FilesApp({ onEditConnection, initialConnection }) {
               onClick={() => { setActiveTab(tab.id); setIsSelecting(false); }}
               className={`flex items-center gap-2 px-3 h-8 mt-2 rounded-t-lg transition-all text-xs border-x border-t ${
                 activeTab === tab.id && !isSelecting
-                  ? 'bg-[#0a0e1a] border-white/10 text-white shadow-[0_-2px_10px_rgba(0,0,0,0.5)]'
-                  : 'bg-transparent border-transparent text-gray-400 hover:text-gray-200'
+                  ? 'bg-[var(--bg-primary)] border-[var(--border-color)] text-[var(--text-primary)] shadow-[0_-2px_10px_rgba(0,0,0,0.5)]'
+                  : 'bg-transparent border-transparent text-[var(--text-muted)] hover:text-[var(--text-secondary)]'
               }`}
               style={{ minWidth: '140px', maxWidth: '200px' }}
             >
@@ -107,8 +107,8 @@ export default function FilesApp({ onEditConnection, initialConnection }) {
             onClick={() => setIsSelecting(true)}
             className={`flex items-center justify-center w-8 h-8 mt-2 rounded-t-lg transition-all border-x border-t ${
               isSelecting
-                ? 'bg-[#0a0e1a] border-white/10 text-blue-400'
-                : 'text-gray-500 hover:text-white hover:bg-white/5 border-transparent'
+                ? 'bg-[var(--bg-primary)] border-[var(--border-color)] text-blue-400'
+                : 'text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-white/5 border-transparent'
             }`}
           >
             <Plus size={16} />
@@ -119,15 +119,15 @@ export default function FilesApp({ onEditConnection, initialConnection }) {
       {/* Main Content Area */}
       <div className="flex-1 min-h-0 relative">
         {isSelecting ? (
-          <div className="absolute inset-0 bg-[#0f172a] p-8 overflow-y-auto z-10">
+          <div className="absolute inset-0 bg-[var(--bg-primary)] p-8 overflow-y-auto z-10">
             <div className="max-w-3xl mx-auto">
               <div className="flex items-center gap-4 mb-8">
                 <div className="w-12 h-12 rounded-2xl bg-blue-500/20 flex items-center justify-center">
                   <FolderClosed size={24} className="text-blue-400" />
                 </div>
                 <div>
-                  <h1 className="text-2xl font-bold text-white tracking-tight">{t('files.title')}</h1>
-                  <p className="text-gray-400 text-sm">{t('files.selectConnection')}</p>
+                  <h1 className="text-2xl font-bold text-[var(--text-primary)] tracking-tight">{t('files.title')}</h1>
+                  <p className="text-[var(--text-secondary)] text-sm">{t('files.selectConnection')}</p>
                 </div>
               </div>
 
@@ -136,7 +136,7 @@ export default function FilesApp({ onEditConnection, initialConnection }) {
                   <div 
                     key={conn._id}
                     onClick={() => handleConnect(conn)}
-                    className="p-5 rounded-2xl bg-white/[0.03] border border-white/10 hover:border-blue-500/50 hover:bg-white/[0.07] transition-all cursor-pointer group relative overflow-hidden"
+                    className="p-5 rounded-2xl bg-[var(--bg-card)] border border-[var(--border-color)] hover:border-blue-500/50 hover:bg-[var(--bg-card-hover)] transition-all cursor-pointer group relative overflow-hidden"
                   >
                     <div className="absolute top-0 right-0 p-3 opacity-20 group-hover:opacity-100 transition-opacity">
                        <HardDrive size={32} className="text-blue-500/20" />
@@ -147,15 +147,15 @@ export default function FilesApp({ onEditConnection, initialConnection }) {
                       </div>
                       <div className={`w-2 h-2 rounded-full ${conn.status === 'online' ? 'bg-emerald-500 animate-pulse' : 'bg-red-500'}`} />
                     </div>
-                    <h3 className="font-bold text-white mb-1 group-hover:text-blue-400 transition-colors">{conn.name}</h3>
-                    <p className="text-[10px] text-gray-500 font-mono truncate uppercase tracking-widest">{conn.host}</p>
+                    <h3 className="font-bold text-[var(--text-primary)] mb-1 group-hover:text-blue-400 transition-colors">{conn.name}</h3>
+                    <p className="text-[10px] text-[var(--text-muted)] font-mono truncate uppercase tracking-widest">{conn.host}</p>
                   </div>
                 ))}
                 
                 {connections.length === 0 && (
-                  <div className="col-span-full py-16 text-center bg-white/[0.02] rounded-3xl border border-dashed border-white/5">
-                    <FolderClosed size={40} className="mx-auto mb-4 text-gray-700" />
-                    <p className="text-gray-500 text-sm">{t('files.noConnections')}</p>
+                  <div className="col-span-full py-16 text-center bg-[var(--bg-tertiary)]/20 rounded-3xl border border-dashed border-[var(--border-color)]">
+                    <FolderClosed size={40} className="mx-auto mb-4 text-[var(--text-muted)]" />
+                    <p className="text-[var(--text-secondary)] text-sm">{t('files.noConnections')}</p>
                   </div>
                 )}
               </div>

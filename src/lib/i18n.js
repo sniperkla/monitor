@@ -13,6 +13,12 @@ const resources = {
         connect: "Connect",
         connecting: "Connecting...",
         connected: "Connected",
+        connections: "Connection Manager",
+        manage: "SSH & Databases",
+        total: "Total",
+        online: "Online",
+        offline: "Offline",
+        type: "Connection Type",
         disconnected: "Disconnected",
         delete: "Delete",
         edit: "Edit",
@@ -40,7 +46,8 @@ const resources = {
           db: "DB",
           local: "Local",
           tmp: "Tmp",
-        }
+        },
+        none: "None",
       },
       vault: {
         locked: "Vault Locked (Safe Mode)",
@@ -108,6 +115,8 @@ const resources = {
         interfaceStyle: "Interface Style",
         glassmorphism: "Glassmorphism",
         glassDesc: "Aero-glass effect on windows",
+        personalizationTitle: "Personalization",
+        personalizationDesc: "Customize taskbar, icons, and desktop layout",
         databaseTitle: "Database",
         databaseDesc: "Storage configuration",
       },
@@ -119,8 +128,9 @@ const resources = {
         },
         db: {
           loading: "Loading configuration...",
-          enterUri: "Please enter a MongoDB URI",
-          invalidUri: "URI must start with mongodb:// or mongodb+srv://",
+          enterUri: "Please enter a Database URI",
+          invalidUri: "Unsupported database protocol",
+          type: "Database Type",
           passShort: "Master Password must be at least 8 characters",
           passMismatch: "Passwords do not match",
           connected: "Connected",
@@ -131,8 +141,8 @@ const resources = {
           vaultLocked: "Vault locked",
           vaultCleared: "Vault cleared",
           activeDb: "Active Database",
-          deleteConfirm: "This will permanently delete your encrypted vault. You will need to set up a new Master Password. Continue?",
-          deleteVault: "Delete Vault & Reset",
+          deleteConfirm: "This will disconnect your private database. Your desktop settings and session will remain safe. Continue?",
+          deleteVault: "Disconnect Private Database",
           setupNow: "Setup Now",
           unlockNow: "Unlock Now",
           lock: "Lock",
@@ -169,6 +179,26 @@ const resources = {
             minimal: "Minimal",
             minimalDesc: "No background",
           },
+          theme: "Theme",
+          themes: {
+            light: "Light",
+            dark: "Dark",
+            auto: "Auto"
+          },
+        },
+        personalization: {
+          taskbarTitle: "Taskbar",
+          taskbarPosition: "Taskbar Position",
+          taskbarPositionDesc: "Choose where the taskbar appears on your screen",
+          desktopTitle: "Desktop Icons",
+          iconSize: "Desktop Icon Size",
+          iconStyle: "Icon Design Style",
+          positions: {
+            bottom: "Bottom",
+            top: "Top",
+            left: "Left",
+            right: "Right"
+          }
         },
         display: {
           title: "Display",
@@ -236,7 +266,7 @@ const resources = {
         noConnections: "No connections found",
         deleteTitle: "Delete Connection?",
         deleteConfirm: "This action cannot be undone.",
-        manager: "Terminal Manager",
+        manager: "Connection Manager",
         dashboard_ui: {
           systemOverview: "System Overview",
           monitoring: "Monitoring",
@@ -266,7 +296,7 @@ const resources = {
           }
         },
         modal: {
-          titleNew: "New SSH Connection",
+          titleNew: "New Connection",
           titleEdit: "Edit Connection",
           storagePrompt: "Where to save this connection?",
           actions: {
@@ -314,20 +344,20 @@ const resources = {
             update: "Update Connection",
             saving: "Saving...",
           },
-          toasts: {
-            manualUpdate: "Manual session updated",
-            manualSuccess: "Temporary connection established",
-            dbUpdate: "Updated in Database",
-            dbSuccess: "Saved to Database",
-            saveFail: "Failed to save",
-            errorPrefix: "Error: ",
-            alreadyConnected: 'Server "{{name}}" is already connected.',
-            deletedLocal: "Deleted from local storage",
-            removedSession: "Removed from session",
-            deleteSuccess: "Connection deleted",
-            deleteFail: "Failed to delete connection",
-            testFail: "Test connection failed",
-          }
+        },
+        toasts: {
+          manualUpdate: "Manual session updated",
+          manualSuccess: "Temporary connection established",
+          dbUpdate: "Updated in Database",
+          dbSuccess: "Saved to Database",
+          saveFail: "Failed to save",
+          errorPrefix: "Error: ",
+          alreadyConnected: 'Server "{{name}}" is already connected.',
+          deletedLocal: "Deleted from local storage",
+          removedSession: "Removed from session",
+          deleteSuccess: "Connection deleted",
+          deleteFail: "Failed to delete connection",
+          testFail: "Test connection failed",
         }
       },
       terminal: {
@@ -431,6 +461,99 @@ const resources = {
         toasts: {
           sorted: "Sorted by ",
         }
+      },
+      database: {
+        naming: {
+          prefix: "Prefix",
+          prefixPlaceholder: "e.g. daily_",
+          suffix: "Suffix",
+          suffixPlaceholder: "e.g. _v1",
+          date: "Date",
+          time: "Time",
+          tag: "Include Export/Backup Tag",
+          tagTooltip: "Adds '_export' or '_backup' to identify the file type",
+          preview: "Preview"
+        },
+        query: {
+          filterJson: "Filter (JSON)",
+          whereClause: "Where Clause",
+          smartPreset: "Smart Preset",
+          run: "Run Query"
+        },
+        ai: {
+          title: "Ask AI",
+          placeholder: "Describe what you want to find (e.g. 'find active users older than 20')",
+          loading: "Magic...",
+          generate: "Generate Query",
+          history: "Prompt History",
+          clearAll: "Clear All",
+          noHistory: "No recent prompts"
+        },
+        status: {
+          fetching: "Fetching Data..."
+        },
+        notifications: {
+          noSchemaTitle: "No Schema",
+          noSchemaMsg: "No tables/collections to export",
+          exportBatchStartTitle: "Batch Export",
+          exportBatchStartMsg: "Starting export of {{count}} items...",
+          networkIssueTitle: "Network Issue",
+          networkIssueMsg: "Pausing export for 15s...",
+          partialExportTitle: "Partial Export",
+          partialExportMsg: "Exported {{success}} files, but {{failed}} failed.",
+          batchExportSuccessTitle: "✅ Batch Export Successful",
+          batchExportSuccessMsg: "All {{success}} files exported ({{total}} total records)",
+          exportFailedTitle: "Export Failed",
+          exportingTitle: "Exporting...",
+          exportingChunksMsg: "Requesting dataset in chunks for safety...",
+          rateLimitTitle: "Rate Limit",
+          rateLimitMsg: "Export paused. Retrying in {{seconds}}s...",
+          fetchedMsg: "Fetched {{count}} records...",
+          exportSuccessTitle: "Export Success",
+          exportSuccessMsg: "Successfully exported {{count}} records.",
+          importingTitle: "Importing...",
+          importingMsg: "Processing {{count}} records in {{batches}} batches",
+          importCompleteTitle: "Import Complete",
+          importCompleteMsg: "Successfully imported {{success}} out of {{total}} records",
+          importErrorTitle: "Import Error",
+          importErrorMsg: "Failed to process import file. Ensure it is a valid JSON array."
+        },
+        modals: {
+          confirmDeleteTitle: "Confirm Deletion",
+          confirmDeleteMsg: "Are you sure you want to delete this record? This action cannot be undone.",
+          confirmCancel: "Cancel",
+          confirmYes: "Yes, I am sure",
+          confirmOk: "Confirm"
+        },
+        editor: {
+          edit: "Edit",
+          delete: "Delete",
+          newTag: "NEW",
+          emptyMsg: "Collection is empty or no data found",
+          addFirst: "Add First Record",
+          invalidJson: "Invalid JSON format",
+          addNew: "Add New Record",
+          editRecord: "Edit Record",
+          docEditor: "Document Editor",
+          jsonContent: "JSON Content",
+          formatGuide: "Format your record as valid JSON. For MongoDB, the _id field is managed automatically unless manually specified.",
+          cancel: "Cancel",
+          createRecord: "Create Record",
+          saveChanges: "Save Changes"
+        },
+        preview: {
+          insertReady: "Ready to insert new record.",
+          showingRecords: "Showing {{count}} records",
+          toBeDeleted: "that will be deleted",
+          toBeUpdated: "that will be updated",
+          title: "{{type}} PREVIEW",
+          actions: "Actions",
+          previewing: "PREVIEWING TARGETS"
+        },
+        errors: {
+          connectionError: "Connection Error",
+          retry: "Retry Connection"
+        }
       }
     }
   },
@@ -444,6 +567,12 @@ const resources = {
         connect: "เชื่อมต่อ",
         connecting: "กำลังเชื่อมต่อ...",
         connected: "เชื่อมต่อแล้ว",
+        connections: "ตัวจัดการการเชื่อมต่อ",
+        manage: "SSH และ ฐานข้อมูล",
+        total: "ทั้งหมด",
+        online: "ออนไลน์",
+        offline: "ออฟไลน์",
+        type: "ประเภทการเชื่อมต่อ",
         disconnected: "ตัดการเชื่อมต่อ",
         delete: "ลบ",
         edit: "แก้ไข",
@@ -471,7 +600,8 @@ const resources = {
           db: "DB",
           local: "Local",
           tmp: "Tmp",
-        }
+        },
+        none: "ไม่มี",
       },
       vault: {
         locked: "ห้องนิรภัยปลอดภัย (Locked)",
@@ -539,6 +669,8 @@ const resources = {
         interfaceStyle: "สไตล์อินเทอร์เฟซ",
         glassmorphism: "Glassmorphism",
         glassDesc: "เอฟเฟกต์กระจกฝ้าบนหน้าต่าง",
+        personalizationTitle: "ความเป็นส่วนตัวและการปรับแต่ง",
+        personalizationDesc: "ปรับแต่งแถบงาน ไอคอน และวอลเปเปอร์",
         databaseTitle: "Database",
         databaseDesc: "การตั้งค่า Storage",
       },
@@ -550,8 +682,9 @@ const resources = {
         },
         db: {
           loading: "กำลังโหลดการตั้งค่า...",
-          enterUri: "กรุณาระบุ MongoDB URI",
-          invalidUri: "URI ต้องเริ่มต้นด้วย mongodb:// หรือ mongodb+srv://",
+          enterUri: "กรุณาระบุ Database URI",
+          invalidUri: "ไม่รองรับโปรโตคอลฐานข้อมูลนี้",
+          type: "ประเภทฐานข้อมูล",
           passShort: "Master Password ต้องมีอย่างน้อย 8 ตัวอักษร",
           passMismatch: "รหัสผ่านไม่ตรงกัน",
           connected: "เชื่อมต่อแล้ว",
@@ -562,8 +695,8 @@ const resources = {
           vaultLocked: "ล็อคห้องนิรภัยแล้ว",
           vaultCleared: "ล้างห้องนิรภัยแล้ว",
           activeDb: "ฐานข้อมูลที่ใช้งานอยู่",
-          deleteConfirm: "การดำเนินการนี้จะลบข้อมูลที่เข้ารหัสของคุณอย่างถาวร คุณจะต้องตั้งค่า Master Password ใหม่ ดำเนินการต่อหรือไม่?",
-          deleteVault: "ลบห้องนิรภัยและรีเซ็ต",
+          deleteConfirm: "สิ่งนี้จะตัดการเชื่อมต่อฐานข้อมูลส่วนตัวของคุณ แต่การตั้งค่าเดสก์ท็อปและเซสชันของคุณจะยังคงอยู่ ต้องการดำเนินการต่อหรือไม่?",
+          deleteVault: "ตัดการเชื่อมต่อฐานข้อมูลส่วนตัว",
           setupNow: "ตั้งค่าตอนนี้",
           unlockNow: "ปลดล็อคตอนนี้",
           lock: "ล็อค",
@@ -600,6 +733,26 @@ const resources = {
             minimal: "มินิมอล (Minimal)",
             minimalDesc: "ไม่มีพื้นหลัง",
           },
+          theme: "ธีม (Theme)",
+          themes: {
+            light: "สว่าง (Light)",
+            dark: "มืด (Dark)",
+            auto: "ตามระบบ (Auto)"
+          },
+        },
+        personalization: {
+          taskbarTitle: "แถบงาน (Taskbar)",
+          taskbarPosition: "ตำแหน่งแถบงาน",
+          taskbarPositionDesc: "เลือกตำแหน่งที่แถบงานจะปรากฏบนหน้าจอของคุณ",
+          desktopTitle: "ไอคอนเดสก์ท็อป",
+          iconSize: "ขนาดไอคอนเดสก์ท็อป",
+          iconStyle: "สไตล์การออกแบบไอคอน",
+          positions: {
+            bottom: "ด้านล่าง (Bottom)",
+            top: "ด้านบน (Top)",
+            left: "ด้านซ้าย (Left)",
+            right: "ด้านขวา (Right)"
+          }
         },
         display: {
           title: "จอแสดงผล",
@@ -667,7 +820,7 @@ const resources = {
         noConnections: "ไม่พบการเชื่อมต่อ",
         deleteTitle: "ลบการเชื่อมต่อ?",
         deleteConfirm: "การดำเนินการนี้ไม่สามารถย้อนกลับได้",
-        manager: "ตัวจัดการเทอร์มินัล",
+        manager: "ตัวจัดการการเชื่อมต่อ",
         dashboard_ui: {
           systemOverview: "System Overview",
           monitoring: "กำลังตรวจสอบ",
@@ -697,7 +850,7 @@ const resources = {
           }
         },
         modal: {
-          titleNew: "การเชื่อมต่อ SSH ใหม่",
+          titleNew: "เพิ่มการเชื่อมต่อใหม่",
           titleEdit: "แก้ไขการเชื่อมต่อ",
           storagePrompt: "บันทึกการเชื่อมต่อนี้ที่ไหน?",
           actions: {
@@ -745,20 +898,20 @@ const resources = {
             update: "อัปเดตการเชื่อมต่อ",
             saving: "กำลังบันทึก...",
           },
-          toasts: {
-            manualUpdate: "อัปเดตเซสชันชั่วคราวแล้ว",
-            manualSuccess: "สร้างการเชื่อมต่อชั่วคราวแล้ว",
-            dbUpdate: "อัปเดตในฐานข้อมูลแล้ว",
-            dbSuccess: "บันทึกลงฐานข้อมูลแล้ว",
-            saveFail: "บันทึกไม่สำเร็จ",
-            errorPrefix: "เกิดข้อผิดพลาด: ",
-            alreadyConnected: 'เซิร์ฟเวอร์ "{{name}}" เชื่อมต่ออยู่แล้ว',
-            deletedLocal: "ลบออกจากพื้นที่เก็บข้อมูลในเครื่องแล้ว",
-            removedSession: "เอาออกจากเซสชันแล้ว",
-            deleteSuccess: "ลบการเชื่อมต่อแล้ว",
-            deleteFail: "ลบการเชื่อมต่อไม่สำเร็จ",
-            testFail: "การทดสอบการเชื่อมต่อล้มเหลว",
-          }
+        },
+        toasts: {
+          manualUpdate: "อัปเดตเซสชันชั่วคราวแล้ว",
+          manualSuccess: "สร้างการเชื่อมต่อชั่วคราวแล้ว",
+          dbUpdate: "อัปเดตในฐานข้อมูลแล้ว",
+          dbSuccess: "บันทึกลงฐานข้อมูลแล้ว",
+          saveFail: "บันทึกไม่สำเร็จ",
+          errorPrefix: "เกิดข้อผิดพลาด: ",
+          alreadyConnected: 'เซิร์ฟเวอร์ "{{name}}" เชื่อมต่ออยู่แล้ว',
+          deletedLocal: "ลบออกจากพื้นที่เก็บข้อมูลในเครื่องแล้ว",
+          removedSession: "เอาออกจากเซสชันแล้ว",
+          deleteSuccess: "ลบการเชื่อมต่อแล้ว",
+          deleteFail: "ลบการเชื่อมต่อไม่สำเร็จ",
+          testFail: "การทดสอบการเชื่อมต่อล้มเหลว",
         }
       },
       terminal: {
@@ -861,6 +1014,99 @@ const resources = {
         },
         toasts: {
           sorted: "เรียงลำดับโดย ",
+        }
+      },
+      database: {
+        naming: {
+          prefix: "คำนำหน้า",
+          prefixPlaceholder: "เช่น daily_",
+          suffix: "คำต่อท้าย",
+          suffixPlaceholder: "เช่น _v1",
+          date: "วันที่",
+          time: "เวลา",
+          tag: "รวมแท็ก Export/Backup",
+          tagTooltip: "เพิ่ม '_export' หรือ '_backup' เพื่อระบุประเภทไฟล์",
+          preview: "ตัวอย่างชื่อไฟล์"
+        },
+        query: {
+          filterJson: "ตัวกรอง (JSON)",
+          whereClause: "เงื่อนไข (Where)",
+          smartPreset: "ค่าล่วงหน้าฉลาด",
+          run: "รันคิวรี"
+        },
+        ai: {
+          title: "ถาม AI",
+          placeholder: "อธิบายสิ่งที่คุณต้องการค้นหา (เช่น 'หาผู้ใช้ที่อายุมากกว่า 20')",
+          loading: "กำลังร่ายมนตร์...",
+          generate: "สร้างคิวรี",
+          history: "ประวัติคำสั่ง",
+          clearAll: "ล้างทั้งหมด",
+          noHistory: "ไม่มีประวัติล่าสุด"
+        },
+        status: {
+          fetching: "กำลังดึงข้อมูล..."
+        },
+        notifications: {
+          noSchemaTitle: "ไม่มีสกีมา",
+          noSchemaMsg: "ไม่มีตาราง/คอลเลกชันที่จะส่งออก",
+          exportBatchStartTitle: "การส่งออกชุดใหญ่",
+          exportBatchStartMsg: "กำลังเริ่มส่งออก {{count}} รายการ...",
+          networkIssueTitle: "ปัญหาเครือข่าย",
+          networkIssueMsg: "หยุดการส่งออกชั่วคราว 15 วินาที...",
+          partialExportTitle: "ส่งออกสำเร็จบางส่วน",
+          partialExportMsg: "ส่งออกแล้ว {{success}} ไฟล์ แต่ล้มเหลว {{failed}} ไฟล์",
+          batchExportSuccessTitle: "✅ ส่งออกชุดใหญ่สำเร็จ",
+          batchExportSuccessMsg: "ส่งออกทั้งหมด {{success}} ไฟล์แล้ว (รวม {{total}} ระเบียน)",
+          exportFailedTitle: "ส่งออกล้มเหลว",
+          exportingTitle: "กำลังส่งออก...",
+          exportingChunksMsg: "กำลังขอข้อมูลเป็นส่วนๆ เพื่อความปลอดภัย...",
+          rateLimitTitle: "จำกัดอัตรา",
+          rateLimitMsg: "หยุดการส่งออกชั่วคราว กำลังลองใหม่ใน {{seconds}} วินาที...",
+          fetchedMsg: "ดึงข้อมูลแล้ว {{count}} ระเบียน...",
+          exportSuccessTitle: "ส่งออกสำเร็จ",
+          exportSuccessMsg: "ส่งออกสำเร็จ {{count}} ระเบียน",
+          importingTitle: "กำลังนำเข้า...",
+          importingMsg: "กำลังประมวลผล {{count}} ระเบียนใน {{batches}} ชุด",
+          importCompleteTitle: "นำเข้าเสร็จสมบูรณ์",
+          importCompleteMsg: "นำเข้าสำเร็จ {{success}} จากทั้งหมด {{total}} ระเบียน",
+          importErrorTitle: "การนำเข้าผิดพลาด",
+          importErrorMsg: "ไม่สามารถประมวลผลไฟล์นำเข้าได้ โปรดตรวจสอบว่าเป็นอาเรย์ JSON ที่ถูกต้อง"
+        },
+        modals: {
+          confirmDeleteTitle: "ยืนยันการลบ",
+          confirmDeleteMsg: "คุณแน่ใจหรือไม่ว่าต้องการลบระเบียนนี้? การดำเนินการนี้ไม่สามารถย้อนกลับได้",
+          confirmCancel: "ยกเลิก",
+          confirmYes: "ใช่ ฉันแน่ใจ",
+          confirmOk: "ตกลง"
+        },
+        editor: {
+          edit: "แก้ไข",
+          delete: "ลบ",
+          newTag: "ใหม่",
+          emptyMsg: "คอลเลกชันว่างเปล่าหรือไม่พบข้อมูล",
+          addFirst: "เพิ่มระเบียนแรก",
+          invalidJson: "รูปแบบ JSON ไม่ถูกต้อง",
+          addNew: "เพิ่มระเบียนใหม่",
+          editRecord: "แก้ไขระเบียน",
+          docEditor: "ตัวแก้ไขเอกสาร",
+          jsonContent: "เนื้อหา JSON",
+          formatGuide: "จัดรูปแบบระเบียนของคุณเป็น JSON ที่ถูกต้อง สำหรับ MongoDB ฟิลด์ _id จะถูกจัดการโดยอัตโนมัติเว้นแต่จะระบุด้วยตนเอง",
+          cancel: "ยกเลิก",
+          createRecord: "สร้างระเบียน",
+          saveChanges: "บันทึกการเปลี่ยนแปลง"
+        },
+        preview: {
+          insertReady: "พร้อมสำหรับแทรกระเบียนใหม่",
+          showingRecords: "กำลังแสดง {{count}} ระเบียน",
+          toBeDeleted: "ที่ถูกลบ",
+          toBeUpdated: "ที่จะถูกอัปเดต",
+          title: "ตัวอย่าง {{type}}",
+          actions: "การดำเนินการ",
+          previewing: "กำลังดูตัวอย่างเป้าหมาย"
+        },
+        errors: {
+          connectionError: "การเชื่อมต่อขัดข้อง",
+          retry: "เชื่อมต่ออีกครั้ง"
         }
       }
     }
@@ -1031,6 +1277,12 @@ const resources = {
             minimal: "极简 (Minimal)",
             minimalDesc: "无背景",
           },
+          theme: "主题",
+          themes: {
+            light: "浅色",
+            dark: "深色",
+            auto: "自动"
+          },
         },
         display: {
           title: "显示",
@@ -1176,20 +1428,20 @@ const resources = {
             update: "更新连接",
             saving: "正在保存...",
           },
-          toasts: {
-            manualUpdate: "手动会话已更新",
-            manualSuccess: "临时连接已建立",
-            dbUpdate: "数据库已更新",
-            dbSuccess: "已保存到数据库",
-            saveFail: "保存失败",
-            errorPrefix: "错误: ",
-            alreadyConnected: '服务器 "{{name}}" 已连接',
-            deletedLocal: "已从本地存储中删除",
-            removedSession: "已从会话中移除",
-            deleteSuccess: "连接已删除",
-            deleteFail: "删除连接失败",
-            testFail: "测试连接失败",
-          }
+        },
+        toasts: {
+          manualUpdate: "手动会话已更新",
+          manualSuccess: "临时连接已建立",
+          dbUpdate: "数据库已更新",
+          dbSuccess: "已保存到数据库",
+          saveFail: "保存失败",
+          errorPrefix: "错误: ",
+          alreadyConnected: '服务器 "{{name}}" 已连接',
+          deletedLocal: "已从本地存储中删除",
+          removedSession: "已从会话中移除",
+          deleteSuccess: "连接已删除",
+          deleteFail: "删除连接失败",
+          testFail: "测试连接失败",
         }
       },
       terminal: {
@@ -1292,6 +1544,99 @@ const resources = {
         },
         toasts: {
           sorted: "排序方式 ",
+        }
+      },
+      database: {
+        naming: {
+          prefix: "前缀",
+          prefixPlaceholder: "例如 daily_",
+          suffix: "后缀",
+          suffixPlaceholder: "例如 _v1",
+          date: "日期",
+          time: "时间",
+          tag: "包含 导出/备份 标签",
+          tagTooltip: "添加 '_export' 或 '_backup' 以识别文件类型",
+          preview: "预览"
+        },
+        query: {
+          filterJson: "过滤器 (JSON)",
+          whereClause: "查询条件 (Where)",
+          smartPreset: "智能预设",
+          run: "运行查询"
+        },
+        ai: {
+          title: "咨询 AI",
+          placeholder: "描述您想查找的内容（例如：'查找年龄大于 20 的活跃用户'）",
+          loading: "正在生成...",
+          generate: "生成查询",
+          history: "提示词历史",
+          clearAll: "清空全部",
+          noHistory: "暂无历史记录"
+        },
+        status: {
+          fetching: "正在获取数据..."
+        },
+        notifications: {
+          noSchemaTitle: "无架构",
+          noSchemaMsg: "没有可导出的表/集合",
+          exportBatchStartTitle: "批量导出",
+          exportBatchStartMsg: "开始导出 {{count}} 个项目...",
+          networkIssueTitle: "网络问题",
+          networkIssueMsg: "导出暂停 15 秒...",
+          partialExportTitle: "部分导出",
+          partialExportMsg: "已导出 {{success}} 个文件，但 {{failed}} 个失败。",
+          batchExportSuccessTitle: "✅ 批量导出成功",
+          batchExportSuccessMsg: "所有 {{success}} 个文件已导出（共 {{total}} 条记录）",
+          exportFailedTitle: "导出失败",
+          exportingTitle: "正在导出...",
+          exportingChunksMsg: "为了安全起见，正在分块请求数据集...",
+          rateLimitTitle: "速率限制",
+          rateLimitMsg: "导出暂停。将在 {{seconds}} 秒后重试...",
+          fetchedMsg: "已获取 {{count}} 条记录...",
+          exportSuccessTitle: "导出成功",
+          exportSuccessMsg: "成功导出 {{count}} 条记录。",
+          importingTitle: "正在导入...",
+          importingMsg: "正在处理 {{batches}} 批次共 {{count}} 条记录",
+          importCompleteTitle: "导入完成",
+          importCompleteMsg: "成功导入 {{total}} 条记录中的 {{success}} 条",
+          importErrorTitle: "导入错误",
+          importErrorMsg: "处理导入文件失败。请确保它是有效的 JSON 数组。"
+        },
+        modals: {
+          confirmDeleteTitle: "确认删除",
+          confirmDeleteMsg: "您确定要删除此记录吗？此操作无法撤消。",
+          confirmCancel: "取消",
+          confirmYes: "是的，我确定",
+          confirmOk: "确认"
+        },
+        editor: {
+          edit: "编辑",
+          delete: "删除",
+          newTag: "新增",
+          emptyMsg: "集合为空或未找到数据",
+          addFirst: "添加第一条记录",
+          invalidJson: "JSON 格式无效",
+          addNew: "添加新记录",
+          editRecord: "编辑记录",
+          docEditor: "文档编辑器",
+          jsonContent: "JSON 内容",
+          formatGuide: "请将您的记录格式化为有效的 JSON。对于 MongoDB，除非手动指定，否则 _id 字段将自动管理。",
+          cancel: "取消",
+          createRecord: "创建记录",
+          saveChanges: "保存更改"
+        },
+        preview: {
+          insertReady: "准备插入新记录。",
+          showingRecords: "显示 {{count}} 条记录",
+          toBeDeleted: "将被删除",
+          toBeUpdated: "将被更新",
+          title: "{{type}} 预览",
+          actions: "操作",
+          previewing: "预览目标"
+        },
+        errors: {
+          connectionError: "连接错误",
+          retry: "重试连接"
         }
       }
     }

@@ -19,7 +19,12 @@ const initialState = {
   clipboard: null, // { file, action: 'copy' | 'cut', sourcePath, connectionId }
   dbConfig: {
     uri: '', // Decrypted URI from vault (in memory only)
-  }
+  },
+  activeDatabaseBrowsers: [], // { id, connectionId, connectionName }
+  activeTerminalId: null,
+  activeFileManagerId: null,
+  activeDatabaseBrowserId: null,
+  wikiChatWindows: [], // { id, guide }
 };
 
 function reducer(state, action) {
@@ -42,17 +47,32 @@ function reducer(state, action) {
         activeTerminals: state.activeTerminals.filter(t => t.connectionId !== action.payload),
       };
     case 'OPEN_TERMINAL':
-      // Avoid duplicates
-      if (state.activeTerminals.find(t => t.id === action.payload.id)) return state;
+      // Avoid duplicates for same connection - but UPDATE with new settings if found
+      const existingTermIndex = state.activeTerminals.findIndex(t => t.connectionId === action.payload.connectionId);
+      if (existingTermIndex >= 0) {
+        const updatedTerminals = [...state.activeTerminals];
+        updatedTerminals[existingTermIndex] = { ...updatedTerminals[existingTermIndex], ...action.payload };
+        return { 
+          ...state, 
+          activeTerminals: updatedTerminals,
+          view: 'terminal', 
+          activeTerminalId: updatedTerminals[existingTermIndex].id 
+        };
+      }
       return {
         ...state,
         activeTerminals: [...state.activeTerminals, action.payload],
+        activeTerminalId: action.payload.id,
         view: 'terminal',
       };
     case 'CLOSE_TERMINAL':
+      const newTerms = state.activeTerminals.filter(t => t.id !== action.payload);
       return {
         ...state,
-        activeTerminals: state.activeTerminals.filter(t => t.id !== action.payload),
+        activeTerminals: newTerms,
+        activeTerminalId: state.activeTerminalId === action.payload 
+          ? (newTerms.length > 0 ? newTerms[newTerms.length - 1].id : null)
+          : state.activeTerminalId
       };
     case 'OPEN_STANDALONE_TERMINAL':
       if (state.standaloneTerminals.find(t => t.id === action.payload.id)) return state;
@@ -66,15 +86,32 @@ function reducer(state, action) {
         standaloneTerminals: state.standaloneTerminals.filter(t => t.id !== action.payload),
       };
     case 'OPEN_FILE_MANAGER':
+      // Avoid duplicates for same connection - but UPDATE with new settings if found
+      const existingFMIndex = state.activeFileManagers.findIndex(f => f.connectionId === action.payload.connectionId);
+      if (existingFMIndex >= 0) {
+        const updatedFMs = [...state.activeFileManagers];
+        updatedFMs[existingFMIndex] = { ...updatedFMs[existingFMIndex], ...action.payload };
+        return { 
+          ...state, 
+          activeFileManagers: updatedFMs,
+          view: 'files', 
+          activeFileManagerId: updatedFMs[existingFMIndex].id 
+        };
+      }
       return {
         ...state,
         activeFileManagers: [...state.activeFileManagers, action.payload],
+        activeFileManagerId: action.payload.id,
         view: 'files',
       };
     case 'CLOSE_FILE_MANAGER':
+      const newFms = state.activeFileManagers.filter(f => f.id !== action.payload);
       return {
         ...state,
-        activeFileManagers: state.activeFileManagers.filter(f => f.id !== action.payload),
+        activeFileManagers: newFms,
+        activeFileManagerId: state.activeFileManagerId === action.payload
+          ? (newFms.length > 0 ? newFms[newFms.length - 1].id : null)
+          : state.activeFileManagerId
       };
     case 'REORDER_TERMINALS': {
       const terms = [...state.activeTerminals];
@@ -106,6 +143,44 @@ function reducer(state, action) {
       return { ...state, dbConfig: action.payload };
     case 'SET_CLIPBOARD':
       return { ...state, clipboard: action.payload };
+    case 'OPEN_DATABASE_BROWSER':
+      // Avoid duplicates for same connection - but UPDATE with new settings if found
+      const existingDBIndex = state.activeDatabaseBrowsers.findIndex(b => b.connectionId === action.payload.connectionId);
+      if (existingDBIndex >= 0) {
+        const updatedDBs = [...state.activeDatabaseBrowsers];
+        updatedDBs[existingDBIndex] = { ...updatedDBs[existingDBIndex], ...action.payload };
+        return { 
+          ...state, 
+          activeDatabaseBrowsers: updatedDBs,
+          view: 'database', 
+          activeDatabaseBrowserId: updatedDBs[existingDBIndex].id 
+        };
+      }
+      return {
+        ...state,
+        activeDatabaseBrowsers: [...state.activeDatabaseBrowsers, action.payload],
+        activeDatabaseBrowserId: action.payload.id,
+        view: 'database',
+      };
+    case 'CLOSE_DATABASE_BROWSER':
+      const newDbs = state.activeDatabaseBrowsers.filter(b => b.id !== action.payload);
+      return {
+        ...state,
+        activeDatabaseBrowsers: newDbs,
+        activeDatabaseBrowserId: state.activeDatabaseBrowserId === action.payload
+          ? (newDbs.length > 0 ? newDbs[newDbs.length - 1].id : null)
+          : state.activeDatabaseBrowserId
+      };
+    case 'SET_ACTIVE_TERMINAL':
+      return { ...state, activeTerminalId: action.payload };
+    case 'SET_ACTIVE_FILE_MANAGER':
+      return { ...state, activeFileManagerId: action.payload };
+    case 'SET_ACTIVE_DATABASE_BROWSER':
+      return { ...state, activeDatabaseBrowserId: action.payload };
+    case 'OPEN_WIKI_CHAT':
+      return { ...state, wikiChatWindows: [...state.wikiChatWindows, action.payload] };
+    case 'CLOSE_WIKI_CHAT':
+      return { ...state, wikiChatWindows: state.wikiChatWindows.filter(w => w.id !== action.payload) };
     default:
       return state;
   }

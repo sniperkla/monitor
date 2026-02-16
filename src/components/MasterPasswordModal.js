@@ -7,16 +7,18 @@ import { useSession } from 'next-auth/react';
 import { 
   Lock, Unlock, Shield, Key, Eye, EyeOff, 
   Mail, AlertTriangle, CheckCircle, Loader, 
-  Database, ArrowRight, RefreshCw, X, Zap,
+  Database, ArrowRight, RefreshCw, Zap,
   HelpCircle, ChevronDown, ChevronUp, Monitor
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useTranslation } from 'react-i18next';
-import toast from 'react-hot-toast';
+import { useOS } from '@/context/OSContext';
+import MacOSModalWindow from '@/components/MacOSModalWindow';
 
 const PRESETS = [
-  { label: 'Localhost', uri: 'mongodb://localhost:27017/ssh-monitor' },
-  { label: 'Local IP', uri: 'mongodb://127.0.0.1:27017/ssh-monitor' },
+  { label: 'MongoDB', uri: 'mongodb://localhost:27017/ssh-monitor' },
+  { label: 'MySQL', uri: 'mysql://root:password@127.0.0.1:3306/db' },
+  { label: 'PostgreSQL', uri: 'postgres://postgres:password@127.0.0.1:5432/db' },
 ];
 
 /**
@@ -36,6 +38,7 @@ export default function MasterPasswordModal() {
     requestRecovery, verifyRecovery, error: vaultError,
     hasLegacyUri, legacyUri, dismissVault, isDismissed
   } = useVault();
+  const { addNotification } = useOS();
 
   const [mounted, setMounted] = useState(false);
   const [mode, setMode] = useState('unlock'); // unlock, setup, recovery, verify
@@ -90,7 +93,7 @@ export default function MasterPasswordModal() {
 
     try {
       await unlockVault(masterPassword);
-      toast.success('🔓 Vault unlocked');
+      addNotification({ title: 'Success', message: '🔓 Vault unlocked', type: 'success' });
     } catch (err) {
       setError(err.message || 'Failed to unlock');
       triggerShake();
@@ -107,8 +110,12 @@ export default function MasterPasswordModal() {
       setError('Please enter your MongoDB URI');
       return;
     }
-    if (!mongoUri.startsWith('mongodb://') && !mongoUri.startsWith('mongodb+srv://')) {
-      setError('URI must start with mongodb:// or mongodb+srv://');
+    const uri = mongoUri.trim();
+    const allowed = ['mongodb://', 'mongodb+srv://', 'mysql://', 'postgres://', 'postgresql://'];
+    const isValid = allowed.some(p => uri.startsWith(p));
+
+    if (!isValid) {
+      setError('Unsupported database protocol');
       return;
     }
     if (masterPassword.length < 8) {
@@ -135,7 +142,7 @@ export default function MasterPasswordModal() {
       }
 
       await setupVault(mongoUri.trim(), masterPassword);
-      toast.success('🔐 Vault created! Your data is now encrypted.');
+      addNotification({ title: 'Success', message: '🔐 Vault created! Your data is now encrypted.', type: 'success' });
     } catch (err) {
       setError(err.message || 'Setup failed');
     }
@@ -151,7 +158,7 @@ export default function MasterPasswordModal() {
       if (data.success) {
         setRecoveryEmail(data.maskedEmail);
         setMode('verify');
-        toast.success(`Recovery code sent to ${data.maskedEmail}`);
+        addNotification({ title: 'Recovery', message: `Recovery code sent to ${data.maskedEmail}`, type: 'info' });
       } else {
         setError(data.error);
       }
@@ -173,7 +180,7 @@ export default function MasterPasswordModal() {
     try {
       const data = await verifyRecovery(recoveryCode);
       if (data.success) {
-        toast.success('Vault reset! Set up a new Master Password.');
+        addNotification({ title: 'Reset Complete', message: 'Vault reset! Set up a new Master Password.', type: 'success' });
         setMode('setup');
         setMasterPassword('');
         setConfirmPassword('');
@@ -206,11 +213,11 @@ export default function MasterPasswordModal() {
 
   // === FAQ Section ===
   const renderFAQ = () => (
-    <div className="mt-4 border-t border-white/5 pt-4">
+    <div className="mt-4 border-t border-[var(--border-color)] pt-4">
       <button
         type="button"
         onClick={() => setFaqOpen(faqOpen === -1 ? null : -1)}
-        className="flex items-center gap-2 text-xs text-gray-500 hover:text-indigo-400 transition-colors w-full"
+        className="flex items-center gap-2 text-xs text-[var(--text-muted)] hover:text-indigo-400 transition-colors w-full"
       >
         <HelpCircle size={12} />
         <span className="font-medium">{t('vault.faq.title')}</span>
@@ -227,11 +234,11 @@ export default function MasterPasswordModal() {
           >
             <div className="mt-3 space-y-2">
               {faqItems.map((item, i) => (
-                <div key={i} className="rounded-lg bg-white/3 border border-white/5 overflow-hidden">
+                <div key={i} className="rounded-lg bg-[var(--bg-tertiary)]/50 border border-[var(--border-color)] overflow-hidden">
                   <button
                     type="button"
                     onClick={() => setFaqOpen(faqOpen === i ? -1 : i)}
-                    className="w-full flex items-center gap-2 px-3 py-2 text-[11px] text-gray-300 hover:text-white transition-colors text-left"
+                    className="w-full flex items-center gap-2 px-3 py-2 text-[11px] text-[var(--text-secondary)] hover:text-[var(--text-primary)] transition-colors text-left"
                   >
                     <span className="flex-1 font-medium">{item.q}</span>
                     {faqOpen === i ? <ChevronUp size={10} /> : <ChevronDown size={10} />}
@@ -245,7 +252,7 @@ export default function MasterPasswordModal() {
                         transition={{ duration: 0.15 }}
                         className="overflow-hidden"
                       >
-                        <p className="px-3 pb-2.5 text-[10px] text-gray-500 leading-relaxed">{item.a}</p>
+                        <p className="px-3 pb-2.5 text-[10px] text-[var(--text-muted)] leading-relaxed">{item.a}</p>
                       </motion.div>
                     )}
                   </AnimatePresence>
@@ -260,46 +267,45 @@ export default function MasterPasswordModal() {
 
   // === UNLOCK VIEW ===
   const renderUnlock = () => (
-    <form onSubmit={handleUnlock} className="space-y-6">
-      <div className="text-center">
+    <form onSubmit={handleUnlock} className="space-y-5">
+      <div className="text-center pt-2">
         <motion.div 
-          className="w-20 h-20 mx-auto bg-gradient-to-br from-indigo-500 to-purple-600 rounded-3xl flex items-center justify-center shadow-2xl shadow-indigo-500/30 mb-4"
-          animate={{ rotate: [0, -3, 3, 0] }}
+          className="w-16 h-16 mx-auto bg-gradient-to-br from-slate-500 to-slate-600 rounded-2xl flex items-center justify-center shadow-lg mb-4"
+          animate={{ scale: [1, 1.02, 1] }}
           transition={{ duration: 2, repeat: Infinity, repeatDelay: 3 }}
         >
-          <Lock size={36} className="text-white" />
+          <Lock size={28} className="text-white" />
         </motion.div>
-        <h2 className="text-2xl font-bold text-white mb-1">
+        <h2 className="text-lg font-semibold text-[var(--text-primary)] mb-1">
           {t('vault.locked')}
         </h2>
-        <p className="text-gray-400 text-sm">
+        <p className="text-[var(--text-secondary)] text-sm">
           {t('vault.unlockNow')}
         </p>
         {!session && (
-          <div className="mt-3 inline-flex items-center gap-1.5 px-3 py-1 bg-amber-500/10 border border-amber-500/20 rounded-full text-[10px] font-bold text-amber-400 uppercase tracking-widest">
+          <div className="mt-2 inline-flex items-center gap-1.5 px-2.5 py-1 bg-amber-500/10 border border-amber-500/20 rounded-md text-[10px] font-medium text-amber-600 dark:text-amber-400">
             <Monitor size={10} /> {t('vault.guestMode')}
           </div>
         )}
       </div>
 
-      <div className="space-y-4">
+      <div className="space-y-3">
         <div className="relative">
-          <Key size={16} className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-500" />
           <input
             ref={inputRef}
             type={showPassword ? 'text' : 'password'}
             value={masterPassword}
             onChange={(e) => setMasterPassword(e.target.value)}
             placeholder={t('vault.masterPassword')}
-            className="w-full pl-11 pr-12 py-3.5 bg-white/5 border border-white/10 rounded-xl text-white placeholder-gray-500 focus:outline-none focus:border-indigo-500/50 focus:ring-1 focus:ring-indigo-500/25 transition-all text-sm"
+            className="w-full px-3 py-2.5 bg-[var(--bg-primary)] border border-[var(--border-color)] rounded-lg text-[var(--text-primary)] placeholder-[var(--text-muted)] focus:outline-none focus:border-blue-500/50 focus:ring-2 focus:ring-blue-500/20 transition-all text-sm"
             autoComplete="off"
           />
           <button
             type="button"
             onClick={() => setShowPassword(!showPassword)}
-            className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-300"
+            className="absolute right-3 top-1/2 -translate-y-1/2 text-[var(--text-muted)] hover:text-[var(--text-secondary)] p-1 rounded hover:bg-[var(--bg-tertiary)] transition-all"
           >
-            {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+            {showPassword ? <EyeOff size={14} /> : <Eye size={14} />}
           </button>
         </div>
 
@@ -309,9 +315,9 @@ export default function MasterPasswordModal() {
             initial={{ x: -10 }}
             animate={{ x: [0, -8, 8, -4, 4, 0] }}
             transition={{ duration: 0.4 }}
-            className="flex items-center gap-2 text-red-400 text-xs bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-2"
+            className="flex items-center gap-2 text-red-500 text-xs bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-2"
           >
-            <AlertTriangle size={14} />
+            <AlertTriangle size={12} />
             {error}
           </motion.div>
         )}
@@ -319,38 +325,32 @@ export default function MasterPasswordModal() {
         <button
           type="submit"
           disabled={loading || !masterPassword}
-          className="w-full py-3.5 bg-indigo-600 hover:bg-indigo-500 disabled:bg-indigo-600/50 rounded-xl text-white font-semibold text-sm flex items-center justify-center gap-2 transition-all shadow-lg shadow-indigo-500/20"
+          className="w-full py-2.5 px-4 bg-blue-600 hover:bg-blue-500 disabled:bg-blue-600/50 disabled:cursor-not-allowed rounded-lg text-white text-sm font-medium flex items-center justify-center gap-2 transition-all"
         >
           {loading ? (
-            <><Loader size={16} className="animate-spin" /> {t('vault.unlocking')}</>
+            <><Loader size={14} className="animate-spin" /> {t('vault.unlocking')}</>
           ) : (
-            <><Unlock size={16} /> {t('vault.unlockVault')}</>
+            <><Unlock size={14} /> {t('vault.unlockVault')}</>
           )}
         </button>
-      </div>
 
-      <div className="flex flex-col items-center gap-4">
-        <button
-          type="button"
-          onClick={() => { setMode('recovery'); setError(''); }}
-          className="text-xs text-gray-500 hover:text-indigo-400 transition-colors"
-        >
-          {t('vault.forgotPassword')}
-        </button>
-        
-        <div className="w-full flex items-center gap-4 my-2">
-          <div className="h-px flex-1 bg-white/5" />
-          <span className="text-[10px] text-gray-600 font-bold uppercase tracking-widest">{t('vault.or')}</span>
-          <div className="h-px flex-1 bg-white/5" />
+        <div className="flex items-center justify-between pt-1">
+          <button
+            type="button"
+            onClick={() => { setMode('recovery'); setError(''); }}
+            className="text-xs text-[var(--text-muted)] hover:text-blue-500 transition-colors"
+          >
+            {t('vault.forgotPassword')}
+          </button>
+
+          <button
+            type="button"
+            onClick={dismissVault}
+            className="text-xs text-[var(--text-muted)] hover:text-[var(--text-secondary)] transition-colors"
+          >
+            {t('vault.unlockLater')}
+          </button>
         </div>
-
-        <button
-          type="button"
-          onClick={dismissVault}
-          className="text-xs text-gray-500 hover:text-white transition-colors bg-white/5 hover:bg-white/10 px-4 py-2 rounded-lg"
-        >
-          {t('vault.unlockLater')}
-        </button>
       </div>
 
       {/* FAQ */}
@@ -360,34 +360,29 @@ export default function MasterPasswordModal() {
 
   // === SETUP VIEW ===
   const renderSetup = () => (
-    <form onSubmit={handleSetup} className="space-y-6">
-      <div className="text-center">
+    <form onSubmit={handleSetup} className="space-y-4">
+      <div className="text-center pt-2">
         <motion.div 
-          className="w-20 h-20 mx-auto bg-gradient-to-br from-emerald-500 to-teal-600 rounded-3xl flex items-center justify-center shadow-2xl shadow-emerald-500/30 mb-4"
+          className="w-14 h-14 mx-auto bg-gradient-to-br from-emerald-500 to-teal-600 rounded-xl flex items-center justify-center shadow-lg mb-3"
           initial={{ scale: 0.8 }}
           animate={{ scale: 1 }}
           transition={{ type: 'spring' }}
         >
-          <Shield size={36} className="text-white" />
+          <Shield size={24} className="text-white" />
         </motion.div>
-        <h2 className="text-2xl font-bold text-white mb-1">
+        <h2 className="text-lg font-semibold text-[var(--text-primary)] mb-1">
           {session ? t('vault.setupVault') : t('vault.localVault')}
         </h2>
-        <p className="text-gray-400 text-sm">
+        <p className="text-[var(--text-secondary)] text-xs">
           {t('vault.setupDescription')}
         </p>
-        {!session && (
-          <div className="mt-3 inline-flex items-center gap-1.5 px-3 py-1 bg-indigo-500/10 border border-indigo-500/20 rounded-full text-[10px] font-bold text-indigo-400 uppercase tracking-widest">
-            <Shield size={10} /> {t('vault.secureLocalStorage')}
-          </div>
-        )}
       </div>
 
-      <div className="space-y-4">
-        {/* MongoDB URI */}
+      <div className="space-y-3">
+        {/* Database URI */}
         <div>
-          <label className="block text-xs font-semibold text-gray-400 mb-2 flex items-center gap-1.5">
-            <Database size={12} /> {t('vault.mongoUri')}
+          <label className="block text-xs font-medium text-[var(--text-muted)] mb-1.5">
+            {mongoUri.includes('mysql') ? 'MySQL URI' : mongoUri.includes('postgres') ? 'PostgreSQL URI' : t('vault.mongoUri')}
           </label>
           <input
             ref={inputRef}
@@ -395,18 +390,17 @@ export default function MasterPasswordModal() {
             value={mongoUri}
             onChange={(e) => setMongoUri(e.target.value)}
             placeholder="mongodb://user:pass@host:27017/db"
-            className="w-full px-4 py-3 bg-white/5 border border-white/10 rounded-xl text-white placeholder-gray-600 focus:outline-none focus:border-emerald-500/50 focus:ring-1 focus:ring-emerald-500/25 transition-all text-sm font-mono"
+            className="w-full px-3 py-2 bg-[var(--bg-primary)] border border-[var(--border-color)] rounded-lg text-[var(--text-primary)] placeholder-[var(--text-muted)] focus:outline-none focus:border-emerald-500/50 focus:ring-2 focus:ring-emerald-500/20 transition-all text-xs font-mono"
           />
           {/* Presets */}
-          <div className="mt-3 flex flex-wrap gap-2">
+          <div className="mt-2 flex flex-wrap gap-1.5">
             {PRESETS.map(preset => (
               <button
                 key={preset.label}
                 type="button"
                 onClick={() => setMongoUri(preset.uri)}
-                className="px-2.5 py-1 rounded-lg bg-white/5 border border-white/5 hover:bg-white/10 hover:border-white/10 text-[10px] text-gray-400 font-medium transition-all flex items-center gap-1"
+                className="px-2 py-1 rounded bg-[var(--bg-tertiary)] hover:bg-[var(--bg-secondary)] border border-[var(--border-color)] text-[10px] text-[var(--text-muted)] transition-all"
               >
-                <Zap size={10} className="text-amber-400" />
                 {preset.label}
               </button>
             ))}
@@ -415,8 +409,8 @@ export default function MasterPasswordModal() {
 
         {/* Master Password */}
         <div>
-          <label className="block text-xs font-semibold text-gray-400 mb-2 flex items-center gap-1.5">
-            <Key size={12} /> {t('vault.masterPassword')}
+          <label className="block text-xs font-medium text-[var(--text-muted)] mb-1.5">
+            {t('vault.masterPassword')}
           </label>
           <div className="relative">
             <input
@@ -424,20 +418,20 @@ export default function MasterPasswordModal() {
               value={masterPassword}
               onChange={(e) => setMasterPassword(e.target.value)}
               placeholder={t('vault.atLeast8')}
-              className="w-full px-4 py-3 pr-12 bg-white/5 border border-white/10 rounded-xl text-white placeholder-gray-600 focus:outline-none focus:border-emerald-500/50 focus:ring-1 focus:ring-emerald-500/25 transition-all text-sm"
+              className="w-full px-3 py-2 pr-10 bg-[var(--bg-primary)] border border-[var(--border-color)] rounded-lg text-[var(--text-primary)] placeholder-[var(--text-muted)] focus:outline-none focus:border-emerald-500/50 focus:ring-2 focus:ring-emerald-500/20 transition-all text-sm"
               autoComplete="new-password"
             />
             <button
               type="button"
               onClick={() => setShowPassword(!showPassword)}
-              className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-300"
+              className="absolute right-2 top-1/2 -translate-y-1/2 text-[var(--text-muted)] hover:text-[var(--text-secondary)] p-1 rounded hover:bg-[var(--bg-tertiary)] transition-all"
             >
-              {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+              {showPassword ? <EyeOff size={14} /> : <Eye size={14} />}
             </button>
           </div>
           {/* Password strength indicator */}
           {masterPassword && (
-            <div className="mt-2 flex gap-1">
+            <div className="mt-1.5 flex gap-1">
               {[1, 2, 3, 4].map(level => (
                 <div
                   key={level}
@@ -447,7 +441,7 @@ export default function MasterPasswordModal() {
                       : level <= 2 ? 'bg-amber-500' 
                       : level <= 3 ? 'bg-emerald-500' 
                       : 'bg-emerald-400'
-                      : 'bg-white/5'
+                      : 'bg-[var(--bg-tertiary)]'
                   }`}
                 />
               ))}
@@ -457,17 +451,17 @@ export default function MasterPasswordModal() {
 
         {/* Confirm Password */}
         <div>
-          <label className="block text-xs font-semibold text-gray-400 mb-2">{t('vault.confirmPassword')}</label>
+          <label className="block text-xs font-medium text-[var(--text-muted)] mb-1.5">{t('vault.confirmPassword')}</label>
           <input
             type={showPassword ? 'text' : 'password'}
             value={confirmPassword}
             onChange={(e) => setConfirmPassword(e.target.value)}
             placeholder={t('vault.confirmPassword')}
-            className="w-full px-4 py-3 bg-white/5 border border-white/10 rounded-xl text-white placeholder-gray-600 focus:outline-none focus:border-emerald-500/50 focus:ring-1 focus:ring-emerald-500/25 transition-all text-sm"
+            className="w-full px-3 py-2 bg-[var(--bg-primary)] border border-[var(--border-color)] rounded-lg text-[var(--text-primary)] placeholder-[var(--text-muted)] focus:outline-none focus:border-emerald-500/50 focus:ring-2 focus:ring-emerald-500/20 transition-all text-sm"
             autoComplete="new-password"
           />
           {confirmPassword && masterPassword !== confirmPassword && (
-            <p className="text-red-400 text-[11px] mt-1 flex items-center gap-1">
+            <p className="text-red-500 text-[11px] mt-1 flex items-center gap-1">
               <AlertTriangle size={10} /> {t('vault.passwordsMismatch')}
             </p>
           )}
@@ -479,40 +473,41 @@ export default function MasterPasswordModal() {
             initial={{ x: -10 }}
             animate={{ x: [0, -8, 8, -4, 4, 0] }}
             transition={{ duration: 0.4 }}
-            className="flex items-center gap-2 text-red-400 text-xs bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-2"
+            className="flex items-center gap-2 text-red-500 text-xs bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-2"
           >
-            <AlertTriangle size={14} />
+            <AlertTriangle size={12} />
             {error}
           </motion.div>
         )}
 
-        <button
-          type="submit"
-          disabled={loading || !mongoUri || !masterPassword || !confirmPassword}
-          className="w-full py-3.5 bg-emerald-600 hover:bg-emerald-500 disabled:bg-emerald-600/50 rounded-xl text-white font-semibold text-sm flex items-center justify-center gap-2 transition-all shadow-lg shadow-emerald-500/20"
-        >
-          {loading ? (
-            <><Loader size={16} className="animate-spin" /> {hasLegacyUri ? t('vault.migrating') : t('vault.encrypting')}</>
-          ) : (
-            <><Shield size={16} /> {hasLegacyUri ? t('vault.secureNow') : t('vault.createVault')}</>
-          )}
-        </button>
-
-        <button
-          type="button"
-          onClick={dismissVault}
-          className="w-full py-3 text-gray-500 hover:text-white text-xs font-medium transition-colors"
-        >
-          {t('vault.setupLater')}
-        </button>
+        <div className="flex gap-2 pt-1">
+          <button
+            type="button"
+            onClick={dismissVault}
+            className="flex-1 py-2 px-3 bg-[var(--bg-tertiary)] hover:bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-lg text-[var(--text-secondary)] text-xs font-medium transition-all"
+          >
+            {t('vault.setupLater')}
+          </button>
+          <button
+            type="submit"
+            disabled={loading || !mongoUri || !masterPassword || !confirmPassword}
+            className="flex-[2] py-2 px-4 bg-emerald-600 hover:bg-emerald-500 disabled:bg-emerald-600/50 disabled:cursor-not-allowed rounded-lg text-white text-sm font-medium flex items-center justify-center gap-2 transition-all"
+          >
+            {loading ? (
+              <><Loader size={14} className="animate-spin" /> {hasLegacyUri ? t('vault.migrating') : t('vault.encrypting')}</>
+            ) : (
+              <><Shield size={14} /> {hasLegacyUri ? t('vault.secureNow') : t('vault.createVault')}</>
+            )}
+          </button>
+        </div>
       </div>
 
       {/* Security Info */}
-      <div className="p-4 bg-indigo-500/5 border border-indigo-500/10 rounded-xl">
-        <div className="flex items-start gap-3">
-          <Shield size={14} className="text-indigo-400 mt-0.5 shrink-0" />
-          <p className="text-[11px] text-gray-400 leading-relaxed">
-            <strong className="text-indigo-400">{t('vault.privacyFirst')}</strong> {t('vault.privacyDesc')}
+      <div className="p-3 bg-blue-500/5 border border-blue-500/10 rounded-lg">
+        <div className="flex items-start gap-2">
+          <Shield size={12} className="text-blue-500 mt-0.5 shrink-0" />
+          <p className="text-[11px] text-[var(--text-muted)] leading-relaxed">
+            <strong className="text-blue-500">{t('vault.privacyFirst')}</strong> {t('vault.privacyDesc')}
           </p>
         </div>
       </div>
@@ -524,49 +519,49 @@ export default function MasterPasswordModal() {
 
   // === RECOVERY VIEW ===
   const renderRecovery = () => (
-    <div className="space-y-6">
-      <div className="text-center">
+    <div className="space-y-4">
+      <div className="text-center pt-2">
         <motion.div 
-          className="w-20 h-20 mx-auto bg-gradient-to-br from-amber-500 to-orange-600 rounded-3xl flex items-center justify-center shadow-2xl shadow-amber-500/30 mb-4"
+          className="w-14 h-14 mx-auto bg-gradient-to-br from-amber-500 to-orange-600 rounded-xl flex items-center justify-center shadow-lg mb-3"
           initial={{ scale: 0.8 }}
           animate={{ scale: 1 }}
         >
-          <Mail size={36} className="text-white" />
+          <Mail size={24} className="text-white" />
         </motion.div>
-        <h2 className="text-2xl font-bold text-white mb-1">{t('vault.recovery.title')}</h2>
-        <p className="text-gray-400 text-sm max-w-xs mx-auto">
+        <h2 className="text-lg font-semibold text-[var(--text-primary)] mb-1">{t('vault.recovery.title')}</h2>
+        <p className="text-[var(--text-secondary)] text-xs max-w-xs mx-auto">
           {t('vault.recovery.desc')} 
-          <strong className="text-amber-400"> {t('vault.recovery.warning')}</strong>
+          <strong className="text-amber-500"> {t('vault.recovery.warning')}</strong>
         </p>
       </div>
 
-      <div className="p-4 bg-red-500/5 border border-red-500/10 rounded-xl">
-        <div className="flex items-start gap-3">
-          <AlertTriangle size={14} className="text-red-400 mt-0.5 shrink-0" />
-          <p className="text-[11px] text-red-400/80 leading-relaxed">
+      <div className="p-3 bg-red-500/5 border border-red-500/10 rounded-lg">
+        <div className="flex items-start gap-2">
+          <AlertTriangle size={12} className="text-red-500 mt-0.5 shrink-0" />
+          <p className="text-[11px] text-red-500/80 leading-relaxed">
             <strong>Warning:</strong> {t('vault.recovery.warningDetail')}
           </p>
         </div>
       </div>
 
       {error && (
-        <div className="flex items-center gap-2 text-red-400 text-xs bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-2">
-          <AlertTriangle size={14} />
+        <div className="flex items-center gap-2 text-red-500 text-xs bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-2">
+          <AlertTriangle size={12} />
           {error}
         </div>
       )}
 
-      <div className="flex gap-3">
+      <div className="flex gap-2 pt-1">
         <button
           onClick={() => { setMode('unlock'); setError(''); }}
-          className="flex-1 py-3 bg-white/5 hover:bg-white/10 border border-white/10 rounded-xl text-gray-300 text-sm font-medium transition-all"
+          className="flex-1 py-2 px-3 bg-[var(--bg-tertiary)] hover:bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-lg text-[var(--text-secondary)] text-xs font-medium transition-all"
         >
           {t('vault.recovery.back')}
         </button>
         <button
           onClick={handleRequestRecovery}
           disabled={loading}
-          className="flex-1 py-3 bg-amber-600 hover:bg-amber-500 disabled:bg-amber-600/50 rounded-xl text-white text-sm font-semibold flex items-center justify-center gap-2 transition-all shadow-lg shadow-amber-500/20"
+          className="flex-[2] py-2 px-4 bg-amber-600 hover:bg-amber-500 disabled:bg-amber-600/50 disabled:cursor-not-allowed rounded-lg text-white text-sm font-medium flex items-center justify-center gap-2 transition-all"
         >
           {loading ? (
             <><Loader size={14} className="animate-spin" /> {t('vault.recovery.sending')}</>
@@ -580,22 +575,22 @@ export default function MasterPasswordModal() {
 
   // === VERIFY CODE VIEW ===
   const renderVerify = () => (
-    <form onSubmit={handleVerifyCode} className="space-y-6">
-      <div className="text-center">
+    <form onSubmit={handleVerifyCode} className="space-y-4">
+      <div className="text-center pt-2">
         <motion.div 
-          className="w-20 h-20 mx-auto bg-gradient-to-br from-blue-500 to-cyan-600 rounded-3xl flex items-center justify-center shadow-2xl shadow-blue-500/30 mb-4"
+          className="w-14 h-14 mx-auto bg-gradient-to-br from-blue-500 to-cyan-600 rounded-xl flex items-center justify-center shadow-lg mb-3"
           initial={{ scale: 0.8 }}
           animate={{ scale: 1 }}
         >
-          <CheckCircle size={36} className="text-white" />
+          <CheckCircle size={24} className="text-white" />
         </motion.div>
-        <h2 className="text-2xl font-bold text-white mb-1">{t('vault.verify.title')}</h2>
-        <p className="text-gray-400 text-sm">
-          {t('vault.verify.sentTo')} <span className="text-blue-400 font-medium">{recoveryEmail}</span>
+        <h2 className="text-lg font-semibold text-[var(--text-primary)] mb-1">{t('vault.verify.title')}</h2>
+        <p className="text-[var(--text-secondary)] text-xs">
+          {t('vault.verify.sentTo')} <span className="text-blue-500 font-medium">{recoveryEmail}</span>
         </p>
       </div>
 
-      <div className="space-y-4">
+      <div className="space-y-3">
         <input
           ref={inputRef}
           type="text"
@@ -603,7 +598,7 @@ export default function MasterPasswordModal() {
           onChange={(e) => setRecoveryCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
           placeholder="000000"
           maxLength={6}
-          className="w-full px-4 py-4 bg-white/5 border border-white/10 rounded-xl text-white text-center text-3xl font-mono tracking-[12px] placeholder-gray-600 focus:outline-none focus:border-blue-500/50 focus:ring-1 focus:ring-blue-500/25 transition-all"
+          className="w-full px-4 py-3 bg-[var(--bg-primary)] border border-[var(--border-color)] rounded-lg text-[var(--text-primary)] text-center text-2xl font-mono tracking-[8px] placeholder-[var(--text-muted)] focus:outline-none focus:border-blue-500/50 focus:ring-2 focus:ring-blue-500/20 transition-all"
           autoComplete="one-time-code"
         />
 
@@ -613,44 +608,39 @@ export default function MasterPasswordModal() {
             initial={{ x: -10 }}
             animate={{ x: [0, -8, 8, -4, 4, 0] }}
             transition={{ duration: 0.4 }}
-            className="flex items-center gap-2 text-red-400 text-xs bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-2"
+            className="flex items-center gap-2 text-red-500 text-xs bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-2"
           >
-            <AlertTriangle size={14} />
+            <AlertTriangle size={12} />
             {error}
           </motion.div>
         )}
 
-        {/* Debug hint for dev */}
-        <div className="text-[10px] text-gray-600 text-center bg-white/3 p-2 rounded-lg border border-white/5">
-          <p>Don't see the email? Check your <strong>terminal console</strong> or <strong>RECOVERY_CODE.txt</strong> in the project folder.</p>
+        <div className="flex gap-2 pt-1">
+          <button
+            type="button"
+            onClick={() => { setMode('recovery'); setError(''); setRecoveryCode(''); }}
+            className="flex-1 py-2 px-3 bg-[var(--bg-tertiary)] hover:bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-lg text-[var(--text-secondary)] text-xs font-medium transition-all"
+          >
+            ← {t('vault.recovery.back')}
+          </button>
+          <button
+            type="submit"
+            disabled={loading || recoveryCode.length !== 6}
+            className="flex-[2] py-2 px-4 bg-blue-600 hover:bg-blue-500 disabled:bg-blue-600/50 disabled:cursor-not-allowed rounded-lg text-white text-sm font-medium flex items-center justify-center gap-2 transition-all"
+          >
+            {loading ? (
+              <><Loader size={14} className="animate-spin" /> {t('vault.verify.verifying')}</>
+            ) : (
+              <><CheckCircle size={14} /> {t('vault.verify.verifyReset')}</>
+            )}
+          </button>
         </div>
 
-        <button
-          type="submit"
-          disabled={loading || recoveryCode.length !== 6}
-          className="w-full py-3.5 bg-blue-600 hover:bg-blue-500 disabled:bg-blue-600/50 rounded-xl text-white font-semibold text-sm flex items-center justify-center gap-2 transition-all shadow-lg shadow-blue-500/20"
-        >
-          {loading ? (
-            <><Loader size={16} className="animate-spin" /> {t('vault.verify.verifying')}</>
-          ) : (
-            <><CheckCircle size={16} /> {t('vault.verify.verifyReset')}</>
-          )}
-        </button>
-      </div>
-
-      <div className="flex justify-between text-xs">
-        <button
-          type="button"
-          onClick={() => { setMode('recovery'); setError(''); setRecoveryCode(''); }}
-          className="text-gray-500 hover:text-gray-300 transition-colors"
-        >
-          ← {t('vault.recovery.back')}
-        </button>
         <button
           type="button"
           onClick={handleRequestRecovery}
           disabled={loading}
-          className="text-gray-500 hover:text-indigo-400 transition-colors flex items-center gap-1"
+          className="w-full py-1.5 text-[var(--text-muted)] hover:text-blue-500 text-xs transition-colors flex items-center justify-center gap-1"
         >
           <RefreshCw size={10} /> {t('vault.verify.resend')}
         </button>
@@ -658,40 +648,31 @@ export default function MasterPasswordModal() {
     </form>
   );
 
-  return createPortal(
-    <AnimatePresence>
-      <motion.div
-        initial={{ opacity: 0 }}
-        animate={{ opacity: 1 }}
-        exit={{ opacity: 0 }}
-        className="fixed inset-0 z-[50000] flex items-center justify-center"
-        style={{ backdropFilter: 'blur(12px)', background: 'rgba(0,0,0,0.7)' }}
-      >
-        <motion.div
-          initial={{ scale: 0.9, y: 20 }}
-          animate={{ scale: 1, y: 0 }}
-          exit={{ scale: 0.9, y: 20 }}
-          transition={{ type: 'spring', damping: 25, stiffness: 300 }}
-          className="w-full max-w-md mx-4 max-h-[90vh] overflow-y-auto custom-scrollbar"
-        >
-          <div 
-            className="rounded-2xl border border-white/10 p-8 shadow-2xl"
-            style={{ 
-              background: 'linear-gradient(145deg, rgba(15, 23, 42, 0.98), rgba(30, 41, 59, 0.95))',
-              boxShadow: '0 25px 60px rgba(0,0,0,0.5), 0 0 0 1px rgba(255,255,255,0.05)'
-            }}
-          >
-            {renderContent()}
+  const getWindowTitle = () => {
+    switch (mode) {
+      case 'unlock': return { title: t('vault.locked') || 'Security', icon: Lock };
+      case 'setup': return { title: t('vault.setupVault') || 'Setup Vault', icon: Shield };
+      case 'recovery': return { title: t('vault.recovery.title') || 'Recovery', icon: Mail };
+      case 'verify': return { title: t('vault.verify.title') || 'Verify', icon: CheckCircle };
+      default: return { title: 'Security', icon: Shield };
+    }
+  };
 
-            {/* Security badge — inside modal */}
-            <div className="mt-6 pt-4 border-t border-white/5 flex items-center justify-center gap-2 text-gray-600 text-[10px]">
-              <Shield size={10} />
-              <span>{t('vault.securityBadge')}</span>
-            </div>
-          </div>
-        </motion.div>
-      </motion.div>
-    </AnimatePresence>,
+  const { title, icon } = getWindowTitle();
+
+  return createPortal(
+    <MacOSModalWindow
+      isOpen
+      title={title}
+      icon={icon}
+      onClose={dismissVault}
+      zIndexClassName="z-[50000]"
+      maxWidthClassName="max-w-sm"
+      maxHeightClassName="max-h-[85vh]"
+      contentClassName="p-4 max-h-[70vh]"
+    >
+      {renderContent()}
+    </MacOSModalWindow>,
     document.body
   );
 }

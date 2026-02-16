@@ -29,7 +29,9 @@ const next = require('next');
 const { Server } = require('socket.io');
 const { Client } = require('ssh2');
 const mongoose = require('mongoose');
+const mysql = require('mysql2/promise');
 const { decrypt } = require('./src/utils/encryption');
+const compression = require('compression');
 
 const dev = process.env.NODE_ENV !== 'production';
 const hostname = 'localhost';
@@ -61,7 +63,7 @@ let mongoConnected = false;
 
 async function connectMongo() {
   // Support live reconnection — check if already connected (e.g. via API route)
-  if (mongoose.connection.readyState === 1) {
+  if (mongoose.connection.readyState === 1 || mongoose.connection.readyState === 2) {
     mongoConnected = true;
     return;
   }
@@ -69,8 +71,15 @@ async function connectMongo() {
     console.log('⚠️  No MongoDB URI configured. Go to Settings → Database to set up.');
     return;
   }
+
+  // ONLY connect to Mongoose if it's a MongoDB URI
+  if (!MONGODB_URI.startsWith('mongodb')) {
+    console.log('📝 Mongoose skipped: Main database is not MongoDB (MySQL/PostgreSQL mode active)');
+    return;
+  }
+
   try {
-    await mongoose.connect(MONGODB_URI);
+    await mongoose.connect(MONGODB_URI, { serverSelectionTimeoutMS: 5000 });
     mongoConnected = true;
     console.log('✅ MongoDB connected');
   } catch (err) {
@@ -78,6 +87,7 @@ async function connectMongo() {
     console.log('💡 You can configure MongoDB in Settings → Database');
   }
 }
+
 
 // Connection schema (inline for server.js)
 const ConnectionSchema = new mongoose.Schema({
@@ -110,40 +120,155 @@ const SessionSchema = new mongoose.Schema({
 }, { timestamps: true });
 
 
+function getLatestCenterUri() {
+  try {
+    const dbConfigPath = path.resolve(__dirname, 'db-config.json');
+    if (fs.existsSync(dbConfigPath)) {
+      const dbConfig = JSON.parse(fs.readFileSync(dbConfigPath, 'utf-8'));
+      if (dbConfig.uri) return dbConfig.uri;
+    }
+  } catch (e) {}
+  return process.env.MONGODB_URI || MONGODB_URI;
+}
+
 // Multi-tenant Model Pool
 const modelsPool = new Map();
 async function getModels(uri) {
-  if (!uri) {
-     // STRICT MODE: Center DB should ONLY store Users.
-     // If no URI is provided, we cannot return valid Connection/Session models 
-     // linked to the default connection because we don't want to pollute it.
+  const targetUri = uri || getLatestCenterUri();
+  if (!targetUri) {
      return { Connection: null, Session: null };
   }
-  if (modelsPool.has(uri)) {
-    const cached = modelsPool.get(uri);
-    if (cached.readyState === 1) return { 
+
+  
+  if (modelsPool.has(targetUri)) {
+    const cached = modelsPool.get(targetUri);
+    if (cached.type === 'mysql') return cached;
+    if (cached.readyState === 1 || cached.readyState === 2) return { 
+      type: 'mongodb',
       Connection: cached.models.Connection || cached.model('Connection', ConnectionSchema),
       Session: cached.models.Session || cached.model('Session', SessionSchema)
     };
-    modelsPool.delete(uri);
+    modelsPool.delete(targetUri);
   }
+
+  if (targetUri.startsWith('mysql://')) {
+    try {
+      const pool = mysql.createPool(targetUri);
+      const repo = {
+        type: 'mysql',
+        pool,
+        Connection: {
+          findById: async (id) => {
+            const [rows] = await pool.execute('SELECT * FROM connections WHERE id = ?', [id]);
+            if (rows.length === 0) return null;
+            const r = rows[0];
+            return {
+              ...r,
+              _id: r.id.toString(),
+              tags: typeof r.tags === 'string' ? JSON.parse(r.tags) : (r.tags || []),
+              isFavorite: !!r.isFavorite,
+              database: r.database_name
+            };
+          },
+          findByIdAndUpdate: async (id, data) => {
+             const updates = [];
+             const values = [];
+             for (const [k, v] of Object.entries(data)) {
+               if (k === '_id' || k === 'id') continue;
+               updates.push(`${k === 'database' ? 'database_name' : k} = ?`);
+               values.push(k === 'tags' ? JSON.stringify(v) : (k === 'isFavorite' ? (v ? 1 : 0) : v));
+             }
+             if (updates.length > 0) {
+               values.push(id);
+               await pool.execute(`UPDATE connections SET ${updates.join(', ')} WHERE id = ?`, values);
+             }
+             return true;
+          }
+        },
+        Session: {
+          create: async (data) => {
+             try {
+               await pool.execute(`
+                 CREATE TABLE IF NOT EXISTS ssh_sessions (
+                   id INT AUTO_INCREMENT PRIMARY KEY,
+                   connectionId INT,
+                   startTime DATETIME DEFAULT CURRENT_TIMESTAMP,
+                   endTime DATETIME,
+                   duration INT,
+                   status VARCHAR(50) DEFAULT 'active',
+                   errorMessage TEXT,
+                   createdAt DATETIME DEFAULT CURRENT_TIMESTAMP,
+                   updatedAt DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+                 )
+               `);
+               const [res] = await pool.execute(
+                 'INSERT INTO ssh_sessions (connectionId, status) VALUES (?, ?)',
+                 [data.connectionId, data.status]
+               );
+               return { _id: res.insertId, ...data, startTime: new Date() };
+             } catch (e) {
+               console.error('MySQL Session Error:', e);
+               return null;
+             }
+          },
+          findByIdAndUpdate: async (id, data) => {
+            try {
+              const updates = [];
+              const values = [];
+              for (const [k, v] of Object.entries(data)) {
+                if (k === '_id' || k === 'id') continue;
+                updates.push(`${k} = ?`);
+                values.push(v instanceof Date ? v.toISOString().slice(0, 19).replace('T', ' ') : v);
+              }
+              if (updates.length > 0) {
+                values.push(id);
+                await pool.execute(`UPDATE ssh_sessions SET ${updates.join(', ')} WHERE id = ?`, values);
+              }
+              return true;
+            } catch (e) {
+              console.error('MySQL Session Update Error:', e);
+              return false;
+            }
+          }
+        }
+      };
+      modelsPool.set(targetUri, repo);
+      return repo;
+    } catch (e) {
+      console.warn('⚠️ MySQL Init Error:', e.message);
+      return { type: 'mysql', Connection: null, Session: null };
+    }
+  }
+
+  if (!targetUri.startsWith('mongodb')) {
+    console.warn('⚠️ Unsupported target URI scheme:', targetUri);
+    return { type: 'unknown', Connection: null, Session: null };
+  }
+
   try {
-    const conn = await mongoose.createConnection(uri, { serverSelectionTimeoutMS: 5000 }).asPromise();
-    modelsPool.set(uri, conn);
+    const conn = await mongoose.createConnection(targetUri, { serverSelectionTimeoutMS: 5000 }).asPromise();
+    modelsPool.set(targetUri, conn);
     return {
+      type: 'mongodb',
       Connection: conn.models.Connection || conn.model('Connection', ConnectionSchema),
       Session: conn.models.Session || conn.model('Session', SessionSchema)
     };
   } catch (e) {
     console.warn('⚠️ Socket DB fallback:', e.message);
-    return { Connection: null, Session: null };
+    return { type: 'mongodb', Connection: null, Session: null };
   }
 }
+
+
+
 
 app.prepare().then(async () => {
   await connectMongo();
 
-  const server = createServer(async (req, res) => {
+  const compress = compression();
+  const server = createServer((req, res) => {
+    // Apply compression
+    compress(req, res, async () => {
     try {
       // Security Headers - Apply only to main pages, not static assets or internal Next.js paths
       const isNextInternal = req.url.startsWith('/_next/') || req.url.includes('/favicon.ico');
@@ -179,6 +304,7 @@ app.prepare().then(async () => {
       res.statusCode = 500;
       res.end('internal server error');
     }
+    }); // End of compress callback
   });
 
   const io = new Server(server, {
@@ -286,7 +412,14 @@ const activeSessions = new Map();
             }
 
             // Store active session
-            activeSessions.set(socket.id, { sshClient, stream, session, connectionId, dbUri });
+            activeSessions.set(socket.id, { 
+              sshClient, 
+              stream, 
+              session, 
+              connectionId, 
+              dbUri,
+              activeTransfers: new Set() // Track transfer IDs for cleanup
+            });
 
             // Forward SSH output to client
             stream.on('data', (data) => {
@@ -739,70 +872,173 @@ const activeSessions = new Map();
             transfer();
           });
 
-          // Upload File (Client -> Server)
-          socket.on('sftp:upload', ({ filename, path: destPath, size }) => {
-            console.log(`📤 [${socket.id}] SFTP UPLOAD START: ${filename} to ${destPath} (${size} bytes)`);
+          // Upload File (Client -> Server) - Resumable with Offset
+          socket.on('sftp:upload', ({ filename, path: destPath, size, offset = 0 }) => {
+            console.log(`📤 [${socket.id}] SFTP UPLOAD START: ${filename} (Size: ${size}, Offset: ${offset})`);
+            
+            const { checkRateLimit, getConcurrencyLimiter, checkMemory } = require('./src/lib/serverGuard');
+            
+            // 1. Memory Guard
+            const mem = checkMemory(300); // Need at least 300MB free
+            if (!mem.safe) {
+               return socket.emit('sftp:error', { message: 'Server is under high load. Please try again later.' });
+            }
+
+            // 2. Concurrency Guard (Global fair-share)
+            const limiter = getConcurrencyLimiter('file_transfer', 10); // Max 10 active transfers global
+            if (!limiter.allowed) {
+               return socket.emit('sftp:error', { message: 'Server transfer capacity reached. Please wait for other transfers to finish.' });
+            }
+
+            // 3. Per-User Rate Limit
+            const rate = checkRateLimit(`sftp_upload:${socket.id}`, 20); 
+            if (!rate.allowed) {
+               return socket.emit('sftp:error', { 
+                 message: `Upload rate limit exceeded. Please wait ${Math.ceil(rate.resetIn / 1000)}s.`,
+                 resetIn: rate.resetIn
+               });
+            }
+
+            const sessionData = activeSessions.get(socket.id);
+            if (!sessionData) return;
+
             getSftp((err, sftp) => {
                if (err) return emitSftpError(err, 'Upload SFTP Init');
-               const writeStream = sftp.createWriteStream(destPath);
                
-               let bytesReceived = 0;
-               
-               const chunkHandler = (chunk) => {
-                 writeStream.write(chunk);
-                 bytesReceived += chunk.length;
-                 socket.emit('sftp:progress', { 
-                   action: 'upload', 
-                   filename, 
-                   progress: Math.round((bytesReceived / size) * 100) 
-                 });
+               const transferId = `up_${Date.now()}`;
+               const startUpload = (actualOffset) => {
+                  // ... inside startUpload ...
+                  sessionData.activeTransfers.add(transferId);
+                  limiter.acquire(); 
+
+                  // Use 'r+' to allow writing at specific offset, 'w' for new file
+                  const flags = actualOffset > 0 ? 'r+' : 'w';
+                  const writeStream = sftp.createWriteStream(destPath, { flags, start: actualOffset });
+                  
+                  let bytesReceivedInSession = 0;
+                  
+                  const chunkHandler = (chunk) => {
+                    // Backpressure: only ack when data is actually written
+                    writeStream.write(chunk, (err) => {
+                       if (err) return emitSftpError(err, 'Stream Write Error');
+                       
+                       bytesReceivedInSession += chunk.length;
+                       const totalTransferred = actualOffset + bytesReceivedInSession;
+                       
+                       socket.emit(`sftp:upload_ack:${filename}`, { 
+                         received: chunk.length, 
+                         totalTransferred,
+                         progress: Math.round((totalTransferred / size) * 100)
+                       });
+                    });
+                  };
+
+                  socket.on(`sftp:upload_chunk:${filename}`, chunkHandler);
+                  socket.emit('sftp:can_upload', { filename, offset: actualOffset }); 
+
+                  socket.once(`sftp:upload_done:${filename}`, () => {
+                    writeStream.end();
+                    socket.off(`sftp:upload_chunk:${filename}`, chunkHandler);
+                  });
+
+                  writeStream.on('close', () => {
+                    if (sessionData.activeTransfers.has(transferId)) {
+                        limiter.release();
+                        sessionData.activeTransfers.delete(transferId);
+                    }
+                    socket.emit('sftp:action_success', { action: 'upload', path: destPath });
+                  });
+
+                  writeStream.on('error', (err) => {
+                    if (sessionData.activeTransfers.has(transferId)) {
+                        limiter.release();
+                        sessionData.activeTransfers.delete(transferId);
+                    }
+                    emitSftpError(err, 'Upload failed');
+                    socket.off(`sftp:upload_chunk:${filename}`, chunkHandler);
+                  });
                };
 
-               socket.on(`sftp:upload_chunk:${filename}`, chunkHandler);
-               socket.emit('sftp:can_upload', { filename }); // HANDSHAKE: Ready to receive
-
-               socket.once(`sftp:upload_done:${filename}`, () => {
-                 writeStream.end();
-                 socket.off(`sftp:upload_chunk:${filename}`, chunkHandler);
-               });
-
-               writeStream.on('close', () => {
-                 socket.emit('sftp:action_success', { action: 'upload', path: destPath });
-               });
-
-               writeStream.on('error', (err) => {
-                 emitSftpError(err, 'Upload failed');
-                 socket.off(`sftp:upload_chunk:${filename}`, chunkHandler);
-               });
+               // Auto-Resume Detection: If client didn't specify offset, check if file exists
+               if (offset === 0) {
+                  sftp.stat(destPath, (err, stats) => {
+                     if (!err && stats.isFile() && stats.size < size) {
+                        console.log(`🔍 [${socket.id}] Auto-resume detected: ${stats.size} bytes already present`);
+                        startUpload(stats.size);
+                     } else {
+                        startUpload(0);
+                     }
+                  });
+               } else {
+                  startUpload(offset);
+               }
             });
           });
 
-          // Download File (Server -> Client)
-          socket.on('sftp:download', (filePath) => {
-             console.log(`📥 [${socket.id}] SFTP DOWNLOAD: ${filePath}`);
+          // Download File (Server -> Client) - Resumable with Offset
+          socket.on('sftp:download', ({ filePath, offset = 0 }) => {
+             console.log(`📥 [${socket.id}] SFTP DOWNLOAD: ${filePath} (Offset: ${offset})`);
+             
+             const { checkRateLimit, getConcurrencyLimiter, checkMemory } = require('./src/lib/serverGuard');
+             
+             // 1. Memory & Concurrency Guards
+             const mem = checkMemory(300);
+             if (!mem.safe) return socket.emit('sftp:error', { message: 'Server busy' });
+
+             const limiter = getConcurrencyLimiter('file_transfer', 10);
+             if (!limiter.allowed) {
+                return socket.emit('sftp:error', { message: 'Server transfer capacity reached' });
+             }
+
+             const rate = checkRateLimit(`sftp_download:${socket.id}`, 30);
+             if (!rate.allowed) {
+                return socket.emit('sftp:error', { 
+                  message: `Download rate limit exceeded. Please wait ${Math.ceil(rate.resetIn / 1000)}s.`,
+                  resetIn: rate.resetIn
+                });
+             }
+
+             const sessionData = activeSessions.get(socket.id);
+             if (!sessionData) return;
+
              getSftp((err, sftp) => {
                if (err) return emitSftpError(err, 'Download SFTP Init');
                
                sftp.stat(filePath, (err, stats) => {
                  if (err) return emitSftpError(err, 'Download Stat');
                  
-                 const readStream = sftp.createReadStream(filePath);
+                 const transferId = `down_${Date.now()}`;
+                 sessionData.activeTransfers.add(transferId);
+                 limiter.acquire();
+
+                 const readStream = sftp.createReadStream(filePath, { start: offset });
                  const filename = path.posix.basename(filePath);
-                 const size = stats.size;
+                 const totalSize = stats.size;
                  
-                 socket.emit('sftp:download_start', { filename, size });
+                 socket.emit('sftp:download_start', { filename, size: totalSize, offset });
                  
-                 let bytesSent = 0;
+                 let bytesSentInSession = 0;
                  readStream.on('data', (chunk) => {
-                   bytesSent += chunk.length;
-                   socket.emit('sftp:download_chunk', { filename, chunk, progress: Math.round((bytesSent / stats.size) * 100) });
+                   bytesSentInSession += chunk.length;
+                   const progress = Math.round(((offset + bytesSentInSession) / totalSize) * 100);
+                   socket.emit('sftp:download_chunk', { filename, chunk, progress, offset: offset + bytesSentInSession });
                  });
                  
                  readStream.on('end', () => {
+                   if (sessionData && sessionData.activeTransfers.has(transferId)) {
+                        limiter.release();
+                        sessionData.activeTransfers.delete(transferId);
+                   }
                    socket.emit('sftp:download_done', { filename });
                  });
                  
-                 readStream.on('error', (err) => emitSftpError(err, 'Download failed'));
+                 readStream.on('error', (err) => {
+                   if (sessionData && sessionData.activeTransfers.has(transferId)) {
+                        limiter.release();
+                        sessionData.activeTransfers.delete(transferId);
+                   }
+                   emitSftpError(err, 'Download failed');
+                 });
                });
              });
           });
@@ -965,6 +1201,17 @@ const activeSessions = new Map();
            if (CurrentConnectionModel) {
              await CurrentConnectionModel.findByIdAndUpdate(session.connectionId, { status: 'offline' });
            }
+        }
+
+        // --- NEW: Cleanup any active file transfers ---
+        if (session.activeTransfers && session.activeTransfers.size > 0) {
+           const { getConcurrencyLimiter } = require('./src/lib/serverGuard');
+           const limiter = getConcurrencyLimiter('file_transfer');
+           for (const tId of session.activeTransfers) {
+              limiter.release();
+              console.log(`🧹 Released capacity for abandoned transfer: ${tId}`);
+           }
+           session.activeTransfers.clear();
         }
       } catch (err) {
         console.error('Cleanup error:', err);

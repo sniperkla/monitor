@@ -1,0 +1,17 @@
+{
+  "name": "Webtop OS Monitor",
+  "short_name": "Webtop",
+  "description": "Professional SSH terminal manager and server monitoring environment.",
+  "start_url": "/",
+  "display": "fullscreen",
+  "background_color": "#0f172a",
+  "theme_color": "#0f172a",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

@@ -1,0 +1,28 @@
+{
+  "environment": "development",
+  "guards": {
+    "memory": {
+      "minFreeMB": 128,
+      "maxRssMB": 2048,
+      "alertThreshold": 0.8
+    },
+    "rateLimit": {
+      "default": 120,
+      "test": 20,
+      "ai": 15
+    },
+    "concurrency": {
+      "heavy_operations": 5
+    }
+  },
+  "database": {
+    "provider": "mongodb",
+    "required": true,
+    "timeoutMs": 5000
+  },
+  "healthCheck": {
+    "enabled": true,
+    "path": "/api/health",
+    "interval": "5m"
+  }
+}

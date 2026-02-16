@@ -6,6 +6,41 @@ import { useOS } from '@/context/OSContext';
 import { X, Minus, Maximize2, Minimize2 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
+function MacTrafficLights({ onClose, onMinimize, onMaximize, isMaximized }) {
+  return (
+    <div className="flex items-center gap-2" onMouseDown={(e) => e.stopPropagation()}>
+      <button
+        type="button"
+        onClick={onClose}
+        className="w-3 h-3 rounded-full bg-[#ff5f57] border border-[#e0443e]/30 flex items-center justify-center group"
+        aria-label="Close"
+      >
+        <X size={8} className="opacity-0 group-hover:opacity-100 text-[#4d0000] transition-opacity" />
+      </button>
+      <button
+        type="button"
+        onClick={onMinimize}
+        className="w-3 h-3 rounded-full bg-[#febc2e] border border-[#d89e24]/30 flex items-center justify-center group"
+        aria-label="Minimize"
+      >
+        <Minus size={8} className="opacity-0 group-hover:opacity-100 text-[#4d2d00] transition-opacity" />
+      </button>
+      <button
+        type="button"
+        onClick={onMaximize}
+        className="w-3 h-3 rounded-full bg-[#28c840] border border-[#1fa530]/30 flex items-center justify-center group"
+        aria-label={isMaximized ? 'Restore' : 'Maximize'}
+      >
+        {isMaximized ? (
+          <Minimize2 size={8} className="opacity-0 group-hover:opacity-100 text-[#003300] transition-opacity" />
+        ) : (
+          <Maximize2 size={8} className="opacity-0 group-hover:opacity-100 text-[#003300] transition-opacity" />
+        )}
+      </button>
+    </div>
+  );
+}
+
 export default function Window({ id, title, icon: Icon, component, isMinimized, isMaximized, zIndex, initialWidth, initialHeight }) {
   const { state: osState, focusWindow, closeWindow, toggleMinimize, toggleMaximize, snapWindow, updateWindowPosition } = useOS();
   const { glassmorphism, taskbarPosition } = osState;
@@ -18,7 +53,7 @@ export default function Window({ id, title, icon: Icon, component, isMinimized, 
   const windowState = osState.windows.find(w => w.id === id) || {};
   const [freeRect, setFreeRect] = useState({
     x: windowState.x ?? 100,
-    y: windowState.y ?? 40,
+    y: windowState.y ?? (taskbarPosition === 'top' ? 64 : 40),
     width: windowState.width || initialWidth || 800,
     height: windowState.height || initialHeight || 600,
   });
@@ -46,7 +81,7 @@ export default function Window({ id, title, icon: Icon, component, isMinimized, 
     return () => window.removeEventListener('resize', update);
   }, []);
 
-  const TASKBAR_H = 48;
+  const TASKBAR_H = 56;
   const isSnappedOrMax = isMaximized || !!snapSide;
 
   // Calculate safe area based on taskbar position
@@ -207,10 +242,10 @@ export default function Window({ id, title, icon: Icon, component, isMinimized, 
             exit={{ opacity: 0 }}
             className="fixed z-[9999] bg-white/10 backdrop-blur-md border border-white/20 pointer-events-none shadow-2xl"
             style={{
-              top: 0,
-              left: snapPreview === 'right' ? '50%' : 0,
-              width: snapPreview === 'top' ? '100%' : '50%',
-              height: `calc(100% - ${TASKBAR_H}px)`,
+              top: snapPreview === 'top' ? safeArea.y : safeArea.y,
+              left: snapPreview === 'right' ? safeArea.x + safeArea.w / 2 : safeArea.x,
+              width: snapPreview === 'top' ? safeArea.w : safeArea.w / 2,
+              height: safeArea.h,
             }}
           />
         )}
@@ -237,7 +272,14 @@ export default function Window({ id, title, icon: Icon, component, isMinimized, 
         onResizeStart={handleResizeStart}
         onResizeStop={handleResizeStop}
         style={{ zIndex, display: 'flex' }}
-        className={isMaximized ? '!top-0 !left-0 !transform-none' : ''}
+        className={isSnappedOrMax ? (
+          `
+          !transform-none 
+          ${taskbarPosition === 'top' ? '!top-[56px]' : '!top-0'} 
+          ${taskbarPosition === 'left' ? '!left-[56px]' : (snapSide === 'right' ? '!left-auto !right-0' : '!left-0')} 
+          ${taskbarPosition === 'right' ? '!right-[56px] !left-auto' : ''}
+          `
+        ) : ''}
       >
         <motion.div
           initial={{ opacity: 0, scale: 0.95 }}
@@ -245,41 +287,32 @@ export default function Window({ id, title, icon: Icon, component, isMinimized, 
           exit={{ opacity: 0, scale: 0.95 }}
           className={`window-container flex flex-col w-full h-full overflow-hidden shadow-2xl transition-all duration-200 ${isSnappedOrMax ? 'rounded-none border-0' : 'rounded-lg border'}`}
           style={{
-            background: glassmorphism ? 'rgba(15, 23, 42, 0.85)' : '#111827',
+            background: glassmorphism ? 'var(--window-bg)' : 'var(--bg-primary)',
             backdropFilter: glassmorphism ? 'blur(20px)' : 'none',
-            borderColor: glassmorphism ? 'rgba(255, 255, 255, 0.1)' : '#374151',
+            borderColor: 'var(--border-color)',
           }}
           onClick={() => focusWindow(id)}
         >
           {/* Title Bar */}
           <div
-            className="title-bar h-10 flex items-center justify-between px-3 bg-white/5 border-b border-white/5 cursor-move"
+            className="title-bar h-10 flex items-center px-3 bg-gradient-to-b from-[var(--bg-secondary)] to-[var(--bg-tertiary)] border-b border-[var(--border-color)] cursor-move"
             onDoubleClick={(e) => { e.stopPropagation(); toggleMaximize(id); }}
           >
-            <div className="flex items-center gap-2 text-sm font-medium text-gray-200 select-none">
-              {Icon && <Icon size={14} className="text-blue-400" />}
-              {title}
+            <MacTrafficLights
+              onClose={(e) => { e?.stopPropagation?.(); closeWindow(id); }}
+              onMinimize={(e) => { e?.stopPropagation?.(); toggleMinimize(id); }}
+              onMaximize={(e) => { e?.stopPropagation?.(); toggleMaximize(id); }}
+              isMaximized={isMaximized}
+            />
+
+            <div className="flex-1 flex items-center justify-center select-none pointer-events-none">
+              <div className="flex items-center gap-2 text-xs font-medium text-[var(--text-secondary)]">
+                {Icon && <Icon size={14} className="text-[var(--text-secondary)]" />}
+                <span className="truncate max-w-[50vw]">{title}</span>
+              </div>
             </div>
-            <div className="flex items-center gap-1.5" onMouseDown={(e) => e.stopPropagation()}>
-              <button
-                className="w-6 h-6 flex items-center justify-center rounded hover:bg-white/10 text-gray-400 hover:text-white transition-colors"
-                onClick={(e) => { e.stopPropagation(); toggleMinimize(id); }}
-              >
-                <Minus size={14} />
-              </button>
-              <button
-                className="w-6 h-6 flex items-center justify-center rounded hover:bg-white/10 text-gray-400 hover:text-white transition-colors"
-                onClick={(e) => { e.stopPropagation(); toggleMaximize(id); }}
-              >
-                {isMaximized ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
-              </button>
-              <button
-                className="w-6 h-6 flex items-center justify-center rounded hover:bg-red-500/20 text-gray-400 hover:text-red-400 transition-colors"
-                onClick={(e) => { e.stopPropagation(); closeWindow(id); }}
-              >
-                <X size={14} />
-              </button>
-            </div>
+
+            <div className="w-[52px]" />
           </div>
 
           {/* Window Content */}

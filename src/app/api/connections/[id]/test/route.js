@@ -1,26 +1,36 @@
 import { NextResponse } from 'next/server';
 import { Client } from 'ssh2';
 import connectDB from '@/lib/mongodb';
-import { getConnectionModel } from '@/models/Connection';
-import { decrypt, isEncrypted } from '@/utils/encryption';
+import { ConnectionRepository } from '@/lib/repositories/ConnectionRepository';
+import { decrypt } from '@/utils/encryption';
+import { getPooledConnection } from '@/lib/dbPool';
+import { checkRateLimit } from '@/lib/serverGuard';
 
 // POST test connection
 export async function POST(request, { params }) {
   try {
+    // Rate limiting
+    const clientIP = request.headers.get('x-forwarded-for') || 'unknown';
+    const rateCheck = checkRateLimit(`test:${clientIP}`, 20); // Max 20 tests per minute
+    if (!rateCheck.allowed) {
+      return NextResponse.json({ 
+        success: false, error: `Too many connection tests. Please wait ${Math.ceil(rateCheck.resetIn / 1000)}s.` 
+      }, { status: 429 });
+    }
+
     const { id } = await params;
     let connection;
-    let ConnectionModel;
     
     // 1. Determine if it's a DB connection or a direct payload (for local/manual)
+    const db = await connectDB();
+    const repo = new ConnectionRepository(db);
+
     if (id && !id.startsWith('local-')) {
-      const db = await connectDB();
-      ConnectionModel = getConnectionModel(db);
-      connection = await ConnectionModel.findById(id).lean();
+      connection = await repo.findById(id);
       if (!connection) {
         return NextResponse.json({ success: false, error: 'Connection not found in DB' }, { status: 404 });
       }
     } else {
-      // For local/manual, the client MUST send the connection object in the body
       const body = await request.json();
       connection = body.connection;
       if (!connection) {
@@ -28,31 +38,35 @@ export async function POST(request, { params }) {
       }
     }
 
-    // 2. Prepare config (Decrypt fields)
-    const sshConfig = {
-      host: connection.host,
-      port: connection.port,
-      username: connection.username,
-      readyTimeout: 10000,
-    };
+    let result;
+    if (connection.type === 'database') {
+      result = await testDatabaseConnection(connection);
+    } else {
+      // Prepare SSH config
+      const sshConfig = {
+        host: connection.host,
+        port: connection.port,
+        username: connection.username,
+        readyTimeout: 10000,
+      };
 
-    if (connection.authType === 'password') {
-      sshConfig.password = decrypt(connection.password);
-    } else if (connection.authType === 'privateKey') {
-      sshConfig.privateKey = decrypt(connection.privateKey);
-      if (connection.passphrase) {
-        sshConfig.passphrase = decrypt(connection.passphrase);
+      if (connection.authType === 'password') {
+        sshConfig.password = decrypt(connection.password);
+      } else if (connection.authType === 'privateKey') {
+        sshConfig.privateKey = decrypt(connection.privateKey);
+        if (connection.passphrase) {
+          sshConfig.passphrase = decrypt(connection.passphrase);
+        }
       }
+      result = await testSSHConnection(sshConfig);
     }
-
-    const result = await testSSHConnection(sshConfig);
 
     // 3. Update DB if it's a DB connection
     if (id && !id.startsWith('local-')) {
-      await ConnectionModel.findByIdAndUpdate(id, {
+      await repo.update(id, {
         status: result.success ? 'online' : 'offline',
-        lastConnected: result.success ? new Date() : connection.lastConnected,
-        info: result.success ? result.info : connection.info,
+        lastConnected: result.success ? new Date() : (connection.lastConnected || null),
+        info: result.success ? result.info : (connection.info || null),
       });
     }
 
@@ -63,6 +77,34 @@ export async function POST(request, { params }) {
       { success: false, error: error.message },
       { status: 500 }
     );
+  }
+}
+
+async function testDatabaseConnection(conn) {
+  try {
+    // Use pooled connection — this also warms up the pool for future queries
+    const pooled = await getPooledConnection(conn);
+    const provider = conn.dbProvider || 'mongodb';
+    
+    if (provider === 'mongodb') {
+      let version = 'Connected';
+      try {
+        const admin = pooled.db.db.admin();
+        const status = await admin.serverStatus();
+        version = `v${status.version}`;
+      } catch (e) {
+        // Fallback: Just connected is enough if it didn't throw
+        console.log('ServerStatus restricted, using basic connection success');
+      }
+      // Don't close! Connection stays in pool for reuse
+      return { success: true, info: `MongoDB ${version}` };
+    } else if (provider === 'mysql') {
+      const [rows] = await pooled.db.query('SELECT VERSION() as version');
+      return { success: true, info: `MySQL ${rows[0].version}` };
+    }
+    return { success: false, error: `Provider ${provider} not supported for testing yet` };
+  } catch (err) {
+    return { success: false, error: err.message };
   }
 }
 

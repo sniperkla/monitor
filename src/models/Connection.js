@@ -1,20 +1,24 @@
 import mongoose from 'mongoose';
 
 const ConnectionSchema = new mongoose.Schema({
+  type: { type: String, enum: ['ssh', 'database'], default: 'ssh' },
+  dbProvider: { type: String, enum: ['mongodb', 'mysql', 'postgres', 'sqlite'], default: 'mongodb' },
   name: { type: String, required: true, trim: true },
   host: { type: String, required: true, trim: true },
   port: { type: Number, default: 22 },
-  username: { type: String, required: true, trim: true },
-  authType: { type: String, enum: ['password', 'privateKey'], required: true },
+  username: { type: String, default: '', trim: true },
+  authType: { type: String, enum: ['password', 'privateKey', 'none'], default: 'password' },
   password: { type: String, default: null },
+  database: { type: String, default: null }, // Database name
   privateKey: { type: String, default: null },
   keyFileName: { type: String, default: null },
   passphrase: { type: String, default: null },
   tags: [{ type: String, trim: true }],
   color: { type: String, default: '#6366f1' },
   lastConnected: { type: Date, default: null },
-  status: { type: String, enum: ['online', 'offline', 'unknown'], default: 'unknown' },
+  status: { type: String, enum: ['online', 'offline', 'testing', 'unknown'], default: 'unknown' },
   isFavorite: { type: Boolean, default: false },
+  isSrv: { type: Boolean, default: false }, // For mongodb+srv
   notes: { type: String, default: '' },
   info: { type: String, default: null },
 }, {

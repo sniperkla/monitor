@@ -32,15 +32,15 @@ export default function DesktopIcon({ id, title, icon: Icon, component, defaultP
   const getStyle = () => {
     switch (iconStyle) {
       case 'flat':
-        return 'bg-slate-800 border border-white/5 shadow-md';
+        return 'bg-[var(--bg-secondary)] border border-[var(--border-color)] shadow-md';
       case 'neumorphic':
-        return 'bg-[#1e293b] shadow-[5px_5px_10px_-1px_rgba(0,0,0,0.5),-5px_-5px_10px_-1px_rgba(255,255,255,0.05)] border-none';
+        return 'bg-[var(--bg-primary)] shadow-[5px_5px_10px_-1px_rgba(0,0,0,0.5),-5px_-5px_10px_-1px_rgba(255,255,255,0.05)] border-none';
       case 'outline':
         return 'bg-transparent border-2 border-white/20 hover:border-indigo-500/50';
       case 'minimal':
         return 'bg-transparent border-none shadow-none';
       default: // glass
-        return 'bg-gradient-to-br from-blue-500/20 to-purple-500/20 backdrop-blur-sm border border-white/10 shadow-lg';
+        return 'bg-gradient-to-br from-blue-500/20 to-purple-500/20 backdrop-blur-sm border border-[var(--border-color)] shadow-lg';
     }
   };
 

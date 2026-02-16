@@ -1,0 +1,103 @@
+'use client';
+
+import { motion, AnimatePresence } from 'framer-motion';
+import { useOS } from '@/context/OSContext';
+import { useState, useEffect } from 'react';
+import { AlertCircle, HelpCircle, Type } from 'lucide-react';
+import MacOSModalWindow from '@/components/MacOSModalWindow';
+
+export default function DesktopModal() {
+  const { state, closeModal } = useOS();
+  const { modal } = state;
+  const [promptValue, setPromptValue] = useState('');
+
+  // Sync prompt value when modal opens
+  useEffect(() => {
+    if (modal.isOpen) {
+      setPromptValue(modal.defaultValue || '');
+    }
+  }, [modal.isOpen, modal.defaultValue]);
+
+  if (!modal.isOpen) return null;
+
+  const handleConfirm = () => {
+    if (modal.type === 'prompt') {
+      modal.onConfirm?.(promptValue);
+    } else {
+      modal.onConfirm?.();
+    }
+    closeModal();
+  };
+
+  const handleCancel = () => {
+    modal.onCancel?.();
+    closeModal();
+  };
+
+  const getIcon = () => {
+    switch (modal.type) {
+      case 'confirm': return HelpCircle;
+      case 'prompt': return Type;
+      default: return AlertCircle;
+    }
+  };
+
+  return (
+    <AnimatePresence>
+      <motion.div
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        exit={{ opacity: 0 }}
+        className="fixed inset-0 z-[100000] flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm"
+        onClick={handleCancel}
+      >
+        <div onClick={(e) => e.stopPropagation()}>
+          <MacOSModalWindow
+            isOpen
+            title={modal.title || (modal.type === 'alert' ? 'Alert' : modal.type === 'confirm' ? 'Confirm' : 'Prompt')}
+            icon={getIcon()}
+            onClose={handleCancel}
+            zIndexClassName="z-[100000]"
+            maxWidthClassName="max-w-sm"
+            maxHeightClassName="max-h-[80vh]"
+            contentClassName="px-6 py-6"
+            closeOnOverlayClick
+            overlayClassName="bg-black/40 backdrop-blur-sm"
+          >
+            <p className="text-[var(--text-secondary)] text-sm leading-relaxed mb-6">
+              {modal.message}
+            </p>
+
+            {modal.type === 'prompt' && (
+              <input
+                autoFocus
+                type="text"
+                value={promptValue}
+                onChange={(e) => setPromptValue(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && handleConfirm()}
+                className="w-full px-4 py-3 bg-white/5 border border-white/10 rounded-xl text-sm text-white placeholder-white/20 focus:outline-none focus:border-indigo-500/50 focus:ring-1 focus:ring-indigo-500/25 transition-all mb-4"
+              />
+            )}
+
+            <div className="flex items-center justify-end gap-3 mt-4">
+              {modal.type !== 'alert' && (
+                <button
+                  onClick={handleCancel}
+                  className="px-5 py-2 rounded-xl text-sm font-bold text-[var(--text-muted)] hover:text-white hover:bg-white/5 transition-all border border-white/5"
+                >
+                  {modal.cancelLabel || 'Cancel'}
+                </button>
+              )}
+              <button
+                onClick={handleConfirm}
+                className="px-6 py-2 rounded-xl text-sm font-bold bg-indigo-500 hover:bg-indigo-600 text-white shadow-lg shadow-indigo-500/20 transition-all border border-indigo-400/20"
+              >
+                {modal.confirmLabel || (modal.type === 'alert' ? 'OK' : modal.type === 'confirm' ? 'Confirm' : 'Submit')}
+              </button>
+            </div>
+          </MacOSModalWindow>
+        </div>
+      </motion.div>
+    </AnimatePresence>
+  );
+}
