@@ -28,8 +28,9 @@ const initialState = {
   theme: 'dark', // light, dark, auto
   customWallpapers: [], // Array of URL strings
   taskbarPosition: 'bottom', // top, bottom, left, right
+  windowLayout: 'mac', // mac, pc
   selectedIconIds: [], // IDs of currently selected icons
-  timestamp: 0, // Last modified timestamp for conflict resolution
+  timestamp: Date.now(), // Last modified timestamp for conflict resolution
   notificationQueue: [], // Array of { id, title, message, type, timestamp }
   modal: {
     isOpen: false,
@@ -245,6 +246,8 @@ function osReducer(state, action) {
       return { ...state, theme: action.payload, timestamp: Date.now() };
     case 'SET_TASKBAR_POSITION':
       return { ...state, taskbarPosition: action.payload, timestamp: Date.now() };
+    case 'SET_WINDOW_LAYOUT':
+      return { ...state, windowLayout: action.payload, timestamp: Date.now() };
     case 'SET_SELECTED_ICONS':
       return { ...state, selectedIconIds: action.payload };
     case 'TOGGLE_ICON_SELECTION': {
@@ -606,8 +609,9 @@ export function OSProvider({ children }) {
       language: s.language || 'en',
       customWallpapers: s.customWallpapers || [],
       taskbarPosition: s.taskbarPosition || 'bottom',
-        theme: s.theme || 'dark',
-        exportNaming: s.exportNaming || {
+      windowLayout: s.windowLayout || 'mac',
+      theme: s.theme || 'dark',
+      exportNaming: s.exportNaming || {
           prefix: '',
           suffix: '',
           includeDate: true,
@@ -885,6 +889,14 @@ export function OSProvider({ children }) {
     dispatch({ type: 'SET_SORT_BY', payload: sort });
   };
 
+  const setTaskbarPosition = (pos) => {
+    dispatch({ type: 'SET_TASKBAR_POSITION', payload: pos });
+  };
+
+  const setWindowLayout = (layout) => {
+    dispatch({ type: 'SET_WINDOW_LAYOUT', payload: layout });
+  };
+
   const setLanguage = (language) => {
     dispatch({ type: 'SET_LANGUAGE', payload: language });
   };
@@ -1157,6 +1169,8 @@ export function OSProvider({ children }) {
       reorderDesktops,
       moveWindowToDesktop,
       setKeyboardShortcuts,
+      setTaskbarPosition,
+      setWindowLayout,
       dispatch,
     }}>
       {children}

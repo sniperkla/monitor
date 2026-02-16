@@ -484,9 +484,11 @@ export default function ConnectionModal({ onClose, editConnection = null }) {
       zIndexClassName="z-[40000]"
       maxWidthClassName="max-w-5xl"
       maxHeightClassName="max-h-[85vh]"
-      contentClassName="p-6 overflow-y-auto custom-scrollbar"
+      contentClassName="p-6"
       closeOnOverlayClick
       overlayClassName="bg-black/40 backdrop-blur-sm"
+      enableMinimize={false}
+      enableMaximize={false}
     >
       <form onSubmit={handleSubmit} className="space-y-6">
           {/* Storage Selection */}

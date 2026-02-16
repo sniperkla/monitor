@@ -215,6 +215,8 @@ export default function SpotlightSearch() {
       overlayClassName="bg-black/40 backdrop-blur-sm"
       containerClassName="items-start pt-[18vh]"
       windowClassName="shadow-2xl"
+      enableMinimize={false}
+      enableMaximize={false}
     >
       <div>
         {/* Search Input */}

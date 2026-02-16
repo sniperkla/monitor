@@ -3,16 +3,51 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { Rnd } from 'react-rnd';
 import { useOS } from '@/context/OSContext';
-import { X, Minus, Maximize2, Minimize2 } from 'lucide-react';
+import { X, Minus, Maximize2, Minimize2, Square } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
-function MacTrafficLights({ onClose, onMinimize, onMaximize, isMaximized }) {
+function WindowControls({ onClose, onMinimize, onMaximize, isMaximized, layout = 'mac' }) {
+  if (layout === 'pc') {
+    return (
+      <div className="flex items-center h-full nodrag">
+        <button
+          type="button"
+          onClick={onMinimize}
+          className="h-10 w-12 flex items-center justify-center hover:bg-white/10 transition-colors group"
+          title="Minimize"
+        >
+          <Minus size={14} className="text-[var(--text-secondary)] group-hover:text-white" />
+        </button>
+        <button
+          type="button"
+          onClick={onMaximize}
+          className="h-10 w-12 flex items-center justify-center hover:bg-white/10 transition-colors group"
+          title={isMaximized ? "Restore" : "Maximize"}
+        >
+          {isMaximized ? (
+            <Minimize2 size={12} className="text-[var(--text-secondary)] group-hover:text-white" />
+          ) : (
+            <Square size={10} className="text-[var(--text-secondary)] group-hover:text-white" />
+          )}
+        </button>
+        <button
+          type="button"
+          onClick={onClose}
+          className="h-10 w-12 flex items-center justify-center hover:bg-[#c42b1c] transition-colors group"
+          title="Close"
+        >
+          <X size={16} className="text-[var(--text-secondary)] group-hover:text-white" />
+        </button>
+      </div>
+    );
+  }
+
   return (
-    <div className="flex items-center gap-2" onMouseDown={(e) => e.stopPropagation()}>
+    <div className="flex items-center gap-2 px-3 h-full nodrag">
       <button
         type="button"
         onClick={onClose}
-        className="w-3 h-3 rounded-full bg-[#ff5f57] border border-[#e0443e]/30 flex items-center justify-center group"
+        className="w-3.5 h-3.5 rounded-full bg-[#ff5f57] border border-[#e0443e]/30 flex items-center justify-center group z-50 relative"
         aria-label="Close"
       >
         <X size={8} className="opacity-0 group-hover:opacity-100 text-[#4d0000] transition-opacity" />
@@ -20,7 +55,7 @@ function MacTrafficLights({ onClose, onMinimize, onMaximize, isMaximized }) {
       <button
         type="button"
         onClick={onMinimize}
-        className="w-3 h-3 rounded-full bg-[#febc2e] border border-[#d89e24]/30 flex items-center justify-center group"
+        className="w-3.5 h-3.5 rounded-full bg-[#febc2e] border border-[#d89e24]/30 flex items-center justify-center group z-50 relative"
         aria-label="Minimize"
       >
         <Minus size={8} className="opacity-0 group-hover:opacity-100 text-[#4d2d00] transition-opacity" />
@@ -28,7 +63,7 @@ function MacTrafficLights({ onClose, onMinimize, onMaximize, isMaximized }) {
       <button
         type="button"
         onClick={onMaximize}
-        className="w-3 h-3 rounded-full bg-[#28c840] border border-[#1fa530]/30 flex items-center justify-center group"
+        className="w-3.5 h-3.5 rounded-full bg-[#28c840] border border-[#1fa530]/30 flex items-center justify-center group z-50 relative"
         aria-label={isMaximized ? 'Restore' : 'Maximize'}
       >
         {isMaximized ? (
@@ -43,7 +78,7 @@ function MacTrafficLights({ onClose, onMinimize, onMaximize, isMaximized }) {
 
 export default function Window({ id, title, icon: Icon, component, isMinimized, isMaximized, zIndex, initialWidth, initialHeight }) {
   const { state: osState, focusWindow, closeWindow, toggleMinimize, toggleMaximize, snapWindow, updateWindowPosition } = useOS();
-  const { glassmorphism, taskbarPosition } = osState;
+  const { glassmorphism, taskbarPosition, windowLayout } = osState;
   const { snapSide } = osState.windows.find(w => w.id === id) || {};
   
   const rndRef = useRef(null);
@@ -260,10 +295,11 @@ export default function Window({ id, title, icon: Icon, component, isMinimized, 
           width: freeRect.width,
           height: freeRect.height,
         }}
-        // Removed size={} and position={} props to avoid controlled/uncontrolled conflict
         minWidth={500}
         minHeight={400}
-        dragHandleClassName="title-bar"
+        dragHandleClassName="window-drag-handle"
+        cancel=".nodrag"
+        enableUserSelectHack={false}
         disableDragging={isMaximized}
         enableResizing={!isMaximized}
         onDragStart={handleDragStart}
@@ -272,6 +308,16 @@ export default function Window({ id, title, icon: Icon, component, isMinimized, 
         onResizeStart={handleResizeStart}
         onResizeStop={handleResizeStop}
         style={{ zIndex, display: 'flex' }}
+        resizeHandleStyles={{
+          top: { zIndex: 1 },
+          topLeft: { zIndex: 1 },
+          topRight: { zIndex: 1 },
+          bottom: { zIndex: 1 },
+          bottomLeft: { zIndex: 1 },
+          bottomRight: { zIndex: 1 },
+          left: { zIndex: 1 },
+          right: { zIndex: 1 },
+        }}
         className={isSnappedOrMax ? (
           `
           !transform-none 
@@ -288,6 +334,8 @@ export default function Window({ id, title, icon: Icon, component, isMinimized, 
           data-window-id={id}
           className={`window-container flex flex-col w-full h-full overflow-hidden shadow-2xl transition-all duration-200 ${isSnappedOrMax ? 'rounded-none border-0' : 'rounded-lg border'}`}
           style={{
+            position: 'relative',
+            zIndex: 2,
             background: glassmorphism ? 'var(--window-bg)' : 'var(--bg-primary)',
             backdropFilter: glassmorphism ? 'blur(20px)' : 'none',
             borderColor: 'var(--border-color)',
@@ -296,24 +344,31 @@ export default function Window({ id, title, icon: Icon, component, isMinimized, 
         >
           {/* Title Bar */}
           <div
-            className="title-bar h-10 flex items-center px-3 bg-gradient-to-b from-[var(--bg-secondary)] to-[var(--bg-tertiary)] border-b border-[var(--border-color)] cursor-move"
-            onDoubleClick={(e) => { e.stopPropagation(); toggleMaximize(id); }}
+            className={`title-bar h-10 flex items-center bg-gradient-to-b from-[var(--bg-secondary)] to-[var(--bg-tertiary)] border-b border-[var(--border-color)] ${windowLayout === 'mac' ? 'px-3 justify-between' : 'flex-row-reverse justify-between'}`}
+            style={{ position: 'relative', zIndex: 60 }}
           >
-            <MacTrafficLights
-              onClose={(e) => { e?.stopPropagation?.(); closeWindow(id); }}
-              onMinimize={(e) => { e?.stopPropagation?.(); toggleMinimize(id); }}
-              onMaximize={(e) => { e?.stopPropagation?.(); toggleMaximize(id); }}
-              isMaximized={isMaximized}
+            {/* Drag Handle Layer - Absolute overlay that handles dragging and double click */}
+            <div 
+              className="window-drag-handle absolute inset-0 z-0"
+              onDoubleClick={(e) => { e.stopPropagation(); toggleMaximize(id); }}
             />
 
-            <div className="flex-1 flex items-center justify-center select-none pointer-events-none">
-              <div className="flex items-center gap-2 text-xs font-medium text-[var(--text-secondary)]">
-                {Icon && <Icon size={14} className="text-[var(--text-secondary)]" />}
-                <span className="truncate max-w-[50vw]">{title}</span>
-              </div>
+            <div style={{ position: 'relative', zIndex: 70 }}>
+              <WindowControls
+                onClose={(e) => { e?.stopPropagation?.(); closeWindow(id); }}
+                onMinimize={(e) => { e?.stopPropagation?.(); toggleMinimize(id); }}
+                onMaximize={(e) => { e?.stopPropagation?.(); toggleMaximize(id); }}
+                isMaximized={isMaximized}
+                layout={windowLayout}
+              />
             </div>
 
-            <div className="w-[52px]" />
+            <div className={`flex items-center gap-2 text-xs font-medium text-[var(--text-secondary)] pointer-events-none select-none relative z-10 ${windowLayout === 'mac' ? 'flex-1 justify-center' : 'px-4'}`}>
+              {Icon && <Icon size={14} className="text-[var(--text-secondary)]" />}
+              <span className="truncate max-w-[50vw]">{title}</span>
+            </div>
+
+            {windowLayout === 'mac' && <div className="w-14" />}
           </div>
 
           {/* Window Content */}

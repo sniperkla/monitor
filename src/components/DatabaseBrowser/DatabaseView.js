@@ -1507,6 +1507,8 @@ function RecordModal({ mode, initialData, onClose, onSave, isSubmitting }) {
       contentClassName="p-6"
       closeOnOverlayClick
       overlayClassName="bg-black/60 backdrop-blur-sm"
+      enableMinimize={false}
+      enableMaximize={false}
     >
       <div className="overflow-hidden flex flex-col">
         <div className="flex items-center justify-between mb-2">
@@ -1569,6 +1571,8 @@ function ConfirmationModal({ title, message, type, onCancel, onConfirm }) {
       contentClassName="p-6"
       closeOnOverlayClick
       overlayClassName="bg-black/60 backdrop-blur-sm"
+      enableMinimize={false}
+      enableMaximize={false}
     >
       <p className="text-sm text-gray-300 whitespace-pre-wrap leading-relaxed font-medium">
         {message}

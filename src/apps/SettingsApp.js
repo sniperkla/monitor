@@ -31,7 +31,7 @@ export default function SettingsApp({ initialTab }) {
   const [activeTab, setActiveTab] = useState(initialTab || 'appearance');
   const { data: session } = useSession();
   const { t, i18n } = useTranslation();
-  const { state: osState, setWallpaper, setGlassmorphism, setIconSize, setIconStyle, setBrightness, setUiScale, setNotifications, setLanguage, setTheme, setTaskbarPosition, addCustomWallpaper, removeCustomWallpaper, saveSettings, addNotification, showConfirm } = useOS();
+  const { state: osState, setWallpaper, setGlassmorphism, setIconSize, setIconStyle, setBrightness, setUiScale, setNotifications, setLanguage, setTheme, setTaskbarPosition, setWindowLayout, addCustomWallpaper, removeCustomWallpaper, saveSettings, addNotification, showConfirm } = useOS();
   const { state: appState, dispatch } = useApp();
   const { vaultStatus, decryptedUri, lockVault, clearVault, setupVault, showVault } = useVault();
   const { glassmorphism, brightness, uiScale, notifications } = osState;
@@ -528,6 +528,34 @@ export default function SettingsApp({ initialTab }) {
                       }`}
                     >
                       {t(`settings_ui.personalization.positions.${pos}`)}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Window Layout Section */}
+              <div className="pt-6 border-t border-white/10">
+                <h3 className="text-sm font-semibold mb-4 flex items-center gap-2">
+                  <Monitor size={16} className="text-blue-400" />
+                  {t('settings_ui.personalization.windowLayoutTitle')}
+                </h3>
+                <div className="grid grid-cols-2 gap-3">
+                  {['mac', 'pc'].map(layout => (
+                    <button
+                      key={layout}
+                      onClick={() => setWindowLayout(layout)}
+                      className={`p-4 rounded-xl text-xs font-bold border transition-all flex flex-col items-center gap-2 ${
+                        osState.windowLayout === layout
+                          ? 'bg-indigo-500/10 border-indigo-500/50 text-indigo-400'
+                          : 'bg-[var(--bg-tertiary)] border-[var(--border-color)] text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-card-hover)]'
+                      }`}
+                    >
+                      <div className={`w-full h-8 rounded-lg bg-black/20 flex items-center px-1.5 ${layout === 'mac' ? 'justify-start gap-1' : 'justify-end gap-1 flex-row-reverse'}`}>
+                        <div className={`w-1.5 h-1.5 rounded-full ${layout === 'mac' ? 'bg-[#ff5f57]' : 'bg-gray-400/50'}`} />
+                        <div className={`w-1.5 h-1.5 rounded-full ${layout === 'mac' ? 'bg-[#febc2e]' : 'bg-gray-400/50'}`} />
+                        <div className={`w-1.5 h-1.5 rounded-full ${layout === 'mac' ? 'bg-[#28c840]' : 'bg-gray-400/50'}`} />
+                      </div>
+                      {t(`settings_ui.personalization.windowLayouts.${layout}`)}
                     </button>
                   ))}
                 </div>

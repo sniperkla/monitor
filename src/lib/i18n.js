@@ -198,7 +198,12 @@ const resources = {
             top: "Top",
             left: "Left",
             right: "Right"
-          }
+          },
+          windowLayoutTitle: "Window Control Layout",
+          windowLayouts: {
+            mac: "MacOS Style (Left)",
+            pc: "Windows Style (Right)"
+          },
         },
         display: {
           title: "Display",

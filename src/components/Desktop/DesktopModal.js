@@ -79,6 +79,8 @@ export default function DesktopModal() {
             contentClassName="px-6 py-6"
             closeOnOverlayClick
             overlayClassName="bg-black/40 backdrop-blur-sm"
+            enableMinimize={false}
+            enableMaximize={false}
           >
             <p className="text-[var(--text-secondary)] text-sm leading-relaxed mb-6">
               {modal.message}
