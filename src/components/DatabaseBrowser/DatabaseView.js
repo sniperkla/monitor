@@ -22,7 +22,7 @@ export default function DatabaseView({ connection, onClose }) {
   const [aiPrompt, setAiPrompt] = useState('');
   const [isAiLoading, setIsAiLoading] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
-  const [pendingAction, setPendingAction] = useState(null); // { type: 'DELETE' | 'UPDATE', fullQuery: string }
+  const [pendingAction, setPendingAction] = useState(null); // { type: 'DELETE' | 'UPDATE' | 'INSERT', fullQuery: string, mongoAction?: object }
   const fileInputRef = useRef(null);
   const historyRef = useRef(null);
   const [failedTables, setFailedTables] = useState([]);
@@ -40,6 +40,42 @@ export default function DatabaseView({ connection, onClose }) {
           confirmResolver.current = resolve;
           setConfirmModal({ isOpen: true, title, message, type });
       });
+  };
+
+  const executePendingAction = async () => {
+    if (!pendingAction) return;
+
+    // Mongo action object (delete/update/insert)
+    if (connection.dbProvider === 'mongodb' && pendingAction.mongoAction) {
+        const confirmed = await showConfirm(
+            '⚠️ DANGEROUS ACTION DETECTED',
+            `This action will MODIFY or DELETE data from your database. There is no UNDO.\n\nAction: ${pendingAction.mongoAction.action}\nCollection: ${pendingAction.mongoAction.collection}\n\n🛡️ A backup of "${pendingAction.mongoAction.collection}" will be auto-downloaded before execution.\n\nAre you absolutely sure?`,
+            'danger'
+        );
+        if (!confirmed) return;
+
+        await createAutoBackup(pendingAction.mongoAction.collection, 'pre_action');
+
+        const res = await apiFetch(`/api/connections/${connection._id}/query`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ connection, query: pendingAction.mongoAction })
+        });
+        const resData = await res.json();
+        if (!resData.success) {
+            addNotification({ title: 'Action Error', message: resData.error || 'Action failed', type: 'error' });
+            return;
+        }
+
+        addNotification({ title: 'Success', message: 'Action executed successfully', type: 'success' });
+        setPendingAction(null);
+        fetchData(selectedSchema);
+        return;
+    }
+
+    // Existing SQL/legacy behavior
+    fetchData(selectedSchema, pendingAction.fullQuery);
+    setPendingAction(null);
   };
 
   const handleConfirmResult = (result) => {
@@ -354,6 +390,52 @@ export default function DatabaseView({ connection, onClose }) {
         // SMART PREVIEW LOGIC
         // Allow SQL regex matching for INSERT even on MongoDB (for Mock Data feature)
         const isMongo = connection.dbProvider === 'mongodb';
+
+        // MongoDB: allow AI to return an executable action object
+        if (isMongo) {
+            let parsed = null;
+            try {
+                parsed = JSON.parse(cleanQuery);
+            } catch {}
+
+            if (parsed && typeof parsed === 'object' && parsed.action) {
+                const action = String(parsed.action || '').trim();
+                const normalized = action.toLowerCase();
+                const collection = parsed.collection || selectedSchema;
+                const filter = parsed.filter && typeof parsed.filter === 'object' ? parsed.filter : {};
+
+                const isDelete = normalized.startsWith('delete');
+                const isUpdate = normalized.startsWith('update');
+                const isInsert = normalized.startsWith('insert');
+
+                // Preview targets for delete/update by fetching matching docs
+                if (isDelete || isUpdate) {
+                    const criteria = JSON.stringify(filter);
+                    setFilterQuery(criteria);
+                    fetchData(selectedSchema, criteria);
+                }
+
+                setPendingAction({
+                    type: isDelete ? 'DELETE' : (isUpdate ? 'UPDATE' : 'INSERT'),
+                    fullQuery: JSON.stringify({ ...parsed, collection }),
+                    mongoAction: { ...parsed, collection },
+                });
+
+                addNotification({
+                    title: 'Action Preview',
+                    message: `Previewing ${isDelete ? 'DELETION' : (isUpdate ? 'UPDATE' : 'INSERTION')}...`,
+                    type: 'info',
+                });
+
+                // Add to history if not duplicate
+                if (!aiHistory.includes(aiPrompt)) {
+                    const newHistory = [aiPrompt, ...aiHistory].slice(0, 10);
+                    setAiHistory(newHistory);
+                }
+                setAiPrompt('');
+                return;
+            }
+        }
         
         // Try to parse as SQL first
         const deleteMatch = cleanQuery.match(/DELETE\s+FROM\s+([\s\S]*?)(?:\s+WHERE\s+([\s\S]*))?$/i);
@@ -1199,8 +1281,7 @@ export default function DatabaseView({ connection, onClose }) {
                         </button>
                         <button 
                             onClick={() => {
-                                fetchData(selectedSchema, pendingAction.fullQuery);
-                                setPendingAction(null);
+                                executePendingAction();
                             }}
                             className={`px-4 py-1.5 text-white rounded-lg text-[10px] font-bold shadow-lg transition-all flex items-center gap-2 ${
                                 pendingAction.type === 'DELETE' ? 'bg-red-600 hover:bg-red-500 shadow-red-900/20' :

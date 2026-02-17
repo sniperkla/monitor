@@ -4,14 +4,23 @@ import { useEffect, useState } from 'react';
 import { useOS } from '@/context/OSContext';
 import { motion, AnimatePresence } from 'framer-motion';
 import { X, CheckCircle, AlertCircle, Info, AlertTriangle, Loader } from 'lucide-react';
+import { createPortal } from 'react-dom';
 
 export default function NotificationCenter() {
   const { state, removeNotification } = useOS();
   const { notificationQueue, taskbarPosition, glassmorphism } = state;
 
-  return (
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
+  if (!mounted) return null;
+
+  return createPortal(
     <div 
-      className="fixed z-[99999] pointer-events-none flex flex-col gap-2 p-4 w-80"
+      className="fixed z-[200000] pointer-events-none flex flex-col gap-2 p-4 w-80"
       style={{
         bottom: taskbarPosition === 'bottom' ? 60 : 20,
         right: taskbarPosition === 'right' ? 60 : 20,
@@ -28,7 +37,8 @@ export default function NotificationCenter() {
           />
         ))}
       </AnimatePresence>
-    </div>
+    </div>,
+    document.body
   );
 }
 

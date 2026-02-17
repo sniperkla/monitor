@@ -979,6 +979,10 @@ export function OSProvider({ children }) {
     dispatch({ type: 'SET_LANGUAGE', payload: language });
   };
 
+  const setTheme = (theme) => {
+    dispatch({ type: 'SET_THEME', payload: theme });
+  };
+
   const setSelectedIcons = (iconIds) => {
     dispatch({ type: 'SET_SELECTED_ICONS', payload: iconIds });
   };
@@ -1252,6 +1256,7 @@ export function OSProvider({ children }) {
       setKeyboardShortcuts,
       setTaskbarPosition,
       setWindowLayout,
+      setTheme,
       dispatch,
     }}>
       {children}

@@ -38,9 +38,9 @@ export async function POST(req, { params }) {
     
     THINKING PROCESS (Chain of Thought):
     1. ANALYZE: Identify the user's core intent. 
-       - READ: "find", "show", "search", "filter" (Return just the filter/WHERE part).
-       - ACTION: "delete", "remove from db", "update", "change", "set" (Return a FULL SQL statement for SQL, or just the filter for MongoDB).
-       - CREATE: "add", "insert", "create", "mock", "generate" (Return a FULL INSERT statement).
+       - READ: "find", "show", "search", "filter" (Mongo: return JSON filter only. SQL: return WHERE clause only.)
+       - ACTION: "delete", "remove", "update", "change", "set" (Mongo: return an executable JSON action object. SQL: return a FULL SQL statement.)
+       - CREATE: "add", "insert", "create", "mock", "generate" (Mongo: return an executable JSON insert action. SQL: return FULL INSERT.)
     2. MAP: Correlate user terms to the exact field names found in the Sample Data.
     3. VALIDATE: Ensure the query handles specific data types.
     4. OPTIMIZE: Use efficient operators.
@@ -52,7 +52,14 @@ export async function POST(req, { params }) {
     3. <repeat> (Optional) If the user demands a large number of rows (e.g., > 5), specify the total count here and ONLY generate 1-3 sample rows in the query.
 
     RULES:
-    1. MongoDB: ALWAYS return a valid JSON filter for Find/Delete. For "Insert", return a JSON object of the new document(s).
+    1. MongoDB:
+       - READ (find): return ONLY a valid JSON filter object.
+       - DELETE: return an executable JSON action object:
+         {"action":"deleteOne"|"deleteMany","collection":"${schemaName}","filter":{...}}
+       - UPDATE: return an executable JSON action object:
+         {"action":"updateOne"|"updateMany","collection":"${schemaName}","filter":{...},"update":{"$set":{...}}}
+       - INSERT: return an executable JSON action object:
+         {"action":"insertOne"|"insertMany","collection":"${schemaName}","data":{...} | [{...}]}
     2. SQL (Read): If the user just wants to find/see records, return ONLY the WHERE clause.
     3. SQL (Action): If the user says "DELETE", "UPDATE", or "INSERT", return the FULL SQL statement.
     4. Mock Data: If the user asks to "mock" or "generate" data (e.g., "mock 100 items"), generate a valid INSERT statement. 
@@ -82,6 +89,11 @@ export async function POST(req, { params }) {
     User: "find users named john"
     <thought>User wants to see data. I will return a JSON filter.</thought>
     <query>{"name": { "$regex": "john", "$options": "i" }}</query>
+
+    Example (MongoDB Delete):
+    User: "delete all users named john"
+    <thought>User wants destructive delete. I will return an executable deleteMany object.</thought>
+    <query>{"action":"deleteMany","collection":"${schemaName}","filter":{"name":{"$regex":"john","$options":"i"}}}</query>
     `;
 
     const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {

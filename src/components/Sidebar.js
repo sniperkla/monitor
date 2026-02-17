@@ -50,6 +50,7 @@ export default function Sidebar({ onNewConnection, onEditConnection }) {
       if (existing) {
         addNotification({ title: t('common.database'), message: t('ssh.toasts.alreadyConnected', { name: conn.name }), type: 'info' });
         dispatch({ type: 'SET_VIEW', payload: 'database' });
+        dispatch({ type: 'SET_ACTIVE_DATABASE_BROWSER', payload: existing.id });
         return;
       }
       dispatch({
@@ -70,6 +71,7 @@ export default function Sidebar({ onNewConnection, onEditConnection }) {
     if (existing) {
       addNotification({ title: t('ssh.dashboard'), message: t('ssh.toasts.alreadyConnected', { name: conn.name }), type: 'error' });
       dispatch({ type: 'SET_VIEW', payload: 'terminal' });
+      dispatch({ type: 'SET_ACTIVE_TERMINAL', payload: existing.id });
       return;
     }
     
@@ -97,6 +99,7 @@ export default function Sidebar({ onNewConnection, onEditConnection }) {
     if (existing) {
       addNotification({ title: t('ssh.fileGui'), message: t('ssh.toasts.alreadyConnected', { name: conn.name }), type: 'info' });
       dispatch({ type: 'SET_VIEW', payload: 'files' });
+      dispatch({ type: 'SET_ACTIVE_FILE_MANAGER', payload: existing.id });
       return;
     }
 

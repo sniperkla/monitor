@@ -157,6 +157,8 @@ export default function MacOSModalWindow({
   const [isMaximized, setIsMaximized] = useState(false);
   const effectiveMaximized = propIsMaximized ?? isMaximized;
 
+  const [viewport, setViewport] = useState({ w: 0, h: 0 });
+
   // Resizable dimensions (used only when resizable + not maximized)
   const [size, setSize] = useState(() => ({
     width: defaultWidth,
@@ -165,7 +167,7 @@ export default function MacOSModalWindow({
 
   const [position, setPosition] = useState({ x: 0, y: 0 });
 
-  const useFloating = (draggable || resizable) && !effectiveMaximized;
+  const useFloating = draggable || resizable;
 
   // Reset local maximization state when modal closes
   useEffect(() => {
@@ -197,6 +199,14 @@ export default function MacOSModalWindow({
 
     setPosition({ x, y });
   }, [isOpen, draggable, resizable, defaultWidth, defaultHeight]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const update = () => setViewport({ w: window.innerWidth, h: window.innerHeight });
+    window.addEventListener('resize', update);
+    update();
+    return () => window.removeEventListener('resize', update);
+  }, [isOpen]);
 
   const handleMaximize = () => {
     if (!enableMaximize) return;
@@ -252,10 +262,14 @@ export default function MacOSModalWindow({
           {useFloating ? (
             <Rnd
               size={{
-                width: typeof size?.width === 'number' ? size.width : (typeof defaultWidth === 'number' ? defaultWidth : 560),
-                height: typeof size?.height === 'number' ? size.height : (typeof defaultHeight === 'number' ? defaultHeight : 420),
+                width: effectiveMaximized
+                  ? (viewport.w || window.innerWidth)
+                  : (typeof size?.width === 'number' ? size.width : (typeof defaultWidth === 'number' ? defaultWidth : 560)),
+                height: effectiveMaximized
+                  ? (viewport.h || window.innerHeight)
+                  : (typeof size?.height === 'number' ? size.height : (typeof defaultHeight === 'number' ? defaultHeight : 420)),
               }}
-              position={position}
+              position={effectiveMaximized ? { x: 0, y: 0 } : position}
               onDragStop={(e, d) => setPosition({ x: d.x, y: d.y })}
               onResizeStop={(e, dir, ref, delta, pos) => {
                 setSize({
@@ -266,18 +280,14 @@ export default function MacOSModalWindow({
               }}
               minWidth={minWidth}
               minHeight={minHeight}
-              bounds="window"
+              bounds={effectiveMaximized ? undefined : 'window'}
               dragHandleClassName="modal-drag-handle"
               cancel="button,input,textarea,select,option,label,.nodrag"
-              enableResizing={resizable}
-              disableDragging={!draggable}
+              enableResizing={resizable && !effectiveMaximized}
+              disableDragging={!draggable || effectiveMaximized}
               style={{ zIndex: 1 }}
             >
-              <motion.div
-                initial={{ scale: 0.95, opacity: 0 }}
-                animate={{ scale: 1, opacity: 1 }}
-                exit={{ scale: 0.95, opacity: 0 }}
-                transition={{ type: 'spring', damping: 25, stiffness: 300 }}
+              <div
                 className={`flex flex-col overflow-hidden w-full h-full ${windowClassName}`}
                 onClick={(e) => e.stopPropagation()}
               >
@@ -304,21 +314,20 @@ export default function MacOSModalWindow({
                     {children}
                   </div>
                 </div>
-              </motion.div>
+              </div>
             </Rnd>
           ) : (
             <motion.div
-              initial={{ scale: 0.95, opacity: 0 }}
+              initial={{ opacity: 0 }}
               animate={{ 
-                scale: 1, 
                 opacity: 1,
                 width: effectiveMaximized ? '100%' : undefined,
                 height: effectiveMaximized ? '100%' : undefined,
                 maxWidth: effectiveMaximized ? '100%' : '100%',
                 maxHeight: effectiveMaximized ? '100%' : '100%',
               }}
-              exit={{ scale: 0.95, opacity: 0 }}
-              transition={{ type: 'spring', damping: 25, stiffness: 300 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.15 }}
               className={`w-full ${!effectiveMaximized ? maxWidthClassName : ''} ${!effectiveMaximized ? maxHeightClassName : ''} flex flex-col overflow-hidden ${windowClassName}`}
               onClick={(e) => e.stopPropagation()}
             >
