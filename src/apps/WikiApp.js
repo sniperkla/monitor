@@ -8,7 +8,7 @@ import {
   Layers, Settings, Globe, Shield, Database, Layout,
   ExternalLink, Info, Filter, Plus, Monitor, Server,
   Cloud, Wrench, Activity, GitBranch, Clock, Cpu,
-  MessageSquare, Send, X, Bot, User, Sparkles, Lock
+  MessageSquare, Send, X, Bot, User, Sparkles, Lock, Languages
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useTranslation } from 'react-i18next';
@@ -43,6 +43,10 @@ export default function WikiApp({ initialGuideId }) {
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(true);
   const [copiedId, setCopiedId] = useState(null);
+  const [autoTranslate, setAutoTranslate] = useState(false);
+  const [translations, setTranslations] = useState({}); // { [key]: string }
+  const [translating, setTranslating] = useState({}); // { [key]: boolean }
+  const { i18n } = useTranslation();
   
   // Chat / AI Assistant State
   // Chat / AI Assistant State - Multiple Windows
@@ -113,6 +117,50 @@ export default function WikiApp({ initialGuideId }) {
 
 
 
+  const translateText = async (text, key) => {
+    const targetLang = i18n.language;
+    if (targetLang === 'en' || !text.trim()) return;
+
+    setTranslating(prev => ({ ...prev, [key]: true }));
+    try {
+      const res = await fetch('/api/utils/translate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text, targetLang })
+      });
+      const data = await res.json();
+      if (data.success) {
+        setTranslations(prev => ({ ...prev, [key]: data.translated }));
+      }
+    } catch (err) {
+      console.error('Translation error:', err);
+    } finally {
+      setTranslating(prev => ({ ...prev, [key]: false }));
+    }
+  };
+
+  useEffect(() => {
+    if (autoTranslate && activeGuide) {
+      const lang = i18n.language;
+      if (lang === 'en') return;
+
+      // Translate Title
+      if (!translations[`title_${activeGuide._id}`]) {
+        translateText(activeGuide.title, `title_${activeGuide._id}`);
+      }
+      // Translate Description
+      if (!translations[`desc_${activeGuide._id}`]) {
+        translateText(activeGuide.description, `desc_${activeGuide._id}`);
+      }
+      // Translate Command Explanations
+      activeGuide.commands?.forEach((cmd, idx) => {
+        if (cmd.explanation && !translations[`cmd_exp_${activeGuide._id}_${idx}`]) {
+          translateText(cmd.explanation, `cmd_exp_${activeGuide._id}_${idx}`);
+        }
+      });
+    }
+  }, [autoTranslate, activeGuide, i18n.language]);
+
   const handleCopy = (code, id) => {
     navigator.clipboard.writeText(code);
     setCopiedId(id);
@@ -156,13 +204,13 @@ export default function WikiApp({ initialGuideId }) {
             <div className="w-8 h-8 rounded-lg bg-indigo-500/10 flex items-center justify-center border border-indigo-500/20 shadow-inner">
                <Book size={18} className="text-indigo-400" />
             </div>
-            <span className="font-bold text-sm tracking-tight italic">Resource Hub</span>
+            <span className="font-bold text-sm tracking-tight italic">{t('wiki.hub')}</span>
           </div>
           <div className="relative">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--text-muted)]" size={14} />
             <input 
               type="text"
-              placeholder="Search guides..."
+              placeholder={t('wiki.search')}
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               className="w-full bg-[var(--bg-tertiary)]/50 border border-[var(--border-color)] rounded-lg py-1.5 pl-9 pr-3 text-xs focus:outline-none focus:border-indigo-500/50"
@@ -172,7 +220,7 @@ export default function WikiApp({ initialGuideId }) {
 
         <div className="flex-1 overflow-y-auto p-2 space-y-1 custom-scrollbar">
           {/* OS Filter */}
-          <p className="px-3 py-2 text-[10px] font-bold text-[var(--text-muted)] uppercase tracking-widest">Platform / OS</p>
+          <p className="px-3 py-2 text-[10px] font-bold text-[var(--text-muted)] uppercase tracking-widest">{t('wiki.platform')}</p>
           <div className="px-2 pb-3 flex flex-wrap gap-1">
             {osList.map(os => {
               const s = os === 'All' ? { emoji: '🌐', color: 'text-purple-400', bg: 'bg-purple-500/10', border: 'border-purple-500/20' } : getOsStyle(os);
@@ -194,7 +242,7 @@ export default function WikiApp({ initialGuideId }) {
           </div>
 
           {/* Categories */}
-          <p className="px-3 py-2 text-[10px] font-bold text-[var(--text-muted)] uppercase tracking-widest">Categories</p>
+          <p className="px-3 py-2 text-[10px] font-bold text-[var(--text-muted)] uppercase tracking-widest">{t('wiki.categories')}</p>
           {categories.map(cat => (
             <button
               key={cat}
@@ -215,14 +263,14 @@ export default function WikiApp({ initialGuideId }) {
       {/* Guide List Pane */}
       <div className="w-72 flex-shrink-0 border-r border-[var(--border-color)] flex flex-col bg-[var(--bg-primary)]">
         <div className="p-4 border-b border-[var(--border-color)] bg-[var(--bg-tertiary)]/5 flex items-center justify-between">
-          <span className="text-xs font-bold text-[var(--text-primary)]">Guides</span>
-          <span className="text-[10px] text-[var(--text-muted)]">{guides.length} found</span>
+          <span className="text-xs font-bold text-[var(--text-primary)]">{t('wiki.guides')}</span>
+          <span className="text-[10px] text-[var(--text-muted)]">{guides.length} {t('wiki.found')}</span>
         </div>
         <div className="flex-1 overflow-y-auto p-2 space-y-1 custom-scrollbar">
           {loading ? (
             <div className="py-12 text-center opacity-40">
               <RefreshCw size={24} className="mx-auto mb-2 animate-spin text-indigo-400" />
-              <p className="text-xs">Connecting to Hub...</p>
+              <p className="text-xs">{t('wiki.connecting')}</p>
             </div>
           ) : guides.length > 0 ? (
             guides.map(guide => (
@@ -237,12 +285,16 @@ export default function WikiApp({ initialGuideId }) {
               >
                 <div className="flex items-center justify-between mb-1">
                   <span className={`text-xs font-bold truncate ${activeGuide?._id === guide._id ? 'text-indigo-400' : 'text-[var(--text-primary)]'}`}>
-                    {guide.title}
+                    {autoTranslate && translations[`title_${guide._id}`] 
+                      ? translations[`title_${guide._id}`] 
+                      : (translating[`title_${guide._id}`] ? '...' : guide.title)}
                   </span>
                   <ChevronRight size={12} className={`transition-transform flex-shrink-0 ml-1 ${activeGuide?._id === guide._id ? 'rotate-90 text-indigo-400' : 'text-[var(--text-muted)]'}`} />
                 </div>
                 <p className="text-[10px] text-[var(--text-muted)] line-clamp-2 leading-relaxed opacity-80 group-hover:opacity-100 italic">
-                  {guide.description}
+                  {autoTranslate && translations[`desc_${guide._id}`] 
+                    ? translations[`desc_${guide._id}`] 
+                    : (translating[`desc_${guide._id}`] ? '...' : guide.description)}
                 </p>
                 <div className="mt-3 flex flex-wrap gap-1">
                   {guide.os?.map(o => (
@@ -259,7 +311,7 @@ export default function WikiApp({ initialGuideId }) {
           ) : (
             <div className="py-12 text-center opacity-40">
               <Info size={32} className="mx-auto mb-2 text-[var(--text-muted)]" />
-              <p className="text-xs">No guides found for this query</p>
+              <p className="text-xs">{t('wiki.noGuides')}</p>
             </div>
           )}
         </div>
@@ -275,8 +327,10 @@ export default function WikiApp({ initialGuideId }) {
                   {getCategoryIcon(activeGuide.category)}
                 </div>
                 <div>
-                  <h1 className="text-lg font-bold text-[var(--text-primary)] tracking-tight">
-                    {activeGuide.title}
+                  <h1 className="text-lg font-bold text-[var(--text-primary)] tracking-tight flex items-center gap-2">
+                    {autoTranslate && translations[`title_${activeGuide._id}`] 
+                      ? translations[`title_${activeGuide._id}`] 
+                      : (translating[`title_${activeGuide._id}`] ? '...' : activeGuide.title)}
                   </h1>
                   <div className="flex items-center gap-2">
                     <span className="text-[9px] uppercase font-bold text-indigo-400 tracking-widest">{activeGuide.category}</span>
@@ -285,18 +339,32 @@ export default function WikiApp({ initialGuideId }) {
                       {activeGuide.os?.map(o => <OsBadge key={o} os={o} />)}
                     </div>
                     <span className="w-1 h-1 rounded-full bg-[var(--border-color)]" />
-                    <span className="text-[9px] text-[var(--text-muted)] italic">Last updated {new Date(activeGuide.updatedAt).toLocaleDateString()}</span>
+                    <span className="text-[9px] text-[var(--text-muted)] italic">{t('wiki.lastUpdated')} {new Date(activeGuide.updatedAt).toLocaleDateString()}</span>
                   </div>
                 </div>
               </div>
               
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => setAutoTranslate(!autoTranslate)}
+                  className={`flex items-center gap-2 px-3 py-1.5 rounded-lg transition-all text-xs font-bold border ${
+                    autoTranslate 
+                      ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30 shadow-lg shadow-emerald-500/10' 
+                      : 'bg-white/5 text-[var(--text-muted)] border-white/5 hover:bg-white/10'
+                  }`}
+                  title={t('wiki.autoTranslate')}
+                >
+                  <Languages size={14} />
+                  {autoTranslate ? t('wiki.translationOn') : t('wiki.autoTranslate')}
+                </button>
+
               {(!session && !isConfigured) ? (
                 <button
                   onClick={() => signIn('google')}
                   className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-white/10 text-white hover:bg-white/20 transition-all text-xs font-bold border border-white/5"
                 >
                   <User size={14} />
-                  Login to Ask AI
+                  {t('wiki.askAiLogin')}
                 </button>
               ) : !isConfigured ? (
                 <button
@@ -308,7 +376,7 @@ export default function WikiApp({ initialGuideId }) {
                   })}
                 >
                   <Database size={14} />
-                  Connect DB for AI
+                  {t('wiki.askAiConnect')}
                 </button>
               ) : !isUnlocked ? (
                 <button
@@ -320,7 +388,7 @@ export default function WikiApp({ initialGuideId }) {
                   className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-blue-500/20 text-blue-400 border border-blue-500/30 transition-all text-xs font-bold"
                 >
                   <Lock size={14} />
-                  Unlock Vault for AI
+                  {t('wiki.askAiUnlock')}
                 </button>
               ) : (
                 <button
@@ -328,21 +396,24 @@ export default function WikiApp({ initialGuideId }) {
                   className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-indigo-500 text-white shadow-lg shadow-indigo-500/20 hover:bg-indigo-600 transition-all text-xs font-bold"
                 >
                   <Sparkles size={14} />
-                  Ask AI Helper
+                  {t('wiki.askAi')}
                 </button>
               )}
+              </div>
             </div>
 
             <div className="flex-1 overflow-y-auto p-8 custom-scrollbar relative">
               <div className="max-w-3xl mx-auto">
-                <div className="p-6 rounded-3xl bg-indigo-500/5 border border-indigo-500/10 mb-8 border-l-4 border-l-indigo-500 shadow-sm shadow-indigo-500/5">
+                <div className="p-6 rounded-3xl bg-indigo-500/5 border border-indigo-500/10 mb-8 border-l-4 border-l-indigo-500 shadow-sm shadow-indigo-500/5 space-y-3">
                   <p className="text-sm leading-relaxed text-[var(--text-secondary)] italic">
-                    {activeGuide.description}
+                    {autoTranslate && translations[`desc_${activeGuide._id}`] 
+                      ? translations[`desc_${activeGuide._id}`] 
+                      : (translating[`desc_${activeGuide._id}`] ? '...' : activeGuide.description)}
                   </p>
                   {activeGuide.os && activeGuide.os.length > 0 && (
                     <div className="mt-3 flex items-center gap-2 pt-3 border-t border-indigo-500/10">
                       <Monitor size={12} className="text-[var(--text-muted)]" />
-                      <span className="text-[10px] text-[var(--text-muted)] font-medium">Supported on:</span>
+                      <span className="text-[10px] text-[var(--text-muted)] font-medium">{t('wiki.supportedOn')}</span>
                       <div className="flex gap-1 flex-wrap">
                         {activeGuide.os.map(o => <OsBadge key={o} os={o} />)}
                       </div>
@@ -378,15 +449,19 @@ export default function WikiApp({ initialGuideId }) {
                           <code>{cmd.code}</code>
                         </pre>
                         {cmd.explanation && (
-                          <div className="px-5 py-3 bg-white/5 border-t border-white/5 text-[11px] text-[var(--text-muted)] italic leading-relaxed">
-                            {cmd.explanation}
+                          <div className="px-5 py-3 bg-white/5 border-t border-white/5 space-y-2">
+                             <p className="text-[11px] text-[var(--text-muted)] italic leading-relaxed">
+                                {autoTranslate && translations[`cmd_exp_${activeGuide._id}_${i}`]
+                                  ? translations[`cmd_exp_${activeGuide._id}_${i}`]
+                                  : (translating[`cmd_exp_${activeGuide._id}_${i}`] ? '...' : cmd.explanation)}
+                             </p>
                           </div>
                         )}
                         {cmd.result && (
                           <div className="px-5 py-3 bg-emerald-500/5 border-t border-white/5">
                             <div className="flex items-center gap-1.5 mb-1.5">
                               <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                              <span className="text-[9px] font-bold text-emerald-400 uppercase tracking-widest">Example Output</span>
+                              <span className="text-[9px] font-bold text-emerald-400 uppercase tracking-widest">{t('wiki.exampleOutput')}</span>
                             </div>
                             <pre className="font-mono text-[10px] text-emerald-200/70 whitespace-pre-wrap leading-tight">
                               {cmd.result}
@@ -400,7 +475,7 @@ export default function WikiApp({ initialGuideId }) {
 
                 {activeGuide.tags && (
                   <div className="mt-12 pt-8 border-t border-[var(--border-color)] flex items-center gap-3">
-                    <span className="text-[10px] font-bold text-[var(--text-muted)] uppercase tracking-wider">Related Tags:</span>
+                    <span className="text-[10px] font-bold text-[var(--text-muted)] uppercase tracking-wider">{t('wiki.tags')}</span>
                     <div className="flex flex-wrap gap-2">
                       {activeGuide.tags.map(tag => (
                         <span key={tag} className="px-2 py-1 rounded-lg bg-[var(--bg-tertiary)] border border-[var(--border-color)] text-[10px] text-[var(--text-secondary)] hover:text-indigo-400 transition-colors cursor-pointer">
@@ -420,8 +495,8 @@ export default function WikiApp({ initialGuideId }) {
              <div className="w-24 h-24 rounded-full bg-indigo-500/5 flex items-center justify-center mb-6 border border-indigo-500/10">
                 <Book size={48} className="text-indigo-400" />
              </div>
-             <h2 className="text-xl font-bold mb-2 tracking-tight">Knowledge Base</h2>
-             <p className="text-sm max-w-xs mx-auto italic">Select a guide from the hub to explore server commands and installation steps.</p>
+             <h2 className="text-xl font-bold mb-2 tracking-tight">{t('wiki.emptyTitle')}</h2>
+             <p className="text-sm max-w-xs mx-auto italic">{t('wiki.emptyDesc')}</p>
           </div>
         )}
       </div>

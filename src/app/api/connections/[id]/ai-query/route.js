@@ -1,7 +1,8 @@
 import { NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth/next';
 import { authOptions } from '@/lib/auth';
-
+import connectDB from '@/lib/mongodb';
+import SystemSetting from '@/models/SystemSetting';
 import { checkRateLimit } from '@/lib/serverGuard';
 
 export async function POST(req, { params }) {
@@ -23,8 +24,37 @@ export async function POST(req, { params }) {
       return NextResponse.json({ success: false, error: 'Prompt is required' }, { status: 400 });
     }
 
-    const apiKey = process.env.GROQ_API_KEY;
-    if (!apiKey) {
+    await connectDB();
+
+    let apiKeys = [];
+    let currentIndex = 0;
+    let aiConfig = {
+      model: 'llama-3.1-8b-instant',
+      temperature: 0.1,
+      max_completion_tokens: 600,
+      top_p: 0.9,
+    };
+
+    try {
+      const keysSetting = await SystemSetting.findOne({ key: 'ai_api_keys' });
+      if (keysSetting && keysSetting.value && Array.isArray(keysSetting.value.keys) && keysSetting.value.keys.length > 0) {
+        apiKeys = keysSetting.value.keys;
+        currentIndex = keysSetting.value.currentIndex || 0;
+      }
+
+      const configSetting = await SystemSetting.findOne({ key: 'ai_config' });
+      if (configSetting && configSetting.value) {
+        aiConfig = { ...aiConfig, ...configSetting.value };
+      }
+    } catch (e) {
+      // Ignore
+    }
+
+    if (apiKeys.length === 0 && process.env.GROQ_API_KEY) {
+      apiKeys.push(process.env.GROQ_API_KEY);
+    }
+
+    if (apiKeys.length === 0) {
       return NextResponse.json({ success: false, error: 'AI service not configured (Missing API Key)' }, { status: 500 });
     }
 
@@ -96,35 +126,66 @@ export async function POST(req, { params }) {
     <query>{"action":"deleteMany","collection":"${schemaName}","filter":{"name":{"$regex":"john","$options":"i"}}}</query>
     `;
 
-    const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${apiKey}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: prompt }
-        ],
-        model: 'llama-3.3-70b-versatile',
-        temperature: 0.2, 
-        max_completion_tokens: 1024,
-      }),
-    });
+    let answer = null;
+    let successfulIndex = -1;
+    let lastError = null;
 
-    if (!response.ok) {
-      throw new Error('Failed to connect to AI service');
+    for (let i = 0; i < apiKeys.length; i++) {
+        const tryIndex = (currentIndex + i) % apiKeys.length;
+        const apiKey = apiKeys[tryIndex];
+
+        try {
+            const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+                method: 'POST',
+                headers: {
+                    'Authorization': `Bearer ${apiKey}`,
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    messages: [
+                        { role: 'system', content: systemPrompt },
+                        { role: 'user', content: prompt }
+                    ],
+                    model: aiConfig.model,
+                    temperature: aiConfig.temperature,
+                    max_completion_tokens: aiConfig.max_completion_tokens,
+                    top_p: aiConfig.top_p,
+                }),
+            });
+
+            
+
+            if (response.ok) {
+                const resData = await response.json();
+                answer = resData.choices[0]?.message?.content || '';
+                successfulIndex = tryIndex;
+                break;
+            } else if (response.status === 429) {
+                console.warn(`AI Query Rate limit hit on key index ${tryIndex}. Rotating...`);
+                continue;
+            } else {
+                const errBody = await response.text().catch(() => '');
+                throw new Error(`AI service error (${response.status}): ${errBody.slice(0, 200)}`);
+            }
+        } catch (err) {
+            lastError = err;
+            if (err.message.includes('429')) continue;
+            break; 
+        }
     }
 
-    const resData = await response.json();
-    const fullContent = resData.choices[0]?.message?.content || '';
-    
-    // Return the RAW content so the frontend can parse <query> and <repeat> tags itself
-    // We only strip the <thought> block to save bandwidth/confusion if needed, but it's safer to send it all.
-    // However, let's just send the raw content. The frontend has the regex logic to handle it.
-    
-    return NextResponse.json({ success: true, query: fullContent });
+    if (successfulIndex !== -1) {
+        if (apiKeys.length > 1) {
+             const nextIndex = (successfulIndex + 1) % apiKeys.length;
+             SystemSetting.updateOne(
+               { key: 'ai_api_keys' },
+               { $set: { 'value.currentIndex': nextIndex } }
+             ).catch(err => console.error('Failed to update key index:', err));
+        }
+        return NextResponse.json({ success: true, query: answer });
+    }
+
+    return NextResponse.json({ success: false, error: lastError?.message || 'AI Rate limit exceeded on all keys.' }, { status: 429 });
 
   } catch (error) {
     console.error('AI Query Error:', error);

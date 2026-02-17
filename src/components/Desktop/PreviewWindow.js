@@ -137,6 +137,11 @@ export default function PreviewWindow({ isOpen, onClose }) {
     try {
       e.dataTransfer.effectAllowed = 'move';
       e.dataTransfer.setData('application/x-desktop-id', desktopId);
+      
+      // Use a custom drag image if possible, or at least ensure a clean one
+      if (dragGhostRef.current) {
+        e.dataTransfer.setDragImage(dragGhostRef.current, 80, 48);
+      }
     } catch {}
   };
 
@@ -193,22 +198,34 @@ export default function PreviewWindow({ isOpen, onClose }) {
     const ghost = card.cloneNode(true);
     ghost.style.position = 'fixed';
     ghost.style.pointerEvents = 'none';
-    ghost.style.zIndex = '9999';
+    ghost.style.zIndex = '200000'; // Higher than PreviewWindow's 99999
     ghost.style.opacity = '0.92';
-    ghost.style.borderRadius = '12px';
-    ghost.style.boxShadow = '0 18px 40px rgba(0,0,0,0.45), 0 0 0 1px rgba(255,255,255,0.08)';
-    ghost.style.transition = 'transform 0.12s ease-out';
+    ghost.style.borderRadius = '14px';
+    ghost.style.boxShadow = '0 25px 60px rgba(0,0,0,0.55), 0 0 0 1px rgba(255,255,255,0.12)';
+    ghost.style.transition = 'transform 0.1s ease-out, opacity 0.2s ease-in-out';
+    ghost.style.backdropFilter = 'blur(12px)';
+    
+    // Initial position
+    const initX = e.clientX - offsetX;
+    const initY = e.clientY - offsetY;
+    ghost.style.left = `${initX}px`;
+    ghost.style.top = `${initY}px`;
+    ghost.style.transform = `scale(${baseScale})`;
+    ghost.style.transformOrigin = 'top left';
+
     document.body.appendChild(ghost);
-    dragGhostRef.current = ghost;
+    setDragScale(baseScale);
+    // Use a separate variable to avoid ref collision with HTML5 DnD ghost
+    const activeGhost = ghost;
     
     const handleMouseMove = (moveEvent) => {
       const x = moveEvent.clientX - offsetX;
       const y = moveEvent.clientY - offsetY;
       
       // Update ghost position
-      if (dragGhostRef.current) {
-        dragGhostRef.current.style.left = `${x}px`;
-        dragGhostRef.current.style.top = `${y}px`;
+      if (activeGhost) {
+        activeGhost.style.left = `${x}px`;
+        activeGhost.style.top = `${y}px`;
       }
       
       // Calculate distance to nearest desktop
@@ -239,12 +256,11 @@ export default function PreviewWindow({ isOpen, onClose }) {
       setDragScale(scale);
       
       // Apply scale to ghost
-      if (dragGhostRef.current) {
+      if (activeGhost) {
         // Keep the cursor aligned with the same point in the ghost while scaling
         const tx = offsetX * (1 - scale);
         const ty = offsetY * (1 - scale);
-        dragGhostRef.current.style.transformOrigin = 'top left';
-        dragGhostRef.current.style.transform = `translate(${tx}px, ${ty}px) scale(${scale})`;
+        activeGhost.style.transform = `translate(${tx}px, ${ty}px) scale(${scale})`;
       }
     };
     
@@ -267,9 +283,8 @@ export default function PreviewWindow({ isOpen, onClose }) {
       }
       
       // Clean up
-      if (dragGhostRef.current) {
-        document.body.removeChild(dragGhostRef.current);
-        dragGhostRef.current = null;
+      if (activeGhost) {
+        document.body.removeChild(activeGhost);
       }
       setIsCustomDragging(false);
       setCustomDragWindow(null);
@@ -282,11 +297,9 @@ export default function PreviewWindow({ isOpen, onClose }) {
     document.addEventListener('mouseup', handleMouseUp);
   };
 
-  // Clean up drag ghost
+  // No-op cleanup for isCustomDragging as we handle it in handleMouseUp
   useEffect(() => {
-    if (!isCustomDragging && dragGhostRef.current) {
-      document.body.removeChild(dragGhostRef.current);
-      dragGhostRef.current = null;
+    if (!isCustomDragging) {
       setDragScale(1);
     }
   }, [isCustomDragging]);

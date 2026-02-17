@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef } from 'react';
 import { motion, useDragControls, AnimatePresence } from 'framer-motion';
-import { Bot, Send, History, Plus, ChevronLeft, Trash, Clock, MessageSquare } from 'lucide-react';
+import { Bot, Send, History, Plus, ChevronLeft, Trash, Clock, MessageSquare, Languages } from 'lucide-react';
 import { MessageContent } from '@/components/MessageContent';
 import { useOS } from '@/context/OSContext';
 import { useTranslation } from 'react-i18next';
@@ -42,6 +42,9 @@ export default function WikiChatWindow({ id, guide, onClose }) {
   const [historyList, setHistoryList] = useState([]);
   const [currentHistoryId, setCurrentHistoryId] = useState(null);
   const [isSaving, setIsSaving] = useState(false);
+  const [autoTranslate, setAutoTranslate] = useState(false);
+  const [translations, setTranslations] = useState({}); // { [messageIdx_partIdx]: translatedText }
+  const [translating, setTranslating] = useState({}); // { [messageIdx_partIdx]: boolean }
   
   const chatEndRef = useRef(null);
   const taskbarPos = osState.taskbarPosition || 'bottom';
@@ -204,6 +207,48 @@ export default function WikiChatWindow({ id, guide, onClose }) {
     }
   };
 
+  const translateText = async (text, msgIdx, partIdx) => {
+    const targetLang = i18n.language;
+    if (targetLang === 'en' || !text.trim()) return;
+
+    const key = `${msgIdx}_${partIdx}`;
+    setTranslating(prev => ({ ...prev, [key]: true }));
+
+    try {
+      const res = await fetch('/api/utils/translate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text, targetLang })
+      });
+      const data = await res.json();
+      if (data.success) {
+        setTranslations(prev => ({ ...prev, [key]: data.translated }));
+      }
+    } catch (err) {
+      console.error('Translation error:', err);
+    } finally {
+      setTranslating(prev => ({ ...prev, [key]: false }));
+    }
+  };
+
+  useEffect(() => {
+    if (autoTranslate && messages.length > 0) {
+      messages.forEach((msg, mIdx) => {
+        if (msg.role === 'assistant') {
+          const parts = msg.content.split(/```/);
+          parts.forEach((part, pIdx) => {
+            if (pIdx % 2 === 0 && part.trim()) {
+              const key = `${mIdx}_${pIdx}`;
+              if (!translations[key] && !translating[key]) {
+                translateText(part, mIdx, pIdx);
+              }
+            }
+          });
+        }
+      });
+    }
+  }, [autoTranslate, messages, i18n.language]);
+
   // Calculate maximized position based on taskbar
   const getMaximizedStyle = () => {
     const base = { position: 'fixed', margin: 0 };
@@ -277,6 +322,14 @@ export default function WikiChatWindow({ id, guide, onClose }) {
           </div>
         </div>
         <div className="flex items-center gap-2" onPointerDown={(e) => e.stopPropagation()}>
+          <button 
+            onClick={() => setAutoTranslate(!autoTranslate)}
+            className={`p-1.5 rounded-lg transition-colors flex items-center gap-1.5 ${autoTranslate ? 'bg-emerald-500/20 text-emerald-400' : 'hover:bg-white/5 text-[var(--text-muted)]'}`}
+            title="Auto Translate"
+          >
+            <Languages size={14} />
+            {autoTranslate && <span className="text-[10px] font-bold uppercase tracking-tighter">On</span>}
+          </button>
           <button 
             onClick={() => setShowHistory(!showHistory)}
             className={`p-1.5 rounded-lg transition-colors ${showHistory ? 'bg-indigo-500 text-white' : 'hover:bg-white/5 text-[var(--text-muted)]'}`}
@@ -390,7 +443,12 @@ export default function WikiChatWindow({ id, guide, onClose }) {
                   {msg.role === 'system' ? (
                     <p className="whitespace-pre-wrap italic opacity-80">{msg.content}</p>
                   ) : (
-                    <MessageContent content={msg.content} />
+                    <MessageContent 
+                      content={msg.content} 
+                      translations={autoTranslate && msg.role === 'assistant' ? translations : null}
+                      translating={autoTranslate && msg.role === 'assistant' ? translating : null}
+                      messageIdx={idx}
+                    />
                   )}
                 </div>
               </div>

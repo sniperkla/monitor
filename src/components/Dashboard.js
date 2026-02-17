@@ -174,9 +174,9 @@ export default function Dashboard({ onNewConnection, onEditConnection }) {
                 <Globe size={28} className="text-white" />
               </div>
               <div>
-                <h2 className="text-lg font-bold text-[var(--text-primary)]">Sync Your Connections</h2>
+                <h2 className="text-lg font-bold text-[var(--text-primary)]">{t('ssh.dashboard_ui.syncPromo.title')}</h2>
                 <p className="text-sm text-[var(--text-muted)] max-w-lg">
-                  You have connections stored in Local Storage. Move them to your <strong>Server DB</strong> (Vault) for multi-device sync and extra security.
+                  {t('ssh.dashboard_ui.syncPromo.desc')}
                 </p>
               </div>
             </div>
@@ -199,7 +199,7 @@ export default function Dashboard({ onNewConnection, onEditConnection }) {
                     localStorage.setItem('ssh_monitor_connections', JSON.stringify(updated));
                   }
                   await fetchConnections();
-                  dispatch({ type: 'ADD_NOTIFICATION', payload: { title: 'Synced', message: 'All connections moved to Cloud', type: 'success' } });
+                  dispatch({ type: 'ADD_NOTIFICATION', payload: { title: t('ssh.dashboard_ui.syncPromo.synced'), message: t('ssh.dashboard_ui.syncPromo.syncedDesc'), type: 'success' } });
                 } catch (e) {
                   console.error(e);
                 } finally {
@@ -208,7 +208,7 @@ export default function Dashboard({ onNewConnection, onEditConnection }) {
               }}
               className="px-6 py-3 bg-white text-indigo-600 font-bold rounded-2xl hover:bg-slate-100 transition-all shadow-xl whitespace-nowrap"
             >
-              Sync to Cloud
+              {t('ssh.dashboard_ui.syncPromo.btn')}
             </button>
           </div>
         </motion.div>

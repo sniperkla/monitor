@@ -163,7 +163,7 @@ export default function FileManager({ connectionId, connectionName, connection }
        window.URL.revokeObjectURL(url);
        downloadBufferRef.current = [];
        setTransfer(null);
-       addNotification({ title: 'Download Complete', message: `Downloaded ${filename}`, type: 'success' });
+       addNotification({ title: t('files.toasts.downloadComplete'), message: `${t('files.context.download')} ${filename}`, type: 'success' });
     });
 
     newSocket.on('sftp:error', (err) => {
@@ -174,13 +174,13 @@ export default function FileManager({ connectionId, connectionName, connection }
          const seconds = Math.ceil(err.resetIn / 1000);
          setTransferCountdown(seconds);
          setTransfer(prev => prev ? { ...prev, waiting: true, countdown: seconds } : null);
-         addNotification({ title: 'Rate Limited', message: `Pausing transfer. Retrying in ${seconds}s...`, type: 'warning' });
+         addNotification({ title: t('files.status.rateLimited'), message: `${t('files.status.pausing')}. ${t('files.status.retryIn', { seconds })}`, type: 'warning' });
          return;
       }
 
       setTransfer(null);
       console.error('❌ SFTP Error:', err);
-      addNotification({ title: 'SFTP Error', message: msg || 'SFTP Error', type: 'error' });
+      addNotification({ title: t('files.status.errorTitle'), message: msg || t('files.status.errorTitle'), type: 'error' });
       if (status === 'connecting' || status === 'ssh_connecting') {
         setStatus('error');
         setError(msg);
@@ -438,8 +438,8 @@ export default function FileManager({ connectionId, connectionName, connection }
      lastDownloadRef.current = { file, offset };
      
      toastRef.current = addNotification({ 
-        title: offset > 0 ? 'Resuming Download' : 'Downloading', 
-        message: `Preparing download for ${file.filename}...`, 
+        title: offset > 0 ? t('files.status.resuming') : t('files.status.download'), 
+        message: `${t('files.actions.loading', { action: t('files.context.download') })} ${file.filename}...`, 
         type: 'loading', 
         duration: 0 
      });
@@ -482,7 +482,7 @@ export default function FileManager({ connectionId, connectionName, connection }
             ? dragData.filename 
             : `${currentPath}/${dragData.filename}`;
           
-          toastRef.current = addNotification({ title: 'Transferring', message: `Transferring ${dragData.filename} from ${dragData.connectionName || 'source'}...`, type: 'loading', duration: 0 });
+          toastRef.current = addNotification({ title: t('files.status.upload'), message: `${t('files.status.uploadingTo')} ${dragData.filename}...`, type: 'loading', duration: 0 });
           socket.emit('sftp:cross_server_transfer', {
             srcConnId: dragData.connectionId,
             srcPath: dragData.filePath,
@@ -497,7 +497,7 @@ export default function FileManager({ connectionId, connectionName, connection }
             : `${currentPath}/${dragData.filename}`;
           if (dragData.filePath !== destPath) {
             socket.emit('sftp:copy', { src: dragData.filePath, dest: destPath });
-            toastRef.current = addNotification({ title: 'Copying', message: `Copying ${dragData.filename}...`, type: 'loading', duration: 0 });
+            toastRef.current = addNotification({ title: t('files.context.copy'), message: `${t('files.context.copy')} ${dragData.filename}...`, type: 'loading', duration: 0 });
           }
           return;
         }
@@ -520,7 +520,7 @@ export default function FileManager({ connectionId, connectionName, connection }
     if (!createModal.name || !socket) return;
     const path = currentPath === '.' ? createModal.name : `${currentPath}/${createModal.name}`;
     
-    toastRef.current = addNotification({ title: 'Creating', message: `Creating ${createModal.type}...`, type: 'loading', duration: 0 });
+    toastRef.current = addNotification({ title: t('files.modals.create.create'), message: `${t('files.actions.loading', { action: t('files.modals.create.create') })} ${createModal.type}...`, type: 'loading', duration: 0 });
     if (createModal.type === 'folder') {
       socket.emit('sftp:mkdir', path);
     } else {
@@ -551,7 +551,7 @@ export default function FileManager({ connectionId, connectionName, connection }
       (name) => {
         if (!name) return;
         const path = currentPath === '.' ? name : `${currentPath}/${name}`;
-        toastRef.current = addNotification({ title: 'Creating', message: `Creating ${type}...`, type: 'loading', duration: 0 });
+        toastRef.current = addNotification({ title: t('files.modals.create.create'), message: `${t('files.actions.loading', { action: t('files.modals.create.create') })} ${type}...`, type: 'loading', duration: 0 });
         if (type === 'folder') {
           socket.emit('sftp:mkdir', path);
         } else {
@@ -571,7 +571,7 @@ export default function FileManager({ connectionId, connectionName, connection }
     }
     const path = currentPath === '.' ? contextMenu.file.filename : `${currentPath}/${contextMenu.file.filename}`;
     
-    toastRef.current = addNotification({ title: 'Loading', message: 'Fetching file content...', type: 'loading', duration: 0 });
+    toastRef.current = addNotification({ title: t('common.loading'), message: t('files.actions.loading', { action: t('files.context.edit') }), type: 'loading', duration: 0 });
     setEditor({ visible: false, file: contextMenu.file, content: '', saving: false });
     socket.emit('sftp:readFile', path);
   };
@@ -608,7 +608,7 @@ export default function FileManager({ connectionId, connectionName, connection }
 
     // Check if Cross-Server Transfer
     if (clipboard.connectionId !== connectionId) {
-      toastRef.current = addNotification({ title: 'Transferring', message: `Transferring from source...`, type: 'loading', duration: 0 });
+      toastRef.current = addNotification({ title: t('files.status.upload'), message: `${t('files.actions.loading', { action: t('files.status.upload') })}...`, type: 'loading', duration: 0 });
       socket.emit('sftp:cross_server_transfer', {
         srcConnId: clipboard.connectionId,
         srcPath: clipboard.sourcePath,
@@ -625,7 +625,7 @@ export default function FileManager({ connectionId, connectionName, connection }
       socket.emit('sftp:move', { src: clipboard.sourcePath, dest: finalDest });
       setClipboard(null); // Clear after move
     }
-    toastRef.current = addNotification({ title: 'Pasting', message: `Pasting to ${currentPath}...`, type: 'loading', duration: 0 });
+    toastRef.current = addNotification({ title: t('files.context.paste'), message: `${t('files.context.paste')} ${t('common.to')} ${currentPath}...`, type: 'loading', duration: 0 });
   };
 
   const filteredFiles = files
@@ -677,7 +677,7 @@ export default function FileManager({ connectionId, connectionName, connection }
                   <h3 className="text-sm font-bold text-[var(--text-primary)] truncate">{transfer.filename}</h3>
                   <p className="text-xs text-[var(--text-muted)] capitalize">
                     {transfer.waiting ? (
-                        <span className="text-amber-400">Rate Limited. Retrying in {transferCountdown || '...'}s</span>
+                        <span className="text-amber-400">{t('files.status.rateLimited')}. {t('files.status.retryIn', { seconds: transferCountdown || '...' })}</span>
                     ) : (
                         `${t(`files.status.${transfer.action}`)} ${t('files.status.inProgress') || 'in progress...'}`
                     )}
@@ -763,7 +763,7 @@ export default function FileManager({ connectionId, connectionName, connection }
           onClick={(e) => e.stopPropagation()}
         >
           <div className="px-3 py-2 border-b border-[var(--border-color)] text-xs text-[var(--text-muted)] font-medium truncate max-w-[200px]">
-            {contextMenu.file ? contextMenu.file.filename : 'Current Folder'}
+            {contextMenu.file ? contextMenu.file.filename : t('files.context.currentFolder')}
           </div>
           
           {contextMenu.file ? (

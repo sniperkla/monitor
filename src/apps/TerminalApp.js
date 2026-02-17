@@ -98,7 +98,6 @@ export default function TerminalApp({ onEditConnection, initialConnection }) {
           color={term.color}
           connection={term.connection}
           onClose={() => handleCloseTab(term.id)}
-          isStandalone
         />
       </div>
     );

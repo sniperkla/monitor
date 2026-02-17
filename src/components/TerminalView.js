@@ -28,6 +28,7 @@ export default function TerminalView({ connectionId, connectionName, host, color
 
   const outputLinesRef = useRef([]);
   const outputBufferRef = useRef('');
+  const aiConversationRef = useRef([]); // conversation history for multi-step context
 
   const [aiOpen, setAiOpen] = useState(false);
   const [aiHasOpenedOnce, setAiHasOpenedOnce] = useState(false);
@@ -47,6 +48,8 @@ export default function TerminalView({ connectionId, connectionName, host, color
   const [autoMode, setAutoMode] = useState(false);
   const [autoStepsRemaining, setAutoStepsRemaining] = useState(0);
   const [autoGoal, setAutoGoal] = useState('');
+  const [autoCountdown, setAutoCountdown] = useState(0);
+  const aiPanelContentRef = useRef(null);
   const autoRunningRef = useRef(false);
   const autoSeenRef = useRef(new Set());
   const autoVerifyKeyRef = useRef('');
@@ -54,6 +57,39 @@ export default function TerminalView({ connectionId, connectionName, host, color
   const autoLoopRepeatRef = useRef(0);
   const [aiMode, setAiMode] = useState('manual'); // manual | auto
   const autoEmptyRetryRef = useRef('');
+  const containerRef = useRef(null);
+
+  // Resize observer to scale AI panel position
+  useEffect(() => {
+    if (!containerRef.current) return;
+    let prevWidth = 0;
+    let prevHeight = 0;
+
+    const observer = new ResizeObserver((entries) => {
+      const entry = entries[0];
+      if (!entry) return;
+      
+      const { width, height } = entry.contentRect;
+      
+      if (prevWidth > 0 && prevHeight > 0) {
+        const scaleX = width / prevWidth;
+        const scaleY = height / prevHeight;
+        
+        if (Math.abs(width - prevWidth) > 1 || Math.abs(height - prevHeight) > 1) {
+          setAiPanelPos(prev => ({
+            x: prev.x * scaleX,
+            y: prev.y * scaleY
+          }));
+        }
+      }
+      prevWidth = width;
+      prevHeight = height;
+    });
+
+    observer.observe(containerRef.current);
+    return () => observer.disconnect();
+  }, []);
+
 
   const sshAiHistory = osState?.sshAiHistory || [];
   const sshAiPrefs = osState?.sshAiPrefs || { preferSudo: true, editor: 'nano', viewer: 'cat', autoExplainOnError: false, autoAnswerPrompts: false };
@@ -275,8 +311,11 @@ export default function TerminalView({ connectionId, connectionName, host, color
     const explain = getTag('explain');
     const dangerRaw = getTag('danger');
     const warn = getTag('warn');
+    const doneRaw = getTag('done');
+    const interactive = getTag('interactive');
     const danger = String(dangerRaw || '').trim().toLowerCase() === 'true';
-    return { command, explain, danger, warn, raw: String(raw || '').trim() };
+    const done = String(doneRaw || '').trim().toLowerCase() === 'true';
+    return { command, explain, danger, warn, done, interactive, raw: String(raw || '').trim() };
   };
 
   const getOutputContext = () => {
@@ -288,33 +327,78 @@ export default function TerminalView({ connectionId, connectionName, host, color
     const lines = String(text || '').split('\n').filter(Boolean);
     const last = (lines[lines.length - 1] || '').trim();
     if (!last) return false;
-    // Common prompts: $ , # , > at end (with optional path/user/host)
-    return /[$#>]\s*$/.test(last);
+    // Common prompts: user@host:path$ , [user@host ~]# , bash-5.1$ , sh-4.4# , % (zsh), > (powershell/fish)
+    if (/[$#%>]\s*$/.test(last)) return true;
+    // Prompt with brackets: [root@server ~]#
+    if (/\][$#%>]\s*$/.test(last)) return true;
+    // bash version prompts: bash-5.1$
+    if (/^(bash|sh|zsh|fish)-[\d.]+[$#]\s*$/.test(last)) return true;
+    return false;
   };
 
-  const waitForCommandSettle = async () => {
-    const maxMs = 60000;
-    const idleMs = 1200;
+  const looksLikeEditorOrPager = (text) => {
+    const t = String(text || '').toLowerCase();
+    // nano editor indicators
+    if (t.includes('gnu nano') || t.includes('^g get help') || t.includes('^x exit')) return 'nano';
+    // vim/vi indicators
+    if (t.includes('-- insert --') || t.includes('-- visual --') || t.includes('~') && /\n~\n/.test(t)) return 'vim';
+    // less/more pager
+    if (/\(end\)\s*$/.test(t) || /:\s*$/.test(t.split('\n').pop() || '')) return 'pager';
+    // man page
+    if (t.includes('manual page') || t.includes('man page')) return 'man';
+    return null;
+  };
+
+  const waitForCommandSettle = async (commandHint) => {
+    const maxMs = 90000; // 90s max for long installs
+    const cmdLower = String(commandHint || '').toLowerCase();
+
+    // Adaptive idle threshold based on command type
+    let idleMs = 1500; // default
+    if (/(yum|dnf|apt|apt-get|apk|pacman|pip|npm|yarn|cargo|gem|go )\s+(install|update|upgrade|remove)/.test(cmdLower)) {
+      idleMs = 3000; // package installs can have pauses
+    } else if (/(wget|curl|git clone|scp|rsync)/.test(cmdLower)) {
+      idleMs = 4000; // downloads
+    } else if (/(make|cmake|gcc|g\+\+|cargo build)/.test(cmdLower)) {
+      idleMs = 5000; // compilation
+    } else if (/(cat |head |tail |ls |echo |whoami|pwd|id |hostname|uname|which |whereis |file |stat )/.test(cmdLower)) {
+      idleMs = 800; // quick commands settle fast
+    }
+
     const start = Date.now();
+    let lastCheckSnap = '';
 
     while (Date.now() - start < maxMs) {
       const snap = getOutputContext();
-      const interactive = detectInteractivePrompt(snap);
-      if (interactive) return { reason: 'interactive', snap };
 
+      // Check for interactive prompt
+      const interactive = detectInteractivePrompt(snap);
+      if (interactive) return { reason: 'interactive', snap, interactive };
+
+      // Check for editor/pager (these never "settle" — output stops but we're stuck)
+      const editorPager = looksLikeEditorOrPager(snap);
+      if (editorPager) return { reason: 'editor', snap, editor: editorPager };
+
+      // Check for errors (settle quickly)
       const err = detectTerminalError(snap);
       if (err) {
-        // still allow settle quickly on errors
         const idleFor = Date.now() - (lastOutputAtRef.current || 0);
-        if (idleFor > 400) return { reason: 'error', snap };
+        if (idleFor > 500) return { reason: 'error', snap, error: err };
       }
 
+      // Check for shell prompt idle
       const idleFor = Date.now() - (lastOutputAtRef.current || 0);
       if (idleFor > idleMs && looksLikeShellPrompt(snap)) {
         return { reason: 'prompt', snap };
       }
 
-      await new Promise(r => setTimeout(r, 200));
+      // Detect stuck (no output change for a long time, but no prompt)
+      if (idleFor > 15000 && snap === lastCheckSnap) {
+        return { reason: 'stuck', snap };
+      }
+
+      lastCheckSnap = snap;
+      await new Promise(r => setTimeout(r, 250));
     }
 
     return { reason: 'timeout', snap: getOutputContext() };
@@ -324,31 +408,93 @@ export default function TerminalView({ connectionId, connectionName, host, color
     const raw = String(text || '').trim();
     if (!raw) return null;
     const t = raw.toLowerCase();
+    const lastLine = (raw.split('\n').filter(Boolean).pop() || '').trim();
+    const lastLineLower = lastLine.toLowerCase();
 
-    // yum/dnf confirmation
-    if (t.includes('is this ok') && t.includes('[y/n')) {
-      return { kind: 'confirm_yn', text: raw };
+    // === Y/N Confirmation Prompts ===
+    // yum/dnf/apt confirmation
+    if (/(\(y\/n\)|\[y\/n\]|\[y\/n\/d\]|\[Y\/n\]|\[y\/N\]|\(yes\/no\)|\[yes\/no\])/i.test(lastLine)) {
+      return { kind: 'confirm_yn', text: lastLine };
     }
-    if (t.includes('is this ok') && t.includes('[y/n]')) {
-      return { kind: 'confirm_yn', text: raw };
+    if (/is this ok/i.test(t) && /\[y/i.test(t)) {
+      return { kind: 'confirm_yn', text: lastLine };
     }
-    if (t.includes('is this ok') && t.includes('[y/n]:')) {
-      return { kind: 'confirm_yn', text: raw };
+    // apt "Do you want to continue?"
+    if (/do you want to continue/i.test(lastLine)) {
+      return { kind: 'confirm_yn', text: lastLine };
     }
-    if (t.includes('is this ok') && t.includes('[y/n]')) {
-      return { kind: 'confirm_yn', text: raw };
-    }
-    if (t.includes('is this ok') && t.includes('[y/n]')) {
-      return { kind: 'confirm_yn', text: raw };
+    // Generic confirmations ending with ? and containing yes/no words
+    if (/\?\s*$/.test(lastLine) && /(proceed|continue|confirm|accept|agree|overwrite|replace|remove|delete)/i.test(lastLine)) {
+      return { kind: 'confirm_yn', text: lastLine };
     }
 
-    // Generic prompts
-    if (/(\(y\/n\)|\[y\/n\]|\[y\/N\]|\(yes\/no\)|\[yes\/no\])/i.test(raw)) {
-      return { kind: 'confirm_yn', text: raw };
+    // === Overwrite Prompts ===
+    if (/overwrite\s+.*\?/i.test(lastLine) || /already exists.*overwrite/i.test(t)) {
+      return { kind: 'confirm_overwrite', text: lastLine };
     }
-    if (/\[y\/N\]/i.test(raw) || /\[Y\/n\]/i.test(raw)) {
-      return { kind: 'confirm_yn', text: raw };
+    if (/file exists.*replace/i.test(lastLine)) {
+      return { kind: 'confirm_overwrite', text: lastLine };
     }
+
+    // === Password/Passphrase Prompts ===
+    if (/password\s*[:：]\s*$/i.test(lastLine) || /password for/i.test(lastLine)) {
+      return { kind: 'password', text: lastLine };
+    }
+    if (/passphrase/i.test(lastLine) && /[:：]\s*$/.test(lastLine)) {
+      return { kind: 'passphrase', text: lastLine };
+    }
+    if (/enter.*password/i.test(lastLine) || /new password/i.test(lastLine)) {
+      return { kind: 'password', text: lastLine };
+    }
+    // sudo password prompt
+    if (/\[sudo\]\s+password/i.test(lastLine)) {
+      return { kind: 'sudo_password', text: lastLine };
+    }
+
+    // === SSH Key Prompts ===
+    if (/enter file in which to save/i.test(lastLine)) {
+      return { kind: 'ssh_key_file', text: lastLine };
+    }
+    if (/are you sure you want to continue connecting/i.test(t)) {
+      return { kind: 'ssh_host_verify', text: lastLine };
+    }
+
+    // === Press ENTER / Any Key ===
+    if (/press.*enter/i.test(lastLine) || /press.*return/i.test(lastLine) || /press any key/i.test(lastLine)) {
+      return { kind: 'press_enter', text: lastLine };
+    }
+    if (/hit enter/i.test(lastLine) || /press.*to continue/i.test(lastLine)) {
+      return { kind: 'press_enter', text: lastLine };
+    }
+
+    // === Selection Prompts ===
+    // Numbered menu (e.g., "Select [1-3]:")
+    if (/select.*\[\d/i.test(lastLine) || /choose.*\[\d/i.test(lastLine) || /option.*\[\d/i.test(lastLine)) {
+      return { kind: 'selection', text: lastLine };
+    }
+    // Generic choice prompt ending with colon after bracket options
+    if (/\[\d+[-/]\d+\]\s*[:：]?\s*$/i.test(lastLine)) {
+      return { kind: 'selection', text: lastLine };
+    }
+
+    // === GPG Key Import ===
+    if (/importing.*gpg key/i.test(t) && /is this ok/i.test(t)) {
+      return { kind: 'confirm_yn', text: lastLine };
+    }
+
+    // === Disk/Partition Selection ===
+    if (/select.*disk/i.test(lastLine) || /which.*partition/i.test(lastLine)) {
+      return { kind: 'selection', text: lastLine };
+    }
+
+    // === Generic "input required" (line ends with : or > and no prompt signs) ===
+    if (/[:：]\s*$/.test(lastLine)) {
+      // Only if it looks like a question, not a normal shell output
+      if (/\?\s*[:：]\s*$/i.test(lastLine) || /enter\s/i.test(lastLineLower) || /type\s/i.test(lastLineLower) || /provide\s/i.test(lastLineLower) || /specify\s/i.test(lastLineLower)) {
+        return { kind: 'text_input', text: lastLine };
+      }
+    }
+
     return null;
   };
 
@@ -366,140 +512,75 @@ export default function TerminalView({ connectionId, connectionName, host, color
   const detectTerminalError = (text) => {
     const t = String(text || '').toLowerCase();
     if (!t.trim()) return null;
-    if (t.includes('command not found')) return { type: 'command_not_found', label: 'Command not found' };
-    if (t.includes('permission denied')) return { type: 'permission_denied', label: 'Permission denied' };
-    if (t.includes('no such file or directory')) return { type: 'missing_file', label: 'No such file or directory' };
-    if (t.includes('not recognized as an internal or external command')) return { type: 'command_not_found', label: 'Command not found' };
-    if (t.includes('failed') || t.includes('error:') || t.includes('fatal:')) return { type: 'generic_error', label: 'Error' };
+
+    // Get the last few lines for more accurate detection (avoid false positives from old output)
+    const recentLines = t.split('\n').filter(Boolean).slice(-8).join('\n');
+
+    // === Command Not Found ===
+    if (recentLines.includes('command not found')) return { type: 'command_not_found', label: 'Command not found', severity: 'high' };
+    if (recentLines.includes('not recognized as an internal or external command')) return { type: 'command_not_found', label: 'Command not found', severity: 'high' };
+    if (/no such command/i.test(recentLines)) return { type: 'command_not_found', label: 'No such command', severity: 'high' };
+
+    // === Permission / Access ===
+    if (recentLines.includes('permission denied')) return { type: 'permission_denied', label: 'Permission denied', severity: 'high' };
+    if (recentLines.includes('access denied')) return { type: 'permission_denied', label: 'Access denied', severity: 'high' };
+    if (recentLines.includes('operation not permitted')) return { type: 'permission_denied', label: 'Operation not permitted', severity: 'high' };
+    if (/insufficient privileges/i.test(recentLines)) return { type: 'permission_denied', label: 'Insufficient privileges', severity: 'high' };
+
+    // === File/Path Errors ===
+    if (recentLines.includes('no such file or directory')) return { type: 'missing_file', label: 'No such file or directory', severity: 'high' };
+    if (recentLines.includes('is a directory')) return { type: 'wrong_type', label: 'Is a directory', severity: 'medium' };
+    if (recentLines.includes('not a directory')) return { type: 'wrong_type', label: 'Not a directory', severity: 'medium' };
+    if (recentLines.includes('file exists')) return { type: 'file_exists', label: 'File already exists', severity: 'medium' };
+
+    // === Package Manager Errors ===
+    if (/no match for/i.test(recentLines) || /no package.*found/i.test(recentLines)) return { type: 'package_not_found', label: 'Package not found', severity: 'high' };
+    if (/unable to locate package/i.test(recentLines)) return { type: 'package_not_found', label: 'Package not found', severity: 'high' };
+    if (/nothing provides/i.test(recentLines)) return { type: 'dependency_error', label: 'Missing dependency', severity: 'high' };
+    if (/dependency.*conflict/i.test(recentLines) || /conflicts with/i.test(recentLines)) return { type: 'dependency_error', label: 'Dependency conflict', severity: 'high' };
+    if (/broken packages/i.test(recentLines)) return { type: 'dependency_error', label: 'Broken packages', severity: 'high' };
+    if (/repository.*not found/i.test(recentLines) || /cannot find.*repo/i.test(recentLines)) return { type: 'repo_error', label: 'Repository error', severity: 'medium' };
+
+    // === Network Errors ===
+    if (/connection refused/i.test(recentLines)) return { type: 'connection_refused', label: 'Connection refused', severity: 'high' };
+    if (/connection timed out/i.test(recentLines) || /timed out/i.test(recentLines)) return { type: 'timeout', label: 'Connection timed out', severity: 'high' };
+    if (/name or service not known/i.test(recentLines) || /could not resolve/i.test(recentLines)) return { type: 'dns_error', label: 'DNS resolution failed', severity: 'high' };
+    if (/network.*unreachable/i.test(recentLines)) return { type: 'network_error', label: 'Network unreachable', severity: 'high' };
+
+    // === Service Errors ===
+    if (/failed to start/i.test(recentLines)) return { type: 'service_error', label: 'Service failed to start', severity: 'high' };
+    if (/unit.*not found/i.test(recentLines)) return { type: 'service_not_found', label: 'Service unit not found', severity: 'high' };
+    if (/inactive \(dead\)/i.test(recentLines)) return { type: 'service_inactive', label: 'Service is inactive', severity: 'medium' };
+
+    // === Disk/Resource Errors ===
+    if (/no space left/i.test(recentLines)) return { type: 'disk_full', label: 'No space left on device', severity: 'critical' };
+    if (/cannot allocate memory/i.test(recentLines)) return { type: 'memory_error', label: 'Out of memory', severity: 'critical' };
+    if (/too many open files/i.test(recentLines)) return { type: 'resource_error', label: 'Too many open files', severity: 'high' };
+
+    // === Authentication Errors ===
+    if (/authentication failure/i.test(recentLines) || /auth.*fail/i.test(recentLines)) return { type: 'auth_error', label: 'Authentication failure', severity: 'high' };
+    if (/incorrect password/i.test(recentLines)) return { type: 'auth_error', label: 'Incorrect password', severity: 'high' };
+
+    // === Port Errors ===
+    if (/address already in use/i.test(recentLines) || /port.*already in use/i.test(recentLines)) return { type: 'port_in_use', label: 'Port already in use', severity: 'high' };
+
+    // === Config Errors ===
+    if (/syntax error/i.test(recentLines) || /parse error/i.test(recentLines)) return { type: 'syntax_error', label: 'Syntax/parse error', severity: 'high' };
+    if (/configuration.*test.*failed/i.test(recentLines) || /configtest.*failed/i.test(recentLines)) return { type: 'config_error', label: 'Config test failed', severity: 'high' };
+
+    // === Generic (lower priority — checked last) ===
+    if (/\berror[:!]/i.test(recentLines) && !recentLines.includes('error:')) return { type: 'generic_error', label: 'Error', severity: 'medium' };
+    if (recentLines.includes('error:')) return { type: 'generic_error', label: 'Error', severity: 'medium' };
+    if (recentLines.includes('fatal:')) return { type: 'fatal_error', label: 'Fatal error', severity: 'critical' };
+    // "failed" alone can be noisy — only match if it's clearly an error line
+    if (/^.*\bfailed\b.*$/m.test(recentLines) && !/\bsuccess/i.test(recentLines)) {
+      // Avoid false positive from lines like "0 failed" (test results)
+      if (!/\b0\s+failed\b/i.test(recentLines)) {
+        return { type: 'generic_error', label: 'Command failed', severity: 'medium' };
+      }
+    }
+
     return null;
-  };
-
-  const getVerifyCommandForGoal = (goalText) => {
-    const g = String(goalText || '').toLowerCase();
-    if (!g.trim()) return '';
-    
-    // Service management goals
-    if (g.includes('firewalld') || (g.includes('firewall') && g.includes('enable'))) {
-      return 'systemctl is-active firewalld && systemctl is-enabled firewalld';
-    }
-    if (g.includes('nginx')) {
-      return 'systemctl is-active nginx && nginx -v';
-    }
-    if (g.includes('apache') || g.includes('httpd')) {
-      return 'systemctl is-active httpd && httpd -v';
-    }
-    if (g.includes('mysql') || g.includes('mariadb')) {
-      return 'systemctl is-active mariadb || systemctl is-active mysql';
-    }
-    if (g.includes('postgresql') || g.includes('postgres')) {
-      return 'systemctl is-active postgresql';
-    }
-    if (g.includes('docker')) {
-      return 'systemctl is-active docker && docker --version';
-    }
-    if (g.includes('redis')) {
-      return 'systemctl is-active redis && redis-cli ping';
-    }
-    
-    // Software installation goals
-    if (g.includes('pm2')) return 'pm2 -v';
-    if (g.includes('node') || g.includes('nodejs')) return 'node -v && npm -v';
-    if (g.includes('npm')) return 'npm -v';
-    if (g.includes('python') && g.includes('pip')) return 'python3 --version && pip3 --version';
-    if (g.includes('go') || g.includes('golang')) return 'go version';
-    if (g.includes('java')) return 'java -version';
-    if (g.includes('ruby')) return 'ruby -v';
-    if (g.includes('mongodb') || g.includes('mongo')) return 'mongod --version && mongo --version';
-    
-    // Firewall configuration goals
-    if (g.includes('firewall') && g.includes('port')) {
-      return 'firewall-cmd --list-all 2>/dev/null || ufw status';
-    }
-    
-    return '';
-  };
-
-  const isGoalSatisfied = (goalText, lastCmdText, snapshot) => {
-    const g = String(goalText || '').toLowerCase();
-    const c = String(lastCmdText || '').toLowerCase();
-    const s = String(snapshot || '').toLowerCase();
-
-    // Firewalld service goals
-    if (g.includes('firewalld') || g.includes('firewall')) {
-      const wantsEnableStart = g.includes('enable') || g.includes('start') || g.includes('active');
-      if (!wantsEnableStart) return false;
-      if (c.includes('systemctl') && c.includes('firewalld') && (c.includes('is-active') || c.includes('is-enabled'))) {
-        if (s.includes('active') && s.includes('enabled')) return true;
-      }
-      // Also check for "active (running)" from status output
-      if (c.includes('systemctl') && c.includes('status') && c.includes('firewalld')) {
-        if (s.includes('active (running)') || (s.includes('active') && s.includes('running'))) return true;
-      }
-    }
-    
-    // Generic service goals (nginx, httpd, mysql, etc.)
-    const services = ['nginx', 'httpd', 'apache', 'mysql', 'mariadb', 'postgresql', 'docker', 'redis'];
-    for (const svc of services) {
-      if (g.includes(svc)) {
-        // Check is-active output
-        if (c.includes('systemctl') && c.includes('is-active') && c.includes(svc)) {
-          if (s.includes('active')) return true;
-        }
-        // Check status output
-        if (c.includes('systemctl') && c.includes('status') && c.includes(svc)) {
-          if (s.includes('active (running)') || (s.includes('active') && s.includes('running'))) return true;
-        }
-      }
-    }
-    
-    // Node.js/npm goals
-    if (g.includes('node') || g.includes('nodejs')) {
-      if ((/\bnode\s+-v\b/.test(c) || /^node\s+-v\b/.test(c) || /\bnode\s+--version\b/.test(c)) && /\bv\d+\.\d+\.\d+\b/.test(s)) return true;
-      if (c.includes('which node') && !s.includes('not found') && s.trim()) return true;
-    }
-    if (g.includes('npm')) {
-      if ((/\bnpm\s+-v\b/.test(c) || /^npm\s+-v\b/.test(c) || /\bnpm\s+--version\b/.test(c)) && /\b\d+\.\d+\.\d+\b/.test(s)) return true;
-    }
-
-    // PM2 goals
-    if (g.includes('pm2')) {
-      if ((/\bpm2\s*(-v|--version)\b/.test(c) || /^pm2\s*(-v|--version)\b/.test(c)) && /\b\d+\.\d+\.\d+\b/.test(s)) return true;
-      if (c.includes('which pm2') && !s.includes('not found') && s.trim()) return true;
-    }
-    
-    // Python/pip goals
-    if (g.includes('python') || g.includes('pip')) {
-      if (c.includes('python3') && c.includes('--version') && /\d+\.\d+\.\d+/.test(s)) return true;
-      if (c.includes('pip3') && c.includes('--version') && /\d+\.\d+\.\d+/.test(s)) return true;
-    }
-    
-    // Docker goals
-    if (g.includes('docker')) {
-      if (c.includes('docker') && c.includes('--version') && /\d+\.\d+/.test(s)) return true;
-      if (c.includes('systemctl') && c.includes('docker') && s.includes('active')) return true;
-    }
-    
-    // MongoDB goals
-    if (g.includes('mongodb') || g.includes('mongo')) {
-      if (c.includes('mongod') && c.includes('--version') && /\d+\.\d+/.test(s)) return true;
-      if (c.includes('mongo') && c.includes('--version') && /\d+\.\d+/.test(s)) return true;
-      if (c.includes('which mongod') && !s.includes('not found') && s.trim()) return true;
-      if (c.includes('systemctl') && c.includes('mongod') && s.includes('active')) return true;
-    }
-    
-    // Firewall port configuration goals
-    if (g.includes('firewall') && g.includes('port')) {
-      // Check if port listing shows successful configuration
-      if (c.includes('firewall-cmd') && c.includes('--list-all')) {
-        // If we can list ports, firewalld is responsive
-        if (s.includes('ports:') || s.includes('services:')) {
-          // For "allow any port" goals, check if public zone or default zone is set
-          if (g.includes('any') && s.includes('public')) return true;
-        }
-      }
-    }
-
-    return false;
   };
 
   const maybeAutoExplainError = (cmd, snapshot) => {
@@ -527,19 +608,57 @@ export default function TerminalView({ connectionId, connectionName, host, color
     // Auto-answer only when explicitly enabled AND in Auto mode.
     if (sshAiPrefs?.autoAnswerPrompts && aiMode === 'auto') {
       const cmd = String(lastExecutedCommand || '').toLowerCase();
-      const looksLikeInstall = /(yum|dnf|apt|get|apk|pacman)\s+.*\b(install|upgrade|update)\b/.test(cmd) || /\binstall\b/.test(cmd);
+      const looksLikeInstall = /(yum|dnf|apt|apt-get|apk|pacman|pip|npm|gem)\s+.*\b(install|upgrade|update|remove)\b/.test(cmd) || /\binstall\b/.test(cmd);
 
-      if (looksLikeInstall) {
-        // default to Yes for install/update confirmations
+      // Auto-answer Y/N for install/update confirmations
+      if (p.kind === 'confirm_yn' && looksLikeInstall) {
         setInteractivePrompt(null);
         sendQuickInput('y');
         return;
       }
+
+      // Auto-answer GPG key imports with yes
+      if (p.kind === 'confirm_yn' && /gpg/i.test(p.text)) {
+        setInteractivePrompt(null);
+        sendQuickInput('y');
+        return;
+      }
+
+      // Auto-answer SSH host verification with yes
+      if (p.kind === 'ssh_host_verify') {
+        setInteractivePrompt(null);
+        sendQuickInput('yes');
+        return;
+      }
+
+      // Auto-press ENTER for "press enter to continue" or SSH key file (accept default)
+      if (p.kind === 'press_enter' || p.kind === 'ssh_key_file') {
+        setInteractivePrompt(null);
+        sendQuickInput('');
+        // Need to send just a newline
+        if (socketRef.current?.connected) {
+          socketRef.current.emit('ssh:input', '\n');
+        }
+        return;
+      }
     }
 
+    // For prompts that require manual input, pause auto mode
     setInteractivePrompt(p);
     if (p && autoMode) {
-      setAiError('Auto Mode paused: interactive prompt requires input (y/n).');
+      const pauseReasons = {
+        'confirm_yn': 'interactive prompt requires input (y/n)',
+        'confirm_overwrite': 'overwrite confirmation required',
+        'password': 'password input required (cannot be automated)',
+        'passphrase': 'passphrase input required',
+        'sudo_password': 'sudo password required (cannot be automated)',
+        'ssh_key_file': 'SSH key file path input required',
+        'ssh_host_verify': 'SSH host verification required',
+        'press_enter': 'waiting for ENTER key',
+        'selection': 'selection input required',
+        'text_input': 'text input required',
+      };
+      setAiError(`${t('ai.pausedPrompt')}`);
       setAutoMode(false);
       setAiOpen(true);
       setAiHasOpenedOnce(true);
@@ -566,7 +685,7 @@ export default function TerminalView({ connectionId, connectionName, host, color
     if (socketRef.current?.connected) {
       socketRef.current.emit('ssh:input', `${cmd}\n`);
       termInstanceRef.current?.focus();
-      const settled = await waitForCommandSettle();
+      const settled = await waitForCommandSettle(cmd);
       const snap = settled?.snap ?? getOutputContext();
       setLastResultSnapshot(snap);
       setLastResultAt((prev) => {
@@ -595,7 +714,7 @@ export default function TerminalView({ connectionId, connectionName, host, color
 
   const handleAskAi = async (promptOverride) => {
     if (!isLoggedIn) {
-      setAiError('Login required to use AI helper.');
+      setAiError(t('ai.loginRequired'));
       return;
     }
     const effectivePrompt = String(promptOverride ?? aiPrompt).trim();
@@ -604,24 +723,34 @@ export default function TerminalView({ connectionId, connectionName, host, color
     setAiError(null);
     setAiAnswer(null);
     try {
-      const instruction = `SSH assistant. Output: <command>, <explain>, <danger>, <warn>. Rules: 1 command only. Detect OS/pkg manager. Prefer safe commands. Use <danger> for destructive ops. For installs: check existing first. If package not found, warn and suggest search (yum/apt search). For DBs: clarify server/client/driver.
+      // Add user message to conversation history
+      aiConversationRef.current = [
+        ...aiConversationRef.current,
+        { role: 'user', content: effectivePrompt }
+      ].slice(-10); // Keep last 10 messages
 
-User: ${effectivePrompt}`;
       const res = await apiFetch('/api/ssh/ai-help', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          prompt: `${instruction}\nUser request: ${effectivePrompt}`,
+          prompt: effectivePrompt,
           context: getOutputContext(),
           connectionName,
           host,
           prefs: sshAiPrefs,
+          history: aiConversationRef.current.slice(0, -1), // Send history excluding current message
         }),
       });
       const data = await res.json();
       if (!data.success) throw new Error(data.error || 'AI request failed');
       const parsed = parseAiAnswer(data.answer);
       setAiAnswer(parsed);
+
+      // Track AI response in conversation history
+      aiConversationRef.current = [
+        ...aiConversationRef.current,
+        { role: 'assistant', content: data.answer }
+      ].slice(-10);
 
       const entry = {
         id: Date.now().toString() + Math.random().toString(36).slice(2, 8),
@@ -631,13 +760,17 @@ User: ${effectivePrompt}`;
         explain: parsed.explain,
         danger: parsed.danger,
         warn: parsed.warn,
+        done: parsed.done,
       };
 
       // De-duplicate by prompt+command (keep most recent)
       const next = [entry, ...sshAiHistory.filter(h => !(h?.prompt === entry.prompt && h?.command === entry.command))].slice(0, 30);
       setSshAiHistory(next);
+
+      return parsed;
     } catch (e) {
       setAiError(e.message);
+      return null;
     } finally {
       setAiLoading(false);
     }
@@ -649,81 +782,70 @@ User: ${effectivePrompt}`;
     if (!autoMode) return;
     if (autoRunningRef.current) return;
     if (autoStepsRemaining <= 0) {
-      setAutoMode(false);
-      return;
-    }
-
-    const goal = String(autoGoal || aiPrompt || '').trim();
-    let snap = String(snapshotOverride ?? lastResultSnapshot ?? getOutputContext() ?? '').trim();
-    let err = detectTerminalError(snap);
-    if (goal && isGoalSatisfied(goal, lastExecutedCommand, snap)) {
-      setAiError(null);
+      setAiError(t('ai.autoFinished'));
       setAutoMode(false);
       setAiOpen(true);
       setAiHasOpenedOnce(true);
       return;
     }
+
+    const goal = String(autoGoal || aiPrompt || '').trim();
     if (!goal) {
-      setAiError('Auto Mode needs a goal. Type what you want to achieve in the Goal box.');
+      setAiError(t('ai.goalRequired'));
       setAutoMode(false);
       return;
     }
 
-    const loopKey = `${lastExecutedCommand || ''}::${snap}`;
+    let snap = String(snapshotOverride ?? lastResultSnapshot ?? getOutputContext() ?? '').trim();
+    const err = detectTerminalError(snap);
+
+    // Loop detection
+    const loopKey = `${lastExecutedCommand || ''}::${snap.slice(-200)}`;
     if (autoLastLoopKeyRef.current === loopKey) {
       autoLoopRepeatRef.current += 1;
     } else {
       autoLastLoopKeyRef.current = loopKey;
       autoLoopRepeatRef.current = 0;
     }
-    if (autoLoopRepeatRef.current >= 2) {
-      setAiError('Auto Mode stopped: output did not change (loop detected).');
+    if (autoLoopRepeatRef.current >= 3) {
+      setAiError('Auto Mode stopped: output did not change after 3 attempts (loop detected).');
       setAutoMode(false);
       return;
     }
 
     autoRunningRef.current = true;
     try {
-      const verifyCmd = getVerifyCommandForGoal(goal);
-      const afterCmd = String(lastExecutedCommand || '');
-      const verifyKey = verifyCmd ? `${goal}::${verifyCmd}::${afterCmd}` : '';
-      if (verifyCmd && verifyKey && autoVerifyKeyRef.current !== verifyKey && looksLikeShellPrompt(snap)) {
-        autoVerifyKeyRef.current = verifyKey;
-        setAutoStepsRemaining((n) => Math.max(0, n - 1));
-        const verifySnap = await executeCommandAndCapture(verifyCmd);
-        maybeAutoExplainError(String(verifyCmd || '').trim(), verifySnap);
-        if (isGoalSatisfied(goal, verifyCmd, verifySnap)) {
-          setAiError(null);
-          setAutoMode(false);
-          setAiOpen(true);
-          setAiHasOpenedOnce(true);
-          return;
-        }
-        snap = String(verifySnap || '').trim();
-        err = detectTerminalError(snap);
-      }
+      // Build contextual prompt for auto-mode (Optimized for tokens)
+      const autoPrompt = `[AUTO] Goal: ${goal}
+State:
+- Last Cmd: ${lastExecutedCommand || '(none)'}
+- Error: ${err ? `${err.label}` : 'none'}
+- Output (last 20 lines):
+${snap || '(no output)'}
 
-      const needRetryKey = `${goal}::${lastExecutedCommand || ''}::${snap}`;
-      const shouldForceContinue = autoEmptyRetryRef.current === needRetryKey;
+Instructions:
+1. Next command?
+2. If DONE (proven in output), set <done>true</done>.
+3. Fix errors.
+4. Auto-confirm (-y). NO interactive editors.
+5. Step ${21 - autoStepsRemaining}/20.`;
+
+      // Add to conversation history
+      aiConversationRef.current = [
+        ...aiConversationRef.current,
+        { role: 'user', content: autoPrompt }
+      ].slice(-10); // Keep last 10 messages only
 
       const res = await apiFetch('/api/ssh/ai-help', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          prompt: `Goal: ${goal}
-
-SSH auto-mode. Output: <command>, <explain>, <danger>, <warn>.
-Rules: 1 command. Detect OS/pkg manager (yum/apt/etc). For firewalld: --permanent + --reload. For installs: check existing first. If "No match" error: STOP, warn, suggest search. For DBs: clarify server/client/driver. Verify before empty command with <warn>VERIFIED_DONE</warn>.
-
-Last: ${lastExecutedCommand || 'none'}
-Error: ${err ? err.label : 'none'}
-Output: ${snap || 'none'}
-
-${shouldForceContinue ? 'Continue mode.' : ''}`,
+          prompt: autoPrompt,
           context: snap,
           connectionName,
           host,
           prefs: sshAiPrefs,
+          history: aiConversationRef.current.slice(0, -1),
         }),
       });
       const data = await res.json();
@@ -731,8 +853,22 @@ ${shouldForceContinue ? 'Continue mode.' : ''}`,
       const parsed = parseAiAnswer(data.answer);
       setAiAnswer(parsed);
 
-      const aiVerifiedDone = /\bverified_done\b/i.test(String(parsed.warn || ''));
+      // Track AI response
+      aiConversationRef.current = [
+        ...aiConversationRef.current,
+        { role: 'assistant', content: data.answer }
+      ].slice(-10);
 
+      // === AI says DONE ===
+      if (parsed.done) {
+        setAiError(null);
+        setAutoMode(false);
+        setAiOpen(true);
+        setAiHasOpenedOnce(true);
+        return;
+      }
+
+      // === Dangerous command: pause for confirmation ===
       if (parsed.danger) {
         setAiOpen(true);
         setAiHasOpenedOnce(true);
@@ -742,24 +878,30 @@ ${shouldForceContinue ? 'Continue mode.' : ''}`,
         return;
       }
 
-      if (!parsed.command || !String(parsed.command).trim()) {
-        if (isGoalSatisfied(goal, lastExecutedCommand, snap) || aiVerifiedDone) {
-          setAiError(null);
-          setAutoMode(false);
+      // === Interactive command warning: pause ===
+      if (parsed.interactive) {
+        const interactiveType = String(parsed.interactive).toLowerCase();
+        if (/(editor|password|passphrase|multiple prompts)/i.test(interactiveType)) {
           setAiOpen(true);
           setAiHasOpenedOnce(true);
+          setAiError(`Auto Mode paused: command requires ${parsed.interactive}.`);
+          setAutoMode(false);
           return;
         }
+      }
 
-        if (!shouldForceContinue) {
+      // === No command and not done: AI is stuck ===
+      if (!parsed.command || !String(parsed.command).trim()) {
+        const needRetryKey = `${goal}::${lastExecutedCommand || ''}::${snap.slice(-100)}`;
+        if (autoEmptyRetryRef.current !== needRetryKey) {
+          // Retry once
           autoEmptyRetryRef.current = needRetryKey;
           autoRunningRef.current = false;
-          // Retry once with stronger prompt
           await runAutoStep(snap);
           return;
         }
 
-        setAiError('Auto Mode stopped: AI returned no command before completion.');
+        setAiError('Auto Mode stopped: AI could not determine next command.');
         setAutoMode(false);
         setAiOpen(true);
         setAiHasOpenedOnce(true);
@@ -768,12 +910,15 @@ ${shouldForceContinue ? 'Continue mode.' : ''}`,
 
       autoEmptyRetryRef.current = '';
 
+      // === Execute the command ===
       setAutoStepsRemaining((n) => Math.max(0, n - 1));
       const newSnap = await executeCommandAndCapture(parsed.command);
       maybeAutoExplainError(String(parsed.command || '').trim(), newSnap);
 
-      if (isGoalSatisfied(goal, parsed.command, newSnap)) {
-        setAiError(null);
+      // Check if editor/pager was accidentally opened
+      const editorCheck = looksLikeEditorOrPager(newSnap);
+      if (editorCheck) {
+        setAiError(`Auto Mode paused: ${editorCheck} editor/pager was opened. Please close it manually.`);
         setAutoMode(false);
         setAiOpen(true);
         setAiHasOpenedOnce(true);
@@ -787,11 +932,33 @@ ${shouldForceContinue ? 'Continue mode.' : ''}`,
     }
   };
 
+  // Scroll to bottom when AI content updates
+  useEffect(() => {
+    if (aiPanelContentRef.current) {
+      aiPanelContentRef.current.scrollTop = aiPanelContentRef.current.scrollHeight;
+    }
+  }, [aiAnswer, aiError, interactivePrompt, autoCountdown, executeConfirmOpen]);
+
   useEffect(() => {
     if (aiMode !== 'auto') return;
     if (!autoMode) return;
     if (!lastResultAt) return;
-    runAutoStep(lastResultSnapshot);
+
+    let timer;
+    let count = 3;
+    setAutoCountdown(count);
+    
+    timer = setInterval(() => {
+      count--;
+      setAutoCountdown(count);
+      if (count <= 0) {
+        clearInterval(timer);
+        setAutoCountdown(0);
+        runAutoStep(lastResultSnapshot);
+      }
+    }, 1000);
+
+    return () => clearInterval(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [aiMode, autoMode, lastResultAt]);
 
@@ -904,7 +1071,7 @@ ${shouldForceContinue ? 'Continue mode.' : ''}`,
   const statusInfo = getStatusInfo();
 
   return (
-    <div className="h-full flex flex-col">
+    <div ref={containerRef} className="h-full flex flex-col">
       {/* Terminal title bar - hidden in standalone mode since Window title shows server name */}
       {isStandalone && (
         <div className="h-10 flex items-center px-3 bg-gradient-to-b from-[var(--bg-secondary)] to-[var(--bg-tertiary)] border-b border-[var(--border-color)]">
@@ -1051,15 +1218,15 @@ ${shouldForceContinue ? 'Continue mode.' : ''}`,
               <div className="ai-panel-drag-handle flex items-center justify-between px-3 py-2 border-b border-[var(--border-color)] bg-black/20">
                 <div className="flex items-center gap-2">
                   <Sparkles size={14} className="text-indigo-400" />
-                  <span className="text-xs font-bold" style={{ color: 'var(--text-primary)' }}>AI Assistant</span>
+                  <span className="text-xs font-bold" style={{ color: 'var(--text-primary)' }}>{t('ai.title')}</span>
                   {autoMode && (
-                    <span className="px-1.5 py-0.5 rounded text-[10px] bg-emerald-500/20 text-emerald-400 animate-pulse">Running</span>
+                    <span className="px-1.5 py-0.5 rounded text-[10px] bg-emerald-500/20 text-emerald-400 animate-pulse">{t('ai.running')}</span>
                   )}
                 </div>
                 <div className="flex items-center gap-1">
-                  <button type="button" onClick={() => setAiHistoryOpen(v => !v)} className="p-1.5 rounded hover:bg-white/5" title="History"><Clock size={12} /></button>
-                  <button type="button" onClick={() => setAiSettingsOpen(v => !v)} className="p-1.5 rounded hover:bg-white/5" title="Settings"><Settings2 size={12} /></button>
-                  <button type="button" onClick={() => { setAiOpen(false); setAiSettingsOpen(false); setAiHistoryOpen(false); }} className="p-1.5 rounded hover:bg-white/5" title="Close"><X size={12} /></button>
+                  <button type="button" onClick={() => setAiHistoryOpen(v => !v)} className="p-1.5 rounded hover:bg-white/5" title={t('ai.history')}><Clock size={12} /></button>
+                  <button type="button" onClick={() => setAiSettingsOpen(v => !v)} className="p-1.5 rounded hover:bg-white/5" title={t('ai.settings')}><Settings2 size={12} /></button>
+                  <button type="button" onClick={() => { setAiOpen(false); setAiSettingsOpen(false); setAiHistoryOpen(false); }} className="p-1.5 rounded hover:bg-white/5" title={t('ai.close')}><X size={12} /></button>
                 </div>
               </div>
 
@@ -1091,20 +1258,20 @@ ${shouldForceContinue ? 'Continue mode.' : ''}`,
               {aiSettingsOpen && (
                 <div className="absolute top-10 left-2 right-2 z-50 rounded-xl border border-white/10 bg-[var(--bg-secondary)] shadow-xl overflow-hidden">
                   <div className="flex items-center justify-between px-3 py-2 border-b border-white/10">
-                    <span className="text-[10px] font-bold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Settings</span>
-                    <button onClick={() => setAiSettingsOpen(false)} className="text-[10px] opacity-70 hover:opacity-100" style={{ color: 'var(--text-muted)' }}>Close</button>
+                    <span className="text-[10px] font-bold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>{t('ai.settings')}</span>
+                    <button onClick={() => setAiSettingsOpen(false)} className="text-[10px] opacity-70 hover:opacity-100" style={{ color: 'var(--text-muted)' }}>{t('ai.close')}</button>
                   </div>
                   <div className="p-3 space-y-3">
                     <label className="flex items-center justify-between text-[11px]" style={{ color: 'var(--text-primary)' }}>
-                      <span>Prefer sudo</span>
+                      <span>{t('ai.preferSudo')}</span>
                       <input type="checkbox" checked={!!sshAiPrefs.preferSudo} onChange={(e) => setSshAiPrefs({ preferSudo: e.target.checked })} disabled={!isLoggedIn} />
                     </label>
                     <label className="flex items-center justify-between text-[11px]" style={{ color: 'var(--text-primary)' }}>
-                      <span>Auto-answer prompts</span>
+                      <span>{t('ai.autoAnswer')}</span>
                       <input type="checkbox" checked={!!sshAiPrefs.autoAnswerPrompts} onChange={(e) => setSshAiPrefs({ autoAnswerPrompts: e.target.checked })} disabled={!isLoggedIn} />
                     </label>
                     <label className="flex items-center justify-between text-[11px]" style={{ color: 'var(--text-primary)' }}>
-                      <span>Auto explain errors</span>
+                      <span>{t('ai.autoExplain')}</span>
                       <input type="checkbox" checked={!!sshAiPrefs.autoExplainOnError} onChange={(e) => setSshAiPrefs({ autoExplainOnError: e.target.checked })} disabled={!isLoggedIn} />
                     </label>
                     <div className="grid grid-cols-2 gap-2">
@@ -1122,23 +1289,24 @@ ${shouldForceContinue ? 'Continue mode.' : ''}`,
               )}
 
               {/* Main Content */}
-              <div className="flex-1 overflow-y-auto p-3 space-y-3">
+              <div ref={aiPanelContentRef} className="flex-1 overflow-y-auto px-3 pt-3 pb-10 space-y-3">
                 {/* Mode Toggle */}
                 <div className="flex items-center justify-between bg-black/20 rounded-lg p-1">
                   <div className="flex">
-                    <button onClick={() => { setAiMode('manual'); setAutoMode(false); }} className={`px-3 py-1.5 rounded text-[11px] font-medium transition ${aiMode === 'manual' ? 'bg-white/10' : 'hover:bg-white/5'}`} style={{ color: 'var(--text-primary)' }}>Manual</button>
-                    <button onClick={() => setAiMode('auto')} className={`px-3 py-1.5 rounded text-[11px] font-medium transition ${aiMode === 'auto' ? 'bg-white/10' : 'hover:bg-white/5'}`} style={{ color: 'var(--text-primary)' }}>Auto</button>
+                    <button onClick={() => { setAiMode('manual'); setAutoMode(false); }} className={`px-3 py-1.5 rounded text-[11px] font-medium transition ${aiMode === 'manual' ? 'bg-white/10' : 'hover:bg-white/5'}`} style={{ color: 'var(--text-primary)' }}>{t('ai.manual')}</button>
+                    <button onClick={() => setAiMode('auto')} className={`px-3 py-1.5 rounded text-[11px] font-medium transition ${aiMode === 'auto' ? 'bg-white/10' : 'hover:bg-white/5'}`} style={{ color: 'var(--text-primary)' }}>{t('ai.auto')}</button>
                   </div>
                   {aiMode === 'auto' && (
                     <button onClick={() => {
-                      if (!isLoggedIn) { setAiError('Login required'); return; }
+                      if (!isLoggedIn) { setAiError(t('ai.loginRequired')); return; }
                       if (!autoMode) {
                         autoSeenRef.current = new Set();
                         autoVerifyKeyRef.current = '';
                         autoLastLoopKeyRef.current = '';
                         autoLoopRepeatRef.current = 0;
+                        aiConversationRef.current = []; // Fresh conversation for new goal
                         setAutoGoal(g => String(g || aiPrompt || '').trim());
-                        setAutoStepsRemaining(20);
+                        setAutoStepsRemaining(30);
                         setAutoMode(true);
                         setLastResultSnapshot(s => s || getOutputContext());
                         setLastResultAt(p => { const n = Date.now(); return n > (p || 0) ? n : (p || 0) + 1; });
@@ -1146,7 +1314,7 @@ ${shouldForceContinue ? 'Continue mode.' : ''}`,
                         setAutoMode(false);
                       }
                     }} className={`px-3 py-1.5 rounded text-[11px] font-bold transition ${autoMode ? 'bg-red-500/20 text-red-400' : 'bg-emerald-500/20 text-emerald-400'}`}>
-                      {autoMode ? 'Stop' : 'Start'}
+                      {autoMode ? t('ai.stop') : t('ai.start')}
                     </button>
                   )}
                 </div>
@@ -1154,22 +1322,22 @@ ${shouldForceContinue ? 'Continue mode.' : ''}`,
                 {/* Auto Mode Info */}
                 {aiMode === 'auto' && (
                   <div className="space-y-2">
-                    <input value={autoGoal} onChange={(e) => setAutoGoal(e.target.value)} placeholder="Goal: install nginx, enable firewalld..." className="w-full rounded-lg bg-black/30 border border-white/10 px-3 py-2 text-xs outline-none" disabled={!isLoggedIn} style={{ color: 'var(--text-primary)' }} />
+                    <input value={autoGoal} onChange={(e) => setAutoGoal(e.target.value)} placeholder={t('ai.goalPlaceholder')} className="w-full rounded-lg bg-black/30 border border-white/10 px-3 py-2 text-xs outline-none" disabled={!isLoggedIn} style={{ color: 'var(--text-primary)' }} />
                     <div className="flex items-center justify-between text-[10px]" style={{ color: 'var(--text-muted)' }}>
-                      <span>Steps: {autoStepsRemaining}</span>
-                      <span className={autoMode ? 'text-emerald-400' : ''}>{autoMode ? 'Running' : 'Idle'}</span>
+                      <span>{t('ai.steps')} {autoStepsRemaining} {autoCountdown > 0 && <span className="text-amber-400 ml-2 animate-pulse">{t('ai.wait', { count: autoCountdown })}</span>}</span>
+                      <span className={autoMode ? 'text-emerald-400' : ''}>{autoMode ? t('ai.running') : t('ai.idle')}</span>
                     </div>
                   </div>
                 )}
 
                 {/* Command Input */}
                 <div className="space-y-2">
-                  <textarea value={aiPrompt} onChange={(e) => setAiPrompt(e.target.value)} placeholder="What do you want to do?" className="w-full h-20 resize-none rounded-lg bg-black/30 border border-white/10 px-3 py-2 text-xs outline-none focus:border-indigo-500/50" disabled={!isLoggedIn} style={{ color: 'var(--text-primary)' }} />
+                  <textarea value={aiPrompt} onChange={(e) => setAiPrompt(e.target.value)} placeholder={t('ai.promptPlaceholder')} className="w-full h-20 resize-none rounded-lg bg-black/30 border border-white/10 px-3 py-2 text-xs outline-none focus:border-indigo-500/50" disabled={!isLoggedIn} style={{ color: 'var(--text-primary)' }} />
                   <div className="flex items-center justify-between">
-                    <span className="text-[10px] opacity-60" style={{ color: 'var(--text-muted)' }}>Uses last terminal output</span>
+                    <span className="text-[10px] opacity-60" style={{ color: 'var(--text-muted)' }}>{t('ai.usesLastOutput')}</span>
                     <button onClick={() => handleAskAi()} disabled={!isLoggedIn || aiLoading || !aiPrompt.trim()} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-xs font-medium transition">
                       {aiLoading ? <Loader2 size={12} className="animate-spin" /> : <CornerDownLeft size={12} />}
-                      Ask AI
+                      {t('ai.askAi')}
                     </button>
                   </div>
                 </div>
@@ -1178,10 +1346,10 @@ ${shouldForceContinue ? 'Continue mode.' : ''}`,
                 {(lastExecutedCommand || lastResultSnapshot) && (
                   <div className="rounded-lg border border-white/10 bg-black/20 overflow-hidden">
                     <div className="flex items-center justify-between px-3 py-1.5 border-b border-white/10">
-                      <span className="text-[10px] font-medium uppercase" style={{ color: 'var(--text-muted)' }}>Last Result</span>
+                      <span className="text-[10px] font-medium uppercase" style={{ color: 'var(--text-muted)' }}>{t('ai.lastResult')}</span>
                       <div className="flex gap-1">
-                        <button onClick={refreshLastResultSnapshot} className="p-1 rounded hover:bg-white/5" title="Refresh"><RefreshCw size={10} /></button>
-                        <button onClick={() => navigator.clipboard.writeText([lastExecutedCommand, lastResultSnapshot].filter(Boolean).join('\n'))} className="p-1 rounded hover:bg-white/5" title="Copy"><Copy size={10} /></button>
+                        <button onClick={refreshLastResultSnapshot} className="p-1 rounded hover:bg-white/5" title={t('ai.refresh')}><RefreshCw size={10} /></button>
+                        <button onClick={() => navigator.clipboard.writeText([lastExecutedCommand, lastResultSnapshot].filter(Boolean).join('\n'))} className="p-1 rounded hover:bg-white/5" title={t('ai.copy')}><Copy size={10} /></button>
                       </div>
                     </div>
                     <div className="p-3 space-y-2">
@@ -1195,8 +1363,8 @@ ${shouldForceContinue ? 'Continue mode.' : ''}`,
                         if (!isLoggedIn) { setAiError('Login required'); return; }
                         const prompt = `Command: ${lastExecutedCommand || 'unknown'}\nOutput: ${lastResultSnapshot || getOutputContext() || 'none'}\nExplain and suggest next step.`;
                         askAiWithPrompt(prompt);
-                      }} disabled={!isLoggedIn} className="w-full flex items-center justify-center gap-1.5 py-1.5 rounded bg-white/5 hover:bg-white/10 text-xs transition" style={{ color: 'var(--text-muted)' }}>
-                        <Sparkles size={10} /> Explain Output
+                      }} disabled={!isLoggedIn} className="w-full flex items-center justify-center gap-1.5 py-2 rounded bg-gradient-to-r from-indigo-500/10 to-purple-500/10 hover:from-indigo-500/20 hover:to-purple-500/20 border border-indigo-500/20 text-xs font-medium text-indigo-200 hover:text-white transition-all shadow-sm group">
+                        <Sparkles size={12} className="text-indigo-400 group-hover:text-indigo-300 transition-colors" /> {t('terminal.explainOutput')}
                       </button>
                     </div>
                   </div>
@@ -1211,13 +1379,17 @@ ${shouldForceContinue ? 'Continue mode.' : ''}`,
 
                 {/* AI Answer */}
                 {aiAnswer && (
-                  <div className={`rounded-lg border overflow-hidden ${aiAnswer.danger ? 'border-red-500/30' : 'border-white/10'}`}>
-                    <div className={`px-3 py-2 ${aiAnswer.danger ? 'bg-red-500/10' : 'bg-black/20'}`}>
+                  <div className={`rounded-lg border overflow-hidden ${aiAnswer.danger ? 'border-red-500/30' : aiAnswer.done ? 'border-emerald-500/30' : 'border-white/10'}`}>
+                    <div className={`px-3 py-2 ${aiAnswer.danger ? 'bg-red-500/10' : aiAnswer.done ? 'bg-emerald-500/10' : 'bg-black/20'}`}>
                       <div className="flex items-center justify-between mb-2">
-                        <span className="text-[10px] font-medium uppercase" style={{ color: 'var(--text-muted)' }}>AI Response</span>
-                        {aiAnswer.danger && <span className="text-[10px] font-bold text-red-400 flex items-center gap-1"><ShieldAlert size={10} /> Danger</span>}
+                        <span className="text-[10px] font-medium uppercase" style={{ color: 'var(--text-muted)' }}>{t('ai.aiResponse')}</span>
+                        <div className="flex items-center gap-2">
+                          {aiAnswer.done && <span className="text-[10px] font-bold text-emerald-400 flex items-center gap-1"><CheckCircle2 size={10} /> {t('ai.done')}</span>}
+                          {aiAnswer.danger && <span className="text-[10px] font-bold text-red-400 flex items-center gap-1"><ShieldAlert size={10} /> {t('ai.danger')}</span>}
+                          {aiAnswer.interactive && <span className="text-[10px] font-bold text-amber-400">⚡ {aiAnswer.interactive}</span>}
+                        </div>
                       </div>
-                      <pre className="text-xs font-mono whitespace-pre-wrap break-words bg-black/40 rounded px-2 py-1.5" style={{ color: 'var(--text-primary)' }}>{aiAnswer.command || '(no command)'}</pre>
+                      <pre className="text-xs font-mono whitespace-pre-wrap break-words bg-black/40 rounded px-2 py-1.5" style={{ color: 'var(--text-primary)' }}>{aiAnswer.command || (aiAnswer.done ? `✅ ${t('ai.done')}!` : '(no command)')}</pre>
                       {(aiAnswer.explain || aiAnswer.warn) && (
                         <div className="mt-2 text-[11px]" style={{ color: 'var(--text-secondary)' }}>
                           {aiAnswer.warn && <div className="text-red-300/80 mb-1">{aiAnswer.warn}</div>}
@@ -1225,38 +1397,97 @@ ${shouldForceContinue ? 'Continue mode.' : ''}`,
                         </div>
                       )}
                     </div>
-                    <div className="flex items-center gap-1 p-2 border-t border-white/10 bg-black/10">
-                      <button onClick={() => navigator.clipboard.writeText(aiAnswer.command || '')} className="flex-1 flex items-center justify-center gap-1 py-1.5 rounded bg-white/5 hover:bg-white/10 text-xs transition" style={{ color: 'var(--text-primary)' }}><Copy size={12} /> Copy</button>
-                      <button onClick={() => handleInsertCommand(aiAnswer.command)} className="flex-1 flex items-center justify-center gap-1 py-1.5 rounded bg-emerald-600/80 hover:bg-emerald-500 text-white text-xs transition"><CornerDownLeft size={12} /> Insert</button>
-                      <button onClick={() => {
-                        if (!isLoggedIn) { setAiError('Login required'); return; }
-                        if (aiAnswer.danger) { setExecuteConfirmOpen(true); return; }
-                        handleExecuteCommand(aiAnswer.command);
-                      }} disabled={!isLoggedIn} className={`flex-1 flex items-center justify-center gap-1 py-1.5 rounded text-white text-xs transition ${aiAnswer.danger ? 'bg-red-600 hover:bg-red-500' : 'bg-indigo-600 hover:bg-indigo-500'}`}><CornerDownLeft size={12} /> Run</button>
-                    </div>
+                    {aiAnswer.command && (
+                      <div className="flex items-center gap-1 p-2 border-t border-white/10 bg-black/10">
+                        <button onClick={() => navigator.clipboard.writeText(aiAnswer.command || '')} className="flex-1 flex items-center justify-center gap-1 py-1.5 rounded bg-white/5 hover:bg-white/10 text-xs transition" style={{ color: 'var(--text-primary)' }}><Copy size={12} /> {t('ai.copy')}</button>
+                        <button onClick={() => handleInsertCommand(aiAnswer.command)} className="flex-1 flex items-center justify-center gap-1 py-1.5 rounded bg-emerald-600/80 hover:bg-emerald-500 text-white text-xs transition"><CornerDownLeft size={12} /> {t('ai.insert')}</button>
+                        <button onClick={() => {
+                          if (!isLoggedIn) { setAiError(t('ai.loginRequired')); return; }
+                          if (aiAnswer.danger) { setExecuteConfirmOpen(true); return; }
+                          handleExecuteCommand(aiAnswer.command);
+                        }} disabled={!isLoggedIn || (executeConfirmOpen && aiAnswer.danger)} className={`flex-1 flex items-center justify-center gap-1 py-1.5 rounded text-white text-xs transition ${aiAnswer.danger ? 'bg-red-600 hover:bg-red-500' : 'bg-indigo-600 hover:bg-indigo-500'} ${(executeConfirmOpen && aiAnswer.danger) ? 'opacity-70 cursor-not-allowed' : ''}`}>
+                          {executeConfirmOpen && aiAnswer.danger ? t('ai.confirmRun') : <><CornerDownLeft size={12} /> {t('ai.run')}</>}
+                        </button>
+                      </div>
+                    )}
                   </div>
                 )}
 
-                {/* Interactive Prompt */}
-                {interactivePrompt?.kind === 'confirm_yn' && (
-                  <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-3">
-                    <div className="text-xs font-medium mb-2" style={{ color: 'var(--text-primary)' }}>Waiting for input...</div>
-                    <pre className="text-[10px] font-mono whitespace-pre-wrap mb-2 opacity-80" style={{ color: 'var(--text-primary)' }}>{interactivePrompt.text}</pre>
-                    <div className="flex gap-2">
-                      <button onClick={() => { setInteractivePrompt(null); sendQuickInput('y'); }} className="flex-1 py-1.5 rounded bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-medium">Yes (y)</button>
-                      <button onClick={() => { setInteractivePrompt(null); sendQuickInput('n'); }} className="flex-1 py-1.5 rounded bg-red-600 hover:bg-red-500 text-white text-xs font-medium">No (n)</button>
+                {/* Interactive Prompt - All Types */}
+                {interactivePrompt && (
+                  <div className={`rounded-lg border p-3 ${
+                    interactivePrompt.kind === 'password' || interactivePrompt.kind === 'sudo_password' || interactivePrompt.kind === 'passphrase'
+                      ? 'border-red-500/30 bg-red-500/10'
+                      : 'border-amber-500/30 bg-amber-500/10'
+                  }`}>
+                    <div className="text-xs font-medium mb-2" style={{ color: 'var(--text-primary)' }}>
+                      {interactivePrompt.kind === 'password' || interactivePrompt.kind === 'sudo_password' ? '🔒 Password Required' :
+                       interactivePrompt.kind === 'passphrase' ? '🔑 Passphrase Required' :
+                       interactivePrompt.kind === 'confirm_yn' || interactivePrompt.kind === 'confirm_overwrite' ? '❓ Confirmation Required' :
+                       interactivePrompt.kind === 'ssh_host_verify' ? '🔗 SSH Host Verification' :
+                       interactivePrompt.kind === 'press_enter' ? '⏎ Press ENTER' :
+                       interactivePrompt.kind === 'selection' ? '📋 Selection Required' :
+                       '⌨️ Input Required'}
                     </div>
+                    <pre className="text-[10px] font-mono whitespace-pre-wrap mb-2 opacity-80" style={{ color: 'var(--text-primary)' }}>{interactivePrompt.text}</pre>
+                    
+                    {/* Y/N Buttons */}
+                    {(interactivePrompt.kind === 'confirm_yn' || interactivePrompt.kind === 'confirm_overwrite') && (
+                      <div className="flex gap-2">
+                        <button onClick={() => { setInteractivePrompt(null); sendQuickInput('y'); }} className="flex-1 py-1.5 rounded bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-medium">Yes (y)</button>
+                        <button onClick={() => { setInteractivePrompt(null); sendQuickInput('n'); }} className="flex-1 py-1.5 rounded bg-red-600 hover:bg-red-500 text-white text-xs font-medium">No (n)</button>
+                      </div>
+                    )}
+
+                    {/* SSH Host Verification */}
+                    {interactivePrompt.kind === 'ssh_host_verify' && (
+                      <div className="flex gap-2">
+                        <button onClick={() => { setInteractivePrompt(null); sendQuickInput('yes'); }} className="flex-1 py-1.5 rounded bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-medium">Yes</button>
+                        <button onClick={() => { setInteractivePrompt(null); sendQuickInput('no'); }} className="flex-1 py-1.5 rounded bg-red-600 hover:bg-red-500 text-white text-xs font-medium">No</button>
+                      </div>
+                    )}
+
+                    {/* Press ENTER */}
+                    {interactivePrompt.kind === 'press_enter' && (
+                      <button onClick={() => { setInteractivePrompt(null); if (socketRef.current?.connected) socketRef.current.emit('ssh:input', '\n'); }} className="w-full py-1.5 rounded bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-medium">Press ENTER</button>
+                    )}
+
+                    {/* Password warning (manual only) */}
+                    {(interactivePrompt.kind === 'password' || interactivePrompt.kind === 'sudo_password' || interactivePrompt.kind === 'passphrase') && (
+                      <div className="text-[10px] opacity-70 mt-1" style={{ color: 'var(--text-secondary)' }}>
+                        Type your {interactivePrompt.kind === 'sudo_password' ? 'sudo password' : interactivePrompt.kind} directly in the terminal below.
+                      </div>
+                    )}
+
+                    {/* Selection / Text Input */}
+                    {(interactivePrompt.kind === 'selection' || interactivePrompt.kind === 'text_input' || interactivePrompt.kind === 'ssh_key_file') && (
+                      <div className="flex gap-2">
+                        <input
+                          type="text"
+                          placeholder={interactivePrompt.kind === 'selection' ? 'Enter selection...' : 'Enter value...'}
+                          className="flex-1 rounded bg-black/30 border border-white/10 px-2 py-1.5 text-xs outline-none"
+                          style={{ color: 'var(--text-primary)' }}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                              setInteractivePrompt(null);
+                              sendQuickInput(e.target.value);
+                            }
+                          }}
+                        />
+                        <button onClick={() => { setInteractivePrompt(null); if (socketRef.current?.connected) socketRef.current.emit('ssh:input', '\n'); }} className="px-3 py-1.5 rounded bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-medium">ENTER</button>
+                      </div>
+                    )}
                   </div>
                 )}
 
                 {/* Danger Confirmation */}
                 {executeConfirmOpen && aiAnswer?.danger && (
                   <div className="rounded-lg border border-red-500/30 bg-red-500/10 p-3">
-                    <div className="flex items-center gap-2 text-xs font-bold text-red-300 mb-2"><ShieldAlert size={12} /> Confirm execution</div>
-                    <div className="text-[11px] opacity-80 mb-3" style={{ color: 'var(--text-primary)' }}>This command will run immediately on your SSH session.</div>
+                    <div className="flex items-center gap-2 text-xs font-bold text-red-300 mb-2"><ShieldAlert size={12} /> {t('ai.confirmExecution')}</div>
+                    <div className="text-[11px] opacity-80 mb-3" style={{ color: 'var(--text-primary)' }}>{t('ai.confirmText')}</div>
                     <div className="flex gap-2">
-                      <button onClick={() => setExecuteConfirmOpen(false)} className="flex-1 py-1.5 rounded border border-white/10 hover:bg-white/5 text-xs font-medium" style={{ color: 'var(--text-primary)' }}>Cancel</button>
-                      <button onClick={() => { setExecuteConfirmOpen(false); handleExecuteCommand(aiAnswer?.command); }} disabled={!isLoggedIn} className="flex-1 py-1.5 rounded bg-red-600 hover:bg-red-500 text-white text-xs font-medium">Execute</button>
+                      <button onClick={() => setExecuteConfirmOpen(false)} className="flex-1 py-1.5 rounded border border-white/10 hover:bg-white/5 text-xs font-medium" style={{ color: 'var(--text-primary)' }}>{t('ai.cancel')}</button>
+                      <button onClick={() => { setExecuteConfirmOpen(false); handleExecuteCommand(aiAnswer?.command); }} disabled={!isLoggedIn} className="flex-1 py-1.5 rounded bg-red-600 hover:bg-red-500 text-white text-xs font-medium">{t('ai.execute')}</button>
                     </div>
                   </div>
                 )}

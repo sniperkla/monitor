@@ -3,6 +3,7 @@ import { getServerSession } from 'next-auth/next';
 import { authOptions } from '@/lib/auth';
 import connectDB from '@/lib/mongodb';
 import User from '@/models/User';
+import SystemSetting from '@/models/SystemSetting';
 
 export async function POST(req) {
   try {
@@ -32,10 +33,37 @@ export async function POST(req) {
       );
     }
 
-    const apiKey = process.env.GROQ_API_KEY;
-    if (!apiKey) {
+    let apiKeys = [];
+    let currentIndex = 0;
+    let aiConfig = {
+      model: 'llama-3.1-8b-instant',
+      temperature: 0.1,
+      max_completion_tokens: 600,
+      top_p: 0.9,
+    };
+
+    try {
+      const keysSetting = await SystemSetting.findOne({ key: 'ai_api_keys' });
+      if (keysSetting && keysSetting.value && Array.isArray(keysSetting.value.keys) && keysSetting.value.keys.length > 0) {
+        apiKeys = keysSetting.value.keys;
+        currentIndex = keysSetting.value.currentIndex || 0;
+      }
+
+      const configSetting = await SystemSetting.findOne({ key: 'ai_config' });
+      if (configSetting && configSetting.value) {
+        aiConfig = { ...aiConfig, ...configSetting.value };
+      }
+    } catch (e) {
+      // Ignore db error
+    }
+
+    if (apiKeys.length === 0 && process.env.GROQ_API_KEY) {
+      apiKeys.push(process.env.GROQ_API_KEY);
+    }
+
+    if (apiKeys.length === 0) {
       return NextResponse.json(
-        { success: false, error: 'GROQ_API_KEY not configured' },
+        { success: false, error: 'AI service not configured (Missing API Key)' },
         { status: 500 }
       );
     }
@@ -67,36 +95,68 @@ export async function POST(req) {
     `).join('\n') || 'No commands listed.'}
     `;
 
-    const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${apiKey}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: message }
-        ],
-        model: 'llama-3.3-70b-versatile', // Using a capable model
-        temperature: 0.5,
-        max_completion_tokens: 1024,
-      }),
-    });
+    let aiMessage = null;
+    let successfulIndex = -1;
+    let lastError = null;
 
-    if (!response.ok) {
-      const errorData = await response.json();
-      console.error('Groq API Error:', errorData);
-      return NextResponse.json(
-        { success: false, error: 'Failed to communicate with AI service' },
-        { status: response.status }
-      );
+    for (let i = 0; i < apiKeys.length; i++) {
+        const tryIndex = (currentIndex + i) % apiKeys.length;
+        const apiKey = apiKeys[tryIndex];
+
+        try {
+            const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+              method: 'POST',
+              headers: {
+                'Authorization': `Bearer ${apiKey}`,
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({
+                messages: [
+                  { role: 'system', content: systemPrompt },
+                  { role: 'user', content: message }
+                ],
+                model: aiConfig.model,
+                temperature: aiConfig.temperature,
+                max_completion_tokens: aiConfig.max_completion_tokens,
+                top_p: aiConfig.top_p,
+              }),
+            });
+
+            if (response.ok) {
+                const data = await response.json();
+                aiMessage = data.choices[0]?.message?.content || 'No response from AI.';
+                successfulIndex = tryIndex;
+                break;
+            } else if (response.status === 429) {
+                 console.warn(`Wiki Chat Rate limit on key ${tryIndex}`);
+                 continue;
+            } else {
+                 const errorData = await response.json();
+                 console.error('Groq API Error:', errorData);
+                 throw new Error('Failed to communicate with AI service');
+            }
+        } catch (err) {
+            lastError = err;
+            if (err.message.includes('Rate limit')) continue;
+            break;
+        }
     }
 
-    const data = await response.json();
-    const aiMessage = data.choices[0]?.message?.content || 'No response from AI.';
+    if (successfulIndex !== -1) {
+         if (apiKeys.length > 1) {
+             const nextIndex = (successfulIndex + 1) % apiKeys.length;
+             SystemSetting.updateOne(
+               { key: 'ai_api_keys' },
+               { $set: { 'value.currentIndex': nextIndex } }
+             ).catch(err => console.error('Failed to update key index:', err));
+        }
+        return NextResponse.json({ success: true, message: aiMessage });
+    }
 
-    return NextResponse.json({ success: true, message: aiMessage });
+    return NextResponse.json(
+        { success: false, error: lastError?.message || 'Failed to communicate with AI service' },
+        { status: 500 }
+    );
 
   } catch (error) {
     console.error('Wiki Chat API Error:', error);

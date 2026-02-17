@@ -15,12 +15,12 @@ import dynamic from 'next/dynamic';
 
 const DatabaseBrowser = dynamic(() => import('@/components/DatabaseBrowser'), {
   ssr: false,
-  loading: () => <div className="h-full flex items-center justify-center bg-[var(--bg-primary)] rounded-3xl border border-[var(--border-color)] opacity-50 italic">Loading Database Browser... </div>
+  loading: () => <div className="h-full flex items-center justify-center bg-[var(--bg-primary)] rounded-3xl border border-[var(--border-color)] opacity-50 italic"> {typeof window !== 'undefined' && window.localStorage ? (require('@/lib/i18n').default.t('common.loading')) : 'Loading...'} </div>
 });
 
 
 
-export default function SSHApp() {
+export default function SSHApp({ windowId }) {
   const { state, dispatch } = useApp();
   const { t } = useTranslation();
   const [isModalOpen, setIsModalOpen] = useState(false);

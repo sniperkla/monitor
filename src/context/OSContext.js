@@ -814,6 +814,13 @@ export function OSProvider({ children }) {
     state.windows
   ]);
 
+  // Sync state.language with i18n
+  useEffect(() => {
+    if (state.language && i18n.language !== state.language) {
+      i18n.changeLanguage(state.language);
+    }
+  }, [state.language]);
+
 
   // Save on tab close or visibility hidden
   useEffect(() => {

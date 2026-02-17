@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import { Copy, Check } from 'lucide-react';
 
-export const MessageContent = ({ content }) => {
+export const MessageContent = ({ content, translations, translating, messageIdx }) => {
   const [copiedIndex, setCopiedIndex] = useState(null);
   
   if (!content) return null;
@@ -14,6 +14,10 @@ export const MessageContent = ({ content }) => {
   return (
     <div className="space-y-2 w-full overflow-hidden">
       {parts.map((part, index) => {
+        const key = `${messageIdx}_${index}`;
+        const isTranslating = translating && translating[key];
+        const translatedText = translations && translations[key];
+
         if (index % 2 === 0) {
           // Text part
           if (!part.trim()) return null;
@@ -28,7 +32,13 @@ export const MessageContent = ({ content }) => {
             });
           };
 
-          return <p key={index} className="whitespace-pre-wrap break-words leading-relaxed">{formatText(part)}</p>;
+          return (
+            <div key={index} className="space-y-1">
+              <p className="whitespace-pre-wrap break-words leading-relaxed">
+                {formatText(translatedText || (isTranslating ? '...' : part))}
+              </p>
+            </div>
+          );
         } else {
           // Code part
           const lines = part.split('\n');
