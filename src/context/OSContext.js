@@ -52,6 +52,14 @@ const initialState = {
     includeType: true,
   },
   aiHistory: [],
+  sshAiHistory: [],
+  sshAiPrefs: {
+    preferSudo: true,
+    editor: 'nano',
+    viewer: 'cat',
+    autoExplainOnError: false,
+    autoAnswerPrompts: false,
+  },
   // Virtual desktops
   currentDesktopId: 'desktop-1',
   desktops: [
@@ -419,6 +427,8 @@ function osReducer(state, action) {
         customWallpapers: action.payload.customWallpapers || state.customWallpapers || [],
         iconPositions: action.payload.iconPositions || state.iconPositions || {},
         aiHistory: action.payload.aiHistory || state.aiHistory || [],
+        sshAiHistory: action.payload.sshAiHistory || state.sshAiHistory || [],
+        sshAiPrefs: action.payload.sshAiPrefs || state.sshAiPrefs || { preferSudo: true, editor: 'nano', viewer: 'cat', autoExplainOnError: false, autoAnswerPrompts: false },
         exportNaming: action.payload.exportNaming || state.exportNaming || {
           prefix: '',
           suffix: '',
@@ -453,6 +463,10 @@ function osReducer(state, action) {
       return { ...state, exportNaming: { ...state.exportNaming, ...action.payload }, timestamp: Date.now() };
     case 'SET_AI_HISTORY':
       return { ...state, aiHistory: action.payload, timestamp: Date.now() };
+    case 'SET_SSH_AI_HISTORY':
+      return { ...state, sshAiHistory: action.payload, timestamp: Date.now() };
+    case 'SET_SSH_AI_PREFS':
+      return { ...state, sshAiPrefs: { ...(state.sshAiPrefs || {}), ...(action.payload || {}) }, timestamp: Date.now() };
     case 'SET_DEFERRED_PROMPT':
       return { ...state, deferredPrompt: action.payload };
     // Virtual desktops
@@ -683,35 +697,37 @@ export function OSProvider({ children }) {
       windowLayout: s.windowLayout || 'mac',
       theme: s.theme || 'dark',
       exportNaming: s.exportNaming || {
-          prefix: '',
-          suffix: '',
-          includeDate: true,
-          includeTime: false,
-          includeType: true,
-        },
-        aiHistory: s.aiHistory || [],
-        openWindows: (s.windows || s.openWindows || []).map(w => ({
-          id: w.id,
-          title: w.title,
-          x: Math.round(w.x || 0),
-          y: Math.round(w.y || 0),
-          width: Math.round(w.width || 800),
-          height: Math.round(w.height || 600),
-          isMaximized: !!w.isMaximized,
-          isMinimized: !!w.isMinimized,
-          snapSide: w.snapSide || null,
-          zIndex: w.zIndex || 100,
-          appType: w.appType || null,
-          props: w.props || {}
-        })),
-        keyboardShortcuts: s.keyboardShortcuts || {
-          previewWindow: 'Ctrl+Cmd+Up',
-          prevDesktop: 'Ctrl+Cmd+Left',
-          nextDesktop: 'Ctrl+Cmd+Right',
-          minimizeAll: 'Ctrl+Cmd+M',
-          closeAll: 'Ctrl+Cmd+W',
-          spotlight: 'Cmd+K'
-        }
+        prefix: '',
+        suffix: '',
+        includeDate: true,
+        includeTime: false,
+        includeType: true,
+      },
+      aiHistory: s.aiHistory || [],
+      sshAiHistory: s.sshAiHistory || [],
+      sshAiPrefs: s.sshAiPrefs || { preferSudo: true, editor: 'nano', viewer: 'cat', autoExplainOnError: false, autoAnswerPrompts: false },
+      openWindows: (s.windows || s.openWindows || []).map((w) => ({
+        id: w.id,
+        title: w.title,
+        x: Math.round(w.x || 0),
+        y: Math.round(w.y || 0),
+        width: Math.round(w.width || 800),
+        height: Math.round(w.height || 600),
+        isMaximized: !!w.isMaximized,
+        isMinimized: !!w.isMinimized,
+        snapSide: w.snapSide || null,
+        zIndex: w.zIndex || 100,
+        appType: w.appType || null,
+        props: w.props || {},
+      })),
+      keyboardShortcuts: s.keyboardShortcuts || {
+        previewWindow: 'Ctrl+Cmd+Up',
+        prevDesktop: 'Ctrl+Cmd+Left',
+        nextDesktop: 'Ctrl+Cmd+Right',
+        minimizeAll: 'Ctrl+Cmd+M',
+        closeAll: 'Ctrl+Cmd+W',
+        spotlight: 'Cmd+K',
+      },
     });
   };
 
@@ -879,6 +895,8 @@ export function OSProvider({ children }) {
     state.keyboardShortcuts,
     state.exportNaming,
     state.aiHistory,
+    state.sshAiHistory,
+    state.sshAiPrefs,
     isInitialLoad
   ]);
 
@@ -1002,6 +1020,14 @@ export function OSProvider({ children }) {
 
   const setAiHistory = (history) => {
     dispatch({ type: 'SET_AI_HISTORY', payload: history });
+  };
+
+  const setSshAiHistory = (history) => {
+    dispatch({ type: 'SET_SSH_AI_HISTORY', payload: history });
+  };
+
+  const setSshAiPrefs = (prefs) => {
+    dispatch({ type: 'SET_SSH_AI_PREFS', payload: prefs });
   };
 
   const setDeferredPrompt = (promptEvent) => {
@@ -1288,6 +1314,8 @@ export function OSProvider({ children }) {
       restoreAll,
       setExportNaming,
       setAiHistory,
+      setSshAiHistory,
+      setSshAiPrefs,
       setDeferredPrompt,
       addNotification,
       removeNotification,
