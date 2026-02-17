@@ -4,7 +4,8 @@ import { useState, useEffect } from 'react';
 import { 
   Palette, Image as ImageIcon, Monitor, Layout, Bell, Shield, Info, 
   Database, CheckCircle, AlertCircle, RefreshCw, Zap, Wifi, WifiOff, 
-  Loader, Trash2, Lock, Unlock, Key, Mail, Code, Volume2, Sun, Moon
+  Loader, Trash2, Lock, Unlock, Key, Mail, Code, Volume2, Sun, Moon,
+  Search
 } from 'lucide-react';
 import { useOS } from '@/context/OSContext';
 import { useApp } from '@/context/AppContext';
@@ -31,7 +32,7 @@ export default function SettingsApp({ initialTab }) {
   const [activeTab, setActiveTab] = useState(initialTab || 'appearance');
   const { data: session } = useSession();
   const { t, i18n } = useTranslation();
-  const { state: osState, setWallpaper, setGlassmorphism, setIconSize, setIconStyle, setBrightness, setUiScale, setNotifications, setLanguage, setTheme, setTaskbarPosition, setWindowLayout, addCustomWallpaper, removeCustomWallpaper, saveSettings, addNotification, showConfirm } = useOS();
+  const { state: osState, setWallpaper, setGlassmorphism, setIconSize, setIconStyle, setBrightness, setUiScale, setNotifications, setLanguage, setTheme, setTaskbarPosition, setWindowLayout, addCustomWallpaper, removeCustomWallpaper, saveSettings, addNotification, showConfirm, setKeyboardShortcuts } = useOS();
   const { state: appState, dispatch } = useApp();
   const { vaultStatus, decryptedUri, lockVault, clearVault, setupVault, showVault } = useVault();
   const { glassmorphism, brightness, uiScale, notifications } = osState;
@@ -221,6 +222,7 @@ export default function SettingsApp({ initialTab }) {
             { id: 'display', label: t('settings_ui.display.title'), icon: Monitor, color: 'text-blue-400', desc: t('settings_ui.display.desc') },
             { id: 'notifications', label: t('settings_ui.notifications.title'), icon: Bell, color: 'text-amber-400', desc: t('settings_ui.notifications.desc') },
             { id: 'privacy', label: t('settings_ui.privacy.title'), icon: Shield, color: 'text-emerald-400', desc: t('settings_ui.privacy.desc') },
+            { id: 'keyboard', label: t('settings_ui.keyboard.title') || 'Shortcuts', icon: Key, color: 'text-rose-400', desc: t('settings_ui.keyboard.desc') || 'Manage system shortcuts' },
             { id: 'about', label: t('common.about'), icon: Info, color: 'text-[var(--text-muted)]', desc: t('settings_ui.about.desc') },
           ].map(tab => {
             const isDisabled = tab.requireLogin && !session;
@@ -997,6 +999,56 @@ export default function SettingsApp({ initialTab }) {
                 )}
               </section>
             )}
+          </div>
+        )}
+
+        {activeTab === 'keyboard' && (
+          <div className="max-w-2xl animate-in fade-in slide-in-from-bottom-2 duration-300">
+            <h1 className="text-2xl font-bold mb-2 text-[var(--text-primary)]">{t('settings_ui.keyboard.title') || 'Keyboard Shortcuts'}</h1>
+            <p className="text-[var(--text-secondary)] text-sm mb-8">Customize system-wide shortcuts for faster navigation.</p>
+
+            <section className="space-y-6">
+              <div className="grid gap-4">
+                {[
+                  { id: 'spotlight', label: 'Spotlight Search', desc: 'Open global search for apps and guides', icon: Search },
+                  { id: 'prevDesktop', label: 'Previous Desktop', desc: 'Switch to the desktop on the left', icon: Monitor },
+                  { id: 'nextDesktop', label: 'Next Desktop', desc: 'Switch to the desktop on the right', icon: Monitor },
+                  { id: 'minimizeAll', label: 'Minimize All', desc: 'Minimize all open windows', icon: Layout },
+                  { id: 'closeAll', label: 'Close All', desc: 'Close all open windows', icon: Trash2 },
+                ].map((item) => (
+                  <div key={item.id} className="p-4 bg-[var(--bg-card)] border border-[var(--border-color)] rounded-2xl flex items-center justify-between group hover:bg-[var(--bg-card-hover)] transition-all">
+                    <div className="flex items-center gap-4">
+                      <div className="w-10 h-10 rounded-xl bg-[var(--bg-tertiary)] flex items-center justify-center">
+                        <item.icon size={18} className="text-indigo-400" />
+                      </div>
+                      <div>
+                        <h4 className="text-sm font-bold text-[var(--text-primary)]">{item.label}</h4>
+                        <p className="text-[10px] text-[var(--text-muted)]">{item.desc}</p>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="text"
+                        value={osState.keyboardShortcuts?.[item.id] || ''}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          setKeyboardShortcuts({ [item.id]: val });
+                        }}
+                        placeholder="e.g. Cmd+K"
+                        className="w-32 px-3 py-1.5 bg-black/20 border border-white/10 rounded-lg text-xs font-mono text-indigo-400 focus:outline-none focus:border-indigo-500 transition-all text-center"
+                      />
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              <div className="p-4 bg-amber-500/10 border border-amber-500/20 rounded-2xl flex items-start gap-3">
+                <AlertCircle size={16} className="text-amber-400 shrink-0 mt-0.5" />
+                <p className="text-[11px] text-amber-200/70 leading-relaxed">
+                  <strong>Tip:</strong> Shortcuts use standard combinations like <code>Cmd+K</code>, <code>Ctrl+Shift+L</code>, etc. Use <code>Cmd</code> for Command (Mac) or Windows Key (PC), and <code>Ctrl</code> for Control.
+                </p>
+              </div>
+            </section>
           </div>
         )}
 

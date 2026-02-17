@@ -322,8 +322,13 @@ const activeSessions = new Map();
     const dbUri = socket.handshake.query.dbUri;
     console.log(`🔌 Socket connected: ${socket.id} ${dbUri ? '(Private DB)' : '(Global DB)'}`);
 
+    // Latency Ping-Pong
+    socket.on('heartbeat:ping', (timestamp) => {
+      socket.emit('heartbeat:pong', timestamp);
+    });
+
       socket.on('ssh:connect', async (data) => {
-      const { connectionId, connection: connectionData } = data;
+      const { connectionId, connection: connectionData, cols, rows } = data;
       const { Connection: CurrentConnectionModel, Session: CurrentSessionModel } = await getModels(dbUri);
 
       try {
@@ -405,7 +410,7 @@ const activeSessions = new Map();
           };
           
           // Request a PTY shell
-          sshClient.shell({ term: 'xterm-256color', cols: 120, rows: 30 }, (err, stream) => {
+          sshClient.shell({ term: 'xterm-256color', cols: cols || 120, rows: rows || 30 }, (err, stream) => {
             if (err) {
               socket.emit('ssh:error', { message: err.message });
               return;

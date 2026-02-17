@@ -53,14 +53,52 @@ export default function SpotlightSearch() {
   const { apiFetch } = useApp();
   const { t } = useTranslation();
 
-  // ⌘+K / Ctrl+K to toggle
+  // Dynamic keyboard shortcut to toggle
   useEffect(() => {
     const handleKeyDown = (e) => {
-      if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+      // Check for terminal or input focus to prevent conflicts
+      const activeElement = document.activeElement;
+      const isTerminal = activeElement?.classList.contains('xterm-helper-textarea') || 
+                         activeElement?.closest('.xterm');
+      const isInput = activeElement?.tagName === 'INPUT' || 
+                      activeElement?.tagName === 'TEXTAREA' || 
+                      activeElement?.isContentEditable;
+
+      // Only skip if Spotlight is NOT already open. 
+      // If it IS open, we need to handle Escape and the shortcut to close it.
+      if (!isOpen && (isTerminal || isInput)) {
+        return;
+      }
+
+      const shortcuts = osState.keyboardShortcuts || { spotlight: 'Cmd+K' };
+      const spotlightShortcut = shortcuts.spotlight || 'Cmd+K';
+
+      const isShortcutMatch = (shortcut, event) => {
+        const parts = shortcut.toLowerCase().split('+').map(p => p.trim());
+        const hasCtrl = parts.includes('ctrl') && event.ctrlKey;
+        const hasCmd = parts.includes('cmd') && event.metaKey;
+        const hasAlt = parts.includes('alt') && event.altKey;
+        const hasShift = parts.includes('shift') && event.shiftKey;
+        
+        // Find the main key (not a modifier)
+        const mainKey = parts.find(p => !['ctrl', 'cmd', 'alt', 'shift'].includes(p));
+        const eventKey = event.key.toLowerCase();
+        
+        return (
+          (hasCtrl || !parts.includes('ctrl')) &&
+          (hasCmd || !parts.includes('cmd')) &&
+          (hasAlt || !parts.includes('alt')) &&
+          (hasShift || !parts.includes('shift')) &&
+          eventKey === mainKey
+        );
+      };
+
+      if (isShortcutMatch(spotlightShortcut, e)) {
         e.preventDefault();
         e.stopPropagation();
         setIsOpen(prev => !prev);
       }
+      
       if (e.key === 'Escape' && isOpen) {
         e.preventDefault();
         setIsOpen(false);
@@ -69,7 +107,7 @@ export default function SpotlightSearch() {
 
     window.addEventListener('keydown', handleKeyDown, true);
     return () => window.removeEventListener('keydown', handleKeyDown, true);
-  }, [isOpen]);
+  }, [isOpen, osState.keyboardShortcuts]);
 
   // Focus input when opened
   useEffect(() => {
@@ -208,8 +246,12 @@ export default function SpotlightSearch() {
       icon={Search}
       onClose={() => setIsOpen(false)}
       zIndexClassName="z-[20000]"
-      maxWidthClassName="w-[640px] max-w-[90vw]"
-      maxHeightClassName="max-h-[70vh]"
+      draggable={true}
+      resizable={true}
+      defaultWidth={640}
+      defaultHeight={480}
+      minWidth={500}
+      minHeight={300}
       contentClassName="p-0"
       closeOnOverlayClick
       overlayClassName="bg-black/40 backdrop-blur-sm"
@@ -417,8 +459,20 @@ export default function SpotlightSearch() {
             </span>
           </div>
           <div className="flex items-center gap-1 text-[10px] text-white/15">
-            <Command size={10} />
-            <span>K</span>
+            {(() => {
+              const shortcuts = osState.keyboardShortcuts || { spotlight: 'Cmd+K' };
+              const parts = (shortcuts.spotlight || 'Cmd+K').split('+');
+              return parts.map((part, i) => (
+                <span key={i} className="flex items-center gap-1">
+                  {part.toLowerCase() === 'cmd' ? <Command size={10} /> : 
+                   part.toLowerCase() === 'ctrl' ? <span className="text-[9px]">⌃</span> :
+                   part.toLowerCase() === 'alt' ? <span className="text-[9px]">⌥</span> :
+                   part.toLowerCase() === 'shift' ? <span className="text-[9px]">⇧</span> :
+                   <span className="font-mono">{part.toUpperCase()}</span>}
+                  {i < parts.length - 1 && <span className="mx-0.5 opacity-30">+</span>}
+                </span>
+              ));
+            })()}
           </div>
         </div>
       </div>

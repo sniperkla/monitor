@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useApp } from '@/context/AppContext';
 import { useOS } from '@/context/OSContext';
@@ -6,10 +6,16 @@ import MacOSModalWindow from '@/components/MacOSModalWindow';
 import { 
   Search, RefreshCw, Layers, Table, Code, Activity, Save, Loader2, 
   Trash2, Edit, Plus, Download, Upload, X, Check, AlertCircle, Sparkles,
-  Clock, ChevronDown, Shield, Archive, Settings2
+  Clock, ChevronDown, Shield, Archive, Settings2, AlertTriangle, Edit3,
+  PlusCircle, Terminal, ShieldCheck, Eye, Copy, Maximize2, HelpCircle, Wifi
 } from 'lucide-react';
+import { io } from 'socket.io-client';
 
 export default function DatabaseView({ connection, onClose }) {
+  const { state: appState, apiFetch, dispatch } = useApp();
+  const { addNotification, state: osState, setExportNaming, setAiHistory, language } = useOS();
+  const { t } = useTranslation();
+  
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [schema, setSchema] = useState([]); // Tables or Collections
@@ -25,36 +31,77 @@ export default function DatabaseView({ connection, onClose }) {
   const [pendingAction, setPendingAction] = useState(null); // { type: 'DELETE' | 'UPDATE' | 'INSERT', fullQuery: string, mongoAction?: object }
   const fileInputRef = useRef(null);
   const historyRef = useRef(null);
+  const helpRef = useRef(null);
   const [failedTables, setFailedTables] = useState([]);
   const [isExportingAll, setIsExportingAll] = useState(false);
   const [retryCountdown, setRetryCountdown] = useState(0);
   const [autoRetry, setAutoRetry] = useState(false);
   const [showNamingSettings, setShowNamingSettings] = useState(false);
+  const [showAiHelp, setShowAiHelp] = useState(false);
+  const [latency, setLatency] = useState(null);
+  const socketRef = useRef(null);
   
   // Modal State
   const confirmResolver = useRef(null);
   const [confirmModal, setConfirmModal] = useState({ isOpen: false, title: '', message: '', type: 'danger' });
+  const [showCodePreview, setShowCodePreview] = useState(false);
 
-  const showConfirm = (title, message, type = 'danger') => {
+  const showConfirm = (title, message, type = 'danger', showBackup = false) => {
       return new Promise((resolve) => {
           confirmResolver.current = resolve;
-          setConfirmModal({ isOpen: true, title, message, type });
+          setConfirmModal({ isOpen: true, title, message, type, showBackup, doBackup: true });
       });
   };
+
+  const handleConfirmResult = (confirmed) => {
+      if (confirmResolver.current) {
+          confirmResolver.current({ confirmed, doBackup: confirmModal.doBackup });
+      }
+      setConfirmModal(prev => ({ ...prev, isOpen: false }));
+      confirmResolver.current = null;
+  };
+
+  // Latency Heartbeat Socket
+  useEffect(() => {
+    const socket = io({
+      path: '/api/socket',
+      transports: ['websocket'],
+      query: { dbUri: appState.dbConfig?.uri || '' }
+    });
+    socketRef.current = socket;
+
+    socket.on('heartbeat:pong', (sentTimestamp) => {
+      setLatency(Date.now() - sentTimestamp);
+    });
+
+    const interval = setInterval(() => {
+      if (socket.connected) {
+        socket.emit('heartbeat:ping', Date.now());
+      }
+    }, 3000);
+
+    return () => {
+      clearInterval(interval);
+      socket.disconnect();
+    };
+  }, [appState.dbConfig?.uri]);
 
   const executePendingAction = async () => {
     if (!pendingAction) return;
 
     // Mongo action object (delete/update/insert)
     if (connection.dbProvider === 'mongodb' && pendingAction.mongoAction) {
-        const confirmed = await showConfirm(
-            '⚠️ DANGEROUS ACTION DETECTED',
-            `This action will MODIFY or DELETE data from your database. There is no UNDO.\n\nAction: ${pendingAction.mongoAction.action}\nCollection: ${pendingAction.mongoAction.collection}\n\n🛡️ A backup of "${pendingAction.mongoAction.collection}" will be auto-downloaded before execution.\n\nAre you absolutely sure?`,
-            'danger'
+        const { confirmed, doBackup } = await showConfirm(
+            'DANGEROUS ACTION DETECTED',
+            `This action will MODIFY or DELETE data from your database. There is no UNDO.\n\nAction: ${pendingAction.mongoAction.action}\nCollection: ${pendingAction.mongoAction.collection}`,
+            'danger',
+            true // Show backup checkbox
         );
         if (!confirmed) return;
 
-        await createAutoBackup(pendingAction.mongoAction.collection, 'pre_action');
+        if (doBackup) {
+            await createAutoBackup(pendingAction.mongoAction.collection, 'pre_action');
+        }
 
         const res = await apiFetch(`/api/connections/${connection._id}/query`, {
             method: 'POST',
@@ -78,13 +125,17 @@ export default function DatabaseView({ connection, onClose }) {
     setPendingAction(null);
   };
 
-  const handleConfirmResult = (result) => {
-      if (confirmResolver.current) confirmResolver.current(result);
-      setConfirmModal(prev => ({ ...prev, isOpen: false }));
-      confirmResolver.current = null;
-  };
   
-  const { addNotification, state: osState, setExportNaming, setAiHistory, language } = useOS();
+  const handleCopyCode = (text) => {
+    navigator.clipboard.writeText(text);
+    addNotification({
+      title: 'Copied to Clipboard',
+      message: 'The query has been copied to your clipboard.',
+      type: 'success'
+    });
+  };
+
+  
   const aiHistory = osState?.aiHistory || [];
   const exportNaming = osState?.exportNaming || {
     prefix: '',
@@ -93,8 +144,40 @@ export default function DatabaseView({ connection, onClose }) {
     includeTime: false,
     includeType: true,
   };
-  const { apiFetch, dispatch } = useApp();
-  const { t } = useTranslation();
+
+  const dynamicExamples = useMemo(() => {
+    const keys = data.length > 0 ? Object.keys(data[0]) : [];
+    const lowerSchema = selectedSchema?.toLowerCase() || '';
+    const allExamples = t('database.ai.examples', { returnObjects: true }) || {};
+    const actions = allExamples.actions || {};
+    
+    let examples = [];
+
+    // 1. Add 'Normal' / Common actions
+    if (actions.list) examples.push(actions.list);
+    if (actions.search) examples.push(actions.search);
+
+    // 2. Add Context-Specific examples
+    if (lowerSchema.includes('session')) {
+      if (allExamples.sessions?.status) examples.push(allExamples.sessions.status);
+      if (allExamples.sessions?.cleanup) examples.push(allExamples.sessions.cleanup);
+    } else if (lowerSchema.includes('note')) {
+      if (allExamples.notes?.search) examples.push(allExamples.notes.search);
+      if (allExamples.notes?.update) examples.push(allExamples.notes.update);
+    } else if (lowerSchema.includes('connect')) {
+      if (allExamples.connections?.provider) examples.push(allExamples.connections.provider);
+      if (allExamples.connections?.host) examples.push(allExamples.connections.host);
+      if (allExamples.connections?.name) examples.push(allExamples.connections.name);
+    }
+
+    // 3. Add General Actions (Edit/Delete/Update)
+    if (actions.edit) examples.push(actions.edit);
+    if (actions.update) examples.push(actions.update);
+    if (actions.delete) examples.push(actions.delete);
+
+    // Filter unique and return max 6 (with scrollable area)
+    return [...new Set(examples)].slice(0, 6);
+  }, [selectedSchema, data, t]);
 
   useEffect(() => {
     if (connection?._id) {
@@ -123,6 +206,9 @@ export default function DatabaseView({ connection, onClose }) {
     const handleClickOutside = (event) => {
       if (historyRef.current && !historyRef.current.contains(event.target)) {
         setShowHistory(false);
+      }
+      if (helpRef.current && !helpRef.current.contains(event.target)) {
+        setShowAiHelp(false);
       }
     };
     document.addEventListener('mousedown', handleClickOutside);
@@ -247,17 +333,20 @@ export default function DatabaseView({ connection, onClose }) {
        }
 
       if (isActionQuery) {
-        const confirmed = await showConfirm(
-            '⚠️ DANGEROUS ACTION DETECTED', 
-            `This query will MODIFY or DELETE data from your database. There is no UNDO.\n\nQuery: ${customFilter.substring(0, 100)}...\n\n🛡️ A backup of "${schemaName}" will be auto-downloaded before execution.\n\nAre you absolutely sure?`,
-            'danger'
+        const { confirmed, doBackup } = await showConfirm(
+            'DANGEROUS ACTION DETECTED', 
+            `This query will MODIFY or DELETE data from your database. There is no UNDO.\n\nQuery: ${customFilter.substring(0, 100)}...`,
+            'danger',
+            true
         );
         if (!confirmed) {
             setLoading(false);
             return;
         }
-        // AUTO-BACKUP: Download current data as a safety net before executing
-        await createAutoBackup(schemaName, 'pre_action');
+        
+        if (doBackup) {
+            await createAutoBackup(schemaName, 'pre_action');
+        }
       }
 
       const res = await apiFetch(`/api/connections/${connection._id}/query`, {
@@ -415,15 +504,56 @@ export default function DatabaseView({ connection, onClose }) {
                     fetchData(selectedSchema, criteria);
                 }
 
+                // Extract mockRows for INSERT preview from the parsed data
+                let mockRows = [];
+                if (isInsert && parsed.data) {
+                    mockRows = Array.isArray(parsed.data) ? [...parsed.data] : [parsed.data];
+                    
+                    // Apply repeat count if AI used <repeat> tag
+                    if (repeatCount > 1 && mockRows.length > 0) {
+                        const templateRow = mockRows[0];
+                        mockRows = [];
+                        for (let i = 0; i < repeatCount; i++) {
+                            const newRow = { ...templateRow };
+                            Object.keys(newRow).forEach(k => {
+                                const val = newRow[k];
+                                if (val === null || val === undefined) return;
+                                if (typeof val === 'string') {
+                                    const numMatch = val.match(/(\d+)$/);
+                                    if (numMatch) {
+                                        const originalNum = parseInt(numMatch[1], 10);
+                                        const prefix = val.substring(0, numMatch.index);
+                                        newRow[k] = `${prefix}${originalNum + i}`;
+                                    }
+                                }
+                            });
+                            mockRows.push(newRow);
+                        }
+                    }
+                }
+                
+                console.log('[AI MongoDB Action] mockRows:', mockRows.length, 'data:', parsed.data);
+
+                // Extract changes for UPDATE preview
+                let changes = null;
+                if (isUpdate && parsed.update && parsed.update.$set) {
+                    changes = {};
+                    Object.entries(parsed.update.$set).forEach(([k, v]) => {
+                        changes[k.toLowerCase()] = v;
+                    });
+                }
+
                 setPendingAction({
                     type: isDelete ? 'DELETE' : (isUpdate ? 'UPDATE' : 'INSERT'),
                     fullQuery: JSON.stringify({ ...parsed, collection }),
                     mongoAction: { ...parsed, collection },
+                    mockRows,
+                    changes,
                 });
 
                 addNotification({
                     title: 'Action Preview',
-                    message: `Previewing ${isDelete ? 'DELETION' : (isUpdate ? 'UPDATE' : 'INSERTION')}...`,
+                    message: `Previewing ${isDelete ? 'DELETION' : (isUpdate ? 'UPDATE' : 'INSERTION')}. ${mockRows.length} mock rows ready.`,
                     type: 'info',
                 });
 
@@ -731,7 +861,17 @@ export default function DatabaseView({ connection, onClose }) {
   };
 
   const handleDelete = async (record) => {
-    if (!await showConfirm(t('database.modals.confirmDeleteTitle'), t('database.modals.confirmDeleteMsg'))) return;
+    const { confirmed, doBackup } = await showConfirm(
+        t('database.modals.confirmDeleteTitle'), 
+        t('database.modals.confirmDeleteMsg'),
+        'danger',
+        true
+    );
+    if (!confirmed) return;
+
+    if (doBackup) {
+        await createAutoBackup(selectedSchema, 'pre_delete');
+    }
     
     try {
       const res = await apiFetch(`/api/connections/${connection._id}/query`, {
@@ -974,20 +1114,22 @@ export default function DatabaseView({ connection, onClose }) {
                 No items found
              </div>
           ) : (
-             schema.map(name => (
-               <button
-                 key={name}
-                 onClick={() => setSelectedSchema(name)}
-                 className={`w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs transition-all ${
-                   selectedSchema === name
-                      ? 'bg-[var(--accent-indigo)]/10 text-[var(--accent-indigo)] font-bold border border-[var(--accent-indigo)]/20 shadow-sm'
-                      : 'text-[var(--text-muted)] hover:bg-[var(--bg-primary)] hover:text-[var(--text-primary)] border border-transparent'
-                 }`}
-               >
-                 {connection.dbProvider === 'mongodb' ? <Layers size={14} /> : <Table size={14} />}
-                 <span className="truncate">{name}</span>
-               </button>
-             ))
+              schema.map(name => (
+                <button
+                  key={name}
+                  disabled={!!pendingAction}
+                  onClick={() => setSelectedSchema(name)}
+                  title={pendingAction ? "Finish or Cancel your current action first" : ""}
+                  className={`w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs transition-all ${
+                    selectedSchema === name
+                       ? 'bg-[var(--accent-indigo)]/10 text-[var(--accent-indigo)] font-bold border border-[var(--accent-indigo)]/20 shadow-sm'
+                       : 'text-[var(--text-muted)] hover:bg-[var(--bg-primary)] hover:text-[var(--text-primary)] border border-transparent'
+                  } ${pendingAction ? 'opacity-50 cursor-not-allowed' : ''}`}
+                >
+                  {connection.dbProvider === 'mongodb' ? <Layers size={14} /> : <Table size={14} />}
+                  <span className="truncate">{name}</span>
+                </button>
+              ))
           )}
         </div>
       </div>
@@ -1021,6 +1163,19 @@ export default function DatabaseView({ connection, onClose }) {
                       <span className="text-[11px] font-bold text-indigo-400 truncate">{selectedSchema || '---'}</span>
                     </div>
                     <span className="text-[10px] text-[var(--text-muted)]/60 font-mono shrink-0">{data.length} rows</span>
+
+                    {latency !== null && (
+                        <div 
+                          className="flex items-center gap-1.5 text-[9px] font-bold px-2 py-0.5 rounded-full bg-[var(--bg-secondary)]/80 backdrop-blur-xl border border-[var(--border-color)]/50 shadow-sm opacity-80"
+                          style={{ 
+                              color: latency < 150 ? '#4ade80' : latency < 300 ? '#fbbf24' : '#f43f5e' 
+                          }}
+                          title="Network Latency (Ping)"
+                        >
+                          <Wifi size={9} strokeWidth={3} />
+                          <span className="font-mono tracking-tighter">{latency}ms</span>
+                        </div>
+                    )}
                  </div>
 
                  {/* Right: Action Buttons */}
@@ -1076,18 +1231,24 @@ export default function DatabaseView({ connection, onClose }) {
                     {/* Safety / Bulk Actions */}
                     <button 
                       onClick={handleExportAll}
-                      className="flex items-center gap-1 px-2 py-1 hover:bg-amber-500/10 text-[var(--text-muted)] hover:text-amber-400 rounded-md text-[10px] font-semibold transition-all"
+                      disabled={!!pendingAction}
+                      className={`flex items-center gap-1 px-2 py-1 hover:bg-amber-500/10 text-[var(--text-muted)] hover:text-amber-400 rounded-md text-[10px] font-semibold transition-all ${pendingAction ? 'opacity-50 cursor-not-allowed' : ''}`}
                       title="Export all tables/collections into one file"
                     >
                        <Archive size={13} /> Export All
                     </button>
-                    <button 
-                      onClick={() => createAutoBackup(selectedSchema, 'manual_backup')}
-                      className="flex items-center gap-1 px-2 py-1 hover:bg-cyan-500/10 text-[var(--text-muted)] hover:text-cyan-400 rounded-md text-[10px] font-semibold transition-all"
-                      title="Create a timestamped backup of this table"
-                    >
-                       <Shield size={13} /> Backup
-                    </button>
+                      <button 
+                        onClick={() => createAutoBackup(selectedSchema, 'manual_backup')}
+                        disabled={!!pendingAction}
+                        className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-bold transition-all ${
+                          pendingAction 
+                            ? 'opacity-50 cursor-not-allowed' 
+                            : 'bg-emerald-500/10 text-emerald-500 hover:bg-emerald-500/20'
+                        }`}
+                        title="Create a timestamped backup of this table"
+                      >
+                         <Shield size={13} /> Backup
+                      </button>
                     
                     <div className="w-px h-5 bg-white/8 mx-1" />
 
@@ -1217,82 +1378,80 @@ export default function DatabaseView({ connection, onClose }) {
 
              {/* Pending Action Banner */}
              {pendingAction && (
-                <div className={`${
-                    pendingAction.type === 'DELETE' ? 'bg-red-500/10 border-red-500/30' :
-                    pendingAction.type === 'UPDATE' ? 'bg-amber-500/10 border-amber-500/30' :
-                    'bg-emerald-500/10 border-emerald-500/30'
-                } border-b p-2 flex items-center justify-between animate-in fade-in slide-in-from-top-1`}>
-                    <div className="flex items-center gap-3 px-2">
-                        <div className={`${
-                            pendingAction.type === 'DELETE' ? 'bg-red-500/20' :
-                            pendingAction.type === 'UPDATE' ? 'bg-amber-500/20' :
-                            'bg-emerald-500/20'
-                        } p-1.5 rounded-lg`}>
-                            <AlertCircle size={16} className={
-                                pendingAction.type === 'DELETE' ? 'text-red-400' :
-                                pendingAction.type === 'UPDATE' ? 'text-amber-400' :
-                                'text-emerald-400'
-                            } />
-                        </div>
-                        <div>
-                            <div className={`text-[10px] font-bold uppercase tracking-widest leading-none ${
-                                pendingAction.type === 'DELETE' ? 'text-red-600 dark:text-red-400' :
-                                pendingAction.type === 'UPDATE' ? 'text-amber-600 dark:text-amber-400' :
-                                'text-green-600 dark:text-green-400'
+                <div className={`border-b animate-in fade-in slide-in-from-top-1 duration-300 ${
+                    pendingAction.type === 'DELETE' ? 'bg-red-500/5 border-red-500/20' :
+                    pendingAction.type === 'UPDATE' ? 'bg-amber-500/5 border-amber-500/20' :
+                    'bg-emerald-500/5 border-emerald-500/20'
+                }`}>
+                    <div className="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between gap-6">
+                        <div className="flex items-center gap-4 flex-1 min-w-0">
+                            <div className={`flex items-center justify-center w-10 h-10 rounded-xl shrink-0 ${
+                                pendingAction.type === 'DELETE' ? 'bg-red-500/20 text-red-500' :
+                                pendingAction.type === 'UPDATE' ? 'bg-amber-500/20 text-amber-500' :
+                                'bg-emerald-500/20 text-emerald-500'
                             }`}>
-                                {pendingAction.type} PREVIEW
+                                {pendingAction.type === 'DELETE' ? <Trash2 size={20} /> :
+                                 pendingAction.type === 'UPDATE' ? <Edit3 size={20} /> :
+                                 <PlusCircle size={20} />}
                             </div>
-                            <div className={`text-[11px] mt-1 flex flex-col gap-2 ${
-                                pendingAction.type === 'DELETE' ? 'text-red-800/80 dark:text-red-200/70' :
-                                pendingAction.type === 'UPDATE' ? 'text-amber-800/80 dark:text-amber-200/70' :
-                                'text-green-800/80 dark:text-green-200/70'
-                            }`}>
-                                 {pendingAction.type === 'INSERT' ? (
-                                     <span>{t('database.preview.insertReady')}</span>
-                                 ) : (
-                                     <span>{t('database.preview.showingRecords', { count: data.length })} <span className={`font-black underline decoration-2 underline-offset-2 ${
-                                         pendingAction.type === 'DELETE' ? 'text-red-600 dark:white' : 'text-amber-600 dark:white'
-                                     }`}>{pendingAction.type === 'DELETE' ? t('database.preview.toBeDeleted') : t('database.preview.toBeUpdated')}</span>.</span>
-                                 )}
-                                <div className={`group relative font-mono text-[9px] p-2 rounded-lg border flex items-center gap-3 max-w-2xl transition-all ${
-                                    pendingAction.type === 'DELETE' ? 'bg-red-500/10 border-red-500/20 text-red-600 dark:text-red-400' :
-                                    pendingAction.type === 'UPDATE' ? 'bg-amber-500/10 border-amber-500/20 text-amber-800 dark:text-amber-400' :
-                                    'bg-green-500/10 border-green-500/20 text-green-600 dark:text-green-400'
-                                }`}>
-                                    <span className="opacity-50 shrink-0 font-bold tracking-tighter">CMD:</span>
-                                    <code className="truncate flex-1">{pendingAction.fullQuery}</code>
+                            
+                            <div className="flex-1 min-w-0">
+                                <div className="flex items-center gap-2 mb-0.5">
+                                    <span className={`text-[10px] font-black uppercase tracking-[0.2em] ${
+                                        pendingAction.type === 'DELETE' ? 'text-red-500' :
+                                        pendingAction.type === 'UPDATE' ? 'text-amber-500' :
+                                        'text-emerald-500'
+                                    }`}>
+                                        {pendingAction.type} ACTION PREVIEW
+                                    </span>
+                                    <div className="h-1 w-1 rounded-full bg-[var(--text-muted)] opacity-30" />
+                                    <span className="text-[10px] font-bold text-[var(--text-muted)] uppercase">
+                                        {pendingAction.type === 'INSERT' ? t('database.preview.insertReady') : 
+                                         t('database.preview.showingRecords', { count: data.length })}
+                                    </span>
+                                </div>
+                                
+                                <div className="flex items-center gap-3 overflow-hidden">
+                                    <p className="text-xs font-semibold text-[var(--text-primary)] truncate">
+                                        {pendingAction.type === 'DELETE' ? 'Ready to permanently remove matching records.' :
+                                         pendingAction.type === 'UPDATE' ? 'Reviewing changes before updating database.' :
+                                         'Verifying new data format for insertion.'}
+                                    </p>
                                     <button 
-                                        onClick={() => navigator.clipboard.writeText(pendingAction.fullQuery)}
-                                        className="opacity-0 group-hover:opacity-100 p-1 hover:bg-white/10 rounded transition-all shrink-0"
-                                        title="Copy Command"
+                                        onClick={() => setShowCodePreview(true)}
+                                        className="flex items-center gap-2 px-2 py-0.5 bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-md shadow-sm overflow-hidden flex-1 max-w-lg hover:border-[var(--accent-indigo)]/50 transition-colors group cursor-zoom-in"
+                                        title="Click to examine full query"
                                     >
-                                        <Code size={10} />
+                                        <Terminal size={10} className="text-[var(--text-muted)] shrink-0" />
+                                        <code className="text-[9px] font-mono whitespace-nowrap overflow-hidden text-[var(--text-secondary)] opacity-80 group-hover:opacity-100 flex-1 text-left">
+                                            {pendingAction.fullQuery}
+                                        </code>
+                                        <Maximize2 size={10} className="text-[var(--text-muted)] opacity-0 group-hover:opacity-100 transition-opacity shrink-0" />
                                     </button>
                                 </div>
                             </div>
                         </div>
-                    </div>
-                    <div className="flex items-center gap-2">
-                        <button 
-                            onClick={() => setPendingAction(null)}
-                            className="px-3 py-1.5 hover:bg-red-500/10 text-red-700 dark:text-[var(--text-muted)] rounded-lg text-[10px] font-bold transition-all border border-red-500/20"
-                        >
-                            Cancel
-                        </button>
-                        <button 
-                            onClick={() => {
-                                executePendingAction();
-                            }}
-                            className={`px-4 py-1.5 text-white rounded-lg text-[10px] font-bold shadow-lg transition-all flex items-center gap-2 ${
-                                pendingAction.type === 'DELETE' ? 'bg-red-600 hover:bg-red-500 shadow-red-900/20' :
-                                pendingAction.type === 'UPDATE' ? 'bg-amber-500 hover:bg-amber-400 shadow-amber-900/20' :
-                                'bg-green-600 hover:bg-green-500 shadow-green-900/20'
-                            }`}
-                        >
-                            {pendingAction.type === 'DELETE' ? <Trash2 size={12}/> : 
-                             pendingAction.type === 'UPDATE' ? <Save size={12}/> : <Plus size={12}/>}
-                            Confirm & Execute {pendingAction.type}
-                        </button>
+
+                        <div className="flex items-center gap-2 shrink-0">
+                            <button 
+                                onClick={() => setPendingAction(null)}
+                                className="px-4 py-2 text-[11px] font-bold text-[var(--text-muted)] hover:text-red-500 hover:bg-red-500/10 rounded-xl transition-all"
+                            >
+                                {t('database.modals.confirmCancel')}
+                            </button>
+                            <button 
+                                onClick={executePendingAction}
+                                className={`px-5 py-2 rounded-xl text-[11px] font-bold text-white transition-all shadow-lg flex items-center gap-2 hover:scale-[1.02] active:scale-95 ${
+                                    pendingAction.type === 'DELETE' ? 'bg-red-600 hover:bg-red-500 shadow-red-500/20' :
+                                    pendingAction.type === 'UPDATE' ? 'bg-amber-500 hover:bg-amber-400 shadow-amber-500/20' :
+                                    'bg-emerald-600 hover:bg-emerald-500 shadow-emerald-500/20'
+                                }`}
+                            >
+                                {pendingAction.type === 'DELETE' ? <Trash2 size={14}/> : 
+                                 pendingAction.type === 'UPDATE' ? <Save size={14}/> : <Plus size={14}/>}
+                                {t('database.preview.confirmAndExecute')}
+                            </button>
+                        </div>
                     </div>
                 </div>
              )}
@@ -1313,47 +1472,86 @@ export default function DatabaseView({ connection, onClose }) {
                            </button>
                         </div>
                         <div className="flex-1 relative">
-                           <input 
-                             type="text"
-                             value={filterQuery}
-                             onChange={(e) => setFilterQuery(e.target.value)}
-                             onKeyDown={(e) => e.key === 'Enter' && handleRunQuery()}
-                             placeholder={connection.dbProvider === 'mongodb' ? '{ "age": { "$gt": 25 } }' : 'age > 25 AND status = "active"'}
-                             className="w-full bg-[var(--bg-primary)] border border-[var(--border-color)] rounded-xl py-2 pl-4 pr-10 text-xs font-mono focus:outline-none focus:border-[var(--accent-indigo)]/50 focus:ring-1 focus:ring-[var(--accent-indigo)]/20 text-[var(--accent-emerald)] placeholder:text-[var(--text-muted)] shadow-inner transition-all"
-                           />
+                            <input 
+                              type="text"
+                              value={filterQuery}
+                              disabled={!!pendingAction}
+                              onChange={(e) => setFilterQuery(e.target.value)}
+                              onKeyDown={(e) => e.key === 'Enter' && !pendingAction && handleRunQuery()}
+                              placeholder={connection.dbProvider === 'mongodb' ? '{ "age": { "$gt": 25 } }' : 'age > 25 AND status = "active"'}
+                              className={`w-full bg-[var(--bg-primary)] border border-[var(--border-color)] rounded-xl py-2 pl-4 pr-10 text-xs font-mono focus:outline-none focus:border-[var(--accent-indigo)]/50 focus:ring-1 focus:ring-[var(--accent-indigo)]/20 text-[var(--accent-emerald)] placeholder:text-[var(--text-muted)] shadow-inner transition-all ${pendingAction ? 'opacity-50 cursor-not-allowed' : ''}`}
+                            />
                            {filterQuery && (
                               <button onClick={handleClearQuery} className="absolute right-3 top-1/2 -translate-y-1/2 text-[var(--text-muted)] hover:text-white">
                                  <X size={14} />
                               </button>
                            )}
                         </div>
-                        <button 
-                          onClick={handleRunQuery}
-                          className="px-6 py-2 bg-[var(--accent-indigo)] hover:brightness-110 text-white rounded-xl text-xs font-bold transition-all shadow-lg shadow-[var(--accent-indigo)]/20 shrink-0 h-[38px] flex items-center gap-2"
-                        >
-                           <Activity size={14} /> {t('database.query.run')}
-                        </button>
+                         <button 
+                           onClick={handleRunQuery}
+                           disabled={!!pendingAction}
+                           className={`px-6 py-2 bg-[var(--accent-indigo)] hover:brightness-110 text-white rounded-xl text-xs font-bold transition-all shadow-lg shadow-[var(--accent-indigo)]/20 shrink-0 h-[38px] flex items-center gap-2 ${pendingAction ? 'opacity-50 cursor-not-allowed grayscale' : ''}`}
+                         >
+                            <Activity size={14} /> {t('database.query.run')}
+                         </button>
                     </div>
 
                     <div className="flex items-center gap-3 pt-2 border-t border-[var(--border-color)]/30">
-                        <div className="flex items-center gap-2 shrink-0 w-32">
-                            <Sparkles size={14} className="text-purple-400" />
-                            <span className="text-[10px] font-bold text-purple-400 uppercase tracking-widest">{t('database.ai.title')}</span>
+                        <div className="flex items-center gap-2 shrink-0 w-32 group/ai-label" ref={helpRef}>
+                            <div className="relative flex items-center gap-2">
+                                <Sparkles size={14} className="text-purple-400 group-hover/ai-label:animate-pulse" />
+                                <span className="text-[10px] font-bold text-purple-400 uppercase tracking-widest">{t('database.ai.title')}</span>
+                                <button 
+                                    onClick={() => setShowAiHelp(!showAiHelp)}
+                                    className={`p-1 rounded-full transition-all ${showAiHelp ? 'bg-purple-500 text-white' : 'text-purple-400/50 hover:text-purple-400 hover:bg-purple-500/10'}`}
+                                    title={t('database.ai.help')}
+                                >
+                                    <HelpCircle size={12} />
+                                </button>
+                                
+                                {showAiHelp && (
+                                    <div className="absolute top-full left-0 mt-3 w-72 bg-[var(--bg-secondary)] border border-purple-500/30 rounded-2xl shadow-[0_20px_50px_rgba(0,0,0,0.5)] p-4 z-[100] animate-in slide-in-from-top-2 backdrop-blur-xl">
+                                        <div className="flex items-center gap-2 mb-3 border-b border-purple-500/20 pb-2">
+                                            <HelpCircle size={14} className="text-purple-400" />
+                                            <h4 className="text-[11px] font-bold text-purple-400 uppercase tracking-widest">{t('database.ai.help')}</h4>
+                                        </div>
+                                            <div className="space-y-2">
+                                                <span className="text-[9px] font-bold text-purple-400/60 uppercase tracking-wider">{t('database.ai.examples.title')}</span>
+                                                <div className="max-h-48 overflow-y-auto custom-scrollbar pr-1 -mr-1">
+                                                    <div className="space-y-1">
+                                                        {dynamicExamples.map((val, idx) => (
+                                                            <div 
+                                                                key={idx}
+                                                                onClick={() => { setAiPrompt(val); setShowAiHelp(false); }}
+                                                                className="text-[10px] text-[var(--text-secondary)] hover:text-purple-300 hover:bg-purple-500/10 p-2 rounded-lg cursor-pointer transition-all border border-transparent hover:border-purple-500/20"
+                                                            >
+                                                                • {val}
+                                                            </div>
+                                                        ))}
+                                                    </div>
+                                                </div>
+                                            </div>
+                                    </div>
+                                )}
+                            </div>
                         </div>
+
                         <div className="flex-1 relative">
-                            <input 
-                                type="text"
-                                value={aiPrompt}
-                                onChange={(e) => setAiPrompt(e.target.value)}
-                                onKeyDown={(e) => e.key === 'Enter' && handleAskAI()}
-                                placeholder={t('database.ai.placeholder')}
-                                className="w-full bg-[var(--bg-primary)] border border-purple-500/30 rounded-xl py-2 pl-4 pr-12 text-xs focus:outline-none focus:border-purple-500 focus:ring-1 focus:ring-purple-500/20 text-[var(--text-primary)] placeholder:text-purple-600/50 shadow-inner transition-all"
-                            />
-                            {isAiLoading ? (
-                                <div className="absolute right-12 top-1/2 -translate-y-1/2">
-                                    <Loader2 size={14} className="animate-spin text-purple-400" />
-                                </div>
-                            ) : (
+                             <input 
+                                 type="text"
+                                 value={aiPrompt}
+                                 disabled={!!pendingAction}
+                                 onChange={(e) => setAiPrompt(e.target.value)}
+                                 onKeyDown={(e) => e.key === 'Enter' && !pendingAction && handleAskAI()}
+                                 placeholder={t('database.ai.placeholder')}
+                                 className={`w-full bg-[var(--bg-primary)] border border-purple-500/30 rounded-xl py-2 pl-4 pr-12 text-xs focus:outline-none focus:border-purple-500 focus:ring-1 focus:ring-purple-500/20 text-[var(--text-primary)] placeholder:text-purple-300/30 shadow-inner transition-all ${pendingAction ? 'opacity-50 cursor-not-allowed' : ''}`}
+                             />
+                             
+                             {isAiLoading ? (
+                                 <div className="absolute right-12 top-1/2 -translate-y-1/2">
+                                     <Loader2 size={14} className="animate-spin text-purple-400" />
+                                 </div>
+                             ) : (
                                 <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center" ref={historyRef}>
                                     <button 
                                         onClick={() => setShowHistory(!showHistory)}
@@ -1383,40 +1581,41 @@ export default function DatabaseView({ connection, onClose }) {
                                                             <Clock size={24} className="opacity-10" />
                                                             <span className="text-xs text-[var(--text-muted)] italic">{t('database.ai.noHistory')}</span>
                                                         </div>
-                                                ) : (
-                                                    aiHistory.map((h, i) => (
-                                                        <div 
-                                                            key={i}
-                                                            onClick={() => { setAiPrompt(h); setShowHistory(false); }}
-                                                            className="group w-full flex items-center justify-between gap-2 px-3 py-2.5 rounded-xl text-xs text-[var(--text-secondary)] hover:bg-purple-500/10 hover:text-purple-300 transition-all cursor-pointer relative"
-                                                        >
-                                                            <div className="flex items-center gap-2 min-w-0 flex-1">
-                                                                <Search size={12} className="shrink-0 opacity-30 group-hover:opacity-100 transition-opacity" />
-                                                                <span className="truncate">{h}</span>
-                                                            </div>
-                                                            <button 
-                                                                onClick={(e) => removeHistoryItem(e, h)}
-                                                                className="opacity-0 group-hover:opacity-100 p-1.5 hover:bg-red-500/20 text-red-400 rounded-lg transition-all"
-                                                                title="Remove"
+                                                    ) : (
+                                                        aiHistory.map((h, i) => (
+                                                            <div 
+                                                                key={i}
+                                                                onClick={() => { setAiPrompt(h); setShowHistory(false); }}
+                                                                className="group w-full flex items-center justify-between gap-2 px-3 py-2.5 rounded-xl text-xs text-[var(--text-secondary)] hover:bg-purple-500/10 hover:text-purple-300 transition-all cursor-pointer relative"
                                                             >
-                                                                <Trash2 size={12} />
-                                                            </button>
-                                                        </div>
-                                                    ))
-                                                )}
+                                                                <div className="flex items-center gap-2 min-w-0 flex-1">
+                                                                    <Search size={12} className="shrink-0 opacity-30 group-hover:opacity-100 transition-opacity" />
+                                                                    <span className="truncate">{h}</span>
+                                                                </div>
+                                                                <button 
+                                                                    onClick={(e) => removeHistoryItem(e, h)}
+                                                                    className="opacity-0 group-hover:opacity-100 p-1.5 hover:bg-red-500/20 text-red-400 rounded-lg transition-all"
+                                                                    title="Remove"
+                                                                >
+                                                                    <Trash2 size={12} />
+                                                                </button>
+                                                            </div>
+                                                        ))
+                                                    )}
+                                                </div>
                                             </div>
-                                        </div>
-                                    )}
-                                </div>
-                            )}
-                        </div>
-                        <button 
-                            disabled={isAiLoading || !aiPrompt.trim()}
-                            onClick={handleAskAI}
-                            className="px-6 py-2 bg-purple-600 hover:bg-purple-500 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-xl text-xs font-bold transition-all shadow-lg shadow-purple-500/20 shrink-0 h-[38px] flex items-center gap-2"
-                        >
-                            {isAiLoading ? t('database.ai.loading') : t('database.ai.generate')}
-                        </button>
+                                        )}
+                                    </div>
+                                )}
+                            </div>
+
+                            <button 
+                                disabled={isAiLoading || !aiPrompt.trim()}
+                                onClick={handleAskAI}
+                                className="px-6 py-2 bg-purple-600 hover:bg-purple-500 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-xl text-xs font-bold transition-all shadow-lg shadow-purple-500/20 shrink-0 h-[38px] flex items-center gap-2"
+                            >
+                                {isAiLoading ? t('database.ai.loading') : t('database.ai.generate')}
+                            </button>
                     </div>
                  </div>
              )}
@@ -1428,7 +1627,7 @@ export default function DatabaseView({ connection, onClose }) {
                       <Loader2 size={24} className="animate-spin mb-4 text-indigo-400" />
                       <span className="text-xs font-medium tracking-widest uppercase">{t('database.status.fetching')}</span>
                    </div>
-                ) : data.length > 0 ? (
+                ) : (data.length > 0 || (pendingAction?.type === 'INSERT' && pendingAction.mockRows?.length > 0)) ? (
                     <div className="rounded-xl border border-[var(--border-color)] overflow-x-auto bg-black/10 custom-scrollbar overscroll-x-none" style={{ overscrollBehaviorX: 'none' }}>
                       <table className="w-full text-left text-xs border-collapse">
                          <thead>
@@ -1450,7 +1649,7 @@ export default function DatabaseView({ connection, onClose }) {
                                       )}
                                    </div>
                                 </th>
-                               {Object.keys(data[0]).map(key => (
+                               {Object.keys(data[0] || (pendingAction?.mockRows?.[0]) || {}).map(key => (
                                   <th key={key} className="px-4 py-3 font-bold text-[var(--text-muted)] uppercase tracking-wider min-w-[150px]">
                                      {key}
                                   </th>
@@ -1458,7 +1657,7 @@ export default function DatabaseView({ connection, onClose }) {
                             </tr>
                          </thead>
                          <tbody className="divide-y divide-[var(--border-color)]">
-                            {pendingAction?.type === 'INSERT' && pendingAction.mockRows && pendingAction.mockRows.map((mRow, mIdx) => (
+                            {pendingAction?.type === 'INSERT' && pendingAction.mockRows && pendingAction.mockRows.length > 0 && pendingAction.mockRows.map((mRow, mIdx) => (
                                <tr key={`mock-${mIdx}`} className="bg-emerald-500/10 border-b-2 border-emerald-500/30 animate-pulse">
                                    <td className="sticky left-0 z-10 bg-emerald-500/20 px-4 py-2.5 text-center border-r border-emerald-500/30 shadow-[4px_0_8px_rgba(0,0,0,0.1)]">
                                       <div className="flex flex-col items-center gap-0.5 opacity-100">
@@ -1466,9 +1665,9 @@ export default function DatabaseView({ connection, onClose }) {
                                           <Plus size={10} className="text-emerald-500" />
                                       </div>
                                    </td>
-                                   {Object.keys(data[0]).map(key => (
+                                   {Object.keys(data[0] || mRow || {}).map(key => (
                                       <td key={key} className="px-4 py-2.5 font-mono text-emerald-700 dark:text-emerald-400 italic font-bold truncate max-w-[300px]">
-                                         {String(mRow[key] || 'AUTO')}
+                                         {String(mRow[key] !== undefined && mRow[key] !== null ? mRow[key] : 'AUTO')}
                                       </td>
                                    ))}
                                </tr>
@@ -1553,9 +1752,69 @@ export default function DatabaseView({ connection, onClose }) {
              title={confirmModal.title}
              message={confirmModal.message}
              type={confirmModal.type}
+             showBackup={confirmModal.showBackup}
+             doBackup={confirmModal.doBackup}
              onCancel={() => handleConfirmResult(false)}
              onConfirm={() => handleConfirmResult(true)}
+             onToggleBackup={(val) => setConfirmModal(prev => ({ ...prev, doBackup: val }))}
          />
+      )}
+
+      {/* Query Examiner Modal */}
+      {showCodePreview && pendingAction && (
+        <MacOSModalWindow
+          isOpen
+          title="Query Examiner"
+          icon={Code}
+          onClose={() => setShowCodePreview(false)}
+          zIndexClassName="z-[70]"
+          maxWidthClassName="max-w-2xl"
+          contentClassName="p-0"
+          enableMinimize={false}
+          enableMaximize={false}
+          draggable
+          resizable
+          defaultWidth={600}
+          defaultHeight={400}
+        >
+          <div className="bg-[var(--bg-primary)] p-5 flex flex-col h-full space-y-4">
+            <div className="flex items-center justify-between shrink-0">
+              <div className="flex items-center gap-3">
+                <div className="w-9 h-9 rounded-xl bg-[var(--accent-indigo)]/10 flex items-center justify-center text-[var(--accent-indigo)]">
+                  <Terminal size={18} />
+                </div>
+                <div>
+                  <h3 className="text-xs font-bold text-[var(--text-primary)]">Generated Database Command</h3>
+                  <p className="text-[9px] text-[var(--text-muted)] uppercase tracking-wider font-bold">Review query before execution</p>
+                </div>
+              </div>
+              <button 
+                onClick={() => handleCopyCode(pendingAction.fullQuery)}
+                className="flex items-center gap-2 px-3 py-1.5 bg-[var(--bg-secondary)] border border-[var(--border-color)] hover:border-[var(--accent-indigo)]/50 rounded-lg text-[10px] font-bold text-[var(--text-primary)] transition-all active:scale-95"
+              >
+                <Copy size={12} /> Copy
+              </button>
+            </div>
+
+            <div className="relative flex-1 min-h-0 group">
+              <div className="absolute top-3 right-3 text-[9px] font-bold text-[var(--text-muted)] uppercase tracking-widest opacity-20 select-none">
+                {connection?.dbProvider?.toUpperCase() || 'DB'} RAW QUERY
+              </div>
+              <pre className="h-full p-4 bg-black/30 border border-[var(--border-color)]/20 rounded-xl overflow-auto custom-scrollbar font-mono text-[10px] leading-relaxed text-[var(--accent-emerald)] shadow-inner whitespace-pre-wrap break-all">
+                {pendingAction.fullQuery}
+              </pre>
+            </div>
+
+            <div className="flex justify-end pt-1 shrink-0">
+              <button 
+                onClick={() => setShowCodePreview(false)}
+                className="px-5 py-1.5 bg-[var(--accent-indigo)] hover:bg-[var(--accent-indigo)]/90 text-white rounded-lg text-[10px] font-bold transition-all shadow-lg shadow-[var(--accent-indigo)]/20"
+              >
+                Close Examiner
+              </button>
+            </div>
+          </div>
+        </MacOSModalWindow>
       )}
     </div>
   );
@@ -1583,15 +1842,19 @@ function RecordModal({ mode, initialData, onClose, onSave, isSubmitting }) {
       icon={mode === 'add' ? Plus : Edit}
       onClose={onClose}
       zIndexClassName="z-50"
-      maxWidthClassName="max-w-2xl"
-      maxHeightClassName="max-h-[80vh]"
+      draggable={true}
+      resizable={true}
+      defaultWidth={600}
+      defaultHeight={500}
+      minWidth={400}
+      minHeight={300}
       contentClassName="p-6"
       closeOnOverlayClick
       overlayClassName="bg-black/60 backdrop-blur-sm"
       enableMinimize={false}
       enableMaximize={false}
     >
-      <div className="overflow-hidden flex flex-col">
+      <div className="overflow-hidden flex flex-col h-full">
         <div className="flex items-center justify-between mb-2">
           <span className="text-[11px] font-bold text-[var(--text-muted)] uppercase">{t('database.editor.jsonContent')}</span>
           {error && (
@@ -1601,7 +1864,7 @@ function RecordModal({ mode, initialData, onClose, onSave, isSubmitting }) {
           )}
         </div>
         <textarea
-          className="w-full bg-black/40 border border-white/10 rounded-2xl p-4 font-mono text-sm focus:outline-none focus:border-indigo-500/50 resize-none custom-scrollbar text-emerald-400/90 min-h-[40vh]"
+          className="w-full bg-black/40 border border-white/10 rounded-2xl p-4 font-mono text-sm focus:outline-none focus:border-indigo-500/50 resize-none custom-scrollbar text-emerald-400/90 flex-1 min-h-0"
           value={jsonValue}
           onChange={(e) => {
             setJsonValue(e.target.value);
@@ -1637,41 +1900,100 @@ function RecordModal({ mode, initialData, onClose, onSave, isSubmitting }) {
   );
 }
 
-function ConfirmationModal({ title, message, type, onCancel, onConfirm }) {
+function ConfirmationModal({ title, message, type, showBackup, doBackup, onCancel, onConfirm, onToggleBackup }) {
   const { t } = useTranslation();
   const isDanger = type === 'danger';
+  const Icon = isDanger ? AlertTriangle : AlertCircle;
+
   return (
     <MacOSModalWindow
       isOpen
       title={title}
-      icon={AlertCircle}
       onClose={onCancel}
-      zIndexClassName="z-[60]"
+      zIndexClassName="z-[61]"
       maxWidthClassName="max-w-md"
-      maxHeightClassName="max-h-[80vh]"
-      contentClassName="p-6"
-      closeOnOverlayClick
-      overlayClassName="bg-black/60 backdrop-blur-sm"
+      contentClassName="p-0"
       enableMinimize={false}
       enableMaximize={false}
+      draggable
+      resizable
+      defaultWidth={440}
+      defaultHeight={280}
     >
-      <p className="text-sm text-gray-300 whitespace-pre-wrap leading-relaxed font-medium">
-        {message}
-      </p>
+      <div className="flex flex-col h-full bg-[var(--bg-primary)]">
+        {/* Main Content Area */}
+        <div className="p-5 flex gap-4">
+           <div className={`shrink-0 w-11 h-11 rounded-xl flex items-center justify-center shadow-inner ${
+             isDanger 
+               ? 'bg-red-500/10 text-red-500' 
+               : 'bg-indigo-500/10 text-indigo-500'
+           }`}>
+             <Icon size={22} />
+           </div>
+           
+           <div className="flex-1 space-y-1.5 min-w-0">
+             <h2 className="text-[13px] font-bold text-[var(--text-primary)] leading-tight tracking-tight uppercase opacity-80">
+               Confirm Action
+             </h2>
+             <p className="text-[11px] text-[var(--text-secondary)] leading-relaxed font-medium opacity-80 break-words">
+               {message}
+             </p>
+           </div>
+        </div>
 
-      <div className="mt-6 flex items-center justify-end gap-3">
-        <button
-          onClick={onCancel}
-          className="px-4 py-2 text-xs font-bold text-gray-400 hover:text-white transition-colors rounded-lg"
-        >
-          {t('database.modals.confirmCancel')}
-        </button>
-        <button
-          onClick={onConfirm}
-          className={`px-6 py-2 rounded-xl text-xs font-bold text-white transition-all shadow-lg ${isDanger ? 'bg-red-500 hover:bg-red-600 shadow-red-500/20' : 'bg-blue-500 hover:bg-blue-600 shadow-blue-500/20'}`}
-        >
-          {isDanger ? t('database.modals.confirmYes') : t('database.modals.confirmOk')}
-        </button>
+        {/* Options & Backup Selection */}
+        {showBackup && (
+          <div className="px-5 py-3 bg-[var(--bg-secondary)]/50 border-y border-[var(--border-color)]/20">
+            <label className="flex items-center gap-3 cursor-pointer group">
+              <div className="relative flex items-center shrink-0">
+                <input 
+                  type="checkbox" 
+                  checked={doBackup}
+                  onChange={(e) => onToggleBackup(e.target.checked)}
+                  className="peer h-4 w-4 opacity-0 absolute cursor-pointer z-10"
+                />
+                <div className={`h-4 w-4 rounded border transition-all flex items-center justify-center ${
+                  doBackup 
+                    ? 'bg-emerald-500 border-emerald-500' 
+                    : 'border-[var(--border-color)] bg-[var(--bg-primary)] group-hover:border-emerald-500/50'
+                }`}>
+                  {doBackup && <Check size={10} className="text-white font-black" strokeWidth={4} />}
+                </div>
+              </div>
+              <div className="flex flex-col min-w-0">
+                <span className="text-[10px] font-bold text-[var(--text-primary)] uppercase tracking-wider">
+                  Auto-download Backup
+                </span>
+                <span className="text-[9px] text-[var(--text-muted)] leading-tight truncate">
+                  Safety download before changes.
+                </span>
+              </div>
+              <div className="ml-auto shrink-0">
+                <ShieldCheck size={14} className={doBackup ? 'text-emerald-500' : 'text-[var(--text-muted)] opacity-20'} />
+              </div>
+            </label>
+          </div>
+        )}
+
+        {/* Footer Actions */}
+        <div className="mt-auto p-3 px-5 flex items-center justify-end gap-2 bg-[var(--bg-tertiary)]/10 rounded-b-2xl">
+          <button
+            onClick={onCancel}
+            className="px-4 py-1.5 text-[10px] font-bold text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-secondary)] transition-all rounded-lg"
+          >
+            {t('database.modals.confirmCancel')}
+          </button>
+          <button
+            onClick={onConfirm}
+            className={`px-5 py-2 rounded-lg text-[10px] font-black text-white transition-all shadow-lg hover:brightness-110 active:scale-95 flex items-center gap-2 ${
+              isDanger 
+                ? 'bg-red-600 shadow-red-500/10' 
+                : 'bg-indigo-600 shadow-indigo-500/10'
+            }`}
+          >
+            {isDanger ? 'Confirm' : t('database.modals.confirmOk')}
+          </button>
+        </div>
       </div>
     </MacOSModalWindow>
   );

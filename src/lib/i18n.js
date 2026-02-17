@@ -224,6 +224,10 @@ const resources = {
           desktop: "Desktop Alerts",
           desktopDesc: "Show toast messages on the virtual desktop",
         },
+        keyboard: {
+          title: "Keyboard Shortcuts",
+          desc: "Manage system shortcuts",
+        },
         privacy: {
           title: "Privacy",
           desc: "Control your data and security preferences.",
@@ -487,12 +491,41 @@ const resources = {
         },
         ai: {
           title: "Ask AI",
-          placeholder: "Describe what you want to find (e.g. 'find active users older than 20')",
+          placeholder: "Search sessions... (e.g. 'closed status', 'started today')",
           loading: "Magic...",
-          generate: "Generate Query",
-          history: "Prompt History",
+          generate: "Generate",
+          history: "History",
           clearAll: "Clear All",
-          noHistory: "No recent prompts"
+          noHistory: "No recent prompts",
+          help: "How to use AI Query",
+          examples: {
+            title: "Try these examples:",
+            actions: {
+              list: "List all from this table",
+              edit: "Change status of latest record to 'closed'",
+              update: "Update all 'active' items to 'pending'",
+              delete: "Remove sessions started before 2024",
+              search: "Find records where status is 'error'"
+            },
+            sessions: {
+              status: "Find sessions with status 'closed'",
+              recent: "Show sessions starting today",
+              active: "List all active sessions",
+              cleanup: "Delete all closed sessions"
+            },
+            connections: {
+              provider: "List all MongoDB connections",
+              host: "Search for localhost servers",
+              name: "Find connection named 'production'",
+              type: "Show all system databases"
+            },
+            notes: {
+              search: "Find notes about 'meeting'",
+              pinned: "List all pinned notes",
+              update: "Mark all 'todo' notes as 'done'",
+              cleanup: "Remove untitled notes"
+            }
+          }
         },
         status: {
           fetching: "Fetching Data..."
@@ -553,7 +586,8 @@ const resources = {
           toBeUpdated: "that will be updated",
           title: "{{type}} PREVIEW",
           actions: "Actions",
-          previewing: "PREVIEWING TARGETS"
+          previewing: "PREVIEWING TARGETS",
+          confirmAndExecute: "Confirm & Execute"
         },
         errors: {
           connectionError: "Connection Error",
@@ -776,7 +810,11 @@ const resources = {
           terminal: "เสียงเทอร์มินัล",
           terminalDesc: "เล่นเสียงบี๊บเมื่อมีการดำเนินการในเทอร์มินัล",
           desktop: "การแจ้งเตือนเดสก์ท็อป",
-          desktopDesc: "แสดงข้อความแจ้งเตือนบนเทอร์มินัลเสมือน",
+          desktopDesc: "แสดงข้อความแจ้งเตือนบนเดสก์ท็อปเสมือน",
+        },
+        keyboard: {
+          title: "คีย์บอร์ดลัด",
+          desc: "จัดการคีย์บอร์ดลัดของระบบ",
         },
         privacy: {
           title: "ความเป็นส่วนตัว",
@@ -1041,12 +1079,41 @@ const resources = {
         },
         ai: {
           title: "ถาม AI",
-          placeholder: "อธิบายสิ่งที่คุณต้องการค้นหา (เช่น 'หาผู้ใช้ที่อายุมากกว่า 20')",
-          loading: "กำลังร่ายมนตร์...",
-          generate: "สร้างคิวรี",
-          history: "ประวัติคำสั่ง",
+          placeholder: "ค้นหาเซสชัน... (เช่น 'สถานะ closed', 'เริ่มต้นวันนี้')",
+          loading: "กำลังประมวลผล...",
+          generate: "สร้าง",
+          history: "ประวัติ",
           clearAll: "ล้างทั้งหมด",
-          noHistory: "ไม่มีประวัติล่าสุด"
+          noHistory: "ไม่มีประวัติล่าสุด",
+          help: "วิธีใช้การค้นหาด้วย AI",
+          examples: {
+            title: "ลองใช้ตัวอย่างเหล่านี้:",
+            actions: {
+              list: "แสดงข้อมูลทั้งหมดในตารางนี้",
+              edit: "เปลี่ยนสถานะรายการล่าสุดเป็น 'closed'",
+              update: "อัปเดตรายการ 'active' ทั้งหมดเป็น 'pending'",
+              delete: "ลบเซสชันที่เริ่มต้นก่อนปี 2024",
+              search: "ค้นหารายการที่สถานะเป็น 'error'"
+            },
+            sessions: {
+              status: "ค้นหาเซสชันที่มีสถานะ 'closed'",
+              recent: "แสดงเซสชันที่เริ่มต้นวันนี้",
+              active: "แสดงเซสชันที่กำลังใช้งานทั้งหมด",
+              cleanup: "ลบเซสชันที่ปิดแล้วทั้งหมด"
+            },
+            connections: {
+              provider: "แสดงการเชื่อมต่อ MongoDB ทั้งหมด",
+              host: "ค้นหาเซิร์ฟเวอร์ localhost",
+              name: "ค้นหาการเชื่อมต่อชื่อ 'production'",
+              type: "แสดงฐานข้อมูลระบบทั้งหมด"
+            },
+            notes: {
+              search: "ค้นหาบันทึกเกี่ยวกับ 'การประชุม'",
+              pinned: "แสดงบันทึกที่ปักหมุดไว้",
+              update: "เปลี่ยนบันทึก 'todo' ทั้งหมดเป็น 'done'",
+              cleanup: "ลบบันทึกที่ไม่มีชื่อ"
+            }
+          }
         },
         status: {
           fetching: "กำลังดึงข้อมูล..."
@@ -1107,7 +1174,8 @@ const resources = {
           toBeUpdated: "ที่จะถูกอัปเดต",
           title: "ตัวอย่าง {{type}}",
           actions: "การดำเนินการ",
-          previewing: "กำลังดูตัวอย่างเป้าหมาย"
+          previewing: "กำลังดูตัวอย่างเป้าหมาย",
+          confirmAndExecute: "ยืนยันและดำเนินการ"
         },
         errors: {
           connectionError: "การเชื่อมต่อขัดข้อง",
@@ -1307,6 +1375,10 @@ const resources = {
           terminalDesc: "在终端执行操作时播放提示音",
           desktop: "桌面警报",
           desktopDesc: "在虚拟桌面上显示提示消息",
+        },
+        keyboard: {
+          title: "键盘快捷键",
+          desc: "管理系统快捷键",
         },
         privacy: {
           title: "隐私",
@@ -1571,12 +1643,41 @@ const resources = {
         },
         ai: {
           title: "咨询 AI",
-          placeholder: "描述您想查找的内容（例如：'查找年龄大于 20 的活跃用户'）",
-          loading: "正在生成...",
-          generate: "生成查询",
-          history: "提示词历史",
+          placeholder: "搜索会话... (例如：'已更改状态'，'今日开始')",
+          loading: "魔法处理中...",
+          generate: "生成",
+          history: "历史",
           clearAll: "清空全部",
-          noHistory: "暂无历史记录"
+          noHistory: "暂无记录",
+          help: "如何使用 AI 查询",
+          examples: {
+            title: "试试这些示例：",
+            actions: {
+              list: "列出此表中的所有记录",
+              edit: "将最新记录的状态更改为 'closed'",
+              update: "将所有 'active' 项目更新为 'pending'",
+              delete: "删除 2024 年之前开始的会话",
+              search: "查找状态为 'error' 的记录"
+            },
+            sessions: {
+              status: "查找状态为 'closed' 的会话",
+              recent: "显示今天开始的会话",
+              active: "列出所有活跃会话",
+              cleanup: "清理所有已关闭会话"
+            },
+            connections: {
+              provider: "列出所有 MongoDB 连接",
+              host: "搜索 localhost 服务器",
+              name: "查找名为 'production' 的连接",
+              type: "显示所有系统数据库"
+            },
+            notes: {
+              search: "查找关于 '会议' 的笔记",
+              pinned: "列出所有置顶笔记",
+              update: "将所有 'todo' 笔记标记为 'done'",
+              cleanup: "删除无标题笔记"
+            }
+          }
         },
         status: {
           fetching: "正在获取数据..."
@@ -1637,7 +1738,8 @@ const resources = {
           toBeUpdated: "将被更新",
           title: "{{type}} 预览",
           actions: "操作",
-          previewing: "预览目标"
+          previewing: "预览目标",
+          confirmAndExecute: "确认并执行"
         },
         errors: {
           connectionError: "连接错误",

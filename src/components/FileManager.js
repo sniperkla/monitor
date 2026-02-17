@@ -6,7 +6,7 @@ import {
   Folder, File, ChevronLeft, ChevronRight, RefreshCw, 
   Download, Upload, Trash2, FolderPlus, Search, Grid, List as ListIcon,
   AlertCircle, Edit, FileText, X, Save, AlertTriangle, 
-  Copy, Scissors, Clipboard
+  Copy, Scissors, Clipboard, Wifi
 } from 'lucide-react';
 import io from 'socket.io-client';
 import { useOS } from '@/context/OSContext';
@@ -31,6 +31,8 @@ export default function FileManager({ connectionId, connectionName, connection }
   const [socket, setSocket] = useState(null);
   const [viewMode, setViewMode] = useState('grid');
   const [searchQuery, setSearchQuery] = useState('');
+  const [latency, setLatency] = useState(null);
+  const socketRef = useRef(null);
 
   // Context Menu State
   const [contextMenu, setContextMenu] = useState({ visible: false, x: 0, y: 0, file: null });
@@ -103,6 +105,11 @@ export default function FileManager({ connectionId, connectionName, connection }
       newSocket.emit('sftp:list', '.');
       // Update global connection status
       appDispatch({ type: 'UPDATE_CONNECTION', payload: { _id: connectionId, status: 'online' } });
+    });
+
+    newSocket.on('heartbeat:pong', (sentTimestamp) => {
+      const now = Date.now();
+      setLatency(now - sentTimestamp);
     });
 
     newSocket.on('sftp:list', (data) => {
@@ -193,6 +200,7 @@ export default function FileManager({ connectionId, connectionName, connection }
       appDispatch({ type: 'UPDATE_CONNECTION', payload: { _id: connectionId, status: 'offline' } });
     });
 
+    socketRef.current = newSocket;
     setSocket(newSocket);
 
     return () => {
@@ -215,6 +223,21 @@ export default function FileManager({ connectionId, connectionName, connection }
     
     return () => clearInterval(interval);
   }, [status, socket]);
+
+  // Latency Heartbeat
+  useEffect(() => {
+    let interval;
+    if (status === 'ready' && socketRef.current) {
+      interval = setInterval(() => {
+        if (socketRef.current.connected) {
+           socketRef.current.emit('heartbeat:ping', Date.now());
+        }
+      }, 3000);
+    }
+    return () => {
+      if (interval) clearInterval(interval);
+    };
+  }, [status]);
   
   // Transfer Retry Countdown
   useEffect(() => {
@@ -617,7 +640,21 @@ export default function FileManager({ connectionId, connectionName, connection }
     });
 
   return (
-    <div className="flex flex-col h-full bg-[var(--bg-primary)] text-[var(--text-primary)] relative overflow-hidden">
+    <div className="flex flex-col h-full bg-[var(--bg-primary)] text-[var(--text-primary)] relative overflow-hidden group/filemanager">
+      {/* Floating Latency Badge */}
+      {latency !== null && status === 'ready' && (
+        <div 
+          className="absolute top-20 right-6 z-[60] flex items-center gap-1.5 text-[10px] font-bold px-2 py-0.5 rounded-full bg-[var(--bg-secondary)]/80 backdrop-blur-xl border border-[var(--border-color)]/50 shadow-lg opacity-60 group-hover/filemanager:opacity-100 transition-all pointer-events-none"
+          style={{ 
+            color: latency < 150 ? '#4ade80' : latency < 300 ? '#fbbf24' : '#f43f5e' 
+          }}
+          title="Network Latency (Ping)"
+        >
+          <Wifi size={10} strokeWidth={3} />
+          <span className="font-mono tracking-tighter">{latency}ms</span>
+        </div>
+      )}
+
       <AnimatePresence>
         {transfer && (
           <motion.div 
@@ -682,13 +719,17 @@ export default function FileManager({ connectionId, connectionName, connection }
           icon={FileText}
           onClose={() => setEditor({ ...editor, visible: false })}
           zIndexClassName="z-[9999]"
-          maxWidthClassName="max-w-4xl"
-          maxHeightClassName="max-h-[80vh]"
+          draggable={true}
+          resizable={true}
+          defaultWidth={800}
+          defaultHeight={600}
+          minWidth={500}
+          minHeight={400}
           contentClassName="p-4"
           closeOnOverlayClick
           overlayClassName="bg-black/80"
         >
-          <div className="flex flex-col h-[70vh]">
+          <div className="flex flex-col h-full">
             <div className="flex items-center justify-end gap-2 mb-3">
               <button
                 onClick={handleSave}

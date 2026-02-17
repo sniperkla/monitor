@@ -122,16 +122,27 @@ export default function DesktopEnvironment() {
     };
 
     const handleKeyDown = (e) => {
-      // Use configurable shortcuts from state
+      // Check for terminal or input focus to prevent conflicts
+      const activeElement = document.activeElement;
+      const isTerminal = activeElement?.classList.contains('xterm-helper-textarea') || 
+                         activeElement?.closest('.xterm');
+      const isInput = activeElement?.tagName === 'INPUT' || 
+                      activeElement?.tagName === 'TEXTAREA' || 
+                      activeElement?.isContentEditable;
+
+      if (isTerminal || isInput) {
+        // If it's an Escape key and we're showing preview, we still want to close it
+        if (e.key === 'Escape' && showPreview) {
+           // allow it to fall through
+        } else {
+           return;
+        }
+      }
+
       const shortcuts = keyboardShortcuts || {
         previewWindow: 'Ctrl+Cmd+Up',
-        prevDesktop: 'Ctrl+Cmd+Left',
-        nextDesktop: 'Ctrl+Cmd+Right',
-        minimizeAll: 'Ctrl+Cmd+M',
-        closeAll: 'Ctrl+Cmd+W',
       };
 
-      // Parse shortcut strings and check if they match
       const isShortcut = (shortcut, pressedKey, ctrlKey, metaKey) => {
         if (!shortcut) return false;
         const parts = shortcut.toLowerCase().split('+').map(p => p.trim());
@@ -141,12 +152,11 @@ export default function DesktopEnvironment() {
         const k = (pressedKey || '').toLowerCase();
         const keyToken = k.startsWith('arrow') ? k.replace('arrow', '') : k;
 
-        // Allow either 'up' or 'arrowup' style tokens in the shortcut string
         const hasKey = parts.includes(keyToken) || parts.includes(k);
         return hasCtrl && hasCmd && hasKey;
       };
 
-      // Ctrl + Cmd + Up to open/close preview window
+      // Toggle preview window
       if (isShortcut(shortcuts.previewWindow, e.key, e.ctrlKey, e.metaKey)) {
         e.preventDefault();
         e.stopPropagation();
@@ -165,20 +175,7 @@ export default function DesktopEnvironment() {
           });
         }
       }
-      // Ctrl + Cmd + Left for previous desktop
-      else if (isShortcut(shortcuts.prevDesktop, e.key, e.ctrlKey, e.metaKey)) {
-        if (e.key !== 'ArrowLeft') return;
-        e.preventDefault();
-        e.stopPropagation();
-        switchToPrevDesktop();
-      }
-      // Ctrl + Cmd + Right for next desktop
-      else if (isShortcut(shortcuts.nextDesktop, e.key, e.ctrlKey, e.metaKey)) {
-        if (e.key !== 'ArrowRight') return;
-        e.preventDefault();
-        e.stopPropagation();
-        switchToNextDesktop();
-      }
+
       // Escape to close preview window
       if (e.key === 'Escape' && showPreview) {
         setShowPreview(false);
@@ -349,11 +346,32 @@ export default function DesktopEnvironment() {
     if (!data) return;
     try {
       const conn = JSON.parse(data);
+      // For databases, there's usually only one tool, so open it immediately
+      if (conn.type === 'database') {
+        openStandaloneDatabase(conn);
+        return;
+      }
       setDropMenu({ x: e.clientX, y: e.clientY, connection: conn });
     } catch (err) {
       console.error('Drop parse error:', err);
     }
   };
+
+  useEffect(() => {
+    const handleIconDrop = (e) => {
+      const { targetAppId, connection } = e.detail;
+      if (targetAppId === 'terminal') {
+        openStandaloneTerminal(connection);
+      } else if (targetAppId === 'files') {
+        openStandaloneFiles(connection);
+      } else if (targetAppId === 'ssh-manager') {
+        // Default to terminal for SSH manager drop if it's a drag-action
+        openStandaloneTerminal(connection);
+      }
+    };
+    window.addEventListener('desktop-icon-drop', handleIconDrop);
+    return () => window.removeEventListener('desktop-icon-drop', handleIconDrop);
+  }, []);
 
   const openStandaloneTerminal = (conn) => {
     const winId = `standalone-term-${conn._id}`;

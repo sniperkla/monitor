@@ -67,6 +67,7 @@ const initialState = {
     nextDesktop: 'Ctrl+Cmd+Right',
     minimizeAll: 'Ctrl+Cmd+M',
     closeAll: 'Ctrl+Cmd+W',
+    spotlight: 'Cmd+K',
   },
 };
 
@@ -425,8 +426,8 @@ function osReducer(state, action) {
           includeTime: false,
           includeType: true,
         },
-        windows: hydratedWindows.length > 0 ? hydratedWindows : state.windows
-        ,
+        keyboardShortcuts: action.payload.keyboardShortcuts || state.keyboardShortcuts,
+        windows: hydratedWindows.length > 0 ? hydratedWindows : state.windows,
         windowsByDesktop: hydratedWindowsByDesktop || action.payload.windowsByDesktop || state.windowsByDesktop
       };
     }
@@ -690,19 +691,27 @@ export function OSProvider({ children }) {
         },
         aiHistory: s.aiHistory || [],
         openWindows: (s.windows || s.openWindows || []).map(w => ({
-        id: w.id,
-        title: w.title,
-        x: Math.round(w.x || 0),
-        y: Math.round(w.y || 0),
-        width: Math.round(w.width || 800),
-        height: Math.round(w.height || 600),
-        isMaximized: !!w.isMaximized,
-        isMinimized: !!w.isMinimized,
-        snapSide: w.snapSide || null,
-        zIndex: w.zIndex || 100,
-        appType: w.appType || null,
-        props: w.props || {}
-      }))
+          id: w.id,
+          title: w.title,
+          x: Math.round(w.x || 0),
+          y: Math.round(w.y || 0),
+          width: Math.round(w.width || 800),
+          height: Math.round(w.height || 600),
+          isMaximized: !!w.isMaximized,
+          isMinimized: !!w.isMinimized,
+          snapSide: w.snapSide || null,
+          zIndex: w.zIndex || 100,
+          appType: w.appType || null,
+          props: w.props || {}
+        })),
+        keyboardShortcuts: s.keyboardShortcuts || {
+          previewWindow: 'Ctrl+Cmd+Up',
+          prevDesktop: 'Ctrl+Cmd+Left',
+          nextDesktop: 'Ctrl+Cmd+Right',
+          minimizeAll: 'Ctrl+Cmd+M',
+          closeAll: 'Ctrl+Cmd+W',
+          spotlight: 'Cmd+K'
+        }
     });
   };
 
@@ -1168,38 +1177,81 @@ export function OSProvider({ children }) {
     };
 
     const handleKeyDown = (e) => {
-      // Do not intercept preview shortcut (Ctrl+Cmd+Up). DesktopEnvironment handles it.
-      if (e.ctrlKey && e.metaKey && e.key === 'ArrowUp') {
+      // Prevent OS shortcuts if we're in a terminal or an input field to avoid conflicts
+      const activeElement = document.activeElement;
+      const isTerminal = activeElement?.classList.contains('xterm-helper-textarea') || 
+                         activeElement?.closest('.xterm');
+      const isInput = activeElement?.tagName === 'INPUT' || 
+                      activeElement?.tagName === 'TEXTAREA' || 
+                      activeElement?.isContentEditable;
+
+      if (isTerminal || isInput) {
+        // If we are in a terminal, we definitely want to skip ALL shortcuts 
+        // to let the terminal handle them.
+        // For inputs, we might want to allow some, but to follow the user request 
+        // of "prevent keyboard shortcuts" due to conflicts, we'll skip them too.
         return;
       }
 
-      // Only handle desktop switching when an arrow key is actually pressed.
-      if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') {
-        return;
-      }
-
-      // Use configurable shortcuts from state
       const shortcuts = state.keyboardShortcuts || {
         prevDesktop: 'Ctrl+Cmd+Left',
         nextDesktop: 'Ctrl+Cmd+Right',
+        minimizeAll: 'Ctrl+Cmd+M',
+        closeAll: 'Ctrl+Cmd+W',
       };
 
-      // Parse shortcut strings and check if they match
-      const isShortcut = (shortcut, key, ctrlKey, metaKey) => {
+      const isShortcutMatch = (shortcut, event) => {
+        if (!shortcut) return false;
         const parts = shortcut.toLowerCase().split('+').map(p => p.trim());
-        const hasCtrl = parts.includes('ctrl') && ctrlKey;
-        const hasCmd = parts.includes('cmd') && metaKey;
-        const hasKey = parts.includes(key.toLowerCase().replace('arrow', ''));
-        return hasCtrl && hasCmd && hasKey;
+        const hasCtrl = parts.includes('ctrl') && event.ctrlKey;
+        const hasCmd = parts.includes('cmd') && event.metaKey;
+        const hasAlt = parts.includes('alt') && event.altKey;
+        const hasShift = parts.includes('shift') && event.shiftKey;
+        
+        // Find the main key (not a modifier)
+        const mainKey = parts.find(p => !['ctrl', 'cmd', 'alt', 'shift'].includes(p));
+        const eventKey = event.key.toLowerCase();
+        
+        // Handle common aliases
+        const keyMap = {
+          'up': 'arrowup',
+          'down': 'arrowdown',
+          'left': 'arrowleft',
+          'right': 'arrowright'
+        };
+
+        const targetKey = keyMap[mainKey] || mainKey;
+        const currentKey = keyMap[eventKey] || eventKey;
+        
+        return (
+          (hasCtrl || !parts.includes('ctrl')) &&
+          (hasCmd || !parts.includes('cmd')) &&
+          (hasAlt || !parts.includes('alt')) &&
+          (hasShift || !parts.includes('shift')) &&
+          currentKey === targetKey
+        );
       };
 
-      // Ctrl + Cmd + Arrow keys to switch desktops
-      if (isShortcut(shortcuts.prevDesktop, 'ArrowLeft', e.ctrlKey, e.metaKey)) {
+      // Previous Desktop
+      if (isShortcutMatch(shortcuts.prevDesktop, e)) {
         e.preventDefault();
         switchToPrevDesktop();
-      } else if (isShortcut(shortcuts.nextDesktop, 'ArrowRight', e.ctrlKey, e.metaKey)) {
+      } 
+      // Next Desktop
+      else if (isShortcutMatch(shortcuts.nextDesktop, e)) {
         e.preventDefault();
         switchToNextDesktop();
+      }
+      // Minimize All
+      else if (isShortcutMatch(shortcuts.minimizeAll, e)) {
+        e.preventDefault();
+        minimizeAll();
+      }
+      // Close All
+      else if (isShortcutMatch(shortcuts.closeAll, e)) {
+        e.preventDefault();
+        // Implement close all if needed, or for now just prevent default
+        // dispatch({ type: 'CLOSE_ALL_WINDOWS' });
       }
     };
 

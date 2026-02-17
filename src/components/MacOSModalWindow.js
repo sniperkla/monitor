@@ -95,15 +95,15 @@ function WindowTitleBar({ title, icon: Icon, onClose, onMinimize, onMaximize, is
 
   return (
     <div 
-      className={`modal-drag-handle relative flex items-center h-10 bg-gradient-to-b from-[var(--bg-secondary)] to-[var(--bg-tertiary)] border-b border-[var(--border-color)] cursor-default select-none ${isMac ? 'px-3 justify-between' : 'flex-row-reverse justify-between'}`}
+      className={`modal-drag-handle relative flex items-center h-9 bg-[var(--bg-secondary)] border-b border-[var(--border-color)] cursor-default select-none group/titlebar px-3 ${isMac ? 'justify-start' : 'justify-between flex-row-reverse'}`}
       onDoubleClick={(e) => { 
-        // Only toggle if not clicking on buttons (buttons stop propagation naturally, but just in case)
         if (e.target.tagName !== 'BUTTON' && enableMaximize) {
           onMaximize();
         }
       }}
     >
-      <div className={`relative z-20 flex items-center h-full ${isMac ? '' : 'order-1'}`}>
+      {/* Buttons Container */}
+      <div className={`relative z-20 flex items-center h-full ${isMac ? 'w-[60px]' : ''}`}>
         <WindowButtons 
           onClose={onClose} 
           onMinimize={onMinimize} 
@@ -115,12 +115,14 @@ function WindowTitleBar({ title, icon: Icon, onClose, onMinimize, onMaximize, is
         />
       </div>
       
-      <div className={`relative z-10 flex items-center gap-2 text-xs font-medium text-[var(--text-secondary)] pointer-events-none select-none ${isMac ? 'flex-1 justify-center' : 'px-4'}`}>
-        {Icon ? <Icon size={14} /> : null}
-        <span className="truncate">{title}</span>
+      {/* Title Container */}
+      <div className={`absolute inset-0 flex items-center gap-2 text-[11px] font-bold text-[var(--text-secondary)] pointer-events-none select-none px-4 ${isMac ? 'justify-center' : 'justify-start'}`}>
+        {Icon ? <Icon size={12} className="opacity-70" /> : null}
+        <span className="truncate max-w-[60%]">{title}</span>
       </div>
-      
-      {isMac && <div className="w-14" />}
+
+      {/* Spacing for Windows Close button hover effect area if needed, or just leave it */}
+      {!isMac && <div className="w-4" />}
     </div>
   );
 }
@@ -139,8 +141,8 @@ export default function MacOSModalWindow({
   resizable = false,
   defaultWidth,
   defaultHeight,
-  minWidth = 420,
-  minHeight = 240,
+  minWidth = 320,
+  minHeight = 180,
   children,
   zIndexClassName = 'z-[50000]',
   maxWidthClassName = 'max-w-sm',
@@ -188,8 +190,8 @@ export default function MacOSModalWindow({
     if (!isOpen) return;
     if (!(draggable || resizable)) return;
 
-    const w = typeof defaultWidth === 'number' ? defaultWidth : 560;
-    const h = typeof defaultHeight === 'number' ? defaultHeight : 420;
+    const w = typeof defaultWidth === 'number' ? defaultWidth : 480;
+    const h = typeof defaultHeight === 'number' ? defaultHeight : 320;
 
     const vw = window.innerWidth;
     const vh = window.innerHeight;
@@ -264,10 +266,10 @@ export default function MacOSModalWindow({
               size={{
                 width: effectiveMaximized
                   ? (viewport.w || window.innerWidth)
-                  : (typeof size?.width === 'number' ? size.width : (typeof defaultWidth === 'number' ? defaultWidth : 560)),
+                  : (typeof size?.width === 'number' ? size.width : (typeof defaultWidth === 'number' ? defaultWidth : 480)),
                 height: effectiveMaximized
                   ? (viewport.h || window.innerHeight)
-                  : (typeof size?.height === 'number' ? size.height : (typeof defaultHeight === 'number' ? defaultHeight : 420)),
+                  : (typeof size?.height === 'number' ? size.height : (typeof defaultHeight === 'number' ? defaultHeight : 320)),
               }}
               position={effectiveMaximized ? { x: 0, y: 0 } : position}
               onDragStop={(e, d) => setPosition({ x: d.x, y: d.y })}

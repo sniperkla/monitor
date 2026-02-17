@@ -14,6 +14,9 @@ export default function DatabaseBrowser({ initialConnection, onEditConnection, o
     dispatch({ type: 'SET_ACTIVE_DATABASE_BROWSER', payload: id });
   };
 
+  const [isOpening, setIsOpening] = useState(!!initialConnection);
+  const isStandalone = !!initialConnection;
+
   // Auto-open initial connection if provided (for standalone mode)
   useEffect(() => {
     if (initialConnection) {
@@ -33,6 +36,7 @@ export default function DatabaseBrowser({ initialConnection, onEditConnection, o
       } else {
         setActiveTab(existing.id);
       }
+      setIsOpening(false);
     }
   }, [initialConnection]);
 
@@ -42,7 +46,17 @@ export default function DatabaseBrowser({ initialConnection, onEditConnection, o
 
   const dbConnections = state.connections.filter(c => c.type === 'database');
 
-  if (activeDatabaseBrowsers.length === 0) {
+  if (activeDatabaseBrowsers.length === 0 || isOpening) {
+    if (isStandalone) {
+      return (
+        <div className="h-full flex items-center justify-center bg-[var(--bg-primary)] rounded-3xl border border-[var(--border-color)]">
+           <div className="text-center animate-pulse">
+              <Database size={40} className="text-emerald-500 mx-auto mb-4" />
+              <p className="text-[var(--text-muted)] text-sm">Opening {initialConnection.name}...</p>
+           </div>
+        </div>
+      );
+    }
     return (
       <div className="h-full flex items-center justify-center bg-[var(--bg-primary)] rounded-3xl border border-[var(--border-color)]">
         <div className="text-center p-12 w-full max-w-4xl">
@@ -81,7 +95,20 @@ export default function DatabaseBrowser({ initialConnection, onEditConnection, o
                             }
                           });
                         }}
-                        className="flex flex-col items-center p-6 bg-white/5 hover:bg-white/10 rounded-3xl w-40 border border-white/5 hover:border-emerald-500/30 transition-all hover:scale-105 active:scale-95 shadow-xl group"
+                        draggable
+                        onDragStart={(e) => {
+                          e.dataTransfer.setData('application/ssh-connection', JSON.stringify(conn));
+                          e.dataTransfer.effectAllowed = 'copy';
+                          // Create a drag image
+                          const ghost = document.createElement('div');
+                          ghost.className = 'flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-semibold text-white';
+                          ghost.style.cssText = `background:${conn.color || '#6366f1'};position:fixed;top:-100px;left:-100px;z-index:99999;opacity:0.9;border-radius:8px;padding:6px 14px;pointer-events:none;`;
+                          ghost.textContent = `🖥 ${conn.name}`;
+                          document.body.appendChild(ghost);
+                          e.dataTransfer.setDragImage(ghost, 0, 0);
+                          setTimeout(() => document.body.removeChild(ghost), 0);
+                        }}
+                        className="flex flex-col items-center p-6 bg-white/5 hover:bg-white/10 rounded-3xl w-40 border border-white/5 hover:border-emerald-500/30 transition-all hover:scale-105 active:scale-95 shadow-xl group cursor-grab active:cursor-grabbing"
                       >
                         <div className="w-12 h-12 rounded-2xl flex items-center justify-center mb-3 transition-transform group-hover:scale-110" 
                           style={{ background: `${conn.color}15`, border: `1px solid ${conn.color}30` }}>
@@ -127,6 +154,20 @@ export default function DatabaseBrowser({ initialConnection, onEditConnection, o
     );
   }
 
+  if (isStandalone) {
+    const browser = activeDatabaseBrowsers.find(b => b.connectionId === initialConnection._id);
+    if (!browser) return null;
+    return (
+      <div className="h-full flex flex-col bg-[var(--bg-primary)] rounded-3xl border border-[var(--border-color)] overflow-hidden">
+        <DatabaseView
+          connection={browser.connection}
+          onClose={() => handleCloseTab(browser.id)}
+          onEditConnection={onEditConnection}
+        />
+      </div>
+    );
+  }
+
   return (
     <div className="h-full flex flex-col bg-[var(--bg-primary)] rounded-3xl border border-[var(--border-color)] overflow-hidden">
       {/* Tab bar */}
@@ -135,7 +176,22 @@ export default function DatabaseBrowser({ initialConnection, onEditConnection, o
           <button
             key={browser.id}
             onClick={() => setActiveTab(browser.id)}
-            className={`flex items-center gap-2 px-4 py-2.5 text-xs font-bold rounded-t-xl transition-all border-x border-t min-w-[140px] max-w-[200px] shrink-0 ${
+            draggable
+            onDragStart={(e) => {
+              if (browser.connection) {
+                e.dataTransfer.setData('application/ssh-connection', JSON.stringify(browser.connection));
+                e.dataTransfer.effectAllowed = 'copy';
+                // Create a drag image
+                const ghost = document.createElement('div');
+                ghost.className = 'flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-semibold text-white';
+                ghost.style.cssText = `background:${browser.color || '#10b981'};position:fixed;top:-100px;left:-100px;z-index:99999;opacity:0.9;border-radius:8px;padding:6px 14px;pointer-events:none;`;
+                ghost.textContent = `🗄 ${browser.connectionName}`;
+                document.body.appendChild(ghost);
+                e.dataTransfer.setDragImage(ghost, 0, 0);
+                setTimeout(() => document.body.removeChild(ghost), 0);
+              }
+            }}
+            className={`flex items-center gap-2 px-4 py-2.5 text-xs font-bold rounded-t-xl transition-all border-x border-t min-w-[140px] max-w-[200px] shrink-0 cursor-grab active:cursor-grabbing ${
               activeTab === browser.id
                 ? 'bg-[var(--bg-primary)] border-[var(--border-color)] text-[var(--text-primary)] shadow-[0_-4px_12px_rgba(0,0,0,0.1)]'
                 : 'bg-transparent border-transparent text-[var(--text-muted)] hover:bg-white/5 hover:text-[var(--text-primary)]'

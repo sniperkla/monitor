@@ -46,7 +46,9 @@ export async function POST(request, { params }) {
       const col = pooled.db.db.collection(collection);
 
       if (query.action === 'find') {
-        result = await col.find(query.filter || {}).limit(100).toArray();
+        // Default to newest first so users see their new insertions
+        const sort = query.sort || { _id: -1 }; 
+        result = await col.find(query.filter || {}).sort(sort).limit(100).toArray();
       } else if (query.action === 'insertOne') {
         result = await col.insertOne(query.data);
       } else if (query.action === 'insertMany') {
@@ -56,13 +58,41 @@ export async function POST(request, { params }) {
         if (filter._id && typeof filter._id === 'string') {
           try { filter._id = new mongoose.Types.ObjectId(filter._id); } catch(e) {}
         }
-        result = await col.updateOne(filter, { $set: query.data });
+        
+        let updateDoc = query.update;
+        if (!updateDoc && query.data) {
+          updateDoc = { $set: query.data };
+        }
+        
+        if (!updateDoc) throw new Error('Update document is required');
+        
+        result = await col.updateOne(filter, updateDoc);
+      } else if (query.action === 'updateMany') {
+        const filter = { ...query.filter } || {};
+        if (filter._id && typeof filter._id === 'string') {
+          try { filter._id = new mongoose.Types.ObjectId(filter._id); } catch(e) {}
+        }
+
+        let updateDoc = query.update;
+        if (!updateDoc && query.data) {
+          updateDoc = { $set: query.data };
+        }
+
+        if (!updateDoc) throw new Error('Update document is required');
+
+        result = await col.updateMany(filter, updateDoc);
       } else if (query.action === 'deleteOne') {
         const filter = { ...query.filter };
         if (filter._id && typeof filter._id === 'string') {
           try { filter._id = new mongoose.Types.ObjectId(filter._id); } catch(e) {}
         }
         result = await col.deleteOne(filter);
+      } else if (query.action === 'deleteMany') {
+         const filter = { ...query.filter } || {};
+         if (filter._id && typeof filter._id === 'string') {
+           try { filter._id = new mongoose.Types.ObjectId(filter._id); } catch(e) {}
+         }
+         result = await col.deleteMany(filter);
       } else {
         throw new Error(`Action ${query.action} not supported`);
       }

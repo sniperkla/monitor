@@ -484,10 +484,10 @@ export default function ConnectionModal({ onClose, editConnection = null }) {
       zIndexClassName="z-[40000]"
       draggable
       resizable
-      defaultWidth={980}
-      defaultHeight={650}
-      minWidth={720}
-      minHeight={520}
+      defaultWidth={800}
+      defaultHeight={600}
+      minWidth={600}
+      minHeight={500}
       maxWidthClassName="max-w-4xl"
       maxHeightClassName="max-h-[80vh]"
       contentClassName="p-6 overflow-y-auto custom-scrollbar"
@@ -927,14 +927,12 @@ export default function ConnectionModal({ onClose, editConnection = null }) {
       icon={Database}
       onClose={() => setIsUriModalOpen(false)}
       zIndexClassName="z-[45000]"
-      draggable
-      resizable
-      defaultWidth={560}
-      defaultHeight={420}
-      minWidth={420}
-      minHeight={320}
-      maxWidthClassName="max-w-lg"
-      maxHeightClassName="max-h-[70vh]"
+      draggable={true}
+      resizable={true}
+      defaultWidth={480}
+      defaultHeight={360}
+      minWidth={400}
+      minHeight={300}
       contentClassName="p-6 overflow-y-auto custom-scrollbar"
       closeOnOverlayClick
       overlayClassName="bg-black/50 backdrop-blur-sm"

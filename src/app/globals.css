@@ -625,11 +625,7 @@ body {
   margin-bottom: 16px;
 }
 
-/* Xterm override styles */
-.xterm {
-  padding: 12px;
-}
-
+/* Xterm override styles - padding is now handled by the parent container in TerminalView for better compatibility with FitAddon */
 .xterm-viewport {
   scrollbar-width: thin;
   scrollbar-color: var(--border-hover) transparent;

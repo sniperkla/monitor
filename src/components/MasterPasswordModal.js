@@ -665,16 +665,14 @@ export default function MasterPasswordModal() {
       isOpen
       title={title}
       icon={icon}
-      draggable
-      resizable
-      defaultWidth={560}
-      defaultHeight={460}
-      minWidth={420}
+      draggable={true}
+      resizable={true}
+      defaultWidth={480}
+      defaultHeight={420}
+      minWidth={400}
       minHeight={360}
       onClose={() => dismissVault?.()}
       zIndexClassName="z-[90000]"
-      maxWidthClassName="max-w-xl"
-      maxHeightClassName="max-h-[75vh]"
       contentClassName="p-4"
       closeOnOverlayClick={false}
     >

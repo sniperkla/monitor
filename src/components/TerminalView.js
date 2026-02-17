@@ -3,7 +3,7 @@
 import { useApp } from '@/context/AppContext';
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { io } from 'socket.io-client';
-import { Loader2, AlertCircle, CheckCircle2, XCircle, X, Minus, Maximize2 } from 'lucide-react';
+import { Loader2, AlertCircle, CheckCircle2, XCircle, X, Minus, Maximize2, Wifi } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 let Terminal, FitAddon, WebLinksAddon;
@@ -17,6 +17,7 @@ export default function TerminalView({ connectionId, connectionName, host, color
   const fitAddonRef = useRef(null);
   const [status, setStatus] = useState('connecting'); // connecting, connected, error, closed
   const [errorMsg, setErrorMsg] = useState(null);
+  const [latency, setLatency] = useState(null);
 
   // Refs for props that might change but shouldn't trigger a full restart
   const propsRef = useRef({ connectionId, connectionName, host, connection });
@@ -80,7 +81,10 @@ export default function TerminalView({ connectionId, connectionName, host, color
     term.loadAddon(webLinksAddon);
     term.open(terminalRef.current);
 
-    setTimeout(() => { try { fitAddon.fit(); } catch (e) {} }, 100);
+    // Initial fit attempt
+    setTimeout(() => {
+      try { fitAddon.fit(); } catch (e) {}
+    }, 50);
 
     termInstanceRef.current = term;
 
@@ -102,8 +106,15 @@ export default function TerminalView({ connectionId, connectionName, host, color
     socket.on('connect', () => {
       socket.emit('ssh:connect', { 
         connectionId: propsRef.current.connectionId, 
-        connection: propsRef.current.connection 
+        connection: propsRef.current.connection,
+        cols: term.cols,
+        rows: term.rows
       });
+    });
+
+    socket.on('heartbeat:pong', (sentTimestamp) => {
+      const now = Date.now();
+      setLatency(now - sentTimestamp);
     });
 
     socket.on('ssh:connected', () => {
@@ -111,6 +122,17 @@ export default function TerminalView({ connectionId, connectionName, host, color
       updateConnectionStatus('online'); // Update global state
       term.writeln(`\x1b[1;32m✓ ${t('terminal.connectedSuccess')}\x1b[0m\n`);
       term.writeln('\r');
+      
+      // Secondary dimension sync to ensure precision after handshake
+      setTimeout(() => {
+        try {
+          fitAddon.fit();
+          if (socket.connected) {
+             socket.emit('ssh:resize', { cols: term.cols, rows: term.rows });
+          }
+        } catch (e) {}
+      }, 100);
+
       term.focus(); // Focus terminal on connect
     });
 
@@ -151,17 +173,32 @@ export default function TerminalView({ connectionId, connectionName, host, color
       }
     });
     
-    // ... resize handlers ...
-    const handleResize = () => { try { fitAddon.fit(); } catch (e) {} };
+    // Improved resize handling with precision fitting
+    const performFit = () => {
+      if (!fitAddonRef.current || !terminalRef.current) return;
+      try {
+        fitAddonRef.current.fit();
+      } catch (e) {
+        console.warn('Terminal fit failed:', e);
+      }
+    };
+
+    const handleResize = () => performFit();
     window.addEventListener('resize', handleResize);
-    const observer = new ResizeObserver(() => { try { fitAddon.fit(); } catch (e) {} });
+
+    const observer = new ResizeObserver(() => {
+      // Small delay helps flexbox layouts finish settling
+      setTimeout(performFit, 0);
+      setTimeout(performFit, 50);
+    });
+
     if (terminalRef.current) observer.observe(terminalRef.current);
 
     return () => {
       window.removeEventListener('resize', handleResize);
       observer.disconnect();
     };
-  }, [connectionId, appState.dbConfig?.uri, updateConnectionStatus]); // Only restart if ID or DB changes
+  }, [connectionId, appState.dbConfig?.uri, updateConnectionStatus]);
 
   useEffect(() => {
     const cleanup = initTerminal();
@@ -194,6 +231,21 @@ export default function TerminalView({ connectionId, connectionName, host, color
     }, 200);
     return () => clearTimeout(timeout);
   }, [status]); // Only re-fit on status changes or mount
+
+  // Heartbeat loop for latency monitoring
+  useEffect(() => {
+    let interval;
+    if (status === 'connected' && socketRef.current) {
+      interval = setInterval(() => {
+        if (socketRef.current.connected) {
+          socketRef.current.emit('heartbeat:ping', Date.now());
+        }
+      }, 3000);
+    }
+    return () => {
+      if (interval) clearInterval(interval);
+    };
+  }, [status]);
 
   const getStatusInfo = () => {
     switch (status) {
@@ -258,39 +310,54 @@ export default function TerminalView({ connectionId, connectionName, host, color
       )}
 
       {/* Terminal body */}
-      <div
-        ref={terminalRef}
-        className="flex-1"
-        style={{ background: 'var(--bg-primary)', minHeight: 0 }}
-        onDragOver={(e) => {
-          e.preventDefault();
-          e.stopPropagation();
-          e.dataTransfer.dropEffect = 'copy';
-        }}
-        onDrop={(e) => {
-          e.preventDefault();
-          e.stopPropagation();
-          
-          const sshFileData = e.dataTransfer.getData('application/ssh-file');
-          if (sshFileData && termInstanceRef.current) {
-            try {
-              const data = JSON.parse(sshFileData);
-              if (data.filePath) {
-                termInstanceRef.current.write(data.filePath);
-              }
-            } catch (err) {
-              console.error('Drop data parse error:', err);
-            }
-            return;
-          }
+      <div className="flex-1 relative bg-[var(--bg-primary)] min-h-0 overflow-hidden group/term">
+        {/* Floating Latency Badge (Visible in all modes) */}
+        {latency !== null && status === 'connected' && (
+          <div 
+            className="absolute top-3 right-5 z-20 flex items-center gap-1.5 text-[10px] font-bold px-2 py-0.5 rounded-full bg-[var(--bg-secondary)]/80 backdrop-blur-xl border border-[var(--border-color)]/50 shadow-lg opacity-60 group-hover/term:opacity-100 transition-all pointer-events-none"
+            style={{ 
+              color: latency < 150 ? '#4ade80' : latency < 300 ? '#fbbf24' : '#f43f5e' 
+            }}
+          >
+            <Wifi size={10} strokeWidth={3} />
+            <span className="font-mono tracking-tighter">{latency}ms</span>
+          </div>
+        )}
 
-          // Fallback for standard files
-          const files = e.dataTransfer.files;
-          if (files.length > 0 && termInstanceRef.current) {
-            termInstanceRef.current.write(files[0].name);
-          }
-        }}
-      />
+        <div
+          className="h-full w-full p-3" // Padding moved here to avoid breaking FitAddon
+          onDragOver={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            e.dataTransfer.dropEffect = 'copy';
+          }}
+          onDrop={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            
+            const sshFileData = e.dataTransfer.getData('application/ssh-file');
+            if (sshFileData && termInstanceRef.current) {
+              try {
+                const data = JSON.parse(sshFileData);
+                if (data.filePath) {
+                  termInstanceRef.current.write(data.filePath);
+                }
+              } catch (err) {
+                console.error('Drop data parse error:', err);
+              }
+              return;
+            }
+
+            // Fallback for standard files
+            const files = e.dataTransfer.files;
+            if (files.length > 0 && termInstanceRef.current) {
+              termInstanceRef.current.write(files[0].name);
+            }
+          }}
+        >
+          <div ref={terminalRef} className="h-full w-full" />
+        </div>
+      </div>
     </div>
   );
 }

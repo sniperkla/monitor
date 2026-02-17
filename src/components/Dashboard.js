@@ -415,7 +415,20 @@ function ConnectionCard({ conn, onClick }) {
       initial={{ scale: 0.95, opacity: 0 }}
       animate={{ scale: 1, opacity: 1 }}
       whileHover={{ scale: 1.02, backgroundColor: 'var(--bg-card-hover)' }}
-      className="p-5 rounded-3xl bg-[var(--bg-card)] border border-[var(--border-color)] cursor-pointer relative group transition-all"
+      draggable
+      onDragStart={(e) => {
+        e.dataTransfer.setData('application/ssh-connection', JSON.stringify(conn));
+        e.dataTransfer.effectAllowed = 'copy';
+        // Create a drag image
+        const ghost = document.createElement('div');
+        ghost.className = 'flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-semibold text-white';
+        ghost.style.cssText = `background:${conn.color || '#6366f1'};position:fixed;top:-100px;left:-100px;z-index:99999;opacity:0.9;border-radius:8px;padding:6px 14px;pointer-events:none;`;
+        ghost.textContent = `🖥 ${conn.name}`;
+        document.body.appendChild(ghost);
+        e.dataTransfer.setDragImage(ghost, 0, 0);
+        setTimeout(() => document.body.removeChild(ghost), 0);
+      }}
+      className="p-5 rounded-3xl bg-[var(--bg-card)] border border-[var(--border-color)] cursor-grab active:cursor-grabbing relative group transition-all"
       onClick={onClick}
     >
       <div className="absolute top-4 right-4 flex gap-1 items-center">

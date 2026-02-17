@@ -74,8 +74,12 @@ export default function DesktopModal() {
             icon={getIcon()}
             onClose={handleCancel}
             zIndexClassName="z-[100000]"
-            maxWidthClassName="max-w-sm"
-            maxHeightClassName="max-h-[80vh]"
+            draggable={true}
+            resizable={true}
+            defaultWidth={400}
+            defaultHeight={modal.type === 'prompt' ? 300 : 220}
+            minWidth={320}
+            minHeight={180}
             contentClassName="px-6 py-6"
             closeOnOverlayClick
             overlayClassName="bg-black/40 backdrop-blur-sm"

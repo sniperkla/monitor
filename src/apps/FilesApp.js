@@ -86,7 +86,22 @@ export default function FilesApp({ onEditConnection, initialConnection }) {
             <button
               key={tab.id}
               onClick={() => { setActiveTab(tab.id); setIsSelecting(false); }}
-              className={`flex items-center gap-2 px-3 h-8 mt-2 rounded-t-lg transition-all text-xs border-x border-t ${
+              draggable
+              onDragStart={(e) => {
+                if (tab.connection) {
+                  e.dataTransfer.setData('application/ssh-connection', JSON.stringify(tab.connection));
+                  e.dataTransfer.effectAllowed = 'copy';
+                  // Create a drag image
+                  const ghost = document.createElement('div');
+                  ghost.className = 'flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-semibold text-white';
+                  ghost.style.cssText = `background:${tab.color || '#6366f1'};position:fixed;top:-100px;left:-100px;z-index:99999;opacity:0.9;border-radius:8px;padding:6px 14px;pointer-events:none;`;
+                  ghost.textContent = `📁 ${tab.connectionName}`;
+                  document.body.appendChild(ghost);
+                  e.dataTransfer.setDragImage(ghost, 0, 0);
+                  setTimeout(() => document.body.removeChild(ghost), 0);
+                }
+              }}
+              className={`flex items-center gap-2 px-3 h-8 mt-2 rounded-t-lg transition-all text-xs border-x border-t cursor-grab active:cursor-grabbing ${
                 activeTab === tab.id && !isSelecting
                   ? 'bg-[var(--bg-primary)] border-[var(--border-color)] text-[var(--text-primary)] shadow-[0_-2px_10px_rgba(0,0,0,0.5)]'
                   : 'bg-transparent border-transparent text-[var(--text-muted)] hover:text-[var(--text-secondary)]'
@@ -103,16 +118,6 @@ export default function FilesApp({ onEditConnection, initialConnection }) {
             </button>
           ))}
           
-          <button
-            onClick={() => setIsSelecting(true)}
-            className={`flex items-center justify-center w-8 h-8 mt-2 rounded-t-lg transition-all border-x border-t ${
-              isSelecting
-                ? 'bg-[var(--bg-primary)] border-[var(--border-color)] text-blue-400'
-                : 'text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-white/5 border-transparent'
-            }`}
-          >
-            <Plus size={16} />
-          </button>
         </div>
       </div>
 
@@ -136,7 +141,20 @@ export default function FilesApp({ onEditConnection, initialConnection }) {
                   <div 
                     key={conn._id}
                     onClick={() => handleConnect(conn)}
-                    className="p-5 rounded-2xl bg-[var(--bg-card)] border border-[var(--border-color)] hover:border-blue-500/50 hover:bg-[var(--bg-card-hover)] transition-all cursor-pointer group relative overflow-hidden"
+                    draggable
+                    onDragStart={(e) => {
+                      e.dataTransfer.setData('application/ssh-connection', JSON.stringify(conn));
+                      e.dataTransfer.effectAllowed = 'copy';
+                      // Create a drag image
+                      const ghost = document.createElement('div');
+                      ghost.className = 'flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-semibold text-white';
+                      ghost.style.cssText = `background:${conn.color || '#6366f1'};position:fixed;top:-100px;left:-100px;z-index:99999;opacity:0.9;border-radius:8px;padding:6px 14px;pointer-events:none;`;
+                      ghost.textContent = `🖥 ${conn.name}`;
+                      document.body.appendChild(ghost);
+                      e.dataTransfer.setDragImage(ghost, 0, 0);
+                      setTimeout(() => document.body.removeChild(ghost), 0);
+                    }}
+                    className="p-5 rounded-2xl bg-[var(--bg-card)] border border-[var(--border-color)] hover:border-blue-500/50 hover:bg-[var(--bg-card-hover)] transition-all cursor-grab active:cursor-grabbing group relative overflow-hidden"
                   >
                     <div className="absolute top-0 right-0 p-3 opacity-20 group-hover:opacity-100 transition-opacity">
                        <HardDrive size={32} className="text-blue-500/20" />

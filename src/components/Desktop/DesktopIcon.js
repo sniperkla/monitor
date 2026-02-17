@@ -136,6 +136,31 @@ export default function DesktopIcon({ id, title, icon: Icon, component, defaultP
     window.addEventListener('pointerup', handlePointerUp);
   }, [id, isSelected, selectedIconIds, state.iconPositions, defaultPos]);
 
+  const handleDragOver = (e) => {
+    if (e.dataTransfer.types.includes('application/ssh-connection') || e.dataTransfer.types.includes('Files')) {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'copy';
+    }
+  };
+
+  const handleDrop = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+
+    const connectionData = e.dataTransfer.getData('application/ssh-connection');
+    if (connectionData) {
+      try {
+        const connection = JSON.parse(connectionData);
+        // Dispatch custom event that DesktopEnvironment can listen to
+        window.dispatchEvent(new CustomEvent('desktop-icon-drop', { 
+          detail: { targetAppId: id, connection } 
+        }));
+      } catch (err) {
+        console.error('DesktopIcon drop parse error:', err);
+      }
+    }
+  };
+
   return (
     <div
       ref={iconRef}
@@ -149,6 +174,8 @@ export default function DesktopIcon({ id, title, icon: Icon, component, defaultP
       data-icon-id={id}
       onDoubleClick={handleDoubleClick}
       onPointerDown={handlePointerDown}
+      onDragOver={handleDragOver}
+      onDrop={handleDrop}
       onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); }}
       tabIndex={0}
       style={{ 

@@ -113,7 +113,22 @@ export default function TerminalApp({ onEditConnection, initialConnection }) {
             <button
               key={term.id}
               onClick={() => { setActiveTab(term.id); setIsSelecting(false); }}
-              className={`flex items-center gap-2 px-3 h-8 mt-2 rounded-t-lg transition-all text-xs border-x border-t ${
+              draggable
+              onDragStart={(e) => {
+                if (term.connection) {
+                  e.dataTransfer.setData('application/ssh-connection', JSON.stringify(term.connection));
+                  e.dataTransfer.effectAllowed = 'copy';
+                  // Create a drag image
+                  const ghost = document.createElement('div');
+                  ghost.className = 'flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-semibold text-white';
+                  ghost.style.cssText = `background:${term.color || '#6366f1'};position:fixed;top:-100px;left:-100px;z-index:99999;opacity:0.9;border-radius:8px;padding:6px 14px;pointer-events:none;`;
+                  ghost.textContent = `🐚 ${term.connectionName}`;
+                  document.body.appendChild(ghost);
+                  e.dataTransfer.setDragImage(ghost, 0, 0);
+                  setTimeout(() => document.body.removeChild(ghost), 0);
+                }
+              }}
+              className={`flex items-center gap-2 px-3 h-8 mt-2 rounded-t-lg transition-all text-xs border-x border-t cursor-grab active:cursor-grabbing ${
                 activeTab === term.id && !isSelecting
                   ? 'bg-[var(--bg-primary)] border-[var(--border-color)] text-[var(--text-primary)] shadow-[0_-2px_10px_rgba(0,0,0,0.5)]'
                   : 'bg-transparent border-transparent text-[var(--text-muted)] hover:text-[var(--text-secondary)]'
@@ -130,16 +145,6 @@ export default function TerminalApp({ onEditConnection, initialConnection }) {
             </button>
           ))}
           
-          <button
-            onClick={() => setIsSelecting(true)}
-            className={`flex items-center justify-center w-8 h-8 mt-2 rounded-t-lg transition-all border-x border-t ${
-              isSelecting
-                ? 'bg-[var(--bg-primary)] border-[var(--border-color)] text-indigo-400'
-                : 'text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-white/5 border-transparent'
-            }`}
-          >
-            <Plus size={16} />
-          </button>
         </div>
       </div>
 
@@ -164,7 +169,20 @@ export default function TerminalApp({ onEditConnection, initialConnection }) {
                   <div 
                     key={conn._id}
                     onClick={() => handleConnect(conn)}
-                    className="p-4 rounded-xl bg-[var(--bg-card)] border border-[var(--border-color)] hover:border-indigo-500/50 hover:bg-[var(--bg-card-hover)] transition-all cursor-pointer group"
+                    draggable
+                    onDragStart={(e) => {
+                      e.dataTransfer.setData('application/ssh-connection', JSON.stringify(conn));
+                      e.dataTransfer.effectAllowed = 'copy';
+                      // Create a drag image
+                      const ghost = document.createElement('div');
+                      ghost.className = 'flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-semibold text-white';
+                      ghost.style.cssText = `background:${conn.color || '#6366f1'};position:fixed;top:-100px;left:-100px;z-index:99999;opacity:0.9;border-radius:8px;padding:6px 14px;pointer-events:none;`;
+                      ghost.textContent = `🖥 ${conn.name}`;
+                      document.body.appendChild(ghost);
+                      e.dataTransfer.setDragImage(ghost, 0, 0);
+                      setTimeout(() => document.body.removeChild(ghost), 0);
+                    }}
+                    className="p-4 rounded-xl bg-[var(--bg-card)] border border-[var(--border-color)] hover:border-indigo-500/50 hover:bg-[var(--bg-card-hover)] transition-all cursor-grab active:cursor-grabbing group"
                   >
                     <div className="flex items-center justify-between mb-3">
                       <div className="w-8 h-8 rounded-lg flex items-center justify-center" style={{ background: `${conn.color}20` }}>
