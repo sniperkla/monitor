@@ -131,18 +131,36 @@ function osReducer(state, action) {
         windows: state.windows.map(w =>
           w.id === action.payload ? { ...w, isMinimized: true } : w
         ),
+        windowsByDesktop: Object.fromEntries(
+          Object.entries(state.windowsByDesktop).map(([desktopId, wins]) => [
+            desktopId,
+            (wins || []).map(w => (w.id === action.payload ? { ...w, isMinimized: true } : w)),
+          ])
+        ),
         activeWindowId: null,
       };
     case 'MINIMIZE_ALL':
       return {
         ...state,
         windows: state.windows.map(w => ({ ...w, isMinimized: true })),
+        windowsByDesktop: Object.fromEntries(
+          Object.entries(state.windowsByDesktop).map(([desktopId, wins]) => [
+            desktopId,
+            (wins || []).map(w => ({ ...w, isMinimized: true })),
+          ])
+        ),
         timestamp: Date.now()
       };
     case 'RESTORE_ALL':
       return {
         ...state,
         windows: state.windows.map(w => ({ ...w, isMinimized: false })),
+        windowsByDesktop: Object.fromEntries(
+          Object.entries(state.windowsByDesktop).map(([desktopId, wins]) => [
+            desktopId,
+            (wins || []).map(w => ({ ...w, isMinimized: false })),
+          ])
+        ),
         timestamp: Date.now(),
         activeWindowId: state.windows.length > 0 ? state.windows[state.windows.length - 1].id : null,
       };
@@ -151,6 +169,14 @@ function osReducer(state, action) {
         ...state,
         windows: state.windows.map(w =>
           w.id === action.payload ? { ...w, isMaximized: !w.isMaximized, snapSide: null } : w
+        ),
+        windowsByDesktop: Object.fromEntries(
+          Object.entries(state.windowsByDesktop).map(([desktopId, wins]) => [
+            desktopId,
+            (wins || []).map(w =>
+              w.id === action.payload ? { ...w, isMaximized: !w.isMaximized, snapSide: null } : w
+            ),
+          ])
         ),
       };
     case 'SNAP_WINDOW':
@@ -165,6 +191,20 @@ function osReducer(state, action) {
               } 
             : w
         ),
+        windowsByDesktop: Object.fromEntries(
+          Object.entries(state.windowsByDesktop).map(([desktopId, wins]) => [
+            desktopId,
+            (wins || []).map(w =>
+              w.id === action.payload.id
+                ? {
+                    ...w,
+                    snapSide: action.payload.side,
+                    isMaximized: action.payload.side === 'top',
+                  }
+                : w
+            ),
+          ])
+        ),
       };
     case 'FOCUS_WINDOW':
       return {
@@ -172,6 +212,14 @@ function osReducer(state, action) {
         activeWindowId: action.payload,
         windows: state.windows.map(w =>
           w.id === action.payload ? { ...w, zIndex: state.nextZIndex, isMinimized: false } : w
+        ),
+        windowsByDesktop: Object.fromEntries(
+          Object.entries(state.windowsByDesktop).map(([desktopId, wins]) => [
+            desktopId,
+            (wins || []).map(w =>
+              w.id === action.payload ? { ...w, zIndex: state.nextZIndex, isMinimized: false } : w
+            ),
+          ])
         ),
         nextZIndex: state.nextZIndex + 1,
       };
@@ -291,52 +339,57 @@ function osReducer(state, action) {
     case 'SET_INITIAL_STATE': {
       // Hydrate windows carefully
       let hydratedWindows = state.windows;
-      if (action.payload.openWindows && Array.isArray(action.payload.openWindows)) {
-        hydratedWindows = action.payload.openWindows.map(w => {
-          // Optimization: Check if window already exists with SAME props to avoid re-mounting
-          const existing = state.windows.find(ew => ew.id === w.id);
-          
-          // Verify props are actually the same (simplified comparison)
-          const propsChanged = existing && JSON.stringify(existing.props) !== JSON.stringify(w.props);
-          
-          if (existing && !propsChanged) {
-            // Merge metadata but keep the active React element/component
-            return { ...existing, ...w, component: existing.component };
-          }
+      const hydrateOne = (w) => {
+        if (!w?.id) return null;
 
-          let Component = null;
-          let Icon = null;
-          
-          // 1. Try to find by explicit appType
-          if (w.appType && AppRegistry[w.appType]) {
-            Component = AppRegistry[w.appType].component;
-            Icon = AppRegistry[w.appType].icon;
-          } 
-          // 2. Try to find by ID (legacy/simple apps)
-          else if (AppRegistry[w.id]) {
-            Component = AppRegistry[w.id].component;
-            Icon = AppRegistry[w.id].icon;
-          }
-          // 3. Special case for Standalone Terminal
-          else if (w.id.startsWith('term-') || w.id.startsWith('standalone-term-')) {
-            Component = AppRegistry['terminal'].component;
-            Icon = AppRegistry['terminal'].icon;
-          }
+        const existing = state.windows.find(ew => ew.id === w.id);
+        const propsChanged = existing && JSON.stringify(existing.props) !== JSON.stringify(w.props);
+        if (existing && !propsChanged && existing.component) {
+          return { ...existing, ...w, component: existing.component };
+        }
 
-          if (Component) {
-            try {
-              return {
-                ...w,
-                component: <Component {...(w.props || {})} />,
-                icon: Icon,
-              };
-            } catch (e) {
-              console.error('Failed to hydrate component for', w.id, e);
-              return null;
-            }
-          }
+        let Component = null;
+        let Icon = null;
+
+        if (w.appType && AppRegistry[w.appType]) {
+          Component = AppRegistry[w.appType].component;
+          Icon = AppRegistry[w.appType].icon;
+        } else if (AppRegistry[w.id]) {
+          Component = AppRegistry[w.id].component;
+          Icon = AppRegistry[w.id].icon;
+        } else if (typeof w.id === 'string' && (w.id.startsWith('term-') || w.id.startsWith('standalone-term-'))) {
+          Component = AppRegistry['terminal']?.component;
+          Icon = AppRegistry['terminal']?.icon;
+        } else if (typeof w.id === 'string' && (w.id.startsWith('standalone-files-') || w.id.startsWith('files-'))) {
+          Component = AppRegistry['files']?.component;
+          Icon = AppRegistry['files']?.icon;
+        }
+
+        if (!Component) return null;
+        try {
+          return {
+            ...w,
+            component: <Component {...(w.props || {})} />,
+            icon: Icon,
+          };
+        } catch (e) {
+          console.error('Failed to hydrate component for', w.id, e);
           return null;
-        }).filter(Boolean);
+        }
+      };
+
+      if (action.payload.openWindows && Array.isArray(action.payload.openWindows)) {
+        hydratedWindows = action.payload.openWindows.map(hydrateOne).filter(Boolean);
+      }
+
+      let hydratedWindowsByDesktop = state.windowsByDesktop;
+      if (action.payload.windowsByDesktop && typeof action.payload.windowsByDesktop === 'object') {
+        hydratedWindowsByDesktop = Object.fromEntries(
+          Object.entries(action.payload.windowsByDesktop).map(([desktopId, list]) => [
+            desktopId,
+            (Array.isArray(list) ? list : []).map(hydrateOne).filter(Boolean),
+          ])
+        );
       }
 
       // Merge payload carefully to avoid wiping defaults with missing fields
@@ -358,6 +411,8 @@ function osReducer(state, action) {
           includeType: true,
         },
         windows: hydratedWindows.length > 0 ? hydratedWindows : state.windows
+        ,
+        windowsByDesktop: hydratedWindowsByDesktop || action.payload.windowsByDesktop || state.windowsByDesktop
       };
     }
     case 'SHOW_MODAL':

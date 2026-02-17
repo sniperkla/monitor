@@ -12,6 +12,8 @@ function WindowControls({ onClose, onMinimize, onMaximize, isMaximized, layout =
       <div className="flex items-center h-full nodrag">
         <button
           type="button"
+          onMouseDown={(e) => e.stopPropagation()}
+          onPointerDown={(e) => e.stopPropagation()}
           onClick={onMinimize}
           className="h-10 w-12 flex items-center justify-center hover:bg-white/10 transition-colors group"
           title="Minimize"
@@ -20,6 +22,8 @@ function WindowControls({ onClose, onMinimize, onMaximize, isMaximized, layout =
         </button>
         <button
           type="button"
+          onMouseDown={(e) => e.stopPropagation()}
+          onPointerDown={(e) => e.stopPropagation()}
           onClick={onMaximize}
           className="h-10 w-12 flex items-center justify-center hover:bg-white/10 transition-colors group"
           title={isMaximized ? "Restore" : "Maximize"}
@@ -32,6 +36,8 @@ function WindowControls({ onClose, onMinimize, onMaximize, isMaximized, layout =
         </button>
         <button
           type="button"
+          onMouseDown={(e) => e.stopPropagation()}
+          onPointerDown={(e) => e.stopPropagation()}
           onClick={onClose}
           className="h-10 w-12 flex items-center justify-center hover:bg-[#c42b1c] transition-colors group"
           title="Close"
@@ -46,6 +52,8 @@ function WindowControls({ onClose, onMinimize, onMaximize, isMaximized, layout =
     <div className="flex items-center gap-2 px-3 h-full nodrag">
       <button
         type="button"
+        onMouseDown={(e) => e.stopPropagation()}
+        onPointerDown={(e) => e.stopPropagation()}
         onClick={onClose}
         className="w-3.5 h-3.5 rounded-full bg-[#ff5f57] border border-[#e0443e]/30 flex items-center justify-center group z-50 relative"
         aria-label="Close"
@@ -54,6 +62,8 @@ function WindowControls({ onClose, onMinimize, onMaximize, isMaximized, layout =
       </button>
       <button
         type="button"
+        onMouseDown={(e) => e.stopPropagation()}
+        onPointerDown={(e) => e.stopPropagation()}
         onClick={onMinimize}
         className="w-3.5 h-3.5 rounded-full bg-[#febc2e] border border-[#d89e24]/30 flex items-center justify-center group z-50 relative"
         aria-label="Minimize"
@@ -62,6 +72,8 @@ function WindowControls({ onClose, onMinimize, onMaximize, isMaximized, layout =
       </button>
       <button
         type="button"
+        onMouseDown={(e) => e.stopPropagation()}
+        onPointerDown={(e) => e.stopPropagation()}
         onClick={onMaximize}
         className="w-3.5 h-3.5 rounded-full bg-[#28c840] border border-[#1fa530]/30 flex items-center justify-center group z-50 relative"
         aria-label={isMaximized ? 'Restore' : 'Maximize'}
@@ -298,7 +310,7 @@ export default function Window({ id, title, icon: Icon, component, isMinimized, 
         minWidth={500}
         minHeight={400}
         dragHandleClassName="window-drag-handle"
-        cancel=".nodrag"
+        cancel=".nodrag,button,input,textarea,select,option,label"
         enableUserSelectHack={false}
         disableDragging={isMaximized}
         enableResizing={!isMaximized}
@@ -347,10 +359,13 @@ export default function Window({ id, title, icon: Icon, component, isMinimized, 
             className={`title-bar h-10 flex items-center bg-gradient-to-b from-[var(--bg-secondary)] to-[var(--bg-tertiary)] border-b border-[var(--border-color)] ${windowLayout === 'mac' ? 'px-3 justify-between' : 'flex-row-reverse justify-between'}`}
             style={{ position: 'relative', zIndex: 60 }}
           >
-            {/* Drag Handle Layer - Absolute overlay that handles dragging and double click */}
-            <div 
+            {/* Drag Handle Layer (behind controls) */}
+            <div
               className="window-drag-handle absolute inset-0 z-0"
-              onDoubleClick={(e) => { e.stopPropagation(); toggleMaximize(id); }}
+              onDoubleClick={(e) => {
+                e.stopPropagation();
+                toggleMaximize(id);
+              }}
             />
 
             <div style={{ position: 'relative', zIndex: 70 }}>
