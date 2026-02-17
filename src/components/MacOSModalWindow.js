@@ -4,6 +4,7 @@ import { X, Minus, Maximize2, Minimize2, Square } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useEffect, useState } from 'react';
 import { useOS } from '@/context/OSContext';
+import { Rnd } from 'react-rnd';
 
 function WindowButtons({ onClose, onMinimize, onMaximize, isMaximized, layout = 'mac', enableMinimize = true, enableMaximize = true }) {
   if (layout === 'pc') {
@@ -94,7 +95,7 @@ function WindowTitleBar({ title, icon: Icon, onClose, onMinimize, onMaximize, is
 
   return (
     <div 
-      className={`relative flex items-center h-10 bg-gradient-to-b from-[var(--bg-secondary)] to-[var(--bg-tertiary)] border-b border-[var(--border-color)] rounded-t-xl overflow-hidden cursor-default select-none ${isMac ? 'justify-between' : 'flex-row-reverse justify-between'}`}
+      className={`modal-drag-handle relative flex items-center h-10 bg-gradient-to-b from-[var(--bg-secondary)] to-[var(--bg-tertiary)] border-b border-[var(--border-color)] cursor-default select-none ${isMac ? 'px-3 justify-between' : 'flex-row-reverse justify-between'}`}
       onDoubleClick={(e) => { 
         // Only toggle if not clicking on buttons (buttons stop propagation naturally, but just in case)
         if (e.target.tagName !== 'BUTTON' && enableMaximize) {
@@ -134,6 +135,12 @@ export default function MacOSModalWindow({
   isMaximized: propIsMaximized,
   enableMinimize = true,
   enableMaximize = true,
+  draggable = false,
+  resizable = false,
+  defaultWidth,
+  defaultHeight,
+  minWidth = 420,
+  minHeight = 240,
   children,
   zIndexClassName = 'z-[50000]',
   maxWidthClassName = 'max-w-sm',
@@ -150,6 +157,16 @@ export default function MacOSModalWindow({
   const [isMaximized, setIsMaximized] = useState(false);
   const effectiveMaximized = propIsMaximized ?? isMaximized;
 
+  // Resizable dimensions (used only when resizable + not maximized)
+  const [size, setSize] = useState(() => ({
+    width: defaultWidth,
+    height: defaultHeight,
+  }));
+
+  const [position, setPosition] = useState({ x: 0, y: 0 });
+
+  const useFloating = (draggable || resizable) && !effectiveMaximized;
+
   // Reset local maximization state when modal closes
   useEffect(() => {
     if (!isOpen) {
@@ -157,6 +174,29 @@ export default function MacOSModalWindow({
       return () => clearTimeout(timer);
     }
   }, [isOpen]);
+
+  // Keep internal size in sync when default size props change (or when modal opens)
+  useEffect(() => {
+    if (!isOpen) return;
+    setSize({ width: defaultWidth, height: defaultHeight });
+  }, [isOpen, defaultWidth, defaultHeight]);
+
+  // Initialize/center floating window position when opened
+  useEffect(() => {
+    if (!isOpen) return;
+    if (!(draggable || resizable)) return;
+
+    const w = typeof defaultWidth === 'number' ? defaultWidth : 560;
+    const h = typeof defaultHeight === 'number' ? defaultHeight : 420;
+
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+
+    const x = Math.max(12, Math.round((vw - w) / 2));
+    const y = Math.max(12, Math.round((vh - h) / 2));
+
+    setPosition({ x, y });
+  }, [isOpen, draggable, resizable, defaultWidth, defaultHeight]);
 
   const handleMaximize = () => {
     if (!enableMaximize) return;
@@ -209,45 +249,104 @@ export default function MacOSModalWindow({
           className={`fixed inset-0 ${zIndexClassName} flex items-center justify-center p-4 ${resolvedOverlayClassName} ${containerClassName} ${effectiveMaximized ? '!p-0' : 'p-4'}`}
           onClick={() => closeOnOverlayClick && onClose?.()}
         >
-          <motion.div
-            initial={{ scale: 0.95, opacity: 0 }}
-            animate={{ 
-              scale: 1, 
-              opacity: 1,
-              width: effectiveMaximized ? '100%' : undefined,
-              height: effectiveMaximized ? '100%' : undefined,
-              maxWidth: effectiveMaximized ? '100%' : '100%',
-              maxHeight: effectiveMaximized ? '100%' : '100%',
-            }}
-            exit={{ scale: 0.95, opacity: 0 }}
-            transition={{ type: 'spring', damping: 25, stiffness: 300 }}
-            className={`w-full ${!effectiveMaximized ? maxWidthClassName : ''} ${!effectiveMaximized ? maxHeightClassName : ''} flex flex-col overflow-hidden ${windowClassName}`}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div
-              className={`${effectiveMaximized ? '' : 'rounded-xl border border-[var(--border-color)] shadow-2xl'} overflow-hidden flex flex-col flex-1 min-h-0 max-h-full`}
-              style={{
-                background: 'var(--window-bg)',
-                boxShadow: effectiveMaximized ? 'none' : '0 25px 50px -12px rgba(0,0,0,0.5), 0 0 0 1px rgba(255,255,255,0.1)',
-                backdropFilter: 'blur(30px)',
+          {useFloating ? (
+            <Rnd
+              size={{
+                width: typeof size?.width === 'number' ? size.width : (typeof defaultWidth === 'number' ? defaultWidth : 560),
+                height: typeof size?.height === 'number' ? size.height : (typeof defaultHeight === 'number' ? defaultHeight : 420),
               }}
+              position={position}
+              onDragStop={(e, d) => setPosition({ x: d.x, y: d.y })}
+              onResizeStop={(e, dir, ref, delta, pos) => {
+                setSize({
+                  width: ref.offsetWidth,
+                  height: ref.offsetHeight,
+                });
+                setPosition(pos);
+              }}
+              minWidth={minWidth}
+              minHeight={minHeight}
+              bounds="window"
+              dragHandleClassName="modal-drag-handle"
+              cancel="button,input,textarea,select,option,label,.nodrag"
+              enableResizing={resizable}
+              disableDragging={!draggable}
+              style={{ zIndex: 1 }}
             >
-              <WindowTitleBar 
-                title={title} 
-                icon={icon} 
-                onClose={onClose} 
-                onMinimize={handleMinimize}
-                onMaximize={handleMaximize}
-                isMaximized={effectiveMaximized}
-                layout={windowLayout}
-                enableMinimize={enableMinimize}
-                enableMaximize={enableMaximize}
-              />
-              <div className={`${contentClassName} overflow-y-auto custom-scrollbar flex-1 min-h-0`}>
-                {children}
+              <motion.div
+                initial={{ scale: 0.95, opacity: 0 }}
+                animate={{ scale: 1, opacity: 1 }}
+                exit={{ scale: 0.95, opacity: 0 }}
+                transition={{ type: 'spring', damping: 25, stiffness: 300 }}
+                className={`flex flex-col overflow-hidden w-full h-full ${windowClassName}`}
+                onClick={(e) => e.stopPropagation()}
+              >
+                <div
+                  className={`${effectiveMaximized ? '' : 'rounded-xl border border-[var(--border-color)] shadow-2xl'} overflow-hidden flex flex-col flex-1 min-h-0 max-h-full`}
+                  style={{
+                    background: 'var(--window-bg)',
+                    boxShadow: effectiveMaximized ? 'none' : '0 25px 50px -12px rgba(0,0,0,0.5), 0 0 0 1px rgba(255,255,255,0.1)',
+                    backdropFilter: 'blur(30px)',
+                  }}
+                >
+                  <WindowTitleBar 
+                    title={title} 
+                    icon={icon} 
+                    onClose={onClose} 
+                    onMinimize={handleMinimize}
+                    onMaximize={handleMaximize}
+                    isMaximized={effectiveMaximized}
+                    layout={windowLayout}
+                    enableMinimize={enableMinimize}
+                    enableMaximize={enableMaximize}
+                  />
+                  <div className={`${contentClassName} overflow-y-auto custom-scrollbar flex-1 min-h-0`}>
+                    {children}
+                  </div>
+                </div>
+              </motion.div>
+            </Rnd>
+          ) : (
+            <motion.div
+              initial={{ scale: 0.95, opacity: 0 }}
+              animate={{ 
+                scale: 1, 
+                opacity: 1,
+                width: effectiveMaximized ? '100%' : undefined,
+                height: effectiveMaximized ? '100%' : undefined,
+                maxWidth: effectiveMaximized ? '100%' : '100%',
+                maxHeight: effectiveMaximized ? '100%' : '100%',
+              }}
+              exit={{ scale: 0.95, opacity: 0 }}
+              transition={{ type: 'spring', damping: 25, stiffness: 300 }}
+              className={`w-full ${!effectiveMaximized ? maxWidthClassName : ''} ${!effectiveMaximized ? maxHeightClassName : ''} flex flex-col overflow-hidden ${windowClassName}`}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div
+                className={`${effectiveMaximized ? '' : 'rounded-xl border border-[var(--border-color)] shadow-2xl'} overflow-hidden flex flex-col flex-1 min-h-0 max-h-full`}
+                style={{
+                  background: 'var(--window-bg)',
+                  boxShadow: effectiveMaximized ? 'none' : '0 25px 50px -12px rgba(0,0,0,0.5), 0 0 0 1px rgba(255,255,255,0.1)',
+                  backdropFilter: 'blur(30px)',
+                }}
+              >
+                <WindowTitleBar 
+                  title={title} 
+                  icon={icon} 
+                  onClose={onClose} 
+                  onMinimize={handleMinimize}
+                  onMaximize={handleMaximize}
+                  isMaximized={effectiveMaximized}
+                  layout={windowLayout}
+                  enableMinimize={enableMinimize}
+                  enableMaximize={enableMaximize}
+                />
+                <div className={`${contentClassName} overflow-y-auto custom-scrollbar flex-1 min-h-0`}>
+                  {children}
+                </div>
               </div>
-            </div>
-          </motion.div>
+            </motion.div>
+          )}
         </motion.div>
       )}
     </AnimatePresence>

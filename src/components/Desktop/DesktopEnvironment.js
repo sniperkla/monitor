@@ -612,6 +612,7 @@ export default function DesktopEnvironment() {
             key={win.id}
             {...win}
             component={component}
+            previewMode={showPreview}
           />
         );
       })}

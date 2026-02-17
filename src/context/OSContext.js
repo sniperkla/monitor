@@ -76,11 +76,26 @@ function osReducer(state, action) {
       // Check if window with same ID already exists (e.g. settings)
       const existing = state.windows.find(w => w.id === action.payload.id);
       if (existing) {
+        const targetDesktopId = Object.entries(state.windowsByDesktop || {}).find(([, list]) =>
+          Array.isArray(list) && list.some(w => w.id === existing.id)
+        )?.[0];
+
+        const nextCurrentDesktopId = targetDesktopId || state.currentDesktopId;
+
         return {
           ...state,
+          currentDesktopId: nextCurrentDesktopId,
           activeWindowId: existing.id,
           windows: state.windows.map(w =>
             w.id === existing.id ? { ...w, isMinimized: false, zIndex: state.nextZIndex } : w
+          ),
+          windowsByDesktop: Object.fromEntries(
+            Object.entries(state.windowsByDesktop || {}).map(([desktopId, list]) => [
+              desktopId,
+              (list || []).map(w =>
+                w.id === existing.id ? { ...w, isMinimized: false, zIndex: state.nextZIndex } : w
+              ),
+            ])
           ),
           nextZIndex: state.nextZIndex + 1,
         };
@@ -756,6 +771,9 @@ export function OSProvider({ children }) {
   }, [
     state.wallpaper, 
     state.glassmorphism, 
+    state.desktops,
+    state.currentDesktopId,
+    state.windowsByDesktop,
     state.iconPositions, 
     state.iconSize, 
     state.iconStyle, 
@@ -767,6 +785,7 @@ export function OSProvider({ children }) {
     state.customWallpapers,
     state.taskbarPosition,
     state.theme,
+    state.keyboardShortcuts,
     state.windows
   ]);
 
@@ -833,6 +852,9 @@ export function OSProvider({ children }) {
     session?.user?.email,
     state.wallpaper, 
     state.glassmorphism, 
+    state.desktops,
+    state.currentDesktopId,
+    state.windowsByDesktop,
     state.iconPositions, 
     state.iconSize, 
     state.iconStyle,
@@ -845,6 +867,7 @@ export function OSProvider({ children }) {
     state.taskbarPosition,
     state.theme,
     state.windows,
+    state.keyboardShortcuts,
     state.exportNaming,
     state.aiHistory,
     isInitialLoad
@@ -1210,6 +1233,9 @@ export function OSProvider({ children }) {
       setExportNaming,
       setAiHistory,
       setDeferredPrompt,
+      addNotification,
+      removeNotification,
+      showAlert,
       showModal,
       showConfirm,
       showPrompt,

@@ -482,13 +482,17 @@ export default function ConnectionModal({ onClose, editConnection = null }) {
       icon={form.type === 'database' ? Database : Server}
       onClose={onClose}
       zIndexClassName="z-[40000]"
-      maxWidthClassName="max-w-5xl"
-      maxHeightClassName="max-h-[85vh]"
-      contentClassName="p-6"
+      draggable
+      resizable
+      defaultWidth={980}
+      defaultHeight={650}
+      minWidth={720}
+      minHeight={520}
+      maxWidthClassName="max-w-4xl"
+      maxHeightClassName="max-h-[80vh]"
+      contentClassName="p-6 overflow-y-auto custom-scrollbar"
       closeOnOverlayClick
       overlayClassName="bg-black/40 backdrop-blur-sm"
-      enableMinimize={false}
-      enableMaximize={false}
     >
       <form onSubmit={handleSubmit} className="space-y-6">
           {/* Storage Selection */}
@@ -923,8 +927,14 @@ export default function ConnectionModal({ onClose, editConnection = null }) {
       icon={Database}
       onClose={() => setIsUriModalOpen(false)}
       zIndexClassName="z-[45000]"
-      maxWidthClassName="max-w-md"
-      maxHeightClassName="max-h-[75vh]"
+      draggable
+      resizable
+      defaultWidth={560}
+      defaultHeight={420}
+      minWidth={420}
+      minHeight={320}
+      maxWidthClassName="max-w-lg"
+      maxHeightClassName="max-h-[70vh]"
       contentClassName="p-6 overflow-y-auto custom-scrollbar"
       closeOnOverlayClick
       overlayClassName="bg-black/50 backdrop-blur-sm"

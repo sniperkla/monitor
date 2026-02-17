@@ -665,11 +665,18 @@ export default function MasterPasswordModal() {
       isOpen
       title={title}
       icon={icon}
-      onClose={dismissVault}
-      zIndexClassName="z-[50000]"
-      maxWidthClassName="max-w-sm"
-      maxHeightClassName="max-h-[85vh]"
-      contentClassName="p-4 max-h-[70vh]"
+      draggable
+      resizable
+      defaultWidth={560}
+      defaultHeight={460}
+      minWidth={420}
+      minHeight={360}
+      onClose={() => dismissVault?.()}
+      zIndexClassName="z-[90000]"
+      maxWidthClassName="max-w-xl"
+      maxHeightClassName="max-h-[75vh]"
+      contentClassName="p-4"
+      closeOnOverlayClick={false}
     >
       {renderContent()}
     </MacOSModalWindow>,

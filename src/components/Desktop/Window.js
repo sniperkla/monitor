@@ -88,7 +88,7 @@ function WindowControls({ onClose, onMinimize, onMaximize, isMaximized, layout =
   );
 }
 
-export default function Window({ id, title, icon: Icon, component, isMinimized, isMaximized, zIndex, initialWidth, initialHeight }) {
+export default function Window({ id, title, icon: Icon, component, isMinimized, isMaximized, zIndex, initialWidth, initialHeight, previewMode = false }) {
   const { state: osState, focusWindow, closeWindow, toggleMinimize, toggleMaximize, snapWindow, updateWindowPosition } = useOS();
   const { glassmorphism, taskbarPosition, windowLayout } = osState;
   const { snapSide } = osState.windows.find(w => w.id === id) || {};
@@ -276,7 +276,9 @@ export default function Window({ id, title, icon: Icon, component, isMinimized, 
     return () => clearTimeout(timer);
   }, [isMinimized, isSnappedOrMax]);
 
-  if (isMinimized) return null;
+  // In preview mode we keep minimized windows mounted (but hidden) so the PreviewWindow
+  // can clone the DOM and show live previews.
+  if (isMinimized && !previewMode) return null;
 
   return (
     <>
@@ -319,7 +321,16 @@ export default function Window({ id, title, icon: Icon, component, isMinimized, 
         onDragStop={handleDragStop}
         onResizeStart={handleResizeStart}
         onResizeStop={handleResizeStop}
-        style={{ zIndex, display: 'flex' }}
+        style={{
+          zIndex,
+          display: 'flex',
+          ...(isMinimized && previewMode
+            ? {
+                opacity: 0,
+                pointerEvents: 'none',
+              }
+            : null),
+        }}
         resizeHandleStyles={{
           top: { zIndex: 1 },
           topLeft: { zIndex: 1 },

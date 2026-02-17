@@ -135,14 +135,14 @@ export default function Taskbar() {
   ];
 
   const isVertical = taskbarPosition === 'left' || taskbarPosition === 'right';
-  const isDock = taskbarPosition === 'bottom';
+  const isHorizontal = taskbarPosition === 'top' || taskbarPosition === 'bottom';
   
   const taskbarClasses = `
     taskbar fixed z-[10000] transition-all duration-300 border-[var(--border-color)]
-    ${taskbarPosition === 'bottom' ? 'bottom-0 left-0 w-full h-16' : ''}
-    ${taskbarPosition === 'top' ? 'top-0 left-0 w-full h-16 border-b' : ''}
-    ${taskbarPosition === 'left' ? 'top-0 left-0 h-full w-14 border-r' : ''}
-    ${taskbarPosition === 'right' ? 'top-0 right-0 h-full w-14 border-l' : ''}
+    ${taskbarPosition === 'bottom' ? 'bottom-0 left-0 w-full h-14' : ''}
+    ${taskbarPosition === 'top' ? 'top-0 left-0 w-full h-14' : ''}
+    ${taskbarPosition === 'left' ? 'top-0 left-0 h-full w-14' : ''}
+    ${taskbarPosition === 'right' ? 'top-0 right-0 h-full w-14' : ''}
   `;
 
   // Start menu positioning based on taskbar position
@@ -235,39 +235,31 @@ export default function Taskbar() {
         onDragEnd={() => setIsDraggingTaskbar(false)}
         onContextMenu={(e) => handleContextMenu(e)}
         style={{
-          background: isDock ? 'transparent' : (glassmorphism ? 'var(--taskbar-bg)' : 'var(--bg-primary)'),
-          backdropFilter: isDock ? 'none' : (glassmorphism ? 'blur(12px)' : 'none'),
+          background: 'transparent',
+          backdropFilter: 'none',
           display: 'flex',
-          flexDirection: isDock ? 'row' : (isVertical ? 'column' : 'row'),
+          flexDirection: isVertical ? 'column' : 'row',
           alignItems: 'center',
-          justifyContent: isDock ? 'center' : 'flex-start',
-          padding: isDock ? '0.5rem 0.75rem' : (isVertical ? '0.5rem 0' : '0 1rem'),
+          justifyContent: isVertical ? 'center' : 'center',
+          padding: isVertical ? '0.5rem 0' : '0.5rem 0.75rem',
           cursor: 'default'
         }}
       >
         <div
-          className={
-            isDock
-              ? 'flex items-center gap-2 rounded-2xl px-3 py-2 border border-white/10 bg-white/5 shadow-2xl backdrop-blur-xl'
-              : ''
-          }
-          style={
-            isDock
-              ? {
-                  background: glassmorphism ? 'var(--taskbar-bg)' : 'var(--bg-primary)',
-                  backdropFilter: glassmorphism ? 'blur(18px)' : 'none',
-                  boxShadow: '0 18px 45px rgba(0,0,0,0.45), 0 0 0 1px rgba(255,255,255,0.06)'
-                }
-              : undefined
-          }
+          className={`flex ${isVertical ? 'flex-col py-2 px-2' : 'flex-row px-3 py-2'} items-center gap-2 rounded-2xl border border-white/10 bg-white/5 shadow-2xl backdrop-blur-xl`}
+          style={{
+            background: glassmorphism ? 'var(--taskbar-bg)' : 'var(--bg-primary)',
+            backdropFilter: glassmorphism ? 'blur(18px)' : 'none',
+            boxShadow: '0 18px 45px rgba(0,0,0,0.45), 0 0 0 1px rgba(255,255,255,0.06)'
+          }}
         >
-        <div className={`flex ${isVertical ? 'flex-col' : 'flex-row'} items-center gap-2 relative ${isVertical ? 'py-2' : ''}`} ref={startMenuRef}>
+        <div className={`flex ${isVertical ? 'flex-col' : 'flex-row'} items-center gap-2 relative`} ref={startMenuRef}>
           <button 
             onClick={() => {
               setStartMenuOpen(!startMenuOpen);
               setContextMenu(null);
             }}
-            className={`w-10 h-10 ${isDock ? 'rounded-2xl' : 'rounded-lg'} transition-all flex items-center justify-center shadow-lg shrink-0 ${
+            className={`w-10 h-10 rounded-2xl transition-all flex items-center justify-center shadow-lg shrink-0 ${
               startMenuOpen ? 'bg-blue-500 scale-95' : 'bg-blue-600 hover:bg-blue-500 active:scale-90'
             }`}
           >
@@ -381,8 +373,8 @@ export default function Taskbar() {
           <div className={isVertical ? 'h-px w-8 bg-[var(--border-color)] my-1' : 'w-px h-8 bg-[var(--border-color)] mx-2'} />
         </div>
 
-        {/* Preview Window Button - only show in bottom position */}
-        {!isVertical && taskbarPosition === 'bottom' && (
+        {/* Preview Window Button */}
+        {isHorizontal && (
           <button
             onClick={() => setShowPreview(true)}
             className="w-10 h-10 rounded-2xl transition-all flex items-center justify-center shadow-lg shrink-0 bg-[var(--bg-tertiary)] hover:bg-[var(--bg-card-hover)] border border-[var(--border-color)] group"
@@ -392,6 +384,7 @@ export default function Taskbar() {
           </button>
         )}
 
+        {/* Running Apps */}
         <div className={`flex-1 flex ${isVertical ? 'flex-col overflow-y-auto no-scrollbar py-1' : 'flex-row items-center overflow-x-auto no-scrollbar px-2'} gap-1.5 relative ${isVertical ? 'items-center' : ''}`}>
           {(windowsByDesktop[currentDesktopId] || windows).map(win => (
             <button
@@ -403,8 +396,8 @@ export default function Taskbar() {
               onContextMenu={(e) => handleContextMenu(e, win.id)}
               title={win.title}
               className={`
-                ${isDock ? 'w-11 h-11 rounded-2xl justify-center' : 'rounded-xl'} flex items-center gap-2 transition-all border relative group shrink-0
-                ${isVertical ? 'w-10 h-10 justify-center mx-auto' : (isDock ? '' : 'h-9 px-3 min-w-[140px] max-w-[200px]')}
+                ${isHorizontal ? 'w-11 h-11 rounded-2xl justify-center' : 'rounded-xl'} flex items-center gap-2 transition-all border relative group shrink-0
+                ${isVertical ? 'w-10 h-10 justify-center mx-auto' : ''}
                 ${activeWindowId === win.id && !win.isMinimized
                   ? 'bg-[var(--bg-card-hover)] border-[var(--border-hover)]'
                   : 'bg-[var(--bg-card)] hover:bg-[var(--bg-tertiary)] border-[var(--border-color)]'}
@@ -413,20 +406,17 @@ export default function Taskbar() {
               {win.icon && (
                 <win.icon
                   size={16}
-                  className={`text-[var(--accent-indigo)] group-hover:scale-110 transition-transform shrink-0 ${isDock ? 'opacity-90' : ''}`}
+                  className={`text-[var(--accent-indigo)] group-hover:scale-110 transition-transform shrink-0 ${isHorizontal ? 'opacity-90' : ''}`}
                 />
               )}
-              {!isVertical && !isDock && (
-                <span className="text-xs font-medium text-[var(--text-primary)] truncate">{win.title}</span>
-              )}
               {activeWindowId === win.id && !win.isMinimized && (
-                <motion.div 
-                  layoutId="taskbar-active" 
+                <motion.div
+                  layoutId="taskbar-active"
                   className={`absolute bg-blue-500 rounded-full ${
-                    isVertical 
+                    isVertical
                       ? (taskbarPosition === 'left' ? 'right-0 top-2 bottom-2 w-1' : 'left-0 top-2 bottom-2 w-1')
-                      : (isDock ? 'bottom-1 w-1.5 h-1.5 left-1/2 -translate-x-1/2' : 'bottom-0 left-2 right-2 h-1')
-                  }`} 
+                      : 'bottom-1 w-1.5 h-1.5 left-1/2 -translate-x-1/2'
+                  }`}
                 />
               )}
             </button>
@@ -435,7 +425,7 @@ export default function Taskbar() {
 
         <div className={`flex items-center shrink-0 ${isVertical ? 'flex-col gap-3 py-3' : 'flex-row gap-3 ml-4'}`}>
           {/* Desktop Switcher */}
-          {!isVertical && (
+          {isHorizontal && (
             <div className="flex items-center gap-1 bg-[var(--bg-tertiary)] rounded-full border border-[var(--border-color)] px-2 py-1">
               <button
                 onClick={() => switchToPrevDesktop()}
@@ -468,7 +458,7 @@ export default function Taskbar() {
               <Keyboard size={14} />
             </button>
           </div>
-          {!isVertical && <div className="w-px h-6 bg-[var(--border-color)]" />}
+          {isHorizontal && <div className="w-px h-6 bg-[var(--border-color)]" />}
           <SystemClock vertical={isVertical} />
         </div>
         </div>
