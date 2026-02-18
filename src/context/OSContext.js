@@ -350,16 +350,7 @@ function osReducer(state, action) {
         timestamp: Date.now() 
       };
     }
-    case 'UPDATE_WINDOW_POSITION':
-      return {
-        ...state,
-        windows: state.windows.map(w =>
-          w.id === action.payload.id 
-            ? { ...w, ...action.payload.position } 
-            : w
-        ),
-        timestamp: Date.now()
-      };
+
     case 'SET_INITIAL_STATE': {
       // Hydrate windows carefully
       let hydratedWindows = state.windows;
@@ -629,14 +620,25 @@ function osReducer(state, action) {
         timestamp: Date.now(),
       };
     }
-    case 'UPDATE_WINDOW_POSITION':
+    case 'UPDATE_WINDOW_POSITION': {
+      const { id, position } = action.payload;
+      const posData = position?.position || position || {};
       return {
         ...state,
-        windows: state.windows.map(w =>
-          w.id === action.payload.id ? { ...w, ...action.payload.position } : w
+        windows: (state.windows || []).map(w =>
+          w.id === id ? { ...w, ...posData } : w
+        ),
+        windowsByDesktop: Object.fromEntries(
+          Object.entries(state.windowsByDesktop || {}).map(([desktopId, wins]) => [
+            desktopId,
+            (wins || []).map(w =>
+              w.id === id ? { ...w, ...posData } : w
+            ),
+          ])
         ),
         timestamp: Date.now()
       };
+    }
     default:
       return state;
   }
@@ -720,6 +722,8 @@ export function OSProvider({ children }) {
         appType: w.appType || null,
         props: w.props || {},
       })),
+      activeWindowId: s.activeWindowId || null,
+      nextZIndex: s.nextZIndex || 100,
       keyboardShortcuts: s.keyboardShortcuts || {
         previewWindow: 'Ctrl+Cmd+Up',
         prevDesktop: 'Ctrl+Cmd+Left',

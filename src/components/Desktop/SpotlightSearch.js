@@ -152,9 +152,9 @@ export default function SpotlightSearch() {
   // Filter system apps
   const filteredApps = query.trim()
     ? SYSTEM_APPS.filter(app => {
-        const title = app.titleKey ? t(app.titleKey) : app.fallback;
-        return title.toLowerCase().includes(query.toLowerCase()) ||
-               app.id.toLowerCase().includes(query.toLowerCase());
+        const title = app.titleKey ? t(app.titleKey) : (app.fallback || '');
+        return (title || '').toLowerCase().includes((query || '').toLowerCase()) ||
+               (app.id || '').toLowerCase().includes((query || '').toLowerCase());
       })
     : SYSTEM_APPS;
 

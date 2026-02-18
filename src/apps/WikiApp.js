@@ -294,7 +294,7 @@ export default function WikiApp({ initialGuideId }) {
   };
 
   const getCategoryIcon = (category) => {
-    const c = category.toLowerCase();
+    const c = (category || '').toLowerCase();
     if (c === 'all') return <Layers size={14} className="text-indigo-600 dark:text-indigo-400" />;
     if (c === 'web server') return <Globe size={14} className="text-emerald-600 dark:text-emerald-400" />;
     if (c === 'security') return <Shield size={14} className="text-rose-600 dark:text-rose-400" />;

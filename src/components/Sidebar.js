@@ -23,9 +23,9 @@ export default function Sidebar({ onNewConnection, onEditConnection }) {
   }, [fetchConnections]);
 
   const filtered = connections.filter(conn => {
-    const matchSearch = conn.name.toLowerCase().includes(search.toLowerCase()) ||
-      conn.host.toLowerCase().includes(search.toLowerCase()) ||
-      conn.tags?.some(t => t.toLowerCase().includes(search.toLowerCase()));
+    const matchSearch = (conn.name || '').toLowerCase().includes((search || '').toLowerCase()) ||
+      (conn.host || '').toLowerCase().includes((search || '').toLowerCase()) ||
+      conn.tags?.some(t => (t || '').toLowerCase().includes((search || '').toLowerCase()));
     
     if (filter === 'favorites') return matchSearch && conn.isFavorite;
     if (filter === 'online') return matchSearch && conn.status === 'online';

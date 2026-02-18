@@ -629,7 +629,7 @@ export default function FileManager({ connectionId, connectionName, connection }
   };
 
   const filteredFiles = files
-    .filter(f => f.filename.toLowerCase().includes(searchQuery.toLowerCase()))
+    .filter(f => (f.filename || '').toLowerCase().includes((searchQuery || '').toLowerCase()))
     .sort((a, b) => {
        // Folders first
        const aIsDir = a.longname.startsWith('d');

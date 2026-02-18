@@ -84,9 +84,9 @@ export default function NotepadApp() {
     setActiveNote(newNote);
   };
 
-  const filteredNotes = notes.filter(n => 
-    n.title.toLowerCase().includes(search.toLowerCase()) || 
-    n.content.toLowerCase().includes(search.toLowerCase())
+  const filteredNotes = (notes || []).filter(n => 
+    (n.title || '').toLowerCase().includes((search || '').toLowerCase()) || 
+    (n.content || '').toLowerCase().includes((search || '').toLowerCase())
   );
 
   if (!isUnlocked) {
