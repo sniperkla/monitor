@@ -97,7 +97,7 @@ export default function DesktopModal() {
                 value={promptValue}
                 onChange={(e) => setPromptValue(e.target.value)}
                 onKeyDown={(e) => e.key === 'Enter' && handleConfirm()}
-                className="w-full px-4 py-3 bg-white/5 border border-white/10 rounded-xl text-sm text-white placeholder-white/20 focus:outline-none focus:border-indigo-500/50 focus:ring-1 focus:ring-indigo-500/25 transition-all mb-4"
+                className="w-full px-4 py-3 bg-[var(--bg-primary)] border border-[var(--border-color)] rounded-xl text-sm text-[var(--text-primary)] placeholder-[var(--text-muted)] focus:outline-none focus:border-indigo-500/50 focus:ring-1 focus:ring-indigo-500/25 transition-all mb-4"
               />
             )}
 
@@ -105,7 +105,7 @@ export default function DesktopModal() {
               {modal.type !== 'alert' && (
                 <button
                   onClick={handleCancel}
-                  className="px-5 py-2 rounded-xl text-sm font-bold text-[var(--text-muted)] hover:text-white hover:bg-white/5 transition-all border border-white/5"
+                  className="px-5 py-2 rounded-xl text-sm font-bold text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] transition-all border border-[var(--border-color)]"
                 >
                   {modal.cancelLabel || 'Cancel'}
                 </button>

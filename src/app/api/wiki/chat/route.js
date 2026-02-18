@@ -4,6 +4,8 @@ import { authOptions } from '@/lib/auth';
 import connectDB from '@/lib/mongodb';
 import User from '@/models/User';
 import SystemSetting from '@/models/SystemSetting';
+import { checkAndTrackAiUsage } from '@/utils/aiLimiter';
+import { checkRateLimit } from '@/lib/serverGuard';
 
 export async function POST(req) {
   try {
@@ -15,7 +17,33 @@ export async function POST(req) {
       return NextResponse.json({ success: false, error: 'Unauthorized. Please login or configure your database.' }, { status: 401 });
     }
 
-    // If logged in, check vault configuration in the central DB
+    const { message, guideContext, language = 'en' } = await req.json();
+
+    // Check AI limit if logged in
+    let usageInfo = null;
+    if (session) {
+      try {
+        await checkAndTrackAiUsage(session.user.email, message);
+      } catch (limitErr) {
+        return NextResponse.json({ success: false, error: limitErr.message }, { status: 429 });
+      }
+
+      const limitsSetting = await SystemSetting.findOne({ key: 'ai_limits' });
+      const limitsValue = limitsSetting?.value && typeof limitsSetting.value === 'object' ? limitsSetting.value : {};
+      const rateValue = limitsValue?.rate && typeof limitsValue.rate === 'object' ? limitsValue.rate : {};
+      const wikiPerMinute = Number.isFinite(Number(rateValue.wikiPerMinute)) ? Math.max(1, Number(rateValue.wikiPerMinute)) : 20;
+
+      const clientIP = req.headers.get('x-forwarded-for') || 'unknown';
+      const rateCheck = checkRateLimit(`ai:wiki:${clientIP}`, wikiPerMinute);
+      if (!rateCheck.allowed) {
+        return NextResponse.json(
+          { success: false, error: `AI rate limit exceeded. Please wait ${Math.ceil(rateCheck.resetIn / 1000)}s.` },
+          { status: 429 }
+        );
+      }
+    }
+
+    // If logged in, check vault configuration in the central DB (already did check above, but keeping for vault validation)
     if (session) {
       await connectDB(process.env.MONGODB_URI, true);
       const dbUser = await User.findOne({ email: session.user.email });
@@ -23,8 +51,6 @@ export async function POST(req) {
         return NextResponse.json({ success: false, error: 'Database connection required. Please configure your vault in Settings.' }, { status: 403 });
       }
     }
-
-    const { message, guideContext, language = 'en' } = await req.json();
 
     if (!message) {
       return NextResponse.json(
@@ -150,7 +176,10 @@ export async function POST(req) {
                { $set: { 'value.currentIndex': nextIndex } }
              ).catch(err => console.error('Failed to update key index:', err));
         }
-        return NextResponse.json({ success: true, message: aiMessage });
+        if (session) {
+          usageInfo = await checkAndTrackAiUsage(session.user.email, message, aiMessage);
+        }
+        return NextResponse.json({ success: true, message: aiMessage, usage: usageInfo });
     }
 
     return NextResponse.json(

@@ -15,23 +15,23 @@ function WindowControls({ onClose, onMinimize, onMaximize, isMaximized, layout =
           onMouseDown={(e) => e.stopPropagation()}
           onPointerDown={(e) => e.stopPropagation()}
           onClick={onMinimize}
-          className="h-10 w-12 flex items-center justify-center hover:bg-white/10 transition-colors group"
+          className="h-10 w-12 flex items-center justify-center hover:bg-[var(--bg-tertiary)] transition-colors group"
           title="Minimize"
         >
-          <Minus size={14} className="text-[var(--text-secondary)] group-hover:text-white" />
+          <Minus size={14} className="text-[var(--text-secondary)] group-hover:text-[var(--text-primary)]" />
         </button>
         <button
           type="button"
           onMouseDown={(e) => e.stopPropagation()}
           onPointerDown={(e) => e.stopPropagation()}
           onClick={onMaximize}
-          className="h-10 w-12 flex items-center justify-center hover:bg-white/10 transition-colors group"
+          className="h-10 w-12 flex items-center justify-center hover:bg-[var(--bg-tertiary)] transition-colors group"
           title={isMaximized ? "Restore" : "Maximize"}
         >
           {isMaximized ? (
-            <Minimize2 size={12} className="text-[var(--text-secondary)] group-hover:text-white" />
+            <Minimize2 size={12} className="text-[var(--text-secondary)] group-hover:text-[var(--text-primary)]" />
           ) : (
-            <Square size={10} className="text-[var(--text-secondary)] group-hover:text-white" />
+            <Square size={10} className="text-[var(--text-secondary)] group-hover:text-[var(--text-primary)]" />
           )}
         </button>
         <button
@@ -289,7 +289,7 @@ export default function Window({ id, title, icon: Icon, component, isMinimized, 
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="fixed z-[9999] bg-white/10 backdrop-blur-md border border-white/20 pointer-events-none shadow-2xl"
+            className="fixed z-[9999] bg-[var(--bg-tertiary)]/20 backdrop-blur-md border border-[var(--border-color)] pointer-events-none shadow-2xl"
             style={{
               top: snapPreview === 'top' ? safeArea.y : safeArea.y,
               left: snapPreview === 'right' ? safeArea.x + safeArea.w / 2 : safeArea.x,

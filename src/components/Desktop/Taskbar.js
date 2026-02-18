@@ -15,9 +15,11 @@ import TerminalApp from '@/apps/TerminalApp';
 import FilesApp from '@/apps/FilesApp';
 import PreviewWindow from './PreviewWindow';
 import ShortcutSettings from './ShortcutSettings';
+import AiUsageBar from '@/components/AiUsageBar';
+import { useAIUsagePolling } from '@/hooks/useAIUsage';
 
 export default function Taskbar() {
-  const { state, focusWindow, toggleMinimize, openWindow, closeWindow, setTaskbarPosition, saveSettings, switchDesktop, switchToNextDesktop, switchToPrevDesktop } = useOS();
+  const { state, focusWindow, toggleMinimize, openWindow, closeWindow, setTaskbarPosition, saveSettings, switchDesktop, switchToNextDesktop, switchToPrevDesktop, addNotification } = useOS();
   const { data: session } = useSession();
   const { t } = useTranslation();
   const { windows, activeWindowId, glassmorphism, taskbarPosition, currentDesktopId, windowsByDesktop, desktops } = state;
@@ -31,6 +33,16 @@ export default function Taskbar() {
   const startMenuRef = useRef(null);
   const contextMenuRef = useRef(null);
   const taskbarContextMenuRef = useRef(null);
+
+  // Use centralized AI usage polling with notification callback for thresholds
+  useAIUsagePolling(60000, ({ percent, used, limit, type }) => {
+    addNotification({
+      title: 'AI usage',
+      message: `${percent}% used (${used.toLocaleString()} / ${limit.toLocaleString()} tokens)`,
+      type,
+      duration: 3500,
+    });
+  });
 
   useEffect(() => {
     setMounted(true);
@@ -138,7 +150,7 @@ export default function Taskbar() {
   const isHorizontal = taskbarPosition === 'top' || taskbarPosition === 'bottom';
   
   const taskbarClasses = `
-    taskbar fixed z-[10000] transition-all duration-300 border-[var(--border-color)]
+    taskbar fixed z-[10000] transition-all duration-300 bg-transparent
     ${taskbarPosition === 'bottom' ? 'bottom-0 left-0 w-full h-14' : ''}
     ${taskbarPosition === 'top' ? 'top-0 left-0 w-full h-14' : ''}
     ${taskbarPosition === 'left' ? 'top-0 left-0 h-full w-14' : ''}
@@ -246,11 +258,11 @@ export default function Taskbar() {
         }}
       >
         <div
-          className={`flex ${isVertical ? 'flex-col py-2 px-2' : 'flex-row px-3 py-2'} items-center gap-2 rounded-2xl border border-white/10 bg-white/5 shadow-2xl backdrop-blur-xl`}
+          className={`flex ${isVertical ? 'flex-col py-2 px-2' : 'flex-row px-3 py-2'} items-center gap-2 rounded-2xl border border-[var(--border-color)] bg-[var(--bg-secondary)] shadow-2xl backdrop-blur-xl`}
           style={{
             background: glassmorphism ? 'var(--taskbar-bg)' : 'var(--bg-primary)',
             backdropFilter: glassmorphism ? 'blur(18px)' : 'none',
-            boxShadow: '0 18px 45px rgba(0,0,0,0.45), 0 0 0 1px rgba(255,255,255,0.06)'
+            boxShadow: '0 18px 45px var(--shadow-strong), 0 0 0 1px var(--border-color)'
           }}
         >
         <div className={`flex ${isVertical ? 'flex-col' : 'flex-row'} items-center gap-2 relative`} ref={startMenuRef}>
@@ -316,7 +328,7 @@ export default function Taskbar() {
                         window.location.href = '/login'; 
                       }
                     }}
-                    className="p-2 rounded-lg hover:bg-white/10 text-[var(--text-muted)] hover:text-red-400 transition-colors"
+                    className="p-2 rounded-lg hover:bg-[var(--bg-tertiary)] text-[var(--text-muted)] hover:text-red-500 transition-colors"
                   >
                     <Power size={18} />
                   </button>
@@ -335,8 +347,8 @@ export default function Taskbar() {
                     <Search size={14} className="group-hover:text-indigo-400 transition-colors" />
                     <span className="flex-1 text-left">{t('desktop.taskbar.search')}</span>
                     <span className="flex items-center gap-0.5 text-[10px] text-[var(--text-muted)]/60 font-mono">
-                      <kbd className="px-1 py-0.5 rounded bg-white/[0.06] border border-white/[0.08] text-[9px]">⌘</kbd>
-                      <kbd className="px-1 py-0.5 rounded bg-white/[0.06] border border-white/[0.08] text-[9px]">K</kbd>
+                      <kbd className="px-1 py-0.5 rounded bg-[var(--bg-tertiary)]/50 border border-[var(--border-color)] text-[9px]">⌘</kbd>
+                      <kbd className="px-1 py-0.5 rounded bg-[var(--bg-tertiary)]/50 border border-[var(--border-color)] text-[9px]">K</kbd>
                     </span>
                   </button>
                 </div>
@@ -406,7 +418,7 @@ export default function Taskbar() {
               {win.icon && (
                 <win.icon
                   size={16}
-                  className={`text-[var(--accent-indigo)] group-hover:scale-110 transition-transform shrink-0 ${isHorizontal ? 'opacity-90' : ''}`}
+                   className={`text-[var(--accent-indigo)] group-hover:scale-110 transition-transform shrink-0 ${isHorizontal ? 'opacity-90 dark:opacity-100' : ''}`}
                 />
               )}
               {activeWindowId === win.id && !win.isMinimized && (
@@ -446,6 +458,9 @@ export default function Taskbar() {
               </button>
             </div>
           )}
+
+          {isHorizontal && <AiUsageBar compact={true} />}
+
           <LanguageSwitcher vertical={isVertical} taskbarPosition={taskbarPosition} />
           <div className={`flex items-center gap-2 ${isVertical ? 'flex-col py-2.5 px-2' : 'px-3 py-1'} bg-[var(--bg-tertiary)] rounded-full border border-[var(--border-color)]`}>
             <Wifi size={14} className="text-emerald-400" />
@@ -557,7 +572,7 @@ export default function Taskbar() {
                     setTaskbarContextMenu(null);
                     window.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', code: 'KeyK', metaKey: true, bubbles: true }));
                   }}
-                  className="w-full text-left px-3 py-2 text-xs text-[var(--text-secondary)] hover:bg-indigo-500/20 rounded-lg flex items-center gap-2 transition-colors group"
+                  className="w-full text-left px-3 py-2 text-xs text-[var(--text-secondary)] hover:bg-indigo-500/10 dark:hover:bg-indigo-500/20 rounded-lg flex items-center gap-2 transition-colors group"
                 >
                   <Search size={13} className="text-indigo-400" />
                   <span className="flex-1">Search</span>
@@ -565,21 +580,21 @@ export default function Taskbar() {
                 </button>
                 <button
                   onClick={() => { openWindow('terminal', t('terminal.title'), <TerminalApp />, Terminal); setTaskbarContextMenu(null); }}
-                  className="w-full text-left px-3 py-2 text-xs text-[var(--text-secondary)] hover:bg-emerald-500/20 rounded-lg flex items-center gap-2 transition-colors"
+                  className="w-full text-left px-3 py-2 text-xs text-[var(--text-secondary)] hover:bg-emerald-500/10 dark:hover:bg-emerald-500/20 rounded-lg flex items-center gap-2 transition-colors"
                 >
                   <Terminal size={13} className="text-emerald-400" />
                   Terminal
                 </button>
                 <button
                   onClick={() => { openWindow('files-app', 'Files', <FilesApp />, FolderClosed); setTaskbarContextMenu(null); }}
-                  className="w-full text-left px-3 py-2 text-xs text-[var(--text-secondary)] hover:bg-blue-500/20 rounded-lg flex items-center gap-2 transition-colors"
+                  className="w-full text-left px-3 py-2 text-xs text-[var(--text-secondary)] hover:bg-blue-500/10 dark:hover:bg-blue-500/20 rounded-lg flex items-center gap-2 transition-colors"
                 >
                   <FolderClosed size={13} className="text-blue-400" />
                   Files
                 </button>
                 <button
                   onClick={() => { openWindow('notepad', 'Notepad', <NotepadApp />, StickyNote); setTaskbarContextMenu(null); }}
-                  className="w-full text-left px-3 py-2 text-xs text-[var(--text-secondary)] hover:bg-amber-500/20 rounded-lg flex items-center gap-2 transition-colors"
+                  className="w-full text-left px-3 py-2 text-xs text-[var(--text-secondary)] hover:bg-amber-500/10 dark:hover:bg-amber-500/20 rounded-lg flex items-center gap-2 transition-colors"
                 >
                   <StickyNote size={13} className="text-amber-400" />
                   Notepad

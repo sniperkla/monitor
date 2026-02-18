@@ -106,7 +106,7 @@ export default function TerminalTabs() {
                 // Handle connection drop on tab (same as tab-bar)
                 const connData = e.dataTransfer.getData('application/ssh-connection');
                 if (connData) {
-                  const conn = JSON.parse(connData);
+                  const conn = qJSON.parse(connData);
                   const termId = `term-${conn._id}-${Date.now()}`;
                   dispatch({ type: 'OPEN_TERMINAL', payload: { id: termId, connectionId: conn._id, connectionName: conn.name, host: conn.host, color: conn.color, connection: conn } });
                   setActiveTab(termId);

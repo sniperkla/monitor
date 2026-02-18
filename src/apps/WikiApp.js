@@ -16,14 +16,17 @@ import { useSession, signIn } from 'next-auth/react';
 import { useVault } from '@/context/VaultContext';
 import { useOS } from '@/context/OSContext';
 
+// Global cache for pending translation requests to prevent duplicates
+const pendingTranslations = new Map();
+
 const OS_ICONS = {
-  'Ubuntu/Debian': { emoji: '🟠', color: 'text-orange-400', bg: 'bg-orange-500/10', border: 'border-orange-500/20' },
-  'CentOS/RHEL': { emoji: '🔴', color: 'text-red-400', bg: 'bg-red-500/10', border: 'border-red-500/20' },
-  'All Linux': { emoji: '🐧', color: 'text-yellow-400', bg: 'bg-yellow-500/10', border: 'border-yellow-500/20' },
-  'macOS': { emoji: '🍎', color: 'text-gray-300', bg: 'bg-gray-500/10', border: 'border-gray-500/20' },
-  'Windows': { emoji: '🪟', color: 'text-blue-400', bg: 'bg-blue-500/10', border: 'border-blue-500/20' },
-  'Alpine': { emoji: '🏔️', color: 'text-cyan-400', bg: 'bg-cyan-500/10', border: 'border-cyan-500/20' },
-  'Any': { emoji: '🌐', color: 'text-purple-400', bg: 'bg-purple-500/10', border: 'border-purple-500/20' },
+  'Ubuntu/Debian': { emoji: '🟠', color: 'text-orange-600 dark:text-orange-400', bg: 'bg-orange-500/10', border: 'border-orange-500/20' },
+  'CentOS/RHEL': { emoji: '🔴', color: 'text-red-600 dark:text-red-400', bg: 'bg-red-500/10', border: 'border-red-500/20' },
+  'All Linux': { emoji: '🐧', color: 'text-yellow-700 dark:text-yellow-400', bg: 'bg-yellow-500/10', border: 'border-yellow-500/20' },
+  'macOS': { emoji: '🍎', color: 'text-slate-600 dark:text-gray-300', bg: 'bg-gray-500/10', border: 'border-gray-500/20' },
+  'Windows': { emoji: '🪟', color: 'text-blue-600 dark:text-blue-400', bg: 'bg-blue-500/10', border: 'border-blue-500/20' },
+  'Alpine': { emoji: '🏔️', color: 'text-cyan-600 dark:text-cyan-400', bg: 'bg-cyan-500/10', border: 'border-cyan-500/20' },
+  'Any': { emoji: '🌐', color: 'text-purple-600 dark:text-purple-400', bg: 'bg-purple-500/10', border: 'border-purple-500/20' },
 };
 
 const getOsStyle = (os) => OS_ICONS[os] || OS_ICONS['Any'];
@@ -121,8 +124,28 @@ export default function WikiApp({ initialGuideId }) {
     const targetLang = i18n.language;
     if (targetLang === 'en' || !text.trim()) return;
 
+    const cacheKey = `${text}_${targetLang}`;
+    
+    // Check if already translated
+    if (translations[key]) return;
+    
+    // Check if translation is already in progress globally
+    if (pendingTranslations.has(cacheKey)) {
+      try {
+        const result = await pendingTranslations.get(cacheKey);
+        if (result) {
+          setTranslations(prev => ({ ...prev, [key]: result }));
+        }
+      } catch (err) {
+        console.error('Translation error:', err);
+      }
+      return;
+    }
+
     setTranslating(prev => ({ ...prev, [key]: true }));
-    try {
+    
+    // Create the translation promise
+    const translationPromise = (async () => {
       const res = await fetch('/api/utils/translate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -130,12 +153,99 @@ export default function WikiApp({ initialGuideId }) {
       });
       const data = await res.json();
       if (data.success) {
-        setTranslations(prev => ({ ...prev, [key]: data.translated }));
+        return data.translated;
       }
+      throw new Error(data.error || 'Translation failed');
+    })();
+
+    // Store in global cache
+    pendingTranslations.set(cacheKey, translationPromise);
+
+    try {
+      const translated = await translationPromise;
+      setTranslations(prev => ({ ...prev, [key]: translated }));
     } catch (err) {
       console.error('Translation error:', err);
     } finally {
       setTranslating(prev => ({ ...prev, [key]: false }));
+      // Clean up cache after a delay
+      setTimeout(() => pendingTranslations.delete(cacheKey), 5000);
+    }
+  };
+
+  // Bulk translation function
+  const translateBatch = async (textsToTranslate) => {
+    const targetLang = i18n.language;
+    if (targetLang === 'en' || textsToTranslate.length === 0) return;
+
+    // Filter out already translated or in-progress texts
+    const pendingTexts = textsToTranslate.filter(({ key, text }) => {
+      const cacheKey = `${text}_${targetLang}`;
+      return !translations[key] && !pendingTranslations.has(cacheKey);
+    });
+
+    if (pendingTexts.length === 0) return;
+
+    // Mark all as translating
+    const translatingKeys = {};
+    pendingTexts.forEach(({ key }) => {
+      translatingKeys[key] = true;
+    });
+    setTranslating(prev => ({ ...prev, ...translatingKeys }));
+
+    // Create batch payload
+    const batch = pendingTexts.map(({ key, text }) => ({
+      key,
+      text,
+      cacheKey: `${text}_${targetLang}`
+    }));
+
+    // Store promises in cache
+    const batchPromise = (async () => {
+      const res = await fetch('/api/utils/translate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          texts: batch.map(b => ({ key: b.key, text: b.text })), 
+          targetLang 
+        })
+      });
+      const data = await res.json();
+      return data;
+    })();
+
+    // Cache individual promises
+    batch.forEach(({ cacheKey }) => {
+      pendingTranslations.set(cacheKey, batchPromise.then(data => {
+        const item = data.translations?.find(t => {
+          const b = batch.find(x => x.key === t.key);
+          return b && b.cacheKey === cacheKey;
+        });
+        return item?.translated;
+      }));
+    });
+
+    try {
+      const data = await batchPromise;
+      if (data.success && data.translations) {
+        const newTranslations = {};
+        data.translations.forEach(({ key, translated }) => {
+          newTranslations[key] = translated;
+        });
+        setTranslations(prev => ({ ...prev, ...newTranslations }));
+      }
+    } catch (err) {
+      console.error('Batch translation error:', err);
+    } finally {
+      setTranslating(prev => {
+        const next = { ...prev };
+        pendingTexts.forEach(({ key }) => delete next[key]);
+        return next;
+      });
+      // Clean up cache
+      setTimeout(() => {
+        batch.forEach(({ cacheKey }) => pendingTranslations.delete(cacheKey));
+      }, 5000);
     }
   };
 
@@ -144,20 +254,36 @@ export default function WikiApp({ initialGuideId }) {
       const lang = i18n.language;
       if (lang === 'en') return;
 
-      // Translate Title
+      const textsToTranslate = [];
+
+      // Queue Title
       if (!translations[`title_${activeGuide._id}`]) {
-        translateText(activeGuide.title, `title_${activeGuide._id}`);
+        textsToTranslate.push({
+          key: `title_${activeGuide._id}`,
+          text: activeGuide.title
+        });
       }
-      // Translate Description
+      // Queue Description  
       if (!translations[`desc_${activeGuide._id}`]) {
-        translateText(activeGuide.description, `desc_${activeGuide._id}`);
+        textsToTranslate.push({
+          key: `desc_${activeGuide._id}`,
+          text: activeGuide.description
+        });
       }
-      // Translate Command Explanations
+      // Queue Command Explanations
       activeGuide.commands?.forEach((cmd, idx) => {
         if (cmd.explanation && !translations[`cmd_exp_${activeGuide._id}_${idx}`]) {
-          translateText(cmd.explanation, `cmd_exp_${activeGuide._id}_${idx}`);
+          textsToTranslate.push({
+            key: `cmd_exp_${activeGuide._id}_${idx}`,
+            text: cmd.explanation
+          });
         }
       });
+
+      // Send as single batch
+      if (textsToTranslate.length > 0) {
+        translateBatch(textsToTranslate);
+      }
     }
   }, [autoTranslate, activeGuide, i18n.language]);
 
@@ -169,20 +295,20 @@ export default function WikiApp({ initialGuideId }) {
 
   const getCategoryIcon = (category) => {
     const c = category.toLowerCase();
-    if (c === 'all') return <Layers size={14} className="text-indigo-400" />;
-    if (c === 'web server') return <Globe size={14} className="text-emerald-400" />;
-    if (c === 'security') return <Shield size={14} className="text-rose-400" />;
-    if (c === 'database') return <Database size={14} className="text-amber-400" />;
-    if (c === 'container') return <Cpu size={14} className="text-cyan-400" />;
-    if (c === 'monitoring') return <Activity size={14} className="text-green-400" />;
-    if (c === 'network') return <Globe size={14} className="text-sky-400" />;
-    if (c === 'process') return <Server size={14} className="text-violet-400" />;
-    if (c === 'devops') return <GitBranch size={14} className="text-pink-400" />;
-    if (c === 'cloud') return <Cloud size={14} className="text-blue-400" />;
-    if (c === 'system') return <Monitor size={14} className="text-teal-400" />;
-    if (c === 'installation') return <Plus size={14} className="text-blue-400" />;
-    if (c === 'tools') return <Wrench size={14} className="text-orange-400" />;
-    return <Settings size={14} className="text-gray-400" />;
+    if (c === 'all') return <Layers size={14} className="text-indigo-600 dark:text-indigo-400" />;
+    if (c === 'web server') return <Globe size={14} className="text-emerald-600 dark:text-emerald-400" />;
+    if (c === 'security') return <Shield size={14} className="text-rose-600 dark:text-rose-400" />;
+    if (c === 'database') return <Database size={14} className="text-amber-600 dark:text-amber-400" />;
+    if (c === 'container') return <Cpu size={14} className="text-cyan-600 dark:text-cyan-400" />;
+    if (c === 'monitoring') return <Activity size={14} className="text-green-600 dark:text-green-400" />;
+    if (c === 'network') return <Globe size={14} className="text-sky-600 dark:text-sky-400" />;
+    if (c === 'process') return <Server size={14} className="text-violet-600 dark:text-violet-400" />;
+    if (c === 'devops') return <GitBranch size={14} className="text-pink-600 dark:text-pink-400" />;
+    if (c === 'cloud') return <Cloud size={14} className="text-blue-600 dark:text-blue-400" />;
+    if (c === 'system') return <Monitor size={14} className="text-teal-600 dark:text-teal-400" />;
+    if (c === 'installation') return <Plus size={14} className="text-blue-600 dark:text-blue-400" />;
+    if (c === 'tools') return <Wrench size={14} className="text-orange-600 dark:text-orange-400" />;
+    return <Settings size={14} className="text-gray-500 dark:text-gray-400" />;
   };
 
   const OsBadge = ({ os, small }) => {
@@ -202,7 +328,7 @@ export default function WikiApp({ initialGuideId }) {
         <div className="p-4 border-b border-[var(--border-color)]">
           <div className="flex items-center gap-2 mb-4">
             <div className="w-8 h-8 rounded-lg bg-indigo-500/10 flex items-center justify-center border border-indigo-500/20 shadow-inner">
-               <Book size={18} className="text-indigo-400" />
+               <Book size={18} className="text-indigo-600 dark:text-indigo-400" />
             </div>
             <span className="font-bold text-sm tracking-tight italic">{t('wiki.hub')}</span>
           </div>
@@ -231,7 +357,7 @@ export default function WikiApp({ initialGuideId }) {
                   className={`inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[10px] font-medium transition-all border ${
                     activeOs === os
                       ? `${s.bg} ${s.color} ${s.border} shadow-sm`
-                      : 'border-transparent hover:bg-white/5 text-[var(--text-muted)]'
+                      : 'border-transparent hover:bg-[var(--bg-tertiary)] text-[var(--text-muted)]'
                   }`}
                 >
                   <span className="text-[11px]">{s.emoji}</span>
@@ -249,8 +375,8 @@ export default function WikiApp({ initialGuideId }) {
               onClick={() => { setActiveCategory(cat); setActiveGuide(null); }}
               className={`w-full flex items-center gap-2 px-3 py-2 rounded-xl transition-all text-xs font-medium ${
                 activeCategory === cat 
-                  ? 'bg-indigo-500/10 text-indigo-400 border border-indigo-500/20' 
-                  : 'hover:bg-white/5 text-[var(--text-secondary)] border border-transparent'
+                  ? 'bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 border border-indigo-500/20' 
+                  : 'hover:bg-[var(--bg-tertiary)] text-[var(--text-secondary)] border border-transparent'
               }`}
             >
               {getCategoryIcon(cat)}
@@ -280,16 +406,16 @@ export default function WikiApp({ initialGuideId }) {
                 className={`w-full p-4 rounded-xl text-left transition-all border group ${
                   activeGuide?._id === guide._id 
                     ? 'bg-indigo-500/5 border-indigo-500/20 shadow-sm' 
-                    : 'border-transparent hover:bg-white/5'
+                    : 'border-transparent hover:bg-[var(--bg-tertiary)]'
                 }`}
               >
                 <div className="flex items-center justify-between mb-1">
-                  <span className={`text-xs font-bold truncate ${activeGuide?._id === guide._id ? 'text-indigo-400' : 'text-[var(--text-primary)]'}`}>
+                  <span className={`text-xs font-bold truncate ${activeGuide?._id === guide._id ? 'text-indigo-600 dark:text-indigo-400' : 'text-[var(--text-primary)]'}`}>
                     {autoTranslate && translations[`title_${guide._id}`] 
                       ? translations[`title_${guide._id}`] 
                       : (translating[`title_${guide._id}`] ? '...' : guide.title)}
                   </span>
-                  <ChevronRight size={12} className={`transition-transform flex-shrink-0 ml-1 ${activeGuide?._id === guide._id ? 'rotate-90 text-indigo-400' : 'text-[var(--text-muted)]'}`} />
+                  <ChevronRight size={12} className={`transition-transform flex-shrink-0 ml-1 ${activeGuide?._id === guide._id ? 'rotate-90 text-indigo-600 dark:text-indigo-400' : 'text-[var(--text-muted)]'}`} />
                 </div>
                 <p className="text-[10px] text-[var(--text-muted)] line-clamp-2 leading-relaxed opacity-80 group-hover:opacity-100 italic">
                   {autoTranslate && translations[`desc_${guide._id}`] 
@@ -301,7 +427,7 @@ export default function WikiApp({ initialGuideId }) {
                     <OsBadge key={o} os={o} small />
                   ))}
                   {guide.tags?.slice(0, 1).map(tag => (
-                    <span key={tag} className="px-1.5 py-0.5 rounded bg-indigo-500/5 text-[8px] text-indigo-300 font-mono">
+                    <span key={tag} className="px-1.5 py-0.5 rounded bg-indigo-500/10 dark:bg-indigo-500/5 text-[8px] text-indigo-600 dark:text-indigo-300 font-mono">
                       #{tag}
                     </span>
                   ))}
@@ -333,7 +459,7 @@ export default function WikiApp({ initialGuideId }) {
                       : (translating[`title_${activeGuide._id}`] ? '...' : activeGuide.title)}
                   </h1>
                   <div className="flex items-center gap-2">
-                    <span className="text-[9px] uppercase font-bold text-indigo-400 tracking-widest">{activeGuide.category}</span>
+                    <span className="text-[9px] uppercase font-bold text-indigo-600 dark:text-indigo-400 tracking-widest">{activeGuide.category}</span>
                     <span className="w-1 h-1 rounded-full bg-[var(--border-color)]" />
                     <div className="flex gap-1">
                       {activeGuide.os?.map(o => <OsBadge key={o} os={o} />)}
@@ -349,8 +475,8 @@ export default function WikiApp({ initialGuideId }) {
                   onClick={() => setAutoTranslate(!autoTranslate)}
                   className={`flex items-center gap-2 px-3 py-1.5 rounded-lg transition-all text-xs font-bold border ${
                     autoTranslate 
-                      ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30 shadow-lg shadow-emerald-500/10' 
-                      : 'bg-white/5 text-[var(--text-muted)] border-white/5 hover:bg-white/10'
+                      ? 'bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 border-emerald-500/30 shadow-lg shadow-emerald-500/10' 
+                      : 'bg-[var(--bg-tertiary)] text-[var(--text-muted)] border-[var(--border-color)] hover:bg-[var(--bg-card-hover)]'
                   }`}
                   title={t('wiki.autoTranslate')}
                 >
@@ -361,7 +487,7 @@ export default function WikiApp({ initialGuideId }) {
               {(!session && !isConfigured) ? (
                 <button
                   onClick={() => signIn('google')}
-                  className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-white/10 text-white hover:bg-white/20 transition-all text-xs font-bold border border-white/5"
+                  className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-[var(--bg-tertiary)] text-[var(--text-primary)] hover:bg-[var(--bg-card-hover)] transition-all text-xs font-bold border border-[var(--border-color)]"
                 >
                   <User size={14} />
                   {t('wiki.askAiLogin')}
@@ -430,7 +556,7 @@ export default function WikiApp({ initialGuideId }) {
                       key={i} 
                       className="group"
                     >
-                      <h3 className="text-xs font-bold text-indigo-300 mb-3 flex items-center gap-2 uppercase tracking-widest">
+                      <h3 className="text-xs font-bold text-indigo-600 dark:text-indigo-300 mb-3 flex items-center gap-2 uppercase tracking-widest">
                         <Terminal size={14} />
                         {cmd.label}
                       </h3>
@@ -478,7 +604,7 @@ export default function WikiApp({ initialGuideId }) {
                     <span className="text-[10px] font-bold text-[var(--text-muted)] uppercase tracking-wider">{t('wiki.tags')}</span>
                     <div className="flex flex-wrap gap-2">
                       {activeGuide.tags.map(tag => (
-                        <span key={tag} className="px-2 py-1 rounded-lg bg-[var(--bg-tertiary)] border border-[var(--border-color)] text-[10px] text-[var(--text-secondary)] hover:text-indigo-400 transition-colors cursor-pointer">
+                        <span key={tag} className="px-2 py-1 rounded-lg bg-[var(--bg-tertiary)] border border-[var(--border-color)] text-[10px] text-[var(--text-secondary)] hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors cursor-pointer">
                           {tag}
                         </span>
                       ))}
@@ -491,12 +617,12 @@ export default function WikiApp({ initialGuideId }) {
             </div>
           </>
         ) : (
-          <div className="flex-1 flex flex-col items-center justify-center p-12 text-center opacity-20">
+          <div className="flex-1 flex flex-col items-center justify-center p-12 text-center opacity-40 dark:opacity-20">
              <div className="w-24 h-24 rounded-full bg-indigo-500/5 flex items-center justify-center mb-6 border border-indigo-500/10">
-                <Book size={48} className="text-indigo-400" />
+                <Book size={48} className="text-indigo-600 dark:text-indigo-400" />
              </div>
-             <h2 className="text-xl font-bold mb-2 tracking-tight">{t('wiki.emptyTitle')}</h2>
-             <p className="text-sm max-w-xs mx-auto italic">{t('wiki.emptyDesc')}</p>
+             <h2 className="text-xl font-bold mb-2 tracking-tight text-[var(--text-primary)]">{t('wiki.emptyTitle')}</h2>
+             <p className="text-sm max-w-xs mx-auto italic text-[var(--text-secondary)]">{t('wiki.emptyDesc')}</p>
           </div>
         )}
       </div>

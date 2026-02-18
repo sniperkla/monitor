@@ -4,25 +4,44 @@ import { authOptions } from '@/lib/auth';
 import connectDB from '@/lib/mongodb';
 import SystemSetting from '@/models/SystemSetting';
 import { checkRateLimit } from '@/lib/serverGuard';
+import { checkAndTrackAiUsage } from '@/utils/aiLimiter';
 
 export async function POST(req, { params }) {
   try {
+    const session = await getServerSession(authOptions);
+    if (!session) {
+      return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
+    }
+
+    const { prompt, provider, schemaName, sampleData } = await req.json();
+
+    if (!prompt) {
+      return NextResponse.json({ success: false, error: 'Prompt is required' }, { status: 400 });
+    }
+
+    // Check AI token limit
+    let usageInfo = null;
+    try {
+      await checkAndTrackAiUsage(session.user.email, prompt);
+    } catch (limitErr) {
+      return NextResponse.json({ success: false, error: limitErr.message }, { status: 429 });
+    }
+
+    const limitsSetting = await SystemSetting.findOne({ key: 'ai_limits' });
+    const limitsValue = limitsSetting?.value && typeof limitsSetting.value === 'object' ? limitsSetting.value : {};
+    const rateValue = limitsValue?.rate && typeof limitsValue.rate === 'object' ? limitsValue.rate : {};
+    const dbPerMinute = Number.isFinite(Number(rateValue.dbPerMinute)) ? Math.max(1, Number(rateValue.dbPerMinute)) : 15;
+
     // Rate limiting for AI queries (expensive)
     const clientIP = req.headers.get('x-forwarded-for') || 'unknown';
-    const rateCheck = checkRateLimit(`ai:${clientIP}`, 15); // Max 15 AI queries per minute
+    const rateCheck = checkRateLimit(`ai:${clientIP}`, dbPerMinute);
     if (!rateCheck.allowed) {
       return NextResponse.json({ 
         success: false, error: `AI rate limit exceeded. Please wait ${Math.ceil(rateCheck.resetIn / 1000)}s.` 
       }, { status: 429 });
     }
 
-    const session = await getServerSession(authOptions);
     const { id } = await params;
-    const { prompt, provider, schemaName, sampleData } = await req.json();
-
-    if (!prompt) {
-      return NextResponse.json({ success: false, error: 'Prompt is required' }, { status: 400 });
-    }
 
     await connectDB();
 
@@ -81,7 +100,7 @@ export async function POST(req, { params }) {
     2. <query> The final valid code/JSON string ONLY </query>
     3. <repeat> (Optional) If the user demands a large number of rows (e.g., > 5), specify the total count here and ONLY generate 1-3 sample rows in the query.
 
-    RULES:
+    CRITICAL RULES:
     1. MongoDB:
        - READ (find): return ONLY a valid JSON filter object.
        - DELETE: return an executable JSON action object:
@@ -90,19 +109,44 @@ export async function POST(req, { params }) {
          {"action":"updateOne"|"updateMany","collection":"${schemaName}","filter":{...},"update":{"$set":{...}}}
        - INSERT: return an executable JSON action object:
          {"action":"insertOne"|"insertMany","collection":"${schemaName}","data":{...} | [{...}]}
-    2. SQL (Read): If the user just wants to find/see records, return ONLY the WHERE clause.
-    3. SQL (Action): If the user says "DELETE", "UPDATE", or "INSERT", return the FULL SQL statement.
+    
+    2. MySQL/PostgreSQL (SQL) - READ OPERATIONS:
+       - If the user just wants to find/see records, return ONLY the WHERE clause in proper SQL syntax.
+       - NEVER use JSON syntax like {"field": "value"} for SQL.
+       - CORRECT SQL: field = 'value' OR field LIKE '%value%'
+       - BAD (JSON): {"field": "value"}
+       - Use proper SQL operators: =, !=, <, >, LIKE, IN, BETWEEN, IS NULL
+       - Example: name = 'production' AND status = 'active'
+       - Example: age > 25 AND name LIKE '%john%'
+    
+    3. MySQL/PostgreSQL (SQL) - ACTION OPERATIONS:
+       - If the user says "DELETE", "UPDATE", or "INSERT", return the FULL SQL statement.
+       - DELETE: DELETE FROM ${schemaName} WHERE field = 'value'
+       - UPDATE: UPDATE ${schemaName} SET field = 'value' WHERE condition
+       - INSERT: INSERT INTO ${schemaName} (field1, field2) VALUES ('value1', 'value2')
+    
     4. Mock Data: If the user asks to "mock" or "generate" data (e.g., "mock 100 items"), generate a valid INSERT statement. 
        - EFFICIENCY TRICK: If the requested count is large (>5), generate ONLY 1 sample row to save tokens.
        - Use the <repeat>N</repeat> tag to tell the system to multiply this row N times.
        - Example: User "100 rows" -> <repeat>100</repeat><query>INSERT ... VALUES (one_row)</query>
        - Use "sampleData" to infer realistic values and types.
+    
     5. Always use the provided Table/Collection name: ${schemaName}
+    
     6. DATE/TIME FIX: For "createdAt", "updatedAt", "lastConnected" or similar date fields, use NULL or omit them in the INSERT statement unless explicitly asked. 
        - Do NOT generate strings like '2026-02-15...' for SQL DATETIME columns as they often fail. Let the DB handle defaults.
+    
     7. JSON FIX: For columns like "tags", "settings", "metadata", "config", ALWAYS format as valid JSON string.
        - BAD: 'prod' 
        - GOOD: '["prod"]' or '{"env": "prod"}'
+
+    Example (SQL Read - CORRECT):
+    User: "find users named john"
+    <thought>User wants to find records with name = 'john'. For SQL, I return a WHERE clause.</thought>
+    <query>name = 'john'</query>
+
+    Example (SQL Read - BAD - NEVER DO THIS):
+    <query>{"name": "john"}</query>
 
     Example (SQL Mock Large):
     User: "mock 100 users"
@@ -182,7 +226,8 @@ export async function POST(req, { params }) {
                { $set: { 'value.currentIndex': nextIndex } }
              ).catch(err => console.error('Failed to update key index:', err));
         }
-        return NextResponse.json({ success: true, query: answer });
+        usageInfo = await checkAndTrackAiUsage(session.user.email, prompt, answer);
+        return NextResponse.json({ success: true, query: answer, usage: usageInfo });
     }
 
     return NextResponse.json({ success: false, error: lastError?.message || 'AI Rate limit exceeded on all keys.' }, { status: 429 });

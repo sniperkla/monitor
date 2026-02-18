@@ -9,6 +9,9 @@ import { useTranslation } from 'react-i18next';
 import { useApp } from '@/context/AppContext';
 import { useSession, signIn } from 'next-auth/react';
 
+// Global cache for pending translation requests to prevent duplicates
+const pendingTranslations = new Map();
+
 const LockIcon = ({ size, className }) => (
   <svg 
     width={size} 
@@ -45,6 +48,7 @@ export default function WikiChatWindow({ id, guide, onClose }) {
   const [autoTranslate, setAutoTranslate] = useState(false);
   const [translations, setTranslations] = useState({}); // { [messageIdx_partIdx]: translatedText }
   const [translating, setTranslating] = useState({}); // { [messageIdx_partIdx]: boolean }
+  const [lastAiUpdate, setLastAiUpdate] = useState(0);
   
   const chatEndRef = useRef(null);
   const taskbarPos = osState.taskbarPosition || 'bottom';
@@ -195,7 +199,19 @@ export default function WikiChatWindow({ id, guide, onClose }) {
         const assistantMsg = { role: 'assistant', content: data.message, timestamp: new Date() };
         const finalMessages = [...newMessages, assistantMsg];
         setMessages(finalMessages);
+        setLastAiUpdate(Date.now());
         saveChat(finalMessages);
+
+        // Sync AI usage across all windows immediately after use
+        if (data.usage) {
+          const syncChannel = new BroadcastChannel('ai_usage_sync');
+          syncChannel.postMessage({ 
+            type: 'sync', 
+            used: data.usage.used, 
+            limit: data.usage.limit 
+          });
+          syncChannel.close();
+        }
       } else {
         setMessages(prev => [...prev, { role: 'assistant', content: 'Sorry, I encountered an error connecting to the AI service.' }]);
       }
@@ -212,9 +228,29 @@ export default function WikiChatWindow({ id, guide, onClose }) {
     if (targetLang === 'en' || !text.trim()) return;
 
     const key = `${msgIdx}_${partIdx}`;
+    const cacheKey = `${text}_${targetLang}`;
+    
+    // Check if already translated
+    if (translations[key]) return;
+    
+    // Check if translation is already in progress globally
+    if (pendingTranslations.has(cacheKey)) {
+      // Wait for the existing request to complete
+      try {
+        const result = await pendingTranslations.get(cacheKey);
+        if (result) {
+          setTranslations(prev => ({ ...prev, [key]: result }));
+        }
+      } catch (err) {
+        console.error('Translation error:', err);
+      }
+      return;
+    }
+
     setTranslating(prev => ({ ...prev, [key]: true }));
 
-    try {
+    // Create the translation promise
+    const translationPromise = (async () => {
       const res = await fetch('/api/utils/translate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -222,17 +258,106 @@ export default function WikiChatWindow({ id, guide, onClose }) {
       });
       const data = await res.json();
       if (data.success) {
-        setTranslations(prev => ({ ...prev, [key]: data.translated }));
+        return data.translated;
       }
+      throw new Error(data.error || 'Translation failed');
+    })();
+
+    // Store in global cache
+    pendingTranslations.set(cacheKey, translationPromise);
+
+    try {
+      const translated = await translationPromise;
+      setTranslations(prev => ({ ...prev, [key]: translated }));
     } catch (err) {
       console.error('Translation error:', err);
     } finally {
       setTranslating(prev => ({ ...prev, [key]: false }));
+      // Clean up cache after a delay
+      setTimeout(() => pendingTranslations.delete(cacheKey), 5000);
+    }
+  };
+
+  // Bulk translation function
+  const translateBatch = async (textsToTranslate) => {
+    const targetLang = i18n.language;
+    if (targetLang === 'en' || textsToTranslate.length === 0) return;
+
+    // Filter out already translated or in-progress texts
+    const pendingTexts = textsToTranslate.filter(({ key, text }) => {
+      const cacheKey = `${text}_${targetLang}`;
+      return !translations[key] && !pendingTranslations.has(cacheKey);
+    });
+
+    if (pendingTexts.length === 0) return;
+
+    // Mark all as translating
+    const translatingKeys = {};
+    pendingTexts.forEach(({ key }) => {
+      translatingKeys[key] = true;
+    });
+    setTranslating(prev => ({ ...prev, ...translatingKeys }));
+
+    // Create batch payload
+    const batch = pendingTexts.map(({ key, text }) => ({
+      key,
+      text,
+      cacheKey: `${text}_${targetLang}`
+    }));
+
+    // Store promises in cache
+    const batchPromise = (async () => {
+      const res = await fetch('/api/utils/translate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          texts: batch.map(b => ({ key: b.key, text: b.text })), 
+          targetLang 
+        })
+      });
+      const data = await res.json();
+      return data;
+    })();
+
+    // Cache individual promises
+    batch.forEach(({ cacheKey }) => {
+      pendingTranslations.set(cacheKey, batchPromise.then(data => {
+        const item = data.translations?.find(t => {
+          const b = batch.find(x => x.key === t.key);
+          return b && b.cacheKey === cacheKey;
+        });
+        return item?.translated;
+      }));
+    });
+
+    try {
+      const data = await batchPromise;
+      if (data.success && data.translations) {
+        const newTranslations = {};
+        data.translations.forEach(({ key, translated }) => {
+          newTranslations[key] = translated;
+        });
+        setTranslations(prev => ({ ...prev, ...newTranslations }));
+      }
+    } catch (err) {
+      console.error('Batch translation error:', err);
+    } finally {
+      setTranslating(prev => {
+        const next = { ...prev };
+        pendingTexts.forEach(({ key }) => delete next[key]);
+        return next;
+      });
+      // Clean up cache
+      setTimeout(() => {
+        batch.forEach(({ cacheKey }) => pendingTranslations.delete(cacheKey));
+      }, 5000);
     }
   };
 
   useEffect(() => {
     if (autoTranslate && messages.length > 0) {
+      const textsToTranslate = [];
+      
       messages.forEach((msg, mIdx) => {
         if (msg.role === 'assistant') {
           const parts = msg.content.split(/```/);
@@ -240,12 +365,17 @@ export default function WikiChatWindow({ id, guide, onClose }) {
             if (pIdx % 2 === 0 && part.trim()) {
               const key = `${mIdx}_${pIdx}`;
               if (!translations[key] && !translating[key]) {
-                translateText(part, mIdx, pIdx);
+                textsToTranslate.push({ key, text: part });
               }
             }
           });
         }
       });
+      
+      // Send as single batch
+      if (textsToTranslate.length > 0) {
+        translateBatch(textsToTranslate);
+      }
     }
   }, [autoTranslate, messages, i18n.language]);
 
@@ -294,7 +424,7 @@ export default function WikiChatWindow({ id, guide, onClose }) {
       }}
       exit={{ opacity: 0, scale: 0.95 }}
       transition={{ duration: 0.2 }}
-      className="window-container bg-[var(--bg-secondary)] border border-[var(--border-color)] shadow-2xl flex flex-col overflow-hidden z-[9999] ring-1 ring-white/10"
+      className="window-container bg-[var(--bg-secondary)] border border-[var(--border-color)] shadow-2xl flex flex-col overflow-hidden z-[9999] ring-1 ring-[var(--border-color)]"
       style={{
         ...windowStyle,
         transition: 'top 0.3s ease, left 0.3s ease, right 0.3s ease, bottom 0.3s ease, width 0.3s ease, height 0.3s ease, border-radius 0.3s ease',
@@ -310,9 +440,9 @@ export default function WikiChatWindow({ id, guide, onClose }) {
       >
         <div className="flex items-center gap-2" onPointerDown={(e) => e.stopPropagation()}>
           <div className="flex gap-1.5">
-            <button onClick={() => onClose(id)} className="w-3 h-3 rounded-full bg-red-400/80 hover:bg-red-400 border border-white/5 transition-colors" title="Close" />
-            <button onClick={() => { if (maximized) setMaximized(false); setMinimized(!minimized); }} className="w-3 h-3 rounded-full bg-yellow-400/80 hover:bg-yellow-400 border border-white/5 transition-colors" title="Minimize" />
-            <button onClick={() => { setMinimized(false); setMaximized(!maximized); }} className="w-3 h-3 rounded-full bg-green-400/80 hover:bg-green-400 border border-white/5 transition-colors" title="Maximize" />
+            <button onClick={() => onClose(id)} className="w-3 h-3 rounded-full bg-red-400/80 hover:bg-red-400 border border-black/5 dark:border-white/5 transition-colors" title="Close" />
+            <button onClick={() => { if (maximized) setMaximized(false); setMinimized(!minimized); }} className="w-3 h-3 rounded-full bg-yellow-400/80 hover:bg-yellow-400 border border-black/5 dark:border-white/5 transition-colors" title="Minimize" />
+            <button onClick={() => { setMinimized(false); setMaximized(!maximized); }} className="w-3 h-3 rounded-full bg-green-400/80 hover:bg-green-400 border border-black/5 dark:border-white/5 transition-colors" title="Maximize" />
           </div>
         </div>
         <div className="flex-1 mx-4 overflow-hidden">
@@ -324,7 +454,7 @@ export default function WikiChatWindow({ id, guide, onClose }) {
         <div className="flex items-center gap-2" onPointerDown={(e) => e.stopPropagation()}>
           <button 
             onClick={() => setAutoTranslate(!autoTranslate)}
-            className={`p-1.5 rounded-lg transition-colors flex items-center gap-1.5 ${autoTranslate ? 'bg-emerald-500/20 text-emerald-400' : 'hover:bg-white/5 text-[var(--text-muted)]'}`}
+            className={`p-1.5 rounded-lg transition-colors flex items-center gap-1.5 ${autoTranslate ? 'bg-emerald-500/20 text-emerald-600 dark:text-emerald-400' : 'hover:bg-[var(--bg-tertiary)] text-[var(--text-muted)]'}`}
             title="Auto Translate"
           >
             <Languages size={14} />
@@ -332,7 +462,7 @@ export default function WikiChatWindow({ id, guide, onClose }) {
           </button>
           <button 
             onClick={() => setShowHistory(!showHistory)}
-            className={`p-1.5 rounded-lg transition-colors ${showHistory ? 'bg-indigo-500 text-white' : 'hover:bg-white/5 text-[var(--text-muted)]'}`}
+            className={`p-1.5 rounded-lg transition-colors ${showHistory ? 'bg-indigo-500 text-white' : 'hover:bg-[var(--bg-tertiary)] text-[var(--text-muted)]'}`}
             title="Chat History"
           >
             <History size={14} />
@@ -365,7 +495,7 @@ export default function WikiChatWindow({ id, guide, onClose }) {
                   </button>
                   <button 
                     onClick={() => setShowHistory(false)}
-                    className="p-1.5 rounded-lg hover:bg-white/5 text-[var(--text-muted)] hover:text-[var(--text-primary)] transition-all"
+                    className="p-1.5 rounded-lg hover:bg-[var(--bg-tertiary)] text-[var(--text-muted)] hover:text-[var(--text-primary)] transition-all"
                     title="Collapse"
                   >
                     <ChevronLeft size={14} />
@@ -386,7 +516,7 @@ export default function WikiChatWindow({ id, guide, onClose }) {
                       className={`group p-3 rounded-xl cursor-pointer transition-all border ${
                         currentHistoryId === hist._id 
                           ? 'bg-indigo-500/10 border-indigo-500/20 shadow-sm' 
-                          : 'border-transparent hover:bg-white/5'
+                          : 'border-transparent hover:bg-[var(--bg-tertiary)]'
                       }`}
                     >
                       <div className="flex items-start justify-between gap-2">
@@ -435,7 +565,7 @@ export default function WikiChatWindow({ id, guide, onClose }) {
                   style={{ userSelect: 'text', WebkitUserSelect: 'text' }}
                 >
                   {msg.role === 'assistant' && (
-                    <div className="flex items-center gap-1.5 mb-1 pb-1 border-b border-white/5">
+                    <div className="flex items-center gap-1.5 mb-1 pb-1 border-b border-[var(--border-color)]">
                       <Bot size={12} className="text-indigo-400" />
                       <span className="text-[10px] font-bold text-indigo-300">Wiki AI</span>
                     </div>

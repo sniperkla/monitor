@@ -242,8 +242,8 @@ export default function SpotlightSearch() {
   return createPortal(
     <MacOSModalWindow
       isOpen
-      title={t('desktop.taskbar.search') || 'Search'}
-      icon={Search}
+      title=""
+      icon={null}
       onClose={() => setIsOpen(false)}
       zIndexClassName="z-[20000]"
       draggable={true}
@@ -259,10 +259,11 @@ export default function SpotlightSearch() {
       windowClassName="shadow-2xl"
       enableMinimize={false}
       enableMaximize={false}
+      showTitleBar={false}
     >
       <div>
         {/* Search Input */}
-        <div className="flex items-center gap-3 px-5 py-4 border-b border-white/[0.06]">
+        <div className="modal-drag-handle flex items-center gap-3 px-5 py-4 border-b border-[var(--border-color)]">
           <Search size={20} className="text-indigo-400 shrink-0" />
           <input
             ref={inputRef}
@@ -278,13 +279,13 @@ export default function SpotlightSearch() {
           {query && (
             <button
               onClick={() => { setQuery(''); inputRef.current?.focus(); }}
-              className="p-1 rounded-md hover:bg-white/10 text-[var(--text-muted)] hover:text-[var(--text-primary)] transition-colors"
+              className="p-1 rounded-md hover:bg-[var(--bg-tertiary)] text-[var(--text-muted)] hover:text-[var(--text-primary)] transition-colors"
             >
               <X size={14} />
             </button>
           )}
           <div className="flex items-center gap-1 text-[var(--text-muted)]/70 text-[10px] font-mono shrink-0">
-            <kbd className="px-1.5 py-0.5 rounded bg-white/[0.06] border border-white/[0.08] text-[10px]">esc</kbd>
+            <kbd className="px-1.5 py-0.5 rounded bg-[var(--bg-tertiary)]/50 border border-[var(--border-color)] text-[10px]">esc</kbd>
           </div>
         </div>
 
@@ -295,7 +296,7 @@ export default function SpotlightSearch() {
               {/* Apps Section */}
               {filteredApps.length > 0 && (
                 <div className="px-3 pt-3 pb-1">
-                  <div className="px-2 mb-2 text-[10px] font-bold text-white/30 uppercase tracking-widest">
+                  <div className="px-2 mb-2 text-[10px] font-bold text-[var(--text-muted)] uppercase tracking-widest">
                     Applications
                   </div>
                   {filteredApps.map((app, i) => {
@@ -309,23 +310,23 @@ export default function SpotlightSearch() {
                         onMouseEnter={() => setSelectedIndex(globalIndex)}
                         className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl transition-all group ${
                           selectedIndex === globalIndex
-                            ? 'bg-indigo-500/20 text-white'
-                            : 'text-white/70 hover:bg-white/[0.04]'
+                            ? 'bg-indigo-500/20 text-[var(--text-primary)]'
+                            : 'text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)]/50'
                         }`}
                       >
                         <div className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 transition-colors ${
                           selectedIndex === globalIndex
                             ? 'bg-indigo-500/30'
-                            : 'bg-white/[0.06]'
+                            : 'bg-[var(--bg-tertiary)]'
                         }`}>
-                          <app.icon size={18} className={selectedIndex === globalIndex ? 'text-indigo-300' : 'text-white/50'} />
+                          <app.icon size={18} className={selectedIndex === globalIndex ? 'text-indigo-600 dark:text-indigo-300' : 'text-[var(--text-muted)]'} />
                         </div>
                         <div className="flex-1 text-left min-w-0">
                           <span className="block text-sm font-semibold truncate">{title}</span>
-                          <span className="block text-[10px] text-white/30 truncate">Application</span>
+                          <span className="block text-[10px] text-[var(--text-muted)] truncate">{t('desktop.taskbar.systemApp') || 'System App'}</span>
                         </div>
                         {selectedIndex === globalIndex && (
-                          <div className="flex items-center gap-1 text-white/30 shrink-0">
+                          <div className="flex items-center gap-1 text-[var(--text-muted)] shrink-0">
                             <CornerDownLeft size={12} />
                           </div>
                         )}
@@ -338,8 +339,8 @@ export default function SpotlightSearch() {
               {/* Wiki section */}
               {wikiResults.length > 0 && (
                 <div className="px-3 pt-2 pb-2">
-                  <div className="h-px bg-white/[0.06] mx-2 mb-3" />
-                  <div className="px-2 mb-2 text-[10px] font-bold text-white/30 uppercase tracking-widest flex items-center gap-2">
+                  <div className="h-px bg-[var(--border-color)] mx-2 mb-3" />
+                  <div className="px-2 mb-2 text-[10px] font-bold text-[var(--text-muted)] uppercase tracking-widest flex items-center gap-2">
                     <Book size={10} />
                     Guide Hub Results
                   </div>
@@ -354,34 +355,34 @@ export default function SpotlightSearch() {
                         onMouseEnter={() => setSelectedIndex(globalIndex)}
                         className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl transition-all group ${
                           selectedIndex === globalIndex
-                            ? 'bg-indigo-500/20 text-white'
-                            : 'text-white/70 hover:bg-white/[0.04]'
+                            ? 'bg-purple-500/20 text-[var(--text-primary)]'
+                            : 'text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)]/50'
                         }`}
                       >
                         <div className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 transition-colors ${
                           selectedIndex === globalIndex
                             ? 'bg-purple-500/30'
-                            : 'bg-white/[0.06]'
+                            : 'bg-[var(--bg-tertiary)]'
                         }`}>
-                          <Icon size={16} className={selectedIndex === globalIndex ? 'text-purple-300' : 'text-white/50'} />
+                          <Icon size={16} className={selectedIndex === globalIndex ? 'text-purple-600 dark:text-purple-300' : 'text-[var(--text-muted)]'} />
                         </div>
                         <div className="flex-1 text-left min-w-0">
                           <span className="block text-sm font-semibold truncate">{guide.title}</span>
-                          <span className="block text-[10px] text-white/30 truncate">
+                          <span className="block text-[10px] text-[var(--text-muted)] truncate">
                             {guide.category} · {guide.os} · {guide.commands?.length || 0} commands
                           </span>
                         </div>
                         {guide.tags && guide.tags.length > 0 && (
                           <div className="hidden md:flex items-center gap-1 shrink-0">
                             {guide.tags.slice(0, 2).map(tag => (
-                              <span key={tag} className="px-1.5 py-0.5 rounded bg-white/[0.05] text-[9px] text-white/30 font-mono">
+                              <span key={tag} className="px-1.5 py-0.5 rounded bg-[var(--bg-tertiary)] text-[9px] text-[var(--text-muted)] font-mono">
                                 {tag}
                               </span>
                             ))}
                           </div>
                         )}
                         {selectedIndex === globalIndex && (
-                          <div className="flex items-center gap-1 text-white/30 shrink-0 ml-1">
+                          <div className="flex items-center gap-1 text-[var(--text-muted)] shrink-0 ml-1">
                             <CornerDownLeft size={12} />
                           </div>
                         )}
@@ -393,7 +394,7 @@ export default function SpotlightSearch() {
 
               {/* Loading indicator for wiki */}
               {wikiLoading && query.trim().length >= 2 && (
-                <div className="px-5 py-3 flex items-center gap-2 text-white/30 text-xs">
+                 <div className="px-5 py-3 flex items-center gap-2 text-[var(--text-muted)] text-xs">
                   <div className="w-3 h-3 rounded-full border-2 border-indigo-400/40 border-t-indigo-400 animate-spin" />
                   Searching guides...
                 </div>
@@ -401,14 +402,14 @@ export default function SpotlightSearch() {
             </>
           ) : query.trim().length >= 2 && !wikiLoading ? (
             <div className="px-5 py-10 text-center">
-              <Search size={32} className="mx-auto text-white/10 mb-3" />
-              <p className="text-sm text-white/30 font-medium">No results found</p>
-              <p className="text-xs text-white/15 mt-1">Try a different search term</p>
+              <Search size={32} className="mx-auto text-[var(--text-muted)]/20 mb-3" />
+              <p className="text-sm text-[var(--text-muted)] font-medium">No results found</p>
+              <p className="text-xs text-[var(--text-muted)]/50 mt-1">Try a different search term</p>
             </div>
           ) : query.trim().length === 0 ? (
             /* Quick actions when empty */
             <div className="px-3 pt-3 pb-2">
-              <div className="px-2 mb-2 text-[10px] font-bold text-white/30 uppercase tracking-widest">
+              <div className="px-2 mb-2 text-[10px] font-bold text-[var(--text-muted)] uppercase tracking-widest">
                 Quick Launch
               </div>
               {SYSTEM_APPS.map((app, i) => {
@@ -421,22 +422,22 @@ export default function SpotlightSearch() {
                     onMouseEnter={() => setSelectedIndex(i)}
                     className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl transition-all group ${
                       selectedIndex === i
-                        ? 'bg-indigo-500/20 text-white'
-                        : 'text-white/70 hover:bg-white/[0.04]'
+                        ? 'bg-indigo-500/20 text-[var(--text-primary)]'
+                        : 'text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)]/50'
                     }`}
                   >
                     <div className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 transition-colors ${
                       selectedIndex === i
                         ? 'bg-indigo-500/30'
-                        : 'bg-white/[0.06]'
+                        : 'bg-[var(--bg-tertiary)]'
                     }`}>
-                      <app.icon size={18} className={selectedIndex === i ? 'text-indigo-300' : 'text-white/50'} />
+                      <app.icon size={18} className={selectedIndex === i ? 'text-indigo-400 dark:text-indigo-300' : 'text-[var(--text-muted)]'} />
                     </div>
                     <div className="flex-1 text-left min-w-0">
                       <span className="block text-sm font-semibold truncate">{title}</span>
                     </div>
                     {selectedIndex === i && (
-                      <CornerDownLeft size={12} className="text-white/30 shrink-0" />
+                      <CornerDownLeft size={12} className="text-[var(--text-muted)] shrink-0" />
                     )}
                   </button>
                 );
@@ -446,15 +447,15 @@ export default function SpotlightSearch() {
         </div>
 
         {/* Footer with keyboard hints */}
-        <div className="flex items-center justify-between px-5 py-2.5 border-t border-white/[0.06] bg-white/[0.02]">
-          <div className="flex items-center gap-4 text-[10px] text-white/20">
+        <div className="flex items-center justify-between px-5 py-2.5 border-t border-[var(--border-color)] bg-[var(--bg-primary)]/10">
+          <div className="flex items-center gap-4 text-[10px] text-[var(--text-muted)]">
             <span className="flex items-center gap-1">
-              <kbd className="px-1 py-0.5 rounded bg-white/[0.06] border border-white/[0.08] text-[9px]">↑</kbd>
-              <kbd className="px-1 py-0.5 rounded bg-white/[0.06] border border-white/[0.08] text-[9px]">↓</kbd>
+              <kbd className="px-1 py-0.5 rounded bg-[var(--bg-tertiary)] text-[9px]">↑</kbd>
+              <kbd className="px-1 py-0.5 rounded bg-[var(--bg-tertiary)] text-[9px]">↓</kbd>
               navigate
             </span>
             <span className="flex items-center gap-1">
-              <kbd className="px-1.5 py-0.5 rounded bg-white/[0.06] border border-white/[0.08] text-[9px]">↵</kbd>
+              <kbd className="px-1.5 py-0.5 rounded bg-[var(--bg-tertiary)] text-[9px]">↵</kbd>
               open
             </span>
           </div>

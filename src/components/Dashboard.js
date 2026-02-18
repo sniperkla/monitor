@@ -206,7 +206,7 @@ export default function Dashboard({ onNewConnection, onEditConnection }) {
                   setRefreshing(false);
                 }
               }}
-              className="px-6 py-3 bg-white text-indigo-600 font-bold rounded-2xl hover:bg-slate-100 transition-all shadow-xl whitespace-nowrap"
+              className="px-6 py-3 bg-white dark:bg-slate-100 text-indigo-600 font-bold rounded-2xl hover:bg-slate-100 dark:hover:bg-white transition-all shadow-xl border border-indigo-200 dark:border-transparent whitespace-nowrap"
             >
               {t('ssh.dashboard_ui.syncPromo.btn')}
             </button>
@@ -272,10 +272,9 @@ export default function Dashboard({ onNewConnection, onEditConnection }) {
                   <p className="text-xs text-[var(--text-muted)] opacity-60 mt-1">{t('ssh.dashboard_ui.starPrompt')}</p>
                 </motion.div>
               ) : (
-                favorites.map(conn => (
+                favorites.map((conn, index) => (
                   <ConnectionCard 
-                    key={conn._id} 
-                    conn={conn} 
+                    key={conn._id || `fav-${index}`} 
                     onClick={() => handleQuickConnect(conn)} 
                   />
                 ))
@@ -301,9 +300,9 @@ export default function Dashboard({ onNewConnection, onEditConnection }) {
                 <p className="text-sm text-[var(--text-muted)]">{t('ssh.dashboard_ui.noActivity')}</p>
               </div>
             ) : (
-              recentConnections.map(conn => (
+              recentConnections.map((conn, index) => (
                 <motion.div
-                  key={conn._id}
+                  key={conn._id || `recent-${index}`}
                   whileHover={{ x: 4, backgroundColor: 'var(--bg-card-hover)' }}
                   className="flex items-center gap-3 p-3 rounded-2xl cursor-pointer transition-all border border-transparent hover:border-[var(--border-hover)] group/link"
                   onClick={() => handleQuickConnect(conn)}
@@ -369,10 +368,10 @@ export default function Dashboard({ onNewConnection, onEditConnection }) {
 
 function StatCard({ icon: Icon, label, value, color, subValue }) {
   const colorMap = {
-    indigo: { bg: 'bg-indigo-500/10', icon: 'text-indigo-400', border: 'border-indigo-500/20', shadow: 'shadow-indigo-500/10' },
-    emerald: { bg: 'bg-emerald-500/10', icon: 'text-emerald-400', border: 'border-emerald-500/20', shadow: 'shadow-emerald-500/10' },
-    rose: { bg: 'bg-rose-500/10', icon: 'text-rose-400', border: 'border-rose-500/20', shadow: 'shadow-rose-500/10' },
-    slate: { bg: 'bg-slate-500/10', icon: 'text-slate-400', border: 'border-slate-500/20', shadow: 'shadow-slate-500/10' },
+    indigo: { bg: 'bg-indigo-500/10', icon: 'text-indigo-600 dark:text-indigo-400', border: 'border-indigo-500/20', shadow: 'shadow-indigo-500/10' },
+    emerald: { bg: 'bg-emerald-500/10', icon: 'text-emerald-600 dark:text-emerald-400', border: 'border-emerald-500/20', shadow: 'shadow-emerald-500/10' },
+    rose: { bg: 'bg-rose-500/10', icon: 'text-rose-600 dark:text-rose-400', border: 'border-rose-500/20', shadow: 'shadow-rose-500/10' },
+    slate: { bg: 'bg-slate-500/10', icon: 'text-slate-600 dark:text-slate-400', border: 'border-slate-500/20', shadow: 'shadow-slate-500/10' },
   };
   const theme = colorMap[color];
 
@@ -457,7 +456,7 @@ function ConnectionCard({ conn, onClick }) {
       <div className="space-y-3">
         {conn.info && (
           <div className="px-3 py-2 rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)]">
-             <div className="flex items-center gap-1.5 text-indigo-400 mb-1">
+             <div className="flex items-center gap-1.5 text-indigo-700 dark:text-indigo-400 mb-1">
                 <Shield size={10} />
                 <span className="text-[9px] font-bold uppercase tracking-widest">{t('ssh.dashboard_ui.healthState')}</span>
              </div>
@@ -470,9 +469,9 @@ function ConnectionCard({ conn, onClick }) {
         <div className="flex items-center justify-between pt-1">
           <div className="flex gap-1.5">
              {conn.tags?.slice(0, 2).map(tag => (
-               <span key={tag} className="text-[9px] px-2 py-0.5 rounded-full bg-indigo-500/10 text-indigo-400 border border-indigo-500/10 font-medium">
-                 {tag}
-               </span>
+                <span key={tag} className="text-[9px] px-2 py-0.5 rounded-full bg-indigo-500/10 text-indigo-700 dark:text-indigo-400 border border-indigo-500/10 font-medium">
+                  {tag}
+                </span>
              ))}
           </div>
           <button className="w-8 h-8 rounded-full bg-[var(--bg-tertiary)] hover:bg-[var(--bg-card-hover)] flex items-center justify-center text-[var(--text-muted)] hover:text-[var(--text-primary)] transition-all">

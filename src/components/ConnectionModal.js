@@ -511,7 +511,7 @@ export default function ConnectionModal({ onClose, editConnection = null }) {
                     disabled={isDisabled}
                     className={`flex flex-col items-center justify-center p-3 rounded-xl border transition-all ${
                       form.targetStorage === opt.id
-                        ? 'bg-indigo-500/20 border-indigo-500/50 text-[var(--text-primary)]'
+                        ? 'bg-indigo-500/10 dark:bg-indigo-500/20 border-indigo-500/50 text-indigo-700 dark:text-indigo-400'
                         : isDisabled
                         ? 'bg-[var(--bg-tertiary)] border-[var(--border-color)] text-[var(--text-muted)] cursor-not-allowed opacity-50'
                         : 'bg-[var(--bg-tertiary)] border-[var(--border-color)] text-[var(--text-muted)] hover:border-[var(--text-primary)]'
@@ -566,8 +566,8 @@ export default function ConnectionModal({ onClose, editConnection = null }) {
                    onClick={() => handleChange('type', type.id)}
                    className={`flex-1 flex items-center justify-center gap-2 py-2.5 text-xs font-bold rounded-lg transition-all ${
                      form.type === type.id
-                       ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-500/30'
-                       : 'text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-white/5'
+                       ? 'bg-indigo-700 dark:bg-indigo-600 text-white shadow-lg shadow-indigo-500/30'
+                       : 'text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)]'
                    }`}
                  >
                    <type.icon size={14} />
@@ -596,14 +596,14 @@ export default function ConnectionModal({ onClose, editConnection = null }) {
                         onClick={() => handleChange('dbProvider', prov.id)}
                         className={`flex flex-col items-center gap-2 py-3 rounded-xl border transition-all relative overflow-hidden group ${
                           form.dbProvider === prov.id
-                            ? 'bg-white/5 border-indigo-500/50 scale-95 shadow-lg'
-                            : 'bg-[var(--bg-tertiary)] border-[var(--border-color)] hover:border-white/20'
+                            ? 'bg-[var(--bg-primary)] dark:bg-white/5 border-indigo-500/50 scale-95 shadow-lg'
+                            : 'bg-[var(--bg-tertiary)] border-[var(--border-color)] hover:border-[var(--border-color)]/50'
                         }`}
                       >
                          <div className={`p-2 rounded-lg ${prov.bg} transition-transform group-hover:scale-110`}>
                            <prov.icon size={16} style={{ color: prov.color }} />
                          </div>
-                         <span className={`text-[10px] font-bold ${form.dbProvider === prov.id ? 'text-white' : 'text-[var(--text-muted)]'}`}>
+                          <span className={`text-[10px] font-bold ${form.dbProvider === prov.id ? 'text-indigo-600 dark:text-indigo-400' : 'text-[var(--text-muted)]'}`}>
                            {prov.label}
                          </span>
                          {form.dbProvider === prov.id && (
@@ -672,14 +672,14 @@ export default function ConnectionModal({ onClose, editConnection = null }) {
                            <button 
                              type="button"
                              onClick={() => handleChange('host', '127.0.0.1')}
-                             className="text-[9px] font-bold px-2 py-0.5 rounded bg-white/5 border border-white/5 text-[var(--text-muted)] hover:text-white transition-colors"
+                             className="text-[9px] font-bold px-2 py-0.5 rounded bg-[var(--bg-tertiary)] border border-[var(--border-color)] text-[var(--text-muted)] hover:text-[var(--text-primary)] transition-colors"
                            >
                               127.0.0.1
                            </button>
                            <button 
                              type="button"
                              onClick={() => handleChange('host', 'localhost')}
-                             className="text-[9px] font-bold px-2 py-0.5 rounded bg-white/5 border border-white/5 text-[var(--text-muted)] hover:text-white transition-colors"
+                             className="text-[9px] font-bold px-2 py-0.5 rounded bg-[var(--bg-tertiary)] border border-[var(--border-color)] text-[var(--text-muted)] hover:text-[var(--text-primary)] transition-colors"
                            >
                               localhost
                            </button>
@@ -756,8 +756,8 @@ export default function ConnectionModal({ onClose, editConnection = null }) {
                       type="button"
                       className={`flex-1 py-2 text-xs font-medium rounded-md transition-all ${
                         form.authType === 'password'
-                          ? 'bg-indigo-600 text-white shadow-lg'
-                          : 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'
+                          ? 'bg-indigo-700 dark:bg-indigo-600 text-white shadow-lg'
+                          : 'text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-primary)]/50'
                       }`}
                       onClick={() => handleChange('authType', 'password')}
                     >
@@ -767,8 +767,8 @@ export default function ConnectionModal({ onClose, editConnection = null }) {
                       type="button"
                       className={`flex-1 py-2 text-xs font-medium rounded-md transition-all ${
                         form.authType === 'privateKey'
-                          ? 'bg-indigo-600 text-white shadow-lg'
-                          : 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'
+                          ? 'bg-indigo-700 dark:bg-indigo-600 text-white shadow-lg'
+                          : 'text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-primary)]/50'
                       }`}
                       onClick={() => handleChange('authType', 'privateKey')}
                     >
@@ -779,8 +779,8 @@ export default function ConnectionModal({ onClose, editConnection = null }) {
                         type="button"
                         className={`flex-1 py-2 text-xs font-medium rounded-md transition-all ${
                           form.authType === 'none'
-                            ? 'bg-indigo-600 text-white shadow-lg'
-                            : 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'
+                            ? 'bg-indigo-700 dark:bg-indigo-600 text-white shadow-lg'
+                            : 'text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-primary)]/50'
                         }`}
                         onClick={() => handleChange('authType', 'none')}
                       >

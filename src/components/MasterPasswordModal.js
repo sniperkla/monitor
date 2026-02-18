@@ -213,35 +213,64 @@ export default function MasterPasswordModal() {
 
   // === FAQ Section ===
   const renderFAQ = () => (
-    <div className="mt-4 border-t border-[var(--border-color)] pt-4">
+    <div className="mt-8 border-t border-white/5 pt-6 relative">
+      <div className="absolute -top-3 left-1/2 -translate-x-1/2 px-4 py-1 bg-slate-900 border border-white/10 rounded-full text-[10px] font-bold text-slate-400 uppercase tracking-[2px] whitespace-nowrap shadow-xl">
+        Security Knowledge
+      </div>
+
       <button
         type="button"
         onClick={() => setFaqOpen(faqOpen === -1 ? null : -1)}
-        className="flex items-center gap-2 text-xs text-[var(--text-muted)] hover:text-indigo-400 transition-colors w-full"
+        className="group flex items-center justify-between w-full px-4 py-3 bg-white/5 hover:bg-white/10 border border-white/10 rounded-2xl transition-all duration-300"
       >
-        <HelpCircle size={12} />
-        <span className="font-medium">{t('vault.faq.title')}</span>
-        {faqOpen !== null ? <ChevronUp size={12} className="ml-auto" /> : <ChevronDown size={12} className="ml-auto" />}
+        <div className="flex items-center gap-3">
+          <div className="w-8 h-8 rounded-lg bg-indigo-500/10 flex items-center justify-center text-indigo-400 group-hover:bg-indigo-500/20 transition-colors">
+            <HelpCircle size={16} />
+          </div>
+          <div className="text-left">
+            <span className="block text-[13px] font-bold text-white tracking-tight">{t('vault.faq.title')}</span>
+            <span className="block text-[10px] text-slate-500 font-medium">{t('vault.faq.subtitle')}</span>
+          </div>
+        </div>
+        <div className={`p-1.5 rounded-full bg-white/5 transition-transform duration-300 ${faqOpen !== null ? 'rotate-180' : ''}`}>
+          <ChevronDown size={14} className="text-slate-400" />
+        </div>
       </button>
+
       <AnimatePresence>
         {faqOpen !== null && (
           <motion.div
-            initial={{ height: 0, opacity: 0 }}
-            animate={{ height: 'auto', opacity: 1 }}
-            exit={{ height: 0, opacity: 0 }}
-            transition={{ duration: 0.2 }}
+            initial={{ height: 0, opacity: 0, marginTop: 0 }}
+            animate={{ height: 'auto', opacity: 1, marginTop: 16 }}
+            exit={{ height: 0, opacity: 0, marginTop: 0 }}
+            transition={{ duration: 0.3, ease: [0.23, 1, 0.32, 1] }}
             className="overflow-hidden"
           >
-            <div className="mt-3 space-y-2">
+            <div className="space-y-3">
               {faqItems.map((item, i) => (
-                <div key={i} className="rounded-lg bg-[var(--bg-tertiary)]/50 border border-[var(--border-color)] overflow-hidden">
+                <motion.div 
+                  initial={{ x: -10, opacity: 0 }}
+                  animate={{ x: 0, opacity: 1 }}
+                  transition={{ delay: i * 0.1 }}
+                  key={i} 
+                  className={`rounded-2xl border transition-all duration-300 ${
+                    faqOpen === i 
+                      ? 'bg-slate-900/80 border-indigo-500/30 shadow-[0_0_20px_rgba(99,102,241,0.05)]' 
+                      : 'bg-white/[0.02] border-white/5 hover:border-white/10'
+                  }`}
+                >
                   <button
                     type="button"
                     onClick={() => setFaqOpen(faqOpen === i ? -1 : i)}
-                    className="w-full flex items-center gap-2 px-3 py-2 text-[11px] text-[var(--text-secondary)] hover:text-[var(--text-primary)] transition-colors text-left"
+                    className="w-full flex items-center gap-3 px-4 py-3.5 text-left group"
                   >
-                    <span className="flex-1 font-medium">{item.q}</span>
-                    {faqOpen === i ? <ChevronUp size={10} /> : <ChevronDown size={10} />}
+                    <div className={`w-1.5 h-1.5 rounded-full transition-all duration-300 ${faqOpen === i ? 'bg-indigo-400 scale-125 shadow-[0_0_8px_rgba(129,140,248,0.8)]' : 'bg-slate-600'}`} />
+                    <span className={`flex-1 text-[12px] font-bold tracking-tight transition-colors ${faqOpen === i ? 'text-white' : 'text-slate-400 group-hover:text-slate-200'}`}>
+                      {item.q}
+                    </span>
+                    <div className={`transition-transform duration-300 ${faqOpen === i ? 'rotate-180' : ''}`}>
+                      <ChevronDown size={14} className={faqOpen === i ? 'text-indigo-400' : 'text-slate-500'} />
+                    </div>
                   </button>
                   <AnimatePresence>
                     {faqOpen === i && (
@@ -249,14 +278,18 @@ export default function MasterPasswordModal() {
                         initial={{ height: 0, opacity: 0 }}
                         animate={{ height: 'auto', opacity: 1 }}
                         exit={{ height: 0, opacity: 0 }}
-                        transition={{ duration: 0.15 }}
+                        transition={{ duration: 0.2 }}
                         className="overflow-hidden"
                       >
-                        <p className="px-3 pb-2.5 text-[10px] text-[var(--text-muted)] leading-relaxed">{item.a}</p>
+                        <div className="px-4 pb-4 pl-[34px]">
+                          <p className="text-[11px] text-slate-400 leading-relaxed font-medium">
+                            {item.a}
+                          </p>
+                        </div>
                       </motion.div>
                     )}
                   </AnimatePresence>
-                </div>
+                </motion.div>
               ))}
             </div>
           </motion.div>
@@ -267,7 +300,7 @@ export default function MasterPasswordModal() {
 
   // === UNLOCK VIEW ===
   const renderUnlock = () => (
-    <form onSubmit={handleUnlock} className="space-y-6 px-2 py-4 relative overflow-hidden">
+    <form onSubmit={handleUnlock} className="space-y-6 px-2 py-4 relative">
       {/* Decorative Background Elements */}
       <div className="absolute top-0 left-1/2 -translate-x-1/2 w-48 h-48 bg-blue-500/10 blur-[80px] rounded-full pointer-events-none" />
       
@@ -320,7 +353,7 @@ export default function MasterPasswordModal() {
               value={masterPassword}
               onChange={(e) => setMasterPassword(e.target.value)}
               placeholder={t('vault.masterPassword') || 'Master Password'}
-              className="w-full px-4 py-3.5 bg-slate-900/80 backdrop-blur-xl border border-white/10 rounded-xl text-white placeholder-slate-500 focus:outline-none focus:ring-0 transition-all text-base shadow-inner"
+              className="w-full px-4 py-3.5 bg-slate-900/80 backdrop-blur-xl border border-white/10 rounded-xl text-white placeholder-slate-500 focus:outline-none focus:ring-0 transition-all text-base shadow-inner pointer-events-auto relative z-10"
               autoComplete="off"
             />
             <button
@@ -426,7 +459,7 @@ export default function MasterPasswordModal() {
               value={mongoUri}
               onChange={(e) => setMongoUri(e.target.value)}
               placeholder="mongodb://user:pass@host:27017/db"
-              className="w-full px-4 py-3 bg-slate-900/80 border border-white/10 rounded-xl text-white placeholder-slate-600 focus:outline-none transition-all text-xs font-mono shadow-inner"
+              className="w-full px-4 py-3 bg-slate-900/80 border border-white/10 rounded-xl text-white placeholder-slate-600 focus:outline-none transition-all text-xs font-mono shadow-inner pointer-events-auto relative z-10"
             />
           </div>
           
@@ -456,7 +489,7 @@ export default function MasterPasswordModal() {
               value={masterPassword}
               onChange={(e) => setMasterPassword(e.target.value)}
               placeholder={t('vault.atLeast8') || 'Minimum 8 strong characters'}
-              className="w-full px-4 py-3 bg-slate-900/80 border border-white/10 rounded-xl text-white placeholder-slate-600 focus:outline-none transition-all text-sm shadow-inner"
+              className="w-full px-4 py-3 bg-slate-900/80 border border-white/10 rounded-xl text-white placeholder-slate-600 focus:outline-none transition-all text-sm shadow-inner pointer-events-auto relative z-10"
               autoComplete="new-password"
             />
             <button
@@ -494,7 +527,7 @@ export default function MasterPasswordModal() {
             value={confirmPassword}
             onChange={(e) => setConfirmPassword(e.target.value)}
             placeholder={t('vault.confirmPassword') || 'Confirm Master Password'}
-            className="w-full px-4 py-3 bg-slate-900/80 border border-white/10 rounded-xl text-white placeholder-slate-600 focus:outline-none transition-all text-sm shadow-inner"
+            className="w-full px-4 py-3 bg-slate-900/80 border border-white/10 rounded-xl text-white placeholder-slate-600 focus:outline-none transition-all text-sm shadow-inner pointer-events-auto relative z-10"
             autoComplete="new-password"
           />
         </div>
@@ -659,7 +692,7 @@ export default function MasterPasswordModal() {
             onChange={(e) => setRecoveryCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
             placeholder="000000"
             maxLength={6}
-            className="relative w-full px-6 py-6 bg-slate-900/90 border border-white/10 rounded-2xl text-white text-center text-4xl font-black tracking-[12px] placeholder-slate-700/50 focus:outline-none focus:border-blue-500/50 transition-all shadow-inner"
+            className="relative w-full px-6 py-6 bg-slate-900/90 border border-white/10 rounded-2xl text-white text-center text-4xl font-black tracking-[12px] placeholder-slate-700/50 focus:outline-none focus:border-blue-500/50 transition-all shadow-inner pointer-events-auto z-10"
             autoComplete="one-time-code"
           />
         </div>
@@ -731,10 +764,10 @@ export default function MasterPasswordModal() {
       icon={icon}
       draggable={true}
       resizable={true}
-      defaultWidth={480}
-      defaultHeight={420}
-      minWidth={400}
-      minHeight={360}
+      defaultWidth={500}
+      defaultHeight={620}
+      minWidth={450}
+      minHeight={550}
       onClose={() => dismissVault?.()}
       zIndexClassName="z-[90000]"
       contentClassName="p-4"

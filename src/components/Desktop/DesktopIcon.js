@@ -165,7 +165,7 @@ export default function DesktopIcon({ id, title, icon: Icon, component, defaultP
     <div
       ref={iconRef}
       className={`desktop-icon absolute flex flex-col items-center justify-center p-2 rounded-lg 
-        cursor-grab active:cursor-grabbing hover:bg-white/10 active:bg-white/20 
+        cursor-grab active:cursor-grabbing hover:bg-white/10 dark:hover:bg-white/10 active:bg-white/20 
         transition-[background,border,box-shadow] duration-150
         ${sizes.container} gap-2 z-10 group 
         ${isSelected ? 'bg-blue-500/30 border border-blue-400/50 shadow-[0_0_15px_rgba(59,130,246,0.3)]' : 'border border-transparent'}
@@ -198,7 +198,7 @@ export default function DesktopIcon({ id, title, icon: Icon, component, defaultP
             transition: 'transform 0.1s ease',
           }}
         >
-          <div className={`${sizes.iconBox} bg-white/5 border border-dashed border-white/20 rounded-xl opacity-50 ml-2 mt-2`} />
+          <div className={`${sizes.iconBox} bg-[var(--bg-tertiary)]/10 border border-dashed border-[var(--border-color)] rounded-xl opacity-50 ml-2 mt-2`} />
         </div>
       )}
 

@@ -56,6 +56,7 @@ export default function TerminalView({ connectionId, connectionName, host, color
   const autoLastLoopKeyRef = useRef('');
   const autoLoopRepeatRef = useRef(0);
   const [aiMode, setAiMode] = useState('manual'); // manual | auto
+  const [lastAiUpdate, setLastAiUpdate] = useState(0);
   const autoEmptyRetryRef = useRef('');
   const containerRef = useRef(null);
 
@@ -304,7 +305,7 @@ export default function TerminalView({ connectionId, connectionName, host, color
 
   const parseAiAnswer = (raw) => {
     const getTag = (tag) => {
-      const m = String(raw || '').match(new RegExp(`<${tag}>([\\s\\S]*?)<\\/${tag}>`, 'i'));
+      const m = new RegExp(`<${tag}>([\\s\\S]*?)<\/${tag}>`, 'i').exec(String(raw || ''));
       return m ? m[1].trim() : '';
     };
     const command = getTag('command');
@@ -319,8 +320,11 @@ export default function TerminalView({ connectionId, connectionName, host, color
   };
 
   const getOutputContext = () => {
-    const lines = outputLinesRef.current.slice(-20);
-    return lines.join('\n');
+    const maxLines = 12;
+    const maxChars = 2500;
+    const lines = outputLinesRef.current.slice(-maxLines);
+    const joined = lines.join('\n');
+    return joined.length > maxChars ? joined.slice(-maxChars) : joined;
   };
 
   const looksLikeShellPrompt = (text) => {
@@ -727,7 +731,7 @@ export default function TerminalView({ connectionId, connectionName, host, color
       aiConversationRef.current = [
         ...aiConversationRef.current,
         { role: 'user', content: effectivePrompt }
-      ].slice(-10); // Keep last 10 messages
+      ].slice(-4); // Keep last 4 messages
 
       const res = await apiFetch('/api/ssh/ai-help', {
         method: 'POST',
@@ -745,12 +749,24 @@ export default function TerminalView({ connectionId, connectionName, host, color
       if (!data.success) throw new Error(data.error || 'AI request failed');
       const parsed = parseAiAnswer(data.answer);
       setAiAnswer(parsed);
+      setLastAiUpdate(Date.now());
+
+      // Sync AI usage across all windows immediately after use
+      if (data.usage) {
+        const syncChannel = new BroadcastChannel('ai_usage_sync');
+        syncChannel.postMessage({ 
+          type: 'sync', 
+          used: data.usage.used, 
+          limit: data.usage.limit 
+        });
+        syncChannel.close();
+      }
 
       // Track AI response in conversation history
       aiConversationRef.current = [
         ...aiConversationRef.current,
         { role: 'assistant', content: data.answer }
-      ].slice(-10);
+      ].slice(-4);
 
       const entry = {
         id: Date.now().toString() + Math.random().toString(36).slice(2, 8),
@@ -820,8 +836,8 @@ export default function TerminalView({ connectionId, connectionName, host, color
 State:
 - Last Cmd: ${lastExecutedCommand || '(none)'}
 - Error: ${err ? `${err.label}` : 'none'}
-- Output (last 20 lines):
-${snap || '(no output)'}
+- Output (last lines):
+${String(snap || '(no output)').slice(-2500)}
 
 Instructions:
 1. Next command?
@@ -834,14 +850,14 @@ Instructions:
       aiConversationRef.current = [
         ...aiConversationRef.current,
         { role: 'user', content: autoPrompt }
-      ].slice(-10); // Keep last 10 messages only
+      ].slice(-4); // Keep last 4 messages only
 
       const res = await apiFetch('/api/ssh/ai-help', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           prompt: autoPrompt,
-          context: snap,
+          context: String(snap || '').slice(-2500),
           connectionName,
           host,
           prefs: sshAiPrefs,
@@ -1215,7 +1231,7 @@ Instructions:
           >
             <div className="w-full h-full rounded-2xl border border-[var(--border-color)] bg-[var(--bg-secondary)]/95 backdrop-blur-2xl shadow-2xl overflow-hidden flex flex-col relative">
               {/* Header */}
-              <div className="ai-panel-drag-handle flex items-center justify-between px-3 py-2 border-b border-[var(--border-color)] bg-black/20">
+              <div className="ai-panel-drag-handle flex items-center justify-between px-3 py-2 border-b border-[var(--border-color)] bg-[var(--bg-tertiary)]/30 dark:bg-black/20">
                 <div className="flex items-center gap-2">
                   <Sparkles size={14} className="text-indigo-400" />
                   <span className="text-xs font-bold" style={{ color: 'var(--text-primary)' }}>{t('ai.title')}</span>
@@ -1223,10 +1239,10 @@ Instructions:
                     <span className="px-1.5 py-0.5 rounded text-[10px] bg-emerald-500/20 text-emerald-400 animate-pulse">{t('ai.running')}</span>
                   )}
                 </div>
-                <div className="flex items-center gap-1">
-                  <button type="button" onClick={() => setAiHistoryOpen(v => !v)} className="p-1.5 rounded hover:bg-white/5" title={t('ai.history')}><Clock size={12} /></button>
-                  <button type="button" onClick={() => setAiSettingsOpen(v => !v)} className="p-1.5 rounded hover:bg-white/5" title={t('ai.settings')}><Settings2 size={12} /></button>
-                  <button type="button" onClick={() => { setAiOpen(false); setAiSettingsOpen(false); setAiHistoryOpen(false); }} className="p-1.5 rounded hover:bg-white/5" title={t('ai.close')}><X size={12} /></button>
+                <div className="flex items-center gap-2">
+                  <button type="button" onClick={() => setAiHistoryOpen(v => !v)} className="p-1.5 rounded hover:bg-[var(--bg-tertiary)] dark:hover:bg-white/5" title={t('ai.history')} style={{ color: 'var(--text-secondary)' }}><Clock size={12} /></button>
+                  <button type="button" onClick={() => setAiSettingsOpen(v => !v)} className="p-1.5 rounded hover:bg-[var(--bg-tertiary)] dark:hover:bg-white/5" title={t('ai.settings')} style={{ color: 'var(--text-secondary)' }}><Settings2 size={12} /></button>
+                  <button type="button" onClick={() => { setAiOpen(false); setAiSettingsOpen(false); setAiHistoryOpen(false); }} className="p-1.5 rounded hover:bg-[var(--bg-tertiary)] dark:hover:bg-white/5" title={t('ai.close')} style={{ color: 'var(--text-secondary)' }}><X size={12} /></button>
                 </div>
               </div>
 
@@ -1289,12 +1305,13 @@ Instructions:
               )}
 
               {/* Main Content */}
-              <div ref={aiPanelContentRef} className="flex-1 overflow-y-auto px-3 pt-3 pb-10 space-y-3">
+              <div ref={aiPanelContentRef} className="flex-1 overflow-y-auto px-4 pt-4 pb-10 space-y-4">
+
                 {/* Mode Toggle */}
-                <div className="flex items-center justify-between bg-black/20 rounded-lg p-1">
+                <div className="flex items-center justify-between bg-[var(--bg-tertiary)]/50 dark:bg-black/20 rounded-lg p-1">
                   <div className="flex">
-                    <button onClick={() => { setAiMode('manual'); setAutoMode(false); }} className={`px-3 py-1.5 rounded text-[11px] font-medium transition ${aiMode === 'manual' ? 'bg-white/10' : 'hover:bg-white/5'}`} style={{ color: 'var(--text-primary)' }}>{t('ai.manual')}</button>
-                    <button onClick={() => setAiMode('auto')} className={`px-3 py-1.5 rounded text-[11px] font-medium transition ${aiMode === 'auto' ? 'bg-white/10' : 'hover:bg-white/5'}`} style={{ color: 'var(--text-primary)' }}>{t('ai.auto')}</button>
+                    <button onClick={() => { setAiMode('manual'); setAutoMode(false); }} className={`px-3 py-1.5 rounded text-[11px] font-medium transition ${aiMode === 'manual' ? 'bg-[var(--bg-primary)] dark:bg-white/10 shadow-sm' : 'hover:bg-[var(--bg-primary)]/50 dark:hover:bg-white/5'}`} style={{ color: 'var(--text-primary)' }}>{t('ai.manual')}</button>
+                    <button onClick={() => setAiMode('auto')} className={`px-3 py-1.5 rounded text-[11px] font-medium transition ${aiMode === 'auto' ? 'bg-[var(--bg-primary)] dark:bg-white/10 shadow-sm' : 'hover:bg-[var(--bg-primary)]/50 dark:hover:bg-white/5'}`} style={{ color: 'var(--text-primary)' }}>{t('ai.auto')}</button>
                   </div>
                   {aiMode === 'auto' && (
                     <button onClick={() => {
@@ -1322,7 +1339,7 @@ Instructions:
                 {/* Auto Mode Info */}
                 {aiMode === 'auto' && (
                   <div className="space-y-2">
-                    <input value={autoGoal} onChange={(e) => setAutoGoal(e.target.value)} placeholder={t('ai.goalPlaceholder')} className="w-full rounded-lg bg-black/30 border border-white/10 px-3 py-2 text-xs outline-none" disabled={!isLoggedIn} style={{ color: 'var(--text-primary)' }} />
+                    <input value={autoGoal} onChange={(e) => setAutoGoal(e.target.value)} placeholder={t('ai.goalPlaceholder')} className="w-full rounded-lg bg-[var(--bg-primary)] border border-[var(--border-color)] px-3 py-2 text-xs outline-none focus:border-indigo-500/50" disabled={!isLoggedIn} style={{ color: 'var(--text-primary)' }} />
                     <div className="flex items-center justify-between text-[10px]" style={{ color: 'var(--text-muted)' }}>
                       <span>{t('ai.steps')} {autoStepsRemaining} {autoCountdown > 0 && <span className="text-amber-400 ml-2 animate-pulse">{t('ai.wait', { count: autoCountdown })}</span>}</span>
                       <span className={autoMode ? 'text-emerald-400' : ''}>{autoMode ? t('ai.running') : t('ai.idle')}</span>
@@ -1332,7 +1349,7 @@ Instructions:
 
                 {/* Command Input */}
                 <div className="space-y-2">
-                  <textarea value={aiPrompt} onChange={(e) => setAiPrompt(e.target.value)} placeholder={t('ai.promptPlaceholder')} className="w-full h-20 resize-none rounded-lg bg-black/30 border border-white/10 px-3 py-2 text-xs outline-none focus:border-indigo-500/50" disabled={!isLoggedIn} style={{ color: 'var(--text-primary)' }} />
+                  <textarea value={aiPrompt} onChange={(e) => setAiPrompt(e.target.value)} placeholder={t('ai.promptPlaceholder')} className="w-full h-20 resize-none rounded-lg bg-[var(--bg-primary)] border border-[var(--border-color)] px-3 py-2 text-xs outline-none focus:border-indigo-500/50" disabled={!isLoggedIn} style={{ color: 'var(--text-primary)' }} />
                   <div className="flex items-center justify-between">
                     <span className="text-[10px] opacity-60" style={{ color: 'var(--text-muted)' }}>{t('ai.usesLastOutput')}</span>
                     <button onClick={() => handleAskAi()} disabled={!isLoggedIn || aiLoading || !aiPrompt.trim()} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-xs font-medium transition">
@@ -1344,7 +1361,7 @@ Instructions:
 
                 {/* Last Result Preview */}
                 {(lastExecutedCommand || lastResultSnapshot) && (
-                  <div className="rounded-lg border border-white/10 bg-black/20 overflow-hidden">
+                  <div className="rounded-lg border border-[var(--border-color)] bg-[var(--bg-tertiary)]/20 dark:bg-black/20 overflow-hidden">
                     <div className="flex items-center justify-between px-3 py-1.5 border-b border-white/10">
                       <span className="text-[10px] font-medium uppercase" style={{ color: 'var(--text-muted)' }}>{t('ai.lastResult')}</span>
                       <div className="flex gap-1">
@@ -1389,18 +1406,18 @@ Instructions:
                           {aiAnswer.interactive && <span className="text-[10px] font-bold text-amber-400">⚡ {aiAnswer.interactive}</span>}
                         </div>
                       </div>
-                      <pre className="text-xs font-mono whitespace-pre-wrap break-words bg-black/40 rounded px-2 py-1.5" style={{ color: 'var(--text-primary)' }}>{aiAnswer.command || (aiAnswer.done ? `✅ ${t('ai.done')}!` : '(no command)')}</pre>
+                      <pre className="text-xs font-mono whitespace-pre-wrap break-words bg-[var(--bg-primary)]/50 dark:bg-black/40 border border-[var(--border-color)] rounded px-2 py-1.5" style={{ color: 'var(--text-primary)' }}>{aiAnswer.command || (aiAnswer.done ? `✅ ${t('ai.done')}!` : '(no command)')}</pre>
                       {(aiAnswer.explain || aiAnswer.warn) && (
                         <div className="mt-2 text-[11px]" style={{ color: 'var(--text-secondary)' }}>
-                          {aiAnswer.warn && <div className="text-red-300/80 mb-1">{aiAnswer.warn}</div>}
+                          {aiAnswer.warn && <div className="text-red-600 dark:text-red-300/80 mb-1">{aiAnswer.warn}</div>}
                           {aiAnswer.explain}
                         </div>
                       )}
                     </div>
                     {aiAnswer.command && (
-                      <div className="flex items-center gap-1 p-2 border-t border-white/10 bg-black/10">
-                        <button onClick={() => navigator.clipboard.writeText(aiAnswer.command || '')} className="flex-1 flex items-center justify-center gap-1 py-1.5 rounded bg-white/5 hover:bg-white/10 text-xs transition" style={{ color: 'var(--text-primary)' }}><Copy size={12} /> {t('ai.copy')}</button>
-                        <button onClick={() => handleInsertCommand(aiAnswer.command)} className="flex-1 flex items-center justify-center gap-1 py-1.5 rounded bg-emerald-600/80 hover:bg-emerald-500 text-white text-xs transition"><CornerDownLeft size={12} /> {t('ai.insert')}</button>
+                      <div className="flex items-center gap-1 p-2 border-t border-[var(--border-color)] bg-[var(--bg-secondary)]/50">
+                        <button onClick={() => navigator.clipboard.writeText(aiAnswer.command || '')} className="flex-1 flex items-center justify-center gap-1 py-1.5 rounded bg-[var(--bg-tertiary)] hover:bg-[var(--bg-card-hover)] text-xs transition border border-[var(--border-color)]" style={{ color: 'var(--text-primary)' }}><Copy size={12} /> {t('ai.copy')}</button>
+                        <button onClick={() => handleInsertCommand(aiAnswer.command)} className="flex-1 flex items-center justify-center gap-1 py-1.5 rounded bg-emerald-600/80 dark:bg-emerald-600/50 hover:bg-emerald-500 text-white text-xs transition border border-emerald-500/20"><CornerDownLeft size={12} /> {t('ai.insert')}</button>
                         <button onClick={() => {
                           if (!isLoggedIn) { setAiError(t('ai.loginRequired')); return; }
                           if (aiAnswer.danger) { setExecuteConfirmOpen(true); return; }
@@ -1465,7 +1482,7 @@ Instructions:
                         <input
                           type="text"
                           placeholder={interactivePrompt.kind === 'selection' ? 'Enter selection...' : 'Enter value...'}
-                          className="flex-1 rounded bg-black/30 border border-white/10 px-2 py-1.5 text-xs outline-none"
+                          className="flex-1 rounded bg-[var(--bg-primary)] border border-[var(--border-color)] px-2 py-1.5 text-xs outline-none"
                           style={{ color: 'var(--text-primary)' }}
                           onKeyDown={(e) => {
                             if (e.key === 'Enter') {
@@ -1483,7 +1500,7 @@ Instructions:
                 {/* Danger Confirmation */}
                 {executeConfirmOpen && aiAnswer?.danger && (
                   <div className="rounded-lg border border-red-500/30 bg-red-500/10 p-3">
-                    <div className="flex items-center gap-2 text-xs font-bold text-red-300 mb-2"><ShieldAlert size={12} /> {t('ai.confirmExecution')}</div>
+                    <div className="flex items-center gap-2 text-xs font-bold text-red-600 dark:text-red-300 mb-2"><ShieldAlert size={12} /> {t('ai.confirmExecution')}</div>
                     <div className="text-[11px] opacity-80 mb-3" style={{ color: 'var(--text-primary)' }}>{t('ai.confirmText')}</div>
                     <div className="flex gap-2">
                       <button onClick={() => setExecuteConfirmOpen(false)} className="flex-1 py-1.5 rounded border border-white/10 hover:bg-white/5 text-xs font-medium" style={{ color: 'var(--text-primary)' }}>{t('ai.cancel')}</button>

@@ -7,9 +7,10 @@ import { Server, FolderClosed, Zap, X, Plus, HardDrive } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 export default function FilesApp({ onEditConnection, initialConnection }) {
-  const { state } = useApp();
+  const { state, dispatch } = useApp();
   const { t } = useTranslation();
   const { connections } = state;
+  const sshConnections = connections.filter(c => c.type !== 'database');
   const [tabs, setTabs] = useState([]);
   const [activeTab, setActiveTab] = useState(null);
   const [isSelecting, setIsSelecting] = useState(!initialConnection);
@@ -49,6 +50,12 @@ export default function FilesApp({ onEditConnection, initialConnection }) {
       return;
     }
 
+    // Terminate existing session in the manager
+    const existing = state.activeFileManagers.find(f => f.connectionId === conn._id);
+    if (existing) {
+      dispatch({ type: 'CLOSE_FILE_MANAGER', payload: existing.id });
+    }
+
     const fileId = `files-${conn._id}-${Date.now()}`;
     const newTab = {
       id: fileId,
@@ -77,6 +84,15 @@ export default function FilesApp({ onEditConnection, initialConnection }) {
     }
   };
 
+  // Listen for external close requests (e.g. when a tab is dragged to the desktop)
+  useEffect(() => {
+    const handleExternalClose = (e) => {
+      handleCloseTab(e.detail.tabId);
+    };
+    window.addEventListener('close-files-tab', handleExternalClose);
+    return () => window.removeEventListener('close-files-tab', handleExternalClose);
+  }, [tabs, activeTab]);
+
   return (
     <div className="flex flex-col h-full bg-[var(--bg-primary)] text-[var(--text-primary)] overflow-hidden">
       {/* App Tab Bar */}
@@ -90,6 +106,10 @@ export default function FilesApp({ onEditConnection, initialConnection }) {
               onDragStart={(e) => {
                 if (tab.connection) {
                   e.dataTransfer.setData('application/ssh-connection', JSON.stringify(tab.connection));
+                  // Tell desktop this came from FilesApp → open as file manager directly
+                  e.dataTransfer.setData('application/source-app-type', 'files');
+                  // Pass the tab ID so desktop can close it on drop
+                  e.dataTransfer.setData('application/standalone-files-id', tab.id);
                   e.dataTransfer.effectAllowed = 'copy';
                   // Create a drag image
                   const ghost = document.createElement('div');
@@ -103,7 +123,7 @@ export default function FilesApp({ onEditConnection, initialConnection }) {
               }}
               className={`flex items-center gap-2 px-3 h-8 mt-2 rounded-t-lg transition-all text-xs border-x border-t cursor-grab active:cursor-grabbing ${
                 activeTab === tab.id && !isSelecting
-                  ? 'bg-[var(--bg-primary)] border-[var(--border-color)] text-[var(--text-primary)] shadow-[0_-2px_10px_rgba(0,0,0,0.5)]'
+                  ? 'bg-[var(--bg-primary)] border-[var(--border-color)] text-[var(--text-primary)] shadow-[0_-2px_10px_rgba(0,0,0,0.1)] dark:shadow-[0_-2px_10px_rgba(0,0,0,0.5)]'
                   : 'bg-transparent border-transparent text-[var(--text-muted)] hover:text-[var(--text-secondary)]'
               }`}
               style={{ minWidth: '140px', maxWidth: '200px' }}
@@ -124,20 +144,26 @@ export default function FilesApp({ onEditConnection, initialConnection }) {
       {/* Main Content Area */}
       <div className="flex-1 min-h-0 relative">
         {isSelecting ? (
-          <div className="absolute inset-0 bg-[var(--bg-primary)] p-8 overflow-y-auto z-10">
-            <div className="max-w-3xl mx-auto">
+          <div className="absolute inset-0 bg-[var(--bg-primary)] overflow-y-auto z-10">
+            <div className="p-8 max-w-3xl mx-auto">
+              {/* Header */}
               <div className="flex items-center gap-4 mb-8">
-                <div className="w-12 h-12 rounded-2xl bg-blue-500/20 flex items-center justify-center">
-                  <FolderClosed size={24} className="text-blue-400" />
+                <div className="w-12 h-12 rounded-2xl flex items-center justify-center shadow-lg" style={{ background: 'linear-gradient(135deg, rgba(59,130,246,0.2), rgba(6,182,212,0.2))', border: '1px solid rgba(59,130,246,0.3)' }}>
+                  <FolderClosed size={22} className="text-blue-400" />
                 </div>
                 <div>
                   <h1 className="text-2xl font-bold text-[var(--text-primary)] tracking-tight">{t('files.title')}</h1>
                   <p className="text-[var(--text-secondary)] text-sm">{t('files.selectConnection')}</p>
                 </div>
+                <div className="ml-auto flex items-center gap-2 px-3 py-1.5 rounded-lg bg-blue-500/10 border border-blue-500/20">
+                  <HardDrive size={12} className="text-blue-400" />
+                  <span className="text-xs font-mono text-blue-400">{sshConnections.length} servers</span>
+                </div>
               </div>
 
+              {/* Connection Grid */}
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                {connections.map(conn => (
+                {sshConnections.map(conn => (
                   <div 
                     key={conn._id}
                     onClick={() => handleConnect(conn)}
@@ -145,34 +171,43 @@ export default function FilesApp({ onEditConnection, initialConnection }) {
                     onDragStart={(e) => {
                       e.dataTransfer.setData('application/ssh-connection', JSON.stringify(conn));
                       e.dataTransfer.effectAllowed = 'copy';
-                      // Create a drag image
                       const ghost = document.createElement('div');
-                      ghost.className = 'flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-semibold text-white';
-                      ghost.style.cssText = `background:${conn.color || '#6366f1'};position:fixed;top:-100px;left:-100px;z-index:99999;opacity:0.9;border-radius:8px;padding:6px 14px;pointer-events:none;`;
-                      ghost.textContent = `🖥 ${conn.name}`;
+                      ghost.style.cssText = `background:${conn.color || '#3b82f6'};position:fixed;top:-100px;left:-100px;z-index:99999;opacity:0.9;border-radius:8px;padding:6px 14px;pointer-events:none;color:white;font-size:13px;font-weight:600;`;
+                      ghost.textContent = `📁 ${conn.name}`;
                       document.body.appendChild(ghost);
                       e.dataTransfer.setDragImage(ghost, 0, 0);
                       setTimeout(() => document.body.removeChild(ghost), 0);
                     }}
-                    className="p-5 rounded-2xl bg-[var(--bg-card)] border border-[var(--border-color)] hover:border-blue-500/50 hover:bg-[var(--bg-card-hover)] transition-all cursor-grab active:cursor-grabbing group relative overflow-hidden"
+                    className="group relative p-5 rounded-2xl border cursor-grab active:cursor-grabbing transition-all hover:scale-[1.02] active:scale-[0.98] overflow-hidden"
+                    style={{ background: 'var(--bg-card)', borderColor: 'var(--border-color)' }}
+                    onMouseEnter={e => { e.currentTarget.style.borderColor = conn.color + '50'; e.currentTarget.style.boxShadow = `0 4px 20px ${conn.color}15`; }}
+                    onMouseLeave={e => { e.currentTarget.style.borderColor = 'var(--border-color)'; e.currentTarget.style.boxShadow = 'none'; }}
                   >
-                    <div className="absolute top-0 right-0 p-3 opacity-20 group-hover:opacity-100 transition-opacity">
-                       <HardDrive size={32} className="text-blue-500/20" />
-                    </div>
-                    <div className="flex items-center justify-between mb-4">
-                      <div className="w-10 h-10 rounded-xl flex items-center justify-center shadow-lg" style={{ background: `${conn.color}20` }}>
-                        <Server size={20} style={{ color: conn.color }} />
+                    {/* Background decoration */}
+                    <div className="absolute top-0 right-0 w-20 h-20 opacity-5 group-hover:opacity-10 transition-opacity" style={{ background: `radial-gradient(circle, ${conn.color}, transparent)` }} />
+                    
+                    <div className="flex items-start justify-between mb-4">
+                      <div className="w-11 h-11 rounded-xl flex items-center justify-center shadow-md" style={{ background: `${conn.color}20`, border: `1px solid ${conn.color}30` }}>
+                        <FolderClosed size={20} style={{ color: conn.color }} />
                       </div>
-                      <div className={`w-2 h-2 rounded-full ${conn.status === 'online' ? 'bg-emerald-500 animate-pulse' : 'bg-red-500'}`} />
+                      <div className={`flex items-center gap-1.5 px-2 py-1 rounded-full text-[10px] font-semibold ${
+                        conn.status === 'online' 
+                          ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' 
+                          : 'bg-red-500/10 text-red-400 border border-red-500/20'
+                      }`}>
+                        <div className={`w-1.5 h-1.5 rounded-full ${conn.status === 'online' ? 'bg-emerald-400 animate-pulse' : 'bg-red-400'}`} />
+                        {conn.status === 'online' ? 'Online' : 'Offline'}
+                      </div>
                     </div>
-                    <h3 className="font-bold text-[var(--text-primary)] mb-1 group-hover:text-blue-400 transition-colors">{conn.name}</h3>
-                    <p className="text-[10px] text-[var(--text-muted)] font-mono truncate uppercase tracking-widest">{conn.host}</p>
+                    <h3 className="font-bold text-[var(--text-primary)] mb-1 truncate">{conn.name}</h3>
+                    <p className="text-[11px] text-[var(--text-muted)] font-mono truncate">{conn.host}</p>
+                    {conn.username && <p className="text-[10px] text-[var(--text-muted)] opacity-60 mt-1 font-mono">user: {conn.username}</p>}
                   </div>
                 ))}
                 
-                {connections.length === 0 && (
-                  <div className="col-span-full py-16 text-center bg-[var(--bg-tertiary)]/20 rounded-3xl border border-dashed border-[var(--border-color)]">
-                    <FolderClosed size={40} className="mx-auto mb-4 text-[var(--text-muted)]" />
+                {sshConnections.length === 0 && (
+                  <div className="col-span-full py-16 text-center rounded-3xl border border-dashed border-[var(--border-color)]">
+                    <FolderClosed size={40} className="mx-auto mb-4 text-[var(--text-muted)] opacity-40" />
                     <p className="text-[var(--text-secondary)] text-sm">{t('files.noConnections')}</p>
                   </div>
                 )}

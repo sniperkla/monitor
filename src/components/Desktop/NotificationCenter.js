@@ -86,7 +86,7 @@ function NotificationItem({ notification, removeNotification, glassmorphism }) {
         </div>
         <button
           onClick={onDismiss}
-          className="shrink-0 p-1 rounded-md text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-white/10 transition-colors -mr-1 -mt-1 opacity-0 group-hover:opacity-100"
+          className="shrink-0 p-1 rounded-md text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] transition-colors -mr-1 -mt-1 opacity-0 group-hover:opacity-100"
         >
           <X size={14} />
         </button>
@@ -98,7 +98,7 @@ function NotificationItem({ notification, removeNotification, glassmorphism }) {
           initial={{ width: '100%' }}
           animate={{ width: '0%' }}
           transition={{ duration: duration / 1000, ease: 'linear' }}
-          className="h-0.5 bg-white/20 absolute bottom-0 left-0"
+          className="h-0.5 bg-indigo-500/40 absolute bottom-0 left-0"
         />
       )}
     </motion.div>

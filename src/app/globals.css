@@ -26,20 +26,22 @@
   --terminal-green: #4ade80;
   --window-bg: rgba(15, 23, 42, 0.85);
   --taskbar-bg: rgba(10, 10, 20, 0.75);
+  --bg-primary-overlay: rgba(0, 0, 0, 0.7);
+  --shadow-strong: rgba(0, 0, 0, 0.4);
 }
 
 /* Force Light Mode */
 .light {
-  --bg-primary: #f8fafc;
-  --bg-secondary: #f1f5f9;
-  --bg-tertiary: #e2e8f0;
-  --bg-card: rgba(255, 255, 255, 0.8);
-  --bg-card-hover: rgba(255, 255, 255, 0.95);
-  --border-color: rgba(0, 0, 0, 0.08);
-  --border-hover: rgba(0, 0, 0, 0.15);
-  --text-primary: #1e293b;
-  --text-secondary: #475569;
-  --text-muted: #64748b;
+  --bg-primary: #ffffff;
+  --bg-secondary: #f8fafc;
+  --bg-tertiary: #f1f5f9;
+  --bg-card: rgba(255, 255, 255, 0.9);
+  --bg-card-hover: rgba(255, 255, 255, 1);
+  --border-color: rgba(0, 0, 0, 0.1);
+  --border-hover: rgba(0, 0, 0, 0.18);
+  --text-primary: #0f172a;      /* Slate 900 */
+  --text-secondary: #334155;    /* Slate 700 */
+  --text-muted: #64748b;       /* Slate 500 */
   --accent-indigo: #4f46e5;
   --accent-indigo-hover: #4338ca;
   --accent-emerald: #059669;
@@ -47,13 +49,15 @@
   --accent-rose: #e11d48;
   --accent-cyan: #0891b2;
   --accent-purple: #9333ea;
-  --glow-indigo: rgba(79, 70, 229, 0.1);
-  --glow-emerald: rgba(5, 150, 105, 0.1);
-  --glow-rose: rgba(225, 29, 72, 0.1);
+  --glow-indigo: rgba(79, 70, 229, 0.08);
+  --glow-emerald: rgba(5, 150, 105, 0.08);
+  --glow-rose: rgba(225, 29, 72, 0.08);
   --terminal-bg: #ffffff;
-  --terminal-green: #16a34a;
-  --window-bg: rgba(241, 245, 249, 0.9);
-  --taskbar-bg: rgba(248, 250, 252, 0.8);
+  --terminal-green: #15803d;    /* Emerald 700 for better contrast */
+  --window-bg: rgba(255, 255, 255, 0.95);
+  --taskbar-bg: rgba(255, 255, 255, 0.85);
+  --bg-primary-overlay: rgba(255, 255, 255, 0.6);
+  --shadow-strong: rgba(0, 0, 0, 0.15);
 }
 
 /* Force Dark Mode (Redundant but good for explicit overrides) */
@@ -70,21 +74,23 @@
   --text-muted: #64748b;
   --window-bg: rgba(15, 23, 42, 0.85);
   --taskbar-bg: rgba(10, 10, 20, 0.75);
+  --bg-primary-overlay: rgba(0, 0, 0, 0.7);
+  --shadow-strong: rgba(0, 0, 0, 0.4);
 }
 
 /* Auto Theme (if html has no .light or .dark class) */
 @media (prefers-color-scheme: light) {
   :root:not(.dark):not(.light) {
-    --bg-primary: #f8fafc;
-    --bg-secondary: #f1f5f9;
-    --bg-tertiary: #e2e8f0;
-    --bg-card: rgba(255, 255, 255, 0.8);
-    --bg-card-hover: rgba(255, 255, 255, 0.95);
-    --border-color: rgba(0, 0, 0, 0.08);
-    --border-hover: rgba(0, 0, 0, 0.15);
-    --text-primary: #1e293b;
-    --text-secondary: #475569;
-    --text-muted: #94a3b8;
+    --bg-primary: #ffffff;
+    --bg-secondary: #f8fafc;
+    --bg-tertiary: #f1f5f9;
+    --bg-card: rgba(255, 255, 255, 0.9);
+    --bg-card-hover: rgba(255, 255, 255, 1);
+    --border-color: rgba(0, 0, 0, 0.1);
+    --border-hover: rgba(0, 0, 0, 0.18);
+    --text-primary: #0f172a;
+    --text-secondary: #334155;
+    --text-muted: #64748b;
     --accent-indigo: #4f46e5;
     --accent-indigo-hover: #4338ca;
     --accent-emerald: #059669;
@@ -92,13 +98,13 @@
     --accent-rose: #e11d48;
     --accent-cyan: #0891b2;
     --accent-purple: #9333ea;
-    --glow-indigo: rgba(79, 70, 229, 0.1);
-    --glow-emerald: rgba(5, 150, 105, 0.1);
-    --glow-rose: rgba(225, 29, 72, 0.1);
+    --glow-indigo: rgba(79, 70, 229, 0.08);
+    --glow-emerald: rgba(5, 150, 105, 0.08);
+    --glow-rose: rgba(225, 29, 72, 0.08);
     --terminal-bg: #ffffff;
-    --terminal-green: #16a34a;
-    --window-bg: rgba(241, 245, 249, 0.9);
-    --taskbar-bg: rgba(248, 250, 252, 0.8);
+    --terminal-green: #15803d;
+    --window-bg: rgba(255, 255, 255, 0.95);
+    --taskbar-bg: rgba(255, 255, 255, 0.85);
   }
 }
 
@@ -405,7 +411,7 @@ body {
 }
 
 .terminal-titlebar {
-  background: linear-gradient(180deg, #1a1a2e 0%, #141425 100%);
+  background: var(--bg-tertiary);
   padding: 10px 16px;
   display: flex;
   align-items: center;
@@ -444,7 +450,7 @@ body {
 .modal-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.7);
+  background: var(--bg-primary-overlay);
   backdrop-filter: blur(8px);
   display: flex;
   align-items: center;
@@ -463,7 +469,7 @@ body {
   max-height: 90vh;
   overflow-y: auto;
   animation: slideUp 0.3s ease;
-  box-shadow: 0 24px 48px rgba(0, 0, 0, 0.4);
+  box-shadow: 0 24px 48px var(--shadow-strong);
 }
 
 @keyframes fadeIn {
@@ -740,8 +746,8 @@ body {
 
 .no-glass .taskbar {
   backdrop-filter: none !important;
-  background: var(--bg-secondary) !important;
-  border-top-color: var(--border-color) !important;
+  background: transparent !important;
+  border: none !important;
 }
 
 .no-glass .modal-overlay {

@@ -7,34 +7,39 @@ import { useOS } from '@/context/OSContext';
 import { Rnd } from 'react-rnd';
 
 function WindowButtons({ onClose, onMinimize, onMaximize, isMaximized, layout = 'mac', enableMinimize = true, enableMaximize = true }) {
+  const stopProp = (e) => e.stopPropagation();
+
   if (layout === 'pc') {
     return (
-      <div className="flex items-center h-full">
+      <div className="flex items-center h-full nodrag">
         <button
           type="button"
           onClick={enableMinimize ? onMinimize : undefined}
-          className={`h-10 w-12 flex items-center justify-center transition-colors group ${enableMinimize ? 'hover:bg-white/10' : 'opacity-50 cursor-default'}`}
+          onMouseDown={stopProp}
+          className={`h-10 w-12 flex items-center justify-center transition-colors group ${enableMinimize ? 'hover:bg-[var(--bg-tertiary)]' : 'opacity-50 cursor-default'}`}
           title="Minimize"
           disabled={!enableMinimize}
         >
-          <Minus size={14} className="text-[var(--text-secondary)] group-hover:text-white" />
+          <Minus size={14} className="text-[var(--text-secondary)] group-hover:text-[var(--text-primary)]" />
         </button>
         <button
           type="button"
           onClick={enableMaximize ? onMaximize : undefined}
-          className={`h-10 w-12 flex items-center justify-center transition-colors group ${enableMaximize ? 'hover:bg-white/10' : 'opacity-50 cursor-default'}`}
+          onMouseDown={stopProp}
+          className={`h-10 w-12 flex items-center justify-center transition-colors group ${enableMaximize ? 'hover:bg-[var(--bg-tertiary)]' : 'opacity-50 cursor-default'}`}
           title={isMaximized ? "Restore" : "Maximize"}
           disabled={!enableMaximize}
         >
           {isMaximized ? (
-            <Minimize2 size={12} className="text-[var(--text-secondary)] group-hover:text-white" />
+            <Minimize2 size={12} className="text-[var(--text-secondary)] group-hover:text-[var(--text-primary)]" />
           ) : (
-            <Square size={10} className="text-[var(--text-secondary)] group-hover:text-white" />
+            <Square size={10} className="text-[var(--text-secondary)] group-hover:text-[var(--text-primary)]" />
           )}
         </button>
         <button
           type="button"
           onClick={onClose}
+          onMouseDown={stopProp}
           className="h-10 w-12 flex items-center justify-center hover:bg-[#c42b1c] transition-colors group"
           title="Close"
         >
@@ -45,11 +50,12 @@ function WindowButtons({ onClose, onMinimize, onMaximize, isMaximized, layout = 
   }
 
   return (
-    <div className="flex items-center gap-2 px-3 h-full">
+    <div className="flex items-center gap-2 px-3 h-full nodrag">
       <button
         type="button"
         onClick={onClose}
-        className="w-3.5 h-3.5 rounded-full bg-[#ff5f57] hover:bg-[#ff5f57] border border-[#e0443e]/30 flex items-center justify-center group transition-all z-20"
+        onMouseDown={stopProp}
+        className="w-3.5 h-3.5 rounded-full bg-[#ff5f57] hover:bg-[#ff5f57] border border-[#e0443e]/30 flex items-center justify-center group transition-all z-20 relative"
         aria-label="Close"
       >
         <X size={8} className="opacity-0 group-hover:opacity-100 text-[#4d0000] transition-opacity" />
@@ -57,7 +63,8 @@ function WindowButtons({ onClose, onMinimize, onMaximize, isMaximized, layout = 
       <button
         type="button"
         onClick={enableMinimize ? onMinimize : undefined}
-        className={`w-3.5 h-3.5 rounded-full border flex items-center justify-center group transition-all z-20 ${
+        onMouseDown={stopProp}
+        className={`w-3.5 h-3.5 rounded-full border flex items-center justify-center group transition-all z-20 relative ${
           enableMinimize 
             ? 'bg-[#febc2e] hover:bg-[#febc2e] border-[#d89e24]/30' 
             : 'bg-[#cfcfcf] border-[#b0b0b0]/30 cursor-default'
@@ -70,7 +77,8 @@ function WindowButtons({ onClose, onMinimize, onMaximize, isMaximized, layout = 
       <button
         type="button"
         onClick={enableMaximize ? onMaximize : undefined}
-        className={`w-3.5 h-3.5 rounded-full border flex items-center justify-center group transition-all z-20 ${
+        onMouseDown={stopProp}
+        className={`w-3.5 h-3.5 rounded-full border flex items-center justify-center group transition-all z-20 relative ${
           enableMaximize 
             ? 'bg-[#28c840] hover:bg-[#28c840] border-[#1fa530]/30' 
             : 'bg-[#cfcfcf] border-[#b0b0b0]/30 cursor-default'
@@ -95,13 +103,18 @@ function WindowTitleBar({ title, icon: Icon, onClose, onMinimize, onMaximize, is
 
   return (
     <div 
-      className={`modal-drag-handle relative flex items-center h-9 bg-[var(--bg-secondary)] border-b border-[var(--border-color)] cursor-default select-none group/titlebar px-3 ${isMac ? 'justify-start' : 'justify-between flex-row-reverse'}`}
-      onDoubleClick={(e) => { 
-        if (e.target.tagName !== 'BUTTON' && enableMaximize) {
-          onMaximize();
-        }
-      }}
+      className="relative flex items-center h-9 bg-[var(--bg-secondary)] border-b border-[var(--border-color)] cursor-default select-none group/titlebar px-3"
     >
+      {/* Drag & Double-Click Handle Layer (behind controls) */}
+      <div 
+        className="modal-drag-handle absolute inset-0 z-0"
+        style={{ zIndex: 0 }}
+        onDoubleClick={(e) => {
+          e.stopPropagation();
+          if (enableMaximize) onMaximize();
+        }}
+      />
+
       {/* Buttons Container */}
       <div className={`relative z-20 flex items-center h-full ${isMac ? 'w-[60px]' : ''}`}>
         <WindowButtons 
@@ -116,13 +129,12 @@ function WindowTitleBar({ title, icon: Icon, onClose, onMinimize, onMaximize, is
       </div>
       
       {/* Title Container */}
-      <div className={`absolute inset-0 flex items-center gap-2 text-[11px] font-bold text-[var(--text-secondary)] pointer-events-none select-none px-4 ${isMac ? 'justify-center' : 'justify-start'}`}>
-        {Icon ? <Icon size={12} className="opacity-70" /> : null}
+      <div className={`absolute inset-0 flex items-center gap-2 text-[11px] font-bold text-[var(--text-primary)] pointer-events-none select-none px-4 ${isMac ? 'justify-center' : 'justify-start'}`}>
+        {Icon ? <Icon size={12} className="opacity-80" /> : null}
         <span className="truncate max-w-[60%]">{title}</span>
       </div>
 
-      {/* Spacing for Windows Close button hover effect area if needed, or just leave it */}
-      {!isMac && <div className="w-4" />}
+      {!isMac && <div className="w-12" />}
     </div>
   );
 }
@@ -152,6 +164,7 @@ export default function MacOSModalWindow({
   overlayClassName = '',
   containerClassName = '',
   windowClassName = '',
+  showTitleBar = true,
 }) {
   const { state: osState } = useOS();
   const windowLayout = osState?.windowLayout || 'mac';
@@ -297,22 +310,24 @@ export default function MacOSModalWindow({
                   className={`${effectiveMaximized ? '' : 'rounded-xl border border-[var(--border-color)] shadow-2xl'} overflow-hidden flex flex-col flex-1 min-h-0 max-h-full`}
                   style={{
                     background: 'var(--window-bg)',
-                    boxShadow: effectiveMaximized ? 'none' : '0 25px 50px -12px rgba(0,0,0,0.5), 0 0 0 1px rgba(255,255,255,0.1)',
+                    boxShadow: effectiveMaximized ? 'none' : '0 25px 50px -12px rgba(0,0,0,0.5), 0 0 0 1px var(--border-color)',
                     backdropFilter: 'blur(30px)',
                   }}
                 >
-                  <WindowTitleBar 
-                    title={title} 
-                    icon={icon} 
-                    onClose={onClose} 
-                    onMinimize={handleMinimize}
-                    onMaximize={handleMaximize}
-                    isMaximized={effectiveMaximized}
-                    layout={windowLayout}
-                    enableMinimize={enableMinimize}
-                    enableMaximize={enableMaximize}
-                  />
-                  <div className={`${contentClassName} overflow-y-auto custom-scrollbar flex-1 min-h-0`}>
+                  {showTitleBar && (
+                    <WindowTitleBar 
+                      title={title} 
+                      icon={icon} 
+                      onClose={onClose} 
+                      onMinimize={handleMinimize}
+                      onMaximize={handleMaximize}
+                      isMaximized={effectiveMaximized}
+                      layout={windowLayout}
+                      enableMinimize={enableMinimize}
+                      enableMaximize={enableMaximize}
+                    />
+                  )}
+                  <div className={`${contentClassName} overflow-y-auto custom-scrollbar flex-1 min-h-0 pointer-events-auto`}>
                     {children}
                   </div>
                 </div>
@@ -337,22 +352,24 @@ export default function MacOSModalWindow({
                 className={`${effectiveMaximized ? '' : 'rounded-xl border border-[var(--border-color)] shadow-2xl'} overflow-hidden flex flex-col flex-1 min-h-0 max-h-full`}
                 style={{
                   background: 'var(--window-bg)',
-                  boxShadow: effectiveMaximized ? 'none' : '0 25px 50px -12px rgba(0,0,0,0.5), 0 0 0 1px rgba(255,255,255,0.1)',
+                  boxShadow: effectiveMaximized ? 'none' : '0 25px 50px -12px rgba(0,0,0,0.5), 0 0 0 1px var(--border-color)',
                   backdropFilter: 'blur(30px)',
                 }}
               >
-                <WindowTitleBar 
-                  title={title} 
-                  icon={icon} 
-                  onClose={onClose} 
-                  onMinimize={handleMinimize}
-                  onMaximize={handleMaximize}
-                  isMaximized={effectiveMaximized}
-                  layout={windowLayout}
-                  enableMinimize={enableMinimize}
-                  enableMaximize={enableMaximize}
-                />
-                <div className={`${contentClassName} overflow-y-auto custom-scrollbar flex-1 min-h-0`}>
+                {showTitleBar && (
+                  <WindowTitleBar 
+                    title={title} 
+                    icon={icon} 
+                    onClose={onClose} 
+                    onMinimize={handleMinimize}
+                    onMaximize={handleMaximize}
+                    isMaximized={effectiveMaximized}
+                    layout={windowLayout}
+                    enableMinimize={enableMinimize}
+                    enableMaximize={enableMaximize}
+                  />
+                )}
+                <div className={`${contentClassName} overflow-y-auto custom-scrollbar flex-1 min-h-0 pointer-events-auto`}>
                   {children}
                 </div>
               </div>

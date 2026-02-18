@@ -13,7 +13,7 @@ import { io } from 'socket.io-client';
 
 export default function DatabaseView({ connection, onClose }) {
   const { state: appState, apiFetch, dispatch } = useApp();
-  const { addNotification, state: osState, setExportNaming, setAiHistory, language } = useOS();
+  const { state: osState, addNotification, setExportNaming, setAiHistory } = useOS();
   const { t } = useTranslation();
   
   const [loading, setLoading] = useState(true);
@@ -39,6 +39,7 @@ export default function DatabaseView({ connection, onClose }) {
   const [showNamingSettings, setShowNamingSettings] = useState(false);
   const [showAiHelp, setShowAiHelp] = useState(false);
   const [latency, setLatency] = useState(null);
+  const [lastAiUpdate, setLastAiUpdate] = useState(0);
   const socketRef = useRef(null);
   
   // Modal State
@@ -357,9 +358,11 @@ export default function DatabaseView({ connection, onClose }) {
            query: connection.dbProvider === 'mongodb' 
              ? (isActionQuery ? { action: 'insertMany', collection: schemaName, data: mongoDocs } : { action: 'find', collection: schemaName, filter: filterObj })
              : isActionQuery
-               ? customFilter // Send raw SQL if it's an action (DELETE/UPDATE)
+               ? customFilter
                : customFilter 
-                 ? `SELECT * FROM ${schemaName} WHERE ${customFilter} LIMIT 100`
+                 ? (customFilter.trim().toUpperCase().startsWith('WHERE') 
+                     ? `SELECT * FROM ${schemaName} ${customFilter} LIMIT 100`
+                     : `SELECT * FROM ${schemaName} WHERE ${customFilter} LIMIT 100`)
                  : `SELECT * FROM ${schemaName} LIMIT 100`
         })
       });
@@ -367,7 +370,7 @@ export default function DatabaseView({ connection, onClose }) {
       if (resData.success) {
         if (isActionQuery) {
             addNotification({ title: 'Success', message: 'Action executed successfully', type: 'success' });
-            fetchData(schemaName); // Refresh view
+            fetchData(schemaName);
         } else {
             setData(resData.data);
         }
@@ -451,6 +454,7 @@ export default function DatabaseView({ connection, onClose }) {
       });
       const resData = await res.json();
       if (resData.success) {
+        setLastAiUpdate(Date.now());
         // Clean any markdown code blocks or AI tags if they leaked through
         // Detect and extract <repeat> tag
         let repeatCount = 1;
@@ -1153,7 +1157,7 @@ export default function DatabaseView({ connection, onClose }) {
                </button>
            </div>
         ) : (
-           <>
+           <div className="flex flex-col h-full">
               {/* Toolbar */}
               <div className="h-11 border-b border-[var(--border-color)] bg-[var(--bg-tertiary)]/5 flex items-center justify-between px-3 gap-2">
                  {/* Left: Schema Info */}
@@ -1211,10 +1215,10 @@ export default function DatabaseView({ connection, onClose }) {
                        <Plus size={14} />
                     </button>
                     <button 
-                      onClick={() => fileInputRef.current.click()}
-                      className="p-1.5 hover:bg-white/5 text-[var(--text-muted)] hover:text-white rounded-md transition-all"
-                      title="Import JSON"
-                    >
+                       onClick={() => fileInputRef.current.click()}
+                       className="p-1.5 hover:bg-[var(--bg-tertiary)] text-[var(--text-muted)] hover:text-[var(--text-primary)] rounded-md transition-all"
+                       title="Import JSON"
+                     >
                        <Upload size={14} />
                     </button>
                     <input type="file" ref={fileInputRef} onChange={handleImport} className="hidden" accept=".json" />
@@ -1226,7 +1230,7 @@ export default function DatabaseView({ connection, onClose }) {
                        <Download size={14} />
                     </button>
 
-                    <div className="w-px h-5 bg-white/8 mx-1" />
+                    <div className="w-px h-5 bg-[var(--border-color)] mx-1" />
 
                     {/* Safety / Bulk Actions */}
                     <button 
@@ -1250,19 +1254,19 @@ export default function DatabaseView({ connection, onClose }) {
                          <Shield size={13} /> Backup
                       </button>
                     
-                    <div className="w-px h-5 bg-white/8 mx-1" />
+                    <div className="w-px h-5 bg-[var(--border-color)] mx-1" />
 
-                    <button 
-                      onClick={() => setShowNamingSettings(!showNamingSettings)}
-                      className={`p-1.5 rounded-md transition-all ${
-                        showNamingSettings 
-                          ? 'bg-amber-500/20 text-amber-400' 
-                          : 'hover:bg-white/5 text-[var(--text-muted)] hover:text-white'
-                      }`}
-                      title="Naming Pattern Settings"
-                    >
-                       <Settings2 size={14} />
-                    </button>
+                      <button 
+                        onClick={() => setShowNamingSettings(!showNamingSettings)}
+                        className={`p-1.5 rounded-md transition-all ${
+                          showNamingSettings 
+                            ? 'bg-amber-500/20 text-amber-600 dark:text-amber-400' 
+                            : 'hover:bg-[var(--bg-tertiary)] text-[var(--text-muted)] hover:text-[var(--text-primary)]'
+                        }`}
+                        title="Naming Pattern Settings"
+                      >
+                         <Settings2 size={14} />
+                      </button>
                  </div>
               </div>
 
@@ -1276,7 +1280,7 @@ export default function DatabaseView({ connection, onClose }) {
                         value={exportNaming.prefix}
                         onChange={(e) => setExportNaming({ prefix: e.target.value })}
                         placeholder={t('database.naming.prefixPlaceholder')}
-                        className="bg-black/20 border border-white/10 rounded px-2 py-1 text-[11px] focus:border-amber-500/50 outline-none w-28"
+                        className="bg-[var(--bg-primary)] border border-[var(--border-color)] rounded px-2 py-1 text-[11px] focus:border-amber-500/50 outline-none w-28 text-[var(--text-primary)]"
                       />
                    </div>
                    <div className="flex flex-col gap-1">
@@ -1286,7 +1290,7 @@ export default function DatabaseView({ connection, onClose }) {
                         value={exportNaming.suffix}
                         onChange={(e) => setExportNaming({ suffix: e.target.value })}
                         placeholder={t('database.naming.suffixPlaceholder')}
-                        className="bg-black/20 border border-white/10 rounded px-2 py-1 text-[11px] focus:border-amber-500/50 outline-none w-28"
+                        className="bg-[var(--bg-primary)] border border-[var(--border-color)] rounded px-2 py-1 text-[11px] focus:border-amber-500/50 outline-none w-28 text-[var(--text-primary)]"
                       />
                    </div>
                    <div className="flex items-center gap-4 pt-4">
@@ -1297,10 +1301,10 @@ export default function DatabaseView({ connection, onClose }) {
                           onChange={(e) => setExportNaming({ includeDate: e.target.checked })}
                           className="hidden"
                         />
-                         <div className={`w-3.5 h-3.5 rounded border flex items-center justify-center transition-all ${exportNaming.includeDate ? 'bg-amber-500 border-amber-500' : 'border-white/20'}`}>
-                           {exportNaming.includeDate && <Check size={8} className="text-black" strokeWidth={4} />}
+                          <div className={`w-3.5 h-3.5 rounded border flex items-center justify-center transition-all ${exportNaming.includeDate ? 'bg-amber-500 border-amber-500' : 'border-[var(--border-color)]'}`}>
+                           {exportNaming.includeDate && <Check size={8} className="text-white" strokeWidth={4} />}
                         </div>
-                        <span className="text-[11px] text-[var(--text-muted)] group-hover:text-white">{t('database.naming.date')}</span>
+                        <span className="text-[11px] text-[var(--text-muted)] group-hover:text-[var(--text-primary)]">{t('database.naming.date')}</span>
                       </label>
 
                       <label className="flex items-center gap-2 cursor-pointer group">
@@ -1310,10 +1314,10 @@ export default function DatabaseView({ connection, onClose }) {
                           onChange={(e) => setExportNaming({ includeTime: e.target.checked })}
                           className="hidden"
                         />
-                        <div className={`w-3.5 h-3.5 rounded border flex items-center justify-center transition-all ${exportNaming.includeTime ? 'bg-amber-500 border-amber-500' : 'border-white/20'}`}>
-                           {exportNaming.includeTime && <Check size={8} className="text-black" strokeWidth={4} />}
+                        <div className={`w-3.5 h-3.5 rounded border flex items-center justify-center transition-all ${exportNaming.includeTime ? 'bg-amber-500 border-amber-500' : 'border-[var(--border-color)]'}`}>
+                           {exportNaming.includeTime && <Check size={8} className="text-white" strokeWidth={4} />}
                         </div>
-                        <span className="text-[11px] text-[var(--text-muted)] group-hover:text-white">{t('database.naming.time')}</span>
+                        <span className="text-[11px] text-[var(--text-muted)] group-hover:text-[var(--text-primary)]">{t('database.naming.time')}</span>
                       </label>
 
                       <label className="flex items-center gap-2 cursor-pointer group">
@@ -1323,18 +1327,18 @@ export default function DatabaseView({ connection, onClose }) {
                           onChange={(e) => setExportNaming({ includeType: e.target.checked })}
                           className="hidden"
                         />
-                        <div className={`w-3.5 h-3.5 rounded border flex items-center justify-center transition-all ${exportNaming.includeType ? 'bg-amber-500 border-amber-500' : 'border-white/20'}`}>
-                           {exportNaming.includeType && <Check size={8} className="text-black" strokeWidth={4} />}
+                        <div className={`w-3.5 h-3.5 rounded border flex items-center justify-center transition-all ${exportNaming.includeType ? 'bg-amber-500 border-amber-500' : 'border-[var(--border-color)]'}`}>
+                           {exportNaming.includeType && <Check size={8} className="text-white" strokeWidth={4} />}
                         </div>
-                        <span className="text-[11px] text-[var(--text-muted)] group-hover:text-white" title={t('database.naming.tagTooltip')}>{t('database.naming.tag')}</span>
+                        <span className="text-[11px] text-[var(--text-muted)] group-hover:text-[var(--text-primary)]" title={t('database.naming.tagTooltip')}>{t('database.naming.tag')}</span>
                       </label>
                    </div>
                    
                    <div className="ml-auto flex flex-col items-end gap-1">
                       <span className="text-[9px] font-bold text-amber-500/80 uppercase tracking-widest">{t('database.naming.preview')}</span>
-                      <div className="text-[10px] font-mono text-white/40 italic bg-black/20 px-2 py-1 rounded">
+                      <div className="text-[10px] font-mono text-[var(--text-muted)] italic bg-[var(--bg-primary)]/5 dark:bg-black/20 px-2 py-1 rounded">
                         {getExportFilename('users', '').replace('.json', '')}
-                        <span className="text-amber-500/50">.json</span>
+                        <span className="text-amber-600 dark:text-amber-500/50">.json</span>
                       </div>
                    </div>
                 </div>
@@ -1458,7 +1462,7 @@ export default function DatabaseView({ connection, onClose }) {
 
              {/* Query Bar */}
              {showQueryBar && (
-                 <div className="bg-[var(--bg-tertiary)]/30 border-b border-[var(--border-color)] p-3 flex flex-col gap-3 animate-in slide-in-from-top-2 duration-200">
+                 <div className="bg-[var(--bg-tertiary)]/30 border-b border-[var(--border-color)] p-4 flex flex-col gap-4 animate-in slide-in-from-top-2 duration-200">
                     <div className="flex items-center gap-3">
                         <div className="flex flex-col gap-1 shrink-0 w-32">
                            <div className="flex items-center gap-2 text-[10px] font-bold text-indigo-400 uppercase tracking-widest">
@@ -1544,7 +1548,7 @@ export default function DatabaseView({ connection, onClose }) {
                                  onChange={(e) => setAiPrompt(e.target.value)}
                                  onKeyDown={(e) => e.key === 'Enter' && !pendingAction && handleAskAI()}
                                  placeholder={t('database.ai.placeholder')}
-                                 className={`w-full bg-[var(--bg-primary)] border border-purple-500/30 rounded-xl py-2 pl-4 pr-12 text-xs focus:outline-none focus:border-purple-500 focus:ring-1 focus:ring-purple-500/20 text-[var(--text-primary)] placeholder:text-purple-300/30 shadow-inner transition-all ${pendingAction ? 'opacity-50 cursor-not-allowed' : ''}`}
+                                 className={`w-full bg-[var(--bg-primary)] border border-purple-500/30 rounded-xl py-2 pl-4 pr-12 text-xs focus:outline-none focus:border-purple-500 focus:ring-1 focus:ring-purple-500/20 text-[var(--text-primary)] placeholder:text-purple-400/40 dark:placeholder:text-purple-300/30 shadow-inner transition-all ${pendingAction ? 'opacity-50 cursor-not-allowed' : ''}`}
                              />
                              
                              {isAiLoading ? (
@@ -1628,7 +1632,7 @@ export default function DatabaseView({ connection, onClose }) {
                       <span className="text-xs font-medium tracking-widest uppercase">{t('database.status.fetching')}</span>
                    </div>
                 ) : (data.length > 0 || (pendingAction?.type === 'INSERT' && pendingAction.mockRows?.length > 0)) ? (
-                    <div className="rounded-xl border border-[var(--border-color)] overflow-x-auto bg-black/10 custom-scrollbar overscroll-x-none" style={{ overscrollBehaviorX: 'none' }}>
+                    <div className="rounded-xl border border-[var(--border-color)] overflow-x-auto bg-[var(--bg-primary)]/10 custom-scrollbar overscroll-x-none" style={{ overscrollBehaviorX: 'none' }}>
                       <table className="w-full text-left text-xs border-collapse">
                          <thead>
                             <tr className="bg-[var(--bg-secondary)] border-b border-[var(--border-color)]">
@@ -1678,10 +1682,10 @@ export default function DatabaseView({ connection, onClose }) {
                                   className={`transition-colors group ${
                                     pendingAction?.type === 'DELETE' ? 'bg-red-500/5 hover:bg-red-500/10' :
                                     pendingAction?.type === 'UPDATE' ? 'bg-amber-500/5 hover:bg-amber-500/10' :
-                                    'hover:bg-white/[0.03]'
+                                    'hover:bg-[var(--bg-primary)]/[0.03]'
                                   }`}
                                 >
-                                   <td className="sticky left-0 z-10 bg-[var(--bg-primary)] px-4 py-2.5 text-center border-r border-[var(--border-color)]/30 group-hover:bg-[#1a1a1a] transition-all shadow-[4px_0_8px_rgba(0,0,0,0.1)]">
+                                   <td className="sticky left-0 z-10 bg-[var(--bg-primary)] px-4 py-2.5 text-center border-r border-[var(--border-color)]/30 group-hover:bg-[var(--bg-tertiary)] transition-all shadow-[4px_0_8px_rgba(0,0,0,0.1)]">
                                       <div className="flex items-center justify-center gap-2 opacity-50 group-hover:opacity-100 transition-opacity">
                                          <button 
                                            onClick={() => setEditingRecord({ mode: 'edit', data: row })}
@@ -1720,7 +1724,7 @@ export default function DatabaseView({ connection, onClose }) {
                       </table>
                    </div>
                 ) : (
-                   <div className="h-full flex flex-col items-center justify-center text-[var(--text-muted)] bg-black/5 rounded-3xl border border-dashed border-white/5">
+                   <div className="h-full flex flex-col items-center justify-center text-[var(--text-muted)] bg-[var(--bg-primary)]/5 rounded-3xl border border-dashed border-[var(--border-color)]/5">
                       <Table size={48} className="mb-4 opacity-10" />
                       <p className="text-sm font-medium">{t('database.editor.emptyMsg')}</p>
                       <button 
@@ -1732,7 +1736,7 @@ export default function DatabaseView({ connection, onClose }) {
                    </div>
                 )}
              </div>
-           </>
+           </div>
         )}
       </div>
 
@@ -1800,7 +1804,7 @@ export default function DatabaseView({ connection, onClose }) {
               <div className="absolute top-3 right-3 text-[9px] font-bold text-[var(--text-muted)] uppercase tracking-widest opacity-20 select-none">
                 {connection?.dbProvider?.toUpperCase() || 'DB'} RAW QUERY
               </div>
-              <pre className="h-full p-4 bg-black/30 border border-[var(--border-color)]/20 rounded-xl overflow-auto custom-scrollbar font-mono text-[10px] leading-relaxed text-[var(--accent-emerald)] shadow-inner whitespace-pre-wrap break-all">
+               <pre className="h-full p-4 bg-[var(--bg-tertiary)]/50 dark:bg-black/30 border border-[var(--border-color)] rounded-xl overflow-auto custom-scrollbar font-mono text-[10px] leading-relaxed text-[var(--accent-emerald)] shadow-inner whitespace-pre-wrap break-all">
                 {pendingAction.fullQuery}
               </pre>
             </div>
@@ -1863,8 +1867,8 @@ function RecordModal({ mode, initialData, onClose, onSave, isSubmitting }) {
             </span>
           )}
         </div>
-        <textarea
-          className="w-full bg-black/40 border border-white/10 rounded-2xl p-4 font-mono text-sm focus:outline-none focus:border-indigo-500/50 resize-none custom-scrollbar text-emerald-400/90 flex-1 min-h-0"
+         <textarea
+          className="w-full bg-[var(--bg-primary)] border border-[var(--border-color)] rounded-2xl p-4 font-mono text-sm focus:outline-none focus:border-indigo-500/50 resize-none custom-scrollbar text-emerald-700 dark:text-emerald-400/90 flex-1 min-h-0"
           value={jsonValue}
           onChange={(e) => {
             setJsonValue(e.target.value);
@@ -1882,7 +1886,7 @@ function RecordModal({ mode, initialData, onClose, onSave, isSubmitting }) {
         <div className="mt-6 flex items-center justify-end gap-3">
           <button
             onClick={onClose}
-            className="px-5 py-2 text-xs font-bold text-[var(--text-muted)] hover:text-white transition-colors"
+             className="px-5 py-2 text-xs font-bold text-[var(--text-muted)] hover:text-[var(--text-primary)] transition-colors"
           >
             {t('database.editor.cancel')}
           </button>

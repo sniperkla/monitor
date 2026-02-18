@@ -21,6 +21,7 @@ const initialState = {
     uri: '', // Decrypted URI from vault (in memory only)
   },
   activeDatabaseBrowsers: [], // { id, connectionId, connectionName }
+  standaloneDatabaseBrowsers: [], // Dedicated Database App
   activeTerminalId: null,
   activeFileManagerId: null,
   activeDatabaseBrowserId: null,
@@ -170,6 +171,17 @@ function reducer(state, action) {
         activeDatabaseBrowserId: state.activeDatabaseBrowserId === action.payload
           ? (newDbs.length > 0 ? newDbs[newDbs.length - 1].id : null)
           : state.activeDatabaseBrowserId
+      };
+    case 'OPEN_STANDALONE_DATABASE_BROWSER':
+      if (state.standaloneDatabaseBrowsers.find(b => b.id === action.payload.id)) return state;
+      return {
+        ...state,
+        standaloneDatabaseBrowsers: [...state.standaloneDatabaseBrowsers, action.payload],
+      };
+    case 'CLOSE_STANDALONE_DATABASE_BROWSER':
+      return {
+        ...state,
+        standaloneDatabaseBrowsers: state.standaloneDatabaseBrowsers.filter(b => b.id !== action.payload),
       };
     case 'SET_ACTIVE_TERMINAL':
       return { ...state, activeTerminalId: action.payload };

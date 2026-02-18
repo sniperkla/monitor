@@ -755,6 +755,10 @@ export function OSProvider({ children }) {
           if (data.success && data.settings) {
             const localTimestamp = stateRef.current.timestamp || 0;
             const dbTimestamp = data.settings.timestamp || 0;
+            
+            console.log('[OS] DB Fetch - customWallpapers:', data.settings.customWallpapers);
+            console.log('[OS] DB Fetch - local customWallpapers:', stateRef.current.customWallpapers);
+            console.log('[OS] Timestamps - DB:', dbTimestamp, 'Local:', localTimestamp);
 
             if (dbTimestamp > localTimestamp || (localTimestamp === 0 && dbTimestamp !== 0)) {
               console.log(`🔄 [OS] Hydrating from DB (DB: ${dbTimestamp}, Local: ${localTimestamp})`);
@@ -913,11 +917,14 @@ export function OSProvider({ children }) {
     if (!userEmail) return;
     try {
       const payload = serializeStateForSync(state);
+      const parsedPayload = JSON.parse(payload);
+      console.log('[OS] Saving settings - customWallpapers:', parsedPayload.customWallpapers);
+      
       await fetch('/api/user/settings', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          ...JSON.parse(payload),
+          ...parsedPayload,
           timestamp: Date.now(),
         })
       });
@@ -995,6 +1002,30 @@ export function OSProvider({ children }) {
   
   const snapWindow = (id, side) => {
     dispatch({ type: 'SNAP_WINDOW', payload: { id, side } });
+  };
+
+  const setIconStyle = (style) => {
+    dispatch({ type: 'SET_ICON_STYLE', payload: style });
+  };
+
+  const setBrightness = (level) => {
+    dispatch({ type: 'SET_BRIGHTNESS', payload: level });
+  };
+
+  const setUiScale = (scale) => {
+    dispatch({ type: 'SET_UI_SCALE', payload: scale });
+  };
+
+  const setNotifications = (payload) => {
+    dispatch({ type: 'SET_NOTIFICATIONS', payload });
+  };
+
+  const addCustomWallpaper = (url) => {
+    dispatch({ type: 'ADD_CUSTOM_WALLPAPER', payload: url });
+  };
+
+  const removeCustomWallpaper = (url) => {
+    dispatch({ type: 'REMOVE_CUSTOM_WALLPAPER', payload: url });
   };
 
   const setSortBy = (sort) => {
@@ -1310,6 +1341,12 @@ export function OSProvider({ children }) {
       snapWindow, 
       setGlassmorphism, 
       setIconSize, 
+      setIconStyle,
+      setBrightness,
+      setUiScale,
+      setNotifications,
+      addCustomWallpaper,
+      removeCustomWallpaper,
       setSortBy, 
       setWallpaper, 
       updateIconPosition, 

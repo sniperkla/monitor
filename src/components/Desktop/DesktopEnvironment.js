@@ -346,11 +346,39 @@ export default function DesktopEnvironment() {
     if (!data) return;
     try {
       const conn = JSON.parse(data);
-      // For databases, there's usually only one tool, so open it immediately
+      const sourceAppType = e.dataTransfer.getData('application/source-app-type');
+
+      // If dragged from a TerminalApp tab, close that source tab first
+      const sourceStandaloneTermId = e.dataTransfer.getData('application/standalone-term-id');
+      if (sourceStandaloneTermId) {
+        appDispatch({ type: 'CLOSE_STANDALONE_TERMINAL', payload: sourceStandaloneTermId });
+      }
+
+      // If dragged from a FilesApp tab, close that source tab first
+      const sourceFilesTabId = e.dataTransfer.getData('application/standalone-files-id');
+      if (sourceFilesTabId) {
+        window.dispatchEvent(new CustomEvent('close-files-tab', { detail: { tabId: sourceFilesTabId } }));
+      }
+
+      // For databases, open immediately
       if (conn.type === 'database') {
         openStandaloneDatabase(conn);
         return;
       }
+
+      // If dragged from TerminalApp → open as terminal directly (no menu)
+      if (sourceAppType === 'terminal') {
+        openStandaloneTerminal(conn);
+        return;
+      }
+
+      // If dragged from FilesApp → open as file manager directly (no menu)
+      if (sourceAppType === 'files') {
+        openStandaloneFiles(conn);
+        return;
+      }
+
+      // Otherwise (sidebar drag) → show the choice menu
       setDropMenu({ x: e.clientX, y: e.clientY, connection: conn });
     } catch (err) {
       console.error('Drop parse error:', err);
@@ -373,8 +401,16 @@ export default function DesktopEnvironment() {
     return () => window.removeEventListener('desktop-icon-drop', handleIconDrop);
   }, []);
 
-  const openStandaloneTerminal = (conn) => {
-    const winId = `standalone-term-${conn._id}`;
+  const openStandaloneTerminal = (conn, sourceStandaloneTermId = null) => {
+    // Use unique ID so multiple standalone windows can coexist for same connection
+    const winId = `standalone-term-${conn._id}-${Date.now()}`;
+    
+    // Close existing session in the manager if it exists (not standalone)
+    const existing = appState.activeTerminals.find(t => t.connectionId === conn._id);
+    if (existing) {
+      appDispatch({ type: 'CLOSE_TERMINAL', payload: existing.id });
+    }
+
     openWindow(
       winId,
       conn.name,
@@ -386,7 +422,15 @@ export default function DesktopEnvironment() {
   };
 
   const openStandaloneFiles = (conn) => {
-    const winId = `standalone-files-${conn._id}`;
+    // Use unique ID so multiple standalone windows can coexist for same connection
+    const winId = `standalone-files-${conn._id}-${Date.now()}`;
+
+    // Close existing session in the manager if it exists
+    const existing = appState.activeFileManagers.find(f => f.connectionId === conn._id);
+    if (existing) {
+      appDispatch({ type: 'CLOSE_FILE_MANAGER', payload: existing.id });
+    }
+
     openWindow(
       winId,
       `Files: ${conn.name}`,
@@ -404,6 +448,13 @@ export default function DesktopEnvironment() {
 
   const openStandaloneDatabase = (conn) => {
     const winId = `standalone-db-${conn._id}`;
+
+    // Close existing session in the manager if it exists
+    const existing = appState.activeDatabaseBrowsers.find(b => b.connectionId === conn._id);
+    if (existing) {
+      appDispatch({ type: 'CLOSE_DATABASE_BROWSER', payload: existing.id });
+    }
+
     openWindow(
       winId,
       `DB: ${conn.name}`,
@@ -667,7 +718,7 @@ export default function DesktopEnvironment() {
                 left: contextMenu.x,
                 background: osState.glassmorphism ? 'var(--window-bg)' : 'var(--bg-primary)',
                 backdropFilter: 'blur(24px)',
-                boxShadow: '0 8px 32px rgba(0,0,0,0.5), 0 0 0 1px rgba(255,255,255,0.04)'
+                boxShadow: '0 8px 32px var(--shadow-strong), 0 0 0 1px var(--border-color)'
               }}
             >
               <div className="py-1.5">
@@ -694,7 +745,7 @@ export default function DesktopEnvironment() {
               >
                 <ContextRadioItem label={t('desktop.context.sortBy.name')} checked={sortBy === 'name'} onClick={() => { setSortBy('name'); applySort('name'); closeContext(); }} />
                 <ContextRadioItem label={t('desktop.context.sortBy.type')} checked={sortBy === 'type'} onClick={() => { setSortBy('type'); applySort('type'); closeContext(); }} />
-                <div className="h-px bg-white/[0.1] my-1" />
+                <div className="h-px bg-[var(--border-color)] my-1" />
                 <ContextRadioItem label="None (Manual)" checked={!sortBy || sortBy === 'none'} onClick={() => { setSortBy('none'); closeContext(); }} />
               </ContextSubmenuItem>
 
@@ -725,7 +776,7 @@ export default function DesktopEnvironment() {
                 }} 
               />
 
-              <div className="h-px bg-white/[0.06] my-1.5 mx-2" />
+              <div className="h-px bg-[var(--border-color)] my-1.5 mx-2" />
 
               <ContextItem 
                 icon={RefreshCw} 
@@ -740,7 +791,7 @@ export default function DesktopEnvironment() {
                 }} 
               />
 
-              <div className="h-px bg-white/[0.06] my-1.5 mx-2" />
+              <div className="h-px bg-[var(--border-color)] my-1.5 mx-2" />
 
               <ContextItem 
                 icon={Plus} 
@@ -755,7 +806,7 @@ export default function DesktopEnvironment() {
                 onClick={() => { openWindow('terminal', 'Terminal', <TerminalApp />, Terminal); closeContext(); }} 
               />
 
-              <div className="h-px bg-white/[0.06] my-1.5 mx-2" />
+              <div className="h-px bg-[var(--border-color)] my-1.5 mx-2" />
 
 
               <ContextItem 
@@ -768,7 +819,7 @@ export default function DesktopEnvironment() {
                 }} 
               />
 
-              <div className="h-px bg-white/[0.06] my-1.5 mx-2" />
+              <div className="h-px bg-[var(--border-color)] my-1.5 mx-2" />
 
               <ContextItem 
                 icon={Settings} 
@@ -816,7 +867,7 @@ export default function DesktopEnvironment() {
               left: Math.min(dropMenu.x, window.innerWidth - 240),
               background: 'var(--window-bg)',
               backdropFilter: 'blur(20px)',
-              boxShadow: '0 8px 32px rgba(0,0,0,0.6), 0 0 0 1px rgba(255,255,255,0.04)',
+              boxShadow: '0 8px 32px rgba(0,0,0,0.6), 0 0 0 1px var(--border-color)',
             }}
           >
             {/* Header */}

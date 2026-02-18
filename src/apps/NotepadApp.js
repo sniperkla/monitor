@@ -132,7 +132,7 @@ export default function NotepadApp() {
             </div>
             <button 
               onClick={createNewNote}
-              className="p-1.5 hover:bg-white/5 rounded-lg text-[var(--text-muted)] hover:text-[var(--accent-indigo)] transition-all active:scale-95"
+              className="p-1.5 hover:bg-[var(--bg-card-hover)] rounded-lg text-[var(--text-muted)] hover:text-[var(--accent-indigo)] transition-all active:scale-95"
             >
               <Plus size={18} />
             </button>
@@ -155,7 +155,7 @@ export default function NotepadApp() {
               key={note._id || Math.random()}
               onClick={() => setActiveNote(note)}
               className={`w-full text-left p-3 rounded-xl transition-all group ${
-                activeNote?._id === note._id ? 'bg-[var(--accent-indigo)]/10 border border-[var(--accent-indigo)]/20 shadow-sm' : 'hover:bg-white/5 border border-transparent'
+                activeNote?._id === note._id ? 'bg-[var(--accent-indigo)]/10 border border-[var(--accent-indigo)]/20 shadow-sm' : 'hover:bg-[var(--bg-card-hover)] border border-transparent'
               }`}
             >
               <div className="flex items-center justify-between mb-1">

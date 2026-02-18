@@ -1,11 +1,10 @@
 import { NextResponse } from 'next/server';
-
 import { getServerSession } from 'next-auth/next';
 import { authOptions } from '@/lib/auth';
-
 import { checkRateLimit } from '@/lib/serverGuard';
 import connectDB from '@/lib/mongodb';
 import SystemSetting from '@/models/SystemSetting';
+import { checkAndTrackAiUsage } from '@/utils/aiLimiter';
 
 export async function POST(req) {
   try {
@@ -14,8 +13,27 @@ export async function POST(req) {
       return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
     }
 
+    const { prompt, context, connectionName, host, prefs, history } = await req.json();
+
+    if (!prompt || !String(prompt).trim()) {
+      return NextResponse.json({ success: false, error: 'Prompt is required' }, { status: 400 });
+    }
+
+    // Check AI token limit
+    let usageInfo = null;
+    try {
+      await checkAndTrackAiUsage(session.user.email, prompt);
+    } catch (limitErr) {
+      return NextResponse.json({ success: false, error: limitErr.message }, { status: 429 });
+    }
+
+    const limitsSetting = await SystemSetting.findOne({ key: 'ai_limits' });
+    const limitsValue = limitsSetting?.value && typeof limitsSetting.value === 'object' ? limitsSetting.value : {};
+    const rateValue = limitsValue?.rate && typeof limitsValue.rate === 'object' ? limitsValue.rate : {};
+    const sshPerMinute = Number.isFinite(Number(rateValue.sshPerMinute)) ? Math.max(1, Number(rateValue.sshPerMinute)) : 30;
+
     const clientIP = req.headers.get('x-forwarded-for') || 'unknown';
-    const rateCheck = checkRateLimit(`ai:ssh:${clientIP}`, 30);
+    const rateCheck = checkRateLimit(`ai:ssh:${clientIP}`, sshPerMinute);
     if (!rateCheck.allowed) {
       return NextResponse.json(
         {
@@ -26,12 +44,6 @@ export async function POST(req) {
       );
     }
 
-    const { prompt, context, connectionName, host, prefs, history } = await req.json();
-
-    if (!prompt || !String(prompt).trim()) {
-      return NextResponse.json({ success: false, error: 'Prompt is required' }, { status: 400 });
-    }
-
     await connectDB();
 
     let apiKeys = [];
@@ -39,7 +51,7 @@ export async function POST(req) {
     let aiConfig = {
       model: 'llama-3.1-8b-instant',
       temperature: 0.1,
-      max_completion_tokens: 600,
+      max_completion_tokens: 220,
       top_p: 0.9,
     };
 
@@ -66,59 +78,26 @@ export async function POST(req) {
       return NextResponse.json({ success: false, error: 'AI service not configured' }, { status: 500 });
     }
 
-    const safeContext = typeof context === 'string' ? context.slice(-10000) : '';
+    const safeContext = typeof context === 'string' ? context.slice(-2500) : '';
     const safePrefs = prefs && typeof prefs === 'object' ? prefs : {};
     const preferSudo = !!safePrefs.preferSudo;
     const editor = typeof safePrefs.editor === 'string' ? safePrefs.editor : 'nano';
     const viewer = typeof safePrefs.viewer === 'string' ? safePrefs.viewer : 'cat';
 
-    // Build conversation history (last 6 turns, max 1000 chars each)
-    const safeHistory = Array.isArray(history) ? history.slice(-6) : [];
+    // Build conversation history (last 2 turns, max 700 chars each)
+    const safeHistory = Array.isArray(history) ? history.slice(-2) : [];
     const historyMessages = safeHistory.flatMap(h => {
       const msgs = [];
-      if (h.role === 'user' && h.content) msgs.push({ role: 'user', content: String(h.content).slice(0, 1000) });
-      if (h.role === 'assistant' && h.content) msgs.push({ role: 'assistant', content: String(h.content).slice(0, 1000) });
+      if (h.role === 'user' && h.content) msgs.push({ role: 'user', content: String(h.content).slice(0, 700) });
+      if (h.role === 'assistant' && h.content) msgs.push({ role: 'assistant', content: String(h.content).slice(0, 700) });
       return msgs;
     });
 
-    const sys = `Role: Expert SSH Shell Assistant.
-Goal: Accomplish user tasks on REMOTE servers. SUGGEST commands only.
-
-ENV:
-- Conn: ${connectionName || '?'} (${host || '?'})
-- Prefs: sudo=${preferSudo}, editor=${editor}, viewer=${viewer}
-- Terminal:
-${safeContext || '(none)'}
-
-RULES:
-1. ONE command per response.
-2. XML output:
-   <thought>reasoning</thought>
-   <command>shell command</command>
-   <explain>brief explanation</explain>
-   <danger>true|false (true if destructive: rm, mkfs, fdisk, kill)</danger>
-   <done>true|false (true ONLY if goal PROVEN done in output)</done>
-   <warn>optional warning</warn>
-   <interactive>input type (password|y/n|passphrase|editor)</interactive>
-
-3. SAFETY:
-   - READ-ONLY (safe): ls, cat, grep, systemctl status.
-   - MODIFY: apt/yum install, systemctl start.
-   - DANGER (<danger>true</danger>): rm, kill, stop services. Pause for these.
-
-4. LOGIC:
-   - Detect OS via output (apt=Debian, yum=RHEL, apk=Alpine).
-   - Install: Check existing first (which/rpm/dpkg). If missing, install.
-   - Service: Use --now with enable. Firewalld: --permanent + --reload.
-   - Interactive: Set <interactive> tag. Auto-confirm installs (-y).
-   - Secrets: NEVER ask/print secrets.
-   - Multi-step: Use history. Don't repeat successful commands. Fix errors.
-   - Files: Use ${viewer}/${editor}. Avoid interactive editors in auto-mode.
-
-5. ERROR HANDLING:
-   - "not found" -> install/check path.
-   - "permission denied" -> sudo/check perms.
-   - "in use" -> check ports (lsof/ss).`;
+    const sys = `SSH assistant.
+Output XML only: <command>, <explain>, <danger>, <done>, <warn>, <interactive>.
+Rules: 1 command only. Prefer safe checks first. Use correct pkg manager from output.
+Conn: ${connectionName || '?'} (${host || '?'}) Prefs: sudo=${preferSudo} editor=${editor} viewer=${viewer}
+Terminal:\n${safeContext || '(none)'}`;
 
     const messages = [
       { role: 'system', content: sys },
@@ -191,7 +170,10 @@ RULES:
                { $set: { 'value.currentIndex': nextIndex } }
              ).catch(err => console.error('Failed to update key index:', err));
         }
-        return NextResponse.json({ success: true, answer });
+        if (session) {
+          usageInfo = await checkAndTrackAiUsage(session.user.email, prompt, answer);
+        }
+        return NextResponse.json({ success: true, answer, usage: usageInfo });
     }
     
     // If we are here, we failed

@@ -19,7 +19,7 @@ import { useApp } from '@/context/AppContext';
 
 export default function FileManager({ connectionId, connectionName, connection }) {
   const { state: appState, dispatch: appDispatch } = useApp();
-  const { addNotification, removeNotification, showConfirm, showPrompt } = useOS();
+  const { state: osState, addNotification, removeNotification, showConfirm, showPrompt } = useOS();
   const { t } = useTranslation();
   const { clipboard } = appState;
   const setClipboard = (payload) => appDispatch({ type: 'SET_CLIPBOARD', payload });
@@ -646,7 +646,7 @@ export default function FileManager({ connectionId, connectionName, connection }
         <div 
           className="absolute top-20 right-6 z-[60] flex items-center gap-1.5 text-[10px] font-bold px-2 py-0.5 rounded-full bg-[var(--bg-secondary)]/80 backdrop-blur-xl border border-[var(--border-color)]/50 shadow-lg opacity-60 group-hover/filemanager:opacity-100 transition-all pointer-events-none"
           style={{ 
-            color: latency < 150 ? '#4ade80' : latency < 300 ? '#fbbf24' : '#f43f5e' 
+            color: latency < 150 ? (osState?.theme === 'light' ? '#059669' : '#4ade80') : latency < 300 ? (osState?.theme === 'light' ? '#d97706' : '#fbbf24') : (osState?.theme === 'light' ? '#dc2626' : '#f43f5e') 
           }}
           title="Network Latency (Ping)"
         >
@@ -689,7 +689,7 @@ export default function FileManager({ connectionId, connectionName, connection }
                     transferRef.current = null;
                     if (socket) socket.emit(`sftp:upload_done:${transfer.filename}`); // Force end on server
                   }}
-                  className="p-2 hover:bg-white/10 rounded-full transition-colors text-[var(--text-muted)] hover:text-rose-400"
+                  className="p-2 hover:bg-[var(--bg-tertiary)] rounded-full transition-colors text-[var(--text-muted)] hover:text-rose-500"
                 >
                   <X size={18} />
                 </button>
@@ -727,7 +727,7 @@ export default function FileManager({ connectionId, connectionName, connection }
           minHeight={400}
           contentClassName="p-4"
           closeOnOverlayClick
-          overlayClassName="bg-black/80"
+           overlayClassName="bg-black/40 backdrop-blur-sm"
         >
           <div className="flex flex-col h-full">
             <div className="flex items-center justify-end gap-2 mb-3">
@@ -770,14 +770,14 @@ export default function FileManager({ connectionId, connectionName, connection }
             <>
               <button 
                 onClick={() => { handleEdit(); setContextMenu({ ...contextMenu, visible: false }); }}
-                className="w-full text-left px-3 py-2 text-sm hover:bg-blue-600/20 text-[var(--text-primary)] hover:text-blue-400 flex items-center gap-2 transition-colors disabled:opacity-50"
+                className="w-full text-left px-3 py-2 text-sm hover:bg-blue-600/10 dark:hover:bg-blue-600/20 text-[var(--text-primary)] hover:text-blue-600 dark:hover:text-blue-400 flex items-center gap-2 transition-colors disabled:opacity-50"
                 disabled={contextMenu.file?.longname.startsWith('d')}
               >
                 <Edit size={14} /> {t('files.context.edit')}
               </button>
               <button 
                 onClick={() => { handleDownload(contextMenu.file); setContextMenu({ ...contextMenu, visible: false }); }}
-                className="w-full text-left px-3 py-2 text-sm hover:bg-blue-600/20 text-[var(--text-primary)] hover:text-emerald-400 flex items-center gap-2 transition-colors disabled:opacity-50"
+                className="w-full text-left px-3 py-2 text-sm hover:bg-blue-600/10 dark:hover:bg-blue-600/20 text-[var(--text-primary)] hover:text-emerald-600 dark:hover:text-emerald-400 flex items-center gap-2 transition-colors disabled:opacity-50"
                 disabled={contextMenu.file?.longname.startsWith('d')}
               >
                 <Download size={14} /> {t('files.context.download')}

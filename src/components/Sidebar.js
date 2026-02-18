@@ -11,7 +11,7 @@ import { useOS } from '@/context/OSContext';
 
 export default function Sidebar({ onNewConnection, onEditConnection }) {
   const { state, dispatch, fetchConnections, apiFetch } = useApp();
-  const { addNotification, showConfirm } = useOS();
+  const { state: osState, addNotification, showConfirm, closeWindow } = useOS();
   const { t } = useTranslation();
   const { connections, sidebarOpen } = state;
   const [search, setSearch] = useState('');
@@ -53,6 +53,15 @@ export default function Sidebar({ onNewConnection, onEditConnection }) {
         dispatch({ type: 'SET_ACTIVE_DATABASE_BROWSER', payload: existing.id });
         return;
       }
+      // Terminate any existing standalone database window
+      closeWindow(`standalone-db-${conn._id}`);
+
+      // Also remove from standalone state if it exists
+      const standaloneDb = state.standaloneDatabaseBrowsers.find(b => b.connectionId === conn._id);
+      if (standaloneDb) {
+        dispatch({ type: 'CLOSE_STANDALONE_DATABASE_BROWSER', payload: standaloneDb.id });
+      }
+      
       dispatch({
         type: 'OPEN_DATABASE_BROWSER',
         payload: {
@@ -66,7 +75,6 @@ export default function Sidebar({ onNewConnection, onEditConnection }) {
       return;
     }
 
-    // Check if already running
     const existing = state.activeTerminals.find(t => t.connectionId === conn._id);
     if (existing) {
       addNotification({ title: t('ssh.dashboard'), message: t('ssh.toasts.alreadyConnected', { name: conn.name }), type: 'error' });
@@ -102,6 +110,9 @@ export default function Sidebar({ onNewConnection, onEditConnection }) {
       dispatch({ type: 'SET_ACTIVE_FILE_MANAGER', payload: existing.id });
       return;
     }
+
+    // Terminate any existing standalone files window
+    closeWindow(`standalone-files-${conn._id}`);
 
     dispatch({
       type: 'OPEN_FILE_MANAGER',
@@ -284,10 +295,10 @@ export default function Sidebar({ onNewConnection, onEditConnection }) {
             { key: 'all', label: t('ssh.filters.all') },
             { key: 'favorites', label: t('ssh.filters.favorites') },
             { key: 'online', label: t('ssh.filters.online') },
-            { key: 'offline', label: t('ssh.filters.offline') },
-          ].map(f => (
+            { key: 'offline', label: t('common.offline') || 'Offline' },
+          ].map((f, i) => (
             <button
-              key={f.key}
+              key={f.key || i}
               className={`flex-1 text-xs py-1.5 rounded-md transition-all font-medium ${
                 filter === f.key
                   ? 'text-white shadow'
@@ -313,9 +324,9 @@ export default function Sidebar({ onNewConnection, onEditConnection }) {
             <p className="text-sm mt-2">{t('ssh.noConnections')}</p>
           </div>
         ) : (
-          filtered.map(conn => (
+          filtered.map((conn, index) => (
             <div
-              key={conn._id}
+              key={conn._id || `conn-${index}`}
               draggable
               onDragStart={(e) => {
                 e.dataTransfer.setData('application/ssh-connection', JSON.stringify(conn));
@@ -351,9 +362,9 @@ export default function Sidebar({ onNewConnection, onEditConnection }) {
                       {conn.name}
                     </span>
                     <span className={`text-[8px] font-bold px-1 rounded-sm border uppercase flex-shrink-0 ${
-                      conn.storage === 'db' ? 'text-indigo-400 border-indigo-400/30' :
-                      conn.storage === 'localstorage' ? 'text-emerald-400 border-emerald-400/30' :
-                      'text-amber-400 border-amber-400/30'
+                      conn.storage === 'db' ? 'text-indigo-700 dark:text-indigo-400 border-indigo-700/30 dark:border-indigo-400/30' :
+                      conn.storage === 'localstorage' ? 'text-emerald-700 dark:text-emerald-400 border-emerald-700/30 dark:border-emerald-400/30' :
+                      'text-amber-700 dark:text-amber-400 border-amber-700/30 dark:border-amber-400/30'
                     }`}>
                       {conn.storage === 'localstorage' ? t('common.storage.local') : conn.storage === 'manual' ? t('common.storage.tmp') : t('common.storage.db')}
                     </span>
@@ -362,14 +373,14 @@ export default function Sidebar({ onNewConnection, onEditConnection }) {
                     )}
                   </div>
                   <div className="flex items-center gap-2">
-                    <span className="text-[10px] font-bold uppercase py-0.5 px-2 bg-white/5 rounded-full border border-white/10" style={{ color: conn.color }}>
+                    <span className="text-[10px] font-bold uppercase py-0.5 px-2 bg-[var(--bg-tertiary)] rounded-full border border-[var(--border-color)]" style={{ color: conn.color }}>
                        {conn.type === 'database' ? (conn.dbProvider || 'db').toUpperCase() : 'SSH'}
                     </span>
                     <span className="text-xs font-mono truncate opacity-60" style={{ color: 'var(--text-muted)' }}>
                       {conn.username ? `${conn.username}@` : ''}{conn.host}
                     </span>
-                    {conn.tags?.slice(0, 1).map(tag => (
-                       <span key={tag} className="tag-pill !py-0.5 !px-1.5 !text-[10px] opacity-70">{tag}</span>
+                    {conn.tags?.slice(0, 1).map((tag, tagIndex) => (
+                       <span key={`${tag}-${tagIndex}`} className="tag-pill !py-0.5 !px-1.5 !text-[10px] opacity-70">{tag}</span>
                     ))}
                   </div>
                 </div>
@@ -377,7 +388,7 @@ export default function Sidebar({ onNewConnection, onEditConnection }) {
                 {/* Actions (Absolute Overlay) */}
                 <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity bg-[var(--bg-tertiary)]/90 p-1 rounded-lg backdrop-blur-sm shadow-lg border border-[var(--border-color)]">
                   <button
-                    className="btn-icon p-1.5 hover:bg-white/10 rounded"
+                    className="btn-icon p-1.5 hover:bg-[var(--bg-card-hover)] rounded"
                     title={conn.type === 'database' ? t('common.database') : t('ssh.modal.actions.connect')}
                     onClick={(e) => { e.stopPropagation(); handleConnect(conn); }}
                   >

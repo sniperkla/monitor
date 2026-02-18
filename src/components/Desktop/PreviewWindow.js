@@ -441,8 +441,8 @@ export default function PreviewWindow({ isOpen, onClose }) {
                 width: 160,
                 height: 96,
                 borderRadius: 14,
-                background: 'rgba(255,255,255,0.14)',
-                border: '1px solid rgba(255,255,255,0.22)',
+                background: 'var(--bg-tertiary)',
+                border: '1px solid var(--border-color)',
                 backdropFilter: 'blur(10px)',
                 WebkitBackdropFilter: 'blur(10px)',
                 boxShadow: '0 18px 38px rgba(0,0,0,0.45)',
@@ -450,7 +450,7 @@ export default function PreviewWindow({ isOpen, onClose }) {
             />
 
             {/* Desktop Bar */}
-            <div className="flex items-center gap-4 px-8 py-6 bg-black/20 border-b border-white/10">
+            <div className="flex items-center gap-4 px-8 py-6 bg-[var(--bg-primary)]/20 border-b border-[var(--border-color)]">
               <div className="flex items-center gap-3 flex-1 justify-center">
                 {desktops.map((desktop, index) => {
                   const desktopWindows = windowsByDesktop[desktop.id] || [];
@@ -489,16 +489,16 @@ export default function PreviewWindow({ isOpen, onClose }) {
                       transition={{ type: "spring", damping: 25, stiffness: 300 }}
                     >
                     {showClose && (
-                      <button
-                        type="button"
-                        onClick={(e) => {
-                          e.preventDefault();
-                          e.stopPropagation();
-                          removeDesktop(desktop.id);
-                        }}
-                        className="absolute -top-2 -right-2 w-6 h-6 rounded-full bg-[#ff5f57] border border-[#e0443e]/30 flex items-center justify-center hover:bg-[#ff6b6b] transition-colors z-20"
-                        title="Close Desktop"
-                      >
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            removeDesktop(desktop.id);
+                          }}
+                          className="absolute -top-2 -right-2 w-6 h-6 rounded-full bg-[#ff5f57] border border-black/10 dark:border-[#e0443e]/30 flex items-center justify-center hover:bg-[#ff6b6b] transition-colors z-20"
+                          title="Close Desktop"
+                        >
                         <X size={12} className="text-white" />
                       </button>
                     )}
@@ -549,7 +549,7 @@ export default function PreviewWindow({ isOpen, onClose }) {
               {/* Add Desktop Button */}
               <motion.button
                 onClick={addDesktop}
-                className="w-40 h-28 rounded-2xl border-2 border-dashed border-white/20 bg-white/5 hover:bg-white/10 hover:border-white/30 transition-all flex flex-col items-center justify-center text-white/70 hover:text-white"
+                className="w-40 h-28 rounded-2xl border-2 border-dashed border-[var(--border-color)] bg-[var(--bg-tertiary)]/50 hover:bg-[var(--bg-tertiary)] hover:border-[var(--border-hover)] transition-all flex flex-col items-center justify-center text-[var(--text-muted)] hover:text-[var(--text-primary)]"
                 initial={{ scale: 0.8, opacity: 0 }}
                 animate={{ scale: 1, opacity: 1 }}
                 whileHover={{ scale: 1.05 }}
@@ -636,7 +636,7 @@ export default function PreviewWindow({ isOpen, onClose }) {
                         <div
                           className="relative h-60 md:h-64 overflow-hidden"
                           style={{
-                            background: 'rgba(255,255,255,0.02)',
+                            background: 'var(--bg-primary)',
                           }}
                         >
                           <div
@@ -663,11 +663,11 @@ export default function PreviewWindow({ isOpen, onClose }) {
 
                           {/* App Icon Badge */}
                           <div className="absolute top-3 left-3">
-                            <div className="w-8 h-8 rounded-lg bg-white/10 border border-white/15 flex items-center justify-center">
+                            <div className="w-8 h-8 rounded-lg bg-[var(--bg-tertiary)]/50 border border-[var(--border-color)] flex items-center justify-center">
                               {win.icon ? (
-                                <win.icon size={16} className="text-white/90" />
+                                <win.icon size={16} className="text-[var(--text-primary)]" />
                               ) : (
-                                <Monitor size={16} className="text-white/90" />
+                                <Monitor size={16} className="text-[var(--text-primary)]" />
                               )}
                             </div>
                           </div>

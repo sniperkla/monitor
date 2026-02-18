@@ -28,7 +28,7 @@ export const MessageContent = ({ content, translations, translating, messageIdx 
               if (subPart.startsWith('**') && subPart.endsWith('**')) {
                 return <strong key={i} className="text-indigo-300 font-bold">{subPart.slice(2, -2)}</strong>;
               }
-              return subPart;
+              return <span key={i}>{subPart}</span>;
             });
           };
 

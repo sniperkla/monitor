@@ -158,7 +158,7 @@ export default function SettingsApp({ initialTab }) {
               <div className="flex items-center gap-3">
                 <img 
                   src={session.user.image || `https://ui-avatars.com/api/?name=${encodeURIComponent(session.user.name)}&background=6366f1&color=fff`} 
-                  className="w-10 h-10 rounded-full border border-white/10 object-cover" 
+                  className="w-10 h-10 rounded-full border border-[var(--border-color)] object-cover" 
                   alt="Avatar" 
                   onError={(e) => {
                     e.target.onerror = null; 
@@ -173,10 +173,10 @@ export default function SettingsApp({ initialTab }) {
               {/* Vault Status Badge */}
               <div className={`flex items-center gap-2 text-[10px] font-bold px-2 py-1 rounded-lg ${
                 vaultStatus === 'unlocked' 
-                  ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'
+                  ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-400'
                   : vaultStatus === 'locked' 
-                  ? 'bg-amber-500/10 text-amber-600 dark:text-amber-400'
-                  : 'bg-gray-500/10 text-gray-600 dark:text-[var(--text-muted)]'
+                  ? 'bg-amber-500/10 text-amber-700 dark:text-amber-400'
+                  : 'bg-gray-500/10 text-gray-700 dark:text-[var(--text-muted)]'
               }`}>
                 {vaultStatus === 'unlocked' ? (
                   <><Unlock size={10} /> {t('settings_ui.vaultStatus.unlocked')}</>
@@ -204,7 +204,7 @@ export default function SettingsApp({ initialTab }) {
               <p className="text-[10px] font-bold text-[var(--text-secondary)] uppercase tracking-widest">{t('common.login')}</p>
               <button 
                 onClick={() => signIn('google')}
-                className="w-full py-2 px-3 rounded-xl bg-white text-gray-800 text-xs font-bold border border-gray-200 hover:bg-gray-50 hover:border-gray-300 transition-all flex items-center justify-center gap-2 shadow-sm"
+                className="w-full py-2 px-3 rounded-xl bg-[var(--bg-tertiary)] text-[var(--text-primary)] text-xs font-bold border border-[var(--border-color)] hover:bg-[var(--bg-card-hover)] transition-all flex items-center justify-center gap-2 shadow-sm"
               >
                 <img src="https://lh3.googleusercontent.com/COxitqgJr1sJnIDe8-jiKhxDx1FrYbtRHKJ9z_hELisAlapwE9LUPh6fcXIfb5vwpbMl4xl9H9TRFPc5NOO8Sb3VSgIBrfRYvW6cUA" className="w-4 h-4" alt="Google" />
                 {t('common.login')}
@@ -233,16 +233,16 @@ export default function SettingsApp({ initialTab }) {
                 disabled={isDisabled}
                 className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg transition-all ${
                   activeTab === tab.id
-                    ? 'bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 font-semibold'
+                    ? 'bg-indigo-500/10 text-indigo-700 dark:text-indigo-400 font-semibold'
                     : isDisabled
                     ? 'text-[var(--text-muted)] cursor-not-allowed opacity-50'
                     : 'text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]'
                 }`}
               >
-                <tab.icon size={16} />
+                <tab.icon size={16} className={activeTab === tab.id ? 'text-indigo-600 dark:text-indigo-400' : ''} />
                 <span className="text-sm font-medium">{tab.label}</span>
                 {isDisabled && (
-                  <span className="ml-auto text-[8px] text-amber-600 dark:text-amber-400 font-bold bg-amber-500/10 px-1.5 py-0.5 rounded">{t('vault.loginBtn').toUpperCase()}</span>
+                  <span className="ml-auto text-[8px] text-amber-700 dark:text-amber-400 font-bold bg-amber-500/10 px-1.5 py-0.5 rounded">{t('vault.loginBtn').toUpperCase()}</span>
                 )}
               </button>
             );
@@ -298,7 +298,7 @@ export default function SettingsApp({ initialTab }) {
                         className={`group relative h-28 rounded-xl overflow-hidden cursor-pointer border-2 transition-all shadow-lg ${
                           isActive 
                             ? 'border-indigo-500 ring-2 ring-indigo-500/30' 
-                            : 'border-white/10 hover:border-white/20'
+                            : 'border-[var(--border-color)] hover:border-[var(--border-hover)]'
                         }`}
                         onClick={() => handleSetWallpaper(url)}
                       >
@@ -334,12 +334,12 @@ export default function SettingsApp({ initialTab }) {
 
                   {/* Add New Custom URL Card */}
                   {showCustomInput ? (
-                    <div className="h-28 rounded-xl bg-white/5 border border-indigo-500/50 p-2 flex flex-col gap-2 animate-in fade-in zoom-in-95 duration-200">
+                    <div className="h-28 rounded-xl bg-[var(--bg-tertiary)] border border-indigo-500/50 p-2 flex flex-col gap-2 animate-in fade-in zoom-in-95 duration-200">
                       <input
                         autoFocus
                         type="text"
                         placeholder="https://images.unsplash.com/..."
-                        className="w-full bg-black/40 border border-white/10 rounded-lg px-2 py-1.5 text-[10px] text-white focus:outline-none focus:border-indigo-500"
+                        className="w-full bg-[var(--bg-primary)] border border-[var(--border-color)] rounded-lg px-2 py-1.5 text-[10px] text-[var(--text-primary)] focus:outline-none focus:border-indigo-500"
                         value={customUrlInput}
                         onChange={(e) => setCustomUrlInput(e.target.value)}
                         onKeyDown={(e) => {
@@ -370,7 +370,7 @@ export default function SettingsApp({ initialTab }) {
                         </button>
                         <button 
                           onClick={() => setShowCustomInput(false)}
-                          className="px-2 py-1.5 bg-white/5 hover:bg-white/10 rounded-lg text-[10px] font-bold transition-colors"
+                          className="px-2 py-1.5 bg-[var(--bg-tertiary)] hover:bg-[var(--bg-card-hover)] rounded-lg text-[10px] font-bold border border-[var(--border-color)] transition-colors"
                         >
                           {t('common.cancel')}
                         </button>
@@ -388,7 +388,7 @@ export default function SettingsApp({ initialTab }) {
                 </div>
               </div>
 
-              <div className="pt-6 border-t border-white/10">
+              <div className="pt-6 border-t border-[var(--border-color)]">
                 <h3 className="text-sm font-semibold mb-4 flex items-center gap-2">
                   <Layout size={16} className="text-emerald-400" />
                   {t('settings.interfaceStyle')}
@@ -429,7 +429,7 @@ export default function SettingsApp({ initialTab }) {
                 </div>
               </div>
 
-              <div className="pt-6 border-t border-white/10">
+              <div className="pt-6 border-t border-[var(--border-color)]">
                 <h3 className="text-sm font-semibold mb-4 flex items-center gap-2">
                   <Layout size={16} className="text-purple-400" />
                   {t('settings_ui.appearance.iconStyle')}
@@ -458,7 +458,7 @@ export default function SettingsApp({ initialTab }) {
                 </div>
               </div>
 
-              <div className="pt-6 border-t border-white/10">
+              <div className="pt-6 border-t border-[var(--border-color)]">
                 <h3 className="text-sm font-semibold mb-4 flex items-center gap-2">
                   <Palette size={16} className="text-indigo-400" />
                   {t('settings_ui.appearance.theme')}
@@ -485,7 +485,7 @@ export default function SettingsApp({ initialTab }) {
                 </div>
               </div>
 
-              <div className="pt-6 border-t border-white/10">
+              <div className="pt-6 border-t border-[var(--border-color)]">
                 <h3 className="text-sm font-semibold mb-4 flex items-center gap-2">
                   <Monitor size={16} className="text-blue-400" />
                   {t('settings_ui.appearance.language')}
@@ -513,7 +513,7 @@ export default function SettingsApp({ initialTab }) {
               </div>
 
               {/* Taskbar Section (Merged from Personalization) */}
-              <div className="pt-6 border-t border-white/10">
+              <div className="pt-6 border-t border-[var(--border-color)]">
                 <h3 className="text-sm font-semibold mb-4 flex items-center gap-2">
                   <Layout size={16} className="text-indigo-400" />
                   {t('settings_ui.personalization.taskbarTitle')}
@@ -536,7 +536,7 @@ export default function SettingsApp({ initialTab }) {
               </div>
 
               {/* Window Layout Section */}
-              <div className="pt-6 border-t border-white/10">
+              <div className="pt-6 border-t border-[var(--border-color)]">
                 <h3 className="text-sm font-semibold mb-4 flex items-center gap-2">
                   <Monitor size={16} className="text-blue-400" />
                   {t('settings_ui.personalization.windowLayoutTitle')}
@@ -564,7 +564,7 @@ export default function SettingsApp({ initialTab }) {
               </div>
 
               {/* Desktop Icon Size (Merged from Personalization) */}
-              <div className="pt-6 border-t border-white/10">
+              <div className="pt-6 border-t border-[var(--border-color)]">
                 <h3 className="text-sm font-semibold mb-4 flex items-center gap-2">
                   <Monitor size={16} className="text-emerald-400" />
                   {t('settings_ui.personalization.desktopTitle')}
@@ -618,7 +618,7 @@ export default function SettingsApp({ initialTab }) {
                   onChange={(e) => setBrightness(parseInt(e.target.value))}
                   className="w-full h-1.5 bg-[var(--bg-tertiary)] rounded-full appearance-none cursor-pointer accent-indigo-500 mb-6"
                 />
-                <div className="p-3 bg-black/10 rounded-xl border border-[var(--border-color)] flex items-center gap-3">
+                <div className="p-3 bg-[var(--bg-tertiary)]/50 rounded-xl border border-[var(--border-color)] flex items-center gap-3">
                    <Info size={14} className="text-[var(--text-muted)]" />
                    <p className="text-[10px] text-[var(--text-muted)] italic">{t('settings_ui.display.brightnessDesc')}</p>
                 </div>
@@ -766,7 +766,7 @@ export default function SettingsApp({ initialTab }) {
                               dispatch({ type: 'SET_DB_CONFIG', payload: { uri: '' } });
                               addNotification({ title: 'Locked', message: t('settings_ui.db.vaultLocked'), type: 'info' });
                             }}
-                            className="px-3 py-1.5 text-xs bg-white/5 hover:bg-white/10 rounded-lg border border-white/10 text-gray-300 flex items-center gap-1.5 transition-colors"
+                            className="px-3 py-1.5 text-xs bg-[var(--bg-tertiary)] hover:bg-[var(--bg-card-hover)] rounded-lg border border-[var(--border-color)] text-[var(--text-primary)] flex items-center gap-1.5 transition-colors"
                           >
                             <Lock size={12} /> {t('settings_ui.db.lock')}
                           </button>
@@ -930,7 +930,7 @@ export default function SettingsApp({ initialTab }) {
                              className={`flex flex-col items-center gap-2 py-4 rounded-2xl border transition-all ${
                                (dbUri.startsWith(prov.id === 'mongodb' ? 'mongodb' : prov.id) || (prov.id === 'mongodb' && dbUri === ''))
                                  ? 'bg-indigo-500/10 border-indigo-500/50 text-indigo-600 dark:text-indigo-400'
-                                 : 'bg-gray-500/5 dark:bg-white/5 border-gray-500/10 dark:border-white/10 text-gray-500 hover:text-gray-700 dark:hover:text-gray-300'
+                                 : 'bg-[var(--bg-tertiary)] border-[var(--border-color)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-card-hover)]'
                              }`}
                            >
                               <div className={`p-2 rounded-xl ${prov.bg}`}>
@@ -1027,24 +1027,24 @@ export default function SettingsApp({ initialTab }) {
                       </div>
                     </div>
                     <div className="flex items-center gap-2">
-                      <input
-                        type="text"
-                        value={osState.keyboardShortcuts?.[item.id] || ''}
-                        onChange={(e) => {
-                          const val = e.target.value;
-                          setKeyboardShortcuts({ [item.id]: val });
-                        }}
-                        placeholder="e.g. Cmd+K"
-                        className="w-32 px-3 py-1.5 bg-black/20 border border-white/10 rounded-lg text-xs font-mono text-indigo-400 focus:outline-none focus:border-indigo-500 transition-all text-center"
-                      />
+                        <input
+                          type="text"
+                          value={osState.keyboardShortcuts?.[item.id] || ''}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            setKeyboardShortcuts({ [item.id]: val });
+                          }}
+                          placeholder="e.g. Cmd+K"
+                          className="w-32 px-3 py-1.5 bg-[var(--bg-primary)] border border-[var(--border-color)] rounded-lg text-xs font-mono text-indigo-400 focus:outline-none focus:border-indigo-500 transition-all text-center"
+                        />
                     </div>
                   </div>
                 ))}
               </div>
 
               <div className="p-4 bg-amber-500/10 border border-amber-500/20 rounded-2xl flex items-start gap-3">
-                <AlertCircle size={16} className="text-amber-400 shrink-0 mt-0.5" />
-                <p className="text-[11px] text-amber-200/70 leading-relaxed">
+                <AlertCircle size={16} className="text-amber-500 shrink-0 mt-0.5" />
+                <p className="text-[11px] text-amber-700 dark:text-amber-200/70 leading-relaxed">
                   <strong>Tip:</strong> Shortcuts use standard combinations like <code>Cmd+K</code>, <code>Ctrl+Shift+L</code>, etc. Use <code>Cmd</code> for Command (Mac) or Windows Key (PC), and <code>Ctrl</code> for Control.
                 </p>
               </div>

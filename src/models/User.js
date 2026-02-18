@@ -62,6 +62,12 @@ const UserSchema = new mongoose.Schema({
     taskbarPosition: { type: String, default: 'bottom' },
     openWindows: { type: [Object], default: [] }, // { id, appType, title, x, y, width, height, isMaximized, isMinimized, zIndex, props }
     timestamp: { type: Number, default: 0 },
+    aiUsage: {
+      dailyLimit: { type: Number, default: 10000 },
+      tokensUsedToday: { type: Number, default: 0 },
+      lastUsageReset: { type: Date, default: Date.now },
+      lastResetDayKey: { type: String, default: '' }
+    }
   }
 }, {
   timestamps: true,

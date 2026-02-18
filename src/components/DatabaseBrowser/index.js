@@ -7,7 +7,7 @@ import DatabaseView from './DatabaseView';
 
 export default function DatabaseBrowser({ initialConnection, onEditConnection, onNewConnection }) {
   const { state, dispatch } = useApp();
-  const { activeDatabaseBrowsers } = state;
+  const { activeDatabaseBrowsers, standaloneDatabaseBrowsers } = state;
   const activeTab = state.activeDatabaseBrowserId;
 
   const setActiveTab = (id) => {
@@ -20,19 +20,27 @@ export default function DatabaseBrowser({ initialConnection, onEditConnection, o
   // Auto-open initial connection if provided (for standalone mode)
   useEffect(() => {
     if (initialConnection) {
-      // Check if already open
-      const existing = activeDatabaseBrowsers.find(b => b.connectionId === initialConnection._id);
+      // Close matching manager tab if it exists
+      const existingInManager = activeDatabaseBrowsers.find(b => b.connectionId === initialConnection._id);
+      if (existingInManager) {
+        dispatch({ type: 'CLOSE_DATABASE_BROWSER', payload: existingInManager.id });
+      }
+
+      // Check if already open in standalone
+      const existing = standaloneDatabaseBrowsers.find(b => b.connectionId === initialConnection._id);
       if (!existing) {
+        const dbId = `db-${initialConnection._id}-${Date.now()}`;
         dispatch({
-          type: 'OPEN_DATABASE_BROWSER',
+          type: 'OPEN_STANDALONE_DATABASE_BROWSER',
           payload: {
-            id: `db-${initialConnection._id}-${Date.now()}`,
+            id: dbId,
             connectionId: initialConnection._id,
             connectionName: initialConnection.name,
             color: initialConnection.color,
             connection: initialConnection,
           },
         });
+        setActiveTab(dbId);
       } else {
         setActiveTab(existing.id);
       }
@@ -41,25 +49,36 @@ export default function DatabaseBrowser({ initialConnection, onEditConnection, o
   }, [initialConnection]);
 
   const handleCloseTab = (id) => {
-    dispatch({ type: 'CLOSE_DATABASE_BROWSER', payload: id });
+    if (isStandalone) {
+      dispatch({ type: 'CLOSE_STANDALONE_DATABASE_BROWSER', payload: id });
+    } else {
+      dispatch({ type: 'CLOSE_DATABASE_BROWSER', payload: id });
+    }
   };
 
   const dbConnections = state.connections.filter(c => c.type === 'database');
 
-  if (activeDatabaseBrowsers.length === 0 || isOpening) {
-    if (isStandalone) {
-      return (
-        <div className="h-full flex items-center justify-center bg-[var(--bg-primary)] rounded-3xl border border-[var(--border-color)]">
-           <div className="text-center animate-pulse">
-              <Database size={40} className="text-emerald-500 mx-auto mb-4" />
-              <p className="text-[var(--text-muted)] text-sm">Opening {initialConnection.name}...</p>
-           </div>
-        </div>
-      );
-    }
+  // For standalone: show loading until the standalone browser is registered
+  const standaloneBrowser = isStandalone
+    ? standaloneDatabaseBrowsers.find(b => b.connectionId === initialConnection._id)
+    : null;
+
+  if (isStandalone && (isOpening || !standaloneBrowser)) {
     return (
       <div className="h-full flex items-center justify-center bg-[var(--bg-primary)] rounded-3xl border border-[var(--border-color)]">
-        <div className="text-center p-12 w-full max-w-4xl">
+         <div className="text-center animate-pulse">
+            <Database size={40} className="text-emerald-500 mx-auto mb-4" />
+            <p className="text-[var(--text-muted)] text-sm">Opening {initialConnection.name}...</p>
+         </div>
+      </div>
+    );
+  }
+
+  if (!isStandalone && activeDatabaseBrowsers.length === 0) {
+    return (
+      <div className="h-full bg-[var(--bg-primary)] rounded-3xl border border-[var(--border-color)] overflow-hidden">
+        <div className="h-full overflow-y-auto custom-scrollbar">
+          <div className="text-center p-6 sm:p-12 w-full max-w-4xl mx-auto">
           <div className="w-20 h-20 mx-auto rounded-3xl flex items-center justify-center mb-6 shadow-2xl relative"
             style={{ background: 'linear-gradient(135deg, rgba(16, 185, 129, 0.2), rgba(6, 182, 212, 0.2))', border: '1px solid rgba(16, 185, 129, 0.3)' }}>
             <Database size={36} style={{ color: 'var(--accent-emerald)' }} className="drop-shadow-[0_0_10px_rgba(16,185,129,0.5)]" />
@@ -79,21 +98,42 @@ export default function DatabaseBrowser({ initialConnection, onEditConnection, o
             {dbConnections.length > 0 && (
               <div className="animate-in fade-in slide-in-from-bottom-4 duration-500">
                 <h4 className="text-[10px] font-bold uppercase tracking-[0.2em] text-[var(--text-muted)] mb-4 text-center">Your Saved Connections</h4>
-                <div className="flex flex-wrap gap-4 justify-center">
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 justify-items-center">
                   {dbConnections.map(conn => (
                     <div key={conn._id} className="relative group">
                       <button 
                         onClick={() => {
-                          dispatch({
-                            type: 'OPEN_DATABASE_BROWSER',
-                            payload: {
-                               id: `db-${conn._id}-${Date.now()}`,
-                               connectionId: conn._id,
-                               connectionName: conn.name,
-                               color: conn.color,
-                               connection: conn,
-                            }
-                          });
+                          // Terminate existing session in the manager
+                          const existingInManager = activeDatabaseBrowsers.find(b => b.connectionId === conn._id);
+                          if (existingInManager) {
+                            dispatch({ type: 'CLOSE_DATABASE_BROWSER', payload: existingInManager.id });
+                          }
+
+                          if (isStandalone) {
+                            const dbId = `db-${conn._id}-${Date.now()}`;
+                            dispatch({
+                              type: 'OPEN_STANDALONE_DATABASE_BROWSER',
+                              payload: {
+                                id: dbId,
+                                connectionId: conn._id,
+                                connectionName: conn.name,
+                                color: conn.color,
+                                connection: conn,
+                              }
+                            });
+                            setActiveTab(dbId);
+                          } else {
+                            dispatch({
+                              type: 'OPEN_DATABASE_BROWSER',
+                              payload: {
+                                id: `db-${conn._id}-${Date.now()}`,
+                                connectionId: conn._id,
+                                connectionName: conn.name,
+                                color: conn.color,
+                                connection: conn,
+                              }
+                            });
+                          }
                         }}
                         draggable
                         onDragStart={(e) => {
@@ -149,19 +189,19 @@ export default function DatabaseBrowser({ initialConnection, onEditConnection, o
               </div>
             )}
           </div>
+          </div>
         </div>
       </div>
     );
   }
 
   if (isStandalone) {
-    const browser = activeDatabaseBrowsers.find(b => b.connectionId === initialConnection._id);
-    if (!browser) return null;
+    if (!standaloneBrowser) return null;
     return (
       <div className="h-full flex flex-col bg-[var(--bg-primary)] rounded-3xl border border-[var(--border-color)] overflow-hidden">
         <DatabaseView
-          connection={browser.connection}
-          onClose={() => handleCloseTab(browser.id)}
+          connection={standaloneBrowser.connection}
+          onClose={() => handleCloseTab(standaloneBrowser.id)}
           onEditConnection={onEditConnection}
         />
       </div>
@@ -172,57 +212,65 @@ export default function DatabaseBrowser({ initialConnection, onEditConnection, o
     <div className="h-full flex flex-col bg-[var(--bg-primary)] rounded-3xl border border-[var(--border-color)] overflow-hidden">
       {/* Tab bar */}
       <div className="flex bg-[var(--bg-tertiary)]/20 border-b border-[var(--border-color)] px-2 pt-2 gap-1 overflow-x-auto custom-scrollbar no-scrollbar">
-        {activeDatabaseBrowsers.map((browser) => (
-          <button
-            key={browser.id}
-            onClick={() => setActiveTab(browser.id)}
-            draggable
-            onDragStart={(e) => {
-              if (browser.connection) {
-                e.dataTransfer.setData('application/ssh-connection', JSON.stringify(browser.connection));
-                e.dataTransfer.effectAllowed = 'copy';
-                // Create a drag image
-                const ghost = document.createElement('div');
-                ghost.className = 'flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-semibold text-white';
-                ghost.style.cssText = `background:${browser.color || '#10b981'};position:fixed;top:-100px;left:-100px;z-index:99999;opacity:0.9;border-radius:8px;padding:6px 14px;pointer-events:none;`;
-                ghost.textContent = `🗄 ${browser.connectionName}`;
-                document.body.appendChild(ghost);
-                e.dataTransfer.setDragImage(ghost, 0, 0);
-                setTimeout(() => document.body.removeChild(ghost), 0);
-              }
-            }}
-            className={`flex items-center gap-2 px-4 py-2.5 text-xs font-bold rounded-t-xl transition-all border-x border-t min-w-[140px] max-w-[200px] shrink-0 cursor-grab active:cursor-grabbing ${
-              activeTab === browser.id
-                ? 'bg-[var(--bg-primary)] border-[var(--border-color)] text-[var(--text-primary)] shadow-[0_-4px_12px_rgba(0,0,0,0.1)]'
-                : 'bg-transparent border-transparent text-[var(--text-muted)] hover:bg-white/5 hover:text-[var(--text-primary)]'
-            }`}
-          >
-            <div className="w-2 h-2 rounded-full shrink-0" style={{ background: browser.color || '#10b981' }} />
-            <span className="truncate flex-1 text-left">{browser.connectionName}</span>
-            <X 
-              size={12} 
-              className="shrink-0 opacity-50 hover:opacity-100 transition-opacity" 
-              onClick={(e) => { e.stopPropagation(); handleCloseTab(browser.id); }} 
-            />
-          </button>
-        ))}
+        {activeDatabaseBrowsers.length > 0 ? (
+          <>
+            {activeDatabaseBrowsers.map((browser) => (
+              <button
+                key={browser.id}
+                onClick={() => setActiveTab(browser.id)}
+                draggable
+                onDragStart={(e) => {
+                  if (browser.connection) {
+                    e.dataTransfer.setData('application/ssh-connection', JSON.stringify(browser.connection));
+                    e.dataTransfer.effectAllowed = 'copy';
+                    // Create a drag image
+                    const ghost = document.createElement('div');
+                    ghost.className = 'flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-semibold text-white';
+                    ghost.style.cssText = `background:${browser.color || '#10b981'};position:fixed;top:-100px;left:-100px;z-index:99999;opacity:0.9;border-radius:8px;padding:6px 14px;pointer-events:none;`;
+                    ghost.textContent = `🗄 ${browser.connectionName}`;
+                    document.body.appendChild(ghost);
+                    e.dataTransfer.setDragImage(ghost, 0, 0);
+                    setTimeout(() => document.body.removeChild(ghost), 0);
+                  }
+                }}
+                className={`flex items-center gap-2 px-4 py-2.5 text-xs font-bold rounded-t-xl transition-all border-x border-t min-w-[140px] max-w-[200px] shrink-0 cursor-grab active:cursor-grabbing ${
+                  activeTab === browser.id
+                    ? 'bg-[var(--bg-primary)] border-[var(--border-color)] text-[var(--text-primary)] shadow-[0_-4px_12px_rgba(0,0,0,0.1)]'
+                    : 'bg-transparent border-transparent text-[var(--text-muted)] hover:bg-white/5 hover:text-[var(--text-primary)]'
+                }`}
+              >
+                <div className="w-2 h-2 rounded-full shrink-0" style={{ background: browser.color || '#10b981' }} />
+                <span className="truncate flex-1 text-left">{browser.connectionName}</span>
+                <X 
+                  size={12} 
+                  className="shrink-0 opacity-50 hover:opacity-100 transition-opacity" 
+                  onClick={(e) => { e.stopPropagation(); handleCloseTab(browser.id); }} 
+                />
+              </button>
+            ))}
+          </>
+        ) : null}
       </div>
 
       {/* Browser content */}
       <div className="flex-1 min-h-0 relative">
-        {activeDatabaseBrowsers.map(browser => (
-          <div
-            key={browser.id}
-            className="h-full"
-            style={{ display: activeTab === browser.id ? 'block' : 'none' }}
-          >
-            <DatabaseView
-              connection={browser.connection}
-              onClose={() => handleCloseTab(browser.id)}
-              onEditConnection={onEditConnection}
-            />
-          </div>
-        ))}
+        {activeDatabaseBrowsers.length > 0 ? (
+          <>
+            {activeDatabaseBrowsers.map(browser => (
+              <div
+                key={browser.id}
+                className="h-full"
+                style={{ display: activeTab === browser.id ? 'block' : 'none' }}
+              >
+                <DatabaseView
+                  connection={browser.connection}
+                  onClose={() => handleCloseTab(browser.id)}
+                  onEditConnection={onEditConnection}
+                />
+              </div>
+            ))}
+          </>
+        ) : null}
       </div>
     </div>
   );
