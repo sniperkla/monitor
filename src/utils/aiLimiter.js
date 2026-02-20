@@ -28,12 +28,20 @@ function getDayKeyUTC7(date = new Date()) {
  */
 async function getGlobalDailyLimit() {
   try {
+    // Prefer the newer key: 'ai_limits'
     const doc = await SystemSetting.findOne({ key: 'ai_limits' });
-    const value = doc?.value && typeof doc.value === 'object' ? doc.value : {};
+    // Backward/alternate support: some deployments used 'ai_usage_global'
+    const legacyDoc = doc ? null : await SystemSetting.findOne({ key: 'ai_usage_global' });
+
+    const chosen = doc || legacyDoc;
+    const value = chosen?.value && typeof chosen.value === 'object' ? chosen.value : {};
     const limit = Number(value.dailyLimit);
-    return Number.isFinite(limit) && limit > 0 ? limit : 10000;
+    if (Number.isFinite(limit) && limit > 0) return limit;
+    const envLimit = Number(process.env.AI_DAILY_LIMIT);
+    return Number.isFinite(envLimit) && envLimit > 0 ? envLimit : 10000;
   } catch {
-    return 10000;
+    const envLimit = Number(process.env.AI_DAILY_LIMIT);
+    return Number.isFinite(envLimit) && envLimit > 0 ? envLimit : 10000;
   }
 }
 

@@ -17,10 +17,10 @@ import MacOSModalWindow from '@/components/MacOSModalWindow';
 
 import { useApp } from '@/context/AppContext';
 
-export default function FileManager({ connectionId, connectionName, connection }) {
+export default function FileManager({ connectionId, connection, connectionName }) {
+  const { t } = useTranslation();
   const { state: appState, dispatch: appDispatch } = useApp();
   const { state: osState, addNotification, removeNotification, showConfirm, showPrompt } = useOS();
-  const { t } = useTranslation();
   const { clipboard } = appState;
   const setClipboard = (payload) => appDispatch({ type: 'SET_CLIPBOARD', payload });
   const [currentPath, setCurrentPath] = useState('.');
@@ -32,6 +32,7 @@ export default function FileManager({ connectionId, connectionName, connection }
   const [viewMode, setViewMode] = useState('grid');
   const [searchQuery, setSearchQuery] = useState('');
   const [latency, setLatency] = useState(null);
+  const [reconnectNonce, setReconnectNonce] = useState(0);
   const socketRef = useRef(null);
 
   // Context Menu State
@@ -200,6 +201,14 @@ export default function FileManager({ connectionId, connectionName, connection }
       appDispatch({ type: 'UPDATE_CONNECTION', payload: { _id: connectionId, status: 'offline' } });
     });
 
+    newSocket.on('ssh:idle_timeout', () => {
+      setStatus('error');
+      setError('Idle timeout: 2m');
+      setLoading(false);
+      appDispatch({ type: 'UPDATE_CONNECTION', payload: { _id: connectionId, status: 'offline' } });
+      addNotification({ title: 'Disconnected', message: 'Idle timeout: 2m', type: 'warning' });
+    });
+
     socketRef.current = newSocket;
     setSocket(newSocket);
 
@@ -208,7 +217,7 @@ export default function FileManager({ connectionId, connectionName, connection }
       newSocket.disconnect();
       clearTimeout(timeout);
     };
-  }, [connectionId]); // Removed 'connection' from dependencies to prevent loop
+  }, [connectionId, reconnectNonce]); // Removed 'connection' from dependencies to prevent loop
 
   // --- Auto-Refresh Logic ---
   
@@ -932,7 +941,7 @@ export default function FileManager({ connectionId, connectionName, connection }
               onClick={() => {
                 setStatus('connecting');
                 setLoading(true);
-                socket?.emit('ssh:connect', { connectionId });
+                setReconnectNonce((n) => n + 1);
               }}
               className="mt-4 px-6 py-2 bg-blue-600 hover:bg-blue-500 rounded-lg text-sm font-medium transition-colors"
             >

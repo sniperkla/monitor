@@ -88,7 +88,7 @@ function WindowControls({ onClose, onMinimize, onMaximize, isMaximized, layout =
   );
 }
 
-export default function Window({ id, title, icon: Icon, component, isMinimized, isMaximized, zIndex, initialWidth, initialHeight, previewMode = false }) {
+export default function Window({ id, title, icon: Icon, component, isMinimized, isMaximized, zIndex, initialWidth, initialHeight, previewMode = false, desktopHidden = false }) {
   const { state: osState, focusWindow, closeWindow, toggleMinimize, toggleMaximize, snapWindow, updateWindowPosition } = useOS();
   const { glassmorphism, taskbarPosition, windowLayout } = osState;
   const { snapSide } = osState.windows.find(w => w.id === id) || {};
@@ -324,6 +324,12 @@ export default function Window({ id, title, icon: Icon, component, isMinimized, 
         style={{
           zIndex,
           display: 'flex',
+          ...(desktopHidden
+            ? {
+                opacity: 0,
+                pointerEvents: 'none',
+              }
+            : null),
           ...(isMinimized && previewMode
             ? {
                 opacity: 0,

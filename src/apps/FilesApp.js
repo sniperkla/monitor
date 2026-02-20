@@ -6,7 +6,7 @@ import FileManager from '@/components/FileManager';
 import { Server, FolderClosed, Zap, X, Plus, HardDrive } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
-export default function FilesApp({ onEditConnection, initialConnection }) {
+export default function FilesApp({ onEditConnection, initialConnection, initialConnectionId }) {
   const { state, dispatch } = useApp();
   const { t } = useTranslation();
   const { connections } = state;
@@ -15,6 +15,7 @@ export default function FilesApp({ onEditConnection, initialConnection }) {
   const [activeTab, setActiveTab] = useState(null);
   const [isSelecting, setIsSelecting] = useState(!initialConnection);
   const initialConnRef = useRef(initialConnection);
+  const initialConnIdRef = useRef(initialConnectionId);
 
   // Auto-connect if initialConnection is provided
   useEffect(() => {
@@ -34,6 +35,30 @@ export default function FilesApp({ onEditConnection, initialConnection }) {
       setIsSelecting(false);
     }
   }, []);
+
+  // Restore mode: auto-connect from persisted initialConnectionId
+  useEffect(() => {
+    if (initialConnRef.current) return;
+    if (!initialConnIdRef.current) return;
+    if (!connections || connections.length === 0) return;
+
+    const conn = connections.find((c) => c._id === initialConnIdRef.current);
+    if (!conn) return;
+
+    initialConnIdRef.current = null;
+    const fileId = `files-${conn._id}-${Date.now()}`;
+    const newTab = {
+      id: fileId,
+      connectionId: conn._id,
+      connectionName: conn.name,
+      color: conn.color,
+      connection: conn,
+    };
+
+    setTabs(prev => [...prev, newTab]);
+    setActiveTab(fileId);
+    setIsSelecting(false);
+  }, [connections]);
 
   // Auto-select latest file manager if a new one is added
   useEffect(() => {

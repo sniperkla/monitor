@@ -99,8 +99,8 @@ export default function DatabaseBrowser({ initialConnection, onEditConnection, o
               <div className="animate-in fade-in slide-in-from-bottom-4 duration-500">
                 <h4 className="text-[10px] font-bold uppercase tracking-[0.2em] text-[var(--text-muted)] mb-4 text-center">Your Saved Connections</h4>
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 justify-items-center">
-                  {dbConnections.map(conn => (
-                    <div key={conn._id} className="relative group">
+                  {dbConnections.map((conn, idx) => (
+                    <div key={conn._id || conn.id || `conn-${idx}`} className="relative group">
                       <button 
                         onClick={() => {
                           // Terminate existing session in the manager
@@ -162,6 +162,7 @@ export default function DatabaseBrowser({ initialConnection, onEditConnection, o
                   
                   {/* Add New Card (Trailing) */}
                   <button 
+                    key="add-new-connection"
                     onClick={onNewConnection}
                     className="flex flex-col items-center justify-center p-6 bg-white/5 hover:bg-emerald-500/10 rounded-3xl w-40 border border-dashed border-white/20 hover:border-emerald-500/40 transition-all hover:scale-105 active:scale-95 group"
                   >

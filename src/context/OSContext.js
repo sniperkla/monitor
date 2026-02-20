@@ -30,7 +30,7 @@ const initialState = {
   taskbarPosition: 'bottom', // top, bottom, left, right
   windowLayout: 'mac', // mac, pc
   selectedIconIds: [], // IDs of currently selected icons
-  timestamp: Date.now(), // Last modified timestamp for conflict resolution
+  timestamp: 0, // Last modified timestamp for conflict resolution
   notificationQueue: [], // Array of { id, title, message, type, timestamp }
   modal: {
     isOpen: false,
@@ -654,6 +654,19 @@ export function OSProvider({ children }) {
   const lastSavedStateRef = useRef(null);
   // Helper for consistent serialization during sync checks
   const serializeStateForSync = (s) => {
+    const sanitizeProps = (props) => {
+      const p = props || {};
+      const initialConnection = p.initialConnection;
+      if (initialConnection && typeof initialConnection === 'object') {
+        const initialConnectionId = initialConnection._id || initialConnection.id;
+        const next = { ...p };
+        delete next.initialConnection;
+        if (initialConnectionId) next.initialConnectionId = initialConnectionId;
+        return next;
+      }
+      return p;
+    };
+
     const safeDesktops = (s.desktops || []).map((d) => ({
       id: d.id,
       name: d.name,
@@ -675,7 +688,7 @@ export function OSProvider({ children }) {
           snapSide: w.snapSide || null,
           zIndex: w.zIndex || 100,
           appType: w.appType || null,
-          props: w.props || {},
+          props: sanitizeProps(w.props),
         })),
       ])
     );
@@ -720,7 +733,7 @@ export function OSProvider({ children }) {
         snapSide: w.snapSide || null,
         zIndex: w.zIndex || 100,
         appType: w.appType || null,
-        props: w.props || {},
+        props: sanitizeProps(w.props),
       })),
       activeWindowId: s.activeWindowId || null,
       nextZIndex: s.nextZIndex || 100,

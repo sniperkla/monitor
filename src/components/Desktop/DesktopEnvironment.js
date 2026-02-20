@@ -416,7 +416,7 @@ export default function DesktopEnvironment() {
       conn.name,
       <TerminalApp onEditConnection={handleEditConnection} initialConnection={conn} />,
       Terminal,
-      { initialWidth: 900, initialHeight: 600, appType: 'terminal', props: { initialConnection: conn } }
+      { initialWidth: 900, initialHeight: 600, appType: 'terminal', props: { initialConnectionId: conn._id } }
     );
     setDropMenu(null);
   };
@@ -436,7 +436,7 @@ export default function DesktopEnvironment() {
       `Files: ${conn.name}`,
       <FilesApp onEditConnection={handleEditConnection} initialConnection={conn} />,
       FolderClosed,
-      { initialWidth: 900, initialHeight: 600, appType: 'files-app', props: { initialConnection: conn } }
+      { initialWidth: 900, initialHeight: 600, appType: 'files-app', props: { initialConnectionId: conn._id } }
     );
     setDropMenu(null);
   };
@@ -658,7 +658,17 @@ export default function DesktopEnvironment() {
       </div>
 
       {/* Windows Layer */}
-      {!hideDesktopContent && (windowsByDesktop[currentDesktopId] || windows).map(win => {
+      {!hideDesktopContent && (() => {
+        const currentWins = windowsByDesktop[currentDesktopId] || windows || [];
+        const currentIds = new Set((currentWins || []).map((w) => w.id));
+        const allWins = windowsByDesktop
+          ? Object.values(windowsByDesktop).flat()
+          : (windows || []);
+        const deduped = Array.from(
+          new Map((allWins || []).map((w) => [w.id, w])).values()
+        );
+
+        return deduped.map((win) => {
         let component = win.component;
         
         // Inject shared props (like onEditConnection) for restored windows
@@ -681,10 +691,12 @@ export default function DesktopEnvironment() {
             key={win.id}
             {...win}
             component={component}
+            desktopHidden={!currentIds.has(win.id)}
             previewMode={showPreview}
           />
         );
-      })}
+        });
+      })()}
 
       {/* Persistent Wiki Chat Windows */}
       <AnimatePresence>

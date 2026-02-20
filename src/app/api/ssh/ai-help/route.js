@@ -13,7 +13,7 @@ export async function POST(req) {
       return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
     }
 
-    const { prompt, context, connectionName, host, prefs, history } = await req.json();
+    const { prompt, context, contextPack, connectionName, host, prefs, history } = await req.json();
 
     if (!prompt || !String(prompt).trim()) {
       return NextResponse.json({ success: false, error: 'Prompt is required' }, { status: 400 });
@@ -79,6 +79,7 @@ export async function POST(req) {
     }
 
     const safeContext = typeof context === 'string' ? context.slice(-2500) : '';
+    const safePack = contextPack && typeof contextPack === 'object' ? contextPack : null;
     const safePrefs = prefs && typeof prefs === 'object' ? prefs : {};
     const preferSudo = !!safePrefs.preferSudo;
     const editor = typeof safePrefs.editor === 'string' ? safePrefs.editor : 'nano';
@@ -93,11 +94,39 @@ export async function POST(req) {
       return msgs;
     });
 
+    const packConnName = safePack?.connectionName || connectionName || '?';
+    const packHost = safePack?.host || host || '?';
+    const packLastCmd = typeof safePack?.lastCommand === 'string' ? safePack.lastCommand.slice(0, 200) : '';
+    const packRecentCmds = Array.isArray(safePack?.recentCommands) ? safePack.recentCommands.slice(-20) : [];
+    const packLastError = safePack?.lastError && typeof safePack.lastError === 'object' ? safePack.lastError : null;
+    const packTail = typeof safePack?.terminalTail === 'string' ? safePack.terminalTail.slice(-6000) : safeContext;
+
+    const structuredContext = safePack
+      ? `Context Pack:
+Recent Commands:
+${packRecentCmds.length ? packRecentCmds.map((c) => `- ${String(c).slice(0, 200)}`).join('\n') : '(none)'}
+
+Last Command:
+${packLastCmd || '(none)'}
+
+Last Error:
+${packLastError ? `${String(packLastError.label || 'error')}:\n${String(packLastError.excerpt || '').slice(-800)}` : '(none)'}
+
+Terminal Tail:
+${packTail || '(none)'}`
+      : `Terminal:\n${safeContext || '(none)'}`;
+
     const sys = `SSH assistant.
 Output XML only: <command>, <explain>, <danger>, <done>, <warn>, <interactive>.
-Rules: 1 command only. Prefer safe checks first. Use correct pkg manager from output.
-Conn: ${connectionName || '?'} (${host || '?'}) Prefs: sudo=${preferSudo} editor=${editor} viewer=${viewer}
-Terminal:\n${safeContext || '(none)'}`;
+Rules:
+- Return exactly 1 next command.
+- Prefer safe checks first. Prefer non-destructive checks first.
+- If an OS package manager (dnf/yum/apt/apk/pacman/zypper) says "not found" or "no match", consider language ecosystem installs instead of retrying the same command.
+  Examples: Node.js tools via npm (e.g. pm2 is commonly installed with "npm i -g pm2"), Python via pip/pipx, Ruby via gem, Rust via cargo.
+- Before installing, confirm prerequisites with safe commands (e.g. "command -v node npm pm2", "node -v", "npm -v").
+- Use sudo only when needed (respect prefs).
+Conn: ${packConnName} (${packHost}) Prefs: sudo=${preferSudo} editor=${editor} viewer=${viewer}
+${structuredContext}`;
 
     const messages = [
       { role: 'system', content: sys },

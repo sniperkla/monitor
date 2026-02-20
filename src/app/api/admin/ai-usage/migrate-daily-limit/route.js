@@ -22,12 +22,26 @@ export async function POST(req) {
 
     await connectDB(process.env.MONGODB_URI, true);
 
+    let requestedLimit = null;
+    try {
+      const body = await req.json();
+      const limit = Number(body?.dailyLimit);
+      if (Number.isFinite(limit) && limit > 0) requestedLimit = limit;
+    } catch (e) {
+      // ignore invalid/missing json
+    }
+
+    const envLimit = Number(process.env.AI_DAILY_LIMIT);
+    const targetLimit =
+      requestedLimit ??
+      (Number.isFinite(envLimit) && envLimit > 0 ? envLimit : null);
+
     // Ensure the global ai_limits setting exists with the daily limit
     const result = await SystemSetting.findOneAndUpdate(
       { key: 'ai_limits' },
       {
         $setOnInsert: { key: 'ai_limits' },
-        $set: { 'value.dailyLimit': 10000 },
+        ...(targetLimit ? { $set: { 'value.dailyLimit': targetLimit } } : {}),
       },
       { upsert: true, new: true }
     );
@@ -35,7 +49,9 @@ export async function POST(req) {
     return NextResponse.json({
       success: true,
       dailyLimit: result?.value?.dailyLimit || 10000,
-      message: 'AI daily limit has been set. Usage is now tracked per-user in the AiUsage collection.',
+      message: targetLimit
+        ? 'AI daily limit has been updated. Usage is tracked per-user in the AiUsage collection.'
+        : 'AI daily limit already exists. Usage is tracked per-user in the AiUsage collection.',
     });
   } catch (error) {
     console.error('Migrate AI dailyLimit error:', error);

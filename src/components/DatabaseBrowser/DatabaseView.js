@@ -1525,7 +1525,7 @@ export default function DatabaseView({ connection, onClose }) {
                                                     <div className="space-y-1">
                                                         {dynamicExamples.map((val, idx) => (
                                                             <div 
-                                                                key={idx}
+                                                                key={`example-${val}-${idx}`}
                                                                 onClick={() => { setAiPrompt(val); setShowAiHelp(false); }}
                                                                 className="text-[10px] text-[var(--text-secondary)] hover:text-purple-300 hover:bg-purple-500/10 p-2 rounded-lg cursor-pointer transition-all border border-transparent hover:border-purple-500/20"
                                                             >
@@ -1588,7 +1588,7 @@ export default function DatabaseView({ connection, onClose }) {
                                                     ) : (
                                                         aiHistory.map((h, i) => (
                                                             <div 
-                                                                key={i}
+                                                                key={`history-${h}-${i}`}
                                                                 onClick={() => { setAiPrompt(h); setShowHistory(false); }}
                                                                 className="group w-full flex items-center justify-between gap-2 px-3 py-2.5 rounded-xl text-xs text-[var(--text-secondary)] hover:bg-purple-500/10 hover:text-purple-300 transition-all cursor-pointer relative"
                                                             >
@@ -1678,7 +1678,7 @@ export default function DatabaseView({ connection, onClose }) {
                             ))}
                             {data.map((row, i) => (
                                <tr 
-                                  key={i} 
+                                  key={row._id || row.id || i} 
                                   className={`transition-colors group ${
                                     pendingAction?.type === 'DELETE' ? 'bg-red-500/5 hover:bg-red-500/10' :
                                     pendingAction?.type === 'UPDATE' ? 'bg-amber-500/5 hover:bg-amber-500/10' :

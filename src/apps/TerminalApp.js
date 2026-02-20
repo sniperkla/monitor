@@ -6,7 +6,7 @@ import TerminalView from '@/components/TerminalView';
 import { Server, Terminal as TermIcon, Zap, X, Plus } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
-export default function TerminalApp({ onEditConnection, initialConnection }) {
+export default function TerminalApp({ onEditConnection, initialConnection, initialConnectionId }) {
   const { state, dispatch } = useApp();
   const { t } = useTranslation();
   const { connections, standaloneTerminals } = state;
@@ -14,6 +14,7 @@ export default function TerminalApp({ onEditConnection, initialConnection }) {
   const [activeTab, setActiveTab] = useState(null);
   const [isSelecting, setIsSelecting] = useState(standaloneTerminals.length === 0 && !initialConnection);
   const initialConnRef = useRef(initialConnection);
+  const initialConnIdRef = useRef(initialConnectionId);
   const standaloneTermIdRef = useRef(null);
   const isStandalone = !!initialConnection;
 
@@ -56,6 +57,31 @@ export default function TerminalApp({ onEditConnection, initialConnection }) {
       }
     }
   }, [dispatch, isStandalone]);
+
+  // Restore mode: auto-connect from persisted initialConnectionId
+  useEffect(() => {
+    if (initialConnRef.current) return;
+    if (!initialConnIdRef.current) return;
+    if (!connections || connections.length === 0) return;
+
+    const conn = connections.find((c) => c._id === initialConnIdRef.current);
+    if (!conn) return;
+
+    initialConnIdRef.current = null;
+    const termId = `term-${conn._id}-${Date.now()}`;
+    standaloneTermIdRef.current = termId;
+
+    // When restoring a Window, we always want a single local standalone terminal
+    // (not the shared multi-tab TerminalApp list)
+    setLocalStandaloneTerm({
+      id: termId,
+      connectionId: conn._id,
+      connectionName: conn.name,
+      host: conn.host,
+      color: conn.color,
+      connection: conn,
+    });
+  }, [connections]);
 
   // Auto-select latest terminal if a new one is added and we aren't selecting
   useEffect(() => {
@@ -108,7 +134,7 @@ export default function TerminalApp({ onEditConnection, initialConnection }) {
   };
 
   // In standalone mode, render just the single terminal without tabs (uses local state)
-  if (isStandalone) {
+  if (isStandalone || localStandaloneTerm) {
     if (!localStandaloneTerm) {
       return <div className="flex flex-col h-full bg-[var(--bg-primary)] overflow-hidden" />;
     }

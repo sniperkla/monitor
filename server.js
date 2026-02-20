@@ -318,9 +318,59 @@ app.prepare().then(async () => {
 // Track active SSH connections
 const activeSessions = new Map();
 
+// Idle timeout (2 minutes)
+const SSH_IDLE_TIMEOUT_MS = 2 * 60 * 1000;
+const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
+
   io.on('connection', (socket) => {
     const dbUri = socket.handshake.query.dbUri;
     console.log(`🔌 Socket connected: ${socket.id} ${dbUri ? '(Private DB)' : '(Global DB)'}`);
+
+    const touchActivity = () => {
+      const s = activeSessions.get(socket.id);
+      if (s) s.lastActivityAt = Date.now();
+    };
+
+    const ensureIdleWatcher = () => {
+      const s = activeSessions.get(socket.id);
+      if (!s) return;
+      if (s.idleInterval) return;
+      s.idleInterval = setInterval(async () => {
+        const cur = activeSessions.get(socket.id);
+        if (!cur) return;
+        const last = cur.lastActivityAt || Date.now();
+        const idleFor = Date.now() - last;
+
+        if (idleFor > SSH_IDLE_TIMEOUT_MS / 2) {
+          const lastLogAt = cur.lastIdleLogAt || 0;
+          if (Date.now() - lastLogAt > 30 * 1000) {
+            cur.lastIdleLogAt = Date.now();
+            console.log(`🕒 SSH idle watcher socket ${socket.id}: idleFor=${idleFor}ms timeout=${SSH_IDLE_TIMEOUT_MS}ms`);
+          }
+        }
+
+        if (idleFor > SSH_IDLE_TIMEOUT_MS) {
+          console.log(`⏳ SSH idle timeout for socket ${socket.id} (>${SSH_IDLE_TIMEOUT_MS}ms). Disconnecting.`);
+          try {
+            socket.emit('ssh:idle_timeout');
+          } catch (e) {}
+          await cleanupSession(socket.id);
+          try {
+            socket.disconnect(true);
+          } catch (e) {}
+        }
+      }, SSH_IDLE_CHECK_INTERVAL_MS);
+    };
+
+    // Count any SSH/SFTP usage as activity. (We do NOT count heartbeat pings as activity.)
+    socket.onAny((eventName) => {
+      if (
+        eventName === 'ssh:input' ||
+        (typeof eventName === 'string' && eventName.startsWith('sftp:'))
+      ) {
+        touchActivity();
+      }
+    });
 
     // Latency Ping-Pong
     socket.on('heartbeat:ping', (timestamp) => {
@@ -423,15 +473,22 @@ const activeSessions = new Map();
               session, 
               connectionId, 
               dbUri,
-              activeTransfers: new Set() // Track transfer IDs for cleanup
+              activeTransfers: new Set(), // Track transfer IDs for cleanup
+              lastActivityAt: Date.now(),
+              lastIdleLogAt: 0,
+              idleInterval: null,
             });
+
+            ensureIdleWatcher();
 
             // Forward SSH output to client
             stream.on('data', (data) => {
+              touchActivity();
               socket.emit('ssh:data', data.toString('utf-8'));
             });
 
             stream.stderr.on('data', (data) => {
+              touchActivity();
               socket.emit('ssh:data', data.toString('utf-8'));
             });
 
@@ -444,6 +501,7 @@ const activeSessions = new Map();
 
             // Forward client input to SSH
             socket.on('ssh:input', (inputData) => {
+              touchActivity();
               if (stream.writable) {
                 stream.write(inputData);
               }
@@ -1183,6 +1241,10 @@ const activeSessions = new Map();
     const session = activeSessions.get(socketId);
     if (session) {
       try {
+        if (session.idleInterval) {
+          clearInterval(session.idleInterval);
+          session.idleInterval = null;
+        }
         if (session.sftp) {
            // No explicit close needed for sftp if client is closed
         }
@@ -1219,13 +1281,10 @@ const activeSessions = new Map();
            session.activeTransfers.clear();
         }
       } catch (err) {
-        console.error('Cleanup error:', err);
+        console.error('Error cleaning up session:', err);
       }
       activeSessions.delete(socketId);
     }
-    // Also remove any dangling listeners on the socket itself if we have access to it?
-    // In this scope we don't hold the socket object map, but sftp handlers are socket-bound.
-    // The socket.disconnect event usually clears them or socket destruction does.
   }
 
   server.listen(port, () => {
