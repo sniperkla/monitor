@@ -12,6 +12,11 @@ const UserSchema = new mongoose.Schema({
   },
   image: String,
   googleId: String,
+  role: {
+    type: String,
+    enum: ['user', 'admin'],
+    default: 'user',
+  },
 
   // === VAULT (Zero-Knowledge Encrypted Private DB URI) ===
   // The privateDbUri is encrypted client-side with the user's Master Password.

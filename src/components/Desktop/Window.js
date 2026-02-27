@@ -278,8 +278,6 @@ export default function Window({ id, title, icon: Icon, component, isMinimized, 
 
   // In preview mode we keep minimized windows mounted (but hidden) so the PreviewWindow
   // can clone the DOM and show live previews.
-  if (isMinimized && !previewMode) return null;
-
   return (
     <>
       {/* Snap preview overlay */}
@@ -309,8 +307,8 @@ export default function Window({ id, title, icon: Icon, component, isMinimized, 
           width: freeRect.width,
           height: freeRect.height,
         }}
-        minWidth={500}
-        minHeight={400}
+        minWidth={300}
+        minHeight={200}
         dragHandleClassName="window-drag-handle"
         cancel=".nodrag,button,input,textarea,select,option,label"
         enableUserSelectHack={false}
@@ -330,7 +328,7 @@ export default function Window({ id, title, icon: Icon, component, isMinimized, 
                 pointerEvents: 'none',
               }
             : null),
-          ...(isMinimized && previewMode
+          ...(isMinimized
             ? {
                 opacity: 0,
                 pointerEvents: 'none',
@@ -365,7 +363,9 @@ export default function Window({ id, title, icon: Icon, component, isMinimized, 
           style={{
             position: 'relative',
             zIndex: 2,
-            background: glassmorphism ? 'var(--window-bg)' : 'var(--bg-primary)',
+            background: (glassmorphism && windowState.appType === 'terminal') 
+              ? 'transparent' 
+              : (glassmorphism ? 'var(--window-bg)' : 'var(--bg-primary)'),
             backdropFilter: glassmorphism ? 'blur(20px)' : 'none',
             borderColor: 'var(--border-color)',
           }}

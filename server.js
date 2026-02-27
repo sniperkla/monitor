@@ -24,7 +24,6 @@ try {
 } catch(e) { console.error('Error loading .env', e); }
 
 const { createServer } = require('http');
-const { parse } = require('url');
 const next = require('next');
 const { Server } = require('socket.io');
 const { Client } = require('ssh2');
@@ -37,7 +36,7 @@ const dev = process.env.NODE_ENV !== 'production';
 const hostname = 'localhost';
 const port = parseInt(process.env.PORT, 10) || 3000;
 
-const app = next({ dev, hostname, port });
+const app = next({ dev, hostname, port, dir: __dirname });
 const handle = app.getRequestHandler();
 
 // MongoDB connection — Priority: db-config.json > .env > default
@@ -277,17 +276,16 @@ app.prepare().then(async () => {
         const cspHeader = `
           default-src 'self';
           script-src 'self' 'unsafe-inline' 'unsafe-eval';
-          style-src 'self' 'unsafe-inline';
-          img-src 'self' blob: data: https:;
-          font-src 'self' data:;
-          connect-src 'self' ws: wss:;
+          style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https:;
+          img-src 'self' blob: data: https://ui-avatars.com https://images.unsplash.com https://lh3.googleusercontent.com https:;
+          font-src 'self' data: https://fonts.gstatic.com https:;
+          connect-src 'self' ws: wss: https://ui-avatars.com https:;
           frame-src 'none';
           object-src 'none';
           base-uri 'self';
-          form-action 'self';
+          form-action 'self' http://localhost:3000 https://accounts.google.com;
           frame-ancestors 'none';
           block-all-mixed-content;
-          upgrade-insecure-requests;
         `.replace(/\s{2,}/g, ' ').trim();
 
         res.setHeader('Content-Security-Policy', cspHeader);
@@ -297,8 +295,7 @@ app.prepare().then(async () => {
         res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
       }
 
-      const parsedUrl = parse(req.url, true);
-      await handle(req, res, parsedUrl);
+      await handle(req, res);
     } catch (err) {
       console.error('Error occurred handling', req.url, err);
       res.statusCode = 500;
@@ -309,17 +306,42 @@ app.prepare().then(async () => {
 
   const io = new Server(server, {
     cors: {
-      origin: '*',
+      origin: process.env.NODE_ENV === 'production' ? (process.env.NEXT_PUBLIC_APP_URL || false) : '*',
       methods: ['GET', 'POST'],
+      credentials: true
     },
     path: '/api/socket',
+  });
+
+  io.use(async (socket, next) => {
+    try {
+      const { getToken } = require('next-auth/jwt');
+      // Polyfill req.cookies for NextAuth
+      if (!socket.request.cookies) {
+         const cookieHeader = socket.request.headers.cookie || '';
+         socket.request.cookies = Object.fromEntries(cookieHeader.split('; ').filter(Boolean).map(c => {
+           let [k, ...v] = c.split('=');
+           return [k, decodeURIComponent(v.join('='))];
+         }));
+      }
+      const token = await getToken({ 
+        req: socket.request, 
+        secret: process.env.NEXTAUTH_SECRET 
+      });
+      if (!token) return next(new Error("Authentication error: Session invalid."));
+      socket.user = token;
+      next();
+    } catch (err) {
+      console.error("Socket Auth Error:", err.message);
+      next(new Error("Authentication error"));
+    }
   });
 
 // Track active SSH connections
 const activeSessions = new Map();
 
-// Idle timeout (2 minutes)
-const SSH_IDLE_TIMEOUT_MS = 2 * 60 * 1000;
+// Idle timeout (10 minutes)
+const SSH_IDLE_TIMEOUT_MS = 10 * 60 * 1000;
 const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
 
   io.on('connection', (socket) => {
@@ -372,8 +394,9 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
       }
     });
 
-    // Latency Ping-Pong
+    // Latency Ping-Pong - Also serves as a keep-alive to prevent SSH idle timeout
     socket.on('heartbeat:ping', (timestamp) => {
+      touchActivity();
       socket.emit('heartbeat:pong', timestamp);
     });
 
@@ -554,6 +577,10 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
             const cmd = `ls -la --full-time ${target}`; 
             console.log(`🔧 [${socket.id}] Running fallback command: ${cmd}`);
             
+            if (!client || client._state === 'closed') {
+               console.warn(`⚠️ [${socket.id}] Fallback skip: client not connected`);
+               return socket.emit('sftp:error', { message: 'SSH Client Disconnected during listing' });
+            }
             client.exec(cmd, (err, stream) => {
               if (err) {
                  console.error(`❌ Fallback exec failed: ${err.message}`);
@@ -719,14 +746,23 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
                 if (err) return emitSftpError(err, 'Stat failed');
 
                 if (stats.isDirectory()) {
-                  // For directories, use cp -r for speed but send a simulated progress
-                  socket.emit('sftp:progress', { action: 'copy', filename: path.posix.basename(src), progress: 10 });
-                  sshClient.exec(`cp -r "${src}" "${dest}"`, (err, stream) => {
+                  // For directories, use tar for speed and to avoid rate limits by streaming
+                  const srcDir = path.posix.dirname(src);
+                  const srcBase = path.posix.basename(src);
+                  const destDir = path.posix.dirname(dest);
+                  
+                  socket.emit('sftp:progress', { action: 'copy', filename: srcBase, progress: 10 });
+                  
+                  // Wrap in a subshell to ensure proper directory nesting - use 'z' for compression
+                  const cmd = `tar czf - -C "${srcDir}" "${srcBase}" | tar xzf - -C "${destDir}"`;
+                  console.log(`📦 Running optimized tar copy: ${cmd}`);
+                  
+                  sshClient.exec(cmd, (err, stream) => {
                     if (err) return emitSftpError(err, 'Copy Init');
-                    socket.emit('sftp:progress', { action: 'copy', filename: path.posix.basename(src), progress: 50 });
+                    socket.emit('sftp:progress', { action: 'copy', filename: srcBase, progress: 50 });
                     stream.on('close', (code) => {
                       if (code === 0) {
-                        socket.emit('sftp:progress', { action: 'copy', filename: path.posix.basename(src), progress: 100 });
+                        socket.emit('sftp:progress', { action: 'copy', filename: srcBase, progress: 100 });
                         socket.emit('sftp:action_success', { action: 'copy', path: dest });
                       } else emitSftpError(`Exit code ${code}`, 'Copy failed');
                     });
@@ -837,8 +873,8 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
                       }
                     });
 
-                    const cmdSrc = `tar cf - -C "${srcDir}" "${srcBase}"`;
-                    const cmdDest = `tar xf - -C "${destDir}"`;
+                    const cmdSrc = `tar czf - -C "${srcDir}" "${srcBase}"`;
+                    const cmdDest = `tar xzf - -C "${destDir}"`;
                     
                     srcSession.sshClient.exec(cmdSrc, (err, srcStream) => {
                       if (err) return finish(err);
@@ -933,6 +969,114 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
             };
 
             transfer();
+          });
+
+          // Extract Archive (Zip/Tar)
+          socket.on('sftp:extract', ({ path: archivePath, type }) => {
+            console.log(`📦 [${socket.id}] SFTP EXTRACT: ${archivePath} (${type})`);
+            if (!sshClient || sshClient._state === 'closed') return emitSftpError('SSH Connection Closed', 'Extract');
+
+            const targetDir = path.posix.dirname(archivePath);
+            const filename = path.posix.basename(archivePath);
+
+            // Step 1: Detect availability of unzip vs python fallback
+            // Step 1: Detect availability of unzip vs python fallback vs tar
+            const detectCmd = `if command -v unzip >/dev/null; then echo "unzip"; elif command -v python3 >/dev/null; then echo "python3"; fi; if command -v tar >/dev/null; then echo "tar"; fi`;
+            
+            sshClient.exec(detectCmd, (err, detStream) => {
+              if (err) return emitSftpError(err, 'Tool detection failed');
+              let detected = "";
+              detStream.on('data', (d) => detected += d.toString());
+
+              detStream.on('close', () => {
+                let countCmd, extractCmd;
+                const hasUnzip = detected.includes('unzip');
+                const hasPython = detected.includes('python3');
+                const hasTar = detected.includes('tar');
+                const usePython = type === 'zip' && !hasUnzip && hasPython;
+
+                if (type === 'zip') {
+                  if (usePython) {
+                    console.log(`🐍 Using Python fallback for unzipping: ${archivePath}`);
+                    countCmd = `python3 -c "import zipfile; z = zipfile.ZipFile('${archivePath}'); print(len([f for f in z.namelist() if not f.endswith('/')]))"`;
+                    extractCmd = `python3 -c "import zipfile; zipfile.ZipFile('${archivePath}').extractall('${targetDir}')"`;
+                  } else if (hasUnzip) {
+                    countCmd = `unzip -Z1 "${archivePath}" | wc -l`;
+                    extractCmd = `unzip -o "${archivePath}" -d "${targetDir}"`;
+                  } else {
+                    return emitSftpError('Neither "unzip" nor "python3" were found on the remote server. Please install zip support.', 'Server Environment');
+                  }
+                } else {
+                  if (hasTar) {
+                    const isGzip = archivePath.endsWith('.gz') || archivePath.endsWith('.tgz');
+                    countCmd = `tar -t${isGzip ? 'z' : ''}f "${archivePath}" | wc -l`;
+                    extractCmd = `tar -xv${isGzip ? 'z' : ''}f "${archivePath}" -C "${targetDir}"`;
+                  } else {
+                    return emitSftpError('"tar" command not found on the remote server.', 'Server Environment');
+                  }
+                }
+
+                socket.emit('sftp:progress', { action: 'extract', filename, progress: 5, status: 'Initializing metadata...' });
+
+                sshClient.exec(countCmd, (err, countStream) => {
+                  if (err) return emitSftpError(err, 'Extract Init');
+                  
+                  let output = '';
+                  countStream.on('data', (d) => output += d.toString());
+                  
+                  countStream.on('close', (code) => {
+                    const totalItems = parseInt(output.trim()) || 0;
+                    
+                    sshClient.exec(extractCmd, (err, stream) => {
+                      if (err) return emitSftpError(err, 'Extract failed');
+                      
+                      let extractedCount = 0;
+                      let buffer = '';
+                      
+                      stream.on('data', (data) => {
+                        buffer += data.toString();
+                        const lines = buffer.split('\n');
+                        buffer = lines.pop() || '';
+                        
+                        const validLines = lines.filter(l => l.trim().length > 0);
+                        if (validLines.length > 0) {
+                          extractedCount += validLines.length;
+                          const lastLine = validLines[validLines.length - 1];
+                          const currentFile = lastLine.replace(/^(extracting:|  inflating:|inflating:|creating:|  creating:)/i, '').trim();
+                          
+                          if (totalItems > 0) {
+                            const prog = Math.min(99, Math.round((extractedCount / totalItems) * 100));
+                            socket.emit('sftp:progress', { 
+                              action: 'extract', filename, progress: prog, status: usePython ? 'Processing files...' : `Extracting: ${currentFile}`
+                            });
+                          }
+                        }
+                      });
+
+                      let extractError = '';
+                      stream.stderr.on('data', (d) => extractError += d.toString());
+
+                      stream.on('close', (code) => {
+                        // Cleanup archive
+                        sshClient.exec(`rm "${archivePath}"`, () => {});
+                        
+                        if (code === 0) {
+                          socket.emit('sftp:progress', { action: 'extract', filename, progress: 100 });
+                          socket.emit('sftp:action_success', { action: 'extract', path: targetDir });
+                        } else {
+                          const errorMsg = extractError || `Exit code ${code}`;
+                          if (errorMsg.includes('command not found')) {
+                            emitSftpError('Missing "unzip" or "python3" on server. Please install zip utilities.', 'Server Environment');
+                          } else {
+                            emitSftpError(errorMsg, 'Extraction failed');
+                          }
+                        }
+                      });
+                    });
+                  });
+                });
+              });
+            });
           });
 
           // Upload File (Client -> Server) - Resumable with Offset

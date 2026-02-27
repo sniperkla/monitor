@@ -447,14 +447,14 @@ export default function WikiChatWindow({ id, guide, onClose }) {
         </div>
         <div className="flex-1 mx-4 overflow-hidden">
           <div className="bg-[var(--bg-primary)]/50 rounded flex items-center justify-center py-0.5 px-2 border border-[var(--border-color)]">
-             <LockIcon size={10} className="text-emerald-400 mr-1.5 flex-shrink-0" />
+             <LockIcon size={10} className="text-[var(--accent-emerald)] mr-1.5 flex-shrink-0" />
              <span className="text-[10px] text-[var(--text-muted)] font-mono truncate">AI: {guide.title}</span>
           </div>
         </div>
         <div className="flex items-center gap-2" onPointerDown={(e) => e.stopPropagation()}>
           <button 
             onClick={() => setAutoTranslate(!autoTranslate)}
-            className={`p-1.5 rounded-lg transition-colors flex items-center gap-1.5 ${autoTranslate ? 'bg-emerald-500/20 text-emerald-600 dark:text-emerald-400' : 'hover:bg-[var(--bg-tertiary)] text-[var(--text-muted)]'}`}
+            className={`p-1.5 rounded-lg transition-colors flex items-center gap-1.5 ${autoTranslate ? 'bg-[var(--glow-emerald)] text-[var(--accent-emerald)]' : 'hover:bg-[var(--bg-tertiary)] text-[var(--text-muted)]'}`}
             title="Auto Translate"
           >
             <Languages size={14} />
@@ -462,7 +462,7 @@ export default function WikiChatWindow({ id, guide, onClose }) {
           </button>
           <button 
             onClick={() => setShowHistory(!showHistory)}
-            className={`p-1.5 rounded-lg transition-colors ${showHistory ? 'bg-indigo-500 text-white' : 'hover:bg-[var(--bg-tertiary)] text-[var(--text-muted)]'}`}
+            className={`p-1.5 rounded-lg transition-colors ${showHistory ? 'bg-[var(--accent-indigo)] text-white' : 'hover:bg-[var(--bg-tertiary)] text-[var(--text-muted)]'}`}
             title="Chat History"
           >
             <History size={14} />
@@ -488,7 +488,7 @@ export default function WikiChatWindow({ id, guide, onClose }) {
                 <div className="flex items-center gap-1">
                   <button 
                     onClick={startNewChat}
-                    className="p-1.5 rounded-lg bg-indigo-500/10 text-indigo-400 hover:bg-indigo-500 hover:text-white transition-all"
+                    className="p-1.5 rounded-lg bg-[var(--glow-indigo)] text-[var(--accent-indigo)] hover:bg-[var(--accent-indigo)] hover:text-white transition-all shadow-sm"
                     title="New Chat"
                   >
                     <Plus size={14} />
@@ -515,13 +515,13 @@ export default function WikiChatWindow({ id, guide, onClose }) {
                       onClick={() => loadHistory(hist._id)}
                       className={`group p-3 rounded-xl cursor-pointer transition-all border ${
                         currentHistoryId === hist._id 
-                          ? 'bg-indigo-500/10 border-indigo-500/20 shadow-sm' 
+                          ? 'bg-[var(--glow-indigo)]/50 border-[var(--accent-indigo)]/20 shadow-sm' 
                           : 'border-transparent hover:bg-[var(--bg-tertiary)]'
                       }`}
                     >
                       <div className="flex items-start justify-between gap-2">
                         <div className="flex-1 min-w-0">
-                          <p className={`text-[11px] font-bold truncate ${currentHistoryId === hist._id ? 'text-indigo-400' : 'text-[var(--text-primary)]'}`}>
+                          <p className={`text-[11px] font-bold truncate ${currentHistoryId === hist._id ? 'text-[var(--accent-indigo)]' : 'text-[var(--text-primary)]'}`}>
                             {hist.title}
                           </p>
                           <div className="flex items-center gap-1.5 mt-1 text-[9px] text-[var(--text-muted)]">
@@ -556,18 +556,18 @@ export default function WikiChatWindow({ id, guide, onClose }) {
             >
               {messages.map((msg, idx) => (
               <div key={idx} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                <div 
-                  className={`max-w-[85%] rounded-2xl px-3 py-2 text-xs leading-relaxed ${
-                    msg.role === 'user' 
-                      ? 'bg-indigo-500 text-white rounded-tr-none shadow-sm shadow-indigo-500/20' 
-                      : 'bg-[var(--bg-tertiary)] text-[var(--text-secondary)] border border-[var(--border-color)] rounded-tl-none'
-                  }`}
-                  style={{ userSelect: 'text', WebkitUserSelect: 'text' }}
-                >
+                  <div 
+                    className={`max-w-[85%] rounded-2xl px-3 py-2 text-xs leading-relaxed ${
+                      msg.role === 'user' 
+                        ? 'bg-[var(--accent-indigo)] text-white rounded-tr-none shadow-sm shadow-[var(--glow-indigo)]' 
+                        : 'bg-[var(--bg-tertiary)] text-[var(--text-secondary)] border border-[var(--border-color)] rounded-tl-none'
+                    }`}
+                    style={{ userSelect: 'text', WebkitUserSelect: 'text' }}
+                  >
                   {msg.role === 'assistant' && (
                     <div className="flex items-center gap-1.5 mb-1 pb-1 border-b border-[var(--border-color)]">
-                      <Bot size={12} className="text-indigo-400" />
-                      <span className="text-[10px] font-bold text-indigo-300">Wiki AI</span>
+                      <Bot size={12} className="text-[var(--accent-indigo)]" />
+                      <span className="text-[10px] font-bold text-[var(--accent-indigo)]">Wiki AI</span>
                     </div>
                   )}
                   {msg.role === 'system' ? (
@@ -593,9 +593,9 @@ export default function WikiChatWindow({ id, guide, onClose }) {
                 <div className="flex justify-start">
                   <div className="bg-[var(--bg-tertiary)] border border-[var(--border-color)] rounded-2xl rounded-tl-none px-4 py-3">
                     <div className="flex gap-1">
-                      <span className="w-1.5 h-1.5 bg-indigo-400 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
-                      <span className="w-1.5 h-1.5 bg-indigo-400 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
-                      <span className="w-1.5 h-1.5 bg-indigo-400 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
+                      <span className="w-1.5 h-1.5 bg-[var(--accent-indigo)] rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
+                      <span className="w-1.5 h-1.5 bg-[var(--accent-indigo)] rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
+                      <span className="w-1.5 h-1.5 bg-[var(--accent-indigo)] rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
                     </div>
                   </div>
                 </div>
@@ -622,7 +622,7 @@ export default function WikiChatWindow({ id, guide, onClose }) {
                 <button 
                   type="submit"
                   disabled={loading || !input.trim()}
-                  className="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 bg-indigo-500 text-white rounded-lg hover:bg-indigo-600 disabled:opacity-50 disabled:hover:bg-indigo-500 transition-colors"
+                  className="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 bg-[var(--accent-indigo)] text-white rounded-lg hover:opacity-90 disabled:opacity-50 transition-all shadow-md shadow-[var(--glow-indigo)]"
                 >
                   <Send size={12} />
                 </button>

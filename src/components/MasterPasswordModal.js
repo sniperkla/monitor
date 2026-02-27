@@ -213,23 +213,23 @@ export default function MasterPasswordModal() {
 
   // === FAQ Section ===
   const renderFAQ = () => (
-    <div className="mt-8 border-t border-white/5 pt-6 relative">
-      <div className="absolute -top-3 left-1/2 -translate-x-1/2 px-4 py-1 bg-slate-900 border border-white/10 rounded-full text-[10px] font-bold text-slate-400 uppercase tracking-[2px] whitespace-nowrap shadow-xl">
+    <div className="mt-8 border-t border-[var(--border-color)] pt-6 relative">
+      <div className="absolute -top-3 left-1/2 -translate-x-1/2 px-4 py-1 bg-[var(--bg-primary)] border border-[var(--border-color)] rounded-full text-[10px] font-bold text-[var(--text-muted)] uppercase tracking-[2px] whitespace-nowrap shadow-xl">
         Security Knowledge
       </div>
 
       <button
         type="button"
         onClick={() => setFaqOpen(faqOpen === -1 ? null : -1)}
-        className="group flex items-center justify-between w-full px-4 py-3 bg-white/5 hover:bg-white/10 border border-white/10 rounded-2xl transition-all duration-300"
+        className="group flex items-center justify-between w-full px-4 py-3 bg-[var(--bg-secondary)]/50 hover:bg-[var(--bg-secondary)]/80 border border-[var(--border-color)] rounded-2xl transition-all duration-300"
       >
         <div className="flex items-center gap-3">
-          <div className="w-8 h-8 rounded-lg bg-indigo-500/10 flex items-center justify-center text-indigo-400 group-hover:bg-indigo-500/20 transition-colors">
+          <div className="w-8 h-8 rounded-lg bg-[var(--accent-indigo)]/10 flex items-center justify-center text-[var(--accent-indigo)] group-hover:bg-[var(--accent-indigo)]/20 transition-colors">
             <HelpCircle size={16} />
           </div>
           <div className="text-left">
-            <span className="block text-[13px] font-bold text-white tracking-tight">{t('vault.faq.title')}</span>
-            <span className="block text-[10px] text-slate-500 font-medium">{t('vault.faq.subtitle')}</span>
+            <span className="block text-[13px] font-bold text-[var(--text-primary)] tracking-tight">{t('vault.faq.title')}</span>
+            <span className="block text-[10px] text-[var(--text-muted)] font-medium">{t('vault.faq.subtitle')}</span>
           </div>
         </div>
         <div className={`p-1.5 rounded-full bg-white/5 transition-transform duration-300 ${faqOpen !== null ? 'rotate-180' : ''}`}>
@@ -255,8 +255,8 @@ export default function MasterPasswordModal() {
                   key={i} 
                   className={`rounded-2xl border transition-all duration-300 ${
                     faqOpen === i 
-                      ? 'bg-slate-900/80 border-indigo-500/30 shadow-[0_0_20px_rgba(99,102,241,0.05)]' 
-                      : 'bg-white/[0.02] border-white/5 hover:border-white/10'
+                      ? 'bg-[var(--bg-primary)] border-[var(--accent-indigo)]/30 shadow-[0_0_20px_rgba(99,102,241,0.05)]' 
+                      : 'bg-[var(--bg-secondary)]/30 border-[var(--border-color)] hover:border-[var(--border-hover)]'
                   }`}
                 >
                   <button
@@ -264,8 +264,8 @@ export default function MasterPasswordModal() {
                     onClick={() => setFaqOpen(faqOpen === i ? -1 : i)}
                     className="w-full flex items-center gap-3 px-4 py-3.5 text-left group"
                   >
-                    <div className={`w-1.5 h-1.5 rounded-full transition-all duration-300 ${faqOpen === i ? 'bg-indigo-400 scale-125 shadow-[0_0_8px_rgba(129,140,248,0.8)]' : 'bg-slate-600'}`} />
-                    <span className={`flex-1 text-[12px] font-bold tracking-tight transition-colors ${faqOpen === i ? 'text-white' : 'text-slate-400 group-hover:text-slate-200'}`}>
+                    <div className={`w-1.5 h-1.5 rounded-full transition-all duration-300 ${faqOpen === i ? 'bg-[var(--accent-indigo)] scale-125 shadow-[0_0_8px_var(--glow-indigo)]' : 'bg-[var(--text-muted)]'}`} />
+                    <span className={`flex-1 text-[12px] font-bold tracking-tight transition-colors ${faqOpen === i ? 'text-[var(--text-primary)]' : 'text-[var(--text-secondary)] group-hover:text-[var(--text-primary)]'}`}>
                       {item.q}
                     </span>
                     <div className={`transition-transform duration-300 ${faqOpen === i ? 'rotate-180' : ''}`}>
@@ -282,7 +282,7 @@ export default function MasterPasswordModal() {
                         className="overflow-hidden"
                       >
                         <div className="px-4 pb-4 pl-[34px]">
-                          <p className="text-[11px] text-slate-400 leading-relaxed font-medium">
+                          <p className="text-[11px] text-[var(--text-secondary)] leading-relaxed font-medium">
                             {item.a}
                           </p>
                         </div>
@@ -314,21 +314,21 @@ export default function MasterPasswordModal() {
           {/* Glowing Ring */}
           <div className="absolute inset-0 rounded-2xl bg-gradient-to-tr from-blue-500/30 to-indigo-500/30 blur-xl animate-pulse" />
           
-          <div className="relative w-20 h-20 bg-gradient-to-br from-slate-800 to-slate-900 border border-white/10 rounded-2xl flex items-center justify-center shadow-2xl overflow-hidden group">
-            <div className="absolute inset-0 bg-gradient-to-tr from-blue-500/20 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-500" />
+          <div className="relative w-20 h-20 bg-gradient-to-br from-[var(--bg-secondary)] to-[var(--bg-tertiary)] border border-[var(--border-color)] rounded-2xl flex items-center justify-center shadow-2xl overflow-hidden group">
+            <div className="absolute inset-0 bg-gradient-to-tr from-[var(--accent-indigo)]/20 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-500" />
             <motion.div
               animate={{ rotate: [0, -5, 5, 0] }}
               transition={{ duration: 4, repeat: Infinity, ease: 'easeInOut' }}
             >
-              <Lock size={32} className="text-blue-400 drop-shadow-[0_0_8px_rgba(96,165,250,0.5)]" />
+              <Lock size={32} className="text-[var(--accent-indigo)] drop-shadow-[0_0_8px_var(--glow-indigo)]" />
             </motion.div>
           </div>
         </motion.div>
         
-        <h2 className="text-2xl font-extrabold tracking-tight text-white mb-2">
+        <h2 className="text-2xl font-extrabold tracking-tight text-[var(--text-primary)] mb-2">
           {t('vault.locked') || 'Secured Vault'}
         </h2>
-        <p className="text-slate-400 text-sm max-w-[280px] mx-auto leading-relaxed">
+        <p className="text-[var(--text-secondary)] text-sm max-w-[280px] mx-auto leading-relaxed">
           {t('vault.unlockNow') || 'Your connection data is securely encrypted. Enter your master password to access.'}
         </p>
         
@@ -336,9 +336,9 @@ export default function MasterPasswordModal() {
           <motion.div 
             initial={{ opacity: 0, y: 5 }}
             animate={{ opacity: 1, y: 0 }}
-            className="mt-4 inline-flex items-center gap-2 px-3 py-1 bg-white/5 border border-white/10 backdrop-blur-md rounded-full text-[10px] font-semibold text-slate-300 uppercase tracking-wider"
+            className="mt-4 inline-flex items-center gap-2 px-3 py-1 bg-[var(--bg-secondary)] border border-[var(--border-color)] backdrop-blur-md rounded-full text-[10px] font-semibold text-[var(--text-secondary)] uppercase tracking-wider"
           >
-            <Monitor size={10} className="text-blue-400" /> {t('vault.guestMode') || 'Guest Mode'}
+            <Monitor size={10} className="text-[var(--accent-indigo)]" /> {t('vault.guestMode') || 'Guest Mode'}
           </motion.div>
         )}
       </div>
@@ -353,13 +353,13 @@ export default function MasterPasswordModal() {
               value={masterPassword}
               onChange={(e) => setMasterPassword(e.target.value)}
               placeholder={t('vault.masterPassword') || 'Master Password'}
-              className="w-full px-4 py-3.5 bg-slate-900/80 backdrop-blur-xl border border-white/10 rounded-xl text-white placeholder-slate-500 focus:outline-none focus:ring-0 transition-all text-base shadow-inner pointer-events-auto relative z-10"
+              className="w-full px-4 py-3.5 bg-[var(--bg-primary)]/80 backdrop-blur-xl border border-[var(--border-color)] rounded-xl text-[var(--text-primary)] placeholder-[var(--text-muted)] focus:outline-none focus:ring-0 transition-all text-base shadow-inner pointer-events-auto relative z-10"
               autoComplete="off"
             />
             <button
               type="button"
               onClick={() => setShowPassword(!showPassword)}
-              className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-500 hover:text-white transition-colors p-1"
+              className="absolute right-4 top-1/2 -translate-y-1/2 text-[var(--text-muted)] hover:text-[var(--text-primary)] transition-colors p-1"
             >
               {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
             </button>
@@ -398,7 +398,7 @@ export default function MasterPasswordModal() {
           <button
             type="button"
             onClick={() => { setMode('recovery'); setError(''); }}
-            className="text-xs font-semibold text-slate-500 hover:text-blue-400 transition-colors py-1"
+            className="text-xs font-semibold text-[var(--text-muted)] hover:text-[var(--accent-indigo)] transition-colors py-1"
           >
             {t('vault.forgotPassword') || 'Forgot Master Password?'}
           </button>
@@ -406,7 +406,7 @@ export default function MasterPasswordModal() {
           <button
             type="button"
             onClick={dismissVault}
-            className="text-xs font-semibold text-slate-500 hover:text-white transition-colors py-1"
+            className="text-xs font-semibold text-[var(--text-muted)] hover:text-[var(--text-primary)] transition-colors py-1"
           >
             {t('vault.unlockLater') || 'Use Manual Mode'}
           </button>
@@ -437,10 +437,10 @@ export default function MasterPasswordModal() {
           </div>
         </motion.div>
         
-        <h2 className="text-2xl font-extrabold tracking-tight text-white mb-1">
+        <h2 className="text-2xl font-extrabold tracking-tight text-[var(--text-primary)] mb-1">
           {session ? (t('vault.setupVault') || 'Initialize Secure Vault') : (t('vault.localVault') || 'Local Vault Setup')}
         </h2>
-        <p className="text-slate-400 text-sm max-w-[320px] mx-auto leading-relaxed">
+        <p className="text-[var(--text-secondary)] text-sm max-w-[320px] mx-auto leading-relaxed">
           {t('vault.setupDescription') || 'Set up your private database and master password to start encrypting your connections.'}
         </p>
       </div>
@@ -448,7 +448,7 @@ export default function MasterPasswordModal() {
       <div className="space-y-4 relative z-10">
         {/* Database URI */}
         <div className="space-y-2">
-          <label className="text-xs font-bold text-slate-500 uppercase tracking-widest ml-1">
+          <label className="text-xs font-bold text-[var(--text-muted)] uppercase tracking-widest ml-1">
              {mongoUri.includes('mysql') ? 'MySQL Connection' : mongoUri.includes('postgres') ? 'PostgreSQL Connection' : (t('vault.mongoUri') || 'MongoDB Connection URI')}
           </label>
           <div className="relative group">
@@ -459,7 +459,7 @@ export default function MasterPasswordModal() {
               value={mongoUri}
               onChange={(e) => setMongoUri(e.target.value)}
               placeholder="mongodb://user:pass@host:27017/db"
-              className="w-full px-4 py-3 bg-slate-900/80 border border-white/10 rounded-xl text-white placeholder-slate-600 focus:outline-none transition-all text-xs font-mono shadow-inner pointer-events-auto relative z-10"
+              className="w-full px-4 py-3 bg-[var(--bg-primary)]/80 border border-[var(--border-color)] rounded-xl text-[var(--text-primary)] placeholder-[var(--text-muted)] focus:outline-none transition-all text-xs font-mono shadow-inner pointer-events-auto relative z-10"
             />
           </div>
           
@@ -469,7 +469,7 @@ export default function MasterPasswordModal() {
                 key={preset.label}
                 type="button"
                 onClick={() => setMongoUri(preset.uri)}
-                className="px-3 py-1.5 rounded-lg bg-slate-800/50 hover:bg-slate-700/80 border border-white/5 text-[10px] font-bold text-slate-400 hover:text-white transition-all backdrop-blur-sm"
+                className="px-3 py-1.5 rounded-lg bg-[var(--bg-secondary)] hover:bg-[var(--bg-card-hover)] border border-[var(--border-color)] text-[10px] font-bold text-[var(--text-secondary)] hover:text-[var(--text-primary)] transition-all backdrop-blur-sm"
               >
                 {preset.label}
               </button>
@@ -479,23 +479,24 @@ export default function MasterPasswordModal() {
 
         {/* Master Password */}
         <div className="space-y-2">
-          <label className="text-xs font-bold text-slate-500 uppercase tracking-widest ml-1">
+          <label className="text-xs font-bold text-[var(--text-muted)] uppercase tracking-widest ml-1">
             {t('vault.masterPassword') || 'Choose Master Password'}
           </label>
           <div className="relative group">
              <div className="absolute -inset-0.5 bg-gradient-to-r from-emerald-500/30 to-teal-500/30 rounded-xl blur opacity-0 group-focus-within:opacity-100 transition duration-500" />
              <input
+              inputMode="text"
               type={showPassword ? 'text' : 'password'}
-              value={masterPassword}
-              onChange={(e) => setMasterPassword(e.target.value)}
-              placeholder={t('vault.atLeast8') || 'Minimum 8 strong characters'}
-              className="w-full px-4 py-3 bg-slate-900/80 border border-white/10 rounded-xl text-white placeholder-slate-600 focus:outline-none transition-all text-sm shadow-inner pointer-events-auto relative z-10"
-              autoComplete="new-password"
-            />
+               value={masterPassword}
+               onChange={(e) => setMasterPassword(e.target.value)}
+               placeholder={t('vault.atLeast8') || 'Minimum 8 strong characters'}
+               className="w-full px-4 py-3 bg-[var(--bg-primary)]/80 border border-[var(--border-color)] rounded-xl text-[var(--text-primary)] placeholder-[var(--text-muted)] focus:outline-none transition-all text-sm shadow-inner pointer-events-auto relative z-10"
+               autoComplete="new-password"
+             />
             <button
               type="button"
               onClick={() => setShowPassword(!showPassword)}
-              className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-500 hover:text-white p-1"
+              className="absolute right-4 top-1/2 -translate-y-1/2 text-[var(--text-muted)] hover:text-[var(--text-primary)] p-1"
             >
               {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
             </button>
@@ -527,7 +528,7 @@ export default function MasterPasswordModal() {
             value={confirmPassword}
             onChange={(e) => setConfirmPassword(e.target.value)}
             placeholder={t('vault.confirmPassword') || 'Confirm Master Password'}
-            className="w-full px-4 py-3 bg-slate-900/80 border border-white/10 rounded-xl text-white placeholder-slate-600 focus:outline-none transition-all text-sm shadow-inner pointer-events-auto relative z-10"
+            className="w-full px-4 py-3 bg-[var(--bg-primary)]/80 border border-[var(--border-color)] rounded-xl text-[var(--text-primary)] placeholder-[var(--text-muted)] focus:outline-none transition-all text-sm shadow-inner pointer-events-auto relative z-10"
             autoComplete="new-password"
           />
         </div>
@@ -548,7 +549,7 @@ export default function MasterPasswordModal() {
           <button
             type="button"
             onClick={dismissVault}
-            className="flex-1 py-4 px-3 bg-slate-800/50 hover:bg-slate-700/80 border border-white/5 rounded-xl text-slate-400 hover:text-white text-sm font-bold transition-all backdrop-blur-sm"
+            className="flex-1 py-4 px-3 bg-[var(--bg-secondary)] hover:bg-[var(--bg-card-hover)] border border-[var(--border-color)] rounded-xl text-[var(--text-secondary)] hover:text-[var(--text-primary)] text-sm font-bold transition-all backdrop-blur-sm"
           >
             {t('vault.setupLater') || 'Later'}
           </button>
@@ -571,12 +572,12 @@ export default function MasterPasswordModal() {
 
       {/* Security Info Card */}
       <div className="relative group">
-        <div className="absolute inset-0 bg-blue-500/5 blur-xl group-hover:bg-blue-500/10 transition-colors pointer-events-none" />
-        <div className="relative p-4 bg-slate-900/40 border border-white/5 rounded-2xl flex items-start gap-3 backdrop-blur-md">
-          <Shield size={18} className="text-blue-400 mt-1 shrink-0" />
+        <div className="absolute inset-0 bg-[var(--accent-indigo)]/5 blur-xl group-hover:bg-[var(--accent-indigo)]/10 transition-colors pointer-events-none" />
+        <div className="relative p-4 bg-[var(--bg-primary)]/40 border border-[var(--border-color)] rounded-2xl flex items-start gap-3 backdrop-blur-md">
+          <Shield size={18} className="text-[var(--accent-indigo)] mt-1 shrink-0" />
           <div className="space-y-1">
-             <h4 className="text-[11px] font-bold text-blue-400 uppercase tracking-wider">{t('vault.privacyFirst') || 'Zero-Knowledge Privacy'}</h4>
-             <p className="text-[11px] text-slate-400 leading-relaxed font-medium">
+             <h4 className="text-[11px] font-bold text-[var(--accent-indigo)] uppercase tracking-wider">{t('vault.privacyFirst') || 'Zero-Knowledge Privacy'}</h4>
+             <p className="text-[11px] text-[var(--text-secondary)] leading-relaxed font-medium">
                {t('vault.privacyDesc') || 'Your Master Password is never stored on our servers. All encryption happens locally in your browser. If you lose this password, your data is unrecoverable.'}
              </p>
           </div>
@@ -604,10 +605,10 @@ export default function MasterPasswordModal() {
           </div>
         </motion.div>
         
-        <h2 className="text-2xl font-extrabold tracking-tight text-white mb-1">
+        <h2 className="text-2xl font-extrabold tracking-tight text-[var(--text-primary)] mb-1">
           {t('vault.recovery.title') || 'Account Recovery'}
         </h2>
-        <p className="text-slate-400 text-sm max-w-[300px] mx-auto leading-relaxed">
+        <p className="text-[var(--text-secondary)] text-sm max-w-[300px] mx-auto leading-relaxed">
           {t('vault.recovery.desc') || 'We will send a 6-digit verification code to your registered email address to reset the vault access.'}
         </p>
       </div>
@@ -634,7 +635,7 @@ export default function MasterPasswordModal() {
       <div className="flex gap-4 pt-2 relative z-10">
         <button
           onClick={() => { setMode('unlock'); setError(''); }}
-          className="flex-1 py-4 px-4 bg-slate-800/50 hover:bg-slate-700/80 border border-white/5 rounded-xl text-slate-400 hover:text-white text-sm font-bold transition-all backdrop-blur-sm"
+          className="flex-1 py-4 px-4 bg-[var(--bg-secondary)] hover:bg-[var(--bg-card-hover)] border border-[var(--border-color)] rounded-xl text-[var(--text-secondary)] hover:text-[var(--text-primary)] text-sm font-bold transition-all backdrop-blur-sm"
         >
           {t('vault.recovery.back') || 'Go Back'}
         </button>
@@ -673,18 +674,18 @@ export default function MasterPasswordModal() {
           </div>
         </motion.div>
         
-        <h2 className="text-2xl font-extrabold tracking-tight text-white mb-1">
+        <h2 className="text-2xl font-extrabold tracking-tight text-[var(--text-primary)] mb-1">
           {t('vault.verify.title') || 'Verify Ownership'}
         </h2>
-        <p className="text-slate-400 text-sm max-w-[300px] mx-auto leading-relaxed">
+        <p className="text-[var(--text-secondary)] text-sm max-w-[300px] mx-auto leading-relaxed">
           {t('vault.verify.sentTo') || 'Verification code sent to:'} <br/>
-          <span className="text-blue-400 font-bold uppercase tracking-wider">{recoveryEmail}</span>
+          <span className="text-[var(--accent-indigo)] font-bold uppercase tracking-wider">{recoveryEmail}</span>
         </p>
       </div>
 
       <div className="space-y-6 relative z-10">
         <div className="relative group">
-          <div className="absolute -inset-1 bg-gradient-to-r from-blue-500/20 to-indigo-500/20 rounded-2xl blur opacity-100" />
+          <div className="absolute -inset-1 bg-[var(--accent-indigo)]/20 rounded-2xl blur opacity-100" />
           <input
             ref={inputRef}
             type="text"
@@ -692,7 +693,7 @@ export default function MasterPasswordModal() {
             onChange={(e) => setRecoveryCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
             placeholder="000000"
             maxLength={6}
-            className="relative w-full px-6 py-6 bg-slate-900/90 border border-white/10 rounded-2xl text-white text-center text-4xl font-black tracking-[12px] placeholder-slate-700/50 focus:outline-none focus:border-blue-500/50 transition-all shadow-inner pointer-events-auto z-10"
+            className="relative w-full px-6 py-6 bg-[var(--bg-primary)]/90 border border-[var(--border-color)] rounded-2xl text-[var(--text-primary)] text-center text-4xl font-black tracking-[12px] placeholder-[var(--text-muted)] focus:outline-none focus:border-[var(--accent-indigo)]/50 transition-all shadow-inner pointer-events-auto z-10"
             autoComplete="one-time-code"
           />
         </div>
@@ -713,7 +714,7 @@ export default function MasterPasswordModal() {
           <button
             type="button"
             onClick={() => { setMode('recovery'); setError(''); setRecoveryCode(''); }}
-            className="flex-1 py-4 px-4 bg-slate-800/50 hover:bg-slate-700/80 border border-white/5 rounded-xl text-slate-400 hover:text-white text-sm font-bold transition-all backdrop-blur-sm"
+            className="flex-1 py-4 px-4 bg-[var(--bg-secondary)] hover:bg-[var(--bg-card-hover)] border border-[var(--border-color)] rounded-xl text-[var(--text-secondary)] hover:text-[var(--text-primary)] text-sm font-bold transition-all backdrop-blur-sm"
           >
             {t('vault.recovery.back') || 'Go Back'}
           </button>
@@ -737,7 +738,7 @@ export default function MasterPasswordModal() {
           type="button"
           onClick={handleRequestRecovery}
           disabled={loading}
-          className="w-full py-1 text-slate-500 hover:text-blue-400 text-xs font-bold transition-colors flex items-center justify-center gap-2 uppercase tracking-widest"
+          className="w-full py-1 text-[var(--text-muted)] hover:text-[var(--accent-indigo)] text-xs font-bold transition-colors flex items-center justify-center gap-2 uppercase tracking-widest"
         >
           <RefreshCw size={12} className={loading ? 'animate-spin' : ''} /> {t('vault.verify.resend') || 'Resend verification code'}
         </button>

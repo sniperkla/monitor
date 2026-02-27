@@ -55,7 +55,7 @@ export default function SSHApp({ windowId }) {
                  onClick={() => dispatch({ type: 'SET_VIEW', payload: 'dashboard' })}
                  className={`px-4 py-1.5 text-xs font-medium rounded-md transition-all ${
                    state.view === 'dashboard'
-                     ? 'bg-indigo-700 dark:bg-indigo-600 text-white shadow-lg shadow-indigo-500/25'
+                     ? 'bg-[var(--bg-selected)] text-[var(--text-selected)] shadow-lg shadow-[var(--glow-indigo)]/20 border border-[var(--accent-indigo)]/30'
                      : 'text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] group'
                  }`}
                >
@@ -65,7 +65,7 @@ export default function SSHApp({ windowId }) {
                  onClick={() => dispatch({ type: 'SET_VIEW', payload: 'terminal' })}
                  className={`px-4 py-1.5 text-xs font-medium rounded-md transition-all ${
                    state.view === 'terminal'
-                     ? 'bg-indigo-700 dark:bg-indigo-600 text-white shadow-lg shadow-indigo-500/25'
+                     ? 'bg-[var(--bg-selected)] text-[var(--text-selected)] shadow-lg shadow-[var(--glow-indigo)]/20 border border-[var(--accent-indigo)]/30'
                      : 'text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] group'
                  }`}
                >
@@ -75,7 +75,7 @@ export default function SSHApp({ windowId }) {
                  onClick={() => dispatch({ type: 'SET_VIEW', payload: 'files' })}
                  className={`px-4 py-1.5 text-xs font-medium rounded-md transition-all ${
                    state.view === 'files'
-                     ? 'bg-indigo-700 dark:bg-indigo-600 text-white shadow-lg shadow-indigo-500/25'
+                     ? 'bg-[var(--bg-selected)] text-[var(--text-selected)] shadow-lg shadow-[var(--glow-indigo)]/20 border border-[var(--accent-indigo)]/30'
                      : 'text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] group'
                  }`}
                >
@@ -85,7 +85,7 @@ export default function SSHApp({ windowId }) {
                   onClick={() => dispatch({ type: 'SET_VIEW', payload: 'database' })}
                   className={`px-4 py-1.5 text-xs font-medium rounded-md transition-all ${
                     state.view === 'database'
-                      ? 'bg-indigo-700 dark:bg-indigo-600 text-white shadow-lg shadow-indigo-500/25'
+                      ? 'bg-[var(--bg-selected)] text-[var(--text-selected)] shadow-lg shadow-[var(--glow-indigo)]/20 border border-[var(--accent-indigo)]/30'
                       : 'text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] group'
                   }`}
                 >

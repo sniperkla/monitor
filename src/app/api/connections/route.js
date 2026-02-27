@@ -1,11 +1,21 @@
 import { NextResponse } from 'next/server';
+import { getServerSession } from "next-auth/next";
+import { authOptions } from "@/lib/auth";
+import { checkRateLimit } from '@/lib/serverGuard';
 import connectDB from '@/lib/mongodb';
 import { ConnectionRepository } from '@/lib/repositories/ConnectionRepository';
 import { encrypt } from '@/utils/encryption';
 
 // GET all connections
-export async function GET() {
+export async function GET(request) {
   try {
+    const session = await getServerSession(authOptions);
+    if (!session) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
+
+    const clientIP = request.headers.get('x-forwarded-for') || 'unknown';
+    const rateCheck = checkRateLimit(`connections_get:${clientIP}`, 200);
+    if (!rateCheck.allowed) return NextResponse.json({ success: false, error: 'Rate limit exceeded' }, { status: 429 });
+
     const db = await connectDB();
     const repo = new ConnectionRepository(db);
     await repo.init();
@@ -46,6 +56,13 @@ export async function GET() {
 // POST create new connection
 export async function POST(request) {
   try {
+    const session = await getServerSession(authOptions);
+    if (!session) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
+
+    const clientIP = request.headers.get('x-forwarded-for') || 'unknown';
+    const rateCheck = checkRateLimit(`connections_post:${clientIP}`, 50);
+    if (!rateCheck.allowed) return NextResponse.json({ success: false, error: 'Rate limit exceeded' }, { status: 429 });
+
     const db = await connectDB();
     const repo = new ConnectionRepository(db);
     await repo.init();

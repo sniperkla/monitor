@@ -150,7 +150,7 @@ export default function Dashboard({ onNewConnection, onEditConnection }) {
             <span className="text-sm font-medium">{refreshing ? t('ssh.dashboard_ui.syncing') : t('ssh.dashboard_ui.refreshStatus')}</span>
           </button>
           <button 
-            className="flex items-center gap-2 px-5 py-2 rounded-xl bg-indigo-600 border border-indigo-500 text-white hover:bg-indigo-500 transition-all shadow-lg shadow-indigo-600/20 active:scale-95" 
+            className="flex items-center gap-2 px-5 py-2 rounded-xl bg-[var(--bg-selected)] border border-[var(--accent-indigo)]/50 text-[var(--text-selected)] hover:opacity-90 transition-all shadow-lg shadow-[var(--glow-indigo)]/20 active:scale-95" 
             onClick={onNewConnection}
           >
             <Plus size={18} /> 
@@ -170,8 +170,8 @@ export default function Dashboard({ onNewConnection, onEditConnection }) {
           </div>
           <div className="relative z-10 flex flex-col md:flex-row items-center justify-between gap-6">
             <div className="flex items-center gap-4">
-              <div className="w-14 h-14 rounded-2xl bg-indigo-600 flex items-center justify-center shadow-lg shadow-indigo-600/20">
-                <Globe size={28} className="text-white" />
+              <div className="w-14 h-14 rounded-2xl bg-[var(--bg-selected)] border border-[var(--accent-indigo)]/30 flex items-center justify-center shadow-lg shadow-[var(--glow-indigo)]/20">
+                <Globe size={28} className="text-[var(--text-selected)]" />
               </div>
               <div>
                 <h2 className="text-lg font-bold text-[var(--text-primary)]">{t('ssh.dashboard_ui.syncPromo.title')}</h2>

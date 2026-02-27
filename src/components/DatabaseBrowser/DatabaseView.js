@@ -13,7 +13,7 @@ import { io } from 'socket.io-client';
 
 export default function DatabaseView({ connection, onClose }) {
   const { state: appState, apiFetch, dispatch } = useApp();
-  const { state: osState, addNotification, setExportNaming, setAiHistory } = useOS();
+  const { state: osState, addNotification, setExportNaming, setAiHistory, setSshAiPrefs } = useOS();
   const { t } = useTranslation();
   
   const [loading, setLoading] = useState(true);
@@ -28,6 +28,8 @@ export default function DatabaseView({ connection, onClose }) {
   const [aiPrompt, setAiPrompt] = useState('');
   const [isAiLoading, setIsAiLoading] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
+  const [aiModel, setAiModel] = useState('auto');
+  const [usedAiModel, setUsedAiModel] = useState(null);
   const [pendingAction, setPendingAction] = useState(null); // { type: 'DELETE' | 'UPDATE' | 'INSERT', fullQuery: string, mongoAction?: object }
   const fileInputRef = useRef(null);
   const historyRef = useRef(null);
@@ -38,6 +40,7 @@ export default function DatabaseView({ connection, onClose }) {
   const [autoRetry, setAutoRetry] = useState(false);
   const [showNamingSettings, setShowNamingSettings] = useState(false);
   const [showAiHelp, setShowAiHelp] = useState(false);
+  const [aiSettingsOpen, setAiSettingsOpen] = useState(false);
   const [latency, setLatency] = useState(null);
   const [lastAiUpdate, setLastAiUpdate] = useState(0);
   const socketRef = useRef(null);
@@ -283,7 +286,7 @@ export default function DatabaseView({ connection, onClose }) {
   };
 
   const fetchData = async (schemaName, customFilter = null) => {
-    if (!schemaName) return;
+    if (!schemaName) return { success: false, error: 'No schema' };
     setLoading(true);
     try {
       let filterObj = {};
@@ -293,7 +296,7 @@ export default function DatabaseView({ connection, onClose }) {
          } catch (e) {
            addNotification({ title: 'Invalid Query', message: 'Filter must be valid JSON', type: 'error' });
            setLoading(false);
-           return;
+           return { success: false, error: 'Filter must be valid JSON' };
          }
       }
 
@@ -342,7 +345,7 @@ export default function DatabaseView({ connection, onClose }) {
         );
         if (!confirmed) {
             setLoading(false);
-            return;
+            return { success: false, error: 'User cancelled action' };
         }
         
         if (doBackup) {
@@ -374,11 +377,14 @@ export default function DatabaseView({ connection, onClose }) {
         } else {
             setData(resData.data);
         }
+        return { success: true, data: resData.data };
       } else {
         addNotification({ title: 'Query Error', message: resData.error, type: 'error' });
+        return { success: false, error: resData.error };
       }
     } catch (err) {
       addNotification({ title: 'Error', message: err.message, type: 'error' });
+      return { success: false, error: err.message };
     } finally {
       setLoading(false);
     }
@@ -438,23 +444,32 @@ export default function DatabaseView({ connection, onClose }) {
     setAiHistory(newHistory);
   };
 
-  const handleAskAI = async () => {
-    if (!aiPrompt.trim()) return;
-    setIsAiLoading(true);
+  const handleAskAI = async (e, promptOverride = null, isRetry = false, retryCount = 0, initialPrompt = null) => {
+    if (e && e.preventDefault) e.preventDefault();
+    const currentPrompt = promptOverride || aiPrompt;
+    if (!currentPrompt.trim()) return;
+    if (!isRetry) setIsAiLoading(true);
+    
+    const basePrompt = initialPrompt || currentPrompt;
+
     try {
       const res = await apiFetch(`/api/connections/${connection._id}/ai-query`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          prompt: aiPrompt,
+          prompt: currentPrompt,
           provider: connection.dbProvider,
           schemaName: selectedSchema,
-          sampleData: data.slice(0, 3) // Give AI some sample context
+          sampleData: data.slice(0, 10), // Give AI more sample context
+          model: aiModel,
+          history: aiHistory.slice(0, 6).map(h => ({ role: 'user', content: h })),
+          prefs: osState?.sshAiPrefs
         })
       });
       const resData = await res.json();
       if (resData.success) {
         setLastAiUpdate(Date.now());
+        setUsedAiModel(resData.usedModel);
         // Clean any markdown code blocks or AI tags if they leaked through
         // Detect and extract <repeat> tag
         let repeatCount = 1;
@@ -562,11 +577,12 @@ export default function DatabaseView({ connection, onClose }) {
                 });
 
                 // Add to history if not duplicate
-                if (!aiHistory.includes(aiPrompt)) {
-                    const newHistory = [aiPrompt, ...aiHistory].slice(0, 10);
+                if (!isRetry && !aiHistory.includes(basePrompt)) {
+                    const newHistory = [basePrompt, ...aiHistory].slice(0, 10);
                     setAiHistory(newHistory);
                 }
-                setAiPrompt('');
+                if (!isRetry) setAiPrompt('');
+                setIsAiLoading(false);
                 return;
             }
         }
@@ -683,28 +699,44 @@ export default function DatabaseView({ connection, onClose }) {
             } else {
                 setFilterQuery(cleanQuery);
                 setPendingAction(null);
+                const dbRes = await fetchData(selectedSchema, cleanQuery);
+                if (!dbRes?.success && retryCount < 3) {
+                    addNotification({ title: 'AI Auto-Fix', message: `Query failed. Asking AI to fix... (Attempt ${retryCount + 1}/3)`, type: 'info' });
+                    return handleAskAI(null, `The query you generated failed with this error: ${dbRes.error}\n\nPlease fix the query, using correct syntax and table names.\nOriginal requirement: ${basePrompt}`, true, retryCount + 1, basePrompt);
+                }
             }
         } else {
             setFilterQuery(cleanQuery);
             setPendingAction(null);
+            const dbRes = await fetchData(selectedSchema, cleanQuery);
+            if (!dbRes?.success && retryCount < 3) {
+                addNotification({ title: 'AI Auto-Fix', message: `Query failed. Asking AI to fix... (Attempt ${retryCount + 1}/3)`, type: 'info' });
+                return handleAskAI(null, `The query you generated failed with this error: ${dbRes.error}\n\nPlease fix the query, using correct syntax and table names.\nOriginal requirement: ${basePrompt}`, true, retryCount + 1, basePrompt);
+            }
         }
 
-        addNotification({ title: 'AI Generated', message: 'Query generated successfully', type: 'success' });
+        if (!isRetry) {
+             addNotification({ title: 'AI Generated', message: 'Query executed successfully', type: 'success' });
+        }
         
         // Add to history if not duplicate
-        if (!aiHistory.includes(aiPrompt)) {
-            const newHistory = [aiPrompt, ...aiHistory].slice(0, 10);
+        if (!isRetry && !aiHistory.includes(basePrompt)) {
+            const newHistory = [basePrompt, ...aiHistory].slice(0, 10);
             setAiHistory(newHistory);
         }
         
-        setAiPrompt(''); // Clear prompt after success
+        if (!isRetry) setAiPrompt(''); // Clear prompt after success
       } else {
-        addNotification({ title: 'AI Error', message: resData.error, type: 'error' });
+        if (isRetry) {
+             addNotification({ title: 'AI Auto-Fix Failed', message: resData.error, type: 'error' });
+        } else {
+             addNotification({ title: 'AI Error', message: resData.error, type: 'error' });
+        }
       }
     } catch (err) {
       addNotification({ title: 'Error', message: err.message, type: 'error' });
     } finally {
-      setIsAiLoading(false);
+      if (!isRetry) setIsAiLoading(false);
     }
   };
 
@@ -1204,7 +1236,7 @@ export default function DatabaseView({ connection, onClose }) {
                       <Search size={14} />
                    </button>
 
-                    <div className="w-px h-5 bg-white/8 mx-1" />
+                    <div className="w-px h-5 bg-[var(--border-color)] mx-1" />
 
                     {/* Data Actions */}
                     <button 
@@ -1541,15 +1573,25 @@ export default function DatabaseView({ connection, onClose }) {
                         </div>
 
                         <div className="flex-1 relative">
-                             <input 
-                                 type="text"
-                                 value={aiPrompt}
-                                 disabled={!!pendingAction}
-                                 onChange={(e) => setAiPrompt(e.target.value)}
-                                 onKeyDown={(e) => e.key === 'Enter' && !pendingAction && handleAskAI()}
-                                 placeholder={t('database.ai.placeholder')}
-                                 className={`w-full bg-[var(--bg-primary)] border border-purple-500/30 rounded-xl py-2 pl-4 pr-12 text-xs focus:outline-none focus:border-purple-500 focus:ring-1 focus:ring-purple-500/20 text-[var(--text-primary)] placeholder:text-purple-400/40 dark:placeholder:text-purple-300/30 shadow-inner transition-all ${pendingAction ? 'opacity-50 cursor-not-allowed' : ''}`}
-                             />
+                              <div className="flex flex-col gap-1 flex-1 min-w-0">
+                                <input 
+                                    type="text"
+                                    value={aiPrompt}
+                                    disabled={!!pendingAction}
+                                    onChange={(e) => setAiPrompt(e.target.value)}
+                                    onKeyDown={(e) => e.key === 'Enter' && !pendingAction && handleAskAI(e)}
+                                    placeholder={t('database.ai.placeholder')}
+                                    className={`w-full bg-[var(--bg-primary)] border border-purple-500/30 rounded-xl py-2 pl-4 pr-12 text-xs focus:outline-none focus:border-purple-500 focus:ring-1 focus:ring-purple-500/20 text-[var(--text-primary)] placeholder:text-purple-400/40 dark:placeholder:text-purple-300/30 shadow-inner transition-all ${pendingAction ? 'opacity-50 cursor-not-allowed' : ''}`}
+                                />
+                                {usedAiModel && (
+                                   <div className="flex items-center gap-1.5 px-2 animate-in fade-in slide-in-from-left-2 duration-500">
+                                      <span className="text-[8px] font-bold text-purple-400/60 uppercase tracking-tighter">⚡ Used:</span>
+                                      <span className="text-[8px] font-medium text-purple-400/50 bg-purple-500/5 px-1.5 py-0.5 rounded border border-purple-500/10">
+                                         {usedAiModel.split('/').pop().replace(/-/g, ' ')}
+                                      </span>
+                                   </div>
+                                )}
+                              </div>
                              
                              {isAiLoading ? (
                                  <div className="absolute right-12 top-1/2 -translate-y-1/2">
@@ -1613,17 +1655,58 @@ export default function DatabaseView({ connection, onClose }) {
                                 )}
                             </div>
 
+                            <div className="relative">
+                                <select 
+                                    value={aiModel} 
+                                    onChange={(e) => {
+                                        setAiModel(e.target.value);
+                                        if (e.target.value === 'manual') setAiSettingsOpen(true);
+                                    }} 
+                                    disabled={isAiLoading || !!pendingAction}
+                                    className={`text-[11px] rounded bg-purple-500/10 border border-purple-500/20 px-2 h-[38px] text-[var(--text-primary)] focus:outline-none focus:border-purple-500/50 cursor-pointer ${pendingAction ? 'opacity-50 cursor-not-allowed' : ''}`}
+                                    title="AI Model"
+                                >
+                                    <option value="auto">✨ Auto Select</option>
+                                    <option value="llama-3.1-8b-instant">🥉 Llama 3.1 8B (Thinking)</option>
+                                    <option value="meta-llama/llama-4-scout-17b-16e-instruct">🥇 Llama 4 Scout (Primary)</option>
+                                    <option value="llama-3.3-70b-versatile">🥈 Llama 3.3 70B (Heavy/Large)</option>
+                                    <option value="manual">🛠 Custom...</option>
+                                </select>
+                                
+                                {aiModel === 'manual' && (
+                                    <button 
+                                        onClick={() => setAiSettingsOpen(!aiSettingsOpen)} 
+                                        className="absolute -right-2 -top-2 bg-purple-500 text-white rounded-full p-0.5 shadow-lg border border-purple-400"
+                                        title="Configure Manual AI"
+                                    >
+                                        <Settings2 size={10} />
+                                    </button>
+                                )}
+
+                                {aiSettingsOpen && aiModel === 'manual' && (
+                                    <div className="absolute top-10 right-0 w-64 p-3 bg-[var(--bg-secondary)] border border-purple-500/30 rounded-xl shadow-[0_20px_50px_rgba(0,0,0,0.5)] z-[100] animate-in slide-in-from-top-2 backdrop-blur-xl space-y-2">
+                                        <div className="flex items-center justify-between border-b border-purple-500/20 pb-1 mb-2">
+                                            <span className="text-[10px] font-bold text-purple-400 uppercase">Manual AI Settings</span>
+                                            <button onClick={() => setAiSettingsOpen(false)} className="text-[10px] text-purple-400/60 hover:text-purple-400">Close</button>
+                                        </div>
+                                        <input type="text" placeholder="Endpoint URL (e.g. OpenAI format)" value={osState?.sshAiPrefs?.aiEndpoint || ''} onChange={(e) => setSshAiPrefs({ aiEndpoint: e.target.value })} className="w-full text-[10px] rounded bg-black/30 border border-[var(--border-color)] px-2 py-1.5 outline-none focus:border-purple-500" style={{ color: 'var(--text-primary)' }} title="API Endpoint URL" />
+                                        <input type="password" placeholder="API Key" value={osState?.sshAiPrefs?.aiApiKey || ''} onChange={(e) => setSshAiPrefs({ aiApiKey: e.target.value })} className="w-full text-[10px] rounded bg-black/30 border border-[var(--border-color)] px-2 py-1.5 outline-none focus:border-purple-500" style={{ color: 'var(--text-primary)' }} title="API Key" />
+                                        <input type="text" placeholder="Model Name (e.g. gpt-4o)" value={osState?.sshAiPrefs?.aiCustomModel || ''} onChange={(e) => setSshAiPrefs({ aiCustomModel: e.target.value })} className="w-full text-[10px] rounded bg-black/30 border border-[var(--border-color)] px-2 py-1.5 outline-none focus:border-purple-500" style={{ color: 'var(--text-primary)' }} title="Custom Model Name" />
+                                        <div className="text-[9px] text-[var(--text-muted)] italic leading-tight pt-1">Settings are shared with Terminal AI config. Requires OpenAI-compatible endpoint.</div>
+                                    </div>
+                                )}
+                            </div>
+
                             <button 
-                                disabled={isAiLoading || !aiPrompt.trim()}
+                                disabled={isAiLoading || !aiPrompt.trim() || !!pendingAction}
                                 onClick={handleAskAI}
                                 className="px-6 py-2 bg-purple-600 hover:bg-purple-500 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-xl text-xs font-bold transition-all shadow-lg shadow-purple-500/20 shrink-0 h-[38px] flex items-center gap-2"
                             >
                                 {isAiLoading ? t('database.ai.loading') : t('database.ai.generate')}
                             </button>
                     </div>
-                 </div>
-             )}
-
+                </div>
+         )}
              {/* Table/Data View */}
              <div className="flex-1 overflow-auto bg-[var(--bg-primary)] p-4 custom-scrollbar">
                 {loading && data.length === 0 ? (

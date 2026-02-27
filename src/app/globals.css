@@ -1,6 +1,7 @@
 @import "tailwindcss";
 
 :root {
+  overscroll-behavior-x: none;
   /* Default to Dark Mode Tokens */
   --bg-primary: #0a0e1a;
   --bg-secondary: #0f172a;
@@ -28,6 +29,12 @@
   --taskbar-bg: rgba(10, 10, 20, 0.75);
   --bg-primary-overlay: rgba(0, 0, 0, 0.7);
   --shadow-strong: rgba(0, 0, 0, 0.4);
+  --bg-selected: var(--accent-indigo);
+  --text-selected: #ffffff;
+  --desktop-icon-text: #ffffff;
+  --desktop-icon-glyph: #ffffff;
+  --neumorphic-shadow-dark: 6px 6px 12px rgba(0, 0, 0, 0.3);
+  --neumorphic-shadow-light: -6px -6px 12px rgba(255, 255, 255, 0.05);
 }
 
 /* Force Light Mode */
@@ -58,6 +65,12 @@
   --taskbar-bg: rgba(255, 255, 255, 0.85);
   --bg-primary-overlay: rgba(255, 255, 255, 0.6);
   --shadow-strong: rgba(0, 0, 0, 0.15);
+  --bg-selected: rgba(79, 70, 229, 0.2);
+  --text-selected: #4f46e5;
+  --desktop-icon-text: var(--text-primary);
+  --desktop-icon-glyph: var(--text-primary);
+  --neumorphic-shadow-dark: 6px 6px 12px rgba(0, 0, 0, 0.1);
+  --neumorphic-shadow-light: -6px -6px 12px rgba(255, 255, 255, 0.8);
 }
 
 /* Force Dark Mode (Redundant but good for explicit overrides) */
@@ -76,11 +89,15 @@
   --taskbar-bg: rgba(10, 10, 20, 0.75);
   --bg-primary-overlay: rgba(0, 0, 0, 0.7);
   --shadow-strong: rgba(0, 0, 0, 0.4);
+  --desktop-icon-text: #ffffff;
+  --desktop-icon-glyph: #ffffff;
+  --neumorphic-shadow-dark: 6px 6px 12px rgba(0, 0, 0, 0.3);
+  --neumorphic-shadow-light: -6px -6px 12px rgba(255, 255, 255, 0.05);
 }
 
 /* Auto Theme (if html has no .light or .dark class) */
 @media (prefers-color-scheme: light) {
-  :root:not(.dark):not(.light) {
+  :root:not(.dark):not(.light):not(.retro):not(.cyberpunk) {
     --bg-primary: #ffffff;
     --bg-secondary: #f8fafc;
     --bg-tertiary: #f1f5f9;
@@ -105,6 +122,12 @@
     --terminal-green: #15803d;
     --window-bg: rgba(255, 255, 255, 0.95);
     --taskbar-bg: rgba(255, 255, 255, 0.85);
+    --bg-selected: rgba(79, 70, 229, 0.2);
+    --text-selected: #4f46e5;
+    --desktop-icon-text: var(--text-primary);
+    --desktop-icon-glyph: var(--text-primary);
+    --neumorphic-shadow-dark: 6px 6px 12px rgba(0, 0, 0, 0.1);
+    --neumorphic-shadow-light: -6px -6px 12px rgba(255, 255, 255, 0.8);
   }
 }
 
@@ -122,6 +145,538 @@
   --text-muted: #64748b;
   --window-bg: rgba(15, 23, 42, 0.85);
   --taskbar-bg: rgba(10, 10, 20, 0.75);
+}
+
+/* Fallout/Pip-Boy Retro Theme */
+.retro {
+  --bg-primary: #050505;
+  --bg-secondary: #0a0b08;
+  --bg-tertiary: #0f100a;
+  --bg-card: rgba(10, 12, 8, 0.9);
+  --bg-card-hover: rgba(20, 25, 15, 0.95);
+  --border-color: rgba(26, 255, 26, 0.2);
+  --border-hover: rgba(26, 255, 26, 0.5);
+  --text-primary: #18e12c;
+  --text-secondary: #12b022;
+  --text-muted: #0d8a1a;
+  --accent-indigo: #18e12c;
+  --accent-indigo-hover: #1aff1a;
+  --accent-emerald: #18e12c;
+  --accent-amber: #18e12c;
+  --accent-rose: #ff3333;
+  --accent-cyan: #18e12c;
+  --accent-purple: #18e12c;
+  --glow-indigo: rgba(26, 255, 26, 0.15);
+  --glow-emerald: rgba(26, 255, 26, 0.15);
+  --glow-rose: rgba(255, 51, 51, 0.15);
+  --terminal-bg: #050505;
+  --terminal-green: #1aff1a;
+  --window-bg: rgba(5, 5, 5, 0.98);
+  --taskbar-bg: rgba(5, 5, 5, 0.95);
+  --bg-primary-overlay: rgba(0, 5, 0, 0.85);
+  --shadow-strong: rgba(24, 225, 44, 0.3);
+  --bg-selected: rgba(24, 225, 44, 0.2);
+  --text-selected: #18e12c;
+  --desktop-icon-text: #18e12c;
+  --desktop-icon-glyph: #18e12c;
+}
+
+.retro {
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 0.95rem;
+}
+
+.retro *:not(.font-mono):not(code):not(pre):not(.terminal):not(.xterm):not(.xterm *) {
+  font-family: 'Share Tech Mono', monospace !important;
+  font-weight: 400 !important; 
+}
+
+/* Bump up text sizes slightly, but not as much as before since Share Tech Mono is bigger */
+.retro .text-\[9px\] { font-size: 11px !important; }
+.retro .text-\[10px\] { font-size: 12px !important; }
+.retro .text-\[11px\] { font-size: 13px !important; }
+.retro .text-xs { font-size: 0.85rem !important; }
+.retro .text-sm { font-size: 1rem !important; line-height: 1.3 !important; }
+.retro .text-base { font-size: 1.1rem !important; }
+.retro .text-lg { font-size: 1.25rem !important; }
+.retro .text-xl { font-size: 1.5rem !important; }
+.retro .text-2xl { font-size: 1.8rem !important; }
+
+.retro * {
+  text-shadow: 0 0 1px rgba(24, 225, 44, 0.4);
+  letter-spacing: 0.02em;
+  -webkit-font-smoothing: antialiased; /* Re-enable for smooth web font */
+}
+
+.retro h1, .retro h2, .retro h3, .retro .text-lg, .retro .text-xl, .retro .text-2xl {
+  text-transform: uppercase;
+  color: #1aff1a;
+  letter-spacing: 0.05em;
+}
+
+.retro .font-mono, .retro code, .retro pre {
+  font-family: 'Share Tech Mono', monospace !important;
+  font-size: 0.92em;
+  letter-spacing: normal;
+  font-weight: inherit !important;
+  text-shadow: none !important;
+  -webkit-font-smoothing: antialiased;
+}
+
+.retro ::selection {
+  background: rgba(26, 255, 26, 0.25);
+  color: #000;
+}
+
+@keyframes retro-grid-scroll {
+  0% { transform: perspective(500px) rotateX(60deg) translateY(0); }
+  100% { transform: perspective(500px) rotateX(60deg) translateY(40px); }
+}
+
+.retro .gradient-bg::before {
+  content: "";
+  position: fixed;
+  top: -50%; left: -50%; width: 200%; height: 200%;
+  background-image: 
+    linear-gradient(rgba(24, 225, 44, 0.3) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(24, 225, 44, 0.3) 1px, transparent 1px);
+  background-size: 40px 40px;
+  transform-origin: center top;
+  animation: retro-grid-scroll 3s linear infinite;
+  z-index: 0;
+  opacity: 0.25;
+  pointer-events: none;
+  /* 3D SVG Grid Overlay */
+  -webkit-mask-image: radial-gradient(ellipse at center, black 20%, transparent 70%);
+  mask-image: radial-gradient(ellipse at center, black 20%, transparent 70%);
+}
+
+.retro .status-online {
+  background: var(--accent-indigo);
+  box-shadow: 0 0 10px rgba(26, 255, 26, 0.8);
+  animation: pulse-pipboy 2s infinite;
+}
+
+@keyframes pulse-pipboy {
+  0%, 100% { box-shadow: 0 0 8px rgba(26, 255, 26, 0.6); }
+  50% { box-shadow: 0 0 18px rgba(26, 255, 26, 1); }
+}
+
+@keyframes crt-flicker {
+  0% { opacity: 0.97; }
+  5% { opacity: 0.95; }
+  10% { opacity: 0.98; }
+  15% { opacity: 0.94; }
+  20% { opacity: 0.98; }
+  25% { opacity: 0.95; }
+  30% { opacity: 0.98; }
+  100% { opacity: 1; }
+}
+
+@keyframes terminal-blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
+
+@keyframes phosphor-pulse {
+  0% { filter: brightness(1) contrast(1); }
+  50% { filter: brightness(1.1) contrast(1.1); }
+  100% { filter: brightness(1) contrast(1); }
+}
+
+.retro::before {
+  content: " ";
+  display: block;
+  position: fixed;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  right: 0;
+  background: 
+    linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.25) 50%), 
+    linear-gradient(90deg, rgba(26, 255, 26, 0.05), rgba(0, 255, 0, 0.01), rgba(0, 0, 255, 0.05));
+  z-index: 10000;
+  background-size: 100% 4px, 4px 100%;
+  pointer-events: none;
+  opacity: 0.3;
+}
+
+/* Moving scanline effect */
+.retro::after {
+  content: " ";
+  display: block;
+  position: fixed;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  right: 0;
+  background: linear-gradient(0deg, transparent 0%, rgba(26, 255, 26, 0.1) 50%, transparent 100%);
+  z-index: 10002;
+  pointer-events: none;
+  height: 50px;
+  animation: scanline 8s linear infinite;
+}
+
+/* Vignette overlay */
+.retro-vignette {
+  content: " ";
+  display: block;
+  position: fixed;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  right: 0;
+  background: 
+    radial-gradient(ellipse at center, transparent 30%, rgba(0, 0, 0, 0.5) 100%),
+    radial-gradient(ellipse at center, rgba(24, 225, 44, 0.05) 0%, transparent 80%),
+    url("data:image/svg+xml,%3Csvg width='4' height='4' viewBox='0 0 4 4' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M0 0h1v4H0zm2 0h1v4H2z' fill='rgba(24,225,44,0.04)'/%3E%3Cpath d='M0 0h4v1H0zm0 2h4v1H0z' fill='rgba(0,0,0,0.15)'/%3E%3C/svg%3E");
+  z-index: 10001;
+  pointer-events: none;
+  box-shadow: inset 0 0 60px rgba(0, 0, 0, 0.8);
+}
+
+.retro body {
+  background-color: #050505 !important;
+  animation: phosphor-pulse 8s ease-in-out infinite;
+}
+
+.retro .glass {
+  background: rgba(10, 15, 10, 0.9);
+  border: 2px solid rgba(26, 255, 26, 0.4);
+  box-shadow: 
+    inset 0 0 20px rgba(26, 255, 26, 0.1),
+    0 0 15px rgba(26, 255, 26, 0.1);
+  backdrop-filter: blur(8px);
+}
+
+.retro .card {
+  border: 1px solid rgba(26, 255, 26, 0.3);
+  background: rgba(10, 15, 10, 0.85);
+  box-shadow: 0 0 15px rgba(26, 255, 26, 0.05);
+  position: relative;
+}
+
+.retro .card::before {
+  content: "PROPERTY OF VAULT-TEC";
+  position: absolute;
+  top: 4px;
+  right: 8px;
+  font-size: 8px;
+  opacity: 0.3;
+  letter-spacing: 1px;
+}
+
+/* Button and list styling for retro theme */
+.retro .btn-primary {
+  background: rgba(26, 255, 26, 0.05);
+  border: 2px solid rgba(26, 255, 26, 0.6);
+  color: #1aff1a;
+  text-shadow: 0 0 8px rgba(26, 255, 26, 0.8);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+
+.retro .btn-primary:hover {
+  background: rgba(26, 255, 26, 0.3);
+  box-shadow: 0 0 25px rgba(26, 255, 26, 0.5);
+  color: #1aff1a;
+}
+
+.retro .taskbar {
+  background: rgba(5, 8, 5, 0.95);
+  border-top: 1px solid rgba(26, 255, 26, 0.1);
+}
+
+/* Analog Terminal Gimmicks */
+.pip-boy-terminal, .pip-boy-terminal * {
+  font-family: 'VT323', 'Courier New', monospace !important;
+}
+
+.pip-boy-terminal {
+  position: relative;
+  overflow: hidden;
+  box-shadow: inset 0 0 20px rgba(24, 225, 44, 0.2);
+  border-radius: 8px;
+}
+
+.pip-boy-terminal canvas {
+  filter: drop-shadow(0 0 2px rgba(24, 225, 44, 0.8)) brightness(1.1) contrast(1.1) blur(0.3px);
+}
+
+.pip-boy-terminal::after {
+  content: " ";
+  display: block;
+  position: absolute;
+  top: 0; left: 0; bottom: 0; right: 0;
+  background: 
+    linear-gradient(rgba(18, 16, 16, 0.1) 50%, rgba(0, 0, 0, 0.1) 50%),
+    radial-gradient(ellipse at center, transparent 40%, rgba(0, 0, 0, 0.5) 100%),
+    radial-gradient(ellipse at center top, rgba(255, 255, 255, 0.08) 0%, transparent 40%);
+  background-size: 100% 2px, 100% 100%, 100% 100%;
+  pointer-events: none;
+  z-index: 10;
+  border-radius: inherit;
+  box-shadow: inset 0 20px 50px rgba(0, 0, 0, 0.8), inset 0 0 100px rgba(0, 0, 0, 0.6);
+}
+
+/* Add a very subtle 'static' grain just for terminal */
+@keyframes terminal-static {
+  0% { background-position: 0 0; }
+  100% { background-position: 100% 100%; }
+}
+
+.pip-boy-terminal::before {
+  content: "";
+  position: absolute;
+  top: 0; left: 0; width: 100%; height: 100%;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noiseFilter'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.65' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noiseFilter)'/%3E%3C/svg%3E");
+  opacity: 0.03;
+  pointer-events: none;
+  z-index: 11;
+  animation: terminal-static 0.2s steps(4) infinite;
+}
+
+/* Cyberpunk Theme */
+.cyberpunk {
+  --bg-primary: #050510;
+  --bg-secondary: #0a0a16;
+  --bg-tertiary: #10101e;
+  --bg-card: rgba(10, 10, 22, 0.85);
+  --bg-card-hover: rgba(20, 20, 36, 0.9);
+  --border-color: rgba(0, 243, 255, 0.4);
+  --border-hover: rgba(255, 0, 255, 0.8);
+  --text-primary: #f8f8ff;
+  --text-secondary: #00f3ff;
+  --text-muted: #8b8b9a;
+  --accent-indigo: #00f3ff;
+  --accent-indigo-hover: #50ffff;
+  --accent-emerald: #00ffaa;
+  --accent-amber: #ffcc00;
+  --accent-rose: #ff00ff;
+  --accent-cyan: #00f3ff;  
+  --accent-purple: #9d00ff; 
+  --glow-indigo: rgba(0, 243, 255, 0.35);
+  --glow-emerald: rgba(0, 255, 170, 0.25);
+  --glow-rose: rgba(255, 0, 255, 0.35);
+  --terminal-bg: #030308;
+  --terminal-green: #00f3ff;
+  --window-bg: rgba(5, 5, 16, 0.95);
+  --taskbar-bg: rgba(5, 5, 16, 0.9);
+  --bg-primary-overlay: rgba(0, 0, 5, 0.85);
+  --shadow-strong: rgba(255, 0, 255, 0.4);
+  --bg-selected: rgba(255, 0, 255, 0.25);
+  --text-selected: #ffffff;
+  --desktop-icon-text: #ffffff;
+  --desktop-icon-glyph: #00f3ff;
+  --neumorphic-shadow-dark: 4px 4px 10px rgba(0, 0, 0, 0.9);
+  --neumorphic-shadow-light: -2px -2px 10px rgba(0, 243, 255, 0.1);
+}
+
+.cyberpunk *:not(.xterm):not(.xterm *):not(code):not(pre) {
+  /* Using Rajdhani, Orbitron, or similar cyberpunkish fonts if available, otherwise fallback */
+  font-family: 'Rajdhani', 'Orbitron', 'Inter', sans-serif !important;
+}
+
+.cyberpunk ::selection {
+  background: rgba(236, 72, 153, 0.4);
+  color: #fff;
+}
+
+.cyberpunk body {
+  background-color: #050510 !important;
+}
+
+/* Base geometric grid gimmick */
+.cyberpunk::before {
+  content: "";
+  position: fixed;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background: 
+    linear-gradient(rgba(0, 243, 255, 0.08) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(0, 243, 255, 0.08) 1px, transparent 1px);
+  background-size: 30px 30px;
+  background-position: center;
+  z-index: 0;
+  pointer-events: none;
+  opacity: 1;
+}
+
+@keyframes scanline-scroll {
+  0% { background-position: 0 0; }
+  100% { background-position: 0 4px; }
+}
+
+/* Chromatic aberration overlay with moving scanlines */
+.cyberpunk::after {
+  content: "";
+  position: fixed;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background: linear-gradient(
+    transparent 50%, 
+    rgba(255, 0, 255, 0.04) 50%
+  );
+  background-size: 100% 4px;
+  z-index: 9999;
+  pointer-events: none;
+  box-shadow: inset 0 0 120px rgba(0, 243, 255, 0.1);
+  animation: scanline-scroll 2s linear infinite;
+}
+
+/* Glass modification for cyberpunk */
+.cyberpunk .glass {
+  background: rgba(10, 10, 22, 0.9);
+  border: 1px solid rgba(0, 243, 255, 0.4);
+  box-shadow: 
+    0 0 15px rgba(0, 243, 255, 0.1),
+    inset 0 0 20px rgba(255, 0, 255, 0.1);
+  backdrop-filter: blur(8px);
+  border-radius: 0;
+  border-left: 3px solid #00f3ff;
+}
+
+.cyberpunk .card {
+  border: 1px solid rgba(0, 243, 255, 0.3);
+  background: rgba(10, 10, 22, 0.85);
+  border-radius: 0;
+  border-bottom: 2px solid #ff00ff;
+}
+
+.cyberpunk .btn-primary {
+  background: transparent;
+  color: #00f3ff;
+  border: 1px solid #00f3ff;
+  border-radius: 0;
+  text-transform: uppercase;
+  font-weight: 700;
+  letter-spacing: 2px;
+  position: relative;
+  box-shadow: 0 0 10px rgba(0, 243, 255, 0.3), inset 0 0 5px rgba(0, 243, 255, 0.2);
+  overflow: hidden;
+}
+
+.cyberpunk .btn-primary:hover {
+  background: rgba(0, 243, 255, 0.2);
+  color: #fff;
+  box-shadow: 0 0 20px rgba(0, 243, 255, 0.8), inset 0 0 10px rgba(0, 243, 255, 0.5);
+  text-shadow: 0 0 8px #fff;
+}
+
+/* Corner cutoff accents on primary buttons */
+.cyberpunk .btn-primary::after {
+  content: '';
+  position: absolute;
+  top: 0; right: 0;
+  width: 10px; height: 10px;
+  border-bottom: 10px solid transparent;
+  border-right: 10px solid #ff00ff;
+}
+
+.cyberpunk .btn-secondary {
+  border-radius: 0;
+  border: 1px solid var(--border-color);
+  background: rgba(24, 24, 27, 0.6);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+
+.cyberpunk .taskbar > div {
+  border-radius: 0 !important;
+  border-bottom: 2px solid #ff00ff !important;
+  border-left: 2px solid #00f3ff !important;
+  background: rgba(5, 5, 16, 0.95) !important;
+  box-shadow: 0 0 15px rgba(255, 0, 255, 0.3) !important;
+}
+
+.cyberpunk .window-container {
+  border-radius: 0 !important;
+  border: 1px solid var(--border-color);
+  box-shadow: 0 0 20px rgba(0, 243, 255, 0.2);
+}
+
+.cyberpunk .window-titlebar {
+  border-radius: 0 !important;
+  border-bottom: 1px solid var(--border-color);
+  background: linear-gradient(90deg, rgba(0, 243, 255, 0.15) 0%, rgba(255, 0, 255, 0.1) 100%);
+}
+
+.cyberpunk .terminal-window {
+  border-radius: 0 !important;
+  border: 1px solid #00f3ff;
+  box-shadow: 0 0 20px rgba(0, 243, 255, 0.3);
+}
+
+/* Glitch animation gimmick */
+@keyframes cyberpunk-glitch {
+  0%   { transform: translate(0); filter: drop-shadow(0 0 10px rgba(0, 243, 255, 0.8)); }
+  10%  { transform: translate(-4px, 2px); filter: drop-shadow(4px 0 0 rgba(255, 0, 255, 0.8)) drop-shadow(-4px 0 0 rgba(0, 243, 255, 0.8)); }
+  20%  { transform: translate(4px, -2px); filter: drop-shadow(-4px 0 0 rgba(255, 0, 255, 0.8)) drop-shadow(4px 0 0 rgba(0, 243, 255, 0.8)); }
+  30%  { transform: translate(0); filter: drop-shadow(0 0 10px rgba(0, 243, 255, 0.8)); }
+  100% { transform: translate(0); filter: drop-shadow(0 0 10px rgba(0, 243, 255, 0.8)); }
+}
+
+.cyberpunk .desktop-icon:hover {
+  animation: cyberpunk-glitch 0.5s infinite;
+}
+
+/* Glowing Headers */
+
+.cyberpunk h1, .cyberpunk h2, .cyberpunk h3, .cyberpunk h4, .cyberpunk strong {
+  text-shadow: 0 0 8px rgba(0, 243, 255, 0.6), 0 0 2px rgba(255, 255, 255, 0.6);
+  letter-spacing: 1px;
+}
+
+/* Custom Cyberpunk Scrollbar */
+.cyberpunk *::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+.cyberpunk *::-webkit-scrollbar-track {
+  background: #050510;
+  border-left: 1px solid rgba(0, 243, 255, 0.15);
+}
+.cyberpunk *::-webkit-scrollbar-thumb {
+  background: rgba(255, 0, 255, 0.5);
+  border-radius: 0;
+  border: 1px solid #00f3ff;
+}
+.cyberpunk *::-webkit-scrollbar-thumb:hover {
+  background: #00f3ff;
+  border-color: #ff00ff;
+  box-shadow: 0 0 10px #00f3ff;
+}
+.cyberpunk * {
+  scrollbar-color: rgba(255, 0, 255, 0.5) #050510;
+}
+
+/* Neon Inputs */
+.cyberpunk input:not(.xterm-helper-textarea), 
+.cyberpunk textarea:not(.xterm-helper-textarea), 
+.cyberpunk select {
+  background: rgba(5, 5, 16, 0.6) !important;
+  border: 1px solid rgba(0, 243, 255, 0.4) !important;
+  color: #00f3ff !important;
+  border-radius: 0 !important;
+  transition: all 0.2s ease;
+}
+.cyberpunk input:not(.xterm-helper-textarea):focus, 
+.cyberpunk textarea:not(.xterm-helper-textarea):focus, 
+.cyberpunk select:focus {
+  outline: none !important;
+  border-color: #ff00ff !important;
+  box-shadow: 0 0 15px rgba(255, 0, 255, 0.3), inset 0 0 5px rgba(255, 0, 255, 0.2) !important;
+}
+
+/* Cyberpunk Active Elements Pulse */
+@keyframes neon-pulse {
+  0% { box-shadow: 0 0 5px rgba(0, 243, 255, 0.2); }
+  50% { box-shadow: 0 0 20px rgba(0, 243, 255, 0.6); }
+  100% { box-shadow: 0 0 5px rgba(0, 243, 255, 0.2); }
+}
+
+/* Reparse trigger for Next.js */
+
+.cyberpunk .taskbar button:hover, .cyberpunk .window-titlebar:hover {
+  animation: neon-pulse 2s infinite;
 }
 
 * {
@@ -174,9 +729,10 @@
 body {
   background: var(--bg-primary);
   color: var(--text-primary);
-  font-family: "Inter", sans-serif;
+  font-family: "Inter", "Prompt", sans-serif;
   min-height: 100vh;
   overflow-x: hidden;
+  overscroll-behavior-x: none;
 }
 
 /* Glass morphism effects */
@@ -336,7 +892,7 @@ body {
   width: 100%;
   transition: all 0.3s ease;
   outline: none;
-  font-family: "Inter", sans-serif;
+  font-family: "Inter", "Prompt", sans-serif;
 }
 
 .input-field:focus {
@@ -361,7 +917,7 @@ body {
   outline: none;
   cursor: pointer;
   appearance: none;
-  font-family: "Inter", sans-serif;
+  font-family: "Inter", "Prompt", sans-serif;
 }
 
 .select-field:focus {
@@ -683,7 +1239,61 @@ body {
   box-shadow: 0 0 0 2px var(--accent-indigo);
 }
 
-/* Responsive */
+/* Global Responsive Adjustments */
+@media (max-width: 768px) {
+  :root {
+    --taskbar-size: 48px;
+  }
+
+  .taskbar {
+    height: var(--taskbar-size) !important;
+  }
+  
+  .taskbar.h-full {
+     width: var(--taskbar-size) !important;
+  }
+
+  .desktop-icon {
+    width: 70px !important;
+    height: 70px !important;
+  }
+
+  .desktop-icon .icon-wrapper {
+    width: 32px !important;
+    height: 32px !important;
+  }
+
+  .desktop-icon span {
+    font-size: 10px !important;
+  }
+
+  h1 { font-size: 1.5rem !important; }
+  h2 { font-size: 1.25rem !important; }
+  
+  .window-container {
+     border-radius: 0 !important;
+  }
+  
+  .title-bar {
+     height: 36px !important;
+  }
+}
+
+@media (max-width: 480px) {
+  .taskbar button {
+    width: 36px !important;
+    height: 36px !important;
+  }
+  
+  .taskbar .flex-row {
+    gap: 0.25rem !important;
+  }
+}
+
+.sidebar {
+  transition: all 0.3s ease;
+}
+
 @media (max-width: 768px) {
   .sidebar {
     position: fixed;

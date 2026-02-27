@@ -26,6 +26,7 @@ export const authOptions = {
               email: user.email,
               image: profileImage,
               googleId: profile.sub,
+              role: process.env.ADMIN_EMAIL && user.email === process.env.ADMIN_EMAIL ? 'admin' : 'user',
             });
             console.log("🆕 New User created in DB Center:", user.email);
           } else {
@@ -51,6 +52,7 @@ export const authOptions = {
           session.user.id = dbUser._id;
           session.user.name = dbUser.name;
           session.user.image = dbUser.image;
+          session.user.role = dbUser.role || 'user';
           session.user.vaultConfigured = dbUser.vault?.isConfigured || false;
           session.user.settings = dbUser.settings;
         }

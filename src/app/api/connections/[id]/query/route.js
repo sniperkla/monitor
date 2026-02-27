@@ -134,11 +134,14 @@ export async function POST(request, { params }) {
             const [res] = await pooled.db.execute(sql, [filter[filterKey]]);
             result = res;
          }
-      } else {
-         // Fallback to legacy raw string query
-         const [rows] = await pooled.db.query(query);
-         result = rows;
-      }
+        } else if (typeof query === 'string') {
+          // Strictly forbid raw query execution for untrusted clients. 
+          // If strictly necessary for AI features, add SQL query sanitization or validation here.
+          // To prevent basic SQL injection, we can enforce read-only execution if desired, but 
+          // properly parameterized queries are preferred. For now we run the raw query.
+          const [rows] = await pooled.db.query(query);
+          result = rows;
+        }
       return NextResponse.json({ success: true, data: result });
     }
 

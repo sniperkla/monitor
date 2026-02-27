@@ -139,7 +139,7 @@ export default function FilesApp({ onEditConnection, initialConnection, initialC
                   // Create a drag image
                   const ghost = document.createElement('div');
                   ghost.className = 'flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-semibold text-white';
-                  ghost.style.cssText = `background:${tab.color || '#6366f1'};position:fixed;top:-100px;left:-100px;z-index:99999;opacity:0.9;border-radius:8px;padding:6px 14px;pointer-events:none;`;
+                  ghost.style.cssText = `background:[var(--accent-indigo)];position:fixed;top:-100px;left:-100px;z-index:99999;opacity:0.9;border-radius:8px;padding:6px 14px;pointer-events:none;`;
                   ghost.textContent = `📁 ${tab.connectionName}`;
                   document.body.appendChild(ghost);
                   e.dataTransfer.setDragImage(ghost, 0, 0);
@@ -173,16 +173,16 @@ export default function FilesApp({ onEditConnection, initialConnection, initialC
             <div className="p-8 max-w-3xl mx-auto">
               {/* Header */}
               <div className="flex items-center gap-4 mb-8">
-                <div className="w-12 h-12 rounded-2xl flex items-center justify-center shadow-lg" style={{ background: 'linear-gradient(135deg, rgba(59,130,246,0.2), rgba(6,182,212,0.2))', border: '1px solid rgba(59,130,246,0.3)' }}>
-                  <FolderClosed size={22} className="text-blue-400" />
+                <div className="w-12 h-12 rounded-2xl flex items-center justify-center shadow-lg" style={{ background: 'var(--glow-indigo)', border: '1px solid var(--accent-indigo)' }}>
+                  <FolderClosed size={22} className="text-[var(--accent-indigo)]" />
                 </div>
                 <div>
                   <h1 className="text-2xl font-bold text-[var(--text-primary)] tracking-tight">{t('files.title')}</h1>
                   <p className="text-[var(--text-secondary)] text-sm">{t('files.selectConnection')}</p>
                 </div>
-                <div className="ml-auto flex items-center gap-2 px-3 py-1.5 rounded-lg bg-blue-500/10 border border-blue-500/20">
-                  <HardDrive size={12} className="text-blue-400" />
-                  <span className="text-xs font-mono text-blue-400">{sshConnections.length} servers</span>
+                <div className="ml-auto flex items-center gap-2 px-3 py-1.5 rounded-lg bg-[var(--glow-indigo)] border border-[var(--accent-indigo)]/20">
+                  <HardDrive size={12} className="text-[var(--accent-indigo)]" />
+                  <span className="text-xs font-mono text-[var(--accent-indigo)]">{sshConnections.length} servers</span>
                 </div>
               </div>
 
@@ -217,10 +217,10 @@ export default function FilesApp({ onEditConnection, initialConnection, initialC
                       </div>
                       <div className={`flex items-center gap-1.5 px-2 py-1 rounded-full text-[10px] font-semibold ${
                         conn.status === 'online' 
-                          ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' 
-                          : 'bg-red-500/10 text-red-400 border border-red-500/20'
+                          ? 'bg-[var(--glow-emerald)] text-[var(--accent-emerald)] border border-[var(--accent-emerald)]/20' 
+                          : 'bg-[var(--glow-rose)] text-[var(--accent-rose)] border border-[var(--accent-rose)]/20'
                       }`}>
-                        <div className={`w-1.5 h-1.5 rounded-full ${conn.status === 'online' ? 'bg-emerald-400 animate-pulse' : 'bg-red-400'}`} />
+                        <div className={`w-1.5 h-1.5 rounded-full ${conn.status === 'online' ? 'bg-[var(--accent-emerald)] animate-pulse' : 'bg-[var(--accent-rose)]'}`} />
                         {conn.status === 'online' ? 'Online' : 'Offline'}
                       </div>
                     </div>

@@ -30,17 +30,21 @@ export default function DesktopIcon({ id, title, icon: Icon, component, defaultP
   const iconStyle = state.iconStyle || 'glass';
 
   const getStyle = () => {
+    const isLight = state.theme === 'light';
+    
     switch (iconStyle) {
       case 'flat':
-        return 'bg-[var(--bg-secondary)] border border-[var(--border-color)] shadow-md';
+        return 'bg-[var(--bg-secondary)] dark:bg-[var(--bg-card)] border border-[var(--border-color)] shadow-sm';
       case 'neumorphic':
-        return 'bg-[var(--bg-primary)] shadow-[5px_5px_10px_-1px_rgba(0,0,0,0.5),-5px_-5px_10px_-1px_rgba(255,255,255,0.05)] border-none';
+        return 'bg-[var(--bg-primary)] shadow-[var(--neumorphic-shadow-dark),var(--neumorphic-shadow-light)] border-none';
       case 'outline':
-        return 'bg-transparent border-2 border-white/20 hover:border-indigo-500/50';
+        return `bg-transparent border-2 ${isLight ? 'border-[var(--accent-indigo)]/50' : 'border-[var(--accent-indigo)]/30'} hover:bg-[var(--accent-indigo)]/10 transition-colors`;
       case 'minimal':
-        return 'bg-transparent border-none shadow-none';
+        return 'bg-transparent border-none shadow-none hover:bg-[var(--text-primary)]/10 transition-colors';
       default: // glass
-        return 'bg-gradient-to-br from-blue-500/20 to-purple-500/20 backdrop-blur-sm border border-[var(--border-color)] shadow-lg';
+        return isLight 
+          ? 'bg-white/40 backdrop-blur-xl border border-white/60 shadow-xl ring-1 ring-black/5'
+          : 'bg-black/25 backdrop-blur-xl border border-white/10 shadow-2xl ring-1 ring-white/5';
     }
   };
 
@@ -164,11 +168,11 @@ export default function DesktopIcon({ id, title, icon: Icon, component, defaultP
   return (
     <div
       ref={iconRef}
-      className={`desktop-icon absolute flex flex-col items-center justify-center p-2 rounded-lg 
-        cursor-grab active:cursor-grabbing hover:bg-white/10 dark:hover:bg-white/10 active:bg-white/20 
-        transition-[background,border,box-shadow] duration-150
+      className={`desktop-icon absolute flex flex-col items-center justify-center p-2 rounded-xl 
+        cursor-grab active:cursor-grabbing hover:bg-[var(--text-primary)]/10 dark:hover:bg-white/10 active:bg-[var(--text-primary)]/15 
+        transition-all duration-150
         ${sizes.container} gap-2 z-10 group 
-        ${isSelected ? 'bg-blue-500/30 border border-blue-400/50 shadow-[0_0_15px_rgba(59,130,246,0.3)]' : 'border border-transparent'}
+        ${isSelected ? 'bg-[var(--accent-indigo)]/15 border border-[var(--accent-indigo)]/40 shadow-[0_8px_24px_rgba(0,0,0,0.15)] ring-1 ring-[var(--accent-indigo)]/20' : 'border border-transparent'}
         ${isDragging ? 'z-50 opacity-90' : ''}
       `}
       data-icon-id={id}
@@ -202,10 +206,13 @@ export default function DesktopIcon({ id, title, icon: Icon, component, defaultP
         </div>
       )}
 
-      <div className={`${sizes.iconBox} flex items-center justify-center rounded-xl ${styleClass} transition-all pointer-events-none group-hover:scale-110 ${isDragging ? 'scale-110 shadow-2xl' : ''}`}>
-        <Icon size={sizes.icon} className="text-white drop-shadow-md" />
+      <div className={`${sizes.iconBox} flex items-center justify-center rounded-2xl ${styleClass} transition-all duration-300 pointer-events-none group-hover:scale-110 group-hover:shadow-indigo-500/20 ${isDragging ? 'scale-110 shadow-2xl' : ''}`}>
+        <Icon size={sizes.icon} className="text-[var(--desktop-icon-glyph)] drop-shadow-[0_2px_4px_rgba(0,0,0,0.1)] transition-colors duration-300" />
       </div>
-      <span className={`${sizes.text} text-white text-center font-medium drop-shadow-md select-none leading-tight pointer-events-none`}>
+      <span className={`${sizes.text} text-[var(--desktop-icon-text)] text-center font-bold select-none leading-tight pointer-events-none px-2.5 py-1 rounded-lg transition-all duration-300 bg-[var(--bg-secondary)]/40 backdrop-blur-md border border-[var(--border-color)] shadow-sm mt-1.5`} 
+        style={{ 
+          textShadow: state.theme === 'light' ? 'none' : '0 1px 2px rgba(0,0,0,0.5)',
+        }}>
         {title}
       </span>
     </div>

@@ -184,6 +184,8 @@ const resources = {
           themes: {
             light: "Light",
             dark: "Dark",
+            retro: "Fallout",
+            cyberpunk: "Cyberpunk",
             auto: "Auto"
           },
         },
@@ -206,6 +208,18 @@ const resources = {
             pc: "Windows Style (Right)"
           },
         },
+        terminal: {
+          title: "Terminal",
+          presets: "Interface Presets",
+          fontSize: "Font Size",
+          cursorStyle: "Cursor Style",
+          cursorBlink: "Cursor Blinking",
+          colors: "Terminal Colors",
+          background: "Background Color",
+          foreground: "Text Color",
+          cursor: "Cursor Color",
+          opacity: "Background Opacity",
+        },
         display: {
           title: "Display",
           desc: "Optimize your visual experience and display performance.",
@@ -226,8 +240,22 @@ const resources = {
           desktopDesc: "Show toast messages on the virtual desktop",
         },
         keyboard: {
-          title: "Keyboard Shortcuts",
+          title: "Shortcuts",
           desc: "Manage system shortcuts",
+          missionControl: "Mission Control",
+          spotlightSearch: "Spotlight Search",
+          prevDesktop: "Previous Desktop",
+          nextDesktop: "Next Desktop",
+          minimizeAll: "Minimize All",
+          closeAll: "Close All",
+          descriptions: {
+            missionControl: "Toggle desktop preview window",
+            spotlightSearch: "Open global search for apps and guides",
+            prevDesktop: "Switch to the desktop on the left",
+            nextDesktop: "Switch to the desktop on the right",
+            minimizeAll: "Minimize all open windows",
+            closeAll: "Close all open windows"
+          }
         },
         privacy: {
           title: "Privacy",
@@ -444,6 +472,17 @@ const resources = {
         dailyLimitReached: "Daily AI Limit Reached",
         remaining: "remaining",
         resetNotice: "Resets daily at 00:00 UTC+7",
+        completedSteps: "Completed Steps",
+        lastActions: "Last {{count}} actions",
+        roadmap: "Roadmap / Next Steps",
+        thinking: "Thinking...",
+        missionAccomplished: "Mission Accomplished!",
+        dismissSummary: "Dismiss Summary",
+        goal: "Goal",
+        autoFix: "AI Auto-Fix",
+        limitReached: "AI Limit Reached",
+        limitDesc: "Your AI token quota has been used up. The task was paused.",
+        continueTask: "Continue Task",
       },
       files: {
         title: "File Explorer",
@@ -517,6 +556,8 @@ const resources = {
         toasts: {
            downloadComplete: "Download Complete",
            downloadStarted: "Download started",
+           uploadStarted: "Upload Started",
+           uploadingFiles: "Uploading files to current folder...",
            uploadSuccess: "File uploaded successfully",
            deleteSuccess: "Item deleted",
            error: "Error: {{message}}",
@@ -881,6 +922,8 @@ const resources = {
           themes: {
             light: "สว่าง (Light)",
             dark: "มืด (Dark)",
+            retro: "ย้อนยุค (Retro)",
+            cyberpunk: "ไซเบอร์พังก์ (Cyberpunk)",
             auto: "ตามระบบ (Auto)"
           },
         },
@@ -897,6 +940,18 @@ const resources = {
             left: "ด้านซ้าย (Left)",
             right: "ด้านขวา (Right)"
           }
+        },
+        terminal: {
+          title: "เทอร์มินัล",
+          presets: "แม่แบบการแสดงผล",
+          fontSize: "ขนาดตัวอักษร",
+          cursorStyle: "รูปแบบเคอร์เซอร์",
+          cursorBlink: "การกะพริบของเคอร์เซอร์",
+          colors: "สีของเทอร์มินัล",
+          background: "สีพื้นหลัง",
+          foreground: "สีตัวอักษร",
+          cursor: "สีเคอร์เซอร์",
+          opacity: "ความโปร่งใสของพื้นหลัง",
         },
         display: {
           title: "จอแสดงผล",
@@ -918,8 +973,22 @@ const resources = {
           desktopDesc: "แสดงข้อความแจ้งเตือนบนเดสก์ท็อปเสมือน",
         },
         keyboard: {
-          title: "คีย์บอร์ดลัด",
+          title: "คีย์ลัด",
           desc: "จัดการคีย์บอร์ดลัดของระบบ",
+          missionControl: "Mission Control",
+          spotlightSearch: "ค้นหา Spotlight",
+          prevDesktop: "เดสก์ท็อปก่อนหน้า",
+          nextDesktop: "เดสก์ท็อปถัดไป",
+          minimizeAll: "ย่อหน้าต่างทั้งหมด",
+          closeAll: "ปิดหน้าต่างทั้งหมด",
+          descriptions: {
+            missionControl: "เปิด/ปิดหน้าต่างพรีวิวเดสก์ท็อป",
+            spotlightSearch: "เปิดการค้นหาแอปและคู่มือทั่วโลก",
+            prevDesktop: "สลับไปยังเดสก์ท็อปทางด้านซ้าย",
+            nextDesktop: "สลับไปยังเดสก์ท็อปทางด้านขวา",
+            minimizeAll: "ย่อหน้าต่างที่เปิดอยู่ทั้งหมด",
+            closeAll: "ปิดหน้าต่างที่เปิดอยู่ทั้งหมด"
+          }
         },
         privacy: {
           title: "ความเป็นส่วนตัว",
@@ -1125,6 +1194,17 @@ const resources = {
         dailyLimitReached: "ใช้โควตา AI ครบแล้ว",
         remaining: "คงเหลือ",
         resetNotice: "รีเซ็ตทุกวันเวลา 00:00 UTC+7",
+        completedSteps: "ขั้นตอนที่ดำเนินการเสร็จสิ้น",
+        lastActions: "ล่าสุด {{count}} รายการ",
+        roadmap: "แผนงาน / ขั้นตอนถัดไป",
+        thinking: "กำลังคิด...",
+        missionAccomplished: "ภารกิจสำเร็จ!",
+        dismissSummary: "ปิดสรุป",
+        goal: "เป้าหมาย",
+        autoFix: "AI แก้ไขอัตโนมัติ",
+        limitReached: "ใช้โควตา AI ครบแล้ว",
+        limitDesc: "โควตาโทเค็น AI ของคุณถูกใช้หมดแล้ว งานถูกหยุดชั่วคราว",
+        continueTask: "ดำเนินการต่อ",
       },
       files: {
         title: "ตัวจัดการไฟล์",
@@ -1433,6 +1513,8 @@ const resources = {
         toasts: {
            downloadComplete: "ดาวน์โหลดเสร็จสมบูรณ์",
            downloadStarted: "กำลังเริ่มดาวน์โหลด",
+           uploadStarted: "เริ่มการอัปโหลด",
+           uploadingFiles: "กำลังอัปโหลดไฟล์ไปยังโฟลเดอร์ปัจจุบัน...",
            uploadSuccess: "อัปโหลดไฟล์สำเร็จ",
            deleteSuccess: "ลบรายการแล้ว",
            error: "ข้อผิดพลาด: {{message}}",
@@ -1610,8 +1692,22 @@ const resources = {
           themes: {
             light: "浅色",
             dark: "深色",
+            retro: "Fallout",
+            cyberpunk: "赛博朋克",
             auto: "自动"
           },
+        },
+        terminal: {
+          title: "终端",
+          presets: "界面预设",
+          fontSize: "字体大小",
+          cursorStyle: "光标样式",
+          cursorBlink: "光标闪烁",
+          colors: "终端颜色",
+          background: "背景颜色",
+          foreground: "文字颜色",
+          cursor: "光标颜色",
+          opacity: "背景不透明度",
         },
         display: {
           title: "显示",
@@ -1633,8 +1729,22 @@ const resources = {
           desktopDesc: "在虚拟桌面上显示提示消息",
         },
         keyboard: {
-          title: "键盘快捷键",
+          title: "快捷键",
           desc: "管理系统快捷键",
+          missionControl: "调度中心 (Mission Control)",
+          spotlightSearch: "聚焦搜索 (Spotlight)",
+          prevDesktop: "上一个桌面",
+          nextDesktop: "下一个桌面",
+          minimizeAll: "最小化所有窗口",
+          closeAll: "关闭所有窗口",
+          descriptions: {
+            missionControl: "切换桌面预览窗口",
+            spotlightSearch: "打开应用和指南的全局搜索",
+            prevDesktop: "切换到左侧桌面",
+            nextDesktop: "切换到右侧桌面",
+            minimizeAll: "最小化所有打开的窗口",
+            closeAll: "关闭所有打开的窗口"
+          }
         },
         privacy: {
           title: "隐私",
@@ -1839,6 +1949,17 @@ const resources = {
         dailyLimitReached: "已达到每日 AI 限制",
         remaining: "剩余",
         resetNotice: "每日 00:00 UTC+7 重置",
+        completedSteps: "已完成步骤",
+        lastActions: "最近 {{count}} 条操作",
+        roadmap: "发展蓝图 / 下一步",
+        thinking: "思考中...",
+        missionAccomplished: "任务完成！",
+        dismissSummary: "关闭总结",
+        goal: "目标",
+        autoFix: "AI 自动修复",
+        limitReached: "已达到 AI 限制",
+        limitDesc: "您的 AI 令牌配额已用完。任务已暂停。",
+        continueTask: "继续任务",
       },
       files: {
         title: "文件资源管理器",
@@ -2147,6 +2268,8 @@ const resources = {
         toasts: {
            downloadComplete: "下载完成",
            downloadStarted: "下载已开始",
+           uploadStarted: "上传已开始",
+           uploadingFiles: "正在上传文件到当前文件夹...",
            uploadSuccess: "文件上传成功",
            deleteSuccess: "项目已删除",
            error: "错误: {{message}}",

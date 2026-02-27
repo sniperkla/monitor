@@ -8,7 +8,7 @@ import SSHApp from '@/apps/SSHApp';
 import SettingsApp from '@/apps/SettingsApp';
 import { Terminal, Settings, FolderClosed, Monitor, RefreshCw, Plus, 
   Image as ImageIcon, Layout, Grid, List, AlignLeft, SortAsc,
-  ChevronRight, Type, Calendar, HardDrive, Palette, MonitorCog, Globe, Maximize, Minimize, Database
+  ChevronRight, Type, Calendar, HardDrive, Palette, MonitorCog, Globe, Maximize, Minimize, Database, Check
 } from 'lucide-react';
 import NotificationCenter from '@/components/Desktop/NotificationCenter';
 import { useState, useEffect, useRef, cloneElement, isValidElement } from 'react';
@@ -89,18 +89,12 @@ export default function DesktopEnvironment() {
         const currentDesktopWindows = windowsByDesktop[currentDesktopId] || [];
 
         // Swipe up: ONLY open preview (no desktop switching as side-effect)
-        // Requirements:
-        // - strong upward intent
-        // - limited horizontal movement
-        // - ignore if preview already open
-        if (!showPreview && deltaY > 120 && absY > absX * 2.2 && deltaTime < 500) {
+        if (!showPreview && deltaY > 80 && absY > absX * 2.2 && deltaTime < 500) {
           setShowPreview(true);
 
           if (currentDesktopWindows.length === 0) {
-            // No apps: hide desktop content
             setHideDesktopContent(true);
           } else {
-            // Apps: minimize all to compact previews
             setHideDesktopContent(false);
             currentDesktopWindows.forEach((win) => {
               if (!win.isMinimized) toggleMinimize(win.id);
@@ -109,8 +103,13 @@ export default function DesktopEnvironment() {
 
           lastSwipeUpTime = currentTime;
         }
+        // Swipe down: close preview
+        else if (showPreview && deltaY < -80 && absY > absX * 2.2 && deltaTime < 500) {
+          setShowPreview(false);
+          setHideDesktopContent(false);
+        }
         // Swipe left/right for desktop switching
-        else if (!showPreview && absX > 140 && absX > absY * 1.8 && deltaTime < 500) {
+        else if (!showPreview && absX > 100 && absX > absY * 1.8 && deltaTime < 500) {
           if (deltaX > 0) {
             switchToPrevDesktop(); // Swipe right: previous desktop
           } else {
@@ -161,7 +160,10 @@ export default function DesktopEnvironment() {
         e.preventDefault();
         e.stopPropagation();
 
-        if (showPreview) return;
+        if (showPreview) {
+          setShowPreview(false);
+          return;
+        }
 
         const currentDesktopWindows = windowsByDesktop[currentDesktopId] || [];
         setShowPreview(true);
@@ -196,11 +198,22 @@ export default function DesktopEnvironment() {
     };
   }, [showPreview, currentDesktopId, windowsByDesktop, keyboardShortcuts, toggleMinimize, switchToPrevDesktop, switchToNextDesktop]);
 
+  const prevShowPreview = useRef(showPreview);
   useEffect(() => {
-    if (!showPreview) {
+    if (!showPreview && prevShowPreview.current) {
       setHideDesktopContent(false);
+      
+      // When Mission Control closes, ensure windows on the current desktop are restored
+      const currentDesktopWindows = windowsByDesktop[currentDesktopId] || [];
+      currentDesktopWindows.forEach(win => {
+        if (win.isMinimized) {
+          // toggleMinimize on a minimized window will restore/focus it
+          toggleMinimize(win.id);
+        }
+      });
     }
-  }, [showPreview]);
+    prevShowPreview.current = showPreview;
+  }, [showPreview, currentDesktopId, toggleMinimize]); // Removed windowsByDesktop from deps
 
 
 
@@ -895,34 +908,34 @@ export default function DesktopEnvironment() {
               {dropMenu.connection?.type === 'database' ? (
                 <button
                   onClick={() => openStandaloneDatabase(dropMenu.connection)}
-                  className="w-full flex items-center gap-3 px-4 py-2.5 hover:bg-emerald-500/90 transition-colors group"
+                  className="w-full flex items-center gap-3 px-4 py-2.5 hover:bg-[var(--bg-selected)] transition-colors group"
                 >
-                  <Database size={16} className="text-emerald-400 group-hover:text-white" />
+                  <Database size={16} className="text-emerald-400 group-hover:text-[var(--text-selected)]" />
                   <div className="text-left">
-                    <span className="text-[13px] text-[var(--text-secondary)] group-hover:text-white block font-medium">Open Database</span>
-                    <span className="text-[10px] text-[var(--text-muted)] group-hover:text-white/70">Manage Collections & Queries</span>
+                    <span className="text-[13px] text-[var(--text-secondary)] group-hover:text-[var(--text-selected)] block font-medium">Open Database</span>
+                    <span className="text-[10px] text-[var(--text-muted)] group-hover:text-[var(--text-selected)]/70">Manage Collections & Queries</span>
                   </div>
                 </button>
               ) : (
                 <>
                   <button
                     onClick={() => openStandaloneTerminal(dropMenu.connection)}
-                    className="w-full flex items-center gap-3 px-4 py-2.5 hover:bg-indigo-500/90 transition-colors group"
+                    className="w-full flex items-center gap-3 px-4 py-2.5 hover:bg-[var(--bg-selected)] transition-colors group"
                   >
-                    <Terminal size={16} className="text-emerald-400 group-hover:text-white" />
+                    <Terminal size={16} className="text-emerald-400 group-hover:text-[var(--text-selected)]" />
                     <div className="text-left">
-                      <span className="text-[13px] text-[var(--text-secondary)] group-hover:text-white block font-medium">Open Terminal</span>
-                      <span className="text-[10px] text-[var(--text-muted)] group-hover:text-white/70">SSH shell session</span>
+                      <span className="text-[13px] text-[var(--text-secondary)] group-hover:text-[var(--text-selected)] block font-medium">Open Terminal</span>
+                      <span className="text-[10px] text-[var(--text-muted)] group-hover:text-[var(--text-selected)]/70">SSH shell session</span>
                     </div>
                   </button>
                   <button
                     onClick={() => openStandaloneFiles(dropMenu.connection)}
-                    className="w-full flex items-center gap-3 px-4 py-2.5 hover:bg-indigo-500/90 transition-colors group"
+                    className="w-full flex items-center gap-3 px-4 py-2.5 hover:bg-[var(--bg-selected)] transition-colors group"
                   >
-                    <FolderClosed size={16} className="text-blue-400 group-hover:text-white" />
+                    <FolderClosed size={16} className="text-blue-400 group-hover:text-[var(--text-selected)]" />
                     <div className="text-left">
-                      <span className="text-[13px] text-[var(--text-secondary)] group-hover:text-white block font-medium">Open File Manager</span>
-                      <span className="text-[10px] text-[var(--text-muted)] group-hover:text-white/70">Browse remote files</span>
+                      <span className="text-[13px] text-[var(--text-secondary)] group-hover:text-[var(--text-selected)] block font-medium">Open File Manager</span>
+                      <span className="text-[10px] text-[var(--text-muted)] group-hover:text-[var(--text-selected)]/70">Browse remote files</span>
                     </div>
                   </button>
                 </>
@@ -943,12 +956,12 @@ function ContextItem({ icon: Icon, label, onClick, onHover, shortcut }) {
         onClick();
       }}
       onMouseEnter={onHover}
-      className="w-full flex items-center gap-3 px-3 py-[6px] mx-1 rounded-md hover:bg-blue-500/90 active:bg-blue-600 transition-colors group text-left"
+      className="w-full flex items-center gap-3 px-3 py-[6px] mx-1 rounded-md hover:bg-[var(--bg-selected)] active:opacity-80 transition-colors group text-left"
       style={{ width: 'calc(100% - 8px)' }}
     >
-      <Icon size={15} className="text-[var(--text-muted)] group-hover:text-white transition-colors flex-shrink-0" />
-      <span className="text-[13px] text-[var(--text-secondary)] group-hover:text-white flex-1">{label}</span>
-      {shortcut && <span className="text-[11px] text-[var(--text-muted)] group-hover:text-white/70">{shortcut}</span>}
+      <Icon size={15} className="text-[var(--text-muted)] group-hover:text-[var(--text-selected)] transition-colors flex-shrink-0" />
+      <span className="text-[13px] text-[var(--text-secondary)] group-hover:text-[var(--text-selected)] flex-1">{label}</span>
+      {shortcut && <span className="text-[11px] text-[var(--text-muted)] group-hover:text-[var(--text-selected)]/70">{shortcut}</span>}
     </button>
   );
 }
@@ -958,13 +971,13 @@ function ContextSubmenuItem({ icon: Icon, label, children, active, onHover, onLe
     <div className="relative" onMouseEnter={onHover} onMouseLeave={onLeave}>
       <button
         className={`w-full flex items-center gap-3 px-3 py-[6px] mx-1 rounded-md transition-colors group text-left ${
-          active ? 'bg-blue-500/90' : 'hover:bg-blue-500/90'
+          active ? 'bg-[var(--bg-selected)]' : 'hover:bg-[var(--bg-selected)]'
         }`}
         style={{ width: 'calc(100% - 8px)' }}
       >
-        <Icon size={15} className={`flex-shrink-0 transition-colors ${active ? 'text-white' : 'text-[var(--text-muted)] group-hover:text-white'}`} />
-        <span className={`text-[13px] flex-1 transition-colors ${active ? 'text-white' : 'text-[var(--text-secondary)] group-hover:text-white'}`}>{label}</span>
-        <ChevronRight size={12} className={`flex-shrink-0 transition-colors ${active ? 'text-white' : 'text-[var(--text-muted)] group-hover:text-white'}`} />
+        <Icon size={15} className={`flex-shrink-0 transition-colors ${active ? 'text-[var(--text-selected)]' : 'text-[var(--text-muted)] group-hover:text-[var(--text-selected)]'}`} />
+        <span className={`text-[13px] flex-1 transition-colors ${active ? 'text-[var(--text-selected)]' : 'text-[var(--text-secondary)] group-hover:text-[var(--text-selected)]'}`}>{label}</span>
+        <ChevronRight size={12} className={`flex-shrink-0 transition-colors ${active ? 'text-[var(--text-selected)]' : 'text-[var(--text-muted)] group-hover:text-[var(--text-selected)]'}`} />
       </button>
       {active && (
         <motion.div
@@ -989,15 +1002,15 @@ function ContextRadioItem({ label, checked, onClick }) {
   return (
     <button
       onClick={(e) => { e.stopPropagation(); onClick(); }}
-      className="w-full flex items-center gap-3 px-3 py-[6px] mx-1 rounded-md hover:bg-blue-500/90 transition-colors group text-left"
+      className="w-full flex items-center gap-3 px-3 py-[6px] mx-1 rounded-md hover:bg-[var(--bg-selected)] transition-colors group text-left"
       style={{ width: 'calc(100% - 8px)' }}
     >
       <span className={`w-4 h-4 rounded-full border flex items-center justify-center flex-shrink-0 ${
-        checked ? 'border-blue-400 bg-blue-500' : 'border-[var(--text-muted)]'
+        checked ? 'border-[var(--accent-indigo)] bg-[var(--bg-selected)]' : 'border-[var(--text-muted)]'
       }`}>
-        {checked && <span className="w-1.5 h-1.5 bg-white rounded-full" />}
+        {checked && <Check size={10} className="text-[var(--text-selected)]" strokeWidth={4} />}
       </span>
-      <span className="text-[13px] text-[var(--text-secondary)] group-hover:text-white">{label}</span>
+      <span className={`text-[13px] ${checked ? 'text-[var(--text-selected)]' : 'text-[var(--text-secondary)]'} group-hover:text-[var(--text-selected)]`}>{label}</span>
     </button>
   );
 }

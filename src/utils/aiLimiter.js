@@ -71,15 +71,16 @@ async function getOrCreateUsage(email) {
  * Check if the user can use AI, and optionally record token usage.
  * 
  * Call pattern in routes:
- *   1) Pre-check:  await checkAndTrackAiUsage(email, prompt)        — checks limit, throws if exceeded
- *   2) Post-track: await checkAndTrackAiUsage(email, prompt, answer) — records actual usage
+ *   1) Pre-check:  await checkAndTrackAiUsage(email, prompt, '', context) — checks limit, throws if exceeded
+ *   2) Post-track: await checkAndTrackAiUsage(email, prompt, answer)     — records actual usage
  * 
  * @param {string} email - User email
- * @param {string} roughPrompt - The prompt text (used to estimate tokens)
+ * @param {string} roughPrompt - The prompt text
  * @param {string} roughResponse - The AI response text (empty = pre-check only)
+ * @param {string} roughContext - Extra context text sent to AI (terminal output, schema, etc.)
  * @returns {{ allowed: boolean, used: number, limit: number, remaining: number }}
  */
-export async function checkAndTrackAiUsage(email, roughPrompt, roughResponse = '') {
+export async function checkAndTrackAiUsage(email, roughPrompt, roughResponse = '', roughContext = '') {
   await connectDB(process.env.MONGODB_URI, true);
 
   if (!email) {
@@ -89,12 +90,19 @@ export async function checkAndTrackAiUsage(email, roughPrompt, roughResponse = '
   const dailyLimit = await getGlobalDailyLimit();
   const usage = await getOrCreateUsage(email);
 
-  const estimatedPromptTokens = Math.ceil(roughPrompt.length / 3.5);
+  // Hard block: user is already at or over limit — don't even estimate
+  if (usage.tokensUsed >= dailyLimit) {
+    throw new Error(
+      `Daily AI limit reached (${usage.tokensUsed}/${dailyLimit} tokens used). Resets at midnight UTC+7.`
+    );
+  }
+
+  const estimatedPromptTokens = Math.ceil((roughPrompt.length + roughContext.length) / 3.5);
   const estimatedResponseTokens = roughResponse
     ? Math.ceil(roughResponse.length / 3.5)
-    : 250;
+    : 300; // Conservative future-response estimate for pre-check
 
-  // Pre-check: would this prompt exceed the daily limit?
+  // Pre-check: would this prompt + context + estimated response exceed limit?
   if (usage.tokensUsed + estimatedPromptTokens >= dailyLimit) {
     throw new Error(
       `Daily AI limit reached (${usage.tokensUsed}/${dailyLimit} tokens used). Resets at midnight UTC+7.`

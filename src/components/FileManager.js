@@ -3,12 +3,13 @@
 import { createPortal } from 'react-dom';
 import { useState, useEffect, useRef } from 'react';
 import { 
-  Folder, File, ChevronLeft, ChevronRight, RefreshCw, 
+  Folder, File as FileIcon, ChevronLeft, ChevronRight, RefreshCw, 
   Download, Upload, Trash2, FolderPlus, Search, Grid, List as ListIcon,
   AlertCircle, Edit, FileText, X, Save, AlertTriangle, 
   Copy, Scissors, Clipboard, Wifi
 } from 'lucide-react';
 import io from 'socket.io-client';
+import * as fflate from 'fflate';
 import { useOS } from '@/context/OSContext';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useTranslation } from 'react-i18next';
@@ -16,6 +17,70 @@ import { useTranslation } from 'react-i18next';
 import MacOSModalWindow from '@/components/MacOSModalWindow';
 
 import { useApp } from '@/context/AppContext';
+
+/**
+ * Minimal TAR packager for browser usage
+ * @param {Object} files - { "path/to/file": Uint8Array }
+ * @returns {Uint8Array} - The generated TAR archive
+ */
+function createTar(files) {
+  const chunks = [];
+  for (const name in files) {
+    const data = files[name];
+    const header = new Uint8Array(512);
+    
+    // Name (up to 100 bytes)
+    for (let i = 0; i < Math.min(name.length, 99); i++) {
+      header[i] = name.charCodeAt(i);
+    }
+    
+    // Mode (0000644)
+    const mode = "0000644\0";
+    for (let i = 0; i < 8; i++) header[100 + i] = mode.charCodeAt(i);
+    
+    // Size (12 bytes, octal)
+    const size = data.length.toString(8).padStart(11, '0') + "\0";
+    for (let i = 0; i < 12; i++) header[124 + i] = size.charCodeAt(i);
+    
+    // Mtime (12 bytes, octal)
+    const mtime = Math.floor(Date.now() / 1000).toString(8).padStart(11, '0') + "\0";
+    for (let i = 0; i < 12; i++) header[136 + i] = mtime.charCodeAt(i);
+    
+    // Checksum placeholder (blanks)
+    for (let i = 0; i < 8; i++) header[148 + i] = 32; 
+    
+    // Magic (ustar)
+    const magic = "ustar\0";
+    for (let i = 0; i < 6; i++) header[257 + i] = magic.charCodeAt(i);
+    const version = "00";
+    for (let i = 0; i < 2; i++) header[263 + i] = version.charCodeAt(i);
+    
+    // Calculate checksum
+    let chk = 0;
+    for (let i = 0; i < 512; i++) chk += header[i];
+    const chkStr = chk.toString(8).padStart(6, '0') + "\0 ";
+    for (let i = 0; i < 8; i++) header[148 + i] = chkStr.charCodeAt(i);
+    
+    chunks.push(header);
+    chunks.push(data);
+    
+    // Padding to 512-byte boundary
+    const paddingLength = (512 - (data.length % 512)) % 512;
+    if (paddingLength > 0) chunks.push(new Uint8Array(paddingLength));
+  }
+  
+  // Final 1024-byte null padding (End of Archive)
+  chunks.push(new Uint8Array(1024));
+  
+  const totalLength = chunks.reduce((acc, c) => acc + c.length, 0);
+  const result = new Uint8Array(totalLength);
+  let offset = 0;
+  for (const c of chunks) {
+    result.set(c, offset);
+    offset += c.length;
+  }
+  return result;
+}
 
 export default function FileManager({ connectionId, connection, connectionName }) {
   const { t } = useTranslation();
@@ -55,6 +120,8 @@ export default function FileManager({ connectionId, connection, connectionName }
   const uploadInputRef = useRef(null);
   const downloadBufferRef = useRef([]);
   
+  const [uploadQueue, setUploadQueue] = useState([]); // Array of { file, path, offset }
+  
   useEffect(() => { currentPathRef.current = currentPath; }, [currentPath]);
 
   useEffect(() => {
@@ -73,6 +140,7 @@ export default function FileManager({ connectionId, connection, connectionName }
     // Don't reset if we are just receiving a status update (handled by removing connection from deps)
     
     setCurrentPath('.');
+    currentPathRef.current = '.';
     setLoading(true);
     setStatus('connecting');
     setError(null);
@@ -114,6 +182,11 @@ export default function FileManager({ connectionId, connection, connectionName }
     });
 
     newSocket.on('sftp:list', (data) => {
+      // Validate that the returned list matches the path we are currently looking at
+      if (data.path !== currentPathRef.current) {
+        console.warn('⚠️ Ignoring stale file list for:', data.path, 'current is:', currentPathRef.current);
+        return;
+      }
       console.log('📋 Received file list:', data.files?.length);
       setFiles(data.files || []);
       setLoading(false);
@@ -134,7 +207,8 @@ export default function FileManager({ connectionId, connection, connectionName }
        addNotification({ title: 'Success', message: t('files.actions.success', { action }), type: 'success' });
        setTransfer(null);
        // Always re-fetch the current file list using the ref (latest path)
-       newSocket.emit('sftp:list', currentPathRef.current || '.');
+       const targetPath = currentPathRef.current || '.';
+       newSocket.emit('sftp:list', targetPath);
        if (action === 'write') {
           setEditor(prev => ({ ...prev, saving: false, visible: false }));
        }
@@ -226,9 +300,9 @@ export default function FileManager({ connectionId, connection, connectionName }
     if (status !== 'ready' || !socket) return;
     
     const interval = setInterval(() => {
-      console.log('🔄 Auto-refreshing file list (polling)...');
-      refreshFiles();
-    }, 10000);
+      console.log('🔄 Auto-refreshing file list (polling)...', currentPathRef.current);
+      refreshFiles(currentPathRef.current);
+    }, 15000); // Increased to 15s to be less aggressive
     
     return () => clearInterval(interval);
   }, [status, socket]);
@@ -282,16 +356,17 @@ export default function FileManager({ connectionId, connection, connectionName }
     return () => window.removeEventListener('focus', handleFocus);
   }, [status, socket]);
 
-  const refreshFiles = (path = currentPath) => {
+  const refreshFiles = (path = currentPathRef.current) => {
     if (socket) {
       // Don't full load, just refresh list
-      socket.emit('sftp:list', path);
+      socket.emit('sftp:list', path || '.');
     }
   };
 
   const handleFolderClick = (name) => {
     const newPath = currentPath === '.' ? name : `${currentPath}/${name}`;
     setCurrentPath(newPath);
+    currentPathRef.current = newPath;
     refreshFiles(newPath);
   };
 
@@ -301,6 +376,7 @@ export default function FileManager({ connectionId, connection, connectionName }
     parts.pop();
     const newPath = parts.length === 0 ? '.' : parts.join('/');
     setCurrentPath(newPath);
+    currentPathRef.current = newPath;
     refreshFiles(newPath);
   };
 
@@ -344,11 +420,20 @@ export default function FileManager({ connectionId, connection, connectionName }
     });
   };
 
-  const handleFileUpload = async (e, specificFile = null, resumeOffset = 0) => {
+  const handleFileUpload = async (e, specificFile = null, resumeOffset = 0, overridePath = null) => {
     const file = specificFile || e?.target?.files[0];
     if (!file || !socket) return;
 
-    const path = currentPath === '.' ? file.name : `${currentPath}/${file.name}`;
+    const baseTarget = overridePath !== null ? overridePath : currentPath;
+    const path = baseTarget === '.' ? file.name : `${baseTarget}/${file.name}`;
+    
+    // Add to queue if not already there (for manual retry support)
+    setUploadQueue(prev => {
+      const exists = prev.find(item => item.path === path);
+      if (exists) return prev.map(item => item.path === path ? { file, path, offset: resumeOffset } : item);
+      return [...prev, { file, path, offset: resumeOffset }];
+    });
+
     const transferObj = { filename: file.name, progress: 0, action: 'upload', waiting: false };
     setTransfer(transferObj);
     transferRef.current = transferObj;
@@ -365,8 +450,13 @@ export default function FileManager({ connectionId, connection, connectionName }
         }
       };
       socket.on('sftp:can_upload', handler);
-      setTimeout(() => { socket.off('sftp:can_upload', handler); resolve({ offset: resumeOffset }); }, 5000);
+      setTimeout(() => { socket.off('sftp:can_upload', handler); resolve({ offset: resumeOffset, error: 'Handshake timeout' }); }, 8000);
     });
+
+    if (startData.error) {
+       setTransfer(prev => ({ ...prev, waiting: true, error: true }));
+       return;
+    }
 
     const chunkSize = 128 * 1024; // 128KB chunks
     let offset = startData.offset || resumeOffset;
@@ -426,6 +516,10 @@ export default function FileManager({ connectionId, connection, connectionName }
           }
 
           offset += chunkSize;
+          
+          // Update queue offset for persistence
+          setUploadQueue(prev => prev.map(item => item.path === path ? { ...item, offset } : item));
+
           setTransfer(prev => ({ 
             ...prev, 
             progress: Math.round((offset / file.size) * 100),
@@ -434,6 +528,8 @@ export default function FileManager({ connectionId, connection, connectionName }
         }
 
         socket.emit(`sftp:upload_done:${file.name}`);
+        // Remove from queue on completion
+        setUploadQueue(prev => prev.filter(item => item.path !== path));
         if (e) e.target.value = null; // Reset input if it was from event
     } catch (err) {
         console.error("Upload Loop Error:", err);
@@ -466,7 +562,109 @@ export default function FileManager({ connectionId, connection, connectionName }
     }
     // Local file upload from desktop
     if (e.dataTransfer.types.includes('Files')) {
+      e.dataTransfer.dropEffect = 'copy';
       setIsDragging(true);
+    }
+  };
+
+  const traverseEntry = async (entry, path) => {
+    if (entry.isFile) {
+      const file = await new Promise((resolve) => entry.file(resolve));
+      await handleFileUpload(null, file, 0, path);
+    } else if (entry.isDirectory) {
+      const filesToZip = {};
+      let totalSize = 0;
+      let processedSize = 0;
+      const allEntries = [];
+
+      // Recursive helper to get all file entries first to calculate total size
+      const collectEntries = async (ent) => {
+        if (ent.isFile) {
+          allEntries.push(ent);
+          const f = await new Promise(r => ent.file(r));
+          totalSize += f.size;
+        } else if (ent.isDirectory) {
+          const reader = ent.createReader();
+          const read = async () => {
+            const results = await new Promise(r => reader.readEntries(r));
+            if (results.length > 0) {
+              for (const result of results) await collectEntries(result);
+              await read();
+            }
+          };
+          await read();
+        }
+      };
+
+      setTransfer({ filename: entry.name, progress: 0, action: 'compress', status: 'Scanning...' });
+      await collectEntries(entry);
+      
+      const zipHelper = async (ent, relPath = '') => {
+        if (ent.isFile) {
+          const file = await new Promise((resolve) => ent.file(resolve));
+          const buf = await file.arrayBuffer();
+          filesToZip[relPath + ent.name] = new Uint8Array(buf);
+          processedSize += file.size;
+          
+          if (totalSize > 0) {
+            setTransfer({ 
+               filename: entry.name, 
+               progress: Math.min(99, Math.round((processedSize / totalSize) * 100)), 
+               action: 'compress',
+               status: `Reading: ${relPath}${ent.name}`
+            });
+          }
+        } else if (ent.isDirectory) {
+          const reader = ent.createReader();
+          const read = async () => {
+            const results = await new Promise((resolve) => reader.readEntries(resolve));
+            if (results.length > 0) {
+              for (const child of results) await zipHelper(child, relPath + ent.name + '/');
+              await read();
+            }
+          };
+          await read();
+        }
+      };
+
+      await zipHelper(entry);
+      
+      setTransfer({ filename: entry.name, progress: 99, action: 'compress', status: 'Zipping...' });
+      
+      try {
+        // Use zipSync with level 1 (fastest) to avoid massive CPU/Memory spikes on large folders
+        // We wrap in a small timeout to allow the 99% UI state to render first
+        const gzData = await new Promise((resolve, reject) => {
+          setTimeout(() => {
+            try {
+              // Create TAR first, then GZIP it
+              const tar = createTar(filesToZip);
+              const compressed = fflate.gzipSync(tar, { level: 6 });
+              resolve(compressed);
+            } catch (err) {
+              reject(err);
+            }
+          }, 100);
+        });
+
+        const blob = new Blob([gzData], { type: 'application/gzip' });
+        const archiveFile = new File([blob], `${entry.name}.tar.gz`, { type: 'application/gzip' });
+        
+        console.log(`✅ TAR.GZ creation complete: ${archiveFile.size} bytes`);
+        
+        // Proceed to the actual upload
+        await handleFileUpload(null, archiveFile, 0, path);
+        
+        // Once upload loop is done, trigger extraction
+        const archivePath = path === '.' ? archiveFile.name : `${path}/${archiveFile.name}`;
+        console.log(`🚀 Upload finished, triggering extraction: ${archivePath}`);
+        socket.emit('sftp:extract', { path: archivePath, type: 'tar' });
+        addNotification({ title: 'Upload Complete', message: 'Starting extraction (TAR.GZ)...', type: 'info' });
+      } catch (err) {
+        console.error('❌ Compression failed:', err);
+        addNotification({ title: 'Compression Error', message: err.message, type: 'error' });
+        setTransfer(null);
+      }
     }
   };
 
@@ -516,14 +714,69 @@ export default function FileManager({ connectionId, connection, connectionName }
     }
     
     // Regular local file uploads
-    const files = Array.from(e.dataTransfer.files);
-    if (!files || files.length === 0 || !socket) return;
+    const items = e.dataTransfer.items;
+    if (items) {
+      for (const item of items) {
+        if (item.kind === 'file') {
+          const entry = item.webkitGetAsEntry();
+          if (entry) {
+            await traverseEntry(entry, currentPath);
+          }
+        }
+      }
+    } else {
+      const files = Array.from(e.dataTransfer.files);
+      if (!files || files.length === 0 || !socket) return;
 
-    // Upload files sequentially using the new robust handler
-    for (const file of files) {
-      await handleFileUpload(null, file);
+      // Upload files sequentially using the new robust handler
+      for (const file of files) {
+        await handleFileUpload(null, file);
+      }
     }
   };
+
+  // System Copy-Paste Support
+  useEffect(() => {
+    const handleSystemPaste = async (e) => {
+      // Only handle paste if something else isn't focused (inputs/textareas)
+      if (document.activeElement.tagName === 'INPUT' || 
+          (document.activeElement.tagName === 'TEXTAREA' && !document.activeElement.closest('.FileManager'))) {
+        return;
+      }
+
+      const items = e.clipboardData.items;
+      if (!items) return;
+
+      // First check for files (including folders in some browsers)
+      let foundFiles = false;
+      for (const item of items) {
+        if (item.kind === 'file') {
+          const file = item.getAsFile();
+          if (file) {
+            foundFiles = true;
+            // WebkitGetAsEntry also works for paste in some newer browsers
+            const entry = item.webkitGetAsEntry?.();
+            if (entry) {
+              await traverseEntry(entry, currentPath);
+            } else {
+              await handleFileUpload(null, file);
+            }
+          }
+        }
+      }
+      
+      if (foundFiles) {
+        addNotification({ 
+          title: t('files.toasts.uploadStarted') || 'Upload Started', 
+          message: t('files.toasts.uploadingFiles') || 'Uploading files to current folder...', 
+          type: 'info' 
+        });
+      }
+    };
+
+    window.addEventListener('paste', handleSystemPaste);
+    return () => window.removeEventListener('paste', handleSystemPaste);
+  }, [currentPath, socket]);
 
    const handleCreate = () => {
     if (!createModal.name || !socket) return;
@@ -679,16 +932,20 @@ export default function FileManager({ connectionId, connection, connectionName }
               className="w-80 bg-[var(--bg-secondary)] rounded-2xl p-6 border border-[var(--border-color)] shadow-2xl"
             >
               <div className="flex items-center gap-4 mb-4">
-                <div className="w-10 h-10 rounded-xl bg-blue-500/20 flex items-center justify-center">
-                  {transfer.action === 'upload' ? <Upload className="text-blue-400" /> : <Download className="text-blue-400" />}
+                <div className="w-10 h-10 rounded-xl bg-[var(--glow-indigo)] flex items-center justify-center">
+                  {transfer.action === 'upload' ? <Upload className="text-[var(--accent-indigo)]" /> : 
+                   transfer.action === 'download' ? <Download className="text-[var(--accent-indigo)]" /> :
+                   <RefreshCw className="text-[var(--accent-indigo)] animate-spin" />}
                 </div>
                 <div className="flex-1 min-w-0">
                   <h3 className="text-sm font-bold text-[var(--text-primary)] truncate">{transfer.filename}</h3>
-                  <p className="text-xs text-[var(--text-muted)] capitalize">
-                    {transfer.waiting ? (
-                        <span className="text-amber-400">{t('files.status.rateLimited')}. {t('files.status.retryIn', { seconds: transferCountdown || '...' })}</span>
+                  <p className="text-xs text-[var(--text-muted)]">
+                    {transfer.status ? (
+                        <span className="text-blue-400 font-medium">{transfer.status}</span>
+                    ) : transfer.waiting ? (
+                        <span className="text-[var(--accent-amber)] font-bold">{t('files.status.rateLimited')}. {t('files.status.retryIn', { seconds: transferCountdown || '...' })}</span>
                     ) : (
-                        `${t(`files.status.${transfer.action}`)} ${t('files.status.inProgress') || 'in progress...'}`
+                        <span className="capitalize">{t(`files.status.${transfer.action}`)} {t('files.status.inProgress') || 'in progress...'}</span>
                     )}
                   </p>
                 </div>
@@ -706,15 +963,30 @@ export default function FileManager({ connectionId, connection, connectionName }
               
               <div className="h-2 bg-[var(--border-color)] rounded-full overflow-hidden mb-2">
                 <motion.div 
-                  className={`h-full ${transfer.waiting ? 'bg-amber-500' : 'bg-blue-500'} shadow-[0_0_10px_rgba(59,130,246,0.5)]`}
+                  className={`h-full ${transfer.waiting ? 'bg-[var(--accent-amber)]' : 'bg-[var(--accent-indigo)]'} shadow-[0_0_10px_var(--glow-indigo)]`}
                   initial={{ width: 0 }}
                   animate={{ width: `${transfer.progress}%` }}
                   transition={{ duration: 0.3 }}
                 />
               </div>
-              <div className="flex justify-between text-[10px] font-mono text-[var(--text-muted)]">
+              <div className="flex justify-between items-center text-[10px] font-mono text-[var(--text-muted)]">
                 <span>{transfer.progress}%</span>
-                <span>{transfer.waiting ? 'Waiting for server...' : t('files.status.doNotClose')}</span>
+                <div className="flex items-center gap-2">
+                   {transfer.waiting && (
+                      <button 
+                        onClick={() => {
+                           const queueItem = uploadQueue.find(qi => (qi.file?.name || qi.filename) === transfer.filename);
+                           if (queueItem) {
+                             if (queueItem.file) handleFileUpload(null, queueItem.file, queueItem.offset);
+                           }
+                        }}
+                        className="text-blue-400 hover:underline flex items-center gap-1"
+                      >
+                         <RefreshCw size={10} /> Retry Now
+                      </button>
+                   )}
+                   <span>{transfer.waiting ? 'Paused' : t('files.status.doNotClose')}</span>
+                </div>
               </div>
             </motion.div>
           </motion.div>
@@ -743,7 +1015,7 @@ export default function FileManager({ connectionId, connection, connectionName }
               <button
                 onClick={handleSave}
                 disabled={editor.saving}
-                className="px-3 py-1.5 bg-blue-600 hover:bg-blue-500 rounded text-xs flex items-center gap-1 transition-colors disabled:opacity-50"
+                className="px-3 py-1.5 bg-[var(--accent-indigo)] hover:opacity-90 rounded text-xs flex items-center gap-1 transition-colors disabled:opacity-50 text-white font-bold"
               >
                 <Save size={14} />
                 {editor.saving ? t('files.modals.editor.saving') : t('files.modals.editor.save')}
@@ -779,24 +1051,38 @@ export default function FileManager({ connectionId, connection, connectionName }
             <>
               <button 
                 onClick={() => { handleEdit(); setContextMenu({ ...contextMenu, visible: false }); }}
-                className="w-full text-left px-3 py-2 text-sm hover:bg-blue-600/10 dark:hover:bg-blue-600/20 text-[var(--text-primary)] hover:text-blue-600 dark:hover:text-blue-400 flex items-center gap-2 transition-colors disabled:opacity-50"
+                className="w-full text-left px-3 py-2 text-sm hover:bg-[var(--glow-indigo)] text-[var(--text-primary)] hover:text-[var(--accent-indigo)] flex items-center gap-2 transition-colors disabled:opacity-50"
                 disabled={contextMenu.file?.longname.startsWith('d')}
               >
                 <Edit size={14} /> {t('files.context.edit')}
               </button>
               <button 
                 onClick={() => { handleDownload(contextMenu.file); setContextMenu({ ...contextMenu, visible: false }); }}
-                className="w-full text-left px-3 py-2 text-sm hover:bg-blue-600/10 dark:hover:bg-blue-600/20 text-[var(--text-primary)] hover:text-emerald-600 dark:hover:text-emerald-400 flex items-center gap-2 transition-colors disabled:opacity-50"
+                className="w-full text-left px-3 py-2 text-sm hover:bg-[var(--glow-emerald)] text-[var(--text-primary)] hover:text-[var(--accent-emerald)] flex items-center gap-2 transition-colors disabled:opacity-50"
                 disabled={contextMenu.file?.longname.startsWith('d')}
               >
                 <Download size={14} /> {t('files.context.download')}
               </button>
               <button 
                 onClick={() => { handleDelete(); setContextMenu({ ...contextMenu, visible: false }); }}
-                className="w-full text-left px-3 py-2 text-sm hover:bg-red-500/10 text-rose-400 flex items-center gap-2 transition-colors"
+                className="w-full text-left px-3 py-2 text-sm hover:bg-[var(--glow-rose)] text-[var(--accent-rose)] flex items-center gap-2 transition-colors"
               >
                 <Trash2 size={14} /> {t('files.context.delete')}
               </button>
+              {(contextMenu.file?.filename.endsWith('.zip') || contextMenu.file?.filename.endsWith('.tar.gz') || contextMenu.file?.filename.endsWith('.tgz')) && (
+                <button 
+                  onClick={() => { 
+                    const isZip = contextMenu.file.filename.endsWith('.zip');
+                    const zipPath = currentPath === '.' ? contextMenu.file.filename : `${currentPath}/${contextMenu.file.filename}`;
+                    setTransfer({ filename: contextMenu.file.filename, progress: 5, action: 'extract', status: 'Initializing extraction...' });
+                    socket.emit('sftp:extract', { path: zipPath, type: isZip ? 'zip' : 'tar' });
+                    setContextMenu({ ...contextMenu, visible: false });
+                  }}
+                  className="w-full text-left px-3 py-2 text-sm hover:bg-orange-600/20 text-orange-400 flex items-center gap-2 transition-colors"
+                >
+                  <FolderPlus size={14} /> Extract
+                </button>
+              )}
               <div className="h-px bg-[var(--border-color)] my-1" />
               <button 
                 onClick={() => handleCopy('copy')}
@@ -1003,7 +1289,7 @@ export default function FileManager({ connectionId, connection, connectionName }
                     {isDir ? (
                       <Folder className="text-blue-400 drop-shadow-lg" size={viewMode === 'grid' ? 48 : 20} />
                     ) : (
-                      <File className="text-[var(--text-muted)]" size={viewMode === 'grid' ? 48 : 20} />
+                      <FileIcon className="text-[var(--text-muted)]" size={viewMode === 'grid' ? 48 : 20} />
                     )}
                   </div>
                   <div className={viewMode === 'grid' ? "text-center" : "flex-1 flex items-center justify-between"}>
@@ -1033,7 +1319,22 @@ export default function FileManager({ connectionId, connection, connectionName }
           <span>{filteredFiles.filter(f => !f.longname.startsWith('d')).length} files</span>
           {status !== 'ready' && <span className="animate-pulse text-amber-500">System State: {status}</span>}
         </div>
-        <div className="flex gap-2">
+        <div className="flex gap-4">
+          {uploadQueue.length > 0 && (
+             <div className="flex items-center gap-2 text-blue-400">
+                <span className="animate-pulse">●</span>
+                <span>{uploadQueue.length} files in queue</span>
+                <button 
+                  onClick={() => {
+                     const next = uploadQueue[0];
+                     handleFileUpload(null, next.file, next.offset);
+                  }}
+                  className="px-2 py-0.5 bg-blue-500/20 rounded hover:bg-blue-500/30 transition-colors flex items-center gap-1"
+                >
+                   <RefreshCw size={8} /> Resync
+                </button>
+             </div>
+          )}
           <span className={status === 'ready' ? 'text-emerald-500' : status === 'error' ? 'text-rose-500' : 'text-amber-500'}>
             {status === 'ready' ? '● SFTP Protocol Active' : status === 'error' ? '○ Connection Failed' : '○ Initializing...'}
           </span>

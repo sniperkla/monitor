@@ -12,6 +12,12 @@ export async function GET(req) {
     if (!session) {
       return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
     }
+    
+    // RBAC: Check for admin access
+    const adminEmail = process.env.ADMIN_EMAIL;
+    if (session.user.role !== 'admin' && (!adminEmail || session.user.email !== adminEmail)) {
+      return NextResponse.json({ success: false, error: 'Forbidden: Admin access required' }, { status: 403 });
+    }
 
     // Ensure DB connection
     await connectDB();

@@ -264,7 +264,7 @@ export default function SpotlightSearch() {
       <div>
         {/* Search Input */}
         <div className="modal-drag-handle flex items-center gap-3 px-5 py-4 border-b border-[var(--border-color)]">
-          <Search size={20} className="text-indigo-400 shrink-0" />
+          <Search size={20} className="text-[var(--accent-indigo)] shrink-0" />
           <input
             ref={inputRef}
             type="text"
@@ -310,16 +310,16 @@ export default function SpotlightSearch() {
                         onMouseEnter={() => setSelectedIndex(globalIndex)}
                         className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl transition-all group ${
                           selectedIndex === globalIndex
-                            ? 'bg-indigo-500/20 text-[var(--text-primary)]'
+                            ? 'bg-[var(--glow-indigo)] text-[var(--text-primary)] shadow-sm'
                             : 'text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)]/50'
                         }`}
                       >
                         <div className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 transition-colors ${
                           selectedIndex === globalIndex
-                            ? 'bg-indigo-500/30'
+                            ? 'bg-[var(--accent-indigo)]/20'
                             : 'bg-[var(--bg-tertiary)]'
                         }`}>
-                          <app.icon size={18} className={selectedIndex === globalIndex ? 'text-indigo-600 dark:text-indigo-300' : 'text-[var(--text-muted)]'} />
+                          <app.icon size={18} className={selectedIndex === globalIndex ? 'text-[var(--accent-indigo)]' : 'text-[var(--text-muted)]'} />
                         </div>
                         <div className="flex-1 text-left min-w-0">
                           <span className="block text-sm font-semibold truncate">{title}</span>
@@ -355,16 +355,16 @@ export default function SpotlightSearch() {
                         onMouseEnter={() => setSelectedIndex(globalIndex)}
                         className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl transition-all group ${
                           selectedIndex === globalIndex
-                            ? 'bg-purple-500/20 text-[var(--text-primary)]'
+                            ? 'bg-[var(--glow-purple,rgba(168,85,247,0.1))] text-[var(--text-primary)] shadow-sm'
                             : 'text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)]/50'
                         }`}
                       >
                         <div className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 transition-colors ${
                           selectedIndex === globalIndex
-                            ? 'bg-purple-500/30'
+                            ? 'bg-[var(--accent-purple,rgba(168,85,247,0.2))]'
                             : 'bg-[var(--bg-tertiary)]'
                         }`}>
-                          <Icon size={16} className={selectedIndex === globalIndex ? 'text-purple-600 dark:text-purple-300' : 'text-[var(--text-muted)]'} />
+                          <Icon size={16} className={selectedIndex === globalIndex ? 'text-[var(--accent-purple,#9333ea)]' : 'text-[var(--text-muted)]'} />
                         </div>
                         <div className="flex-1 text-left min-w-0">
                           <span className="block text-sm font-semibold truncate">{guide.title}</span>
@@ -395,7 +395,7 @@ export default function SpotlightSearch() {
               {/* Loading indicator for wiki */}
               {wikiLoading && query.trim().length >= 2 && (
                  <div className="px-5 py-3 flex items-center gap-2 text-[var(--text-muted)] text-xs">
-                  <div className="w-3 h-3 rounded-full border-2 border-indigo-400/40 border-t-indigo-400 animate-spin" />
+                  <div className="w-3 h-3 rounded-full border-2 border-[var(--accent-indigo)]/40 border-t-[var(--accent-indigo)] animate-spin" />
                   Searching guides...
                 </div>
               )}
@@ -422,7 +422,7 @@ export default function SpotlightSearch() {
                     onMouseEnter={() => setSelectedIndex(i)}
                     className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl transition-all group ${
                       selectedIndex === i
-                        ? 'bg-indigo-500/20 text-[var(--text-primary)]'
+                        ? 'bg-[var(--glow-indigo)] text-[var(--text-primary)]'
                         : 'text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)]/50'
                     }`}
                   >
@@ -431,7 +431,7 @@ export default function SpotlightSearch() {
                         ? 'bg-indigo-500/30'
                         : 'bg-[var(--bg-tertiary)]'
                     }`}>
-                      <app.icon size={18} className={selectedIndex === i ? 'text-indigo-400 dark:text-indigo-300' : 'text-[var(--text-muted)]'} />
+                      <app.icon size={18} className={selectedIndex === i ? 'text-[var(--accent-indigo)]' : 'text-[var(--text-muted)]'} />
                     </div>
                     <div className="flex-1 text-left min-w-0">
                       <span className="block text-sm font-semibold truncate">{title}</span>

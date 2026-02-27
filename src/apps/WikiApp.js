@@ -295,7 +295,7 @@ export default function WikiApp({ initialGuideId }) {
 
   const getCategoryIcon = (category) => {
     const c = (category || '').toLowerCase();
-    if (c === 'all') return <Layers size={14} className="text-indigo-600 dark:text-indigo-400" />;
+    if (c === 'all') return <Layers size={14} className="text-[var(--accent-indigo)]" />;
     if (c === 'web server') return <Globe size={14} className="text-emerald-600 dark:text-emerald-400" />;
     if (c === 'security') return <Shield size={14} className="text-rose-600 dark:text-rose-400" />;
     if (c === 'database') return <Database size={14} className="text-amber-600 dark:text-amber-400" />;
@@ -307,8 +307,8 @@ export default function WikiApp({ initialGuideId }) {
     if (c === 'cloud') return <Cloud size={14} className="text-blue-600 dark:text-blue-400" />;
     if (c === 'system') return <Monitor size={14} className="text-teal-600 dark:text-teal-400" />;
     if (c === 'installation') return <Plus size={14} className="text-blue-600 dark:text-blue-400" />;
-    if (c === 'tools') return <Wrench size={14} className="text-orange-600 dark:text-orange-400" />;
-    return <Settings size={14} className="text-gray-500 dark:text-gray-400" />;
+    if (c === 'tools') return <Wrench size={14} className="text-[var(--accent-amber)]" />;
+    return <Settings size={14} className="text-[var(--text-muted)]" />;
   };
 
   const OsBadge = ({ os, small }) => {
@@ -327,8 +327,8 @@ export default function WikiApp({ initialGuideId }) {
       <div className="w-64 flex-shrink-0 border-r border-[var(--border-color)] flex flex-col bg-[var(--bg-secondary)]/30">
         <div className="p-4 border-b border-[var(--border-color)]">
           <div className="flex items-center gap-2 mb-4">
-            <div className="w-8 h-8 rounded-lg bg-indigo-500/10 flex items-center justify-center border border-indigo-500/20 shadow-inner">
-               <Book size={18} className="text-indigo-600 dark:text-indigo-400" />
+            <div className="w-8 h-8 rounded-lg bg-[var(--glow-indigo)] flex items-center justify-center border border-[var(--accent-indigo)]/20 shadow-inner">
+               <Book size={18} className="text-[var(--accent-indigo)]" />
             </div>
             <span className="font-bold text-sm tracking-tight italic">{t('wiki.hub')}</span>
           </div>
@@ -375,7 +375,7 @@ export default function WikiApp({ initialGuideId }) {
               onClick={() => { setActiveCategory(cat); setActiveGuide(null); }}
               className={`w-full flex items-center gap-2 px-3 py-2 rounded-xl transition-all text-xs font-medium ${
                 activeCategory === cat 
-                  ? 'bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 border border-indigo-500/20' 
+                  ? 'bg-[var(--glow-indigo)] text-[var(--accent-indigo)] border border-[var(--accent-indigo)]/20' 
                   : 'hover:bg-[var(--bg-tertiary)] text-[var(--text-secondary)] border border-transparent'
               }`}
             >
@@ -395,7 +395,7 @@ export default function WikiApp({ initialGuideId }) {
         <div className="flex-1 overflow-y-auto p-2 space-y-1 custom-scrollbar">
           {loading ? (
             <div className="py-12 text-center opacity-40">
-              <RefreshCw size={24} className="mx-auto mb-2 animate-spin text-indigo-400" />
+              <RefreshCw size={24} className="mx-auto mb-2 animate-spin text-[var(--accent-indigo)]" />
               <p className="text-xs">{t('wiki.connecting')}</p>
             </div>
           ) : guides.length > 0 ? (
@@ -405,17 +405,17 @@ export default function WikiApp({ initialGuideId }) {
                 onClick={() => setActiveGuide(guide)}
                 className={`w-full p-4 rounded-xl text-left transition-all border group ${
                   activeGuide?._id === guide._id 
-                    ? 'bg-indigo-500/5 border-indigo-500/20 shadow-sm' 
+                    ? 'bg-[var(--glow-indigo)] border-[var(--accent-indigo)]/20 shadow-sm' 
                     : 'border-transparent hover:bg-[var(--bg-tertiary)]'
                 }`}
               >
                 <div className="flex items-center justify-between mb-1">
-                  <span className={`text-xs font-bold truncate ${activeGuide?._id === guide._id ? 'text-indigo-600 dark:text-indigo-400' : 'text-[var(--text-primary)]'}`}>
+                  <span className={`text-xs font-bold truncate ${activeGuide?._id === guide._id ? 'text-[var(--accent-indigo)]' : 'text-[var(--text-primary)]'}`}>
                     {autoTranslate && translations[`title_${guide._id}`] 
                       ? translations[`title_${guide._id}`] 
                       : (translating[`title_${guide._id}`] ? '...' : guide.title)}
                   </span>
-                  <ChevronRight size={12} className={`transition-transform flex-shrink-0 ml-1 ${activeGuide?._id === guide._id ? 'rotate-90 text-indigo-600 dark:text-indigo-400' : 'text-[var(--text-muted)]'}`} />
+                  <ChevronRight size={12} className={`transition-transform flex-shrink-0 ml-1 ${activeGuide?._id === guide._id ? 'rotate-90 text-[var(--accent-indigo)]' : 'text-[var(--text-muted)]'}`} />
                 </div>
                 <p className="text-[10px] text-[var(--text-muted)] line-clamp-2 leading-relaxed opacity-80 group-hover:opacity-100 italic">
                   {autoTranslate && translations[`desc_${guide._id}`] 
@@ -427,7 +427,7 @@ export default function WikiApp({ initialGuideId }) {
                     <OsBadge key={o} os={o} small />
                   ))}
                   {guide.tags?.slice(0, 1).map(tag => (
-                    <span key={tag} className="px-1.5 py-0.5 rounded bg-indigo-500/10 dark:bg-indigo-500/5 text-[8px] text-indigo-600 dark:text-indigo-300 font-mono">
+                    <span key={tag} className="px-1.5 py-0.5 rounded bg-[var(--glow-indigo)] text-[8px] text-[var(--accent-indigo)] font-mono">
                       #{tag}
                     </span>
                   ))}
@@ -447,9 +447,9 @@ export default function WikiApp({ initialGuideId }) {
       <div className="flex-1 min-w-[500px] flex flex-col bg-[var(--bg-primary)]">
         {activeGuide ? (
           <>
-            <div className="h-16 border-b border-[var(--border-color)] flex items-center justify-between px-8 bg-indigo-500/5">
+            <div className="h-16 border-b border-[var(--border-color)] flex items-center justify-between px-8 bg-[var(--bg-secondary)]">
               <div className="flex items-center gap-3">
-                <div className="p-2 rounded-xl bg-indigo-500/10 border border-indigo-500/20">
+                <div className="p-2 rounded-xl bg-[var(--glow-indigo)] border border-[var(--accent-indigo)]/20">
                   {getCategoryIcon(activeGuide.category)}
                 </div>
                 <div>
@@ -459,7 +459,7 @@ export default function WikiApp({ initialGuideId }) {
                       : (translating[`title_${activeGuide._id}`] ? '...' : activeGuide.title)}
                   </h1>
                   <div className="flex items-center gap-2">
-                    <span className="text-[9px] uppercase font-bold text-indigo-600 dark:text-indigo-400 tracking-widest">{activeGuide.category}</span>
+                    <span className="text-[9px] uppercase font-bold text-[var(--accent-indigo)] tracking-widest">{activeGuide.category}</span>
                     <span className="w-1 h-1 rounded-full bg-[var(--border-color)]" />
                     <div className="flex gap-1">
                       {activeGuide.os?.map(o => <OsBadge key={o} os={o} />)}
@@ -475,7 +475,7 @@ export default function WikiApp({ initialGuideId }) {
                   onClick={() => setAutoTranslate(!autoTranslate)}
                   className={`flex items-center gap-2 px-3 py-1.5 rounded-lg transition-all text-xs font-bold border ${
                     autoTranslate 
-                      ? 'bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 border-emerald-500/30 shadow-lg shadow-emerald-500/10' 
+                      ? 'bg-[var(--glow-emerald)] text-[var(--accent-emerald)] border-[var(--accent-emerald)]/30 shadow-lg shadow-[var(--glow-emerald)]' 
                       : 'bg-[var(--bg-tertiary)] text-[var(--text-muted)] border-[var(--border-color)] hover:bg-[var(--bg-card-hover)]'
                   }`}
                   title={t('wiki.autoTranslate')}
@@ -519,9 +519,9 @@ export default function WikiApp({ initialGuideId }) {
               ) : (
                 <button
                   onClick={openChatWindow}
-                  className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-indigo-500 text-white shadow-lg shadow-indigo-500/20 hover:bg-indigo-600 transition-all text-xs font-bold"
+                  className="flex items-center gap-2 px-4 py-1.5 rounded-lg bg-[var(--glow-indigo)] border border-[var(--accent-indigo)]/50 text-[var(--accent-indigo)] shadow-lg shadow-[var(--glow-indigo)] hover:bg-[var(--accent-indigo)] hover:text-white transition-all text-xs font-bold group/ai"
                 >
-                  <Sparkles size={14} />
+                  <Sparkles size={14} className="group-hover/ai:animate-pulse" />
                   {t('wiki.askAi')}
                 </button>
               )}
@@ -530,7 +530,7 @@ export default function WikiApp({ initialGuideId }) {
 
             <div className="flex-1 overflow-y-auto p-8 custom-scrollbar relative">
               <div className="max-w-3xl mx-auto">
-                <div className="p-6 rounded-3xl bg-indigo-500/5 border border-indigo-500/10 mb-8 border-l-4 border-l-indigo-500 shadow-sm shadow-indigo-500/5 space-y-3">
+                <div className="p-6 rounded-3xl bg-[var(--glow-indigo)] border border-[var(--accent-indigo)]/10 mb-8 border-l-4 border-l-[var(--accent-indigo)] shadow-sm shadow-[var(--glow-indigo)] space-y-3">
                   <p className="text-sm leading-relaxed text-[var(--text-secondary)] italic">
                     {autoTranslate && translations[`desc_${activeGuide._id}`] 
                       ? translations[`desc_${activeGuide._id}`] 
@@ -556,7 +556,7 @@ export default function WikiApp({ initialGuideId }) {
                       key={i} 
                       className="group"
                     >
-                      <h3 className="text-xs font-bold text-indigo-600 dark:text-indigo-300 mb-3 flex items-center gap-2 uppercase tracking-widest">
+                      <h3 className="text-xs font-bold text-[var(--accent-indigo)] mb-3 flex items-center gap-2 uppercase tracking-widest">
                         <Terminal size={14} />
                         {cmd.label}
                       </h3>
@@ -571,7 +571,7 @@ export default function WikiApp({ initialGuideId }) {
                             {copiedId === `${activeGuide._id}-${i}` ? <Check size={14} className="text-emerald-400" /> : <Copy size={14} />}
                           </button>
                         </div>
-                        <pre className="p-5 font-mono text-[13px] text-indigo-100 overflow-x-auto custom-scrollbar-horizontal leading-relaxed">
+                        <pre className="p-5 font-mono text-[13px] text-white dark:text-indigo-100 overflow-x-auto custom-scrollbar-horizontal leading-relaxed">
                           <code>{cmd.code}</code>
                         </pre>
                         {cmd.explanation && (
@@ -604,7 +604,7 @@ export default function WikiApp({ initialGuideId }) {
                     <span className="text-[10px] font-bold text-[var(--text-muted)] uppercase tracking-wider">{t('wiki.tags')}</span>
                     <div className="flex flex-wrap gap-2">
                       {activeGuide.tags.map(tag => (
-                        <span key={tag} className="px-2 py-1 rounded-lg bg-[var(--bg-tertiary)] border border-[var(--border-color)] text-[10px] text-[var(--text-secondary)] hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors cursor-pointer">
+                        <span key={tag} className="px-2 py-1 rounded-lg bg-[var(--bg-tertiary)] border border-[var(--border-color)] text-[10px] text-[var(--text-secondary)] hover:text-[var(--accent-indigo)] transition-colors cursor-pointer">
                           {tag}
                         </span>
                       ))}
@@ -617,9 +617,9 @@ export default function WikiApp({ initialGuideId }) {
             </div>
           </>
         ) : (
-          <div className="flex-1 flex flex-col items-center justify-center p-12 text-center opacity-40 dark:opacity-20">
-             <div className="w-24 h-24 rounded-full bg-indigo-500/5 flex items-center justify-center mb-6 border border-indigo-500/10">
-                <Book size={48} className="text-indigo-600 dark:text-indigo-400" />
+          <div className="flex-1 flex flex-col items-center justify-center p-12 text-center opacity-40">
+             <div className="w-24 h-24 rounded-full bg-[var(--glow-indigo)] flex items-center justify-center mb-6 border border-[var(--accent-indigo)]/20 shadow-xl">
+                <Book size={48} className="text-[var(--accent-indigo)]" />
              </div>
              <h2 className="text-xl font-bold mb-2 tracking-tight text-[var(--text-primary)]">{t('wiki.emptyTitle')}</h2>
              <p className="text-sm max-w-xs mx-auto italic text-[var(--text-secondary)]">{t('wiki.emptyDesc')}</p>

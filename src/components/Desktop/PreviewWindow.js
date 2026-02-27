@@ -20,6 +20,7 @@ export default function PreviewWindow({ isOpen, onClose }) {
   const [isDragging, setIsDragging] = useState(false);
   const windowCardRefs = useRef({});
   const previewSurfaceRefs = useRef({});
+  const miniPreviewSurfaceRefs = useRef({});
   const [renamingDesktopId, setRenamingDesktopId] = useState(null);
   const [renamingValue, setRenamingValue] = useState('');
   const [dragPosition, setDragPosition] = useState({ x: 0, y: 0 });
@@ -173,6 +174,7 @@ export default function PreviewWindow({ isOpen, onClose }) {
   };
 
   const handleWindowMouseDown = (e, windowId, fromDesktopId) => {
+    if (renamingDesktopId) commitRenameDesktop();
     e.preventDefault();
     const card = windowCardRefs.current[windowId];
     if (!card) return;
@@ -347,40 +349,70 @@ export default function PreviewWindow({ isOpen, onClose }) {
 
     let cancelled = false;
 
-    const renderOne = (windowId) => {
-      const surface = previewSurfaceRefs.current[windowId];
+    const renderToSurface = (windowData, surface) => {
       if (!surface) return;
 
-      const node = document.querySelector(`[data-window-id="${windowId}"]`);
+      const node = document.querySelector(`[data-window-id="${windowData.id}"]`);
       if (!node) return;
 
-      const rect = node.getBoundingClientRect();
+      let rect = node.getBoundingClientRect();
+      let w = rect.width;
+      let h = rect.height;
+
+      // If window is on background desktop, its dimensions might be reported as 0 or it might be hidden
+      if (w === 0 || h === 0) {
+        w = windowData.width || 800;
+        h = windowData.height || 600;
+      }
+
       const targetW = surface.clientWidth;
       const targetH = surface.clientHeight;
 
-      if (!rect.width || !rect.height || !targetW || !targetH) return;
+      if (!w || !h || !targetW || !targetH) return;
 
-      const scale = Math.min(targetW / rect.width, targetH / rect.height);
+      const scale = Math.min(targetW / w, targetH / h);
 
-      const clone = node.cloneNode(true);
-      clone.style.pointerEvents = 'none';
-      clone.style.transform = `scale(${scale})`;
-      clone.style.transformOrigin = 'top left';
-      clone.style.position = 'absolute';
-      clone.style.top = '0';
-      clone.style.left = '0';
-      clone.style.width = `${rect.width}px`;
-      clone.style.height = `${rect.height}px`;
+      try {
+        const clone = node.cloneNode(true);
+        // Force the clone to be visible in case the original is hidden
+        clone.style.display = 'block';
+        clone.style.opacity = '1';
+        clone.style.visibility = 'visible';
+        
+        clone.style.pointerEvents = 'none';
+        clone.style.transform = `scale(${scale})`;
+        clone.style.transformOrigin = 'top left';
+        clone.style.position = 'absolute';
+        clone.style.top = '0';
+        clone.style.left = '0';
+        clone.style.width = `${w}px`;
+        clone.style.height = `${h}px`;
+        // Strip out shadows to keep the preview clean
+        clone.style.boxShadow = 'none';
 
-      surface.replaceChildren(clone);
+        surface.replaceChildren(clone);
+      } catch (e) {
+        // Ignore cross-origin canvas errors during clone
+      }
     };
 
     const renderAll = () => {
       if (cancelled) return;
-      const list = windowsByDesktop[currentDesktopId] || [];
-      for (const w of list) {
+      
+      // Render large previews for current desktop
+      const currentList = windowsByDesktop[currentDesktopId] || [];
+      for (const w of currentList) {
         if (!w?.id) continue;
-        renderOne(w.id);
+        renderToSurface(w, previewSurfaceRefs.current[w.id]);
+      }
+
+      // Render mini previews for ALL desktops
+      for (const deskId of Object.keys(windowsByDesktop)) {
+        const deskWindows = windowsByDesktop[deskId] || [];
+        for (const w of deskWindows) {
+          if (!w?.id) continue;
+          renderToSurface(w, miniPreviewSurfaceRefs.current[`${deskId}-${w.id}`]);
+        }
       }
     };
 
@@ -412,6 +444,7 @@ export default function PreviewWindow({ isOpen, onClose }) {
             boxShadow: '0 25px 60px rgba(0,0,0,0.55)',
           }}
           onMouseDown={(e) => {
+            if (renamingDesktopId) commitRenameDesktop();
             // Clicking blank space should collapse preview window
             if (e.target === e.currentTarget) {
               if (!isDragging) onClose();
@@ -477,12 +510,6 @@ export default function PreviewWindow({ isOpen, onClose }) {
                       onDrop={(e) => {
                         handleDesktopDrop(e, desktop.id);
                       }}
-                      onClick={() => switchDesktop(desktop.id)}
-                      onDoubleClick={(e) => {
-                        e.preventDefault();
-                        e.stopPropagation();
-                        beginRenameDesktop(desktop);
-                      }}
                       initial={{ scale: 0.8, opacity: 0 }}
                       animate={{ scale: 1, opacity: 1 }}
                       whileHover={{ scale: 1.05 }}
@@ -503,15 +530,78 @@ export default function PreviewWindow({ isOpen, onClose }) {
                       </button>
                     )}
                     <div
-                      className={`w-40 h-28 rounded-2xl border-2 transition-all flex flex-col items-center justify-center ${
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (renamingDesktopId) commitRenameDesktop();
+                        switchDesktop(desktop.id);
+                        onClose();
+                      }}
+                      className={`w-40 h-28 rounded-2xl border-2 transition-all flex flex-col items-center justify-center overflow-hidden relative ${
                         isActive
                           ? 'bg-blue-500/20 border-blue-500 text-blue-400 shadow-lg'
                           : 'bg-[var(--bg-primary)] border-[var(--border-color)] text-[var(--text-secondary)] hover:border-[var(--border-hover)] hover:shadow-lg'
                       }`}
                       style={isDropTarget ? { outline: '2px solid rgba(59,130,246,0.8)', outlineOffset: '2px' } : undefined}
                     >
-                      <Monitor size={24} className="mb-2" />
-                      <div className="text-sm font-medium text-center w-full px-2">
+                      {/* Desktop Wallpaper Background */}
+                      <div
+                        className="absolute inset-0 opacity-40 mix-blend-overlay"
+                        style={{
+                          backgroundImage: wallpaper ? `url(${wallpaper})` : undefined,
+                          backgroundSize: 'cover',
+                          backgroundPosition: 'center',
+                        }}
+                      />
+                      
+                      {/* Mini Window Previews */}
+                      {desktopWindows.length > 0 ? (
+                        <div className="absolute inset-0 p-2">
+                          {desktopWindows.map((win, i) => {
+                            // Calculate relative position based on a generic full screen size (e.g. 1920x1080)
+                            const screenW = window.innerWidth || 1920;
+                            const screenH = window.innerHeight || 1080;
+                            const left = ((win.x || 0) / screenW) * 100;
+                            const top = ((win.y || 0) / screenH) * 100;
+                            const width = ((win.width || 800) / screenW) * 100;
+                            const height = ((win.height || 600) / screenH) * 100;
+
+                            return (
+                              <div
+                                key={`${win.id}-mini-${i}`}
+                                className="absolute bg-[var(--window-bg)] border border-[var(--border-color)] rounded-sm shadow-sm overflow-hidden"
+                                style={{
+                                  left: `${Math.max(0, Math.min(left, 90))}%`,
+                                  top: `${Math.max(0, Math.min(top, 90))}%`,
+                                  width: `${Math.max(10, Math.min(width, 90))}%`,
+                                  height: `${Math.max(10, Math.min(height, 90))}%`,
+                                  zIndex: win.zIndex || 1,
+                                }}
+                              >
+                                <div 
+                                  ref={(el) => {
+                                    if (el) miniPreviewSurfaceRefs.current[`${desktop.id}-${win.id}`] = el;
+                                  }}
+                                  className="absolute inset-0 w-full h-full"
+                                />
+                                {/* Overlay a subtle gradient so the live clone stands out without being overpowering */}
+                                <div className="absolute inset-0 bg-gradient-to-t from-black/20 to-transparent pointer-events-none" />
+                              </div>
+                            );
+                          })}
+                        </div>
+                      ) : (
+                        <Monitor size={24} className="relative z-10" />
+                      )}
+                    </div>
+
+                    <div className="mt-2 flex flex-col items-center">
+                      <div 
+                        className="text-sm font-medium text-center w-full px-2 cursor-text"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          beginRenameDesktop(desktop);
+                        }}
+                      >
                         {renamingDesktopId === desktop.id ? (
                           <input
                             value={renamingValue}
@@ -531,14 +621,16 @@ export default function PreviewWindow({ isOpen, onClose }) {
                               }
                             }}
                             onBlur={commitRenameDesktop}
-                            className="w-full text-center text-sm bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded px-2 py-1 text-[var(--text-primary)]"
+                            className="w-full text-center text-sm bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded px-2 py-1 text-[var(--text-primary)] focus:outline-none focus:ring-1 focus:ring-blue-500"
                           />
                         ) : (
-                          desktop.name
+                          <span className={`inline-block hover:text-blue-400 transition-colors ${isActive ? 'text-blue-400 font-bold' : 'text-[var(--text-secondary)]'}`}>
+                            {desktop.name}
+                          </span>
                         )}
                       </div>
-                      <div className="text-xs opacity-70 text-center">
-                        {desktopWindows.length} windows
+                      <div className="text-[10px] opacity-50 text-center font-mono uppercase tracking-tighter">
+                        {desktopWindows.length} {desktopWindows.length === 1 ? 'window' : 'windows'}
                       </div>
                     </div>
                     
@@ -548,16 +640,21 @@ export default function PreviewWindow({ isOpen, onClose }) {
               
               {/* Add Desktop Button */}
               <motion.button
-                onClick={addDesktop}
-                className="w-40 h-28 rounded-2xl border-2 border-dashed border-[var(--border-color)] bg-[var(--bg-tertiary)]/50 hover:bg-[var(--bg-tertiary)] hover:border-[var(--border-hover)] transition-all flex flex-col items-center justify-center text-[var(--text-muted)] hover:text-[var(--text-primary)]"
+                onClick={() => {
+                  if (renamingDesktopId) commitRenameDesktop();
+                  addDesktop();
+                }}
+                className="group flex flex-col items-center"
                 initial={{ scale: 0.8, opacity: 0 }}
                 animate={{ scale: 1, opacity: 1 }}
                 whileHover={{ scale: 1.05 }}
                 transition={{ type: "spring", damping: 25, stiffness: 300 }}
                 title="Add Desktop"
               >
-                <Plus size={24} className="mb-2" />
-                <div className="text-sm font-medium">
+                <div className="w-40 h-28 rounded-2xl border-2 border-dashed border-[var(--border-color)] bg-[var(--bg-tertiary)]/50 group-hover:bg-[var(--bg-tertiary)] group-hover:border-[var(--border-hover)] transition-all flex items-center justify-center text-[var(--text-muted)] group-hover:text-[var(--text-primary)]">
+                  <Plus size={24} />
+                </div>
+                <div className="mt-2 text-sm font-medium text-[var(--text-muted)] group-hover:text-[var(--text-primary)]">
                   Add Desktop
                 </div>
               </motion.button>

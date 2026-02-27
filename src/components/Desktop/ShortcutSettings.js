@@ -3,6 +3,7 @@
 import { useOS } from '@/context/OSContext';
 import { useState, useEffect } from 'react';
 import { Keyboard, X, Save } from 'lucide-react';
+import ShortcutInput from './ShortcutInput';
 
 export default function ShortcutSettings({ isOpen, onClose }) {
   const { state, setKeyboardShortcuts, saveSettings } = useOS();
@@ -61,55 +62,45 @@ export default function ShortcutSettings({ isOpen, onClose }) {
           <div className="space-y-3">
             <div className="flex items-center justify-between">
               <span className="text-sm text-[var(--text-secondary)]">Open Preview</span>
-              <input
-                type="text"
+              <ShortcutInput
                 value={shortcuts.previewWindow}
-                onChange={(e) => updateShortcut('previewWindow', e.target.value)}
-                className="px-2 py-1 text-sm bg-[var(--bg-primary)] border border-[var(--border-color)] rounded text-[var(--text-primary)] w-32"
+                onChange={(value) => updateShortcut('previewWindow', value)}
                 placeholder="Ctrl+Cmd+Up"
               />
             </div>
             
             <div className="flex items-center justify-between">
               <span className="text-sm text-[var(--text-secondary)]">Previous Desktop</span>
-              <input
-                type="text"
+              <ShortcutInput
                 value={shortcuts.prevDesktop}
-                onChange={(e) => updateShortcut('prevDesktop', e.target.value)}
-                className="px-2 py-1 text-sm bg-[var(--bg-primary)] border border-[var(--border-color)] rounded text-[var(--text-primary)] w-32"
+                onChange={(value) => updateShortcut('prevDesktop', value)}
                 placeholder="Ctrl+Cmd+Left"
               />
             </div>
             
             <div className="flex items-center justify-between">
               <span className="text-sm text-[var(--text-secondary)]">Next Desktop</span>
-              <input
-                type="text"
+              <ShortcutInput
                 value={shortcuts.nextDesktop}
-                onChange={(e) => updateShortcut('nextDesktop', e.target.value)}
-                className="px-2 py-1 text-sm bg-[var(--bg-primary)] border border-[var(--border-color)] rounded text-[var(--text-primary)] w-32"
+                onChange={(value) => updateShortcut('nextDesktop', value)}
                 placeholder="Ctrl+Cmd+Right"
               />
             </div>
             
             <div className="flex items-center justify-between">
               <span className="text-sm text-[var(--text-secondary)]">Minimize All</span>
-              <input
-                type="text"
+              <ShortcutInput
                 value={shortcuts.minimizeAll}
-                onChange={(e) => updateShortcut('minimizeAll', e.target.value)}
-                className="px-2 py-1 text-sm bg-[var(--bg-primary)] border border-[var(--border-color)] rounded text-[var(--text-primary)] w-32"
+                onChange={(value) => updateShortcut('minimizeAll', value)}
                 placeholder="Ctrl+Cmd+M"
               />
             </div>
             
             <div className="flex items-center justify-between">
               <span className="text-sm text-[var(--text-secondary)]">Close All</span>
-              <input
-                type="text"
+              <ShortcutInput
                 value={shortcuts.closeAll}
-                onChange={(e) => updateShortcut('closeAll', e.target.value)}
-                className="px-2 py-1 text-sm bg-[var(--bg-primary)] border border-[var(--border-color)] rounded text-[var(--text-primary)] w-32"
+                onChange={(value) => updateShortcut('closeAll', value)}
                 placeholder="Ctrl+Cmd+W"
               />
             </div>
@@ -117,7 +108,7 @@ export default function ShortcutSettings({ isOpen, onClose }) {
 
           <div className="pt-3 border-t border-[var(--border-color)]">
             <p className="text-xs text-[var(--text-muted)] mb-3">
-              Format: Ctrl+Cmd+[Key]. Use arrow keys for navigation: ArrowUp, ArrowLeft, ArrowRight.
+              Click a box above and press the keys on your keyboard to sequence a new shortcut.
             </p>
             
             <div className="flex justify-end gap-2">

@@ -251,9 +251,8 @@ export default function Sidebar({ onNewConnection, onEditConnection }) {
       {/* Header */}
       <div className="p-4 border-b" style={{ borderColor: 'var(--border-color)' }}>
         <div className="flex items-center gap-3 mb-4">
-          <div className="w-9 h-9 rounded-lg flex items-center justify-center"
-            style={{ background: 'linear-gradient(135deg, #6366f1, #8b5cf6)' }}>
-            <Terminal size={18} className="text-white" />
+          <div className="w-9 h-9 rounded-lg flex items-center justify-center bg-[var(--bg-selected)] shadow-[var(--glow-indigo)] border border-[var(--accent-indigo)]/30">
+            <Terminal size={18} className="text-[var(--text-selected)]" />
           </div>
           <div>
             <h1 className="text-sm font-bold" style={{ color: 'var(--text-primary)' }}>{t('common.connections') || 'Connection Manager'}</h1>
@@ -265,15 +264,15 @@ export default function Sidebar({ onNewConnection, onEditConnection }) {
         <div className="flex gap-2 mb-3">
           <div className="flex-1 rounded-lg p-2 text-center" style={{ background: 'var(--bg-tertiary)' }}>
             <div className="text-lg font-bold" style={{ color: 'var(--text-primary)' }}>{stats.total}</div>
-            <div className="text-xs" style={{ color: 'var(--text-muted)' }}>{t('common.total') || 'Total'}</div>
+            <div className="text-xs" style={{ color: 'var(--text-muted)' }}>{t('common.total')}</div>
           </div>
-          <div className="flex-1 rounded-lg p-2 text-center" style={{ background: 'rgba(16, 185, 129, 0.1)' }}>
+          <div className="flex-1 rounded-lg p-2 text-center" style={{ background: 'var(--glow-emerald)' }}>
             <div className="text-lg font-bold" style={{ color: 'var(--accent-emerald)' }}>{stats.online}</div>
-            <div className="text-xs" style={{ color: 'var(--text-muted)' }}>{t('common.online') || 'Online'}</div>
+            <div className="text-xs" style={{ color: 'var(--text-muted)' }}>{t('common.online')}</div>
           </div>
-          <div className="flex-1 rounded-lg p-2 text-center" style={{ background: 'rgba(244, 63, 94, 0.1)' }}>
+          <div className="flex-1 rounded-lg p-2 text-center" style={{ background: 'var(--glow-rose)' }}>
             <div className="text-lg font-bold" style={{ color: 'var(--accent-rose)' }}>{stats.offline}</div>
-            <div className="text-xs" style={{ color: 'var(--text-muted)' }}>{t('common.offline') || 'Offline'}</div>
+            <div className="text-xs" style={{ color: 'var(--text-muted)' }}>{t('common.offline')}</div>
           </div>
         </div>
 
@@ -301,13 +300,9 @@ export default function Sidebar({ onNewConnection, onEditConnection }) {
               key={f.key || i}
               className={`flex-1 text-xs py-1.5 rounded-md transition-all font-medium ${
                 filter === f.key
-                  ? 'text-white shadow'
-                  : ''
+                  ? 'bg-[var(--bg-selected)] text-[var(--text-selected)] shadow-sm border border-[var(--accent-indigo)]/30'
+                  : 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'
               }`}
-              style={{
-                background: filter === f.key ? 'var(--accent-indigo)' : 'transparent',
-                color: filter === f.key ? 'white' : 'var(--text-muted)',
-              }}
               onClick={() => setFilter(f.key)}
             >
               {f.label}
@@ -334,14 +329,16 @@ export default function Sidebar({ onNewConnection, onEditConnection }) {
                 // Create a drag image
                 const ghost = document.createElement('div');
                 ghost.className = 'flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-semibold text-white';
-                ghost.style.cssText = `background:${conn.color || '#6366f1'};position:fixed;top:-100px;left:-100px;z-index:99999;opacity:0.9;border-radius:8px;padding:6px 14px;pointer-events:none;`;
+                ghost.style.cssText = `background:var(--accent-indigo);position:fixed;top:-100px;left:-100px;z-index:99999;opacity:0.9;border-radius:8px;padding:6px 14px;pointer-events:none;color:white;`;
                 ghost.textContent = `🖥 ${conn.name}`;
                 document.body.appendChild(ghost);
                 e.dataTransfer.setDragImage(ghost, 0, 0);
                 setTimeout(() => document.body.removeChild(ghost), 0);
               }}
               className={`connection-item group relative !p-3 !my-2 cursor-grab active:cursor-grabbing transition-all border ${
-                state.selectedConnection?._id === conn._id ? 'border-indigo-500/50 bg-indigo-500/5' : 'border-transparent'
+                state.selectedConnection?._id === conn._id 
+                  ? 'border-[var(--accent-indigo)]/50 bg-[var(--bg-selected)] shadow-sm' 
+                  : 'border-transparent'
               }`}
               onClick={() => {
                 dispatch({ type: 'SELECT_CONNECTION', payload: conn });
@@ -358,13 +355,13 @@ export default function Sidebar({ onNewConnection, onEditConnection }) {
                       conn.status === 'online' ? 'status-online' :
                       conn.status === 'offline' ? 'status-offline' : 'status-unknown'
                     }`} />
-                    <span className="text-sm font-semibold truncate" style={{ color: 'var(--text-primary)' }}>
+                    <span className="text-sm font-semibold truncate" style={{ color: state.selectedConnection?._id === conn._id ? 'var(--text-selected)' : 'var(--text-primary)' }}>
                       {conn.name}
                     </span>
                     <span className={`text-[8px] font-bold px-1 rounded-sm border uppercase flex-shrink-0 ${
-                      conn.storage === 'db' ? 'text-indigo-700 dark:text-indigo-400 border-indigo-700/30 dark:border-indigo-400/30' :
-                      conn.storage === 'localstorage' ? 'text-emerald-700 dark:text-emerald-400 border-emerald-700/30 dark:border-emerald-400/30' :
-                      'text-amber-700 dark:text-amber-400 border-amber-700/30 dark:border-amber-400/30'
+                      conn.storage === 'db' ? 'text-[var(--accent-indigo)] border-[var(--accent-indigo)]/30' :
+                      conn.storage === 'localstorage' ? 'text-[var(--accent-emerald)] border-[var(--accent-emerald)]/30' :
+                      'text-[var(--accent-amber)] border-[var(--accent-amber)]/30'
                     }`}>
                       {conn.storage === 'localstorage' ? t('common.storage.local') : conn.storage === 'manual' ? t('common.storage.tmp') : t('common.storage.db')}
                     </span>

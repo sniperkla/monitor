@@ -77,6 +77,21 @@ const initialState = {
     closeAll: 'Ctrl+Cmd+W',
     spotlight: 'Cmd+K',
   },
+  terminalSettings: {
+    activePreset: 'modern', // modern, retro, matrix, solarized
+    fontSize: 14,
+    fontFamily: "'JetBrains Mono', 'Fira Code', monospace",
+    cursorStyle: 'bar',
+    cursorBlink: true,
+    theme: {
+      background: '#0c0c0c',
+      foreground: '#e4e4e7',
+      cursor: '#6366f1',
+      selectionBackground: 'rgba(99, 102, 241, 0.3)',
+    },
+    backgroundOpacity: 1,
+    customPresets: [] // Array of { id, name, settings }
+  },
 };
 
 function osReducer(state, action) {
@@ -316,6 +331,12 @@ function osReducer(state, action) {
       return { ...state, language: action.payload, timestamp: Date.now() };
     case 'SET_THEME':
       return { ...state, theme: action.payload, timestamp: Date.now() };
+    case 'SET_TERMINAL_SETTINGS':
+      return { 
+        ...state, 
+        terminalSettings: { ...state.terminalSettings, ...action.payload }, 
+        timestamp: Date.now() 
+      };
     case 'SET_TASKBAR_POSITION':
       return { ...state, taskbarPosition: action.payload, timestamp: Date.now() };
     case 'SET_WINDOW_LAYOUT':
@@ -721,6 +742,21 @@ export function OSProvider({ children }) {
       aiHistory: s.aiHistory || [],
       sshAiHistory: s.sshAiHistory || [],
       sshAiPrefs: s.sshAiPrefs || { preferSudo: true, editor: 'nano', viewer: 'cat', autoExplainOnError: false, autoAnswerPrompts: false },
+      terminalSettings: s.terminalSettings || {
+        activePreset: 'modern',
+        fontSize: 14,
+        fontFamily: "'JetBrains Mono', 'Fira Code', monospace",
+        cursorStyle: 'bar',
+        cursorBlink: true,
+        theme: {
+          background: '#0c0c0c',
+          foreground: '#e4e4e7',
+          cursor: '#6366f1',
+          selectionBackground: 'rgba(99, 102, 241, 0.3)',
+        },
+        backgroundOpacity: s.terminalSettings?.backgroundOpacity ?? 1,
+        customPresets: []
+      },
       openWindows: (s.windows || s.openWindows || []).map((w) => ({
         id: w.id,
         title: w.title,
@@ -832,6 +868,7 @@ export function OSProvider({ children }) {
     state.taskbarPosition,
     state.theme,
     state.keyboardShortcuts,
+    state.terminalSettings,
     state.windows
   ]);
 
@@ -925,6 +962,7 @@ export function OSProvider({ children }) {
     state.aiHistory,
     state.sshAiHistory,
     state.sshAiPrefs,
+    state.terminalSettings,
     isInitialLoad
   ]);
 
@@ -1122,7 +1160,7 @@ export function OSProvider({ children }) {
       const html = document.documentElement;
       const theme = state.theme || 'dark';
       
-      html.classList.remove('light', 'dark');
+      html.classList.remove('light', 'dark', 'retro', 'cyberpunk');
       
       if (theme === 'auto') {
         const isDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
@@ -1362,6 +1400,7 @@ export function OSProvider({ children }) {
       setBrightness,
       setUiScale,
       setNotifications,
+      saveSettings,
       addCustomWallpaper,
       removeCustomWallpaper,
       setSortBy, 
@@ -1398,6 +1437,7 @@ export function OSProvider({ children }) {
       setTaskbarPosition,
       setWindowLayout,
       setTheme,
+      setTerminalSettings: (settings) => dispatch({ type: 'SET_TERMINAL_SETTINGS', payload: settings }),
       dispatch,
     }}>
       {children}

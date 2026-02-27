@@ -1,10 +1,16 @@
 const crypto = require('crypto');
 
-const SECRET_KEY = process.env.ENCRYPTION_KEY || 'development_fallback_secret_key_32_chars';
+const SECRET_KEY = process.env.ENCRYPTION_KEY;
+
+if (!SECRET_KEY && process.env.NODE_ENV === 'production') {
+  throw new Error("CRITICAL: ENCRYPTION_KEY is required in production environments.");
+}
+
+const FALLBACK_SECRET = SECRET_KEY || crypto.randomBytes(32).toString('hex');
 const SECRET_KEY_OLD = process.env.ENCRYPTION_KEY_OLD;
 
 // Use SHA-256 to ensure key is exactly 32 bytes
-const KEY = crypto.createHash('sha256').update(String(SECRET_KEY)).digest();
+const KEY = crypto.createHash('sha256').update(String(FALLBACK_SECRET)).digest();
 const OLD_KEY = SECRET_KEY_OLD ? crypto.createHash('sha256').update(String(SECRET_KEY_OLD)).digest() : null;
 
 const IV_LENGTH = 16; 

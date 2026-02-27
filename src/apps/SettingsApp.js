@@ -4,8 +4,8 @@ import { useState, useEffect } from 'react';
 import { 
   Palette, Image as ImageIcon, Monitor, Layout, Bell, Shield, Info, 
   Database, CheckCircle, AlertCircle, RefreshCw, Zap, Wifi, WifiOff, 
-  Loader, Trash2, Lock, Unlock, Key, Mail, Code, Volume2, Sun, Moon,
-  Search
+  Loader, Trash2, Lock, Unlock, Key, Mail, Code, Volume2, Sun, Moon, Cpu,
+  Search, Terminal
 } from 'lucide-react';
 import { useOS } from '@/context/OSContext';
 import { useApp } from '@/context/AppContext';
@@ -14,6 +14,7 @@ import { useSession, signIn, signOut } from 'next-auth/react';
 import { useTranslation } from 'react-i18next';
 
 import { motion, AnimatePresence } from 'framer-motion';
+import ShortcutInput from '@/components/Desktop/ShortcutInput';
 
 const WALLPAPERS = [
   { id: 'space', name: 'Space Earth', url: 'https://images.unsplash.com/photo-1451187580459-43490279c0fa?q=80&w=2072&auto=format&fit=crop' },
@@ -32,7 +33,7 @@ export default function SettingsApp({ initialTab }) {
   const [activeTab, setActiveTab] = useState(initialTab || 'appearance');
   const { data: session } = useSession();
   const { t, i18n } = useTranslation();
-  const { state: osState, setWallpaper, setGlassmorphism, setIconSize, setIconStyle, setBrightness, setUiScale, setNotifications, setLanguage, setTheme, setTaskbarPosition, setWindowLayout, addCustomWallpaper, removeCustomWallpaper, saveSettings, addNotification, showConfirm, setKeyboardShortcuts } = useOS();
+  const { state: osState, setWallpaper, setGlassmorphism, setIconSize, setIconStyle, setBrightness, setUiScale, setNotifications, setLanguage, setTheme, setTaskbarPosition, setWindowLayout, addCustomWallpaper, removeCustomWallpaper, saveSettings, addNotification, showConfirm, setKeyboardShortcuts, setTerminalSettings } = useOS();
   const { state: appState, dispatch } = useApp();
   const { vaultStatus, decryptedUri, lockVault, clearVault, setupVault, showVault } = useVault();
   const { glassmorphism, brightness, uiScale, notifications } = osState;
@@ -49,9 +50,18 @@ export default function SettingsApp({ initialTab }) {
   const [vaultConfirm, setVaultConfirm] = useState('');
   const [vaultSaving, setVaultSaving] = useState(false);
 
-  // Custom Wallpaper state
   const [showCustomInput, setShowCustomInput] = useState(false);
   const [customUrlInput, setCustomUrlInput] = useState('');
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false); // For mobile/small window view
+
+  const updateTerminalTheme = (key, value) => {
+    setTerminalSettings({
+      theme: {
+        ...(osState.terminalSettings?.theme || {}),
+        [key]: value
+      }
+    });
+  };
 
   useEffect(() => {
     if (activeTab === 'database') {
@@ -148,9 +158,12 @@ export default function SettingsApp({ initialTab }) {
   };
 
   return (
-    <div className="flex h-full w-full bg-[var(--bg-primary)] text-[var(--text-primary)] border-[var(--border-color)] overflow-hidden">
-      {/* Sidebar */}
-      <div className="w-52 border-r border-[var(--border-color)] p-4 flex flex-col shrink-0 h-full overflow-y-auto custom-scrollbar">
+    <div className="flex h-full w-full bg-[var(--bg-primary)] text-[var(--text-primary)] border-[var(--border-color)] overflow-hidden relative">
+      {/* Sidebar - responsive behavior */}
+      <div className={`
+        ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'}
+        fixed md:relative z-20 md:z-0 w-52 border-r border-[var(--border-color)] p-4 flex flex-col shrink-0 h-full overflow-y-auto custom-scrollbar transition-transform duration-300 bg-[var(--bg-primary)]
+      `}>
         {/* User Profile Section */}
         <div className="mb-8 px-2">
           {session ? (
@@ -161,9 +174,14 @@ export default function SettingsApp({ initialTab }) {
                   className="w-10 h-10 rounded-full border border-[var(--border-color)] object-cover" 
                   alt="Avatar" 
                   onError={(e) => {
-                    e.target.onerror = null; 
+                  if (e.target.src.includes('ui-avatars.com')) {
+                    e.target.onerror = null;
+                    e.target.src = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%236366f1'%3E%3Cpath d='M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z'/%3E%3C/svg%3E";
+                  } else {
                     e.target.src = `https://ui-avatars.com/api/?name=${encodeURIComponent(session.user.name)}&background=6366f1&color=fff`;
-                  }}
+                  }
+                }} 
+
                 />
                 <div className="min-w-0">
                   <p className="text-xs font-bold truncate text-[var(--text-primary)]">{session.user.name}</p>
@@ -218,6 +236,7 @@ export default function SettingsApp({ initialTab }) {
         <div className="space-y-1">
           {[
             { id: 'appearance', label: t('settings.appearanceTitle'), icon: Palette, color: 'text-indigo-400', desc: t('settings.appearanceDesc') },
+            { id: 'terminal', label: t('settings_ui.terminal.title') || 'Terminal', icon: Terminal, color: 'text-emerald-400', desc: 'Custom terminal appearance' },
             { id: 'database', label: t('settings.databaseTitle'), icon: Database, color: 'text-purple-400', desc: t('settings.databaseDesc'), requireLogin: true },
             { id: 'display', label: t('settings_ui.display.title'), icon: Monitor, color: 'text-blue-400', desc: t('settings_ui.display.desc') },
             { id: 'notifications', label: t('settings_ui.notifications.title'), icon: Bell, color: 'text-amber-400', desc: t('settings_ui.notifications.desc') },
@@ -229,18 +248,23 @@ export default function SettingsApp({ initialTab }) {
             return (
               <button
                 key={tab.id}
-                onClick={() => !isDisabled && setActiveTab(tab.id)}
+                onClick={() => {
+                  if (!isDisabled) {
+                    setActiveTab(tab.id);
+                    setIsSidebarOpen(false);
+                  }
+                }}
                 disabled={isDisabled}
                 className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg transition-all ${
                   activeTab === tab.id
-                    ? 'bg-indigo-500/10 text-indigo-700 dark:text-indigo-400 font-semibold'
+                    ? 'bg-[var(--glow-indigo)] text-[var(--accent-indigo)] font-semibold'
                     : isDisabled
                     ? 'text-[var(--text-muted)] cursor-not-allowed opacity-50'
                     : 'text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]'
                 }`}
               >
-                <tab.icon size={16} className={activeTab === tab.id ? 'text-indigo-600 dark:text-indigo-400' : ''} />
-                <span className="text-sm font-medium">{tab.label}</span>
+                <tab.icon size={16} className={activeTab === tab.id ? 'text-[var(--accent-indigo)]' : ''} />
+                <span className="text-sm font-medium truncate">{tab.label}</span>
                 {isDisabled && (
                   <span className="ml-auto text-[8px] text-amber-700 dark:text-amber-400 font-bold bg-amber-500/10 px-1.5 py-0.5 rounded">{t('vault.loginBtn').toUpperCase()}</span>
                 )}
@@ -250,8 +274,29 @@ export default function SettingsApp({ initialTab }) {
         </div>
       </div>
       
+      {/* Overlay to close sidebar on mobile */}
+      {isSidebarOpen && (
+        <div 
+          className="fixed inset-0 bg-black/50 z-10 md:hidden" 
+          onClick={() => setIsSidebarOpen(false)} 
+        />
+      )}
+
       {/* Content */}
-      <div className="flex-1 overflow-y-auto h-full p-8 pb-28 custom-scrollbar">
+      <div className="flex-1 overflow-y-auto h-full p-4 md:p-8 pb-28 custom-scrollbar">
+        {/* Mobile Header */}
+        <div className="flex items-center gap-3 mb-6 md:hidden">
+          <button 
+            onClick={() => setIsSidebarOpen(true)}
+            className="p-2 rounded-lg bg-[var(--bg-tertiary)] border border-[var(--border-color)]"
+          >
+            <Layout size={18} />
+          </button>
+          <h2 className="text-lg font-bold truncate">
+            {activeTab.charAt(0).toUpperCase() + activeTab.slice(1)}
+          </h2>
+        </div>
+
         {activeTab === 'appearance' && (
           <div className="max-w-2xl animate-in fade-in slide-in-from-bottom-2 duration-300">
             <h1 className="text-2xl font-bold mb-2 text-[var(--text-primary)]">{t('settings.appearanceTitle')}</h1>
@@ -390,13 +435,13 @@ export default function SettingsApp({ initialTab }) {
 
               <div className="pt-6 border-t border-[var(--border-color)]">
                 <h3 className="text-sm font-semibold mb-4 flex items-center gap-2">
-                  <Layout size={16} className="text-emerald-400" />
+                  <Layout size={16} className="text-[var(--accent-emerald)]" />
                   {t('settings.interfaceStyle')}
                 </h3>
                 <div className="grid grid-cols-2 gap-4">
                   <div 
                     className={`p-4 rounded-xl cursor-pointer transition-all border shadow-sm ${
-                      glassmorphism ? 'bg-indigo-500/10 border-indigo-500/50' : 'bg-[var(--bg-card)] border-[var(--border-color)] hover:bg-[var(--bg-card-hover)]'
+                      glassmorphism ? 'bg-[var(--glow-indigo)] border-[var(--accent-indigo)]' : 'bg-[var(--bg-card)] border-[var(--border-color)] hover:bg-[var(--bg-card-hover)]'
                     } flex items-center justify-between`}
                     onClick={() => setGlassmorphism(true)}
                   >
@@ -405,14 +450,14 @@ export default function SettingsApp({ initialTab }) {
                       <span className="text-[10px] text-[var(--text-muted)]">{t('settings_ui.appearance.glassmorphismDesc')}</span>
                     </div>
                     {glassmorphism && (
-                      <div className="w-10 h-5 bg-indigo-600 rounded-full relative">
+                      <div className="w-10 h-5 bg-[var(--accent-indigo)] rounded-full relative">
                         <div className="absolute top-1 right-1 w-3 h-3 bg-white rounded-full shadow-lg" />
                       </div>
                     )}
                   </div>
                   <div 
                     className={`p-4 rounded-xl cursor-pointer transition-all border shadow-sm ${
-                      !glassmorphism ? 'bg-indigo-500/10 border-indigo-500/50' : 'bg-[var(--bg-card)] border-[var(--border-color)] hover:bg-[var(--bg-card-hover)]'
+                      !glassmorphism ? 'bg-[var(--glow-indigo)] border-[var(--accent-indigo)]' : 'bg-[var(--bg-card)] border-[var(--border-color)] hover:bg-[var(--bg-card-hover)]'
                     } flex items-center justify-between`}
                     onClick={() => setGlassmorphism(false)}
                   >
@@ -421,7 +466,7 @@ export default function SettingsApp({ initialTab }) {
                       <span className="text-[10px] text-[var(--text-muted)]">{t('settings_ui.appearance.opaqueModeDesc')}</span>
                     </div>
                     {!glassmorphism && (
-                      <div className="w-10 h-5 bg-indigo-600 rounded-full relative">
+                      <div className="w-10 h-5 bg-[var(--accent-indigo)] rounded-full relative">
                         <div className="absolute top-1 right-1 w-3 h-3 bg-white rounded-full shadow-lg" />
                       </div>
                     )}
@@ -431,10 +476,10 @@ export default function SettingsApp({ initialTab }) {
 
               <div className="pt-6 border-t border-[var(--border-color)]">
                 <h3 className="text-sm font-semibold mb-4 flex items-center gap-2">
-                  <Layout size={16} className="text-purple-400" />
+                  <Layout size={16} className="text-[var(--accent-purple)]" />
                   {t('settings_ui.appearance.iconStyle')}
                 </h3>
-                <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
                   {[
                     { id: 'glass' },
                     { id: 'flat' },
@@ -445,13 +490,13 @@ export default function SettingsApp({ initialTab }) {
                     <button
                       key={style.id}
                       onClick={() => setIconStyle(style.id)}
-                      className={`p-3 rounded-xl border transition-all text-left ${
+                      className={`p-3 rounded-xl border transition-all text-left flex flex-col justify-between h-full ${
                         osState.iconStyle === style.id 
-                          ? 'bg-indigo-500/10 border-indigo-500/50 shadow-lg shadow-indigo-500/10' 
+                          ? 'bg-[var(--glow-indigo)] border-[var(--accent-indigo)] shadow-lg shadow-[var(--glow-indigo)]' 
                           : 'bg-[var(--bg-card)] border-[var(--border-color)] hover:bg-[var(--bg-card-hover)]'
                       }`}
                     >
-                      <span className="block text-[11px] font-bold text-[var(--text-primary)]">{t(`settings_ui.appearance.styles.${style.id}`)}</span>
+                      <span className="block text-[11px] font-bold text-[var(--text-primary)] mb-1">{t(`settings_ui.appearance.styles.${style.id}`)}</span>
                       <span className="text-[9px] text-[var(--text-muted)] leading-tight">{t(`settings_ui.appearance.styles.${style.id}Desc`)}</span>
                     </button>
                   ))}
@@ -460,26 +505,31 @@ export default function SettingsApp({ initialTab }) {
 
               <div className="pt-6 border-t border-[var(--border-color)]">
                 <h3 className="text-sm font-semibold mb-4 flex items-center gap-2">
-                  <Palette size={16} className="text-indigo-400" />
+                  <Palette size={16} className="text-[var(--accent-indigo)]" />
                   {t('settings_ui.appearance.theme')}
                 </h3>
-                <div className="flex gap-4">
+                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
                   {[
                     { id: 'light', label: t('settings_ui.appearance.themes.light'), icon: Sun },
                     { id: 'dark', label: t('settings_ui.appearance.themes.dark'), icon: Moon },
+                    { id: 'retro', label: t('settings_ui.appearance.themes.retro'), icon: Cpu },
+                    { id: 'cyberpunk', label: t('settings_ui.appearance.themes.cyberpunk') || 'Cyberpunk', icon: Zap },
                     { id: 'auto', label: t('settings_ui.appearance.themes.auto'), icon: Monitor },
                   ].map(theme => (
                     <button
                       key={theme.id}
-                      onClick={() => setTheme(theme.id)}
-                      className={`flex-1 p-4 rounded-xl border transition-all text-left ${
+                      onClick={() => {
+                        setTheme(theme.id);
+                        if (window.innerWidth < 768) setIsSidebarOpen(false);
+                      }}
+                      className={`p-4 rounded-xl border transition-all text-left flex flex-col justify-center items-start gap-2 h-full ${
                         osState.theme === theme.id 
-                          ? 'bg-indigo-500/10 border-indigo-500/50' 
+                          ? 'bg-[var(--glow-indigo)] border-[var(--accent-indigo)]' 
                           : 'bg-[var(--bg-card)] border-[var(--border-color)] hover:bg-[var(--bg-card-hover)]'
                       }`}
                     >
-                      <theme.icon size={20} className={`mb-2 ${osState.theme === theme.id ? 'text-indigo-600 dark:text-indigo-400' : 'text-[var(--text-muted)]'}`} />
-                      <span className="block text-sm font-bold truncate text-[var(--text-primary)]">{theme.label}</span>
+                      <theme.icon size={20} className={osState.theme === theme.id ? 'text-[var(--accent-indigo)]' : 'text-[var(--text-muted)]'} />
+                      <span className="block text-sm font-bold truncate text-[var(--text-primary)] w-full">{theme.label}</span>
                     </button>
                   ))}
                 </div>
@@ -487,10 +537,10 @@ export default function SettingsApp({ initialTab }) {
 
               <div className="pt-6 border-t border-[var(--border-color)]">
                 <h3 className="text-sm font-semibold mb-4 flex items-center gap-2">
-                  <Monitor size={16} className="text-blue-400" />
+                  <Monitor size={16} className="text-[var(--accent-indigo)]" />
                   {t('settings_ui.appearance.language')}
                 </h3>
-                <div className="flex gap-4">
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
                   {[
                     { code: 'en', label: 'English', sub: 'USA' },
                     { code: 'th', label: 'ภาษาไทย', sub: 'TH' },
@@ -499,9 +549,9 @@ export default function SettingsApp({ initialTab }) {
                     <button
                       key={lang.code}
                       onClick={() => setLanguage(lang.code)}
-                      className={`flex-1 p-4 rounded-xl border transition-all text-left ${
+                      className={`p-4 rounded-xl border transition-all text-left h-full ${
                         i18n.language === lang.code 
-                          ? 'bg-indigo-500/10 border-indigo-500/50' 
+                          ? 'bg-[var(--glow-indigo)] border-[var(--accent-indigo)]' 
                           : 'bg-[var(--bg-card)] border-[var(--border-color)] hover:bg-[var(--bg-card-hover)]'
                       }`}
                     >
@@ -525,7 +575,7 @@ export default function SettingsApp({ initialTab }) {
                       onClick={() => setTaskbarPosition(pos)}
                       className={`py-3 rounded-xl text-xs font-bold border transition-all ${
                         osState.taskbarPosition === pos
-                          ? 'bg-indigo-500/10 border-indigo-500/50 text-indigo-400'
+                          ? 'bg-[var(--glow-indigo)] border-[var(--accent-indigo)] text-[var(--accent-indigo)]'
                           : 'bg-[var(--bg-tertiary)] border-[var(--border-color)] text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-card-hover)]'
                       }`}
                     >
@@ -548,7 +598,7 @@ export default function SettingsApp({ initialTab }) {
                       onClick={() => setWindowLayout(layout)}
                       className={`p-4 rounded-xl text-xs font-bold border transition-all flex flex-col items-center gap-2 ${
                         osState.windowLayout === layout
-                          ? 'bg-indigo-500/10 border-indigo-500/50 text-indigo-400'
+                          ? 'bg-[var(--glow-indigo)] border-[var(--accent-indigo)] text-[var(--accent-indigo)]'
                           : 'bg-[var(--bg-tertiary)] border-[var(--border-color)] text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-card-hover)]'
                       }`}
                     >
@@ -702,8 +752,8 @@ export default function SettingsApp({ initialTab }) {
               <div className="p-6 bg-gradient-to-br from-indigo-500/10 to-purple-500/10 border border-[var(--border-color)] rounded-3xl relative overflow-hidden group">
                 <div className="absolute -right-10 -top-10 w-40 h-40 bg-indigo-500/10 rounded-full blur-3xl group-hover:bg-indigo-500/20 transition-all duration-700" />
                 <div className="relative z-10 flex items-start gap-4">
-                  <div className="w-12 h-12 rounded-2xl bg-indigo-500 flex items-center justify-center shadow-xl shadow-indigo-500/20">
-                    <Shield size={24} className="text-white" />
+                  <div className="w-12 h-12 rounded-2xl bg-[var(--bg-selected)] border border-[var(--accent-indigo)]/30 flex items-center justify-center shadow-xl shadow-[var(--glow-indigo)]/20">
+                    <Shield size={24} className="text-[var(--text-selected)]" />
                   </div>
                   <div className="flex-1">
                     <h3 className="text-lg font-bold text-[var(--text-primary)] mb-1">{t('settings_ui.privacy.dashboard')}</h3>
@@ -959,8 +1009,8 @@ export default function SettingsApp({ initialTab }) {
                           disabled={dbConnecting || !dbUri.trim()}
                           className={`px-5 py-3 rounded-xl text-sm font-semibold transition-all flex items-center gap-2 whitespace-nowrap shadow-lg ${
                             dbConnecting
-                              ? 'bg-indigo-600/50 text-white/50 cursor-wait'
-                              : 'bg-indigo-600 hover:bg-indigo-700 text-white shadow-indigo-500/20'
+                              ? 'bg-[var(--accent-indigo)]/50 text-[var(--text-selected)]/50 cursor-wait'
+                              : 'bg-[var(--bg-selected)] hover:opacity-90 text-[var(--text-selected)] shadow-[var(--glow-indigo)]/20 border border-[var(--accent-indigo)]/30'
                           }`}
                         >
                           {dbConnecting ? (
@@ -1004,17 +1054,18 @@ export default function SettingsApp({ initialTab }) {
 
         {activeTab === 'keyboard' && (
           <div className="max-w-2xl animate-in fade-in slide-in-from-bottom-2 duration-300">
-            <h1 className="text-2xl font-bold mb-2 text-[var(--text-primary)]">{t('settings_ui.keyboard.title') || 'Keyboard Shortcuts'}</h1>
-            <p className="text-[var(--text-secondary)] text-sm mb-8">Customize system-wide shortcuts for faster navigation.</p>
+            <h1 className="text-2xl font-bold mb-2 text-[var(--text-primary)]">{t('settings_ui.keyboard.title')}</h1>
+            <p className="text-[var(--text-secondary)] text-sm mb-8">{t('settings_ui.keyboard.desc')}</p>
 
             <section className="space-y-6">
               <div className="grid gap-4">
                 {[
-                  { id: 'spotlight', label: 'Spotlight Search', desc: 'Open global search for apps and guides', icon: Search },
-                  { id: 'prevDesktop', label: 'Previous Desktop', desc: 'Switch to the desktop on the left', icon: Monitor },
-                  { id: 'nextDesktop', label: 'Next Desktop', desc: 'Switch to the desktop on the right', icon: Monitor },
-                  { id: 'minimizeAll', label: 'Minimize All', desc: 'Minimize all open windows', icon: Layout },
-                  { id: 'closeAll', label: 'Close All', desc: 'Close all open windows', icon: Trash2 },
+                  { id: 'previewWindow', label: t('settings_ui.keyboard.missionControl'), desc: t('settings_ui.keyboard.descriptions.missionControl'), icon: Layout },
+                  { id: 'spotlight', label: t('settings_ui.keyboard.spotlightSearch'), desc: t('settings_ui.keyboard.descriptions.spotlightSearch'), icon: Search },
+                  { id: 'prevDesktop', label: t('settings_ui.keyboard.prevDesktop'), desc: t('settings_ui.keyboard.descriptions.prevDesktop'), icon: Monitor },
+                  { id: 'nextDesktop', label: t('settings_ui.keyboard.nextDesktop'), desc: t('settings_ui.keyboard.descriptions.nextDesktop'), icon: Monitor },
+                  { id: 'minimizeAll', label: t('settings_ui.keyboard.minimizeAll'), desc: t('settings_ui.keyboard.descriptions.minimizeAll'), icon: Layout },
+                  { id: 'closeAll', label: t('settings_ui.keyboard.closeAll'), desc: t('settings_ui.keyboard.descriptions.closeAll'), icon: Trash2 },
                 ].map((item) => (
                   <div key={item.id} className="p-4 bg-[var(--bg-card)] border border-[var(--border-color)] rounded-2xl flex items-center justify-between group hover:bg-[var(--bg-card-hover)] transition-all">
                     <div className="flex items-center gap-4">
@@ -1027,15 +1078,13 @@ export default function SettingsApp({ initialTab }) {
                       </div>
                     </div>
                     <div className="flex items-center gap-2">
-                        <input
-                          type="text"
+                        <ShortcutInput
                           value={osState.keyboardShortcuts?.[item.id] || ''}
-                          onChange={(e) => {
-                            const val = e.target.value;
+                          onChange={(val) => {
                             setKeyboardShortcuts({ [item.id]: val });
                           }}
                           placeholder="e.g. Cmd+K"
-                          className="w-32 px-3 py-1.5 bg-[var(--bg-primary)] border border-[var(--border-color)] rounded-lg text-xs font-mono text-indigo-400 focus:outline-none focus:border-indigo-500 transition-all text-center"
+                          className="w-32 border-indigo-500/20 text-[var(--accent-indigo)]"
                         />
                     </div>
                   </div>
@@ -1110,6 +1159,222 @@ export default function SettingsApp({ initialTab }) {
               </div>
             </div>
             <p className="mt-8 text-[10px] text-gray-600 italic">{t('settings_ui.about.quote')}</p>
+          </div>
+        )}
+        {activeTab === 'terminal' && (
+          <div className="max-w-2xl animate-in fade-in slide-in-from-bottom-2 duration-300">
+            <h1 className="text-2xl font-bold mb-2 text-[var(--text-primary)]">{t('settings_ui.terminal.title') || 'Terminal Customization'}</h1>
+            <p className="text-[var(--text-secondary)] text-sm mb-8">Personalize your command-line interface with presets and custom styling.</p>
+
+            <section className="space-y-8">
+              {/* Presets Grid */}
+              <div>
+                <h3 className="text-sm font-semibold mb-4 flex items-center gap-2">
+                  <Monitor size={16} className="text-emerald-400" />
+                  {t('settings_ui.terminal.presets') || 'Interface Presets'}
+                </h3>
+                <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+                  {[
+                    { id: 'modern', name: 'Standard Modern', desc: 'Clean font, smooth colors' },
+                    { id: 'retro', name: 'Pip-Boy 3000', desc: 'Monochrome, phosphor glow' },
+                    { id: 'matrix', name: 'Digital Rain', desc: 'High contrast green-on-black' },
+                  ].map(p => {
+                    const isActive = osState.terminalSettings?.activePreset === p.id;
+                    return (
+                      <button 
+                        key={p.id}
+                        onClick={() => setTerminalSettings({ activePreset: p.id })}
+                        className={`p-4 rounded-xl border text-left transition-all relative overflow-hidden ${
+                          isActive 
+                            ? 'bg-emerald-500/5 border-emerald-500/50 shadow-[0_0_20px_rgba(16,185,129,0.1)]' 
+                            : 'bg-[var(--bg-card)] border-[var(--border-color)] hover:bg-[var(--bg-card-hover)]'
+                        }`}
+                      >
+                        <div className={`w-8 h-8 rounded-lg mb-3 flex items-center justify-center ${isActive ? 'bg-emerald-500/20' : 'bg-[var(--bg-tertiary)]'}`}>
+                          <Terminal size={16} className={isActive ? 'text-emerald-400' : 'text-[var(--text-muted)]'} />
+                        </div>
+                        <span className="block text-sm font-bold text-[var(--text-primary)]">{p.name}</span>
+                        <span className="text-[10px] text-[var(--text-muted)]">{p.desc}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Advanced Typography */}
+              <div className="pt-6 border-t border-[var(--border-color)]">
+                <h3 className="text-sm font-semibold mb-4 flex items-center gap-2">
+                   <Code size={16} className="text-indigo-400" />
+                   Typography & Sizing
+                </h3>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  {/* Font Size */}
+                  <div className="space-y-3">
+                    <label className="text-xs font-bold text-[var(--text-muted)] uppercase tracking-widest">{t('settings_ui.terminal.fontSize') || 'Font Size'}</label>
+                    <div className="flex items-center gap-4">
+                      <input 
+                        type="range"
+                        min="10"
+                        max="32"
+                        value={osState.terminalSettings?.fontSize || 14}
+                        onChange={(e) => setTerminalSettings({ fontSize: parseInt(e.target.value) })}
+                        className="flex-1 h-1.5 bg-[var(--bg-tertiary)] rounded-full appearance-none cursor-pointer accent-emerald-500"
+                      />
+                      <span className="text-sm font-mono text-emerald-400 w-8">{osState.terminalSettings?.fontSize || 14}px</span>
+                    </div>
+                  </div>
+
+                  {/* Cursor Style */}
+                  <div className="space-y-3">
+                    <label className="text-xs font-bold text-[var(--text-muted)] uppercase tracking-widest">Cursor Style</label>
+                    <div className="flex gap-2">
+                      {['bar', 'block', 'underline'].map(style => (
+                        <button
+                          key={style}
+                          onClick={() => setTerminalSettings({ cursorStyle: style })}
+                          className={`flex-1 py-1.5 rounded-lg border text-[10px] font-bold transition-all ${
+                            (osState.terminalSettings?.cursorStyle || 'bar') === style
+                              ? 'bg-[var(--glow-indigo)] border-[var(--accent-indigo)] text-[var(--accent-indigo)]'
+                              : 'bg-[var(--bg-tertiary)] border-[var(--border-color)] text-[var(--text-muted)]'
+                          }`}
+                        >
+                          {style.toUpperCase()}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Terminal Colors */}
+              <div className="pt-6 border-t border-[var(--border-color)]">
+                <h3 className="text-sm font-semibold mb-4 flex items-center gap-2">
+                   <Palette size={16} className="text-amber-400" />
+                   {t('settings_ui.terminal.colors') || 'Terminal Colors'}
+                </h3>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                  {/* Background */}
+                  <div className="space-y-3">
+                    <label className="text-xs font-bold text-[var(--text-muted)] uppercase tracking-widest">{t('settings_ui.terminal.background')}</label>
+                    <div className="flex items-center gap-3">
+                       <div className="relative w-10 h-10 rounded-xl border-2 border-[var(--border-color)] overflow-hidden bg-[var(--bg-tertiary)] flex-shrink-0 shadow-inner group">
+                         <div 
+                           className="absolute inset-0 transition-transform group-hover:scale-110" 
+                           style={{ backgroundColor: osState.terminalSettings?.theme?.background || '#0c0c0c' }} 
+                         />
+                         <input 
+                           type="color" 
+                           value={osState.terminalSettings?.theme?.background || '#0c0c0c'}
+                           onChange={(e) => updateTerminalTheme('background', e.target.value)}
+                           className="absolute inset-0 opacity-0 cursor-pointer w-[200%] h-[200%] -left-1/2 -top-1/2"
+                         />
+                       </div>
+                       <input 
+                         type="text"
+                         value={osState.terminalSettings?.theme?.background || '#0c0c0c'}
+                         onChange={(e) => updateTerminalTheme('background', e.target.value)}
+                         className="flex-1 h-10 bg-[var(--bg-tertiary)] border border-[var(--border-color)] rounded-xl px-3 text-[10px] font-mono text-amber-400 focus:outline-none focus:border-amber-500 transition-all shadow-sm"
+                       />
+                    </div>
+                  </div>
+                  {/* Foreground */}
+                  <div className="space-y-3">
+                    <label className="text-xs font-bold text-[var(--text-muted)] uppercase tracking-widest">{t('settings_ui.terminal.foreground')}</label>
+                    <div className="flex items-center gap-3">
+                       <div className="relative w-10 h-10 rounded-xl border-2 border-[var(--border-color)] overflow-hidden bg-[var(--bg-tertiary)] flex-shrink-0 shadow-inner group">
+                         <div 
+                           className="absolute inset-0 transition-transform group-hover:scale-110" 
+                           style={{ backgroundColor: osState.terminalSettings?.theme?.foreground || '#e4e4e7' }} 
+                         />
+                         <input 
+                           type="color" 
+                           value={osState.terminalSettings?.theme?.foreground || '#e4e4e7'}
+                           onChange={(e) => updateTerminalTheme('foreground', e.target.value)}
+                           className="absolute inset-0 opacity-0 cursor-pointer w-[200%] h-[200%] -left-1/2 -top-1/2"
+                         />
+                       </div>
+                       <input 
+                         type="text"
+                         value={osState.terminalSettings?.theme?.foreground || '#e4e4e7'}
+                         onChange={(e) => updateTerminalTheme('foreground', e.target.value)}
+                         className="flex-1 h-10 bg-[var(--bg-tertiary)] border border-[var(--border-color)] rounded-xl px-3 text-[10px] font-mono text-emerald-400 focus:outline-none focus:border-emerald-500 transition-all shadow-sm"
+                       />
+                    </div>
+                  </div>
+                  {/* Cursor */}
+                  <div className="space-y-3">
+                    <label className="text-xs font-bold text-[var(--text-muted)] uppercase tracking-widest">{t('settings_ui.terminal.cursor')}</label>
+                    <div className="flex items-center gap-3">
+                       <div className="relative w-10 h-10 rounded-xl border-2 border-[var(--border-color)] overflow-hidden bg-[var(--bg-tertiary)] flex-shrink-0 shadow-inner group">
+                         <div 
+                           className="absolute inset-0 transition-transform group-hover:scale-110" 
+                           style={{ backgroundColor: osState.terminalSettings?.theme?.cursor || '#6366f1' }} 
+                         />
+                         <input 
+                           type="color" 
+                           value={osState.terminalSettings?.theme?.cursor || '#6366f1'}
+                           onChange={(e) => updateTerminalTheme('cursor', e.target.value)}
+                           className="absolute inset-0 opacity-0 cursor-pointer w-[200%] h-[200%] -left-1/2 -top-1/2"
+                         />
+                       </div>
+                       <input 
+                         type="text"
+                         value={osState.terminalSettings?.theme?.cursor || '#6366f1'}
+                         onChange={(e) => updateTerminalTheme('cursor', e.target.value)}
+                         className="flex-1 h-10 bg-[var(--bg-tertiary)] border border-[var(--border-color)] rounded-xl px-3 text-[10px] font-mono text-indigo-400 focus:outline-none focus:border-indigo-500 transition-all shadow-sm"
+                       />
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Opacity Control */}
+              <div className="pt-6 border-t border-[var(--border-color)]">
+                <div className="p-6 bg-[var(--bg-card)] border border-[var(--border-color)] rounded-2xl">
+                  <div className="flex items-center justify-between mb-4">
+                    <h3 className="text-sm font-semibold flex items-center gap-2 text-[var(--text-primary)]">
+                      <Layout size={16} className="text-blue-400" />
+                      {t('settings_ui.terminal.opacity') || 'Background Opacity'}
+                    </h3>
+                    <span className="text-xs text-blue-400 font-mono">{Math.round((osState.terminalSettings?.backgroundOpacity ?? 1) * 100)}%</span>
+                  </div>
+                  <input 
+                    type="range"
+                    min="30"
+                    max="100"
+                    value={(osState.terminalSettings?.backgroundOpacity ?? 1) * 100}
+                    onChange={(e) => setTerminalSettings({ backgroundOpacity: parseInt(e.target.value) / 100 })}
+                    className="w-full h-1.5 bg-[var(--bg-tertiary)] rounded-full appearance-none cursor-pointer accent-blue-500"
+                  />
+                  <p className="mt-4 text-[10px] text-[var(--text-muted)] italic">
+                    Lower opacity allows the desktop wallpaper to shine through. Works best with darker background colors.
+                  </p>
+                </div>
+              </div>
+
+              {/* Behavior Settings */}
+              <div className="pt-6 border-t border-[var(--border-color)]">
+                <div className="p-4 bg-[var(--bg-card)] border border-[var(--border-color)] rounded-2xl flex items-center justify-between group hover:bg-[var(--bg-card-hover)] transition-all">
+                  <div className="flex items-center gap-4">
+                    <div className="w-10 h-10 rounded-xl bg-[var(--bg-tertiary)] flex items-center justify-center">
+                      <RefreshCw size={18} className="text-amber-400" />
+                    </div>
+                    <div>
+                      <h4 className="text-sm font-bold text-[var(--text-primary)]">Cursor Blinking</h4>
+                      <p className="text-[10px] text-[var(--text-muted)] italic">Enable or disable smooth cursor animation</p>
+                    </div>
+                  </div>
+                  <div 
+                    onClick={() => setTerminalSettings({ cursorBlink: !osState.terminalSettings?.cursorBlink })}
+                    className={`w-11 h-6 rounded-full p-1 transition-colors cursor-pointer ${osState.terminalSettings?.cursorBlink !== false ? 'bg-[var(--accent-emerald)]' : 'bg-gray-700'}`}
+                  >
+                    <div className={`w-4 h-4 bg-white rounded-full shadow-lg transition-transform ${osState.terminalSettings?.cursorBlink !== false ? 'translate-x-5' : 'translate-x-0'}`} />
+                  </div>
+                </div>
+              </div>
+
+
+            </section>
           </div>
         )}
       </div>

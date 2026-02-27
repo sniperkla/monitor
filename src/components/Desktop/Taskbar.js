@@ -14,7 +14,6 @@ import { useTranslation } from 'react-i18next';
 import TerminalApp from '@/apps/TerminalApp';
 import FilesApp from '@/apps/FilesApp';
 import PreviewWindow from './PreviewWindow';
-import ShortcutSettings from './ShortcutSettings';
 import AiUsageBar from '@/components/AiUsageBar';
 import { useAIUsagePolling } from '@/hooks/useAIUsage';
 
@@ -27,7 +26,6 @@ export default function Taskbar() {
   const [contextMenu, setContextMenu] = useState(null); // { x, y, windowId }
   const [taskbarContextMenu, setTaskbarContextMenu] = useState(null); // { x, y }
   const [showPreview, setShowPreview] = useState(false);
-  const [showShortcutSettings, setShowShortcutSettings] = useState(false);
   const { minimizeAll, restoreAll } = useOS();
   const [mounted, setMounted] = useState(false);
   const startMenuRef = useRef(null);
@@ -79,21 +77,22 @@ export default function Taskbar() {
 
     // Snap to taskbar edges and handle vertical boundary checks
     if (taskbarPosition === 'bottom') {
-      position = { left: x, bottom: 56 };
+      position = { left: x, bottom: 'var(--taskbar-size, 56px)' };
     } else if (taskbarPosition === 'top') {
-      position = { left: x, top: 56 };
+      position = { left: x, top: 'var(--taskbar-size, 56px)' };
     } else if (taskbarPosition === 'left' || taskbarPosition === 'right') {
-      const menuHeightEstimate = 320; // safe fallack for overflow checks
+      const taskbarSizeNum = parseInt(getComputedStyle(document.documentElement).getPropertyValue('--taskbar-size')) || 56;
+      const menuHeightEstimate = 320; 
       const isNearBottom = y + menuHeightEstimate > window.innerHeight;
       
       if (taskbarPosition === 'left') {
         position = isNearBottom 
-          ? { left: 60, bottom: 10 } 
-          : { left: 60, top: y };
+          ? { left: taskbarSizeNum + 4, bottom: 10 } 
+          : { left: taskbarSizeNum + 4, top: y };
       } else {
         position = isNearBottom 
-          ? { right: 60, bottom: 10 } 
-          : { right: 60, top: y };
+          ? { right: taskbarSizeNum + 4, bottom: 10 } 
+          : { right: taskbarSizeNum + 4, top: y };
       }
     }
 
@@ -151,10 +150,10 @@ export default function Taskbar() {
   
   const taskbarClasses = `
     taskbar fixed z-[10000] transition-all duration-300 bg-transparent
-    ${taskbarPosition === 'bottom' ? 'bottom-0 left-0 w-full h-14' : ''}
-    ${taskbarPosition === 'top' ? 'top-0 left-0 w-full h-14' : ''}
-    ${taskbarPosition === 'left' ? 'top-0 left-0 h-full w-14' : ''}
-    ${taskbarPosition === 'right' ? 'top-0 right-0 h-full w-14' : ''}
+    ${taskbarPosition === 'bottom' ? 'bottom-0 left-0 w-full h-[var(--taskbar-size,56px)]' : ''}
+    ${taskbarPosition === 'top' ? 'top-0 left-0 w-full h-[var(--taskbar-size,56px)]' : ''}
+    ${taskbarPosition === 'left' ? 'top-0 left-0 h-full w-[var(--taskbar-size,56px)]' : ''}
+    ${taskbarPosition === 'right' ? 'top-0 right-0 h-full w-[var(--taskbar-size,56px)]' : ''}
   `;
 
   // Start menu positioning based on taskbar position
@@ -271,18 +270,18 @@ export default function Taskbar() {
               setStartMenuOpen(!startMenuOpen);
               setContextMenu(null);
             }}
-            className={`w-10 h-10 rounded-2xl transition-all flex items-center justify-center shadow-lg shrink-0 ${
-              startMenuOpen ? 'bg-blue-500 scale-95' : 'bg-blue-600 hover:bg-blue-500 active:scale-90'
+            className={`w-10 h-10 rounded-2xl transition-all flex items-center justify-center shadow-lg shrink-0 border border-[var(--accent-indigo)]/30 ${
+              startMenuOpen ? 'bg-[var(--bg-selected)] scale-95' : 'bg-[var(--bg-selected)] hover:opacity-90 active:scale-90 shadow-[var(--glow-indigo)]/50'
             }`}
           >
-            <LayoutGrid size={20} className="text-white" />
+            <LayoutGrid size={20} className="text-[var(--text-selected)]" />
           </button>
 
           <AnimatePresence>
             {startMenuOpen && (
               <motion.div
                 {...menuAnim}
-                className="w-80 rounded-2xl overflow-hidden border border-[var(--border-color)] shadow-2xl"
+                className="w-[90vw] max-w-[320px] sm:w-80 rounded-2xl overflow-hidden border border-[var(--border-color)] shadow-2xl"
                 style={{
                   ...getStartMenuStyle(),
                   background: glassmorphism ? 'var(--window-bg)' : 'var(--bg-primary)',
@@ -300,8 +299,12 @@ export default function Taskbar() {
                           className="w-8 h-8 rounded-full border border-[var(--border-color)] object-cover" 
                           alt="Avatar" 
                           onError={(e) => {
-                            e.target.onerror = null; 
-                            e.target.src = `https://ui-avatars.com/api/?name=${encodeURIComponent(session.user.name)}&background=6366f1&color=fff`;
+                            if (e.target.src.includes('ui-avatars.com')) {
+                              e.target.onerror = null;
+                              e.target.src = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%236366f1'%3E%3Cpath d='M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z'/%3E%3C/svg%3E";
+                            } else {
+                              e.target.src = `https://ui-avatars.com/api/?name=${encodeURIComponent(session.user.name)}&background=6366f1&color=fff`;
+                            }
                           }}
                         />
                         <div className="min-w-0">
@@ -342,9 +345,9 @@ export default function Taskbar() {
                       // Dispatch keyboard event to open Spotlight
                       window.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', code: 'KeyK', metaKey: true, bubbles: true }));
                     }}
-                    className="w-full flex items-center gap-2 bg-[var(--bg-tertiary)]/40 border border-[var(--border-color)] rounded-lg py-2.5 px-3 text-xs text-[var(--text-muted)] hover:border-indigo-500/50 hover:bg-[var(--bg-tertiary)]/60 transition-all group"
+                    className="w-full flex items-center gap-2 bg-[var(--bg-tertiary)]/40 border border-[var(--border-color)] rounded-lg py-2.5 px-3 text-xs text-[var(--text-muted)] hover:border-[var(--accent-indigo)]/50 hover:bg-[var(--bg-tertiary)]/60 transition-all group"
                   >
-                    <Search size={14} className="group-hover:text-indigo-400 transition-colors" />
+                    <Search size={14} className="group-hover:text-[var(--accent-indigo)] transition-colors" />
                     <span className="flex-1 text-left">{t('desktop.taskbar.search')}</span>
                     <span className="flex items-center gap-0.5 text-[10px] text-[var(--text-muted)]/60 font-mono">
                       <kbd className="px-1 py-0.5 rounded bg-[var(--bg-tertiary)]/50 border border-[var(--border-color)] text-[9px]">⌘</kbd>
@@ -368,7 +371,7 @@ export default function Taskbar() {
                       }}
                       className="w-full flex items-center gap-3 px-3 py-2 rounded-xl hover:bg-[var(--bg-tertiary)] transition-colors group"
                     >
-                      <div className={`p-2 rounded-lg bg-[var(--bg-primary)] group-hover:bg-[var(--bg-card-hover)] text-blue-400`}>
+                      <div className={`p-2 rounded-lg bg-[var(--bg-primary)] group-hover:bg-[var(--bg-card-hover)] text-[var(--accent-indigo)]`}>
                         <app.icon size={18} />
                       </div>
                       <div className="text-left">
@@ -424,7 +427,7 @@ export default function Taskbar() {
               {activeWindowId === win.id && !win.isMinimized && (
                 <motion.div
                   layoutId="taskbar-active"
-                  className={`absolute bg-blue-500 rounded-full ${
+                  className={`absolute bg-[var(--accent-indigo)] rounded-full ${
                     isVertical
                       ? (taskbarPosition === 'left' ? 'right-0 top-2 bottom-2 w-1' : 'left-0 top-2 bottom-2 w-1')
                       : 'bottom-1 w-1.5 h-1.5 left-1/2 -translate-x-1/2'
@@ -463,15 +466,8 @@ export default function Taskbar() {
 
           <LanguageSwitcher vertical={isVertical} taskbarPosition={taskbarPosition} />
           <div className={`flex items-center gap-2 ${isVertical ? 'flex-col py-2.5 px-2' : 'px-3 py-1'} bg-[var(--bg-tertiary)] rounded-full border border-[var(--border-color)]`}>
-            <Wifi size={14} className="text-emerald-400" />
+            <Wifi size={14} className="text-[var(--accent-emerald)]" />
             <Volume2 size={14} className="text-[var(--text-muted)]" />
-            <button
-              onClick={() => setShowShortcutSettings(true)}
-              className="p-1 rounded hover:bg-[var(--bg-card-hover)] text-[var(--text-muted)] hover:text-[var(--text-primary)] transition-colors"
-              title="Keyboard Shortcuts"
-            >
-              <Keyboard size={14} />
-            </button>
           </div>
           {isHorizontal && <div className="w-px h-6 bg-[var(--border-color)]" />}
           <SystemClock vertical={isVertical} />
@@ -479,15 +475,8 @@ export default function Taskbar() {
         </div>
       </div>
 
-      {/* Preview Window */}
       {mounted && createPortal(
         <PreviewWindow isOpen={showPreview} onClose={() => setShowPreview(false)} />,
-        document.body
-      )}
-
-      {/* Shortcut Settings */}
-      {mounted && createPortal(
-        <ShortcutSettings isOpen={showShortcutSettings} onClose={() => setShowShortcutSettings(false)} />,
         document.body
       )}
 
@@ -517,14 +506,14 @@ export default function Taskbar() {
                 onClick={() => { focusWindow(contextMenu.windowId); setContextMenu(null); }}
                 className="w-full text-left px-3 py-2 text-xs text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] rounded-lg flex items-center gap-2 transition-colors"
               >
-                <Monitor size={13} className="text-blue-400" />
+                <Monitor size={13} className="text-[var(--accent-indigo)]" />
                 Bring to Front
               </button>
               <button
                 onClick={() => { toggleMinimize(contextMenu.windowId); setContextMenu(null); }}
                 className="w-full text-left px-3 py-2 text-xs text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] rounded-lg flex items-center gap-2 transition-colors"
               >
-                <Layers size={13} className="text-amber-400" />
+                <Layers size={13} className="text-[var(--accent-amber)]" />
                 {windows.find(w => w.id === contextMenu.windowId)?.isMinimized ? 'Restore' : 'Minimize'}
               </button>
               <div className="h-px bg-[var(--border-color)] my-1 mx-2" />
@@ -535,7 +524,7 @@ export default function Taskbar() {
                 }}
                 className="w-full text-left px-3 py-2 text-xs text-[var(--text-primary)] hover:bg-red-500/20 rounded-lg flex items-center gap-2 transition-colors hover:text-red-400"
               >
-                <X size={13} className="text-red-400" />
+                <X size={13} className="text-[var(--accent-rose)]" />
                 {t('common.close')} 
               </button>
             </motion.div>
@@ -572,31 +561,31 @@ export default function Taskbar() {
                     setTaskbarContextMenu(null);
                     window.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', code: 'KeyK', metaKey: true, bubbles: true }));
                   }}
-                  className="w-full text-left px-3 py-2 text-xs text-[var(--text-secondary)] hover:bg-indigo-500/10 dark:hover:bg-indigo-500/20 rounded-lg flex items-center gap-2 transition-colors group"
+                  className="w-full text-left px-3 py-2 text-xs text-[var(--text-secondary)] hover:bg-[var(--glow-indigo)] rounded-lg flex items-center gap-2 transition-colors group"
                 >
-                  <Search size={13} className="text-indigo-400" />
+                  <Search size={13} className="text-[var(--accent-indigo)]" />
                   <span className="flex-1">Search</span>
                   <span className="text-[9px] text-[var(--text-muted)] font-mono">⌘K</span>
                 </button>
                 <button
                   onClick={() => { openWindow('terminal', t('terminal.title'), <TerminalApp />, Terminal); setTaskbarContextMenu(null); }}
-                  className="w-full text-left px-3 py-2 text-xs text-[var(--text-secondary)] hover:bg-emerald-500/10 dark:hover:bg-emerald-500/20 rounded-lg flex items-center gap-2 transition-colors"
+                  className="w-full text-left px-3 py-2 text-xs text-[var(--text-secondary)] hover:bg-[var(--glow-emerald)] rounded-lg flex items-center gap-2 transition-colors"
                 >
-                  <Terminal size={13} className="text-emerald-400" />
+                  <Terminal size={13} className="text-[var(--accent-emerald)]" />
                   Terminal
                 </button>
                 <button
                   onClick={() => { openWindow('files-app', 'Files', <FilesApp />, FolderClosed); setTaskbarContextMenu(null); }}
-                  className="w-full text-left px-3 py-2 text-xs text-[var(--text-secondary)] hover:bg-blue-500/10 dark:hover:bg-blue-500/20 rounded-lg flex items-center gap-2 transition-colors"
+                  className="w-full text-left px-3 py-2 text-xs text-[var(--text-secondary)] hover:bg-[var(--glow-indigo)] rounded-lg flex items-center gap-2 transition-colors"
                 >
-                  <FolderClosed size={13} className="text-blue-400" />
+                  <FolderClosed size={13} className="text-[var(--accent-indigo)]" />
                   Files
                 </button>
                 <button
                   onClick={() => { openWindow('notepad', 'Notepad', <NotepadApp />, StickyNote); setTaskbarContextMenu(null); }}
-                  className="w-full text-left px-3 py-2 text-xs text-[var(--text-secondary)] hover:bg-amber-500/10 dark:hover:bg-amber-500/20 rounded-lg flex items-center gap-2 transition-colors"
+                  className="w-full text-left px-3 py-2 text-xs text-[var(--text-secondary)] hover:bg-[var(--glow-amber,rgba(245,158,11,0.1))] rounded-lg flex items-center gap-2 transition-colors"
                 >
-                  <StickyNote size={13} className="text-amber-400" />
+                  <StickyNote size={13} className="text-[var(--accent-amber)]" />
                   Notepad
                 </button>
               </div>
@@ -612,14 +601,14 @@ export default function Taskbar() {
                   onClick={() => { minimizeAll(); setTaskbarContextMenu(null); }}
                   className="w-full text-left px-3 py-2 text-xs text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] rounded-lg flex items-center gap-2 transition-colors"
                 >
-                  <Monitor size={13} className="text-blue-400" />
+                  <Monitor size={13} className="text-[var(--accent-indigo)]" />
                   Show Desktop
                 </button>
                 <button
                   onClick={() => { restoreAll(); setTaskbarContextMenu(null); }}
                   className="w-full text-left px-3 py-2 text-xs text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] rounded-lg flex items-center gap-2 transition-colors"
                 >
-                  <LayoutGrid size={13} className="text-emerald-400" />
+                  <LayoutGrid size={13} className="text-[var(--accent-emerald)]" />
                   Restore All
                 </button>
                 {windows.length > 0 && (
@@ -627,7 +616,7 @@ export default function Taskbar() {
                     onClick={() => { windows.forEach(w => closeWindow(w.id)); setTaskbarContextMenu(null); }}
                     className="w-full text-left px-3 py-2 text-xs text-[var(--text-secondary)] hover:bg-red-500/10 rounded-lg flex items-center gap-2 transition-colors hover:text-red-400"
                   >
-                    <X size={13} className="text-red-400" />
+                    <X size={13} className="text-[var(--accent-rose)]" />
                     Close All Windows
                   </button>
                 )}
@@ -674,7 +663,7 @@ export default function Taskbar() {
                     openWindow('settings', 'Settings', <SettingsApp initialTab="personalization" />, Settings, { initialWidth: 900, initialHeight: 700 }); 
                     setTaskbarContextMenu(null); 
                   }}
-                  className="w-full text-left px-3 py-2.5 text-xs text-indigo-400 font-bold hover:bg-indigo-500/10 rounded-lg flex items-center gap-2 transition-all group"
+                  className="w-full text-left px-3 py-2.5 text-xs text-[var(--accent-indigo)] font-bold hover:bg-[var(--glow-indigo)] rounded-lg flex items-center gap-2 transition-all group"
                 >
                   <Settings size={14} className="group-hover:rotate-45 transition-transform duration-500" />
                   Taskbar Settings
@@ -758,7 +747,7 @@ function LanguageSwitcher({ vertical, taskbarPosition }) {
                   <span className="text-xs font-bold text-[var(--text-primary)]">{lang.label}</span>
                   <span className="text-[9px] text-[var(--text-muted)] group-hover:text-[var(--text-secondary)] uppercase">{lang.sub}</span>
                 </div>
-                {state.language === lang.code && <div className="w-1 h-1 rounded-full bg-indigo-400" />}
+                {state.language === lang.code && <div className="w-1 h-1 rounded-full bg-[var(--accent-indigo)]" />}
               </button>
             ))}
           </motion.div>
