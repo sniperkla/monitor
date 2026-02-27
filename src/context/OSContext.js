@@ -55,6 +55,8 @@ const initialState = {
   sshAiHistory: [],
   sshAiPrefs: {
     preferSudo: true,
+    enforcePatch: true,
+    autoApplyPatch: false,
     editor: 'nano',
     viewer: 'cat',
     autoExplainOnError: false,
@@ -440,7 +442,7 @@ function osReducer(state, action) {
         iconPositions: action.payload.iconPositions || state.iconPositions || {},
         aiHistory: action.payload.aiHistory || state.aiHistory || [],
         sshAiHistory: action.payload.sshAiHistory || state.sshAiHistory || [],
-        sshAiPrefs: action.payload.sshAiPrefs || state.sshAiPrefs || { preferSudo: true, editor: 'nano', viewer: 'cat', autoExplainOnError: false, autoAnswerPrompts: false },
+        sshAiPrefs: action.payload.sshAiPrefs || state.sshAiPrefs || { preferSudo: true, enforcePatch: true, autoApplyPatch: false, editor: 'nano', viewer: 'cat', autoExplainOnError: false, autoAnswerPrompts: false },
         exportNaming: action.payload.exportNaming || state.exportNaming || {
           prefix: '',
           suffix: '',
@@ -741,7 +743,7 @@ export function OSProvider({ children }) {
       },
       aiHistory: s.aiHistory || [],
       sshAiHistory: s.sshAiHistory || [],
-      sshAiPrefs: s.sshAiPrefs || { preferSudo: true, editor: 'nano', viewer: 'cat', autoExplainOnError: false, autoAnswerPrompts: false },
+      sshAiPrefs: s.sshAiPrefs || { preferSudo: true, enforcePatch: true, autoApplyPatch: false, editor: 'nano', viewer: 'cat', autoExplainOnError: false, autoAnswerPrompts: false },
       terminalSettings: s.terminalSettings || {
         activePreset: 'modern',
         fontSize: 14,

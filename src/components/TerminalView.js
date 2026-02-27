@@ -1,14 +1,20 @@
 'use client';
 
-import { useApp } from '@/context/AppContext';
-import { useOS } from '@/context/OSContext';
-import { useEffect, useRef, useState, useCallback } from 'react';
-import { io } from 'socket.io-client';
-import { Loader2, AlertCircle, CheckCircle2, XCircle, X, Minus, Maximize2, Wifi, Sparkles, Copy, CornerDownLeft, ShieldAlert, Settings2, Clock, RefreshCw, ListChecks, Trophy, PartyPopper, Languages, Lock, Brain } from 'lucide-react';
-import { useTranslation } from 'react-i18next';
-import { useSession } from 'next-auth/react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { Rnd } from 'react-rnd';
 import { motion, AnimatePresence } from 'framer-motion';
+import { io } from 'socket.io-client';
+import { useTranslation } from 'react-i18next';
+import { useSession } from 'next-auth/react';
+import { useOS } from '@/context/OSContext';
+import { useApp } from '@/context/AppContext';
+import { i18n } from '@/lib/i18n';
+import {
+  Loader2, AlertCircle, CheckCircle2, XCircle, X, Minus, Maximize2, Wifi,
+  Sparkles, Copy, CornerDownLeft, ShieldAlert, Settings2, Clock, RefreshCw,
+  ListChecks, Trophy, PartyPopper, Languages, Lock, Brain, ChevronDown, ChevronUp
+} from 'lucide-react';
 
 let Terminal, FitAddon, WebLinksAddon;
 
@@ -19,7 +25,64 @@ const hexToRgba = (hex, alpha) => {
   const r = parseInt(h.substring(0, 2), 16);
   const g = parseInt(h.substring(2, 4), 16);
   const b = parseInt(h.substring(4, 6), 16);
-  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+  return `rgba(${r},${g},${b},${alpha})`;
+};
+
+const extractUnifiedDiff = (text) => {
+  const t = String(text || '');
+  if (!t) return null;
+
+  // We look for common unified diff markers.
+  // Supports diff -u, git diff, and some patch outputs.
+  const lines = t.split(/\r?\n/);
+  const startIdx = lines.findIndex((l) =>
+    l.startsWith('diff --git ') ||
+    l.startsWith('--- ') ||
+    l.startsWith('+++ ') ||
+    l.startsWith('@@ ') ||
+    l.startsWith('@@@ ')
+  );
+  if (startIdx === -1) return null;
+
+  const diffLines = lines.slice(startIdx);
+  const diffText = diffLines.join('\n').trim();
+  if (!/^(diff --git |--- |\+\+\+ |@@ )/m.test(diffText)) return null;
+
+  const fileMap = new Map();
+  let currentFile = null;
+
+  const ensureFile = (path) => {
+    const p = String(path || '').trim();
+    if (!p) return null;
+    if (!fileMap.has(p)) {
+      fileMap.set(p, { path: p, added: 0, removed: 0, lines: [] });
+    }
+    return fileMap.get(p);
+  };
+
+  for (const l of diffLines) {
+    const m = l.match(/^diff --git a\/(.+?) b\/(.+)$/);
+    if (m) {
+      currentFile = m[2];
+      ensureFile(currentFile);
+    }
+    const fileEntry = currentFile ? ensureFile(currentFile) : null;
+    if (fileEntry) fileEntry.lines.push(l);
+
+    if (l.startsWith('+++ ') || l.startsWith('--- ')) continue;
+    if (l.startsWith('+') && !l.startsWith('+++')) {
+      if (fileEntry) fileEntry.added++;
+    }
+    if (l.startsWith('-') && !l.startsWith('---')) {
+      if (fileEntry) fileEntry.removed++;
+    }
+  }
+
+  const files = Array.from(fileMap.values()).slice(0, 20);
+  const added = files.reduce((sum, f) => sum + (f.added || 0), 0);
+  const removed = files.reduce((sum, f) => sum + (f.removed || 0), 0);
+
+  return { diffText, files, added, removed };
 };
 
 const TERMINAL_PRESETS = {
@@ -77,7 +140,7 @@ const TERMINAL_PRESETS = {
   }
 };
 
-const MAX_AUTO_STEPS = 50;
+const MAX_AUTO_STEPS = Number.POSITIVE_INFINITY;
 
 export default function TerminalView({ connectionId, connectionName, host, color, onClose, connection, isStandalone }) {
   const { state: appState, dispatch, apiFetch } = useApp();
@@ -119,13 +182,30 @@ export default function TerminalView({ connectionId, connectionName, host, color
   const [aiLimitGoal, setAiLimitGoal] = useState(''); // save goal for resume
   const [autoStepHistory, setAutoStepHistory] = useState([]); // track steps for UI
   const [executeConfirmOpen, setExecuteConfirmOpen] = useState(false);
-  const [aiPanelPos, setAiPanelPos] = useState({ x: 16, y: 64 });
+  const [sensitiveConfirmOpen, setSensitiveConfirmOpen] = useState(false);
+  const [pendingSensitiveCommand, setPendingSensitiveCommand] = useState(null);
+  const [patchModalOpen, setPatchModalOpen] = useState(false);
+  const [patchModalDiff, setPatchModalDiff] = useState('');
+  const [lastPatchBackup, setLastPatchBackup] = useState(null); // { id: string, files: string[] } | null
+  const lastAutoAppliedDiffRef = useRef('');
+  const [patchModalAutoApplied, setPatchModalAutoApplied] = useState(false);
+  const [aiPanelPos, setAiPanelPos] = useState({ x: typeof window !== 'undefined' ? window.innerWidth - 450 : 16, y: 64 });
   const [aiPanelSize, setAiPanelSize] = useState({ width: 420, height: 520 });
-  const [interactivePrompt, setInteractivePrompt] = useState(null); // { text: string, kind: string } | null
+  const [aiPanelDocked, setAiPanelDocked] = useState(false);
+  const [aiPanelMinimized, setAiPanelMinimized] = useState(false);
+  const [interactivePrompt, setInteractivePrompt] = useState(null);
   const [lastExecutedCommand, setLastExecutedCommand] = useState('');
   const [lastResultSnapshot, setLastResultSnapshot] = useState('');
   const [lastResultAt, setLastResultAt] = useState(null);
   const lastAutoExplainKeyRef = useRef('');
+  const [chatHistory, setChatHistory] = useState([]); // Chat-like conversation history
+  const [lastResultCollapsed, setLastResultCollapsed] = useState(true); // Default collapsed for cleaner UI
+  const [aiAnswerCollapsed, setAiAnswerCollapsed] = useState(false); // Default expanded for new answers
+  const [fileChangesCollapsed, setFileChangesCollapsed] = useState(true);
+  const [fileChanges, setFileChanges] = useState(null); // { diffText, files, added, removed } | null
+  const [selectedDiffFile, setSelectedDiffFile] = useState('');
+  const [aiStreamText, setAiStreamText] = useState('');
+  const [aiStreaming, setAiStreaming] = useState(false);
 
   const [autoMode, setAutoMode] = useState(false);
   const [autoStepsRemaining, setAutoStepsRemaining] = useState(MAX_AUTO_STEPS);
@@ -139,6 +219,7 @@ export default function TerminalView({ connectionId, connectionName, host, color
   const autoLastLoopKeyRef = useRef('');
   const autoLoopRepeatRef = useRef(0);
   const autoRepeatSigRef = useRef({ key: '', count: 0 });
+  const autoSameCommandRef = useRef({ cmd: '', count: 0 });
   const autoRecentCommandsRef = useRef([]);
   const autoRecentSigsRef = useRef([]);
   const autoDiagKeyRef = useRef('');
@@ -451,7 +532,14 @@ export default function TerminalView({ connectionId, connectionName, host, color
       setAiError(null);
       setAiAnswer(null);
       setInteractivePrompt(null);
+      setPatchModalOpen(false);
+      setPatchModalDiff('');
+      setPatchModalAutoApplied(false);
+      setLastPatchBackup(null);
+      // Close AI panel and related panels when SSH disconnects
       setAiOpen(false);
+      setAiSettingsOpen(false);
+      setAiHistoryOpen(false);
       autoRunningRef.current = false;
       lastCommandSentAtRef.current = 0;
       sawOutputAfterCommandRef.current = false;
@@ -615,6 +703,63 @@ export default function TerminalView({ connectionId, connectionName, host, color
     return t;
   };
 
+  // Detect if a command is sensitive/dangerous and requires user confirmation
+  const isSensitiveCommand = (command) => {
+    const cmd = String(command || '').toLowerCase().trim();
+    if (!cmd) return false;
+
+    // File overwrite / replace patterns (high risk: can wipe existing code)
+    // We only treat these as sensitive when AI is in code-editor mode.
+    const overwritePatterns = [
+      /\bcat\s+<<\s*'eof'\s*>\s*[^\s]+/i,  // cat <<'EOF' > file
+      /\bcat\s+<<\s*eof\s*>\s*[^\s]+/i,    // cat <<EOF > file
+      /\btee\s+[^\s]+\s*>\s*\/dev\/null/i, // tee file > /dev/null (used with sudo)
+      /\bprintf\b[\s\S]*>\s*[^\s]+/i,       // printf ... > file
+      /\becho\b[\s\S]*>\s*[^\s]+/i,         // echo ... > file
+    ];
+    if (sshAiPrefs?.aiTask === 'code' && overwritePatterns.some(p => p.test(cmd))) {
+      return true;
+    }
+
+    // Destructive patterns
+    const destructivePatterns = [
+      /rm\s+-[rf]+/i,           // rm -rf, rm -r -f
+      /rm\s+.*\*/i,             // rm with wildcards
+      /mkfs\./i,                // Format filesystem
+      /dd\s+if=/i,              // dd with input file
+      /fdisk/i,                 // Partition manipulation
+      /parted/i,                // Partition editing
+      /userdel/i,               // Delete user
+      /groupdel/i,              // Delete group
+      /passwd\s+/i,             // Change password
+      /iptables.*-F/i,          // Flush firewall rules
+      /ufw.*disable/i,          // Disable firewall
+      /sshd.*stop/i,            // Stop SSH service
+      /systemctl.*stop.*ssh/i,  // Stop SSH
+      /chown\s+-R/i,            // Recursive chown
+      /chmod\s+-R/i,            // Recursive chmod
+      /mkfs\s+/i,               // Make filesystem
+      /dd\s+.*of=\/dev\/sd/i,   // Write to disk device
+      /echo.*>.*\/etc\/passwd/i, // Modify passwd file
+      /echo.*>.*\/etc\/shadow/i, // Modify shadow file
+    ];
+
+    // System file modifications
+    const systemFilePatterns = [
+      /\/etc\/sshd?(_config)?/i,
+      /\/etc\/passwd/i,
+      /\/etc\/shadow/i,
+      /\/etc\/sudoers/i,
+      /\/etc\/hosts/i,
+      /\/etc\/fstab/i,
+      /\/boot\//i,
+      /\/dev\/sd[a-z]/i,
+    ];
+
+    return destructivePatterns.some(p => p.test(cmd)) ||
+           systemFilePatterns.some(p => p.test(cmd));
+  };
+
   const parseAiAnswer = (raw, metadata) => {
     const decodeEntities = (str) => {
       const entities = {
@@ -638,6 +783,8 @@ export default function TerminalView({ connectionId, connectionName, host, color
     const dangerRaw = getTag('danger');
     const warn = getTag('warn');
     const doneRaw = getTag('done');
+    let diff = getTag('diff');
+    if (diff.includes('&')) diff = decodeEntities(diff);
     const plan = getTag('plan');
     const thought = getTag('thought');
     const interactive = getTag('interactive');
@@ -645,7 +792,246 @@ export default function TerminalView({ connectionId, connectionName, host, color
     const danger = String(dangerRaw || '').trim().toLowerCase() === 'true';
     const done = String(doneRaw || '').trim().toLowerCase() === 'true';
     const step = parseInt(stepRaw) || 1;
-    return { command, explain, danger, warn, done, interactive, plan, thought, step, usedModel: metadata?.usedModel, raw: String(raw || '').trim() };
+    return { command, diff, explain, danger, warn, done, interactive, plan, thought, step, usedModel: metadata?.usedModel, raw: String(raw || '').trim() };
+  };
+
+  const isValidUnifiedDiff = (diffText) => {
+    const d = String(diffText || '').replace(/\r\n/g, '\n').trim();
+    if (!d) return false;
+    if (!/(^--- |^\+\+\+ |^@@ )/m.test(d)) return false;
+    return true;
+  };
+
+  const rewriteDiffPathsForPatch = (diffText) => {
+    const d = String(diffText || '').replace(/\r\n/g, '\n');
+    if (!d.trim()) return '';
+
+    const lines = d.split('\n');
+    const processedLines = [];
+    let currentHunk = null; // { headerIdx: number, oldStart: number, oldLines: number, newStart: number, newLines: number, actualOld: number, actualNew: number }
+
+    const finalizeHunk = () => {
+      if (!currentHunk) return;
+      const { headerIdx, oldStart, actualOld, newStart, actualNew } = currentHunk;
+      // Update the @@ line with actual counts
+      processedLines[headerIdx] = `@@ -${oldStart},${actualOld} +${newStart},${actualNew} @@`;
+      currentHunk = null;
+    };
+
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+
+      // Handle File Headers
+      if (line.startsWith('--- ') || line.startsWith('+++ ') || line.startsWith('diff ') || line.startsWith('index ')) {
+        finalizeHunk();
+        if (line.startsWith('--- ') || line.startsWith('+++ ')) {
+          const prefix = line.slice(0, 4);
+          let rest = line.slice(4);
+          const parts = rest.split('\t');
+          let p = (parts[0] || '').trim();
+          if (p.startsWith('/')) p = p.slice(1);
+          if (p.startsWith('a/')) p = p.slice(2);
+          if (p.startsWith('b/')) p = p.slice(2);
+          const suffix = parts.length > 1 ? '\t' + parts.slice(1).join('\t') : '';
+          processedLines.push(`${prefix}${p}${suffix}`);
+        } else {
+          processedLines.push(line);
+        }
+        continue;
+      }
+
+      // Handle Hunk Headers
+      const hunkMatch = line.match(/^@@ -(\d+),?(\d*) \+(\d+),?(\d*) @@/);
+      if (hunkMatch) {
+        finalizeHunk();
+        currentHunk = {
+          headerIdx: processedLines.length,
+          oldStart: parseInt(hunkMatch[1]),
+          oldLines: parseInt(hunkMatch[2] || '1'),
+          newStart: parseInt(hunkMatch[3]),
+          newLines: parseInt(hunkMatch[4] || '1'),
+          actualOld: 0,
+          actualNew: 0
+        };
+        processedLines.push(line); // Placeholder, will be updated in finalizeHunk
+        continue;
+      }
+
+      // Handle Hunk Content
+      if (currentHunk) {
+        // Sanitize line prefix
+        let repaired = line;
+        
+        // AI often leaves empty lines for context. In a diff, these MUST start with a space.
+        if (line === '') {
+          repaired = ' ';
+        } else if (line.startsWith('+') || line.startsWith('-') || line.startsWith(' ') || line.startsWith('\\')) {
+          if (line.startsWith('+-') || line.startsWith('-+')) repaired = line.slice(1);
+        } else {
+          // Missing prefix, assume context
+          repaired = ' ' + line;
+        }
+
+        // Count for header
+        if (repaired.startsWith(' ')) {
+          currentHunk.actualOld++;
+          currentHunk.actualNew++;
+        } else if (repaired.startsWith('+')) {
+          currentHunk.actualNew++;
+        } else if (repaired.startsWith('-')) {
+          currentHunk.actualOld++;
+        }
+        // '\' lines (no newline markers) don't count towards line total
+
+        processedLines.push(repaired);
+      } else {
+        // Outside hunk, just push
+        processedLines.push(line);
+      }
+    }
+
+    finalizeHunk();
+    
+    // Join and ensure clean trailing newline for heredoc
+    return processedLines.join('\n').trimEnd() + '\n';
+  };
+
+  const buildEnsurePatchInstalledSnippet = () => {
+    return `SUDO=""; command -v sudo >/dev/null 2>&1 && SUDO="sudo"; \
+command -v patch >/dev/null 2>&1 || ( \
+  if command -v apt-get >/dev/null 2>&1; then \
+    $SUDO env DEBIAN_FRONTEND=noninteractive apt-get update -y && $SUDO env DEBIAN_FRONTEND=noninteractive apt-get install -y patch; \
+  elif command -v dnf >/dev/null 2>&1; then \
+    $SUDO dnf install -y patch; \
+  elif command -v yum >/dev/null 2>&1; then \
+    $SUDO yum install -y patch; \
+  elif command -v apk >/dev/null 2>&1; then \
+    $SUDO apk add --no-cache patch; \
+  elif command -v pacman >/dev/null 2>&1; then \
+    $SUDO pacman -S --noconfirm patch; \
+  else \
+    echo "No supported package manager found to install 'patch'" 1>&2; exit 2; \
+  fi \
+);`;
+  };
+
+  const buildPatchApplyCommand = (diffText) => {
+    const d = rewriteDiffPathsForPatch(diffText);
+    if (!d) return '';
+    if (!isValidUnifiedDiff(d)) {
+      return '';
+    }
+
+    const ensurePatch = buildEnsurePatchInstalledSnippet();
+    const pid = Math.random().toString(36).slice(2, 10);
+    const tmpFile = `/tmp/patch_${pid}.diff`;
+    // -F 3: Fuzzy matching (allows up to 3 lines of discrepancy in context)
+    const opts = '--batch --forward --ignore-whitespace -F 3';
+
+    // We write to a temp file first.
+    return `${ensurePatch} \
+cat <<'PATCH_EOF' > ${tmpFile}
+${d}
+PATCH_EOF
+if patch -d / -p0 --dry-run ${opts} < ${tmpFile} >/dev/null 2>&1; then \
+  patch -d / -p0 ${opts} < ${tmpFile}; \
+elif patch -d / -p1 --dry-run ${opts} < ${tmpFile} >/dev/null 2>&1; then \
+  patch -d / -p1 ${opts} < ${tmpFile}; \
+else \
+  echo "--- PATCH FAILED (Dry-run errors below) ---" 1>&2; \
+  patch -d / -p0 --dry-run ${opts} < ${tmpFile}; \
+fi; rm -f ${tmpFile}`;
+  };
+
+  const extractFilesFromUnifiedDiff = (diffText) => {
+    const lines = String(diffText || '').replace(/\r\n/g, '\n').split('\n');
+    const files = [];
+    for (const line of lines) {
+      if (!line.startsWith('+++ ')) continue;
+      let p = line.slice(4).trim();
+      if (!p || p === '/dev/null') continue;
+      // Drop possible timestamps after path (some diff formats)
+      p = p.split('\t')[0].trim();
+      if (p.startsWith('b/')) p = p.slice(2);
+      if (p.startsWith('/')) p = p.slice(1);
+      if (!files.includes(p)) files.push(p);
+    }
+    return files;
+  };
+
+  const buildPatchBackupAndApplyCommand = (diffText, backupId) => {
+    const d = String(diffText || '').trim();
+    if (!d) return { cmd: '', files: [] };
+    const files = extractFilesFromUnifiedDiff(d);
+    // Ensure backup paths are treated as absolute since patch runs with -d /
+    const absFiles = files.map(f => f.startsWith('/') ? f : '/' + f);
+    const backupPart = absFiles.length
+      ? `for f in ${absFiles.map(f => `'${String(f).replace(/'/g, `'\\''`)}'`).join(' ')}; do if [ -f "$f" ]; then cp "$f" "$f.bak.${backupId}"; fi; done; \
+`
+      : '';
+    const applyCmd = buildPatchApplyCommand(d);
+    const cmd = `backup_id='${backupId}'; ${backupPart}${applyCmd}`;
+    return { cmd, files: absFiles };
+  };
+
+  const buildPatchRollbackCommand = (backup) => {
+    const id = backup?.id;
+    const files = Array.isArray(backup?.files) ? backup.files : [];
+    if (!id || files.length === 0) return '';
+    const list = files.map(f => `'${String(f).replace(/'/g, `'\\''`)}'`).join(' ');
+    return `for f in ${list}; do if [ -f "$f.bak.${id}" ]; then mv "$f.bak.${id}" "$f"; fi; done`;
+  };
+
+  const openPatchModal = (diffText) => {
+    setPatchModalDiff(diffText || '');
+    setPatchModalAutoApplied(false);
+    setPatchModalOpen(true);
+  };
+
+  useEffect(() => {
+    if (!aiAnswer?.diff) return;
+    if (sshAiPrefs?.aiTask !== 'code') return;
+    if (sshAiPrefs?.enforcePatch === false) return;
+    if (!sshAiPrefs?.autoApplyPatch) return;
+    const d = String(aiAnswer.diff || '').trim();
+    if (!d) return;
+    if (lastAutoAppliedDiffRef.current === d) return;
+    lastAutoAppliedDiffRef.current = d;
+
+    const backupId = `${Date.now().toString(36)}`;
+    const { cmd, files } = buildPatchBackupAndApplyCommand(d, backupId);
+    if (!cmd) return;
+    setLastPatchBackup({ id: backupId, files });
+    setPatchModalDiff(d);
+    setPatchModalAutoApplied(true);
+    setPatchModalOpen(true);
+    handleExecuteCommand(cmd);
+  }, [aiAnswer, sshAiPrefs?.aiTask, sshAiPrefs?.enforcePatch, sshAiPrefs?.autoApplyPatch]);
+
+  const renderDiffLines = (diffText) => {
+    const lines = String(diffText || '').replace(/\r\n/g, '\n').split('\n');
+    return lines.map((line, idx) => {
+      const isAdd = line.startsWith('+') && !line.startsWith('+++');
+      const isDel = line.startsWith('-') && !line.startsWith('---');
+      const isHunk = line.startsWith('@@');
+      const isFileHdr = line.startsWith('--- ') || line.startsWith('+++ ') || line.startsWith('diff ') || line.startsWith('index ');
+
+      const sectionStart = line.startsWith('diff ') || line.startsWith('--- ');
+
+      let cls = 'whitespace-pre px-3 py-[2px] text-[11px] font-mono';
+      if (isAdd) cls += ' bg-emerald-500/15 text-emerald-200';
+      else if (isDel) cls += ' bg-red-500/15 text-red-200';
+      else if (isHunk) cls += ' bg-indigo-500/15 text-indigo-200 font-semibold';
+      else if (isFileHdr) cls += ' bg-white/5 text-[var(--text-primary)] font-semibold';
+      else cls += ' text-[var(--text-secondary)]';
+      if (sectionStart && idx !== 0) cls += ' mt-2 border-t border-white/10';
+
+      return (
+        <div key={idx} className={cls}>
+          {line || ' '}
+        </div>
+      );
+    });
   };
 
   const getOutputContext = () => {
@@ -1193,6 +1579,22 @@ export default function TerminalView({ connectionId, connectionName, host, color
     maybeHandleInteractivePrompt(snap);
   };
 
+  useEffect(() => {
+    // Only attempt diff extraction in code-edit mode (keeps UI simpler for normal SSH mode)
+    if (sshAiPrefs?.aiTask !== 'code') {
+      setFileChanges(null);
+      setSelectedDiffFile('');
+      return;
+    }
+    const extracted = extractUnifiedDiff(lastResultSnapshot);
+    if (extracted?.diffText) {
+      setFileChanges(extracted);
+      setFileChangesCollapsed(true);
+      const first = extracted.files?.[0]?.path || '';
+      setSelectedDiffFile(first);
+    }
+  }, [lastResultSnapshot, sshAiPrefs?.aiTask]);
+
   const executeCommandAndCapture = async (command) => {
     const cmd = String(command || '').replace(/[\r\n]+$/g, '');
     if (!cmd) return '';
@@ -1310,7 +1712,12 @@ export default function TerminalView({ connectionId, connectionName, host, color
     setAiError(null);
     setAiAnswer(null);
     setExecuteConfirmOpen(false);
-    setAiPrompt(p);
+    
+    // Add user message to chat history
+    const userMsg = { id: Date.now(), role: 'user', content: p, timestamp: new Date() };
+    setChatHistory(prev => [...prev, userMsg]);
+    setAiPrompt(''); // Clear input immediately for chat-like feel
+    
     return handleAskAi(p);
   };
 
@@ -1322,6 +1729,8 @@ export default function TerminalView({ connectionId, connectionName, host, color
     const effectivePrompt = String(promptOverride ?? aiPrompt).trim();
     if (!effectivePrompt || aiLoading) return;
     setAiLoading(true);
+    setAiStreaming(false);
+    setAiStreamText('');
     setAiError(null);
     setAiAnswer(null);
     try {
@@ -1331,21 +1740,105 @@ export default function TerminalView({ connectionId, connectionName, host, color
         { role: 'user', content: effectivePrompt }
       ].slice(-8); // Keep last 8 turns for loop prevention
 
-      const res = await apiFetch('/api/ssh/ai-help', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          prompt: effectivePrompt,
-          context: getOutputContext().slice(-2500),
-          contextPack: buildAiContextPack(),
-          connectionName,
-           host,
-           prefs: sshAiPrefs,
-           model: sshAiPrefs.aiModel || 'auto',
-           history: aiConversationRef.current.slice(-8).slice(0, -1),
-         }),
-       });
-       const data = await res.json();
+      // Streaming attempt (Groq models). Falls back to normal JSON if unsupported.
+      let data = null;
+      let streamedAnswer = '';
+      try {
+        setAiStreaming(true);
+        const streamRes = await fetch('/api/ssh/ai-help?stream=1', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            prompt: effectivePrompt,
+            context: getOutputContext().slice(-2500),
+            contextPack: buildAiContextPack(),
+            connectionName,
+            host,
+            prefs: sshAiPrefs,
+            model: sshAiPrefs.aiModel || 'auto',
+            history: aiConversationRef.current.slice(-8).slice(0, -1),
+          }),
+        });
+
+        const contentType = streamRes.headers.get('content-type') || '';
+        if (!streamRes.ok || !contentType.includes('text/event-stream') || !streamRes.body) {
+          throw new Error('Streaming not available');
+        }
+
+        const reader = streamRes.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+
+        const safeNarration = (text) => {
+          // Keep UI simple: show only a short preview and hide raw <thought> content.
+          const cleaned = String(text || '')
+            .replace(/<thought>[\s\S]*?<\/thought>/gi, '<thought>[hidden]</thought>')
+            .replace(/\s+/g, ' ')
+            .trim();
+          return cleaned.slice(-220);
+        };
+
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const chunks = buffer.split('\n\n');
+          buffer = chunks.pop() || '';
+
+          for (const chunk of chunks) {
+            const lines = chunk.split('\n');
+            let eventName = 'message';
+            let dataLine = '';
+            for (const line of lines) {
+              if (line.startsWith('event:')) eventName = line.slice(6).trim();
+              if (line.startsWith('data:')) dataLine += line.slice(5).trim();
+            }
+            if (!dataLine) continue;
+
+            let payload = null;
+            try { payload = JSON.parse(dataLine); } catch { payload = null; }
+
+            if (eventName === 'delta') {
+              const delta = payload?.content || '';
+              if (delta) {
+                streamedAnswer += delta;
+                setAiStreamText(safeNarration(streamedAnswer));
+              }
+            }
+            if (eventName === 'final') {
+              data = payload;
+            }
+            if (eventName === 'error') {
+              throw new Error(payload?.error || 'Streaming error');
+            }
+          }
+        }
+
+        if (!data?.success) {
+          // Sometimes final may not arrive; fallback to using streamedAnswer
+          data = { success: true, answer: streamedAnswer, usedModel: null, usage: null };
+        }
+      } catch (streamErr) {
+        setAiStreaming(false);
+        setAiStreamText('');
+        // Fallback to classic JSON API call
+        const res = await apiFetch('/api/ssh/ai-help', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            prompt: effectivePrompt,
+            context: getOutputContext().slice(-2500),
+            contextPack: buildAiContextPack(),
+            connectionName,
+            host,
+            prefs: sshAiPrefs,
+            model: sshAiPrefs.aiModel || 'auto',
+            history: aiConversationRef.current.slice(-8).slice(0, -1),
+          }),
+        });
+        data = await res.json();
+      }
+
        let parsed = null;
        if (data.success) {
          parsed = parseAiAnswer(data.answer, { usedModel: data.usedModel });
@@ -1378,7 +1871,22 @@ export default function TerminalView({ connectionId, connectionName, host, color
       aiConversationRef.current = [
         ...aiConversationRef.current,
         { role: 'assistant', content: data.answer }
-      ].slice(-4);
+      ].slice(-12);
+
+      // Add AI response to chat history
+      const aiMsg = { 
+        id: Date.now() + 1, 
+        role: 'assistant', 
+        content: parsed?.explain || data.answer,
+        command: parsed?.command,
+        danger: parsed?.danger,
+        done: parsed?.done,
+        warn: parsed?.warn,
+        plan: parsed?.plan,
+        thought: parsed?.thought,
+        timestamp: new Date()
+      };
+      setChatHistory(prev => [...prev, aiMsg]);
 
       if (parsed) {
         const entry = {
@@ -1400,10 +1908,11 @@ export default function TerminalView({ connectionId, connectionName, host, color
 
       return parsed;
     } catch (e) {
-      setAiError(e.message);
-      return null;
+      setAiError(String(e?.message || e));
     } finally {
       setAiLoading(false);
+      setAiStreaming(false);
+      setAiStreamText('');
     }
   };
 
@@ -1413,7 +1922,7 @@ export default function TerminalView({ connectionId, connectionName, host, color
     if (aiModeRef.current !== 'auto') return;
     if (!autoModeRef.current) return;
     if (autoRunningRef.current) return;
-    if (autoStepsRemaining <= 0) {
+    if (Number.isFinite(autoStepsRemaining) && autoStepsRemaining <= 0) {
       setAiError(t('ai.autoFinished'));
       setAutoMode(false);
       setAiOpen(true);
@@ -1551,11 +2060,15 @@ export default function TerminalView({ connectionId, connectionName, host, color
         ? `\n- NOTE: Terminal output ALREADY shows the installation succeeded. You MUST verify with a quick check and set <done>true</done> if confirmed.`
         : '';
 
-      // Low-steps warning
-      const stepsLeft = MAX_AUTO_STEPS + 1 - autoStepsRemaining;
-      const lowStepsWarn = autoStepsRemaining <= 5
+      // Low-steps warning (disabled in infinite mode)
+      const lowStepsWarn = (Number.isFinite(autoStepsRemaining) && autoStepsRemaining <= 5)
         ? `\n- WARNING: Only ${autoStepsRemaining} steps remaining. Prioritize finishing or verifying. Set <done>true</done> if goal is met.`
         : '';
+
+      const stepsDone = Array.isArray(autoStepHistory) ? autoStepHistory.length : 0;
+      const progressLine = Number.isFinite(MAX_AUTO_STEPS)
+        ? `Progress: ${MAX_AUTO_STEPS + 1 - autoStepsRemaining}/${MAX_AUTO_STEPS}.`
+        : `Progress: ${stepsDone + 1}/∞.`;
 
       // Smart context: try to extract ONLY output after last command (saves tokens & reduces stale context)
       const extractPostCommandContext = (fullSnap, lastCmd) => {
@@ -1577,6 +2090,21 @@ export default function TerminalView({ connectionId, connectionName, host, color
       // Use post-command context if it's meaningful (>50 chars), otherwise use full snap
       const contextToSend = postCmdContext.trim().length > 50 ? postCmdContext : snap;
 
+      const isReadOnlyCommand = (cmd) => {
+        const s = String(cmd || '').trim().toLowerCase();
+        if (!s) return false;
+        return /^(cat|head|tail|grep|rg|sed\s+-n|awk|cut|ls|stat|wc|find|test|\[)/.test(s);
+      };
+
+      const patchFirstAutoRules = (sshAiPrefs?.aiTask === 'code' && sshAiPrefs?.enforcePatch !== false)
+        ? `\nPATCH-FIRST AUTO RULES (CODE MODE):\n- You MAY use <command> ONLY for reading/verifying (cat/head/tail/grep/test).\n- After reading the relevant files, you MUST output a <diff> that updates ALL required .md files (e.g. HEARTBEAT.md AND AGENTS.md) in ONE response if possible.\n- Never output file-write commands (sed -i, cat > file, tee, printf > file). The UI will apply the patch.\n- Do NOT loop on cat; if you already have the file content in context, move on to <diff>.\n`
+        : '';
+
+      const recentReadOnlyCount = (autoRecentCommandsRef.current || []).slice(-6).filter(isReadOnlyCommand).length;
+      const forceDiffNowRule = (sshAiPrefs?.aiTask === 'code' && sshAiPrefs?.enforcePatch !== false && recentReadOnlyCount >= 2)
+        ? `\nIMPORTANT: You have already performed enough reads. STOP issuing read commands and output ONLY a <diff> now. Leave <command> empty.`
+        : '';
+
       const autoPrompt = `[AUTO] Goal: ${goal}
 State:
 - Status: ${terminalStatus}${runningNote}${osNote}${macOsRule}${removalSuccessHint}${installSuccessHint}${lowStepsWarn}
@@ -1592,7 +2120,7 @@ RULES:
 3. VERIFY the last command result before proceeding.
 4. COMMAND: 1 shell command, [Wait], or [Ctrl+C]. NEVER install when goal is remove.
 5. macOS=brew, Linux=apt/dnf. No editors (nano/vim). use cat <<EOF.
-6. Progress: ${stepsLeft}/${MAX_AUTO_STEPS}.`;
+6. ${progressLine}${patchFirstAutoRules}${forceDiffNowRule}`;
 
       // Add to conversation history
       aiConversationRef.current = [
@@ -1713,6 +2241,69 @@ RULES:
       }
       bypassPasswordPauseRef.current = false; // consume the bypass after one step
 
+      // === Patch-first auto mode: handle <diff> as an executable patch step ===
+      if (parsed.diff && String(parsed.diff).trim() && sshAiPrefs?.aiTask === 'code' && sshAiPrefs?.enforcePatch !== false) {
+        const d = String(parsed.diff).trim();
+        if (!isValidUnifiedDiff(d)) {
+          setPatchModalDiff(d);
+          setPatchModalAutoApplied(false);
+          setPatchModalOpen(true);
+          setAiError('Auto Mode paused: AI returned a malformed diff patch. Please review/copy the patch, then Resume.');
+          setAutoMode(false);
+          setAiOpen(true);
+          setAiHasOpenedOnce(true);
+          return;
+        }
+        // If the model repeats the exact same diff, don't hard-stop.
+        // This commonly happens when the patch already applied but the model didn't observe output yet.
+        if (lastAutoAppliedDiffRef.current === d) {
+          setAiError(null);
+          setAutoCountdown(5);
+          if (autoTimerRef.current) clearTimeout(autoTimerRef.current);
+          autoTimerRef.current = setTimeout(() => {
+            autoRunningRef.current = false;
+            runAutoStep();
+          }, 5000);
+          return;
+        }
+
+        setPatchModalDiff(d);
+        setPatchModalOpen(true);
+
+        if (!sshAiPrefs?.autoApplyPatch) {
+          setPatchModalAutoApplied(false);
+          setAiError('Auto Mode paused: patch requires review. Click Apply Patch, then Resume.');
+          setAutoMode(false);
+          setAiOpen(true);
+          setAiHasOpenedOnce(true);
+          return;
+        }
+
+        // Auto-apply patch with backup, then continue
+        lastAutoAppliedDiffRef.current = d;
+        const backupId = `${Date.now().toString(36)}`;
+        const { cmd, files } = buildPatchBackupAndApplyCommand(d, backupId);
+        if (!cmd) {
+          setAiError('Auto Mode stopped: could not build patch apply command.');
+          setAutoMode(false);
+          setAiOpen(true);
+          setAiHasOpenedOnce(true);
+          return;
+        }
+        setLastPatchBackup({ id: backupId, files });
+        setPatchModalAutoApplied(true);
+        handleExecuteCommand(cmd);
+
+        // Continue after a short delay to let terminal output update
+        setAutoCountdown(5);
+        if (autoTimerRef.current) clearTimeout(autoTimerRef.current);
+        autoTimerRef.current = setTimeout(() => {
+          autoRunningRef.current = false;
+          runAutoStep();
+        }, 5000);
+        return;
+      }
+
       // === No command and not done: AI is stuck ===
       if (!parsed.command || !String(parsed.command).trim()) {
         const needRetryKey = `${goal}::${lastExecutedCommand || ''}::${snap.slice(-100)}`;
@@ -1756,8 +2347,33 @@ RULES:
         return;
       }
 
+      // === Hard loop guard: same command repeated ===
+      // If the model keeps sending the exact same command repeatedly (common for sed/cat edits), stop auto mode.
+      const nextCmdTrim = String(parsed.command || '').trim();
+      if (nextCmdTrim) {
+        if (autoSameCommandRef.current.cmd === nextCmdTrim) {
+          autoSameCommandRef.current.count += 1;
+        } else {
+          autoSameCommandRef.current = { cmd: nextCmdTrim, count: 0 };
+        }
+        if (autoSameCommandRef.current.count >= 6 && isReadOnlyCommand(nextCmdTrim) && sshAiPrefs?.aiTask === 'code' && sshAiPrefs?.enforcePatch !== false) {
+          setAiError('Auto Mode stopped: AI kept repeating read-only commands without producing a patch diff.');
+          setAutoMode(false);
+          setAiOpen(true);
+          setAiHasOpenedOnce(true);
+          return;
+        }
+        if (autoSameCommandRef.current.count >= 2 && !isReadOnlyCommand(nextCmdTrim)) {
+          setAiError('Auto Mode stopped: AI repeated the same command multiple times. Please run manually or adjust the goal.');
+          setAutoMode(false);
+          setAiOpen(true);
+          setAiHasOpenedOnce(true);
+          return;
+        }
+      }
+
       // === Execute the command ===
-      setAutoStepsRemaining((n) => Math.max(0, n - 1));
+      setAutoStepsRemaining((n) => (Number.isFinite(n) ? Math.max(0, n - 1) : n));
       const cmdTrim = String(parsed.command || '').trim();
       if (cmdTrim) {
         autoRecentCommandsRef.current = [...autoRecentCommandsRef.current, cmdTrim].slice(-8);
@@ -1768,11 +2384,13 @@ RULES:
           const c = autoRecentCommandsRef.current[autoRecentCommandsRef.current.length - 3];
           const d = autoRecentCommandsRef.current[autoRecentCommandsRef.current.length - 4];
           if (a === c && b === d && a !== b) {
-            setAiError('Auto Mode stopped: repeating a command cycle (loop detected).');
-            setAutoMode(false);
-            setAiOpen(true);
-            setAiHasOpenedOnce(true);
-            return;
+            if (!(isReadOnlyCommand(a) && isReadOnlyCommand(b) && isReadOnlyCommand(c) && isReadOnlyCommand(d))) {
+              setAiError('Auto Mode stopped: repeating a command cycle (loop detected).');
+              setAutoMode(false);
+              setAiOpen(true);
+              setAiHasOpenedOnce(true);
+              return;
+            }
           }
         }
       }
@@ -1849,6 +2467,19 @@ RULES:
   const handleExecuteCommand = (cmd) => {
     const command = String(cmd || '').replace(/[\r\n]+$/g, '');
     if (!command) return;
+    
+    // Check for sensitive operations if confirmation is enabled
+    const confirmSensitive = sshAiPrefs?.confirmSensitive !== false; // default true
+    if (confirmSensitive && isSensitiveCommand(command) && !autoMode) {
+      setPendingSensitiveCommand(command);
+      setSensitiveConfirmOpen(true);
+      return;
+    }
+    
+    executeCommandInternal(command);
+  };
+
+  const executeCommandInternal = (command) => {
     setLastExecutedCommand(command);
     if (socketRef.current?.connected) {
       if (/^\[?ctrl\+c\]?$|^\^c$/i.test(command)) {
@@ -1970,7 +2601,13 @@ RULES:
           <div className="flex items-center gap-2">
             <button
               type="button"
-              onClick={onClose}
+              onClick={() => {
+                setPatchModalOpen(false);
+                setPatchModalDiff('');
+                setPatchModalAutoApplied(false);
+                setLastPatchBackup(null);
+                onClose?.();
+              }}
               className="w-3 h-3 rounded-full bg-[#ff5f57] border border-[#e0443e]/30 flex items-center justify-center group"
               aria-label="Close"
             >
@@ -2084,7 +2721,7 @@ RULES:
 
                 <div className="flex items-center gap-2 text-[10px] text-emerald-400/80 font-mono">
                   <span className="animate-ping w-1.5 h-1.5 rounded-full bg-emerald-500" />
-                  Step {MAX_AUTO_STEPS + 1 - autoStepsRemaining} <span className="opacity-40">/</span> {MAX_AUTO_STEPS}
+                  Step {(Array.isArray(autoStepHistory) ? autoStepHistory.length : 0) + 1} <span className="opacity-40">/</span> {Number.isFinite(MAX_AUTO_STEPS) ? MAX_AUTO_STEPS : '∞'}
                 </div>
 
                 <button
@@ -2145,7 +2782,7 @@ RULES:
           AI
         </button>
 
-        {aiOpen && (
+        {aiOpen && createPortal(
           <Rnd
             size={aiPanelSize}
             position={aiPanelPos}
@@ -2154,12 +2791,12 @@ RULES:
               setAiPanelSize({ width: ref.offsetWidth, height: ref.offsetHeight });
               setAiPanelPos(pos);
             }}
-            bounds="parent"
             minWidth={320}
             minHeight={280}
             dragHandleClassName="ai-panel-drag-handle"
             cancel="button,input,textarea,select,option,label"
-            className="absolute z-30"
+            className="z-50"
+            style={{ position: 'fixed' }}
           >
             <div className="w-full h-full rounded-2xl border border-[var(--border-color)] bg-[var(--bg-secondary)]/95 backdrop-blur-2xl shadow-2xl overflow-hidden flex flex-col relative">
               {/* Header */}
@@ -2278,6 +2915,30 @@ RULES:
                       <input type="checkbox" checked={!!sshAiPrefs.preferSudo} onChange={(e) => setSshAiPrefs({ preferSudo: e.target.checked })} disabled={!isLoggedIn} />
                     </label>
 
+                    <label className="flex items-center justify-between text-[11px]" style={{ color: 'var(--text-primary)' }} title="When enabled, Code Editor mode will propose changes as a patch (<diff>) for you to review/apply (VSCode-like).">
+                      <span className="flex items-center gap-1.5">
+                        <span className="text-emerald-400">🧩</span>
+                        Enforce Patch-first
+                      </span>
+                      <input type="checkbox" checked={sshAiPrefs?.enforcePatch !== false} onChange={(e) => setSshAiPrefs({ enforcePatch: e.target.checked })} disabled={!isLoggedIn} />
+                    </label>
+
+                    <label className="flex items-center justify-between text-[11px]" style={{ color: 'var(--text-primary)' }} title="When enabled, AI patches will be applied automatically (with backups). You can Rollback from the Patch Review modal.">
+                      <span className="flex items-center gap-1.5">
+                        <span className="text-indigo-400">⚡</span>
+                        Auto-apply patches
+                      </span>
+                      <input type="checkbox" checked={!!sshAiPrefs?.autoApplyPatch} onChange={(e) => setSshAiPrefs({ autoApplyPatch: e.target.checked })} disabled={!isLoggedIn || sshAiPrefs?.enforcePatch === false || sshAiPrefs?.aiTask !== 'code'} />
+                    </label>
+
+                    <label className="flex items-center justify-between text-[11px]" style={{ color: 'var(--text-primary)' }} title="Ask for confirmation before executing sensitive commands (rm -rf, disk operations, user deletion, etc.)">
+                      <span className="flex items-center gap-1.5">
+                        <ShieldAlert size={12} className="text-amber-400" />
+                        Confirm Sensitive Ops
+                      </span>
+                      <input type="checkbox" checked={sshAiPrefs?.confirmSensitive !== false} onChange={(e) => setSshAiPrefs({ confirmSensitive: e.target.checked })} disabled={!isLoggedIn} />
+                    </label>
+
                     {/* AI Task Mode */}
                     <div className="pt-1 space-y-1">
                       <span className="text-[9px] font-bold uppercase tracking-widest opacity-50" style={{ color: 'var(--text-muted)' }}>AI Task Mode</span>
@@ -2322,6 +2983,18 @@ RULES:
                         <input type="text" placeholder="Model Name (e.g. gpt-4o)" value={sshAiPrefs.aiCustomModel || ''} onChange={e => setSshAiPrefs({ aiCustomModel: e.target.value })} disabled={!isLoggedIn} className="w-full text-[10px] rounded bg-black/30 border border-white/10 px-2 py-1.5 focus:border-indigo-500/50 outline-none" style={{ color: 'var(--text-primary)' }} title="Custom Model Name" />
                       </div>
                     )}
+
+                    {/* Save Button */}
+                    <button
+                      onClick={() => {
+                        // Settings are already saved via setSshAiPrefs, just show feedback
+                        setAiSettingsOpen(false);
+                      }}
+                      disabled={!isLoggedIn}
+                      className="w-full py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:bg-white/5 disabled:text-white/30 text-white text-xs font-bold uppercase tracking-wider transition-all active:scale-95 mt-2"
+                    >
+                      💾 Save Settings
+                    </button>
                   </div>
                 </div>
               )}
@@ -2379,32 +3052,330 @@ RULES:
               {/* Main Content */}
               <div ref={aiPanelContentRef} className="flex-1 overflow-y-auto px-4 pt-4 pb-10 space-y-4">
 
+                {/* Chat History - Chat-like conversation */}
+                {chatHistory.length > 0 && (
+                  <div className="space-y-3">
+                    {chatHistory.map((msg, idx) => (
+                      <div key={msg.id} className={`flex flex-col ${msg.role === 'user' ? 'items-end' : 'items-start'}`}>
+                        {/* User Message */}
+                        {msg.role === 'user' && (
+                          <div className="max-w-[85%] rounded-2xl rounded-tr-sm bg-indigo-600/90 dark:bg-indigo-600/80 px-4 py-2.5 text-[12px] leading-relaxed text-white shadow-lg shadow-indigo-500/10">
+                            <div className="flex items-center gap-1.5 mb-1 opacity-70">
+                              <span className="text-[9px] font-bold uppercase tracking-wider">You</span>
+                              <span className="text-[9px] opacity-50">{msg.timestamp.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</span>
+                            </div>
+                            {msg.content}
+                          </div>
+                        )}
+                        
+                        {/* AI Message */}
+                        {msg.role === 'assistant' && (
+                          <div className={`max-w-[90%] rounded-2xl rounded-tl-sm px-4 py-3 text-[12px] leading-relaxed shadow-lg ${
+                            msg.danger ? 'bg-red-500/10 border border-red-500/20 text-red-100' : 
+                            msg.done ? 'bg-emerald-500/10 border border-emerald-500/20 text-emerald-100' : 
+                            'bg-[var(--bg-tertiary)]/60 border border-white/5 text-[var(--text-primary)]'
+                          }`}>
+                            <div className="flex items-center gap-1.5 mb-2">
+                              <Sparkles size={12} className={msg.danger ? 'text-red-400' : msg.done ? 'text-emerald-400' : 'text-[var(--accent-indigo)]'} />
+                              <span className={`text-[9px] font-bold uppercase tracking-wider ${msg.danger ? 'text-red-400' : msg.done ? 'text-emerald-400' : 'text-[var(--accent-indigo)]'}`}>
+                                AI Assistant
+                              </span>
+                              <span className="text-[9px] opacity-40 text-[var(--text-muted)]">{msg.timestamp.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</span>
+                            </div>
+                            
+                            {/* Message Content */}
+                            <div className="space-y-2">
+                              {msg.content && (
+                                <div className="text-[12px] leading-relaxed">
+                                  {autoTranslate && aiTranslations.explain && msg.content === parsed?.explain ? aiTranslations.explain : msg.content}
+                                </div>
+                              )}
+                              
+                              {msg.warn && (
+                                <div className="flex gap-2 items-start text-amber-400 text-[11px]">
+                                  <span>⚠️</span>
+                                  <span>{msg.warn}</span>
+                                </div>
+                              )}
+                              
+                              {msg.thought && (
+                                <div className="text-[10px] italic opacity-60 border-l-2 border-white/10 pl-2">
+                                  💭 {msg.thought}
+                                </div>
+                              )}
+                              
+                              {msg.plan && (
+                                <div className="text-[11px] space-y-2 bg-black/20 rounded-lg p-3 border border-white/5">
+                                  <div className="font-bold text-indigo-400 mb-2 flex items-center gap-1.5">
+                                    <ListChecks size={12} />
+                                    Task Checklist
+                                  </div>
+                                  {msg.plan.split('\n').filter(l => l.trim()).map((line, i) => {
+                                    const stepNum = i + 1;
+                                    const isDone = msg.step > stepNum || msg.done;
+                                    const isCurrent = stepNum === msg.step && !msg.done;
+                                    return (
+                                      <div key={i} className="flex items-start gap-2.5 transition-all duration-300">
+                                        <span className={`mt-0.5 shrink-0 w-4 h-4 rounded flex items-center justify-center text-[10px] font-bold transition-all ${
+                                          isDone 
+                                            ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30' 
+                                            : isCurrent
+                                              ? 'bg-amber-500/20 text-amber-400 border border-amber-500/30 animate-pulse'
+                                              : 'bg-white/5 text-white/30 border border-white/10'
+                                        }`}>
+                                          {isDone ? '✓' : isCurrent ? '⋯' : stepNum}
+                                        </span>
+                                        <span className={`flex-1 transition-all ${
+                                          isDone 
+                                            ? 'text-emerald-400 line-through decoration-emerald-500/30' 
+                                            : isCurrent
+                                              ? 'text-amber-300 font-medium'
+                                              : 'text-white/50'
+                                        }`}>
+                                          {line.replace(/^[\d\.\s\)\-]{1,5}/, '').trim()}
+                                          {isCurrent && <span className="ml-2 inline-block text-[8px] text-amber-400/70">(running...)</span>}
+                                        </span>
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              )}
+                              
+                              {msg.command && (
+                                <div className="mt-2 rounded-lg bg-black/40 border border-white/10 overflow-hidden">
+                                  <div className="px-2 py-1 text-[8px] font-mono text-white/40 uppercase tracking-wider bg-black/20">💻 Command</div>
+                                  <pre className="text-[10px] font-mono p-2 text-white/90">{msg.command}</pre>
+                                </div>
+                              )}
+                              
+                              {/* Action Buttons for AI messages with commands */}
+                              {msg.command && (
+                                <div className="flex items-center gap-1 pt-2 mt-2 border-t border-white/5">
+                                  <button onClick={() => navigator.clipboard.writeText(msg.command)} className="flex-1 flex items-center justify-center gap-1 py-1.5 rounded bg-white/5 hover:bg-white/10 text-[10px] transition">
+                                    <Copy size={10} /> Copy
+                                  </button>
+                                  <button onClick={() => handleInsertCommand(msg.command)} className="flex-1 flex items-center justify-center gap-1 py-1.5 rounded bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-400 text-[10px] transition">
+                                    <CornerDownLeft size={10} /> Insert
+                                  </button>
+                                  <button onClick={() => {
+                                    if (!isLoggedIn) { setAiError(t('ai.loginRequired')); return; }
+                                    if (msg.danger) { setExecuteConfirmOpen(true); setAiAnswer({ ...msg, danger: true }); return; }
+                                    handleExecuteCommand(msg.command);
+                                  }} disabled={!isLoggedIn} className={`flex-1 flex items-center justify-center gap-1 py-1.5 rounded text-[10px] transition ${msg.danger ? 'bg-red-500/20 hover:bg-red-500/30 text-red-400' : 'bg-indigo-500/20 hover:bg-indigo-500/30 text-indigo-400'}`}>
+                                    <CornerDownLeft size={10} /> Run
+                                  </button>
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
 
+                {/* Patch Review Modal */}
+                {patchModalOpen && (
+                  (typeof document !== 'undefined'
+                    ? createPortal(
+                        <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/60 p-4" onMouseDown={(e) => {
+                          if (e.target === e.currentTarget) {
+                            setPatchModalOpen(false);
+                          }
+                        }}>
+                          <Rnd
+                            default={{ x: 0, y: 0, width: 920, height: 520 }}
+                            enableResizing={true}
+                            minWidth={520}
+                            minHeight={320}
+                            dragHandleClassName="patch-modal-drag-handle"
+                            cancel="button,input,textarea,select,option,label,pre"
+                            className="z-[10000]"
+                            style={{ position: 'relative' }}
+                          >
+                            <div className="w-full h-full rounded-xl border border-[var(--border-color)] bg-[var(--bg-secondary)] shadow-2xl overflow-hidden flex flex-col">
+                              <div className="patch-modal-drag-handle flex items-center justify-between px-4 py-3 border-b border-[var(--border-color)] cursor-move">
+                                <div className="flex items-center gap-2">
+                                  <div className="text-xs font-bold uppercase tracking-wider" style={{ color: 'var(--text-primary)' }}>Patch Review</div>
+                                  {patchModalAutoApplied && (
+                                    <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-emerald-500/15 text-emerald-300 border border-emerald-500/20">Auto-applied</span>
+                                  )}
+                                </div>
+                                <button onClick={() => setPatchModalOpen(false)} className="p-1 rounded hover:bg-white/5" style={{ color: 'var(--text-muted)' }} title={t('ai.cancel')}>
+                                  <X size={14} />
+                                </button>
+                              </div>
 
-                {/* Last Result Preview */}
+                              <div className="p-4 flex-1 min-h-0">
+                                <div className="h-full overflow-y-auto custom-scrollbar rounded bg-black/40 border border-white/5 py-2">
+                                  {renderDiffLines(patchModalDiff)}
+                                </div>
+                              </div>
+
+                              <div className="flex gap-2 px-4 py-3 border-t border-[var(--border-color)] bg-[var(--bg-secondary)]/70">
+                                <button onClick={() => setPatchModalOpen(false)} className="flex-1 py-2 rounded border border-white/10 hover:bg-white/5 text-xs font-medium" style={{ color: 'var(--text-primary)' }}>
+                                  {t('ai.cancel')}
+                                </button>
+                                <button onClick={() => {
+                                  const rb = buildPatchRollbackCommand(lastPatchBackup);
+                                  if (!rb) { setAiError('No rollback available'); return; }
+                                  setPatchModalOpen(false);
+                                  handleExecuteCommand(rb);
+                                  setLastPatchBackup(null);
+                                  setPatchModalAutoApplied(false);
+                                }} disabled={!isLoggedIn || !lastPatchBackup?.id} className="flex-1 flex items-center justify-center gap-1 py-2 rounded bg-red-600/70 hover:bg-red-600 text-white text-xs transition border border-red-500/20 disabled:opacity-40 disabled:cursor-not-allowed">
+                                  Rollback
+                                </button>
+                                <button onClick={() => navigator.clipboard.writeText(patchModalDiff || '')} className="flex-1 flex items-center justify-center gap-1 py-2 rounded bg-[var(--bg-tertiary)] hover:bg-[var(--bg-card-hover)] text-xs transition border border-[var(--border-color)]" style={{ color: 'var(--text-primary)' }}>
+                                  <Copy size={12} /> {t('ai.copy')}
+                                </button>
+                                {!patchModalAutoApplied ? (
+                                  <button onClick={() => {
+                                    if (!isLoggedIn) { setAiError(t('ai.loginRequired')); return; }
+                                    const backupId = `${Date.now().toString(36)}`;
+                                    const { cmd, files } = buildPatchBackupAndApplyCommand(patchModalDiff, backupId);
+                                    if (!cmd) { setAiError('Invalid patch (diff is malformed or file paths not found)'); return; }
+                                    setLastPatchBackup({ id: backupId, files });
+                                    setPatchModalOpen(false);
+                                    handleExecuteCommand(cmd);
+                                  }} disabled={!isLoggedIn} className="flex-1 flex items-center justify-center gap-1 py-2 rounded bg-emerald-600/80 dark:bg-emerald-600/50 hover:bg-emerald-500 text-white text-xs transition border border-emerald-500/20">
+                                    <CornerDownLeft size={12} /> Apply Patch
+                                  </button>
+                                ) : (
+                                  <button disabled className="flex-1 flex items-center justify-center gap-1 py-2 rounded bg-emerald-600/20 text-emerald-200 text-xs transition border border-emerald-500/10 opacity-60 cursor-not-allowed">
+                                    Applied
+                                  </button>
+                                )}
+                              </div>
+                            </div>
+                          </Rnd>
+                        </div>,
+                        document.body
+                      )
+                    : null)
+                )}
+
+                {/* Last Result Preview - Collapsible */}
                 {(lastExecutedCommand || lastResultSnapshot) && (
                   <div className="rounded-lg border border-[var(--border-color)] bg-[var(--bg-tertiary)]/20 dark:bg-black/20 overflow-hidden">
-                    <div className="flex items-center justify-between px-3 py-1.5 border-b border-white/10">
-                      <span className="text-[10px] font-medium uppercase" style={{ color: 'var(--text-muted)' }}>{t('ai.lastResult')}</span>
-                      <div className="flex gap-1">
-                        <button onClick={refreshLastResultSnapshot} className="p-1 rounded hover:bg-white/5" title={t('ai.refresh')}><RefreshCw size={10} /></button>
-                        <button onClick={() => navigator.clipboard.writeText([lastExecutedCommand, lastResultSnapshot].filter(Boolean).join('\n'))} className="p-1 rounded hover:bg-white/5" title={t('ai.copy')}><Copy size={10} /></button>
+                    <div className="flex items-center justify-between px-3 py-1.5 border-b border-white/10 cursor-pointer hover:bg-white/5 transition-colors" onClick={() => setLastResultCollapsed(!lastResultCollapsed)}>
+                      <div className="flex items-center gap-2">
+                        <span className="text-[10px] font-medium uppercase" style={{ color: 'var(--text-muted)' }}>{t('ai.lastResult')}</span>
+                        <span className="text-[9px] opacity-50" style={{ color: 'var(--text-secondary)' }}>
+                          {lastResultCollapsed ? '(คลิกเพื่อขยาย)' : '(คลิกเพื่อย่อ)'}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-1">
+                        <button onClick={(e) => { e.stopPropagation(); refreshLastResultSnapshot(); }} className="p-1 rounded hover:bg-white/5" title={t('ai.refresh')}><RefreshCw size={10} /></button>
+                        <button onClick={(e) => { e.stopPropagation(); navigator.clipboard.writeText([lastExecutedCommand, lastResultSnapshot].filter(Boolean).join('\n')); }} className="p-1 rounded hover:bg-white/5" title={t('ai.copy')}><Copy size={10} /></button>
+                        <button className="p-1 rounded hover:bg-white/5" style={{ color: 'var(--text-muted)' }}>
+                          {lastResultCollapsed ? <ChevronDown size={14} /> : <ChevronUp size={14} />}
+                        </button>
                       </div>
                     </div>
-                    <div className="p-3 space-y-2">
-                      {lastExecutedCommand && (
-                        <div className="text-xs font-mono opacity-80 truncate" style={{ color: 'var(--text-primary)' }}>{lastExecutedCommand}</div>
-                      )}
-                      {lastResultSnapshot && (
-                        <pre className="text-[10px] font-mono whitespace-pre-wrap break-words max-h-24 overflow-y-auto custom-scrollbar" style={{ color: 'var(--text-secondary)' }}>{lastResultSnapshot}</pre>
-                      )}
-                      <button onClick={() => {
-                        if (!isLoggedIn) { setAiError('Login required'); return; }
-                        const prompt = `Command: ${lastExecutedCommand || 'unknown'}\nOutput: ${lastResultSnapshot || getOutputContext() || 'none'}\nExplain and suggest next step.`;
-                        askAiWithPrompt(prompt);
-                      }} disabled={!isLoggedIn} className="w-full flex items-center justify-center gap-1.5 py-2 rounded bg-gradient-to-r from-[var(--accent-indigo)]/10 to-[var(--accent-purple,rgba(168,85,247,0.1))] hover:from-[var(--accent-indigo)]/20 hover:to-[var(--accent-purple,rgba(168,85,247,0.2))] border border-[var(--accent-indigo)]/20 text-xs font-medium text-[var(--accent-indigo)] hover:text-white transition-all shadow-sm group">
-                        <Sparkles size={12} className="text-[var(--accent-indigo)] group-hover:text-[var(--accent-indigo)] transition-colors" /> {t('terminal.explainOutput')}
-                      </button>
+                    {!lastResultCollapsed && (
+                      <div className="p-3 space-y-2 animate-in fade-in slide-in-from-top-2 duration-200">
+                        {lastExecutedCommand && (
+                          <div className="text-xs font-mono opacity-80 truncate" style={{ color: 'var(--text-primary)' }}>{lastExecutedCommand}</div>
+                        )}
+                        {lastResultSnapshot && (
+                          <pre className="text-[10px] font-mono whitespace-pre-wrap break-words max-h-24 overflow-y-auto custom-scrollbar" style={{ color: 'var(--text-secondary)' }}>{lastResultSnapshot}</pre>
+                        )}
+                        <button onClick={() => {
+                          if (!isLoggedIn) { setAiError('Login required'); return; }
+                          const prompt = `Command: ${lastExecutedCommand || 'unknown'}\nOutput: ${lastResultSnapshot || getOutputContext() || 'none'}\nExplain and suggest next step.`;
+                          askAiWithPrompt(prompt);
+                        }} disabled={!isLoggedIn} className="w-full flex items-center justify-center gap-1.5 py-2 rounded bg-gradient-to-r from-[var(--accent-indigo)]/10 to-[var(--accent-purple,rgba(168,85,247,0.1))] hover:from-[var(--accent-indigo)]/20 hover:to-[var(--accent-purple,rgba(168,85,247,0.2))] border border-[var(--accent-indigo)]/20 text-xs font-medium text-[var(--accent-indigo)] hover:text-white transition-all shadow-sm group">
+                          <Sparkles size={12} className="text-[var(--accent-indigo)] group-hover:text-[var(--accent-indigo)] transition-colors" /> {t('terminal.explainOutput')}
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* File Changes (diff) - Collapsible */}
+                {sshAiPrefs?.aiTask === 'code' && fileChanges?.diffText && (
+                  <div className="rounded-lg border border-[var(--border-color)] bg-[var(--bg-tertiary)]/20 dark:bg-black/20 overflow-hidden">
+                    <div
+                      className="flex items-center justify-between px-3 py-1.5 border-b border-white/10 cursor-pointer hover:bg-white/5 transition-colors"
+                      onClick={() => setFileChangesCollapsed(!fileChangesCollapsed)}
+                    >
+                      <div className="flex items-center gap-2 min-w-0">
+                        <span className="text-[10px] font-medium uppercase" style={{ color: 'var(--text-muted)' }}>File Changes</span>
+                        <span className="text-[9px] opacity-60 font-mono" style={{ color: 'var(--text-secondary)' }}>
+                          +{fileChanges.added} / -{fileChanges.removed}
+                        </span>
+                        {Array.isArray(fileChanges.files) && fileChanges.files.length > 0 && (
+                          <span className="text-[9px] opacity-50" style={{ color: 'var(--text-secondary)' }}>
+                            {fileChanges.files.length} file(s)
+                          </span>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-1">
+                        <button
+                          onClick={(e) => { e.stopPropagation(); navigator.clipboard.writeText(fileChanges.diffText || ''); }}
+                          className="p-1 rounded hover:bg-white/5"
+                          title={t('ai.copy')}
+                        >
+                          <Copy size={10} />
+                        </button>
+                        <button className="p-1 rounded hover:bg-white/5" style={{ color: 'var(--text-muted)' }}>
+                          {fileChangesCollapsed ? <ChevronDown size={14} /> : <ChevronUp size={14} />}
+                        </button>
+                      </div>
+                    </div>
+                    {!fileChangesCollapsed && (
+                      <div className="p-3 animate-in fade-in slide-in-from-top-2 duration-200">
+                        <div className="flex gap-3">
+                          <div className="w-[160px] shrink-0 space-y-1">
+                            {Array.isArray(fileChanges.files) && fileChanges.files.map((f) => (
+                              <button
+                                key={f.path}
+                                onClick={() => setSelectedDiffFile(f.path)}
+                                className={`w-full text-left rounded px-2 py-1 border transition ${selectedDiffFile === f.path ? 'bg-emerald-500/10 border-emerald-500/20' : 'bg-black/10 border-white/5 hover:bg-white/5'}`}
+                              >
+                                <div className="text-[10px] font-mono truncate" style={{ color: 'var(--text-primary)' }}>{f.path}</div>
+                                <div className="text-[9px] font-mono opacity-70" style={{ color: 'var(--text-secondary)' }}>
+                                  <span className="text-emerald-400">+{f.added || 0}</span>
+                                  <span className="mx-1 opacity-40">/</span>
+                                  <span className="text-rose-400">-{f.removed || 0}</span>
+                                </div>
+                              </button>
+                            ))}
+                          </div>
+
+                          <div className="flex-1 min-w-0">
+                            {(() => {
+                              const chosen = Array.isArray(fileChanges.files)
+                                ? fileChanges.files.find((x) => x.path === selectedDiffFile)
+                                : null;
+                              const textToShow = chosen?.lines?.length ? chosen.lines.join('\n') : fileChanges.diffText;
+                              return (
+                                <pre className="text-[10px] font-mono whitespace-pre-wrap break-words max-h-44 overflow-y-auto custom-scrollbar" style={{ color: 'var(--text-secondary)' }}>
+                                  {textToShow}
+                                </pre>
+                              );
+                            })()}
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {aiStreaming && (
+                  <div className="rounded-lg border border-indigo-500/20 bg-indigo-500/5 p-3">
+                    <div className="flex items-center justify-between mb-2">
+                      <div className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-wider text-indigo-400">
+                        <Loader2 size={12} className="animate-spin" />
+                        Streaming
+                      </div>
+                      <span className="text-[9px] opacity-60" style={{ color: 'var(--text-secondary)' }}>
+                        live
+                      </span>
+                    </div>
+                    <div className="text-[11px] leading-relaxed" style={{ color: 'var(--text-primary)' }}>
+                      {aiStreamText || '...'}
                     </div>
                   </div>
                 )}
@@ -2417,10 +3388,14 @@ RULES:
 
                 {aiAnswer && (
                   <div className={`rounded-lg border overflow-hidden ${aiAnswer.danger ? 'border-red-500/30' : aiAnswer.done ? 'border-emerald-500/30' : 'border-white/10'}`}>
-                    <div className={`px-3 py-2 ${aiAnswer.danger ? 'bg-red-500/10' : aiAnswer.done ? 'bg-emerald-500/10' : 'bg-black/20'}`}>
-                      <div className="flex items-center justify-between mb-3 border-b border-white/5 pb-2">
-                        <div className="flex flex-col gap-0.5">
-                          <div className="flex items-center gap-1.5 opacity-80 mb-0.5">
+                    {/* Header - Always visible, clickable to collapse */}
+                    <div 
+                      className={`px-3 py-2 cursor-pointer hover:opacity-80 transition-opacity ${aiAnswer.danger ? 'bg-red-500/10' : aiAnswer.done ? 'bg-emerald-500/10' : 'bg-black/20'}`}
+                      onClick={() => setAiAnswerCollapsed(!aiAnswerCollapsed)}
+                    >
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <div className="flex items-center gap-1.5 opacity-80">
                             <Sparkles size={12} className="text-[var(--accent-indigo)]" />
                             <span className="text-[10px] font-bold uppercase tracking-wider text-[var(--accent-indigo)]">
                               {aiAnswer.raw.includes('AUTO_FIX_REQUEST') ? t('ai.autoFix') : 'Zeroclaw AI'}
@@ -2437,9 +3412,18 @@ RULES:
                           {aiAnswer.done && <span className="text-[10px] font-bold text-emerald-400 flex items-center gap-1"><CheckCircle2 size={10} /> {t('ai.done')}</span>}
                           {aiAnswer.danger && <span className="text-[10px] font-bold text-red-400 flex items-center gap-1"><ShieldAlert size={10} /> {t('ai.danger')}</span>}
                           {aiAnswer.interactive && <span className="text-[10px] font-bold text-amber-400">⚡ {aiAnswer.interactive}</span>}
+                          <button className="p-1 rounded hover:bg-white/5" style={{ color: 'var(--text-muted)' }}>
+                            {aiAnswerCollapsed ? <ChevronDown size={14} /> : <ChevronUp size={14} />}
+                          </button>
                         </div>
                       </div>
-
+                    </div>
+                    
+                    {/* Content - Collapsible */}
+                    {!aiAnswerCollapsed && (
+                      <div className="animate-in fade-in slide-in-from-top-2 duration-200">
+                      <div className="px-3 py-2">
+                      <div className="mb-3 border-b border-white/5 pb-2">
                       {/* Conversational Explanation */}
                       {(aiAnswer.explain || aiAnswer.warn) && (
                         <div className="mb-3 text-[12px] leading-relaxed" style={{ color: 'var(--text-primary)' }}>
@@ -2461,6 +3445,23 @@ RULES:
                         <div className="mb-3 p-2.5 rounded-lg border border-black/20 bg-black/20 overflow-hidden opacity-70 hover:opacity-100 transition-opacity">
                           <div className="text-[10px] font-medium leading-relaxed italic text-[var(--text-muted)]">
                             "{autoTranslate && aiTranslations.thought ? aiTranslations.thought : (translatingAiText.thought ? '...' : aiAnswer.thought)}"
+                          </div>
+                        </div>
+                      )}
+                      </div>
+
+                      {/* Proposed Patch (VSCode-like) */}
+                      {aiAnswer.diff && (
+                        <div className="mt-2 rounded bg-black/40 border border-white/5 overflow-hidden">
+                          <div className="px-2 py-1 text-[8px] font-mono text-[var(--text-muted)] uppercase tracking-wider bg-black/40 border-b border-white/5">Proposed Patch</div>
+                          <div className="flex items-center gap-1 p-2 border-t border-white/5 bg-black/20">
+                            <button onClick={() => {
+                              setPatchModalDiff(aiAnswer.diff || '');
+                              setPatchModalOpen(true);
+                            }} className="flex-1 flex items-center justify-center gap-1 py-1.5 rounded bg-indigo-600/80 dark:bg-indigo-600/50 hover:bg-indigo-500 text-white text-xs transition border border-indigo-500/20">
+                              Review Patch
+                            </button>
+                            <button onClick={() => navigator.clipboard.writeText(aiAnswer.diff || '')} className="flex-1 flex items-center justify-center gap-1 py-1.5 rounded bg-[var(--bg-tertiary)] hover:bg-[var(--bg-card-hover)] text-xs transition border border-[var(--border-color)]" style={{ color: 'var(--text-primary)' }}><Copy size={12} /> {t('ai.copy')}</button>
                           </div>
                         </div>
                       )}
@@ -2493,6 +3494,8 @@ RULES:
                           {executeConfirmOpen && aiAnswer.danger ? t('ai.confirmRun') : <><CornerDownLeft size={12} /> {t('ai.run')}</>}
                         </button>
                       </div>
+                    )}
+                    </div>
                     )}
                   </div>
                 )}
@@ -2748,6 +3751,45 @@ RULES:
                     </div>
                   </div>
                 )}
+
+                {/* Sensitive Operation Confirmation */}
+                {sensitiveConfirmOpen && pendingSensitiveCommand && (
+                  <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-3">
+                    <div className="flex items-center gap-2 text-xs font-bold text-amber-600 dark:text-amber-300 mb-2">
+                      <ShieldAlert size={12} /> Sensitive Operation
+                    </div>
+                    <div className="text-[11px] opacity-80 mb-2" style={{ color: 'var(--text-primary)' }}>
+                      This command may affect system security or stability:
+                    </div>
+                    <div className="rounded bg-black/40 border border-amber-500/20 p-2 mb-3">
+                      <code className="text-[10px] font-mono text-amber-400 break-all">{pendingSensitiveCommand}</code>
+                    </div>
+                    <div className="flex gap-2">
+                      <button 
+                        onClick={() => {
+                          setSensitiveConfirmOpen(false);
+                          setPendingSensitiveCommand(null);
+                        }} 
+                        className="flex-1 py-1.5 rounded border border-white/10 hover:bg-white/5 text-xs font-medium" 
+                        style={{ color: 'var(--text-primary)' }}
+                      >
+                        Cancel
+                      </button>
+                      <button 
+                        onClick={() => {
+                          const cmd = pendingSensitiveCommand;
+                          setSensitiveConfirmOpen(false);
+                          setPendingSensitiveCommand(null);
+                          executeCommandInternal(cmd);
+                        }} 
+                        disabled={!isLoggedIn} 
+                        className="flex-1 py-1.5 rounded bg-amber-600 hover:bg-amber-500 text-white text-xs font-medium"
+                      >
+                        Execute Anyway
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
 
               {/* ── Error Banner (bottom, most visible) ── */}
@@ -2947,7 +3989,8 @@ RULES:
                 </div>
               </div>
             </div>
-          </Rnd>
+          </Rnd>,
+          document.body
         )}
       </div>
 

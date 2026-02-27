@@ -15,7 +15,13 @@ export async function POST(req) {
       return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
     }
 
-    const { prompt, context, contextPack, connectionName, host, prefs, history, model } = await req.json();
+    const extractCooldownMap = globalThis.__sshMemoryExtractCooldownMap || (globalThis.__sshMemoryExtractCooldownMap = new Map());
+
+    const { searchParams } = new URL(req.url);
+    const streamRequested = searchParams.get('stream') === '1';
+
+    const body = await req.json();
+    const { prompt, context, connectionName, host, prefs, history, model, contextPack } = body;
     const customerDbUri = req.headers.get('x-mongodb-uri');
 
     if (!prompt || !String(prompt).trim()) {
@@ -89,8 +95,54 @@ export async function POST(req) {
     const safePack = contextPack && typeof contextPack === 'object' ? contextPack : null;
     const safePrefs = prefs && typeof prefs === 'object' ? prefs : {};
     const preferSudo = !!safePrefs.preferSudo;
+    const enforcePatch = safePrefs.enforcePatch !== false;
     const editor = typeof safePrefs.editor === 'string' ? safePrefs.editor : 'nano';
     const viewer = typeof safePrefs.viewer === 'string' ? safePrefs.viewer : 'cat';
+
+    const normalizeAiXml = (xml) => {
+      let s = String(xml || '');
+      if (!s) return s;
+
+      // Smart Diff Sanitizer: AI often emits "unified diffs" that are slightly malformed 
+      // (e.g. context lines missing the leading space).
+      if (aiTask === 'code' && enforcePatch) {
+        // 1. Basic character repairs
+        s = s.replace(/^[\t ]*\+-(.*)$/gm, '+$1');
+        s = s.replace(/^[\t ]*-\+(.*)$/gm, '-$1');
+
+        // 2. Structural Hunk Repair: Ensure every line inside <diff> hunk starting from @@ has a valid prefix
+        s = s.replace(/<diff>([\s\S]*?)<\/diff>/gi, (match, diffContent) => {
+          let inHunk = false;
+          const lines = diffContent.split('\n');
+          const repairedLines = lines.map(line => {
+            const trimmed = line.trim();
+            if (line.startsWith('@@')) { inHunk = true; return line; }
+            if (line.startsWith('--- ') || line.startsWith('+++ ') || line.startsWith('diff ') || line.startsWith('index ')) {
+              inHunk = false;
+              return line;
+            }
+            if (!inHunk || trimmed === '') return line;
+            
+            // If inside hunk and line doesn't start with space, +, -, or \, force a space prefix
+            if (!/^[ +\-\\@]/.test(line)) {
+              return ' ' + line;
+            }
+            return line;
+          });
+          return `<diff>\n${repairedLines.join('\n')}\n</diff>`;
+        });
+      }
+
+      if (aiTask !== 'code' || !enforcePatch) return s;
+
+      const hasDone = /<done>\s*true\s*<\/done>/i.test(s);
+      const hasDiff = /<diff>\s*[\s\S]*?\S[\s\S]*?<\/diff>/i.test(s);
+      // In patch-first code mode, model must not declare done unless it proposed a diff.
+      if (hasDone && !hasDiff) {
+        return s.replace(/<done>\s*true\s*<\/done>/ig, '<done>false</done>');
+      }
+      return s;
+    };
 
     // Keep history tight — 2 turns (last 2 actions) is plenty with the rich prompt
     const safeHistory = Array.isArray(history) ? history.slice(-2) : [];
@@ -167,63 +219,288 @@ ${safeContext || 'none'}`;
     }
 
     // ── CODE / FILE EDITOR MODE ──────────────────────────────────────────────
-    const codeEditorSys = `Expert Code & File Editor AI operating on a remote Linux server via SSH.
+    const codeEditorSys = `You are an expert Linux systems engineer and code editor operating via SSH. Your task is to solve problems intelligently and efficiently.
+
 ENV: u=${packUser} h=${packHostname} cwd=${packCwd}
 
-${memBlock}You help edit, fix, or create any kind of file on the remote server — JSON, TOML, YAML, Python scripts, shell scripts, agent skills, config files, etc.
+${memBlock}CRITICAL THINKING FRAMEWORK:
+1. ANALYZE: Understand the problem completely before acting. What is broken? What needs to change?
+2. PLAN: Create a clear, logical sequence of steps. Consider dependencies between steps.
+3. EXECUTE: Take action with surgical precision. Use the right tool for the job.
+4. VERIFY: Confirm the fix works. Check for side effects. Validate the solution.
+5. DOCUMENT: Summarize what was done and why.
 
-OUTPUT XML:
-<thought>Brief analysis of what needs to change and why</thought>
-<plan>1–3 clear steps to accomplish the edit</plan>
-<command>A SINGLE complete shell command that writes/patches the file (use printf, cat <<'EOF', tee, sed -i, python3 -c, or jq). Never use interactive editors (nano/vim).</command>
-<explain>One short conversational sentence describing your action (e.g. "I'll update the config file now," or "Let me fix that JSON syntax error.")</explain>
+OUTPUT XML FORMAT (STRICT):
+<thought>
+Problem Analysis: What exactly is the issue?
+Current State: What does the system look like now?
+Target State: What should it look like when fixed?
+Approach: How will you solve this? (direct edit, config change, service restart, etc)
+Risk Assessment: What could go wrong? How will you prevent it?
+</thought>
+<plan>
+Step-by-step checklist with clear dependencies:
+1. [ ] Analyze/Read current state (REQUIRED first step for any file edit)
+2. [ ] Backup existing file if it exists
+3. [ ] Make the necessary changes
+4. [ ] Verify the changes are correct
+5. [ ] Restart/reload services if needed
+Mark steps as DONE when complete. Only check off after verification.
+</plan>
+<diff>A unified diff patch (preferred for ALL edits). This is the VSCode-like workflow.
+The patch MUST be valid unified diff format using either:
+- --- /path/to/file +++ /path/to/file (RECOMMENDED; use absolute paths, applied with -d /)
+- or --- a/path +++ b/path (traditional git style, will be attempted with -p1)
+Include @@ hunks and only the minimal required changes. Preserve unrelated code.</diff>
+<command>Optional non-edit command ONLY for reading/verifying (cat/grep/test). MUST NOT modify files. Leave empty when providing a <diff>.</command>
+<explain>One conversational sentence with emoji describing what you're doing and why. Be specific about the file/change.</explain>
 <danger>true|false</danger><done>true|false</done>
 
-RULES FOR CODE/FILE EDITING:
-- JSON: Use "python3 -c" or "jq" to safely patch JSON. NEVER write raw JSON with cat<<EOF if it has special characters; use python3 -c "import json,sys; d=json.load(open('path')); d['key']='val'; json.dump(d,open('path','w'),indent=2)" instead.
-- TOML / YAML: Use sed -i or python3 with tomllib/pyyaml.
-- Shell scripts / Python: Use printf '%s\n' or cat <<'HEREDOC' > file to write multi-line content safely.
-- Agent/Skill files (Zeroclaw, etc): Read the file FIRST (cat/python3 print) to understand structure, then patch the specific section. You have full control.
-- Always VERIFY: After writing, cat the modified section back to confirm correctness. Set <done>true</done> only when verified.
-- DIFF APPROACH: For large files, prefer surgical sed -i or python3 patch over full rewrites.
-- NO LOOPING: If you have already read a file once, do NOT read it again unless you just changed it. Prioritize ACTION (patching) over repetitive checking.
-- ENCODING: Never use &lt; &gt; — use raw characters.
-- If user says "fix the JSON", first cat the file to see the problem, then patch.
-- SELF-CORRECT: If your last command errored, analyze the output and try a completely different approach.
+ADVANCED RULES FOR INTELLIGENT PROBLEM SOLVING:
+
+FILE EDITING MASTERY:
+- ALWAYS READ FIRST: Before editing ANY file, you MUST read it first with cat/head/tail to understand its structure
+- BACKUP STRATEGY: Always backup files before major changes: cp file file.bak.$(date +%s)
+- VALIDATION MANDATORY: After every edit, verify with: cat file | grep -A2 -B2 'changed_section'
+- DIFF REQUIRED: After every file edit, output a unified diff so the user can see exactly what changed.
+  * If you created a backup: diff -u file.bak.TIMESTAMP file || true
+  * If no backup available but in a git repo: git diff -- file || true
+- PRESERVE EXISTING CODE: Never replace an entire file unless the user explicitly asks for a full rewrite.
+${enforcePatch ? `- PATCH-FIRST (VSCode): For ANY file change, you MUST output a <diff> patch. Do NOT output write commands.
+  Forbidden in <command>: sed -i, perl -pi, cat > file, tee file, printf > file, echo > file, mv temp file, redirect (>) writes.
+  Allowed in <command>: read/verify only (cat/head/tail/grep/test).
+  If the user asks to "apply" immediately, still output <diff>; the UI applies it.
+  Only return <command> for read/verify steps.` : `- LEGACY EDITING: You may use surgical edit commands (sed -i / python3 -c) when needed.
+  Still prefer minimal changes and always include a unified diff after edits.`}
+ - DIFF MUST BE PATCHABLE: Inside @@ hunks, EVERY line must start with one of:
+   * space for context lines
+   * + for additions
+   * - for deletions
+   Do NOT emit raw text lines without a prefix (this causes "malformed patch").
+- ESCAPE HANDLING: For special characters in sed, use: sed -i 's|pattern|replacement|g' (pipe delimiter avoids escaping slashes)
+- HEREDOC SAFETY: Always use <<'EOF' (single quotes) to prevent variable expansion
+
+JSON EDITING (Use python3, never raw text):
+python3 -c "
+import json
+with open('file.json', 'r') as f:
+    data = json.load(f)
+data['key'] = 'value'
+with open('file.json', 'w') as f:
+    json.dump(data, f, indent=2)
+"
+
+CONFIG FILES:
+- INI files: Use python3 configparser or sed with section awareness
+- YAML: Use python3 with PyYAML if available, otherwise sed for simple changes
+- TOML: Use sed for simple key=value changes, python3 tomllib for complex edits
+- Environment files: sed -i 's/^KEY=.*/KEY=newvalue/' .env
+
+DEBUGGING & DIAGNOSTICS:
+- Check service status: systemctl status servicename --no-pager
+- View recent logs: journalctl -u servicename -n 50 --no-pager
+- Test configs BEFORE reload: nginx -t, apachectl configtest, sshd -t
+- Check syntax: bash -n script.sh, python3 -m py_compile script.py
+
+ERROR RECOVERY STRATEGIES:
+If a command fails, analyze the error and choose the correct recovery path:
+1. "Permission denied" → Use sudo or check file ownership (ls -la)
+2. "No such file or directory" → Check path exists (ls -la dirname/)
+3. "Already exists" → Remove first or use force flag if safe
+4. "Syntax error" → Fix the syntax issue, don't just retry
+5. "Service failed" → Check logs: journalctl -xe --no-pager | tail -30
+6. "Port already in use" → Check: lsof -i :PORT or ss -tlnp | grep PORT
+
+SELF-CORRECTION PROTOCOL:
+When you encounter errors:
+1. STOP and ANALYZE the error message carefully
+2. IDENTIFY the root cause (wrong path? missing dep? syntax error?)
+3. ADJUST your approach based on the specific error
+4. TRY a different method if the first one failed
+5. VERIFY the fix before marking done
+
+ANTI-PATTERNS TO AVOID:
+- ❌ Don't use echo with >> to append to config files (creates duplicates)
+- ❌ Don't restart services unless you verified config is valid first
+- ❌ Don't assume paths - always verify with pwd, which, or ls
+- ❌ Don't ignore error output - parse it and respond intelligently
+- ❌ Don't modify files without reading them first
+- ❌ Don't set done=true until you've verified the fix works
+
+COMPLEX SCENARIOS:
+- Multiple file changes: Complete ALL edits, then verify ALL, then restart services
+- Service dependencies: Start/restart in correct order (database before app)
+- Network configs: Always have a rollback plan before changing network settings
+- Database migrations: Backup before schema changes
+
+BE FRIENDLY & PROFESSIONAL: Use emojis in explanations:
+🔍 = Analyzing/investigating
+📝 = Reading/writing files  
+💾 = Saving/creating files
+🔧 = Fixing/patching
+✅ = Verified working
+🚀 = Completed successfully
+⚠️ = Warning/caution
+🔄 = Retrying/alternative approach
 ${structuredContext}`;
 
     // ── SSH COMMAND MODE (default) ────────────────────────────────────────────
-    const sshCommandSys = `Autonomous Linux AI. Achieve goal via SSH. No questions.
+    const sshCommandSys = `You are an expert Linux systems engineer solving problems via SSH. Think like a senior SRE/DevOps engineer.
+
 ENV: u=${packUser} h=${packHostname} cwd=${packCwd} sudo=${preferSudo}
 
-${memBlock}OUTPUT XML:
-<thought>Brief Analysis</thought>
-<plan>1-3 NEXT steps</plan>
-<command>1 shell command or [Wait] or [Ctrl+C]</command>
-<explain>1 short conversational sentence (e.g. "Let me check the logs", "Ah, I found the issue!", "I'll install that now.")</explain>
-<danger>true|false</danger><done>true|false</done><interactive>type</interactive>
-RULES:
-- Continuous commands (ping, top) MUST use count/limit flags (e.g. ping -c 4).
-- If process running (no prompt), next command must be [Wait] or [Ctrl+C].
-- CURSOR/PROMPT: You MUST wait for the shell prompt ($ or #) before sending a new command. If you see active output (installing logs, progress bars) but NO prompt, send [Wait].
-- TOKEN CONSERVATION: Do NOT send new commands while a process is RUNNING. Only proceed when the prompt is returned.
-- SMART COMMANDS: 
-  * Use "ls -F" or "ls -la" to see file types/permissions.
-  * Use "grep -C 3" to see context around errors.
-  * Use "df -h" or "free -m" if you suspect resource issues.
-  * Prefill answers for interactive tools (e.g., DEBIAN_FRONTEND=noninteractive).
-- SUDO: If a command fails with "Permission denied", use "sudo !!" or prepend "sudo ".
-- VERIFICATION: You MUST check the result of your last command. If it produced an error, failed to create a file, or didn't start a service, FIX IT immediately. Do NOT ignore errors or skip to the next step until the current one is successful.
-- ANTI-LOOP: If a service is clearly RUNNING or a file is clearly CREATED, set <done>true</done>. DO NOT "double check" unless it's a safety requirement.
-- CONTEXT: If user says "continue", it means "Finish the task based on HISTORY". Review the last 5 steps to resume progress.
-- NO EDITORS: Never use nano, vim, or vi. Use "cat <<EOF > file" or "sed -i".
-- NO HTML ENCODING: Always send RAW terminal characters. Never use &lt or &gt in <command>.
-- NPM/NPX ERRORS: If "npx create-next-app" fails with "Could not locate repository", it means the template/example path is invalid. Try again WITHOUT the example flag or use a simpler official template.
-- ZEROCLAW: If asked to adjust Zeroclaw (.zeroclaw), do NOT get stuck in a loop checking files. Identify the target skill/agent/config, patch it (sed/python/printf), and verify. You have full control.
-- NO LOOPING: If you have already read a file once, do NOT read it again unless you just changed it. Prioritize ACTION (patching) over repetitive checking.
-- SELF-CORRECTION: If you see "error", "canceled", or "syntax error", analyze the cause and try a COMPLETELY different approach immediately.
-- INTERACTIVE PROMPTS: If you see "(y/n)", "(y)", or similar questions ending the output, send exactly "y" or "yes" as the <command>. Do NOT send a full shell command until the prompt is resolved.
-- PROJECT NAME: If prompted for a project name, use the default or a simple name like "my-app".
+${memBlock}PROBLEM-SOLVING METHODOLOGY:
+1. GATHER INTEL: Understand the current state before acting
+2. FORM HYPOTHESIS: What is likely causing the issue?
+3. TEST HYPOTHESIS: Run targeted diagnostics to confirm
+4. EXECUTE FIX: Apply the solution with precision
+5. VERIFY OUTCOME: Confirm the problem is resolved
+6. CLEAN UP: Remove any temporary files or test data
+
+OUTPUT XML FORMAT (STRICT):
+<thought>
+Situation Assessment: What do we know? What's the current state?
+Hypothesis: What do you think is wrong and why?
+Plan of Attack: How will you solve this step by step?
+Verification Strategy: How will you confirm success?
+</thought>
+<plan>
+Clear checklist with dependencies marked:
+1. [ ] Gather information/diagnose
+2. [ ] Formulate solution
+3. [ ] Execute fix
+4. [ ] Verify resolution
+5. [ ] Final cleanup
+Mark steps complete ONLY after verification.
+</plan>
+<command>Single shell command that makes progress. Options:
+- Diagnostic: ls, ps, netstat, systemctl status, journalctl, grep in logs
+- Package mgmt: apt/dnf/apk install, npm/pip install
+- File ops: cat, grep, find, stat, test -f
+- Service mgmt: systemctl start/stop/restart/status
+- Process mgmt: pkill, kill, pgrep
+- Network: curl, wget, ping, nc, ss
+- [Wait] - when process is still running
+- [Ctrl+C] - to stop a running process
+- y/yes - to answer interactive prompts only</command>
+<explain>One sentence with emoji explaining your reasoning and action. Be specific about what you're checking or fixing.</explain>
+<danger>true|false</danger><done>true|false</done><interactive>password|sudo_password|passphrase|confirm_yn|confirm_overwrite|generic</interactive>
+
+COMMAND INTELLIGENCE:
+
+DIAGNOSTIC COMMANDS (Use these FIRST when investigating):
+- systemctl status SERVICE --no-pager | head -20: Check service state
+- journalctl -u SERVICE -n 50 --no-pager: View recent service logs
+- tail -50 /var/log/syslog | grep -i ERROR: System errors
+- ps aux | grep -E 'PROCESS|PID' | grep -v grep: Check if process running
+- netstat -tlnp | grep :PORT or ss -tlnp | grep :PORT: Check port usage
+- df -h: Check disk space issues
+- free -m: Check memory
+- curl -s http://localhost:PORT/health: Test if service responds
+
+PACKAGE MANAGEMENT:
+- DEBIAN/UBUNTU: apt-get update && apt-get install -y PKG
+- RHEL/CENTOS/FEDORA: dnf install -y PKG or yum install -y PKG
+- ALPINE: apk add --no-cache PKG
+- NODE: npm install -g PKG or npx CMD
+- PYTHON: pip3 install PKG
+
+SERVICE MANAGEMENT:
+- Start: systemctl start SERVICE
+- Stop: systemctl stop SERVICE
+- Restart: systemctl restart SERVICE
+- Reload (config): systemctl reload SERVICE (preferred if available)
+- Enable autostart: systemctl enable SERVICE
+- Check config: nginx -t, apachectl configtest, sshd -t
+
+PROCESS HANDLING:
+- Find process: pgrep -a PROCESS or ps aux | grep PROCESS
+- Kill gracefully: kill -TERM PID (wait 5s)
+- Force kill: kill -9 PID (last resort)
+- Kill all: pkill -f PROCESS_NAME
+
+ERROR ANALYSIS & RECOVERY:
+When you see errors, classify and respond:
+
+1. "Permission denied" → Check user: whoami, id. Try sudo. Check permissions: ls -la FILE
+2. "No such file or directory" → Verify path: ls -la DIR/, find / -name FILE 2>/dev/null
+3. "Address already in use" → Find process: lsof -i :PORT, then decide if kill or reconfigure
+4. "Connection refused" → Check if service running: systemctl status SERVICE, check port binding
+5. "Syntax error" in configs → Check with: nginx -t, python3 -m py_compile FILE, bash -n SCRIPT
+6. "Out of memory" → Check: free -m, dmesg | tail -20, consider adding swap or reducing processes
+7. "Disk full" → Check: df -h, find large files: du -h / | sort -rh | head -20
+8. "Timeout" → Check network, firewall, DNS: ping, dig, nc -zv HOST PORT
+
+SELF-CORRECTION HIERARCHY:
+If your command fails, escalate through these approaches:
+Level 1: Fix obvious issue (typo, wrong path, missing sudo)
+Level 2: Try alternative command (e.g., dnf instead of yum, ss instead of netstat)
+Level 3: Gather more diagnostic data to understand root cause
+Level 4: Try completely different approach to achieve the same goal
+Level 5: Ask for clarification if truly stuck after 3 attempts
+
+SMART COMMAND PATTERNS:
+
+Chain commands safely with &&:
+- cd /path && ls -la (only ls if cd succeeded)
+- make config && make && make install
+
+Conditional execution:
+- test -f file && echo exists || echo missing
+- systemctl is-active --quiet service && echo running || echo stopped
+
+Capture and analyze output:
+- CMD 2>&1 | tee /tmp/output.log && grep -q SUCCESS /tmp/output.log
+
+Safe file operations:
+- cp important.conf important.conf.bak.$(date +%s) before editing
+- test -w file || sudo chown $USER file (check writability first)
+
+INTERACTIVE PROMPT HANDLING:
+When you see prompts like:
+- "(y/n)" or "[Y/n]" → Send: y
+- "Password:" → Send the password (system will prompt user if needed)
+- "[sudo] password for" → Send password or mark as sudo_password
+- "Are you sure?" → Usually means it's dangerous - set <danger>true</danger>
+
+WAIT PROTOCOL (CRITICAL):
+After sending ANY command:
+1. If you see output flowing (progress bars, logs) → Send [Wait]
+2. If you see a shell prompt ($ or #) → Ready for next command
+3. If you see "(END)" or pager prompt → Send q to quit
+4. If you see "(y/n)" prompt → Send y or n
+5. NEVER send multiple commands while one is still running
+
+SIGNAL HANDLING:
+- [Ctrl+C] = Send SIGINT (\x03) - for interactive programs, ping, etc
+- Use for: ping, top, tail -f, hung commands, infinite loops
+
+VERIFICATION MANDATE:
+You MUST verify every fix:
+- File edits: cat file | grep -C3 changed_part
+- Service starts: systemctl is-active SERVICE
+- Package installs: which CMD || CMD --version
+- Config changes: CONFIG_CMD -t (syntax test)
+- Network changes: curl/nc test to verify connectivity
+
+TOKEN EFFICIENCY:
+- Use concise, precise commands
+- Prefer single pipeline over multiple commands
+- Use head/tail to limit output
+- Avoid cat | grep when grep FILE works
+
+PROFESSIONAL COMMUNICATION:
+Use emojis to convey status:
+🔍 Diagnosing/Investigating
+📊 Checking status/metrics
+📦 Installing packages
+🔧 Applying fixes
+✅ Verified working
+🚀 Task completed
+🔄 Retrying with alternative
+⚠️ Warning/needs attention
+❌ Failed/encountered error
+💡 Suggestion/Tip
 ${structuredContext}`;
 
     const sys = aiTask === 'code' ? codeEditorSys : sshCommandSys;
@@ -234,6 +511,58 @@ ${structuredContext}`;
       ...historyMessages,
       { role: 'user', content: String(prompt) },
     ];
+
+    const maybeRetryForMissingDiff = async (answerText, currentModel, apiKey, extraInfo) => {
+      try {
+        if (aiTask !== 'code') return null;
+        if (!enforcePatch) return null;
+        const s = String(answerText || '');
+        const hasDiff = /<diff>\s*[\s\S]*?\S[\s\S]*?<\/diff>/i.test(s);
+        if (hasDiff) return null;
+
+        const retryUserMsg = `Your last response did NOT include a <diff>. In PATCH-FIRST code mode you MUST output a unified diff patch.
+OUTPUT REQUIREMENTS (STRICT):
+- Return ONLY valid XML with a non-empty <diff> tag.
+- Leave <command> empty.
+- The <diff> MUST be a valid unified diff and MUST NOT use leading '/' absolute paths in ---/+++ headers.
+  Use safe paths like: home/ubuntu/.zeroclaw/workspace/FILE.md (the UI applies patch with -d /).
+- Do NOT re-read files again. Use the context you already have.
+Now output the <diff> needed to complete the request.`;
+
+        const retryMessages = [
+          ...messages,
+          { role: 'assistant', content: String(answerText || '') },
+          { role: 'user', content: retryUserMsg },
+        ];
+
+        const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${apiKey}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            messages: retryMessages,
+            model: currentModel,
+            temperature: aiConfig.temperature,
+            max_completion_tokens: aiConfig.max_completion_tokens,
+            top_p: aiConfig.top_p,
+          }),
+        });
+
+        if (!res.ok) {
+          const errBody = await res.text().catch(() => '');
+          console.warn('[AI retry missing diff] Retry request failed:', res.status, errBody.slice(0, 200), extraInfo);
+          return null;
+        }
+        const out = await res.json();
+        const retryAnswer = out?.choices?.[0]?.message?.content || '';
+        return retryAnswer ? String(retryAnswer) : null;
+      } catch (e) {
+        console.warn('[AI retry missing diff] Retry failed:', e?.message || e, extraInfo);
+        return null;
+      }
+    };
 
     let answer = null;
     let lastError = null;
@@ -274,6 +603,175 @@ ${structuredContext}`;
     }
 
     let actualUsedModel = mainModel;
+
+    // If streaming is requested, we do a single attempt (no key/model rotation mid-stream).
+    // If it fails, we fall back to the normal non-stream response logic.
+    if (streamRequested && mainModel !== 'manual') {
+      const chosenApiKey = apiKeys[currentIndex] || apiKeys[0];
+      if (!chosenApiKey) {
+        return NextResponse.json({ success: false, error: 'Missing AI API key.' }, { status: 400 });
+      }
+
+      try {
+        const encoder = new TextEncoder();
+        const stream = new ReadableStream({
+          async start(controller) {
+            let full = '';
+            let usedModel = mainModel;
+            try {
+              controller.enqueue(encoder.encode(`event: meta\ndata: ${JSON.stringify({ model: usedModel })}\n\n`));
+
+              const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+                method: 'POST',
+                headers: {
+                  Authorization: `Bearer ${chosenApiKey}`,
+                  'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                  messages,
+                  model: mainModel,
+                  temperature: aiConfig.temperature,
+                  max_completion_tokens: aiConfig.max_completion_tokens,
+                  top_p: aiConfig.top_p,
+                  stream: true,
+                }),
+              });
+
+              if (!response.ok || !response.body) {
+                const errBody = await response.text().catch(() => '');
+                throw new Error(`AI service error (${response.status}): ${errBody.slice(0, 200)}`);
+              }
+
+              const reader = response.body.getReader();
+              const decoder = new TextDecoder();
+              let buf = '';
+
+              while (true) {
+                const { value, done } = await reader.read();
+                if (done) break;
+
+                buf += decoder.decode(value, { stream: true });
+                const parts = buf.split(/\n\n/);
+                buf = parts.pop() || '';
+
+                for (const part of parts) {
+                  const lines = part.split(/\n/).map(l => l.trim()).filter(Boolean);
+                  for (const line of lines) {
+                    if (!line.startsWith('data:')) continue;
+                    const data = line.slice(5).trim();
+                    if (data === '[DONE]') {
+                      break;
+                    }
+                    try {
+                      const parsed = JSON.parse(data);
+                      const delta = parsed.choices?.[0]?.delta?.content;
+                      if (delta) {
+                        full += delta;
+                        controller.enqueue(encoder.encode(`event: delta\ndata: ${JSON.stringify({ content: delta })}\n\n`));
+                      }
+                    } catch {
+                      // ignore malformed chunk
+                    }
+                  }
+                }
+              }
+
+              // Finalize: track usage, persist history, trigger memory extraction, then send final payload
+              let usageInfo = null;
+              usageInfo = await checkAndTrackAiUsage(session.user.email, prompt, full);
+
+              try {
+                const missionTitle = contextPack?.goal || prompt.slice(0, 50);
+                const oneHourAgo = new Date(Date.now() - 3600000);
+                let historyRecord = await AiHistory.findOne({
+                  userId: session.user.email,
+                  type: 'terminal',
+                  title: missionTitle,
+                  updatedAt: { $gt: oneHourAgo }
+                });
+
+                const newMessagePair = [
+                  { role: 'user', content: prompt, timestamp: new Date() },
+                  { role: 'assistant', content: full, metadata: { usedModel }, timestamp: new Date() }
+                ];
+
+                if (historyRecord) {
+                  await AiHistory.updateOne(
+                    { _id: historyRecord._id },
+                    { $push: { messages: { $each: newMessagePair } }, $set: { lastActive: new Date() } }
+                  );
+                } else {
+                  await AiHistory.create({
+                    userId: session.user.email,
+                    type: 'terminal',
+                    title: missionTitle,
+                    context: { connectionName, host, connectionId: contextPack?.connectionId },
+                    messages: newMessagePair
+                  });
+                }
+              } catch (dbErr) {
+                console.error('Failed to save AI history:', dbErr);
+              }
+
+              try {
+                full = normalizeAiXml(full);
+                try {
+                  const retry = await maybeRetryForMissingDiff(full, usedModel, chosenApiKey, { streamRequested: true, model: usedModel });
+                  if (retry) {
+                    full = normalizeAiXml(retry);
+                  }
+                } catch {}
+                const doneTagRe = /<done>\s*true\s*<\/done>/i;
+                const diffTagRe = /<diff>[\s\S]*?<\/diff>/i;
+                const hasCompletion = doneTagRe.test(full) || (aiTask === 'code' && diffTagRe.test(full));
+                if (host && hasCompletion && apiKeys.length > 0 && usedModel !== 'manual') {
+                  const cooldownKey = `${session.user.email}::${host}`;
+                  const now = Date.now();
+                  const lastAt = extractCooldownMap.get(cooldownKey) || 0;
+                  if (now - lastAt < 60000) {
+                    console.log('[SSH Memory] Skipping extraction (cooldown) for host:', host);
+                  } else {
+                    extractCooldownMap.set(cooldownKey, now);
+                  const extractFacts = async (uri) => {
+                    try {
+                      const db = await connectDB(uri);
+                      const SshMemory = getSshMemoryModel(db);
+                      await SshMemory.findOneAndUpdate(
+                        { userId: session.user.email, host },
+                        { $set: { lastSeenAt: new Date() }, $inc: { sessionCount: 1 } },
+                        { upsert: true }
+                      );
+                    } catch (err) {
+                      console.error('[SSH Memory] Fact extraction failed:', err);
+                    }
+                  };
+                  extractFacts(customerDbUri);
+                  }
+                }
+              } catch (err) {
+                console.error('[SSH Memory] Streaming done handling failed:', err);
+              }
+
+              controller.enqueue(encoder.encode(`event: final\ndata: ${JSON.stringify({ success: true, answer: full, usedModel: usedModel, usage: usageInfo })}\n\n`));
+              controller.close();
+            } catch (err) {
+              controller.enqueue(encoder.encode(`event: error\ndata: ${JSON.stringify({ success: false, error: err?.message || 'Streaming failed' })}\n\n`));
+              controller.close();
+            }
+          }
+        });
+
+        return new NextResponse(stream, {
+          headers: {
+            'Content-Type': 'text/event-stream; charset=utf-8',
+            'Cache-Control': 'no-cache, no-transform',
+            Connection: 'keep-alive',
+          },
+        });
+      } catch (err) {
+        console.error('Streaming request failed, falling back:', err);
+      }
+    }
 
     // Loop through models, then through keys
     for (const currentModel of modelsToTry) {
@@ -347,6 +845,15 @@ ${structuredContext}`;
                     answer = resData.choices[0]?.message?.content || '';
                     successfulIndex = tryIndex;
                     actualUsedModel = currentModel;
+
+                    try {
+                      answer = normalizeAiXml(answer);
+                      const retry = await maybeRetryForMissingDiff(answer, currentModel, apiKey, { streamRequested, tryIndex, currentModel });
+                      if (retry) {
+                        answer = normalizeAiXml(retry);
+                      }
+                    } catch {}
+
                     break;
                 } else if (response.status === 429) {
                     console.warn(`AI Rate limit hit on key index ${tryIndex} for model ${currentModel}. Rotating...`);
@@ -418,11 +925,36 @@ ${structuredContext}`;
 
           // ASYNC KNOWLEDGE EXTRACTION (if done and success)
           // We fire and forget this so it doesn't block the user response
-          if (host && /<done>true<\/done>/.test(answer) && apiKeys.length > 0 && actualUsedModel !== 'manual') {
+          answer = normalizeAiXml(answer);
+          const doneTagRe = /<done>\s*true\s*<\/done>/i;
+          const diffTagRe = /<diff>[\s\S]*?<\/diff>/i;
+          const hasCompletion = doneTagRe.test(answer) || (aiTask === 'code' && diffTagRe.test(answer));
+          if (host && hasCompletion && apiKeys.length > 0 && actualUsedModel !== 'manual') {
+            const cooldownKey = `${session.user.email}::${host}`;
+            const now = Date.now();
+            const lastAt = extractCooldownMap.get(cooldownKey) || 0;
+            if (now - lastAt < 60000) {
+              console.log('[SSH Memory] Skipping extraction (cooldown) for host:', host);
+              return NextResponse.json({ success: true, answer, usage: usageInfo, usedModel: actualUsedModel });
+            }
+            extractCooldownMap.set(cooldownKey, now);
+            console.log('[SSH Memory] Triggering fact extraction for host:', host);
             const extractFacts = async (uri) => {
               try {
                 const db = await connectDB(uri);
                 const SshMemory = getSshMemoryModel(db);
+                
+                // First, always update session count and lastSeenAt when done
+                await SshMemory.findOneAndUpdate(
+                  { userId: session.user.email, host },
+                  { 
+                    $set: { lastSeenAt: new Date() },
+                    $inc: { sessionCount: 1 }
+                  },
+                  { upsert: true }
+                );
+                console.log('[SSH Memory] Updated session count for:', host);
+                
                 // Use the fastest/cheapest model for extraction
                 const extractModel = 'llama-3.1-8b-instant';
                 const extractApiKey = apiKeys[0]; // grab first key
@@ -448,6 +980,7 @@ Command ran: ${cmdMatch ? cmdMatch[1].trim() : '(none)'}
 AI Explanation: ${explainMatch ? explainMatch[1].trim() : '(none)'}
 Context: ${structuredContext.slice(0, 1500)}`;
 
+                console.log('[SSH Memory] Calling extraction AI...');
                 const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
                   method: 'POST',
                   headers: { Authorization: `Bearer ${extractApiKey}`, 'Content-Type': 'application/json' },
@@ -464,9 +997,18 @@ Context: ${structuredContext.slice(0, 1500)}`;
                 
                 if (res.ok) {
                   const out = await res.json();
-                  const facts = JSON.parse(out.choices[0]?.message?.content || '{}');
+                  const factsText = out.choices[0]?.message?.content || '{}';
+                  console.log('[SSH Memory] Extraction AI response:', factsText);
                   
-                  // Call our local PATCH memory endpoint internally
+                  let facts = {};
+                  try {
+                    facts = JSON.parse(factsText);
+                  } catch (parseErr) {
+                    console.error('[SSH Memory] Failed to parse extraction JSON:', parseErr);
+                    return;
+                  }
+                  
+                  // Build update payload
                   const setFields = { lastSeenAt: new Date() };
                   const addToSetFields = {};
                   const pushFields = {};
@@ -494,19 +1036,33 @@ Context: ${structuredContext.slice(0, 1500)}`;
                   if (Object.keys(addToSetFields).length) updatePayload.$addToSet = addToSetFields;
                   if (Object.keys(pushFields).length) updatePayload.$push = pushFields;
                   
-                  await SshMemory.findOneAndUpdate(
+                  const result = await SshMemory.findOneAndUpdate(
                     { userId: session.user.email, host },
                     updatePayload,
-                    { upsert: true }
+                    { upsert: true, new: true }
                   );
+                  console.log('[SSH Memory] Successfully updated facts for:', host, 'Fields:', Object.keys(setFields).join(', '));
+                } else {
+                  const errText = await res.text().catch(() => 'unknown error');
+                  console.error('[SSH Memory] Extraction AI failed:', res.status, errText);
                 }
               } catch (err) {
-                console.error('Fact extraction failed silently:', err);
+                console.error('[SSH Memory] Fact extraction failed:', err);
               }
             };
             
             // Fire and forget
             extractFacts(customerDbUri);
+          } else {
+            if (host) {
+              console.log('[SSH Memory] Skipping extraction. Conditions:', {
+                hasDone: doneTagRe.test(answer),
+                hasDiff: diffTagRe.test(answer),
+                aiTask,
+                hasApiKeys: apiKeys.length > 0,
+                isNotManual: actualUsedModel !== 'manual'
+              });
+            }
           }
         }
         return NextResponse.json({ success: true, answer, usage: usageInfo, usedModel: actualUsedModel });
