@@ -15,6 +15,7 @@ import {
   Sparkles, Copy, CornerDownLeft, ShieldAlert, Settings2, Clock, RefreshCw,
   ListChecks, Trophy, PartyPopper, Languages, Lock, Brain, ChevronDown, ChevronUp
 } from 'lucide-react';
+import { diff_match_patch } from 'diff-match-patch';
 
 let Terminal, FitAddon, WebLinksAddon;
 
@@ -187,8 +188,10 @@ export default function TerminalView({ connectionId, connectionName, host, color
   const [patchModalOpen, setPatchModalOpen] = useState(false);
   const [patchModalDiff, setPatchModalDiff] = useState('');
   const [lastPatchBackup, setLastPatchBackup] = useState(null); // { id: string, files: string[] } | null
+  const [lastPatchResultData, setLastPatchResultData] = useState(null);
   const lastAutoAppliedDiffRef = useRef('');
   const [patchModalAutoApplied, setPatchModalAutoApplied] = useState(false);
+  const [patchFileCollapsed, setPatchFileCollapsed] = useState({}); // per-file collapse in patch modal
   const [aiPanelPos, setAiPanelPos] = useState({ x: typeof window !== 'undefined' ? window.innerWidth - 450 : 16, y: 64 });
   const [aiPanelSize, setAiPanelSize] = useState({ width: 420, height: 520 });
   const [aiPanelDocked, setAiPanelDocked] = useState(false);
@@ -240,6 +243,21 @@ export default function TerminalView({ connectionId, connectionName, host, color
   const [autoTranslate, setAutoTranslate] = useState(false);
   const [aiTranslations, setAiTranslations] = useState({ explain: '', warn: '', plan: '', thought: '' });
   const [translatingAiText, setTranslatingAiText] = useState({ explain: false, warn: false, plan: false, thought: false });
+  const [tmuxInitialized, setTmuxInitialized] = useState(false);
+  
+  const sshAiPrefs = osState?.sshAiPrefs || { preferSudo: true, aiModel: 'auto' };
+
+  // Auto Tmux Init
+  useEffect(() => {
+    if (sshAiPrefs?.autoTmux && status === 'connected' && !tmuxInitialized) {
+      setTmuxInitialized(true);
+      if (socketRef.current) {
+        // Send command to setup tmux in the background (no attach)
+        const tmuxCmd = `if ! command -v tmux &> /dev/null; then echo "\\n\\033[1;36m✨ [AI Auto-Setup]\\033[0m Installing tmux for background tasks..."; if command -v apt-get &> /dev/null; then sudo apt-get update && sudo apt-get install -y tmux; elif command -v yum &> /dev/null; then sudo yum install -y tmux; elif command -v dnf &> /dev/null; then sudo dnf install -y tmux; elif command -v apk &> /dev/null; then sudo apk add tmux; elif command -v pacman &> /dev/null; then sudo pacman -S --noconfirm tmux; fi; fi; if command -v tmux &> /dev/null; then tmux new -d -s ai-bg-task 2>/dev/null || true; echo "\\n\\033[1;36m✨ [AI Auto-Setup]\\033[0m Background tmux session 'ai-bg-task' is ready.\\n"; fi\n`;
+        socketRef.current.emit('ssh:input', tmuxCmd);
+      }
+    }
+  }, [sshAiPrefs?.autoTmux, status, tmuxInitialized]);
 
   // Handle translation when AI answer updates and autoTranslate is enabled
   useEffect(() => {
@@ -363,7 +381,6 @@ export default function TerminalView({ connectionId, connectionName, host, color
 
 
   const sshAiHistory = Array.isArray(osState?.sshAiHistory) ? osState.sshAiHistory : [];
-  const sshAiPrefs = osState?.sshAiPrefs || { preferSudo: true, aiModel: 'auto' };
   const [aiSettingsOpen, setAiSettingsOpen] = useState(false);
   const [aiHistoryOpen, setAiHistoryOpen] = useState(false);
   const [expandedHistoryId, setExpandedHistoryId] = useState(null);
@@ -536,6 +553,7 @@ export default function TerminalView({ connectionId, connectionName, host, color
       setPatchModalDiff('');
       setPatchModalAutoApplied(false);
       setLastPatchBackup(null);
+      setTmuxInitialized(false);
       // Close AI panel and related panels when SSH disconnects
       setAiOpen(false);
       setAiSettingsOpen(false);
@@ -769,22 +787,38 @@ export default function TerminalView({ connectionId, connectionName, host, color
     };
 
     const getTag = (tag) => {
-      const m = new RegExp(`<${tag}>([\\s\\S]*?)<\/${tag}>`, 'i').exec(String(raw || ''));
-      return m ? m[1].trim() : '';
+      const regex = new RegExp(`<${tag}>([\\s\\S]*?)<\/${tag}>`, 'gi');
+      let m;
+      let lastMatch = '';
+      while ((m = regex.exec(String(raw || ''))) !== null) {
+        lastMatch = m[1].trim();
+      }
+      return lastMatch;
+    };
+
+    const cleanDiffContent = (text) => {
+      let d = String(text || '').trim();
+      // If there's garbage before the first diff header, strip it
+      // Allow leading whitespace in the header check
+      const firstHeader = d.search(/(^\s*--- |^\s*\+\+\+ |^\s*@@ |^\s*diff )/m);
+      if (firstHeader > 0) {
+        d = d.slice(firstHeader);
+      }
+      return d;
     };
 
     let command = getTag('command');
-    // Decode HTML entities in command because some LLMs encode them inside XML tags
-    if (command.includes('&')) {
-      command = decodeEntities(command);
-    }
+    if (command.includes('&')) command = decodeEntities(command);
     
     const explain = getTag('explain');
     const dangerRaw = getTag('danger');
     const warn = getTag('warn');
     const doneRaw = getTag('done');
     let diff = getTag('diff');
-    if (diff.includes('&')) diff = decodeEntities(diff);
+    if (diff) {
+      diff = cleanDiffContent(diff);
+      if (diff.includes('&')) diff = decodeEntities(diff);
+    }
     const plan = getTag('plan');
     const thought = getTag('thought');
     const interactive = getTag('interactive');
@@ -798,13 +832,109 @@ export default function TerminalView({ connectionId, connectionName, host, color
   const isValidUnifiedDiff = (diffText) => {
     const d = String(diffText || '').replace(/\r\n/g, '\n').trim();
     if (!d) return false;
-    if (!/(^--- |^\+\+\+ |^@@ )/m.test(d)) return false;
-    return true;
+    
+    const lines = d.split('\n');
+    let foundMinus = false;
+    let foundPlus = false;
+    let foundHunk = false;
+    let foundChange = false;
+    let inHunk = false;
+    
+    for (let i = 0; i < lines.length; i++) {
+      const raw = lines[i];          // keep original (leading space = context line!)
+      const trimmed = raw.trim();     // only for header detection
+      if (trimmed.startsWith('--- ')) {
+        foundMinus = true;
+        inHunk = false;
+        continue;
+      }
+      if (trimmed.startsWith('+++ ')) {
+        foundPlus = true;
+        inHunk = false;
+        continue;
+      }
+      if (trimmed.startsWith('@@ ')) {
+        foundHunk = true;
+        inHunk = true;
+        continue;
+      }
+      if (inHunk) {
+        if (trimmed.startsWith('diff ') || trimmed.startsWith('index ')) {
+          inHunk = false;
+          continue;
+        }
+        if (raw.startsWith('+') || raw.startsWith('-')) {
+          foundChange = true;
+        }
+        // Inside a hunk, every line MUST start with ' ', '+', '-', or '\' (no newline marker)
+        // Use RAW line (not trimmed) so context lines keep their leading space
+        if (raw.length > 0 && !/^[ \+\-\\]/.test(raw)) {
+          // Don't reject — DMP can handle slightly malformed diffs via fuzzy matching
+          // Just skip validation for this line
+        }
+      }
+    }
+    // Only require hunk header + at least one --- or +++ header + at least one change
+    return foundHunk && (foundMinus || foundPlus) && foundChange;
+  };
+
+  const applyUnifiedWithDMP = (originalText, unifiedDiff) => {
+    try {
+      const dmp = new diff_match_patch();
+      const patches = dmp.patch_fromText(unifiedDiff);
+      const [newText, results] = dmp.patch_apply(patches, originalText);
+      const success = results.every(r => r === true);
+      return { success, newText, results };
+    } catch (e) {
+      console.error('DMP Patch Error:', e);
+      return { success: false, error: e.message };
+    }
+  };
+
+  const repairDiffWithDMP = (diffText) => {
+    const d = String(diffText || '').replace(/\r\n/g, '\n');
+    const lines = d.split('\n');
+    const fixed = [];
+    let inHunk = false;
+    for (let line of lines) {
+      if (line.startsWith('@@ ')) {
+        inHunk = true;
+        fixed.push(line);
+        continue;
+      }
+      if (inHunk) {
+        if (/^--- |^\+\+\+ |^diff |^index /.test(line)) {
+          inHunk = false;
+          fixed.push(line);
+          continue;
+        }
+        if (/^[ \+\-]/.test(line)) {
+          fixed.push(line);
+        } else if (line.trim() === '') {
+          fixed.push(' ');
+        } else {
+          fixed.push(' ' + line);
+        }
+      } else {
+        fixed.push(line);
+      }
+    }
+    return fixed.join('\n');
   };
 
   const rewriteDiffPathsForPatch = (diffText) => {
-    const d = String(diffText || '').replace(/\r\n/g, '\n');
+    // 🛡️ Pre-sanitize: Fix minor malformations using DMP-inspired repair
+    const sanitized = repairDiffWithDMP(diffText);
+    let d = String(sanitized || '').replace(/\r\n/g, '\n');
     if (!d.trim()) return '';
+
+    // 🔧 Tilde Fix: AI sometimes writes /~/ which is invalid (e.g. "/~/.zeroclaw/foo" → "~/.zeroclaw/foo")
+    d = d.split('\n').map(line => {
+      if ((line.startsWith('--- /~') || line.startsWith('+++ /~'))) {
+        return line.replace(/^((?:--- |\+\+\+ ))\/~/, '$1~');
+      }
+      return line;
+    }).join('\n');
 
     const lines = d.split('\n');
     const processedLines = [];
@@ -819,160 +949,181 @@ export default function TerminalView({ connectionId, connectionName, host, color
     };
 
     for (let i = 0; i < lines.length; i++) {
-      const line = lines[i];
+      let line = lines[i];
+      let trimmed = line.trim();
+
+      // 🚨 AUTO-FIX: Split merged headers
+      if (trimmed.startsWith('--- ') && trimmed.includes(' +++ ')) {
+        const parts = line.split(' +++ ');
+        const minusLine = parts[0];
+        const plusLine = '+++ ' + parts[1];
+        lines.splice(i + 1, 0, plusLine);
+        line = minusLine;
+        trimmed = line.trim();
+      }
 
       // Handle File Headers
-      if (line.startsWith('--- ') || line.startsWith('+++ ') || line.startsWith('diff ') || line.startsWith('index ')) {
+      if (trimmed.startsWith('--- ') || trimmed.startsWith('+++ ') || trimmed.startsWith('diff ') || trimmed.startsWith('index ')) {
         finalizeHunk();
-        if (line.startsWith('--- ') || line.startsWith('+++ ')) {
-          const prefix = line.slice(0, 4);
-          let rest = line.slice(4);
+        if (trimmed.startsWith('--- ') || trimmed.startsWith('+++ ')) {
+          const prefix = trimmed.slice(0, 4);
+          let rest = trimmed.slice(4);
           const parts = rest.split('\t');
           let p = (parts[0] || '').trim();
-          if (p.startsWith('/')) p = p.slice(1);
+          
           if (p.startsWith('a/')) p = p.slice(2);
           if (p.startsWith('b/')) p = p.slice(2);
+          
+          // Smart Path Resolution: 
+          const isBare = !p.includes('/') || (p.startsWith('/') && p.lastIndexOf('/') === 0);
+          if (isBare) {
+            const fileName = p.split('/').pop();
+            let absoluteMatch = null;
+            
+            // 1. Try to resolve relative to CWD first (Priority)
+            if (sshMemory?.cwd) {
+              const cwd = sshMemory.cwd.endsWith('/') ? sshMemory.cwd.slice(0, -1) : sshMemory.cwd;
+              absoluteMatch = cwd + '/' + fileName;
+            }
+            
+            // 2. Fallback to memory keyPaths if CWD didn't help (or file needs system-wide matching)
+            if (!absoluteMatch && sshMemory?.keyPaths?.length) {
+              absoluteMatch = sshMemory.keyPaths.find(kp => kp.endsWith('/' + fileName) || kp === fileName);
+            }
+            
+            if (absoluteMatch) {
+              p = absoluteMatch;
+            }
+          }
+          
+          if (p && !p.startsWith('/') && !p.startsWith('~') && p.includes('/')) {
+            p = '/' + p;
+          }
           const suffix = parts.length > 1 ? '\t' + parts.slice(1).join('\t') : '';
           processedLines.push(`${prefix}${p}${suffix}`);
         } else {
-          processedLines.push(line);
+          processedLines.push(trimmed);
         }
         continue;
       }
 
       // Handle Hunk Headers
-      const hunkMatch = line.match(/^@@ -(\d+),?(\d*) \+(\d+),?(\d*) @@/);
-      if (hunkMatch) {
+      if (trimmed.startsWith('@@ ')) {
         finalizeHunk();
-        currentHunk = {
-          headerIdx: processedLines.length,
-          oldStart: parseInt(hunkMatch[1]),
-          oldLines: parseInt(hunkMatch[2] || '1'),
-          newStart: parseInt(hunkMatch[3]),
-          newLines: parseInt(hunkMatch[4] || '1'),
-          actualOld: 0,
-          actualNew: 0
-        };
-        processedLines.push(line); // Placeholder, will be updated in finalizeHunk
+        const headerMatch = trimmed.match(/^@@ -(\d+),?(\d*) \+(\d+),?(\d*) @@/);
+        if (headerMatch) {
+          const oldStart = parseInt(headerMatch[1]);
+          const newStart = parseInt(headerMatch[3]);
+          currentHunk = { headerIdx: processedLines.length, oldStart, actualOld: 0, newStart, actualNew: 0 };
+          processedLines.push(trimmed);
+        } else {
+          processedLines.push(trimmed);
+        }
         continue;
       }
 
       // Handle Hunk Content
       if (currentHunk) {
-        // Sanitize line prefix
-        let repaired = line;
-        
-        // AI often leaves empty lines for context. In a diff, these MUST start with a space.
-        if (line === '') {
-          repaired = ' ';
-        } else if (line.startsWith('+') || line.startsWith('-') || line.startsWith(' ') || line.startsWith('\\')) {
-          if (line.startsWith('+-') || line.startsWith('-+')) repaired = line.slice(1);
+        // AI sometimes sends blank lines for context, but standard patch requires a ' '
+        if (line.startsWith(' ') || trimmed === '') {
+          // 🛡️ SMART HEAL: If the line is totally empty but the AI meant it as context, 
+          // we only count it if it's not a placeholder at the start/end of a hunk.
+          currentHunk.actualOld++;
+          currentHunk.actualNew++;
+          processedLines.push(line.startsWith(' ') ? line : ' ' + line);
+        } else if (line.startsWith('-')) {
+          currentHunk.actualOld++;
+          processedLines.push(line);
+        } else if (line.startsWith('+')) {
+          currentHunk.actualNew++;
+          processedLines.push(line);
         } else {
-          // Missing prefix, assume context
-          repaired = ' ' + line;
+          finalizeHunk();
+          processedLines.push(line);
         }
-
-        // Count for header
-        if (repaired.startsWith(' ')) {
-          currentHunk.actualOld++;
-          currentHunk.actualNew++;
-        } else if (repaired.startsWith('+')) {
-          currentHunk.actualNew++;
-        } else if (repaired.startsWith('-')) {
-          currentHunk.actualOld++;
-        }
-        // '\' lines (no newline markers) don't count towards line total
-
-        processedLines.push(repaired);
       } else {
         // Outside hunk, just push
         processedLines.push(line);
       }
     }
 
+    // Finalize the last hunk if any
     finalizeHunk();
     
-    // Join and ensure clean trailing newline for heredoc
-    return processedLines.join('\n').trimEnd() + '\n';
+    // 🛡️ EMERGENCY REPAIR: If the AI produced an invalid "empty" hunk like @@ -0,0 +0,0 @@
+    // we convert it to a valid "remove everything" hunk if possible, or just skip it.
+    const finalLines = processedLines.filter(l => {
+      const trim = l.trim();
+      if (trim.startsWith('@@') && (l.includes('-0,0 +0,0') || l.includes('-1,0 +1,0'))) return false;
+      return true;
+    });
+
+    // Ensure the diff is actually valid and has hunks
+    if (!finalLines.some(l => l.trim().startsWith('@@ '))) return '';
+
+    return finalLines.join('\n').trimEnd() + '\n';
   };
 
-  const buildEnsurePatchInstalledSnippet = () => {
-    return `SUDO=""; command -v sudo >/dev/null 2>&1 && SUDO="sudo"; \
-command -v patch >/dev/null 2>&1 || ( \
-  if command -v apt-get >/dev/null 2>&1; then \
-    $SUDO env DEBIAN_FRONTEND=noninteractive apt-get update -y && $SUDO env DEBIAN_FRONTEND=noninteractive apt-get install -y patch; \
-  elif command -v dnf >/dev/null 2>&1; then \
-    $SUDO dnf install -y patch; \
-  elif command -v yum >/dev/null 2>&1; then \
-    $SUDO yum install -y patch; \
-  elif command -v apk >/dev/null 2>&1; then \
-    $SUDO apk add --no-cache patch; \
-  elif command -v pacman >/dev/null 2>&1; then \
-    $SUDO pacman -S --noconfirm patch; \
-  else \
-    echo "No supported package manager found to install 'patch'" 1>&2; exit 2; \
-  fi \
-);`;
-  };
+  // ── Apply Patch via SFTP + diff-match-patch (server-side) ──────────────────
+  const applyPatchViaSftp = (diffText, backupId) => {
+    return new Promise((resolve) => {
+      if (!socketRef.current?.connected) {
+        resolve({ success: false, error: 'Socket not connected' });
+        return;
+      }
 
-  const buildPatchApplyCommand = (diffText) => {
-    const d = rewriteDiffPathsForPatch(diffText);
-    if (!d) return '';
-    if (!isValidUnifiedDiff(d)) {
-      return '';
-    }
+      const d = rewriteDiffPathsForPatch(diffText);
+      if (!d) {
+        resolve({ success: false, error: 'Invalid diff (empty after path rewrite)' });
+        return;
+      }
+      if (!isValidUnifiedDiff(d)) {
+        resolve({ success: false, error: 'Invalid unified diff format' });
+        return;
+      }
 
-    const ensurePatch = buildEnsurePatchInstalledSnippet();
-    const pid = Math.random().toString(36).slice(2, 10);
-    const tmpFile = `/tmp/patch_${pid}.diff`;
-    // -F 3: Fuzzy matching (allows up to 3 lines of discrepancy in context)
-    const opts = '--batch --forward --ignore-whitespace -F 3';
+      // Extract files for rollback tracking
+      const files = extractFilesFromUnifiedDiff(d);
 
-    // We write to a temp file first.
-    return `${ensurePatch} \
-cat <<'PATCH_EOF' > ${tmpFile}
-${d}
-PATCH_EOF
-if patch -d / -p0 --dry-run ${opts} < ${tmpFile} >/dev/null 2>&1; then \
-  patch -d / -p0 ${opts} < ${tmpFile}; \
-elif patch -d / -p1 --dry-run ${opts} < ${tmpFile} >/dev/null 2>&1; then \
-  patch -d / -p1 ${opts} < ${tmpFile}; \
-else \
-  echo "--- PATCH FAILED (Dry-run errors below) ---" 1>&2; \
-  patch -d / -p0 --dry-run ${opts} < ${tmpFile}; \
-fi; rm -f ${tmpFile}`;
+      // Set up one-time result listener
+      const onResult = (result) => {
+        socketRef.current?.off('sftp:patchResult', onResult);
+        clearTimeout(timeout);
+        resolve({ ...result, files });
+      };
+
+      // Timeout after 30 seconds
+      const timeout = setTimeout(() => {
+        socketRef.current?.off('sftp:patchResult', onResult);
+        resolve({ success: false, error: 'Patch operation timed out (30s)', files });
+      }, 30000);
+
+      socketRef.current.on('sftp:patchResult', onResult);
+      socketRef.current.emit('sftp:applyPatch', { diffText: d, backupId: backupId || null });
+    });
   };
 
   const extractFilesFromUnifiedDiff = (diffText) => {
     const lines = String(diffText || '').replace(/\r\n/g, '\n').split('\n');
     const files = [];
     for (const line of lines) {
-      if (!line.startsWith('+++ ')) continue;
-      let p = line.slice(4).trim();
+      const trimmed = line.trim();
+      if (!trimmed.startsWith('+++ ')) continue;
+      let p = trimmed.slice(4).trim();
       if (!p || p === '/dev/null') continue;
-      // Drop possible timestamps after path (some diff formats)
       p = p.split('\t')[0].trim();
       if (p.startsWith('b/')) p = p.slice(2);
-      if (p.startsWith('/')) p = p.slice(1);
+      if (p.startsWith('a/')) p = p.slice(2);
+      if (p.startsWith('/') || p.startsWith('~')) {
+        // Keep as is
+      } else {
+        if (!p.startsWith('~')) p = '/' + p;
+      }
       if (!files.includes(p)) files.push(p);
     }
     return files;
   };
 
-  const buildPatchBackupAndApplyCommand = (diffText, backupId) => {
-    const d = String(diffText || '').trim();
-    if (!d) return { cmd: '', files: [] };
-    const files = extractFilesFromUnifiedDiff(d);
-    // Ensure backup paths are treated as absolute since patch runs with -d /
-    const absFiles = files.map(f => f.startsWith('/') ? f : '/' + f);
-    const backupPart = absFiles.length
-      ? `for f in ${absFiles.map(f => `'${String(f).replace(/'/g, `'\\''`)}'`).join(' ')}; do if [ -f "$f" ]; then cp "$f" "$f.bak.${backupId}"; fi; done; \
-`
-      : '';
-    const applyCmd = buildPatchApplyCommand(d);
-    const cmd = `backup_id='${backupId}'; ${backupPart}${applyCmd}`;
-    return { cmd, files: absFiles };
-  };
 
   const buildPatchRollbackCommand = (backup) => {
     const id = backup?.id;
@@ -985,6 +1136,7 @@ fi; rm -f ${tmpFile}`;
   const openPatchModal = (diffText) => {
     setPatchModalDiff(diffText || '');
     setPatchModalAutoApplied(false);
+    setPatchFileCollapsed({}); // reset so all files start expanded
     setPatchModalOpen(true);
   };
 
@@ -993,30 +1145,56 @@ fi; rm -f ${tmpFile}`;
     if (sshAiPrefs?.aiTask !== 'code') return;
     if (sshAiPrefs?.enforcePatch === false) return;
     if (!sshAiPrefs?.autoApplyPatch) return;
+    
+    // ✋ If we are in Auto Mode (running loop), let 'runAutoStep' handle the execution 
+    // to avoid double-sending the command. This effect is for Manual Mode auto-apply.
+    if (autoModeRef.current) return;
+
     const d = String(aiAnswer.diff || '').trim();
     if (!d) return;
     if (lastAutoAppliedDiffRef.current === d) return;
     lastAutoAppliedDiffRef.current = d;
 
     const backupId = `${Date.now().toString(36)}`;
-    const { cmd, files } = buildPatchBackupAndApplyCommand(d, backupId);
-    if (!cmd) return;
-    setLastPatchBackup({ id: backupId, files });
+    
     setPatchModalDiff(d);
     setPatchModalAutoApplied(true);
+    setPatchFileCollapsed({}); 
+    setLastPatchResultData(null); // Clear for new diff
     setPatchModalOpen(true);
-    handleExecuteCommand(cmd);
+
+    // Apply via SFTP + diff-match-patch
+    applyPatchViaSftp(d, backupId).then((result) => {
+      const files = result.files || [];
+      setLastPatchBackup({ id: backupId, files });
+      setLastPatchResultData(result.results || null);
+      if (result.success) {
+        console.log('[Patch] Auto-applied successfully:', result.summary);
+      } else {
+        console.warn('[Patch] Auto-apply failed:', result.error || result.summary);
+        setAiError(`Patch failed: ${result.error || result.summary || 'Unknown error'}`);
+      }
+    });
+
+    // Auto-close modal after 4 seconds to keep UI clean during auto operations
+    setTimeout(() => {
+      setPatchModalOpen(prev => {
+        if (prev && lastAutoAppliedDiffRef.current === d) return false;
+        return prev;
+      });
+    }, 4000);
   }, [aiAnswer, sshAiPrefs?.aiTask, sshAiPrefs?.enforcePatch, sshAiPrefs?.autoApplyPatch]);
 
   const renderDiffLines = (diffText) => {
     const lines = String(diffText || '').replace(/\r\n/g, '\n').split('\n');
     return lines.map((line, idx) => {
-      const isAdd = line.startsWith('+') && !line.startsWith('+++');
-      const isDel = line.startsWith('-') && !line.startsWith('---');
-      const isHunk = line.startsWith('@@');
-      const isFileHdr = line.startsWith('--- ') || line.startsWith('+++ ') || line.startsWith('diff ') || line.startsWith('index ');
+      const trimmed = line.trim();
+      const isAdd = trimmed.startsWith('+') && !trimmed.startsWith('+++');
+      const isDel = trimmed.startsWith('-') && !trimmed.startsWith('---');
+      const isHunk = trimmed.startsWith('@@');
+      const isFileHdr = trimmed.startsWith('--- ') || trimmed.startsWith('+++ ') || trimmed.startsWith('diff ') || trimmed.startsWith('index ');
 
-      const sectionStart = line.startsWith('diff ') || line.startsWith('--- ');
+      const sectionStart = trimmed.startsWith('diff ') || trimmed.startsWith('--- ');
 
       let cls = 'whitespace-pre px-3 py-[2px] text-[11px] font-mono';
       if (isAdd) cls += ' bg-emerald-500/15 text-emerald-200';
@@ -1029,6 +1207,438 @@ fi; rm -f ${tmpFile}`;
       return (
         <div key={idx} className={cls}>
           {line || ' '}
+        </div>
+      );
+    });
+  };
+
+  // Split a unified diff into per-file sections with VS Code-style colored view
+  // Green = added, Red = removed, normal = context (unchanged). Per-file rollback supported.
+  const renderDiffByFile = (diffText, collapsedState, setCollapsedState, backup, onRollbackFile) => {
+    const rawLines = String(diffText || '').replace(/\r\n/g, '\n').split('\n');
+
+    // ── Parse into file sections ──────────────────────────────────────────────
+    const fileSections = [];
+    let current = null;
+
+    for (let i = 0; i < rawLines.length; i++) {
+      const line = rawLines[i];
+      const trimmed = line.trim();
+
+      if (trimmed.startsWith('diff ')) {
+        if (current) fileSections.push(current);
+        current = { lines: [line], filename: '' };
+      } else if (trimmed.startsWith('--- ') && !trimmed.startsWith('--- a/')) {
+        const nextLine = (rawLines[i + 1] || '').trim();
+        if (nextLine.startsWith('+++ ')) {
+          if (current) fileSections.push(current);
+          const rawName = trimmed.replace(/^--- /, '').replace(/\s+\d{4}-\d{2}-\d{2}.*$/, '').trim();
+          current = { lines: [line], filename: rawName };
+        } else if (current) {
+          current.lines.push(line);
+        }
+      } else if (trimmed.startsWith('--- a/')) {
+        if (current === null) {
+          current = { lines: [line], filename: trimmed.replace(/^--- a\//, '').trim() };
+        } else {
+          current.filename = trimmed.replace(/^--- a\//, '').trim();
+          current.lines.push(line);
+        }
+      } else if (current) {
+        current.lines.push(line);
+      }
+    }
+    if (current) fileSections.push(current);
+
+    // ── Fallback: no file boundary found ─────────────────────────────────────
+    if (fileSections.length === 0) {
+      return (
+        <div className="rounded-lg border border-white/10 overflow-hidden">
+          <div className="overflow-y-auto max-h-[420px] custom-scrollbar bg-black/40">
+            {rawLines.map((line, idx) => {
+              const isAdd = line.startsWith('+') && !line.startsWith('+++');
+              const isDel = line.startsWith('-') && !line.startsWith('---');
+              const isHunk = line.startsWith('@@');
+              let cls = 'whitespace-pre-wrap break-all px-4 py-[1px] text-[11px] font-mono flex';
+              if (isAdd) cls += ' bg-emerald-500/10 text-emerald-300';
+              else if (isDel) cls += ' bg-red-500/10 text-red-300';
+              else if (isHunk) cls += ' bg-indigo-500/20 text-indigo-300 font-semibold';
+              else cls += ' text-[var(--text-secondary)]';
+              return (
+                <div key={idx} className={cls}>
+                  <span className="w-5 shrink-0 opacity-30 text-right mr-3 select-none">
+                    {isAdd ? '+' : isDel ? '−' : ' '}
+                  </span>
+                  <span>{line.slice(isAdd || isDel ? 1 : 0) || ' '}</span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      );
+    }
+
+    // ── Render per-file cards ─────────────────────────────────────────────────
+    return fileSections.map((section, fi) => {
+      const key = section.filename || String(fi);
+      const isCollapsed = collapsedState?.[key] ?? false;
+
+      // Count changes
+      let added = 0, removed = 0;
+      for (const ln of section.lines) {
+        if (ln.startsWith('+') && !ln.startsWith('+++')) added++;
+        if (ln.startsWith('-') && !ln.startsWith('---')) removed++;
+      }
+
+      const displayName = section.filename
+        ? section.filename.split('/').pop() || section.filename
+        : `File ${fi + 1}`;
+      // Paths in the diff are relative to / (for patch -d /), so prepend / for display
+      const fullPath = section.filename
+        ? ((section.filename.startsWith('/') || section.filename.startsWith('~')) ? section.filename : '/' + section.filename)
+        : '';
+
+      // Can we roll back this specific file?
+      const fileBackupExists = backup?.id && Array.isArray(backup?.files) &&
+        backup.files.some(f => {
+          const norm = (s) => s.replace(/^\/+/, '');
+          return norm(f).endsWith(norm(fullPath)) || norm(fullPath).endsWith(norm(f));
+        });
+
+      // Build a full-view display list:
+      // - Between hunks, gap lines are shown as plain grey (original/unchanged)
+      // - Changed lines: green (+) or red (-)
+      // - Context lines within hunks: normal color
+      const displayLines = [];
+      let newLineNo = 1;
+      let prevHunkEndNewLine = 0; // tracks where last hunk ended in the new file
+
+      // First pass: collect all hunks with their line ranges
+      const hunks = [];
+      let curHunk = null;
+      for (const ln of section.lines) {
+        const isFileMeta = ln.startsWith('---') || ln.startsWith('+++') || ln.startsWith('diff ') || ln.startsWith('index ');
+        if (isFileMeta) continue;
+        const hunkMatch = ln.match(/^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/);
+        if (hunkMatch) {
+          if (curHunk) hunks.push(curHunk);
+          curHunk = {
+            oldStart: parseInt(hunkMatch[1], 10),
+            newStart: parseInt(hunkMatch[3], 10),
+            lines: [],
+          };
+          continue;
+        }
+        if (curHunk) curHunk.lines.push(ln);
+      }
+      if (curHunk) hunks.push(curHunk);
+
+      // Second pass: render with gap placeholders
+      let currentNewLine = 1;
+      for (let hi = 0; hi < hunks.length; hi++) {
+        const hunk = hunks[hi];
+        const gapStart = currentNewLine;
+        const gapEnd = hunk.newStart - 1;
+
+        // Show gap lines as folded "N lines unchanged"
+        if (gapEnd >= gapStart) {
+          const gapCount = gapEnd - gapStart + 1;
+          displayLines.push({ type: 'gap', count: gapCount, startLine: gapStart });
+          currentNewLine = gapEnd + 1;
+        }
+
+        // Show hunk lines
+        let lineNo = hunk.newStart;
+        let oldLineNo = hunk.oldStart;
+        for (const ln of hunk.lines) {
+          const isAdd = ln.startsWith('+') && !ln.startsWith('+++');
+          const isDel = ln.startsWith('-') && !ln.startsWith('---');
+          if (isAdd) {
+            displayLines.push({ type: 'add', text: ln.slice(1), lineNo });
+            lineNo++;
+          } else if (isDel) {
+            displayLines.push({ type: 'del', text: ln.slice(1), lineNo: null });
+            oldLineNo++;
+          } else {
+            displayLines.push({ type: 'ctx', text: ln.slice(1) || '', lineNo });
+            lineNo++;
+            oldLineNo++;
+          }
+        }
+        currentNewLine = lineNo;
+      }
+
+      return (
+        <div key={fi} className="rounded-xl border border-white/10 overflow-hidden mb-3 last:mb-0 shadow-sm">
+          {/* ── File header ── */}
+          <div className="flex items-center bg-[#1a1a2e] border-b border-white/10">
+            <button
+              type="button"
+              onClick={() => setCollapsedState(prev => ({ ...prev, [key]: !isCollapsed }))}
+              className="flex items-center gap-2 flex-1 min-w-0 px-3 py-2.5 hover:bg-white/5 transition-colors text-left"
+            >
+              <span className="text-[var(--text-muted)] shrink-0">
+                {isCollapsed
+                  ? <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M4 3l4 3-4 3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                  : <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M3 4l3 4 3-4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                }
+              </span>
+              <span className="text-[12px] font-bold font-mono text-white truncate">{displayName}</span>
+              {fullPath && fullPath !== displayName && (
+                <span className="text-[10px] font-mono opacity-30 text-[var(--text-muted)] truncate hidden sm:inline ml-1">{fullPath}</span>
+              )}
+            </button>
+
+            {/* Stats + per-file rollback */}
+            <div className="flex items-center gap-2 px-3 py-2.5 shrink-0">
+              <span className="text-[11px] font-mono font-bold text-emerald-400">+{added}</span>
+              <span className="text-[10px] opacity-30 font-mono">/</span>
+              <span className="text-[11px] font-mono font-bold text-red-400">-{removed}</span>
+              {fileBackupExists && onRollbackFile && (
+                <button
+                  type="button"
+                  onClick={(e) => { e.stopPropagation(); onRollbackFile(fullPath, backup.id); }}
+                  className="ml-2 px-2 py-1 rounded text-[10px] font-bold border border-red-500/30 bg-red-500/10 hover:bg-red-500/25 text-red-400 transition-all"
+                  title={`Rollback ${displayName}`}
+                >
+                  ↩ Rollback
+                </button>
+              )}
+            </div>
+          </div>
+
+          {/* ── Diff content ── */}
+          {!isCollapsed && (
+            <div className="overflow-y-auto max-h-[500px] custom-scrollbar font-mono text-[11px] bg-[#0d0d1a]">
+              {displayLines.map((entry, li) => {
+                if (entry.type === 'gap') {
+                  return (
+                    <div key={li} className="flex items-center gap-2 px-3 py-[3px] bg-[#111122]/60 border-y border-white/[0.04] text-[var(--text-muted)] opacity-40 text-[10px] select-none">
+                      <span>···</span>
+                      <span className="italic">{entry.count} unchanged line{entry.count !== 1 ? 's' : ''}</span>
+                    </div>
+                  );
+                }
+
+                const isAdd = entry.type === 'add';
+                const isDel = entry.type === 'del';
+                const lineNumStr = entry.lineNo != null ? String(entry.lineNo) : '';
+
+                return (
+                  <div key={li} className={`flex min-w-0 ${
+                    isAdd ? 'bg-emerald-500/10 hover:bg-emerald-500/15' :
+                    isDel ? 'bg-red-500/10 hover:bg-red-500/15' :
+                    'hover:bg-white/[0.03]'
+                  }`}>
+                    {/* Line number gutter */}
+                    <span className="w-10 shrink-0 px-2 py-[2px] text-right text-[10px] text-[var(--text-muted)] opacity-30 select-none border-r border-white/5">
+                      {lineNumStr}
+                    </span>
+                    {/* +/- gutter */}
+                    <span className={`w-5 shrink-0 px-1 py-[2px] text-center select-none ${
+                      isAdd ? 'text-emerald-400' : isDel ? 'text-red-400' : 'text-[var(--text-muted)] opacity-20'
+                    }`}>
+                      {isAdd ? '+' : isDel ? '−' : ' '}
+                    </span>
+                    {/* Code content */}
+                    <span className={`flex-1 py-[2px] px-2 whitespace-pre-wrap break-all ${
+                      isAdd ? 'text-emerald-200' :
+                      isDel ? 'text-red-200' :
+                      'text-[var(--text-secondary)]'
+                    }`}>
+                      {entry.text || ' '}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      );
+    });
+  };
+
+  // ── Render actual full-file post-patch diff using DMP ───────────────────────
+  const renderDmpDiffByResult = (resultsArray, collapsedState, setCollapsedState, backup, onRollbackFile) => {
+    if (!Array.isArray(resultsArray) || resultsArray.length === 0) return null;
+
+    return resultsArray.map((result, fi) => {
+      const fullPath = result.file;
+      const displayName = fullPath.split('/').pop() || fullPath;
+      const key = fullPath;
+      const isCollapsed = collapsedState?.[key] ?? false;
+
+      // Calculate diff using diff-match-patch
+      const dmp = new diff_match_patch();
+      // Calculate diffs between original and new
+      const diffs = dmp.diff_main(result.originalContent || '', result.newContent || '');
+      // Clean up diffs to be semantic line-by-line
+      dmp.diff_cleanupSemantic(diffs);
+
+      let added = 0;
+      let removed = 0;
+      
+      const displayLines = [];
+      let oldLine = 1;
+      let newLine = 1;
+
+      // diffs is array of [Operation, text]
+      // Operation format: -1 = diff_match_patch.DIFF_DELETE, 1 = DIFF_INSERT, 0 = DIFF_EQUAL
+      for (const [op, text] of diffs) {
+        // text might be multiple lines, split by \n
+        // Be careful: trailing \n means empty last element in split array
+        const lines = text.split('\n');
+        // if the last element is empty because of a trailing newline, remove it to avoid extra blank line
+        if (lines[lines.length - 1] === '') lines.pop();
+
+        for (const lineText of lines) {
+          if (op === 1) { // Insert
+            displayLines.push({ type: 'add', text: lineText, lineNo: newLine });
+            newLine++;
+            added++;
+          } else if (op === -1) { // Delete
+            displayLines.push({ type: 'del', text: lineText, lineNo: null });
+            oldLine++;
+            removed++;
+          } else { // Equal
+            displayLines.push({ type: 'ctx', text: lineText, lineNo: newLine });
+            newLine++;
+            oldLine++;
+          }
+        }
+      }
+
+      const fileBackupExists = backup?.id && Array.isArray(backup?.files) &&
+        backup.files.some(f => {
+          const norm = (s) => s.replace(/^\/+/, '');
+          return norm(f).endsWith(norm(fullPath)) || norm(fullPath).endsWith(norm(f));
+        });
+
+      // Now we have a huge list of displayLines containing the entire file.
+      // We can also collapse context areas (gap lines) if there are too many ctx lines in a row.
+      const foldedLines = [];
+      const CONTEXT_SIZE = 3;
+      let i = 0;
+      
+      while (i < displayLines.length) {
+        if (displayLines[i].type !== 'ctx') {
+          foldedLines.push(displayLines[i]);
+          i++;
+          continue;
+        }
+
+        // Count consecutive "ctx" lines
+        let ctxCount = 0;
+        let startIdx = i;
+        while (i < displayLines.length && displayLines[i].type === 'ctx') {
+          ctxCount++;
+          i++;
+        }
+
+        if (ctxCount > CONTEXT_SIZE * 2 + 1) {
+          // Add first few context lines
+          for (let j = 0; j < CONTEXT_SIZE; j++) {
+            foldedLines.push(displayLines[startIdx + j]);
+          }
+          // Add the gap
+          const hiddenCount = ctxCount - (CONTEXT_SIZE * 2);
+          foldedLines.push({ type: 'gap', count: hiddenCount });
+          // Add the last few context lines
+          for (let j = 0; j < CONTEXT_SIZE; j++) {
+            foldedLines.push(displayLines[i - CONTEXT_SIZE + j]);
+          }
+        } else {
+          // Just push all ctx lines if it's small enough
+          for (let j = startIdx; j < i; j++) {
+            foldedLines.push(displayLines[j]);
+          }
+        }
+      }
+
+      return (
+        <div key={key} className="rounded-xl border border-white/10 overflow-hidden mb-3 last:mb-0 shadow-sm">
+          {/* FILE HEADER HTML IDENTICAL TO RENDERDIFFBYFILE */}
+          <div className="flex items-center bg-[#1a1a2e] border-b border-white/10">
+            <button
+              type="button"
+              onClick={() => setCollapsedState(prev => ({ ...prev, [key]: !isCollapsed }))}
+              className="flex items-center gap-2 flex-1 min-w-0 px-3 py-2.5 hover:bg-white/5 transition-colors text-left"
+            >
+              <span className="text-[var(--text-muted)] shrink-0">
+                {isCollapsed
+                  ? <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M4 3l4 3-4 3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                  : <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M3 4l3 4 3-4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                }
+              </span>
+              <span className="text-[12px] font-bold font-mono text-white truncate">{displayName}</span>
+              {fullPath && fullPath !== displayName && (
+                <span className="text-[10px] font-mono opacity-30 text-[var(--text-muted)] truncate hidden sm:inline ml-1">{fullPath}</span>
+              )}
+              {!result.success && (
+                <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-red-500/20 text-red-400 ml-2">FAILED</span>
+              )}
+            </button>
+
+            <div className="flex items-center gap-2 px-3 py-2.5 shrink-0">
+              <span className="text-[11px] font-mono font-bold text-emerald-400">+{added}</span>
+              <span className="text-[10px] opacity-30 font-mono">/</span>
+              <span className="text-[11px] font-mono font-bold text-red-400">-{removed}</span>
+              {fileBackupExists && onRollbackFile && (
+                <button
+                  type="button"
+                  onClick={(e) => { e.stopPropagation(); onRollbackFile(fullPath, backup.id); }}
+                  className="ml-2 px-2 py-1 rounded text-[10px] font-bold border border-red-500/30 bg-red-500/10 hover:bg-red-500/25 text-red-400 transition-all"
+                  title={`Rollback ${displayName}`}
+                >
+                  ↩ Rollback
+                </button>
+              )}
+            </div>
+          </div>
+
+          {/* DIFF CONTENT */}
+          {!isCollapsed && (
+            <div className="overflow-y-auto max-h-[500px] custom-scrollbar font-mono text-[11px] bg-[#0d0d1a]">
+              {foldedLines.map((entry, li) => {
+                if (entry.type === 'gap') {
+                  return (
+                    <div key={li} className="flex items-center gap-2 px-3 py-[3px] bg-[#111122]/60 border-y border-white/[0.04] text-[var(--text-muted)] opacity-40 text-[10px] select-none">
+                      <span>···</span>
+                      <span className="italic">{entry.count} unchanged line{entry.count !== 1 ? 's' : ''}</span>
+                    </div>
+                  );
+                }
+
+                const isAdd = entry.type === 'add';
+                const isDel = entry.type === 'del';
+                const lineNumStr = entry.lineNo != null ? String(entry.lineNo) : '';
+
+                return (
+                  <div key={li} className={`flex min-w-0 ${
+                    isAdd ? 'bg-emerald-500/10 hover:bg-emerald-500/15' :
+                    isDel ? 'bg-red-500/10 hover:bg-red-500/15' :
+                    'hover:bg-white/[0.03]'
+                  }`}>
+                    <span className="w-10 shrink-0 px-2 py-[2px] text-right text-[10px] text-[var(--text-muted)] opacity-30 select-none border-r border-white/5">
+                      {lineNumStr}
+                    </span>
+                    <span className={`w-5 shrink-0 px-1 py-[2px] text-center select-none ${
+                      isAdd ? 'text-emerald-400' : isDel ? 'text-red-400' : 'text-[var(--text-muted)] opacity-20'
+                    }`}>
+                      {isAdd ? '+' : isDel ? '−' : ' '}
+                    </span>
+                    <span className={`flex-1 py-[2px] px-2 whitespace-pre-wrap break-all ${
+                      isAdd ? 'text-emerald-200' :
+                      isDel ? 'text-red-200' :
+                      'text-[var(--text-secondary)]'
+                    }`}>
+                      {entry.text || ' '}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </div>
       );
     });
@@ -2254,18 +2864,44 @@ RULES:
           setAiHasOpenedOnce(true);
           return;
         }
-        // If the model repeats the exact same diff, don't hard-stop.
-        // This commonly happens when the patch already applied but the model didn't observe output yet.
+        // If the model repeats the exact same diff, it means the patch already applied
+        // but the AI didn't observe the result yet and sent the same patch again.
+        // Track repeat count — after 2 repeats, the patch has definitely been applied; force done.
+        const patchRepeatKey = `patch::${d.slice(0, 120)}`;
         if (lastAutoAppliedDiffRef.current === d) {
+          autoRepeatSigRef.current.count = (autoRepeatSigRef.current.key === patchRepeatKey)
+            ? autoRepeatSigRef.current.count + 1
+            : 1;
+          autoRepeatSigRef.current.key = patchRepeatKey;
+
+          if (autoRepeatSigRef.current.count >= 2) {
+            // Patch was already applied — AI is in a loop. Treat as done.
+            setAiError(null);
+            setAutoMode(false);
+            setAiDone(true);
+            setAiOpen(true);
+            setAiHasOpenedOnce(true);
+            setAiDoneSummary({
+              goal,
+              steps: autoStepHistory,
+              taskMode: sshAiPrefs?.aiTask || 'code',
+              explain: '✅ Patch was successfully applied. AI confirmed via re-check.',
+            });
+            return;
+          }
+
+          // First repeat — give it one more chance to confirm and declare done
           setAiError(null);
-          setAutoCountdown(5);
+          setAutoCountdown(4);
           if (autoTimerRef.current) clearTimeout(autoTimerRef.current);
           autoTimerRef.current = setTimeout(() => {
             autoRunningRef.current = false;
             runAutoStep();
-          }, 5000);
+          }, 4000);
           return;
         }
+        // Reset repeat counter when a new diff appears
+        autoRepeatSigRef.current = { key: patchRepeatKey, count: 0 };
 
         setPatchModalDiff(d);
         setPatchModalOpen(true);
@@ -2282,19 +2918,29 @@ RULES:
         // Auto-apply patch with backup, then continue
         lastAutoAppliedDiffRef.current = d;
         const backupId = `${Date.now().toString(36)}`;
-        const { cmd, files } = buildPatchBackupAndApplyCommand(d, backupId);
-        if (!cmd) {
-          setAiError('Auto Mode stopped: could not build patch apply command.');
-          setAutoMode(false);
-          setAiOpen(true);
-          setAiHasOpenedOnce(true);
-          return;
-        }
-        setLastPatchBackup({ id: backupId, files });
         setPatchModalAutoApplied(true);
-        handleExecuteCommand(cmd);
+        setLastPatchResultData(null); // Clear for new run
+        setPatchModalOpen(true);
 
-        // Continue after a short delay to let terminal output update
+        // Apply via SFTP + diff-match-patch
+        applyPatchViaSftp(d, backupId).then((result) => {
+          const files = result.files || [];
+          setLastPatchBackup({ id: backupId, files });
+          setLastPatchResultData(result.results || null);
+          if (!result.success) {
+            setAiError(`Auto Mode: Patch failed — ${result.error || result.summary || 'Unknown error'}`);
+          }
+        });
+
+        // Auto-close modal after 4 seconds to keep UI clean
+        setTimeout(() => {
+          setPatchModalOpen(prev => {
+            if (prev && lastAutoAppliedDiffRef.current === d) return false;
+            return prev;
+          });
+        }, 4000);
+
+        // Continue after a short delay to let the patch complete
         setAutoCountdown(5);
         if (autoTimerRef.current) clearTimeout(autoTimerRef.current);
         autoTimerRef.current = setTimeout(() => {
@@ -2356,8 +3002,11 @@ RULES:
         } else {
           autoSameCommandRef.current = { cmd: nextCmdTrim, count: 0 };
         }
-        if (autoSameCommandRef.current.count >= 6 && isReadOnlyCommand(nextCmdTrim) && sshAiPrefs?.aiTask === 'code' && sshAiPrefs?.enforcePatch !== false) {
-          setAiError('Auto Mode stopped: AI kept repeating read-only commands without producing a patch diff.');
+        if (autoSameCommandRef.current.count >= 3 && isReadOnlyCommand(nextCmdTrim) && sshAiPrefs?.aiTask === 'code' && sshAiPrefs?.enforcePatch !== false) {
+          // Check if this is a file read that keeps returning empty — likely wrong path
+          const catMatch = nextCmdTrim.match(/^(cat|head|tail)\s+(.*)/i);
+          const wrongPathHint = catMatch ? `\n\n⚠️ PATH ERROR: The command '${nextCmdTrim}' was repeated ${autoSameCommandRef.current.count + 1} times. This file likely doesn't exist at this path. Check SSH memory for the correct absolute path. If the file is HEARTBEAT.md, it is likely at /home/ubuntu/.zeroclaw/workspace/HEARTBEAT.md` : '';
+          setAiError(`Auto Mode stopped: AI kept running read-only commands without making any changes.${wrongPathHint}`);
           setAutoMode(false);
           setAiOpen(true);
           setAiHasOpenedOnce(true);
@@ -2464,13 +3113,15 @@ RULES:
     }
   };
 
-  const handleExecuteCommand = (cmd) => {
+  const handleExecuteCommand = (cmd, bypassSensitive = false) => {
     const command = String(cmd || '').replace(/[\r\n]+$/g, '');
     if (!command) return;
     
     // Check for sensitive operations if confirmation is enabled
+    // Skip check for patch commands (they are safe, system-managed operations)
     const confirmSensitive = sshAiPrefs?.confirmSensitive !== false; // default true
-    if (confirmSensitive && isSensitiveCommand(command) && !autoMode) {
+    const isPatchCmd = command.startsWith('backup_id=') || command.includes('PATCH_EOF') || command.includes('patch_') || bypassSensitive;
+    if (confirmSensitive && isSensitiveCommand(command) && !autoMode && !isPatchCmd) {
       setPendingSensitiveCommand(command);
       setSensitiveConfirmOpen(true);
       return;
@@ -2686,7 +3337,8 @@ RULES:
             // Fallback for standard files
             const files = e.dataTransfer.files;
             if (files.length > 0 && termInstanceRef.current) {
-              termInstanceRef.current.write(files[0].name);
+              const fileNames = Array.from(files).map(f => `'${f.name}'`).join(' ');
+              termInstanceRef.current.write(fileNames + ' ');
             }
           }}
         >
@@ -2931,6 +3583,14 @@ RULES:
                       <input type="checkbox" checked={!!sshAiPrefs?.autoApplyPatch} onChange={(e) => setSshAiPrefs({ autoApplyPatch: e.target.checked })} disabled={!isLoggedIn || sshAiPrefs?.enforcePatch === false || sshAiPrefs?.aiTask !== 'code'} />
                     </label>
 
+                    <label className="flex items-center justify-between text-[11px]" style={{ color: 'var(--text-primary)' }} title="Automatically install and prepare tmux for AI to run background tasks without blocking the terminal.">
+                      <span className="flex items-center gap-1.5">
+                        <span className="text-blue-400">🔄</span>
+                        Background AI Tasks (tmux)
+                      </span>
+                      <input type="checkbox" checked={!!sshAiPrefs?.autoTmux} onChange={(e) => setSshAiPrefs({ autoTmux: e.target.checked })} disabled={!isLoggedIn} />
+                    </label>
+
                     <label className="flex items-center justify-between text-[11px]" style={{ color: 'var(--text-primary)' }} title="Ask for confirmation before executing sensitive commands (rm -rf, disk operations, user deletion, etc.)">
                       <span className="flex items-center gap-1.5">
                         <ShieldAlert size={12} className="text-amber-400" />
@@ -2978,9 +3638,20 @@ RULES:
                     </div>
                     {sshAiPrefs.aiModel === 'manual' && (
                       <div className="space-y-2 pt-2 border-t border-white/10">
+                        <div className="flex gap-2 mb-2">
+                           <button onClick={() => setSshAiPrefs({ aiEndpoint: 'https://openrouter.ai/api/v1/chat/completions', aiCustomModel: 'anthropic/claude-3.5-sonnet' })} className="text-[9px] px-2 py-1 rounded bg-indigo-500/20 text-indigo-400 hover:bg-indigo-500/30 border border-indigo-500/30 transition-colors" title="Use OpenRouter Preset">
+                             🌐 OpenRouter
+                           </button>
+                           <button onClick={() => setSshAiPrefs({ aiEndpoint: 'https://api.openai.com/v1/chat/completions', aiCustomModel: 'gpt-4o' })} className="text-[9px] px-2 py-1 rounded bg-emerald-500/20 text-emerald-400 hover:bg-emerald-500/30 border border-emerald-500/30 transition-colors" title="Use default OpenAI Endpoint">
+                             🟢 OpenAI
+                           </button>
+                           <button onClick={() => setSshAiPrefs({ aiEndpoint: 'http://localhost:11434/v1/chat/completions', aiCustomModel: 'llama3.2' })} className="text-[9px] px-2 py-1 rounded bg-amber-500/20 text-amber-400 hover:bg-amber-500/30 border border-amber-500/30 transition-colors" title="Use Ollama Local Preset">
+                             🦙 Ollama
+                           </button>
+                        </div>
                         <input type="text" placeholder="Endpoint URL (e.g. https://api.openai.com/v1/chat/completions)" value={sshAiPrefs.aiEndpoint || ''} onChange={e => setSshAiPrefs({ aiEndpoint: e.target.value })} disabled={!isLoggedIn} className="w-full text-[10px] rounded bg-black/30 border border-white/10 px-2 py-1.5 focus:border-indigo-500/50 outline-none" style={{ color: 'var(--text-primary)' }} title="API Endpoint URL" />
                         <input type="password" placeholder="API Key" value={sshAiPrefs.aiApiKey || ''} onChange={e => setSshAiPrefs({ aiApiKey: e.target.value })} disabled={!isLoggedIn} className="w-full text-[10px] rounded bg-black/30 border border-white/10 px-2 py-1.5 focus:border-indigo-500/50 outline-none" style={{ color: 'var(--text-primary)' }} title="API Key" />
-                        <input type="text" placeholder="Model Name (e.g. gpt-4o)" value={sshAiPrefs.aiCustomModel || ''} onChange={e => setSshAiPrefs({ aiCustomModel: e.target.value })} disabled={!isLoggedIn} className="w-full text-[10px] rounded bg-black/30 border border-white/10 px-2 py-1.5 focus:border-indigo-500/50 outline-none" style={{ color: 'var(--text-primary)' }} title="Custom Model Name" />
+                        <input type="text" placeholder="Model Name (e.g. gpt-4o, openrouter/auto)" value={sshAiPrefs.aiCustomModel || ''} onChange={e => setSshAiPrefs({ aiCustomModel: e.target.value })} disabled={!isLoggedIn} className="w-full text-[10px] rounded bg-black/30 border border-white/10 px-2 py-1.5 focus:border-indigo-500/50 outline-none" style={{ color: 'var(--text-primary)' }} title="Custom Model Name" />
                       </div>
                     )}
 
@@ -3206,38 +3877,70 @@ RULES:
                                 </button>
                               </div>
 
-                              <div className="p-4 flex-1 min-h-0">
-                                <div className="h-full overflow-y-auto custom-scrollbar rounded bg-black/40 border border-white/5 py-2">
-                                  {renderDiffLines(patchModalDiff)}
-                                </div>
+                              <div className="p-4 flex-1 min-h-0 overflow-y-auto custom-scrollbar">
+                                  {lastPatchResultData ? (
+                                    renderDmpDiffByResult(
+                                      lastPatchResultData,
+                                      patchFileCollapsed,
+                                      setPatchFileCollapsed,
+                                      lastPatchBackup,
+                                      (filePath, backupId) => {
+                                        if (!isLoggedIn) { setAiError('Login required'); return; }
+                                        const safeFile = `'${String(filePath).replace(/'/g, "'\\''")} '`;
+                                        const cmd = `if [ -f ${safeFile}.bak.${backupId} ]; then mv ${safeFile}.bak.${backupId} ${safeFile}; echo "✅ Rolled back ${filePath}"; else echo "⚠️ No backup found for ${filePath}"; fi`;
+                                        handleExecuteCommand(cmd, true);
+                                      }
+                                    )
+                                  ) : (
+                                    renderDiffByFile(
+                                      patchModalDiff,
+                                      patchFileCollapsed,
+                                      setPatchFileCollapsed,
+                                      lastPatchBackup,
+                                      (filePath, backupId) => {
+                                        if (!isLoggedIn) { setAiError('Login required'); return; }
+                                        const safeFile = `'${String(filePath).replace(/'/g, "'\\''")} '`;
+                                        const cmd = `if [ -f ${safeFile}.bak.${backupId} ]; then mv ${safeFile}.bak.${backupId} ${safeFile}; echo "✅ Rolled back ${filePath}"; else echo "⚠️ No backup found for ${filePath}"; fi`;
+                                        handleExecuteCommand(cmd, true);
+                                      }
+                                    )
+                                  )}
                               </div>
 
                               <div className="flex gap-2 px-4 py-3 border-t border-[var(--border-color)] bg-[var(--bg-secondary)]/70">
                                 <button onClick={() => setPatchModalOpen(false)} className="flex-1 py-2 rounded border border-white/10 hover:bg-white/5 text-xs font-medium" style={{ color: 'var(--text-primary)' }}>
                                   {t('ai.cancel')}
                                 </button>
-                                <button onClick={() => {
-                                  const rb = buildPatchRollbackCommand(lastPatchBackup);
-                                  if (!rb) { setAiError('No rollback available'); return; }
-                                  setPatchModalOpen(false);
-                                  handleExecuteCommand(rb);
-                                  setLastPatchBackup(null);
-                                  setPatchModalAutoApplied(false);
-                                }} disabled={!isLoggedIn || !lastPatchBackup?.id} className="flex-1 flex items-center justify-center gap-1 py-2 rounded bg-red-600/70 hover:bg-red-600 text-white text-xs transition border border-red-500/20 disabled:opacity-40 disabled:cursor-not-allowed">
-                                  Rollback
-                                </button>
+                                {/* Rollback All — only shown when backup exists */}
+                                {lastPatchBackup?.id && (
+                                  <button onClick={() => {
+                                    const rb = buildPatchRollbackCommand(lastPatchBackup);
+                                    if (!rb) { setAiError('No rollback available'); return; }
+                                    setPatchModalOpen(false);
+                                    handleExecuteCommand(rb, true);
+                                    setLastPatchBackup(null);
+                                    setLastPatchResultData(null);
+                                    setPatchModalAutoApplied(false);
+                                  }} disabled={!isLoggedIn} className="flex-1 flex items-center justify-center gap-1 py-2 rounded bg-red-600/70 hover:bg-red-600 text-white text-xs transition border border-red-500/20 disabled:opacity-40 disabled:cursor-not-allowed">
+                                    ↩ Rollback All
+                                  </button>
+                                )}
                                 <button onClick={() => navigator.clipboard.writeText(patchModalDiff || '')} className="flex-1 flex items-center justify-center gap-1 py-2 rounded bg-[var(--bg-tertiary)] hover:bg-[var(--bg-card-hover)] text-xs transition border border-[var(--border-color)]" style={{ color: 'var(--text-primary)' }}>
                                   <Copy size={12} /> {t('ai.copy')}
                                 </button>
                                 {!patchModalAutoApplied ? (
-                                  <button onClick={() => {
+                                  <button onClick={async () => {
                                     if (!isLoggedIn) { setAiError(t('ai.loginRequired')); return; }
                                     const backupId = `${Date.now().toString(36)}`;
-                                    const { cmd, files } = buildPatchBackupAndApplyCommand(patchModalDiff, backupId);
-                                    if (!cmd) { setAiError('Invalid patch (diff is malformed or file paths not found)'); return; }
-                                    setLastPatchBackup({ id: backupId, files });
                                     setPatchModalOpen(false);
-                                    handleExecuteCommand(cmd);
+                                    const result = await applyPatchViaSftp(patchModalDiff, backupId);
+                                    const files = result.files || [];
+                                    setLastPatchBackup({ id: backupId, files });
+                                    setLastPatchResultData(result.results || null);
+                                    if (!result.success) {
+                                      setAiError(`Patch failed: ${result.error || result.summary || 'Unknown error'}`);
+                                    }
+                                    setPatchModalAutoApplied(true);
                                   }} disabled={!isLoggedIn} className="flex-1 flex items-center justify-center gap-1 py-2 rounded bg-emerald-600/80 dark:bg-emerald-600/50 hover:bg-emerald-500 text-white text-xs transition border border-emerald-500/20">
                                     <CornerDownLeft size={12} /> Apply Patch
                                   </button>

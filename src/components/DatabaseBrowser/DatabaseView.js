@@ -1689,9 +1689,17 @@ export default function DatabaseView({ connection, onClose }) {
                                             <span className="text-[10px] font-bold text-purple-400 uppercase">Manual AI Settings</span>
                                             <button onClick={() => setAiSettingsOpen(false)} className="text-[10px] text-purple-400/60 hover:text-purple-400">Close</button>
                                         </div>
+                                        <div className="flex gap-2 mb-2">
+                                           <button onClick={() => setSshAiPrefs({ aiEndpoint: 'https://openrouter.ai/api/v1/chat/completions', aiCustomModel: 'anthropic/claude-3.5-sonnet' })} className="text-[9px] px-2 py-1 rounded bg-purple-500/20 text-purple-400 hover:bg-purple-500/30 border border-purple-500/30 transition-colors" title="Use OpenRouter Preset">
+                                             🌐 OpenRouter
+                                           </button>
+                                           <button onClick={() => setSshAiPrefs({ aiEndpoint: 'https://api.openai.com/v1/chat/completions', aiCustomModel: 'gpt-4o' })} className="text-[9px] px-2 py-1 rounded bg-emerald-500/20 text-emerald-400 hover:bg-emerald-500/30 border border-emerald-500/30 transition-colors" title="Use default OpenAI Endpoint">
+                                             🟢 OpenAI
+                                           </button>
+                                        </div>
                                         <input type="text" placeholder="Endpoint URL (e.g. OpenAI format)" value={osState?.sshAiPrefs?.aiEndpoint || ''} onChange={(e) => setSshAiPrefs({ aiEndpoint: e.target.value })} className="w-full text-[10px] rounded bg-black/30 border border-[var(--border-color)] px-2 py-1.5 outline-none focus:border-purple-500" style={{ color: 'var(--text-primary)' }} title="API Endpoint URL" />
                                         <input type="password" placeholder="API Key" value={osState?.sshAiPrefs?.aiApiKey || ''} onChange={(e) => setSshAiPrefs({ aiApiKey: e.target.value })} className="w-full text-[10px] rounded bg-black/30 border border-[var(--border-color)] px-2 py-1.5 outline-none focus:border-purple-500" style={{ color: 'var(--text-primary)' }} title="API Key" />
-                                        <input type="text" placeholder="Model Name (e.g. gpt-4o)" value={osState?.sshAiPrefs?.aiCustomModel || ''} onChange={(e) => setSshAiPrefs({ aiCustomModel: e.target.value })} className="w-full text-[10px] rounded bg-black/30 border border-[var(--border-color)] px-2 py-1.5 outline-none focus:border-purple-500" style={{ color: 'var(--text-primary)' }} title="Custom Model Name" />
+                                        <input type="text" placeholder="Model Name (e.g. gpt-4o, openrouter/auto)" value={osState?.sshAiPrefs?.aiCustomModel || ''} onChange={(e) => setSshAiPrefs({ aiCustomModel: e.target.value })} className="w-full text-[10px] rounded bg-black/30 border border-[var(--border-color)] px-2 py-1.5 outline-none focus:border-purple-500" style={{ color: 'var(--text-primary)' }} title="Custom Model Name" />
                                         <div className="text-[9px] text-[var(--text-muted)] italic leading-tight pt-1">Settings are shared with Terminal AI config. Requires OpenAI-compatible endpoint.</div>
                                     </div>
                                 )}

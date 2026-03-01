@@ -1,4 +1,4 @@
-import { Terminal, Settings, Monitor, Database, Folder, AlertCircle, StickyNote, Book } from 'lucide-react';
+import { Terminal, Settings, Monitor, Database, Folder, AlertCircle, StickyNote, Book, MonitorPlay } from 'lucide-react';
 
 import TerminalApp from '@/apps/TerminalApp';
 import SettingsApp from '@/apps/SettingsApp';
@@ -6,6 +6,7 @@ import SSHApp from '@/apps/SSHApp';
 import FilesApp from '@/apps/FilesApp';
 import NotepadApp from '@/apps/NotepadApp';
 import WikiApp from '@/apps/WikiApp';
+import TmuxApp from '@/apps/TmuxApp';
 
 // Add other apps here as needed
 export const AppRegistry = {
@@ -43,6 +44,11 @@ export const AppRegistry = {
     component: FilesApp,
     icon: Folder,
     defaultTitle: 'Files'
+  },
+  'tmux': {
+    component: TmuxApp,
+    icon: MonitorPlay,
+    defaultTitle: 'Tmux Manager'
   },
   // Add other known apps here if they are openable via window ID
 };

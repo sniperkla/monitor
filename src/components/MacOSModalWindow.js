@@ -129,9 +129,9 @@ function WindowTitleBar({ title, icon: Icon, onClose, onMinimize, onMaximize, is
       </div>
       
       {/* Title Container */}
-      <div className={`absolute inset-0 flex items-center gap-2 text-[11px] font-bold text-[var(--text-primary)] pointer-events-none select-none px-4 ${isMac ? 'justify-center' : 'justify-start'}`}>
-        {Icon ? <Icon size={12} className="opacity-80" /> : null}
-        <span className="truncate max-w-[60%]">{title}</span>
+      <div className={`absolute inset-0 flex items-center gap-2 text-[11px] font-bold text-[var(--text-primary)] pointer-events-none select-none ${isMac ? 'px-16 justify-center' : 'pl-12 pr-4 justify-start'}`}>
+        {Icon ? <Icon size={12} className="opacity-80 shrink-0" /> : null}
+        <span className="truncate">{title}</span>
       </div>
 
       {!isMac && <div className="w-12" />}

@@ -327,6 +327,13 @@ function osReducer(state, action) {
         ...state, 
         notificationQueue: state.notificationQueue.filter(n => n.id !== action.payload) 
       };
+    case 'UPDATE_NOTIFICATION':
+      return {
+        ...state,
+        notificationQueue: state.notificationQueue.map(n => 
+          n.id === action.payload.id ? { ...n, ...action.payload } : n
+        )
+      };
     case 'CLEAR_NOTIFICATIONS':
       return { ...state, notificationQueue: [] };
     case 'SET_LANGUAGE':
@@ -442,7 +449,7 @@ function osReducer(state, action) {
         iconPositions: action.payload.iconPositions || state.iconPositions || {},
         aiHistory: action.payload.aiHistory || state.aiHistory || [],
         sshAiHistory: action.payload.sshAiHistory || state.sshAiHistory || [],
-        sshAiPrefs: action.payload.sshAiPrefs || state.sshAiPrefs || { preferSudo: true, enforcePatch: true, autoApplyPatch: false, editor: 'nano', viewer: 'cat', autoExplainOnError: false, autoAnswerPrompts: false },
+        sshAiPrefs: action.payload.sshAiPrefs || state.sshAiPrefs || { preferSudo: true, enforcePatch: true, autoApplyPatch: false, autoTmux: false, editor: 'nano', viewer: 'cat', autoExplainOnError: false, autoAnswerPrompts: false },
         exportNaming: action.payload.exportNaming || state.exportNaming || {
           prefix: '',
           suffix: '',
@@ -743,7 +750,7 @@ export function OSProvider({ children }) {
       },
       aiHistory: s.aiHistory || [],
       sshAiHistory: s.sshAiHistory || [],
-      sshAiPrefs: s.sshAiPrefs || { preferSudo: true, enforcePatch: true, autoApplyPatch: false, editor: 'nano', viewer: 'cat', autoExplainOnError: false, autoAnswerPrompts: false },
+      sshAiPrefs: s.sshAiPrefs || { preferSudo: true, enforcePatch: true, autoApplyPatch: false, autoTmux: false, editor: 'nano', viewer: 'cat', autoExplainOnError: false, autoAnswerPrompts: false },
       terminalSettings: s.terminalSettings || {
         activePreset: 'modern',
         fontSize: 14,
@@ -1156,6 +1163,10 @@ export function OSProvider({ children }) {
     dispatch({ type: 'REMOVE_NOTIFICATION', payload: id });
   };
 
+  const updateNotification = (id, updates) => {
+    dispatch({ type: 'UPDATE_NOTIFICATION', payload: { id, ...updates } });
+  };
+
   // Centralized Theme Management
   useEffect(() => {
     const applyTheme = () => {
@@ -1421,6 +1432,7 @@ export function OSProvider({ children }) {
       setDeferredPrompt,
       addNotification,
       removeNotification,
+      updateNotification,
       showAlert,
       showModal,
       showConfirm,

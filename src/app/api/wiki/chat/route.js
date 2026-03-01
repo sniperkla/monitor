@@ -147,6 +147,8 @@ ${guideContext?.commands?.map(c => `- ${c.code} (${c.label})`).join('\n') || 'No
                   headers: {
                     'Authorization': `Bearer ${manualApiKey}`,
                     'Content-Type': 'application/json',
+                    'HTTP-Referer': 'https://zeroclaw.local',
+                    'X-Title': 'ZeroClaw Monitor'
                   },
                   body: JSON.stringify({
                     messages: [

@@ -85,7 +85,7 @@ function createTar(files) {
 export default function FileManager({ connectionId, connection, connectionName }) {
   const { t } = useTranslation();
   const { state: appState, dispatch: appDispatch } = useApp();
-  const { state: osState, addNotification, removeNotification, showConfirm, showPrompt } = useOS();
+  const { state: osState, addNotification, removeNotification, updateNotification, showConfirm, showPrompt } = useOS();
   const { clipboard } = appState;
   const setClipboard = (payload) => appDispatch({ type: 'SET_CLIPBOARD', payload });
   const [currentPath, setCurrentPath] = useState('.');
@@ -102,10 +102,12 @@ export default function FileManager({ connectionId, connection, connectionName }
 
   // Context Menu State
   const [contextMenu, setContextMenu] = useState({ visible: false, x: 0, y: 0, file: null });
+  const [selectedFiles, setSelectedFiles] = useState(new Set());
+  const [lastSelectedFile, setLastSelectedFile] = useState(null);
   
   // Editor State
   const [editor, setEditor] = useState({ visible: false, file: null, content: '', saving: false });
-  // Delete Confirmation and Create modals are now handled by global OS modal system
+  const [infoModal, setInfoModal] = useState({ visible: false, file: null });
 
   // Transfer Progress State
   const [transfer, setTransfer] = useState(null); // { filename, progress, action, waiting, countdown }
@@ -113,6 +115,7 @@ export default function FileManager({ connectionId, connection, connectionName }
   const [transferCountdown, setTransferCountdown] = useState(0);
   const lastDownloadRef = useRef(null); // { file, offset }
   const transferRef = useRef(null); // Keep a ref of transfer for loop cancellation
+  const deleteBatchRef = useRef({ count: 0, total: 0, toastId: null });
 
   // Ref to track latest currentPath and active toast
   const currentPathRef = useRef(currentPath);
@@ -200,18 +203,46 @@ export default function FileManager({ connectionId, connection, connectionName }
     });
 
     newSocket.on('sftp:action_success', ({ action, path }) => {
-       if (toastRef.current) {
+       if (action === 'delete') {
+          deleteBatchRef.current.count++;
+          // Update progress message
+          if (deleteBatchRef.current.toastId) {
+             const { count, total, toastId } = deleteBatchRef.current;
+             const rawFilename = path ? path.split('/').pop() : '';
+             const filename = truncateName(rawFilename, 15);
+             updateNotification(toastId, { 
+                message: `${t('files.actions.deleting')}: ${filename} (${count}/${total})` 
+             });
+          }
+          // Clear toast only when batch is done
+          if (deleteBatchRef.current.count >= deleteBatchRef.current.total && deleteBatchRef.current.toastId) {
+            removeNotification(deleteBatchRef.current.toastId);
+            deleteBatchRef.current.toastId = null;
+          }
+       } else if (toastRef.current) {
          removeNotification(toastRef.current);
          toastRef.current = null;
        }
-       addNotification({ title: 'Success', message: t('files.actions.success', { action }), type: 'success' });
-       setTransfer(null);
-       // Always re-fetch the current file list using the ref (latest path)
-       const targetPath = currentPathRef.current || '.';
-       newSocket.emit('sftp:list', targetPath);
+       
        if (action === 'write') {
+          addNotification({ title: 'Success', message: t('files.actions.success', { action }), type: 'success' });
           setEditor(prev => ({ ...prev, saving: false, visible: false }));
+       } else if (action === 'delete') {
+          if (!window._lastDeleteToast || Date.now() - window._lastDeleteToast > 2000) {
+            addNotification({ title: 'Success', message: t('files.actions.success', { action }), type: 'success' });
+            window._lastDeleteToast = Date.now();
+          }
+       } else {
+          addNotification({ title: 'Success', message: t('files.actions.success', { action }), type: 'success' });
        }
+       
+       setTransfer(null);
+       
+       if (window._refreshTimeout) clearTimeout(window._refreshTimeout);
+       window._refreshTimeout = setTimeout(() => {
+         const targetPath = currentPathRef.current || '.';
+         newSocket.emit('sftp:list', targetPath);
+       }, 300);
     });
 
     newSocket.on('sftp:progress', (data) => {
@@ -244,6 +275,17 @@ export default function FileManager({ connectionId, connection, connectionName }
     newSocket.on('sftp:error', (err) => {
       const msg = err?.message || (typeof err === 'string' ? err : JSON.stringify(err));
       
+      // Clear batch deletion toast on error too
+      if (deleteBatchRef.current.toastId) {
+        removeNotification(deleteBatchRef.current.toastId);
+        deleteBatchRef.current.toastId = null;
+      }
+      
+      if (toastRef.current) {
+        removeNotification(toastRef.current);
+        toastRef.current = null;
+      }
+      
       // Handle Rate Limit specifically
       if (err?.resetIn) {
          const seconds = Math.ceil(err.resetIn / 1000);
@@ -256,13 +298,16 @@ export default function FileManager({ connectionId, connection, connectionName }
       setTransfer(null);
       console.error('❌ SFTP Error:', err);
       addNotification({ title: t('files.status.errorTitle'), message: msg || t('files.status.errorTitle'), type: 'error' });
+      
+      const targetPath = currentPathRef.current || '.';
+      newSocket.emit('sftp:list', targetPath);
+
       if (status === 'connecting' || status === 'ssh_connecting') {
         setStatus('error');
         setError(msg);
         setLoading(false);
         clearTimeout(timeout);
       }
-      // Reset editor saving state on error
       setEditor(prev => ({ ...prev, saving: false }));
     });
 
@@ -380,6 +425,11 @@ export default function FileManager({ connectionId, connection, connectionName }
     refreshFiles(newPath);
   };
 
+  const truncateName = (name, length = 20) => {
+    if (!name) return '';
+    return name.length > length ? name.substring(0, length - 3) + '...' : name;
+  };
+
   const formatSize = (bytes) => {
     if (!bytes) return '0 B';
     const k = 1024;
@@ -409,6 +459,11 @@ export default function FileManager({ connectionId, connection, connectionName }
       y = y - menuHeight;
       // Ensure it doesn't go off top
       if (y < 10) y = 10;
+    }
+
+    if (file && !selectedFiles.has(file.filename)) {
+      setSelectedFiles(new Set([file.filename]));
+      setLastSelectedFile(file.filename);
     }
 
     setContextMenu({
@@ -716,13 +771,17 @@ export default function FileManager({ connectionId, connection, connectionName }
     // Regular local file uploads
     const items = e.dataTransfer.items;
     if (items) {
-      for (const item of items) {
+      // Collect entries synchronously because awaiting invalidates DataTransferItemList
+      const entries = [];
+      for (let i = 0; i < items.length; i++) {
+        const item = items[i];
         if (item.kind === 'file') {
           const entry = item.webkitGetAsEntry();
-          if (entry) {
-            await traverseEntry(entry, currentPath);
-          }
+          if (entry) entries.push(entry);
         }
+      }
+      for (const entry of entries) {
+        await traverseEntry(entry, currentPath);
       }
     } else {
       const files = Array.from(e.dataTransfer.files);
@@ -749,7 +808,13 @@ export default function FileManager({ connectionId, connection, connectionName }
 
       // First check for files (including folders in some browsers)
       let foundFiles = false;
-      for (const item of items) {
+      
+      // Collect synchronously 
+      const entriesToProcess = [];
+      const filesToUpload = [];
+
+      for (let i = 0; i < items.length; i++) {
+        const item = items[i];
         if (item.kind === 'file') {
           const file = item.getAsFile();
           if (file) {
@@ -757,9 +822,9 @@ export default function FileManager({ connectionId, connection, connectionName }
             // WebkitGetAsEntry also works for paste in some newer browsers
             const entry = item.webkitGetAsEntry?.();
             if (entry) {
-              await traverseEntry(entry, currentPath);
+              entriesToProcess.push(entry);
             } else {
-              await handleFileUpload(null, file);
+              filesToUpload.push(file);
             }
           }
         }
@@ -771,6 +836,14 @@ export default function FileManager({ connectionId, connection, connectionName }
           message: t('files.toasts.uploadingFiles') || 'Uploading files to current folder...', 
           type: 'info' 
         });
+
+        // Process asynchronously after collecting
+        for (const entry of entriesToProcess) {
+          await traverseEntry(entry, currentPath);
+        }
+        for (const file of filesToUpload) {
+          await handleFileUpload(null, file);
+        }
       }
     };
 
@@ -792,19 +865,60 @@ export default function FileManager({ connectionId, connection, connectionName }
   };
 
   const handleDelete = () => {
-    if (!contextMenu.file || !socket) return;
-    const file = contextMenu.file;
-    const path = currentPath === '.' ? file.filename : `${currentPath}/${file.filename}`;
+    if ((!contextMenu.file && selectedFiles.size === 0) || !socket) return;
     
+    const fileTarget = contextMenu.file ? contextMenu.file.filename : null;
+    let targets = Array.from(selectedFiles);
+    if (fileTarget && !selectedFiles.has(fileTarget)) {
+       targets = [fileTarget];
+    }
+    
+    if (targets.length === 0) return;
+
     showConfirm(
-      `${t('files.modals.delete.confirm')} '${file.filename}'?`,
+      targets.length > 1 ? `${t('files.modals.delete.confirm')} ${targets.length} items?` : `${t('files.modals.delete.confirm')} '${targets[0]}'?`,
       () => {
-        socket.emit('sftp:delete', path);
+        const toastId = addNotification({ 
+          title: t('files.modals.delete.delete'), 
+          message: `${t('files.actions.deleting')}: ${truncateName(targets[0], 15)}${targets.length > 1 ? ` (+${targets.length - 1})` : ''} (0/${targets.length})`, 
+          type: 'loading', 
+          duration: 0 
+        });
+        
+        deleteBatchRef.current = {
+          count: 0,
+          total: targets.length,
+          toastId: toastId
+        };
+        
+        // Safety timeout to clear toast if server vanishes
+        setTimeout(() => {
+           if (deleteBatchRef.current.toastId === toastId) {
+              removeNotification(toastId);
+              deleteBatchRef.current.toastId = null;
+           }
+        }, 15000);
+
+        const targetSet = new Set(targets);
+        setFiles(prev => prev.filter(f => !targetSet.has(f.filename)));
+        
+        targets.forEach(filename => {
+           const path = currentPath === '.' ? filename : `${currentPath}/${filename}`;
+           socket.emit('sftp:delete', path);
+        });
+        setSelectedFiles(new Set());
+        setContextMenu({ ...contextMenu, visible: false });
       },
       t('files.modals.delete.title'),
       t('files.modals.delete.yes'),
       t('files.modals.delete.no')
     );
+  };
+
+  const handleInfo = () => {
+    if (!contextMenu.file) return;
+    setInfoModal({ visible: true, file: contextMenu.file });
+    setContextMenu({ ...contextMenu, visible: false });
   };
 
   const handleCreatePrompt = (type) => {
@@ -1069,6 +1183,12 @@ export default function FileManager({ connectionId, connection, connectionName }
               >
                 <Trash2 size={14} /> {t('files.context.delete')}
               </button>
+              <button 
+                onClick={handleInfo}
+                className="w-full text-left px-3 py-2 text-sm hover:bg-[var(--glow-indigo)] text-[var(--accent-indigo)] flex items-center gap-2 transition-colors"
+              >
+                <AlertCircle size={14} /> {t('files.context.getInfo')}
+              </button>
               {(contextMenu.file?.filename.endsWith('.zip') || contextMenu.file?.filename.endsWith('.tar.gz') || contextMenu.file?.filename.endsWith('.tgz')) && (
                 <button 
                   onClick={() => { 
@@ -1130,6 +1250,53 @@ export default function FileManager({ connectionId, connection, connectionName }
           )}
         </div>,
         document.body
+      )}
+
+      {/* Info Modal */}
+      {infoModal.visible && (
+        <MacOSModalWindow
+          isOpen
+          title={`Info: ${infoModal.file?.filename}`}
+          onClose={() => setInfoModal({ visible: false, file: null })}
+          defaultWidth={280}
+          minWidth={280}
+          defaultHeight={420}
+          draggable
+          resizable={false}
+          contentClassName="p-4"
+        >
+          <div className="flex flex-col items-center gap-4 pt-2">
+             <div className="w-16 h-16 bg-[var(--bg-tertiary)] rounded-2xl flex items-center justify-center shadow-md border border-[var(--border-color)]">
+               {infoModal.file?.longname.startsWith('d') ? (
+                 <Folder className="text-blue-400" size={32} />
+               ) : (
+                 <FileIcon className="text-[var(--text-muted)]" size={32} />
+               )}
+             </div>
+             <div className="w-full space-y-3">
+               <div className="flex justify-between items-start border-b border-[var(--border-color)] pb-2 pt-1 gap-2">
+                 <span className="text-[10px] font-bold text-[var(--text-muted)] uppercase shrink-0">Name</span>
+                 <p className="text-xs font-medium text-right break-all leading-tight">{infoModal.file?.filename}</p>
+               </div>
+               <div className="flex justify-between items-center border-b border-[var(--border-color)] pb-2">
+                 <span className="text-[10px] font-bold text-[var(--text-muted)] uppercase">Type</span>
+                 <p className="text-xs font-medium">{infoModal.file?.longname.startsWith('d') ? 'Directory' : 'File'}</p>
+               </div>
+               <div className="flex justify-between items-center border-b border-[var(--border-color)] pb-2">
+                 <span className="text-[10px] font-bold text-[var(--text-muted)] uppercase">Size</span>
+                 <p className="text-xs font-medium font-mono">{formatSize(infoModal.file?.attrs?.size)}</p>
+               </div>
+               <div className="flex justify-between items-center border-b border-[var(--border-color)] pb-2">
+                 <span className="text-[10px] font-bold text-[var(--text-muted)] uppercase">Modified</span>
+                 <p className="text-[11px] font-medium">{new Date(infoModal.file?.attrs?.mtime * 1000).toLocaleDateString()}</p>
+               </div>
+               <div className="space-y-1">
+                 <span className="text-[10px] font-bold text-[var(--text-muted)] uppercase">Path</span>
+                 <p className="text-[10px] font-mono break-all opacity-60 leading-tight">{currentPath === '.' ? infoModal.file?.filename : `${currentPath}/${infoModal.file?.filename}`}</p>
+               </div>
+             </div>
+          </div>
+        </MacOSModalWindow>
       )}
 
       {/* Toolbar */}
@@ -1201,7 +1368,7 @@ export default function FileManager({ connectionId, connection, connectionName }
       {/* Explorer Area */}
       <div 
         className={`flex-1 overflow-y-auto p-6 pb-20 custom-scrollbar relative transition-colors ${isDragging ? 'bg-blue-600/10' : ''}`} 
-        onClick={() => setContextMenu({ ...contextMenu, visible: false })}
+        onClick={() => { setContextMenu({ ...contextMenu, visible: false }); setSelectedFiles(new Set()); setLastSelectedFile(null); }}
         onContextMenu={(e) => handleContextMenu(e, null)}
         onDragOver={handleDragOver}
         onDragLeave={handleDragLeave}
@@ -1255,6 +1422,30 @@ export default function FileManager({ connectionId, connection, connectionName }
                 <div 
                   key={file.filename}
                   draggable
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    if (e.metaKey || e.ctrlKey) {
+                      const newSelected = new Set(selectedFiles);
+                      if (newSelected.has(file.filename)) newSelected.delete(file.filename);
+                      else newSelected.add(file.filename);
+                      setSelectedFiles(newSelected);
+                      setLastSelectedFile(file.filename);
+                    } else if (e.shiftKey && lastSelectedFile) {
+                      const fileNames = filteredFiles.map(f => f.filename);
+                      const startIdx = fileNames.indexOf(lastSelectedFile);
+                      const endIdx = fileNames.indexOf(file.filename);
+                      const minIdx = Math.min(startIdx, endIdx);
+                      const maxIdx = Math.max(startIdx, endIdx);
+                      const newSelected = new Set(selectedFiles);
+                      for (let i = minIdx; i <= maxIdx; i++) {
+                        newSelected.add(fileNames[i]);
+                      }
+                      setSelectedFiles(newSelected);
+                    } else {
+                      setSelectedFiles(new Set([file.filename]));
+                      setLastSelectedFile(file.filename);
+                    }
+                  }}
                   onDragStart={(e) => {
                     const filePath = currentPath === '.' ? file.filename : `${currentPath}/${file.filename}`;
                     const dragData = JSON.stringify({
@@ -1275,11 +1466,17 @@ export default function FileManager({ connectionId, connection, connectionName }
                     e.dataTransfer.setDragImage(ghost, 0, 0);
                     setTimeout(() => document.body.removeChild(ghost), 0);
                   }}
-                  onDoubleClick={() => isDir ? handleFolderClick(file.filename) : null}
+                  onDoubleClick={() => {
+                    if (isDir) {
+                      setSelectedFiles(new Set());
+                      setLastSelectedFile(null);
+                      handleFolderClick(file.filename);
+                    }
+                  }}
                   onContextMenu={(e) => handleContextMenu(e, file)}
                   className={viewMode === 'grid'
-                    ? "group flex flex-col items-center p-3 rounded-xl hover:bg-[var(--border-color)] border border-transparent hover:border-[var(--border-hover)] transition-all cursor-grab active:cursor-grabbing"
-                    : "flex items-center gap-3 p-2 rounded-lg hover:bg-[var(--border-color)] group transition-all cursor-grab active:cursor-grabbing"
+                    ? `group flex flex-col items-center p-3 rounded-xl border transition-all cursor-grab active:cursor-grabbing ${selectedFiles.has(file.filename) ? 'bg-blue-600/20 border-blue-500 shadow-md shadow-blue-500/10' : 'hover:bg-[var(--border-color)] border-transparent hover:border-[var(--border-hover)]'}`
+                    : `flex items-center gap-3 p-2 rounded-lg group transition-all cursor-grab active:cursor-grabbing ${selectedFiles.has(file.filename) ? 'bg-blue-600/20 border border-blue-500 shadow-inner' : 'hover:bg-[var(--border-color)] border border-transparent'}`
                   }
                 >
                   <div className={viewMode === 'grid'

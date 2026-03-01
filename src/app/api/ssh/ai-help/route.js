@@ -98,6 +98,7 @@ export async function POST(req) {
     const enforcePatch = safePrefs.enforcePatch !== false;
     const editor = typeof safePrefs.editor === 'string' ? safePrefs.editor : 'nano';
     const viewer = typeof safePrefs.viewer === 'string' ? safePrefs.viewer : 'cat';
+    const autoTmux = !!safePrefs.autoTmux;
 
     const normalizeAiXml = (xml) => {
       let s = String(xml || '');
@@ -183,40 +184,19 @@ ${safeContext || 'none'}`;
 
     const aiTask = typeof safePrefs.aiTask === 'string' ? safePrefs.aiTask : 'ssh';
 
-    // ── LOAD SSH MEMORY ──────────────────────────────────────────────────────
+    // ── LOAD SSH MEMORY (DISABLED) ────────────────────────────────────────────
     const db = await connectDB(customerDbUri);
-    const SshMemory = getSshMemoryModel(db);
+    // const SshMemory = getSshMemoryModel(db); // SSH Memory disabled
 
     let memBlock = '';
     let memoryDoc = null;
-    try {
-      if (host) {
-        memoryDoc = await SshMemory.findOne({ userId: session.user.email, host }).lean();
-        if (memoryDoc) {
-          const lines = ['[SERVER MEMORY FACTS]'];
-          if (memoryDoc.os) lines.push(`- OS: ${memoryDoc.os}`);
-          if (memoryDoc.loginUser) lines.push(`- User: ${memoryDoc.loginUser}`);
-          if (memoryDoc.packageManager) lines.push(`- PkgMgr: ${memoryDoc.packageManager}`);
-          if (memoryDoc.workingDir) lines.push(`- WorkDir: ${memoryDoc.workingDir}`);
-          if (memoryDoc.installedTools?.length) lines.push(`- Tools: ${memoryDoc.installedTools.join(', ')}`);
-          if (memoryDoc.runningServices?.length) lines.push(`- Services: ${memoryDoc.runningServices.join(', ')}`);
-          if (memoryDoc.keyPaths?.length) lines.push(`- Paths: ${memoryDoc.keyPaths.join(', ')}`);
-          if (memoryDoc.completedGoals?.length) {
-            lines.push(`- Past Goals:`);
-            memoryDoc.completedGoals.slice(-3).forEach(g => lines.push(`  * ${g.goal} (${g.summary})`));
-          }
-          if (memoryDoc.notes?.length) {
-            lines.push(`- Notes:`);
-            memoryDoc.notes.slice(-3).forEach(n => lines.push(`  * ${n.content}`));
-          }
-          if (lines.length > 1) {
-            memBlock = lines.join('\n') + '\n\n';
-          }
-        }
-      }
-    } catch (e) {
-      console.error('Failed to load SshMemory:', e);
-    }
+    // SSH Memory disabled — skip loading
+    // try {
+    //   if (host) {
+    //     memoryDoc = await SshMemory.findOne({ userId: session.user.email, host }).lean();
+    //     ...
+    //   }
+    // } catch (e) {}
 
     // ── CODE / FILE EDITOR MODE ──────────────────────────────────────────────
     const codeEditorSys = `You are an expert Linux systems engineer and code editor operating via SSH. Your task is to solve problems intelligently and efficiently.
@@ -247,19 +227,69 @@ Step-by-step checklist with clear dependencies:
 5. [ ] Restart/reload services if needed
 Mark steps as DONE when complete. Only check off after verification.
 </plan>
-<diff>A unified diff patch (preferred for ALL edits). This is the VSCode-like workflow.
-The patch MUST be valid unified diff format using either:
-- --- /path/to/file +++ /path/to/file (RECOMMENDED; use absolute paths, applied with -d /)
-- or --- a/path +++ b/path (traditional git style, will be attempted with -p1)
-Include @@ hunks and only the minimal required changes. Preserve unrelated code.</diff>
-<command>Optional non-edit command ONLY for reading/verifying (cat/grep/test). MUST NOT modify files. Leave empty when providing a <diff>.</command>
-<explain>One conversational sentence with emoji describing what you're doing and why. Be specific about the file/change.</explain>
-<danger>true|false</danger><done>true|false</done>
+<diff>
+--- ${packCwd}/example_file.ext
++++ ${packCwd}/example_file.ext
+@@ -1,3 +1,3 @@
+ context line 1
+-removed line
++added line
+ context line 3
+</diff>
+<command>cat /absolute/path/to/file</command>
+<explain>I've updated the logic to handle ... ✨</explain>
+<danger>false</danger><done>false</done>
+
+🚀 PATCHING RULES (STRICT):
+1. MANDATORY CONTEXT: Every @@ hunk MUST include 3 lines of unchanged context (starting with a ' ' space) around every change.
+   ❌ FAILED (No context):
+     @@ -10,1 +10,1 @@
+     -old line
+     +new line
+   ✅ CORRECT (With context):
+     @@ -7,7 +7,7 @@
+      existing context line 1
+      existing context line 2
+      existing context line 3
+     -old line
+     +new line
+      existing context line 5
+      existing context line 6
+      existing context line 7
+2. PATCHES WITHOUT CONTEXT WILL FAIL on large files (100+ lines).
+3. NO TAG REPETITION: NEVER include "<diff>" or "</diff>" inside the content.
+4. ABSOLUTE PATHS: Use the full path or the ~ shorthand for the user's home directory.
+   ✅ GOOD: --- ~/.zeroclaw/workspace/HEARTBEAT.md (The system will cleanly resolve ~ to $HOME automatically)
+   ✅ GOOD: --- /var/www/html/index.js
+   ❌ BAD: --- /~/workspace/file.md (invalid double-root, do not combine / and ~)
+   Your current CWD is: ${packCwd} — you can safely use this exact string in diff headers.
+5. VERIFY FIRST (THE TWO-TURN RULE): You MUST run '<command>cat -n <file></command>' to see the exact lines and spaces before producing a <diff>. 
+   - 🚨 NEVER guess the contents of a file.
+   - 🚨 NEVER output a <diff> and a <command> in the same response.
+   - Turn 1: Output ONLY a <command>cat file</command> to read the file. Set <done>false</done>.
+   - Turn 2: Read the terminal output provided to you, then output your <diff>. Set <done>true</done>.
+   - If you guess the spacing or context lines, the patch WILL FAIL.
+6. NO PLACEHOLDERS: Never output "UNIFIED_DIFF_HERE", "existing context", or similar text. Use real code exactly as it appears in the file.
+
+WHEN TO SET done=true (PATCH MODE — CRITICAL):
+- ✅ You just output a <diff> patch AND it is the FINAL edit needed → set <done>true</done> IMMEDIATELY
+- ✅ You ran a verification command (cat/grep) and the file content shows your changes are present → <done>true</done>
+- ✅ The terminal output shows "patching file..." or "Hunk #N succeeded" → your patch was applied → <done>true</done>
+- ✅ The goal was to edit/improve a file, and you have output a complete diff → <done>true</done>
+- ❌ NEVER keep outputting the same <diff> more than once — if you already sent a diff in a previous turn, VERIFY then CLOSE with done=true
+- ❌ NEVER loop: cat → produce diff → cat → produce same diff again → this is a broken loop, set done=true now
+- 🧹 CLEARING A FILE: If the goal is to empty/clear a file, you MUST:
+  1. Read the file content completely (count lines and get exact text).
+  2. Produce a <diff> that explicitly removes every existing line starting with '-'.
+  3. ⚠️ ALTERNATIVE: You may use <command>> FILENAME</command> or <command>truncate -s 0 FILENAME</command> if the file is large or if diffs are failing. This is the only exception to the "no write commands" rule.
+  4. If you used a shell command to clear the file, verify it with wc -l or cat and then IMMEDIATELY set <done>true</done> in the same or next output. Never loop.
 
 ADVANCED RULES FOR INTELLIGENT PROBLEM SOLVING:
 
 FILE EDITING MASTERY:
-- ALWAYS READ FIRST: Before editing ANY file, you MUST read it first with cat/head/tail to understand its structure
+- ALWAYS READ FIRST: Before editing ANY file, you MUST read its exact contents.
+- ❌ GUESSING IS STRICTLY FORBIDDEN: Never output a <diff> based on assumptions. You cannot guess exact spaces and tabs. If you haven't read the file in the CURRENT turn using <command>cat -n <file></command>, you MUST do that first and wait for the user to provide the terminal output.
+- ❌ NO PLACEHOLDERS: NEVER use generic placeholder text like "- old line", "- metric line to be removed", or "context line 1" in your diffs. The lines must be EXACT character-for-character matches of the real file content.
 - BACKUP STRATEGY: Always backup files before major changes: cp file file.bak.$(date +%s)
 - VALIDATION MANDATORY: After every edit, verify with: cat file | grep -A2 -B2 'changed_section'
 - DIFF REQUIRED: After every file edit, output a unified diff so the user can see exactly what changed.
@@ -267,18 +297,51 @@ FILE EDITING MASTERY:
   * If no backup available but in a git repo: git diff -- file || true
 - PRESERVE EXISTING CODE: Never replace an entire file unless the user explicitly asks for a full rewrite.
 ${enforcePatch ? `- PATCH-FIRST (VSCode): For ANY file change, you MUST output a <diff> patch. Do NOT output write commands.
-  Forbidden in <command>: sed -i, perl -pi, cat > file, tee file, printf > file, echo > file, mv temp file, redirect (>) writes.
+  Forbidden in <command>: sed -i, perl -pi, mv temp file, redirect (>) writes (EXCEPT when generating large content as instructed below).
   Allowed in <command>: read/verify only (cat/head/tail/grep/test).
-  If the user asks to "apply" immediately, still output <diff>; the UI applies it.
-  Only return <command> for read/verify steps.` : `- LEGACY EDITING: You may use surgical edit commands (sed -i / python3 -c) when needed.
+  Only return <command> for read/verify steps.
+  🚨 EXCEPTION 1 — CLEARING A FILE: If the goal is to EMPTY or CLEAR all content from a file, you MUST use:
+    <command>truncate -s 0 /absolute/path/to/file</command>
+  🚨 EXCEPTION 2 — LARGE GENERATION: Using \`>>\` or \`>\` inside <command> is explicitly ALLOWED if you are generating hundreds of lines using \`seq\` or \`printf\`.` : `- LEGACY EDITING: You may use surgical edit commands (sed -i / python3 -c) when needed.
   Still prefer minimal changes and always include a unified diff after edits.`}
- - DIFF MUST BE PATCHABLE: Inside @@ hunks, EVERY line must start with one of:
+- DIFF MUST BE PATCHABLE: Inside @@ hunks, EVERY line must start with one of:
    * space for context lines
    * + for additions
    * - for deletions
-   Do NOT emit raw text lines without a prefix (this causes "malformed patch").
+   * \\ (for no newline at end of file)
+   🚨 CRITICAL: NEVER emit hunk lines without a prefix (+, -, spatial).
+   ❌ BAD (MALFORMED — missing prefix):
+     @@ -1,3 +1,3 @@
+     old line
+     new line
+   ✅ GOOD:
+     @@ -1,3 +1,3 @@
+     -old line
+     +new line
+   Malformed patches with missing prefixes WILL FAIL and corrupt the file.
+   Do NOT emit raw text lines without a prefix (causes "malformed patch").
+- 🚨 LARGE CONTENT GENERATION (e.g., 500 lines): If asked to write many lines or large repetitive content:
+   ❌ NEVER write a diff with "..." or skip lines. This creates literal "..." in the file.
+   ✅ Instead use a shell command to generate the content (e.g., seq, printf, Python scripts):
+     <command>seq 1 500 >> /absolute/path/file.ext</command>
+   ✅ After verifying the generated content with 'wc -l' or similar, you MUST set <done>true</done> IMMEDIATELY. Doing repeated verifications without setting done=true will cause an infinite loop!
+   Only use diff/patch for actual surgical code edits where exact file content is known.
 - ESCAPE HANDLING: For special characters in sed, use: sed -i 's|pattern|replacement|g' (pipe delimiter avoids escaping slashes)
 - HEREDOC SAFETY: Always use <<'EOF' (single quotes) to prevent variable expansion
+
+FILE DISCOVERY (CRITICAL — READ BEFORE EDITING):
+- 📁 WORKSPACE PRIORITY: You are currently working in \`${packCwd}\`.
+- If the user refers to a file (e.g. FILENAME, config.py, index.html) WITHOUT an absolute path:
+  1. ✅ SEARCH WORKSPACE FIRST: Always check \`${packCwd}\` with \`ls ${packCwd}/FILENAME 2>/dev/null\` or \`find ${packCwd} -name "FILENAME" 2>/dev/null\`.
+  2. ❌ NEVER assume /FILENAME or ~/file. Workspace files are almost NEVER at the system root.
+  3. 🚨 PATH ALERT: Paths like /some_file.ext are ALWAYS wrong. The file is likely at \`${packCwd}/some_file.ext\`.
+  4. ✅ Check [SERVER MEMORY FACTS] section for known path matches.
+  5. ✅ Only if not found in workspace, perform a wider search: \`find /home -name "FILENAME" 2>/dev/null | head -5\`.
+  6. ✅ BROADEST SEARCH (LAST RESORT): \`find / -name "FILENAME" -not -path "*/proc/*" -not -path "*/sys/*" 2>/dev/null | head -10\`.
+- 🔄 PATH FAILURE CORRECTION: If you try to run a command (cat, sed, ls) on a path like /FILE and it returns "No such file or directory", you MUST STOP, run search as described above, and update your internal path. DO NOT repeat the same wrong path.
+- Always use the FULL absolute path in <diff> headers.
+- 🚨 LOOP PREVENTION: If you run cat/head/tail on a file and get NO OUTPUT or "No such file", that path is WRONG.
+  DO NOT repeat the same cat command. Immediately run discovery to locate the correct path instead.
 
 JSON EDITING (Use python3, never raw text):
 python3 -c "
@@ -326,6 +389,16 @@ ANTI-PATTERNS TO AVOID:
 - ❌ Don't ignore error output - parse it and respond intelligently
 - ❌ Don't modify files without reading them first
 - ❌ Don't set done=true until you've verified the fix works
+
+FILE DISCOVERY (CRITICAL RULE):
+- If the user mentions a filename (e.g. FILENAME, script.py, config.json) WITHOUT an absolute path:
+  1. NEVER assume a path like /home/username/file or ~/file
+  2. ALWAYS run: find / -name "FILENAME" -not -path "*/proc/*" -not -path "*/sys/*" 2>/dev/null | head -10
+  3. Use the FOUND path in all subsequent operations
+  4. If memory has known keyPaths that include the filename, prefer those (check [SERVER MEMORY FACTS] Paths)
+  5. If find returns multiple results, pick the most relevant one (e.g., in user home or workspace)
+- If user gives an absolute path OR says "in /some/dir", use that directly
+- The cwd is ${packCwd} — check there first before searching system-wide
 
 COMPLEX SCENARIOS:
 - Multiple file changes: Complete ALL edits, then verify ALL, then restart services
@@ -423,7 +496,8 @@ ERROR ANALYSIS & RECOVERY:
 When you see errors, classify and respond:
 
 1. "Permission denied" → Check user: whoami, id. Try sudo. Check permissions: ls -la FILE
-2. "No such file or directory" → Verify path: ls -la DIR/, find / -name FILE 2>/dev/null
+2. "No such file or directory" → Verify path: ls -la DIR/, find / -name FILE -not -path '*/proc/*' 2>/dev/null | head -5
+     IMPORTANT: Use find to locate a file before assuming it lives at /home/username/FILE
 3. "Address already in use" → Find process: lsof -i :PORT, then decide if kill or reconfigure
 4. "Connection refused" → Check if service running: systemctl status SERVICE, check port binding
 5. "Syntax error" in configs → Check with: nginx -t, python3 -m py_compile FILE, bash -n SCRIPT
@@ -503,13 +577,32 @@ Use emojis to convey status:
 💡 Suggestion/Tip
 ${structuredContext}`;
 
-    const sys = aiTask === 'code' ? codeEditorSys : sshCommandSys;
+    const backgroundTmuxSys = autoTmux ? `
+BACKGROUND TASKS (TMUX):
+- A background tmux session named 'ai-bg-task' is available to run long tasks.
+- DO NOT run long blocking commands (builds, scrapers, servers) directly in the terminal as it freezes the UI.
+- Instead, run them in the background using tmux: <command>tmux send-keys -t ai-bg-task "your_long_command > /tmp/task.log 2>&1 &" C-m</command>
+- To check the task output, use <command>tail -n 20 /tmp/task.log</command>.
+- NEVER attach to the tmux session (no 'tmux attach' or 'tmux a').` : '';
 
+    const sys = (aiTask === 'code' ? codeEditorSys : sshCommandSys) + '\n' + backgroundTmuxSys;
+
+    // Proactively inject file paths from memory into the user prompt if they match the filename
+    let enhancedPrompt = String(prompt);
+    if (memoryDoc?.keyPaths?.length) {
+      const mentionedFile = enhancedPrompt.match(/(\w+\.\w+)/)?.[0];
+      if (mentionedFile) {
+        const foundPath = memoryDoc.keyPaths.find(p => p.endsWith(mentionedFile));
+        if (foundPath) {
+          enhancedPrompt = `(CONTEXT: Use absolute path ${foundPath} for ${mentionedFile})\n\n${enhancedPrompt}`;
+        }
+      }
+    }
 
     const messages = [
       { role: 'system', content: sys },
       ...historyMessages,
-      { role: 'user', content: String(prompt) },
+      { role: 'user', content: enhancedPrompt },
     ];
 
     const maybeRetryForMissingDiff = async (answerText, currentModel, apiKey, extraInfo) => {
@@ -525,7 +618,7 @@ OUTPUT REQUIREMENTS (STRICT):
 - Return ONLY valid XML with a non-empty <diff> tag.
 - Leave <command> empty.
 - The <diff> MUST be a valid unified diff and MUST NOT use leading '/' absolute paths in ---/+++ headers.
-  Use safe paths like: home/ubuntu/.zeroclaw/workspace/FILE.md (the UI applies patch with -d /).
+  Use safe paths like: home/ubuntu/workspace/some_file.ext (the UI applies patch with -d /).
 - Do NOT re-read files again. Use the context you already have.
 Now output the <diff> needed to complete the request.`;
 
@@ -606,30 +699,39 @@ Now output the <diff> needed to complete the request.`;
 
     // If streaming is requested, we do a single attempt (no key/model rotation mid-stream).
     // If it fails, we fall back to the normal non-stream response logic.
-    if (streamRequested && mainModel !== 'manual') {
-      const chosenApiKey = apiKeys[currentIndex] || apiKeys[0];
+    if (streamRequested) {
+      const isManual = mainModel === 'manual';
+      const chosenApiKey = isManual ? prefs?.aiApiKey : (apiKeys[currentIndex] || apiKeys[0]);
+      
       if (!chosenApiKey) {
-        return NextResponse.json({ success: false, error: 'Missing AI API key.' }, { status: 400 });
+        return NextResponse.json({ success: false, error: isManual ? 'Missing Manual API Key in settings.' : 'Missing AI API key.' }, { status: 400 });
       }
+
+      const apiUrl = isManual ? (prefs?.aiEndpoint || 'https://api.openai.com/v1/chat/completions') : 'https://api.groq.com/openai/v1/chat/completions';
+      const actualModelToRequest = isManual ? (prefs?.aiCustomModel || 'gpt-3.5-turbo') : mainModel;
 
       try {
         const encoder = new TextEncoder();
         const stream = new ReadableStream({
           async start(controller) {
             let full = '';
-            let usedModel = mainModel;
+            let usedModel = actualModelToRequest;
             try {
               controller.enqueue(encoder.encode(`event: meta\ndata: ${JSON.stringify({ model: usedModel })}\n\n`));
 
-              const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+              const fetchHeaders = {
+                Authorization: `Bearer ${chosenApiKey}`,
+                'Content-Type': 'application/json',
+                'HTTP-Referer': 'https://zeroclaw.local',
+                'X-Title': 'ZeroClaw Monitor'
+              };
+
+              const response = await fetch(apiUrl, {
                 method: 'POST',
-                headers: {
-                  Authorization: `Bearer ${chosenApiKey}`,
-                  'Content-Type': 'application/json',
-                },
+                headers: fetchHeaders,
                 body: JSON.stringify({
                   messages,
-                  model: mainModel,
+                  model: actualModelToRequest,
                   temperature: aiConfig.temperature,
                   max_completion_tokens: aiConfig.max_completion_tokens,
                   top_p: aiConfig.top_p,
@@ -721,33 +823,8 @@ Now output the <diff> needed to complete the request.`;
                     full = normalizeAiXml(retry);
                   }
                 } catch {}
-                const doneTagRe = /<done>\s*true\s*<\/done>/i;
-                const diffTagRe = /<diff>[\s\S]*?<\/diff>/i;
-                const hasCompletion = doneTagRe.test(full) || (aiTask === 'code' && diffTagRe.test(full));
-                if (host && hasCompletion && apiKeys.length > 0 && usedModel !== 'manual') {
-                  const cooldownKey = `${session.user.email}::${host}`;
-                  const now = Date.now();
-                  const lastAt = extractCooldownMap.get(cooldownKey) || 0;
-                  if (now - lastAt < 60000) {
-                    console.log('[SSH Memory] Skipping extraction (cooldown) for host:', host);
-                  } else {
-                    extractCooldownMap.set(cooldownKey, now);
-                  const extractFacts = async (uri) => {
-                    try {
-                      const db = await connectDB(uri);
-                      const SshMemory = getSshMemoryModel(db);
-                      await SshMemory.findOneAndUpdate(
-                        { userId: session.user.email, host },
-                        { $set: { lastSeenAt: new Date() }, $inc: { sessionCount: 1 } },
-                        { upsert: true }
-                      );
-                    } catch (err) {
-                      console.error('[SSH Memory] Fact extraction failed:', err);
-                    }
-                  };
-                  extractFacts(customerDbUri);
-                  }
-                }
+                // SSH Memory disabled — skip extraction
+                const hasCompletion = false;
               } catch (err) {
                 console.error('[SSH Memory] Streaming done handling failed:', err);
               }
@@ -791,6 +868,8 @@ Now output the <diff> needed to complete the request.`;
                     headers: {
                         Authorization: `Bearer ${manualApiKey}`,
                         'Content-Type': 'application/json',
+                        'HTTP-Referer': 'https://zeroclaw.local',
+                        'X-Title': 'ZeroClaw Monitor'
                     },
                     body: JSON.stringify({
                         messages,
@@ -923,148 +1002,10 @@ Now output the <diff> needed to complete the request.`;
             console.error('Failed to save AI history:', dbErr);
           }
 
-          // ASYNC KNOWLEDGE EXTRACTION (if done and success)
-          // We fire and forget this so it doesn't block the user response
+          // SSH Memory disabled — skip extraction.
           answer = normalizeAiXml(answer);
-          const doneTagRe = /<done>\s*true\s*<\/done>/i;
-          const diffTagRe = /<diff>[\s\S]*?<\/diff>/i;
-          const hasCompletion = doneTagRe.test(answer) || (aiTask === 'code' && diffTagRe.test(answer));
-          if (host && hasCompletion && apiKeys.length > 0 && actualUsedModel !== 'manual') {
-            const cooldownKey = `${session.user.email}::${host}`;
-            const now = Date.now();
-            const lastAt = extractCooldownMap.get(cooldownKey) || 0;
-            if (now - lastAt < 60000) {
-              console.log('[SSH Memory] Skipping extraction (cooldown) for host:', host);
-              return NextResponse.json({ success: true, answer, usage: usageInfo, usedModel: actualUsedModel });
-            }
-            extractCooldownMap.set(cooldownKey, now);
-            console.log('[SSH Memory] Triggering fact extraction for host:', host);
-            const extractFacts = async (uri) => {
-              try {
-                const db = await connectDB(uri);
-                const SshMemory = getSshMemoryModel(db);
-                
-                // First, always update session count and lastSeenAt when done
-                await SshMemory.findOneAndUpdate(
-                  { userId: session.user.email, host },
-                  { 
-                    $set: { lastSeenAt: new Date() },
-                    $inc: { sessionCount: 1 }
-                  },
-                  { upsert: true }
-                );
-                console.log('[SSH Memory] Updated session count for:', host);
-                
-                // Use the fastest/cheapest model for extraction
-                const extractModel = 'llama-3.1-8b-instant';
-                const extractApiKey = apiKeys[0]; // grab first key
-                
-                const cmdMatch = answer.match(/<command>([\s\S]*?)<\/command>/i);
-                const explainMatch = answer.match(/<explain>([\s\S]*?)<\/explain>/i);
-                
-                const sysExtract = `Extract server facts from this newly completed AI task.
-Return ONLY a valid JSON object. No markdown, no fuzz.
-Fields (all optional):
-{
-  "os": "Ubuntu 22.04 or Debian etc",
-  "packageManager": "apt, brew, yum, etc",
-  "installedTools": ["nodejs", "pm2", "nginx"],
-  "runningServices": ["zeroclaw", "nginx"],
-  "keyPaths": ["/var/www/html", "/home/user/zeroclaw"],
-  "completedGoal": { "goal": "what was asked", "summary": "what was done", "stepsCount": 1 }
-}
-ONLY include fields if you learned them JUST NOW. NEVER invent facts.`;
-                
-                const userExtractText = `Task Goal: ${prompt}
-Command ran: ${cmdMatch ? cmdMatch[1].trim() : '(none)'}
-AI Explanation: ${explainMatch ? explainMatch[1].trim() : '(none)'}
-Context: ${structuredContext.slice(0, 1500)}`;
+        } // end if (session)
 
-                console.log('[SSH Memory] Calling extraction AI...');
-                const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-                  method: 'POST',
-                  headers: { Authorization: `Bearer ${extractApiKey}`, 'Content-Type': 'application/json' },
-                  body: JSON.stringify({
-                    messages: [
-                      { role: 'system', content: sysExtract },
-                      { role: 'user', content: userExtractText }
-                    ],
-                    model: extractModel,
-                    temperature: 0.1,
-                    response_format: { type: 'json_object' }
-                  })
-                });
-                
-                if (res.ok) {
-                  const out = await res.json();
-                  const factsText = out.choices[0]?.message?.content || '{}';
-                  console.log('[SSH Memory] Extraction AI response:', factsText);
-                  
-                  let facts = {};
-                  try {
-                    facts = JSON.parse(factsText);
-                  } catch (parseErr) {
-                    console.error('[SSH Memory] Failed to parse extraction JSON:', parseErr);
-                    return;
-                  }
-                  
-                  // Build update payload
-                  const setFields = { lastSeenAt: new Date() };
-                  const addToSetFields = {};
-                  const pushFields = {};
-
-                  if (facts.os) setFields.os = facts.os;
-                  if (facts.packageManager) setFields.packageManager = facts.packageManager;
-                  
-                  if (facts.installedTools?.length) addToSetFields.installedTools = { $each: facts.installedTools.slice(0, 10) };
-                  if (facts.runningServices?.length) addToSetFields.runningServices = { $each: facts.runningServices.slice(0, 10) };
-                  if (facts.keyPaths?.length) addToSetFields.keyPaths = { $each: facts.keyPaths.slice(0, 10) };
-                  
-                  if (facts.completedGoal?.goal) {
-                    pushFields.completedGoals = {
-                      $each: [{
-                        goal: String(facts.completedGoal.goal).slice(0, 200),
-                        summary: String(facts.completedGoal.summary || '').slice(0, 400),
-                        stepsCount: Number(facts.completedGoal.stepsCount) || 1,
-                        completedAt: new Date(),
-                      }],
-                      $slice: -20,
-                    };
-                  }
-
-                  const updatePayload = { $set: setFields };
-                  if (Object.keys(addToSetFields).length) updatePayload.$addToSet = addToSetFields;
-                  if (Object.keys(pushFields).length) updatePayload.$push = pushFields;
-                  
-                  const result = await SshMemory.findOneAndUpdate(
-                    { userId: session.user.email, host },
-                    updatePayload,
-                    { upsert: true, new: true }
-                  );
-                  console.log('[SSH Memory] Successfully updated facts for:', host, 'Fields:', Object.keys(setFields).join(', '));
-                } else {
-                  const errText = await res.text().catch(() => 'unknown error');
-                  console.error('[SSH Memory] Extraction AI failed:', res.status, errText);
-                }
-              } catch (err) {
-                console.error('[SSH Memory] Fact extraction failed:', err);
-              }
-            };
-            
-            // Fire and forget
-            extractFacts(customerDbUri);
-          } else {
-            if (host) {
-              console.log('[SSH Memory] Skipping extraction. Conditions:', {
-                hasDone: doneTagRe.test(answer),
-                hasDiff: diffTagRe.test(answer),
-                aiTask,
-                hasApiKeys: apiKeys.length > 0,
-                isNotManual: actualUsedModel !== 'manual'
-              });
-            }
-          }
-        }
         return NextResponse.json({ success: true, answer, usage: usageInfo, usedModel: actualUsedModel });
     }
     

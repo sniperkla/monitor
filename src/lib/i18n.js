@@ -506,6 +506,7 @@ const resources = {
           newFile: "New File",
           newFolder: "New Folder",
           refresh: "Refresh",
+          getInfo: "Get Info",
           currentFolder: "Current Folder",
         },
         modals: {
@@ -518,6 +519,7 @@ const resources = {
           },
           delete: {
             title: "Delete Item",
+            delete: "Delete Item",
             confirm: "Are you sure you want to permanently delete",
             warning: "This action cannot be undone.",
             yes: "Yes, Delete",
@@ -552,6 +554,7 @@ const resources = {
         actions: {
           success: "{{action}} successful",
           loading: "Processing {{action}}...",
+          deleting: "Deleting",
         },
         toasts: {
            downloadComplete: "Download Complete",
@@ -748,6 +751,7 @@ const resources = {
         cancel: "ยกเลิก",
         close: "ปิด",
         delete: "ลบ",
+        getInfo: "ดูรายละเอียด",
         connect: "เชื่อมต่อ",
         connecting: "กำลังเชื่อมต่อ...",
         connected: "เชื่อมต่อแล้ว",

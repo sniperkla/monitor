@@ -8,7 +8,7 @@ import SSHApp from '@/apps/SSHApp';
 import SettingsApp from '@/apps/SettingsApp';
 import { Terminal, Settings, FolderClosed, Monitor, RefreshCw, Plus, 
   Image as ImageIcon, Layout, Grid, List, AlignLeft, SortAsc,
-  ChevronRight, Type, Calendar, HardDrive, Palette, MonitorCog, Globe, Maximize, Minimize, Database, Check
+  ChevronRight, Type, Calendar, HardDrive, Palette, MonitorCog, Globe, Maximize, Minimize, Database, Check, MonitorPlay
 } from 'lucide-react';
 import NotificationCenter from '@/components/Desktop/NotificationCenter';
 import { useState, useEffect, useRef, cloneElement, isValidElement } from 'react';
@@ -24,6 +24,7 @@ import WikiChatWindow from './WikiChatWindow';
 import PWAHandler from './PWAHandler';
 import SpotlightSearch from './SpotlightSearch';
 import PreviewWindow from './PreviewWindow';
+import TmuxApp from '@/apps/TmuxApp';
 import dynamic from 'next/dynamic';
 
 const DatabaseBrowser = dynamic(() => import('@/components/DatabaseBrowser'), {
@@ -245,6 +246,7 @@ export default function DesktopEnvironment() {
     { id: 'ssh-manager', title: t('ssh.manager'), icon: Monitor, component: <SSHApp />, type: 'app', initialWidth: 1200, initialHeight: 750 },
     { id: 'terminal', title: t('ssh.terminal'), icon: Terminal, component: <TerminalApp onEditConnection={handleEditConnection} />, type: 'app', initialWidth: 900, initialHeight: 600 },
     { id: 'files', title: t('ssh.fileGui'), icon: FolderClosed, component: <FilesApp onEditConnection={handleEditConnection} />, type: 'app', initialWidth: 900, initialHeight: 600 },
+    { id: 'tmux', title: 'Tmux', icon: MonitorPlay, component: <TmuxApp />, type: 'app', initialWidth: 1000, initialHeight: 650 },
     { id: 'settings', title: t('common.settings'), icon: Settings, component: <SettingsApp />, type: 'app', initialWidth: 700, initialHeight: 500 },
   ];
 

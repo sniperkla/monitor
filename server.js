@@ -433,7 +433,7 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
         // Prevent listener stacking: remove previous SFTP and SSH specific handlers
         const sftpEvents = [
           'sftp:list', 'sftp:mkdir', 'sftp:delete', 'sftp:readFile', 
-          'sftp:writeFile', 'sftp:copy', 'sftp:move', 'sftp:cross_server_transfer',
+          'sftp:writeFile', 'sftp:applyPatch', 'sftp:copy', 'sftp:move', 'sftp:cross_server_transfer',
           'sftp:upload', 'sftp:download'
         ];
         const sshEvents = ['ssh:input', 'ssh:resize'];
@@ -641,7 +641,7 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
           // Delete File/Directory
           socket.on('sftp:delete', (path) => {
             console.log(`🗑️ [${socket.id}] SFTP DELETE: ${path}`);
-            sshClient.sftp((err, sftp) => {
+            getSftp((err, sftp) => {
               if (err) {
                  // Fallback to rm
                  console.warn('⚠️ SFTP unavailable for delete. Using rm fallback.');
@@ -734,6 +734,317 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
               stream.on('close', () => socket.emit('sftp:action_success', { action: 'write', path }));
               stream.on('error', (err) => emitSftpError(err, 'Write failed'));
             });
+          });
+
+          // ── Apply Patch via diff-match-patch ─────────────────────────────────
+          socket.on('sftp:applyPatch', ({ diffText, backupId }) => {
+            console.log(`🩹 [${socket.id}] SFTP APPLY PATCH (backupId: ${backupId})`);
+            const diff_match_patch = require('diff-match-patch');
+
+            // Parse unified diff into per-file sections
+            const parseDiffIntoFiles = (text) => {
+              const lines = String(text || '').replace(/\r\n/g, '\n').split('\n');
+              const sections = [];
+              let current = null;
+
+              for (let i = 0; i < lines.length; i++) {
+                const line = lines[i];
+                const trimmed = line.trim();
+
+                if (trimmed.startsWith('--- ') && !trimmed.startsWith('--- a/')) {
+                  const nextLine = (lines[i + 1] || '').trim();
+                  if (nextLine.startsWith('+++ ')) {
+                    if (current) sections.push(current);
+                    let filePath = trimmed.slice(4).split('\t')[0].trim();
+                    current = { filePath, diffLines: [line] };
+                    continue;
+                  }
+                } else if (trimmed.startsWith('--- a/')) {
+                  if (current) sections.push(current);
+                  let filePath = trimmed.slice(6).split('\t')[0].trim();
+                  current = { filePath, diffLines: [line] };
+                  continue;
+                }
+
+                if (current) {
+                  current.diffLines.push(line);
+                  // Update filePath from +++ line
+                  if (trimmed.startsWith('+++ ') && !current.plusPath) {
+                    let pp = trimmed.slice(4).split('\t')[0].trim();
+                    if (pp.startsWith('b/')) pp = pp.slice(2);
+                    if (pp !== '/dev/null') current.plusPath = pp;
+                  }
+                }
+              }
+              if (current) sections.push(current);
+
+              // Resolve final file path for each section
+              for (const sec of sections) {
+                let fp = sec.plusPath || sec.filePath;
+                if (fp.startsWith('a/')) fp = fp.slice(2);
+                if (fp.startsWith('b/')) fp = fp.slice(2);
+                sec.resolvedPath = fp;
+              }
+              return sections;
+            };
+
+            // Convert a per-file unified diff section into DMP patch text
+            const unifiedToDmpPatch = (diffLines) => {
+              // DMP patch_fromText expects the GNU unified diff format
+              // We'll rebuild it cleanly
+              const patchLines = [];
+              for (const line of diffLines) {
+                const trimmed = line.trim();
+                if (trimmed.startsWith('diff ') || trimmed.startsWith('index ')) continue;
+                if (trimmed.startsWith('--- ') || trimmed.startsWith('+++ ')) continue;
+                patchLines.push(line);
+              }
+              return patchLines.join('\n');
+            };
+
+            const sections = parseDiffIntoFiles(diffText);
+            if (sections.length === 0) {
+              return socket.emit('sftp:patchResult', { success: false, error: 'No valid diff sections found' });
+            }
+
+            const results = [];
+            let completed = 0;
+
+            const resolveFilePath = (filePath, cb) => {
+              // Expand ~ to $HOME on the remote
+              if (filePath.startsWith('~')) {
+                // Use a quick exec to get $HOME
+                sshClient.exec('echo $HOME', (err, stream) => {
+                  if (err) return cb(filePath); // fallback
+                  let home = '';
+                  stream.on('data', (d) => home += d.toString().trim());
+                  stream.on('close', () => {
+                    if (home) {
+                      cb(filePath.replace(/^~/, home));
+                    } else {
+                      cb(filePath);
+                    }
+                  });
+                });
+              } else {
+                cb(filePath);
+              }
+            };
+
+            const processSection = (section) => {
+              resolveFilePath(section.resolvedPath, (absPath) => {
+                console.log(`🩹 [${socket.id}] Patching file: ${absPath}`);
+
+                // Read current file content
+                const readFile = (cb) => {
+                  getSftp((err, sftp) => {
+                    if (err) {
+                      // Fallback to exec cat
+                      sshClient.exec(`cat "${absPath}" 2>/dev/null || echo ""`, (err, stream) => {
+                        if (err) return cb(err, '');
+                        let content = '';
+                        stream.on('data', d => content += d.toString());
+                        stream.on('close', () => cb(null, content));
+                      });
+                      return;
+                    }
+                    const rs = sftp.createReadStream(absPath);
+                    let content = '';
+                    rs.on('data', d => content += d.toString());
+                    rs.on('end', () => cb(null, content));
+                    rs.on('error', (readErr) => {
+                      // File might not exist yet (new file)
+                      cb(null, '');
+                    });
+                  });
+                };
+
+                readFile((err, originalContent) => {
+                  if (err) {
+                    results.push({ file: absPath, success: false, error: err.message, originalContent: '', newContent: '' });
+                    finishOne();
+                    return;
+                  }
+
+                  // Create backup if backupId provided
+                  const doBackup = (cb) => {
+                    if (!backupId) return cb();
+                    getSftp((err, sftp) => {
+                      if (err) return cb(); // skip backup on error
+                      const backupPath = `${absPath}.bak.${backupId}`;
+                      const ws = sftp.createWriteStream(backupPath);
+                      ws.write(originalContent);
+                      ws.end();
+                      ws.on('close', () => {
+                        console.log(`💾 [${socket.id}] Backup created: ${backupPath}`);
+                        cb();
+                      });
+                      ws.on('error', () => cb()); // skip backup on error
+                    });
+                  };
+
+                  doBackup(() => {
+                    // Apply patch using diff-match-patch
+                    try {
+                      const dmp = new diff_match_patch();
+                      dmp.Match_Threshold = 0.5; // fuzzy matching
+                      dmp.Patch_DeleteThreshold = 0.5;
+
+                      // Build the unified diff text for this file
+                      const hunkText = section.diffLines.join('\n');
+                      
+                      // Try DMP patch_fromText with the raw hunk
+                      let patches;
+                      try {
+                        patches = dmp.patch_fromText(hunkText);
+                      } catch (e) {
+                        // Fallback: manually parse unified diff into DMP patches
+                        patches = dmp.patch_make(originalContent, applyManualUnifiedDiff(originalContent, section.diffLines));
+                      }
+
+                      if (!patches || patches.length === 0) {
+                        // Try manual line-by-line application as final fallback
+                        const manualResult = applyManualUnifiedDiff(originalContent, section.diffLines);
+                        if (manualResult !== null && manualResult !== originalContent) {
+                          writeResult(absPath, manualResult, () => {
+                            results.push({ file: absPath, success: true, method: 'manual', originalContent, newContent: manualResult });
+                            finishOne();
+                          });
+                          return;
+                        }
+                        results.push({ file: absPath, success: false, error: 'Could not parse patches', originalContent, newContent: originalContent });
+                        finishOne();
+                        return;
+                      }
+
+                      const [newText, patchResults] = dmp.patch_apply(patches, originalContent);
+                      const allApplied = patchResults.every(r => r === true);
+                      const anyApplied = patchResults.some(r => r === true);
+
+                      if (allApplied || anyApplied) {
+                        writeResult(absPath, newText, () => {
+                          results.push({ 
+                            file: absPath, 
+                            success: true, 
+                            method: 'dmp',
+                            partial: !allApplied,
+                            applied: patchResults.filter(r => r).length,
+                            total: patchResults.length,
+                            originalContent,
+                            newContent: newText
+                          });
+                          finishOne();
+                        });
+                      } else {
+                        // DMP failed, try manual line-by-line
+                        const manualResult = applyManualUnifiedDiff(originalContent, section.diffLines);
+                        if (manualResult !== null && manualResult !== originalContent) {
+                          writeResult(absPath, manualResult, () => {
+                            results.push({ file: absPath, success: true, method: 'manual-fallback', originalContent, newContent: manualResult });
+                            finishOne();
+                          });
+                        } else {
+                          results.push({ file: absPath, success: false, error: 'All hunks failed to apply', originalContent, newContent: originalContent });
+                          finishOne();
+                        }
+                      }
+                    } catch (patchErr) {
+                      console.error(`🩹 [${socket.id}] Patch error for ${absPath}:`, patchErr.message);
+                      results.push({ file: absPath, success: false, error: patchErr.message, originalContent, newContent: originalContent });
+                      finishOne();
+                    }
+                  });
+                });
+              });
+            };
+
+            // Manual unified diff application (line-by-line)
+            const applyManualUnifiedDiff = (original, diffLines) => {
+              try {
+                const origLines = original.split('\n');
+                const newLines = [...origLines];
+                let offset = 0;
+
+                // Parse hunks
+                let i = 0;
+                while (i < diffLines.length) {
+                  const line = diffLines[i].trim();
+                  const hunkMatch = line.match(/^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/);
+                  if (!hunkMatch) { i++; continue; }
+
+                  const oldStart = parseInt(hunkMatch[1]) - 1; // 0-indexed
+                  i++;
+
+                  let pos = oldStart + offset;
+                  while (i < diffLines.length) {
+                    const dl = diffLines[i];
+                    if (dl.trim().startsWith('@@ ') || dl.trim().startsWith('--- ') || dl.trim().startsWith('+++ ') || dl.trim().startsWith('diff ')) break;
+
+                    if (dl.startsWith('-')) {
+                      // Remove line
+                      if (pos < newLines.length) {
+                        newLines.splice(pos, 1);
+                        offset--;
+                      }
+                    } else if (dl.startsWith('+')) {
+                      // Add line
+                      newLines.splice(pos, 0, dl.slice(1));
+                      pos++;
+                      offset++;
+                    } else {
+                      // Context line (space prefix) — skip
+                      pos++;
+                    }
+                    i++;
+                  }
+                }
+                return newLines.join('\n');
+              } catch (e) {
+                console.error('Manual unified diff apply failed:', e);
+                return null;
+              }
+            };
+
+            const writeResult = (filePath, content, cb) => {
+              getSftp((err, sftp) => {
+                if (err) {
+                  // Fallback: use base64 write
+                  const b64 = Buffer.from(content).toString('base64');
+                  const cmd = `echo "${b64}" | base64 -d > "${filePath}"`;
+                  sshClient.exec(cmd, (err, stream) => {
+                    if (err) return cb(err);
+                    stream.on('close', () => cb());
+                  });
+                  return;
+                }
+                const ws = sftp.createWriteStream(filePath);
+                ws.write(content);
+                ws.end();
+                ws.on('close', () => cb());
+                ws.on('error', (writeErr) => cb(writeErr));
+              });
+            };
+
+            const finishOne = () => {
+              completed++;
+              if (completed >= sections.length) {
+                const allSuccess = results.every(r => r.success);
+                const successFiles = results.filter(r => r.success).map(r => r.file);
+                const failedFiles = results.filter(r => !r.success).map(r => ({ file: r.file, error: r.error }));
+                
+                console.log(`🩹 [${socket.id}] Patch complete: ${successFiles.length}/${sections.length} files patched`);
+                socket.emit('sftp:patchResult', {
+                  success: allSuccess,
+                  results,
+                  summary: allSuccess 
+                    ? `✅ Patched ${successFiles.length} file(s) successfully`
+                    : `⚠️ ${successFiles.length}/${sections.length} files patched. Failed: ${failedFiles.map(f => f.file).join(', ')}`
+                });
+              }
+            };
+
+            // Process all file sections
+            sections.forEach(processSection);
           });
 
           // Copy File/Directory
