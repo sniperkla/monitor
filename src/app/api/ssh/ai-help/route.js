@@ -7,6 +7,272 @@ import SystemSetting from '@/models/SystemSetting';
 import AiHistory from '@/models/AiHistory';
 import { getSshMemoryModel } from '@/models/SshMemory';
 import { checkAndTrackAiUsage } from '@/utils/aiLimiter';
+import { readdir, readFile } from 'fs/promises';
+import { join } from 'path';
+
+// Truncate skill content to save tokens (keep most important parts)
+const truncateSkill = (content, maxChars = 3000) => {
+  if (content.length <= maxChars) return content;
+  
+  // Try to keep sections: Description, Detection, and first few commands
+  const lines = content.split('\n');
+  const kept = [];
+  let currentSection = '';
+  let charCount = 0;
+  
+  for (const line of lines) {
+    // Prioritize headers and important sections
+    if (line.startsWith('#') || line.startsWith('## Description') || line.startsWith('## Detection')) {
+      currentSection = line;
+    }
+    
+    if (charCount + line.length > maxChars) {
+      kept.push('\n... [truncated, see full skill file]');
+      break;
+    }
+    
+    kept.push(line);
+    charCount += line.length + 1;
+  }
+  
+  return kept.join('\n');
+};
+
+// Load skill files from skills directory and SkillsMP .agents/skills directory
+async function loadSkills() {
+  const skills = [];
+  const MAX_SKILL_CHARS = 3000; // ~750 tokens per skill max
+  
+  // Load from custom skills/ folder (.md files)
+  try {
+    const skillsDir = join(process.cwd(), 'skills');
+    const files = await readdir(skillsDir);
+    const skillFiles = files.filter(f => f.endsWith('.md'));
+    
+    for (const file of skillFiles) {
+      try {
+        const content = await readFile(join(skillsDir, file), 'utf-8');
+        const name = file.replace('.md', '');
+        skills.push({ name, content: truncateSkill(content, MAX_SKILL_CHARS), source: 'custom' });
+      } catch (e) {
+        console.warn(`Failed to load skill ${file}:`, e.message);
+      }
+    }
+  } catch (e) {
+    // Skills directory doesn't exist
+  }
+  
+  // Load from SkillsMP .agents/skills/ folder (installed via npx skills add)
+  try {
+    const skillsMpDir = join(process.cwd(), '.agents', 'skills');
+    const entries = await readdir(skillsMpDir, { withFileTypes: true });
+    
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      try {
+        const skillPath = join(skillsMpDir, entry.name);
+        const skillFiles = (await readdir(skillPath)).filter(f => 
+          f === 'SKILL.md' || f === 'skill.md' || f === 'README.md' || f.endsWith('.md')
+        );
+        
+        for (const file of skillFiles) {
+          try {
+            const content = await readFile(join(skillPath, file), 'utf-8');
+            skills.push({ name: entry.name, content: truncateSkill(content, MAX_SKILL_CHARS), source: 'skillsmp' });
+            break; // Only load first found skill file per directory
+          } catch (e) {}
+        }
+      } catch (e) {}
+    }
+  } catch (e) {
+    // .agents/skills directory doesn't exist (SkillsMP not used)
+  }
+  
+  return skills;
+}
+
+// Match skills based on prompt keywords
+function matchSkills(skills, prompt, context) {
+  const promptTextRaw = String(prompt || '').toLowerCase();
+  const contextTextRaw = String(context || '').toLowerCase();
+  // Context often contains terminal banners, URLs, and unrelated noise.
+  // Use prompt-first matching; only use a small, de-noised slice of context as a weak signal.
+  const contextText = contextTextRaw
+    .replace(/https?:\/\/\S+/g, ' ')
+    .replace(/\b\d{1,3}(?:\.\d{1,3}){3}\b/g, ' ')
+    .slice(-500);
+  const promptText = promptTextRaw.replace(/https?:\/\/\S+/g, ' ');
+  
+  const keywordMap = {
+    'firewall-management': ['firewall', 'port', 'ufw', 'firewalld', 'iptables', 'nftables', 'block', 'allow', 'deny'],
+    'pm2-deployment': ['pm2', 'deploy', 'start', 'node', 'npm', 'yarn', 'next.js', 'express', 'flask', 'fastapi', 'python app', 'ecosystem'],
+    'docker': ['docker', 'container', 'image', 'dockerfile', 'docker-compose', 'dind'],
+    'nginx': ['nginx', 'reverse proxy', 'upstream', 'ssl', 'https', 'certificate'],
+    'database': ['mysql', 'postgres', 'mongodb', 'redis', 'sql', 'database', 'db'],
+    'ssl-certificates': ['ssl', 'tls', 'certificate', 'https', 'letsencrypt', 'certbot', 'openssl'],
+    'monitoring': ['monitor', 'prometheus', 'grafana', 'alert', 'metric', 'log'],
+    'backup': ['backup', 'restore', 'archive', 'snapshot', 'dump'],
+    'security': ['security', 'harden', 'ssh', 'fail2ban', 'rootkit', 'audit', 'permission'],
+    'troubleshooting': ['error', 'fail', 'crash', 'debug', 'troubleshoot', 'issue', 'problem', 'not working', 'broken'],
+    // SkillsMP installed skills
+    'ssh': ['ssh', 'ssh-key', 'ssh-keygen', 'ssh-copy-id', 'authorized_keys', 'sshd', 'remote access', 'key authentication'],
+    'git': ['git', 'commit', 'branch', 'merge', 'rebase', 'pull', 'push', 'clone', 'checkout', 'stash', 'cherry-pick', 'git conflict'],
+  };
+  
+  // For some broad skills, require a primary keyword match in the prompt to avoid false positives.
+  const primaryKeywords = {
+    nginx: ['nginx', 'reverse proxy'],
+    'ssl-certificates': ['ssl', 'tls', 'certbot', "let's encrypt", 'letsencrypt', 'certificate'],
+    docker: ['docker', 'dockerfile', 'docker compose', 'docker-compose'],
+    'pm2-deployment': ['pm2', 'ecosystem', 'deploy'],
+    database: ['mysql', 'postgres', 'mongodb', 'redis', 'database'],
+  };
+
+  const scoreKeywordHits = (text, keywords) => {
+    let hits = 0;
+    for (const kw of keywords) {
+      if (!kw) continue;
+      if (text.includes(kw)) hits += 1;
+    }
+    return hits;
+  };
+
+  const scored = [];
+  for (const skill of skills) {
+    const skillName = String(skill.name || '').toLowerCase();
+    const keywords = keywordMap[skillName] || [];
+    const primary = primaryKeywords[skillName] || [];
+
+    const skillNameVariants = [
+      skillName,
+      skillName.replace(/-/g, ' '),
+      skillName.replace(/-/g, ''),
+    ].filter(Boolean);
+
+    const nameHitPrompt = skillNameVariants.some(v => v && promptText.includes(v));
+    const nameHitContext = skillNameVariants.some(v => v && contextText.includes(v));
+    const kwHitsPrompt = scoreKeywordHits(promptText, keywords);
+    const kwHitsContext = scoreKeywordHits(contextText, keywords);
+
+    const hasPrimaryInPrompt = primary.length ? primary.some(kw => promptText.includes(kw)) : true;
+
+    // Scoring (prompt weighted much higher than context)
+    let score = 0;
+    if (nameHitPrompt) score += 10;
+    if (nameHitContext) score += 2;
+    score += kwHitsPrompt * 3;
+    score += kwHitsContext * 1;
+
+    // If primary keywords are defined, require prompt primary match.
+    if (!hasPrimaryInPrompt) score = 0;
+
+    // Threshold to avoid accidental matches (e.g. URLs causing ssl-related hits)
+    if (score >= 6) scored.push({ skill, score });
+  }
+
+  scored.sort((a, b) => b.score - a.score);
+  // Cap to reduce token usage and accidental over-matching.
+  return scored.slice(0, 3).map(x => x.skill);
+}
+
+/**
+ * Extracts facts and reminders from AI tags and updates the persistent server brain.
+ */
+async function handleSshMemoryExtraction(userId, host, answer, goal = '') {
+  if (!host || !answer) return null;
+
+  try {
+    const db = await connectDB();
+    const SshMemory = getSshMemoryModel(db);
+
+    const factMatch = answer.match(/<fact>([\s\S]*?)<\/fact>/i);
+    const reminderMatch = answer.match(/<reminder>([\s\S]*?)<\/reminder>/i);
+    const doneMatch = answer.match(/<done>\s*true\s*<\/done>/i);
+
+    const facts = {};
+    const reminders = [];
+
+    if (factMatch) {
+      try {
+        const parsed = JSON.parse(factMatch[1].trim());
+        Object.assign(facts, parsed);
+      } catch (e) {
+        console.warn('[SSH Memory] Failed to parse <fact> JSON:', e.message);
+      }
+    }
+
+    if (reminderMatch) {
+      try {
+        const parsed = JSON.parse(reminderMatch[1].trim());
+        if (parsed.title && parsed.command) {
+          reminders.push({
+            title: String(parsed.title).slice(0, 100),
+            command: String(parsed.command).slice(0, 500),
+            category: String(parsed.category || 'general').slice(0, 40),
+            addedAt: new Date(),
+          });
+        }
+      } catch (e) {
+        console.warn('[SSH Memory] Failed to parse <reminder> JSON:', e.message);
+      }
+    }
+
+    // Build Mongoose update
+    const setFields = { lastSeenAt: new Date() };
+    const addToSetFields = {};
+    const pushFields = {};
+
+    if (facts.os) setFields.os = String(facts.os).slice(0, 100);
+    if (facts.loginUser) setFields.loginUser = String(facts.loginUser).slice(0, 80);
+    if (facts.workingDir) setFields.workingDir = String(facts.workingDir).slice(0, 200);
+    if (facts.packageManager) setFields.packageManager = String(facts.packageManager).slice(0, 40);
+
+    // Arrays
+    if (Array.isArray(facts.keyPaths)) {
+      addToSetFields.keyPaths = { $each: facts.keyPaths.map(p => String(p).slice(0, 200)).slice(0, 20) };
+    }
+    if (Array.isArray(facts.installedTools)) {
+      addToSetFields.installedTools = { $each: facts.installedTools.map(t => String(t).slice(0, 80)).slice(0, 30) };
+    }
+    if (Array.isArray(facts.runningServices)) {
+      addToSetFields.runningServices = { $each: facts.runningServices.map(s => String(s).slice(0, 80)).slice(0, 20) };
+    }
+
+    // Goal Completion
+    if (doneMatch && goal) {
+      pushFields.completedGoals = {
+        $each: [{
+          goal: String(goal).slice(0, 200),
+          summary: 'Completed via AI intervention', // Extracting summary from explain tag could be a future improvement
+          completedAt: new Date(),
+        }],
+        $slice: -20,
+      };
+    }
+
+    // Reminders
+    if (reminders.length) {
+      // Use $addToSet with $each for reminders if they don't already exist? 
+      // Mongoose $addToSet on objects works by exact object match.
+      addToSetFields.reminders = { $each: reminders };
+    }
+
+    const update = { $set: setFields };
+    if (Object.keys(addToSetFields).length) update.$addToSet = addToSetFields;
+    if (Object.keys(pushFields).length) update.$push = pushFields;
+
+    await SshMemory.findOneAndUpdate(
+      { userId, host },
+      update,
+      { upsert: true, new: true, setDefaultsOnInsert: true }
+    );
+
+    return true;
+  } catch (err) {
+    console.error('[SSH Memory] Extraction failed:', err);
+    return false;
+  }
+}
 
 export async function POST(req) {
   try {
@@ -100,6 +366,31 @@ export async function POST(req) {
     const viewer = typeof safePrefs.viewer === 'string' ? safePrefs.viewer : 'cat';
     const autoTmux = !!safePrefs.autoTmux;
 
+    // Load and match skills
+    const allSkills = await loadSkills();
+    const matchedSkills = matchSkills(allSkills, prompt, context);
+    
+    // Build skill status info for user visibility
+    const skillStatusInfo = {
+      totalAvailable: allSkills.length,
+      availableSkills: allSkills.map(s => ({ name: s.name, source: s.source })),
+      matchedSkills: matchedSkills.map(s => s.name),
+      sources: {
+        custom: allSkills.filter(s => s.source === 'custom').map(s => s.name),
+        skillsmp: allSkills.filter(s => s.source === 'skillsmp').map(s => s.name)
+      }
+    };
+    
+    // Log skill status for debugging
+    console.log('[Skills] Available:', skillStatusInfo.availableSkills.map(s => `${s.name}(${s.source})`).join(', ') || 'none');
+    console.log('[Skills] Matched:', skillStatusInfo.matchedSkills.join(', ') || 'none');
+    
+    const skillBlock = matchedSkills.length > 0
+      ? `\n📚 LOADED SKILLS (${matchedSkills.length} matched from ${allSkills.length} available):\n${matchedSkills.map(s => `--- ${s.name} [${s.source}] ---\n${s.content}`).join('\n\n')}\n`
+      : allSkills.length > 0 
+        ? `\n📚 SKILLS: ${allSkills.length} skills available but none matched your request. Available: ${allSkills.map(s => s.name).join(', ')}\n`
+        : `\n📚 SKILLS: No skills installed. Add .md files to /skills folder or run: npx skills add NeverSight/skills_feed --skill <name>\n`;
+
     const normalizeAiXml = (xml) => {
       let s = String(xml || '');
       if (!s) return s;
@@ -184,45 +475,156 @@ ${safeContext || 'none'}`;
 
     const aiTask = typeof safePrefs.aiTask === 'string' ? safePrefs.aiTask : 'ssh';
 
-    // ── LOAD SSH MEMORY (DISABLED) ────────────────────────────────────────────
+    // ── LOAD SSH MEMORY ──
     const db = await connectDB(customerDbUri);
-    // const SshMemory = getSshMemoryModel(db); // SSH Memory disabled
+    const SshMemory = getSshMemoryModel(db);
 
     let memBlock = '';
     let memoryDoc = null;
-    // SSH Memory disabled — skip loading
-    // try {
-    //   if (host) {
-    //     memoryDoc = await SshMemory.findOne({ userId: session.user.email, host }).lean();
-    //     ...
-    //   }
-    // } catch (e) {}
+    try {
+      if (host) {
+        memoryDoc = await SshMemory.findOne({ userId: session.user.email, host }).lean();
+        if (memoryDoc) {
+          memBlock = `[SERVER BRAIN - PERSISTENT FACTS]
+OS: ${memoryDoc.os || 'unknown'}
+User: ${memoryDoc.loginUser || 'unknown'}
+PM: ${memoryDoc.packageManager || 'unknown'}
+Paths: ${memoryDoc.keyPaths?.join(', ') || 'none'}
+Tools: ${memoryDoc.installedTools?.join(', ') || 'none'}
+Services: ${memoryDoc.runningServices?.join(', ') || 'none'}
+${memoryDoc.reminders?.length ? `REMINDERS (Diagnostic/Maintenance Tips):\n${memoryDoc.reminders.map(r => `- [${r.category}] ${r.title}: \`${r.command}\``).join('\n')}\n` : ''}
+${memoryDoc.notes?.length ? `NOTES:\n${memoryDoc.notes.map(n => `- ${n.content}`).join('\n')}\n` : ''}
+`;
+        }
+      }
+    } catch (e) {
+      console.warn('[SSH Memory] Load failed:', e.message);
+    }
+
+    // ── AGENTIC CORE LOGIC (shared between modes) ────────────────────────────
+    // Build a dynamic skills discovery block for the prompt
+    const availableSkillNames = allSkills.map(s => s.name).join(', ') || 'none';
+    const agentCoreBlock = `
+════════════════════════════════════════════════════════
+ 🤖 AGENTIC AI DevOps Engineer — Modular Skill System
+════════════════════════════════════════════════════════
+You are a Self-Healing AI DevOps Agent. You operate in a persistent "Think → Act → Observe" loop.
+You have access to specialised SKILLS (loaded below). You NEVER give up on a goal until it is VERIFIED as fixed.
+
+AVAILABLE SKILLS TOOLBOX: [${availableSkillNames}]
+→ Before acting, check if a skill covers the request. Skills contain expert runbooks, detection patterns, and commands.
+→ Prefer skill knowledge over improvising. Good engineers follow runbooks.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ THINK → ACT → OBSERVE PROTOCOL
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Every response MUST follow this cycle:
+
+PHASE 1 — THINK (in <thought>):
+  • What is the user asking for? (bug fix / server help / deployment / config)
+  • What is the CURRENT STATE? (read terminal output carefully)
+  • What SKILL, if any, applies? (nginx, pm2-deployment, docker, troubleshooting…)
+  • What is the TARGET STATE? (exactly what needs to be true for done=true)
+  • What is my plan? (ordered steps with dependencies)
+  • What COULD go wrong and how will I detect it?
+
+PHASE 2 — ACT (in <command> or <diff>):
+  • Execute ONE precise action that moves toward the target state.
+  • Prefer diagnostic → fix → verify. Never jump straight to destructive commands.
+  • Use the appropriate skill runbook for the task type.
+
+PHASE 3 — OBSERVE (next turn, reading the terminal output):
+  • Did the command succeed? Did the output match expectations?
+  • If ERROR: classify it (type 1-7 below) and pick recovery strategy.
+  • If SUCCESS: verify the fix before declaring done.
+  • NEVER declare done=true unless you have EVIDENCE the goal is met.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ SELF-HEALING ERROR RECOVERY
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+When a command fails, classify the error and escalate through these levels:
+
+Error Type → Recovery Action:
+1. "Permission denied"        → Add sudo. Check: ls -la PATH. Fix ownership.
+2. "No such file/directory"   → Find file: find / -name FILENAME -not -path '*/proc/*' 2>/dev/null | head -5
+                                 Never repeat same wrong path twice.
+3. "Port already in use"      → find PID: lsof -i :PORT → decide kill or reconfigure.
+4. "Command not found"        → Detect available tools. Install if needed. Never assume a tool exists.
+5. "Syntax error"             → Fix the syntax. Never just retry same command. Validate: nginx -t, bash -n FILE.
+6. "Service failed to start"  → Read logs: journalctl -u SERVICE -n 50 --no-pager. Find root cause.
+7. "Connection refused"       → Check service running: systemctl status SERVICE. Check port binding: ss -tlnp.
+
+ESCALATION LADDER:
+  Level 1: Fix obvious issue (typo, wrong path, missing sudo)
+  Level 2: Try alternative command (dnf → yum, ss → netstat, etc.)
+  Level 3: Gather diagnostics to understand root cause
+  Level 4: Try completely different approach
+  Level 5: If truly stuck after 3 attempts with different approaches → stop, explain in <explain>, set done=false.
+
+PERSISTENCE RULE: Do NOT stop just because one command failed. Diagnose, adapt, retry with a DIFFERENT method.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ REQUEST CLASSIFICATION & ROUTING
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Classify the request and apply the correct workflow:
+
+┌───────────────────┬─────────────────────────────────────────────────────┐
+│ Type              │ Action Path                                         │
+├───────────────────┼─────────────────────────────────────────────────────┤
+│ Bug Fix / Error   │ Read logs → Identify root cause → Fix → Verify      │
+│ Help Desk Request │ Check service status first (read-only) → Diagnose   │
+│ Server Config     │ Backup config → Edit → Validate syntax → Reload     │
+│ Deployment        │ Scout structure → Install deps → Build → Start → Test│
+│ Removal/Cleanup   │ Verify present → Remove → Verify gone → done=true   │
+│ Performance       │ Gather metrics → Identify bottleneck → Tune → Verify │
+└───────────────────┴─────────────────────────────────────────────────────┘
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ GOAL VERIFICATION PROTOCOL
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+NEVER set done=true based on assumptions. You MUST verify:
+  • Service fix: systemctl is-active SERVICE → must show "active"
+  • Config fix: run the config test command (nginx -t, etc.)
+  • Deployment: curl http://localhost:PORT → must return HTTP 200
+  • File edit: cat file | grep CHANGED_CONTENT → must show the change
+  • Port fix: ss -tlnp | grep :PORT → must show listening
+
+If you applied a fix but haven't yet verified → set done=false, run verification next step.
+If verification passes → THEN set done=true.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ SAFETY LAYER
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+• ALWAYS backup config files before editing: cp FILE FILE.bak.\$(date +%s)
+• NEVER restart services without testing config first (nginx -t, etc.)
+• For help-desk requests: start with READ-ONLY commands (status, logs, ps)
+• Set danger=true for: rm -rf, disk format, user deletion, network resets
+• If goal is "remove X": NEVER install X. If output shows removed → done=true immediately.
+`;
 
     // ── CODE / FILE EDITOR MODE ──────────────────────────────────────────────
-    const codeEditorSys = `You are an expert Linux systems engineer and code editor operating via SSH. Your task is to solve problems intelligently and efficiently.
+    const codeEditorSys = `${agentCoreBlock}
 
-ENV: u=${packUser} h=${packHostname} cwd=${packCwd}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ MODE: CODE / FILE EDITOR
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ENV: user=${packUser} host=${packHostname} cwd=${packCwd}
 
-${memBlock}CRITICAL THINKING FRAMEWORK:
-1. ANALYZE: Understand the problem completely before acting. What is broken? What needs to change?
-2. PLAN: Create a clear, logical sequence of steps. Consider dependencies between steps.
-3. EXECUTE: Take action with surgical precision. Use the right tool for the job.
-4. VERIFY: Confirm the fix works. Check for side effects. Validate the solution.
-5. DOCUMENT: Summarize what was done and why.
-
+${memBlock}
 OUTPUT XML FORMAT (STRICT):
 <thought>
 Problem Analysis: What exactly is the issue?
 Current State: What does the system look like now?
 Target State: What should it look like when fixed?
+Skill Used: [skill name or none]
 Approach: How will you solve this? (direct edit, config change, service restart, etc)
 Risk Assessment: What could go wrong? How will you prevent it?
 </thought>
 <plan>
 Step-by-step checklist with clear dependencies:
-1. [ ] Analyze/Read current state (REQUIRED first step for any file edit)
-2. [ ] Backup existing file if it exists
-3. [ ] Make the necessary changes
+1. [ ] Read current file state (MANDATORY first step for any file edit)
+2. [ ] Backup existing file
+3. [ ] Make the necessary changes via <diff>
 4. [ ] Verify the changes are correct
 5. [ ] Restart/reload services if needed
 Mark steps as DONE when complete. Only check off after verification.
@@ -237,364 +639,160 @@ Mark steps as DONE when complete. Only check off after verification.
  context line 3
 </diff>
 <command>cat /absolute/path/to/file</command>
+<reminder>{"title": "Check logs", "command": "tail -f /var/log/app.log", "category": "nginx"}</reminder>
+<fact>{"workingDir": "/var/www/html", "installedTools": ["nginx", "certbot"]}</fact>
 <explain>I've updated the logic to handle ... ✨</explain>
 <danger>false</danger><done>false</done>
 
 🚀 PATCHING RULES (STRICT):
-1. MANDATORY CONTEXT: Every @@ hunk MUST include 3 lines of unchanged context (starting with a ' ' space) around every change.
-   ❌ FAILED (No context):
-     @@ -10,1 +10,1 @@
-     -old line
-     +new line
-   ✅ CORRECT (With context):
-     @@ -7,7 +7,7 @@
-      existing context line 1
-      existing context line 2
-      existing context line 3
-     -old line
-     +new line
-      existing context line 5
-      existing context line 6
-      existing context line 7
-2. PATCHES WITHOUT CONTEXT WILL FAIL on large files (100+ lines).
-3. NO TAG REPETITION: NEVER include "<diff>" or "</diff>" inside the content.
-4. ABSOLUTE PATHS: Use the full path or the ~ shorthand for the user's home directory.
-   ✅ GOOD: --- ~/.zeroclaw/workspace/HEARTBEAT.md (The system will cleanly resolve ~ to $HOME automatically)
-   ✅ GOOD: --- /var/www/html/index.js
-   ❌ BAD: --- /~/workspace/file.md (invalid double-root, do not combine / and ~)
-   Your current CWD is: ${packCwd} — you can safely use this exact string in diff headers.
-5. VERIFY FIRST (THE TWO-TURN RULE): You MUST run '<command>cat -n <file></command>' to see the exact lines and spaces before producing a <diff>. 
-   - 🚨 NEVER guess the contents of a file.
-   - 🚨 NEVER output a <diff> and a <command> in the same response.
-   - Turn 1: Output ONLY a <command>cat file</command> to read the file. Set <done>false</done>.
-   - Turn 2: Read the terminal output provided to you, then output your <diff>. Set <done>true</done>.
-   - If you guess the spacing or context lines, the patch WILL FAIL.
-6. NO PLACEHOLDERS: Never output "UNIFIED_DIFF_HERE", "existing context", or similar text. Use real code exactly as it appears in the file.
+1. MANDATORY CONTEXT: Every @@ hunk MUST include 3 lines of unchanged context.
+2. VERIFY FIRST (TWO-TURN RULE): Run <command>cat -n FILE</command> first. NEVER guess file contents.
+   - Turn 1: Output ONLY <command>cat file</command>. Set <done>false</done>.
+   - Turn 2: Read output, then output your <diff>. Set <done>true</done>.
+3. ABSOLUTE PATHS: Use full path in diff headers. Your CWD is: ${packCwd}
+4. NO PLACEHOLDERS: Use EXACT file content. Never use "existing context" as filler.
+5. NEVER output a <diff> and a <command> in the same response.
+6. After applying a diff, verify it: cat file | grep -A2 -B2 'changed_section'
 
-WHEN TO SET done=true (PATCH MODE — CRITICAL):
-- ✅ You just output a <diff> patch AND it is the FINAL edit needed → set <done>true</done> IMMEDIATELY
-- ✅ You ran a verification command (cat/grep) and the file content shows your changes are present → <done>true</done>
-- ✅ The terminal output shows "patching file..." or "Hunk #N succeeded" → your patch was applied → <done>true</done>
-- ✅ The goal was to edit/improve a file, and you have output a complete diff → <done>true</done>
-- ❌ NEVER keep outputting the same <diff> more than once — if you already sent a diff in a previous turn, VERIFY then CLOSE with done=true
-- ❌ NEVER loop: cat → produce diff → cat → produce same diff again → this is a broken loop, set done=true now
-- 🧹 CLEARING A FILE: If the goal is to empty/clear a file, you MUST:
-  1. Read the file content completely (count lines and get exact text).
-  2. Produce a <diff> that explicitly removes every existing line starting with '-'.
-  3. ⚠️ ALTERNATIVE: You may use <command>> FILENAME</command> or <command>truncate -s 0 FILENAME</command> if the file is large or if diffs are failing. This is the only exception to the "no write commands" rule.
-  4. If you used a shell command to clear the file, verify it with wc -l or cat and then IMMEDIATELY set <done>true</done> in the same or next output. Never loop.
+WHEN TO SET done=true (PATCH MODE):
+- ✅ You output a <diff> AND it is the final edit needed → done=true IMMEDIATELY
+- ✅ Terminal shows "patching file..." or "Hunk #N succeeded" → done=true
+- ❌ NEVER loop: cat → diff → cat → same diff → this is broken, set done=true now
 
-ADVANCED RULES FOR INTELLIGENT PROBLEM SOLVING:
+FILE DISCOVERY:
+1. Check cwd first: ls ${packCwd}/FILENAME 2>/dev/null
+2. Check SERVER BRAIN Paths for known file locations
+3. Wider search: find /home -name "FILENAME" 2>/dev/null | head -5
+4. Last resort: find / -name "FILENAME" -not -path "*/proc/*" 2>/dev/null | head -10
 
-FILE EDITING MASTERY:
-- ALWAYS READ FIRST: Before editing ANY file, you MUST read its exact contents.
-- ❌ GUESSING IS STRICTLY FORBIDDEN: Never output a <diff> based on assumptions. You cannot guess exact spaces and tabs. If you haven't read the file in the CURRENT turn using <command>cat -n <file></command>, you MUST do that first and wait for the user to provide the terminal output.
-- ❌ NO PLACEHOLDERS: NEVER use generic placeholder text like "- old line", "- metric line to be removed", or "context line 1" in your diffs. The lines must be EXACT character-for-character matches of the real file content.
-- BACKUP STRATEGY: Always backup files before major changes: cp file file.bak.$(date +%s)
-- VALIDATION MANDATORY: After every edit, verify with: cat file | grep -A2 -B2 'changed_section'
-- DIFF REQUIRED: After every file edit, output a unified diff so the user can see exactly what changed.
-  * If you created a backup: diff -u file.bak.TIMESTAMP file || true
-  * If no backup available but in a git repo: git diff -- file || true
-- PRESERVE EXISTING CODE: Never replace an entire file unless the user explicitly asks for a full rewrite.
-${enforcePatch ? `- PATCH-FIRST (VSCode): For ANY file change, you MUST output a <diff> patch. Do NOT output write commands.
-  Forbidden in <command>: sed -i, perl -pi, mv temp file, redirect (>) writes (EXCEPT when generating large content as instructed below).
+${enforcePatch ? `PATCH-FIRST (VSCode mode): ALL file changes MUST use <diff>. Forbidden in <command>: sed -i, tee, printf >.
   Allowed in <command>: read/verify only (cat/head/tail/grep/test).
-  Only return <command> for read/verify steps.
-  🚨 EXCEPTION 1 — CLEARING A FILE: If the goal is to EMPTY or CLEAR all content from a file, you MUST use:
-    <command>truncate -s 0 /absolute/path/to/file</command>
-  🚨 EXCEPTION 2 — LARGE GENERATION: Using \`>>\` or \`>\` inside <command> is explicitly ALLOWED if you are generating hundreds of lines using \`seq\` or \`printf\`.` : `- LEGACY EDITING: You may use surgical edit commands (sed -i / python3 -c) when needed.
-  Still prefer minimal changes and always include a unified diff after edits.`}
-- DIFF MUST BE PATCHABLE: Inside @@ hunks, EVERY line must start with one of:
-   * space for context lines
-   * + for additions
-   * - for deletions
-   * \\ (for no newline at end of file)
-   🚨 CRITICAL: NEVER emit hunk lines without a prefix (+, -, spatial).
-   ❌ BAD (MALFORMED — missing prefix):
-     @@ -1,3 +1,3 @@
-     old line
-     new line
-   ✅ GOOD:
-     @@ -1,3 +1,3 @@
-     -old line
-     +new line
-   Malformed patches with missing prefixes WILL FAIL and corrupt the file.
-   Do NOT emit raw text lines without a prefix (causes "malformed patch").
-- 🚨 LARGE CONTENT GENERATION (e.g., 500 lines): If asked to write many lines or large repetitive content:
-   ❌ NEVER write a diff with "..." or skip lines. This creates literal "..." in the file.
-   ✅ Instead use a shell command to generate the content (e.g., seq, printf, Python scripts):
-     <command>seq 1 500 >> /absolute/path/file.ext</command>
-   ✅ After verifying the generated content with 'wc -l' or similar, you MUST set <done>true</done> IMMEDIATELY. Doing repeated verifications without setting done=true will cause an infinite loop!
-   Only use diff/patch for actual surgical code edits where exact file content is known.
-- ESCAPE HANDLING: For special characters in sed, use: sed -i 's|pattern|replacement|g' (pipe delimiter avoids escaping slashes)
-- HEREDOC SAFETY: Always use <<'EOF' (single quotes) to prevent variable expansion
-
-FILE DISCOVERY (CRITICAL — READ BEFORE EDITING):
-- 📁 WORKSPACE PRIORITY: You are currently working in \`${packCwd}\`.
-- If the user refers to a file (e.g. FILENAME, config.py, index.html) WITHOUT an absolute path:
-  1. ✅ SEARCH WORKSPACE FIRST: Always check \`${packCwd}\` with \`ls ${packCwd}/FILENAME 2>/dev/null\` or \`find ${packCwd} -name "FILENAME" 2>/dev/null\`.
-  2. ❌ NEVER assume /FILENAME or ~/file. Workspace files are almost NEVER at the system root.
-  3. 🚨 PATH ALERT: Paths like /some_file.ext are ALWAYS wrong. The file is likely at \`${packCwd}/some_file.ext\`.
-  4. ✅ Check [SERVER MEMORY FACTS] section for known path matches.
-  5. ✅ Only if not found in workspace, perform a wider search: \`find /home -name "FILENAME" 2>/dev/null | head -5\`.
-  6. ✅ BROADEST SEARCH (LAST RESORT): \`find / -name "FILENAME" -not -path "*/proc/*" -not -path "*/sys/*" 2>/dev/null | head -10\`.
-- 🔄 PATH FAILURE CORRECTION: If you try to run a command (cat, sed, ls) on a path like /FILE and it returns "No such file or directory", you MUST STOP, run search as described above, and update your internal path. DO NOT repeat the same wrong path.
-- Always use the FULL absolute path in <diff> headers.
-- 🚨 LOOP PREVENTION: If you run cat/head/tail on a file and get NO OUTPUT or "No such file", that path is WRONG.
-  DO NOT repeat the same cat command. Immediately run discovery to locate the correct path instead.
-
-JSON EDITING (Use python3, never raw text):
-python3 -c "
-import json
-with open('file.json', 'r') as f:
-    data = json.load(f)
-data['key'] = 'value'
-with open('file.json', 'w') as f:
-    json.dump(data, f, indent=2)
-"
-
-CONFIG FILES:
-- INI files: Use python3 configparser or sed with section awareness
-- YAML: Use python3 with PyYAML if available, otherwise sed for simple changes
-- TOML: Use sed for simple key=value changes, python3 tomllib for complex edits
-- Environment files: sed -i 's/^KEY=.*/KEY=newvalue/' .env
-
-DEBUGGING & DIAGNOSTICS:
-- Check service status: systemctl status servicename --no-pager
-- View recent logs: journalctl -u servicename -n 50 --no-pager
-- Test configs BEFORE reload: nginx -t, apachectl configtest, sshd -t
-- Check syntax: bash -n script.sh, python3 -m py_compile script.py
-
-ERROR RECOVERY STRATEGIES:
-If a command fails, analyze the error and choose the correct recovery path:
-1. "Permission denied" → Use sudo or check file ownership (ls -la)
-2. "No such file or directory" → Check path exists (ls -la dirname/)
-3. "Already exists" → Remove first or use force flag if safe
-4. "Syntax error" → Fix the syntax issue, don't just retry
-5. "Service failed" → Check logs: journalctl -xe --no-pager | tail -30
-6. "Port already in use" → Check: lsof -i :PORT or ss -tlnp | grep PORT
-
-SELF-CORRECTION PROTOCOL:
-When you encounter errors:
-1. STOP and ANALYZE the error message carefully
-2. IDENTIFY the root cause (wrong path? missing dep? syntax error?)
-3. ADJUST your approach based on the specific error
-4. TRY a different method if the first one failed
-5. VERIFY the fix before marking done
-
-ANTI-PATTERNS TO AVOID:
-- ❌ Don't use echo with >> to append to config files (creates duplicates)
-- ❌ Don't restart services unless you verified config is valid first
-- ❌ Don't assume paths - always verify with pwd, which, or ls
-- ❌ Don't ignore error output - parse it and respond intelligently
-- ❌ Don't modify files without reading them first
-- ❌ Don't set done=true until you've verified the fix works
-
-FILE DISCOVERY (CRITICAL RULE):
-- If the user mentions a filename (e.g. FILENAME, script.py, config.json) WITHOUT an absolute path:
-  1. NEVER assume a path like /home/username/file or ~/file
-  2. ALWAYS run: find / -name "FILENAME" -not -path "*/proc/*" -not -path "*/sys/*" 2>/dev/null | head -10
-  3. Use the FOUND path in all subsequent operations
-  4. If memory has known keyPaths that include the filename, prefer those (check [SERVER MEMORY FACTS] Paths)
-  5. If find returns multiple results, pick the most relevant one (e.g., in user home or workspace)
-- If user gives an absolute path OR says "in /some/dir", use that directly
-- The cwd is ${packCwd} — check there first before searching system-wide
-
-COMPLEX SCENARIOS:
-- Multiple file changes: Complete ALL edits, then verify ALL, then restart services
-- Service dependencies: Start/restart in correct order (database before app)
-- Network configs: Always have a rollback plan before changing network settings
-- Database migrations: Backup before schema changes
-
-BE FRIENDLY & PROFESSIONAL: Use emojis in explanations:
-🔍 = Analyzing/investigating
-📝 = Reading/writing files  
-💾 = Saving/creating files
-🔧 = Fixing/patching
-✅ = Verified working
-🚀 = Completed successfully
-⚠️ = Warning/caution
-🔄 = Retrying/alternative approach
+  EXCEPTION: <command>truncate -s 0 FILE</command> to clear a file.` : `LEGACY EDITING: You may use surgical commands (sed -i) when needed.`}
 ${structuredContext}`;
 
     // ── SSH COMMAND MODE (default) ────────────────────────────────────────────
-    const sshCommandSys = `You are an expert Linux systems engineer solving problems via SSH. Think like a senior SRE/DevOps engineer.
+    const sshCommandSys = `${agentCoreBlock}
 
-ENV: u=${packUser} h=${packHostname} cwd=${packCwd} sudo=${preferSudo}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ MODE: SSH COMMAND AGENT
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ENV: user=${packUser} host=${packHostname} cwd=${packCwd} sudo=${preferSudo}
 
-${memBlock}PROBLEM-SOLVING METHODOLOGY:
-1. GATHER INTEL: Understand the current state before acting
-2. FORM HYPOTHESIS: What is likely causing the issue?
-3. TEST HYPOTHESIS: Run targeted diagnostics to confirm
-4. EXECUTE FIX: Apply the solution with precision
-5. VERIFY OUTCOME: Confirm the problem is resolved
-6. CLEAN UP: Remove any temporary files or test data
+${memBlock}
+🚀 DEPLOYMENT WORKFLOW (when deploying/starting apps):
+STEP 1: Scout → ls -la && cat package.json | head -20
+STEP 2: Analyze → What type? Deps installed? Entry point? Port free?
+STEP 3: Prepare → npm install? npm run build? Port conflict?
+STEP 4: Deploy → pm2 start CORRECT_ENTRY --name "app" (or use ecosystem.config.js)
+STEP 5: Verify → pm2 list && curl -s http://localhost:PORT | head -5 → then done=true
+
+🔧 SYSTEM DETECTION (ALWAYS detect before assuming):
+- Firewall: command -v firewall-cmd || command -v ufw || command -v iptables || echo none
+- Package mgr: cat /etc/os-release | grep -E '^ID=' && command -v apt-get dnf yum apk 2>/dev/null
+- Init system: ps -p 1 -o comm= && command -v systemctl 2>/dev/null
 
 OUTPUT XML FORMAT (STRICT):
 <thought>
-Situation Assessment: What do we know? What's the current state?
-Hypothesis: What do you think is wrong and why?
-Plan of Attack: How will you solve this step by step?
-Verification Strategy: How will you confirm success?
+Situation Assessment: Current state based on terminal output?
+Skill Routing: Which skill applies? [${availableSkillNames}]
+Hypothesis: What is wrong and why?
+Plan: Ordered steps to reach target state?
+Verification: How will I confirm success?
 </thought>
 <plan>
-Clear checklist with dependencies marked:
-1. [ ] Gather information/diagnose
-2. [ ] Formulate solution
-3. [ ] Execute fix
-4. [ ] Verify resolution
-5. [ ] Final cleanup
-Mark steps complete ONLY after verification.
+1. [ ] Diagnose / gather intelligence
+2. [ ] Apply fix
+3. [ ] Verify resolution
+4. [ ] Final check / cleanup
 </plan>
-<command>Single shell command that makes progress. Options:
-- Diagnostic: ls, ps, netstat, systemctl status, journalctl, grep in logs
-- Package mgmt: apt/dnf/apk install, npm/pip install
-- File ops: cat, grep, find, stat, test -f
-- Service mgmt: systemctl start/stop/restart/status
-- Process mgmt: pkill, kill, pgrep
-- Network: curl, wget, ping, nc, ss
-- [Wait] - when process is still running
-- [Ctrl+C] - to stop a running process
-- y/yes - to answer interactive prompts only</command>
-<explain>One sentence with emoji explaining your reasoning and action. Be specific about what you're checking or fixing.</explain>
-<danger>true|false</danger><done>true|false</done><interactive>password|sudo_password|passphrase|confirm_yn|confirm_overwrite|generic</interactive>
+<command>Single shell command. Options:
+- Diagnostics: ps, ss, systemctl status, journalctl, df, free, curl
+- Package: apt/dnf/apk install, npm/pip install
+- Process: pkill, kill, systemctl start/stop/restart
+- Control: [Wait], [Ctrl+C], y (for interactive prompts only)</command>
+<explain>One sentence with emoji. Be specific about what you're checking or fixing. ✨</explain>
+<reminder>{"title": "Short title", "command": "diagnostic-cmd", "category": "skill-name"}</reminder>
+<fact>{"os": "Ubuntu 22.04", "loginUser": "ubuntu", "packageManager": "apt"}</fact>
+<danger>false</danger><done>false</done>
+<interactive>sudo_password</interactive>
+
+TAG PICK-ONE RULE: NEVER list all options with `|`. Pick exactly ONE:
+  interactive: [sudo_password, password, passphrase, confirm_yn, generic]
+  danger: [true, false]
+  done: [true, false]
+
+NGINX GOTCHAS (CHECK IF ERROR OCCURS):
+- Error "unexpected end of file" in /etc/nginx/sites-enabled/FILENAME?
+  - CAT THE FILE: If it's just one word (e.g. "remider"), it's corrupted.
+  - FIX: Replace with a VALID server block (server { ... }) reverse-proxying to your port.
+  - Verify with nginx -t BEFORE restart.
+
 
 COMMAND INTELLIGENCE:
+- Chain safely: cmd1 && cmd2 (only run cmd2 if cmd1 succeeds)
+- Conditional: test -f file && echo exists || echo missing
+- Use --no-pager for journalctl and systemctl to avoid blocking pager
+- Use head -N to cap long outputs
+- sudo: ${preferSudo ? 'PREFERRED — use sudo for system-level ops' : 'AVOID unless necessary'}
 
-DIAGNOSTIC COMMANDS (Use these FIRST when investigating):
-- systemctl status SERVICE --no-pager | head -20: Check service state
-- journalctl -u SERVICE -n 50 --no-pager: View recent service logs
-- tail -50 /var/log/syslog | grep -i ERROR: System errors
-- ps aux | grep -E 'PROCESS|PID' | grep -v grep: Check if process running
-- netstat -tlnp | grep :PORT or ss -tlnp | grep :PORT: Check port usage
-- df -h: Check disk space issues
-- free -m: Check memory
-- curl -s http://localhost:PORT/health: Test if service responds
-
-PACKAGE MANAGEMENT:
-- DEBIAN/UBUNTU: apt-get update && apt-get install -y PKG
-- RHEL/CENTOS/FEDORA: dnf install -y PKG or yum install -y PKG
-- ALPINE: apk add --no-cache PKG
-- NODE: npm install -g PKG or npx CMD
-- PYTHON: pip3 install PKG
-
-SERVICE MANAGEMENT:
-- Start: systemctl start SERVICE
-- Stop: systemctl stop SERVICE
-- Restart: systemctl restart SERVICE
-- Reload (config): systemctl reload SERVICE (preferred if available)
-- Enable autostart: systemctl enable SERVICE
-- Check config: nginx -t, apachectl configtest, sshd -t
-
-PROCESS HANDLING:
-- Find process: pgrep -a PROCESS or ps aux | grep PROCESS
-- Kill gracefully: kill -TERM PID (wait 5s)
-- Force kill: kill -9 PID (last resort)
-- Kill all: pkill -f PROCESS_NAME
-
-ERROR ANALYSIS & RECOVERY:
-When you see errors, classify and respond:
-
-1. "Permission denied" → Check user: whoami, id. Try sudo. Check permissions: ls -la FILE
-2. "No such file or directory" → Verify path: ls -la DIR/, find / -name FILE -not -path '*/proc/*' 2>/dev/null | head -5
-     IMPORTANT: Use find to locate a file before assuming it lives at /home/username/FILE
-3. "Address already in use" → Find process: lsof -i :PORT, then decide if kill or reconfigure
-4. "Connection refused" → Check if service running: systemctl status SERVICE, check port binding
-5. "Syntax error" in configs → Check with: nginx -t, python3 -m py_compile FILE, bash -n SCRIPT
-6. "Out of memory" → Check: free -m, dmesg | tail -20, consider adding swap or reducing processes
-7. "Disk full" → Check: df -h, find large files: du -h / | sort -rh | head -20
-8. "Timeout" → Check network, firewall, DNS: ping, dig, nc -zv HOST PORT
-
-SELF-CORRECTION HIERARCHY:
-If your command fails, escalate through these approaches:
-Level 1: Fix obvious issue (typo, wrong path, missing sudo)
-Level 2: Try alternative command (e.g., dnf instead of yum, ss instead of netstat)
-Level 3: Gather more diagnostic data to understand root cause
-Level 4: Try completely different approach to achieve the same goal
-Level 5: Ask for clarification if truly stuck after 3 attempts
-
-SMART COMMAND PATTERNS:
-
-Chain commands safely with &&:
-- cd /path && ls -la (only ls if cd succeeded)
-- make config && make && make install
-
-Conditional execution:
-- test -f file && echo exists || echo missing
-- systemctl is-active --quiet service && echo running || echo stopped
-
-Capture and analyze output:
-- CMD 2>&1 | tee /tmp/output.log && grep -q SUCCESS /tmp/output.log
-
-Safe file operations:
-- cp important.conf important.conf.bak.$(date +%s) before editing
-- test -w file || sudo chown $USER file (check writability first)
+WAIT PROTOCOL:
+1. Output still flowing (progress bars) → [Wait]
+2. Shell prompt ($ or #) visible → ready for next command
+3. "(END)" or ":" pager → q to exit
+4. "(y/n)" → y or n
+5. NEVER send multiple commands while one is running
 
 INTERACTIVE PROMPT HANDLING:
-When you see prompts like:
-- "(y/n)" or "[Y/n]" → Send: y
-- "Password:" → Send the password (system will prompt user if needed)
-- "[sudo] password for" → Send password or mark as sudo_password
-- "Are you sure?" → Usually means it's dangerous - set <danger>true</danger>
+- "(y/n)" or "[Y/n]" → y
+- "Password:" → send password or pause with interactive=sudo_password
+- "Are you sure?" → danger=true
 
-WAIT PROTOCOL (CRITICAL):
-After sending ANY command:
-1. If you see output flowing (progress bars, logs) → Send [Wait]
-2. If you see a shell prompt ($ or #) → Ready for next command
-3. If you see "(END)" or pager prompt → Send q to quit
-4. If you see "(y/n)" prompt → Send y or n
-5. NEVER send multiple commands while one is still running
+PROCESS & NETWORK DIAGNOSTICS:
+- Processes: ps auxf, pgrep -a NAME
+- Ports: ss -tlnp || netstat -tlnp
+- Connections: lsof -i -P -n | grep LISTEN
+- DNS: dig DOMAIN || nslookup DOMAIN
+- Traffic: curl -sI URL (use -I to get headers only)
 
-SIGNAL HANDLING:
-- [Ctrl+C] = Send SIGINT (\x03) - for interactive programs, ping, etc
-- Use for: ping, top, tail -f, hung commands, infinite loops
+SELF-CORRECTION HIERARCHY:
+Level 1: Fix obvious (wrong path, typo, sudo missing)
+Level 2: Alternative command (dnf↔yum, ss↔netstat)
+Level 3: More diagnostics (journalctl, tail logs)
+Level 4: Completely different approach
+Level 5: Stop with explanation if 3+ attempts all failed differently
 
-VERIFICATION MANDATE:
-You MUST verify every fix:
-- File edits: cat file | grep -C3 changed_part
-- Service starts: systemctl is-active SERVICE
-- Package installs: which CMD || CMD --version
-- Config changes: CONFIG_CMD -t (syntax test)
-- Network changes: curl/nc test to verify connectivity
-
-TOKEN EFFICIENCY:
-- Use concise, precise commands
-- Prefer single pipeline over multiple commands
-- Use head/tail to limit output
-- Avoid cat | grep when grep FILE works
-
-PROFESSIONAL COMMUNICATION:
-Use emojis to convey status:
-🔍 Diagnosing/Investigating
-📊 Checking status/metrics
-📦 Installing packages
-🔧 Applying fixes
-✅ Verified working
-🚀 Task completed
-🔄 Retrying with alternative
-⚠️ Warning/needs attention
-❌ Failed/encountered error
-💡 Suggestion/Tip
+EMOJIS FOR STATUS:
+🔍=Investigating 📊=Status check 📦=Installing 🔧=Fixing ✅=Verified 🚀=Deployed 🔄=Retrying ⚠️=Warning ❌=Failed 💡=Tip
 ${structuredContext}`;
 
     const backgroundTmuxSys = autoTmux ? `
 BACKGROUND TASKS (TMUX):
-- A background tmux session named 'ai-bg-task' is available to run long tasks.
-- DO NOT run long blocking commands (builds, scrapers, servers) directly in the terminal as it freezes the UI.
-- Instead, run them in the background using tmux: <command>tmux send-keys -t ai-bg-task "your_long_command > /tmp/task.log 2>&1 &" C-m</command>
-- To check the task output, use <command>tail -n 20 /tmp/task.log</command>.
-- NEVER attach to the tmux session (no 'tmux attach' or 'tmux a').` : '';
+- A background tmux session named 'ai-bg-task' is available for long tasks.
+- Run blocking ops in background: <command>tmux send-keys -t ai-bg-task "your_long_command > /tmp/task.log 2>&1 &" C-m</command>
+- Check progress: <command>tail -n 20 /tmp/task.log</command>
+- NEVER attach to tmux (no 'tmux attach').` : '';
 
-    const sys = (aiTask === 'code' ? codeEditorSys : sshCommandSys) + '\n' + backgroundTmuxSys;
+    const sys = (aiTask === 'code' ? codeEditorSys : sshCommandSys) + '\n' + backgroundTmuxSys + skillBlock;
+
 
     // Proactively inject file paths from memory into the user prompt if they match the filename
     let enhancedPrompt = String(prompt);
     if (memoryDoc?.keyPaths?.length) {
       const mentionedFile = enhancedPrompt.match(/(\w+\.\w+)/)?.[0];
       if (mentionedFile) {
-        const foundPath = memoryDoc.keyPaths.find(p => p.endsWith(mentionedFile));
+        const foundPath = (memoryDoc.keyPaths || []).find(p => p.endsWith(mentionedFile));
         if (foundPath) {
-          enhancedPrompt = `(CONTEXT: Use absolute path ${foundPath} for ${mentionedFile})\n\n${enhancedPrompt}`;
+          // Check if we've already tried this path and failed (preventing loops)
+          const lastResp = historyMessages[historyMessages.length - 1]?.content || '';
+          const pathIsStale = lastResp.includes(foundPath) && (lastResp.includes('No such file') || lastResp.includes('does not exist'));
+          
+          if (!pathIsStale) {
+            // Suggest the path but don't force it as the only truth
+            enhancedPrompt = `(MEMORY: Possible absolute path for ${mentionedFile} is ${foundPath})\n\n${enhancedPrompt}`;
+          } else {
+             // Warms the AI that the memory is wrong
+            enhancedPrompt = `(MEMORY WARNING: The saved path ${foundPath} for ${mentionedFile} appears to be STALE/WRONG. Perform discovery with 'find' or 'ls' instead.)\n\n${enhancedPrompt}`;
+          }
         }
       }
     }
@@ -823,8 +1021,21 @@ Now output the <diff> needed to complete the request.`;
                     full = normalizeAiXml(retry);
                   }
                 } catch {}
-                // SSH Memory disabled — skip extraction
-                const hasCompletion = false;
+                // SSH Memory extraction
+                const hasFact = /<fact>[\s\S]*?<\/fact>/i.test(full);
+                const hasReminder = /<reminder>[\s\S]*?<\/reminder>/i.test(full);
+                const hasCompletion = /<done>\s*true\s*<\/done>/i.test(full);
+
+                if (hasFact || hasCompletion || hasReminder) {
+                  const cooldownKey = `stream:${session.user.email}:${host}:${contextPack?.goal || 'unk'}`;
+                  const lastExtracted = extractCooldownMap.get(cooldownKey) || 0;
+                  const isLongEnoughSinceLast = Date.now() - lastExtracted > 4000;
+
+                  if (isLongEnoughSinceLast) {
+                    extractCooldownMap.set(cooldownKey, Date.now());
+                    handleSshMemoryExtraction(session.user.email, host, full, contextPack?.goal);
+                  }
+                }
               } catch (err) {
                 console.error('[SSH Memory] Streaming done handling failed:', err);
               }
@@ -1002,7 +1213,8 @@ Now output the <diff> needed to complete the request.`;
             console.error('Failed to save AI history:', dbErr);
           }
 
-          // SSH Memory disabled — skip extraction.
+          // SSH Memory extraction
+          handleSshMemoryExtraction(session.user.email, host, answer, contextPack?.goal);
           answer = normalizeAiXml(answer);
         } // end if (session)
 

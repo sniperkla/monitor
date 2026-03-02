@@ -88,6 +88,16 @@ export async function PATCH(req) {
       };
     }
 
+    // Reminders — addToSet by title+command combo
+    if (facts.reminder && facts.reminder.title && facts.reminder.command) {
+      addToSetFields.reminders = {
+        title: String(facts.reminder.title).slice(0, 100),
+        command: String(facts.reminder.command).slice(0, 500),
+        category: String(facts.reminder.category || 'general').slice(0, 40),
+        addedAt: new Date()
+      };
+    }
+
     const update = {
       $set: setFields,
       $inc: { sessionCount: 1 },

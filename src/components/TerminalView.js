@@ -166,6 +166,7 @@ export default function TerminalView({ connectionId, connectionName, host, color
   const aiConversationRef = useRef([]); // conversation history for multi-step context
   const lastCommandSentAtRef = useRef(0);
   const sawOutputAfterCommandRef = useRef(false);
+  const commandRunningRef = useRef(false); // true while executeCommandAndCapture is actively awaiting
 
   const inputBufferRef = useRef('');
   const recentCommandsRef = useRef([]);
@@ -824,9 +825,21 @@ export default function TerminalView({ connectionId, connectionName, host, color
     const interactive = getTag('interactive');
     const stepRaw = getTag('step');
     const danger = String(dangerRaw || '').trim().toLowerCase() === 'true';
-    const done = String(doneRaw || '').trim().toLowerCase() === 'true';
+    const doneRawLower = String(doneRaw || '').trim().toLowerCase();
+    const done = doneRawLower === 'true';
+    // NOTE: The model uses <done>false</done> for normal "in progress" steps.
+    // Only treat done=false as a failure (stop Auto Mode) when the AI is explicitly giving up.
+    const explainLower = String(explain || '').toLowerCase();
+    const hasWorkOutput = !!(String(command || '').trim() || String(diff || '').trim());
+    const giveUpSignals = [
+      "cannot", "can't", "unable", "not possible", "no way", "blocked", "permission denied",
+      "i don't have", "insufficient", "give up", "cannot be completed", "can't be completed",
+      "cannot proceed", "unable to proceed", "stuck"
+    ];
+    const isGiveUpExplain = giveUpSignals.some(s => explainLower.includes(s));
+    const doneFailed = doneRawLower === 'false' && !!doneRaw && (!hasWorkOutput) && isGiveUpExplain;
     const step = parseInt(stepRaw) || 1;
-    return { command, diff, explain, danger, warn, done, interactive, plan, thought, step, usedModel: metadata?.usedModel, raw: String(raw || '').trim() };
+    return { command, diff, explain, danger, warn, done, doneFailed, interactive, plan, thought, step, usedModel: metadata?.usedModel, raw: String(raw || '').trim() };
   };
 
   const isValidUnifiedDiff = (diffText) => {
@@ -1830,6 +1843,89 @@ export default function TerminalView({ connectionId, connectionName, host, color
     return null;
   };
 
+  // Detect streaming/blocked commands that never exit on their own (pm2 log, tail -f, journalctl -f, etc.)
+  const isStreamingCommand = (cmd) => {
+    const c = String(cmd || '').toLowerCase().trim();
+    // Commands that stream output indefinitely until interrupted
+    const streamingPatterns = [
+      /\bpm2\s+(log|logs|monit|mon)\b/,           // pm2 log, pm2 logs, pm2 monit
+      /\btail\s+(-f|--follow)/,                     // tail -f, tail --follow
+      /\bjournalctl\s+(-f|--follow)/,              // journalctl -f
+      /\b(kubectl|k)\s+logs\s+.*(-f|--follow)/,    // kubectl logs -f
+      /\bdocker\s+logs\s+.*(-f|--follow)/,        // docker logs -f
+      /\bless\s+/,                                 // less (can be interactive)
+      /\bmore\s+/,                                 // more (can be interactive)
+      /\bwatch\s+/,                                // watch command
+      /\btop\b/,                                   // top
+      /\bhtop\b/,                                  // htop
+      /\bnc\s+.*(-l|--listen)/,                   // netcat listening
+      /\bcat\s+.*\|/,                              // cat piped (might be waiting)
+      /\bgrep\s+.*--line-buffered/,                // grep with line buffering
+      /\bscreen\s+/,                               // screen
+      /\btmux\s+/,                                 // tmux
+      /\bredis-cli\s+monitor/,                     // redis-cli monitor
+      /\bmysql\s+.*-e\s+"/,                        // mysql with query (might hang)
+      /\bping\s+/,                                 // ping (runs until stopped)
+      /\btraceroute\s+/,                           // traceroute
+      /\bnslookup\s+/,                             // nslookup interactive
+      /\bpython\s+(-i|--interactive)/,             // python interactive
+      /\bnode\s+(-i|--interactive)/,              // node interactive
+      /\birb\b/,                                   // ruby interactive
+      /\bphp\s+-a/,                                // php interactive
+      /\bsqlite3\s+/,                              // sqlite3 interactive
+    ];
+    return streamingPatterns.some(p => p.test(c));
+  };
+
+  // Detect if terminal is in a streaming state (no prompt, output keeps coming)
+  const looksLikeStreamingMode = (text, lastCmd) => {
+    const raw = String(text || '');
+    // If we have a shell prompt, we're not streaming
+    if (looksLikeShellPrompt(raw)) return null;
+    
+    const t = raw.toLowerCase();
+    const cmdLower = String(lastCmd || '').toLowerCase();
+    
+    // Check if the last command was a streaming command
+    if (!isStreamingCommand(cmdLower)) return null;
+    
+    // Detect streaming indicators in output
+    const streamingIndicators = [
+      // PM2 log/streaming indicators
+      /[\[<]\d{4}-\d{2}-\d{2}/,                    // timestamp prefix in logs
+      /pm2\s+(log|logs|monit)/i,
+      /\[pm2\]/i,
+      // General log streaming patterns
+      /streaming\.{3,}/i,
+      /listening\.{3,}/i,
+      /waiting\.{3,}/i,
+      // tail -f patterns
+      /==>\s*\S+\s+<==/i,                        // tail -f file header
+      // journalctl -f
+      /--\s*beginning\s+/i,
+      // top/htop
+      /cpu\s+\d+%/i,
+      /mem\s*:/i,
+      // watch
+      /every\s+\d+\.?\d*\s*s/i,
+      // ping
+      /\d+\s*bytes\s+from/i,
+      /ttl=\d+/i,
+      // time elapsed indicators (command still running)
+      /time\s+\d+:\d+/i,
+    ];
+    
+    // If we see streaming indicators and no prompt, it's streaming
+    const hasStreamingIndicator = streamingIndicators.some(p => p.test(t));
+    if (hasStreamingIndicator) return 'streaming';
+    
+    // If the command is a known streaming command and we have output but no prompt
+    // and the output is actively changing (checked by caller via idleFor), treat as streaming
+    if (isStreamingCommand(cmdLower)) return 'streaming';
+    
+    return null;
+  };
+
   const waitForCommandSettle = async (commandHint) => {
     const maxMs = 300000; // 5 minute max heartbeat (safety net)
     const cmdLower = String(commandHint || '').toLowerCase();
@@ -1865,6 +1961,11 @@ export default function TerminalView({ connectionId, connectionName, host, color
       // 2. Check for editor/pager (these never "settle" — output stops but we're stuck)
       const editorPager = looksLikeEditorOrPager(snap);
       if (editorPager && idleFor > 1200) return { reason: 'editor', snap, editor: editorPager };
+
+      // 2.5. Check for streaming/blocked commands (pm2 log, tail -f, etc.)
+      const streaming = looksLikeStreamingMode(snap, commandHint);
+      const timeSinceCmd = Date.now() - start;
+      if (streaming && (idleFor > 2000 || timeSinceCmd > 5000)) return { reason: 'streaming', snap, streaming };
 
       // 3. Check for errors (patience: don't error out while output is still flying)
       const err = detectTerminalError(snap);
@@ -2211,107 +2312,129 @@ export default function TerminalView({ connectionId, connectionName, host, color
     setLastExecutedCommand(cmd);
     lastCommandSentAtRef.current = Date.now();
     sawOutputAfterCommandRef.current = false;
+    commandRunningRef.current = true; // Mark command as in-flight
 
-    if (socketRef.current?.connected) {
-      if (/^\[wait\]$/i.test(cmd)) {
-        // AI specifically wants to wait for more output from a previous command
-      } else if (/^\[?ctrl\+c\]?$|^\^c$/i.test(cmd)) {
-        socketRef.current.emit('ssh:input', '\x03');
-      } else {
-        // Parse special control notations: ^X, ^O, ^R, [ESC]
-        let finalInput = cmd;
-        
-        // 1. Handle [ESC]
-        finalInput = finalInput.replace(/\[ESC\]/gi, '\x1b');
-        
-        // 2. Handle Ctrl+Letter (e.g. ^X, ^O, ^C)
-        finalInput = finalInput.replace(/\^([A-Z])/g, (m, char) => {
-          return String.fromCharCode(char.charCodeAt(0) - 64);
-        });
-
-        // 3. Append newline only if it's not a standalone control character or explicitly forbidden
-        // If the command already has a newline or Ends with a control character, we don't force another one.
-        const isControlOnly = /[\x00-\x1F]/.test(finalInput) && finalInput.length <= 2;
-        if (!isControlOnly && !finalInput.endsWith('\n')) {
-           finalInput += '\n';
-        }
-
-        socketRef.current.emit('ssh:input', finalInput);
-      }
-      termInstanceRef.current?.focus();
-      const settled = await waitForCommandSettle(cmd);
-      const snap = settled?.snap ?? getOutputContext();
-      setLastResultSnapshot(snap);
-
-      // If the command landed us in an interactive prompt or pager/editor, try to handle it in Auto Mode.
-      if (settled?.reason === 'interactive') {
-        const prompt = settled.interactive;
-        setInteractivePrompt(prompt);
-        
-        // Auto-handle "press enter" prompts in Auto Mode
-        if (autoMode && prompt.kind === 'press_enter') {
-          socketRef.current.emit('ssh:input', '\n');
-          setInteractivePrompt(null);
-          await new Promise(r => setTimeout(r, 800));
-          const nextSnap = getOutputContext();
-          setLastResultSnapshot(nextSnap);
-          return nextSnap;
-        }
-
-        // Auto-handle Y/N install confirmations in Auto Mode
-        if (autoMode && prompt.kind === 'confirm_yn') {
-          const cmdLower = cmd.toLowerCase();
-          const isPkg = /(yum|dnf|apt|apt-get|apk|pacman|pip|npm|npx|yarn|gem)\b/.test(cmdLower);
-          const isInstall = /\b(install|upgrade|update|remove|create|setup|add|create-next-app)\b/.test(cmdLower);
+    try {
+      if (socketRef.current?.connected) {
+        if (/^\[wait\]$/i.test(cmd)) {
+          // AI specifically wants to wait for more output from a previous command
+        } else if (/^\[?ctrl\+c\]?$|^\^c$/i.test(cmd)) {
+          socketRef.current.emit('ssh:input', '\x03');
+        } else {
+          // Parse special control notations: ^X, ^O, ^R, [ESC]
+          let finalInput = cmd;
           
-          if (isPkg || isInstall) {
-            socketRef.current.emit('ssh:input', 'y\n');
+          // 1. Handle [ESC]
+          finalInput = finalInput.replace(/\[ESC\]/gi, '\x1b');
+          
+          // 2. Handle Ctrl+Letter (e.g. ^X, ^O, ^C)
+          finalInput = finalInput.replace(/\^([A-Z])/g, (m, char) => {
+            return String.fromCharCode(char.charCodeAt(0) - 64);
+          });
+
+          // 3. Append newline only if it's not a standalone control character or explicitly forbidden
+          const isControlOnly = /[\x00-\x1F]/.test(finalInput) && finalInput.length <= 2;
+          if (!isControlOnly && !finalInput.endsWith('\n')) {
+             finalInput += '\n';
+          }
+
+          socketRef.current.emit('ssh:input', finalInput);
+        }
+        termInstanceRef.current?.focus();
+        const settled = await waitForCommandSettle(cmd);
+        const snap = settled?.snap ?? getOutputContext();
+        setLastResultSnapshot(snap);
+
+        // If the command landed us in an interactive prompt, try to handle it in Auto Mode.
+        if (settled?.reason === 'interactive') {
+          const prompt = settled.interactive;
+          setInteractivePrompt(prompt);
+          
+          // Auto-handle "press enter" prompts in Auto Mode
+          if (autoMode && prompt.kind === 'press_enter') {
+            socketRef.current.emit('ssh:input', '\n');
             setInteractivePrompt(null);
-            await new Promise(r => setTimeout(r, 1200));
+            await new Promise(r => setTimeout(r, 800));
             const nextSnap = getOutputContext();
             setLastResultSnapshot(nextSnap);
             return nextSnap;
           }
+
+          // Auto-handle Y/N install confirmations in Auto Mode
+          if (autoMode && prompt.kind === 'confirm_yn') {
+            const cmdLower = cmd.toLowerCase();
+            const isPkg = /(yum|dnf|apt|apt-get|apk|pacman|pip|npm|npx|yarn|gem)\b/.test(cmdLower);
+            const isInstall = /\b(install|upgrade|update|remove|create|setup|add|create-next-app)\b/.test(cmdLower);
+            
+            if (isPkg || isInstall) {
+              socketRef.current.emit('ssh:input', 'y\n');
+              setInteractivePrompt(null);
+              await new Promise(r => setTimeout(r, 1200));
+              const nextSnap = getOutputContext();
+              setLastResultSnapshot(nextSnap);
+              return nextSnap;
+            }
+          }
+
+          if (autoMode) {
+            setAiError(t('ai.pausedPrompt'));
+            setAutoMode(false);
+            setAiOpen(true);
+            setAiHasOpenedOnce(true);
+          }
+          return snap;
         }
 
-        if (autoMode) {
-          setAiError(t('ai.pausedPrompt'));
-          setAutoMode(false);
-          setAiOpen(true);
-          setAiHasOpenedOnce(true);
+        if (settled?.reason === 'editor') {
+          // Allow editors — return snapshot so AI can continue interacting
+          return snap;
         }
-        if (autoMode) {
-          setLastResultAt(Date.now());
+
+        // Streaming commands (pm2 log, tail -f, etc.) need Ctrl+C to exit
+        if (settled?.reason === 'streaming') {
+          if (autoMode) {
+            // Auto-send Ctrl+C to exit the streaming command
+            socketRef.current?.emit('ssh:input', '\x03'); // Ctrl+C
+            await new Promise(r => setTimeout(r, 800));
+            const nextSnap = getOutputContext();
+            setLastResultSnapshot(nextSnap);
+            // Mark as ready for next command
+            setLastResultAt((prev) => {
+              const next = Date.now();
+              const p = Number(prev || 0);
+              return next > p ? next : p + 1;
+            });
+            return nextSnap;
+          }
+          // In manual mode, just inform the user
+          setAiError('Streaming command detected. Press Ctrl+C to exit, or wait for it to finish.');
+          return snap;
         }
+
+        if (settled?.reason === 'busy' || settled?.reason === 'stuck') {
+          // Command is still running (hit timeout). Do NOT fire lastResultAt here —
+          // runAutoStep's own polling will re-check after seeing isStillRunning in the prompt.
+          // Just update the snapshot so the AI sees fresh partial output.
+          setAiError('Command is still running... (Waiting for AI decision)');
+          maybeHandleInteractivePrompt(snap);
+          return snap;
+        }
+
+        // Command finished cleanly (prompt detected or error settled)
+        setLastResultAt((prev) => {
+          const next = Date.now();
+          const p = Number(prev || 0);
+          return next > p ? next : p + 1;
+        });
+
+        maybeHandleInteractivePrompt(snap);
         return snap;
       }
-
-      if (settled?.reason === 'editor') {
-        const editorType = String(settled.editor || '');
-        // We now ALLOW editors. Return the editor snapshot so the AI can continue interacting with it.
-        if (autoMode) {
-          setLastResultAt(Date.now());
-        }
-        return snap;
-      }
-      if (settled?.reason === 'busy') {
-        // Report busy state to AI so it can decide to Wait or Ctrl+C
-        setAiError('Command is still running... (Waiting for AI decision)');
-        // We return the snap, and in the next loop the AI will see partial output.
-        // If the AI sends something new, it will be injected.
-      }
-
-      setLastResultAt((prev) => {
-        const next = Date.now();
-        const p = Number(prev || 0);
-        return next > p ? next : p + 1;
-      });
-
-      maybeHandleInteractivePrompt(snap);
-      return snap;
+      if (termInstanceRef.current) termInstanceRef.current.focus();
+      return '';
+    } finally {
+      commandRunningRef.current = false; // Always clear the in-flight flag
     }
-    if (termInstanceRef.current) termInstanceRef.current.focus();
-    return '';
   };
 
   const askAiWithPrompt = async (prompt) => {
@@ -2526,7 +2649,7 @@ export default function TerminalView({ connectionId, connectionName, host, color
     }
   };
 
-  const runAutoStep = async (snapshotOverride) => {
+  const runAutoStep = async (snapshotOverride, nudgeMsg = '') => {
     if (!isLoggedIn) return;
     // Use refs instead of closed-over state — fixes stale-state bug when called from setTimeout
     if (aiModeRef.current !== 'auto') return;
@@ -2550,16 +2673,29 @@ export default function TerminalView({ connectionId, connectionName, host, color
     let snap = String(snapshotOverride ?? lastResultSnapshot ?? getOutputContext() ?? '').trim();
     const err = detectTerminalError(snap);
 
-    // Loop detection
+    // 🔄 Loop detection & self-healing injection
     const loopKey = `${lastExecutedCommand || ''}::${normalizeForLoop(snap).slice(-200)}`;
+    let autoPromptExpansion = '';
     if (autoLastLoopKeyRef.current === loopKey) {
       autoLoopRepeatRef.current += 1;
+      // 🧪 INJECT WARNING TO AI: Explain that it is repeating itself
+      if (autoLoopRepeatRef.current >= 1) {
+        autoPromptExpansion = `\n\n⚠️ LOOP WARNING: Your last command produced NO change in the terminal output.
+Current repeat count: ${autoLoopRepeatRef.current}. 
+If you keep repeating the same command and getting the same output, Auto Mode will be shut down. 
+CHANGE YOUR STRATEGY: 
+- If reading a file, check if you're using the wrong absolute path. 
+- If trying to fix a file, check if permission was denied (did you use sudo?). 
+- If stuck in a pager like 'less', press 'q' to exit. 
+- Try a different diagnostic tool (e.g. ss instead of netstat, journalctl instead of cat).`;
+      }
     } else {
       autoLastLoopKeyRef.current = loopKey;
       autoLoopRepeatRef.current = 0;
     }
+
     if (autoLoopRepeatRef.current >= 5) {
-      setAiError('Auto Mode stopped: output did not change for 5 consecutive steps. The AI may be stuck in an unresolvable state.');
+      setAiError('Auto Mode stopped: output did not change for 5 consecutive steps. This usually means the AI is repeating a command or stuck in a pager/interactive prompt. Try running "q" or [Ctrl+C] to clear the terminal and then Resume.');
       setAutoMode(false);
       return;
     }
@@ -2579,10 +2715,56 @@ export default function TerminalView({ connectionId, connectionName, host, color
     const editorType = looksLikeEditorOrPager(snap);
     const interactive = detectInteractivePrompt(snap);
     const isStillRunning = !looksLikeShellPrompt(snap);
+    const streamingMode = looksLikeStreamingMode(snap, lastExecutedCommand);
     
     let terminalStatus = isStillRunning ? 'RUNNING (No prompt yet)' : 'IDLE (Prompt detected)';
-    if (editorType) terminalStatus = `INTERACTIVE PAGER/EDITOR ACTIVE (${editorType})`;
+    if (streamingMode) terminalStatus = `STREAMING MODE (${streamingMode})`;
+    else if (editorType) terminalStatus = `INTERACTIVE PAGER/EDITOR ACTIVE (${editorType})`;
     else if (interactive) terminalStatus = `INTERACTIVE PROMPT DETECTED (${interactive.kind})`;
+
+    // Auto-exit streaming commands (pm2 log, tail -f, etc.) before proceeding
+    if (streamingMode && isStillRunning) {
+      const idleFor = Date.now() - (lastOutputAtRef.current || 0);
+      const timeSinceCommand = Date.now() - (lastCommandSentAtRef.current || 0);
+      if (idleFor > 2000 || timeSinceCommand > 5000) {
+        // Send Ctrl+C to exit the streaming command
+        socketRef.current?.emit('ssh:input', '\x03');
+        await new Promise(r => setTimeout(r, 800));
+        const nextSnap = getOutputContext();
+        setLastResultSnapshot(nextSnap);
+        setLastResultAt((prev) => {
+          const next = Date.now();
+          const p = Number(prev || 0);
+          return next > p ? next : p + 1;
+        });
+        // Re-check after exiting streaming mode
+        autoRunningRef.current = false;
+        setTimeout(() => runAutoStep(nextSnap), 500);
+        return;
+      }
+    }
+
+    // Auto-exit safe pagers (less/more/man) that block the prompt, so Auto Mode can continue.
+    // IMPORTANT: Only do this for pagers, NOT editors like vim/nano.
+    if (editorType && isStillRunning) {
+      const safePagerTypes = new Set(['pager', 'man']);
+      const idleFor = Date.now() - (lastOutputAtRef.current || 0);
+      const timeSinceCommand = Date.now() - (lastCommandSentAtRef.current || 0);
+      if (safePagerTypes.has(String(editorType)) && (idleFor > 1500 || timeSinceCommand > 4000)) {
+        socketRef.current?.emit('ssh:input', 'q');
+        await new Promise(r => setTimeout(r, 700));
+        const nextSnap = getOutputContext();
+        setLastResultSnapshot(nextSnap);
+        setLastResultAt((prev) => {
+          const next = Date.now();
+          const p = Number(prev || 0);
+          return next > p ? next : p + 1;
+        });
+        autoRunningRef.current = false;
+        setTimeout(() => runAutoStep(nextSnap), 400);
+        return;
+      }
+    }
 
     autoRunningRef.current = true;
     try {
@@ -2646,6 +2828,9 @@ export default function TerminalView({ connectionId, connectionName, host, color
       const isRemoveGoal = /\b(remove|uninstall|delete|purge|deinstall|get rid of|clean up)\b/.test(goalLower);
       const isInstallGoal = /\b(install|setup|set up|deploy|add|enable)\b/.test(goalLower) && !isRemoveGoal;
 
+      // Detect if the goal is an execution/deployment task (needs SSH commands, not file patches).
+      const isExecutionGoal = /\b(deploy|start|run|pm2|npm\s+run|npm\s+start|docker|docker-compose|systemctl|nginx|apache|gulp|make|build|serve|launch|restart|reload|install|clone|pull|push|migrate|seed|test|jest|pytest|mocha)\b/i.test(goalLower);
+
       // Evidence in the terminal that removal already succeeded
       const snapLower = String(snap || '').toLowerCase();
       const removalDoneSignals = [
@@ -2659,15 +2844,31 @@ export default function TerminalView({ connectionId, connectionName, host, color
         ? `\n- NOTE: Terminal output ALREADY shows the removal succeeded or package is not present. You MUST set <done>true</done> NOW. Do NOT reinstall.`
         : '';
 
-      // Evidence that installation succeeded
+      // Evidence that installation / deployment succeeded
       const installDoneSignals = [
         /successfully installed/i, /installation complete/i, /installed successfully/i,
         /already installed/i, /is up to date/i, /nothing to install/i,
         /successfully started/i, /running.*active/i, /enabled/i,
       ];
-      const installSuccess = isInstallGoal && installDoneSignals.some(r => r.test(snapLower));
+      // pm2 / deployment-specific success signals
+      const deployDoneSignals = [
+        /\bonline\b/i,                    // pm2 reports "online" when process is running
+        /pm2.*start.*success/i,
+        /\[PM2\].*started/i,
+        /\[PM2\].*online/i,
+        /App\s+name.*online/i,
+        /successfully deployed/i,
+        /deployment.*complete/i,
+        /server.*listening/i,
+        /started\s+in\s+\d+ms/i,         // Next.js / Nest.js etc.
+        /app.*running/i,
+        /process.*started/i,
+      ];
+      const isDeployGoal = isExecutionGoal && /\b(deploy|pm2|start|serve|launch|run|docker|systemctl)\b/i.test(goalLower);
+      const installSuccess = (isInstallGoal && installDoneSignals.some(r => r.test(snapLower)))
+        || (isDeployGoal && deployDoneSignals.some(r => r.test(snapLower)));
       const installSuccessHint = installSuccess
-        ? `\n- NOTE: Terminal output ALREADY shows the installation succeeded. You MUST verify with a quick check and set <done>true</done> if confirmed.`
+        ? `\n- NOTE: Terminal output ALREADY shows the task succeeded (process running / deployment complete). You MUST verify with a quick status check then set <done>true</done> IMMEDIATELY.`
         : '';
 
       // Low-steps warning (disabled in infinite mode)
@@ -2703,22 +2904,69 @@ export default function TerminalView({ connectionId, connectionName, host, color
       const isReadOnlyCommand = (cmd) => {
         const s = String(cmd || '').trim().toLowerCase();
         if (!s) return false;
-        return /^(cat|head|tail|grep|rg|sed\s+-n|awk|cut|ls|stat|wc|find|test|\[)/.test(s);
+        // Read-only includes status/verification commands. These are safe to repeat and shouldn't trigger loop stops.
+        if (/^(cat|head|tail|grep|rg|sed\s+-n|awk|cut|ls|stat|wc|find|test|\[)/.test(s)) return true;
+
+        // Process / service status
+        if (/^ps\b/.test(s)) return true;
+        if (/^(top|htop)\b/.test(s)) return true;
+        if (/^systemctl\s+(status|is-active|is-enabled|show|list-units|list-unit-files)\b/.test(s)) return true;
+        if (/^service\s+\S+\s+status\b/.test(s)) return true;
+        if (/^journalctl\b/.test(s) && /--no-pager|-n\s+\d+|-u\s+\S+/.test(s)) return true;
+
+        // Nginx verification
+        if (/^nginx\s+-t\b/.test(s)) return true;
+
+        // PM2 verification
+        if (/^pm2\s+(list|ls|status|show|describe|env|ping)\b/.test(s)) return true;
+        if (/^pm2\s+logs\b/.test(s) && /--lines\s+\d+/.test(s)) return true;
+
+        // Network checks
+        if (/^(ss|netstat)\b/.test(s)) return true;
+        if (/^lsof\b/.test(s)) return true;
+        if (/^curl\b/.test(s)) return true;
+        if (/^(nc|netcat)\b/.test(s)) return true;
+        if (/^(ping|traceroute|mtr)\b/.test(s)) return true;
+        if (/^(dig|nslookup)\b/.test(s)) return true;
+
+        // System resource checks
+        if (/^(df|du|free|uptime|whoami|id|uname|lsb_release)\b/.test(s)) return true;
+
+        return false;
       };
 
-      const patchFirstAutoRules = (sshAiPrefs?.aiTask === 'code' && sshAiPrefs?.enforcePatch !== false)
-        ? `\nPATCH-FIRST AUTO RULES (CODE MODE):\n- You MAY use <command> ONLY for reading/verifying (cat/head/tail/grep/test).\n- After reading the relevant files, you MUST output a <diff> that updates ALL required .md files (e.g. HEARTBEAT.md AND AGENTS.md) in ONE response if possible.\n- Never output file-write commands (sed -i, cat > file, tee, printf > file). The UI will apply the patch.\n- Do NOT loop on cat; if you already have the file content in context, move on to <diff>.\n`
-        : '';
+      // Detect if the goal is an execution/deployment task that needs shell commands, not file patches.
+      // When this is true, we suspend the patch-first constraint so the AI can freely run SSH commands.
+
+      const patchFirstAutoRules = (sshAiPrefs?.aiTask === 'code' && sshAiPrefs?.enforcePatch !== false && !isExecutionGoal)
+        ? `\nPATCH-FIRST AUTO RULES (CODE EDIT MODE):\n- This is a CODE EDITING session. Use <command> ONLY for reading files (cat/head/tail/grep/ls/stat).\n- After reading the relevant files, produce a <diff> patch. Do NOT use sed -i, tee, printf > or nano to write files.\n- Do NOT loop on cat; once you have file content, move to <diff>.\n`
+        : (sshAiPrefs?.aiTask === 'code' && isExecutionGoal
+          ? `\nNOTE: This is a DEPLOYMENT/EXECUTION task in Code Mode. You MUST use <command> to run shell commands (pm2, npm, git, etc.). Do NOT produce <diff> patches for config files unless the user explicitly asks to edit a file. Focus on executing the goal via SSH commands.\n`
+          : '');
 
       const recentReadOnlyCount = (autoRecentCommandsRef.current || []).slice(-6).filter(isReadOnlyCommand).length;
-      const forceDiffNowRule = (sshAiPrefs?.aiTask === 'code' && sshAiPrefs?.enforcePatch !== false && recentReadOnlyCount >= 2)
-        ? `\nIMPORTANT: You have already performed enough reads. STOP issuing read commands and output ONLY a <diff> now. Leave <command> empty.`
+      // Only force-diff if we are in code-edit mode AND this is NOT an execution goal
+      const forceDiffNowRule = (sshAiPrefs?.aiTask === 'code' && sshAiPrefs?.enforcePatch !== false && !isExecutionGoal && recentReadOnlyCount >= 2)
+        ? `\nIMPORTANT: You have already performed enough reads. STOP issuing read commands and output ONLY a <diff> patch now. Leave <command> empty.`
+        : '';
+
+      // === Scout-first: detect if this is the very first step for an execution goal ===
+      // If the AI has run zero commands yet, it should explore before executing.
+      const isFirstStep = !lastExecutedCommand || String(lastExecutedCommand).trim() === '';
+      const scoutFirstRule = (isExecutionGoal && isFirstStep)
+        ? `\n🔍 SCOUT FIRST (Step 1): Before running ANY execution command, you MUST verify prerequisites:\n- Run \`ls\` or \`ls -la\` to see the folder structure\n- If deploying a Node app, check \`cat package.json | head -20\` to find the start script\n- Check if \`node_modules\` exists (if not, run npm install first)\n- Identify the correct working directory and entry point BEFORE running pm2/npm/docker\n- Do NOT run pm2 start until you have confirmed the app structure is ready\n`
+        : '';
+
+      // === Failure reasoning: structured exit vs retry decision ===
+      const hasError = !!err;
+      const errorRootCauseRule = hasError
+        ? `\n⚠️ ERROR RECOVERY RULES:\n- ANALYZE the error before retrying. Ask: What is the ROOT CAUSE?\n  • "No such file/directory" → Wrong path or missing file. Find correct path with \`find / -name <file> 2>/dev/null\` or \`ls\`.\n  • "npm ERR!" / "Cannot find package.json" → Not in the right directory, or npm install not done.\n  • "Port already in use" → Kill existing process: \`pm2 delete all\` or \`fuser -k <port>/tcp\`.\n  • "Permission denied" → Try with sudo or \`chmod +x\`.\n  • "module not found" → Run \`npm install\` first.\n  • "ENOENT" → File/dir doesn't exist. Verify with \`ls\` before retrying.\n- RETRY LIMIT: If the SAME error appears 3 times in a row, STOP and set <done>false</done> with a clear explanation. Do NOT keep retrying the same fix.\n- WHEN TO EXIT: Exit (set <done>false</done>) if: the error is a permission you cannot fix, required resources don't exist, or the goal is fundamentally impossible given server state.\n- WHEN TO RETRY: Retry with a DIFFERENT approach if: wrong path/directory, missing dependency that can be installed, or configuration can be fixed.\n`
         : '';
 
       const autoPrompt = `[AUTO] Goal: ${goal}
 State:
 - Status: ${terminalStatus}${runningNote}${osNote}${macOsRule}${removalSuccessHint}${installSuccessHint}${lowStepsWarn}
-- Last Cmd: ${lastExecutedCommand || '(none)'}
+- Last Cmd: ${lastExecutedCommand || '(none — this is the FIRST step)'}
 - Error: ${err ? err.label : 'none'}${failureNote}
 - Recent steps: ${recentHistory || '(none)'}
 - Output (since last command):
@@ -2726,11 +2974,11 @@ ${String(contextToSend || '(no output)').slice(-4000)}
 
 RULES:
 1. If the goal was to REMOVE/UNINSTALL and the output shows it is gone or was not installed → <done>true</done> IMMEDIATELY.
-2. If the goal was to INSTALL and it is now installed and running → <done>true</done> IMMEDIATELY.
-3. VERIFY the last command result before proceeding.
+2. If the goal was to INSTALL/DEPLOY and the process is running/online → <done>true</done> IMMEDIATELY.
+3. VERIFY the last command result before proceeding. Never blindly retry a failing command.
 4. COMMAND: 1 shell command, [Wait], or [Ctrl+C]. NEVER install when goal is remove.
-5. macOS=brew, Linux=apt/dnf. No editors (nano/vim). use cat <<EOF.
-6. ${progressLine}${patchFirstAutoRules}${forceDiffNowRule}`;
+5. macOS=brew, Linux=apt/dnf. No editors (nano/vim). Use cat <<EOF only if truly needed.
+${isExecutionGoal ? '⚡ EXECUTION GOAL: Run shell commands directly (pm2, npm, git, docker, etc.). Do NOT create config files (ecosystem.config.js, Makefile, Dockerfile) unless explicitly asked. Use `pm2 start npm --name <app> -- start` directly.\n' : ''}${scoutFirstRule}${errorRootCauseRule}6. ${progressLine}${patchFirstAutoRules}${forceDiffNowRule}${autoPromptExpansion}`;
 
       // Add to conversation history
       aiConversationRef.current = [
@@ -2742,7 +2990,7 @@ RULES:
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          prompt: autoPrompt,
+          prompt: autoPrompt + nudgeMsg,
           context: String(snap || '').slice(-2500),
           contextPack: buildAiContextPack(snap),
           connectionName,
@@ -2786,7 +3034,7 @@ RULES:
         { role: 'assistant', content: data.answer }
       ].slice(-12);
 
-      // === AI says DONE ===
+      // === AI says DONE (success) ===
       if (parsed.done) {
         setAiError(null);
         setAutoMode(false);
@@ -2817,12 +3065,26 @@ RULES:
             steps: finalSteps.slice(-30),
             done: true,
           };
-          // Use setTimeout to avoid calling dispatch inside a state updater
           setTimeout(() => {
             setSshAiHistory([sessionEntry, ...sshAiHistory.filter(e => e?.id !== sessionEntry.id)].slice(0, 30));
           }, 0);
           return finalSteps;
         });
+        return;
+      }
+
+      // === AI says DONE=false (graceful failure / gave up) ===
+      if (parsed.doneFailed) {
+        const failReason = parsed.explain || 'The AI determined the goal cannot be completed in the current server state.';
+        setAiError(`❌ Auto Mode stopped: ${failReason}`);
+        setAutoMode(false);
+        setAiOpen(true);
+        setAiHasOpenedOnce(true);
+        setAutoStepHistory(prev => [...prev, {
+          command: parsed.command || '',
+          explain: `FAILED: ${failReason}`,
+          status: 'error',
+        }]);
         return;
       }
 
@@ -2838,10 +3100,26 @@ RULES:
 
       // === Interactive command warning: predictive pause ===
       // Skip this pause if the user just manually resumed (bypassPasswordPauseRef is set)
+      // === Interactive command warning: predictive pause ===
+      // Skip this pause if the user just manually resumed (bypassPasswordPauseRef.current)
       // We have reactive password handling via the terminal interactive prompt UI anyway.
       if (parsed.interactive && !sshAiPrefs?.strictAutoMode && !bypassPasswordPauseRef.current) {
-        const interactiveType = String(parsed.interactive).toLowerCase();
-        if (/(password|passphrase|multiple prompts)/i.test(interactiveType)) {
+        const interactiveType = String(parsed.interactive).toLowerCase().trim();
+        
+        // 🧪 SELF-HEALING: If the AI literally copied the pipe-separated format example,
+        // it means it's hallucinating the template. Clear it to prevent a loop.
+        const isExampleTemplate = interactiveType.includes('|') || interactiveType.includes('sudo_password|password');
+        
+        if (isExampleTemplate) {
+          console.warn('[AI Agent] Detected literal template in <interactive> tag. Skipping pause to avoid loop.', parsed.interactive);
+          parsed.interactive = ''; // Clear it so it doesn't trigger below
+        }
+
+        // Guard: non-blocking types that don't require user input (just informational)
+        const isNonBlocking = /^(generic|confirm_yn)$/.test(interactiveType);
+        
+        if (parsed.interactive && !isNonBlocking && /(password|passphrase|multiple prompts)/i.test(interactiveType)) {
+          console.log('[AI Agent] Pausing for interactive command...', parsed.interactive);
           setAiOpen(true);
           setAiHasOpenedOnce(true);
           setAiError(`Auto Mode paused: command requires ${parsed.interactive}. Click Resume to proceed anyway.`);
@@ -2852,6 +3130,10 @@ RULES:
       bypassPasswordPauseRef.current = false; // consume the bypass after one step
 
       // === Patch-first auto mode: handle <diff> as an executable patch step ===
+      // We always accept diffs in Code Editor mode (even for execution goals) so the AI can voluntarily
+      // fix a config file (Dockerfile, package.json, ecosystem.config.js) mid-deploy via clean SFTP patch
+      // instead of resorting to cat-heredoc or sed inline edits.
+      // What's suppressed for execution goals is only the *forcing* rules (patchFirstAutoRules / forceDiffNowRule).
       if (parsed.diff && String(parsed.diff).trim() && sshAiPrefs?.aiTask === 'code' && sshAiPrefs?.enforcePatch !== false) {
         const d = String(parsed.diff).trim();
         if (!isValidUnifiedDiff(d)) {
@@ -2950,19 +3232,38 @@ RULES:
         return;
       }
 
-      // === No command and not done: AI is stuck ===
+      // === No command and not done: AI is stuck (STALL DETECTION) ===
       if (!parsed.command || !String(parsed.command).trim()) {
         const needRetryKey = `${goal}::${lastExecutedCommand || ''}::${snap.slice(-100)}`;
-        if (autoEmptyRetryRef.current !== needRetryKey) {
-          // Retry once after a short delay — do NOT recurse directly to avoid race
-          autoEmptyRetryRef.current = needRetryKey;
-          autoRunningRef.current = false; // release lock before scheduling
+        
+        // Use a counter for multiple nudges instead of a single binary ref
+        if (!autoEmptyRetryRef.current || !autoEmptyRetryRef.current.startsWith(needRetryKey)) {
+          autoEmptyRetryRef.current = `${needRetryKey}:1`;
+        } else {
+          const count = parseInt(autoEmptyRetryRef.current.split(':').pop()) || 1;
+          autoEmptyRetryRef.current = `${needRetryKey}:${count + 1}`;
+        }
+
+        const retryCount = parseInt(autoEmptyRetryRef.current.split(':').pop()) || 0;
+
+        if (retryCount <= 2) {
+          // 🧪 SELF-HEALING NUDGE: Remind the AI it MUST produce an action
+          console.log(`[AI Agent] Nudging talkative AI (attempt ${retryCount}/2)...`);
+          const nudgeMsg = `\n\n⚠️ STALL WARNING: You provided no action (no <command> or <diff>).
+In Auto Mode, every response MUST contain either a <command>, a <diff>, or set <done>true</done>.
+You cannot just explain; you must ACT.
+- Running diagnostics? Use <command>...command here...</command>.
+- Fix required? Use <diff>...patch here...</diff>.
+- Already verified the goal? Set <done>true</done>.
+What is your move?`;
+          
+          autoRunningRef.current = false;
           if (autoTimerRef.current) clearTimeout(autoTimerRef.current);
-          autoTimerRef.current = setTimeout(() => runAutoStep(snap), 800);
+          autoTimerRef.current = setTimeout(() => runAutoStep(snap, nudgeMsg), 1000);
           return;
         }
 
-        setAiError('Auto Mode stopped: AI could not determine next command. Click Resume to try again.');
+        setAiError('Auto Mode stopped: AI is providing explanations but no actions after 3 attempts. Please click Resume to prompt it manually.');
         setAutoMode(false);
         setAiOpen(true);
         setAiHasOpenedOnce(true);
@@ -3002,7 +3303,8 @@ RULES:
         } else {
           autoSameCommandRef.current = { cmd: nextCmdTrim, count: 0 };
         }
-        if (autoSameCommandRef.current.count >= 3 && isReadOnlyCommand(nextCmdTrim) && sshAiPrefs?.aiTask === 'code' && sshAiPrefs?.enforcePatch !== false) {
+        // Guard: only trigger read-only loop stop in code-edit mode AND only when NOT an execution task
+        if (autoSameCommandRef.current.count >= 3 && isReadOnlyCommand(nextCmdTrim) && sshAiPrefs?.aiTask === 'code' && sshAiPrefs?.enforcePatch !== false && !isExecutionGoal) {
           // Check if this is a file read that keeps returning empty — likely wrong path
           const catMatch = nextCmdTrim.match(/^(cat|head|tail)\s+(.*)/i);
           const wrongPathHint = catMatch ? `\n\n⚠️ PATH ERROR: The command '${nextCmdTrim}' was repeated ${autoSameCommandRef.current.count + 1} times. This file likely doesn't exist at this path. Check SSH memory for the correct absolute path. If the file is HEARTBEAT.md, it is likely at /home/ubuntu/.zeroclaw/workspace/HEARTBEAT.md` : '';
@@ -3045,6 +3347,39 @@ RULES:
       }
       const newSnap = await executeCommandAndCapture(parsed.command);
 
+      // After the command resolves, decide what to do next:
+      // — If the terminal is still running (busy/stuck), let runAutoStep's own wait logic
+      //   handle the re-poll. We DO NOT schedule the next AI call immediately here.
+      // — If the terminal returned to a shell prompt, schedule the next AI step directly
+      //   from here (avoids the 50ms useEffect race).
+      if (!autoModeRef.current) return; // auto mode was cancelled during command
+
+      const snapAfter = newSnap ?? getOutputContext();
+      const isStillBusy = !looksLikeShellPrompt(snapAfter);
+
+      if (isStillBusy) {
+        // Command did not exit — let runAutoStep's existing idle-wait logic handle it:
+        // update snapshot and trigger the polling useEffect normally.
+        setLastResultSnapshot(snapAfter);
+        setLastResultAt((prev) => {
+          const next = Date.now();
+          const p = Number(prev || 0);
+          return next > p ? next : p + 1;
+        });
+      } else {
+        // Command exited cleanly — schedule next AI step directly with a short delay.
+        // (The lastResultAt useEffect will also fire, but autoRunningRef.current will be
+        //  false by then and the duplicate call will be blocked at the top of runAutoStep.)
+        setLastResultSnapshot(snapAfter);
+        autoRunningRef.current = false; // release lock before scheduling
+        setAutoCountdown(1);
+        if (autoTimerRef.current) clearTimeout(autoTimerRef.current);
+        autoTimerRef.current = setTimeout(() => {
+          runAutoStep(snapAfter);
+        }, 1000); // 1s breathing room after command exits
+        return;
+      }
+
     } catch (e) {
       if (apiRetryCountRef.current < 2) {
         apiRetryCountRef.current += 1;
@@ -3075,11 +3410,16 @@ RULES:
     if (aiMode !== 'auto') return;
     if (!autoMode) return;
     if (!lastResultAt) return;
+    // Guard: never trigger a new AI step while a command is still actively running.
+    // executeCommandAndCapture sets commandRunningRef.current = true for its entire duration;
+    // when the command finishes AND exits cleanly it schedules the next step directly.
+    // This effect only serves as the fallback trigger (e.g. manual refresh, editor exit).
+    if (commandRunningRef.current) return;
 
     setAutoCountdown(0);
     const timer = setTimeout(() => {
       runAutoStep(lastResultSnapshot);
-    }, 50); // Instant transition (50ms)
+    }, 200); // Slightly longer debounce to avoid double-fire with the direct schedule above
 
     return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -3702,7 +4042,8 @@ RULES:
                           `PkgMgr: ${sshMemory.packageManager || 'Unknown'}\n` +
                           `Tools: ${sshMemory.installedTools?.length || 0} known\n` +
                           `Services: ${sshMemory.runningServices?.length || 0} known\n` +
-                          `Paths: ${sshMemory.keyPaths?.length || 0} known`
+                          `Paths: ${sshMemory.keyPaths?.length || 0} known\n` +
+                          `Reminders: ${sshMemory.reminders?.length || 0} saved`
                         }
                       >
                         <Brain size={10} className="text-purple-400" />
@@ -3722,6 +4063,41 @@ RULES:
 
               {/* Main Content */}
               <div ref={aiPanelContentRef} className="flex-1 overflow-y-auto px-4 pt-4 pb-10 space-y-4">
+                {/* Server Reminders / Tips */}
+                {sshMemory?.reminders?.length > 0 && (
+                  <div className="space-y-2">
+                    <div className="flex items-center gap-2 mb-2 px-1">
+                      <Brain size={12} className="text-purple-400" />
+                      <span className="text-[10px] font-bold uppercase tracking-wider text-purple-400/80">Server Reminders</span>
+                    </div>
+                    <div className="grid grid-cols-1 gap-2 border-b border-purple-500/10 pb-4 mb-4">
+                      {sshMemory.reminders.map((rem, idx) => (
+                        <div key={idx} className="group relative rounded-xl border border-purple-500/20 bg-purple-500/5 hover:bg-purple-500/10 p-3 transition-all duration-300 shadow-sm hover:shadow-purple-500/5">
+                          <div className="flex items-center justify-between mb-1.5">
+                            <div className="flex items-center gap-2 min-w-0">
+                              <span className="text-[11px] font-bold text-purple-300 truncate">{rem.title}</span>
+                              {rem.category && (
+                                <span className="px-1.5 py-0.5 rounded-[4px] bg-purple-500/20 text-purple-400 text-[8px] font-bold uppercase tracking-tighter">
+                                  {rem.category}
+                                </span>
+                              )}
+                            </div>
+                            <button 
+                              onClick={() => handleInsertCommand(rem.command)}
+                              className="shrink-0 p-1.5 rounded-lg bg-purple-500/20 text-purple-400 hover:bg-purple-600/30 hover:text-purple-300 transition-all opacity-0 group-hover:opacity-100"
+                              title="Insert command"
+                            >
+                              <CornerDownLeft size={10} />
+                            </button>
+                          </div>
+                          <pre className="text-[9px] font-mono text-purple-200/50 bg-black/20 rounded-lg p-2 overflow-x-auto whitespace-pre-wrap break-all border border-purple-500/10">
+                            {rem.command}
+                          </pre>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
 
                 {/* Chat History - Chat-like conversation */}
                 {chatHistory.length > 0 && (
@@ -4646,16 +5022,29 @@ RULES:
                             autoVerifyKeyRef.current = '';
                             autoLastLoopKeyRef.current = '';
                             autoLoopRepeatRef.current = 0;
+                            autoRepeatSigRef.current = { key: '', count: 0 };
+                            autoSameCommandRef.current = { cmd: '', count: 0 };
+                            autoEmptyRetryRef.current = '';
                             aiConversationRef.current = []; // Fresh context for new goal
                             autoRecentCommandsRef.current = []; // Clear cmd history
                             detectedOsRef.current = null; // Re-detect OS for new session
                             lastGoalRef.current = String(autoGoal || aiPrompt || '').trim();
                             setAutoStepHistory([]);
+                            setAiError(null); // Clear any previous error
                             setAutoGoal(g => String(g || aiPrompt || '').trim());
                             setAutoStepsRemaining(MAX_AUTO_STEPS);
                             setAutoMode(true);
                             setLastResultSnapshot(s => s || getOutputContext());
-                            setLastResultAt(p => { const n = Date.now(); return n > (p || 0) ? n : (p || 0) + 1; });
+                            // Always bump lastResultAt to guarantee useEffect fires even for repeated goals
+                            setLastResultAt(() => Date.now() + Math.random()); // unique value every time
+
+                            // Direct backstop: if the useEffect doesn't re-fire (same state), call directly
+                            autoRunningRef.current = false;
+                            setTimeout(() => {
+                              if (autoModeRef.current && !autoRunningRef.current) {
+                                runAutoStep();
+                              }
+                            }, 300);
 
                           } else {
                             setAutoMode(false);

@@ -65,6 +65,15 @@ const SshMemorySchema = new mongoose.Schema({
     addedAt: { type: Date, default: Date.now },
   }],
 
+  // ── Reminders ──────────────────────────────────────────────────────────────
+  // Persistent diagnostic commands or maintenance tips — max 30 entries
+  reminders: [{
+    title: { type: String, required: true },
+    command: { type: String, required: true },
+    category: { type: String, default: 'general' }, // ‘nginx’, ‘pm2’, ‘system’
+    addedAt: { type: Date, default: Date.now },
+  }],
+
   // ── Meta ───────────────────────────────────────────────────────────────────
   lastSeenAt: { type: Date, default: Date.now },
   sessionCount: { type: Number, default: 0 },

@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "skills": {
+    "Git": {
+      "source": "NeverSight/skills_feed",
+      "sourceType": "github",
+      "computedHash": "8e85f5a97f66c2424bcc922cca71faf0de3a3258c3a580bfeefa473ea633459c"
+    },
+    "git": {
+      "source": "NeverSight/skills_feed",
+      "sourceType": "github",
+      "computedHash": "a4660005df11386d52b436fd8f99579cf10acdf20a06d153e415ecab3d5eef9c"
+    },
+    "ssh": {
+      "source": "NeverSight/skills_feed",
+      "sourceType": "github",
+      "computedHash": "4714f0d17a646a249b6a8690cfeb2c4f41206d0229ff5f0ddef8c82d5dde79a1"
+    }
+  }
+}
