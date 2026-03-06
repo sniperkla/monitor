@@ -208,7 +208,7 @@ export function AppProvider({ children }) {
     if (state.dbConfig?.uri) {
       headers['x-mongodb-uri'] = state.dbConfig.uri;
     }
-    return fetch(url, { ...options, headers });
+    return fetch(url, { ...options, headers, credentials: 'include' });
   }, [state.dbConfig?.uri]);
 
   const fetchConnections = useCallback(async () => {

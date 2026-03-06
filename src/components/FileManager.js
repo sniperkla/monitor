@@ -1,12 +1,12 @@
 'use client';
 
 import { createPortal } from 'react-dom';
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { 
-  Folder, File as FileIcon, ChevronLeft, ChevronRight, RefreshCw, 
+  Folder, File as FileIcon, ChevronLeft, ChevronRight, ChevronUp, ChevronDown, RefreshCw, 
   Download, Upload, Trash2, FolderPlus, Search, Grid, List as ListIcon,
   AlertCircle, Edit, FileText, X, Save, AlertTriangle, 
-  Copy, Scissors, Clipboard, Wifi
+  Copy, Scissors, Clipboard, Wifi, AtSign, Replace
 } from 'lucide-react';
 import io from 'socket.io-client';
 import * as fflate from 'fflate';
@@ -96,6 +96,10 @@ export default function FileManager({ connectionId, connection, connectionName }
   const [socket, setSocket] = useState(null);
   const [viewMode, setViewMode] = useState('grid');
   const [searchQuery, setSearchQuery] = useState('');
+  const [searchResults, setSearchResults] = useState([]); // global search results
+  const [searchLoading, setSearchLoading] = useState(false);
+  const isSearchMode = searchQuery.trim().length > 0;
+  const searchDebounceRef = useRef(null);
   const [latency, setLatency] = useState(null);
   const [reconnectNonce, setReconnectNonce] = useState(0);
   const socketRef = useRef(null);
@@ -108,6 +112,12 @@ export default function FileManager({ connectionId, connection, connectionName }
   // Editor State
   const [editor, setEditor] = useState({ visible: false, file: null, content: '', saving: false });
   const [infoModal, setInfoModal] = useState({ visible: false, file: null });
+  const editorTextareaRef = useRef(null);
+  const [mentionState, setMentionState] = useState({ active: false, query: '', results: [], selectedIndex: 0, triggerPos: 0 });
+
+  // Find / Replace state
+  const [findBar, setFindBar] = useState({ visible: false, query: '', replace: '', matchCase: false, useRegex: false, replaceVisible: false, currentIndex: 0 });
+  const findInputRef = useRef(null);
 
   // Transfer Progress State
   const [transfer, setTransfer] = useState(null); // { filename, progress, action, waiting, countdown }
@@ -256,7 +266,8 @@ export default function FileManager({ connectionId, connection, connectionName }
 
     newSocket.on('sftp:download_chunk', ({ filename, chunk, progress, offset }) => {
        downloadBufferRef.current.push(chunk);
-       setTransfer({ filename, progress, action: "download", waiting: false }); if (lastDownloadRef.current) lastDownloadRef.current.offset = offset; 
+       setTransfer({ filename, progress, action: 'download', waiting: false, bytes: offset });
+       if (lastDownloadRef.current) lastDownloadRef.current.offset = offset;
     });
 
     newSocket.on('sftp:download_done', ({ filename }) => {
@@ -401,6 +412,33 @@ export default function FileManager({ connectionId, connection, connectionName }
     return () => window.removeEventListener('focus', handleFocus);
   }, [status, socket]);
 
+  // Global search: listen for results from server
+  useEffect(() => {
+    if (!socket) return;
+    const handler = ({ query, results, error }) => {
+      setSearchLoading(false);
+      if (error) { console.warn('[Search] Error:', error); return; }
+      setSearchResults(results || []);
+    };
+    socket.on('sftp:searchResult', handler);
+    return () => socket.off('sftp:searchResult', handler);
+  }, [socket]);
+
+  // Debounced global search trigger
+  useEffect(() => {
+    if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current);
+    if (!searchQuery.trim() || !socket) {
+      setSearchResults([]);
+      setSearchLoading(false);
+      return;
+    }
+    setSearchLoading(true);
+    searchDebounceRef.current = setTimeout(() => {
+      socket.emit('sftp:search', { query: searchQuery.trim() });
+    }, 400);
+    return () => clearTimeout(searchDebounceRef.current);
+  }, [searchQuery, socket]);
+
   const refreshFiles = (path = currentPathRef.current) => {
     if (socket) {
       // Don't full load, just refresh list
@@ -437,6 +475,97 @@ export default function FileManager({ connectionId, connection, connectionName }
     const i = Math.floor(Math.log(bytes) / Math.log(k));
     return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
   };
+
+  const insertMention = (file) => {
+    const content = editor.content;
+    const pos = editor.cursorPos ?? content.length;
+    const filePath = currentPath === '.' ? file.filename : `${currentPath}/${file.filename}`;
+    const before = content.slice(0, mentionState.triggerPos);
+    const after = content.slice(pos);
+    const insertion = `@${filePath} `;
+    const newContent = `${before}${insertion}${after}`;
+    const newPos = mentionState.triggerPos + insertion.length;
+    setEditor(prev => ({ ...prev, content: newContent, cursorPos: newPos }));
+    setMentionState({ active: false, query: '', results: [], selectedIndex: 0, triggerPos: 0 });
+    setTimeout(() => {
+      if (editorTextareaRef.current) {
+        editorTextareaRef.current.focus();
+        editorTextareaRef.current.setSelectionRange(newPos, newPos);
+      }
+    }, 0);
+  };
+
+  // ── Find / Replace helpers ────────────────────────────────────────────────
+  const computeMatches = useCallback((content, query, matchCase, useRegex) => {
+    if (!query) return [];
+    try {
+      const flags = matchCase ? 'g' : 'gi';
+      const pattern = useRegex ? query : query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const re = new RegExp(pattern, flags);
+      const hits = [];
+      let m;
+      while ((m = re.exec(content)) !== null) {
+        hits.push({ start: m.index, end: m.index + m[0].length, text: m[0] });
+        if (m[0].length === 0) re.lastIndex++;
+      }
+      return hits;
+    } catch { return []; }
+  }, []);
+
+  const jumpToMatch = useCallback((matches, index) => {
+    if (!matches.length || !editorTextareaRef.current) return;
+    const m = matches[index];
+    editorTextareaRef.current.focus();
+    editorTextareaRef.current.setSelectionRange(m.start, m.end);
+    // Scroll textarea to show the match
+    const ta = editorTextareaRef.current;
+    const linesBefore = ta.value.slice(0, m.start).split('\n').length - 1;
+    const lineH = 20; // matches leading-5
+    ta.scrollTop = Math.max(0, linesBefore * lineH - ta.clientHeight / 2);
+  }, []);
+
+  const openFindBar = useCallback((withReplace = false) => {
+    setFindBar(prev => ({ ...prev, visible: true, replaceVisible: withReplace || prev.replaceVisible }));
+    setTimeout(() => findInputRef.current?.focus(), 30);
+  }, []);
+
+  const closeFindBar = useCallback(() => {
+    setFindBar(prev => ({ ...prev, visible: false }));
+    editorTextareaRef.current?.focus();
+  }, []);
+
+  const findNavigate = useCallback((dir) => {
+    const matches = computeMatches(editor.content, findBar.query, findBar.matchCase, findBar.useRegex);
+    if (!matches.length) return;
+    const next = (findBar.currentIndex + dir + matches.length) % matches.length;
+    setFindBar(prev => ({ ...prev, currentIndex: next }));
+    jumpToMatch(matches, next);
+  }, [editor.content, findBar, computeMatches, jumpToMatch]);
+
+  const findReplaceOne = useCallback(() => {
+    const matches = computeMatches(editor.content, findBar.query, findBar.matchCase, findBar.useRegex);
+    if (!matches.length) return;
+    const idx = findBar.currentIndex % matches.length;
+    const m = matches[idx];
+    const newContent = editor.content.slice(0, m.start) + findBar.replace + editor.content.slice(m.end);
+    setEditor(prev => ({ ...prev, content: newContent }));
+    // Move to next after replace
+    const newMatches = computeMatches(newContent, findBar.query, findBar.matchCase, findBar.useRegex);
+    const newIdx = Math.min(idx, Math.max(newMatches.length - 1, 0));
+    setFindBar(prev => ({ ...prev, currentIndex: newIdx }));
+    setTimeout(() => jumpToMatch(computeMatches(newContent, findBar.query, findBar.matchCase, findBar.useRegex), newIdx), 0);
+  }, [editor.content, findBar, computeMatches, jumpToMatch]);
+
+  const findReplaceAll = useCallback(() => {
+    if (!findBar.query) return;
+    try {
+      const flags = (findBar.matchCase ? 'g' : 'gi');
+      const pattern = findBar.useRegex ? findBar.query : findBar.query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const re = new RegExp(pattern, flags);
+      const newContent = editor.content.replace(re, findBar.replace);
+      setEditor(prev => ({ ...prev, content: newContent }));
+    } catch {}
+  }, [editor.content, findBar]);
 
   const handleContextMenu = (e, file = null) => {
     e.preventDefault();
@@ -594,7 +723,7 @@ export default function FileManager({ connectionId, connection, connectionName }
 
   const handleDownload = (file, offset = 0) => {
      if (!socket) return;
-     const path = currentPath === '.' ? file.filename : `${currentPath}/${file.filename}`;
+     const path = file.absPath || (currentPath === '.' ? file.filename : `${currentPath}/${file.filename}`);
      lastDownloadRef.current = { file, offset };
      
      toastRef.current = addNotification({ 
@@ -604,6 +733,30 @@ export default function FileManager({ connectionId, connection, connectionName }
         duration: 0 
      });
      socket.emit('sftp:download', { filePath: path, offset });
+  };
+
+  const handleDownloadFolder = (file) => {
+    if (!socket) return;
+    const folderPath = file.absPath || (currentPath === '.' ? file.filename : `${currentPath}/${file.filename}`);
+    downloadBufferRef.current = [];
+    setTransfer({ filename: file.filename + '.tar.gz', progress: -1, action: 'download' });
+    socket.emit('sftp:download_folder', { folderPath });
+  };
+
+  const handleDownloadSelected = () => {
+    const selected = filteredFiles.filter(f => selectedFiles.has(f.filename));
+    if (selected.length === 0) return;
+    if (selected.length === 1) {
+      const f = selected[0];
+      return f.longname.startsWith('d') ? handleDownloadFolder(f) : handleDownload(f);
+    }
+    const paths = selected.map(f => ({
+      filePath: currentPath === '.' ? f.filename : `${currentPath}/${f.filename}`,
+      isDir: f.longname.startsWith('d'),
+    }));
+    downloadBufferRef.current = [];
+    setTransfer({ filename: 'selection.tar.gz', progress: -1, action: 'download' });
+    socket.emit('sftp:download_folder', { paths });
   };
 
   const handleDragOver = (e) => {
@@ -945,7 +1098,7 @@ export default function FileManager({ connectionId, connection, connectionName }
        addNotification({ title: 'Error', message: 'Cannot edit directory', type: 'error' });
        return;
     }
-    const path = currentPath === '.' ? contextMenu.file.filename : `${currentPath}/${contextMenu.file.filename}`;
+    const path = contextMenu.file.absPath || (currentPath === '.' ? contextMenu.file.filename : `${currentPath}/${contextMenu.file.filename}`);
     
     toastRef.current = addNotification({ title: t('common.loading'), message: t('files.actions.loading', { action: t('files.context.edit') }), type: 'loading', duration: 0 });
     setEditor({ visible: false, file: contextMenu.file, content: '', saving: false });
@@ -954,7 +1107,7 @@ export default function FileManager({ connectionId, connection, connectionName }
 
   const handleSave = () => {
      if (!editor.file || !socket) return;
-     const path = currentPath === '.' ? editor.file.filename : `${currentPath}/${editor.file.filename}`;
+     const path = editor.file.absPath || (currentPath === '.' ? editor.file.filename : `${currentPath}/${editor.file.filename}`);
      setEditor(prev => ({ ...prev, saving: true }));
      socket.emit('sftp:writeFile', { path, content: editor.content });
   };
@@ -1004,16 +1157,25 @@ export default function FileManager({ connectionId, connection, connectionName }
     toastRef.current = addNotification({ title: t('files.context.paste'), message: `${t('files.context.paste')} ${t('common.to')} ${currentPath}...`, type: 'loading', duration: 0 });
   };
 
-  const filteredFiles = files
-    .filter(f => (f.filename || '').toLowerCase().includes((searchQuery || '').toLowerCase()))
-    .sort((a, b) => {
-       // Folders first
-       const aIsDir = a.longname.startsWith('d');
-       const bIsDir = b.longname.startsWith('d');
-       if (aIsDir && !bIsDir) return -1;
-       if (!aIsDir && bIsDir) return 1;
-       return a.filename.localeCompare(b.filename);
-    });
+  // In search mode show global results; otherwise filter current-dir listing
+  const filteredFiles = isSearchMode
+    ? searchResults.map(r => ({
+        filename: r.filename,
+        absPath: r.absPath,
+        dir: r.dir,
+        longname: r.filename.includes('.') ? '-' : 'd', // best-effort dir detection by absence of extension
+        attrs: {},
+        _searchResult: true,
+      }))
+    : files
+        .filter(f => (f.filename || '').toLowerCase().includes((searchQuery || '').toLowerCase()))
+        .sort((a, b) => {
+           const aIsDir = a.longname.startsWith('d');
+           const bIsDir = b.longname.startsWith('d');
+           if (aIsDir && !bIsDir) return -1;
+           if (!aIsDir && bIsDir) return 1;
+           return a.filename.localeCompare(b.filename);
+        });
 
   return (
     <div className="flex flex-col h-full bg-[var(--bg-primary)] text-[var(--text-primary)] relative overflow-hidden group/filemanager">
@@ -1079,12 +1241,24 @@ export default function FileManager({ connectionId, connection, connectionName }
                 <motion.div 
                   className={`h-full ${transfer.waiting ? 'bg-[var(--accent-amber)]' : 'bg-[var(--accent-indigo)]'} shadow-[0_0_10px_var(--glow-indigo)]`}
                   initial={{ width: 0 }}
-                  animate={{ width: `${transfer.progress}%` }}
-                  transition={{ duration: 0.3 }}
+                  animate={
+                    transfer.progress < 0
+                      ? { width: ['20%', '75%', '20%'], opacity: [1, 0.55, 1] }
+                      : { width: `${transfer.progress}%`, opacity: 1 }
+                  }
+                  transition={
+                    transfer.progress < 0
+                      ? { duration: 1.6, repeat: Infinity, ease: 'easeInOut' }
+                      : { duration: 0.3 }
+                  }
                 />
               </div>
               <div className="flex justify-between items-center text-[10px] font-mono text-[var(--text-muted)]">
-                <span>{transfer.progress}%</span>
+                <span>
+                  {transfer.progress < 0
+                    ? `${((transfer.bytes || 0) / 1024 / 1024).toFixed(1)} MB`
+                    : `${transfer.progress}%`}
+                </span>
                 <div className="flex items-center gap-2">
                    {transfer.waiting && (
                       <button 
@@ -1124,8 +1298,161 @@ export default function FileManager({ connectionId, connection, connectionName }
           closeOnOverlayClick
            overlayClassName="bg-black/40 backdrop-blur-sm"
         >
-          <div className="flex flex-col h-full">
-            <div className="flex items-center justify-end gap-2 mb-3">
+          <div className="flex flex-col h-full relative">
+            {/* @ Mention file picker dropdown */}
+            {mentionState.active && mentionState.results.length > 0 && (
+              <div className="absolute top-10 left-0 z-[60] bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-xl shadow-2xl w-72 overflow-hidden">
+                <div className="px-3 py-1.5 border-b border-[var(--border-color)] text-[10px] text-[var(--text-muted)] font-bold uppercase tracking-wider flex items-center gap-1.5">
+                  <AtSign size={10} /> Mention File
+                  <span className="ml-auto text-[9px] opacity-50">↑↓ navigate · Enter select · Esc close</span>
+                </div>
+                <div className="overflow-y-auto max-h-52 custom-scrollbar">
+                  {mentionState.results.map((file, i) => {
+                    const isDir = file.longname?.startsWith('d');
+                    return (
+                      <button
+                        key={file.filename}
+                        onMouseDown={e => { e.preventDefault(); insertMention(file); }}
+                        className={`w-full flex items-center gap-2.5 px-3 py-2 text-xs transition-colors ${
+                          i === mentionState.selectedIndex
+                            ? 'bg-[var(--accent-indigo)]/20 text-[var(--accent-indigo)]'
+                            : 'hover:bg-[var(--bg-card-hover)] text-[var(--text-primary)]'
+                        }`}
+                      >
+                        {isDir
+                          ? <Folder size={14} className="text-blue-400 shrink-0" />
+                          : <FileIcon size={14} className="text-[var(--text-muted)] shrink-0" />}
+                        <span className="truncate font-mono">{file.filename}</span>
+                        {isDir && <span className="ml-auto text-[9px] text-blue-400/60 uppercase shrink-0">dir</span>}
+                      </button>
+                    );
+                  })}
+                  {mentionState.results.length === 0 && (
+                    <div className="px-3 py-3 text-xs text-[var(--text-muted)] text-center">No matches</div>
+                  )}
+                </div>
+              </div>
+            )}
+            {/* ── Find / Replace bar ── */}
+            {findBar.visible && (() => {
+              const matches = computeMatches(editor.content, findBar.query, findBar.matchCase, findBar.useRegex);
+              const safeIdx = matches.length ? findBar.currentIndex % matches.length : -1;
+              return (
+                <div className="mb-2 rounded-xl border border-[var(--border-color)] bg-[var(--bg-secondary)] overflow-hidden">
+                  {/* Search row */}
+                  <div className="flex items-center gap-1.5 px-2 py-1.5">
+                    <Search size={13} className="text-[var(--text-muted)] shrink-0" />
+                    <input
+                      ref={findInputRef}
+                      value={findBar.query}
+                      onChange={e => setFindBar(prev => ({ ...prev, query: e.target.value, currentIndex: 0 }))}
+                      onKeyDown={e => {
+                        if (e.key === 'Enter') { e.preventDefault(); findNavigate(e.shiftKey ? -1 : 1); }
+                        if (e.key === 'Escape') { e.preventDefault(); closeFindBar(); }
+                      }}
+                      placeholder="Find…"
+                      className="flex-1 bg-transparent text-xs text-[var(--text-primary)] placeholder:text-[var(--text-muted)] focus:outline-none font-mono"
+                      spellCheck={false}
+                    />
+                    {/* match counter */}
+                    <span className="text-[10px] font-mono text-[var(--text-muted)] select-none whitespace-nowrap shrink-0">
+                      {findBar.query
+                        ? matches.length
+                          ? `${safeIdx + 1} / ${matches.length}`
+                          : 'no match'
+                        : ''}
+                    </span>
+                    {/* Case sensitive toggle */}
+                    <button
+                      title="Match case (Alt+C)"
+                      onClick={() => setFindBar(prev => ({ ...prev, matchCase: !prev.matchCase, currentIndex: 0 }))}
+                      className={`px-1.5 py-0.5 rounded text-[10px] font-bold transition-colors select-none ${
+                        findBar.matchCase
+                          ? 'bg-[var(--accent-indigo)] text-white'
+                          : 'text-[var(--text-muted)] hover:bg-[var(--bg-card-hover)]'
+                      }`}
+                    >Aa</button>
+                    {/* Regex toggle */}
+                    <button
+                      title="Use regular expression (Alt+R)"
+                      onClick={() => setFindBar(prev => ({ ...prev, useRegex: !prev.useRegex, currentIndex: 0 }))}
+                      className={`px-1.5 py-0.5 rounded text-[10px] font-mono font-bold transition-colors select-none ${
+                        findBar.useRegex
+                          ? 'bg-[var(--accent-indigo)] text-white'
+                          : 'text-[var(--text-muted)] hover:bg-[var(--bg-card-hover)]'
+                      }`}
+                    >.*</button>
+                    {/* Prev / Next */}
+                    <button
+                      title="Previous match (Shift+Enter)"
+                      onClick={() => findNavigate(-1)}
+                      disabled={!matches.length}
+                      className="p-0.5 rounded text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-card-hover)] disabled:opacity-30 transition-colors"
+                    ><ChevronUp size={14} /></button>
+                    <button
+                      title="Next match (Enter)"
+                      onClick={() => findNavigate(1)}
+                      disabled={!matches.length}
+                      className="p-0.5 rounded text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-card-hover)] disabled:opacity-30 transition-colors"
+                    ><ChevronDown size={14} /></button>
+                    {/* Replace toggle */}
+                    <button
+                      title="Toggle replace"
+                      onClick={() => setFindBar(prev => ({ ...prev, replaceVisible: !prev.replaceVisible }))}
+                      className={`p-0.5 rounded transition-colors ${
+                        findBar.replaceVisible
+                          ? 'text-[var(--accent-indigo)]'
+                          : 'text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-card-hover)]'
+                      }`}
+                    ><Replace size={13} /></button>
+                    {/* Close */}
+                    <button
+                      onClick={closeFindBar}
+                      className="ml-1 p-0.5 rounded text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-card-hover)] transition-colors"
+                    ><X size={13} /></button>
+                  </div>
+
+                  {/* Replace row */}
+                  {findBar.replaceVisible && (
+                    <div className="flex items-center gap-1.5 px-2 py-1.5 border-t border-[var(--border-color)]">
+                      <Replace size={13} className="text-[var(--text-muted)] shrink-0" />
+                      <input
+                        value={findBar.replace}
+                        onChange={e => setFindBar(prev => ({ ...prev, replace: e.target.value }))}
+                        onKeyDown={e => { if (e.key === 'Escape') { e.preventDefault(); closeFindBar(); } }}
+                        placeholder="Replace with…"
+                        className="flex-1 bg-transparent text-xs text-[var(--text-primary)] placeholder:text-[var(--text-muted)] focus:outline-none font-mono"
+                        spellCheck={false}
+                      />
+                      <button
+                        onClick={findReplaceOne}
+                        disabled={!matches.length}
+                        className="px-2 py-0.5 rounded text-[10px] bg-[var(--bg-card-hover)] hover:bg-[var(--accent-indigo)]/20 text-[var(--text-primary)] hover:text-[var(--accent-indigo)] disabled:opacity-30 transition-colors whitespace-nowrap"
+                      >Replace</button>
+                      <button
+                        onClick={findReplaceAll}
+                        disabled={!matches.length}
+                        className="px-2 py-0.5 rounded text-[10px] bg-[var(--bg-card-hover)] hover:bg-[var(--accent-indigo)]/20 text-[var(--text-primary)] hover:text-[var(--accent-indigo)] disabled:opacity-30 transition-colors whitespace-nowrap"
+                      >Replace All</button>
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
+
+            <div className="flex items-center justify-between gap-2 mb-3">
+              {/* Cursor position indicator */}
+              <span className="text-[11px] font-mono text-[var(--text-muted)] select-none">
+                {(() => {
+                  const content = editor.content || '';
+                  const pos = editor.cursorPos ?? content.length;
+                  const before = content.slice(0, pos);
+                  const line = before.split('\n').length;
+                  const col = before.split('\n').pop().length + 1;
+                  const totalLines = content.split('\n').length;
+                  return `Ln ${line}, Col ${col}  |  ${totalLines} lines`;
+                })()}
+              </span>
               <button
                 onClick={handleSave}
                 disabled={editor.saving}
@@ -1136,13 +1463,115 @@ export default function FileManager({ connectionId, connection, connectionName }
               </button>
             </div>
 
-            <div className="flex-1 relative">
-              <textarea
-                value={editor.content}
-                onChange={e => setEditor(prev => ({ ...prev, content: e.target.value }))}
-                className="w-full h-full bg-[var(--bg-primary)] text-[var(--text-primary)] font-mono text-sm p-4 focus:outline-none resize-none rounded-xl border border-[var(--border-color)]"
-                spellCheck={false}
-              />
+            <div className="flex-1 relative overflow-hidden rounded-xl border border-[var(--border-color)] bg-[var(--bg-primary)]">
+              {/* Line number gutter + textarea side by side */}
+              <div
+                className="flex h-full w-full overflow-auto"
+                ref={el => {
+                  // Keep gutter scroll in sync with textarea scroll
+                  if (!el) return;
+                  el._scrollSyncInstalled = el._scrollSyncInstalled || (() => {
+                    const ta = el.querySelector('textarea');
+                    const gutter = el.querySelector('[data-gutter]');
+                    if (!ta || !gutter) return;
+                    ta.addEventListener('scroll', () => { gutter.scrollTop = ta.scrollTop; });
+                    el._scrollSyncInstalled = true;
+                  })();
+                }}
+              >
+                {/* Gutter */}
+                <div
+                  data-gutter="1"
+                  className="select-none overflow-hidden shrink-0 text-right font-mono text-xs leading-5 pt-4 pb-4 pr-3 pl-3"
+                  style={{
+                    color: 'var(--text-muted)',
+                    background: 'color-mix(in srgb, var(--bg-primary) 60%, transparent)',
+                    borderRight: '1px solid var(--border-color)',
+                    minWidth: `${String((editor.content || '').split('\n').length).length * 9 + 28}px`,
+                    userSelect: 'none',
+                    pointerEvents: 'none',
+                  }}
+                >
+                  {(editor.content || '').split('\n').map((_, i) => (
+                    <div key={i} style={{ lineHeight: '1.25rem' }}>{i + 1}</div>
+                  ))}
+                </div>
+
+                {/* Editor textarea */}
+                <textarea
+                  ref={editorTextareaRef}
+                  value={editor.content}
+                  onChange={e => {
+                    const val = e.target.value;
+                    const pos = e.target.selectionStart;
+                    setEditor(prev => ({ ...prev, content: val, cursorPos: pos }));
+                    // @mention detection
+                    const textBeforeCursor = val.slice(0, pos);
+                    const lastAt = textBeforeCursor.lastIndexOf('@');
+                    if (lastAt !== -1) {
+                      const segment = textBeforeCursor.slice(lastAt + 1);
+                      if (!segment.includes(' ') && !segment.includes('\n')) {
+                        const results = files
+                          .filter(f => f.filename.toLowerCase().includes(segment.toLowerCase()))
+                          .slice(0, 10);
+                        setMentionState({ active: true, query: segment, results, selectedIndex: 0, triggerPos: lastAt });
+                        return;
+                      }
+                    }
+                    setMentionState(prev => ({ ...prev, active: false }));
+                  }}
+                  onKeyDown={e => {
+                    // Global shortcuts (mention inactive)
+                    const isMod = e.metaKey || e.ctrlKey;
+                    if (isMod && e.key === 'f') {
+                      e.preventDefault();
+                      openFindBar(false);
+                      return;
+                    }
+                    if (isMod && e.key === 'h') {
+                      e.preventDefault();
+                      openFindBar(true);
+                      return;
+                    }
+                    if (e.key === 'F3' || (isMod && e.key === 'g')) {
+                      e.preventDefault();
+                      if (findBar.visible) findNavigate(e.shiftKey ? -1 : 1);
+                      return;
+                    }
+                    if (e.key === 'Escape' && findBar.visible) {
+                      e.preventDefault();
+                      closeFindBar();
+                      return;
+                    }
+                    // Mention navigation
+                    if (!mentionState.active) return;
+                    if (e.key === 'ArrowDown') {
+                      e.preventDefault();
+                      setMentionState(prev => ({ ...prev, selectedIndex: Math.min(prev.selectedIndex + 1, prev.results.length - 1) }));
+                    } else if (e.key === 'ArrowUp') {
+                      e.preventDefault();
+                      setMentionState(prev => ({ ...prev, selectedIndex: Math.max(prev.selectedIndex - 1, 0) }));
+                    } else if (e.key === 'Enter' || e.key === 'Tab') {
+                      if (mentionState.results.length > 0) {
+                        e.preventDefault();
+                        insertMention(mentionState.results[mentionState.selectedIndex]);
+                      }
+                    } else if (e.key === 'Escape') {
+                      e.preventDefault();
+                      setMentionState(prev => ({ ...prev, active: false }));
+                    }
+                  }}
+                  onSelect={e => setEditor(prev => ({ ...prev, cursorPos: e.target.selectionStart }))}
+                  onClick={e => {
+                    setEditor(prev => ({ ...prev, cursorPos: e.target.selectionStart }));
+                    setMentionState(prev => ({ ...prev, active: false }));
+                  }}
+                  onKeyUp={e => setEditor(prev => ({ ...prev, cursorPos: e.target.selectionStart }))}
+                  className="flex-1 bg-transparent text-[var(--text-primary)] font-mono text-sm pt-4 pb-4 pl-4 pr-4 focus:outline-none resize-none leading-5"
+                  style={{ tabSize: 2 }}
+                  spellCheck={false}
+                />
+              </div>
             </div>
           </div>
         </MacOSModalWindow>,
@@ -1163,6 +1592,24 @@ export default function FileManager({ connectionId, connection, connectionName }
           
           {contextMenu.file ? (
             <>
+              {contextMenu.file._searchResult && (
+                <>
+                  <button
+                    onClick={() => {
+                      const dir = contextMenu.file.dir || '.';
+                      setCurrentPath(dir);
+                      currentPathRef.current = dir;
+                      setSearchQuery('');
+                      refreshFiles(dir);
+                      setContextMenu({ ...contextMenu, visible: false });
+                    }}
+                    className="w-full text-left px-3 py-2 text-sm hover:bg-blue-600/20 text-blue-400 flex items-center gap-2 transition-colors"
+                  >
+                    <Folder size={14} /> Navigate to folder
+                  </button>
+                  <div className="h-px bg-[var(--border-color)] my-1" />
+                </>
+              )}
               <button 
                 onClick={() => { handleEdit(); setContextMenu({ ...contextMenu, visible: false }); }}
                 className="w-full text-left px-3 py-2 text-sm hover:bg-[var(--glow-indigo)] text-[var(--text-primary)] hover:text-[var(--accent-indigo)] flex items-center gap-2 transition-colors disabled:opacity-50"
@@ -1171,11 +1618,16 @@ export default function FileManager({ connectionId, connection, connectionName }
                 <Edit size={14} /> {t('files.context.edit')}
               </button>
               <button 
-                onClick={() => { handleDownload(contextMenu.file); setContextMenu({ ...contextMenu, visible: false }); }}
-                className="w-full text-left px-3 py-2 text-sm hover:bg-[var(--glow-emerald)] text-[var(--text-primary)] hover:text-[var(--accent-emerald)] flex items-center gap-2 transition-colors disabled:opacity-50"
-                disabled={contextMenu.file?.longname.startsWith('d')}
+                onClick={() => {
+                  const f = contextMenu.file;
+                  if (f?.longname.startsWith('d')) handleDownloadFolder(f);
+                  else handleDownload(f);
+                  setContextMenu({ ...contextMenu, visible: false });
+                }}
+                className="w-full text-left px-3 py-2 text-sm hover:bg-[var(--glow-emerald)] text-[var(--text-primary)] hover:text-[var(--accent-emerald)] flex items-center gap-2 transition-colors"
               >
-                <Download size={14} /> {t('files.context.download')}
+                <Download size={14} />
+                {contextMenu.file?.longname.startsWith('d') ? 'Download as .tar.gz' : t('files.context.download')}
               </button>
               <button 
                 onClick={() => { handleDelete(); setContextMenu({ ...contextMenu, visible: false }); }}
@@ -1316,14 +1768,25 @@ export default function FileManager({ connectionId, connection, connectionName }
 
         <div className="flex items-center gap-4">
           <div className="relative">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--text-muted)]" size={14} />
+            {searchLoading
+              ? <RefreshCw className="absolute left-3 top-1/2 -translate-y-1/2 text-blue-400 animate-spin" size={14} />
+              : <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--text-muted)]" size={14} />}
             <input 
               type="text" 
-              placeholder={t('files.toolbar.search')}
+              placeholder="Search whole server..."
               value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="bg-[var(--bg-primary)]/50 border border-[var(--border-color)] rounded-lg py-1.5 pl-9 pr-4 text-xs focus:outline-none focus:border-blue-500/50 w-48 text-[var(--text-primary)]"
+              onChange={(e) => { setSearchQuery(e.target.value); }}
+              onKeyDown={(e) => e.key === 'Escape' && setSearchQuery('')}
+              className={`bg-[var(--bg-primary)]/50 border rounded-lg py-1.5 pl-9 pr-8 text-xs focus:outline-none w-52 text-[var(--text-primary)] transition-colors ${
+                isSearchMode ? 'border-blue-500/60 focus:border-blue-500' : 'border-[var(--border-color)] focus:border-blue-500/50'
+              }`}
             />
+            {searchQuery && (
+              <button
+                onClick={() => setSearchQuery('')}
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-[var(--text-muted)] hover:text-[var(--text-primary)] transition-colors"
+              >✕</button>
+            )}
           </div>
           {clipboard && (
             <button 
@@ -1348,6 +1811,15 @@ export default function FileManager({ connectionId, connection, connectionName }
               onChange={handleFileUpload} 
               className="hidden" 
             />
+            {selectedFiles.size > 0 && (
+              <button
+                onClick={handleDownloadSelected}
+                className="p-1 text-emerald-400 hover:text-emerald-300 rounded hover:bg-emerald-500/10 transition-all"
+                title={`Download ${selectedFiles.size} selected item${selectedFiles.size > 1 ? 's' : ''} to local`}
+              >
+                <Download size={16} />
+              </button>
+            )}
             <div className="w-px h-4 bg-[var(--border-color)] my-auto mx-1" />
             <button 
               onClick={() => setViewMode('grid')}
@@ -1420,9 +1892,18 @@ export default function FileManager({ connectionId, connection, connectionName }
               const isDir = file.longname.startsWith('d');
               return (
                 <div 
-                  key={file.filename}
-                  draggable
+                  key={file._searchResult ? file.absPath : file.filename}
+                  draggable={!file._searchResult}
                   onClick={(e) => {
+                    if (file._searchResult) {
+                      // Navigate to the file's parent directory
+                      const dir = file.dir || '.';
+                      setCurrentPath(dir);
+                      currentPathRef.current = dir;
+                      setSearchQuery('');
+                      refreshFiles(dir);
+                      return;
+                    }
                     e.stopPropagation();
                     if (e.metaKey || e.ctrlKey) {
                       const newSelected = new Set(selectedFiles);
@@ -1467,16 +1948,19 @@ export default function FileManager({ connectionId, connection, connectionName }
                     setTimeout(() => document.body.removeChild(ghost), 0);
                   }}
                   onDoubleClick={() => {
+                    if (file._searchResult) return; // single-click already navigates
                     if (isDir) {
                       setSelectedFiles(new Set());
                       setLastSelectedFile(null);
                       handleFolderClick(file.filename);
                     }
                   }}
-                  onContextMenu={(e) => handleContextMenu(e, file)}
+                  onContextMenu={(e) => {
+                    handleContextMenu(e, file);
+                  }}
                   className={viewMode === 'grid'
-                    ? `group flex flex-col items-center p-3 rounded-xl border transition-all cursor-grab active:cursor-grabbing ${selectedFiles.has(file.filename) ? 'bg-blue-600/20 border-blue-500 shadow-md shadow-blue-500/10' : 'hover:bg-[var(--border-color)] border-transparent hover:border-[var(--border-hover)]'}`
-                    : `flex items-center gap-3 p-2 rounded-lg group transition-all cursor-grab active:cursor-grabbing ${selectedFiles.has(file.filename) ? 'bg-blue-600/20 border border-blue-500 shadow-inner' : 'hover:bg-[var(--border-color)] border border-transparent'}`
+                    ? `group flex flex-col items-center p-3 rounded-xl border transition-all ${file._searchResult ? 'cursor-pointer' : 'cursor-grab active:cursor-grabbing'} ${selectedFiles.has(file.filename) ? 'bg-blue-600/20 border-blue-500 shadow-md shadow-blue-500/10' : 'hover:bg-[var(--border-color)] border-transparent hover:border-[var(--border-hover)]'}`
+                    : `flex items-center gap-3 p-2 rounded-lg group transition-all ${file._searchResult ? 'cursor-pointer' : 'cursor-grab active:cursor-grabbing'} ${selectedFiles.has(file.filename) ? 'bg-blue-600/20 border border-blue-500 shadow-inner' : 'hover:bg-[var(--border-color)] border border-transparent'}`
                   }
                 >
                   <div className={viewMode === 'grid'
@@ -1493,13 +1977,21 @@ export default function FileManager({ connectionId, connection, connectionName }
                     <span className="text-xs font-medium truncate max-w-[120px] block text-[var(--text-primary)]">
                       {file.filename}
                     </span>
-                    {viewMode === 'list' && (
+                    {file._searchResult && (
+                      <span className="text-[9px] text-[var(--text-muted)] truncate max-w-[120px] block mt-0.5" title={file.dir}>
+                        {file.dir}
+                      </span>
+                    )}
+                    {viewMode === 'list' && !file._searchResult && (
                       <div className="flex items-center gap-4 text-[10px] text-[var(--text-muted)]">
                         <span>{formatSize(file.attrs.size)}</span>
                         <span className="w-32 truncate text-right">
                           {new Date(file.attrs.mtime * 1000).toLocaleDateString()}
                         </span>
                       </div>
+                    )}
+                    {viewMode === 'list' && file._searchResult && (
+                      <span className="text-[10px] text-[var(--text-muted)] truncate max-w-xs" title={file.absPath}>{file.absPath}</span>
                     )}
                   </div>
                 </div>
@@ -1512,8 +2004,9 @@ export default function FileManager({ connectionId, connection, connectionName }
       {/* Footer / Status */}
       <div className="px-4 py-2 bg-[var(--bg-tertiary)]/80 border-t border-[var(--border-color)] flex items-center justify-between text-[10px] text-[var(--text-muted)]">
         <div className="flex gap-4">
-          <span>{filteredFiles.length} items</span>
+          <span>{filteredFiles.length} {isSearchMode ? 'matches' : 'items'}</span>
           <span>{filteredFiles.filter(f => !f.longname.startsWith('d')).length} files</span>
+          {isSearchMode && <span className="text-blue-400">🔍 whole server · click to navigate</span>}
           {status !== 'ready' && <span className="animate-pulse text-amber-500">System State: {status}</span>}
         </div>
         <div className="flex gap-4">

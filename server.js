@@ -434,7 +434,7 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
         const sftpEvents = [
           'sftp:list', 'sftp:mkdir', 'sftp:delete', 'sftp:readFile', 
           'sftp:writeFile', 'sftp:applyPatch', 'sftp:copy', 'sftp:move', 'sftp:cross_server_transfer',
-          'sftp:upload', 'sftp:download'
+          'sftp:upload', 'sftp:download', 'sftp:download_folder', 'sftp:search'
         ];
         const sshEvents = ['ssh:input', 'ssh:resize'];
         sftpEvents.forEach(ev => socket.removeAllListeners(ev));
@@ -564,6 +564,65 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
                 if (err) return fallbackFileListing(socket, sshClient, path);
                 socket.emit('sftp:list', { path, files: list });
               });
+            });
+          });
+
+          // ── Global SFTP Search (find across entire filesystem) ──────────────
+          socket.on('sftp:search', ({ query } = {}) => {
+            const q = String(query || '').trim();
+            if (!q) return socket.emit('sftp:searchResult', { query: q, results: [], error: null });
+            if (!sshClient || sshClient._state === 'closed') {
+              return socket.emit('sftp:searchResult', { query: q, results: [], error: 'SSH not connected' });
+            }
+            console.log(`🔍 [${socket.id}] SFTP SEARCH: "${q}"`);
+
+            // Escape only characters that could break the shell pattern inside double-quotes
+            const escapedQ = q.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/`/g, '\\`').replace(/\$/g, '\\$');
+
+            // Two-pass search (semicolon-separated so both always run):
+            // 1) $HOME — covers all user/hidden files like .zeroclaw (fast)
+            // 2) / excluding $HOME and noisy pseudo-fs (broader, may be slower)
+            // Results are merged and de-duplicated on arrival.
+            // Double-quoted pattern so $HOME is expanded by the remote shell.
+            const cmd = [
+              `find $HOME -iname "*${escapedQ}*" 2>/dev/null | head -150`,
+              `find / \\( -path "$HOME" -o -path /proc -o -path /sys -o -path /dev -o -path /run \\) -prune -o -iname "*${escapedQ}*" -print 2>/dev/null | head -100`,
+            ].join(' ; ');
+
+            let output = '';
+            let done = false;
+
+            // Safety valve: emit whatever arrived after 8 s if stream never closes
+            const safetyTimer = setTimeout(() => {
+              if (done) return;
+              done = true;
+              emitResults();
+            }, 8000);
+
+            const emitResults = () => {
+              clearTimeout(safetyTimer);
+              const seen = new Set();
+              const results = output
+                .split('\n')
+                .map(l => l.trim())
+                .filter(l => l && !seen.has(l) && seen.add(l))
+                .map(absPath => ({
+                  filename: absPath.split('/').pop(),
+                  absPath,
+                  dir: absPath.split('/').slice(0, -1).join('/') || '/',
+                }));
+              console.log(`🔍 [${socket.id}] Search "${q}" → ${results.length} results`);
+              socket.emit('sftp:searchResult', { query: q, results, error: null });
+            };
+
+            sshClient.exec(cmd, (err, stream) => {
+              if (err) {
+                clearTimeout(safetyTimer);
+                return socket.emit('sftp:searchResult', { query: q, results: [], error: err.message });
+              }
+              stream.on('data', d => { output += d.toString(); });
+              stream.stderr.on('data', () => {}); // suppress permission-denied noise
+              stream.on('close', () => { if (!done) { done = true; emitResults(); } });
             });
           });
 
@@ -890,10 +949,13 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
                       dmp.Match_Threshold = 0.5; // fuzzy matching
                       dmp.Patch_DeleteThreshold = 0.5;
 
-                      // Build the unified diff text for this file
-                      const hunkText = section.diffLines.join('\n');
-                      
-                      // Try DMP patch_fromText with the raw hunk
+                      // Build the unified diff text for this file.
+                      // Strip --- / +++ / diff / index header lines first — DMP's patch_fromText
+                      // treats lines starting with '-'/'+'  as content deletions/insertions, so
+                      // leaving the file-header lines in would corrupt the output.
+                      const hunkText = unifiedToDmpPatch(section.diffLines);
+
+                      // Try DMP patch_fromText with the cleaned hunk
                       let patches;
                       try {
                         patches = dmp.patch_fromText(hunkText);
@@ -1557,6 +1619,81 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
                    }
                    emitSftpError(err, 'Download failed');
                  });
+               });
+             });
+          });
+
+          // Download Folder / Multi-file as TAR.GZ (Server → Client)
+          // Accepts { folderPath } for a single directory, or { paths: [{filePath, isDir}] } for multiple items.
+          // Uses `tar czf -` via exec and streams chunks immediately — no in-memory buffering.
+          socket.on('sftp:download_folder', ({ folderPath, paths: multiPaths }) => {
+             const { checkRateLimit, getConcurrencyLimiter, checkMemory } = require('./src/lib/serverGuard');
+             const mem = checkMemory(300);
+             if (!mem.safe) return socket.emit('sftp:error', { message: 'Server busy' });
+             const limiter = getConcurrencyLimiter('file_transfer', 10);
+             if (!limiter.allowed) return socket.emit('sftp:error', { message: 'Server transfer capacity reached' });
+             const rate = checkRateLimit(`sftp_download:${socket.id}`, 30);
+             if (!rate.allowed) return socket.emit('sftp:error', { message: `Download rate limit exceeded. Please wait ${Math.ceil(rate.resetIn / 1000)}s.`, resetIn: rate.resetIn });
+             const sessionData = activeSessions.get(socket.id);
+             if (!sessionData) return;
+
+             // Safe single-quote shell escaping
+             const sq = (s) => `'${String(s).replace(/'/g, "'\\''")}' `;
+
+             let archiveName, tarCmd;
+             if (folderPath) {
+               const folderName = path.posix.basename(folderPath);
+               const parentDir  = path.posix.dirname(folderPath);
+               archiveName = folderName + '.tar.gz';
+               tarCmd = `tar czf - -C ${sq(parentDir)} ${sq(folderName)}`;
+             } else {
+               if (!multiPaths || multiPaths.length === 0)
+                 return socket.emit('sftp:error', { message: 'No paths specified' });
+               archiveName = 'selection.tar.gz';
+               const parentDir = path.posix.dirname(multiPaths[0].filePath);
+               const items = multiPaths.map(p => sq(path.posix.basename(p.filePath))).join(' ');
+               tarCmd = `tar czf - -C ${sq(parentDir)} ${items}`;
+             }
+
+             const transferId = `downfolder_${Date.now()}`;
+             sessionData.activeTransfers.add(transferId);
+             limiter.acquire();
+             const cleanup = () => {
+               if (sessionData?.activeTransfers.has(transferId)) {
+                 limiter.release();
+                 sessionData.activeTransfers.delete(transferId);
+               }
+             };
+
+             sshClient.exec(tarCmd, (execErr, stream) => {
+               if (execErr) {
+                 cleanup();
+                 return socket.emit('sftp:error', { message: `Archive failed: ${execErr.message}` });
+               }
+
+               let totalSent  = 0;
+               let headerSent = false;
+               let stderrBuf  = '';
+
+               stream.on('data', (chunk) => {
+                 if (!headerSent) {
+                   socket.emit('sftp:download_start', { filename: archiveName, size: 0, offset: 0 });
+                   headerSent = true;
+                 }
+                 totalSent += chunk.length;
+                 socket.emit('sftp:download_chunk', { filename: archiveName, chunk, progress: -1, offset: totalSent });
+               });
+
+               stream.stderr.on('data', (d) => { stderrBuf += d.toString(); });
+
+               stream.on('close', (code) => {
+                 cleanup();
+                 if (code === 0) {
+                   if (!headerSent) socket.emit('sftp:download_start', { filename: archiveName, size: 0, offset: 0 });
+                   socket.emit('sftp:download_done', { filename: archiveName });
+                 } else {
+                   socket.emit('sftp:error', { message: stderrBuf.trim() || `tar exited with code ${code}` });
+                 }
                });
              });
           });

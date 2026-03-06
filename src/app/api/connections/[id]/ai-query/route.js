@@ -268,8 +268,8 @@ RULES:
               title: queryTitle,
               context: { connectionId: id, provider, schemaName },
               messages: [
-                { role: 'user', content: prompt, timestamp: new Date() },
-                { role: 'assistant', content: answer, metadata: { usedModel: actualUsedModel }, timestamp: new Date() }
+                { role: 'user', content: prompt || '(no prompt)', timestamp: new Date() },
+                { role: 'assistant', content: answer || '(no response)', metadata: { usedModel: actualUsedModel }, timestamp: new Date() }
               ]
             });
           } catch (dbErr) {

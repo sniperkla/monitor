@@ -13,7 +13,8 @@ import { i18n } from '@/lib/i18n';
 import {
   Loader2, AlertCircle, CheckCircle2, XCircle, X, Minus, Maximize2, Wifi,
   Sparkles, Copy, CornerDownLeft, ShieldAlert, Settings2, Clock, RefreshCw,
-  ListChecks, Trophy, PartyPopper, Languages, Lock, Brain, ChevronDown, ChevronUp
+  ListChecks, Trophy, PartyPopper, Languages, Lock, Brain, ChevronDown, ChevronUp,
+  AtSign, Folder, File as FileIconAi
 } from 'lucide-react';
 import { diff_match_patch } from 'diff-match-patch';
 
@@ -143,7 +144,66 @@ const TERMINAL_PRESETS = {
 
 const MAX_AUTO_STEPS = Number.POSITIVE_INFINITY;
 
-export default function TerminalView({ connectionId, connectionName, host, color, onClose, connection, isStandalone }) {
+// ─── Error recovery rules keyed by detectTerminalError type ───────────────────
+const ERROR_RECOVERY_RULES = {
+  command_not_found:  `"Command not found" → The command is not installed or not on $PATH. Install it first (\`apt install <pkg>\` / \`yum install <pkg>\` / \`dnf install <pkg>\`) or find it with \`which <cmd>\`.`,
+  permission_denied:  `"Permission denied" → Retry with sudo, or run \`chmod +x <file>\`. If sudo is unavailable, verify you are the correct user.`,
+  missing_file:       `"No such file or directory" → Wrong path or missing file. Locate it with \`find / -name <file> 2>/dev/null\` or list the directory with \`ls\`.`,
+  wrong_type:         `"Is a directory" / "Not a directory" → You used a file operation on a directory or vice versa. Verify the path with \`ls -la\`.`,
+  file_exists:        `"File already exists" → Remove the existing file first (\`rm <file>\`) or choose a different destination path.`,
+  package_not_found:  `"Package not found" → The package name may differ across distros. Search with \`apt-cache search <pkg>\` or \`dnf search <pkg>\`.`,
+  dependency_error:   `"Dependency conflict / Missing dependency" → Run \`apt --fix-broken install\` or \`dnf install --skip-broken\`. Check for conflicting package versions.`,
+  repo_error:         `"Repository not found" → The repo URL may be wrong or unavailable. Verify with \`curl -I <repo-url>\` and update the repo config.`,
+  docker_error:       `"Docker error" → Check container status with \`docker ps -a\`. Start it if stopped, or inspect logs with \`docker logs <id>\`.`,
+  k8s_error:          `"Kubernetes error" → Check pod status with \`kubectl get pods\` and logs with \`kubectl logs <pod>\`.`,
+  db_error:           `"Database connection failed" → Verify the service is running (\`systemctl status mysql\` etc.) and credentials are correct.`,
+  disk_full:          `"No space left / Disk quota exceeded" → Free space: \`df -h\` to check usage, \`du -sh /*\` to find large dirs. Remove unused files or expand the volume.`,
+  memory_error:       `"Out of memory" → Free memory or add swap: \`free -m\` to check; create swap with \`fallocate -l 4G /swapfile && chmod 600 /swapfile && mkswap /swapfile && swapon /swapfile\`.`,
+  system_error:       `"Argument list too long" → Use \`xargs\` or a loop to process files in batches instead of a single glob expansion.`,
+  connection_refused: `"Connection refused" → The service is not running or the port is wrong. Check with \`ss -tlnp | grep <port>\` and ensure the service is started.`,
+  timeout:            `"Connection timed out" → Check network connectivity (\`ping <host>\`) and firewall rules (\`iptables -L\` or \`firewall-cmd --list-all\`).`,
+  dns_error:          `"DNS resolution failed" → Inspect /etc/resolv.conf. Try \`nslookup <host>\` or use the IP address directly.`,
+  network_error:      `"Network unreachable" → Check interface status with \`ip a\` and routing with \`ip route\`.`,
+  service_error:      `"Service failed to start" / "Job for X failed" → MANDATORY: Read the actual error FIRST with \`journalctl -xeu <service>.service -n 50 --no-pager\` or \`systemctl status <service>.service --no-pager\`. NEVER retry \`systemctl restart\` without first reading the logs. Common causes: config syntax error (run \`nginx -t\`, \`apache2ctl configtest\`), missing file/directory, port conflict (\`ss -tlnp\`), wrong user/permission. Fix the ROOT CAUSE shown in the journal, THEN restart.`,
+  service_not_found:  `"Service unit not found" → The service may not be installed. Verify with \`systemctl list-units --type=service | grep <name>\`.`,
+  service_inactive:   `"Service inactive" → Start with \`systemctl start <service>\` and enable on boot with \`systemctl enable <service>\`.`,
+  port_in_use:        `"Port already in use" → Kill the occupying process: \`fuser -k <port>/tcp\` or \`lsof -ti:<port> | xargs kill -9\`. If it recurs, switch to a different host port (e.g. \`docker run -p 3001:3000\`).`,
+  auth_error:         `"Authentication failure" → Verify credentials, SSH keys, or tokens. Check for expired passwords or locked accounts.`,
+  syntax_error:       `"Syntax/parse error" → The config file or script has a syntax error. Validate it with the tool's built-in check (e.g. \`nginx -t\`, \`bash -n <script>\`).`,
+  config_error:       `"Config test failed / Invalid project name" → Review the configuration file for typos or invalid values. Use the tool's built-in validation command.`,
+  glibc_mismatch:     `"version GLIBC_X.XX not found" → The pre-built binary is INCOMPATIBLE with this system's libc. NEVER retry the same binary. Must build from source. Steps IN ORDER: (0) ⚠️ SWAP — ALWAYS run this one command unconditionally before anything else (it is idempotent): \`sudo bash -c 'MEM=$(free -m | awk "/^Mem:/{print $2}"); if [ "$MEM" -lt 4000 ]; then [ -f /swapfile ] || { fallocate -l 4G /swapfile 2>/dev/null || dd if=/dev/zero of=/swapfile bs=1M count=4096 status=progress; chmod 600 /swapfile; mkswap /swapfile; }; swapon /swapfile 2>/dev/null; fi; free -m'\` — DO NOT skip even if you think swap already exists. (1) CPU: \`nproc\`; choose -j: 1 core→-j1, 2→-j1, 3→-j2, 4+→-j(N-1). (2) cargo: \`cargo --version\`; if missing: \`curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y && source $HOME/.cargo/env\`. (3) cd into the repo dir. (4) \`cargo build --release -j <N>\`. (5) \`sudo cp target/release/<binary> /usr/local/bin/\`.`,
+  npm_error:          `"NPM Executable error / Cannot find package.json" → You are likely in the wrong directory. Run \`ls\` to confirm, then \`npm install\` if node_modules is missing.`,
+  generic_error:      `Check the full error message above. Identify the specific reason and fix the root cause before retrying.`,
+  fatal_error:        `A fatal error occurred. Read the full output carefully. Do NOT retry blindly — diagnose the root cause first.`,
+};
+
+const ERROR_RECOVERY_FOOTER =
+  `- RETRY LIMIT: If the SAME error appears 3 times in a row, STOP and set <done>false</done> with a clear explanation. Do NOT keep retrying the same fix.
+- WHEN TO EXIT: Exit (set <done>false</done>) if: the error is a permission you cannot fix, required resources don't exist, or the goal is fundamentally impossible given server state.
+- WHEN TO RETRY: Retry with a DIFFERENT approach if: wrong path/directory, missing dependency that can be installed, or configuration can be fixed.`;
+
+// ─── Dynamic blocker recovery: auto-handle known terminal blocking states ─────
+// Keys match detectInteractivePrompt().kind values.
+// The engine automatically sends `action` and waits `waitMs` before re-checking.
+const DYNAMIC_BLOCKER_RECOVERY = {
+  // "Press ENTER to continue", "Press RETURN", "(press RETURN)", etc.
+  press_enter:        { action: '\r',      label: 'Dismiss "press ENTER"',     waitMs: 600  },
+  // "Press any key to continue"
+  press_any_key:      { action: '\r',      label: 'Dismiss "press any key"',   waitMs: 600  },
+  // "Are you sure you want to continue connecting (yes/no)?" — first-time SSH host key
+  ssh_host_verify:    { action: 'yes\n',   label: 'Accept SSH host key',       waitMs: 900  },
+  // "[Y/n]", "(y/n)", "Do you want to continue?" — package manager / installer confirmations
+  confirm_yn:         { action: 'y\n',     label: 'Auto-confirm Y/N',          waitMs: 800  },
+  // "File already exists, overwrite?" style prompts
+  confirm_overwrite:  { action: 'y\n',     label: 'Auto-confirm overwrite',    waitMs: 800  },
+  // sudo password: try empty enter (works on cloud instances with NOPASSWD sudo like EC2/Ubuntu).
+  // autoBlockerRef caps this at 3 attempts — if the prompt keeps reappearing, falls through to modal.
+  sudo_password:      { action: '\r',      label: 'Try empty sudo password (NOPASSWD)',  waitMs: 700  },
+  // selection / text_input: intentionally absent — wrong default would break the workflow
+};
+// ─────────────────────────────────────────────────────────────────────────────
+
+export default function TerminalView({ connectionId, connectionName, host, color, onClose, connection, isStandalone, initialCommand }) {
   const { state: appState, dispatch, apiFetch } = useApp();
   const { state: osState, setSshAiHistory, setSshAiPrefs } = useOS();
   const { data: session } = useSession();
@@ -174,6 +234,13 @@ export default function TerminalView({ connectionId, connectionName, host, color
   const [aiOpen, setAiOpen] = useState(false);
   const [aiHasOpenedOnce, setAiHasOpenedOnce] = useState(false);
   const [aiPrompt, setAiPrompt] = useState('');
+  const aiPromptRef = useRef(null);
+  const autoGoalRef = useRef(null);
+  const [aiMention, setAiMention] = useState({ active: false, query: '', results: [], selectedIndex: 0, triggerPos: 0, field: 'prompt', dirPath: '' }); // field: 'prompt' | 'goal'
+  const aiMentionFilesRef = useRef({ dir: null, files: [] }); // cached file list keyed by directory
+  const mentionedFilesRef = useRef([]); // @mentioned absolute paths in current goal (for patch path accuracy)
+  const autoSessionBackupIdRef = useRef(null); // single backup ID reused for the whole auto session (prevents .bak spam)
+  const [noMentionWarning, setNoMentionWarning] = useState(false);
   const [aiLoading, setAiLoading] = useState(false);
   const [aiAnswer, setAiAnswer] = useState(null);
   const [aiError, setAiError] = useState(null);
@@ -210,6 +277,11 @@ export default function TerminalView({ connectionId, connectionName, host, color
   const [selectedDiffFile, setSelectedDiffFile] = useState('');
   const [aiStreamText, setAiStreamText] = useState('');
   const [aiStreaming, setAiStreaming] = useState(false);
+  const [skillsSearchResults, setSkillsSearchResults] = useState(null);
+  const [skillsSearchLoading, setSkillsSearchLoading] = useState(false);
+  const [injectedSkills, setInjectedSkills] = useState(null); // { skills: [...], allAvailable: [...] } shown during engine start
+  const [activeSkills, setActiveSkills] = useState([]); // Persistent list of skills currently loaded in context
+  const [showSkillsList, setShowSkillsList] = useState(false); // Toggle for skills panel
 
   const [autoMode, setAutoMode] = useState(false);
   const [autoStepsRemaining, setAutoStepsRemaining] = useState(MAX_AUTO_STEPS);
@@ -231,6 +303,7 @@ export default function TerminalView({ connectionId, connectionName, host, color
   const [lastAiUpdate, setLastAiUpdate] = useState(0);
   const autoTimerRef = useRef(null);
   const autoEmptyRetryRef = useRef('');
+  const preloadedSkillsRef = useRef(null); // skills fetched before the first auto-step
   const containerRef = useRef(null);
   const autoModeRef = useRef(false);
   useEffect(() => { autoModeRef.current = autoMode; }, [autoMode]);
@@ -240,6 +313,18 @@ export default function TerminalView({ connectionId, connectionName, host, color
   const aiModeRef = useRef('manual');
   useEffect(() => { aiModeRef.current = aiMode; }, [aiMode]);
   const bypassPasswordPauseRef = useRef(false); // skip predictive password-pause for one step after user resumes
+  const skillsJustInjectedRef = useRef(false); // force full reset on next resume after skill injection
+  // Tracks consecutive auto-unblock attempts for the same blocker kind.
+  // Resets when the kind changes or the blocker is cleared.
+  // After 3 failed attempts the engine falls through to the AI / stops gracefully.
+  const autoBlockerRef = useRef({ kind: null, count: 0 });
+
+  // Keep activeSkills UI state in sync with preloadedSkillsRef after every auto step
+  useEffect(() => {
+    if (Array.isArray(preloadedSkillsRef.current) && preloadedSkillsRef.current.length > 0) {
+      setActiveSkills(preloadedSkillsRef.current);
+    }
+  }, [lastResultAt]);
 
   const [autoTranslate, setAutoTranslate] = useState(false);
   const [aiTranslations, setAiTranslations] = useState({ explain: '', warn: '', plan: '', thought: '' });
@@ -247,6 +332,153 @@ export default function TerminalView({ connectionId, connectionName, host, color
   const [tmuxInitialized, setTmuxInitialized] = useState(false);
   
   const sshAiPrefs = osState?.sshAiPrefs || { preferSudo: true, aiModel: 'auto' };
+
+  // @mention helpers for AI prompt textareas
+
+  // Extracts absolute file paths from @mention tokens in a text string
+  const extractMentionedPaths = (text) => {
+    const matches = [...String(text || '').matchAll(/@([\S]+)/g)];
+    return matches.map(m => m[1].replace(/\/$/, '')).filter(p => p && p.includes('/'));
+  };
+
+  const insertAiMention = (file) => {
+    const isGoal = aiMention.field === 'goal';
+    const currentVal = isGoal ? autoGoal : aiPrompt;
+    const dirPath = aiMention.dirPath || '';
+    const isDir = file.longname?.startsWith('d');
+    // Full path = directory prefix + filename (+ trailing slash for dirs to allow drilling in)
+    const fullPath = dirPath + file.filename + (isDir ? '/' : '');
+    const before = currentVal.slice(0, aiMention.triggerPos);
+    const after = currentVal.slice(aiMention.triggerPos + 1 + aiMention.query.length);
+
+    if (isDir) {
+      // For directories: insert path WITHOUT trailing space and keep detecting
+      // so the user can immediately see contents of that folder
+      const newVal = `${before}@${fullPath}${after}`;
+      const newPos = aiMention.triggerPos + 1 + fullPath.length;
+      // Clear cache so the next detection fetches this subdir
+      aiMentionFilesRef.current = { dir: null, files: [] };
+      if (isGoal) {
+        setAutoGoal(newVal);
+        setTimeout(() => {
+          if (autoGoalRef.current) {
+            autoGoalRef.current.focus();
+            autoGoalRef.current.setSelectionRange(newPos, newPos);
+            handleAiMentionDetect(newVal, newPos, 'goal');
+          }
+        }, 0);
+      } else {
+        setAiPrompt(newVal);
+        setTimeout(() => {
+          if (aiPromptRef.current) {
+            aiPromptRef.current.focus();
+            aiPromptRef.current.setSelectionRange(newPos, newPos);
+            handleAiMentionDetect(newVal, newPos, 'prompt');
+          }
+        }, 0);
+      }
+    } else {
+      // For files: insert with trailing space and close dropdown
+      const insertion = `@${fullPath} `;
+      const newVal = `${before}${insertion}${after}`;
+      const newPos = aiMention.triggerPos + insertion.length;
+      aiMentionFilesRef.current = { dir: null, files: [] };
+      setAiMention(prev => ({ ...prev, active: false }));
+      if (isGoal) {
+        setAutoGoal(newVal);
+        setTimeout(() => {
+          if (autoGoalRef.current) {
+            autoGoalRef.current.focus();
+            autoGoalRef.current.setSelectionRange(newPos, newPos);
+            autoGoalRef.current.style.height = 'auto';
+            autoGoalRef.current.style.height = Math.min(autoGoalRef.current.scrollHeight, 96) + 'px';
+          }
+        }, 0);
+      } else {
+        setAiPrompt(newVal);
+        setTimeout(() => {
+          if (aiPromptRef.current) {
+            aiPromptRef.current.focus();
+            aiPromptRef.current.setSelectionRange(newPos, newPos);
+            aiPromptRef.current.style.height = 'auto';
+            aiPromptRef.current.style.height = Math.min(aiPromptRef.current.scrollHeight, 120) + 'px';
+          }
+        }, 0);
+      }
+    }
+  };
+
+  const handleAiMentionDetect = (val, pos, field) => {
+    const textBefore = val.slice(0, pos);
+    const lastAt = textBefore.lastIndexOf('@');
+    if (lastAt !== -1) {
+      const segment = textBefore.slice(lastAt + 1);
+      if (!segment.includes(' ') && !segment.includes('\n') && segment.length <= 120) {
+        // Split segment into directory prefix and file query
+        // e.g. ".zeroclaw/draw" → dirPath=".zeroclaw/", fileQuery="draw"
+        const lastSlash = segment.lastIndexOf('/');
+        const dirPath = lastSlash !== -1 ? segment.slice(0, lastSlash + 1) : '';
+        const fileQuery = lastSlash !== -1 ? segment.slice(lastSlash + 1) : segment;
+        const listPath = dirPath || '.';
+
+        // Use cache if it belongs to the same directory
+        const cache = aiMentionFilesRef.current;
+        if (cache.dir === listPath && cache.files.length > 0) {
+          const results = cache.files
+            .filter(f => !fileQuery || f.filename.toLowerCase().includes(fileQuery.toLowerCase()))
+            .slice(0, 12);
+          setAiMention({ active: true, query: segment, results, selectedIndex: 0, triggerPos: lastAt, field, dirPath });
+          return true;
+        }
+
+        // Different directory or empty cache — fetch via SFTP
+        const sock = socketRef.current;
+        if (sock?.connected) {
+          const onList = ({ files }) => {
+            if (!files) return;
+            const allFiles = files.filter(f => f.filename !== '.' && f.filename !== '..');
+            // Cache keyed by directory
+            aiMentionFilesRef.current = { dir: listPath, files: allFiles };
+            const results = allFiles
+              .filter(f => !fileQuery || f.filename.toLowerCase().includes(fileQuery.toLowerCase()))
+              .slice(0, 12);
+            setAiMention({ active: true, query: segment, results, selectedIndex: 0, triggerPos: lastAt, field, dirPath });
+          };
+          // ⚠️ Register listener FIRST, then emit — prevents race condition
+          sock.once('sftp:list', onList);
+          sock.emit('sftp:list', listPath);
+          setTimeout(() => sock.off('sftp:list', onList), 5000);
+        }
+        return true;
+      }
+    }
+    // @ removed or space typed — close dropdown and reset cache
+    aiMentionFilesRef.current = { dir: null, files: [] };
+    setAiMention(prev => ({ ...prev, active: false }));
+    return false;
+  };
+
+  const handleAiMentionKeyDown = (e) => {
+    if (!aiMention.active || aiMention.results.length === 0) return false;
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      setAiMention(prev => ({ ...prev, selectedIndex: Math.min(prev.selectedIndex + 1, prev.results.length - 1) }));
+      return true;
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      setAiMention(prev => ({ ...prev, selectedIndex: Math.max(prev.selectedIndex - 1, 0) }));
+      return true;
+    } else if (e.key === 'Enter' || e.key === 'Tab') {
+      e.preventDefault();
+      insertAiMention(aiMention.results[aiMention.selectedIndex]);
+      return true;
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      setAiMention(prev => ({ ...prev, active: false }));
+      return true;
+    }
+    return false;
+  };
 
   // Auto Tmux Init
   useEffect(() => {
@@ -531,6 +763,15 @@ export default function TerminalView({ connectionId, connectionName, host, color
         } catch (e) {}
       }, 100);
 
+      // Run initialCommand (e.g. tmux attach) once shell is ready
+      if (initialCommand) {
+        setTimeout(() => {
+          if (socket.connected) {
+            socket.emit('ssh:input', initialCommand);
+          }
+        }, 800);
+      }
+
       term.focus(); // Focus terminal on connect
     });
 
@@ -809,13 +1050,58 @@ export default function TerminalView({ connectionId, connectionName, host, color
     };
 
     let command = getTag('command');
+    
+    // 🧪 ROBUSTNESS: If command is empty but we see markdown code blocks (lazy AI), extract them!
+    if (!command.trim()) {
+      const mdBashRegex = /```(?:bash|sh|shell|zsh)?\n([\s\S]*?)```/i;
+      const mdMatch = mdBashRegex.exec(String(raw || ''));
+      if (mdMatch) {
+         command = mdMatch[1].trim();
+         console.log('[AI Agent] Recovered command from markdown block:', command);
+      }
+    }
+
+    // 🧪 SAFETY: Block conversational text masquerading as a command
+    // "Next, create a new file..." or "I will run..." should NOT be executed.
+    const conversationalStart = /^(next,|please|merely|just|i will|let's|ok,|okay,|sure,|first,|then,|finally,)/i;
+    // Common safe commands that might look like english but are valid
+    const isSafeCommand = /^(echo|printf|cat|ls|cd|pwd|grep|find|git|npm|pm2|docker|sudo|rm|mv|cp|mkdir|touch|diff|patch|make|service|systemctl|journalctl|ssh|scp|curl|wget|tar|zip|unzip|gzip|gunzip|nano|vim|vi|pico|emacs|head|tail|less|more|whoami|id|groups|users|ps|top|htop|kill|pkill|killall|fuser|lsof|netstat|ss|ip|ifconfig|route|ping|traceroute|dig|nslookup|host|whois|uptime|w|who|last|history|export|unset|env|set|alias|unalias|source|\.|bash|sh|zsh|python|perl|ruby|php|node|deno|go|rustc|gcc|g\+\+|clang|clang\+\+|javac|java|jar)/;
+    
+    if (conversationalStart.test(command) && !isSafeCommand.test(command)) {
+        console.warn('[AI Agent] Blocked conversational command:', command);
+        command = '';
+    }
+
     if (command.includes('&')) command = decodeEntities(command);
     
-    const explain = getTag('explain');
+    let explain = getTag('explain');
+    // 🧪 ROBUSTNESS: If AI provides raw text without <explain> tag, use it as the explanation
+    if (!explain.trim()) {
+       const cleanRaw = String(raw || '').replace(/<[^>]+>[\s\S]*?<\/[^>]+>/gi, '').trim();
+       if (cleanRaw) {
+          explain = cleanRaw.split('\n')[0].slice(0, 150) + (cleanRaw.length > 150 ? '...' : '');
+       }
+    }
+
     const dangerRaw = getTag('danger');
     const warn = getTag('warn');
     const doneRaw = getTag('done');
     let diff = getTag('diff');
+    
+    // 🧪 ROBUSTNESS: MD Diff Fallback
+    if (!diff.trim()) {
+      const mdDiffRegex = /```(?:diff|patch)\n([\s\S]*?)```/i;
+      const mdMatch = mdDiffRegex.exec(String(raw || ''));
+      if (mdMatch) {
+         diff = mdMatch[1].trim();
+         console.log('[AI Agent] Recovered diff from markdown block:', diff);
+      } else if (String(raw || '').includes('--- ') && String(raw || '').includes('+++ ')) {
+         // Raw diff detection
+         const rawMatch = String(raw || '').match(/(?:--- |@@ |diff -u)[\s\S]+/i);
+         if (rawMatch) diff = rawMatch[0];
+      }
+    }
+
     if (diff) {
       diff = cleanDiffContent(diff);
       if (diff.includes('&')) diff = decodeEntities(diff);
@@ -823,14 +1109,21 @@ export default function TerminalView({ connectionId, connectionName, host, color
     const plan = getTag('plan');
     const thought = getTag('thought');
     const interactive = getTag('interactive');
+    const searchSkills = getTag('search_skills');
     const stepRaw = getTag('step');
     const danger = String(dangerRaw || '').trim().toLowerCase() === 'true';
     const doneRawLower = String(doneRaw || '').trim().toLowerCase();
-    const done = doneRawLower === 'true';
+    let done = doneRawLower === 'true';
+
+    // 🧪 ROBUSTNESS: Done Detection
+    if (!doneRawLower && explain.toLowerCase().includes('task complete') || explain.toLowerCase().includes('finished goal')) {
+       done = true;
+    }
+
     // NOTE: The model uses <done>false</done> for normal "in progress" steps.
     // Only treat done=false as a failure (stop Auto Mode) when the AI is explicitly giving up.
     const explainLower = String(explain || '').toLowerCase();
-    const hasWorkOutput = !!(String(command || '').trim() || String(diff || '').trim());
+    const hasWorkOutput = !!(String(command || '').trim() || String(diff || '').trim() || String(searchSkills || '').trim());
     const giveUpSignals = [
       "cannot", "can't", "unable", "not possible", "no way", "blocked", "permission denied",
       "i don't have", "insufficient", "give up", "cannot be completed", "can't be completed",
@@ -839,7 +1132,7 @@ export default function TerminalView({ connectionId, connectionName, host, color
     const isGiveUpExplain = giveUpSignals.some(s => explainLower.includes(s));
     const doneFailed = doneRawLower === 'false' && !!doneRaw && (!hasWorkOutput) && isGiveUpExplain;
     const step = parseInt(stepRaw) || 1;
-    return { command, diff, explain, danger, warn, done, doneFailed, interactive, plan, thought, step, usedModel: metadata?.usedModel, raw: String(raw || '').trim() };
+    return { command, diff, explain, danger, warn, done, doneFailed, interactive, plan, thought, searchSkills, step, usedModel: metadata?.usedModel, raw: String(raw || '').trim() };
   };
 
   const isValidUnifiedDiff = (diffText) => {
@@ -986,13 +1279,29 @@ export default function TerminalView({ connectionId, connectionName, host, color
           
           if (p.startsWith('a/')) p = p.slice(2);
           if (p.startsWith('b/')) p = p.slice(2);
-          
+
+          // 🎯 Priority 0: @mentioned file paths — suffix-match handles both bare and relative paths
+          // e.g., AI writes "chart_analysis/draw_on_chart.py" → we map it to the full mentioned path
+          const _mentionedPaths = mentionedFilesRef.current || [];
+          if (_mentionedPaths.length > 0) {
+            const mentionedSuffix = _mentionedPaths.find(mp => {
+              // exact match, or the AI's `p` is a suffix of the mentioned absolute path
+              return mp === p || mp.endsWith('/' + p) || p.endsWith('/' + mp.split('/').pop());
+            });
+            if (mentionedSuffix) {
+              p = mentionedSuffix;
+              const suffix = parts.length > 1 ? '\t' + parts.slice(1).join('\t') : '';
+              processedLines.push(`${prefix}${p}${suffix}`);
+              continue;
+            }
+          }
+
           // Smart Path Resolution: 
           const isBare = !p.includes('/') || (p.startsWith('/') && p.lastIndexOf('/') === 0);
           if (isBare) {
             const fileName = p.split('/').pop();
             let absoluteMatch = null;
-            
+
             // 1. Try to resolve relative to CWD first (Priority)
             if (sshMemory?.cwd) {
               const cwd = sshMemory.cwd.endsWith('/') ? sshMemory.cwd.slice(0, -1) : sshMemory.cwd;
@@ -1939,6 +2248,14 @@ export default function TerminalView({ connectionId, connectionName, host, color
       idleMs = 4000; // Give installers more time to think
       stuckMs = 30000; // Wait 30s before declaring stuck
     }
+
+    // Compilation commands: cargo build, make, cmake, gcc, g++, rustc, mvn, gradle
+    // These can go completely silent for MINUTES during linking — never declare stuck during active compile
+    const isCompilationCmd = /\bcargo\s+(build|install|test|check)|\bmake\b|\bcmake\b|\bgcc\b|\bg\+\+\b|\brustc\b|\bmvn\b|\bgradle\b/.test(cmdLower);
+    if (isCompilationCmd) {
+      idleMs = 4000;
+      stuckMs = 600000; // 10 min — prompt detection will exit early when shell prompt appears
+    }
     
     // Minimal override just to prevent flickering on very quick commands
     if (/^\[?ctrl\+c\]?$|^\^c$/.test(cmdLower)) {
@@ -1947,20 +2264,45 @@ export default function TerminalView({ connectionId, connectionName, host, color
 
     const start = Date.now();
     let lastCheckSnap = '';
+    // Tracks whether ANY compilation output (Compiling/Linking/Building) has appeared.
+    // Once true we require a longer idle before accepting a shell prompt, and we never
+    // return 'prompt' while active compilation markers are still the most recent output.
+    let compilationStarted = false;
+    // Regex for "compilation is actively in progress" (excludes Finished/warning/error which can coexist with a prompt)
+    const compilingActiveRe = /^\s*(Compiling|Linking|Building\s*\[)\b/im;
 
     while (Date.now() - start < maxMs) {
       const snap = getOutputContext();
 
+      // Track if compilation has ever started for this command
+      if (isCompilationCmd && !compilationStarted && compilingActiveRe.test(snap)) {
+        compilationStarted = true;
+      }
+
       // 1. Check for shell prompt FIRST (if prompt is ready, we are NOT in an editor/pager)
       const idleFor = Date.now() - (lastOutputAtRef.current || 0);
-      const promptIdleMs = Math.min(idleMs, 800); 
+      // For compilation commands: once compilation has started, require 3 s of idle AND
+      // verify compilation is no longer the last meaningful output. This prevents the AI
+      // from being called while cargo/make is still linking (which can be silent for minutes).
+      const promptIdleMs = compilationStarted ? 3000 : Math.min(idleMs, 800);
       if (idleFor > promptIdleMs && looksLikeShellPrompt(snap) && sawOutputAfterCommandRef.current) {
-        return { reason: 'prompt', snap };
+        // Extra guard for compilation: don't return prompt if the recent output still shows
+        // active compilation markers (handles race between linker silence and prompt detection)
+        if (compilationStarted && compilingActiveRe.test(snap.split('\n').slice(-6).join('\n'))) {
+          // Still compiling — don't return yet, let the loop continue
+        } else {
+          return { reason: 'prompt', snap };
+        }
       }
 
       // 2. Check for editor/pager (these never "settle" — output stops but we're stuck)
       const editorPager = looksLikeEditorOrPager(snap);
-      if (editorPager && idleFor > 1200) return { reason: 'editor', snap, editor: editorPager };
+      // Pagers (less/more/man) block immediately — detect them fast (500ms) so they aren't
+      // misclassified as interactive/press_enter by the check below.
+      // True editors (vim/nano) need a longer grace period (1200ms) to distinguish from normal output.
+      const pagerQuickSet = new Set(['pager', 'man']);
+      const editorIdleMs = (editorPager && pagerQuickSet.has(editorPager)) ? 500 : 1200;
+      if (editorPager && idleFor > editorIdleMs) return { reason: 'editor', snap, editor: editorPager };
 
       // 2.5. Check for streaming/blocked commands (pm2 log, tail -f, etc.)
       const streaming = looksLikeStreamingMode(snap, commandHint);
@@ -1978,6 +2320,17 @@ export default function TerminalView({ connectionId, connectionName, host, color
       // Detect stuck (no output change for a long time, but no prompt)
       if (idleFor > stuckMs && snap === lastCheckSnap) {
         return { reason: 'stuck', snap };
+      }
+
+      // Compilation guard: if the terminal shows active compilation progress (Compiling/Linking/Building/make),
+      // keep the stuck timer from firing by continuously refreshing lastCheckSnap.
+      // This prevents declaring 'stuck' during the silent linking phase of cargo/make/gcc.
+      const isActivelyCompiling = compilingActiveRe.test(snap)
+        || /^\s*(Finished|Running|Checking|warning:|error\[E)\b/im.test(snap)
+        || /\bmake\[\d+\]/i.test(snap)
+        || /\d+\/\d+:\s*\w/i.test(snap); // cargo progress line like "499/500: zeroclaw(bin)"
+      if (isActivelyCompiling) {
+        lastCheckSnap = snap; // Reset stuck timer — build is alive, just silent during linking
       }
 
       lastCheckSnap = snap;
@@ -2156,6 +2509,9 @@ export default function TerminalView({ connectionId, connectionName, host, color
 
     // === Service Errors ===
     if (/failed to start/i.test(recentLines)) return { type: 'service_error', label: 'Service failed to start', severity: 'high' };
+    if (/control process exited with error code/i.test(recentLines)) return { type: 'service_error', label: 'Service control process failed', severity: 'high' };
+    if (/job for .* failed/i.test(recentLines)) return { type: 'service_error', label: 'Systemctl job failed', severity: 'high' };
+    if (/start-pre.*failed|start-post.*failed|exec.*code=exited.*status/i.test(recentLines)) return { type: 'service_error', label: 'Service process failed', severity: 'high' };
     if (/unit.*not found/i.test(recentLines)) return { type: 'service_not_found', label: 'Service unit not found', severity: 'high' };
     if (/inactive \(dead\)/i.test(recentLines)) return { type: 'service_inactive', label: 'Service is inactive', severity: 'medium' };
 
@@ -2163,6 +2519,7 @@ export default function TerminalView({ connectionId, connectionName, host, color
     if (/no space left/i.test(recentLines)) return { type: 'disk_full', label: 'No space left on device', severity: 'critical' };
     if (/cannot allocate memory/i.test(recentLines)) return { type: 'memory_error', label: 'Out of memory', severity: 'critical' };
     if (/too many open files/i.test(recentLines)) return { type: 'resource_error', label: 'Too many open files', severity: 'high' };
+    if (/version.*GLIBC.*not found/i.test(recentLines) || /GLIBC_[0-9].*not found/i.test(recentLines)) return { type: 'glibc_mismatch', label: 'GLIBC version mismatch (binary incompatible)', severity: 'critical' };
 
     // === Authentication Errors ===
     if (/authentication failure/i.test(recentLines) || /auth.*fail/i.test(recentLines)) return { type: 'auth_error', label: 'Authentication failure', severity: 'high' };
@@ -2264,7 +2621,7 @@ export default function TerminalView({ connectionId, connectionName, host, color
         'confirm_overwrite': 'overwrite confirmation required',
         'password': 'password input required (cannot be automated)',
         'passphrase': 'passphrase input required',
-        'sudo_password': 'sudo password required (cannot be automated)',
+        'sudo_password': 'sudo password prompt detected — trying passwordless (NOPASSWD)',
         'ssh_key_file': 'SSH key file path input required',
         'ssh_host_verify': 'SSH host verification required',
         'press_enter': 'waiting for ENTER key',
@@ -2327,9 +2684,12 @@ export default function TerminalView({ connectionId, connectionName, host, color
           // 1. Handle [ESC]
           finalInput = finalInput.replace(/\[ESC\]/gi, '\x1b');
           
-          // 2. Handle Ctrl+Letter (e.g. ^X, ^O, ^C)
-          finalInput = finalInput.replace(/\^([A-Z])/g, (m, char) => {
-            return String.fromCharCode(char.charCodeAt(0) - 64);
+          // 2. Handle Ctrl+Letter notations: ^X, ^O, ^R (standalone tokens only)
+          // IMPORTANT: only replace when ^[A-Z] appears at the start/end of the string or
+          // surrounded by whitespace — never inside shell patterns like awk '/^Mem:/' where
+          // ^M would otherwise become a carriage return.
+          finalInput = finalInput.replace(/(^|\s)\^([A-Z])($|\s)/g, (m, pre, char, post) => {
+            return pre + String.fromCharCode(char.charCodeAt(0) - 64) + post;
           });
 
           // 3. Append newline only if it's not a standalone control character or explicitly forbidden
@@ -2349,34 +2709,25 @@ export default function TerminalView({ connectionId, connectionName, host, color
         if (settled?.reason === 'interactive') {
           const prompt = settled.interactive;
           setInteractivePrompt(prompt);
-          
-          // Auto-handle "press enter" prompts in Auto Mode
-          if (autoMode && prompt.kind === 'press_enter') {
-            socketRef.current.emit('ssh:input', '\n');
-            setInteractivePrompt(null);
-            await new Promise(r => setTimeout(r, 800));
-            const nextSnap = getOutputContext();
-            setLastResultSnapshot(nextSnap);
-            return nextSnap;
-          }
 
-          // Auto-handle Y/N install confirmations in Auto Mode
-          if (autoMode && prompt.kind === 'confirm_yn') {
-            const cmdLower = cmd.toLowerCase();
-            const isPkg = /(yum|dnf|apt|apt-get|apk|pacman|pip|npm|npx|yarn|gem)\b/.test(cmdLower);
-            const isInstall = /\b(install|upgrade|update|remove|create|setup|add|create-next-app)\b/.test(cmdLower);
-            
-            if (isPkg || isInstall) {
-              socketRef.current.emit('ssh:input', 'y\n');
+          if (autoMode) {
+            // ── Dynamic recovery ──────────────────────────────────────────────────────
+            // For any blocking kind listed in DYNAMIC_BLOCKER_RECOVERY, auto-send the
+            // recovery action and continue without stopping the engine.
+            // Kinds intentionally excluded (password/passphrase/sudo_password) fall
+            // through to the hard-stop below because they need real credentials.
+            const recovery = DYNAMIC_BLOCKER_RECOVERY[prompt?.kind];
+            if (recovery) {
+              console.log(`[AI Agent] Auto-unblocking "${prompt.kind}": ${recovery.label}`);
+              socketRef.current?.emit('ssh:input', recovery.action);
               setInteractivePrompt(null);
-              await new Promise(r => setTimeout(r, 1200));
+              await new Promise(r => setTimeout(r, recovery.waitMs));
               const nextSnap = getOutputContext();
               setLastResultSnapshot(nextSnap);
               return nextSnap;
             }
-          }
 
-          if (autoMode) {
+            // Credential / unknown prompts — pause and ask the user
             setAiError(t('ai.pausedPrompt'));
             setAutoMode(false);
             setAiOpen(true);
@@ -2461,6 +2812,21 @@ export default function TerminalView({ connectionId, connectionName, host, color
     }
     const effectivePrompt = String(promptOverride ?? aiPrompt).trim();
     if (!effectivePrompt || aiLoading) return;
+
+    // In Code Editor mode, require at least one @file mention so the AI knows exactly which file
+    if (sshAiPrefs?.aiTask === 'code' && !effectivePrompt.includes('@')) {
+      setNoMentionWarning(true);
+      setTimeout(() => setNoMentionWarning(false), 4000);
+      // Open the mention picker immediately so the user can pick a file
+      if (aiPromptRef.current) {
+        const pos = aiPromptRef.current.selectionStart ?? effectivePrompt.length;
+        handleAiMentionDetect(effectivePrompt + '@', effectivePrompt.length + 1, 'prompt');
+        setAiPrompt(prev => prev + '@');
+        setTimeout(() => aiPromptRef.current?.focus(), 0);
+      }
+      return;
+    }
+    setNoMentionWarning(false);
     setAiLoading(true);
     setAiStreaming(false);
     setAiStreamText('');
@@ -2649,12 +3015,283 @@ export default function TerminalView({ connectionId, connectionName, host, color
     }
   };
 
+  // Fetch matching skills from LOCAL skills/*.md files AND external SkillsMP if needed
+  // Returns { skills: [...], allAvailable: [...] }
+  const fetchSkillsForGoal = async (goalStr) => {
+    let localSkills = [];
+    let allAvailable = [];
+    const detectedOs = String(detectedOsRef.current || '').toLowerCase();
+    
+    // Filter helper: Reject skills that clash with OS
+    const isOsCompatible = (s) => {
+      const text = (s.name + ' ' + (s.content || '') + ' ' + (s.description || '')).toLowerCase();
+      // If we are on Linux (CentOS/Ubuntu/Debian), reject explicit macOS skills
+      if (detectedOs.match(/linux|ubuntu|debian|centos|fedora|alpine/)) {
+         if (text.includes('macos') || text.includes('brew install') || text.includes('launchctl')) {
+            // Allow only if it explicitly mentions Linux too (rare)
+            if (!text.includes('linux') && !text.includes('ubuntu')) return false;
+         }
+      }
+      // If we are on macOS, reject linux-only package managers
+      if (detectedOs.match(/macos|darwin/)) {
+         if (text.includes('apt-get') || text.includes('yum install') || text.includes('systemctl')) {
+            if (!text.includes('brew') && !text.includes('macos')) return false;
+         }
+      }
+      return true;
+    };
+
+    // 1. Try Local Skills
+    try {
+      const res = await apiFetch('/api/skills/local', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ q: goalStr }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        localSkills = Array.isArray(data.skills) ? data.skills.filter(isOsCompatible) : [];
+        allAvailable = Array.isArray(data.allAvailable) ? data.allAvailable : [];
+      }
+    } catch (e) {
+      console.warn('[Skills] Local fetch failed:', e);
+    }
+
+    // 2. Fallback: If local skills are insufficient (< 1), or all were filtered out
+    if (localSkills.length < 1) {
+      try {
+        console.log('[Skills] Local skills insufficient. Searching SkillsMP for:', goalStr);
+        // Add OS context to query to help the backend rank better results
+        const osContext = detectedOs ? ` for ${detectedOs}` : '';
+        const externRes = await apiFetch('/api/skills/search', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ q: goalStr + osContext, type: 'ai' })
+        });
+        const externData = await externRes.json();
+        
+        if (externData.success && Array.isArray(externData.skills)) {
+             // Add unique external skills
+             const localNames = new Set(localSkills.map(s => s.name));
+             for (const s of externData.skills) {
+                 if (!localNames.has(s.name) && isOsCompatible(s)) {
+                     // Tag source clearly
+                     localSkills.push({ ...s, _source: 'skillsmp' });
+                 }
+                 if (localSkills.length >= 3) break; // Don't overwhelm context
+             }
+        }
+      } catch (e) {
+        console.warn('[Skills] External SkillsMP search failed:', e);
+      }
+    }
+    
+    return { skills: localSkills, allAvailable };
+  };
+
+  // Extract a useful SkillsMP query from the current goal string and recent context
+  const skillQueryFromGoal = (goalStr, contextStr = '') => {
+    const g = String(goalStr || '').toLowerCase().trim();
+    const c = String(contextStr || '').toLowerCase().trim();
+
+    // 1. Context-aware overrides (The "problem" logic)
+    // If we see specific errors in the output, prioritizing searching for those fixes
+    if (c.includes('nginx') && (c.includes('emerg') || c.includes('fail') || c.includes('configtest'))) return 'nginx configuration troubleshooting';
+    if (c.includes('docker') && (c.includes('permission denied') || c.includes('connect to the docker daemon'))) return 'docker sudoless setup';
+    if (c.includes('docker') && c.includes('command not found')) return 'install docker ubuntu';
+    if (c.includes('npm err') || c.includes('enoent')) return 'npm install troubleshooting';
+    if (c.includes('pm2') && c.includes('command not found')) return 'install pm2 global';
+    if (c.includes('address already in use') || c.includes('eaddrinuse')) return 'kill process on port';
+    if (c.includes('connection refused')) return 'linux network troubleshooting';
+    if (c.includes('permission denied') || c.includes('eacces')) return 'linux file permissions';
+    if (c.includes('syntax error')) return 'fix syntax error code';
+
+    // 2. Goal-based matchers (Fallback)
+    const matchers = [
+      [/docker|dockerfile|container|compose/, 'docker deployment'],
+      [/nginx|apache|caddy|web server/, 'nginx web server'],
+      [/pm2|node|nodejs|next\.?js/, 'nodejs pm2 deployment'],
+      [/ssl|certbot|https|letsencrypt/, 'ssl certificates'],
+      [/deploy|deployment/, 'linux deployment'],
+      [/firewall|ufw|iptables/, 'firewall management'],
+      [/git|clone|push|pull/, 'git workflow'],
+      [/ssh|remote/, 'ssh management'],
+      [/postgres|mysql|mongo|database|db/, 'database setup'],
+      [/systemd|service|daemon/, 'systemd services'],
+    ];
+    for (const [re, label] of matchers) {
+      if (re.test(g)) return label;
+    }
+    // Fallback: first 4 words of the goal
+    return g.split(/\s+/).slice(0, 4).join(' ') || 'linux automation';
+  };
+
+  // Helper: Extract ONLY output after last command
+  const extractPostCommandContext = (fullSnap, lastCmd) => {
+    if (!lastCmd) return fullSnap;
+    const lines = fullSnap.split('\n');
+    let cmdIdx = -1;
+    const cmdTrimmed = String(lastCmd).trim().slice(0, 80); 
+    for (let i = lines.length - 1; i >= 0; i--) {
+        if (lines[i].includes(cmdTrimmed)) { cmdIdx = i; break; }
+    }
+    if (cmdIdx >= 0 && cmdIdx < lines.length - 2) {
+        return lines.slice(cmdIdx + 1).join('\n');
+    }
+    return fullSnap;
+  };
+
+  const handleSkillsSearch = async (query) => {
+    if (!query) return;
+    setSkillsSearchLoading(true);
+    setSkillsSearchResults(null);
+    setInjectedSkills(null);
+
+    const allFound = [];
+
+    // ── Step 1: Always search local skills first (reliable) ──
+    try {
+      const localRes = await apiFetch('/api/skills/local', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ q: query }),
+      });
+      const localData = await localRes.json();
+      if (localData.success && Array.isArray(localData.skills)) {
+        for (const s of localData.skills) allFound.push({ ...s, _source: 'local' });
+      }
+    } catch (e) {
+      console.warn('[Skills] Local search failed:', e);
+    }
+
+    // ── Step 2: Try external SkillsMP too (best-effort) ──
+    try {
+      const res = await apiFetch('/api/skills/search', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ q: query, type: 'ai' })
+      });
+      const data = await res.json();
+      if (data.success && Array.isArray(data.skills)) {
+        // Only add SkillsMP skills that aren't already in local results
+        const localNames = new Set(allFound.map(s => s.name));
+        for (const s of data.skills) {
+          if (!localNames.has(s.name)) allFound.push({ ...s, _source: 'skillsmp' });
+        }
+        // If SkillsMP returned installable skills, show them in the results panel
+        const installable = data.skills.filter(s => s.id);
+        if (installable.length > 0) {
+          setSkillsSearchResults(installable);
+        }
+      }
+    } catch (e) {
+      // External SkillsMP unavailable — that's fine, we have local skills
+      console.warn('[Skills] SkillsMP search skipped:', e.message);
+    }
+
+    // ── Step 3: Inject ALL found skills into preloadedSkillsRef for the AI prompt ──
+    // Deduplicate by category slug, max 3
+    const seen = new Set();
+    const deduped = [];
+    for (const s of allFound) {
+      const slug = String(s.name || '').toLowerCase().split(/[-_\s]/)[0];
+      if (!seen.has(slug) && s.content) {
+        seen.add(slug);
+        deduped.push(s);
+      }
+      if (deduped.length >= 3) break;
+    }
+
+    // Merge with any previously loaded skills (don't lose what was loaded on start)
+    const prev = Array.isArray(preloadedSkillsRef.current) ? preloadedSkillsRef.current : [];
+    const prevNames = new Set(prev.map(s => s.name));
+    const merged = [...prev];
+    for (const s of deduped) {
+      if (!prevNames.has(s.name)) {
+        merged.push(s);
+      }
+    }
+    // Keep max 5 total skills in context
+    preloadedSkillsRef.current = merged.slice(0, 5);
+    setActiveSkills(preloadedSkillsRef.current); // Update persistent UI state
+    console.log(`[SkillsMP] Injected ${deduped.length} new skills. Total available for prompt: ${preloadedSkillsRef.current.length}`, preloadedSkillsRef.current.map(s => s.name));
+
+
+    // Show the injection panel to the user
+    const allAvailableNames = [...new Set([
+      ...prev.map(s => `${s.name}(${s.source || 'loaded'})`),
+      ...deduped.map(s => `${s.name}(${s._source || s.source || 'found'})`),
+    ])];
+    setInjectedSkills({
+      skills: deduped,
+      allAvailable: allAvailableNames,
+    });
+
+    if (deduped.length > 0) {
+      skillsJustInjectedRef.current = true; // force full fresh reset on next Resume
+      // If autoMode is still on, pause it so user gets a clean Resume with new skills
+      if (autoModeRef.current) {
+        autoModeRef.current = false;
+        setAutoMode(false);
+      }
+      setAiError(`Skills injected: ${deduped.map(s => s.name).join(', ')}. Click Resume Engine to start fresh with enhanced knowledge.`);
+    } else {
+      setAiError(`No matching skills found for "${query}". Click Resume Engine to try a different approach.`);
+    }
+
+    setSkillsSearchLoading(false);
+    // Auto-dismiss injection panel after 10s
+    setTimeout(() => setInjectedSkills(null), 10000);
+  };
+
+  const handleInstallSkill = async (skill) => {
+    if (!skill?.id) return;
+    setAiLoading(true);
+    try {
+      const res = await apiFetch('/api/skills/install', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          id: skill.id, 
+          name: skill.name, 
+          content: skill.content 
+        })
+      });
+      const data = await res.json();
+      if (data.success) {
+        setAiError(`✅ Skill "${skill.name}" installed! You can now Resume Engine to use it.`);
+        setSkillsSearchResults(prev => prev.filter(s => s.id !== skill.id));
+      } else {
+        setAiError(`Installation failed: ${data.error}`);
+      }
+    } catch (err) {
+      console.error('Skill installation failed:', err);
+      setAiError(`Skill installation failed: ${err.message}`);
+    } finally {
+      setAiLoading(false);
+    }
+  };
+
   const runAutoStep = async (snapshotOverride, nudgeMsg = '') => {
     if (!isLoggedIn) return;
     // Use refs instead of closed-over state — fixes stale-state bug when called from setTimeout
     if (aiModeRef.current !== 'auto') return;
     if (!autoModeRef.current) return;
     if (autoRunningRef.current) return;
+    // ⛔ Hard guard: never call the AI while a compilation (cargo/make/gcc) is actively running.
+    // "Compiling / Linking / Building" in the recent output means the process hasn't finished.
+    // We reschedule in 4 s instead of wasting an API call.
+    if (commandRunningRef.current) return;
+    {
+      const liveSnap = getOutputContext();
+      const isLivelyCompiling = /^\s*(Compiling|Linking|Building\s*\[)\b/im.test(liveSnap);
+      if (isLivelyCompiling && !looksLikeShellPrompt(liveSnap)) {
+        console.log('[AI Agent] Compilation still in progress — deferring AI call by 4 s');
+        if (autoTimerRef.current) clearTimeout(autoTimerRef.current);
+        autoTimerRef.current = setTimeout(() => runAutoStep(liveSnap), 4000);
+        return;
+      }
+    }
     if (Number.isFinite(autoStepsRemaining) && autoStepsRemaining <= 0) {
       setAiError(t('ai.autoFinished'));
       setAutoMode(false);
@@ -2676,27 +3313,45 @@ export default function TerminalView({ connectionId, connectionName, host, color
     // 🔄 Loop detection & self-healing injection
     const loopKey = `${lastExecutedCommand || ''}::${normalizeForLoop(snap).slice(-200)}`;
     let autoPromptExpansion = '';
-    if (autoLastLoopKeyRef.current === loopKey) {
+    
+    // 🧪 ROBUSTNESS: If we are nudging, EXEMPT this turn from the Loop Detector
+    // because no command has run yet, so the snapshot is EXPECTED to be identical.
+    if (autoLastLoopKeyRef.current === loopKey && !nudgeMsg) {
       autoLoopRepeatRef.current += 1;
-      // 🧪 INJECT WARNING TO AI: Explain that it is repeating itself
-      if (autoLoopRepeatRef.current >= 1) {
-        autoPromptExpansion = `\n\n⚠️ LOOP WARNING: Your last command produced NO change in the terminal output.
-Current repeat count: ${autoLoopRepeatRef.current}. 
-If you keep repeating the same command and getting the same output, Auto Mode will be shut down. 
-CHANGE YOUR STRATEGY: 
-- If reading a file, check if you're using the wrong absolute path. 
-- If trying to fix a file, check if permission was denied (did you use sudo?). 
-- If stuck in a pager like 'less', press 'q' to exit. 
-- Try a different diagnostic tool (e.g. ss instead of netstat, journalctl instead of cat).`;
+      // INJECT WARNING TO AI: Explain that it is repeating itself
+      if (autoLoopRepeatRef.current >= 2) {
+        autoPromptExpansion = `\n\n⚠️ LOOP WARNING: Your last command produced NO change in the terminal output. 
+REPEAT COUNT: ${autoLoopRepeatRef.current}. 
+CHANGE YOUR STRATEGY: Use different flags, check paths with absolute references, or use a diagnostic tool like 'ls -la' to see what's actually there.`;
       }
     } else {
-      autoLastLoopKeyRef.current = loopKey;
-      autoLoopRepeatRef.current = 0;
+      if (!nudgeMsg) {
+        autoLastLoopKeyRef.current = loopKey;
+        autoLoopRepeatRef.current = 0;
+      }
     }
 
-    if (autoLoopRepeatRef.current >= 5) {
-      setAiError('Auto Mode stopped: output did not change for 5 consecutive steps. This usually means the AI is repeating a command or stuck in a pager/interactive prompt. Try running "q" or [Ctrl+C] to clear the terminal and then Resume.');
+    if (autoLoopRepeatRef.current >= 3) {
+      if (sshAiPrefs?.aiTask === 'code') {
+        // Code mode: don't search skills — force the AI to produce a diff patch
+        autoLoopRepeatRef.current = 0;
+        autoLastLoopKeyRef.current = '';
+        autoRunningRef.current = false;
+        if (autoTimerRef.current) clearTimeout(autoTimerRef.current);
+        autoTimerRef.current = setTimeout(() => runAutoStep(snap,
+          `\n\n⚠️ LOOP DETECTED (Code Mode): You have run the same read command ${autoLoopRepeatRef.current + 3} times without producing a patch.\nYou MUST now output a <diff> patch to edit the file. Do NOT run cat/head/tail again. Use the file content you already have and produce the unified diff NOW.`
+        ), 800);
+        return;
+      }
+      // Use recent output for smarter skill search
+      const postCmdContext = extractPostCommandContext(snap, lastExecutedCommand);
+      const _loopSkillQuery = skillQueryFromGoal(goal, postCmdContext);
+      console.log('[AI Agent] Loop detected — searching SkillsMP for:', _loopSkillQuery);
+      setAiError(`Auto Mode paused: AI is stuck in a loop. Searching SkillsMP for "${_loopSkillQuery}" skills to help break through...`);
       setAutoMode(false);
+      setAiOpen(true);
+      setAiHasOpenedOnce(true);
+      handleSkillsSearch(_loopSkillQuery);
       return;
     }
 
@@ -2751,8 +3406,35 @@ CHANGE YOUR STRATEGY:
       const idleFor = Date.now() - (lastOutputAtRef.current || 0);
       const timeSinceCommand = Date.now() - (lastCommandSentAtRef.current || 0);
       if (safePagerTypes.has(String(editorType)) && (idleFor > 1500 || timeSinceCommand > 4000)) {
-        socketRef.current?.emit('ssh:input', 'q');
-        await new Promise(r => setTimeout(r, 700));
+        let currentSnap = getOutputContext();
+
+        // Guard: only act if the pager is still active
+        if (!looksLikeShellPrompt(currentSnap)) {
+          // Step 1: If the pager is showing a "press RETURN/ENTER" interstitial
+          // (e.g. "Log file is already in use (press RETURN)"), we MUST send Enter
+          // first to dismiss it before we can send 'q' to exit the pager.
+          const needsReturn = /press\s+(return|enter)/i.test(currentSnap);
+          if (needsReturn) {
+            socketRef.current?.emit('ssh:input', '\r');
+            await new Promise(r => setTimeout(r, 600));
+            currentSnap = getOutputContext();
+          }
+
+          // Step 2: If we're still in the pager (no shell prompt yet), send 'q'
+          if (!looksLikeShellPrompt(currentSnap)) {
+            socketRef.current?.emit('ssh:input', 'q');
+            await new Promise(r => setTimeout(r, 700));
+
+            // Step 3: After 'q', flush any leftover chars with Ctrl+U
+            // in case the pager exited before consuming the 'q'
+            const snapAfterQ = getOutputContext();
+            if (looksLikeShellPrompt(snapAfterQ)) {
+              socketRef.current?.emit('ssh:input', '\x15'); // Ctrl+U — kill line
+              await new Promise(r => setTimeout(r, 200));
+            }
+          }
+        }
+
         const nextSnap = getOutputContext();
         setLastResultSnapshot(nextSnap);
         setLastResultAt((prev) => {
@@ -2765,6 +3447,53 @@ CHANGE YOUR STRATEGY:
         return;
       }
     }
+
+    // ── Pre-AI Dynamic Blocker Recovery ───────────────────────────────────────
+    // Safety net: if the terminal is still in a recoverable blocking state (e.g.
+    // an installer printed "Press ENTER to continue" after command execution,
+    // or a confirm prompt appeared unexpectedly), auto-dismiss it here before
+    // calling the AI. This prevents wasting an AI turn on a state we can handle.
+    {
+      const preSnap = getOutputContext();
+      const preBlocker = detectInteractivePrompt(preSnap);
+      if (preBlocker) {
+        const recovery = DYNAMIC_BLOCKER_RECOVERY[preBlocker.kind];
+        if (recovery) {
+          // Increment counter for this blocker kind; reset on kind change
+          if (autoBlockerRef.current.kind === preBlocker.kind) {
+            autoBlockerRef.current.count += 1;
+          } else {
+            autoBlockerRef.current = { kind: preBlocker.kind, count: 1 };
+          }
+
+          if (autoBlockerRef.current.count <= 3) {
+            // Still worth trying — send recovery input and re-run the step
+            // Exception: sudo_password — if empty-enter didn't work on the first try,
+            // stop immediately and let the AI configure NOPASSWD instead of re-prompting.
+            const sudoFailed = preBlocker.kind === 'sudo_password' && autoBlockerRef.current.count > 1;
+            if (!sudoFailed) {
+              console.log(`[AI Agent] Pre-AI unblock attempt ${autoBlockerRef.current.count}/3: "${preBlocker.kind}" → ${recovery.label}`);
+              socketRef.current?.emit('ssh:input', recovery.action);
+              await new Promise(r => setTimeout(r, recovery.waitMs));
+              const unblockSnap = getOutputContext();
+              autoRunningRef.current = false;
+              setTimeout(() => runAutoStep(unblockSnap), 300);
+              return;
+            }
+          }
+
+          // 4th+ consecutive failure for same blocker — fall through to the AI
+          // with an informative note in the prompt. Reset counter so the next
+          // blocker encountered gets a fresh set of attempts.
+          console.warn(`[AI Agent] Auto-unblock gave up after 3 attempts for: ${preBlocker.kind}. Handing off to AI.`);
+          autoBlockerRef.current = { kind: null, count: 0 };
+        }
+      } else {
+        // No blocker detected — reset the counter
+        autoBlockerRef.current = { kind: null, count: 0 };
+      }
+    }
+    // ─────────────────────────────────────────────────────────────────────────
 
     autoRunningRef.current = true;
     try {
@@ -2807,10 +3536,10 @@ CHANGE YOUR STRATEGY:
       const idleFor = Date.now() - (lastOutputAtRef.current || 0);
       const isInteractionNeeded = err || detectInteractivePrompt(snap) || looksLikeEditorOrPager(snap);
       
-      // Give heavy installers up to 60s of silence before bothering the AI, otherwise 20s.
+      // Give heavy installers up to 10 minutes of silence before bothering the AI, otherwise 20s.
       const cmdLower = String(lastExecutedCommand || '').toLowerCase();
       const isHeavy = /install|build|deploy|setup|create-next-app|npx|npm|dnf|yum|apt|pacman|pip|gem|cargo|brew/.test(cmdLower);
-      const maxIdleTime = isHeavy ? 60000 : 20000;
+      const maxIdleTime = isHeavy ? 600000 : 20000;
 
       if (!isInteractionNeeded && isStillRunning && idleFor < maxIdleTime) {
          const waitTime = isHeavy ? 4 : 1.5;
@@ -2828,47 +3557,47 @@ CHANGE YOUR STRATEGY:
       const isRemoveGoal = /\b(remove|uninstall|delete|purge|deinstall|get rid of|clean up)\b/.test(goalLower);
       const isInstallGoal = /\b(install|setup|set up|deploy|add|enable)\b/.test(goalLower) && !isRemoveGoal;
 
+      // Smart context: try to extract ONLY output after last command (saves tokens & reduces stale context)
+      
+      const postCmdContext = extractPostCommandContext(snap, lastExecutedCommand);
+      const contextToSend = postCmdContext.trim().length > 50 ? postCmdContext : snap;
+
+      // Use ONLY the recent output for success detection, avoiding false positives from old scrollback!
+      const recentOutputLower = String(postCmdContext || '').toLowerCase();
+
       // Detect if the goal is an execution/deployment task (needs SSH commands, not file patches).
       const isExecutionGoal = /\b(deploy|start|run|pm2|npm\s+run|npm\s+start|docker|docker-compose|systemctl|nginx|apache|gulp|make|build|serve|launch|restart|reload|install|clone|pull|push|migrate|seed|test|jest|pytest|mocha)\b/i.test(goalLower);
 
+      const stepsDone = Array.isArray(autoStepHistory) ? autoStepHistory.length : 0;
+
       // Evidence in the terminal that removal already succeeded
-      const snapLower = String(snap || '').toLowerCase();
       const removalDoneSignals = [
         /successfully removed/i, /successfully uninstalled/i, /removal complete/i,
         /uninstalled/i, /removed/i, /purged/i,
         /no such file or directory/i, /not found/i, /is not installed/i,
         /package.*not installed/i, /nothing to uninstall/i, /already uninstalled/i,
       ];
-      const removalSuccess = isRemoveGoal && removalDoneSignals.some(r => r.test(snapLower));
+      const removalSuccess = stepsDone > 0 && isRemoveGoal && removalDoneSignals.some(r => r.test(recentOutputLower));
       const removalSuccessHint = removalSuccess
         ? `\n- NOTE: Terminal output ALREADY shows the removal succeeded or package is not present. You MUST set <done>true</done> NOW. Do NOT reinstall.`
         : '';
 
-      // Evidence that installation / deployment succeeded
-      const installDoneSignals = [
-        /successfully installed/i, /installation complete/i, /installed successfully/i,
-        /already installed/i, /is up to date/i, /nothing to install/i,
-        /successfully started/i, /running.*active/i, /enabled/i,
+      // Dynamic Success Heuristic: Detect common patterns of success/uptime instead of hardcoded framework strings
+      // Covers: "Successfully installed", "Active (running)", "Up 3 hours", "Ready in 50ms", "Listening on port 3000"
+      const genericSuccessPatterns = [
+        /\b(successfully completed|successfully installed|successfully deployed)\b/i,
+        /\b(service|status).{0,20}\b(active|running|online)\b/i,
+        /\b(listening on|started on).{0,20}\b(port|http)\b/i,
+        /\b(ready in|done in).{0,20}\b(ms|s)\b/i,
+        /\bup\s+.{0,20}\b(minute|hour|day|second)s?\b/i, // Docker/Uptime
       ];
-      // pm2 / deployment-specific success signals
-      const deployDoneSignals = [
-        /\bonline\b/i,                    // pm2 reports "online" when process is running
-        /pm2.*start.*success/i,
-        /\[PM2\].*started/i,
-        /\[PM2\].*online/i,
-        /App\s+name.*online/i,
-        /successfully deployed/i,
-        /deployment.*complete/i,
-        /server.*listening/i,
-        /started\s+in\s+\d+ms/i,         // Next.js / Nest.js etc.
-        /app.*running/i,
-        /process.*started/i,
-      ];
+
       const isDeployGoal = isExecutionGoal && /\b(deploy|pm2|start|serve|launch|run|docker|systemctl)\b/i.test(goalLower);
-      const installSuccess = (isInstallGoal && installDoneSignals.some(r => r.test(snapLower)))
-        || (isDeployGoal && deployDoneSignals.some(r => r.test(snapLower)));
+
+      const installSuccess = stepsDone > 0 && (isInstallGoal || isDeployGoal) && genericSuccessPatterns.some(p => p.test(recentOutputLower));
+      
       const installSuccessHint = installSuccess
-        ? `\n- NOTE: Terminal output ALREADY shows the task succeeded (process running / deployment complete). You MUST verify with a quick status check then set <done>true</done> IMMEDIATELY.`
+        ? `\n- HINT: The terminal output suggests the goal is met (detected keywords like "Active", "Ready", or "Up"). If true, output <done>true</done>.`
         : '';
 
       // Low-steps warning (disabled in infinite mode)
@@ -2876,34 +3605,16 @@ CHANGE YOUR STRATEGY:
         ? `\n- WARNING: Only ${autoStepsRemaining} steps remaining. Prioritize finishing or verifying. Set <done>true</done> if goal is met.`
         : '';
 
-      const stepsDone = Array.isArray(autoStepHistory) ? autoStepHistory.length : 0;
       const progressLine = Number.isFinite(MAX_AUTO_STEPS)
         ? `Progress: ${MAX_AUTO_STEPS + 1 - autoStepsRemaining}/${MAX_AUTO_STEPS}.`
         : `Progress: ${stepsDone + 1}/∞.`;
 
-      // Smart context: try to extract ONLY output after last command (saves tokens & reduces stale context)
-      const extractPostCommandContext = (fullSnap, lastCmd) => {
-        if (!lastCmd) return fullSnap;
-        const lines = fullSnap.split('\n');
-        // Find the last occurrence of the command in the output
-        let cmdIdx = -1;
-        const cmdTrimmed = String(lastCmd).trim().slice(0, 80); // Use first 80 chars as search key
-        for (let i = lines.length - 1; i >= 0; i--) {
-          if (lines[i].includes(cmdTrimmed)) { cmdIdx = i; break; }
-        }
-        // If found, return lines after it; otherwise return full context
-        if (cmdIdx >= 0 && cmdIdx < lines.length - 2) {
-          return lines.slice(cmdIdx + 1).join('\n');
-        }
-        return fullSnap;
-      };
-      const postCmdContext = extractPostCommandContext(snap, lastExecutedCommand);
-      // Use post-command context if it's meaningful (>50 chars), otherwise use full snap
-      const contextToSend = postCmdContext.trim().length > 50 ? postCmdContext : snap;
-
       const isReadOnlyCommand = (cmd) => {
         const s = String(cmd || '').trim().toLowerCase();
         if (!s) return false;
+        // 🧪 If the command redirects output to a file or pipes to tee, it is a WRITE command!
+        if (/>|>>/.test(s) || /\|\s*tee\b/.test(s)) return false;
+
         // Read-only includes status/verification commands. These are safe to repeat and shouldn't trigger loop stops.
         if (/^(cat|head|tail|grep|rg|sed\s+-n|awk|cut|ls|stat|wc|find|test|\[)/.test(s)) return true;
 
@@ -2938,10 +3649,16 @@ CHANGE YOUR STRATEGY:
       // Detect if the goal is an execution/deployment task that needs shell commands, not file patches.
       // When this is true, we suspend the patch-first constraint so the AI can freely run SSH commands.
 
+      // Inject @mentioned file targets so the AI uses exact absolute paths in diff headers
+      const _mentionedInGoal = mentionedFilesRef.current || [];
+      const mentionedPathsRule = _mentionedInGoal.length > 0
+        ? `\n- TARGET FILE${_mentionedInGoal.length > 1 ? 'S' : ''} (from @mention): ${_mentionedInGoal.join(', ')}\n  ⚠️  CRITICAL: Use these EXACT absolute paths in every <diff> header (--- path / +++ path). Never use bare filenames or relative paths.\n`
+        : '';
+
       const patchFirstAutoRules = (sshAiPrefs?.aiTask === 'code' && sshAiPrefs?.enforcePatch !== false && !isExecutionGoal)
-        ? `\nPATCH-FIRST AUTO RULES (CODE EDIT MODE):\n- This is a CODE EDITING session. Use <command> ONLY for reading files (cat/head/tail/grep/ls/stat).\n- After reading the relevant files, produce a <diff> patch. Do NOT use sed -i, tee, printf > or nano to write files.\n- Do NOT loop on cat; once you have file content, move to <diff>.\n`
+        ? `\nPATCH-FIRST AUTO RULES (CODE EDIT MODE):\n- This is a CODE EDITING session. Use <command> ONLY for reading files (cat/head/tail/grep/ls/stat).\n- After reading the relevant files, produce a <diff> patch. Do NOT use sed/tee/printf/nano to write files.\n- To CREATE a new file, prefer using a single heredoc command: \`cat << 'EOF' > filename\` (quoted delimiter). Use <diff> for EDITS.\n${mentionedPathsRule}`
         : (sshAiPrefs?.aiTask === 'code' && isExecutionGoal
-          ? `\nNOTE: This is a DEPLOYMENT/EXECUTION task in Code Mode. You MUST use <command> to run shell commands (pm2, npm, git, etc.). Do NOT produce <diff> patches for config files unless the user explicitly asks to edit a file. Focus on executing the goal via SSH commands.\n`
+          ? `\nNOTE: This is a DEPLOYMENT/EXECUTION task. Run shell commands (pm2, npm, git). To CREATE a new file (nginx.conf, Dockerfile), use \`cat << 'EOF' > filename\`. Ensure 'EOF' is quoted to prevent variable expansion ($var). Use <diff> mainly for EDITING existing files.\n${mentionedPathsRule}`
           : '');
 
       const recentReadOnlyCount = (autoRecentCommandsRef.current || []).slice(-6).filter(isReadOnlyCommand).length;
@@ -2960,7 +3677,29 @@ CHANGE YOUR STRATEGY:
       // === Failure reasoning: structured exit vs retry decision ===
       const hasError = !!err;
       const errorRootCauseRule = hasError
-        ? `\n⚠️ ERROR RECOVERY RULES:\n- ANALYZE the error before retrying. Ask: What is the ROOT CAUSE?\n  • "No such file/directory" → Wrong path or missing file. Find correct path with \`find / -name <file> 2>/dev/null\` or \`ls\`.\n  • "npm ERR!" / "Cannot find package.json" → Not in the right directory, or npm install not done.\n  • "Port already in use" → Kill existing process: \`pm2 delete all\` or \`fuser -k <port>/tcp\`.\n  • "Permission denied" → Try with sudo or \`chmod +x\`.\n  • "module not found" → Run \`npm install\` first.\n  • "ENOENT" → File/dir doesn't exist. Verify with \`ls\` before retrying.\n- RETRY LIMIT: If the SAME error appears 3 times in a row, STOP and set <done>false</done> with a clear explanation. Do NOT keep retrying the same fix.\n- WHEN TO EXIT: Exit (set <done>false</done>) if: the error is a permission you cannot fix, required resources don't exist, or the goal is fundamentally impossible given server state.\n- WHEN TO RETRY: Retry with a DIFFERENT approach if: wrong path/directory, missing dependency that can be installed, or configuration can be fixed.\n`
+        ? (() => {
+            const rule = ERROR_RECOVERY_RULES[err?.type] ?? ERROR_RECOVERY_RULES.generic_error;
+            return `\n⚠️ ERROR RECOVERY [${err?.label ?? 'Unknown error'}]:\n- ROOT CAUSE HINT: ${rule}\n${ERROR_RECOVERY_FOOTER}\n`;
+          })()
+        : '';
+
+      // Build skills context block injected into every step
+      const _skills = preloadedSkillsRef.current;
+      const skillsInjected = Array.isArray(_skills) && _skills.length > 0;
+      if (skillsInjected) {
+         console.log(`[AI Agent] Injecting ${_skills.length} skills into prompt:`, _skills.map(s => s.name));
+      }
+      const skillsBlock = skillsInjected
+        ? `\n[Skills] Matched: ${_skills.map(s => s.name).join(', ')}\n` +
+          _skills.map(s =>
+            s.content
+              ? `--- Skill: ${s.name} ---\n${String(s.content).slice(0, 2000)}\n`
+              : ''
+          ).filter(Boolean).join('\n')
+        : '';
+        
+      const preventSearchRule = skillsInjected
+        ? `\n7. SKILLS INJECTED: You have matched skills above. DO NOT use <search_skills> again. Use the content provided in [Skills] to solve the goal.`
         : '';
 
       const autoPrompt = `[AUTO] Goal: ${goal}
@@ -2968,17 +3707,17 @@ State:
 - Status: ${terminalStatus}${runningNote}${osNote}${macOsRule}${removalSuccessHint}${installSuccessHint}${lowStepsWarn}
 - Last Cmd: ${lastExecutedCommand || '(none — this is the FIRST step)'}
 - Error: ${err ? err.label : 'none'}${failureNote}
-- Recent steps: ${recentHistory || '(none)'}
+- Recent steps: ${recentHistory || '(none)'}${skillsBlock}
 - Output (since last command):
 ${String(contextToSend || '(no output)').slice(-4000)}
 
 RULES:
 1. If the goal was to REMOVE/UNINSTALL and the output shows it is gone or was not installed → <done>true</done> IMMEDIATELY.
-2. If the goal was to INSTALL/DEPLOY and the process is running/online → <done>true</done> IMMEDIATELY.
-3. VERIFY the last command result before proceeding. Never blindly retry a failing command.
+2. DYNAMIC SUCCESS: If the goal is (Check/Deploy/Install) AND the output contains "Active", "Running", "Listening", "Up", or "Ready" → <done>true</done>.
+3. VERIFY only if necessary. If the last command output confirms success (e.g. status code 0 or positive message), STOP.
 4. COMMAND: 1 shell command, [Wait], or [Ctrl+C]. NEVER install when goal is remove.
-5. macOS=brew, Linux=apt/dnf. No editors (nano/vim). Use cat <<EOF only if truly needed.
-${isExecutionGoal ? '⚡ EXECUTION GOAL: Run shell commands directly (pm2, npm, git, docker, etc.). Do NOT create config files (ecosystem.config.js, Makefile, Dockerfile) unless explicitly asked. Use `pm2 start npm --name <app> -- start` directly.\n' : ''}${scoutFirstRule}${errorRootCauseRule}6. ${progressLine}${patchFirstAutoRules}${forceDiffNowRule}${autoPromptExpansion}`;
+5. macOS=brew, Linux=apt/dnf. No editors (nano/vim). To CREATE a new file, prefer quoted heredoc: \`cat << 'EOF' > filename\`. To EDIT an existing file, use a <diff> patch.
+${isExecutionGoal ? '⚡ EXECUTION GOAL: Run shell commands directly. Use `cat` heredocs for new files and <diff> for modifying configs.\n' : ''}${scoutFirstRule}${errorRootCauseRule}6. ${progressLine}${preventSearchRule || ''}${patchFirstAutoRules}${forceDiffNowRule}${autoPromptExpansion}`;
 
       // Add to conversation history
       aiConversationRef.current = [
@@ -3036,41 +3775,49 @@ ${isExecutionGoal ? '⚡ EXECUTION GOAL: Run shell commands directly (pm2, npm, 
 
       // === AI says DONE (success) ===
       if (parsed.done) {
-        setAiError(null);
-        setAutoMode(false);
-        setAiOpen(true);
-        setAiHasOpenedOnce(true);
-        // Show a clear DONE status
-        setAiDone(true);
-        // ✅ Save completed session to sshAiHistory
-        setAutoStepHistory(prev => {
-          const finalSteps = [...prev, {
-            command: parsed.command,
-            explain: parsed.explain || 'Task complete.',
-            status: 'success',
-          }];
-          // Build summary for the popup
-          setAiDoneSummary({
-            goal,
-            steps: finalSteps.slice(-30),
-            taskMode: sshAiPrefs.aiTask || 'ssh',
-            thought: parsed.thought || null,
-            explain: parsed.explain || null,
+        if (parsed.command) {
+          // AI tried to execute a command AND set done=true in the same turn.
+          // This strips the command! We should execute the command, override done to false, 
+          // and let the loop run one more time to verify the result!
+          console.warn('[AI Agent] Model tried to set done=true while executing a command. Overriding to false to allow command execution and verification.');
+          parsed.done = false;
+        } else {
+          setAiError(null);
+          setAutoMode(false);
+          setAiOpen(true);
+          setAiHasOpenedOnce(true);
+          // Show a clear DONE status
+          setAiDone(true);
+          // ✅ Save completed session to sshAiHistory
+          setAutoStepHistory(prev => {
+            const finalSteps = [...prev, {
+              command: '',
+              explain: parsed.explain || 'Task complete.',
+              status: 'success',
+            }];
+            // Build summary for the popup
+            setAiDoneSummary({
+              goal,
+              steps: finalSteps.slice(-30),
+              taskMode: sshAiPrefs.aiTask || 'ssh',
+              thought: parsed.thought || null,
+              explain: parsed.explain || null,
+            });
+            const sessionEntry = {
+              id: Date.now().toString() + Math.random().toString(36).slice(2, 8),
+              createdAt: Date.now(),
+              type: 'auto',
+              prompt: goal,
+              steps: finalSteps.slice(-30),
+              done: true,
+            };
+            setTimeout(() => {
+              setSshAiHistory([sessionEntry, ...sshAiHistory.filter(e => e?.id !== sessionEntry.id)].slice(0, 30));
+            }, 0);
+            return finalSteps;
           });
-          const sessionEntry = {
-            id: Date.now().toString() + Math.random().toString(36).slice(2, 8),
-            createdAt: Date.now(),
-            type: 'auto',
-            prompt: goal,
-            steps: finalSteps.slice(-30),
-            done: true,
-          };
-          setTimeout(() => {
-            setSshAiHistory([sessionEntry, ...sshAiHistory.filter(e => e?.id !== sessionEntry.id)].slice(0, 30));
-          }, 0);
-          return finalSteps;
-        });
-        return;
+          return;
+        }
       }
 
       // === AI says DONE=false (graceful failure / gave up) ===
@@ -3129,14 +3876,50 @@ ${isExecutionGoal ? '⚡ EXECUTION GOAL: Run shell commands directly (pm2, npm, 
       }
       bypassPasswordPauseRef.current = false; // consume the bypass after one step
 
+      // === SkillsMP Integration: Search for remote skills (disabled in code mode) ===
+      if (parsed.searchSkills && String(parsed.searchSkills).trim() && sshAiPrefs?.aiTask !== 'code') {
+        const query = String(parsed.searchSkills).trim();
+        console.log('[AI Agent] Searching SkillsMP for:', query);
+
+        // 🧪 Fix for "loop on resume": If the AI also provided a command, EXECUTE IT before pausing!
+        // This ensures the AI sees the result of its command when the user resumes, instead of repeating the same step.
+        if (parsed.command && String(parsed.command).trim()) {
+           const cmd = String(parsed.command).trim();
+           // Only run if not empty
+           if (cmd) {
+             console.log('[AI Agent] Executing command before pausing for skill search:', cmd);
+             handleExecuteCommand(cmd);
+           }
+        }
+
+        setAiError(`Auto Mode paused: Searching for skills relating to "${query}"...`);
+        setAutoMode(false);
+        setAiOpen(true);
+        setAiHasOpenedOnce(true);
+        handleSkillsSearch(query);
+        return;
+      }
+
       // === Patch-first auto mode: handle <diff> as an executable patch step ===
       // We always accept diffs in Code Editor mode (even for execution goals) so the AI can voluntarily
       // fix a config file (Dockerfile, package.json, ecosystem.config.js) mid-deploy via clean SFTP patch
       // instead of resorting to cat-heredoc or sed inline edits.
       // What's suppressed for execution goals is only the *forcing* rules (patchFirstAutoRules / forceDiffNowRule).
-      if (parsed.diff && String(parsed.diff).trim() && sshAiPrefs?.aiTask === 'code' && sshAiPrefs?.enforcePatch !== false) {
+      if (parsed.diff && String(parsed.diff).trim() && (sshAiPrefs?.aiTask === 'code' || sshAiPrefs?.enforcePatch)) {
         const d = String(parsed.diff).trim();
         if (!isValidUnifiedDiff(d)) {
+          const hasHunk = d.includes('@@');
+          const hasHeader = d.includes('--- ') || d.includes('+++ ');
+          
+          if (!hasHunk && !hasHeader) {
+            // Found plain text caught in a diff tag/block. Do not open the Patch Modal with gibberish.
+            setAiError('Auto Mode paused: AI provided conversational text in a <diff> tag instead of a valid patch. Instruct it to use correct formatting.');
+            setAutoMode(false);
+            setAiOpen(true);
+            setAiHasOpenedOnce(true);
+            return;
+          }
+
           setPatchModalDiff(d);
           setPatchModalAutoApplied(false);
           setPatchModalOpen(true);
@@ -3198,8 +3981,10 @@ ${isExecutionGoal ? '⚡ EXECUTION GOAL: Run shell commands directly (pm2, npm, 
         }
 
         // Auto-apply patch with backup, then continue
+        // Reuse the session backup ID so only ONE .bak file per file per auto session (no spam)
+        if (!autoSessionBackupIdRef.current) autoSessionBackupIdRef.current = Date.now().toString(36);
         lastAutoAppliedDiffRef.current = d;
-        const backupId = `${Date.now().toString(36)}`;
+        const backupId = autoSessionBackupIdRef.current;
         setPatchModalAutoApplied(true);
         setLastPatchResultData(null); // Clear for new run
         setPatchModalOpen(true);
@@ -3263,10 +4048,22 @@ What is your move?`;
           return;
         }
 
-        setAiError('Auto Mode stopped: AI is providing explanations but no actions after 3 attempts. Please click Resume to prompt it manually.');
+        if (sshAiPrefs?.aiTask === 'code') {
+          // Code mode: don't search skills — force the AI to produce a diff
+          autoRunningRef.current = false;
+          if (autoTimerRef.current) clearTimeout(autoTimerRef.current);
+          autoTimerRef.current = setTimeout(() => runAutoStep(snap,
+            `\n\n⚠️ STALL (Code Mode): You provided no action. In Code Edit mode you MUST either:\n- Read the file once with <command>cat path</command> if you haven't yet, OR\n- Output a <diff> patch immediately. Do NOT explain; ACT.`
+          ), 800);
+          return;
+        }
+        const _stallSkillQuery = skillQueryFromGoal(goal, recentOutputLower);
+        console.log('[AI Agent] Stall detected — searching SkillsMP for:', _stallSkillQuery);
+        setAiError(`Auto Mode paused: AI is stuck. Searching SkillsMP for "${_stallSkillQuery}" skills to help...`);
         setAutoMode(false);
         setAiOpen(true);
         setAiHasOpenedOnce(true);
+        handleSkillsSearch(_stallSkillQuery);
         return;
       }
 
@@ -3303,22 +4100,47 @@ What is your move?`;
         } else {
           autoSameCommandRef.current = { cmd: nextCmdTrim, count: 0 };
         }
-        // Guard: only trigger read-only loop stop in code-edit mode AND only when NOT an execution task
-        if (autoSameCommandRef.current.count >= 3 && isReadOnlyCommand(nextCmdTrim) && sshAiPrefs?.aiTask === 'code' && sshAiPrefs?.enforcePatch !== false && !isExecutionGoal) {
-          // Check if this is a file read that keeps returning empty — likely wrong path
+        // Guard: same read-only command repeated — in code mode force a diff, otherwise search skills
+        if (autoSameCommandRef.current.count >= 2 && isReadOnlyCommand(nextCmdTrim)) {
+          if (sshAiPrefs?.aiTask === 'code') {
+            // Code mode: don't pause/search — nudge AI to stop cat-looping and produce a patch
+            autoSameCommandRef.current = { cmd: '', count: 0 };
+            autoRunningRef.current = false;
+            if (autoTimerRef.current) clearTimeout(autoTimerRef.current);
+            autoTimerRef.current = setTimeout(() => runAutoStep(snap,
+              `\n\n⚠️ PATCH NOW (Code Mode): You have read '${nextCmdTrim}' ${autoSameCommandRef.current.count + 3} times. STOP issuing read commands. You already have the file content. Output a <diff> patch immediately to make the edit. Leave <command> empty.`
+            ), 800);
+            return;
+          }
+          const _roRepeatSkillQuery = skillQueryFromGoal(goal, recentOutputLower);
           const catMatch = nextCmdTrim.match(/^(cat|head|tail)\s+(.*)/i);
-          const wrongPathHint = catMatch ? `\n\n⚠️ PATH ERROR: The command '${nextCmdTrim}' was repeated ${autoSameCommandRef.current.count + 1} times. This file likely doesn't exist at this path. Check SSH memory for the correct absolute path. If the file is HEARTBEAT.md, it is likely at /home/ubuntu/.zeroclaw/workspace/HEARTBEAT.md` : '';
-          setAiError(`Auto Mode stopped: AI kept running read-only commands without making any changes.${wrongPathHint}`);
+          const wrongPathHint = catMatch ? ` (possible wrong path for '${catMatch[2]}')` : '';
+          console.log('[AI Agent] Read-only command repeated', autoSameCommandRef.current.count + 1, 'times — searching SkillsMP for:', _roRepeatSkillQuery);
+          setAiError(`Auto Mode paused: AI repeated '${nextCmdTrim}' ${autoSameCommandRef.current.count + 1} times${wrongPathHint}. Searching SkillsMP for "${_roRepeatSkillQuery}" skills...`);
           setAutoMode(false);
           setAiOpen(true);
           setAiHasOpenedOnce(true);
+          handleSkillsSearch(_roRepeatSkillQuery);
           return;
         }
         if (autoSameCommandRef.current.count >= 2 && !isReadOnlyCommand(nextCmdTrim)) {
-          setAiError('Auto Mode stopped: AI repeated the same command multiple times. Please run manually or adjust the goal.');
+          if (sshAiPrefs?.aiTask === 'code') {
+            // Code mode: repeated non-read command — nudge to patch
+            autoSameCommandRef.current = { cmd: '', count: 0 };
+            autoRunningRef.current = false;
+            if (autoTimerRef.current) clearTimeout(autoTimerRef.current);
+            autoTimerRef.current = setTimeout(() => runAutoStep(snap,
+              `\n\n⚠️ CODE MODE: You repeated the same command. In Code Edit mode, use <diff> to make file changes, not shell commands. Output the patch now.`
+            ), 800);
+            return;
+          }
+          const _repeatSkillQuery = skillQueryFromGoal(goal, recentOutputLower);
+          console.log('[AI Agent] Repeated command detected — searching SkillsMP for:', _repeatSkillQuery);
+          setAiError(`Auto Mode paused: AI repeated the same command. Searching SkillsMP for "${_repeatSkillQuery}" skills to find a better approach...`);
           setAutoMode(false);
           setAiOpen(true);
           setAiHasOpenedOnce(true);
+          handleSkillsSearch(_repeatSkillQuery);
           return;
         }
       }
@@ -3329,19 +4151,43 @@ What is your move?`;
       if (cmdTrim) {
         autoRecentCommandsRef.current = [...autoRecentCommandsRef.current, cmdTrim].slice(-8);
         autoRecentSigsRef.current = [...autoRecentSigsRef.current, computeErrorSignature(snap)].slice(-8);
-        if (autoRecentCommandsRef.current.length >= 6) {
-          const a = autoRecentCommandsRef.current[autoRecentCommandsRef.current.length - 1];
-          const b = autoRecentCommandsRef.current[autoRecentCommandsRef.current.length - 2];
-          const c = autoRecentCommandsRef.current[autoRecentCommandsRef.current.length - 3];
-          const d = autoRecentCommandsRef.current[autoRecentCommandsRef.current.length - 4];
+
+        // === Read-only saturation detector ===
+        // If the last 4+ commands are ALL read-only (cat, ls, head, grep, etc.)
+        // the AI is stuck gathering info without acting — trigger skill search.
+        const recentCmds = autoRecentCommandsRef.current;
+        if (recentCmds.length >= 4) {
+          const lastFour = recentCmds.slice(-4);
+          const allReadOnly = lastFour.every(c => isReadOnlyCommand(c));
+          if (allReadOnly) {
+            const _roSkillQuery = skillQueryFromGoal(goal, recentOutputLower);
+            console.log('[AI Agent] Read-only saturation (4+ consecutive read-only commands) — searching SkillsMP for:', _roSkillQuery);
+            setAiError(`Auto Mode paused: AI ran ${lastFour.length} read-only commands without taking action. Searching SkillsMP for "${_roSkillQuery}" skills...`);
+            setAutoMode(false);
+            setAiOpen(true);
+            setAiHasOpenedOnce(true);
+            handleSkillsSearch(_roSkillQuery);
+            return;
+          }
+        }
+
+        // === Command cycle detector (A→B→A→B pattern) ===
+        // Lowered threshold from 6 to 4 commands — catches cycles faster.
+        // Now also catches read-only command cycles (previously excluded).
+        if (recentCmds.length >= 4) {
+          const a = recentCmds[recentCmds.length - 1];
+          const b = recentCmds[recentCmds.length - 2];
+          const c = recentCmds[recentCmds.length - 3];
+          const d = recentCmds[recentCmds.length - 4];
           if (a === c && b === d && a !== b) {
-            if (!(isReadOnlyCommand(a) && isReadOnlyCommand(b) && isReadOnlyCommand(c) && isReadOnlyCommand(d))) {
-              setAiError('Auto Mode stopped: repeating a command cycle (loop detected).');
-              setAutoMode(false);
-              setAiOpen(true);
-              setAiHasOpenedOnce(true);
-              return;
-            }
+            const _cycleSkillQuery = skillQueryFromGoal(goal, recentOutputLower);
+            console.log('[AI Agent] Command cycle detected — searching SkillsMP for:', _cycleSkillQuery);
+            setAiError(`Auto Mode paused: AI is cycling commands (${a} ↔ ${b}). Searching SkillsMP for "${_cycleSkillQuery}" skills to break the loop...`);
+            setAutoMode(false);
+            setAiOpen(true);
+            setAiHasOpenedOnce(true);
+            handleSkillsSearch(_cycleSkillQuery);
+            return;
           }
         }
       }
@@ -4502,10 +5348,9 @@ What is your move?`;
                     {!aiAnswerCollapsed && (
                       <div className="animate-in fade-in slide-in-from-top-2 duration-200">
                       <div className="px-3 py-2">
-                      <div className="mb-3 border-b border-white/5 pb-2">
-                      {/* Conversational Explanation */}
-                      {(aiAnswer.explain || aiAnswer.warn) && (
-                        <div className="mb-3 text-[12px] leading-relaxed" style={{ color: 'var(--text-primary)' }}>
+                      {/* Conversational Explanation & Thoughts (Always visible for transparency) */}
+                      {(aiAnswer.explain || aiAnswer.warn || aiAnswer.thought) && (
+                        <div className="mb-3 border-b border-white/5 pb-2">
                            {aiAnswer.warn && (
                              <div className="text-red-500 font-medium mb-1.5 flex gap-1.5 items-start">
                                <AlertCircle size={14} className="mt-0.5 shrink-0" />
@@ -4513,21 +5358,19 @@ What is your move?`;
                              </div>
                            )}
                            {aiAnswer.explain && (
-                             <div>
+                             <div className="mb-3 text-[12px] leading-relaxed" style={{ color: 'var(--text-primary)' }}>
                                {autoTranslate && aiTranslations.explain ? aiTranslations.explain : (translatingAiText.explain ? '...' : aiAnswer.explain)}
+                             </div>
+                           )}
+                           {aiAnswer.thought && (
+                             <div className="p-2.5 rounded-lg border border-black/20 bg-black/20 overflow-hidden opacity-70 hover:opacity-100 transition-opacity">
+                               <div className="text-[10px] font-medium leading-relaxed italic text-[var(--text-muted)]">
+                                 "{autoTranslate && aiTranslations.thought ? aiTranslations.thought : (translatingAiText.thought ? '...' : aiAnswer.thought)}"
+                               </div>
                              </div>
                            )}
                         </div>
                       )}
-                      
-                      {aiAnswer.thought && (
-                        <div className="mb-3 p-2.5 rounded-lg border border-black/20 bg-black/20 overflow-hidden opacity-70 hover:opacity-100 transition-opacity">
-                          <div className="text-[10px] font-medium leading-relaxed italic text-[var(--text-muted)]">
-                            "{autoTranslate && aiTranslations.thought ? aiTranslations.thought : (translatingAiText.thought ? '...' : aiAnswer.thought)}"
-                          </div>
-                        </div>
-                      )}
-                      </div>
 
                       {/* Proposed Patch (VSCode-like) */}
                       {aiAnswer.diff && (
@@ -4574,8 +5417,143 @@ What is your move?`;
                         </button>
                       </div>
                     )}
-                    </div>
+                      </div>
                     )}
+                  </div>
+                )}
+
+                {/* Injected Skills Panel — shows which skills were loaded */}
+                {injectedSkills && !skillsSearchLoading && (
+                  <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/10 overflow-hidden mb-3 animate-in fade-in zoom-in-95 duration-300">
+                    <div className="px-3 py-2 bg-emerald-600/20 border-b border-emerald-500/20 flex items-center justify-between">
+                      <div className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-wider text-emerald-300">
+                        <Brain size={12} />
+                        Skills Loaded
+                      </div>
+                      <button onClick={() => setInjectedSkills(null)} className="text-emerald-300/60 hover:text-emerald-300"><X size={12} /></button>
+                    </div>
+                    <div className="p-3 space-y-2">
+                      {/* All available skills */}
+                      <div className="text-[9px] text-white/40 font-mono leading-relaxed">
+                        <span className="text-emerald-400/70 font-bold">[Skills]</span> Available: {injectedSkills.allAvailable.length > 0 ? injectedSkills.allAvailable.join(', ') : 'none'}
+                      </div>
+                      {/* Matched skills with staggered animation */}
+                      <div className="text-[9px] text-white/40 font-mono leading-relaxed">
+                        <span className="text-emerald-400/70 font-bold">[Skills]</span> Matched: {injectedSkills.skills.length > 0 ? injectedSkills.skills.map(s => s.name).join(', ') : 'none'}
+                      </div>
+                      {injectedSkills.skills.length > 0 && (
+                        <div className="space-y-1.5 mt-2">
+                          {injectedSkills.skills.map((skill, i) => (
+                            <div
+                              key={skill.name}
+                              className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg border border-emerald-500/20 bg-emerald-600/10 animate-in slide-in-from-left-3 fade-in duration-300"
+                              style={{ animationDelay: `${i * 150}ms`, animationFillMode: 'both' }}
+                            >
+                              <div className="w-5 h-5 rounded-md bg-emerald-500/20 border border-emerald-500/30 flex items-center justify-center shrink-0">
+                                <CheckCircle2 size={10} className="text-emerald-400" />
+                              </div>
+                              <div className="flex-1 min-w-0">
+                                <div className="text-[10px] font-bold text-emerald-300 truncate">{skill.name}</div>
+                                <div className="text-[8px] text-white/30 truncate">{skill.source === 'custom' ? 'Local skill' : 'Installed skill'} · injected into AI context</div>
+                              </div>
+                              <span className="text-[8px] text-emerald-400/50 font-bold uppercase shrink-0">Active</span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      {injectedSkills.skills.length === 0 && (
+                        <div className="text-[9px] text-amber-400/60 mt-1">No skills matched this goal. AI will use general knowledge.</div>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {/* SkillsMP Loading Animation */}
+                {skillsSearchLoading && (
+                  <div className="rounded-xl border border-indigo-500/30 bg-indigo-500/10 overflow-hidden mb-3">
+                    <div className="px-3 py-2 bg-indigo-600/20 border-b border-indigo-500/20 flex items-center justify-between">
+                      <div className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-wider text-indigo-300">
+                        <Brain size={12} className="animate-pulse" />
+                        Scanning SkillsMP...
+                      </div>
+                      <div className="flex items-center gap-1">
+                        {[0, 150, 300].map((delay, i) => (
+                          <div key={i} className="w-1.5 h-1.5 rounded-full bg-indigo-400 animate-bounce" style={{ animationDelay: `${delay}ms` }} />
+                        ))}
+                      </div>
+                    </div>
+                    <div className="p-4">
+                      {/* Radar pulse */}
+                      <div className="flex items-center justify-center py-3">
+                        <div className="relative w-16 h-16 flex items-center justify-center">
+                          <div className="absolute inset-0 rounded-full border-2 border-indigo-500/40 animate-ping" style={{ animationDuration: '1.2s' }} />
+                          <div className="absolute inset-2 rounded-full border border-indigo-400/30 animate-ping" style={{ animationDelay: '0.3s', animationDuration: '1.2s' }} />
+                          <div className="absolute inset-4 rounded-full border border-indigo-300/20 animate-ping" style={{ animationDelay: '0.6s', animationDuration: '1.2s' }} />
+                          <div className="relative z-10 w-8 h-8 rounded-full bg-indigo-600/30 border border-indigo-400/40 flex items-center justify-center">
+                            <Brain size={14} className="text-indigo-300 animate-pulse" />
+                          </div>
+                        </div>
+                      </div>
+                      {/* Skeleton skill cards */}
+                      <div className="space-y-2 mt-1">
+                        {[1, 0.75, 0.5].map((opacity, i) => (
+                          <div
+                            key={i}
+                            className="h-11 rounded-lg bg-black/20 border border-white/5 animate-pulse flex items-center px-3 gap-3"
+                            style={{ animationDelay: `${i * 120}ms`, opacity }}
+                          >
+                            <div className="flex-1 space-y-1.5">
+                              <div className="h-2 bg-indigo-500/30 rounded-full" style={{ width: `${55 + i * 12}%` }} />
+                              <div className="h-1.5 bg-white/10 rounded-full" style={{ width: `${40 + i * 8}%` }} />
+                            </div>
+                            <div className="shrink-0 h-5 w-12 bg-indigo-600/25 rounded-lg" />
+                          </div>
+                        ))}
+                      </div>
+                      <p className="text-center text-[9px] text-indigo-300/50 mt-3 animate-pulse tracking-widest uppercase">
+                        Finding matching skills...
+                      </p>
+                    </div>
+                  </div>
+                )}
+
+                {/* SkillsMP Search Results */}
+                {skillsSearchResults && (
+                  <div className="rounded-xl border border-indigo-500/30 bg-indigo-500/10 overflow-hidden mb-3 animate-in fade-in zoom-in-95 duration-200">
+                    <div className="px-3 py-2 bg-indigo-600/20 border-b border-indigo-500/20 flex items-center justify-between">
+                      <div className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-wider text-indigo-300">
+                        <Search size={12} />
+                        SkillsMP Discovery
+                      </div>
+                      <button onClick={() => setSkillsSearchResults(null)} className="text-indigo-300/60 hover:text-indigo-300"><X size={12} /></button>
+                    </div>
+                    <div className="p-2 space-y-2 max-h-[300px] overflow-y-auto scrollbar-thin">
+                      {skillsSearchResults.length === 0 ? (
+                        <div className="py-4 text-center text-[10px] text-white/40">No matching skills found. Try a different query.</div>
+                      ) : (
+                        skillsSearchResults.map((skill, idx) => (
+                          <div key={idx} className="rounded-lg border border-white/5 bg-black/20 p-2.5 flex flex-col gap-2 hover:border-white/10 transition-colors">
+                            <div className="flex items-start justify-between gap-2">
+                              <div className="flex-1 min-w-0">
+                                <div className="text-[11px] font-bold text-white truncate">{skill.name}</div>
+                                <div className="text-[9px] text-white/50 line-clamp-2 mt-0.5 leading-snug">{skill.description || 'Expert-level infrastructure automation and runbooks.'}</div>
+                              </div>
+                              <button 
+                                onClick={() => handleInstallSkill(skill)}
+                                disabled={aiLoading}
+                                className="shrink-0 px-2 py-1 rounded bg-indigo-600 hover:bg-indigo-500 text-white text-[9px] font-bold uppercase transition-all active:scale-95 disabled:opacity-50"
+                              >
+                                {t('ai.install')}
+                              </button>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <span className="text-[8px] px-1.5 py-0.5 rounded-full bg-indigo-500/20 text-indigo-300 border border-indigo-500/20">Stars: {skill.stars || 0}</span>
+                              <span className="text-[8px] px-1.5 py-0.5 rounded-full bg-white/5 text-white/40 border border-white/10">v{skill.version || '1.0.0'}</span>
+                            </div>
+                          </div>
+                        ))
+                      )}
+                    </div>
                   </div>
                 )}
 
@@ -4883,7 +5861,38 @@ What is your move?`;
               )}
 
               {/* Floating Input Footer - Antigravity Style */}
-              <div className="p-4 border-t border-white/5 bg-[var(--bg-secondary)] dark:bg-[#0c0c0c]/90 backdrop-blur-3xl z-40 transition-all duration-300">
+              <div className="border-t border-white/5 bg-[var(--bg-secondary)] dark:bg-[#0c0c0c]/90 backdrop-blur-3xl z-40 transition-all duration-300">
+                {/* Active Skills Panel — slides in above the footer */}
+                {showSkillsList && activeSkills.length > 0 && (
+                  <div className="border-b border-indigo-500/20 bg-indigo-950/60 animate-in fade-in slide-in-from-bottom-2 duration-200">
+                    <div className="px-3 py-1.5 flex items-center justify-between">
+                      <div className="flex items-center gap-1.5 text-[9px] font-bold uppercase tracking-wider text-indigo-300">
+                        <Brain size={10} />
+                        Skills in AI Context ({activeSkills.length})
+                      </div>
+                      <button onClick={() => setShowSkillsList(false)} className="text-white/30 hover:text-white transition-colors"><X size={11} /></button>
+                    </div>
+                    <div className="px-2 pb-2 space-y-1 max-h-[180px] overflow-y-auto scrollbar-thin">
+                      {activeSkills.map((skill, i) => (
+                        <div key={skill.name || i} className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg bg-black/30 border border-indigo-500/10 hover:border-indigo-500/30 transition-colors group">
+                          <CheckCircle2 size={10} className="text-indigo-400 shrink-0" />
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2">
+                              <span className="text-[10px] font-bold text-white/90">{skill.name}</span>
+                              <span className="text-[8px] px-1 py-0.5 rounded bg-indigo-500/20 text-indigo-300 font-mono">{skill._source || skill.source || 'local'}</span>
+                            </div>
+                            {skill.content && (
+                              <p className="text-[9px] text-white/30 truncate mt-0.5 font-mono group-hover:text-white/50 transition-colors">
+                                {skill.content.replace(/^#+[^\n]*\n/, '').replace(/[#*`]/g, '').trim().slice(0, 120)}
+                              </p>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                <div className="p-4">
                 <div className="flex flex-col gap-3">
                   {/* Status & Control Bar */}
                   {aiMode === 'auto' && (
@@ -4899,17 +5908,64 @@ What is your move?`;
                          {!autoMode && aiMode === 'auto' && (
                            <button 
                              onClick={() => {
+                               const currentGoal = String(autoGoal || aiPrompt || '').trim();
+                               const lastGoal = String(lastGoalRef.current || '').trim();
+                               const isNewGoal = currentGoal !== lastGoal && currentGoal.length > 2;
+                               const isSkillsResume = skillsJustInjectedRef.current;
+
+                               if (isNewGoal || isSkillsResume) {
+                                  // 🚀 FULL RESET: Goal changed OR skills were just injected (SSH may be dead, start fresh)
+                                  const reason = isSkillsResume ? 'Skills injected -> Fresh start' : 'New goal detected';
+                                  console.log(`[Auto Mode] ${reason} -> Performing Full Task Reset`);
+                                  skillsJustInjectedRef.current = false;
+                                  autoSeenRef.current = new Set();
+                                  autoVerifyKeyRef.current = '';
+                                  autoLastLoopKeyRef.current = '';
+                                  autoLoopRepeatRef.current = 0;
+                                  autoRepeatSigRef.current = { key: '', count: 0 };
+                                  autoSameCommandRef.current = { cmd: '', count: 0 };
+                                  autoEmptyRetryRef.current = '';
+                                  autoBlockerRef.current = { kind: null, count: 0 };
+                                  aiConversationRef.current = []; // Wipe conversation — SSH dead, start fresh
+                                  autoRecentCommandsRef.current = [];
+                                  detectedOsRef.current = null;
+                                  lastGoalRef.current = currentGoal;
+                                  setAutoStepHistory([]);
+                                  setAutoStepsRemaining(MAX_AUTO_STEPS);
+                                  
+                                  if (isNewGoal) {
+                                    preloadedSkillsRef.current = [];
+                                    mentionedFilesRef.current = extractMentionedPaths(currentGoal);
+                                    if (sshAiPrefs?.aiTask !== 'code') {
+                                      fetchSkillsForGoal(currentGoal).then(({ skills, allAvailable }) => {
+                                          preloadedSkillsRef.current = skills;
+                                          setActiveSkills(skills);
+                                          if (skills.length > 0) {
+                                              setInjectedSkills({ skills, allAvailable });
+                                              setTimeout(() => setInjectedSkills(null), 5000);
+                                          }
+                                      });
+                                    }
+                                  }
+                               } else {
+                                  // 🚀 SAME GOAL: Emergency Reset of stuck counters only
+                                  autoEmptyRetryRef.current = '';
+                                  autoLoopRepeatRef.current = 0;
+                                  autoRepeatSigRef.current = { key: '', count: 0 };
+                                  autoSameCommandRef.current = { cmd: '', count: 0 };
+                               }
+                               
                                suppressInteractiveUntilRef.current = Date.now() + 4000;
                                autoModeRef.current = true;
                                bypassPasswordPauseRef.current = true;
-                               setAiError(null); // clear any error on resume
+                               setAiError(null);
                                setAutoMode(true);
-                               // Bump lastResultAt so the useEffect always re-fires
                                setLastResultAt(p => { const n = Date.now(); return n > (p || 0) ? n : (p || 0) + 1; });
-                               // Also call directly after short delay as backstop
                                setTimeout(() => {
                                  autoRunningRef.current = false;
-                                 runAutoStep();
+                                 runAutoStep(null, (isNewGoal || isSkillsResume)
+                                    ? '\n\n(FRESH START: Previous session cleared. Begin from scratch with the current terminal state and injected skills.)'
+                                    : '\n\n(RESUMED: Please provide your next <command> or <diff> immediately to continue the task.)');
                                }, 300);
                              }}
                              className="flex items-center gap-1 px-2 py-0.5 rounded bg-white/5 border border-white/10 text-white/80 text-[9px] font-bold hover:bg-white/10 hover:text-white transition-all active:scale-95"
@@ -4922,14 +5978,72 @@ What is your move?`;
                         {autoMode && autoCountdown === 0 && (
                           <button 
                             onClick={() => {
+                               // Reset stall memory for force-step too
+                               autoEmptyRetryRef.current = '';
+                               autoLoopRepeatRef.current = 0;
+                               
+                               autoRunningRef.current = false;
+                               runAutoStep(null, '\n\n(FORCE RESUME: Provide an action tag [<command>, <diff>, or <done>] immediately.)');
+                             }}
+                             className="flex items-center gap-1.5 px-2 py-0.5 rounded bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-[9px] font-bold hover:bg-emerald-500/20 active:scale-95 transition-all"
+                             title="Force the AI to re-analyze immediately"
+                           >
+                             <CornerDownLeft size={10} />
+                             FORCE NEXT STEP
+                           </button>
+                         )}
+
+                         {activeSkills.length > 0 && (
+                           <button 
+                             onClick={() => setShowSkillsList(prev => !prev)}
+                             className={`flex items-center gap-1.5 px-2 py-0.5 rounded border text-[9px] font-bold transition-all ${showSkillsList ? 'bg-indigo-500/20 border-indigo-400/40 text-indigo-300' : 'bg-white/5 border-white/10 text-white/50 hover:bg-white/10 hover:text-white/80'}`}
+                             title="View active skills"
+                           >
+                             <Brain size={10} />
+                             {activeSkills.length} SKILLS
+                           </button>
+                         )}
+
+                        {/* RESET button — always visible in auto mode for a clean fresh start */}
+                        {aiMode === 'auto' && (
+                          <button
+                            title="Clear all AI history and start completely fresh"
+                            onClick={() => {
+                              // Full nuclear reset
+                              skillsJustInjectedRef.current = false;
+                              autoSeenRef.current = new Set();
+                              autoVerifyKeyRef.current = '';
+                              autoLastLoopKeyRef.current = '';
+                              autoLoopRepeatRef.current = 0;
+                              autoRepeatSigRef.current = { key: '', count: 0 };
+                              autoSameCommandRef.current = { cmd: '', count: 0 };
+                              autoEmptyRetryRef.current = '';
+                              autoBlockerRef.current = { kind: null, count: 0 };
+                              aiConversationRef.current = [];
+                              autoRecentCommandsRef.current = [];
+                              detectedOsRef.current = null;
+                              lastGoalRef.current = '';
+                              preloadedSkillsRef.current = [];
+                              autoSessionBackupIdRef.current = null; // reset backup session
                               autoRunningRef.current = false;
-                              runAutoStep();
+                              if (autoTimerRef.current) clearTimeout(autoTimerRef.current);
+                              setAutoStepHistory([]);
+                              setAutoStepsRemaining(MAX_AUTO_STEPS);
+                              setAutoMode(false);
+                              autoModeRef.current = false;
+                              setAutoCountdown(0);
+                              setAiError(null);
+                              setAiAnswer(null);
+                              setActiveSkills([]);
+                              setShowSkillsList(false);
+                              setInjectedSkills(null);
+                              setInteractivePrompt(null);
+                              console.log('[Auto Mode] FULL RESET by user');
                             }}
-                            className="flex items-center gap-1.5 px-2 py-0.5 rounded bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-[9px] font-bold hover:bg-emerald-500/20 active:scale-95 transition-all"
-                            title="Force the AI to re-analyze immediately"
+                            className="flex items-center gap-1 px-2 py-0.5 rounded bg-red-500/10 border border-red-500/20 text-red-400 text-[9px] font-bold hover:bg-red-500/20 hover:text-red-300 transition-all active:scale-95"
                           >
-                            <CornerDownLeft size={10} />
-                            FORCE NEXT STEP
+                            <RefreshCw size={9} className="opacity-60" />
+                            RESET
                           </button>
                         )}
 
@@ -4953,7 +6067,39 @@ What is your move?`;
                   )}
 
                   {/* Primary Input Box */}
-                  <div className={`relative flex gap-2 bg-[var(--bg-primary)] border border-white/5 rounded-2xl p-1.5 shadow-2xl transition-all focus-within:border-indigo-500/40 focus-within:ring-4 focus-within:ring-indigo-500/5 ${(!isLoggedIn || aiLimitHit) ? 'opacity-50 grayscale' : ''}`}>
+                  <div className="relative">
+                  {/* @Mention file picker dropdown */}
+                  {aiMention.active && aiMention.results.length > 0 && (
+                    <div className="absolute bottom-full left-0 right-0 mb-1.5 z-[9999] bg-[var(--bg-secondary)] border border-white/10 rounded-xl shadow-2xl overflow-hidden">
+                      <div className="px-3 py-1.5 border-b border-white/5 text-[10px] text-white/30 font-bold uppercase tracking-wider flex items-center gap-1.5">
+                        <AtSign size={10} className="text-indigo-400" /> Mention File
+                        <span className="ml-auto text-[9px] opacity-40">↑↓ navigate · Enter/Tab select · Esc close</span>
+                      </div>
+                      <div className="overflow-y-auto max-h-44 custom-scrollbar">
+                        {aiMention.results.map((file, i) => {
+                          const isDir = file.longname?.startsWith('d');
+                          return (
+                            <button
+                              key={file.filename}
+                              onMouseDown={e => { e.preventDefault(); insertAiMention(file); }}
+                              className={`w-full flex items-center gap-2.5 px-3 py-2 text-xs transition-colors ${
+                                i === aiMention.selectedIndex
+                                  ? 'bg-indigo-500/20 text-indigo-300'
+                                  : 'hover:bg-white/5 text-white/70'
+                              }`}
+                            >
+                              {isDir
+                                ? <Folder size={13} className="text-blue-400 shrink-0" />
+                                : <FileIconAi size={13} className="text-white/30 shrink-0" />}
+                              <span className="truncate font-mono text-[11px]">{file.filename}</span>
+                              {isDir && <span className="ml-auto text-[9px] text-blue-400/50 uppercase shrink-0">dir</span>}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+                  <div className={`flex gap-2 bg-[var(--bg-primary)] border border-white/5 rounded-2xl p-1.5 shadow-2xl transition-all focus-within:border-indigo-500/40 focus-within:ring-4 focus-within:ring-indigo-500/5 ${(!isLoggedIn || aiLimitHit) ? 'opacity-50 grayscale' : ''}`}>
                     {aiMode === 'auto' ? (
                       <div className="flex-1 flex flex-col px-3 py-1 min-w-0">
                         <div className="flex items-center gap-2 mb-0.5">
@@ -4963,19 +6109,25 @@ What is your move?`;
                           )}
                         </div>
                         <textarea
+                          ref={autoGoalRef}
                           value={autoGoal}
                           onChange={(e) => {
-                            setAutoGoal(e.target.value);
+                            const val = e.target.value;
+                            const pos = e.target.selectionStart;
+                            setAutoGoal(val);
                             e.target.style.height = 'auto';
                             e.target.style.height = Math.min(e.target.scrollHeight, 96) + 'px';
+                            handleAiMentionDetect(val, pos, 'goal');
                           }}
                           onKeyDown={(e) => {
+                            if (handleAiMentionKeyDown(e)) return;
                             if (e.key === 'Enter' && !e.shiftKey && !autoMode) {
                               e.preventDefault();
                               // trigger start
                               document.querySelector('[data-ai-submit]')?.click();
                             }
                           }}
+                          onClick={() => setAiMention(prev => ({ ...prev, active: false }))}
                           disabled={!isLoggedIn || aiLimitHit || autoMode}
                           rows={1}
                           className="w-full bg-transparent text-xs outline-none text-[var(--text-primary)] font-medium placeholder:text-white/20 resize-none leading-relaxed scrollbar-none"
@@ -4989,20 +6141,26 @@ What is your move?`;
                           <Clock size={14} />
                         </button>
                         <textarea
+                          ref={aiPromptRef}
                           value={aiPrompt}
                           onChange={(e) => {
-                            setAiPrompt(e.target.value);
+                            const val = e.target.value;
+                            const pos = e.target.selectionStart;
+                            setAiPrompt(val);
                             e.target.style.height = 'auto';
                             e.target.style.height = Math.min(e.target.scrollHeight, 120) + 'px';
+                            handleAiMentionDetect(val, pos, 'prompt');
                           }}
                           disabled={!isLoggedIn || aiLimitHit || aiLoading}
                           rows={1}
                           onKeyDown={(e) => {
+                            if (handleAiMentionKeyDown(e)) return;
                             if (e.key === 'Enter' && !e.shiftKey) {
                               e.preventDefault();
                               handleAskAi();
                             }
                           }}
+                          onClick={() => setAiMention(prev => ({ ...prev, active: false }))}
                           className="flex-1 bg-transparent py-2 text-xs outline-none resize-none text-[var(--text-primary)] font-medium placeholder:text-white/20 leading-relaxed scrollbar-none"
                           style={{ height: 'auto', minHeight: '28px', maxHeight: '120px' }}
                           placeholder={t('ai.promptPlaceholder')}
@@ -5018,6 +6176,21 @@ What is your move?`;
                           if (!isLoggedIn) { setAiError(t('ai.loginRequired')); return; }
                           if (aiLimitHit && !autoMode) { setAiError('Daily AI limit reached.'); return; }
                           if (!autoMode) {
+                            const _goalText = String(autoGoal || aiPrompt || '').trim();
+
+                            // Code Editor mode: require an @file mention in the goal
+                            if (sshAiPrefs?.aiTask === 'code' && !_goalText.includes('@')) {
+                              setNoMentionWarning(true);
+                              setTimeout(() => setNoMentionWarning(false), 4000);
+                              if (autoGoalRef.current) {
+                                handleAiMentionDetect(_goalText + '@', _goalText.length + 1, 'goal');
+                                setAutoGoal(prev => prev + '@');
+                                setTimeout(() => autoGoalRef.current?.focus(), 0);
+                              }
+                              return;
+                            }
+                            setNoMentionWarning(false);
+
                             autoSeenRef.current = new Set();
                             autoVerifyKeyRef.current = '';
                             autoLastLoopKeyRef.current = '';
@@ -5025,26 +6198,66 @@ What is your move?`;
                             autoRepeatSigRef.current = { key: '', count: 0 };
                             autoSameCommandRef.current = { cmd: '', count: 0 };
                             autoEmptyRetryRef.current = '';
+                            autoBlockerRef.current = { kind: null, count: 0 };
                             aiConversationRef.current = []; // Fresh context for new goal
                             autoRecentCommandsRef.current = []; // Clear cmd history
                             detectedOsRef.current = null; // Re-detect OS for new session
+                            autoSessionBackupIdRef.current = Date.now().toString(36); // Fresh backup ID for this session
+                            preloadedSkillsRef.current = null; // will be set below
                             lastGoalRef.current = String(autoGoal || aiPrompt || '').trim();
                             setAutoStepHistory([]);
-                            setAiError(null); // Clear any previous error
+                            setAiError(null);
                             setAutoGoal(g => String(g || aiPrompt || '').trim());
                             setAutoStepsRemaining(MAX_AUTO_STEPS);
-                            setAutoMode(true);
                             setLastResultSnapshot(s => s || getOutputContext());
-                            // Always bump lastResultAt to guarantee useEffect fires even for repeated goals
-                            setLastResultAt(() => Date.now() + Math.random()); // unique value every time
 
-                            // Direct backstop: if the useEffect doesn't re-fire (same state), call directly
-                            autoRunningRef.current = false;
-                            setTimeout(() => {
-                              if (autoModeRef.current && !autoRunningRef.current) {
-                                runAutoStep();
-                              }
-                            }, 300);
+                            // ── Extract @mentioned file paths for patch accuracy ──
+                            const _goalForSkills = String(autoGoal || aiPrompt || '').trim();
+                            mentionedFilesRef.current = extractMentionedPaths(_goalForSkills);
+
+                            if (sshAiPrefs?.aiTask === 'code') {
+                              // Code mode: skip skill fetching — use pure AI performance
+                              preloadedSkillsRef.current = [];
+                              setSkillsSearchLoading(false);
+                              setAutoMode(true);
+                              setLastResultAt(() => Date.now() + Math.random());
+                              autoRunningRef.current = false;
+                              setTimeout(() => {
+                                if (autoModeRef.current && !autoRunningRef.current) runAutoStep();
+                              }, 300);
+                            } else {
+                            // ── Phase 1: Fetch relevant skills BEFORE first AI step ──
+                            setSkillsSearchLoading(true);
+                            setInjectedSkills(null);
+                            fetchSkillsForGoal(_goalForSkills).then(result => {
+                              const { skills: fetchedSkills, allAvailable } = result;
+                              preloadedSkillsRef.current = fetchedSkills;
+                              setActiveSkills(fetchedSkills); // Persistent state
+                              setSkillsSearchLoading(false);
+
+                              // Show the injected skills panel to the user
+                              setInjectedSkills({
+                                skills: fetchedSkills,
+                                allAvailable: allAvailable || [],
+                              });
+                              const skillNames = fetchedSkills.map(s => s.name).join(', ');
+                              console.log('[Skills] Available:', allAvailable.join(', '));
+                              console.log('[Skills] Matched:', skillNames || '(none)');
+
+                              // ── Phase 2: Now start auto mode with skills context ready ──
+                              setAutoMode(true);
+                              setLastResultAt(() => Date.now() + Math.random());
+                              autoRunningRef.current = false;
+                              setTimeout(() => {
+                                if (autoModeRef.current && !autoRunningRef.current) {
+                                  runAutoStep();
+                                }
+                              }, 300);
+
+                              // Auto-dismiss the injection panel after 8 seconds
+                              setTimeout(() => setInjectedSkills(null), 8000);
+                            });
+                            }
 
                           } else {
                             setAutoMode(false);
@@ -5066,9 +6279,15 @@ What is your move?`;
                       }
                     </button>
                   </div>
+                  </div>{/* end relative wrapper for @mention */}
                   
                   {/* Footer Hint */}
-                  {!isLoggedIn ? (
+                  {noMentionWarning ? (
+                    <div className="flex items-center gap-2 px-2 py-1.5 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-400 text-[10px] font-bold animate-pulse">
+                      <AtSign size={11} className="shrink-0" />
+                      <span>Code Mode requires a file mention — type <span className="font-mono bg-amber-500/20 px-1 rounded">@filename</span> to tell the AI exactly which file to edit</span>
+                    </div>
+                  ) : !isLoggedIn ? (
                     <div className="text-center text-[9px] text-amber-400/60 font-medium uppercase tracking-tighter">Login Required to Execute</div>
                   ) : aiLimitHit ? (
                     <div className="text-center text-[9px] text-rose-400/60 font-medium uppercase tracking-tighter">Daily Token Limit Reached</div>
@@ -5078,6 +6297,7 @@ What is your move?`;
                        <span className={sshAiPrefs.aiTask === 'code' ? 'text-emerald-400/50' : ''}>{sshAiPrefs.aiTask === 'code' ? 'File Edit Mode — Not SSH' : 'Terminal Context Attached'}</span>
                     </div>
                   )}
+                </div>
                 </div>
               </div>
             </div>

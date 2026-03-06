@@ -96,6 +96,17 @@ export default function Window({ id, title, icon: Icon, component, isMinimized, 
   const rndRef = useRef(null);
   const [snapPreview, setSnapPreview] = useState(null);
 
+  // ── Global Rnd ref registry so any window can imperatively control peers ──
+  // setFreeRect is stable (React useState guarantee) so we don't need it in deps.
+  // The closure captures the binding by ref; the effect runs after the full render.
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    window.__wndRefs = window.__wndRefs || new Map();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    window.__wndRefs.set(id, { rnd: rndRef, setFreeRect });
+    return () => { window.__wndRefs?.delete(id); };
+  }, [id]); // setFreeRect is intentionally omitted — it is stable
+
   // Track the "free" (non-snapped) position and size so we can restore seamlessly
   const windowState = osState.windows.find(w => w.id === id) || {};
   const [freeRect, setFreeRect] = useState({
@@ -246,19 +257,107 @@ export default function Window({ id, title, icon: Icon, component, isMinimized, 
     }
   }, [id, focusWindow, isSnappedOrMax, isMaximized, snapWindow]);
 
+  // ── Live collision push: resize peer windows when edges collide ──
+  // Uses the global __wndRefs registry for imperative peer updates.
+  // getBoundingClientRect() gives live DOM positions — no stale-state issues.
+  const handleResize = useCallback((e, direction, ref, delta, position) => {
+    const MARGIN = 20; // px — snap/push distance
+    const MIN_W  = 280;
+    const MIN_H  = 160;
+
+    const myL = position.x;
+    const myT = position.y;
+    const myR = myL + parseInt(ref.style.width,  10);
+    const myB = myT + parseInt(ref.style.height, 10);
+
+    // Which edges is THIS resize dragging?
+    const affectsRight  = direction === 'right'  || direction === 'topRight'    || direction === 'bottomRight';
+    const affectsLeft   = direction === 'left'   || direction === 'topLeft'     || direction === 'bottomLeft';
+    const affectsBottom = direction === 'bottom' || direction === 'bottomRight' || direction === 'bottomLeft';
+    const affectsTop    = direction === 'top'    || direction === 'topRight'    || direction === 'topLeft';
+
+    const registry = typeof window !== 'undefined' ? window.__wndRefs : null;
+    if (!registry) return;
+
+    for (const [peerId, peer] of registry) {
+      if (peerId === id) continue;
+      const peerRnd = peer.rnd?.current;
+      if (!peerRnd) continue;
+      const pEl = peerRnd.getSelfElement();
+      if (!pEl) continue;
+      const pr = pEl.getBoundingClientRect();
+      if (pr.width < 10 || pr.height < 10) continue; // minimized / hidden
+
+      const pL = pr.left, pT = pr.top, pR = pr.right, pB = pr.bottom;
+
+      // Windows must share overlap on the perpendicular axis to be in collision path
+      const vertOverlap  = myT < pB - 20 && myB > pT + 20;
+      const horizOverlap = myL < pR - 20 && myR > pL + 20;
+
+      // My RIGHT edge → peer LEFT edge: push peer rightward & shrink it
+      if (affectsRight && vertOverlap) {
+        const dist = myR - pL;
+        if (dist > -MARGIN && dist < MARGIN) {
+          peerRnd.updatePosition({ x: myR, y: pT });
+          peerRnd.updateSize({ width: Math.max(MIN_W, pR - myR), height: pr.height });
+        }
+      }
+      // My LEFT edge → peer RIGHT edge: shrink peer from its right
+      if (affectsLeft && vertOverlap) {
+        const dist = pR - myL;
+        if (dist > -MARGIN && dist < MARGIN) {
+          peerRnd.updateSize({ width: Math.max(MIN_W, myL - pL), height: pr.height });
+        }
+      }
+      // My BOTTOM edge → peer TOP edge: push peer downward & shrink it
+      if (affectsBottom && horizOverlap) {
+        const dist = myB - pT;
+        if (dist > -MARGIN && dist < MARGIN) {
+          peerRnd.updatePosition({ x: pL, y: myB });
+          peerRnd.updateSize({ width: pr.width, height: Math.max(MIN_H, pB - myB) });
+        }
+      }
+      // My TOP edge → peer BOTTOM edge: shrink peer from its bottom
+      if (affectsTop && horizOverlap) {
+        const dist = pB - myT;
+        if (dist > -MARGIN && dist < MARGIN) {
+          peerRnd.updateSize({ width: pr.width, height: Math.max(MIN_H, myT - pT) });
+        }
+      }
+    }
+  }, [id]);
+
   const handleResizeStop = useCallback((e, direction, ref, delta, position) => {
-    const newWidth = parseInt(ref.style.width, 10);
+    const newWidth  = parseInt(ref.style.width,  10);
     const newHeight = parseInt(ref.style.height, 10);
-    const clampedY = Math.max(safeArea.y, Math.min(position.y, safeArea.y + safeArea.h - 40));
-    
+    const clampedY  = Math.max(safeArea.y, Math.min(position.y, safeArea.y + safeArea.h - 40));
+
     setFreeRect({ x: position.x, y: clampedY, width: newWidth, height: newHeight });
-    
+
     if (rndRef.current && position.y !== clampedY) {
       rndRef.current.updatePosition({ x: position.x, y: clampedY });
     }
-    
+
     updateWindowPosition(id, { position: { x: position.x, y: clampedY, width: newWidth, height: newHeight } });
-  }, [screen, id, updateWindowPosition, safeArea]);
+
+    // Flush peer windows that were imperatively moved during the resize back into React state
+    const registry = typeof window !== 'undefined' ? window.__wndRefs : null;
+    if (registry) {
+      for (const [peerId, peer] of registry) {
+        if (peerId === id) continue;
+        const peerRnd = peer.rnd?.current;
+        if (!peerRnd) continue;
+        const pEl = peerRnd.getSelfElement();
+        if (!pEl) continue;
+        const pr = pEl.getBoundingClientRect();
+        if (pr.width < 10) continue;
+        const rect = { x: Math.round(pr.left), y: Math.round(pr.top), width: Math.round(pr.width), height: Math.round(pr.height) };
+        // Update peer's local freeRect so its next drag starts from the correct position
+        peer.setFreeRect(rect);
+        updateWindowPosition(peerId, { position: rect });
+      }
+    }
+  }, [id, updateWindowPosition, safeArea]);
 
   // ── Safety check: ensure window is visible after restore from minimize ──
   useEffect(() => {
@@ -318,6 +417,7 @@ export default function Window({ id, title, icon: Icon, component, isMinimized, 
         onDrag={handleDrag}
         onDragStop={handleDragStop}
         onResizeStart={handleResizeStart}
+        onResize={handleResize}
         onResizeStop={handleResizeStop}
         style={{
           zIndex,

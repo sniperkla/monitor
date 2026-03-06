@@ -246,8 +246,8 @@ ${guideContext?.commands?.map(c => `- ${c.code} (${c.label})`).join('\n') || 'No
               title: chatTitle,
               context: { guideId: guideContext?.id, category: guideContext?.category },
               messages: [
-                { role: 'user', content: String(message).slice(0, 1000), timestamp: new Date() },
-                { role: 'assistant', content: aiMessage, metadata: { model: actualUsedModel }, timestamp: new Date() }
+                { role: 'user', content: String(message || '(no prompt)').slice(0, 1000), timestamp: new Date() },
+                { role: 'assistant', content: aiMessage || '(no response)', metadata: { model: actualUsedModel }, timestamp: new Date() }
               ]
             });
           } catch (dbErr) {
