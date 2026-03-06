@@ -16,6 +16,8 @@ export default function TmuxApp({ initialConnection }) {
   const [sessions, setSessions] = useState([]);
   const [isLoading, setIsLoading] = useState(false);
   const [activeSession, setActiveSession] = useState(null);
+  const [newSessionPrompt, setNewSessionPrompt] = useState(false);
+  const [newSessionName, setNewSessionName] = useState('');
   
   // Connection selection
   const { connections } = state;
@@ -43,46 +45,47 @@ export default function TmuxApp({ initialConnection }) {
     });
 
     let stdoutBuffer = '';
-    
+    const SENTINEL_START = '---TMUX_LS_START---';
+    const SENTINEL_END   = '---TMUX_LS_END---';
+    const stripAnsi = s => s.replace(/\x1b\[[0-9;]*[A-Za-z]|\x1b\][^\x07]*\x07|\r/g, '');
+
+    const emitLs = () => {
+      if (socketRef.current) {
+        socketRef.current.emit('ssh:input', `echo "${SENTINEL_START}" && tmux ls 2>/dev/null; echo "${SENTINEL_END}"\n`);
+      }
+    };
+
     socketRef.current.on('connect', () => {
       setTimeout(() => {
-        if (socketRef.current) {
-          const initCmd = `if ! command -v tmux &> /dev/null; then echo "Installing tmux..."; if command -v apt-get &> /dev/null; then sudo apt-get update >/dev/null 2>&1 && sudo apt-get install -y tmux >/dev/null 2>&1; elif command -v yum &> /dev/null; then sudo yum install -y tmux >/dev/null 2>&1; elif command -v dnf &> /dev/null; then sudo dnf install -y tmux >/dev/null 2>&1; elif command -v apk &> /dev/null; then sudo apk add tmux >/dev/null 2>&1; elif command -v pacman &> /dev/null; then sudo pacman -S --noconfirm tmux >/dev/null 2>&1; fi; fi; tmux ls\n`;
-          socketRef.current.emit('ssh:input', initCmd);
-        }
+        if (!socketRef.current) return;
+        const installCheck = `if ! command -v tmux &>/dev/null; then if command -v apt-get &>/dev/null; then sudo apt-get install -y tmux -qq; elif command -v yum &>/dev/null; then sudo yum install -y tmux -q; elif command -v apk &>/dev/null; then sudo apk add tmux -q; fi; fi`;
+        socketRef.current.emit('ssh:input', `${installCheck}; echo "${SENTINEL_START}" && tmux ls 2>/dev/null; echo "${SENTINEL_END}"\n`);
       }, 1000);
     });
 
+    // Robust parser: extract content between our sentinels, strip ANSI, parse tmux ls lines
+    const parseTmuxOutput = (raw) => {
+      const clean = stripAnsi(raw);
+      const si = clean.indexOf(SENTINEL_START);
+      const ei = clean.indexOf(SENTINEL_END, si);
+      if (si === -1 || ei === -1) return null; // not complete yet
+      const block = clean.slice(si + SENTINEL_START.length, ei);
+      const parsed = [];
+      for (const line of block.split('\n')) {
+        const m = line.trim().match(/^([^:]+):\s+(\d+)\s+windows.*?(?:\((attached)\))?/);
+        if (m) parsed.push({ name: m[1].trim(), windows: m[2], attached: !!m[3], raw: line });
+      }
+      // empty block means no sessions (no server running)
+      return parsed;
+    };
+    
     socketRef.current.on('ssh:data', (data) => {
       stdoutBuffer += data;
-      
-      // Basic parser for `tmux ls` output
-      // Output example: 
-      // ai-agent: 1 windows (created Sat Feb 28 06:17:15 2026) (attached)
-      // session2: 3 windows (created Sat Feb 28 06:18:00 2026)
-      
-      if (stdoutBuffer.includes('windows (created') || stdoutBuffer.includes('no server running') || stdoutBuffer.includes('failed to connect') || stdoutBuffer.includes('command not found')) {
+      const result = parseTmuxOutput(stdoutBuffer);
+      if (result !== null) {
+        setSessions(result);
         setIsLoading(false);
-        const lines = stdoutBuffer.split('\n');
-        const parsed = [];
-        
-        for (const line of lines) {
-          const match = line.match(/^([^:]+):\s+(\d+)\s+windows.*?(?:\((attached)\))?/);
-          if (match) {
-            parsed.push({
-              name: match[1],
-              windows: match[2],
-              attached: !!match[3],
-              raw: line
-            });
-          }
-        }
-        
-        // Only update if we actually got results or we are sure it's empty
-        if (parsed.length > 0 || stdoutBuffer.includes('no server running') || stdoutBuffer.includes('failed to connect')) {
-           setSessions(parsed);
-           stdoutBuffer = ''; // Clear buffer after parsing
-        }
+        stdoutBuffer = ''; // clear so next command starts fresh
       }
     });
 
@@ -98,33 +101,36 @@ export default function TmuxApp({ initialConnection }) {
     };
   }, [selectedConnection]);
 
+  const TMUX_SENTINEL_START = '---TMUX_LS_START---';
+  const TMUX_SENTINEL_END   = '---TMUX_LS_END---';
+
+  const emitTmuxLs = () => {
+    if (!socketRef.current) return;
+    socketRef.current.emit('ssh:input', `echo "${TMUX_SENTINEL_START}" && tmux ls 2>/dev/null; echo "${TMUX_SENTINEL_END}"\n`);
+  };
+
   // Handle re-fetching sessions
   const fetchSessions = () => {
-    if (socketRef.current && !isLoading) {
+    if (socketRef.current) {
       setIsLoading(true);
-      const lsCmd = `if ! command -v tmux &> /dev/null; then echo "Installing tmux..."; if command -v apt-get &> /dev/null; then sudo apt-get update >/dev/null 2>&1 && sudo apt-get install -y tmux >/dev/null 2>&1; elif command -v yum &> /dev/null; then sudo yum install -y tmux >/dev/null 2>&1; elif command -v dnf &> /dev/null; then sudo dnf install -y tmux >/dev/null 2>&1; elif command -v apk &> /dev/null; then sudo apk add tmux >/dev/null 2>&1; elif command -v pacman &> /dev/null; then sudo pacman -S --noconfirm tmux >/dev/null 2>&1; fi; fi; tmux ls\n`;
-      socketRef.current.emit('ssh:input', lsCmd);
-      
-      // Fallback timeout in case of no output
-      setTimeout(() => setIsLoading(false), 3000);
+      emitTmuxLs();
+      setTimeout(() => setIsLoading(false), 4000); // safety fallback
     }
   };
 
   const handleCreateSession = (name) => {
-    if (socketRef.current) {
-      setIsLoading(true);
-      const safeName = (name || `session-${Date.now()}`).replace(/[^a-zA-Z0-9_-]/g, '');
-      socketRef.current.emit('ssh:input', `tmux new -d -s ${safeName}\n`);
-      setTimeout(fetchSessions, 1000);
-    }
+    if (!socketRef.current) return;
+    const safeName = (name || `session-${Date.now()}`).replace(/[^a-zA-Z0-9_-]/g, '-').replace(/^-+|-+$/g, '') || `session-${Date.now()}`;
+    socketRef.current.emit('ssh:input', `tmux new -d -s "${safeName}"\n`);
+    setIsLoading(true);
+    setTimeout(() => emitTmuxLs(), 900);
   };
 
   const handleKillSession = (name) => {
-    if (socketRef.current) {
-      setIsLoading(true);
-      socketRef.current.emit('ssh:input', `tmux kill-session -t ${name}\n`);
-      setTimeout(fetchSessions, 1000);
-    }
+    if (!socketRef.current) return;
+    setIsLoading(true);
+    socketRef.current.emit('ssh:input', `tmux kill-session -t "${name}"\n`);
+    setTimeout(() => emitTmuxLs(), 900);
   };
 
   const attachToSession = (sessionName) => {
@@ -247,7 +253,7 @@ export default function TmuxApp({ initialConnection }) {
                                 Refresh
                             </button>
                             <button 
-                                onClick={() => handleCreateSession()}
+                                onClick={() => { setNewSessionName(''); setNewSessionPrompt(true); }}
                                 className="px-3 py-1.5 rounded-lg border border-emerald-500/30 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 flex items-center gap-2 text-xs font-semibold transition-all"
                             >
                                 <Play size={12} />
@@ -320,11 +326,52 @@ export default function TmuxApp({ initialConnection }) {
                                 There are no active tmux sessions on this server. Sessions created by the AI agent or manually will appear here.
                             </p>
                             <button 
-                                onClick={() => handleCreateSession('manual-session')}
+                                onClick={() => { setNewSessionName(''); setNewSessionPrompt(true); }}
                                 className="mt-6 px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-sm transition-all"
                             >
                                 Create Session
                             </button>
+                        </div>
+                    )}
+
+                    {/* New Session Name Prompt */}
+                    {newSessionPrompt && (
+                        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm" onClick={() => setNewSessionPrompt(false)}>
+                            <div className="bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-2xl shadow-2xl p-6 w-80" onClick={e => e.stopPropagation()}>
+                                <h3 className="font-bold text-[var(--text-primary)] mb-1">New Tmux Session</h3>
+                                <p className="text-xs text-[var(--text-muted)] mb-4">Enter a name for the new session (letters, numbers, hyphens)</p>
+                                <input
+                                    autoFocus
+                                    value={newSessionName}
+                                    onChange={e => setNewSessionName(e.target.value)}
+                                    onKeyDown={e => {
+                                        if (e.key === 'Enter' && newSessionName.trim()) {
+                                            handleCreateSession(newSessionName.trim());
+                                            setNewSessionPrompt(false);
+                                        } else if (e.key === 'Escape') {
+                                            setNewSessionPrompt(false);
+                                        }
+                                    }}
+                                    placeholder="my-session"
+                                    className="w-full bg-[var(--bg-primary)] border border-[var(--border-color)] rounded-lg px-3 py-2 text-sm font-mono text-[var(--text-primary)] focus:outline-none focus:border-emerald-500/50 mb-4"
+                                />
+                                <div className="flex gap-2">
+                                    <button
+                                        onClick={() => setNewSessionPrompt(false)}
+                                        className="flex-1 py-2 rounded-lg border border-[var(--border-color)] text-xs text-[var(--text-muted)] hover:bg-white/5 transition-colors"
+                                    >Cancel</button>
+                                    <button
+                                        onClick={() => {
+                                            if (newSessionName.trim()) {
+                                                handleCreateSession(newSessionName.trim());
+                                                setNewSessionPrompt(false);
+                                            }
+                                        }}
+                                        disabled={!newSessionName.trim()}
+                                        className="flex-1 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-white font-bold text-xs transition-colors"
+                                    >Create</button>
+                                </div>
+                            </div>
                         </div>
                     )}
                 </div>

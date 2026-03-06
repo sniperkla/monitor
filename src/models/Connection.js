@@ -21,6 +21,15 @@ const ConnectionSchema = new mongoose.Schema({
   isSrv: { type: Boolean, default: false }, // For mongodb+srv
   notes: { type: String, default: '' },
   info: { type: String, default: null },
+  // SSH Tunnel (for reaching local/private DBs through an SSH jump)
+  sshTunnel: { type: Boolean, default: false },
+  sshTunnelHost: { type: String, default: null },
+  sshTunnelPort: { type: Number, default: 22 },
+  sshTunnelUser: { type: String, default: null },
+  sshTunnelAuth: { type: String, enum: ['password', 'privateKey'], default: 'password' },
+  sshTunnelPassword: { type: String, default: null },
+  sshTunnelPrivateKey: { type: String, default: null },
+  sshTunnelPassphrase: { type: String, default: null },
 }, {
   timestamps: true,
 });

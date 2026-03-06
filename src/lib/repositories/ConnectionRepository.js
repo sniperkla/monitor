@@ -40,6 +40,22 @@ export class ConnectionRepository {
       } catch (e) {
         // Column probably already exists, ignore
       }
+      // Migration: Add SSH tunnel columns if missing
+      const tunnelCols = [
+        'sshTunnel BOOLEAN DEFAULT FALSE',
+        'sshTunnelHost VARCHAR(255)',
+        'sshTunnelPort INT DEFAULT 22',
+        'sshTunnelUser VARCHAR(255)',
+        "sshTunnelAuth ENUM('password','privateKey') DEFAULT 'password'",
+        'sshTunnelPassword TEXT',
+        'sshTunnelPrivateKey TEXT',
+        'sshTunnelPassphrase TEXT',
+      ];
+      for (const colDef of tunnelCols) {
+        try {
+          await this.db.query(`ALTER TABLE connections ADD COLUMN ${colDef}`);
+        } catch (e) { /* already exists */ }
+      }
     }
   }
 
@@ -52,6 +68,7 @@ export class ConnectionRepository {
         tags: typeof r.tags === 'string' ? JSON.parse(r.tags) : (r.tags || []),
         isFavorite: !!r.isFavorite,
         isSrv: !!r.isSrv,
+        sshTunnel: !!r.sshTunnel,
         database: r.database_name
       }));
     } else {

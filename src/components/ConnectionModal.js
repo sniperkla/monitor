@@ -53,6 +53,15 @@ export default function ConnectionModal({ onClose, editConnection = null }) {
     color: editConnection?.color || (editConnection?.type === 'database' ? '#10b981' : '#6366f1'),
     notes: editConnection?.notes || '',
     targetStorage: editConnection?.storage || state.storageMode || 'db',
+    // SSH Tunnel (for database connections)
+    sshTunnel: editConnection?.sshTunnel || false,
+    sshTunnelHost: editConnection?.sshTunnelHost || '',
+    sshTunnelPort: editConnection?.sshTunnelPort || 22,
+    sshTunnelUser: editConnection?.sshTunnelUser || '',
+    sshTunnelAuth: editConnection?.sshTunnelAuth || 'password',
+    sshTunnelPassword: '',
+    sshTunnelPrivateKey: '',
+    sshTunnelPassphrase: '',
   });
 
   // Auto-set ports based on provider
@@ -281,6 +290,20 @@ export default function ConnectionModal({ onClose, editConnection = null }) {
       notes: form.notes,
       storage: form.targetStorage,
     };
+
+    // SSH Tunnel config
+    if (form.type === 'database' && form.sshTunnel && form.sshTunnelHost) {
+      payload.sshTunnel = true;
+      payload.sshTunnelHost = form.sshTunnelHost;
+      payload.sshTunnelPort = parseInt(form.sshTunnelPort) || 22;
+      payload.sshTunnelUser = form.sshTunnelUser;
+      payload.sshTunnelAuth = form.sshTunnelAuth;
+      if (form.sshTunnelPassword) payload.sshTunnelPassword = form.sshTunnelPassword;
+      if (form.sshTunnelPrivateKey) payload.sshTunnelPrivateKey = form.sshTunnelPrivateKey;
+      if (form.sshTunnelPassphrase) payload.sshTunnelPassphrase = form.sshTunnelPassphrase;
+    } else {
+      payload.sshTunnel = false;
+    }
 
     if (form.authType === 'password' && form.password) {
       payload.password = form.password;
@@ -861,6 +884,157 @@ export default function ConnectionModal({ onClose, editConnection = null }) {
                 )}
               </div>
            </div>
+
+           {/* ── SSH Tunnel Section (database connections only) ── */}
+           {form.type === 'database' && (
+             <div className="pt-2 border-t border-[var(--border-color)]">
+               {/* Toggle header */}
+               <button
+                 type="button"
+                 onClick={() => handleChange('sshTunnel', !form.sshTunnel)}
+                 className="w-full flex items-center justify-between px-3 py-2.5 rounded-xl border transition-all group"
+                 style={{
+                   background: form.sshTunnel ? 'rgba(99,102,241,0.08)' : 'var(--bg-tertiary)',
+                   borderColor: form.sshTunnel ? 'rgba(99,102,241,0.35)' : 'var(--border-color)',
+                 }}
+               >
+                 <div className="flex items-center gap-2.5">
+                   <div className={`w-7 h-7 rounded-lg flex items-center justify-center shrink-0 transition-colors ${form.sshTunnel ? 'bg-indigo-500/20' : 'bg-[var(--bg-primary)]'}`}>
+                     <Key size={13} className={form.sshTunnel ? 'text-indigo-400' : 'text-[var(--text-muted)]'} />
+                   </div>
+                   <div className="text-left">
+                     <div className={`text-xs font-bold ${form.sshTunnel ? 'text-indigo-300' : 'text-[var(--text-secondary)]'}`}>SSH Tunnel</div>
+                     <div className="text-[9px] text-[var(--text-muted)]">Connect via SSH — reach local/private DBs without port forwarding</div>
+                   </div>
+                 </div>
+                 {/* Toggle pill */}
+                 <div className={`relative w-9 h-5 rounded-full transition-colors shrink-0 ${form.sshTunnel ? 'bg-indigo-500' : 'bg-[var(--border-color)]'}`}>
+                   <div className={`absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-all ${form.sshTunnel ? 'left-4' : 'left-0.5'}`} />
+                 </div>
+               </button>
+
+               {/* Tunnel fields */}
+               {form.sshTunnel && (
+                 <div className="mt-3 space-y-3 pl-3 border-l-2 border-indigo-500/30 animate-in fade-in slide-in-from-top-2 duration-200">
+                   {/* Info banner */}
+                   <div className="flex gap-2 p-2.5 rounded-lg bg-indigo-500/8 border border-indigo-500/20 text-[9px] text-indigo-300/80 leading-relaxed">
+                     <Server size={11} className="shrink-0 mt-0.5 text-indigo-400" />
+                     <span>
+                       Enter the <strong>SSH host</strong> (e.g. your Tailscale IP or VPN address) below. <br />
+                       The <strong>DB host/port</strong> above is how the DB appears <em>from inside that SSH host</em> — <code className="font-mono">localhost:27017</code> works perfectly.
+                     </span>
+                   </div>
+
+                   {/* SSH Host + Port */}
+                   <div className="grid grid-cols-3 gap-3">
+                     <div className="col-span-2">
+                       <label className="flex items-center gap-1.5 text-xs font-medium mb-1.5" style={{ color: 'var(--text-secondary)' }}>
+                         <Server size={12} /> SSH Host
+                       </label>
+                       <input
+                         type="text"
+                         className="input-field"
+                         placeholder="100.64.x.x or jump.example.com"
+                         value={form.sshTunnelHost}
+                         onChange={(e) => handleChange('sshTunnelHost', e.target.value)}
+                       />
+                     </div>
+                     <div>
+                       <label className="flex items-center gap-1.5 text-xs font-medium mb-1.5" style={{ color: 'var(--text-secondary)' }}>
+                         <Activity size={12} /> Port
+                       </label>
+                       <input
+                         type="number"
+                         className="input-field"
+                         placeholder="22"
+                         value={form.sshTunnelPort}
+                         onChange={(e) => handleChange('sshTunnelPort', e.target.value)}
+                       />
+                     </div>
+                   </div>
+
+                   {/* SSH Username */}
+                   <div>
+                     <label className="flex items-center gap-1.5 text-xs font-medium mb-1.5" style={{ color: 'var(--text-secondary)' }}>
+                       <User size={12} /> SSH Username
+                     </label>
+                     <input
+                       type="text"
+                       className="input-field"
+                       placeholder="ubuntu, root, etc."
+                       value={form.sshTunnelUser}
+                       onChange={(e) => handleChange('sshTunnelUser', e.target.value)}
+                     />
+                   </div>
+
+                   {/* SSH Auth type toggle */}
+                   <div>
+                     <label className="text-xs font-medium mb-1.5 block" style={{ color: 'var(--text-secondary)' }}>SSH Auth</label>
+                     <div className="flex bg-[var(--bg-tertiary)] p-1 rounded-lg w-fit gap-1">
+                       {['password', 'privateKey'].map(authOpt => (
+                         <button
+                           key={authOpt}
+                           type="button"
+                           onClick={() => handleChange('sshTunnelAuth', authOpt)}
+                           className={`px-3 py-1.5 text-[10px] font-bold rounded-md transition-all ${
+                             form.sshTunnelAuth === authOpt
+                               ? 'bg-indigo-700 dark:bg-indigo-600 text-white shadow'
+                               : 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'
+                           }`}
+                         >
+                           {authOpt === 'password' ? 'Password' : 'Private Key'}
+                         </button>
+                       ))}
+                     </div>
+                   </div>
+
+                   {/* SSH Password or Private Key */}
+                   {/* Secret notice when editing */}
+                   {editConnection?.sshTunnel && (
+                     <div className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg bg-amber-500/8 border border-amber-500/20 text-[9px] text-amber-300/80">
+                       <Lock size={10} className="shrink-0 text-amber-400" />
+                       Credentials are stored encrypted. Leave blank to keep the existing secret.
+                     </div>
+                   )}
+
+                   {form.sshTunnelAuth === 'password' ? (
+                     <div>
+                       <label className="flex items-center gap-1.5 text-xs font-medium mb-1.5" style={{ color: 'var(--text-secondary)' }}>
+                         <Lock size={12} /> SSH Password
+                       </label>
+                       <input
+                         type="password"
+                         className="input-field"
+                         placeholder={editConnection?.sshTunnel ? '••••••• (unchanged)' : 'SSH password'}
+                         value={form.sshTunnelPassword}
+                         onChange={(e) => handleChange('sshTunnelPassword', e.target.value)}
+                       />
+                     </div>
+                   ) : (
+                     <div className="space-y-2">
+                       <label className="flex items-center gap-1.5 text-xs font-medium mb-1.5" style={{ color: 'var(--text-secondary)' }}>
+                         <FileKey size={12} /> SSH Private Key
+                       </label>
+                       <textarea
+                         className="input-field font-mono text-[10px] resize-none"
+                         rows={4}
+                         placeholder={editConnection?.sshTunnel ? '(unchanged — paste new key to replace)' : '-----BEGIN OPENSSH PRIVATE KEY-----'}
+                         value={form.sshTunnelPrivateKey}
+                         onChange={(e) => handleChange('sshTunnelPrivateKey', e.target.value)}
+                       />
+                       <input
+                         type="password"
+                         className="input-field text-xs"
+                         placeholder={editConnection?.sshTunnel ? '(unchanged)' : 'Key passphrase (optional)'}
+                         value={form.sshTunnelPassphrase}
+                         onChange={(e) => handleChange('sshTunnelPassphrase', e.target.value)}
+                       />
+                     </div>
+                   )}
+                 </div>
+               )}
+             </div>
+           )}
 
            <div className="grid grid-cols-1 md:grid-cols-2 gap-5 pt-2 border-t border-[var(--border-color)]">
               <div>

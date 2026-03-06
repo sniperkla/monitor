@@ -41,6 +41,12 @@ export async function GET(request) {
       notes: conn.notes,
       createdAt: conn.createdAt,
       updatedAt: conn.updatedAt,
+      // SSH Tunnel metadata (no secrets)
+      sshTunnel: !!conn.sshTunnel,
+      sshTunnelHost: conn.sshTunnelHost || null,
+      sshTunnelPort: conn.sshTunnelPort || 22,
+      sshTunnelUser: conn.sshTunnelUser || null,
+      sshTunnelAuth: conn.sshTunnelAuth || 'password',
     }));
 
     return NextResponse.json({ success: true, data: sanitized });
@@ -84,6 +90,15 @@ export async function POST(request) {
       tags: body.tags || [],
       color: body.color || '#6366f1',
       notes: body.notes || '',
+      // SSH Tunnel
+      sshTunnel: !!body.sshTunnel,
+      sshTunnelHost: body.sshTunnelHost || null,
+      sshTunnelPort: body.sshTunnelPort || 22,
+      sshTunnelUser: body.sshTunnelUser || null,
+      sshTunnelAuth: body.sshTunnelAuth || 'password',
+      sshTunnelPassword: body.sshTunnelPassword ? encrypt(body.sshTunnelPassword) : null,
+      sshTunnelPrivateKey: body.sshTunnelPrivateKey ? encrypt(body.sshTunnelPrivateKey) : null,
+      sshTunnelPassphrase: body.sshTunnelPassphrase ? encrypt(body.sshTunnelPassphrase) : null,
     });
 
     return NextResponse.json(

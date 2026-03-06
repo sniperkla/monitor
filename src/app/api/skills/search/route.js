@@ -20,7 +20,7 @@ export async function POST(req) {
       console.warn('[SkillsMP Search] No session found — proceeding with API key auth only.');
     }
 
-    const { q, type = 'ai' } = await req.json();
+    const { q, type = 'smart' } = await req.json();
     if (!q) {
       return NextResponse.json({ success: false, error: 'Query is required' }, { status: 400 });
     }
@@ -33,10 +33,47 @@ export async function POST(req) {
     // DEBUG: Log key prefix and length to verify it's loaded correctly
     console.log(`[SkillsMP] Key check: prefix=${apiKey.substring(0, 10)}... length=${apiKey.length}`);
 
-    // SkillsMP AI search is GET /api/v1/skills/ai-search?q=...
-    // Regular search is GET /api/v1/skills/search?q=...
+    // 'smart' mode: use Groq to extract concise keywords, then call normal keyword search
+    // 'ai' mode: use SkillsMP AI vector search (hits rate limit)
+    // anything else: normal keyword search with raw query
+    let searchQuery = String(q);
+
+    if (type === 'smart') {
+      const groqKey = process.env.GROQ_API_KEY;
+      if (groqKey) {
+        try {
+          const groqRes = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${groqKey}`,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              model: 'llama-3.1-8b-instant',
+              messages: [{
+                role: 'user',
+                content: `Extract 1-3 short search keywords for a DevOps skills marketplace from the user goal below. Reply with ONLY the keywords, space-separated, no explanation, no punctuation.\n\nGoal: ${q}`,
+              }],
+              max_tokens: 20,
+              temperature: 0,
+            }),
+          });
+          if (groqRes.ok) {
+            const groqData = await groqRes.json();
+            const extracted = groqData?.choices?.[0]?.message?.content?.trim();
+            if (extracted) {
+              searchQuery = extracted;
+              console.log(`[SkillsMP] Smart keywords: "${searchQuery}" (from: "${q}")`);
+            }
+          }
+        } catch (e) {
+          console.warn('[SkillsMP] Keyword extraction failed, using raw query:', e.message);
+        }
+      }
+    }
+
     const endpoint = type === 'ai' ? '/skills/ai-search' : '/skills/search';
-    const params = new URLSearchParams({ q: String(q) });
+    const params = new URLSearchParams({ q: searchQuery });
     const url = `${SKILLS_MP_API_BASE}${endpoint}?${params}`;
     
     console.log(`[SkillsMP] GET ${url}`);

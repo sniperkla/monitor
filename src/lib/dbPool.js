@@ -13,12 +13,16 @@
  * Connections auto-expire after 5 minutes of inactivity.
  */
 
+import net from 'net';
 import mongoose from 'mongoose';
 import mysql from 'mysql2/promise';
+import { Client as SshClient } from 'ssh2';
 import { decrypt } from '@/utils/encryption';
 
 // Global pool (survives hot reloads in dev)
 const globalPool = global.__dbPool || (global.__dbPool = new Map());
+// SSH tunnel pool: tunnelKey → { sshClient, server, port, alive }
+const tunnelPool = global.__tunnelPool || (global.__tunnelPool = new Map());
 
 const POOL_TTL_MS = 5 * 60 * 1000; // 5 minutes idle timeout
 const MAX_POOL_SIZE = 20; // Max concurrent different connections
@@ -30,6 +34,108 @@ const MAX_POOL_SIZE = 20; // Max concurrent different connections
 function getCacheKey(conn) {
   const provider = conn.dbProvider || 'mongodb';
   return `${provider}://${conn.username || ''}@${conn.host}:${conn.port || 'default'}/${conn.database || ''}`;
+}
+
+/**
+ * Open an SSH tunnel and expose the remote DB port on a random local port.
+ * Returns { port, tunnelKey } — connect your DB client to 127.0.0.1:port.
+ * Tunnels are cached and reused until explicitly closed or cleaned up.
+ */
+async function createSSHTunnel(conn) {
+  const tunnelKey = `ssh:${conn.sshTunnelUser}@${conn.sshTunnelHost}:${conn.sshTunnelPort || 22}→${conn.host}:${conn.port}`;
+
+  // Reuse alive tunnel
+  if (tunnelPool.has(tunnelKey)) {
+    const existing = tunnelPool.get(tunnelKey);
+    if (existing.alive) {
+      existing.lastUsed = Date.now();
+      console.log(`♻️ SSH Tunnel: Reusing tunnel on port ${existing.port} (${tunnelKey})`);
+      return { port: existing.port, tunnelKey };
+    }
+    // Dead tunnel — clean it up
+    try { existing.server.close(); } catch (_) {}
+    try { existing.sshClient.end(); } catch (_) {}
+    tunnelPool.delete(tunnelKey);
+  }
+
+  return new Promise((resolve, reject) => {
+    const sshClient = new SshClient();
+
+    const sshConfig = {
+      host: conn.sshTunnelHost,
+      port: parseInt(conn.sshTunnelPort) || 22,
+      username: conn.sshTunnelUser || '',
+      readyTimeout: 15000,
+    };
+
+    const tunnelAuth = conn.sshTunnelAuth || 'password';
+    if (tunnelAuth === 'password' && conn.sshTunnelPassword) {
+      try { sshConfig.password = decrypt(conn.sshTunnelPassword); } catch (_) { sshConfig.password = conn.sshTunnelPassword; }
+    } else if (tunnelAuth === 'privateKey' && conn.sshTunnelPrivateKey) {
+      try { sshConfig.privateKey = decrypt(conn.sshTunnelPrivateKey); } catch (_) { sshConfig.privateKey = conn.sshTunnelPrivateKey; }
+      if (conn.sshTunnelPassphrase) {
+        try { sshConfig.passphrase = decrypt(conn.sshTunnelPassphrase); } catch (_) { sshConfig.passphrase = conn.sshTunnelPassphrase; }
+      }
+    }
+
+    const targetHost = conn.host || 'localhost';
+    const targetPort = parseInt(conn.port) || 27017;
+
+    // Local TCP server that proxies each socket through the SSH forward
+    const localServer = net.createServer((localSocket) => {
+      sshClient.forwardOut('127.0.0.1', 0, targetHost, targetPort, (err, stream) => {
+        if (err) {
+          console.error(`[SSH Tunnel] forwardOut error: ${err.message}`);
+          localSocket.destroy();
+          return;
+        }
+        localSocket.pipe(stream);
+        stream.pipe(localSocket);
+        localSocket.once('close', () => { try { stream.close(); } catch (_) {} });
+        stream.once('close', () => { try { localSocket.destroy(); } catch (_) {} });
+        stream.once('error', () => { try { localSocket.destroy(); } catch (_) {} });
+        localSocket.once('error', () => { try { stream.close(); } catch (_) {} });
+      });
+    });
+
+    sshClient.once('ready', () => {
+      localServer.listen(0, '127.0.0.1', () => {
+        const localPort = localServer.address().port;
+        console.log(`🔌 SSH Tunnel: OPEN — ${conn.sshTunnelHost} → 127.0.0.1:${localPort} → ${targetHost}:${targetPort}`);
+        tunnelPool.set(tunnelKey, {
+          sshClient,
+          server: localServer,
+          port: localPort,
+          alive: true,
+          lastUsed: Date.now(),
+        });
+        resolve({ port: localPort, tunnelKey });
+      });
+    });
+
+    sshClient.once('error', (err) => {
+      try { localServer.close(); } catch (_) {}
+      reject(new Error(`SSH Tunnel connect error: ${err.message}`));
+    });
+
+    try {
+      sshClient.connect(sshConfig);
+    } catch (err) {
+      try { localServer.close(); } catch (_) {}
+      reject(err);
+    }
+  });
+}
+
+/** Close and remove an SSH tunnel from the pool. */
+async function closeSSHTunnel(tunnelKey) {
+  if (!tunnelKey || !tunnelPool.has(tunnelKey)) return;
+  const tunnel = tunnelPool.get(tunnelKey);
+  tunnel.alive = false;
+  try { tunnel.server.close(); } catch (_) {}
+  try { tunnel.sshClient.end(); } catch (_) {}
+  tunnelPool.delete(tunnelKey);
+  console.log(`🔌 SSH Tunnel: CLOSED — ${tunnelKey}`);
 }
 
 /**
@@ -102,31 +208,55 @@ export async function getPooledConnection(conn) {
 
   // Create new connection
   let db;
+  let tunnelKey = null;
+
   if (provider === 'mongodb') {
-    const uri = buildMongoUri(conn, password);
+    let connectHost = conn.host;
+    let connectPort = conn.port || 27017;
+
+    if (conn.sshTunnel && conn.sshTunnelHost) {
+      const tunnel = await createSSHTunnel(conn);
+      connectHost = '127.0.0.1';
+      connectPort = tunnel.port;
+      tunnelKey = tunnel.tunnelKey;
+    }
+
+    const tunnelConn = { ...conn, host: connectHost, port: connectPort, isSrv: false };
+    const uri = buildMongoUri(tunnelConn, password);
     db = await mongoose.createConnection(uri, {
-      serverSelectionTimeoutMS: 5000,
-      maxPoolSize: 5,        // MongoDB driver-level pooling (5 sockets per connection)
+      serverSelectionTimeoutMS: tunnelKey ? 10000 : 5000,
+      maxPoolSize: 5,
       minPoolSize: 1,
-      maxIdleTimeMS: 60000,  // Close idle sockets after 60s 
+      maxIdleTimeMS: 60000,
+      ...(tunnelKey ? { directConnection: true } : {}), // bypass replica set discovery when tunnelled
     }).asPromise();
   } else if (provider === 'mysql') {
+    let connectHost = conn.host;
+    let connectPort = conn.port || 3306;
+
+    if (conn.sshTunnel && conn.sshTunnelHost) {
+      const tunnel = await createSSHTunnel(conn);
+      connectHost = '127.0.0.1';
+      connectPort = tunnel.port;
+      tunnelKey = tunnel.tunnelKey;
+    }
+
     db = await mysql.createConnection({
-      host: conn.host,
-      port: conn.port,
+      host: connectHost,
+      port: connectPort,
       user: conn.username || '',
       password: password || '',
       database: conn.database,
-      connectTimeout: 5000,
+      connectTimeout: tunnelKey ? 10000 : 5000,
     });
   } else {
     throw new Error(`Provider ${provider} not supported`);
   }
 
-  const entry = { db, provider, key, lastUsed: Date.now() };
+  const entry = { db, provider, key, tunnelKey, lastUsed: Date.now() };
   globalPool.set(key, entry);
 
-  console.log(`🔗 Pool: New connection created for ${key} (pool size: ${globalPool.size})`);
+  console.log(`🔗 Pool: New connection created for ${key}${tunnelKey ? ' (via SSH tunnel)' : ''} (pool size: ${globalPool.size})`);
   return entry;
 }
 
@@ -149,6 +279,7 @@ export async function closePooledConnection(key) {
       if (entry.provider === 'mongodb') await entry.db.close();
       else if (entry.provider === 'mysql') await entry.db.end();
     } catch (_) {}
+    if (entry.tunnelKey) await closeSSHTunnel(entry.tunnelKey);
     globalPool.delete(key);
   }
 }
@@ -170,6 +301,7 @@ function startPoolCleanup() {
           if (entry.provider === 'mongodb') await entry.db.close();
           else if (entry.provider === 'mysql') await entry.db.end();
         } catch (_) {}
+        if (entry.tunnelKey) await closeSSHTunnel(entry.tunnelKey);
         globalPool.delete(key);
       }
     }

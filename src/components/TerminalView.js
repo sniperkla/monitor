@@ -13,7 +13,7 @@ import { i18n } from '@/lib/i18n';
 import {
   Loader2, AlertCircle, CheckCircle2, XCircle, X, Minus, Maximize2, Wifi,
   Sparkles, Copy, CornerDownLeft, ShieldAlert, Settings2, Clock, RefreshCw,
-  ListChecks, Trophy, PartyPopper, Languages, Lock, Brain, ChevronDown, ChevronUp,
+  ListChecks, Trophy, Search, Languages, Lock, Brain, ChevronDown, ChevronUp,
   AtSign, Folder, File as FileIconAi
 } from 'lucide-react';
 import { diff_match_patch } from 'diff-match-patch';
@@ -3165,11 +3165,12 @@ export default function TerminalView({ connectionId, connectionName, host, color
     }
 
     // ── Step 2: Try external SkillsMP too (best-effort) ──
+    // Uses 'smart' mode: AI extracts concise keywords → normal keyword search (no rate-limit hit)
     try {
       const res = await apiFetch('/api/skills/search', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ q: query, type: 'ai' })
+        body: JSON.stringify({ q: query, type: 'smart' })
       });
       const data = await res.json();
       if (data.success && Array.isArray(data.skills)) {
@@ -5424,13 +5425,19 @@ What is your move?`;
 
                 {/* Injected Skills Panel — shows which skills were loaded */}
                 {injectedSkills && !skillsSearchLoading && (
-                  <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/10 overflow-hidden mb-3 animate-in fade-in zoom-in-95 duration-300">
-                    <div className="px-3 py-2 bg-emerald-600/20 border-b border-emerald-500/20 flex items-center justify-between">
-                      <div className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-wider text-emerald-300">
-                        <Brain size={12} />
-                        Skills Loaded
+                  <div className="rounded-xl border border-emerald-500/40 bg-emerald-950/60 overflow-hidden mb-3 animate-in fade-in zoom-in-95 duration-300 shadow-lg shadow-emerald-500/10">
+                    {/* Header */}
+                    <div className="px-3 py-2.5 bg-emerald-600/25 border-b border-emerald-500/30 flex items-center justify-between">
+                      <div className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-wider text-emerald-200">
+                        <CheckCircle2 size={12} className="text-emerald-400" />
+                        Skills Ready — AI Context Updated
                       </div>
                       <button onClick={() => setInjectedSkills(null)} className="text-emerald-300/60 hover:text-emerald-300"><X size={12} /></button>
+                    </div>
+                    {/* CTA banner */}
+                    <div className="flex items-center gap-2 px-3 py-2 bg-emerald-500/15 border-b border-emerald-500/20">
+                      <svg width={11} height={11} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" className="text-emerald-400 shrink-0"><polyline points="13 17 18 12 13 7"/><polyline points="6 17 11 12 6 7"/></svg>
+                      <span className="text-[9px] text-emerald-300 font-bold tracking-wide">Skills injected — click <span className="text-emerald-200 underline decoration-dotted">Resume Engine</span> to start with enhanced knowledge</span>
                     </div>
                     <div className="p-3 space-y-2">
                       {/* All available skills */}
@@ -5470,17 +5477,23 @@ What is your move?`;
 
                 {/* SkillsMP Loading Animation */}
                 {skillsSearchLoading && (
-                  <div className="rounded-xl border border-indigo-500/30 bg-indigo-500/10 overflow-hidden mb-3">
-                    <div className="px-3 py-2 bg-indigo-600/20 border-b border-indigo-500/20 flex items-center justify-between">
-                      <div className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-wider text-indigo-300">
-                        <Brain size={12} className="animate-pulse" />
-                        Scanning SkillsMP...
+                  <div className="rounded-xl border border-indigo-500/40 bg-indigo-950/60 overflow-hidden mb-3 animate-in fade-in duration-200">
+                    {/* Top banner — clear notice */}
+                    <div className="px-3 py-2.5 bg-indigo-600/25 border-b border-indigo-500/30 flex items-center justify-between">
+                      <div className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-wider text-indigo-200">
+                        <svg className="animate-spin shrink-0" width={12} height={12} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10" strokeOpacity="0.3"/><path d="M12 2a10 10 0 0 1 10 10"/></svg>
+                        Injecting Skills — Please Wait
                       </div>
                       <div className="flex items-center gap-1">
                         {[0, 150, 300].map((delay, i) => (
                           <div key={i} className="w-1.5 h-1.5 rounded-full bg-indigo-400 animate-bounce" style={{ animationDelay: `${delay}ms` }} />
                         ))}
                       </div>
+                    </div>
+                    {/* Lock notice */}
+                    <div className="flex items-center gap-2 px-3 py-2 bg-amber-500/10 border-b border-amber-500/20">
+                      <svg width={11} height={11} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-amber-400 shrink-0"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+                      <span className="text-[9px] text-amber-300/80 font-semibold">Resume Engine is locked until skills are ready</span>
                     </div>
                     <div className="p-4">
                       {/* Radar pulse */}
@@ -5511,7 +5524,7 @@ What is your move?`;
                         ))}
                       </div>
                       <p className="text-center text-[9px] text-indigo-300/50 mt-3 animate-pulse tracking-widest uppercase">
-                        Finding matching skills...
+                        Searching & injecting skills into AI context...
                       </p>
                     </div>
                   </div>
@@ -5907,7 +5920,9 @@ What is your move?`;
 
                          {!autoMode && aiMode === 'auto' && (
                            <button 
+                             disabled={skillsSearchLoading}
                              onClick={() => {
+                               if (skillsSearchLoading) return;
                                const currentGoal = String(autoGoal || aiPrompt || '').trim();
                                const lastGoal = String(lastGoalRef.current || '').trim();
                                const isNewGoal = currentGoal !== lastGoal && currentGoal.length > 2;
@@ -5968,10 +5983,23 @@ What is your move?`;
                                     : '\n\n(RESUMED: Please provide your next <command> or <diff> immediately to continue the task.)');
                                }, 300);
                              }}
-                             className="flex items-center gap-1 px-2 py-0.5 rounded bg-white/5 border border-white/10 text-white/80 text-[9px] font-bold hover:bg-white/10 hover:text-white transition-all active:scale-95"
+                             className={`flex items-center gap-1 px-2 py-0.5 rounded border text-[9px] font-bold transition-all ${
+                               skillsSearchLoading
+                                 ? 'bg-white/3 border-white/5 text-white/25 cursor-not-allowed opacity-50'
+                                 : 'bg-white/5 border-white/10 text-white/80 hover:bg-white/10 hover:text-white active:scale-95'
+                             }`}
                            >
-                             <RefreshCw size={9} className="opacity-60" />
-                             RESUME ENGINE
+                             {skillsSearchLoading ? (
+                               <>
+                                 <svg className="animate-spin" width={9} height={9} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10" strokeOpacity="0.3"/><path d="M12 2a10 10 0 0 1 10 10"/></svg>
+                                 LOADING SKILLS...
+                               </>
+                             ) : (
+                               <>
+                                 <RefreshCw size={9} className="opacity-60" />
+                                 RESUME ENGINE
+                               </>
+                             )}
                            </button>
                          )}
                         

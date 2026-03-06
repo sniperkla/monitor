@@ -62,6 +62,10 @@ export async function PUT(request, { params }) {
     if (body.password) body.password = encrypt(body.password);
     if (body.privateKey) body.privateKey = encrypt(body.privateKey);
     if (body.passphrase) body.passphrase = encrypt(body.passphrase);
+    // SSH tunnel secrets
+    if (body.sshTunnelPassword) body.sshTunnelPassword = encrypt(body.sshTunnelPassword);
+    if (body.sshTunnelPrivateKey) body.sshTunnelPrivateKey = encrypt(body.sshTunnelPrivateKey);
+    if (body.sshTunnelPassphrase) body.sshTunnelPassphrase = encrypt(body.sshTunnelPassphrase);
 
     const success = await repo.update(id, body);
 
