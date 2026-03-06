@@ -21,6 +21,7 @@ export function VaultProvider({ children }) {
   // Vault state
   const [vaultStatus, setVaultStatus] = useState('loading'); // loading, no_auth, setup, locked, unlocked
   const [decryptedUri, setDecryptedUri] = useState(''); // Only exists in memory!
+  const [decryptedTunnel, setDecryptedTunnel] = useState(null); // SSH tunnel config, only in memory
   const [vaultData, setVaultData] = useState(null); // Server-side encrypted data
   const [hasLegacyUri, setHasLegacyUri] = useState(false);
   const [legacyUri, setLegacyUri] = useState('');
@@ -46,6 +47,10 @@ export function VaultProvider({ children }) {
           const cached = sessionStorage.getItem('_vault_uri');
           if (cached) {
             setDecryptedUri(cached);
+            const cachedTunnel = sessionStorage.getItem('_vault_tunnel');
+            if (cachedTunnel) {
+              try { setDecryptedTunnel(JSON.parse(cachedTunnel)); } catch (_) {}
+            }
             setVaultStatus('unlocked');
           } else {
             setVaultStatus('locked');
@@ -71,6 +76,10 @@ export function VaultProvider({ children }) {
         if (cached) {
           console.log('🔓 [Vault] Optimistically unlocking from session storage');
           setDecryptedUri(cached);
+          const cachedTunnel = window.sessionStorage.getItem('_vault_tunnel');
+          if (cachedTunnel) {
+            try { setDecryptedTunnel(JSON.parse(cachedTunnel)); } catch (_) {}
+          }
           setVaultStatus('unlocked');
         }
       }
@@ -100,6 +109,10 @@ export function VaultProvider({ children }) {
         const cached = sessionStorage.getItem('_vault_uri');
         if (cached) {
           setDecryptedUri(cached);
+          const cachedTunnel = sessionStorage.getItem('_vault_tunnel');
+          if (cachedTunnel) {
+            try { setDecryptedTunnel(JSON.parse(cachedTunnel)); } catch (_) {}
+          }
           setVaultStatus('unlocked');
         } else {
           setVaultStatus('locked');
@@ -131,16 +144,36 @@ export function VaultProvider({ children }) {
         throw new Error('WRONG_PASSWORD');
       }
 
-      // Decrypt the URI client-side
-      const uri = await decryptWithPassword(
+      // Decrypt the URI (or URI+tunnel JSON blob) client-side
+      const decryptedBlob = await decryptWithPassword(
         vaultData.encryptedUri,
         vaultData.salt,
         vaultData.iv,
         masterPassword
       );
 
+      // Support new format: JSON blob { uri, tunnel } or legacy plain URI string
+      let uri = decryptedBlob;
+      let tunnel = null;
+      try {
+        const parsed = JSON.parse(decryptedBlob);
+        if (parsed && parsed.uri) {
+          uri = parsed.uri;
+          tunnel = parsed.tunnel || null;
+        }
+      } catch (_) {
+        // Legacy plain URI — no tunnel
+      }
+
       // Store in memory + sessionStorage (cleared on tab close)
       setDecryptedUri(uri);
+      if (tunnel) {
+        setDecryptedTunnel(tunnel);
+        sessionStorage.setItem('_vault_tunnel', JSON.stringify(tunnel));
+      } else {
+        setDecryptedTunnel(null);
+        sessionStorage.removeItem('_vault_tunnel');
+      }
       sessionStorage.setItem('_vault_uri', uri);
       setVaultStatus('unlocked');
 
@@ -159,12 +192,17 @@ export function VaultProvider({ children }) {
    * Set up the vault for the first time (or after recovery reset).
    * Encrypts the URI client-side and stores encrypted data.
    */
-  const setupVault = useCallback(async (mongoUri, masterPassword) => {
+  const setupVault = useCallback(async (mongoUri, masterPassword, tunnelConfig = null) => {
     setError('');
 
     try {
+      // Encode URI + tunnel config as a single JSON blob (backward compatible)
+      const blob = tunnelConfig && tunnelConfig.enabled
+        ? JSON.stringify({ uri: mongoUri, tunnel: tunnelConfig })
+        : mongoUri;
+
       // 1. Encrypt client-side
-      const { encrypted, salt, iv } = await encryptWithPassword(mongoUri, masterPassword);
+      const { encrypted, salt, iv } = await encryptWithPassword(blob, masterPassword);
       
       // 2. Create password hash for future verification
       const pwHash = await hashPassword(masterPassword, salt);
@@ -194,9 +232,16 @@ export function VaultProvider({ children }) {
         localStorage.setItem('ssh_monitor_local_vault', JSON.stringify(vaultPayload));
       }
 
-      // 4. Keep decrypted URI in memory for this session
+      // 4. Keep decrypted URI + tunnel in memory for this session
       setDecryptedUri(mongoUri);
       sessionStorage.setItem('_vault_uri', mongoUri);
+      if (tunnelConfig && tunnelConfig.enabled) {
+        setDecryptedTunnel(tunnelConfig);
+        sessionStorage.setItem('_vault_tunnel', JSON.stringify(tunnelConfig));
+      } else {
+        setDecryptedTunnel(null);
+        sessionStorage.removeItem('_vault_tunnel');
+      }
       setVaultData(vaultPayload);
       setVaultStatus('unlocked');
 
@@ -244,7 +289,9 @@ export function VaultProvider({ children }) {
    */
   const lockVault = useCallback(() => {
     setDecryptedUri('');
+    setDecryptedTunnel(null);
     sessionStorage.removeItem('_vault_uri');
+    sessionStorage.removeItem('_vault_tunnel');
     if (vaultData?.isConfigured) {
       setVaultStatus('locked');
     }
@@ -287,6 +334,7 @@ export function VaultProvider({ children }) {
     <VaultContext.Provider value={{
       vaultStatus,     // 'loading' | 'no_auth' | 'setup' | 'locked' | 'unlocked'
       decryptedUri,    // Plain URI (only in memory when unlocked)
+      decryptedTunnel, // SSH tunnel config (only in memory when unlocked)
       error,           // Error message
       unlockVault,     // (masterPassword) => Promise<uri>
       setupVault,      // (mongoUri, masterPassword) => Promise<boolean>

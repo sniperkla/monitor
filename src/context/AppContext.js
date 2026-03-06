@@ -18,7 +18,8 @@ const initialState = {
   storageMode: 'db', // 'db', 'localstorage', 'manual'
   clipboard: null, // { file, action: 'copy' | 'cut', sourcePath, connectionId }
   dbConfig: {
-    uri: '', // Decrypted URI from vault (in memory only)
+    uri: '',    // Decrypted URI from vault (in memory only)
+    tunnel: null, // SSH tunnel config from vault (in memory only)
   },
   activeDatabaseBrowsers: [], // { id, connectionId, connectionName }
   standaloneDatabaseBrowsers: [], // Dedicated Database App
@@ -201,15 +202,18 @@ function reducer(state, action) {
 export function AppProvider({ children }) {
   const [state, dispatch] = useReducer(reducer, initialState);
   const { data: session } = useSession();
-  const { vaultStatus, decryptedUri } = useVault();
+  const { vaultStatus, decryptedUri, decryptedTunnel } = useVault();
 
   const apiFetch = useCallback(async (url, options = {}) => {
     const headers = { ...options.headers };
     if (state.dbConfig?.uri) {
       headers['x-mongodb-uri'] = state.dbConfig.uri;
     }
+    if (state.dbConfig?.tunnel?.enabled) {
+      headers['x-vault-tunnel'] = JSON.stringify(state.dbConfig.tunnel);
+    }
     return fetch(url, { ...options, headers, credentials: 'include' });
-  }, [state.dbConfig?.uri]);
+  }, [state.dbConfig?.uri, state.dbConfig?.tunnel]);
 
   const fetchConnections = useCallback(async () => {
     dispatch({ type: 'SET_LOADING', payload: true });
@@ -252,19 +256,19 @@ export function AppProvider({ children }) {
   useEffect(() => {
     if (vaultStatus === 'unlocked' && decryptedUri) {
       // Only update if different to prevent loops
-      if (decryptedUri !== state.dbConfig?.uri) {
-        dispatch({ 
-          type: 'SET_DB_CONFIG', 
-          payload: { uri: decryptedUri } 
+      if (decryptedUri !== state.dbConfig?.uri || decryptedTunnel !== state.dbConfig?.tunnel) {
+        dispatch({
+          type: 'SET_DB_CONFIG',
+          payload: { uri: decryptedUri, tunnel: decryptedTunnel || null },
         });
       }
     } else if (vaultStatus === 'no_auth') {
       // Not logged in and no vault — ensure config is empty
       if (state.dbConfig?.uri) {
-        dispatch({ type: 'SET_DB_CONFIG', payload: { uri: '' } });
+        dispatch({ type: 'SET_DB_CONFIG', payload: { uri: '', tunnel: null } });
       }
     }
-  }, [vaultStatus, decryptedUri]);
+  }, [vaultStatus, decryptedUri, decryptedTunnel]);
 
   // 3. Auto-refresh connections when DB Config changes
   useEffect(() => {

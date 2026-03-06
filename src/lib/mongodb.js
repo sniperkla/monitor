@@ -1,6 +1,7 @@
 import mongoose from "mongoose";
 import { headers } from "next/headers";
 import mysql from "mysql2/promise";
+import { createSSHTunnel, rewriteUriForTunnel, parseUriHostPort } from './sshTunnel.js';
 
 /**
  * Global is used here to maintain a cached connection across hot reloads
@@ -25,6 +26,21 @@ export async function getUriFromRequest() {
     if (clientUri) return clientUri;
   } catch (e) {}
   return process.env.MONGODB_URI;
+}
+
+/**
+ * Extracts SSH tunnel config from the x-vault-tunnel header.
+ * Returns null if no tunnel header is present.
+ */
+export async function getTunnelFromRequest() {
+  try {
+    const headersList = await headers();
+    const tunnelHeader = headersList.get('x-vault-tunnel');
+    if (tunnelHeader) {
+      return JSON.parse(tunnelHeader);
+    }
+  } catch (e) {}
+  return null;
 }
 
 /**
@@ -62,37 +78,67 @@ async function connectCenter(uri) {
 
 /**
  * Connects to a specific private URI and returns a separate connection.
- * Supports MongoDB and MySQL.
+ * Supports MongoDB, MySQL, and SSH-tunneled connections.
+ *
+ * @param {string} uri           Database URI
+ * @param {object|null} tunnelConfig  SSH tunnel config from x-vault-tunnel header
  */
-async function getDynamicConnection(uri) {
+async function getDynamicConnection(uri, tunnelConfig = null) {
   if (!uri) throw new Error("Database URI is missing.");
-  
-  if (connectionPool.has(uri)) {
-    const cachedConn = connectionPool.get(uri);
+
+  // Unique cache key: tunneled connections use a separate key per SSH host
+  const cacheKey = tunnelConfig?.enabled
+    ? `tunnel:${tunnelConfig.sshUser}@${tunnelConfig.sshHost}:${tunnelConfig.sshPort || 22}=>${uri}`
+    : uri;
+
+  if (connectionPool.has(cacheKey)) {
+    const cachedConn = connectionPool.get(cacheKey);
     // For Mongoose connections
     if (cachedConn.readyState && cachedConn.readyState === 1) return cachedConn;
     // For MySQL pools (simple check)
     if (cachedConn.pool && !cachedConn._closing) return cachedConn;
-    
-    connectionPool.delete(uri);
+    connectionPool.delete(cacheKey);
   }
 
-  if (uri.startsWith('mysql://')) {
-    const pool = mysql.createPool(uri);
-    const conn = { 
-      type: 'mysql', 
+  // Open SSH tunnel if requested
+  let connectUri = uri;
+  if (tunnelConfig?.enabled) {
+    const { remoteHost, remotePort } = parseUriHostPort(uri);
+    const localPort = await createSSHTunnel({
+      sshHost: tunnelConfig.sshHost,
+      sshPort: tunnelConfig.sshPort,
+      sshUser: tunnelConfig.sshUser,
+      sshAuth: tunnelConfig.sshAuth,
+      sshPassword: tunnelConfig.sshPassword,
+      sshPrivateKey: tunnelConfig.sshPrivateKey,
+      sshPassphrase: tunnelConfig.sshPassphrase,
+      remoteHost,
+      remotePort,
+    });
+    connectUri = rewriteUriForTunnel(uri, localPort);
+    console.log(`🔒 [Vault Tunnel] ${tunnelConfig.sshUser}@${tunnelConfig.sshHost} → ${remoteHost}:${remotePort} (local :${localPort})`);
+  }
+
+  if (connectUri.startsWith('mysql://')) {
+    const pool = mysql.createPool(connectUri);
+    const conn = {
+      type: 'mysql',
       pool,
-      // Helper to mimic mongoose query interface roughly
-      query: (sql, params) => pool.execute(sql, params)
+      query: (sql, params) => pool.execute(sql, params),
     };
-    connectionPool.set(uri, conn);
+    connectionPool.set(cacheKey, conn);
     return conn;
   }
 
   // Default to MongoDB
-  const opts = { bufferCommands: false, serverSelectionTimeoutMS: 5000 };
-  const conn = await mongoose.createConnection(uri, opts).asPromise();
-  connectionPool.set(uri, conn);
+  const opts = {
+    bufferCommands: false,
+    serverSelectionTimeoutMS: 5000,
+    // Required when connecting via tunnel to avoid SRV lookup
+    ...(tunnelConfig?.enabled ? { directConnection: true } : {}),
+  };
+  const conn = await mongoose.createConnection(connectUri, opts).asPromise();
+  connectionPool.set(cacheKey, conn);
   return conn;
 }
 
@@ -103,14 +149,18 @@ async function getDynamicConnection(uri) {
  */
 async function connectDB(uri = null, isCenter = false) {
   const targetUri = uri || (await getUriFromRequest());
-  
+
   // If this is the center DB (User storage), use the default connection
   if (isCenter || targetUri === process.env.MONGODB_URI) {
     return connectCenter(targetUri);
   }
 
+  // When URI came from request headers, also check for SSH tunnel config.
+  // When URI was provided explicitly (e.g., internal server calls), skip tunnel.
+  const tunnelConfig = uri ? null : await getTunnelFromRequest();
+
   // Otherwise, use a separate pool connection for tenant isolation
-  return getDynamicConnection(targetUri);
+  return getDynamicConnection(targetUri, tunnelConfig);
 }
 
 export default connectDB;

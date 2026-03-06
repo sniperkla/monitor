@@ -8,7 +8,7 @@ import {
   Lock, Unlock, Shield, Key, Eye, EyeOff, 
   Mail, AlertTriangle, CheckCircle, Loader, 
   Database, ArrowRight, RefreshCw, Zap,
-  HelpCircle, ChevronDown, ChevronUp, Monitor
+  HelpCircle, ChevronDown, ChevronUp, Monitor, Network
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useTranslation } from 'react-i18next';
@@ -52,6 +52,16 @@ export default function MasterPasswordModal() {
   const [recoveryEmail, setRecoveryEmail] = useState('');
   const [shakeKey, setShakeKey] = useState(0);
   const [faqOpen, setFaqOpen] = useState(null); // which FAQ index is open
+
+  // SSH Tunnel state (for vault setup)
+  const [tunnelEnabled, setTunnelEnabled] = useState(false);
+  const [tunnelHost, setTunnelHost] = useState('');
+  const [tunnelPort, setTunnelPort] = useState(22);
+  const [tunnelUser, setTunnelUser] = useState('');
+  const [tunnelAuth, setTunnelAuth] = useState('password');
+  const [tunnelPassword, setTunnelPassword] = useState('');
+  const [tunnelKey, setTunnelKey] = useState('');
+  const [tunnelPassphrase, setTunnelPassphrase] = useState('');
 
   const inputRef = useRef(null);
 
@@ -128,12 +138,25 @@ export default function MasterPasswordModal() {
       return;
     }
 
+    // Build tunnel config (only when enabled and host is provided)
+    const tunnelConfig = tunnelEnabled && tunnelHost.trim() ? {
+      enabled: true,
+      sshHost: tunnelHost.trim(),
+      sshPort: Number(tunnelPort) || 22,
+      sshUser: tunnelUser.trim(),
+      sshAuth: tunnelAuth,
+      sshPassword: tunnelAuth === 'password' ? tunnelPassword : undefined,
+      sshPrivateKey: tunnelAuth === 'privateKey' ? tunnelKey : undefined,
+      sshPassphrase: tunnelAuth === 'privateKey' ? tunnelPassphrase : undefined,
+    } : null;
+
     setLoading(true);
     try {
-      // First test the URI
-      const testRes = await fetch('/api/connections', {
-        headers: { 'x-mongodb-uri': mongoUri.trim() }
-      });
+      // First test the URI (with tunnel if configured)
+      const testHeaders = { 'x-mongodb-uri': uri };
+      if (tunnelConfig) testHeaders['x-vault-tunnel'] = JSON.stringify(tunnelConfig);
+
+      const testRes = await fetch('/api/connections', { headers: testHeaders });
       const testData = await testRes.json();
       if (!testData.success) {
         setError('Could not connect to the database. Please check the URI.');
@@ -141,7 +164,7 @@ export default function MasterPasswordModal() {
         return;
       }
 
-      await setupVault(mongoUri.trim(), masterPassword);
+      await setupVault(uri, masterPassword, tunnelConfig);
       addNotification({ title: 'Success', message: '🔐 Vault created! Your data is now encrypted.', type: 'success' });
     } catch (err) {
       setError(err.message || 'Setup failed');
@@ -475,6 +498,120 @@ export default function MasterPasswordModal() {
               </button>
             ))}
           </div>
+        </div>
+
+        {/* SSH Tunnel */}
+        <div className="space-y-3">
+          <button
+            type="button"
+            onClick={() => setTunnelEnabled(v => !v)}
+            className="w-full flex items-center justify-between px-4 py-3 bg-[var(--bg-secondary)]/60 hover:bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-xl transition-all"
+          >
+            <div className="flex items-center gap-3">
+              <Network size={14} className={tunnelEnabled ? 'text-amber-400' : 'text-[var(--text-muted)]'} />
+              <div className="text-left">
+                <span className="block text-xs font-bold text-[var(--text-secondary)]">SSH Tunnel</span>
+                <span className="block text-[10px] text-[var(--text-muted)]">Connect to localhost DB on your own machine</span>
+              </div>
+            </div>
+            <div className={`w-9 h-5 rounded-full p-0.5 transition-colors flex items-center ${
+              tunnelEnabled ? 'bg-amber-500' : 'bg-[var(--bg-card)]'
+            }`}>
+              <div className={`w-4 h-4 rounded-full bg-white shadow-md transition-transform ${
+                tunnelEnabled ? 'translate-x-4' : 'translate-x-0'
+              }`} />
+            </div>
+          </button>
+
+          <AnimatePresence>
+            {tunnelEnabled && (
+              <motion.div
+                initial={{ height: 0, opacity: 0 }}
+                animate={{ height: 'auto', opacity: 1 }}
+                exit={{ height: 0, opacity: 0 }}
+                transition={{ duration: 0.25 }}
+                className="overflow-hidden"
+              >
+                <div className="space-y-3 p-4 bg-amber-500/5 border border-amber-500/20 rounded-xl">
+                  <p className="text-[10px] text-amber-400/70 font-medium">
+                    ⚡ SSH into your machine first, then this app will tunnel to your local DB.
+                  </p>
+
+                  {/* SSH Host + Port */}
+                  <div className="grid grid-cols-3 gap-2">
+                    <input
+                      type="text"
+                      value={tunnelHost}
+                      onChange={e => setTunnelHost(e.target.value)}
+                      placeholder="SSH Host (e.g. 100.64.x.x)"
+                      className="col-span-2 px-3 py-2 bg-[var(--bg-primary)]/80 border border-[var(--border-color)] rounded-lg text-[var(--text-primary)] placeholder-[var(--text-muted)] focus:outline-none text-xs font-mono"
+                    />
+                    <input
+                      type="number"
+                      value={tunnelPort}
+                      onChange={e => setTunnelPort(e.target.value)}
+                      placeholder="22"
+                      className="px-3 py-2 bg-[var(--bg-primary)]/80 border border-[var(--border-color)] rounded-lg text-[var(--text-primary)] placeholder-[var(--text-muted)] focus:outline-none text-xs font-mono"
+                    />
+                  </div>
+
+                  {/* SSH Username */}
+                  <input
+                    type="text"
+                    value={tunnelUser}
+                    onChange={e => setTunnelUser(e.target.value)}
+                    placeholder="SSH Username"
+                    className="w-full px-3 py-2 bg-[var(--bg-primary)]/80 border border-[var(--border-color)] rounded-lg text-[var(--text-primary)] placeholder-[var(--text-muted)] focus:outline-none text-xs font-mono"
+                  />
+
+                  {/* Auth type toggle */}
+                  <div className="flex gap-2">
+                    {['password', 'privateKey'].map(a => (
+                      <button
+                        key={a}
+                        type="button"
+                        onClick={() => setTunnelAuth(a)}
+                        className={`flex-1 py-1.5 rounded-lg text-[10px] font-bold transition-all border ${
+                          tunnelAuth === a
+                            ? 'bg-amber-500/20 border-amber-500/40 text-amber-400'
+                            : 'bg-[var(--bg-secondary)] border-[var(--border-color)] text-[var(--text-muted)] hover:text-[var(--text-secondary)]'
+                        }`}
+                      >
+                        {a === 'password' ? '🔑 Password' : '🗂️ Private Key'}
+                      </button>
+                    ))}
+                  </div>
+
+                  {tunnelAuth === 'password' ? (
+                    <input
+                      type="password"
+                      value={tunnelPassword}
+                      onChange={e => setTunnelPassword(e.target.value)}
+                      placeholder="SSH Password"
+                      className="w-full px-3 py-2 bg-[var(--bg-primary)]/80 border border-[var(--border-color)] rounded-lg text-[var(--text-primary)] placeholder-[var(--text-muted)] focus:outline-none text-xs"
+                    />
+                  ) : (
+                    <div className="space-y-2">
+                      <textarea
+                        value={tunnelKey}
+                        onChange={e => setTunnelKey(e.target.value)}
+                        placeholder="-----BEGIN RSA PRIVATE KEY-----\n..."
+                        rows={3}
+                        className="w-full px-3 py-2 bg-[var(--bg-primary)]/80 border border-[var(--border-color)] rounded-lg text-[var(--text-primary)] placeholder-[var(--text-muted)] focus:outline-none text-[10px] font-mono resize-none"
+                      />
+                      <input
+                        type="password"
+                        value={tunnelPassphrase}
+                        onChange={e => setTunnelPassphrase(e.target.value)}
+                        placeholder="Passphrase (optional)"
+                        className="w-full px-3 py-2 bg-[var(--bg-primary)]/80 border border-[var(--border-color)] rounded-lg text-[var(--text-primary)] placeholder-[var(--text-muted)] focus:outline-none text-xs"
+                      />
+                    </div>
+                  )}
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
         </div>
 
         {/* Master Password */}
