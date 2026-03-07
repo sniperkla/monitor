@@ -10,18 +10,6 @@ export const authOptions = {
     }),
   ],
   callbacks: {
-    async jwt({ token, account }) {
-      // Store MongoDB user._id in the JWT so API routes and relay lookups
-      // all use the same key. Only query DB on first sign-in or if missing.
-      if (account || !token.userId) {
-        try {
-          await connectDB(process.env.MONGODB_URI, true);
-          const dbUser = await User.findOne({ email: token.email });
-          if (dbUser) token.userId = dbUser._id.toString();
-        } catch {}
-      }
-      return token;
-    },
     async signIn({ user, account, profile }) {
       if (account.provider === "google") {
         try {

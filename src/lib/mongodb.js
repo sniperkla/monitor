@@ -66,7 +66,7 @@ async function getActiveRelayInfo(uri) {
       req: { headers: { cookie }, cookies },
       secret: process.env.NEXTAUTH_SECRET,
     });
-    const relayKey = token.userId || token.sub;
+    const relayKey = token.sub;
     if (!relayKey) return null;
 
     const relay = global.__activeRelays.get(relayKey);

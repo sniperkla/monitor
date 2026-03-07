@@ -1,5 +1,4 @@
-import { getServerSession } from 'next-auth/next';
-import { authOptions } from '@/lib/auth';
+import { getToken } from 'next-auth/jwt';
 import { randomUUID } from 'crypto';
 
 const TOKEN_TTL = 365 * 24 * 60 * 60 * 1000; // 1 year — relay is a permanent background service
@@ -7,28 +6,29 @@ const TOKEN_TTL = 365 * 24 * 60 * 60 * 1000; // 1 year — relay is a permanent 
 /**
  * POST /api/relay/token — generate a relay token for the current user
  */
-export async function POST() {
+export async function POST(request) {
   try {
-    const session = await getServerSession(authOptions);
-    if (!session?.user?.id) {
+    const token = await getToken({ req: request, secret: process.env.NEXTAUTH_SECRET });
+    if (!token?.sub) {
       return Response.json({ error: 'Unauthorized' }, { status: 401 });
     }
+    const userId = token.sub; // Google's stable OAuth sub — no DB call needed
 
     // Revoke any existing tokens for this user
     global.__relayTokens = global.__relayTokens || new Map();
     for (const [t, e] of global.__relayTokens) {
-      if (e.userId === session.user.id) global.__relayTokens.delete(t);
+      if (e.userId === userId) global.__relayTokens.delete(t);
     }
 
-    const token = randomUUID();
-    global.__relayTokens.set(token, {
-      userId: String(session.user.id),
+    const relayToken = randomUUID();
+    global.__relayTokens.set(relayToken, {
+      userId,
       expiresAt: Date.now() + TOKEN_TTL,
     });
 
     // Persist tokens to disk so relay survives server restarts
     if (typeof global.__persistRelayTokens === 'function') global.__persistRelayTokens();
-    return Response.json({ success: true, token });
+    return Response.json({ success: true, token: relayToken });
   } catch (err) {
     return Response.json({ error: err.message }, { status: 500 });
   }
@@ -37,14 +37,14 @@ export async function POST() {
 /**
  * GET /api/relay/token — check if relay is currently connected
  */
-export async function GET() {
+export async function GET(request) {
   try {
-    const session = await getServerSession(authOptions);
-    if (!session?.user?.id) {
+    const token = await getToken({ req: request, secret: process.env.NEXTAUTH_SECRET });
+    if (!token?.sub) {
       return Response.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
-    const relay = global.__activeRelays?.get(String(session.user.id));
+    const relay = global.__activeRelays?.get(token.sub);
     return Response.json({
       success: true,
       connected: !!relay,
@@ -58,24 +58,25 @@ export async function GET() {
 /**
  * DELETE /api/relay/token — revoke token and disconnect relay
  */
-export async function DELETE() {
+export async function DELETE(request) {
   try {
-    const session = await getServerSession(authOptions);
-    if (!session?.user?.id) {
+    const token = await getToken({ req: request, secret: process.env.NEXTAUTH_SECRET });
+    if (!token?.sub) {
       return Response.json({ error: 'Unauthorized' }, { status: 401 });
     }
+    const userId = token.sub;
 
     // Revoke tokens
     global.__relayTokens = global.__relayTokens || new Map();
     for (const [t, e] of global.__relayTokens) {
-      if (e.userId === session.user.id) global.__relayTokens.delete(t);
+      if (e.userId === userId) global.__relayTokens.delete(t);
     }
 
     // Close active relay if present
-    const relay = global.__activeRelays?.get(String(session.user.id));
+    const relay = global.__activeRelays?.get(userId);
     if (relay) {
       try { relay.netServer?.close(); } catch {}
-      global.__activeRelays.delete(String(session.user.id));
+      global.__activeRelays.delete(userId);
     }
 
     if (typeof global.__persistRelayTokens === 'function') global.__persistRelayTokens();
