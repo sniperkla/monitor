@@ -59,6 +59,8 @@ export default function SettingsApp({ initialTab }) {
   const [relayConnected, setRelayConnected] = useState(false);
   const [relayLoading, setRelayLoading] = useState(false);
   const [relayModalOpen, setRelayModalOpen] = useState(false);
+  const [relayWaiting, setRelayWaiting] = useState(false);
+  const [relayInstallSuccess, setRelayInstallSuccess] = useState(false);
 
   // Detect PWA (standalone) mode
   const isPWA = useMemo(() =>
@@ -97,9 +99,12 @@ export default function SettingsApp({ initialTab }) {
     }
   }, [activeTab, vaultStatus, decryptedUri]);
 
-  // Poll relay status every 5 s when on the database tab
+  // Poll relay status — every 5s on database tab, every 2s while install wizard is waiting
   useEffect(() => {
-    if (activeTab !== 'database' || !session) return;
+    const isOnDbTab = activeTab === 'database' && session;
+    const isWaiting = relayModalOpen && relayWaiting;
+    if (!isOnDbTab && !isWaiting) return;
+    const interval = isWaiting ? 2000 : 5000;
     const poll = async () => {
       try {
         const res = await fetch('/api/relay/token');
@@ -108,9 +113,26 @@ export default function SettingsApp({ initialTab }) {
       } catch {}
     };
     poll();
-    const id = setInterval(poll, 5000);
+    const id = setInterval(poll, interval);
     return () => clearInterval(id);
-  }, [activeTab, session]);
+  }, [activeTab, session, relayModalOpen, relayWaiting]);
+
+  // Auto-close modal when relay connects during install wizard
+  useEffect(() => {
+    if (!relayModalOpen) {
+      setRelayWaiting(false);
+      setRelayInstallSuccess(false);
+      return;
+    }
+    if (relayWaiting && relayConnected && !relayInstallSuccess) {
+      setRelayInstallSuccess(true);
+      const timer = setTimeout(() => {
+        setRelayModalOpen(false);
+        addNotification({ title: 'Relay Connected!', message: 'Your local relay agent is now running.', type: 'success' });
+      }, 2500);
+      return () => clearTimeout(timer);
+    }
+  }, [relayConnected, relayWaiting, relayModalOpen, relayInstallSuccess]);
 
   const handleGenerateRelayToken = async () => {
     setRelayLoading(true);
@@ -1699,7 +1721,30 @@ export default function SettingsApp({ initialTab }) {
                 </button>
               </div>
 
-              <div className="p-5 space-y-4 overflow-y-auto max-h-[calc(100vh-12rem)]">
+              <div className="p-5 overflow-y-auto max-h-[calc(100vh-12rem)]">
+              {relayInstallSuccess ? (
+                <div className="flex flex-col items-center justify-center py-10 text-center gap-5">
+                  <motion.div
+                    initial={{ scale: 0, opacity: 0 }}
+                    animate={{ scale: 1, opacity: 1 }}
+                    transition={{ type: 'spring', damping: 14, stiffness: 200 }}
+                    className="w-20 h-20 rounded-full bg-emerald-500/20 border-2 border-emerald-500/30 flex items-center justify-center"
+                  >
+                    <CheckCircle size={38} className="text-emerald-400" />
+                  </motion.div>
+                  <motion.div
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ delay: 0.25 }}
+                    className="space-y-1"
+                  >
+                    <p className="text-base font-bold text-[var(--text-primary)]">Relay Connected!</p>
+                    <p className="text-xs text-emerald-400">Agent is running on your machine</p>
+                    <p className="text-[10px] text-[var(--text-muted)] pt-1">Closing automatically…</p>
+                  </motion.div>
+                </div>
+              ) : (
+              <div className="space-y-4">
                 {/* How-it-works banner */}
                 <div className="flex gap-2.5 p-3 rounded-xl bg-emerald-500/[0.07] border border-emerald-500/15 text-[10px] text-[var(--text-muted)] leading-relaxed">
                   <Info size={12} className="shrink-0 text-emerald-400 mt-0.5" />
@@ -1726,6 +1771,7 @@ export default function SettingsApp({ initialTab }) {
                         <button
                           onClick={() => {
                             navigator.clipboard.writeText(getMacOneLiner('install'));
+                            setRelayWaiting(true);
                             addNotification({ title: t('settings_ui.relay.toasts.copied'), message: t('settings_ui.relay.toasts.copyMsg'), type: 'success' });
                           }}
                           className="absolute right-2 top-2 p-1.5 hover:bg-white/10 rounded-lg transition-colors"
@@ -1737,6 +1783,7 @@ export default function SettingsApp({ initialTab }) {
                       <button
                         onClick={() => {
                           navigator.clipboard.writeText(getMacOneLiner('install'));
+                          setRelayWaiting(true);
                           addNotification({ title: t('settings_ui.relay.toasts.copied'), message: t('settings_ui.relay.toasts.openPasteInstall'), type: 'success' });
                         }}
                         className="w-full flex items-center justify-center gap-2 py-2.5 bg-amber-500 hover:bg-amber-600 active:scale-[0.98] rounded-xl text-white font-bold text-sm transition-all shadow-lg shadow-amber-500/20"
@@ -1863,6 +1910,23 @@ export default function SettingsApp({ initialTab }) {
                 <p className="text-[9px] text-center text-[var(--text-muted)]">
                   {t('settings_ui.relay.osMeta.unknown')}
                 </p>
+
+                {/* Waiting indicator — shown after user copies the install command */}
+                <AnimatePresence>
+                  {relayWaiting && (
+                    <motion.div
+                      initial={{ opacity: 0, y: 6 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0, y: 6 }}
+                      className="flex items-center gap-2.5 p-3 rounded-xl bg-amber-500/[0.07] border border-amber-500/20 text-[10px] text-[var(--text-muted)]"
+                    >
+                      <Loader size={12} className="shrink-0 text-amber-400 animate-spin" />
+                      <span>Waiting for relay agent to connect… run the command above in your Terminal, then this window will close automatically.</span>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+              </div>
+              )}
               </div>
             </motion.div>
           </motion.div>
