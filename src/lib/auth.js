@@ -10,16 +10,16 @@ export const authOptions = {
     }),
   ],
   callbacks: {
+    /**
+     * signIn — runs once when the user authenticates with Google.
+     * Creates or syncs the user record in the center DB.
+     */
     async signIn({ user, account, profile }) {
       if (account.provider === "google") {
         try {
-          // Connect to DB Center using the global default connection
           await connectDB(process.env.MONGODB_URI, true);
-          
           let existingUser = await User.findOne({ email: user.email });
-          
           const profileImage = profile.picture || user.image;
-
           if (!existingUser) {
             existingUser = await User.create({
               name: user.name,
@@ -30,7 +30,6 @@ export const authOptions = {
             });
             console.log("🆕 New User created in DB Center:", user.email);
           } else {
-            // Update profile info (captures updated image/name from Google)
             existingUser.name = user.name;
             existingUser.image = profileImage;
             await existingUser.save();
@@ -44,21 +43,40 @@ export const authOptions = {
       }
       return true;
     },
-    async session({ session, token }) {
-      try {
-        await connectDB(process.env.MONGODB_URI, true);
-        const dbUser = await User.findOne({ email: session.user.email });
-        if (dbUser) {
-          session.user.id = dbUser._id;
-          session.user.name = dbUser.name;
-          session.user.image = dbUser.image;
-          session.user.role = dbUser.role || 'user';
-          session.user.vaultConfigured = dbUser.vault?.isConfigured || false;
-          session.user.settings = dbUser.settings;
+
+    /**
+     * jwt — runs when the JWT is created or refreshed.
+     * DB call ONLY on first sign-in (account is present). 
+     * All subsequent calls just return the cached token — zero DB queries.
+     */
+    async jwt({ token, account }) {
+      if (account) {
+        // First sign-in: fetch MongoDB _id and role once, store in the JWT.
+        try {
+          await connectDB(process.env.MONGODB_URI, true);
+          const dbUser = await User.findOne({ email: token.email }).lean();
+          if (dbUser) {
+            token.dbId           = dbUser._id.toString();
+            token.role           = dbUser.role || 'user';
+            token.vaultConfigured = dbUser.vault?.isConfigured || false;
+            token.settings       = dbUser.settings || null;
+          }
+        } catch (e) {
+          console.error("JWT callback DB error:", e);
         }
-      } catch (e) {
-        console.error("Session callback error:", e);
       }
+      return token;
+    },
+
+    /**
+     * session — called on every authenticated request.
+     * Reads from the JWT — NO database queries here.
+     */
+    async session({ session, token }) {
+      session.user.id             = token.dbId || token.sub;
+      session.user.role           = token.role || 'user';
+      session.user.vaultConfigured = token.vaultConfigured || false;
+      session.user.settings       = token.settings || null;
       return session;
     },
   },
