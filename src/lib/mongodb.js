@@ -1,6 +1,7 @@
 import mongoose from "mongoose";
 import { headers } from "next/headers";
 import mysql from "mysql2/promise";
+import { getToken } from 'next-auth/jwt';
 import { createSSHTunnel, rewriteUriForTunnel, parseUriHostPort } from './sshTunnel.js';
 
 /**
@@ -44,6 +45,44 @@ export async function getTunnelFromRequest() {
 }
 
 /**
+ * Checks whether the current user has an active Local Relay Agent connected
+ * and the URI targets localhost. Returns { port, userId } or null.
+ * Updates the relay's targetHost/targetPort so the TCP proxy knows where to forward.
+ */
+async function getActiveRelayInfo(uri) {
+  if (!global.__activeRelays?.size) return null;
+  if (!/localhost|127\.0\.0\.1/.test(uri)) return null;
+
+  try {
+    const h = await headers();
+    const cookie = h.get('cookie') || '';
+    const cookies = Object.fromEntries(
+      cookie.split(';').map(c => c.trim()).filter(Boolean).map(c => {
+        const i = c.indexOf('=');
+        return [c.slice(0, i).trim(), decodeURIComponent(c.slice(i + 1))];
+      })
+    );
+    const token = await getToken({
+      req: { headers: { cookie }, cookies },
+      secret: process.env.NEXTAUTH_SECRET,
+    });
+    if (!token?.sub) return null;
+
+    const relay = global.__activeRelays.get(token.sub);
+    if (!relay) return null;
+
+    // Update relay target so the TCP proxy knows what to forward to
+    const { remoteHost, remotePort } = parseUriHostPort(uri);
+    relay.targetHost = remoteHost;
+    relay.targetPort = remotePort;
+
+    return { port: relay.localPort, userId: token.sub };
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Connects to the primary "Center" database using the default mongoose connection.
  */
 async function connectCenter(uri) {
@@ -78,7 +117,7 @@ async function connectCenter(uri) {
 
 /**
  * Connects to a specific private URI and returns a separate connection.
- * Supports MongoDB, MySQL, and SSH-tunneled connections.
+ * Supports MongoDB, MySQL, SSH-tunneled, and Local Relay connections.
  *
  * @param {string} uri           Database URI
  * @param {object|null} tunnelConfig  SSH tunnel config from x-vault-tunnel header
@@ -86,10 +125,23 @@ async function connectCenter(uri) {
 async function getDynamicConnection(uri, tunnelConfig = null) {
   if (!uri) throw new Error("Database URI is missing.");
 
-  // Unique cache key: tunneled connections use a separate key per SSH host
+  let connectUri = uri;
+  let cachePrefix = '';
+
+  // 1. Try Local Relay Agent (free, no SSH/Tailscale needed)
+  if (!tunnelConfig?.enabled) {
+    const relayInfo = await getActiveRelayInfo(uri);
+    if (relayInfo) {
+      connectUri = rewriteUriForTunnel(uri, relayInfo.port);
+      cachePrefix = `relay:${relayInfo.userId}:`;
+      console.log(`🔗 [Local Relay] ${uri} → 127.0.0.1:${relayInfo.port}`);
+    }
+  }
+
+  // Unique cache key: relay & tunnel connections are keyed separately
   const cacheKey = tunnelConfig?.enabled
     ? `tunnel:${tunnelConfig.sshUser}@${tunnelConfig.sshHost}:${tunnelConfig.sshPort || 22}=>${uri}`
-    : uri;
+    : `${cachePrefix}${uri}`;
 
   if (connectionPool.has(cacheKey)) {
     const cachedConn = connectionPool.get(cacheKey);
@@ -100,9 +152,8 @@ async function getDynamicConnection(uri, tunnelConfig = null) {
     connectionPool.delete(cacheKey);
   }
 
-  // Open SSH tunnel if requested
-  let connectUri = uri;
-  if (tunnelConfig?.enabled) {
+  // 2. Open SSH tunnel if requested (and no relay was found)
+  if (tunnelConfig?.enabled && connectUri === uri) {
     const { remoteHost, remotePort } = parseUriHostPort(uri);
     const localPort = await createSSHTunnel({
       sshHost: tunnelConfig.sshHost,
@@ -131,11 +182,12 @@ async function getDynamicConnection(uri, tunnelConfig = null) {
   }
 
   // Default to MongoDB
+  const useTunnel = tunnelConfig?.enabled || cachePrefix.startsWith('relay:');
   const opts = {
     bufferCommands: false,
     serverSelectionTimeoutMS: 5000,
-    // Required when connecting via tunnel to avoid SRV lookup
-    ...(tunnelConfig?.enabled ? { directConnection: true } : {}),
+    // directConnection required when going through a local proxy/tunnel
+    ...(useTunnel ? { directConnection: true } : {}),
   };
   const conn = await mongoose.createConnection(connectUri, opts).asPromise();
   connectionPool.set(cacheKey, conn);

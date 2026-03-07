@@ -40,6 +40,12 @@ export async function POST(request, { params }) {
 
     let result;
     if (connection.type === 'database') {
+      // Attach userId so dbPool can route localhost connections via relay
+      try {
+        const { getToken } = await import('next-auth/jwt');
+        const token = await getToken({ req: request, secret: process.env.NEXTAUTH_SECRET });
+        if (token?.sub) connection = { ...connection, _userId: token.sub };
+      } catch (_) {}
       result = await testDatabaseConnection(connection);
     } else {
       // Prepare SSH config

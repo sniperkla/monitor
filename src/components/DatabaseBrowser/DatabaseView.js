@@ -96,8 +96,8 @@ export default function DatabaseView({ connection, onClose }) {
     // Mongo action object (delete/update/insert)
     if (connection.dbProvider === 'mongodb' && pendingAction.mongoAction) {
         const { confirmed, doBackup } = await showConfirm(
-            'DANGEROUS ACTION DETECTED',
-            `This action will MODIFY or DELETE data from your database. There is no UNDO.\n\nAction: ${pendingAction.mongoAction.action}\nCollection: ${pendingAction.mongoAction.collection}`,
+            t('database.ai.dangerTitle'),
+            `${t('database.ai.dangerDesc')}\n\n${t('database.ai.action')}: ${pendingAction.mongoAction.action}\n${t('database.ai.collection')}: ${pendingAction.mongoAction.collection}`,
             'danger',
             true // Show backup checkbox
         );
@@ -276,7 +276,7 @@ export default function DatabaseView({ connection, onClose }) {
             localStorage.setItem('ssh_monitor_connections', JSON.stringify(updated));
         }
       } else {
-        setError(resData.error || 'Failed to fetch schema');
+        setError(resData.error || t('database.notifications.fetchFail'));
       }
     } catch (err) {
       setError(err.message);
@@ -569,11 +569,12 @@ export default function DatabaseView({ connection, onClose }) {
                     mockRows,
                     changes,
                 });
-
-                addNotification({
-                    title: 'Action Preview',
-                    message: `Previewing ${isDelete ? 'DELETION' : (isUpdate ? 'UPDATE' : 'INSERTION')}. ${mockRows.length} mock rows ready.`,
-                    type: 'info',
+                // Add preview notification
+                const actionLabel = isDelete ? t('database.ai.deletion') : (isUpdate ? t('database.ai.update') : t('database.ai.insertion'));
+                addNotification({ 
+                    title: t('database.notifications.actionPreviewTitle'),
+                    message: t('database.notifications.actionPreviewMsg', { action: actionLabel, count: mockRows.length }),
+                    type: 'info' 
                 });
 
                 // Add to history if not duplicate
@@ -690,10 +691,11 @@ export default function DatabaseView({ connection, onClose }) {
                     changes: updateChanges,
                     mockRows: Array.isArray(mockRow) ? mockRow : (mockRow ? [mockRow] : [])
                 });
-
+                // Add preview notification
+                const actionLabel = deleteMatch ? t('database.ai.deletion') : (updateMatch ? t('database.ai.update') : t('database.ai.insertion'));
                 addNotification({ 
-                    title: 'Action Preview', 
-                    message: `Previewing ${deleteMatch ? 'DELETION' : (updateMatch ? 'UPDATE' : 'INSERTION')}...`, 
+                    title: t('database.notifications.actionPreviewTitle'), 
+                    message: t('database.notifications.actionPreviewMsg', { action: actionLabel, count: mockRow ? mockRow.length : '...' }), 
                     type: 'info' 
                 });
             } else {

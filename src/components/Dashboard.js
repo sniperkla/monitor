@@ -449,7 +449,7 @@ function ConnectionCard({ conn, onClick }) {
         </div>
         <div className="min-w-0 flex-1">
           <h3 className="font-bold text-[var(--text-primary)] truncate text-base tracking-tight">{conn.name}</h3>
-          <p className="text-xs text-[var(--text-muted)] font-mono truncate">{conn.host || conn.database || 'Connection'}</p>
+          <p className="text-xs text-[var(--text-muted)] font-mono truncate">{conn.host || conn.database || t('common.untitled')}</p>
         </div>
       </div>
 

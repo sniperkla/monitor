@@ -1,11 +1,11 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { 
   Palette, Image as ImageIcon, Monitor, Layout, Bell, Shield, Info, 
   Database, CheckCircle, AlertCircle, RefreshCw, Zap, Wifi, WifiOff, 
   Loader, Trash2, Lock, Unlock, Key, Mail, Code, Volume2, Sun, Moon, Cpu,
-  Search, Terminal
+  Search, Terminal, Network, Download, Copy, X, CheckCheck, Sparkles
 } from 'lucide-react';
 import { useOS } from '@/context/OSContext';
 import { useApp } from '@/context/AppContext';
@@ -54,6 +54,34 @@ export default function SettingsApp({ initialTab }) {
   const [customUrlInput, setCustomUrlInput] = useState('');
   const [isSidebarOpen, setIsSidebarOpen] = useState(false); // For mobile/small window view
 
+  // Local Relay Agent state
+  const [relayToken, setRelayToken] = useState(null);
+  const [relayConnected, setRelayConnected] = useState(false);
+  const [relayLoading, setRelayLoading] = useState(false);
+  const [relayModalOpen, setRelayModalOpen] = useState(false);
+
+  // Detect PWA (standalone) mode
+  const isPWA = useMemo(() =>
+    typeof window !== 'undefined' && window.matchMedia('(display-mode: standalone)').matches, []);
+
+  // Auto-detect user's OS from browser (for relay install hint)
+  const detectedOS = useMemo(() => {
+    if (typeof navigator === 'undefined') return 'unknown';
+    const ua  = navigator.userAgent || '';
+    const plt = (navigator.userAgentData?.platform || navigator.platform || '').toLowerCase();
+    if (/win/i.test(plt) || /windows/i.test(ua))  return 'windows';
+    if (/mac/i.test(plt) || /mac os/i.test(ua))   return 'macos';
+    if (/linux/i.test(plt) || /linux/i.test(ua))  return 'linux';
+    return 'unknown';
+  }, []);
+
+  const osMeta = useMemo(() => ({
+    macos:   { label: 'macOS',   badge: 'bg-blue-500/10 text-blue-400 border-blue-500/20',   detail: t('settings_ui.relay.osMeta.macos') },
+    linux:   { label: 'Linux',   badge: 'bg-green-500/10 text-green-400 border-green-500/20', detail: t('settings_ui.relay.osMeta.linux') },
+    windows: { label: 'Windows', badge: 'bg-sky-500/10 text-sky-400 border-sky-500/20',       detail: t('settings_ui.relay.osMeta.windows') },
+    unknown: { label: 'Unknown', badge: 'bg-[var(--bg-tertiary)] text-[var(--text-muted)]',   detail: t('settings_ui.relay.osMeta.unknown') },
+  }), [t]);
+
   const updateTerminalTheme = (key, value) => {
     setTerminalSettings({
       theme: {
@@ -69,9 +97,111 @@ export default function SettingsApp({ initialTab }) {
     }
   }, [activeTab, vaultStatus, decryptedUri]);
 
+  // Poll relay status every 5 s when on the database tab
+  useEffect(() => {
+    if (activeTab !== 'database' || !session) return;
+    const poll = async () => {
+      try {
+        const res = await fetch('/api/relay/token');
+        const data = await res.json();
+        if (data.success) setRelayConnected(data.connected);
+      } catch {}
+    };
+    poll();
+    const id = setInterval(poll, 5000);
+    return () => clearInterval(id);
+  }, [activeTab, session]);
+
+  const handleGenerateRelayToken = async () => {
+    setRelayLoading(true);
+    try {
+      const res = await fetch('/api/relay/token', { method: 'POST' });
+      const data = await res.json();
+      if (data.success) {
+        setRelayToken(data.token);
+        addNotification({ title: 'Token Created', message: 'Relay token generated. Run the command below.', type: 'success' });
+      }
+    } catch {
+      addNotification({ title: 'Error', message: 'Failed to generate token', type: 'error' });
+    }
+    setRelayLoading(false);
+  };
+
+  const handleRevokeRelayToken = async () => {
+    try {
+      await fetch('/api/relay/token', { method: 'DELETE' });
+      setRelayToken(null);
+      setRelayConnected(false);
+      addNotification({ title: 'Revoked', message: 'Relay token revoked.', type: 'info' });
+    } catch {}
+  };
+
+  // Generate & download a platform-specific install/uninstall script
+  const downloadInstallerScript = (mode) => {
+    const server = window.location.origin;
+    const scriptUrl = `${server}/local-relay.js`;
+    const installArgs = `--install --server ${server} --token ${relayToken}`;
+    const installCmd  = `node local-relay.js ${installArgs}`;
+    const uninstallCmd = `node local-relay.js --uninstall`;
+    const cmd = mode === 'install' ? installCmd : uninstallCmd;
+
+    let content, filename;
+    if (detectedOS === 'windows') {
+      content = [
+        '@echo off',
+        'setlocal',
+        `cd /d "%USERPROFILE%\\Downloads"`,
+        `if not exist local-relay.js (`,
+        `  echo Downloading local-relay.js...`,
+        `  curl -fsSL "${scriptUrl}" -o local-relay.js`,
+        `)`,
+        `echo Running: ${cmd}`,
+        cmd,
+        'echo.',
+        'echo Done! Press any key to close...',
+        'pause > nul',
+      ].join('\r\n');
+      filename = mode === 'install' ? 'relay-install.bat' : 'relay-uninstall.bat';
+    } else {
+      const lines = [
+        '#!/bin/bash',
+        'set -e',
+        'cd ~/Downloads',
+        `[ -f local-relay.js ] || { echo "Downloading local-relay.js..."; curl -fsSL "${scriptUrl}" -o local-relay.js; }`,
+        `echo "Running: ${cmd}"`,
+        cmd,
+        'echo ""',
+        'echo "Done!"',
+      ];
+      filename = mode === 'install' ? 'relay-install.sh' : 'relay-uninstall.sh';
+      content = lines.join('\n');
+    }
+
+    const blob = new Blob([content], { type: 'text/plain' });
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement('a');
+    a.href = url; a.download = filename; a.click();
+    URL.revokeObjectURL(url);
+    addNotification({ 
+      title: t('settings_ui.relay.toasts.downloaded'), 
+      message: t('settings_ui.relay.toasts.downloadMsg', { filename, mode: mode === 'install' ? t('settings_ui.relay.install').toLowerCase() : t('settings_ui.relay.uninstall').toLowerCase() }), 
+      type: 'success' 
+    });
+  };
+
+  // Self-contained one-liner for macOS/Linux (curl download + node run in one paste)
+  const getMacOneLiner = (mode) => {
+    const server = window.location.origin;
+    const scriptUrl = `${server}/local-relay.js`;
+    if (mode === 'uninstall') {
+      return `curl -fsSL "${scriptUrl}" -o /tmp/local-relay.js && node /tmp/local-relay.js --uninstall`;
+    }
+    return `curl -fsSL "${scriptUrl}" -o /tmp/local-relay.js && node /tmp/local-relay.js --install --server ${server} --token ${relayToken}`;
+  };
+
   const setVaultPreset = (uri) => {
     setVaultUri(uri);
-    addNotification({ title: 'Preset Applied', message: 'Localhost URI set', type: 'info' });
+    addNotification({ title: t('settings_ui.relay.toasts.presetApplied'), message: t('settings_ui.relay.toasts.presetMsg'), type: 'info' });
   };
 
   const fetchDbConfig = async () => {
@@ -854,14 +984,35 @@ export default function SettingsApp({ initialTab }) {
 
                     {/* Connected URI (masked) when unlocked */}
                     {vaultStatus === 'unlocked' && decryptedUri && (
-                      <div className="p-4 bg-[var(--bg-tertiary)] border border-[var(--border-color)] rounded-xl">
+                      <div className={`p-4 border rounded-xl ${
+                        /localhost|127\.0\.0\.1/.test(decryptedUri) && !relayConnected
+                          ? 'bg-amber-500/5 border-amber-500/30'
+                          : 'bg-[var(--bg-tertiary)] border-[var(--border-color)]'
+                      }`}>
                         <h3 className="text-xs font-semibold text-[var(--text-muted)] mb-2 flex items-center gap-2">
-                          <Database size={14} className="text-emerald-400" />
+                          <Database size={14} className={/localhost|127\.0\.0\.1/.test(decryptedUri) && !relayConnected ? 'text-amber-400' : 'text-emerald-400'} />
                           {t('settings_ui.db.activeDb')}
                         </h3>
-                        <code className="text-xs text-emerald-400/70 font-mono break-all">
+                        <code className={`text-xs font-mono break-all ${/localhost|127\.0\.0\.1/.test(decryptedUri) && !relayConnected ? 'text-amber-400/70' : 'text-emerald-400/70'}`}>
                           {decryptedUri.replace(/:([^@]+)@/, ':••••••@')}
                         </code>
+                        {/localhost|127\.0\.0\.1/.test(decryptedUri) && !relayConnected && (
+                          <div className="mt-3 flex items-center justify-between gap-3">
+                            <div className="flex items-center gap-2 text-[11px] text-amber-400/80">
+                              <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse inline-block" />
+                              {t('settings_ui.db.relayRequired')}
+                            </div>
+                            <button
+                              onClick={() => {
+                                const el = document.getElementById('relay-agent-section');
+                                el?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                              }}
+                              className="shrink-0 text-[10px] font-bold text-amber-400 hover:text-amber-300 underline underline-offset-2 transition-colors"
+                            >
+                              {t('settings_ui.db.installRelay')}
+                            </button>
+                          </div>
+                        )}
                       </div>
                     )}
 
@@ -887,6 +1038,131 @@ export default function SettingsApp({ initialTab }) {
                         </button>
                       </div>
                     )}
+
+                    {/* Local Relay Agent — only shown when active DB targets localhost */}
+                    {/localhost|127\.0\.0\.1/.test(decryptedUri || dbUri) && (
+                    <div id="relay-agent-section" className="border border-[var(--border-color)] rounded-2xl overflow-hidden">
+                      <div className="px-4 py-3 bg-amber-500/[0.04] border-b border-amber-500/10 flex items-center gap-3">
+                        <Network size={15} className={relayConnected ? 'text-amber-400' : 'text-[var(--text-muted)]'} />
+                        <div className="flex-1 min-w-0">
+                          <h4 className="text-xs font-bold text-[var(--text-primary)]">{t('settings_ui.relay.title')}</h4>
+                          <p className="text-[10px] text-[var(--text-muted)]">{t('settings_ui.relay.subtitle')}</p>
+                        </div>
+                        <div className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[9px] font-bold uppercase tracking-wider ${
+                          relayConnected
+                            ? 'bg-emerald-500/10 text-emerald-400'
+                            : 'bg-[var(--bg-tertiary)] text-[var(--text-muted)]'
+                        }`}>
+                          <div className={`w-1.5 h-1.5 rounded-full ${relayConnected ? 'bg-emerald-400 animate-pulse' : 'bg-[var(--text-muted)]'}`} />
+                          {relayConnected ? t('settings_ui.relay.statusConnected') : t('settings_ui.relay.statusOffline')}
+                        </div>
+                      </div>
+
+                      <div className="p-4 space-y-3">
+                        {/* Why section — always visible */}
+                        <details className="group">
+                          <summary className="flex items-center gap-1.5 text-[10px] text-[var(--text-muted)] cursor-pointer select-none hover:text-[var(--text-secondary)] transition-colors list-none">
+                            <Info size={11} className="shrink-0" />
+                            {t('settings_ui.relay.whyTitle')}
+                            <span className="ml-auto text-[8px] opacity-50 group-open:rotate-180 transition-transform">▼</span>
+                          </summary>
+                          <div className="mt-2.5 p-3 rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] space-y-2 text-[10px] leading-relaxed text-[var(--text-muted)]">
+                            <p>
+                              <span className="text-[var(--text-primary)] font-semibold">{t('settings_ui.relay.problemLabel')}</span> {t('settings_ui.relay.problemDesc')}
+                            </p>
+                            <p>
+                              <span className="text-[var(--text-primary)] font-semibold">{t('settings_ui.relay.fixesLabel')}</span> {t('settings_ui.relay.fixesDesc')}
+                            </p>
+                            <p>
+                              <span className="text-emerald-400 font-semibold">{t('settings_ui.relay.solutionLabel')}</span> {t('settings_ui.relay.solutionDesc', { machine: t('settings_ui.relay.machine') || 'your machine' })}
+                            </p>
+                            <div className="flex items-center gap-1.5 pt-1 text-[9px] text-emerald-400 font-semibold">
+                              <span className="w-2 h-2 rounded-full bg-emerald-400 shrink-0" />
+                              {t('settings_ui.relay.safeHint')}
+                            </div>
+                          </div>
+                        </details>
+
+                        {relayToken ? (
+                          <>
+                            {/* OS badge */}
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[9px] font-bold uppercase tracking-wider border ${osMeta[detectedOS].badge}`}>
+                                {osMeta[detectedOS].label} {t('settings_ui.relay.detected')}
+                              </span>
+                              <span className="text-[10px] text-[var(--text-muted)]">{osMeta[detectedOS].detail}</span>
+                            </div>
+
+                            {/* ONE-CLICK wizard button (always shown, primary on PWA) */}
+                            <button
+                              onClick={() => setRelayModalOpen(true)}
+                              className={`w-full flex items-center justify-center gap-2 py-2.5 rounded-xl font-bold text-[12px] transition-colors ${
+                                isPWA
+                                  ? 'bg-amber-500 hover:bg-amber-600 text-white shadow-lg shadow-amber-500/20'
+                                  : 'bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 text-amber-400'
+                              }`}
+                            >
+                              <Sparkles size={13} />
+                              {isPWA ? t('settings_ui.relay.oneClick') : t('settings_ui.relay.wizard')}
+                            </button>
+
+                            {/* Inline command (non-PWA only — collapsible in PWA) */}
+                            {!isPWA && (
+                              <details>
+                                <summary className="text-[10px] text-[var(--text-muted)] cursor-pointer select-none hover:text-[var(--text-secondary)] transition-colors">
+                                  {t('settings_ui.relay.manualCommand')}
+                                </summary>
+                                <div className="relative mt-2">
+                                  <code className="block p-3 pr-10 bg-[var(--bg-tertiary)] rounded-xl text-[10px] font-mono text-amber-300 break-all leading-relaxed">
+                                    {getMacOneLiner('install')}
+                                  </code>
+                                  <button
+                                    onClick={() => {
+                                      navigator.clipboard.writeText(getMacOneLiner('install'));
+                                      addNotification({ title: t('settings_ui.relay.toasts.copied'), message: t('settings_ui.relay.toasts.copyMsg'), type: 'success' });
+                                    }}
+                                    className="absolute right-2 top-2 p-1.5 hover:bg-white/10 rounded-lg transition-colors"
+                                  >
+                                    <Copy size={12} className="text-[var(--text-muted)]" />
+                                  </button>
+                                </div>
+                              </details>
+                            )}
+
+                            <div className="flex items-center gap-3 flex-wrap">
+                              <a
+                                href="/local-relay.js"
+                                download="local-relay.js"
+                                className="inline-flex items-center gap-2 px-3 py-1.5 bg-[var(--bg-tertiary)] hover:bg-[var(--border-color)] rounded-lg text-[11px] text-[var(--text-muted)] transition-colors"
+                              >
+                                <Download size={12} /> local-relay.js
+                              </a>
+                              <button
+                                onClick={handleRevokeRelayToken}
+                                className="text-[10px] text-[var(--text-muted)] hover:text-red-400 transition-colors px-2 py-1.5 ml-auto"
+                              >
+                                {t('settings_ui.relay.revokeToken')}
+                              </button>
+                            </div>
+                          </>
+                        ) : (
+                          <div className="flex items-center gap-3">
+                            <p className="text-[11px] text-[var(--text-muted)] flex-1">
+                              Generate a token — <code className="text-amber-400 font-mono">local-relay.js</code> will auto-detect your OS and install the right background service.
+                            </p>
+                            <button
+                              onClick={handleGenerateRelayToken}
+                              disabled={relayLoading}
+                              className="shrink-0 px-4 py-2 bg-amber-500 hover:bg-amber-600 disabled:opacity-50 rounded-lg text-white text-[11px] font-bold flex items-center gap-2 transition-colors"
+                            >
+                              {relayLoading ? <Loader size={12} className="animate-spin" /> : <Zap size={12} />}
+                              Generate Token
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                    )} {/* end Local Relay Agent conditional */}
 
                     {/* Security Info */}
                     <div className="p-6 bg-indigo-500/[0.03] border border-indigo-500/10 rounded-2xl">
@@ -1378,6 +1654,211 @@ export default function SettingsApp({ initialTab }) {
           </div>
         )}
       </div>
+
+      {/* ── One-Click Relay Installer Modal ─────────────────────────── */}
+      <AnimatePresence>
+        {relayModalOpen && (
+          <motion.div
+            key="relay-installer-modal"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="absolute inset-0 z-50 flex items-start justify-center bg-black/60 backdrop-blur-sm p-4 overflow-y-auto"
+            onClick={(e) => { if (e.target === e.currentTarget) setRelayModalOpen(false); }}
+          >
+            <motion.div
+              initial={{ scale: 0.92, opacity: 0, y: 16 }}
+              animate={{ scale: 1, opacity: 1, y: 0 }}
+              exit={{ scale: 0.92, opacity: 0, y: 16 }}
+              transition={{ type: 'spring', damping: 22, stiffness: 300 }}
+              className="w-full max-w-sm bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-2xl shadow-2xl my-auto flex flex-col"
+            >
+              {/* Header — sticky so it stays visible while scrolling */}
+              <div className="px-5 py-4 border-b border-[var(--border-color)] flex items-center gap-3 shrink-0">
+                <Sparkles size={15} className="text-amber-400" />
+                <div className="flex-1">
+                  <h3 className="text-sm font-bold text-[var(--text-primary)]">{t('settings_ui.relay.installerTitle')}</h3>
+                  <p className="text-[10px] text-[var(--text-muted)] mt-0.5">
+                    {detectedOS === 'macos' ? t('settings_ui.relay.copyPasteOneLiner') : t('settings_ui.relay.downloadClickNoTerminal')}
+                  </p>
+                </div>
+                <span className={`text-[9px] font-bold px-2 py-0.5 rounded-full border uppercase tracking-wider ${osMeta[detectedOS].badge}`}>
+                  {osMeta[detectedOS].label}
+                </span>
+                <button onClick={() => setRelayModalOpen(false)} className="p-1.5 hover:bg-white/10 rounded-lg transition-colors">
+                  <X size={14} className="text-[var(--text-muted)]" />
+                </button>
+              </div>
+
+              <div className="p-5 space-y-4 overflow-y-auto max-h-[calc(100vh-12rem)]">
+                {/* How-it-works banner */}
+                <div className="flex gap-2.5 p-3 rounded-xl bg-emerald-500/[0.07] border border-emerald-500/15 text-[10px] text-[var(--text-muted)] leading-relaxed">
+                  <Info size={12} className="shrink-0 text-emerald-400 mt-0.5" />
+                  <span>
+                    {t('settings_ui.relay.howItWorks', { 
+                      machine: t('settings_ui.relay.machine') || 'your machine' 
+                    }).split('{{machine}}').map((part, i, arr) => 
+                      i < arr.length - 1 ? [part, <strong key={i} className="text-[var(--text-secondary)]">{t('settings_ui.relay.machine') || 'your machine'}</strong>] : part
+                    )}
+                  </span>
+                </div>
+
+                {/* INSTALL */}
+                <div className="space-y-2">
+                  <p className="text-[10px] font-bold text-[var(--text-secondary)] uppercase tracking-widest">{t('settings_ui.relay.install')}</p>
+
+                  {detectedOS === 'macos' ? (
+                    /* macOS: Gatekeeper blocks downloaded scripts — use copy+paste approach */
+                    <>
+                      <div className="relative">
+                        <code className="block p-3 pr-10 bg-[var(--bg-tertiary)] rounded-xl text-[10px] font-mono text-amber-300 break-all leading-relaxed">
+                          {getMacOneLiner('install')}
+                        </code>
+                        <button
+                          onClick={() => {
+                            navigator.clipboard.writeText(getMacOneLiner('install'));
+                            addNotification({ title: t('settings_ui.relay.toasts.copied'), message: t('settings_ui.relay.toasts.copyMsg'), type: 'success' });
+                          }}
+                          className="absolute right-2 top-2 p-1.5 hover:bg-white/10 rounded-lg transition-colors"
+                        >
+                          <Copy size={12} className="text-[var(--text-muted)]" />
+                        </button>
+                      </div>
+
+                      <button
+                        onClick={() => {
+                          navigator.clipboard.writeText(getMacOneLiner('install'));
+                          addNotification({ title: t('settings_ui.relay.toasts.copied'), message: t('settings_ui.relay.toasts.openPasteInstall'), type: 'success' });
+                        }}
+                        className="w-full flex items-center justify-center gap-2 py-2.5 bg-amber-500 hover:bg-amber-600 active:scale-[0.98] rounded-xl text-white font-bold text-sm transition-all shadow-lg shadow-amber-500/20"
+                      >
+                        <Copy size={14} /> {t('settings_ui.relay.copyInstallCommand')}
+                      </button>
+
+                      {/* Step hints */}
+                      <div className="grid grid-cols-3 gap-2 pt-1">
+                        {[t('settings_ui.relay.steps.copy'), t('settings_ui.relay.steps.openTerminal'), t('settings_ui.relay.steps.pasteEnter')].map((s, i) => (
+                          <div key={i} className="flex flex-col items-center gap-1 p-2 rounded-lg bg-[var(--bg-tertiary)]">
+                            <CheckCheck size={12} className="text-amber-400" />
+                            <span className="text-[9px] text-[var(--text-muted)] text-center leading-tight">{s}</span>
+                          </div>
+                        ))}
+                      </div>
+
+                      <p className="text-[10px] text-[var(--text-muted)] bg-[var(--bg-tertiary)] rounded-lg px-3 py-2">
+                        {t('settings_ui.relay.openTerminalHint')}
+                      </p>
+
+                      {/* Download fallback */}
+                      <details>
+                        <summary className="text-[10px] text-[var(--text-muted)] cursor-pointer select-none hover:text-[var(--text-secondary)] transition-colors py-1">
+                          {t('settings_ui.relay.preferScript')}
+                        </summary>
+                        <div className="pt-2 space-y-2">
+                          <button
+                            onClick={() => downloadInstallerScript('install')}
+                            className="w-full flex items-center gap-2 px-4 py-2.5 bg-[var(--bg-tertiary)] hover:bg-[var(--border-color)] rounded-xl text-[var(--text-secondary)] text-[11px] font-bold transition-colors"
+                          >
+                            <Download size={13} /> {t('settings_ui.relay.downloadScript')}
+                          </button>
+                          <p className="text-[10px] text-[var(--text-muted)] bg-amber-500/5 border border-amber-500/15 rounded-lg px-3 py-2">
+                            {t('settings_ui.relay.macOSBlockWarning')}<br />
+                            <code className="text-amber-300 text-[9px] break-all">xattr -d com.apple.quarantine ~/Downloads/relay-install.command && bash ~/Downloads/relay-install.command</code>
+                          </p>
+                        </div>
+                      </details>
+                    </>
+                  ) : (
+                    /* Windows / Linux: download & double-click works fine */
+                    <>
+                      <button
+                        onClick={() => downloadInstallerScript('install')}
+                        className="w-full flex items-center gap-3 px-4 py-3.5 bg-amber-500 hover:bg-amber-600 active:scale-[0.98] rounded-xl text-white font-bold text-sm transition-all shadow-lg shadow-amber-500/25"
+                      >
+                        <Download size={16} />
+                        <div className="text-left">
+                          <div>{t('settings_ui.relay.downloadInstaller')}</div>
+                          <div className="text-[10px] font-normal opacity-80">
+                            {detectedOS === 'windows' && t('settings_ui.relay.winHint')}
+                            {detectedOS === 'linux'   && t('settings_ui.relay.linuxHint')}
+                            {detectedOS === 'unknown' && t('settings_ui.relay.autoDetect')}
+                          </div>
+                        </div>
+                      </button>
+
+                      {/* Step hints */}
+                      <div className="grid grid-cols-3 gap-2 pt-1">
+                        {[t('settings_ui.relay.steps.download'), t('settings_ui.relay.steps.doubleClick'), t('settings_ui.relay.steps.done')].map((s, i) => (
+                          <div key={i} className="flex flex-col items-center gap-1 p-2 rounded-lg bg-[var(--bg-tertiary)]">
+                            <CheckCheck size={12} className="text-amber-400" />
+                            <span className="text-[9px] text-[var(--text-muted)] text-center leading-tight">{s}</span>
+                          </div>
+                        ))}
+                      </div>
+
+                      {detectedOS === 'linux' && (
+                        <p className="text-[10px] text-[var(--text-muted)] bg-[var(--bg-tertiary)] rounded-lg px-3 py-2">
+                          {t('settings_ui.relay.linuxRunHint')}
+                        </p>
+                      )}
+                      {detectedOS === 'windows' && (
+                        <p className="text-[10px] text-[var(--text-muted)] bg-[var(--bg-tertiary)] rounded-lg px-3 py-2">
+                          {t('settings_ui.relay.winRunHint')}
+                        </p>
+                      )}
+                    </>
+                  )}
+                </div>
+
+                {/* Divider */}
+                <div className="flex items-center gap-3">
+                  <div className="flex-1 h-px bg-[var(--border-color)]" />
+                  <span className="text-[9px] text-[var(--text-muted)] uppercase tracking-widest">{t('vault.or')}</span>
+                  <div className="flex-1 h-px bg-[var(--border-color)]" />
+                </div>
+
+                {/* UNINSTALL */}
+                <div className="space-y-2">
+                  <p className="text-[10px] font-bold text-[var(--text-secondary)] uppercase tracking-widest">{t('settings_ui.relay.uninstall')}</p>
+                  {detectedOS === 'macos' ? (
+                    <button
+                      onClick={() => {
+                        navigator.clipboard.writeText(getMacOneLiner('uninstall'));
+                        addNotification({ title: t('settings_ui.relay.toasts.copied'), message: t('settings_ui.relay.toasts.pasteUninstall'), type: 'info' });
+                      }}
+                      className="w-full flex items-center gap-3 px-4 py-3 bg-red-500/10 hover:bg-red-500/20 border border-red-500/20 active:scale-[0.98] rounded-xl text-red-400 font-bold text-[12px] transition-all"
+                    >
+                      <Copy size={14} />
+                      <div className="text-left">
+                        <div>{t('settings_ui.relay.uninstallBtn')}</div>
+                        <div className="text-[10px] font-normal opacity-70">{t('settings_ui.relay.uninstallDesc')}</div>
+                      </div>
+                    </button>
+                  ) : (
+                    <button
+                      onClick={() => downloadInstallerScript('uninstall')}
+                      className="w-full flex items-center gap-3 px-4 py-3 bg-red-500/10 hover:bg-red-500/20 border border-red-500/20 active:scale-[0.98] rounded-xl text-red-400 font-bold text-[12px] transition-all"
+                    >
+                      <X size={14} />
+                      <div className="text-left">
+                        <div>{t('settings_ui.relay.downloadUninstaller')}</div>
+                        <div className="text-[10px] font-normal opacity-70">
+                          {detectedOS === 'windows' && t('settings_ui.relay.winUninstallHint')}
+                          {detectedOS === 'linux'   && t('settings_ui.relay.linuxUninstallHint')}
+                        </div>
+                      </div>
+                    </button>
+                  )}
+                </div>
+
+                <p className="text-[9px] text-center text-[var(--text-muted)]">
+                  {t('settings_ui.relay.osMeta.unknown')}
+                </p>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }

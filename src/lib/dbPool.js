@@ -28,6 +28,27 @@ const POOL_TTL_MS = 5 * 60 * 1000; // 5 minutes idle timeout
 const MAX_POOL_SIZE = 20; // Max concurrent different connections
 
 /**
+ * If the target host is localhost/127.0.0.1 and the requesting user has an
+ * active Local Relay Agent connected, rewrite the connection to go through
+ * the relay's local TCP proxy port instead of the server's own localhost.
+ * Returns the rewritten { host, port } or the original values unchanged.
+ */
+async function resolveRelayForLocalhost(host, port, userId) {
+  const isLocal = /^(localhost|127\.0\.0\.1)$/.test(host);
+  if (!isLocal || !userId || !global.__activeRelays?.size) return { host, port };
+
+  const relay = global.__activeRelays.get(userId);
+  if (!relay) return { host, port };
+
+  // Tell the relay's TCP proxy what to forward to
+  relay.targetHost = host;
+  relay.targetPort = parseInt(port) || 27017;
+
+  console.log(`🔗 Relay: routing ${host}:${port} → 127.0.0.1:${relay.localPort} (user ${userId})`);
+  return { host: '127.0.0.1', port: relay.localPort };
+}
+
+/**
  * Generate a unique cache key for a connection config.
  * We use host:port:database:username as the key (NOT password for security).
  */
@@ -214,32 +235,28 @@ export async function getPooledConnection(conn) {
     let connectHost = conn.host;
     let connectPort = conn.port || 27017;
 
-    if (conn.sshTunnel && conn.sshTunnelHost) {
-      const tunnel = await createSSHTunnel(conn);
-      connectHost = '127.0.0.1';
-      connectPort = tunnel.port;
-      tunnelKey = tunnel.tunnelKey;
-    }
+    // Auto-route localhost connections through the relay agent if one is active
+    const resolved = await resolveRelayForLocalhost(connectHost, connectPort, conn._userId);
+    connectHost = resolved.host;
+    connectPort = resolved.port;
 
     const tunnelConn = { ...conn, host: connectHost, port: connectPort, isSrv: false };
     const uri = buildMongoUri(tunnelConn, password);
     db = await mongoose.createConnection(uri, {
-      serverSelectionTimeoutMS: tunnelKey ? 10000 : 5000,
+      serverSelectionTimeoutMS: 10000,
       maxPoolSize: 5,
       minPoolSize: 1,
       maxIdleTimeMS: 60000,
-      ...(tunnelKey ? { directConnection: true } : {}), // bypass replica set discovery when tunnelled
+      directConnection: true,
     }).asPromise();
   } else if (provider === 'mysql') {
     let connectHost = conn.host;
     let connectPort = conn.port || 3306;
 
-    if (conn.sshTunnel && conn.sshTunnelHost) {
-      const tunnel = await createSSHTunnel(conn);
-      connectHost = '127.0.0.1';
-      connectPort = tunnel.port;
-      tunnelKey = tunnel.tunnelKey;
-    }
+    // Auto-route localhost connections through the relay agent if one is active
+    const resolved = await resolveRelayForLocalhost(connectHost, connectPort, conn._userId);
+    connectHost = resolved.host;
+    connectPort = resolved.port;
 
     db = await mysql.createConnection({
       host: connectHost,

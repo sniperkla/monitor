@@ -24,6 +24,7 @@ try {
 } catch(e) { console.error('Error loading .env', e); }
 
 const { createServer } = require('http');
+const net = require('net');
 const next = require('next');
 const { Server } = require('socket.io');
 const { Client } = require('ssh2');
@@ -269,6 +270,19 @@ app.prepare().then(async () => {
     // Apply compression
     compress(req, res, async () => {
     try {
+      // Serve local-relay.js as a public static file — bypass Next.js/auth entirely
+      // so unauthenticated curl downloads work (e.g. one-liner installer)
+      if (req.url === '/local-relay.js') {
+        const scriptPath = path.join(__dirname, 'public', 'local-relay.js');
+        res.setHeader('Content-Type', 'application/javascript; charset=utf-8');
+        res.setHeader('Cache-Control', 'no-store, no-cache');
+        res.setHeader('X-Content-Type-Options', 'nosniff');
+        const stream = fs.createReadStream(scriptPath);
+        stream.on('error', () => { res.statusCode = 404; res.end('Not found'); });
+        stream.pipe(res);
+        return;
+      }
+
       // Security Headers - Apply only to main pages, not static assets or internal Next.js paths
       const isNextInternal = req.url.startsWith('/_next/') || req.url.includes('/favicon.ico');
       
@@ -1876,6 +1890,114 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
         console.error('Error cleaning up session:', err);
       }
       activeSessions.delete(socketId);
+    }
+  }
+
+  // =======================================================================
+  // LOCAL RELAY AGENT — WebSocket TCP proxy (free, no port forwarding needed)
+  // Users run local-relay.js on their machine; it connects outward here.
+  // =======================================================================
+  {
+    let WebSocketServer;
+    try { WebSocketServer = (require('ws').WebSocketServer || require('ws').Server); } catch (e) {
+      console.warn('⚠️  ws not found — Local Relay disabled (socket.io should include it)');
+    }
+
+    if (WebSocketServer) {
+      // Global stores — shared between server.js and Next.js API routes (same process)
+      global.__relayTokens  = global.__relayTokens  || new Map(); // token → {userId, expiresAt}
+      global.__activeRelays = global.__activeRelays || new Map(); // userId → {localPort, netServer, targetHost, targetPort}
+
+      // Purge expired tokens every hour
+      setInterval(() => {
+        const now = Date.now();
+        for (const [t, e] of global.__relayTokens) if (e.expiresAt < now) global.__relayTokens.delete(t);
+      }, 60 * 60 * 1000);
+
+      const relayWss = new WebSocketServer({ noServer: true });
+
+      // Intercept HTTP upgrades — only take /relay-ws, leave the rest to socket.io
+      server.on('upgrade', (req, sock, head) => {
+        if (req.url && req.url.startsWith('/relay-ws')) {
+          relayWss.handleUpgrade(req, sock, head, (ws) => relayWss.emit('connection', ws, req));
+        }
+      });
+
+      relayWss.on('connection', (ws, req) => {
+        const url    = new URL(req.url, 'http://localhost');
+        const token  = url.searchParams.get('token');
+        const entry  = global.__relayTokens.get(token);
+
+        if (!entry || entry.expiresAt < Date.now()) {
+          ws.send(JSON.stringify({ type: 'error', message: 'Invalid or expired token' }));
+          ws.close(4001, 'Invalid token');
+          return;
+        }
+
+        const { userId } = entry;
+        const tcpSockets = new Map(); // connId → tcp socket (MongoDB driver side)
+
+        // Local TCP server — Mongoose driver connects here; we proxy to relay agent
+        const netServer = net.createServer((tcpSock) => {
+          const connId  = Math.random().toString(36).slice(2, 10);
+          const relay   = global.__activeRelays.get(userId);
+          const tHost   = relay?.targetHost || 'localhost';
+          const tPort   = relay?.targetPort || 27017;
+
+          if (ws.readyState === 1 /*OPEN*/) {
+            ws.send(JSON.stringify({ type: 'open', connId, host: tHost, port: tPort }));
+          }
+
+          // Mongoose driver → relay agent
+          tcpSock.on('data', (data) => {
+            if (ws.readyState === 1) ws.send(JSON.stringify({ type: 'data', connId, data: data.toString('base64') }));
+          });
+          tcpSock.on('close', () => {
+            if (ws.readyState === 1) ws.send(JSON.stringify({ type: 'close', connId }));
+            tcpSockets.delete(connId);
+          });
+          tcpSock.on('error', () => tcpSock.destroy());
+          tcpSockets.set(connId, tcpSock);
+        });
+
+        netServer.listen(0, '127.0.0.1', () => {
+          const localPort = netServer.address().port;
+          global.__activeRelays.set(userId, { localPort, netServer, targetHost: 'localhost', targetPort: 27017 });
+          ws.send(JSON.stringify({ type: 'ready', localPort }));
+          console.log(`🔗 [Relay] Connected: user ${userId} → :${localPort}`);
+        });
+
+        // relay agent → Mongoose driver
+        ws.on('message', (raw) => {
+          try {
+            const msg = JSON.parse(raw.toString());
+            if (msg.type === 'init') {
+              // Relay agent reports which local port it is forwarding
+              const r = global.__activeRelays.get(userId);
+              if (r) { r.targetHost = msg.targetHost || 'localhost'; r.targetPort = Number(msg.targetPort) || 27017; }
+            }
+            if (msg.type === 'data') {
+              const s = tcpSockets.get(msg.connId);
+              if (s && !s.destroyed) s.write(Buffer.from(msg.data, 'base64'));
+            }
+            if (msg.type === 'close') {
+              const s = tcpSockets.get(msg.connId);
+              if (s) { s.destroy(); tcpSockets.delete(msg.connId); }
+            }
+          } catch {}
+        });
+
+        ws.on('close', () => {
+          netServer.close();
+          global.__activeRelays.delete(userId);
+          tcpSockets.forEach(s => s.destroy());
+          console.log(`🔗 [Relay] Disconnected: user ${userId}`);
+        });
+
+        ws.on('error', () => {});
+      });
+
+      console.log('🔗 Local Relay Agent: ready (/relay-ws)');
     }
   }
 

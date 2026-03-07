@@ -36,6 +36,15 @@ export async function POST(request, { params }) {
 
     if (!query) throw new Error('Query body is missing');
 
+    // Attach userId so dbPool can route localhost connections via relay
+    if (!conn._userId) {
+      try {
+        const { getToken } = await import('next-auth/jwt');
+        const token = await getToken({ req: request, secret: process.env.NEXTAUTH_SECRET });
+        if (token?.sub) conn = { ...conn, _userId: token.sub };
+      } catch (_) {}
+    }
+
     // Use pooled connection instead of creating a new one every time
     const pooled = await getPooledConnection(conn);
 

@@ -48,6 +48,8 @@ export default function MasterPasswordModal() {
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [showRelayReminder, setShowRelayReminder] = useState(false);
+  const [pendingSetup, setPendingSetup] = useState(null); // stores { uri, tunnelConfig } when relay reminder is shown
   const [recoveryCode, setRecoveryCode] = useState('');
   const [recoveryEmail, setRecoveryEmail] = useState('');
   const [shakeKey, setShakeKey] = useState(0);
@@ -103,12 +105,13 @@ export default function MasterPasswordModal() {
 
     try {
       await unlockVault(masterPassword);
-      addNotification({ title: 'Success', message: '🔓 Vault unlocked', type: 'success' });
+      addNotification({ title: t('common.success'), message: t('vault.toasts.unlocked'), type: 'success' });
     } catch (err) {
-      setError(err.message || 'Failed to unlock');
+      setError(err.message || t('vault.errors.unlockFailed'));
       triggerShake();
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
   };
 
   // === SETUP HANDLER ===
@@ -138,18 +141,19 @@ export default function MasterPasswordModal() {
       return;
     }
 
-    // Build tunnel config (only when enabled and host is provided)
-    const tunnelConfig = tunnelEnabled && tunnelHost.trim() ? {
-      enabled: true,
-      sshHost: tunnelHost.trim(),
-      sshPort: Number(tunnelPort) || 22,
-      sshUser: tunnelUser.trim(),
-      sshAuth: tunnelAuth,
-      sshPassword: tunnelAuth === 'password' ? tunnelPassword : undefined,
-      sshPrivateKey: tunnelAuth === 'privateKey' ? tunnelKey : undefined,
-      sshPassphrase: tunnelAuth === 'privateKey' ? tunnelPassphrase : undefined,
-    } : null;
+    // If URI targets localhost, remind about Local Relay Agent
+    const isLocalhost = /localhost|127\.0\.0\.1/.test(uri);
+    if (isLocalhost) {
+      setError('');
+      setPendingSetup({ uri, tunnelConfig: null });
+      setShowRelayReminder(true);
+      return;
+    }
 
+    await continueSetup(uri, null);
+  };
+
+  const continueSetup = async (uri, tunnelConfig) => {
     setLoading(true);
     try {
       // First test the URI (with tunnel if configured)
@@ -159,13 +163,13 @@ export default function MasterPasswordModal() {
       const testRes = await fetch('/api/connections', { headers: testHeaders });
       const testData = await testRes.json();
       if (!testData.success) {
-        setError('Could not connect to the database. Please check the URI.');
+        setError(t('vault.errors.connectionFailed'));
         setLoading(false);
         return;
       }
 
       await setupVault(uri, masterPassword, tunnelConfig);
-      addNotification({ title: 'Success', message: '🔐 Vault created! Your data is now encrypted.', type: 'success' });
+      addNotification({ title: t('common.success'), message: t('vault.toasts.created'), type: 'success' });
     } catch (err) {
       setError(err.message || 'Setup failed');
     }
@@ -181,7 +185,7 @@ export default function MasterPasswordModal() {
       if (data.success) {
         setRecoveryEmail(data.maskedEmail);
         setMode('verify');
-        addNotification({ title: 'Recovery', message: `Recovery code sent to ${data.maskedEmail}`, type: 'info' });
+        addNotification({ title: t('vault.recovery.title'), message: t('vault.toasts.recoverySent', { email: data.maskedEmail }), type: 'info' });
       } else {
         setError(data.error);
       }
@@ -203,7 +207,7 @@ export default function MasterPasswordModal() {
     try {
       const data = await verifyRecovery(recoveryCode);
       if (data.success) {
-        addNotification({ title: 'Reset Complete', message: 'Vault reset! Set up a new Master Password.', type: 'success' });
+        addNotification({ title: t('vault.toasts.resetComplete'), message: t('vault.toasts.resetComplete'), type: 'success' });
         setMode('setup');
         setMasterPassword('');
         setConfirmPassword('');
@@ -500,120 +504,6 @@ export default function MasterPasswordModal() {
           </div>
         </div>
 
-        {/* SSH Tunnel */}
-        <div className="space-y-3">
-          <button
-            type="button"
-            onClick={() => setTunnelEnabled(v => !v)}
-            className="w-full flex items-center justify-between px-4 py-3 bg-[var(--bg-secondary)]/60 hover:bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-xl transition-all"
-          >
-            <div className="flex items-center gap-3">
-              <Network size={14} className={tunnelEnabled ? 'text-amber-400' : 'text-[var(--text-muted)]'} />
-              <div className="text-left">
-                <span className="block text-xs font-bold text-[var(--text-secondary)]">SSH Tunnel</span>
-                <span className="block text-[10px] text-[var(--text-muted)]">Connect to localhost DB on your own machine</span>
-              </div>
-            </div>
-            <div className={`w-9 h-5 rounded-full p-0.5 transition-colors flex items-center ${
-              tunnelEnabled ? 'bg-amber-500' : 'bg-[var(--bg-card)]'
-            }`}>
-              <div className={`w-4 h-4 rounded-full bg-white shadow-md transition-transform ${
-                tunnelEnabled ? 'translate-x-4' : 'translate-x-0'
-              }`} />
-            </div>
-          </button>
-
-          <AnimatePresence>
-            {tunnelEnabled && (
-              <motion.div
-                initial={{ height: 0, opacity: 0 }}
-                animate={{ height: 'auto', opacity: 1 }}
-                exit={{ height: 0, opacity: 0 }}
-                transition={{ duration: 0.25 }}
-                className="overflow-hidden"
-              >
-                <div className="space-y-3 p-4 bg-amber-500/5 border border-amber-500/20 rounded-xl">
-                  <p className="text-[10px] text-amber-400/70 font-medium">
-                    ⚡ SSH into your machine first, then this app will tunnel to your local DB.
-                  </p>
-
-                  {/* SSH Host + Port */}
-                  <div className="grid grid-cols-3 gap-2">
-                    <input
-                      type="text"
-                      value={tunnelHost}
-                      onChange={e => setTunnelHost(e.target.value)}
-                      placeholder="SSH Host (e.g. 100.64.x.x)"
-                      className="col-span-2 px-3 py-2 bg-[var(--bg-primary)]/80 border border-[var(--border-color)] rounded-lg text-[var(--text-primary)] placeholder-[var(--text-muted)] focus:outline-none text-xs font-mono"
-                    />
-                    <input
-                      type="number"
-                      value={tunnelPort}
-                      onChange={e => setTunnelPort(e.target.value)}
-                      placeholder="22"
-                      className="px-3 py-2 bg-[var(--bg-primary)]/80 border border-[var(--border-color)] rounded-lg text-[var(--text-primary)] placeholder-[var(--text-muted)] focus:outline-none text-xs font-mono"
-                    />
-                  </div>
-
-                  {/* SSH Username */}
-                  <input
-                    type="text"
-                    value={tunnelUser}
-                    onChange={e => setTunnelUser(e.target.value)}
-                    placeholder="SSH Username"
-                    className="w-full px-3 py-2 bg-[var(--bg-primary)]/80 border border-[var(--border-color)] rounded-lg text-[var(--text-primary)] placeholder-[var(--text-muted)] focus:outline-none text-xs font-mono"
-                  />
-
-                  {/* Auth type toggle */}
-                  <div className="flex gap-2">
-                    {['password', 'privateKey'].map(a => (
-                      <button
-                        key={a}
-                        type="button"
-                        onClick={() => setTunnelAuth(a)}
-                        className={`flex-1 py-1.5 rounded-lg text-[10px] font-bold transition-all border ${
-                          tunnelAuth === a
-                            ? 'bg-amber-500/20 border-amber-500/40 text-amber-400'
-                            : 'bg-[var(--bg-secondary)] border-[var(--border-color)] text-[var(--text-muted)] hover:text-[var(--text-secondary)]'
-                        }`}
-                      >
-                        {a === 'password' ? '🔑 Password' : '🗂️ Private Key'}
-                      </button>
-                    ))}
-                  </div>
-
-                  {tunnelAuth === 'password' ? (
-                    <input
-                      type="password"
-                      value={tunnelPassword}
-                      onChange={e => setTunnelPassword(e.target.value)}
-                      placeholder="SSH Password"
-                      className="w-full px-3 py-2 bg-[var(--bg-primary)]/80 border border-[var(--border-color)] rounded-lg text-[var(--text-primary)] placeholder-[var(--text-muted)] focus:outline-none text-xs"
-                    />
-                  ) : (
-                    <div className="space-y-2">
-                      <textarea
-                        value={tunnelKey}
-                        onChange={e => setTunnelKey(e.target.value)}
-                        placeholder="-----BEGIN RSA PRIVATE KEY-----\n..."
-                        rows={3}
-                        className="w-full px-3 py-2 bg-[var(--bg-primary)]/80 border border-[var(--border-color)] rounded-lg text-[var(--text-primary)] placeholder-[var(--text-muted)] focus:outline-none text-[10px] font-mono resize-none"
-                      />
-                      <input
-                        type="password"
-                        value={tunnelPassphrase}
-                        onChange={e => setTunnelPassphrase(e.target.value)}
-                        placeholder="Passphrase (optional)"
-                        className="w-full px-3 py-2 bg-[var(--bg-primary)]/80 border border-[var(--border-color)] rounded-lg text-[var(--text-primary)] placeholder-[var(--text-muted)] focus:outline-none text-xs"
-                      />
-                    </div>
-                  )}
-                </div>
-              </motion.div>
-            )}
-          </AnimatePresence>
-        </div>
-
         {/* Master Password */}
         <div className="space-y-2">
           <label className="text-xs font-bold text-[var(--text-muted)] uppercase tracking-widest ml-1">
@@ -688,7 +578,7 @@ export default function MasterPasswordModal() {
             onClick={dismissVault}
             className="flex-1 py-4 px-3 bg-[var(--bg-secondary)] hover:bg-[var(--bg-card-hover)] border border-[var(--border-color)] rounded-xl text-[var(--text-secondary)] hover:text-[var(--text-primary)] text-sm font-bold transition-all backdrop-blur-sm"
           >
-            {t('vault.setupLater') || 'Later'}
+            {t('common.cancel')}
           </button>
           <button
             type="submit"
@@ -713,15 +603,80 @@ export default function MasterPasswordModal() {
         <div className="relative p-4 bg-[var(--bg-primary)]/40 border border-[var(--border-color)] rounded-2xl flex items-start gap-3 backdrop-blur-md">
           <Shield size={18} className="text-[var(--accent-indigo)] mt-1 shrink-0" />
           <div className="space-y-1">
-             <h4 className="text-[11px] font-bold text-[var(--accent-indigo)] uppercase tracking-wider">{t('vault.privacyFirst') || 'Zero-Knowledge Privacy'}</h4>
+             <h4 className="text-[11px] font-bold text-[var(--accent-indigo)] uppercase tracking-wider">{t('vault.privacyFirstTitle')}</h4>
              <p className="text-[11px] text-[var(--text-secondary)] leading-relaxed font-medium">
-               {t('vault.privacyDesc') || 'Your Master Password is never stored on our servers. All encryption happens locally in your browser. If you lose this password, your data is unrecoverable.'}
+               {t('vault.privacyFirstDesc')}
              </p>
           </div>
         </div>
       </div>
 
       {renderFAQ()}
+
+      {/* Local Relay Reminder Modal */}
+      <AnimatePresence>
+        {showRelayReminder && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="absolute inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm rounded-2xl"
+          >
+            <motion.div
+              initial={{ scale: 0.9, opacity: 0, y: 10 }}
+              animate={{ scale: 1, opacity: 1, y: 0 }}
+              exit={{ scale: 0.9, opacity: 0, y: 10 }}
+              className="mx-4 bg-[var(--bg-secondary)] border border-amber-500/30 rounded-2xl p-5 space-y-4 shadow-2xl max-w-sm w-full"
+            >
+              <div className="flex items-start gap-3">
+                <div className="w-10 h-10 rounded-xl bg-amber-500/15 flex items-center justify-center shrink-0">
+                  <Zap size={18} className="text-amber-400" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-extrabold text-[var(--text-primary)]">{t('vault.relay.reminderTitle')}</h3>
+                  <p className="text-xs text-[var(--text-secondary)] mt-1 leading-relaxed">
+                    {t('vault.relay.reminderDesc').split('localhost').map((part, i, arr) =>
+                      i < arr.length - 1
+                        ? [part, <span key={i} className="font-mono text-amber-400">localhost</span>]
+                        : part
+                    )}
+                  </p>
+                </div>
+              </div>
+
+              <div className="p-3 bg-amber-500/5 border border-amber-500/15 rounded-xl text-[11px] text-amber-300/80 leading-relaxed">
+                {t('vault.relay.reminderHint')}
+              </div>
+
+              <div className="flex gap-2 pt-1">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowRelayReminder(false);
+                    setPendingSetup(null);
+                    dismissVault();
+                    window.dispatchEvent(new CustomEvent('open-settings-tab', { detail: 'database' }));
+                  }}
+                  className="flex-1 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-white text-xs font-bold transition-all"
+                >
+                  {t('vault.relay.setupRelay')}
+                </button>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    setShowRelayReminder(false);
+                    if (pendingSetup) await continueSetup(pendingSetup.uri, pendingSetup.tunnelConfig);
+                    setPendingSetup(null);
+                  }}
+                  className="flex-1 py-2.5 rounded-xl bg-[var(--bg-card)] hover:bg-[var(--bg-card-hover)] border border-[var(--border-color)] text-[var(--text-secondary)] text-xs font-bold transition-all"
+                >
+                  {t('vault.relay.continueAnyway')}
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </form>
   );
 

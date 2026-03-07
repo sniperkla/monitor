@@ -68,7 +68,7 @@ export default function DatabaseBrowser({ initialConnection, onEditConnection, o
       <div className="h-full flex items-center justify-center bg-[var(--bg-primary)] rounded-3xl border border-[var(--border-color)]">
          <div className="text-center animate-pulse">
             <Database size={40} className="text-emerald-500 mx-auto mb-4" />
-            <p className="text-[var(--text-muted)] text-sm">Opening {initialConnection.name}...</p>
+            <p className="text-[var(--text-muted)] text-sm">{t('common.opening', { name: initialConnection.name })}</p>
          </div>
       </div>
     );
@@ -87,17 +87,18 @@ export default function DatabaseBrowser({ initialConnection, onEditConnection, o
             </div>
           </div>
           <h3 className="text-2xl font-bold mb-2 text-[var(--text-primary)] tracking-tight">
-            Database Launchpad
+            {t('database.launchpad.title')}
           </h3>
           <p className="text-sm text-[var(--text-muted)] max-w-md mx-auto mb-10">
-            Select a connection to manage your data. 
-            Your saved databases are shown below.
+            {t('database.launchpad.subtitle')}
           </p>
 
           <div className="space-y-8">
             {dbConnections.length > 0 && (
               <div className="animate-in fade-in slide-in-from-bottom-4 duration-500">
-                <h4 className="text-[10px] font-bold uppercase tracking-[0.2em] text-[var(--text-muted)] mb-4 text-center">Your Saved Connections</h4>
+                <h4 className="text-[10px] font-bold uppercase tracking-[0.2em] text-[var(--text-muted)] mb-4 text-center">
+                  {t('database.launchpad.savedConnections')}
+                </h4>
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 justify-items-center">
                   {dbConnections.map((conn, idx) => (
                     <div key={conn._id || conn.id || `conn-${idx}`} className="relative group">

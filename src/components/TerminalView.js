@@ -1897,7 +1897,7 @@ export default function TerminalView({ connectionId, connectionName, host, color
                 <span className="text-[10px] font-mono opacity-30 text-[var(--text-muted)] truncate hidden sm:inline ml-1">{fullPath}</span>
               )}
               {!result.success && (
-                <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-red-500/20 text-red-400 ml-2">FAILED</span>
+                <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-red-500/20 text-red-400 ml-2">{t('ai.failedSmall')}</span>
               )}
             </button>
 
@@ -3830,7 +3830,7 @@ ${isExecutionGoal ? '⚡ EXECUTION GOAL: Run shell commands directly. Use `cat` 
         setAiHasOpenedOnce(true);
         setAutoStepHistory(prev => [...prev, {
           command: parsed.command || '',
-          explain: `FAILED: ${failReason}`,
+          explain: `${t('ai.failedSmall')}: ${failReason}`,
           status: 'error',
         }]);
         return;
@@ -4552,8 +4552,8 @@ What is your move?`;
                 </div>
                 
                 <div className="space-y-1">
-                  <div className="text-sm font-bold text-emerald-300 tracking-tight">AI Control Active</div>
-                  <div className="text-[11px] text-emerald-400/60 leading-relaxed">Terminal is locked while AI is executing your goal.</div>
+                  <div className="text-sm font-bold text-emerald-300 tracking-tight">{t('ai.aiControlActive')}</div>
+                  <div className="text-[11px] text-emerald-400/60 leading-relaxed">{t('ai.aiControlDesc')}</div>
                 </div>
 
                 <div className="w-full h-px bg-white/5 my-1" />
@@ -4665,16 +4665,13 @@ What is your move?`;
               {/* Popovers */}
               {aiHistoryOpen && (
                 <div className="absolute top-10 left-2 right-2 z-50 rounded-xl border border-white/10 bg-[var(--bg-secondary)] shadow-xl overflow-hidden">
-                  <div className="flex items-center justify-between px-3 py-2 border-b border-white/10">
-                    <span className="text-[10px] font-bold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>History</span>
-                    <div className="flex gap-2">
-                      <button onClick={() => setSshAiHistory([])} className="text-[10px] opacity-70 hover:opacity-100" style={{ color: 'var(--text-muted)' }}>Clear</button>
-                      <button onClick={() => setAiHistoryOpen(false)} className="text-[10px] opacity-70 hover:opacity-100" style={{ color: 'var(--text-muted)' }}>Close</button>
-                    </div>
+                  <div className="p-3 border-b border-white/10 flex items-center justify-between">
+                    <h4 className="text-[10px] font-bold text-indigo-400 uppercase tracking-widest">{t('ai.history')}</h4>
+                    <button onClick={() => setAiHistoryOpen(false)} className="text-[10px] opacity-70 hover:opacity-100" style={{ color: 'var(--text-muted)' }}>{t('ai.close')}</button>
                   </div>
-                  <div className="max-h-64 overflow-y-auto">
+                  <div className="max-h-60 overflow-y-auto custom-scrollbar">
                     {sshAiHistory.length === 0 ? (
-                      <div className="px-3 py-3 text-[11px] opacity-60" style={{ color: 'var(--text-muted)' }}>No history</div>
+                      <div className="px-3 py-3 text-[11px] opacity-60" style={{ color: 'var(--text-muted)' }}>{t('ai.noHistory')}</div>
                     ) : (
                       sshAiHistory.slice(0, 20).map((h) => {
                         const isAuto = h?.type === 'auto';
@@ -4754,73 +4751,73 @@ What is your move?`;
                       <input type="checkbox" checked={!!sshAiPrefs.preferSudo} onChange={(e) => setSshAiPrefs({ preferSudo: e.target.checked })} disabled={!isLoggedIn} />
                     </label>
 
-                    <label className="flex items-center justify-between text-[11px]" style={{ color: 'var(--text-primary)' }} title="When enabled, Code Editor mode will propose changes as a patch (<diff>) for you to review/apply (VSCode-like).">
+                    <label className="flex items-center justify-between text-[11px]" style={{ color: 'var(--text-primary)' }} title={t('ai.enforcePatchDesc')}>
                       <span className="flex items-center gap-1.5">
                         <span className="text-emerald-400">🧩</span>
-                        Enforce Patch-first
+                        {t('ai.enforcePatch')}
                       </span>
                       <input type="checkbox" checked={sshAiPrefs?.enforcePatch !== false} onChange={(e) => setSshAiPrefs({ enforcePatch: e.target.checked })} disabled={!isLoggedIn} />
                     </label>
 
-                    <label className="flex items-center justify-between text-[11px]" style={{ color: 'var(--text-primary)' }} title="When enabled, AI patches will be applied automatically (with backups). You can Rollback from the Patch Review modal.">
+                    <label className="flex items-center justify-between text-[11px]" style={{ color: 'var(--text-primary)' }} title={t('ai.autoApplyPatchDesc')}>
                       <span className="flex items-center gap-1.5">
                         <span className="text-indigo-400">⚡</span>
-                        Auto-apply patches
+                        {t('ai.autoApplyPatch')}
                       </span>
-                      <input type="checkbox" checked={!!sshAiPrefs?.autoApplyPatch} onChange={(e) => setSshAiPrefs({ autoApplyPatch: e.target.checked })} disabled={!isLoggedIn || sshAiPrefs?.enforcePatch === false || sshAiPrefs?.aiTask !== 'code'} />
+                      <input type="checkbox" checked={!!sshAiPrefs?.autoApplyPatch} onChange={(e) => setSshAiPrefs({ autoApplyPatch: e.target.checked })} disabled={!isLoggedIn || sshAiPrefs?.enforcePatch === false || sshAiPrefs?.aiTask === 'code'} />
                     </label>
 
-                    <label className="flex items-center justify-between text-[11px]" style={{ color: 'var(--text-primary)' }} title="Automatically install and prepare tmux for AI to run background tasks without blocking the terminal.">
+                    <label className="flex items-center justify-between text-[11px]" style={{ color: 'var(--text-primary)' }} title={t('ai.backgroundTasksDesc')}>
                       <span className="flex items-center gap-1.5">
                         <span className="text-blue-400">🔄</span>
-                        Background AI Tasks (tmux)
+                        {t('ai.backgroundTasks')}
                       </span>
                       <input type="checkbox" checked={!!sshAiPrefs?.autoTmux} onChange={(e) => setSshAiPrefs({ autoTmux: e.target.checked })} disabled={!isLoggedIn} />
                     </label>
 
-                    <label className="flex items-center justify-between text-[11px]" style={{ color: 'var(--text-primary)' }} title="Ask for confirmation before executing sensitive commands (rm -rf, disk operations, user deletion, etc.)">
+                    <label className="flex items-center justify-between text-[11px]" style={{ color: 'var(--text-primary)' }} title={t('ai.confirmSensitiveDesc')}>
                       <span className="flex items-center gap-1.5">
                         <ShieldAlert size={12} className="text-amber-400" />
-                        Confirm Sensitive Ops
+                        {t('ai.confirmSensitiveOps')}
                       </span>
                       <input type="checkbox" checked={sshAiPrefs?.confirmSensitive !== false} onChange={(e) => setSshAiPrefs({ confirmSensitive: e.target.checked })} disabled={!isLoggedIn} />
                     </label>
 
                     {/* AI Task Mode */}
                     <div className="pt-1 space-y-1">
-                      <span className="text-[9px] font-bold uppercase tracking-widest opacity-50" style={{ color: 'var(--text-muted)' }}>AI Task Mode</span>
+                      <span className="text-[9px] font-bold uppercase tracking-widest opacity-50" style={{ color: 'var(--text-muted)' }}>{t('ai.aiTaskMode')}</span>
                       <div className="grid grid-cols-2 gap-1">
                         <button
                           onClick={() => setSshAiPrefs({ aiTask: 'ssh' })}
                           disabled={!isLoggedIn}
                           className={`px-2 py-1.5 rounded-lg text-[10px] font-bold transition-all border ${(!sshAiPrefs.aiTask || sshAiPrefs.aiTask === 'ssh') ? 'bg-indigo-500/20 border-indigo-500/40 text-indigo-400' : 'bg-black/20 border-white/10 text-[var(--text-muted)]'}`}
-                          title="SSH Commands — AI sends terminal commands to achieve your goal"
+                          title={t('ai.sshCommandsTitle')}
                         >
-                          💻 SSH Commands
+                          {t('ai.sshCommands')}
                         </button>
                         <button
                           onClick={() => setSshAiPrefs({ aiTask: 'code' })}
                           disabled={!isLoggedIn}
                           className={`px-2 py-1.5 rounded-lg text-[10px] font-bold transition-all border ${sshAiPrefs.aiTask === 'code' ? 'bg-emerald-500/20 border-emerald-500/40 text-emerald-400' : 'bg-black/20 border-white/10 text-[var(--text-muted)]'}`}
-                          title="Code / File Editor — AI writes or patches file content directly"
+                          title={t('ai.codeEditorTitle')}
                         >
-                          🗒 Code Editor
+                          {t('ai.codeEditor')}
                         </button>
                       </div>
                       <p className="text-[9px] leading-tight opacity-50" style={{ color: 'var(--text-muted)' }}>
                         {(!sshAiPrefs.aiTask || sshAiPrefs.aiTask === 'ssh')
-                          ? 'AI generates shell commands to run on the server.'
-                          : 'AI writes/patches file content (JSON, TOML, scripts, agent files, etc). Use when you want to edit a file, not run commands.'}
+                          ? t('ai.sshCommandsDesc')
+                          : t('ai.codeEditorDesc')}
                       </p>
                     </div>
 
                     <div className="pt-1">
-                        <select value={sshAiPrefs.aiModel || 'auto'} onChange={(e) => setSshAiPrefs({ aiModel: e.target.value })} disabled={!isLoggedIn} className="w-full text-[11px] rounded bg-black/30 border border-white/10 px-2 py-1.5 outline-none focus:border-indigo-500/50" title="AI Model" style={{ color: 'var(--text-primary)' }}>
-                          <option value="auto">✨ Auto Select (Recommended)</option>
+                        <select value={sshAiPrefs.aiModel || 'auto'} onChange={(e) => setSshAiPrefs({ aiModel: e.target.value })} disabled={!isLoggedIn} className="w-full text-[11px] rounded bg-black/30 border border-white/10 px-2 py-1.5 outline-none focus:border-indigo-500/50" title={t('ai.aiModel')} style={{ color: 'var(--text-primary)' }}>
+                          <option value="auto">{t('ai.autoSelect')}</option>
                           <option value="llama-3.1-8b-instant">🥉 Llama 3.1 8B (Thinking)</option>
                           <option value="meta-llama/llama-4-scout-17b-16e-instruct">🥇 Llama 4 Scout (Primary)</option>
                           <option value="llama-3.3-70b-versatile">🥈 Llama 3.3 70B (Heavy/Large)</option>
-                          <option value="manual">🛠 Custom (Manual Endpoint)</option>
+                          <option value="manual">{t('ai.customManual')}</option>
                         </select>
                     </div>
                     {sshAiPrefs.aiModel === 'manual' && (
@@ -4836,9 +4833,9 @@ What is your move?`;
                              🦙 Ollama
                            </button>
                         </div>
-                        <input type="text" placeholder="Endpoint URL (e.g. https://api.openai.com/v1/chat/completions)" value={sshAiPrefs.aiEndpoint || ''} onChange={e => setSshAiPrefs({ aiEndpoint: e.target.value })} disabled={!isLoggedIn} className="w-full text-[10px] rounded bg-black/30 border border-white/10 px-2 py-1.5 focus:border-indigo-500/50 outline-none" style={{ color: 'var(--text-primary)' }} title="API Endpoint URL" />
-                        <input type="password" placeholder="API Key" value={sshAiPrefs.aiApiKey || ''} onChange={e => setSshAiPrefs({ aiApiKey: e.target.value })} disabled={!isLoggedIn} className="w-full text-[10px] rounded bg-black/30 border border-white/10 px-2 py-1.5 focus:border-indigo-500/50 outline-none" style={{ color: 'var(--text-primary)' }} title="API Key" />
-                        <input type="text" placeholder="Model Name (e.g. gpt-4o, openrouter/auto)" value={sshAiPrefs.aiCustomModel || ''} onChange={e => setSshAiPrefs({ aiCustomModel: e.target.value })} disabled={!isLoggedIn} className="w-full text-[10px] rounded bg-black/30 border border-white/10 px-2 py-1.5 focus:border-indigo-500/50 outline-none" style={{ color: 'var(--text-primary)' }} title="Custom Model Name" />
+                        <input type="text" placeholder={t('ai.endpointUrl')} value={sshAiPrefs.aiEndpoint || ''} onChange={e => setSshAiPrefs({ aiEndpoint: e.target.value })} disabled={!isLoggedIn} className="w-full text-[10px] rounded bg-black/30 border border-white/10 px-2 py-1.5 focus:border-indigo-500/50 outline-none" style={{ color: 'var(--text-primary)' }} title="API Endpoint URL" />
+                        <input type="password" placeholder={t('ai.apiKey')} value={sshAiPrefs.aiApiKey || ''} onChange={e => setSshAiPrefs({ aiApiKey: e.target.value })} disabled={!isLoggedIn} className="w-full text-[10px] rounded bg-black/30 border border-white/10 px-2 py-1.5 focus:border-indigo-500/50 outline-none" style={{ color: 'var(--text-primary)' }} title="API Key" />
+                        <input type="text" placeholder={t('ai.modelName')} value={sshAiPrefs.aiCustomModel || ''} onChange={e => setSshAiPrefs({ aiCustomModel: e.target.value })} disabled={!isLoggedIn} className="w-full text-[10px] rounded bg-black/30 border border-white/10 px-2 py-1.5 focus:border-indigo-500/50 outline-none" style={{ color: 'var(--text-primary)' }} title="Custom Model Name" />
                       </div>
                     )}
 
@@ -4881,27 +4878,16 @@ What is your move?`;
                   <div className="flex flex-1 justify-end items-center gap-2">
                     {/* Server Memory Badge */}
                     {sshMemory && (sshMemory.os || sshMemory.installedTools?.length > 0) && (
-                      <div 
-                        className="flex items-center gap-1.5 px-2 py-1 rounded-md bg-purple-500/10 border border-purple-500/20 text-purple-400 text-[9px] font-bold cursor-help transition-colors hover:bg-purple-500/20"
-                        title={
-                          `Server Memory Context:\n` +
-                          `OS: ${sshMemory.os || 'Unknown'}\n` +
-                          `PkgMgr: ${sshMemory.packageManager || 'Unknown'}\n` +
-                          `Tools: ${sshMemory.installedTools?.length || 0} known\n` +
-                          `Services: ${sshMemory.runningServices?.length || 0} known\n` +
-                          `Paths: ${sshMemory.keyPaths?.length || 0} known\n` +
-                          `Reminders: ${sshMemory.reminders?.length || 0} saved`
-                        }
-                      >
-                        <Brain size={10} className="text-purple-400" />
-                        <span className="uppercase tracking-wider">Brain Synced</span>
+                      <div className="flex items-center gap-1.5 px-2 py-1 rounded bg-indigo-500/10 border border-indigo-500/20">
+                        <Sparkles size={10} className="text-indigo-400" />
+                        <span className="uppercase tracking-wider">{t('ai.brainSynced')}</span>
                       </div>
                     )}
 
                     {aiMode === 'auto' && (
                       <div className="flex items-center gap-2 px-2 py-1 rounded-md bg-emerald-500/10 border border-emerald-500/20">
                         <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse shadow-[0_0_8px_rgba(16,185,129,0.5)]" />
-                        <span className="text-[9px] font-bold text-emerald-400 uppercase tracking-wider">Engine Active</span>
+                        <span className="text-[9px] font-bold text-emerald-400 uppercase tracking-wider">{t('ai.engineActive')}</span>
                       </div>
                     )}
                   </div>
@@ -6130,8 +6116,8 @@ What is your move?`;
                   <div className={`flex gap-2 bg-[var(--bg-primary)] border border-white/5 rounded-2xl p-1.5 shadow-2xl transition-all focus-within:border-indigo-500/40 focus-within:ring-4 focus-within:ring-indigo-500/5 ${(!isLoggedIn || aiLimitHit) ? 'opacity-50 grayscale' : ''}`}>
                     {aiMode === 'auto' ? (
                       <div className="flex-1 flex flex-col px-3 py-1 min-w-0">
-                        <div className="flex items-center gap-2 mb-0.5">
-                          <span className="text-[8px] font-black tracking-widest text-emerald-500 opacity-70 shrink-0">GOAL</span>
+                        <div className="flex flex-col flex-1 gap-1.5 opacity-60">
+                          <span className="text-[8px] font-black tracking-widest text-emerald-500 opacity-70 shrink-0">{t('ai.goal').toUpperCase()}</span>
                           {autoGoal.length > 0 && (
                             <span className="text-[8px] text-white/20 ml-auto">{autoGoal.length} chars</span>
                           )}
@@ -6311,18 +6297,19 @@ What is your move?`;
                   
                   {/* Footer Hint */}
                   {noMentionWarning ? (
-                    <div className="flex items-center gap-2 px-2 py-1.5 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-400 text-[10px] font-bold animate-pulse">
-                      <AtSign size={11} className="shrink-0" />
-                      <span>Code Mode requires a file mention — type <span className="font-mono bg-amber-500/20 px-1 rounded">@filename</span> to tell the AI exactly which file to edit</span>
+                    <div className="p-3 text-[10px] text-amber-500 bg-amber-500/10 border border-amber-500/20 rounded-xl leading-relaxed">
+                      <span>{t('ai.codeModeMention').split('@filename').map((part, i, arr) => 
+                        i < arr.length - 1 ? [part, <span key={i} className="font-mono bg-amber-500/20 px-1 rounded">@filename</span>] : part
+                      )}</span>
                     </div>
                   ) : !isLoggedIn ? (
-                    <div className="text-center text-[9px] text-amber-400/60 font-medium uppercase tracking-tighter">Login Required to Execute</div>
+                    <div className="text-center text-[9px] text-amber-400/60 font-medium uppercase tracking-tighter">{t('ai.loginToExecute')}</div>
                   ) : aiLimitHit ? (
-                    <div className="text-center text-[9px] text-rose-400/60 font-medium uppercase tracking-tighter">Daily Token Limit Reached</div>
+                    <div className="text-center text-[9px] text-rose-400/60 font-medium uppercase tracking-tighter">{t('ai.dailyLimitReached')}</div>
                   ) : (
                     <div className="flex items-center justify-between px-2 text-[9px] text-white/30 font-medium uppercase tracking-tighter">
-                       <span>{aiMode === 'auto' ? 'Goal Mode Active' : (sshAiPrefs.aiTask === 'code' ? '🗒 Code Editor Mode' : t('ai.usesLastOutput'))}</span>
-                       <span className={sshAiPrefs.aiTask === 'code' ? 'text-emerald-400/50' : ''}>{sshAiPrefs.aiTask === 'code' ? 'File Edit Mode — Not SSH' : 'Terminal Context Attached'}</span>
+                       <span>{aiMode === 'auto' ? t('ai.goalModeActive') : (sshAiPrefs.aiTask === 'code' ? t('ai.codeEditorMode') : t('ai.usesLastOutput'))}</span>
+                       <span className={sshAiPrefs.aiTask === 'code' ? 'text-emerald-400/50' : ''}>{sshAiPrefs.aiTask === 'code' ? t('ai.fileEditMode') : t('ai.terminalContextAttached')}</span>
                     </div>
                   )}
                 </div>

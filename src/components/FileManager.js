@@ -1095,7 +1095,7 @@ export default function FileManager({ connectionId, connection, connectionName }
   const handleEdit = () => {
     if (!contextMenu.file || !socket) return;
     if (contextMenu.file.longname.startsWith('d')) {
-       addNotification({ title: 'Error', message: 'Cannot edit directory', type: 'error' });
+       addNotification({ title: t('common.error'), message: t('files.errors.cannotEditDir'), type: 'error' });
        return;
     }
     const path = contextMenu.file.absPath || (currentPath === '.' ? contextMenu.file.filename : `${currentPath}/${contextMenu.file.filename}`);
@@ -1121,7 +1121,7 @@ export default function FileManager({ connectionId, connection, connectionName }
       sourcePath: path,
       connectionId: connectionId // Store source connection
     });
-    addNotification({ title: 'Success', message: `${action === 'copy' ? 'Copied' : 'Cut'} ${contextMenu.file.filename}`, type: 'success' });
+    addNotification({ title: t('common.success'), message: `${action === 'copy' ? t('files.actions.copied') : t('files.actions.cut')} ${contextMenu.file.filename}`, type: 'success' });
     setContextMenu({ ...contextMenu, visible: false });
   };
 
@@ -1186,7 +1186,7 @@ export default function FileManager({ connectionId, connection, connectionName }
           style={{ 
             color: latency < 150 ? (osState?.theme === 'light' ? '#059669' : '#4ade80') : latency < 300 ? (osState?.theme === 'light' ? '#d97706' : '#fbbf24') : (osState?.theme === 'light' ? '#dc2626' : '#f43f5e') 
           }}
-          title="Network Latency (Ping)"
+          title={t('files.status.latency')}
         >
           <Wifi size={10} strokeWidth={3} />
           <span className="font-mono tracking-tighter">{latency}ms</span>
@@ -1727,23 +1727,23 @@ export default function FileManager({ connectionId, connection, connectionName }
              </div>
              <div className="w-full space-y-3">
                <div className="flex justify-between items-start border-b border-[var(--border-color)] pb-2 pt-1 gap-2">
-                 <span className="text-[10px] font-bold text-[var(--text-muted)] uppercase shrink-0">Name</span>
+                  <span className="text-[10px] font-bold text-[var(--text-muted)] uppercase shrink-0">{t('files.info.name')}</span>
                  <p className="text-xs font-medium text-right break-all leading-tight">{infoModal.file?.filename}</p>
                </div>
                <div className="flex justify-between items-center border-b border-[var(--border-color)] pb-2">
-                 <span className="text-[10px] font-bold text-[var(--text-muted)] uppercase">Type</span>
-                 <p className="text-xs font-medium">{infoModal.file?.longname.startsWith('d') ? 'Directory' : 'File'}</p>
+                  <span className="text-[10px] font-bold text-[var(--text-muted)] uppercase">{t('files.info.type')}</span>
+                  <p className="text-xs font-medium">{infoModal.file?.longname.startsWith('d') ? t('files.info.directory') : t('files.info.file')}</p>
                </div>
                <div className="flex justify-between items-center border-b border-[var(--border-color)] pb-2">
-                 <span className="text-[10px] font-bold text-[var(--text-muted)] uppercase">Size</span>
+                  <span className="text-[10px] font-bold text-[var(--text-muted)] uppercase">{t('files.info.size')}</span>
                  <p className="text-xs font-medium font-mono">{formatSize(infoModal.file?.attrs?.size)}</p>
                </div>
                <div className="flex justify-between items-center border-b border-[var(--border-color)] pb-2">
-                 <span className="text-[10px] font-bold text-[var(--text-muted)] uppercase">Modified</span>
+                  <span className="text-[10px] font-bold text-[var(--text-muted)] uppercase">{t('files.info.modified')}</span>
                  <p className="text-[11px] font-medium">{new Date(infoModal.file?.attrs?.mtime * 1000).toLocaleDateString()}</p>
                </div>
                <div className="space-y-1">
-                 <span className="text-[10px] font-bold text-[var(--text-muted)] uppercase">Path</span>
+                  <span className="text-[10px] font-bold text-[var(--text-muted)] uppercase">{t('files.info.path')}</span>
                  <p className="text-[10px] font-mono break-all opacity-60 leading-tight">{currentPath === '.' ? infoModal.file?.filename : `${currentPath}/${infoModal.file?.filename}`}</p>
                </div>
              </div>
@@ -1773,7 +1773,7 @@ export default function FileManager({ connectionId, connection, connectionName }
               : <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--text-muted)]" size={14} />}
             <input 
               type="text" 
-              placeholder="Search whole server..."
+              placeholder={t('files.status.searchWhole')}
               value={searchQuery}
               onChange={(e) => { setSearchQuery(e.target.value); }}
               onKeyDown={(e) => e.key === 'Escape' && setSearchQuery('')}
@@ -1801,7 +1801,7 @@ export default function FileManager({ connectionId, connection, connectionName }
             <button 
               onClick={() => uploadInputRef.current?.click()}
               className="p-1 text-[var(--text-muted)] hover:text-[var(--text-primary)] rounded hover:bg-[var(--border-color)] transition-all"
-              title="Upload from Local Computer"
+              title={t('files.status.uploadLocal')}
             >
               <Upload size={16} />
             </button>
@@ -1878,7 +1878,7 @@ export default function FileManager({ connectionId, connection, connectionName }
             <div className="w-12 h-12 border-4 border-blue-500/20 border-t-blue-500 rounded-full animate-spin" />
             <div className="text-center">
               <span className="text-sm text-[var(--text-secondary)] block mb-1">
-                {status === 'connecting' ? 'Establishing Socket...' : 'Initializing SSH & SFTP...'}
+                {status === 'connecting' ? t('files.status.establishingSocket') : t('files.status.initializingSshSftp')}
               </span>
               <span className="text-xs text-[var(--text-muted)] uppercase tracking-widest">{connectionName}</span>
             </div>
@@ -2004,16 +2004,16 @@ export default function FileManager({ connectionId, connection, connectionName }
       {/* Footer / Status */}
       <div className="px-4 py-2 bg-[var(--bg-tertiary)]/80 border-t border-[var(--border-color)] flex items-center justify-between text-[10px] text-[var(--text-muted)]">
         <div className="flex gap-4">
-          <span>{filteredFiles.length} {isSearchMode ? 'matches' : 'items'}</span>
-          <span>{filteredFiles.filter(f => !f.longname.startsWith('d')).length} files</span>
-          {isSearchMode && <span className="text-blue-400">🔍 whole server · click to navigate</span>}
-          {status !== 'ready' && <span className="animate-pulse text-amber-500">System State: {status}</span>}
+          <span>{filteredFiles.length} {isSearchMode ? t('files.status.matches') : t('files.status.items')}</span>
+          <span>{filteredFiles.filter(f => !f.longname.startsWith('d')).length} {t('files.status.filesPlural')}</span>
+          {isSearchMode && <span className="text-blue-400">{t('files.status.wholeServerNavigate')}</span>}
+          {status !== 'ready' && <span className="animate-pulse text-amber-500">{t('files.status.systemState', { status })}</span>}
         </div>
         <div className="flex gap-4">
           {uploadQueue.length > 0 && (
              <div className="flex items-center gap-2 text-blue-400">
                 <span className="animate-pulse">●</span>
-                <span>{uploadQueue.length} files in queue</span>
+                 <span>{uploadQueue.length} {t('files.status.filesInQueue')}</span>
                 <button 
                   onClick={() => {
                      const next = uploadQueue[0];
@@ -2021,12 +2021,12 @@ export default function FileManager({ connectionId, connection, connectionName }
                   }}
                   className="px-2 py-0.5 bg-blue-500/20 rounded hover:bg-blue-500/30 transition-colors flex items-center gap-1"
                 >
-                   <RefreshCw size={8} /> Resync
+                   <RefreshCw size={8} /> {t('files.status.resync')}
                 </button>
              </div>
           )}
           <span className={status === 'ready' ? 'text-emerald-500' : status === 'error' ? 'text-rose-500' : 'text-amber-500'}>
-            {status === 'ready' ? '● SFTP Protocol Active' : status === 'error' ? '○ Connection Failed' : '○ Initializing...'}
+            {status === 'ready' ? t('files.status.sftpActive') : status === 'error' ? t('files.status.connFailed') : t('files.status.initializing')}
           </span>
         </div>
       </div>

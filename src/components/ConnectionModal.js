@@ -8,7 +8,7 @@ import { useTranslation } from 'react-i18next';
 import { useSession, signIn } from 'next-auth/react';
 import MacOSModalWindow from '@/components/MacOSModalWindow';
 import {
-  X, Server, User, Lock, Key, Upload, FileKey, Hash, Tag, Palette, StickyNote, Database, HardDrive, Cpu, Eye, EyeOff, Activity, RefreshCw
+  X, Server, User, Lock, Key, Upload, FileKey, Hash, Tag, Palette, StickyNote, Database, HardDrive, Cpu, Eye, EyeOff, Activity, RefreshCw, AlertTriangle, Network
 } from 'lucide-react';
 
 const COLORS = [
@@ -53,15 +53,6 @@ export default function ConnectionModal({ onClose, editConnection = null }) {
     color: editConnection?.color || (editConnection?.type === 'database' ? '#10b981' : '#6366f1'),
     notes: editConnection?.notes || '',
     targetStorage: editConnection?.storage || state.storageMode || 'db',
-    // SSH Tunnel (for database connections)
-    sshTunnel: editConnection?.sshTunnel || false,
-    sshTunnelHost: editConnection?.sshTunnelHost || '',
-    sshTunnelPort: editConnection?.sshTunnelPort || 22,
-    sshTunnelUser: editConnection?.sshTunnelUser || '',
-    sshTunnelAuth: editConnection?.sshTunnelAuth || 'password',
-    sshTunnelPassword: '',
-    sshTunnelPrivateKey: '',
-    sshTunnelPassphrase: '',
   });
 
   // Auto-set ports based on provider
@@ -208,15 +199,15 @@ export default function ConnectionModal({ onClose, editConnection = null }) {
           
           return newForm;
         });
-        addNotification({ title: 'Import successful', message: 'URI details have been applied.', type: 'info' });
+        addNotification({ title: t('ssh.toasts.importSuccess'), message: t('ssh.toasts.importSuccess'), type: 'info' });
         setIsUriModalOpen(false);
         setUriInput('');
       } else {
-        showAlert('Only mongodb://, mysql:// and postgresql:// are supported.', 'Unsupported Protocol');
+        showAlert(t('settings_ui.db.invalidUri'), t('common.error'));
       }
     } catch (e) {
       console.error('URI Parse Error:', e);
-      showAlert('The provided string is not a valid URI format.', 'Invalid URI');
+      showAlert(t('settings_ui.db.invalidUri'), t('common.error'));
     }
   };
 
@@ -240,25 +231,25 @@ export default function ConnectionModal({ onClose, editConnection = null }) {
       
       if (res.status === 429) {
         addNotification({ 
-          title: 'Rate Limited', 
-          message: data.error || 'Too many requests. Please wait.', 
+          title: t('database.status.rateLimited'), 
+          message: data.error || t('database.status.rateLimited'), 
           type: 'error' 
         });
       } else if (data.success) {
         addNotification({ 
-          title: 'Success', 
-          message: `${t('ssh.toasts.connectSuccess')}: ${data.info || 'Connected'}`, 
+          title: t('common.success'), 
+          message: `${t('ssh.toasts.connectSuccess') || t('common.connected')}: ${data.info || 'Connected'}`, 
           type: 'success' 
         });
       } else {
         addNotification({ 
-          title: 'Connection Failed', 
-          message: data.error || t('ssh.toasts.connectFail'), 
+          title: t('ssh.status.error') || t('common.error'), 
+          message: data.error || t('ssh.toasts.testFail'), 
           type: 'error' 
         });
       }
     } catch (err) {
-      addNotification({ title: 'Error', message: err.message, type: 'error' });
+      addNotification({ title: t('common.error'), message: err.message, type: 'error' });
     } finally {
       setIsTesting(false);
     }
@@ -290,20 +281,6 @@ export default function ConnectionModal({ onClose, editConnection = null }) {
       notes: form.notes,
       storage: form.targetStorage,
     };
-
-    // SSH Tunnel config
-    if (form.type === 'database' && form.sshTunnel && form.sshTunnelHost) {
-      payload.sshTunnel = true;
-      payload.sshTunnelHost = form.sshTunnelHost;
-      payload.sshTunnelPort = parseInt(form.sshTunnelPort) || 22;
-      payload.sshTunnelUser = form.sshTunnelUser;
-      payload.sshTunnelAuth = form.sshTunnelAuth;
-      if (form.sshTunnelPassword) payload.sshTunnelPassword = form.sshTunnelPassword;
-      if (form.sshTunnelPrivateKey) payload.sshTunnelPrivateKey = form.sshTunnelPrivateKey;
-      if (form.sshTunnelPassphrase) payload.sshTunnelPassphrase = form.sshTunnelPassphrase;
-    } else {
-      payload.sshTunnel = false;
-    }
 
     if (form.authType === 'password' && form.password) {
       payload.password = form.password;
@@ -350,7 +327,7 @@ export default function ConnectionModal({ onClose, editConnection = null }) {
           dispatch({ type: 'ADD_CONNECTION', payload: data.data });
         }
         localStorage.setItem('ssh_monitor_connections', JSON.stringify(updated));
-        addNotification({ title: 'Saved', message: editConnection ? t('ssh.modal.buttons.update') : t('ssh.modal.buttons.save'), type: 'success' });
+        addNotification({ title: t('common.success'), message: editConnection ? t('ssh.modal.buttons.update') : t('ssh.modal.buttons.save'), type: 'success' });
         
         // AUTO-OPEN after save
         const savedConn = data.data;
@@ -416,7 +393,7 @@ export default function ConnectionModal({ onClose, editConnection = null }) {
           },
         });
 
-        addNotification({ title: 'Session Updated', message: editConnection ? t('ssh.toasts.manualUpdate') : t('ssh.toasts.manualSuccess'), type: 'success' });
+        addNotification({ title: t('common.success'), message: t('ssh.toasts.manualSuccess'), type: 'success' });
         onClose();
         return;
       }
@@ -445,7 +422,7 @@ export default function ConnectionModal({ onClose, editConnection = null }) {
             localStorage.setItem('ssh_monitor_connections', JSON.stringify(updated));
         }
         
-        addNotification({ title: 'Saved to Cloud', message: editConnection ? t('ssh.toasts.dbUpdate') : t('ssh.toasts.dbSuccess'), type: 'success' });
+        addNotification({ title: t('common.success'), message: editConnection ? t('ssh.toasts.dbUpdate') : t('ssh.toasts.dbSuccess'), type: 'success' });
         await fetchConnections();
         
         // AUTO-OPEN after save
@@ -481,10 +458,10 @@ export default function ConnectionModal({ onClose, editConnection = null }) {
 
         onClose();
       } else {
-        addNotification({ title: 'Error', message: resData.error || t('ssh.toasts.saveFail'), type: 'error' });
+        addNotification({ title: t('common.error'), message: resData.error || t('ssh.toasts.saveFail'), type: 'error' });
       }
     } catch (err) {
-      addNotification({ title: 'Error', message: t('ssh.toasts.errorPrefix') + err.message, type: 'error' });
+      addNotification({ title: t('common.error'), message: t('ssh.toasts.errorPrefix') + err.message, type: 'error' });
     } finally {
       setIsSubmitting(false);
     }
@@ -581,7 +558,7 @@ export default function ConnectionModal({ onClose, editConnection = null }) {
              <div className="flex bg-[var(--bg-tertiary)] p-1 rounded-xl">
                {[
                  { id: 'ssh', label: 'SSH Server', icon: Server },
-                 { id: 'database', label: 'Database', icon: Database },
+                 { id: 'database', label: t('common.database'), icon: Database },
                ].map(type => (
                  <button
                    key={type.id}
@@ -594,7 +571,7 @@ export default function ConnectionModal({ onClose, editConnection = null }) {
                    }`}
                  >
                    <type.icon size={14} />
-                   {type.label}
+                   {type.id === 'ssh' ? 'SSH Server' : type.label}
                  </button>
                ))}
              </div>
@@ -648,7 +625,7 @@ export default function ConnectionModal({ onClose, editConnection = null }) {
                   </label>
                   <div className="flex items-center justify-between mb-2">
                     <div className="flex items-center gap-2">
-                      <span className="text-[10px] font-bold text-[var(--text-muted)] uppercase tracking-widest">Supported:</span>
+                      <span className="text-[10px] font-bold text-[var(--text-muted)] uppercase tracking-widest">{t('common.supported')}:</span>
                       <div className="flex gap-1.5 grayscale opacity-50">
                          <Database size={12} className="text-emerald-500" />
                          <Database size={12} className="text-blue-500" />
@@ -662,7 +639,7 @@ export default function ConnectionModal({ onClose, editConnection = null }) {
                         onClick={() => setIsUriModalOpen(true)}
                         className="text-[9px] font-bold text-indigo-400 hover:text-indigo-300 transition-colors flex items-center gap-1 bg-indigo-500/10 px-2 py-0.5 rounded border border-indigo-500/20"
                       >
-                         <Upload size={10} /> Paste URI
+                         <Upload size={10} /> {t('ssh.modal.form.pasteUri')}
                       </button>
                     )}
                   </div>
@@ -708,6 +685,16 @@ export default function ConnectionModal({ onClose, editConnection = null }) {
                            </button>
                         </div>
                       )}
+                      {/* Relay agent hint when host is localhost */}
+                      {form.type === 'database' && /^(localhost|127\.0\.0\.1)$/.test(form.host) && (
+                        <div className="flex gap-2 mt-2 p-2.5 rounded-xl bg-amber-500/8 border border-amber-500/25 text-[10px] leading-relaxed">
+                          <AlertTriangle size={13} className="shrink-0 text-amber-400 mt-0.5" />
+                          <span className="text-amber-300/90">
+                            <strong>{t('ssh.modal.relay.localDetected')}</strong> {t('ssh.modal.relay.localDesc')}
+                            <span className="text-[var(--text-muted)]"> {t('ssh.modal.relay.localHint')}</span>
+                          </span>
+                        </div>
+                      )}
                     </div>
                     <div>
                       <label className="flex items-center gap-2 text-sm font-medium mb-2" style={{ color: 'var(--text-secondary)' }}>
@@ -725,7 +712,7 @@ export default function ConnectionModal({ onClose, editConnection = null }) {
                 ) : (
                   <div>
                     <label className="flex items-center gap-2 text-sm font-medium mb-2" style={{ color: 'var(--text-secondary)' }}>
-                      <Server size={14} /> SQLite File Path
+                      <Server size={14} /> {t('ssh.modal.form.sqlitePath')}
                     </label>
                     <input
                       type="text"
@@ -740,7 +727,7 @@ export default function ConnectionModal({ onClose, editConnection = null }) {
 
                 <div>
                   <label className="flex items-center gap-2 text-sm font-medium mb-2" style={{ color: 'var(--text-secondary)' }}>
-                    <User size={14} /> {form.type === 'database' ? 'Db User' : t('ssh.modal.form.username')}
+                    <User size={14} /> {form.type === 'database' ? t('ssh.modal.form.dbUser') : t('ssh.modal.form.username')}
                   </label>
                   <input
                     type="text"
@@ -755,7 +742,7 @@ export default function ConnectionModal({ onClose, editConnection = null }) {
                 {form.type === 'database' && (
                   <div className="animate-in fade-in slide-in-from-top-1 duration-200">
                     <label className="flex items-center gap-2 text-sm font-medium mb-2" style={{ color: 'var(--text-secondary)' }}>
-                      <Database size={14} /> Database Name
+                      <Database size={14} /> {t('ssh.modal.form.dbName')}
                     </label>
                     <input
                       type="text"
@@ -840,7 +827,7 @@ export default function ConnectionModal({ onClose, editConnection = null }) {
                    <div className="bg-emerald-500/5 border border-emerald-500/10 p-4 rounded-xl flex items-center gap-3">
                      <Activity size={16} className="text-emerald-400 shrink-0" />
                      <span className="text-[10px] text-[var(--text-muted)] italic">
-                       No authentication required for this connection. Be careful with open databases.
+                       {t('ssh.modal.auth.noAuthDesc') || 'No authentication required for this connection. Be careful with open databases.'}
                      </span>
                    </div>
                 ) : (
@@ -885,157 +872,6 @@ export default function ConnectionModal({ onClose, editConnection = null }) {
               </div>
            </div>
 
-           {/* ── SSH Tunnel Section (database connections only) ── */}
-           {form.type === 'database' && (
-             <div className="pt-2 border-t border-[var(--border-color)]">
-               {/* Toggle header */}
-               <button
-                 type="button"
-                 onClick={() => handleChange('sshTunnel', !form.sshTunnel)}
-                 className="w-full flex items-center justify-between px-3 py-2.5 rounded-xl border transition-all group"
-                 style={{
-                   background: form.sshTunnel ? 'rgba(99,102,241,0.08)' : 'var(--bg-tertiary)',
-                   borderColor: form.sshTunnel ? 'rgba(99,102,241,0.35)' : 'var(--border-color)',
-                 }}
-               >
-                 <div className="flex items-center gap-2.5">
-                   <div className={`w-7 h-7 rounded-lg flex items-center justify-center shrink-0 transition-colors ${form.sshTunnel ? 'bg-indigo-500/20' : 'bg-[var(--bg-primary)]'}`}>
-                     <Key size={13} className={form.sshTunnel ? 'text-indigo-400' : 'text-[var(--text-muted)]'} />
-                   </div>
-                   <div className="text-left">
-                     <div className={`text-xs font-bold ${form.sshTunnel ? 'text-indigo-300' : 'text-[var(--text-secondary)]'}`}>SSH Tunnel</div>
-                     <div className="text-[9px] text-[var(--text-muted)]">Connect via SSH — reach local/private DBs without port forwarding</div>
-                   </div>
-                 </div>
-                 {/* Toggle pill */}
-                 <div className={`relative w-9 h-5 rounded-full transition-colors shrink-0 ${form.sshTunnel ? 'bg-indigo-500' : 'bg-[var(--border-color)]'}`}>
-                   <div className={`absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-all ${form.sshTunnel ? 'left-4' : 'left-0.5'}`} />
-                 </div>
-               </button>
-
-               {/* Tunnel fields */}
-               {form.sshTunnel && (
-                 <div className="mt-3 space-y-3 pl-3 border-l-2 border-indigo-500/30 animate-in fade-in slide-in-from-top-2 duration-200">
-                   {/* Info banner */}
-                   <div className="flex gap-2 p-2.5 rounded-lg bg-indigo-500/8 border border-indigo-500/20 text-[9px] text-indigo-300/80 leading-relaxed">
-                     <Server size={11} className="shrink-0 mt-0.5 text-indigo-400" />
-                     <span>
-                       Enter the <strong>SSH host</strong> (e.g. your Tailscale IP or VPN address) below. <br />
-                       The <strong>DB host/port</strong> above is how the DB appears <em>from inside that SSH host</em> — <code className="font-mono">localhost:27017</code> works perfectly.
-                     </span>
-                   </div>
-
-                   {/* SSH Host + Port */}
-                   <div className="grid grid-cols-3 gap-3">
-                     <div className="col-span-2">
-                       <label className="flex items-center gap-1.5 text-xs font-medium mb-1.5" style={{ color: 'var(--text-secondary)' }}>
-                         <Server size={12} /> SSH Host
-                       </label>
-                       <input
-                         type="text"
-                         className="input-field"
-                         placeholder="100.64.x.x or jump.example.com"
-                         value={form.sshTunnelHost}
-                         onChange={(e) => handleChange('sshTunnelHost', e.target.value)}
-                       />
-                     </div>
-                     <div>
-                       <label className="flex items-center gap-1.5 text-xs font-medium mb-1.5" style={{ color: 'var(--text-secondary)' }}>
-                         <Activity size={12} /> Port
-                       </label>
-                       <input
-                         type="number"
-                         className="input-field"
-                         placeholder="22"
-                         value={form.sshTunnelPort}
-                         onChange={(e) => handleChange('sshTunnelPort', e.target.value)}
-                       />
-                     </div>
-                   </div>
-
-                   {/* SSH Username */}
-                   <div>
-                     <label className="flex items-center gap-1.5 text-xs font-medium mb-1.5" style={{ color: 'var(--text-secondary)' }}>
-                       <User size={12} /> SSH Username
-                     </label>
-                     <input
-                       type="text"
-                       className="input-field"
-                       placeholder="ubuntu, root, etc."
-                       value={form.sshTunnelUser}
-                       onChange={(e) => handleChange('sshTunnelUser', e.target.value)}
-                     />
-                   </div>
-
-                   {/* SSH Auth type toggle */}
-                   <div>
-                     <label className="text-xs font-medium mb-1.5 block" style={{ color: 'var(--text-secondary)' }}>SSH Auth</label>
-                     <div className="flex bg-[var(--bg-tertiary)] p-1 rounded-lg w-fit gap-1">
-                       {['password', 'privateKey'].map(authOpt => (
-                         <button
-                           key={authOpt}
-                           type="button"
-                           onClick={() => handleChange('sshTunnelAuth', authOpt)}
-                           className={`px-3 py-1.5 text-[10px] font-bold rounded-md transition-all ${
-                             form.sshTunnelAuth === authOpt
-                               ? 'bg-indigo-700 dark:bg-indigo-600 text-white shadow'
-                               : 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'
-                           }`}
-                         >
-                           {authOpt === 'password' ? 'Password' : 'Private Key'}
-                         </button>
-                       ))}
-                     </div>
-                   </div>
-
-                   {/* SSH Password or Private Key */}
-                   {/* Secret notice when editing */}
-                   {editConnection?.sshTunnel && (
-                     <div className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg bg-amber-500/8 border border-amber-500/20 text-[9px] text-amber-300/80">
-                       <Lock size={10} className="shrink-0 text-amber-400" />
-                       Credentials are stored encrypted. Leave blank to keep the existing secret.
-                     </div>
-                   )}
-
-                   {form.sshTunnelAuth === 'password' ? (
-                     <div>
-                       <label className="flex items-center gap-1.5 text-xs font-medium mb-1.5" style={{ color: 'var(--text-secondary)' }}>
-                         <Lock size={12} /> SSH Password
-                       </label>
-                       <input
-                         type="password"
-                         className="input-field"
-                         placeholder={editConnection?.sshTunnel ? '••••••• (unchanged)' : 'SSH password'}
-                         value={form.sshTunnelPassword}
-                         onChange={(e) => handleChange('sshTunnelPassword', e.target.value)}
-                       />
-                     </div>
-                   ) : (
-                     <div className="space-y-2">
-                       <label className="flex items-center gap-1.5 text-xs font-medium mb-1.5" style={{ color: 'var(--text-secondary)' }}>
-                         <FileKey size={12} /> SSH Private Key
-                       </label>
-                       <textarea
-                         className="input-field font-mono text-[10px] resize-none"
-                         rows={4}
-                         placeholder={editConnection?.sshTunnel ? '(unchanged — paste new key to replace)' : '-----BEGIN OPENSSH PRIVATE KEY-----'}
-                         value={form.sshTunnelPrivateKey}
-                         onChange={(e) => handleChange('sshTunnelPrivateKey', e.target.value)}
-                       />
-                       <input
-                         type="password"
-                         className="input-field text-xs"
-                         placeholder={editConnection?.sshTunnel ? '(unchanged)' : 'Key passphrase (optional)'}
-                         value={form.sshTunnelPassphrase}
-                         onChange={(e) => handleChange('sshTunnelPassphrase', e.target.value)}
-                       />
-                     </div>
-                   )}
-                 </div>
-               )}
-             </div>
-           )}
-
            <div className="grid grid-cols-1 md:grid-cols-2 gap-5 pt-2 border-t border-[var(--border-color)]">
               <div>
                 <label className="flex items-center gap-2 text-sm font-medium mb-2" style={{ color: 'var(--text-secondary)' }}>
@@ -1076,7 +912,7 @@ export default function ConnectionModal({ onClose, editConnection = null }) {
               className="px-6 py-3 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-sm font-bold hover:bg-emerald-500/20 transition-all flex items-center justify-center gap-2 whitespace-nowrap"
             >
               {isTesting ? <RefreshCw size={16} className="animate-spin" /> : <Activity size={16} />}
-              {isTesting ? 'Testing...' : 'Test Connection'}
+              {isTesting ? t('common.testing') || 'Testing...' : t('ssh.dashboard_ui.refreshStatus') || 'Test Connection'}
             </button>
             <button
               type="submit"
@@ -1147,7 +983,7 @@ export default function ConnectionModal({ onClose, editConnection = null }) {
             disabled={!uriInput}
             className="flex-1 btn-primary justify-center py-2.5 font-bold disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            Import Details
+            {t('files.modals.create.create') || 'Import Details'}
           </button>
           <button
             onClick={() => setIsUriModalOpen(false)}

@@ -182,7 +182,7 @@ export default function FilesApp({ onEditConnection, initialConnection, initialC
                 </div>
                 <div className="ml-auto flex items-center gap-2 px-3 py-1.5 rounded-lg bg-[var(--glow-indigo)] border border-[var(--accent-indigo)]/20">
                   <HardDrive size={12} className="text-[var(--accent-indigo)]" />
-                  <span className="text-xs font-mono text-[var(--accent-indigo)]">{sshConnections.length} servers</span>
+                  <span className="text-xs font-mono text-[var(--accent-indigo)]">{sshConnections.length} {t('common.servers') || 'servers'}</span>
                 </div>
               </div>
 
@@ -221,12 +221,12 @@ export default function FilesApp({ onEditConnection, initialConnection, initialC
                           : 'bg-[var(--glow-rose)] text-[var(--accent-rose)] border border-[var(--accent-rose)]/20'
                       }`}>
                         <div className={`w-1.5 h-1.5 rounded-full ${conn.status === 'online' ? 'bg-[var(--accent-emerald)] animate-pulse' : 'bg-[var(--accent-rose)]'}`} />
-                        {conn.status === 'online' ? 'Online' : 'Offline'}
+                        {conn.status === 'online' ? t('common.online') : t('common.offline')}
                       </div>
                     </div>
                     <h3 className="font-bold text-[var(--text-primary)] mb-1 truncate">{conn.name}</h3>
                     <p className="text-[11px] text-[var(--text-muted)] font-mono truncate">{conn.host}</p>
-                    {conn.username && <p className="text-[10px] text-[var(--text-muted)] opacity-60 mt-1 font-mono">user: {conn.username}</p>}
+                    {conn.username && <p className="text-[10px] text-[var(--text-muted)] opacity-60 mt-1 font-mono">{t('common.user') || 'user'}: {conn.username}</p>}
                   </div>
                 ))}
                 

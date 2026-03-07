@@ -101,14 +101,14 @@ export default function NotepadApp() {
             <Lock size={40} className="text-amber-500" />
           </div>
           <h2 className="text-2xl font-bold text-[var(--text-primary)] mb-4 italic tracking-tight">
-            System Encrypted
+            {t('notepad.systemEncrypted')}
           </h2>
           <p className="text-[var(--text-secondary)] mb-8 leading-relaxed">
-            This module requires a <span className="text-[var(--accent-indigo)] font-semibold tracking-wide underline decoration-[var(--accent-indigo)]/30">Private Database Connector</span> to initialize persistent storage. 
+            {t('notepad.encryptedDesc')} 
           </p>
           <div className="p-4 rounded-xl bg-[var(--glow-indigo)] border border-[var(--accent-indigo)]/20 text-xs text-[var(--accent-indigo)] inline-flex items-center gap-2">
             <Database size={14} />
-            Connect your own MongoDB to unlock high-security notes
+            {t('notepad.connectDbHint')}
           </div>
         </motion.div>
       </div>
@@ -125,9 +125,9 @@ export default function NotepadApp() {
               <div className="w-8 h-8 rounded-lg bg-[var(--accent-indigo)]/10 flex items-center justify-center border border-[var(--accent-indigo)]/20 shadow-inner">
                  <StickyNote size={16} className="text-[var(--accent-indigo)]" />
               </div>
-              <span className="font-bold text-sm tracking-tight italic">Notes DB</span>
+              <span className="font-bold text-sm tracking-tight italic">{t('notepad.title')}</span>
               <div className="px-1.5 py-0.5 rounded bg-emerald-500/10 border border-emerald-500/20 text-[10px] text-emerald-400 font-bold animate-pulse">
-                UNLOCKED
+                {t('notepad.unlocked')}
               </div>
             </div>
             <button 
@@ -141,7 +141,7 @@ export default function NotepadApp() {
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--text-muted)]" size={14} />
             <input 
               type="text"
-              placeholder="Search secure notes..."
+              placeholder={t('notepad.searchPlaceholder')}
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               className="w-full bg-[var(--bg-tertiary)]/50 border border-[var(--border-color)] rounded-lg py-1.5 pl-9 pr-3 text-xs focus:outline-none focus:border-[var(--accent-indigo)]/50 placeholder-[var(--text-muted)]"
@@ -174,7 +174,7 @@ export default function NotepadApp() {
           {filteredNotes.length === 0 && (
             <div className="py-12 text-center">
               <Search size={32} className="mx-auto mb-2 text-[var(--text-muted)] opacity-20" />
-              <p className="text-xs text-[var(--text-muted)]">No notes found</p>
+              <p className="text-xs text-[var(--text-muted)]">{t('notepad.noNotes')}</p>
             </div>
           )}
         </div>
@@ -183,7 +183,7 @@ export default function NotepadApp() {
           <div className="flex items-center gap-2 px-2 py-1.5 rounded-lg bg-[var(--bg-primary)] border border-[var(--accent-indigo)]/20 shadow-sm">
             <Zap size={10} className="text-[var(--accent-indigo)]" />
             <span className="text-[9px] font-mono text-[var(--accent-indigo)] font-bold truncate">
-              DIRECT DB ACCESS GRANTED
+              {t('notepad.directAccess')}
             </span>
           </div>
         </div>
@@ -199,7 +199,7 @@ export default function NotepadApp() {
                 value={activeNote.title}
                 onChange={e => setActiveNote({...activeNote, title: e.target.value})}
                 className="bg-transparent border-none text-lg font-bold text-[var(--text-primary)] focus:outline-none flex-1 italic tracking-tight"
-                placeholder="Title"
+                placeholder={t('common.title') || "Title"}
               />
               <div className="flex items-center gap-3">
                 <button 
@@ -216,7 +216,7 @@ export default function NotepadApp() {
                   className="px-4 py-1.5 bg-[var(--accent-indigo)] hover:bg-[var(--accent-indigo-hover)] text-white text-xs font-bold rounded-lg transition-all flex items-center gap-2 shadow-lg shadow-[var(--accent-indigo)]/20 active:scale-95 disabled:opacity-50"
                 >
                   {loading ? <div className="w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin" /> : <Save size={14} />}
-                  Save to Cluster
+                  {t('notepad.saveBtn')}
                 </button>
               </div>
             </div>
@@ -225,7 +225,7 @@ export default function NotepadApp() {
                 value={activeNote.content}
                 onChange={e => setActiveNote({...activeNote, content: e.target.value})}
                 className="w-full h-full bg-transparent border-none resize-none text-[15px] leading-relaxed text-[var(--text-secondary)] focus:outline-none font-mono"
-                placeholder="Write something only your DB will remember..."
+                placeholder={t('notepad.notePlaceholder')}
                 spellCheck={false}
               />
             </div>
@@ -233,7 +233,7 @@ export default function NotepadApp() {
         ) : (
           <div className="flex-1 flex flex-col items-center justify-center p-12 text-center opacity-40">
              <StickyNote size={64} className="mb-4 text-[var(--text-muted)]" />
-             <p className="text-sm font-medium">Select a note or create a new one to begin editing</p>
+             <p className="text-sm font-medium">{t('notepad.emptyState')}</p>
           </div>
         )}
       </div>

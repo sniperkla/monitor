@@ -138,13 +138,13 @@ export default function Sidebar({ onNewConnection, onEditConnection }) {
           const updated = saved.filter(c => c._id !== id);
           localStorage.setItem('ssh_monitor_connections', JSON.stringify(updated));
           dispatch({ type: 'REMOVE_CONNECTION', payload: id });
-          addNotification({ title: 'Deleted', message: t('ssh.toasts.deletedLocal'), type: 'success' });
+          addNotification({ title: t('common.delete'), message: t('ssh.toasts.deletedLocal'), type: 'success' });
           return;
         }
 
         if (conn.storage === 'manual') {
           dispatch({ type: 'REMOVE_CONNECTION', payload: id });
-          addNotification({ title: 'Removed', message: t('ssh.toasts.removedSession'), type: 'info' });
+          addNotification({ title: t('common.removed'), message: t('ssh.toasts.removedSession'), type: 'info' });
           return;
         }
 
@@ -152,11 +152,11 @@ export default function Sidebar({ onNewConnection, onEditConnection }) {
           const res = await apiFetch(`/api/connections/${id}`, { method: 'DELETE' });
           const data = await res.json();
           if (data.success) {
-            addNotification({ title: 'Deleted', message: t('ssh.toasts.deleteSuccess'), type: 'success' });
+            addNotification({ title: t('common.delete'), message: t('ssh.toasts.deleteSuccess'), type: 'success' });
             dispatch({ type: 'REMOVE_CONNECTION', payload: id });
           }
         } catch (err) {
-          addNotification({ title: 'Error', message: t('ssh.toasts.deleteFail'), type: 'error' });
+          addNotification({ title: t('common.error') || 'Error', message: t('ssh.toasts.deleteFail'), type: 'error' });
           console.error(err);
         }
       },
@@ -218,7 +218,7 @@ export default function Sidebar({ onNewConnection, onEditConnection }) {
         },
       });
       if (data.success) {
-        addNotification({ title: 'Connected', message: t('common.connected'), type: 'success' });
+        addNotification({ title: t('common.connected'), message: t('common.connected'), type: 'success' });
         
         // If local storage, also persist the lastConnected status
         if (conn && conn.storage === 'localstorage') {
@@ -230,7 +230,7 @@ export default function Sidebar({ onNewConnection, onEditConnection }) {
             localStorage.setItem('ssh_monitor_connections', JSON.stringify(updated));
         }
       } else {
-        addNotification({ title: 'Connection Failed', message: t('ssh.toasts.testFail') + ': ' + data.error, type: 'error' });
+        addNotification({ title: t('ssh.status.error') || 'Error', message: t('ssh.toasts.testFail') + ': ' + data.error, type: 'error' });
         if (conn && conn.storage === 'localstorage') {
             const saved = JSON.parse(localStorage.getItem('ssh_monitor_connections') || '[]');
             const updated = saved.map(c => {
@@ -241,7 +241,7 @@ export default function Sidebar({ onNewConnection, onEditConnection }) {
         }
       }
     } catch (err) {
-      addNotification({ title: 'Error', message: t('ssh.toasts.testFail'), type: 'error' });
+      addNotification({ title: t('common.error') || 'Error', message: t('ssh.toasts.testFail'), type: 'error' });
       dispatch({ type: 'UPDATE_CONNECTION', payload: { _id: id, status: 'offline' } });
     }
   };
@@ -255,8 +255,8 @@ export default function Sidebar({ onNewConnection, onEditConnection }) {
             <Terminal size={18} className="text-[var(--text-selected)]" />
           </div>
           <div>
-            <h1 className="text-sm font-bold" style={{ color: 'var(--text-primary)' }}>{t('common.connections') || 'Connection Manager'}</h1>
-            <p className="text-xs" style={{ color: 'var(--text-muted)' }}>{t('common.manage') || 'SSH & Databases'}</p>
+            <h1 className="text-sm font-bold" style={{ color: 'var(--text-primary)' }}>{t('common.connections')}</h1>
+            <p className="text-xs" style={{ color: 'var(--text-muted)' }}>{t('common.manage')}</p>
           </div>
         </div>
 

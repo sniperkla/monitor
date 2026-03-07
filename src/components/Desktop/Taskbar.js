@@ -138,11 +138,11 @@ export default function Taskbar() {
   if (!mounted) return null;
 
   const apps = [
-    { id: 'ssh-manager', title: t('ssh.manager'), icon: Monitor, component: <SSHApp />, initialWidth: 1200, initialHeight: 800 },
-    { id: 'settings', title: t('common.settings'), icon: Settings, component: <SettingsApp />, initialWidth: 800, initialHeight: 600 },
-    { id: 'wiki', title: 'Resource Hub', icon: Book, component: <WikiApp />, initialWidth: 1100, initialHeight: 700 },
-    { id: 'notepad', title: 'Notepad', icon: StickyNote, component: <NotepadApp />, initialWidth: 800, initialHeight: 600 },
-    { id: 'terminal', title: t('terminal.title'), icon: Terminal, component: <TerminalApp />, initialWidth: 900, initialHeight: 600 },
+    { id: 'ssh-manager', title: t('apps.sshManager'), icon: Monitor, component: <SSHApp />, initialWidth: 1200, initialHeight: 800 },
+    { id: 'settings', title: t('apps.settings'), icon: Settings, component: <SettingsApp />, initialWidth: 800, initialHeight: 600 },
+    { id: 'wiki', title: t('apps.resourceHub'), icon: Book, component: <WikiApp />, initialWidth: 1100, initialHeight: 700 },
+    { id: 'notepad', title: t('apps.notepad'), icon: StickyNote, component: <NotepadApp />, initialWidth: 800, initialHeight: 600 },
+    { id: 'terminal', title: t('apps.terminal'), icon: Terminal, component: <TerminalApp />, initialWidth: 900, initialHeight: 600 },
   ];
 
   const isVertical = taskbarPosition === 'left' || taskbarPosition === 'right';
@@ -500,21 +500,21 @@ export default function Taskbar() {
               onClick={(e) => e.stopPropagation()}
             >
               <div className="px-3 py-1.5 text-[10px] font-bold text-[var(--text-muted)] uppercase tracking-wider border-b border-[var(--border-color)] mb-1 truncate">
-                {windows.find(w => w.id === contextMenu.windowId)?.title || 'Application'}
+                {windows.find(w => w.id === contextMenu.windowId)?.title || t('common.application')}
               </div>
               <button
                 onClick={() => { focusWindow(contextMenu.windowId); setContextMenu(null); }}
                 className="w-full text-left px-3 py-2 text-xs text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] rounded-lg flex items-center gap-2 transition-colors"
               >
                 <Monitor size={13} className="text-[var(--accent-indigo)]" />
-                Bring to Front
+                {t('desktop.taskbar.bringToFront')}
               </button>
               <button
                 onClick={() => { toggleMinimize(contextMenu.windowId); setContextMenu(null); }}
                 className="w-full text-left px-3 py-2 text-xs text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] rounded-lg flex items-center gap-2 transition-colors"
               >
                 <Layers size={13} className="text-[var(--accent-amber)]" />
-                {windows.find(w => w.id === contextMenu.windowId)?.isMinimized ? 'Restore' : 'Minimize'}
+                {windows.find(w => w.id === contextMenu.windowId)?.isMinimized ? t('common.restore') : t('common.minimize')}
               </button>
               <div className="h-px bg-[var(--border-color)] my-1 mx-2" />
               <button
@@ -554,7 +554,7 @@ export default function Taskbar() {
               {/* Quick Launch Section */}
               <div className="p-1.5">
                 <div className="px-3 py-1 text-[10px] font-bold text-[var(--text-muted)] uppercase tracking-wider mb-1">
-                  Quick Launch
+                  {t('desktop.taskbar.quickLaunch')}
                 </div>
                 <button
                   onClick={() => { 
@@ -564,29 +564,29 @@ export default function Taskbar() {
                   className="w-full text-left px-3 py-2 text-xs text-[var(--text-secondary)] hover:bg-[var(--glow-indigo)] rounded-lg flex items-center gap-2 transition-colors group"
                 >
                   <Search size={13} className="text-[var(--accent-indigo)]" />
-                  <span className="flex-1">Search</span>
+                  <span className="flex-1">{t('common.search')}</span>
                   <span className="text-[9px] text-[var(--text-muted)] font-mono">⌘K</span>
                 </button>
                 <button
-                  onClick={() => { openWindow('terminal', t('terminal.title'), <TerminalApp />, Terminal); setTaskbarContextMenu(null); }}
+                  onClick={() => { openWindow('terminal', t('apps.terminal'), <TerminalApp />, Terminal); setTaskbarContextMenu(null); }}
                   className="w-full text-left px-3 py-2 text-xs text-[var(--text-secondary)] hover:bg-[var(--glow-emerald)] rounded-lg flex items-center gap-2 transition-colors"
                 >
                   <Terminal size={13} className="text-[var(--accent-emerald)]" />
-                  Terminal
+                  {t('apps.terminal')}
                 </button>
                 <button
-                  onClick={() => { openWindow('files-app', 'Files', <FilesApp />, FolderClosed); setTaskbarContextMenu(null); }}
+                  onClick={() => { openWindow('files-app', t('apps.files'), <FilesApp />, FolderClosed); setTaskbarContextMenu(null); }}
                   className="w-full text-left px-3 py-2 text-xs text-[var(--text-secondary)] hover:bg-[var(--glow-indigo)] rounded-lg flex items-center gap-2 transition-colors"
                 >
                   <FolderClosed size={13} className="text-[var(--accent-indigo)]" />
-                  Files
+                  {t('apps.files')}
                 </button>
                 <button
-                  onClick={() => { openWindow('notepad', 'Notepad', <NotepadApp />, StickyNote); setTaskbarContextMenu(null); }}
+                  onClick={() => { openWindow('notepad', t('apps.notepad'), <NotepadApp />, StickyNote); setTaskbarContextMenu(null); }}
                   className="w-full text-left px-3 py-2 text-xs text-[var(--text-secondary)] hover:bg-[var(--glow-amber,rgba(245,158,11,0.1))] rounded-lg flex items-center gap-2 transition-colors"
                 >
                   <StickyNote size={13} className="text-[var(--accent-amber)]" />
-                  Notepad
+                  {t('apps.notepad')}
                 </button>
               </div>
 
@@ -595,21 +595,21 @@ export default function Taskbar() {
               {/* Window Management */}
               <div className="p-1.5">
                 <div className="px-3 py-1 text-[10px] font-bold text-[var(--text-muted)] uppercase tracking-wider mb-1">
-                  Windows
+                  {t('desktop.taskbar.showDesktop')}
                 </div>
                 <button
                   onClick={() => { minimizeAll(); setTaskbarContextMenu(null); }}
                   className="w-full text-left px-3 py-2 text-xs text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] rounded-lg flex items-center gap-2 transition-colors"
                 >
                   <Monitor size={13} className="text-[var(--accent-indigo)]" />
-                  Show Desktop
+                  {t('desktop.taskbar.showDesktop')}
                 </button>
                 <button
                   onClick={() => { restoreAll(); setTaskbarContextMenu(null); }}
                   className="w-full text-left px-3 py-2 text-xs text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] rounded-lg flex items-center gap-2 transition-colors"
                 >
                   <LayoutGrid size={13} className="text-[var(--accent-emerald)]" />
-                  Restore All
+                  {t('desktop.taskbar.restoreAll')}
                 </button>
                 {windows.length > 0 && (
                   <button
@@ -617,7 +617,7 @@ export default function Taskbar() {
                     className="w-full text-left px-3 py-2 text-xs text-[var(--text-secondary)] hover:bg-red-500/10 rounded-lg flex items-center gap-2 transition-colors hover:text-red-400"
                   >
                     <X size={13} className="text-[var(--accent-rose)]" />
-                    Close All Windows
+                    {t('desktop.taskbar.closeAll')}
                   </button>
                 )}
               </div>
@@ -629,7 +629,7 @@ export default function Taskbar() {
                   <div className="p-1.5">
                     <div className="px-3 py-1 text-[10px] font-bold text-[var(--text-muted)] uppercase tracking-wider mb-1 flex items-center gap-1.5">
                       <Cpu size={9} className="text-[var(--text-muted)]" />
-                      Running ({windows.length})
+                      {t('desktop.taskbar.running')} ({windows.length})
                     </div>
                     <div className="max-h-32 overflow-y-auto custom-scrollbar">
                       {windows.map(win => (
@@ -660,13 +660,13 @@ export default function Taskbar() {
               <div className="p-1.5 pt-0">
                 <button
                   onClick={() => { 
-                    openWindow('settings', 'Settings', <SettingsApp initialTab="personalization" />, Settings, { initialWidth: 900, initialHeight: 700 }); 
+                    openWindow('settings', t('apps.settings'), <SettingsApp initialTab="personalization" />, Settings, { initialWidth: 900, initialHeight: 700 }); 
                     setTaskbarContextMenu(null); 
                   }}
                   className="w-full text-left px-3 py-2.5 text-xs text-[var(--accent-indigo)] font-bold hover:bg-[var(--glow-indigo)] rounded-lg flex items-center gap-2 transition-all group"
                 >
                   <Settings size={14} className="group-hover:rotate-45 transition-transform duration-500" />
-                  Taskbar Settings
+                  {t('desktop.taskbar.settings')}
                 </button>
               </div>
             </motion.div>

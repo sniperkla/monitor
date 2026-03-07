@@ -51,6 +51,18 @@ export default function DesktopEnvironment() {
   const [showPreview, setShowPreview] = useState(false);
   const [hideDesktopContent, setHideDesktopContent] = useState(false);
 
+  const openWindowRef = useRef(openWindow);
+  useEffect(() => { openWindowRef.current = openWindow; });
+
+  useEffect(() => {
+    const handleOpenSettingsTab = (e) => {
+      const tab = e.detail || 'database';
+      openWindowRef.current('settings', t('apps.settings'), <SettingsApp initialTab={tab} />, Settings, { initialWidth: 900, initialHeight: 700 });
+    };
+    window.addEventListener('open-settings-tab', handleOpenSettingsTab);
+    return () => window.removeEventListener('open-settings-tab', handleOpenSettingsTab);
+  }, []);
+
   useEffect(() => {
     setMounted(true);
     const timer = setTimeout(() => setBooting(false), 2000);
@@ -243,11 +255,11 @@ export default function DesktopEnvironment() {
   };
 
   const DESKTOP_ICONS = [
-    { id: 'ssh-manager', title: t('ssh.manager'), icon: Monitor, component: <SSHApp />, type: 'app', initialWidth: 1200, initialHeight: 750 },
-    { id: 'terminal', title: t('ssh.terminal'), icon: Terminal, component: <TerminalApp onEditConnection={handleEditConnection} />, type: 'app', initialWidth: 900, initialHeight: 600 },
-    { id: 'files', title: t('ssh.fileGui'), icon: FolderClosed, component: <FilesApp onEditConnection={handleEditConnection} />, type: 'app', initialWidth: 900, initialHeight: 600 },
-    { id: 'tmux', title: 'Tmux', icon: MonitorPlay, component: <TmuxApp />, type: 'app', initialWidth: 1000, initialHeight: 650 },
-    { id: 'settings', title: t('common.settings'), icon: Settings, component: <SettingsApp />, type: 'app', initialWidth: 700, initialHeight: 500 },
+    { id: 'ssh-manager', title: t('apps.sshManager'), icon: Monitor, component: <SSHApp />, type: 'app', initialWidth: 1200, initialHeight: 750 },
+    { id: 'terminal', title: t('apps.terminal'), icon: Terminal, component: <TerminalApp onEditConnection={handleEditConnection} />, type: 'app', initialWidth: 900, initialHeight: 600 },
+    { id: 'files', title: t('apps.files'), icon: FolderClosed, component: <FilesApp onEditConnection={handleEditConnection} />, type: 'app', initialWidth: 900, initialHeight: 600 },
+    { id: 'tmux', title: t('apps.tmux'), icon: MonitorPlay, component: <TmuxApp />, type: 'app', initialWidth: 1000, initialHeight: 650 },
+    { id: 'settings', title: t('apps.settings'), icon: Settings, component: <SettingsApp />, type: 'app', initialWidth: 700, initialHeight: 500 },
   ];
 
   /* Sorting Logic with Auto-Enforcement */
@@ -773,7 +785,7 @@ export default function DesktopEnvironment() {
                 <ContextRadioItem label={t('desktop.context.sortBy.name')} checked={sortBy === 'name'} onClick={() => { setSortBy('name'); applySort('name'); closeContext(); }} />
                 <ContextRadioItem label={t('desktop.context.sortBy.type')} checked={sortBy === 'type'} onClick={() => { setSortBy('type'); applySort('type'); closeContext(); }} />
                 <div className="h-px bg-[var(--border-color)] my-1" />
-                <ContextRadioItem label="None (Manual)" checked={!sortBy || sortBy === 'none'} onClick={() => { setSortBy('none'); closeContext(); }} />
+                <ContextRadioItem label={t('desktop.context.sortBy.none')} checked={!sortBy || sortBy === 'none'} onClick={() => { setSortBy('none'); closeContext(); }} />
               </ContextSubmenuItem>
 
               {/* Language submenu */}

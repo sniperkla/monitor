@@ -39,6 +39,13 @@ export async function POST(request, { params }) {
     const maxRecords = Math.min(body.limit || LIMITS.MAX_EXPORT_RECORDS, LIMITS.MAX_EXPORT_RECORDS);
     const provider = conn.dbProvider || 'mongodb';
 
+    // Attach userId so dbPool can route localhost connections via relay
+    try {
+      const { getToken } = await import('next-auth/jwt');
+      const token = await getToken({ req: request, secret: process.env.NEXTAUTH_SECRET });
+      if (token?.sub) conn = { ...conn, _userId: token.sub };
+    } catch (_) {}
+
     // Rate limit check
     const clientIP = request.headers.get('x-forwarded-for') || 'unknown';
     const rateCheck = checkRateLimit(`export:${clientIP}`, 200); // Increased to 200 to support batch exports of many tables
