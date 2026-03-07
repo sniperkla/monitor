@@ -13,7 +13,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 export default function Dashboard({ onNewConnection, onEditConnection }) {
   const { state, dispatch, fetchConnections } = useApp();
   const { t } = useTranslation();
-  const { connections } = state;
+  const { connections, relayWarning } = state;
   const [refreshing, setRefreshing] = useState(false);
 
   const stats = {
@@ -336,6 +336,28 @@ export default function Dashboard({ onNewConnection, onEditConnection }) {
           </div>
         </motion.div>
       </div>
+
+      {/* Relay Agent Warning Banner */}
+      {relayWarning && (
+        <motion.div
+          variants={itemVariants}
+          className="mt-6 rounded-2xl border border-amber-500/30 bg-amber-500/10 p-4 flex items-start gap-3"
+        >
+          <AlertTriangle size={20} className="text-amber-400 shrink-0 mt-0.5" />
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-semibold text-amber-300">{t('relay.warningTitle', 'Local Relay Agent Required')}</p>
+            <p className="text-xs text-amber-400/80 mt-0.5">
+              {t('relay.warningDesc', 'Your database URI targets localhost, but the Local Relay Agent is not running. Go to Settings → Database to install and start the relay agent, or use a remote database URI.')}
+            </p>
+          </div>
+          <button
+            onClick={() => dispatch({ type: 'SET_RELAY_WARNING', payload: null })}
+            className="text-amber-400/60 hover:text-amber-400 transition-colors shrink-0"
+          >
+            <span className="text-lg leading-none">×</span>
+          </button>
+        </motion.div>
+      )}
 
       {/* Empty state for no connections */}
       {connections.length === 0 && (

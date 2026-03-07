@@ -37,7 +37,8 @@ export async function POST(request, { params }) {
     try {
       const { getToken } = await import('next-auth/jwt');
       const token = await getToken({ req: request, secret: process.env.NEXTAUTH_SECRET });
-      if (token?.sub) conn = { ...conn, _userId: token.sub };
+      const relayKey = token?.userId || token?.sub;
+      if (relayKey) conn = { ...conn, _userId: relayKey };
     } catch (_) {}
 
     // Use pooled connection

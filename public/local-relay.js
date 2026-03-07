@@ -154,10 +154,16 @@ function connect() {
     return;
   }
 
+  let keepAliveTimer = null;
+
   ws.addEventListener('open', () => {
     retryDelay = 3000; // reset backoff on successful connect
     // Tell server which local port we're forwarding
     ws.send(JSON.stringify({ type: 'init', targetHost: HOST, targetPort: PORT }));
+    // Send a keepalive ping every 30s to prevent nginx/proxy from closing idle connections
+    keepAliveTimer = setInterval(() => {
+      if (ws.readyState === 1 /*OPEN*/) ws.send(JSON.stringify({ type: 'ping' }));
+    }, 30000);
   });
 
   ws.addEventListener('message', ({ data }) => {
@@ -168,6 +174,8 @@ function connect() {
       console.log(`\n✅  Relay ready! Your local ${HOST}:${PORT} is now accessible through SSH Monitor.`);
       console.log(`    Keep this terminal open while using the app.\n`);
     }
+
+    if (msg.type === 'pong') return; // keepalive reply — ignore
 
     if (msg.type === 'error') {
       console.error(`\n❌  Server error: ${msg.message}`);
@@ -219,6 +227,8 @@ function connect() {
   });
 
   ws.addEventListener('close', ({ reason }) => {
+    clearInterval(keepAliveTimer);
+    keepAliveTimer = null;
     console.log(`\n💤  Site closed or disconnected${reason ? ': ' + reason : ''}. Idling — will reconnect when you open the site (in ${retryDelay / 1000}s)...`);
     connections.forEach(t => t.destroy());
     connections.clear();

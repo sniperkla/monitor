@@ -2,7 +2,7 @@ import { getServerSession } from 'next-auth/next';
 import { authOptions } from '@/lib/auth';
 import { randomUUID } from 'crypto';
 
-const TOKEN_TTL = 24 * 60 * 60 * 1000; // 24 hours
+const TOKEN_TTL = 365 * 24 * 60 * 60 * 1000; // 1 year — relay is a permanent background service
 
 /**
  * POST /api/relay/token — generate a relay token for the current user
@@ -22,7 +22,7 @@ export async function POST() {
 
     const token = randomUUID();
     global.__relayTokens.set(token, {
-      userId: session.user.id,
+      userId: String(session.user.id),
       expiresAt: Date.now() + TOKEN_TTL,
     });
 
@@ -44,7 +44,7 @@ export async function GET() {
       return Response.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
-    const relay = global.__activeRelays?.get(session.user.id);
+    const relay = global.__activeRelays?.get(String(session.user.id));
     return Response.json({
       success: true,
       connected: !!relay,
@@ -72,10 +72,10 @@ export async function DELETE() {
     }
 
     // Close active relay if present
-    const relay = global.__activeRelays?.get(session.user.id);
+    const relay = global.__activeRelays?.get(String(session.user.id));
     if (relay) {
       try { relay.netServer?.close(); } catch {}
-      global.__activeRelays.delete(session.user.id);
+      global.__activeRelays.delete(String(session.user.id));
     }
 
     if (typeof global.__persistRelayTokens === 'function') global.__persistRelayTokens();

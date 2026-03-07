@@ -168,13 +168,17 @@ export default function MasterPasswordModal() {
     setLoading(true);
     try {
       // First test the URI (with tunnel if configured)
-      const testHeaders = { 'x-mongodb-uri': uri };
+      const testHeaders = { 'Content-Type': 'application/json' };
       if (tunnelConfig) testHeaders['x-vault-tunnel'] = JSON.stringify(tunnelConfig);
 
-      const testRes = await fetch('/api/connections', { headers: testHeaders });
+      const testRes = await fetch('/api/connections/test-uri', { 
+        method: 'POST',
+        headers: testHeaders,
+        body: JSON.stringify({ uri })
+      });
       const testData = await testRes.json();
       if (!testData.success) {
-        setError(t('vault.errors.connectionFailed'));
+        setError(testData.error || t('vault.errors.connectionFailed'));
         setLoading(false);
         return;
       }

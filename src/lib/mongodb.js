@@ -66,9 +66,10 @@ async function getActiveRelayInfo(uri) {
       req: { headers: { cookie }, cookies },
       secret: process.env.NEXTAUTH_SECRET,
     });
-    if (!token?.sub) return null;
+    const relayKey = token.userId || token.sub;
+    if (!relayKey) return null;
 
-    const relay = global.__activeRelays.get(token.sub);
+    const relay = global.__activeRelays.get(relayKey);
     if (!relay) return null;
 
     // Update relay target so the TCP proxy knows what to forward to
@@ -130,11 +131,20 @@ async function getDynamicConnection(uri, tunnelConfig = null) {
 
   // 1. Try Local Relay Agent (free, no SSH/Tailscale needed)
   if (!tunnelConfig?.enabled) {
-    const relayInfo = await getActiveRelayInfo(uri);
+    const isLocalhost = /localhost|127\.0\.0\.1/.test(uri);
+    const relayInfo = isLocalhost ? await getActiveRelayInfo(uri) : null;
+
     if (relayInfo) {
       connectUri = rewriteUriForTunnel(uri, relayInfo.port);
       cachePrefix = `relay:${relayInfo.userId}:`;
       console.log(`🔗 [Local Relay] ${uri} → 127.0.0.1:${relayInfo.port}`);
+    } else if (isLocalhost) {
+      // Localhost URI but no relay active — connecting directly would silently
+      // hit the SERVER's own local MongoDB, not the user's machine. Reject.
+      throw new Error(
+        'Local Relay Agent is not connected. ' +
+        'Run local-relay.js on your machine to access localhost databases.'
+      );
     }
   }
 

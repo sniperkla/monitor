@@ -151,10 +151,8 @@ export default function SettingsApp({ initialTab }) {
         '@echo off',
         'setlocal',
         `cd /d "%USERPROFILE%\\Downloads"`,
-        `if not exist local-relay.js (`,
-        `  echo Downloading local-relay.js...`,
-        `  curl -fsSL "${scriptUrl}" -o local-relay.js`,
-        `)`,
+        `echo Downloading latest local-relay.js...`,
+        `curl -fsSL "${scriptUrl}" -o local-relay.js`,
         `echo Running: ${cmd}`,
         cmd,
         'echo.',
@@ -167,7 +165,8 @@ export default function SettingsApp({ initialTab }) {
         '#!/bin/bash',
         'set -e',
         'cd ~/Downloads',
-        `[ -f local-relay.js ] || { echo "Downloading local-relay.js..."; curl -fsSL "${scriptUrl}" -o local-relay.js; }`,
+        `echo "Downloading latest local-relay.js..."`,
+        `curl -fsSL "${scriptUrl}" -o local-relay.js`,
         `echo "Running: ${cmd}"`,
         cmd,
         'echo ""',
@@ -223,8 +222,10 @@ export default function SettingsApp({ initialTab }) {
     }
     setDbConnecting(true);
     try {
-      const testRes = await fetch('/api/connections', {
-        headers: { 'x-mongodb-uri': dbUri.trim() }
+      const testRes = await fetch('/api/connections/test-uri', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ uri: dbUri.trim() })
       });
       const testData = await testRes.json();
       
@@ -1085,6 +1086,14 @@ export default function SettingsApp({ initialTab }) {
 
                         {relayToken ? (
                           <>
+                            {/* Important: run on LOCAL machine notice */}
+                            <div className="flex items-start gap-2 p-3 bg-blue-500/8 border border-blue-500/20 rounded-xl">
+                              <span className="text-blue-400 text-base shrink-0">💻</span>
+                              <p className="text-[10px] text-blue-300/80 leading-relaxed">
+                                <span className="font-bold text-blue-300">Run the command below on your own computer</span> — the machine where MongoDB / MySQL / PostgreSQL is running. <span className="opacity-70">Not on the server.</span>
+                              </p>
+                            </div>
+
                             {/* OS badge */}
                             <div className="flex items-center gap-2 flex-wrap">
                               <span className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[9px] font-bold uppercase tracking-wider border ${osMeta[detectedOS].badge}`}>

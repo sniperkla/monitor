@@ -17,6 +17,7 @@ const initialState = {
   view: 'dashboard', // 'dashboard' | 'terminal' | 'files' | 'settings'
   storageMode: 'db', // 'db', 'localstorage', 'manual'
   clipboard: null, // { file, action: 'copy' | 'cut', sourcePath, connectionId }
+  relayWarning: null, // Set when DB URI is localhost but relay agent is not running
   dbConfig: {
     uri: '',    // Decrypted URI from vault (in memory only)
     tunnel: null, // SSH tunnel config from vault (in memory only)
@@ -143,6 +144,8 @@ function reducer(state, action) {
     case 'SET_DB_CONFIG':
       // NO LONGER stored in localStorage — only in memory via vault
       return { ...state, dbConfig: action.payload };
+    case 'SET_RELAY_WARNING':
+      return { ...state, relayWarning: action.payload };
     case 'SET_CLIPBOARD':
       return { ...state, clipboard: action.payload };
     case 'OPEN_DATABASE_BROWSER':
@@ -235,6 +238,14 @@ export function AppProvider({ children }) {
       const data = await res.json();
       if (data.success) {
         dbConnections = data.data.map(c => ({ ...c, storage: 'db' }));
+        // Clear any previous relay warning when connections load successfully
+        if (!data.relayRequired) {
+          dispatch({ type: 'SET_RELAY_WARNING', payload: null });
+        }
+      }
+      // Relay agent required — store warning so UI can prompt the user
+      if (data.relayRequired) {
+        dispatch({ type: 'SET_RELAY_WARNING', payload: data.relayMessage || 'Local Relay Agent is required to access localhost databases.' });
       }
     } catch (err) {
       console.error('Failed to fetch DB connections:', err);

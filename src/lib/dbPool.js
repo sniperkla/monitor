@@ -35,10 +35,24 @@ const MAX_POOL_SIZE = 20; // Max concurrent different connections
  */
 async function resolveRelayForLocalhost(host, port, userId) {
   const isLocal = /^(localhost|127\.0\.0\.1)$/.test(host);
-  if (!isLocal || !userId || !global.__activeRelays?.size) return { host, port };
+  if (!isLocal || !userId || !global.__activeRelays?.size) {
+    if (isLocal && userId) {
+      // Localhost but no relay connected — reject to avoid silently hitting the server's own DB
+      throw new Error(
+        'Local Relay Agent is not connected. ' +
+        'Run local-relay.js on your machine to access localhost databases.'
+      );
+    }
+    return { host, port };
+  }
 
   const relay = global.__activeRelays.get(userId);
-  if (!relay) return { host, port };
+  if (!relay) {
+    throw new Error(
+      'Local Relay Agent is not connected. ' +
+      'Run local-relay.js on your machine to access localhost databases.'
+    );
+  }
 
   // Tell the relay's TCP proxy what to forward to
   relay.targetHost = host;

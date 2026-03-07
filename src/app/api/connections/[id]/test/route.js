@@ -44,7 +44,8 @@ export async function POST(request, { params }) {
       try {
         const { getToken } = await import('next-auth/jwt');
         const token = await getToken({ req: request, secret: process.env.NEXTAUTH_SECRET });
-        if (token?.sub) connection = { ...connection, _userId: token.sub };
+        const relayKey = token?.userId || token?.sub;
+        if (relayKey) connection = { ...connection, _userId: relayKey };
       } catch (_) {}
       result = await testDatabaseConnection(connection);
     } else {

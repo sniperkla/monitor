@@ -16,7 +16,22 @@ export async function GET(request) {
     const rateCheck = checkRateLimit(`connections_get:${clientIP}`, 200);
     if (!rateCheck.allowed) return NextResponse.json({ success: false, error: 'Rate limit exceeded' }, { status: 429 });
 
-    const db = await connectDB();
+    let db;
+    try {
+      db = await connectDB();
+    } catch (dbErr) {
+      // Localhost URI without relay — return empty list with relay hint instead of crashing
+      if (dbErr.message?.includes('Local Relay Agent')) {
+        return NextResponse.json({
+          success: true,
+          data: [],
+          relayRequired: true,
+          relayMessage: dbErr.message,
+        });
+      }
+      throw dbErr;
+    }
+
     const repo = new ConnectionRepository(db);
     await repo.init();
     const connections = await repo.findAll();

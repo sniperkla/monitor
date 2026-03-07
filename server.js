@@ -1943,7 +1943,7 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
       // Load on startup
       loadPersistedRelayTokens();
 
-      // Purge expired tokens every hour and persist
+      // Purge expired tokens every 24h and persist
       setInterval(() => {
         const now = Date.now();
         let changed = false;
@@ -1951,7 +1951,7 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
           if (e.expiresAt < now) { global.__relayTokens.delete(t); changed = true; }
         }
         if (changed) persistRelayTokens();
-      }, 60 * 60 * 1000);
+      }, 24 * 60 * 60 * 1000);
 
       // Expose persist function for use by API route
       global.__persistRelayTokens = persistRelayTokens;
@@ -2002,6 +2002,10 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
           tcpSockets.set(connId, tcpSock);
         });
 
+        netServer.on('error', (err) => {
+          console.error(`🔗 [Relay] netServer error for user ${userId}: ${err.message}`);
+        });
+
         netServer.listen(0, '127.0.0.1', () => {
           const localPort = netServer.address().port;
           global.__activeRelays.set(userId, { localPort, netServer, targetHost: 'localhost', targetPort: 27017 });
@@ -2009,10 +2013,20 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
           console.log(`🔗 [Relay] Connected: user ${userId} → :${localPort}`);
         });
 
+        // Server-side WS-level ping every 30s to keep the connection alive through proxies
+        const serverPingTimer = setInterval(() => {
+          if (ws.readyState === 1) ws.ping();
+        }, 30000);
+
         // relay agent → Mongoose driver
         ws.on('message', (raw) => {
           try {
             const msg = JSON.parse(raw.toString());
+            if (msg.type === 'ping') {
+              // Keepalive — respond with pong to confirm relay is alive
+              if (ws.readyState === 1) ws.send(JSON.stringify({ type: 'pong' }));
+              return;
+            }
             if (msg.type === 'init') {
               // Relay agent reports which local port it is forwarding
               const r = global.__activeRelays.get(userId);
@@ -2030,8 +2044,14 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
         });
 
         ws.on('close', () => {
+          clearInterval(serverPingTimer);
           netServer.close();
-          global.__activeRelays.delete(userId);
+          // Only clear __activeRelays if OUR netServer is still the registered one.
+          // A newer relay connection may have already replaced it — don't wipe theirs.
+          const current = global.__activeRelays.get(userId);
+          if (current && current.netServer === netServer) {
+            global.__activeRelays.delete(userId);
+          }
           tcpSockets.forEach(s => s.destroy());
           console.log(`🔗 [Relay] Disconnected: user ${userId}`);
         });
