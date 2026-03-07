@@ -4580,10 +4580,10 @@ What is your move?`;
               type="button"
               onClick={handleReconnect}
               className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-semibold text-white bg-blue-600 hover:bg-blue-500 shadow-lg shadow-blue-500/20 border border-blue-500/40 transition-colors"
-              title="Reconnect"
+              title={t('common.reconnect')}
             >
               <RefreshCw size={14} />
-              <span>Reconnect</span>
+              <span>{t('common.reconnect')}</span>
             </button>
           </div>
         )}
@@ -4823,19 +4823,19 @@ What is your move?`;
                     {sshAiPrefs.aiModel === 'manual' && (
                       <div className="space-y-2 pt-2 border-t border-white/10">
                         <div className="flex gap-2 mb-2">
-                           <button onClick={() => setSshAiPrefs({ aiEndpoint: 'https://openrouter.ai/api/v1/chat/completions', aiCustomModel: 'anthropic/claude-3.5-sonnet' })} className="text-[9px] px-2 py-1 rounded bg-indigo-500/20 text-indigo-400 hover:bg-indigo-500/30 border border-indigo-500/30 transition-colors" title="Use OpenRouter Preset">
+                           <button onClick={() => setSshAiPrefs({ aiEndpoint: 'https://openrouter.ai/api/v1/chat/completions', aiCustomModel: 'anthropic/claude-3.5-sonnet' })} className="text-[9px] px-2 py-1 rounded bg-indigo-500/20 text-indigo-400 hover:bg-indigo-500/30 border border-indigo-500/30 transition-colors" title={t('ai.presets.openRouter')}>
                              🌐 OpenRouter
                            </button>
-                           <button onClick={() => setSshAiPrefs({ aiEndpoint: 'https://api.openai.com/v1/chat/completions', aiCustomModel: 'gpt-4o' })} className="text-[9px] px-2 py-1 rounded bg-emerald-500/20 text-emerald-400 hover:bg-emerald-500/30 border border-emerald-500/30 transition-colors" title="Use default OpenAI Endpoint">
+                           <button onClick={() => setSshAiPrefs({ aiEndpoint: 'https://api.openai.com/v1/chat/completions', aiCustomModel: 'gpt-4o' })} className="text-[9px] px-2 py-1 rounded bg-emerald-500/20 text-emerald-400 hover:bg-emerald-500/30 border border-emerald-500/30 transition-colors" title={t('ai.presets.openAI')}>
                              🟢 OpenAI
                            </button>
-                           <button onClick={() => setSshAiPrefs({ aiEndpoint: 'http://localhost:11434/v1/chat/completions', aiCustomModel: 'llama3.2' })} className="text-[9px] px-2 py-1 rounded bg-amber-500/20 text-amber-400 hover:bg-amber-500/30 border border-amber-500/30 transition-colors" title="Use Ollama Local Preset">
+                           <button onClick={() => setSshAiPrefs({ aiEndpoint: 'http://localhost:11434/v1/chat/completions', aiCustomModel: 'llama3.2' })} className="text-[9px] px-2 py-1 rounded bg-amber-500/20 text-amber-400 hover:bg-amber-500/30 border border-amber-500/30 transition-colors" title={t('ai.presets.ollama')}>
                              🦙 Ollama
                            </button>
                         </div>
-                        <input type="text" placeholder={t('ai.endpointUrl')} value={sshAiPrefs.aiEndpoint || ''} onChange={e => setSshAiPrefs({ aiEndpoint: e.target.value })} disabled={!isLoggedIn} className="w-full text-[10px] rounded bg-black/30 border border-white/10 px-2 py-1.5 focus:border-indigo-500/50 outline-none" style={{ color: 'var(--text-primary)' }} title="API Endpoint URL" />
-                        <input type="password" placeholder={t('ai.apiKey')} value={sshAiPrefs.aiApiKey || ''} onChange={e => setSshAiPrefs({ aiApiKey: e.target.value })} disabled={!isLoggedIn} className="w-full text-[10px] rounded bg-black/30 border border-white/10 px-2 py-1.5 focus:border-indigo-500/50 outline-none" style={{ color: 'var(--text-primary)' }} title="API Key" />
-                        <input type="text" placeholder={t('ai.modelName')} value={sshAiPrefs.aiCustomModel || ''} onChange={e => setSshAiPrefs({ aiCustomModel: e.target.value })} disabled={!isLoggedIn} className="w-full text-[10px] rounded bg-black/30 border border-white/10 px-2 py-1.5 focus:border-indigo-500/50 outline-none" style={{ color: 'var(--text-primary)' }} title="Custom Model Name" />
+                        <input type="text" placeholder={t('ai.endpointUrl')} value={sshAiPrefs.aiEndpoint || ''} onChange={e => setSshAiPrefs({ aiEndpoint: e.target.value })} disabled={!isLoggedIn} className="w-full text-[10px] rounded bg-black/30 border border-white/10 px-2 py-1.5 focus:border-indigo-500/50 outline-none" style={{ color: 'var(--text-primary)' }} title={t('ai.tooltips.endpoint')} />
+                        <input type="password" placeholder={t('ai.apiKey')} value={sshAiPrefs.aiApiKey || ''} onChange={e => setSshAiPrefs({ aiApiKey: e.target.value })} disabled={!isLoggedIn} className="w-full text-[10px] rounded bg-black/30 border border-white/10 px-2 py-1.5 focus:border-indigo-500/50 outline-none" style={{ color: 'var(--text-primary)' }} title={t('ai.tooltips.apiKey')} />
+                        <input type="text" placeholder={t('ai.modelName')} value={sshAiPrefs.aiCustomModel || ''} onChange={e => setSshAiPrefs({ aiCustomModel: e.target.value })} disabled={!isLoggedIn} className="w-full text-[10px] rounded bg-black/30 border border-white/10 px-2 py-1.5 focus:border-indigo-500/50 outline-none" style={{ color: 'var(--text-primary)' }} title={t('ai.tooltips.model')} />
                       </div>
                     )}
 
@@ -4918,7 +4918,7 @@ What is your move?`;
                             <button 
                               onClick={() => handleInsertCommand(rem.command)}
                               className="shrink-0 p-1.5 rounded-lg bg-purple-500/20 text-purple-400 hover:bg-purple-600/30 hover:text-purple-300 transition-all opacity-0 group-hover:opacity-100"
-                              title="Insert command"
+                              title={t('ai.insertCommand')}
                             >
                               <CornerDownLeft size={10} />
                             </button>
@@ -5853,7 +5853,7 @@ What is your move?`;
                 <div className="mx-3 mb-3 rounded-xl border border-red-500/40 bg-red-500/10 px-3 py-2.5 text-[11px] flex items-start gap-2" style={{ color: 'var(--text-primary)' }}>
                   <span className="shrink-0 mt-0.5 text-red-400">⚠</span>
                   <span className="flex-1 leading-snug">{aiError}</span>
-                  <button onClick={() => setAiError(null)} className="shrink-0 text-red-400/60 hover:text-red-400 transition-colors" title="Dismiss">
+                  <button onClick={() => setAiError(null)} className="shrink-0 text-red-400/60 hover:text-red-400 transition-colors" title={t('common.dismiss')}>
                     <X size={12} />
                   </button>
                 </div>
@@ -6000,7 +6000,7 @@ What is your move?`;
                                runAutoStep(null, '\n\n(FORCE RESUME: Provide an action tag [<command>, <diff>, or <done>] immediately.)');
                              }}
                              className="flex items-center gap-1.5 px-2 py-0.5 rounded bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-[9px] font-bold hover:bg-emerald-500/20 active:scale-95 transition-all"
-                             title="Force the AI to re-analyze immediately"
+                             title={t('ai.forceNextStep')}
                            >
                              <CornerDownLeft size={10} />
                              FORCE NEXT STEP
@@ -6011,7 +6011,7 @@ What is your move?`;
                            <button 
                              onClick={() => setShowSkillsList(prev => !prev)}
                              className={`flex items-center gap-1.5 px-2 py-0.5 rounded border text-[9px] font-bold transition-all ${showSkillsList ? 'bg-indigo-500/20 border-indigo-400/40 text-indigo-300' : 'bg-white/5 border-white/10 text-white/50 hover:bg-white/10 hover:text-white/80'}`}
-                             title="View active skills"
+                             title={t('ai.viewActiveSkills')}
                            >
                              <Brain size={10} />
                              {activeSkills.length} SKILLS
@@ -6021,7 +6021,7 @@ What is your move?`;
                         {/* RESET button — always visible in auto mode for a clean fresh start */}
                         {aiMode === 'auto' && (
                           <button
-                            title="Clear all AI history and start completely fresh"
+                            title={t('ai.clearAiHistory')}
                             onClick={() => {
                               // Full nuclear reset
                               skillsJustInjectedRef.current = false;
@@ -6151,7 +6151,7 @@ What is your move?`;
                       </div>
                     ) : (
                       <div className="flex-1 flex items-start gap-2 px-2 pt-1 min-w-0">
-                        <button className="p-1.5 text-white/40 hover:text-white/80 transition-colors shrink-0 mt-0.5" onClick={() => setAiHistoryOpen(true)} title="History">
+                        <button className="p-1.5 text-white/40 hover:text-white/80 transition-colors shrink-0 mt-0.5" onClick={() => setAiHistoryOpen(true)} title={t('ai.history')}>
                           <Clock size={14} />
                         </button>
                         <textarea

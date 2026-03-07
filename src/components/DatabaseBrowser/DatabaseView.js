@@ -96,8 +96,8 @@ export default function DatabaseView({ connection, onClose }) {
     // Mongo action object (delete/update/insert)
     if (connection.dbProvider === 'mongodb' && pendingAction.mongoAction) {
         const { confirmed, doBackup } = await showConfirm(
-            t('database.ai.dangerTitle'),
-            `${t('database.ai.dangerDesc')}\n\n${t('database.ai.action')}: ${pendingAction.mongoAction.action}\n${t('database.ai.collection')}: ${pendingAction.mongoAction.collection}`,
+            t('database.modals.dangerousActionTitle'),
+            `${t('database.modals.dangerousActionMsg')}\n\n${t('database.ai.action')}: ${pendingAction.mongoAction.action}\n${t('database.ai.collection')}: ${pendingAction.mongoAction.collection}`,
             'danger',
             true // Show backup checkbox
         );
@@ -114,11 +114,11 @@ export default function DatabaseView({ connection, onClose }) {
         });
         const resData = await res.json();
         if (!resData.success) {
-            addNotification({ title: 'Action Error', message: resData.error || 'Action failed', type: 'error' });
+            addNotification({ title: t('database.notifications.actionError'), message: resData.error || 'Action failed', type: 'error' });
             return;
         }
 
-        addNotification({ title: 'Success', message: 'Action executed successfully', type: 'success' });
+        addNotification({ title: t('common.success'), message: t('database.notifications.actionSuccess'), type: 'success' });
         setPendingAction(null);
         fetchData(selectedSchema);
         return;
@@ -133,8 +133,8 @@ export default function DatabaseView({ connection, onClose }) {
   const handleCopyCode = (text) => {
     navigator.clipboard.writeText(text);
     addNotification({
-      title: 'Copied to Clipboard',
-      message: 'The query has been copied to your clipboard.',
+      title: t('database.notifications.copied'),
+      message: t('database.notifications.copiedMsg'),
       type: 'success'
     });
   };
@@ -198,8 +198,8 @@ export default function DatabaseView({ connection, onClose }) {
         if (queue.length > 0) {
             setFailedTables(queue);
             addNotification({ 
-                title: 'Unfinished Export Found', 
-                message: `You have ${queue.length} tables pending from a previous session.`, 
+                title: t('database.notifications.unfinishedExport'), 
+                message: t('database.notifications.unfinishedExportMsg', { count: queue.length }), 
                 type: 'info' 
             });
         }
@@ -338,8 +338,8 @@ export default function DatabaseView({ connection, onClose }) {
 
       if (isActionQuery) {
         const { confirmed, doBackup } = await showConfirm(
-            'DANGEROUS ACTION DETECTED', 
-            `This query will MODIFY or DELETE data from your database. There is no UNDO.\n\nQuery: ${customFilter.substring(0, 100)}...`,
+            t('database.modals.dangerousActionTitle'), 
+            `${t('database.modals.dangerousActionMsg')}\n\nQuery: ${customFilter.substring(0, 100)}...`,
             'danger',
             true
         );
@@ -372,7 +372,7 @@ export default function DatabaseView({ connection, onClose }) {
       const resData = await res.json();
       if (resData.success) {
         if (isActionQuery) {
-            addNotification({ title: 'Success', message: 'Action executed successfully', type: 'success' });
+            addNotification({ title: t('common.success'), message: t('database.notifications.actionSuccess'), type: 'success' });
             fetchData(schemaName);
         } else {
             setData(resData.data);
@@ -766,9 +766,9 @@ export default function DatabaseView({ connection, onClose }) {
         link.download = getExportFilename(tableName, reason);
         link.click();
         URL.revokeObjectURL(url);
-        addNotification({ title: '🛡️ Backup Created', message: `Auto-backup of ${tableName} (${resData.data.length} records) saved`, type: 'success' });
+        addNotification({ title: `🛡️ ${t('database.notifications.backupCreated')}`, message: t('database.notifications.backupCreatedMsg', { tableName, count: resData.data.length }), type: 'success' });
     } catch (err) {
-        addNotification({ title: 'Backup Warning', message: `Could not create backup: ${err.message}`, type: 'error' });
+        addNotification({ title: t('database.notifications.backupWarning'), message: t('database.notifications.backupFail', { message: err.message }), type: 'error' });
     }
   };
 
@@ -1881,8 +1881,8 @@ export default function DatabaseView({ connection, onClose }) {
                   <Terminal size={18} />
                 </div>
                 <div>
-                  <h3 className="text-xs font-bold text-[var(--text-primary)]">Generated Database Command</h3>
-                  <p className="text-[9px] text-[var(--text-muted)] uppercase tracking-wider font-bold">Review query before execution</p>
+                  <h3 className="text-xs font-bold text-[var(--text-primary)]">{t('database.ai.generatedCommand')}</h3>
+                  <p className="text-[9px] text-[var(--text-muted)] uppercase tracking-wider font-bold">{t('database.ai.reviewQuery')}</p>
                 </div>
               </div>
               <button 

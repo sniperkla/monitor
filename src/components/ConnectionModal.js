@@ -827,7 +827,7 @@ export default function ConnectionModal({ onClose, editConnection = null }) {
                    <div className="bg-emerald-500/5 border border-emerald-500/10 p-4 rounded-xl flex items-center gap-3">
                      <Activity size={16} className="text-emerald-400 shrink-0" />
                      <span className="text-[10px] text-[var(--text-muted)] italic">
-                       {t('ssh.modal.auth.noAuthDesc') || 'No authentication required for this connection. Be careful with open databases.'}
+                       {t('ssh.modal.auth.noAuthDesc')}
                      </span>
                    </div>
                 ) : (
@@ -933,7 +933,7 @@ export default function ConnectionModal({ onClose, editConnection = null }) {
   const uriImportModal = isUriModalOpen && createPortal(
     <MacOSModalWindow
       isOpen
-      title="Import Connection URI"
+      title={t('ssh.modal.form.importTitle')}
       icon={Database}
       onClose={() => setIsUriModalOpen(false)}
       zIndexClassName="z-[45000]"
@@ -949,7 +949,7 @@ export default function ConnectionModal({ onClose, editConnection = null }) {
     >
       <div className="space-y-4">
         <p className="text-[10px] text-[var(--text-muted)]">
-          Paste string from MongoDB, MySQL or PostgreSQL
+          {t('ssh.modal.form.importDesc')}
         </p>
 
         <div className="flex flex-wrap gap-2">
@@ -989,7 +989,7 @@ export default function ConnectionModal({ onClose, editConnection = null }) {
             onClick={() => setIsUriModalOpen(false)}
             className="px-6 py-2.5 bg-[var(--bg-tertiary)] hover:bg-[var(--bg-tertiary)]/70 rounded-xl text-xs font-bold transition-all"
           >
-            Cancel
+            {t('common.cancel')}
           </button>
         </div>
       </div>

@@ -3,9 +3,11 @@
 import { useApp } from '@/context/AppContext';
 import { X, Database, Edit, Plus } from 'lucide-react';
 import { useState, useEffect } from 'react';
+import { useTranslation } from 'react-i18next';
 import DatabaseView from './DatabaseView';
 
 export default function DatabaseBrowser({ initialConnection, onEditConnection, onNewConnection }) {
+  const { t } = useTranslation();
   const { state, dispatch } = useApp();
   const { activeDatabaseBrowsers, standaloneDatabaseBrowsers } = state;
   const activeTab = state.activeDatabaseBrowserId;
@@ -170,7 +172,7 @@ export default function DatabaseBrowser({ initialConnection, onEditConnection, o
                     <div className="w-12 h-12 rounded-2xl flex items-center justify-center mb-3 bg-white/5 border border-white/10 group-hover:bg-emerald-500/20 group-hover:border-emerald-500/30 transition-all">
                       <Plus size={24} className="text-[var(--text-muted)] group-hover:text-emerald-400" />
                     </div>
-                    <span className="font-bold text-[10px] text-[var(--text-muted)] group-hover:text-emerald-400 uppercase tracking-tight">Add Connection</span>
+                    <span className="font-bold text-[10px] text-[var(--text-muted)] group-hover:text-emerald-400 uppercase tracking-tight">{t('database.launchpad.addConnection')}</span>
                   </button>
                 </div>
               </div>
@@ -183,10 +185,10 @@ export default function DatabaseBrowser({ initialConnection, onEditConnection, o
                    className="px-10 py-5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white rounded-2xl font-bold shadow-2xl shadow-emerald-500/20 transition-all hover:scale-105 active:scale-95 flex items-center gap-3 mx-auto"
                 >
                    <Plus size={20} />
-                   <span>Create New Connection</span>
+                   <span>{t('database.launchpad.createFirst')}</span>
                 </button>
                 <p className="text-[9px] text-[var(--text-muted)] mt-4 uppercase tracking-[0.3em] font-medium opacity-50">
-                   Start by adding a MongoDB or MySQL server
+                   {t('database.launchpad.startHint')}
                 </p>
               </div>
             )}

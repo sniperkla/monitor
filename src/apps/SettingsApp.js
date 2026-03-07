@@ -76,10 +76,10 @@ export default function SettingsApp({ initialTab }) {
   }, []);
 
   const osMeta = useMemo(() => ({
-    macos:   { label: 'macOS',   badge: 'bg-blue-500/10 text-blue-400 border-blue-500/20',   detail: t('settings_ui.relay.osMeta.macos') },
-    linux:   { label: 'Linux',   badge: 'bg-green-500/10 text-green-400 border-green-500/20', detail: t('settings_ui.relay.osMeta.linux') },
-    windows: { label: 'Windows', badge: 'bg-sky-500/10 text-sky-400 border-sky-500/20',       detail: t('settings_ui.relay.osMeta.windows') },
-    unknown: { label: 'Unknown', badge: 'bg-[var(--bg-tertiary)] text-[var(--text-muted)]',   detail: t('settings_ui.relay.osMeta.unknown') },
+    macos:   { label: t('settings_ui.relay.osMeta.macos_label'),   badge: 'bg-blue-500/10 text-blue-400 border-blue-500/20',   detail: t('settings_ui.relay.osMeta.macos') },
+    linux:   { label: t('settings_ui.relay.osMeta.linux_label'),   badge: 'bg-green-500/10 text-green-400 border-green-500/20', detail: t('settings_ui.relay.osMeta.linux') },
+    windows: { label: t('settings_ui.relay.osMeta.windows_label'), badge: 'bg-sky-500/10 text-sky-400 border-sky-500/20',       detail: t('settings_ui.relay.osMeta.windows') },
+    unknown: { label: t('settings_ui.relay.osMeta.unknown_label'), badge: 'bg-[var(--bg-tertiary)] text-[var(--text-muted)]',   detail: t('settings_ui.relay.osMeta.unknown') },
   }), [t]);
 
   const updateTerminalTheme = (key, value) => {
@@ -119,10 +119,10 @@ export default function SettingsApp({ initialTab }) {
       const data = await res.json();
       if (data.success) {
         setRelayToken(data.token);
-        addNotification({ title: 'Token Created', message: 'Relay token generated. Run the command below.', type: 'success' });
+        addNotification({ title: t('settings_ui.relay.toasts.tokenCreated'), message: t('settings_ui.relay.toasts.tokenCreatedMsg'), type: 'success' });
       }
     } catch {
-      addNotification({ title: 'Error', message: 'Failed to generate token', type: 'error' });
+      addNotification({ title: t('common.error'), message: t('settings_ui.relay.toasts.tokenError'), type: 'error' });
     }
     setRelayLoading(false);
   };
@@ -132,7 +132,7 @@ export default function SettingsApp({ initialTab }) {
       await fetch('/api/relay/token', { method: 'DELETE' });
       setRelayToken(null);
       setRelayConnected(false);
-      addNotification({ title: 'Revoked', message: 'Relay token revoked.', type: 'info' });
+      addNotification({ title: t('settings_ui.relay.toasts.tokenRevoked'), message: t('settings_ui.relay.toasts.tokenRevokedMsg'), type: 'info' });
     } catch {}
   };
 
@@ -1026,7 +1026,7 @@ export default function SettingsApp({ initialTab }) {
                               async () => {
                                 await clearVault();
                                 dispatch({ type: 'SET_DB_CONFIG', payload: { uri: '' } });
-                                addNotification({ title: 'Cleared', message: t('settings_ui.db.vaultCleared'), type: 'info' });
+                                addNotification({ title: t('common.removed'), message: t('settings_ui.db.vaultCleared'), type: 'info' });
                               },
                               t('settings_ui.db.deleteVault')
                             );

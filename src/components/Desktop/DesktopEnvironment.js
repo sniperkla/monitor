@@ -803,7 +803,7 @@ export default function DesktopEnvironment() {
 
               <ContextItem 
                 icon={isFullscreen ? Minimize : Maximize} 
-                label={isFullscreen ? "Exit Fullscreen" : "Enter Fullscreen"} 
+                label={isFullscreen ? t('common.exitFullscreen') : t('common.enterFullscreen')} 
                 onHover={() => setActiveSubmenu(null)}
                 onClick={() => {
                   if (!isFullscreen) {
