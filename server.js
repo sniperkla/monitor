@@ -1908,11 +1908,53 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
       global.__relayTokens  = global.__relayTokens  || new Map(); // token → {userId, expiresAt}
       global.__activeRelays = global.__activeRelays || new Map(); // userId → {localPort, netServer, targetHost, targetPort}
 
-      // Purge expired tokens every hour
+      // ── Persist tokens to disk so they survive server restarts ──────────────
+      const RELAY_TOKENS_FILE = path.resolve(__dirname, '.relay-tokens.json');
+
+      function loadPersistedRelayTokens() {
+        try {
+          if (fs.existsSync(RELAY_TOKENS_FILE)) {
+            const raw = JSON.parse(fs.readFileSync(RELAY_TOKENS_FILE, 'utf-8'));
+            const now = Date.now();
+            let loaded = 0;
+            for (const [token, entry] of Object.entries(raw)) {
+              if (entry.expiresAt > now) {
+                global.__relayTokens.set(token, entry);
+                loaded++;
+              }
+            }
+            if (loaded > 0) console.log(`🔗 [Relay] Loaded ${loaded} persisted token(s) from disk.`);
+          }
+        } catch (e) {
+          console.warn('⚠️  Could not load persisted relay tokens:', e.message);
+        }
+      }
+
+      function persistRelayTokens() {
+        try {
+          const obj = {};
+          for (const [token, entry] of global.__relayTokens) obj[token] = entry;
+          fs.writeFileSync(RELAY_TOKENS_FILE, JSON.stringify(obj, null, 2));
+        } catch (e) {
+          console.warn('⚠️  Could not persist relay tokens:', e.message);
+        }
+      }
+
+      // Load on startup
+      loadPersistedRelayTokens();
+
+      // Purge expired tokens every hour and persist
       setInterval(() => {
         const now = Date.now();
-        for (const [t, e] of global.__relayTokens) if (e.expiresAt < now) global.__relayTokens.delete(t);
+        let changed = false;
+        for (const [t, e] of global.__relayTokens) {
+          if (e.expiresAt < now) { global.__relayTokens.delete(t); changed = true; }
+        }
+        if (changed) persistRelayTokens();
       }, 60 * 60 * 1000);
+
+      // Expose persist function for use by API route
+      global.__persistRelayTokens = persistRelayTokens;
 
       const relayWss = new WebSocketServer({ noServer: true });
 

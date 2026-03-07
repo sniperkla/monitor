@@ -54,6 +54,16 @@ export default function MasterPasswordModal() {
   const [recoveryEmail, setRecoveryEmail] = useState('');
   const [shakeKey, setShakeKey] = useState(0);
   const [faqOpen, setFaqOpen] = useState(null); // which FAQ index is open
+  const [relayConnected, setRelayConnected] = useState(false);
+
+  // Check relay status once on mount
+  useEffect(() => {
+    if (!session) return;
+    fetch('/api/relay/token')
+      .then(r => r.json())
+      .then(d => { if (d.success) setRelayConnected(d.connected); })
+      .catch(() => {});
+  }, [session]);
 
   // SSH Tunnel state (for vault setup)
   const [tunnelEnabled, setTunnelEnabled] = useState(false);
@@ -142,8 +152,9 @@ export default function MasterPasswordModal() {
     }
 
     // If URI targets localhost, remind about Local Relay Agent
+    // (skip reminder if relay is already connected)
     const isLocalhost = /localhost|127\.0\.0\.1/.test(uri);
-    if (isLocalhost) {
+    if (isLocalhost && !relayConnected) {
       setError('');
       setPendingSetup({ uri, tunnelConfig: null });
       setShowRelayReminder(true);

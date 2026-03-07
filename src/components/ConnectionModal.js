@@ -31,10 +31,17 @@ export default function ConnectionModal({ onClose, editConnection = null }) {
   const [isUriModalOpen, setIsUriModalOpen] = useState(false);
   const [uriInput, setUriInput] = useState('');
   const [isTesting, setIsTesting] = useState(false);
+  const [relayConnected, setRelayConnected] = useState(false);
 
   useEffect(() => {
     setMounted(true);
-  }, []);
+    if (session) {
+      fetch('/api/relay/token')
+        .then(r => r.json())
+        .then(d => { if (d.success) setRelayConnected(d.connected); })
+        .catch(() => {});
+    }
+  }, [session]);
 
   const [form, setForm] = useState({
     type: editConnection?.type || 'ssh',
@@ -685,8 +692,8 @@ export default function ConnectionModal({ onClose, editConnection = null }) {
                            </button>
                         </div>
                       )}
-                      {/* Relay agent hint when host is localhost */}
-                      {form.type === 'database' && /^(localhost|127\.0\.0\.1)$/.test(form.host) && (
+                      {/* Relay agent hint when host is localhost (only if relay is not connected) */}
+                      {form.type === 'database' && /^(localhost|127\.0\.0\.1)$/.test(form.host) && !relayConnected && (
                         <div className="flex gap-2 mt-2 p-2.5 rounded-xl bg-amber-500/8 border border-amber-500/25 text-[10px] leading-relaxed">
                           <AlertTriangle size={13} className="shrink-0 text-amber-400 mt-0.5" />
                           <span className="text-amber-300/90">

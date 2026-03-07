@@ -26,6 +26,8 @@ export async function POST() {
       expiresAt: Date.now() + TOKEN_TTL,
     });
 
+    // Persist tokens to disk so relay survives server restarts
+    if (typeof global.__persistRelayTokens === 'function') global.__persistRelayTokens();
     return Response.json({ success: true, token });
   } catch (err) {
     return Response.json({ error: err.message }, { status: 500 });
@@ -76,6 +78,7 @@ export async function DELETE() {
       global.__activeRelays.delete(session.user.id);
     }
 
+    if (typeof global.__persistRelayTokens === 'function') global.__persistRelayTokens();
     return Response.json({ success: true });
   } catch (err) {
     return Response.json({ error: err.message }, { status: 500 });
