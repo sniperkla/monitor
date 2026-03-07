@@ -34,7 +34,7 @@ const { decrypt } = require('./src/utils/encryption');
 const compression = require('compression');
 
 const dev = process.env.NODE_ENV !== 'production';
-const hostname = 'localhost';
+const hostname = dev ? 'localhost' : '0.0.0.0';
 const port = parseInt(process.env.PORT, 10) || 3000;
 
 const app = next({ dev, hostname, port, dir: __dirname });
@@ -320,7 +320,9 @@ app.prepare().then(async () => {
 
   const io = new Server(server, {
     cors: {
-      origin: process.env.NODE_ENV === 'production' ? (process.env.NEXT_PUBLIC_APP_URL || false) : '*',
+      origin: process.env.NODE_ENV === 'production'
+        ? (process.env.NEXT_PUBLIC_APP_URL || process.env.NEXTAUTH_URL || true)
+        : '*',
       methods: ['GET', 'POST'],
       credentials: true
     },
