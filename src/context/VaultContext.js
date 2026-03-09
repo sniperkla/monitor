@@ -349,7 +349,12 @@ export function VaultProvider({ children }) {
       dismissVault,    // () => void
       showVault,        // () => void
       isConfigured: vaultStatus !== 'setup' && vaultStatus !== 'loading',
-      isUnlocked: vaultStatus === 'unlocked'
+      isUnlocked: vaultStatus === 'unlocked',
+      verifyMasterPassword: async (password) => {
+        if (!vaultData?.passwordHash || !vaultData?.salt) return false;
+        const hash = await hashPassword(password, vaultData.salt);
+        return hash === vaultData.passwordHash;
+      }
     }}>
       {children}
     </VaultContext.Provider>

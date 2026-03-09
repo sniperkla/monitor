@@ -632,6 +632,7 @@ export default function TmuxLayout({ windowId = 'default', isTmuxMode = false })
 
     setWindows(prev => {
       let currentWindows = [...prev];
+      
       newTerminals.forEach(newTerminal => {
         handledTermIdsRef.current.add(newTerminal.id);
         const termData = {
@@ -643,19 +644,45 @@ export default function TmuxLayout({ windowId = 'default', isTmuxMode = false })
           connection: newTerminal.connection,
         };
 
-        // FAVOR SPLITTING ACTIVE WINDOW: Avoid creating new workspace tabs
-        // We look for the active window or the first one available.
+        // 1. EXACT DUPLICATE CHECK: Search ALL windows/panes for this connectionId
+        // This ensures that after a page refresh, we "re-occupy" the existing pane
+        // instead of creating a second split for the same server.
+        let foundExisting = false;
+        for (let i = 0; i < currentWindows.length; i++) {
+          const win = currentWindows[i];
+          const paneIds = getAllPaneIds(win.layout);
+          for (const pid of paneIds) {
+            const pane = getPaneById(win.layout, pid);
+            if (pane?.termData?.connectionId === newTerminal.connectionId) {
+              // Found a pane that belongs to this server!
+              // Update it with the NEW terminalId and bring it to focus.
+              currentWindows[i] = {
+                ...win,
+                layout: updatePaneData(win.layout, pid, termData),
+                activePaneId: pid
+              };
+              setActiveWindowIndex(i);
+              foundExisting = true;
+              break;
+            }
+          }
+          if (foundExisting) break;
+        }
+
+        if (foundExisting) return; // Proceed to next new terminal
+
+        // 2. FAVOR SPLITTING ACTIVE WINDOW: If not already in layout, find a place for it
         const targetWinIndex = (activeWindowIndex >= 0 && currentWindows[activeWindowIndex]) 
           ? activeWindowIndex 
           : (currentWindows.length > 0 ? 0 : -1);
 
         if (targetWinIndex >= 0) {
-          // Add as a new pane (split) in the existing window
           const targetWin = currentWindows[targetWinIndex];
           const activeId = targetWin.activePaneId;
           const activePane = getPaneById(targetWin.layout, activeId);
           
           let newLayout;
+          // If current pane is empty, use it. Otherwise, split.
           if (activePane && !activePane.termData) {
              newLayout = updatePaneData(targetWin.layout, activeId, termData);
           } else {
@@ -666,11 +693,11 @@ export default function TmuxLayout({ windowId = 'default', isTmuxMode = false })
           currentWindows[targetWinIndex] = {
             ...targetWin,
             layout: assignSplitIds(newLayout),
-            activePaneId: activeId // Keep focus stable or update to new pane
+            activePaneId: activePane && !activePane.termData ? activeId : (newLayout.children?.find(c => c.termData?.terminalId === newTerminal.id)?.id || activeId)
           };
-          setActiveWindowIndex(targetWinIndex); // Ensure we are on this window
+          setActiveWindowIndex(targetWinIndex);
         } else {
-          // NEW CONNECTION: Create the first Window Tab
+          // 3. FIRST WINDOW: Create the initial layout entry
           const newPane = createPane(termData);
           const newWin = {
             id: `win-${Date.now()}-${Math.random()}`,
@@ -685,9 +712,33 @@ export default function TmuxLayout({ windowId = 'default', isTmuxMode = false })
       });
       return currentWindows;
     });
-  }, [activeTerminals]);
+  }, [activeTerminals, activeWindowIndex]);
 
   // ── Auto-focus window for selected connection ──
+  useEffect(() => {
+    if (state.activeTerminalId) {
+      // Find which window and pane has this terminalId
+      for (let i = 0; i < windows.length; i++) {
+        const win = windows[i];
+        const paneIds = getAllPaneIds(win.layout);
+        for (const pid of paneIds) {
+          const pane = getPaneById(win.layout, pid);
+          if (pane?.termData?.terminalId === state.activeTerminalId) {
+            if (activeWindowIndex !== i) setActiveWindowIndex(i);
+            if (win.activePaneId !== pid) {
+              setWindows(prev => {
+                const next = [...prev];
+                next[i] = { ...next[i], activePaneId: pid };
+                return next;
+              });
+            }
+            return;
+          }
+        }
+      }
+    }
+  }, [state.activeTerminalId, windows.length, activeWindowIndex]);
+
   useEffect(() => {
     if (state.selectedConnection?._id) {
       const idx = windows.findIndex(w => w.connectionId === state.selectedConnection._id);
@@ -695,7 +746,7 @@ export default function TmuxLayout({ windowId = 'default', isTmuxMode = false })
         setActiveWindowIndex(idx);
       }
     }
-  }, [state.selectedConnection?._id, windows.length]);
+  }, [state.selectedConnection?._id, windows.length, activeWindowIndex]);
 
   // ── Handle external drops (Drag to Desktop) ──
   useEffect(() => {

@@ -890,17 +890,26 @@ export default function TerminalView({ connectionId, connectionName, host, color
 
     const handleResize = () => performFit();
     window.addEventListener('resize', handleResize);
+    
+    // Remote restart listener (used by Dashboard to reconnect from a click)
+    const handleRemoteRestart = (e) => {
+      // Reconnect if the event targets this specific connection
+      if (e.detail?.terminalId === terminalId || e.detail?.connectionId === propsRef.current.connectionId) {
+        handleReconnect();
+      }
+    };
+    window.addEventListener('terminal:restart', handleRemoteRestart);
 
     const observer = new ResizeObserver(() => {
       // Small delay helps flexbox layouts finish settling
       setTimeout(performFit, 0);
       setTimeout(performFit, 50);
     });
-
     if (terminalRef.current) observer.observe(terminalRef.current);
 
     return () => {
       window.removeEventListener('resize', handleResize);
+      window.removeEventListener('terminal:restart', handleRemoteRestart);
       observer.disconnect();
     };
   }, [connectionId, appState.dbConfig?.uri, updateConnectionStatus]);

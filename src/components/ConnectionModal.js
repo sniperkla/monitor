@@ -4,11 +4,12 @@ import { useState, useRef, useEffect, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { useApp } from '@/context/AppContext';
 import { useOS } from '@/context/OSContext';
+import { useVault } from '@/context/VaultContext';
 import { useTranslation } from 'react-i18next';
 import { useSession, signIn } from 'next-auth/react';
 import MacOSModalWindow from '@/components/MacOSModalWindow';
 import {
-  X, Server, User, Lock, Key, Upload, FileKey, Hash, Tag, Palette, StickyNote, Database, HardDrive, Cpu, Eye, EyeOff, Activity, RefreshCw, AlertTriangle, Network
+  X, Server, User, Lock, Key, Shield, Upload, FileKey, Hash, Tag, Palette, StickyNote, Database, HardDrive, Cpu, Eye, EyeOff, Activity, RefreshCw, AlertTriangle, Network
 } from 'lucide-react';
 
 const COLORS = [
@@ -20,6 +21,7 @@ const COLORS = [
 
 export default function ConnectionModal({ onClose, editConnection = null }) {
   const { state, dispatch, fetchConnections, apiFetch } = useApp();
+  const { vaultStatus, verifyMasterPassword } = useVault();
   const { addNotification, showAlert } = useOS();
   const { t } = useTranslation();
   const { data: session } = useSession();
@@ -32,6 +34,11 @@ export default function ConnectionModal({ onClose, editConnection = null }) {
   const [uriInput, setUriInput] = useState('');
   const [isTesting, setIsTesting] = useState(false);
   const [relayConnected, setRelayConnected] = useState(false);
+  const [showMasterPasswordPrompt, setShowMasterPasswordPrompt] = useState(false);
+  const [verifyPassword, setVerifyPassword] = useState('');
+  const [isVerifying, setIsVerifying] = useState(false);
+  const [revealTarget, setRevealTarget] = useState(null); // 'password' | 'privateKey' | 'passphrase'
+  const [revealedSecrets, setRevealedSecrets] = useState({}); // { password: '...', ... }
 
   useEffect(() => {
     setMounted(true);
@@ -259,6 +266,68 @@ export default function ConnectionModal({ onClose, editConnection = null }) {
       addNotification({ title: t('common.error'), message: err.message, type: 'error' });
     } finally {
       setIsTesting(false);
+    }
+  };
+
+  const handleRevealClick = (target) => {
+    if (!editConnection) return;
+    setRevealTarget(target);
+    setShowMasterPasswordPrompt(true);
+  };
+
+  const handleVerifyMasterPassword = async (e) => {
+    e.preventDefault();
+    if (!verifyPassword) return;
+    setIsVerifying(true);
+
+    try {
+      const isValid = await verifyMasterPassword(verifyPassword);
+      if (isValid) {
+        let encryptedData = {
+          password: editConnection.password,
+          privateKey: editConnection.privateKey,
+          passphrase: editConnection.passphrase
+        };
+
+        // If it's a DB connection, the encrypted data isn't in the state (sanitized).
+        // Fetch the full connection object from the server.
+        if (editConnection.storage === 'db') {
+          const fetchRes = await apiFetch(`/api/connections/${editConnection._id}`);
+          const fetchData = await fetchRes.json();
+          if (fetchData.success) {
+            encryptedData = {
+              password: fetchData.data.password,
+              privateKey: fetchData.data.privateKey,
+              passphrase: fetchData.data.passphrase
+            };
+          } else {
+            throw new Error(fetchData.error || 'Failed to fetch full connection details');
+          }
+        }
+
+        // Now decrypt with the actual encrypted strings
+        const res = await apiFetch('/api/utils/decrypt', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ data: encryptedData })
+        });
+        const data = await res.json();
+        if (data.success) {
+          setRevealedSecrets(data.data);
+          setShowMasterPasswordPrompt(false);
+          setVerifyPassword('');
+          // Automatically show the field so they don't have to click the Eye too
+          if (revealTarget === 'password') setShowPassword(true);
+        } else {
+          addNotification({ title: 'Error', message: data.error, type: 'error' });
+        }
+      } else {
+        addNotification({ title: 'Invalid Password', message: 'The master password you entered is incorrect.', type: 'error' });
+      }
+    } catch (err) {
+      addNotification({ title: 'Error', message: err.message || 'Failed to verify password', type: 'error' });
+    } finally {
+      setIsVerifying(false);
     }
   };
 
@@ -815,19 +884,34 @@ export default function ConnectionModal({ onClose, editConnection = null }) {
                     <div className="relative">
                       <input
                         type={showPassword ? "text" : "password"}
-                        className="input-field pr-10"
+                        className="input-field pr-20"
                         placeholder={editConnection ? t('ssh.modal.placeholders.passwordEdit') : t('ssh.modal.placeholders.password')}
-                        value={form.password}
-                        onChange={(e) => handleChange('password', e.target.value)}
+                        value={form.password || (revealedSecrets.password || '')}
+                        onChange={(e) => {
+                          if (revealedSecrets.password) setRevealedSecrets(prev => ({ ...prev, password: null }));
+                          handleChange('password', e.target.value);
+                        }}
                         required={!editConnection && form.authType !== 'none'}
                       />
-                      <button
-                        type="button"
-                        className="absolute right-3 top-1/2 -translate-y-1/2 text-[var(--text-muted)] hover:text-[var(--text-primary)] transition-colors"
-                        onClick={() => setShowPassword(!showPassword)}
-                      >
-                        {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
-                      </button>
+                      <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-1">
+                        {editConnection && !revealedSecrets.password && (
+                          <button
+                            type="button"
+                            className="p-1 text-[var(--text-muted)] hover:text-indigo-400 transition-colors"
+                            title="Reveal current saved password"
+                            onClick={() => handleRevealClick('password')}
+                          >
+                            <Lock size={14} />
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          className="p-1 text-[var(--text-muted)] hover:text-[var(--text-primary)] transition-colors"
+                          onClick={() => setShowPassword(!showPassword)}
+                        >
+                          {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                        </button>
+                      </div>
                     </div>
                   </div>
                 ) : form.authType === 'none' ? (
@@ -856,23 +940,61 @@ export default function ConnectionModal({ onClose, editConnection = null }) {
                           className="hidden"
                           onChange={(e) => handleFileUpload(e.target.files[0])}
                         />
-                        {form.keyFileName ? (
-                          <span className="text-xs text-[var(--accent-indigo)] font-medium truncate max-w-full px-2">
-                             {form.keyFileName}
-                          </span>
+                        {form.keyFileName || revealedSecrets.keyFileName ? (
+                          <div className="flex flex-col items-center">
+                            <span className="text-xs text-[var(--accent-indigo)] font-medium truncate max-w-full px-2">
+                               {form.keyFileName || editConnection?.keyFileName || 'Saved Private Key'}
+                            </span>
+                            {revealedSecrets.privateKey && (
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  navigator.clipboard.writeText(revealedSecrets.privateKey);
+                                  addNotification({ title: 'Copied', message: 'Private key copied to clipboard', type: 'info' });
+                                }}
+                                className="mt-2 text-[9px] font-bold text-emerald-400 hover:text-emerald-300 transition-colors bg-emerald-500/10 px-2 py-1 rounded border border-emerald-500/20"
+                              >
+                                Copy Key
+                              </button>
+                            )}
+                          </div>
                         ) : (
-                          <span className="text-[10px] text-[var(--text-muted)] lowercase text-center px-4">{t('ssh.modal.placeholders.dropKey')}</span>
+                          <div className="flex flex-col items-center gap-2">
+                            <span className="text-[10px] text-[var(--text-muted)] lowercase text-center px-4">{t('ssh.modal.placeholders.dropKey')}</span>
+                            {editConnection && editConnection.authType === 'privateKey' && !revealedSecrets.privateKey && (
+                              <button
+                                type="button"
+                                className="text-[9px] font-bold text-indigo-400 hover:text-indigo-300 transition-colors flex items-center gap-1.5"
+                                onClick={(e) => { e.stopPropagation(); handleRevealClick('privateKey'); }}
+                              >
+                                <Lock size={10} /> Reveal Saved Key
+                              </button>
+                            )}
+                          </div>
                         )}
                       </div>
                     </div>
-                    <div>
+                    <div className="relative">
                       <input
                         type="password"
-                        className="input-field text-xs"
+                        className="input-field text-xs pr-10"
                         placeholder={t('ssh.modal.placeholders.passphrase')}
-                        value={form.passphrase}
-                        onChange={(e) => handleChange('passphrase', e.target.value)}
+                        value={form.passphrase || (revealedSecrets.passphrase || '')}
+                        onChange={(e) => {
+                          if (revealedSecrets.passphrase) setRevealedSecrets(prev => ({ ...prev, passphrase: null }));
+                          handleChange('passphrase', e.target.value);
+                        }}
                       />
+                      {editConnection && !revealedSecrets.passphrase && (
+                        <button
+                          type="button"
+                          className="absolute right-3 top-1/2 -translate-y-1/2 p-1 text-[var(--text-muted)] hover:text-indigo-400 transition-colors"
+                          onClick={() => handleRevealClick('passphrase')}
+                        >
+                          <Lock size={14} />
+                        </button>
+                      )}
                     </div>
                   </>
                 )}
@@ -1004,10 +1126,58 @@ export default function ConnectionModal({ onClose, editConnection = null }) {
     document.body
   );
 
+  const masterPasswordVerifyModal = showMasterPasswordPrompt && createPortal(
+    <div className="fixed inset-0 z-[60000] flex items-center justify-center bg-black/60 backdrop-blur-md">
+       <div className="w-full max-w-sm mx-4 bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-3xl p-6 shadow-2xl animate-in fade-in zoom-in-95 duration-200">
+          <div className="text-center mb-6">
+             <div className="w-16 h-16 bg-indigo-500/10 rounded-2xl flex items-center justify-center mx-auto mb-4">
+                <Shield size={32} className="text-indigo-400" />
+             </div>
+             <h3 className="text-xl font-extrabold text-[var(--text-primary)] mb-1">Confirm Identity</h3>
+             <p className="text-xs text-[var(--text-muted)] uppercase tracking-widest font-bold">Verification Required</p>
+          </div>
+
+          <form onSubmit={handleVerifyMasterPassword} className="space-y-4">
+             <div className="space-y-2">
+                <label className="text-[10px] font-bold text-[var(--text-muted)] uppercase tracking-wider ml-1">Master Password</label>
+                <input
+                  autoFocus
+                  type="password"
+                  value={verifyPassword}
+                  onChange={(e) => setVerifyPassword(e.target.value)}
+                  placeholder="Enter your master password..."
+                  className="w-full px-4 py-3 bg-[var(--bg-tertiary)] border border-[var(--border-color)] rounded-xl text-sm focus:outline-none focus:border-indigo-500/50 transition-all"
+                />
+             </div>
+
+             <div className="flex gap-3">
+                <button
+                  type="button"
+                  onClick={() => { setShowMasterPasswordPrompt(false); setVerifyPassword(''); }}
+                  className="flex-1 py-3 bg-[var(--bg-tertiary)] hover:bg-[var(--bg-card-hover)] rounded-xl text-xs font-bold transition-all"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={isVerifying || !verifyPassword}
+                  className="flex-[2] py-3 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-extrabold transition-all shadow-lg shadow-indigo-500/20 disabled:opacity-50"
+                >
+                  {isVerifying ? <RefreshCw size={14} className="animate-spin inline-block mr-2" /> : <Lock size={14} className="inline-block mr-2" />}
+                  Verify & Reveal
+                </button>
+             </div>
+          </form>
+       </div>
+    </div>,
+    document.body
+  );
+
   return (
     <>
       {modalJsx}
       {uriImportModal}
+      {masterPasswordVerifyModal}
     </>
   );
 }

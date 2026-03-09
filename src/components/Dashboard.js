@@ -19,8 +19,10 @@ export default function Dashboard({ onNewConnection, onEditConnection }) {
   const [showImportKeyModal, setShowImportKeyModal] = useState(false);
   const [showExportModal, setShowExportModal] = useState(false);
   const [exportMode, setExportMode] = useState('encrypted'); // 'encrypted' | 'plain'
+  const [exportPassword, setExportPassword] = useState('');
+  const [importPassword, setImportPassword] = useState('');
   const [importFileData, setImportFileData] = useState(null);
-  const importKeyRef = useRef(null);
+  const importKeyRef = useRef(null); // Keep for legacy oldKey fallback if needed
 
   const stats = {
     total: connections.length,
@@ -57,9 +59,17 @@ export default function Dashboard({ onNewConnection, onEditConnection }) {
   };
 
   const handleConfirmExport = async () => {
+    if (exportMode === 'encrypted' && !exportPassword) {
+      dispatch({ type: 'ADD_NOTIFICATION', payload: { title: 'Password Required', message: 'Please enter a password to secure your export.', type: 'warning' } });
+      return;
+    }
     setShowExportModal(false);
     try {
-      const res = await apiFetch(`/api/connections/export?mode=${exportMode}`);
+      const urlParams = new URLSearchParams({ mode: exportMode });
+      if (exportMode === 'encrypted' && exportPassword) {
+        urlParams.append('password', exportPassword);
+      }
+      const res = await apiFetch(`/api/connections/export?${urlParams.toString()}`);
       const data = await res.json();
       if (data.success) {
         // Wrap with metadata so import can detect format
@@ -136,13 +146,14 @@ export default function Dashboard({ onNewConnection, onEditConnection }) {
       }
     };
     input.click();
+    setExportPassword(''); // Reset for next time
   };
 
-  const doImport = async (connections, oldEncryptionKey) => {
+  const doImport = async (connections, password, oldEncryptionKey) => {
     try {
-      const body = oldEncryptionKey
-        ? { connections, oldEncryptionKey }
-        : connections; // backward compatible: send plain array
+      const body = { connections };
+      if (password) body.password = password;
+      if (oldEncryptionKey) body.oldEncryptionKey = oldEncryptionKey;
 
       const res = await apiFetch('/api/connections/import', {
         method: 'POST',
@@ -188,10 +199,16 @@ export default function Dashboard({ onNewConnection, onEditConnection }) {
       return;
     }
 
-    // SSH Duplicate Check
+    // SSH Duplicate/Focus Logic
     const existing = state.activeTerminals.find(t => t.connectionId === conn._id);
+    
     if (existing) {
-      dispatch({ type: 'SET_VIEW', payload: 'terminal' });
+      // If it exists, we update activeTerminalId to bring it to focus
+      dispatch({ type: 'OPEN_TERMINAL', payload: existing });
+      // Also trigger a restart event just in case it was disconnected
+      window.dispatchEvent(new CustomEvent('terminal:restart', { 
+        detail: { terminalId: existing.id } 
+      }));
       return;
     }
     
@@ -585,6 +602,22 @@ export default function Dashboard({ onNewConnection, onEditConnection }) {
                 </div>
               </div>
 
+              {exportMode === 'encrypted' && (
+                <div className="mb-6 space-y-2">
+                  <label className="text-xs font-bold text-[var(--text-secondary)] uppercase tracking-wider ml-1">Export Password</label>
+                  <input
+                    type="password"
+                    value={exportPassword}
+                    onChange={(e) => setExportPassword(e.target.value)}
+                    placeholder="Enter password to lock this file..."
+                    className="w-full px-4 py-3 rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] text-[var(--text-primary)] text-sm focus:outline-none focus:border-indigo-500/50"
+                  />
+                  <p className="text-[10px] text-[var(--text-muted)] ml-1">
+                    You'll need this password to import the connections to another server.
+                  </p>
+                </div>
+              )}
+
               {exportMode === 'plain' && (
                 <div className="mb-6 p-3 rounded-xl bg-rose-500/10 border border-rose-500/20 flex items-start gap-2">
                   <AlertCircle size={16} className="text-rose-400 shrink-0 mt-0.5" />
@@ -653,17 +686,30 @@ export default function Dashboard({ onNewConnection, onEditConnection }) {
                 </button>
               </div>
 
-              <p className="text-sm text-[var(--text-secondary)] mb-4">
-                This export file contains encrypted credentials. To re-encrypt them with this server's key, 
-                paste the <code className="px-1.5 py-0.5 rounded bg-[var(--bg-tertiary)] text-amber-400 font-mono text-xs">ENCRYPTION_KEY</code> from 
-                the <strong>old</strong> server's <code className="px-1.5 py-0.5 rounded bg-[var(--bg-tertiary)] text-amber-400 font-mono text-xs">.env</code> file.
+              <p className="text-sm text-[var(--text-secondary)] mb-4 leading-relaxed">
+                This export file is password-protected. To re-encrypt these connections with this server's key, 
+                please enter the <strong>Export Password</strong> you used when creating the file.
               </p>
+
+              <input
+                type="password"
+                value={importPassword}
+                onChange={(e) => setImportPassword(e.target.value)}
+                placeholder="Enter Export Password..."
+                className="w-full px-4 py-3 rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] text-[var(--text-primary)] text-sm focus:outline-none focus:border-amber-500/50 mb-2"
+              />
+
+              <div className="relative flex items-center gap-2 mb-4 opacity-40 hover:opacity-100 transition-opacity">
+                <div className="h-px flex-1 bg-[var(--border-color)]" />
+                <span className="text-[10px] font-bold text-[var(--text-muted)] uppercase tracking-widest whitespace-nowrap">OR USE OLD SERVER KEY</span>
+                <div className="h-px flex-1 bg-[var(--border-color)]" />
+              </div>
 
               <input
                 ref={importKeyRef}
                 type="password"
-                placeholder="e.g. 66f462177aa9fa4f38cf4263c6079f4d..."
-                className="w-full px-4 py-3 rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] text-[var(--text-primary)] font-mono text-sm placeholder:text-[var(--text-muted)] focus:outline-none focus:border-amber-500/50 mb-4"
+                placeholder="Old ENCRYPTION_KEY..."
+                className="w-full px-4 py-2 rounded-lg bg-[var(--bg-tertiary)]/50 border border-[var(--border-color)] text-[var(--text-primary)] font-mono text-[10px] placeholder:text-[var(--text-muted)] focus:outline-none focus:border-amber-500/30 mb-4"
               />
 
               <div className="flex gap-3">
@@ -675,13 +721,15 @@ export default function Dashboard({ onNewConnection, onEditConnection }) {
                 </button>
                 <button
                   onClick={async () => {
+                    const password = importPassword.trim();
                     const key = importKeyRef.current?.value?.trim();
-                    if (!key) {
-                      dispatch({ type: 'ADD_NOTIFICATION', payload: { title: 'Key Required', message: 'Please enter the old ENCRYPTION_KEY.', type: 'error' } });
+                    if (!password && !key) {
+                      dispatch({ type: 'ADD_NOTIFICATION', payload: { title: 'Input Required', message: 'Please enter the export password or the old server key.', type: 'error' } });
                       return;
                     }
                     setShowImportKeyModal(false);
-                    await doImport(importFileData, key);
+                    await doImport(importFileData, password, key);
+                    setImportPassword('');
                     setImportFileData(null);
                   }}
                   className="flex-1 px-4 py-2.5 rounded-xl bg-amber-500 text-black font-semibold hover:bg-amber-400 transition-all text-sm"

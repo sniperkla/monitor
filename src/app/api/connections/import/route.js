@@ -4,7 +4,7 @@ import { authOptions } from "@/lib/auth";
 import { checkRateLimit } from '@/lib/serverGuard';
 import connectDB from '@/lib/mongodb';
 import { ConnectionRepository } from '@/lib/repositories/ConnectionRepository';
-import { encrypt } from '@/utils/encryption';
+import { encrypt, decryptWithPassword } from '@/utils/encryption';
 import crypto from 'crypto';
 
 const IV_LENGTH = 16;
@@ -31,24 +31,25 @@ function decryptWithCustomKey(encryptedText, hexKey) {
 }
 
 /**
- * Re-encrypt a field: decrypt with the old key, then encrypt with the
- * current server's ENCRYPTION_KEY.  If no oldKey is provided or the
- * value isn't encrypted, encrypt it directly as plain text.
+ * Re-encrypt a field: 
+ * 1. If password provided, decrypt with that first.
+ * 2. Else if oldKey provided, decrypt with that.
+ * 3. Then encrypt with this server's current key.
  */
-function reEncrypt(value, oldKey) {
+function reEncrypt(value, password, oldKey) {
   if (!value) return null;
 
-  if (oldKey) {
-    // Value is encrypted with the old server's key → decrypt first
-    const plain = decryptWithCustomKey(value, oldKey);
-    if (plain === null) {
-      // Decryption failed — store as-is (might be plain text already)
-      return encrypt(value);
-    }
-    return encrypt(plain);
+  if (password) {
+    const plain = decryptWithPassword(value, password);
+    if (plain !== null) return encrypt(plain);
   }
 
-  // No old key provided — treat value as plain text and encrypt
+  if (oldKey) {
+    const plain = decryptWithCustomKey(value, oldKey);
+    if (plain !== null) return encrypt(plain);
+  }
+
+  // No password/key worked or provided — treat as plain text if it looks like it
   return encrypt(value);
 }
 
@@ -81,16 +82,13 @@ export async function POST(request) {
 
     const body = await request.json();
 
-    // Support both formats:
-    //   1. Array directly (old format, plain-text credentials)
-    //   2. { connections: [...], oldEncryptionKey: "..." }
-    let items, oldKey;
+    let items, oldKey, password;
     if (Array.isArray(body)) {
       items = body;
-      oldKey = null;
     } else if (body.connections && Array.isArray(body.connections)) {
       items = body.connections;
       oldKey = body.oldEncryptionKey || null;
+      password = body.password || null;
     } else {
       return NextResponse.json({ success: false, error: 'Expected an array of connections or { connections, oldEncryptionKey }' }, { status: 400 });
     }
@@ -116,10 +114,10 @@ export async function POST(request) {
         username: item.username || 'root',
         database: item.database || null,
         authType: item.authType || 'password',
-        password: reEncrypt(item.password, oldKey),
-        privateKey: reEncrypt(item.privateKey, oldKey),
+        password: reEncrypt(item.password, password, oldKey),
+        privateKey: reEncrypt(item.privateKey, password, oldKey),
         keyFileName: item.keyFileName || null,
-        passphrase: reEncrypt(item.passphrase, oldKey),
+        passphrase: reEncrypt(item.passphrase, password, oldKey),
         tags: item.tags || [],
         color: item.color || '#6366f1',
         notes: item.notes || '',
@@ -129,9 +127,9 @@ export async function POST(request) {
         sshTunnelPort: item.sshTunnelPort || 22,
         sshTunnelUser: item.sshTunnelUser || null,
         sshTunnelAuth: item.sshTunnelAuth || 'password',
-        sshTunnelPassword: reEncrypt(item.sshTunnelPassword, oldKey),
-        sshTunnelPrivateKey: reEncrypt(item.sshTunnelPrivateKey, oldKey),
-        sshTunnelPassphrase: reEncrypt(item.sshTunnelPassphrase, oldKey),
+        sshTunnelPassword: reEncrypt(item.sshTunnelPassword, password, oldKey),
+        sshTunnelPrivateKey: reEncrypt(item.sshTunnelPrivateKey, password, oldKey),
+        sshTunnelPassphrase: reEncrypt(item.sshTunnelPassphrase, password, oldKey),
       });
       imported++;
     }

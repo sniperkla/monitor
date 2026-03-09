@@ -4,13 +4,14 @@ import { authOptions } from "@/lib/auth";
 import { checkRateLimit } from '@/lib/serverGuard';
 import connectDB from '@/lib/mongodb';
 import { ConnectionRepository } from '@/lib/repositories/ConnectionRepository';
-import { decryptWithMetadata } from '@/utils/encryption';
+import { decryptWithMetadata, encryptWithPassword } from '@/utils/encryption';
 
 /**
- * GET /api/connections/export?mode=encrypted|plain
+ * GET /api/connections/export?mode=encrypted|plain&password=...
  *
  * mode=encrypted (default): credentials stay encrypted in the export.
  * mode=plain: credentials are decrypted to plain text (⚠️ dangerous).
+ * password: if provided, re-encrypt credentials using this password.
  */
 export async function GET(request) {
   try {
@@ -23,6 +24,7 @@ export async function GET(request) {
 
     const { searchParams } = new URL(request.url);
     const mode = searchParams.get('mode') || 'encrypted';
+    const password = searchParams.get('password') || null;
 
     const db = await connectDB();
     const repo = new ConnectionRepository(db);
@@ -42,6 +44,7 @@ export async function GET(request) {
 
     const exported = connections.map(conn => {
       const raw = conn.toObject ? conn.toObject() : conn;
+      
       const data = {
         name: raw.name,
         type: raw.type || 'ssh',
@@ -62,22 +65,22 @@ export async function GET(request) {
         sshTunnelAuth: raw.sshTunnelAuth || 'password',
       };
 
+      const fields = [
+        'password', 'privateKey', 'passphrase',
+        'sshTunnelPassword', 'sshTunnelPrivateKey', 'sshTunnelPassphrase'
+      ];
+
       if (mode === 'plain') {
-        // Decrypt credentials to plain text
-        data.password = safeDecrypt(raw.password);
-        data.privateKey = safeDecrypt(raw.privateKey);
-        data.passphrase = safeDecrypt(raw.passphrase);
-        data.sshTunnelPassword = safeDecrypt(raw.sshTunnelPassword);
-        data.sshTunnelPrivateKey = safeDecrypt(raw.sshTunnelPrivateKey);
-        data.sshTunnelPassphrase = safeDecrypt(raw.sshTunnelPassphrase);
+        fields.forEach(f => { data[f] = safeDecrypt(raw[f]); });
+      } else if (password) {
+        // Mode is encrypted AND password is provided -> Re-encrypt with password
+        fields.forEach(f => {
+          const plain = safeDecrypt(raw[f]);
+          data[f] = encryptWithPassword(plain, password);
+        });
       } else {
-        // Keep encrypted blobs as-is
-        data.password = raw.password || null;
-        data.privateKey = raw.privateKey || null;
-        data.passphrase = raw.passphrase || null;
-        data.sshTunnelPassword = raw.sshTunnelPassword || null;
-        data.sshTunnelPrivateKey = raw.sshTunnelPrivateKey || null;
-        data.sshTunnelPassphrase = raw.sshTunnelPassphrase || null;
+        // Mode is encrypted BUT no password -> Keep current server-side encryption
+        fields.forEach(f => { data[f] = raw[f] || null; });
       }
 
       return data;
@@ -87,6 +90,7 @@ export async function GET(request) {
       success: true,
       data: exported,
       encrypted: mode !== 'plain',
+      password_protected: !!password,
     });
   } catch (error) {
     console.error('Export Error:', error);

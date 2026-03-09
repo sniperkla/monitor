@@ -41,6 +41,51 @@ function decryptWithKey(text, key) {
   return decrypted.toString();
 }
 
+/**
+ * Encrypt using a user-provided password.
+ * Format: salt:iv:ciphertext
+ */
+function encryptWithPassword(text, password) {
+  if (!text || !password) return text;
+  try {
+    const salt = crypto.randomBytes(16);
+    const key = crypto.scryptSync(password, salt, 32);
+    const iv = crypto.randomBytes(IV_LENGTH);
+    const cipher = crypto.createCipheriv('aes-256-cbc', key, iv);
+    let encrypted = cipher.update(text);
+    encrypted = Buffer.concat([encrypted, cipher.final()]);
+    
+    return salt.toString('hex') + ':' + iv.toString('hex') + ':' + encrypted.toString('hex');
+  } catch (error) {
+    console.error('Password encryption error:', error);
+    return text;
+  }
+}
+
+/**
+ * Decrypt using a user-provided password.
+ */
+function decryptWithPassword(encryptedText, password) {
+  if (!encryptedText || !password) return null;
+  try {
+    const parts = encryptedText.split(':');
+    if (parts.length < 3) return null; // Expected salt:iv:ciphertext
+    
+    const salt = Buffer.from(parts.shift(), 'hex');
+    const iv = Buffer.from(parts.shift(), 'hex');
+    const ciphertext = Buffer.from(parts.join(':'), 'hex');
+    
+    const key = crypto.scryptSync(password, salt, 32);
+    const decipher = crypto.createDecipheriv('aes-256-cbc', key, iv);
+    let decrypted = decipher.update(ciphertext);
+    decrypted = Buffer.concat([decrypted, decipher.final()]);
+    return decrypted.toString();
+  } catch (error) {
+    console.error('Password decryption error:', error.message);
+    return null;
+  }
+}
+
 function decrypt(text) {
   const result = decryptWithMetadata(text);
   return result.text;
@@ -74,4 +119,10 @@ function decryptWithMetadata(text) {
   }
 }
 
-module.exports = { encrypt, decrypt, decryptWithMetadata };
+module.exports = { 
+  encrypt, 
+  decrypt, 
+  decryptWithMetadata,
+  encryptWithPassword,
+  decryptWithPassword
+};
