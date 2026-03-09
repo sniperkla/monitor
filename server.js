@@ -718,6 +718,20 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
             return;
           }
 
+          // DEBUG: What did we actually get from the DB?
+          const connObj = connection.toObject ? connection.toObject() : connection;
+          console.log('[SSH DEBUG] Connection from DB:', {
+            name: connObj.name,
+            host: connObj.host,
+            authType: connObj.authType,
+            hasPassword: !!connObj.password,
+            passwordPreview: connObj.password ? connObj.password.substring(0, 20) + '...' : 'NULL',
+            hasPrivateKey: !!connObj.privateKey,
+            pkPreview: connObj.privateKey ? connObj.privateKey.substring(0, 20) + '...' : 'NULL',
+            source: connection.toObject ? 'DB_MODEL' : 'CLIENT_DATA',
+            dbUri: dbUri ? dbUri.substring(0, 30) + '...' : 'NONE',
+          });
+
         // Cleanup any existing session on this socket before creating a new one
         await cleanupSession(socket.id);
         
