@@ -21,6 +21,12 @@ export default function Sidebar({ onNewConnection, onEditConnection }) {
 
 
 
+
+  // Proactively fetch connections when Sidebar mounts (ensures re-opening works)
+  useEffect(() => {
+    fetchConnections();
+  }, [fetchConnections]);
+
   const filtered = connections.filter(conn => {
     const matchSearch = (conn.name || '').toLowerCase().includes((search || '').toLowerCase()) ||
       (conn.host || '').toLowerCase().includes((search || '').toLowerCase()) ||

@@ -270,6 +270,8 @@ export function AppProvider({ children }) {
       if (requestId !== latestRequestIdRef.current) return;
     }
 
+    // 3. Update State
+    console.log(`✅ [AppContext] Connections updated: ${dbConnections.length} (DB) + ${localConnections.length} (Local)`);
     dispatch({ type: 'SET_CONNECTIONS', payload: [...dbConnections, ...localConnections] });
     dispatch({ type: 'SET_LOADING', payload: false });
   }, [apiFetch]);
@@ -301,10 +303,12 @@ export function AppProvider({ children }) {
   }, [vaultStatus, decryptedUri, decryptedTunnel]);
 
 
-  // 3. Auto-refresh connections when DB Config changes
+  // 3. Auto-refresh connections when DB Config changes or on Mount
   useEffect(() => {
+    console.log(`📡 [AppContext] Fetching connections (URI: ${state.dbConfig?.uri ? 'PRIVATE' : 'CENTER'})`);
     fetchConnections();
   }, [state.dbConfig?.uri, fetchConnections]);
+
 
   // 4. Persistence: Load active workspace state from localStorage on mount
   useEffect(() => {

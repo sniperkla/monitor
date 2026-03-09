@@ -24,6 +24,11 @@ export default function Dashboard({ onNewConnection, onEditConnection }) {
   const [importFileData, setImportFileData] = useState(null);
   const importKeyRef = useRef(null); // Keep for legacy oldKey fallback if needed
 
+  // Proactively fetch connections when Dashboard mounts (ensures re-opening works)
+  useEffect(() => {
+    fetchConnections();
+  }, [fetchConnections]);
+
   const stats = {
     total: connections.length,
     online: connections.filter(c => c.status === 'online').length,
