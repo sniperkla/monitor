@@ -117,22 +117,37 @@ export default function SettingsApp({ initialTab }) {
     return () => clearInterval(id);
   }, [activeTab, session, relayModalOpen, relayWaiting]);
 
-  // Auto-close modal when relay connects during install wizard
+
+  // 1. Detect transition to success
+  useEffect(() => {
+    if (relayModalOpen && relayWaiting && relayConnected && !relayInstallSuccess) {
+      setRelayInstallSuccess(true);
+    }
+  }, [relayConnected, relayWaiting, relayModalOpen, relayInstallSuccess]);
+
+  // 2. Handle auto-close timer separately to prevent premature cleanup on state changes
+  useEffect(() => {
+    if (relayInstallSuccess && relayModalOpen) {
+      const timer = setTimeout(() => {
+        setRelayModalOpen(false);
+        addNotification({ 
+          title: 'Relay Connected!', 
+          message: 'Your local relay agent is now running.', 
+          type: 'success' 
+        });
+      }, 3000);
+      return () => clearTimeout(timer);
+    }
+  }, [relayInstallSuccess, relayModalOpen, addNotification]);
+
+  // 3. Reset states when modal closes
   useEffect(() => {
     if (!relayModalOpen) {
       setRelayWaiting(false);
       setRelayInstallSuccess(false);
-      return;
     }
-    if (relayWaiting && relayConnected && !relayInstallSuccess) {
-      setRelayInstallSuccess(true);
-      const timer = setTimeout(() => {
-        setRelayModalOpen(false);
-        addNotification({ title: 'Relay Connected!', message: 'Your local relay agent is now running.', type: 'success' });
-      }, 2500);
-      return () => clearTimeout(timer);
-    }
-  }, [relayConnected, relayWaiting, relayModalOpen, relayInstallSuccess]);
+  }, [relayModalOpen]);
+
 
   const handleGenerateRelayToken = async () => {
     setRelayLoading(true);

@@ -147,7 +147,17 @@ export default function Dashboard({ onNewConnection, onEditConnection }) {
 
         // Legacy format: plain array of connections
         if (Array.isArray(parsed)) {
-          await doImport(parsed, null);
+          const hasEncrypted = parsed.some(c => 
+            (c.password && String(c.password).includes(':')) || 
+            (c.privateKey && String(c.privateKey).includes(':')) ||
+            (c.passphrase && String(c.passphrase).includes(':'))
+          );
+          if (hasEncrypted) {
+            setImportFileData(parsed);
+            setShowImportKeyModal(true);
+          } else {
+            await doImport(parsed, null);
+          }
           return;
         }
 

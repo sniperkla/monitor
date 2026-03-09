@@ -36,33 +36,43 @@ function decryptWithCustomKey(encryptedText, hexKey) {
  * 3. Else try to decrypt with THIS server's current key (prevents double-encryption).
  * 4. Finally encrypt with this server's current key.
  */
-function reEncrypt(value, password, oldKey) {
+function reEncrypt(value, password, oldKey, fieldName) {
   if (!value) return null;
 
   // If it's not and doesn't look like an encrypted string (no colons), treat as plain text
   if (typeof value === 'string' && !value.includes(':')) {
+    console.log(`[reEncrypt] ${fieldName} - plain text detected`);
     return encrypt(value);
   }
 
   if (password) {
     const plain = decryptWithPassword(value, password);
-    if (plain !== null) return encrypt(plain);
+    if (plain !== null) {
+      console.log(`[reEncrypt] ${fieldName} - Success using password`);
+      return encrypt(plain);
+    } else {
+      console.log(`[reEncrypt] ${fieldName} - FAILED using password! value: ${value.substring(0, 15)}...`);
+    }
   }
 
   if (oldKey) {
     const plain = decryptWithCustomKey(value, oldKey);
-    if (plain !== null) return encrypt(plain);
+    if (plain !== null) {
+      console.log(`[reEncrypt] ${fieldName} - Success using oldKey`);
+      return encrypt(plain);
+    } else {
+      console.log(`[reEncrypt] ${fieldName} - FAILED using oldKey!`);
+    }
   }
 
   // Fallback: try to decrypt with current key (maybe it's a same-server import)
   const meta = decryptWithMetadata(value);
   if (meta.success && meta.text !== value) {
+     console.log(`[reEncrypt] ${fieldName} - Success using current key fallback`);
      return encrypt(meta.text); 
   }
 
-  // No password/key worked or provided — treat as plain text if it doesn't look like our ciphertext format
-  // or if we failed to decrypt it but it contains colons (might be a different password/key).
-  // If it still doesn't work, we return encrypt(value) anyway as a last resort plain-text assumption.
+  console.log(`[reEncrypt] ${fieldName} - All decryption failed! Defaulting to double-encrypting`);
   return encrypt(value);
 }
 
@@ -137,10 +147,10 @@ export async function POST(request) {
         username: item.username || 'root',
         database: item.database || null,
         authType: item.authType || 'password',
-        password: reEncrypt(item.password, password, oldKey),
-        privateKey: reEncrypt(item.privateKey, password, oldKey),
+        password: reEncrypt(item.password, password, oldKey, 'password'),
+        privateKey: reEncrypt(item.privateKey, password, oldKey, 'privateKey'),
         keyFileName: item.keyFileName || null,
-        passphrase: reEncrypt(item.passphrase, password, oldKey),
+        passphrase: reEncrypt(item.passphrase, password, oldKey, 'passphrase'),
         tags: item.tags || [],
         color: item.color || '#6366f1',
         notes: item.notes || '',
@@ -150,9 +160,9 @@ export async function POST(request) {
         sshTunnelPort: item.sshTunnelPort || 22,
         sshTunnelUser: item.sshTunnelUser || null,
         sshTunnelAuth: item.sshTunnelAuth || 'password',
-        sshTunnelPassword: reEncrypt(item.sshTunnelPassword, password, oldKey),
-        sshTunnelPrivateKey: reEncrypt(item.sshTunnelPrivateKey, password, oldKey),
-        sshTunnelPassphrase: reEncrypt(item.sshTunnelPassphrase, password, oldKey),
+        sshTunnelPassword: reEncrypt(item.sshTunnelPassword, password, oldKey, 'sshTunnelPassword'),
+        sshTunnelPrivateKey: reEncrypt(item.sshTunnelPrivateKey, password, oldKey, 'sshTunnelPrivateKey'),
+        sshTunnelPassphrase: reEncrypt(item.sshTunnelPassphrase, password, oldKey, 'sshTunnelPassphrase'),
       };
 
       // Check if connection already exists to prevent duplicates
