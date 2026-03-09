@@ -705,7 +705,28 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
                return;
             }
             await connectMongo();
+            console.log(`[SSH DEBUG] Looking up connection ${connectionId} using dbUri: ${dbUri || 'CENTER'}`);
             connection = await CurrentConnectionModel.findById(connectionId);
+            
+            // If model findById failed, try a direct lookup on the center database as fallback
+            if (!connection && dbUri) {
+              console.log(`[SSH DEBUG] Model findById returned null. Trying center DB fallback...`);
+              try {
+                const { Connection: CenterModel } = await getModels(null); // null = use center URI
+                if (CenterModel) {
+                  connection = await CenterModel.findById(connectionId);
+                  if (connection) {
+                    console.log(`[SSH DEBUG] ✅ Found connection in center DB fallback!`);
+                  }
+                }
+              } catch (fbErr) {
+                console.log(`[SSH DEBUG] Center DB fallback failed:`, fbErr.message);
+              }
+            }
+            
+            if (!connection) {
+              console.log(`[SSH DEBUG] ⚠️ DB lookup failed! connectionId=${connectionId}`);
+            }
           }
           
           // Use provided data if DB lookup fails or if it's a local/manual connection
