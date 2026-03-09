@@ -2030,7 +2030,10 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
               .catch(err => console.error('❌ Migration failed:', err));
         }
 
-        // console.log('Connecting with config:', { ...sshConfig, privateKey: 'REDACTED', password: 'REDACTED' });
+        console.log('[SSH DEBUG] Trying to connect with user:', sshConfig.username, 'to', sshConfig.host);
+        console.log('[SSH DEBUG] Auth Info: Password Length:', sshConfig.password ? sshConfig.password.length : 'none', 
+                    '| PrivateKey length:', sshConfig.privateKey ? sshConfig.privateKey.length : 'none',
+                    '| Passphrase length:', sshConfig.passphrase ? sshConfig.passphrase.length : 'none');
         sshClient.connect(sshConfig);
       } catch (err) {
         console.error('SSH connect error:', err);
