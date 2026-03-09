@@ -133,13 +133,50 @@ function getLatestCenterUri() {
 
 // Multi-tenant Model Pool
 const modelsPool = new Map();
+
+/**
+ * Normalise a MongoDB URI so that hostname variants (localhost, 127.0.0.1)
+ * and default-port omission all produce the same canonical string.
+ */
+function normalizeMongoUri(raw) {
+  if (!raw) return '';
+  let u = raw.trim();
+  u = u.replace(/\b(localhost|127\.0\.0\.1|\[::1\])\b/gi, '127.0.0.1');
+  u = u.replace(/:27017(?=\/|$)/, '');
+  return u;
+}
+
 async function getModels(uri) {
   const targetUri = uri || getLatestCenterUri();
   if (!targetUri) {
      return { Connection: null, Session: null };
   }
 
-  
+  // Check if target URI is actually the center database (normalize localhost variants)
+  const centerUri = getLatestCenterUri();
+  const isCenterDb = centerUri && normalizeMongoUri(targetUri) === normalizeMongoUri(centerUri);
+
+  if (isCenterDb) {
+    // Reuse the default mongoose connection for the center database
+    // This ensures consistency with the API routes that use connectDB()
+    if (mongoose.connection.readyState === 1) {
+      return {
+        type: 'mongodb',
+        Connection: mongoose.models.Connection || mongoose.model('Connection', ConnectionSchema),
+        Session: mongoose.models.Session || mongoose.model('Session', SessionSchema)
+      };
+    }
+    // If default connection not ready, connect it first
+    await connectMongo();
+    if (mongoose.connection.readyState === 1) {
+      return {
+        type: 'mongodb',
+        Connection: mongoose.models.Connection || mongoose.model('Connection', ConnectionSchema),
+        Session: mongoose.models.Session || mongoose.model('Session', SessionSchema)
+      };
+    }
+  }
+
   if (modelsPool.has(targetUri)) {
     const cached = modelsPool.get(targetUri);
     if (cached.type === 'mysql') return cached;
