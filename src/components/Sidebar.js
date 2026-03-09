@@ -3,7 +3,8 @@ import { createPortal } from 'react-dom';
 import { useApp } from '@/context/AppContext';
 import {
   Server, Star, StarOff, Wifi, WifiOff, Clock, MoreVertical, Terminal, Edit, Trash2,  
-  RotateCw, Plus, Search, Filter, Key, Lock, BarChart3, TrendingUp, Zap, RefreshCw, Folder, AlertTriangle, X, Database
+  RotateCw, Plus, Search, Filter, Key, Lock, BarChart3, TrendingUp, Zap, RefreshCw, Folder, AlertTriangle, X, Database,
+  PanelLeftClose, PanelLeft
 } from 'lucide-react';
 import { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -75,26 +76,30 @@ export default function Sidebar({ onNewConnection, onEditConnection }) {
       return;
     }
 
-    const existing = state.activeTerminals.find(t => t.connectionId === conn._id);
-    if (existing) {
-      addNotification({ title: t('ssh.dashboard'), message: t('ssh.toasts.alreadyConnected', { name: conn.name }), type: 'error' });
+    if (conn.type === 'ssh' || !conn.type) {
+      // Check if a terminal for this connection already exists — focus it instead of spawning a duplicate
+      const existingTerm = state.activeTerminals.find(t => t.connectionId === conn._id);
+      if (existingTerm) {
+        dispatch({ type: 'SET_VIEW', payload: 'terminal' });
+        dispatch({ type: 'SET_ACTIVE_TERMINAL', payload: existingTerm.id });
+        return;
+      }
+
+      // Switch to terminal view and signal TmuxLayout to open this connection.
       dispatch({ type: 'SET_VIEW', payload: 'terminal' });
-      dispatch({ type: 'SET_ACTIVE_TERMINAL', payload: existing.id });
+      dispatch({
+        type: 'OPEN_TERMINAL',
+        payload: {
+          id: `term-${conn._id}-${Date.now()}`,
+          connectionId: conn._id,
+          connectionName: conn.name,
+          host: conn.host,
+          color: conn.color,
+          connection: conn,
+        },
+      });
       return;
     }
-    
-    const termId = `term-${conn._id}-${Date.now()}`;
-    dispatch({
-      type: 'OPEN_TERMINAL',
-      payload: {
-        id: termId,
-        connectionId: conn._id,
-        connectionName: conn.name,
-        host: conn.host,
-        color: conn.color,
-        connection: conn,
-      },
-    });
   };
 
   const handleFiles = (conn) => {
@@ -103,17 +108,18 @@ export default function Sidebar({ onNewConnection, onEditConnection }) {
       return;
     }
 
-    const existing = state.activeFileManagers.find(f => f.connectionId === conn._id);
-    if (existing) {
-      addNotification({ title: t('ssh.fileGui'), message: t('ssh.toasts.alreadyConnected', { name: conn.name }), type: 'info' });
+    // Check if a file manager for this connection already exists — focus it instead of spawning a duplicate
+    const existingFM = state.activeFileManagers.find(f => f.connectionId === conn._id);
+    if (existingFM) {
       dispatch({ type: 'SET_VIEW', payload: 'files' });
-      dispatch({ type: 'SET_ACTIVE_FILE_MANAGER', payload: existing.id });
+      dispatch({ type: 'SET_ACTIVE_FILE_MANAGER', payload: existingFM.id });
       return;
     }
 
     // Terminate any existing standalone files window
     closeWindow(`standalone-files-${conn._id}`);
 
+    dispatch({ type: 'SET_VIEW', payload: 'files' });
     dispatch({
       type: 'OPEN_FILE_MANAGER',
       payload: {
@@ -247,17 +253,26 @@ export default function Sidebar({ onNewConnection, onEditConnection }) {
   };
 
   return (
-    <div className={`sidebar flex flex-col ${!sidebarOpen ? 'hidden' : ''}`}>
+    <div className={`sidebar flex flex-col shrink-0 ${!sidebarOpen ? 'hidden' : ''}`} style={{ width: '320px', borderRight: '1px solid var(--border-color)' }}>
       {/* Header */}
       <div className="p-4 border-b" style={{ borderColor: 'var(--border-color)' }}>
-        <div className="flex items-center gap-3 mb-4">
-          <div className="w-9 h-9 rounded-lg flex items-center justify-center bg-[var(--bg-selected)] shadow-[var(--glow-indigo)] border border-[var(--accent-indigo)]/30">
-            <Terminal size={18} className="text-[var(--text-selected)]" />
+        <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center gap-3">
+            <div className="w-9 h-9 rounded-lg flex items-center justify-center bg-[var(--bg-selected)] shadow-[var(--glow-indigo)] border border-[var(--accent-indigo)]/30">
+              <Terminal size={18} className="text-[var(--text-selected)]" />
+            </div>
+            <div>
+              <h1 className="text-sm font-bold" style={{ color: 'var(--text-primary)' }}>{t('common.connections')}</h1>
+              <p className="text-xs" style={{ color: 'var(--text-muted)' }}>{t('common.manage')}</p>
+            </div>
           </div>
-          <div>
-            <h1 className="text-sm font-bold" style={{ color: 'var(--text-primary)' }}>{t('common.connections')}</h1>
-            <p className="text-xs" style={{ color: 'var(--text-muted)' }}>{t('common.manage')}</p>
-          </div>
+          <button 
+            onClick={(e) => { e.stopPropagation(); dispatch({ type: 'TOGGLE_SIDEBAR' }); }}
+            className="p-1.5 rounded-lg hover:bg-[var(--bg-tertiary)] transition-colors text-[var(--text-muted)] hover:text-white"
+            title="Collapse Sidebar"
+          >
+            <PanelLeftClose size={18} />
+          </button>
         </div>
 
         {/* Stats mini bar */}

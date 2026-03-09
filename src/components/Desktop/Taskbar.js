@@ -38,7 +38,6 @@ export default function Taskbar() {
       title: 'AI usage',
       message: `${percent}% used (${used.toLocaleString()} / ${limit.toLocaleString()} tokens)`,
       type,
-      duration: 3500,
     });
   });
 

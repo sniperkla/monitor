@@ -43,7 +43,7 @@ export default function NotificationCenter() {
 }
 
 function NotificationItem({ notification, removeNotification, glassmorphism }) {
-  const { id, title, message, type, duration = 5000 } = notification;
+  const { id, title, message, type, duration = 3000 } = notification;
 
   const onDismiss = () => removeNotification(id);
 

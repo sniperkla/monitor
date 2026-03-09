@@ -729,7 +729,7 @@
 body {
   background: var(--bg-primary);
   color: var(--text-primary);
-  font-family: "Inter", "Prompt", sans-serif;
+  font-family: "Prompt", sans-serif;
   min-height: 100vh;
   overflow-x: hidden;
   overscroll-behavior-x: none;

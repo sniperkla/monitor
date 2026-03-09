@@ -703,6 +703,15 @@ const resources = {
           upload: "Upload from computer",
           goBack: "Go back",
         },
+        layout: {
+          splitLeftRight: "Split Left/Right",
+          split: "Split",
+          closePane: "Close this pane",
+          close: "Close",
+          dropServer: "Drop a server here to open",
+          downloadSelected: "Download {{count}} selected items to local",
+          downloadSingle: "Download selected item to local",
+        },
         noFileManagers: "No active file managers",
         noFileManagersDesc: "Select a connection in the sidebar to open its file manager.",
         context: {
@@ -719,6 +728,9 @@ const resources = {
           currentFolder: "Current Folder",
         },
         modals: {
+          editor: {
+            save: "Save",
+          },
           create: {
             titleFile: "Create New File",
             titleFolder: "Create New Folder",
@@ -760,6 +772,23 @@ const resources = {
           connFailed: "○ Connection Failed",
           initializing: "○ Initializing...",
           dropToUpload: "Drop here to upload",
+          connecting: "Connecting Socket...",
+          ssh_connecting: "Connecting SFTP...",
+          errorTitle: "Filesystem Error",
+          emptyFolder: "This folder is empty",
+          uploadingTo: "Uploading to",
+          doNotClose: "Do not close",
+          timeout: "Connection timeout. Please check if the server is reachable.",
+          ready: "Ready",
+          upload: "Uploading",
+          download: "Downloading",
+          inProgress: "Processing...",
+          pausing: "Pausing...",
+          resuming: "Resuming...",
+          rateLimited: "Rate Limited",
+          retryIn: "Retrying in {{seconds}}s...",
+          waiting: "Waiting for server response...",
+          latency: "Latency (Ping)",
         },
         editor: {
             title: "File Editor",
@@ -1846,6 +1875,15 @@ const resources = {
           upload: "อัปโหลดจากคอมพิวเตอร์",
           goBack: "ย้อนกลับ",
         },
+        layout: {
+          splitLeftRight: "แบ่งหน้าต่างซ้าย/ขวา",
+          split: "แบ่งหน้าต่าง",
+          closePane: "ปิดหน้าต่างนี้",
+          close: "ปิด",
+          dropServer: "ลากเซิร์ฟเวอร์มาวางเพื่อเปิด",
+          downloadSelected: "ดาวน์โหลดไฟล์ที่เลือก {{count}} รายการ",
+          downloadSingle: "ดาวน์โหลดไฟล์ที่เลือก",
+        },
         context: {
           edit: "แก้ไขข้อความ",
           download: "ดาวน์โหลด",
@@ -1859,6 +1897,9 @@ const resources = {
           currentFolder: "โฟลเดอร์ปัจจุบัน",
         },
         modals: {
+          editor: {
+            save: "บันทึก",
+          },
           create: {
             titleFile: "สร้างไฟล์ใหม่",
             titleFolder: "สร้างโฟลเดอร์ใหม่",
@@ -1899,6 +1940,23 @@ const resources = {
           connFailed: "○ การเชื่อมต่อล้มเหลว",
           initializing: "○ กำลังเริ่มระบบ...",
           dropToUpload: "วางไฟล์ที่นี่เพื่ออัปโหลด",
+          connecting: "กำลังเชื่อมต่อ Socket...",
+          ssh_connecting: "กำลังเชื่อมต่อ SFTP...",
+          errorTitle: "ข้อผิดพลาดของระบบไฟล์",
+          emptyFolder: "โฟลเดอร์นี้ว่างเปล่า",
+          uploadingTo: "กำลังอัปโหลดไปยัง",
+          doNotClose: "ห้ามปิด",
+          timeout: "หมดเวลาเชื่อมต่อ โปรดตรวจสอบว่าเซิร์ฟเวอร์ตอบสนองหรือไม่",
+          ready: "พร้อมใช้งาน",
+          upload: "กำลังอัปโหลด",
+          download: "กำลังดาวน์โหลด",
+          inProgress: "กำลังดำเนินการ...",
+          pausing: "กำลังพัก...",
+          resuming: "กำลังดำเนินการต่อ...",
+          rateLimited: "จำกัดอัตราการส่งข้อมูล",
+          retryIn: "จะลองใหม่ใน {{seconds}} วินาที...",
+          waiting: "รอการตอบสนองจากเซิร์ฟเวอร์...",
+          latency: "ความหน่วง (Ping)",
         },
         editor: {
             title: "ตัวแก้ไขไฟล์",
@@ -2629,6 +2687,15 @@ const resources = {
           upload: "从电脑上传",
           goBack: "后退",
         },
+        layout: {
+          splitLeftRight: "左右拆分",
+          split: "拆分",
+          closePane: "关闭此窗格",
+          close: "关闭",
+          dropServer: "将服务器拖拽到此处打开",
+          downloadSelected: "下载选中的 {{count}} 个项目",
+          downloadSingle: "下载选中的项目",
+        },
         noFileManagers: "无活动的文件管理器",
         noFileManagersDesc: "在侧栏中选择一个连接以打开其文件管理器。",
         context: {
@@ -2645,6 +2712,9 @@ const resources = {
           currentFolder: "当前文件夹",
         },
         modals: {
+          editor: {
+            save: "保存",
+          },
           create: {
             titleFile: "新建文件",
             titleFolder: "新建文件夹",

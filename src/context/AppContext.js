@@ -50,7 +50,7 @@ function reducer(state, action) {
         activeTerminals: state.activeTerminals.filter(t => t.connectionId !== action.payload),
       };
     case 'OPEN_TERMINAL':
-      // Avoid duplicates for same connection - but UPDATE with new settings if found
+      // Prevent duplicate terminals for the same connection
       const existingTermIndex = state.activeTerminals.findIndex(t => t.connectionId === action.payload.connectionId);
       if (existingTermIndex >= 0) {
         const updatedTerminals = [...state.activeTerminals];
@@ -89,7 +89,7 @@ function reducer(state, action) {
         standaloneTerminals: state.standaloneTerminals.filter(t => t.id !== action.payload),
       };
     case 'OPEN_FILE_MANAGER':
-      // Avoid duplicates for same connection - but UPDATE with new settings if found
+      // Prevent duplicate file managers for the same connection
       const existingFMIndex = state.activeFileManagers.findIndex(f => f.connectionId === action.payload.connectionId);
       if (existingFMIndex >= 0) {
         const updatedFMs = [...state.activeFileManagers];

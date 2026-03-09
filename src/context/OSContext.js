@@ -1,6 +1,6 @@
 'use client';
 
-import { createContext, useContext, useReducer, useEffect, useState, useRef } from 'react';
+import { createContext, useContext, useReducer, useEffect, useState, useRef, useCallback } from 'react';
 import { useSession } from 'next-auth/react';
 import i18n from '@/lib/i18n';
 import { AppRegistry } from '@/apps/AppRegistry';
@@ -1152,20 +1152,20 @@ export function OSProvider({ children }) {
     dispatch({ type: 'RESTORE_ALL' });
   };
 
-  const addNotification = (notification) => {
+  const addNotification = useCallback((notification) => {
     // notification: { title, message, type (success/error/info), duration }
     const id = Date.now().toString() + Math.random().toString(36).substr(2, 9);
     dispatch({ type: 'ADD_NOTIFICATION', payload: { ...notification, id, timestamp: Date.now() } });
     return id;
-  };
+  }, [dispatch]);
 
-  const removeNotification = (id) => {
+  const removeNotification = useCallback((id) => {
     dispatch({ type: 'REMOVE_NOTIFICATION', payload: id });
-  };
+  }, [dispatch]);
 
-  const updateNotification = (id, updates) => {
+  const updateNotification = useCallback((id, updates) => {
     dispatch({ type: 'UPDATE_NOTIFICATION', payload: { id, ...updates } });
-  };
+  }, [dispatch]);
 
   // Centralized Theme Management
   useEffect(() => {

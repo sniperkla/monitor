@@ -6,7 +6,7 @@ import TerminalView from '@/components/TerminalView';
 import { Server, Terminal as TermIcon, Zap, X, Plus } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
-export default function TerminalApp({ onEditConnection, initialConnection, initialConnectionId }) {
+export default function TerminalApp({ onEditConnection, initialConnection, initialConnectionId, initialCommand }) {
   const { state, dispatch } = useApp();
   const { t } = useTranslation();
   const { connections, standaloneTerminals } = state;
@@ -39,6 +39,7 @@ export default function TerminalApp({ onEditConnection, initialConnection, initi
           host: conn.host,
           color: conn.color,
           connection: conn,
+          initialCommand: initialCommand
         });
       } else {
         dispatch({
@@ -50,6 +51,7 @@ export default function TerminalApp({ onEditConnection, initialConnection, initi
             host: conn.host,
             color: conn.color,
             connection: conn,
+            initialCommand: initialCommand
           },
         });
         setActiveTab(termId);
@@ -146,6 +148,7 @@ export default function TerminalApp({ onEditConnection, initialConnection, initi
           host={localStandaloneTerm.host}
           color={localStandaloneTerm.color}
           connection={localStandaloneTerm.connection}
+          initialCommand={localStandaloneTerm.initialCommand}
           onClose={() => setLocalStandaloneTerm(null)}
         />
       </div>
@@ -291,6 +294,7 @@ export default function TerminalApp({ onEditConnection, initialConnection, initi
                 host={term.host}
                 color={term.color}
                 connection={term.connection}
+                initialCommand={term.initialCommand}
                 onClose={() => handleCloseTab(term.id)}
               />
             </div>

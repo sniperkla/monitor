@@ -6,7 +6,7 @@ import {
   Folder, File as FileIcon, ChevronLeft, ChevronRight, ChevronUp, ChevronDown, RefreshCw, 
   Download, Upload, Trash2, FolderPlus, Search, Grid, List as ListIcon,
   AlertCircle, Edit, FileText, X, Save, AlertTriangle, 
-  Copy, Scissors, Clipboard, Wifi, AtSign, Replace
+  Copy, Scissors, Clipboard, Wifi, AtSign, Replace, Columns, Rows
 } from 'lucide-react';
 import io from 'socket.io-client';
 import * as fflate from 'fflate';
@@ -82,7 +82,14 @@ function createTar(files) {
   return result;
 }
 
-export default function FileManager({ connectionId, connection, connectionName }) {
+export default function FileManager({ 
+  connectionId, 
+  connection, 
+  connectionName,
+  isSplit = false,
+  onClosePane,
+  onSplit
+}) {
   const { t } = useTranslation();
   const { state: appState, dispatch: appDispatch } = useApp();
   const { state: osState, addNotification, removeNotification, updateNotification, showConfirm, showPrompt } = useOS();
@@ -131,7 +138,7 @@ export default function FileManager({ connectionId, connection, connectionName }
   const currentPathRef = useRef(currentPath);
   const toastRef = useRef(null);
   const uploadInputRef = useRef(null);
-  const downloadBufferRef = useRef([]);
+  const downloadBufferRef = useRef({});
   
   const [uploadQueue, setUploadQueue] = useState([]); // Array of { file, path, offset }
   
@@ -260,26 +267,42 @@ export default function FileManager({ connectionId, connection, connectionName }
     });
 
     newSocket.on('sftp:download_start', ({ filename, size }) => {
-       downloadBufferRef.current = [];
+       if (!downloadBufferRef.current[filename]) {
+         downloadBufferRef.current[filename] = { buffer: [], toastId: null };
+       } else {
+         downloadBufferRef.current[filename].buffer = [];
+       }
        setTransfer({ filename, progress: 0, action: 'download' });
     });
 
     newSocket.on('sftp:download_chunk', ({ filename, chunk, progress, offset }) => {
-       downloadBufferRef.current.push(chunk);
+       if (downloadBufferRef.current[filename]) {
+         downloadBufferRef.current[filename].buffer.push(chunk);
+       }
        setTransfer({ filename, progress, action: 'download', waiting: false, bytes: offset });
        if (lastDownloadRef.current) lastDownloadRef.current.offset = offset;
     });
 
     newSocket.on('sftp:download_done', ({ filename }) => {
-       const blob = new Blob(downloadBufferRef.current);
+       const dlMeta = downloadBufferRef.current[filename];
+       if (!dlMeta) return;
+       const blob = new Blob(dlMeta.buffer);
        const url = window.URL.createObjectURL(blob);
        const a = document.createElement('a');
        a.href = url;
        a.download = filename;
        a.click();
        window.URL.revokeObjectURL(url);
-       downloadBufferRef.current = [];
+       
+       if (dlMeta.toastId) {
+         removeNotification(dlMeta.toastId);
+       }
+       delete downloadBufferRef.current[filename];
+       
        setTransfer(null);
+       if (toastRef.current === dlMeta?.toastId) {
+         toastRef.current = null;
+       }
        addNotification({ title: t('files.toasts.downloadComplete'), message: `${t('files.context.download')} ${filename}`, type: 'success' });
     });
 
@@ -726,20 +749,33 @@ export default function FileManager({ connectionId, connection, connectionName }
      const path = file.absPath || (currentPath === '.' ? file.filename : `${currentPath}/${file.filename}`);
      lastDownloadRef.current = { file, offset };
      
-     toastRef.current = addNotification({ 
+     const tId = addNotification({ 
         title: offset > 0 ? t('files.status.resuming') : t('files.status.download'), 
         message: `${t('files.actions.loading', { action: t('files.context.download') })} ${file.filename}...`, 
         type: 'loading', 
         duration: 0 
      });
+     
+     // Initialize download buffer state
+     downloadBufferRef.current[file.filename] = { buffer: [], toastId: tId };
+
      socket.emit('sftp:download', { filePath: path, offset });
   };
 
   const handleDownloadFolder = (file) => {
     if (!socket) return;
     const folderPath = file.absPath || (currentPath === '.' ? file.filename : `${currentPath}/${file.filename}`);
-    downloadBufferRef.current = [];
-    setTransfer({ filename: file.filename + '.tar.gz', progress: -1, action: 'download' });
+    const dlName = file.filename + '.tar.gz';
+    
+    const tId = addNotification({ 
+        title: t('files.status.download'), 
+        message: `${t('files.actions.loading', { action: t('files.context.download') })} ${dlName}...`, 
+        type: 'loading', 
+        duration: 0 
+    });
+
+    downloadBufferRef.current[dlName] = { buffer: [], toastId: tId };
+    setTransfer({ filename: dlName, progress: -1, action: 'download' });
     socket.emit('sftp:download_folder', { folderPath });
   };
 
@@ -754,8 +790,17 @@ export default function FileManager({ connectionId, connection, connectionName }
       filePath: currentPath === '.' ? f.filename : `${currentPath}/${f.filename}`,
       isDir: f.longname.startsWith('d'),
     }));
-    downloadBufferRef.current = [];
-    setTransfer({ filename: 'selection.tar.gz', progress: -1, action: 'download' });
+    const dlName = 'selection.tar.gz';
+    
+    const tId = addNotification({ 
+        title: t('files.status.download'), 
+        message: `${t('files.actions.loading', { action: t('files.context.download') })} ${dlName}...`, 
+        type: 'loading', 
+        duration: 0 
+    });
+
+    downloadBufferRef.current[dlName] = { buffer: [], toastId: tId };
+    setTransfer({ filename: dlName, progress: -1, action: 'download' });
     socket.emit('sftp:download_folder', { paths });
   };
 
@@ -1752,22 +1797,46 @@ export default function FileManager({ connectionId, connection, connectionName }
       )}
 
       {/* Toolbar */}
-      <div className="flex items-center justify-between p-4 border-b border-[var(--border-color)] bg-[var(--bg-tertiary)]/50">
-        <div className="flex items-center gap-2">
-          <button onClick={goBack} disabled={currentPath === '.'} className="p-2 hover:bg-[var(--border-color)] rounded-lg disabled:opacity-30">
+      <div className="flex flex-wrap sm:flex-nowrap items-center justify-between gap-3 p-3 lg:p-4 border-b border-[var(--border-color)] bg-[var(--bg-tertiary)]/50">
+        <div className="flex items-center gap-1.5 lg:gap-2 flex-1 min-w-[120px]">
+          <button onClick={goBack} disabled={currentPath === '.'} className="p-1.5 lg:p-2 hover:bg-[var(--border-color)] rounded-lg disabled:opacity-30 flex-shrink-0">
             <ChevronLeft size={18} />
           </button>
-          <div className="flex items-center gap-2 px-3 py-1.5 bg-[var(--bg-primary)]/50 rounded-lg border border-[var(--border-color)] min-w-[300px]">
-            <Folder size={14} className="text-blue-400" />
-            <span className="text-xs font-mono truncate">{currentPath}</span>
+          <div className="flex items-center gap-2 px-2 lg:px-3 py-1.5 bg-[var(--bg-primary)]/50 rounded-lg border border-[var(--border-color)] w-full min-w-0 max-w-sm">
+            <Folder size={14} className="text-blue-400 flex-shrink-0" />
+            <span className="text-[11px] lg:text-xs font-mono truncate">{currentPath}</span>
           </div>
-          <button onClick={() => refreshFiles()} className="p-2 hover:bg-[var(--border-color)] rounded-lg">
+          <button onClick={() => refreshFiles()} className="p-1.5 lg:p-2 hover:bg-[var(--border-color)] rounded-lg flex-shrink-0">
             <RefreshCw size={18} className={loading ? 'animate-spin text-blue-400' : ''} />
           </button>
         </div>
 
-        <div className="flex items-center gap-4">
-          <div className="relative">
+        {/* Split / Close Pane Controls */}
+        {(onSplit || isSplit) && (
+          <div className="flex items-center gap-1">
+            <button 
+              onClick={() => onSplit?.('horizontal')}
+              className="flex items-center gap-1.5 px-2.5 py-1.5 text-[var(--text-muted)] hover:text-[var(--accent-indigo)] rounded-lg hover:bg-[var(--accent-indigo)]/10 transition-all text-[11px] font-medium"
+              title={t('files.layout.splitLeftRight')}
+            >
+              <Columns size={14} />
+              <span className="hidden lg:inline">{t('files.layout.split')}</span>
+            </button>
+            {isSplit && (
+              <button 
+                onClick={() => onClosePane?.()}
+                className="flex items-center gap-1.5 px-2.5 py-1.5 text-rose-400/70 hover:text-rose-400 rounded-lg hover:bg-rose-500/10 transition-all text-[11px] font-medium"
+                title={t('files.layout.closePane')}
+              >
+                <X size={14} strokeWidth={2.5} />
+                <span className="hidden lg:inline">{t('files.layout.close')}</span>
+              </button>
+            )}
+          </div>
+        )}
+
+        <div className="flex flex-wrap items-center justify-end gap-2 lg:gap-4 shrink-0">
+          <div className="relative flex-shrink min-w-[100px] w-full max-w-[200px] sm:max-w-none sm:w-40 lg:w-52">
             {searchLoading
               ? <RefreshCw className="absolute left-3 top-1/2 -translate-y-1/2 text-blue-400 animate-spin" size={14} />
               : <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--text-muted)]" size={14} />}
@@ -1777,7 +1846,7 @@ export default function FileManager({ connectionId, connection, connectionName }
               value={searchQuery}
               onChange={(e) => { setSearchQuery(e.target.value); }}
               onKeyDown={(e) => e.key === 'Escape' && setSearchQuery('')}
-              className={`bg-[var(--bg-primary)]/50 border rounded-lg py-1.5 pl-9 pr-8 text-xs focus:outline-none w-52 text-[var(--text-primary)] transition-colors ${
+              className={`bg-[var(--bg-primary)]/50 border rounded-lg py-1.5 pl-9 pr-6 lg:pr-8 text-[11px] lg:text-xs focus:outline-none w-full text-[var(--text-primary)] transition-colors ${
                 isSearchMode ? 'border-blue-500/60 focus:border-blue-500' : 'border-[var(--border-color)] focus:border-blue-500/50'
               }`}
             />
@@ -1815,7 +1884,7 @@ export default function FileManager({ connectionId, connection, connectionName }
               <button
                 onClick={handleDownloadSelected}
                 className="p-1 text-emerald-400 hover:text-emerald-300 rounded hover:bg-emerald-500/10 transition-all"
-                title={`Download ${selectedFiles.size} selected item${selectedFiles.size > 1 ? 's' : ''} to local`}
+                title={selectedFiles.size > 1 ? t('files.layout.downloadSelected', { count: selectedFiles.size }) : t('files.layout.downloadSingle')}
               >
                 <Download size={16} />
               </button>

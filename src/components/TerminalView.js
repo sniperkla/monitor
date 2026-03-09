@@ -4498,7 +4498,7 @@ What is your move?`;
         )}
 
         <div
-          className="h-full w-full p-3" // Padding moved here to avoid breaking FitAddon
+          className="h-full w-full p-1" // Padding moved here to avoid breaking FitAddon
           onDragOver={(e) => {
             e.preventDefault();
             e.stopPropagation();
