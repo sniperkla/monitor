@@ -745,24 +745,54 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
             console.log(`[SSH DEBUG] Looking up connection ${connectionId} using dbUri: ${dbUri || 'CENTER'}`);
             connection = await CurrentConnectionModel.findById(connectionId);
             
-            // If model findById failed, try a direct lookup on the center database as fallback
+            // Fallback 1: Try center DB model
             if (!connection && dbUri) {
               console.log(`[SSH DEBUG] Model findById returned null. Trying center DB fallback...`);
               try {
-                const { Connection: CenterModel } = await getModels(null); // null = use center URI
+                const { Connection: CenterModel } = await getModels(null);
                 if (CenterModel) {
                   connection = await CenterModel.findById(connectionId);
-                  if (connection) {
-                    console.log(`[SSH DEBUG] ✅ Found connection in center DB fallback!`);
-                  }
+                  if (connection) console.log(`[SSH DEBUG] ✅ Found connection in center DB fallback!`);
                 }
               } catch (fbErr) {
                 console.log(`[SSH DEBUG] Center DB fallback failed:`, fbErr.message);
               }
             }
+
+            // Fallback 2: Raw MongoDB collection query (bypasses Mongoose model issues entirely)
+            if (!connection) {
+              console.log(`[SSH DEBUG] ⚠️ All model lookups failed. Trying raw MongoDB collection query...`);
+              try {
+                const { ObjectId } = require('mongoose').Types;
+                let oid;
+                try { oid = new ObjectId(connectionId); } catch (_) { oid = connectionId; }
+                
+                // Try on default mongoose connection first
+                if (mongoose.connection.readyState === 1) {
+                  const rawDoc = await mongoose.connection.db.collection('connections').findOne({ _id: oid });
+                  if (rawDoc) {
+                    console.log(`[SSH DEBUG] ✅ Found via raw query on default connection!`);
+                    connection = rawDoc;
+                  }
+                }
+                
+                // If still not found, try on the dbUri connection
+                if (!connection && dbUri) {
+                  const targetConn = await mongoose.createConnection(dbUri, { serverSelectionTimeoutMS: 5000 }).asPromise();
+                  const rawDoc = await targetConn.db.collection('connections').findOne({ _id: oid });
+                  if (rawDoc) {
+                    console.log(`[SSH DEBUG] ✅ Found via raw query on dbUri connection!`);
+                    connection = rawDoc;
+                  }
+                  targetConn.close();
+                }
+              } catch (rawErr) {
+                console.log(`[SSH DEBUG] Raw query fallback failed:`, rawErr.message);
+              }
+            }
             
             if (!connection) {
-              console.log(`[SSH DEBUG] ⚠️ DB lookup failed! connectionId=${connectionId}`);
+              console.log(`[SSH DEBUG] ⚠️ ALL DB lookups failed! connectionId=${connectionId}`);
             }
           }
           
