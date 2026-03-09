@@ -146,10 +146,29 @@ function normalizeMongoUri(raw) {
   return u;
 }
 
-async function getModels(uri) {
-  const targetUri = uri || getLatestCenterUri();
+async function getModels(uri, userId) {
+  let targetUri = uri || getLatestCenterUri();
   if (!targetUri) {
      return { Connection: null, Session: null };
+  }
+
+  // If URI targets localhost, try to route through Local Relay Agent
+  const isLocalhost = /localhost|127\.0\.0\.1/.test(targetUri);
+  if (isLocalhost && userId && global.__activeRelays?.size) {
+    const relay = global.__activeRelays.get(userId);
+    if (relay && relay.localPort) {
+      // Rewrite URI to go through the relay's local TCP proxy
+      try {
+        const url = new URL(targetUri);
+        url.hostname = '127.0.0.1';
+        url.port = String(relay.localPort);
+        const relayUri = url.toString();
+        console.log(`[getModels] 🔗 Rewriting localhost URI through relay port ${relay.localPort}`);
+        targetUri = relayUri;
+      } catch (e) {
+        console.warn('[getModels] Failed to rewrite URI for relay:', e.message);
+      }
+    }
   }
 
   // Check if target URI is actually the center database (normalize localhost variants)
@@ -730,7 +749,7 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
           return;
         }
 
-        const { Connection: CurrentConnectionModel, Session: CurrentSessionModel } = await getModels(dbUri);
+        const { Connection: CurrentConnectionModel, Session: CurrentSessionModel } = await getModels(dbUri, uId);
 
         try {
           let connection;
@@ -749,7 +768,7 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
             if (!connection && dbUri) {
               console.log(`[SSH DEBUG] Model findById returned null. Trying center DB fallback...`);
               try {
-                const { Connection: CenterModel } = await getModels(null);
+                const { Connection: CenterModel } = await getModels(null, uId);
                 if (CenterModel) {
                   connection = await CenterModel.findById(connectionId);
                   if (connection) console.log(`[SSH DEBUG] ✅ Found connection in center DB fallback!`);
@@ -767,18 +786,41 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
                 let oid;
                 try { oid = new ObjectId(connectionId); } catch (_) { oid = connectionId; }
                 
+                console.log(`[SSH DEBUG] Default mongoose readyState: ${mongoose.connection.readyState}`);
+                console.log(`[SSH DEBUG] Default mongoose db name: ${mongoose.connection.db?.databaseName || 'N/A'}`);
+                console.log(`[SSH DEBUG] Looking for _id: ${oid} (type: ${typeof oid})`);
+                
                 // Try on default mongoose connection first
                 if (mongoose.connection.readyState === 1) {
+                  const count = await mongoose.connection.db.collection('connections').countDocuments();
+                  const allIds = await mongoose.connection.db.collection('connections').find({}, { projection: { _id: 1, name: 1, host: 1 } }).toArray();
+                  console.log(`[SSH DEBUG] Default DB has ${count} connections:`, allIds.map(d => `${d._id} (${d.name})`));
+                  
                   const rawDoc = await mongoose.connection.db.collection('connections').findOne({ _id: oid });
                   if (rawDoc) {
                     console.log(`[SSH DEBUG] ✅ Found via raw query on default connection!`);
                     connection = rawDoc;
+                  } else {
+                    // Also try string match
+                    const rawDoc2 = await mongoose.connection.db.collection('connections').findOne({ _id: connectionId });
+                    if (rawDoc2) {
+                      console.log(`[SSH DEBUG] ✅ Found via string _id query!`);
+                      connection = rawDoc2;
+                    }
                   }
                 }
                 
                 // If still not found, try on the dbUri connection
                 if (!connection && dbUri) {
                   const targetConn = await mongoose.createConnection(dbUri, { serverSelectionTimeoutMS: 5000 }).asPromise();
+                  const count2 = await targetConn.db.collection('connections').countDocuments();
+                  console.log(`[SSH DEBUG] dbUri DB (${targetConn.db.databaseName}) has ${count2} connections`);
+
+                  if (count2 > 0) {
+                    const allIds2 = await targetConn.db.collection('connections').find({}, { projection: { _id: 1, name: 1 } }).toArray();
+                    console.log(`[SSH DEBUG] dbUri DB IDs:`, allIds2.map(d => `${d._id} (${d.name})`));
+                  }
+                  
                   const rawDoc = await targetConn.db.collection('connections').findOne({ _id: oid });
                   if (rawDoc) {
                     console.log(`[SSH DEBUG] ✅ Found via raw query on dbUri connection!`);
@@ -2238,7 +2280,7 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
           try {
             const endTime = new Date();
             const duration = Math.floor((endTime - session.session.startTime) / 1000);
-            const { Session: CleanupSessionModel } = await getModels(session.dbUri);
+            const { Session: CleanupSessionModel } = await getModels(session.dbUri, uId);
             if (CleanupSessionModel) {
               await CleanupSessionModel.findByIdAndUpdate(session.session._id, {
                 status: 'closed',
@@ -2255,7 +2297,7 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
         if (forceKill && connectionId && !String(connectionId).startsWith('local-')) {
            try {
              console.log(`📡 Updating DB status to offline for connection ${connectionId}`);
-             const { Connection: CurrentConnectionModel } = await getModels(session.dbUri);
+             const { Connection: CurrentConnectionModel } = await getModels(session.dbUri, uId);
              if (CurrentConnectionModel) {
                const result = await CurrentConnectionModel.findByIdAndUpdate(connectionId, { status: 'offline' });
                console.log(`✅ DB status updated for ${connectionId}:`, !!result);
