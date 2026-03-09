@@ -205,6 +205,22 @@ async function getDynamicConnection(uri, tunnelConfig = null) {
 }
 
 /**
+ * Normalise a MongoDB URI so that hostname variants (localhost, 127.0.0.1,
+ * [::1]) and default-port omission all produce the same canonical string.
+ * This lets us reliably detect when the Vault URI points at the same
+ * database as the MONGODB_URI env var.
+ */
+function normalizeMongoUri(raw) {
+  if (!raw) return '';
+  let u = raw.trim();
+  // Unify localhost variants
+  u = u.replace(/\b(localhost|127\.0\.0\.1|\[::1\])\b/gi, '127.0.0.1');
+  // Strip default MongoDB port (:27017) so "host" and "host:27017" match
+  u = u.replace(/:27017(?=\/|$)/, '');
+  return u;
+}
+
+/**
  * Main entry point for database connections.
  * @param {string} uri - Optional URI to connect to.
  * @param {boolean} isCenter - If true, connects to the global default instance.
@@ -212,8 +228,17 @@ async function getDynamicConnection(uri, tunnelConfig = null) {
 async function connectDB(uri = null, isCenter = false) {
   const targetUri = uri || (await getUriFromRequest());
 
-  // If this is the center DB (User storage), use the default connection
-  if (isCenter || targetUri === process.env.MONGODB_URI) {
+  // If this is the center DB (User storage), use the default connection.
+  // Compare both exact match AND normalised form so that
+  // "mongodb://localhost:27017/db" and "mongodb://127.0.0.1:27017/db" are
+  // recognised as the same center database.
+  const envUri = process.env.MONGODB_URI;
+  const isCenterUri =
+    isCenter ||
+    targetUri === envUri ||
+    (envUri && normalizeMongoUri(targetUri) === normalizeMongoUri(envUri));
+
+  if (isCenterUri) {
     return connectCenter(targetUri);
   }
 

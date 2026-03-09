@@ -4,17 +4,23 @@ import { useApp } from '@/context/AppContext';
 import {
   Server, Terminal, Activity, Clock, Globe, Shield, Cpu, HardDrive, Database,
   BarChart3, TrendingUp, Zap, Plus, RefreshCw, ChevronRight, AlertCircle,
-  CheckCircle2, AlertTriangle, Star
+  CheckCircle2, AlertTriangle, Star, Download, Upload
 } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
+import { X, Key } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { motion, AnimatePresence } from 'framer-motion';
 
 export default function Dashboard({ onNewConnection, onEditConnection }) {
-  const { state, dispatch, fetchConnections } = useApp();
+  const { state, dispatch, fetchConnections, apiFetch } = useApp();
   const { t } = useTranslation();
   const { connections, relayWarning } = state;
   const [refreshing, setRefreshing] = useState(false);
+  const [showImportKeyModal, setShowImportKeyModal] = useState(false);
+  const [showExportModal, setShowExportModal] = useState(false);
+  const [exportMode, setExportMode] = useState('encrypted'); // 'encrypted' | 'plain'
+  const [importFileData, setImportFileData] = useState(null);
+  const importKeyRef = useRef(null);
 
   const stats = {
     total: connections.length,
@@ -44,6 +50,117 @@ export default function Dashboard({ onNewConnection, onEditConnection }) {
     await Promise.all(promises);
     await fetchConnections();
     setRefreshing(false);
+  };
+
+  const handleExport = () => {
+    setShowExportModal(true);
+  };
+
+  const handleConfirmExport = async () => {
+    setShowExportModal(false);
+    try {
+      const res = await apiFetch(`/api/connections/export?mode=${exportMode}`);
+      const data = await res.json();
+      if (data.success) {
+        // Wrap with metadata so import can detect format
+        const exportPayload = {
+          _format: 'ssh-monitor-export',
+          _version: 1,
+          _encrypted: data.encrypted,
+          _exportedAt: new Date().toISOString(),
+          connections: data.data,
+        };
+        const fileData = JSON.stringify(exportPayload, null, 2);
+        const blob = new Blob([fileData], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `monitor-connections-${exportMode}-${new Date().toISOString().slice(0, 10)}.json`;
+        a.click();
+        URL.revokeObjectURL(url);
+
+        const msg = data.encrypted 
+          ? 'Connections exported with encrypted credentials. Safe to transfer.'
+          : '⚠️ DANGER: Connections exported in PLAIN TEXT. Secrets are exposed!';
+        
+        dispatch({ 
+          type: 'ADD_NOTIFICATION', 
+          payload: { 
+            title: 'Export Successful', 
+            message: msg, 
+            type: data.encrypted ? 'success' : 'warning' 
+          } 
+        });
+      } else {
+        dispatch({ type: 'ADD_NOTIFICATION', payload: { title: 'Export Failed', message: data.error, type: 'error' } });
+      }
+    } catch (err) {
+      console.error(err);
+      dispatch({ type: 'ADD_NOTIFICATION', payload: { title: 'Export Error', message: 'Failed to access export endpoint', type: 'error' } });
+    }
+  };
+
+  const handleImport = () => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = 'application/json';
+    input.onchange = async (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+      try {
+        const text = await file.text();
+        const parsed = JSON.parse(text);
+
+        // Detect new format: { connections: [...], _encrypted: boolean }
+        if (parsed.connections && Array.isArray(parsed.connections)) {
+          if (parsed._encrypted) {
+            setImportFileData(parsed.connections);
+            setShowImportKeyModal(true);
+          } else {
+            // New format but not encrypted (Plain Text mode)
+            await doImport(parsed.connections, null);
+          }
+          return;
+        }
+
+        // Legacy format: plain array of connections
+        if (Array.isArray(parsed)) {
+          await doImport(parsed, null);
+          return;
+        }
+
+        dispatch({ type: 'ADD_NOTIFICATION', payload: { title: 'Import Failed', message: 'Invalid JSON format. Expected an array or a valid export file.', type: 'error' } });
+      } catch (err) {
+        console.error(err);
+        dispatch({ type: 'ADD_NOTIFICATION', payload: { title: 'Import Error', message: 'Failed to parse JSON configuration file.', type: 'error' } });
+      }
+    };
+    input.click();
+  };
+
+  const doImport = async (connections, oldEncryptionKey) => {
+    try {
+      const body = oldEncryptionKey
+        ? { connections, oldEncryptionKey }
+        : connections; // backward compatible: send plain array
+
+      const res = await apiFetch('/api/connections/import', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      });
+      const data = await res.json();
+
+      if (data.success) {
+        await fetchConnections();
+        dispatch({ type: 'ADD_NOTIFICATION', payload: { title: 'Import Successful', message: `Successfully imported ${data.count} connections. Credentials re-encrypted with this server's keys.`, type: 'success' } });
+      } else {
+        dispatch({ type: 'ADD_NOTIFICATION', payload: { title: 'Import Failed', message: data.error, type: 'error' } });
+      }
+    } catch (err) {
+      console.error(err);
+      dispatch({ type: 'ADD_NOTIFICATION', payload: { title: 'Import Error', message: 'Network error during import.', type: 'error' } });
+    }
   };
 
   const handleQuickConnect = (conn) => {
@@ -140,7 +257,19 @@ export default function Dashboard({ onNewConnection, onEditConnection }) {
             {t('ssh.dashboard_ui.monitoring')} {stats.total} {t('ssh.dashboard_ui.nodesAcross')}
           </motion.p>
         </div>
-        <motion.div variants={itemVariants} className="flex gap-3">
+        <motion.div variants={itemVariants} className="flex gap-3 flex-wrap">
+          <button
+            className="flex items-center gap-2 px-3 py-2 rounded-xl bg-[var(--bg-card)] border border-[var(--border-color)] text-[var(--text-secondary)] hover:bg-[var(--bg-card-hover)] transition-all active:scale-95"
+            onClick={handleImport}
+          >
+            <Download size={16} />
+          </button>
+          <button
+            className="flex items-center gap-2 px-3 py-2 rounded-xl bg-[var(--bg-card)] border border-[var(--border-color)] text-[var(--text-secondary)] hover:bg-[var(--bg-card-hover)] transition-all active:scale-95"
+            onClick={handleExport}
+          >
+            <Upload size={16} />
+          </button>
           <button
             className="flex items-center gap-2 px-4 py-2 rounded-xl bg-[var(--bg-card)] border border-[var(--border-color)] text-[var(--text-secondary)] hover:bg-[var(--bg-card-hover)] transition-all active:scale-95"
             onClick={handleRefreshAll}
@@ -384,6 +513,186 @@ export default function Dashboard({ onNewConnection, onEditConnection }) {
           </div>
         </motion.div>
       )}
+      {/* Export Mode Selection Modal */}
+      <AnimatePresence>
+        {showExportModal && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/60 backdrop-blur-sm"
+            onClick={() => setShowExportModal(false)}
+          >
+            <motion.div
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              onClick={(e) => e.stopPropagation()}
+              className="w-full max-w-md mx-4 rounded-3xl bg-[var(--bg-secondary)] border border-[var(--border-color)] shadow-2xl p-6"
+            >
+              <div className="flex items-center justify-between mb-6">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-indigo-500/10 flex items-center justify-center">
+                    <Upload size={20} className="text-indigo-400" />
+                  </div>
+                  <h3 className="font-bold text-[var(--text-primary)]">Export Connections</h3>
+                </div>
+                <button
+                  onClick={() => setShowExportModal(false)}
+                  className="text-[var(--text-muted)] hover:text-[var(--text-primary)] transition-colors"
+                >
+                  <X size={20} />
+                </button>
+              </div>
+
+              <div className="space-y-4 mb-8">
+                <div 
+                  onClick={() => setExportMode('encrypted')}
+                  className={`p-4 rounded-2xl border cursor-pointer transition-all ${
+                    exportMode === 'encrypted' 
+                      ? 'bg-indigo-500/10 border-indigo-500/50 ring-1 ring-indigo-500/20' 
+                      : 'bg-[var(--bg-tertiary)] border-[var(--border-color)] hover:border-[var(--border-hover)]'
+                  }`}
+                >
+                  <div className="flex items-center gap-3">
+                    <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center ${exportMode === 'encrypted' ? 'border-indigo-400' : 'border-[var(--text-muted)]'}`}>
+                      {exportMode === 'encrypted' && <div className="w-2.5 h-2.5 rounded-full bg-indigo-400" />}
+                    </div>
+                    <div>
+                      <h4 className="font-bold text-sm text-[var(--text-primary)]">Secure (Encrypted)</h4>
+                      <p className="text-[10px] text-[var(--text-muted)]">Credentials stay locked. Requires ENCRYPTION_KEY to import. [Recommended]</p>
+                    </div>
+                  </div>
+                </div>
+
+                <div 
+                  onClick={() => setExportMode('plain')}
+                  className={`p-4 rounded-2xl border cursor-pointer transition-all ${
+                    exportMode === 'plain' 
+                      ? 'bg-rose-500/10 border-rose-500/50 ring-1 ring-rose-500/20' 
+                      : 'bg-[var(--bg-tertiary)] border-[var(--border-color)] hover:border-[var(--border-hover)]'
+                  }`}
+                >
+                  <div className="flex items-center gap-3">
+                    <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center ${exportMode === 'plain' ? 'border-rose-400' : 'border-[var(--text-muted)]'}`}>
+                      {exportMode === 'plain' && <div className="w-2.5 h-2.5 rounded-full bg-rose-400" />}
+                    </div>
+                    <div>
+                      <h4 className="font-bold text-sm text-[var(--text-primary)]">Plain Text (Dangerous)</h4>
+                      <p className="text-[10px] text-rose-400/80">Credentials are decrypted and visible. RISK OF KEY LEAK. Use only for local backups.</p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {exportMode === 'plain' && (
+                <div className="mb-6 p-3 rounded-xl bg-rose-500/10 border border-rose-500/20 flex items-start gap-2">
+                  <AlertCircle size={16} className="text-rose-400 shrink-0 mt-0.5" />
+                  <p className="text-[10px] text-rose-200 leading-relaxed font-semibold">
+                    WARNING: Plain text export exposes all passwords and private keys. 
+                    Handle this file with extreme caution!
+                  </p>
+                </div>
+              )}
+
+              <div className="flex gap-3">
+                <button
+                  onClick={() => setShowExportModal(false)}
+                  className="flex-1 px-4 py-3 rounded-xl bg-[var(--bg-tertiary)] text-[var(--text-secondary)] hover:bg-[var(--bg-card-hover)] transition-all text-sm font-bold"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleConfirmExport}
+                  className={`flex-1 px-4 py-3 rounded-xl font-bold transition-all text-sm ${
+                    exportMode === 'encrypted' 
+                      ? 'bg-indigo-500 text-white hover:bg-indigo-400' 
+                      : 'bg-rose-600 text-white hover:bg-rose-500'
+                  }`}
+                >
+                  Start Export
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Import Encryption Key Modal */}
+      <AnimatePresence>
+        {showImportKeyModal && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/60 backdrop-blur-sm"
+            onClick={() => { setShowImportKeyModal(false); setImportFileData(null); }}
+          >
+            <motion.div
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              onClick={(e) => e.stopPropagation()}
+              className="w-full max-w-md mx-4 rounded-3xl bg-[var(--bg-secondary)] border border-[var(--border-color)] shadow-2xl p-6"
+            >
+              <div className="flex items-center justify-between mb-4">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-amber-500/10 flex items-center justify-center">
+                    <Key size={20} className="text-amber-400" />
+                  </div>
+                  <div>
+                    <h3 className="font-bold text-[var(--text-primary)]">Enter Old Encryption Key</h3>
+                    <p className="text-xs text-[var(--text-muted)]">From the old server's .env file</p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => { setShowImportKeyModal(false); setImportFileData(null); }}
+                  className="text-[var(--text-muted)] hover:text-[var(--text-primary)] transition-colors"
+                >
+                  <X size={20} />
+                </button>
+              </div>
+
+              <p className="text-sm text-[var(--text-secondary)] mb-4">
+                This export file contains encrypted credentials. To re-encrypt them with this server's key, 
+                paste the <code className="px-1.5 py-0.5 rounded bg-[var(--bg-tertiary)] text-amber-400 font-mono text-xs">ENCRYPTION_KEY</code> from 
+                the <strong>old</strong> server's <code className="px-1.5 py-0.5 rounded bg-[var(--bg-tertiary)] text-amber-400 font-mono text-xs">.env</code> file.
+              </p>
+
+              <input
+                ref={importKeyRef}
+                type="password"
+                placeholder="e.g. 66f462177aa9fa4f38cf4263c6079f4d..."
+                className="w-full px-4 py-3 rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] text-[var(--text-primary)] font-mono text-sm placeholder:text-[var(--text-muted)] focus:outline-none focus:border-amber-500/50 mb-4"
+              />
+
+              <div className="flex gap-3">
+                <button
+                  onClick={() => { setShowImportKeyModal(false); setImportFileData(null); }}
+                  className="flex-1 px-4 py-2.5 rounded-xl bg-[var(--bg-tertiary)] text-[var(--text-secondary)] hover:bg-[var(--bg-card-hover)] transition-all text-sm font-medium"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={async () => {
+                    const key = importKeyRef.current?.value?.trim();
+                    if (!key) {
+                      dispatch({ type: 'ADD_NOTIFICATION', payload: { title: 'Key Required', message: 'Please enter the old ENCRYPTION_KEY.', type: 'error' } });
+                      return;
+                    }
+                    setShowImportKeyModal(false);
+                    await doImport(importFileData, key);
+                    setImportFileData(null);
+                  }}
+                  className="flex-1 px-4 py-2.5 rounded-xl bg-amber-500 text-black font-semibold hover:bg-amber-400 transition-all text-sm"
+                >
+                  Import & Re-encrypt
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </motion.div>
   );
 }

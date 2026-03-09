@@ -103,7 +103,7 @@ function WindowTitleBar({ title, icon: Icon, onClose, onMinimize, onMaximize, is
 
   return (
     <div 
-      className="relative flex items-center h-9 bg-[var(--bg-secondary)] border-b border-[var(--border-color)] cursor-default select-none group/titlebar px-3"
+      className="relative flex items-center h-10 bg-[var(--bg-secondary)] border-b border-[var(--border-color)] cursor-default select-none group/titlebar"
     >
       {/* Drag & Double-Click Handle Layer (behind controls) */}
       <div 
@@ -115,26 +115,45 @@ function WindowTitleBar({ title, icon: Icon, onClose, onMinimize, onMaximize, is
         }}
       />
 
-      {/* Buttons Container */}
-      <div className={`relative z-20 flex items-center h-full ${isMac ? 'w-[60px]' : ''}`}>
-        <WindowButtons 
-          onClose={onClose} 
-          onMinimize={onMinimize} 
-          onMaximize={onMaximize} 
-          isMaximized={isMaximized} 
-          layout={layout}
-          enableMinimize={enableMinimize}
-          enableMaximize={enableMaximize} 
-        />
-      </div>
+      {/* Mac Buttons (Left) */}
+      {isMac && (
+        <div className="relative z-20 flex items-center h-full w-[84px] shrink-0">
+          <WindowButtons 
+            onClose={onClose} 
+            onMinimize={onMinimize} 
+            onMaximize={onMaximize} 
+            isMaximized={isMaximized} 
+            layout={layout}
+            enableMinimize={enableMinimize}
+            enableMaximize={enableMaximize} 
+          />
+        </div>
+      )}
       
       {/* Title Container */}
-      <div className={`absolute inset-0 flex items-center gap-2 text-[11px] font-bold text-[var(--text-primary)] pointer-events-none select-none ${isMac ? 'px-16 justify-center' : 'pl-12 pr-4 justify-start'}`}>
-        {Icon ? <Icon size={12} className="opacity-80 shrink-0" /> : null}
-        <span className="truncate">{title}</span>
+      <div className={`absolute inset-0 flex items-center gap-2.5 text-xs font-bold text-[var(--text-primary)] pointer-events-none select-none modal-title ${
+        isMac 
+          ? 'px-24 justify-center' 
+          : 'pl-4 pr-[150px] justify-start'
+      }`}>
+        {Icon ? <Icon size={14} className="opacity-80 shrink-0 modal-icon" /> : null}
+        <span className="truncate max-w-[80%]">{title}</span>
       </div>
 
-      {!isMac && <div className="w-12" />}
+      {/* PC Buttons (Right) */}
+      {!isMac && (
+        <div className="relative z-20 flex items-center h-full ml-auto shrink-0">
+          <WindowButtons 
+            onClose={onClose} 
+            onMinimize={onMinimize} 
+            onMaximize={onMaximize} 
+            isMaximized={isMaximized} 
+            layout={layout}
+            enableMinimize={enableMinimize}
+            enableMaximize={enableMaximize} 
+          />
+        </div>
+      )}
     </div>
   );
 }
