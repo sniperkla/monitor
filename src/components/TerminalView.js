@@ -724,6 +724,8 @@ export default function TerminalView({ connectionId, connectionName, host, color
     const socket = io({
       path: '/api/socket',
       transports: ['websocket', 'polling'],
+      forceNew: true,
+      multiplex: false,
       query: {
         dbUri: appState.dbConfig?.uri || ''
       }
@@ -744,13 +746,19 @@ export default function TerminalView({ connectionId, connectionName, host, color
       setLatency(now - sentTimestamp);
     });
 
-    socket.on('ssh:connected', () => {
+    socket.on('ssh:connected', (data) => {
       setStatus('connected');
       updateConnectionStatus('online'); // Update global state
       idleTimedOutRef.current = false;
       setShowReconnect(false);
-      term.writeln(`\x1b[1;32m✓ ${t('terminal.connectedSuccess')}\x1b[0m\n`);
-      appendOutput(`✓ ${t('terminal.connectedSuccess')}\n`);
+      
+      const isReattached = data?.reattached;
+      if (isReattached) {
+        term.writeln(`\x1b[1;36m⇅  ${t('terminal.reattachedSession') || 'Re-attached to persistent session'}\x1b[0m\n`);
+      } else {
+        term.writeln(`\x1b[1;32m✓ ${t('terminal.connectedSuccess')}\x1b[0m\n`);
+        appendOutput(`✓ ${t('terminal.connectedSuccess')}\n`);
+      }
       term.writeln('\r');
       
       // Secondary dimension sync to ensure precision after handshake
@@ -763,8 +771,8 @@ export default function TerminalView({ connectionId, connectionName, host, color
         } catch (e) {}
       }, 100);
 
-      // Run initialCommand (e.g. tmux attach) once shell is ready
-      if (initialCommand) {
+      // Run initialCommand (e.g. tmux attach) ONLY if it's a new session
+      if (initialCommand && !isReattached) {
         setTimeout(() => {
           if (socket.connected) {
             socket.emit('ssh:input', initialCommand);
@@ -4361,15 +4369,30 @@ What is your move?`;
         cleanup.then(fn => fn && fn());
       }
       if (socketRef.current) {
-        socketRef.current.emit('ssh:disconnect');
+        // We do NOT emit 'ssh:disconnect' here because we want sessions to PERSIST
+        // when the component unmounts (e.g. during refresh or switching tabs).
+        // Only explicitly disconnect the socket.IO connection.
         socketRef.current.disconnect();
       }
       if (termInstanceRef.current) {
         termInstanceRef.current.dispose();
         termInstanceRef.current = null;
       }
+      // Update local status to offline
+      dispatch({ 
+        type: 'UPDATE_CONNECTION', 
+        payload: { _id: connectionId, status: 'offline' } 
+      });
     };
   }, [initTerminal, reconnectNonce]);
+
+  const handleManualDisconnect = () => {
+    if (socketRef.current) {
+      socketRef.current.emit('ssh:disconnect');
+      socketRef.current.disconnect();
+    }
+    setStatus('disconnected');
+  };
 
   const handleReconnect = () => {
     try {

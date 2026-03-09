@@ -1,6 +1,6 @@
 'use client';
 
-import { createContext, useContext, useReducer, useCallback, useEffect } from 'react';
+import { createContext, useContext, useReducer, useCallback, useEffect, useRef } from 'react';
 import { useSession } from 'next-auth/react';
 import { useVault } from '@/context/VaultContext';
 
@@ -193,11 +193,19 @@ function reducer(state, action) {
       return { ...state, activeFileManagerId: action.payload };
     case 'SET_ACTIVE_DATABASE_BROWSER':
       return { ...state, activeDatabaseBrowserId: action.payload };
+
     case 'OPEN_WIKI_CHAT':
       return { ...state, wikiChatWindows: [...state.wikiChatWindows, action.payload] };
     case 'CLOSE_WIKI_CHAT':
       return { ...state, wikiChatWindows: state.wikiChatWindows.filter(w => w.id !== action.payload) };
+    case 'SET_ACTIVE_TERMINALS':
+      return { ...state, activeTerminals: action.payload };
+    case 'SET_ACTIVE_FILE_MANAGERS':
+      return { ...state, activeFileManagers: action.payload };
+    case 'SET_ACTIVE_DATABASE_BROWSERS':
+      return { ...state, activeDatabaseBrowsers: action.payload };
     default:
+
       return state;
   }
 }
@@ -218,7 +226,10 @@ export function AppProvider({ children }) {
     return fetch(url, { ...options, headers, credentials: 'include' });
   }, [state.dbConfig?.uri, state.dbConfig?.tunnel]);
 
+  const latestRequestIdRef = useRef(0);
+
   const fetchConnections = useCallback(async () => {
+    const requestId = ++latestRequestIdRef.current;
     dispatch({ type: 'SET_LOADING', payload: true });
     
     let dbConnections = [];
@@ -228,7 +239,9 @@ export function AppProvider({ children }) {
     if (typeof window !== 'undefined') {
        const saved = localStorage.getItem('ssh_monitor_connections');
        if (saved) {
-         localConnections = JSON.parse(saved).map(c => ({ ...c, storage: 'localstorage' }));
+         try {
+           localConnections = JSON.parse(saved).map(c => ({ ...c, storage: 'localstorage' }));
+         } catch (e) { console.error('Failed to parse local connections:', e); }
        }
     }
 
@@ -236,6 +249,10 @@ export function AppProvider({ children }) {
     try {
       const res = await apiFetch('/api/connections');
       const data = await res.json();
+      
+      // If a newer request has started, ignore this response
+      if (requestId !== latestRequestIdRef.current) return;
+
       if (data.success) {
         dbConnections = data.data.map(c => ({ ...c, storage: 'db' }));
         // Clear any previous relay warning when connections load successfully
@@ -249,6 +266,8 @@ export function AppProvider({ children }) {
       }
     } catch (err) {
       console.error('Failed to fetch DB connections:', err);
+      // If a newer request has started, ignore this error
+      if (requestId !== latestRequestIdRef.current) return;
     }
 
     dispatch({ type: 'SET_CONNECTIONS', payload: [...dbConnections, ...localConnections] });
@@ -281,16 +300,67 @@ export function AppProvider({ children }) {
     }
   }, [vaultStatus, decryptedUri, decryptedTunnel]);
 
+
   // 3. Auto-refresh connections when DB Config changes
   useEffect(() => {
     fetchConnections();
   }, [state.dbConfig?.uri, fetchConnections]);
+
+  // 4. Persistence: Load active workspace state from localStorage on mount
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      const savedTerms = localStorage.getItem('ssh_monitor_active_terminals');
+      if (savedTerms) {
+        const terms = JSON.parse(savedTerms);
+        if (Array.isArray(terms) && terms.length > 0) {
+          dispatch({ type: 'SET_ACTIVE_TERMINALS', payload: terms });
+        }
+      }
+      const savedFms = localStorage.getItem('ssh_monitor_active_file_managers');
+      if (savedFms) {
+        const fms = JSON.parse(savedFms);
+        if (Array.isArray(fms) && fms.length > 0) {
+          dispatch({ type: 'SET_ACTIVE_FILE_MANAGERS', payload: fms });
+        }
+      }
+      const savedDbs = localStorage.getItem('ssh_monitor_active_database_browsers');
+      if (savedDbs) {
+        const dbs = JSON.parse(savedDbs);
+        if (Array.isArray(dbs) && dbs.length > 0) {
+          dispatch({ type: 'SET_ACTIVE_DATABASE_BROWSERS', payload: dbs });
+        }
+      }
+      const savedActiveTermId = localStorage.getItem('ssh_monitor_active_terminal_id');
+      if (savedActiveTermId) dispatch({ type: 'SET_ACTIVE_TERMINAL', payload: savedActiveTermId });
+      
+      const savedView = localStorage.getItem('ssh_monitor_active_view');
+      if (savedView) dispatch({ type: 'SET_VIEW', payload: savedView });
+    } catch (e) {
+      console.error('Failed to restore workspace state:', e);
+    }
+  }, []);
+
+  // 5. Persistence: Save active workspace state to localStorage when it changes
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      localStorage.setItem('ssh_monitor_active_terminals', JSON.stringify(state.activeTerminals));
+      localStorage.setItem('ssh_monitor_active_file_managers', JSON.stringify(state.activeFileManagers));
+      localStorage.setItem('ssh_monitor_active_database_browsers', JSON.stringify(state.activeDatabaseBrowsers));
+      localStorage.setItem('ssh_monitor_active_terminal_id', state.activeTerminalId || '');
+      localStorage.setItem('ssh_monitor_active_view', state.view);
+    } catch (e) {
+      console.error('Failed to save workspace state:', e);
+    }
+  }, [state.activeTerminals, state.activeFileManagers, state.activeDatabaseBrowsers, state.activeTerminalId, state.view]);
 
   return (
     <AppContext.Provider value={{ state, dispatch, fetchConnections, apiFetch }}>
       {children}
     </AppContext.Provider>
   );
+
 }
 
 export function useApp() {

@@ -74,6 +74,10 @@ export default function DatabaseView({ connection, onClose }) {
     });
     socketRef.current = socket;
 
+    socket.on('connect', () => {
+      socket.emit('register:connection', { connectionId: connection._id });
+    });
+
     socket.on('heartbeat:pong', (sentTimestamp) => {
       setLatency(Date.now() - sentTimestamp);
     });
@@ -87,6 +91,13 @@ export default function DatabaseView({ connection, onClose }) {
     return () => {
       clearInterval(interval);
       socket.disconnect();
+      // Update local status to offline if no other component is using it
+      // Note: Full multi-session ref-counting could be added to AppContext,
+      // but this handles the most common 'one window' case.
+      dispatch({ 
+        type: 'UPDATE_CONNECTION', 
+        payload: { _id: connection._id, status: 'offline' } 
+      });
     };
   }, [appState.dbConfig?.uri]);
 

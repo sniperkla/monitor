@@ -19,9 +19,7 @@ export default function Sidebar({ onNewConnection, onEditConnection }) {
   const [filter, setFilter] = useState('all'); // all, favorites, online, offline
 
 
-  useEffect(() => {
-    fetchConnections();
-  }, [fetchConnections]);
+
 
   const filtered = connections.filter(conn => {
     const matchSearch = (conn.name || '').toLowerCase().includes((search || '').toLowerCase()) ||
