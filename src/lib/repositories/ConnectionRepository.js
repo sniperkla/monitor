@@ -96,7 +96,31 @@ export class ConnectionRepository {
     }
   }
 
+
+  async findOne(criteria) {
+    if (this.isMysql) {
+      const keys = Object.keys(criteria);
+      if (keys.length === 0) return null;
+      const where = keys.map(k => `${k === 'database' ? 'database_name' : k} = ?`).join(' AND ');
+      const [rows] = await this.db.query(`SELECT * FROM connections WHERE ${where} LIMIT 1`, Object.values(criteria));
+      if (rows.length === 0) return null;
+      const r = rows[0];
+      return {
+        ...r,
+        _id: r.id.toString(),
+        tags: typeof r.tags === 'string' ? JSON.parse(r.tags) : (r.tags || []),
+        isFavorite: !!r.isFavorite,
+        isSrv: !!r.isSrv,
+        database: r.database_name
+      };
+    } else {
+      const model = getConnectionModel(this.db);
+      return await model.findOne(criteria);
+    }
+  }
+
   async create(data) {
+
     if (this.isMysql) {
       const [result] = await this.db.query(
         `INSERT INTO connections (

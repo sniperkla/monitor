@@ -110,13 +110,20 @@ export default function Dashboard({ onNewConnection, onEditConnection }) {
     }
   };
 
+
   const handleImport = () => {
     const input = document.createElement('input');
     input.type = 'file';
     input.accept = 'application/json';
+    input.style.display = 'none';
+    document.body.appendChild(input);
+
     input.onchange = async (e) => {
       const file = e.target.files[0];
+      document.body.removeChild(input);
       if (!file) return;
+
+      console.log(`📂 Importing file: ${file.name} (${file.size} bytes)`);
       try {
         const text = await file.text();
         const parsed = JSON.parse(text);
@@ -141,16 +148,25 @@ export default function Dashboard({ onNewConnection, onEditConnection }) {
 
         dispatch({ type: 'ADD_NOTIFICATION', payload: { title: 'Import Failed', message: 'Invalid JSON format. Expected an array or a valid export file.', type: 'error' } });
       } catch (err) {
-        console.error(err);
+        console.error('Import process error:', err);
         dispatch({ type: 'ADD_NOTIFICATION', payload: { title: 'Import Error', message: 'Failed to parse JSON configuration file.', type: 'error' } });
       }
     };
+
     input.click();
     setExportPassword(''); // Reset for next time
   };
 
+
+
   const doImport = async (connections, password, oldEncryptionKey) => {
+    if (!connections || !Array.isArray(connections) || connections.length === 0) {
+      console.warn('⚠️ No connections to import.');
+      return;
+    }
+    
     try {
+      console.log(`🚀 Sending import request for ${connections.length} items...`);
       const body = { connections };
       if (password) body.password = password;
       if (oldEncryptionKey) body.oldEncryptionKey = oldEncryptionKey;
@@ -161,18 +177,23 @@ export default function Dashboard({ onNewConnection, onEditConnection }) {
         body: JSON.stringify(body)
       });
       const data = await res.json();
+      console.log('🏁 Import response:', data);
 
       if (data.success) {
         await fetchConnections();
-        dispatch({ type: 'ADD_NOTIFICATION', payload: { title: 'Import Successful', message: `Successfully imported ${data.count} connections. Credentials re-encrypted with this server's keys.`, type: 'success' } });
+        const msg = data.updated > 0 
+          ? `Imported ${data.count} new and updated ${data.updated} existing connections.`
+          : `Successfully imported ${data.count} connections.`;
+        dispatch({ type: 'ADD_NOTIFICATION', payload: { title: 'Import Successful', message: `${msg} Credentials re-encrypted with this server's keys.`, type: 'success' } });
       } else {
-        dispatch({ type: 'ADD_NOTIFICATION', payload: { title: 'Import Failed', message: data.error, type: 'error' } });
+        dispatch({ type: 'ADD_NOTIFICATION', payload: { title: 'Import Failed', message: data.error || 'Unknown error during import.', type: 'error' } });
       }
     } catch (err) {
-      console.error(err);
+      console.error('Import Error:', err);
       dispatch({ type: 'ADD_NOTIFICATION', payload: { title: 'Import Error', message: 'Network error during import.', type: 'error' } });
     }
   };
+
 
   const handleQuickConnect = (conn) => {
     if (conn.storage === 'manual') {

@@ -4,10 +4,9 @@ import { authOptions } from "@/lib/auth";
 import { checkRateLimit } from '@/lib/serverGuard';
 import connectDB from '@/lib/mongodb';
 import { ConnectionRepository } from '@/lib/repositories/ConnectionRepository';
-import { encrypt, decryptWithPassword } from '@/utils/encryption';
-import crypto from 'crypto';
 
-const IV_LENGTH = 16;
+import { encrypt, decryptWithPassword, decryptWithMetadata } from '@/utils/encryption';
+import crypto from 'crypto';
 
 /**
  * Decrypt an encrypted blob using an arbitrary hex key.
@@ -34,10 +33,16 @@ function decryptWithCustomKey(encryptedText, hexKey) {
  * Re-encrypt a field: 
  * 1. If password provided, decrypt with that first.
  * 2. Else if oldKey provided, decrypt with that.
- * 3. Then encrypt with this server's current key.
+ * 3. Else try to decrypt with THIS server's current key (prevents double-encryption).
+ * 4. Finally encrypt with this server's current key.
  */
 function reEncrypt(value, password, oldKey) {
   if (!value) return null;
+
+  // If it's not and doesn't look like an encrypted string (no colons), treat as plain text
+  if (typeof value === 'string' && !value.includes(':')) {
+    return encrypt(value);
+  }
 
   if (password) {
     const plain = decryptWithPassword(value, password);
@@ -49,9 +54,18 @@ function reEncrypt(value, password, oldKey) {
     if (plain !== null) return encrypt(plain);
   }
 
-  // No password/key worked or provided — treat as plain text if it looks like it
+  // Fallback: try to decrypt with current key (maybe it's a same-server import)
+  const meta = decryptWithMetadata(value);
+  if (meta.success && meta.text !== value) {
+     return encrypt(meta.text); 
+  }
+
+  // No password/key worked or provided — treat as plain text if it doesn't look like our ciphertext format
+  // or if we failed to decrypt it but it contains colons (might be a different password/key).
+  // If it still doesn't work, we return encrypt(value) anyway as a last resort plain-text assumption.
   return encrypt(value);
 }
+
 
 /**
  * POST /api/connections/import
@@ -81,8 +95,10 @@ export async function POST(request) {
     await repo.init();
 
     const body = await request.json();
+    console.log(`📥 Import requested. Body keys: ${Object.keys(body).join(', ')}`);
 
     let items, oldKey, password;
+
     if (Array.isArray(body)) {
       items = body;
     } else if (body.connections && Array.isArray(body.connections)) {
@@ -95,17 +111,24 @@ export async function POST(request) {
 
     const MAX_IMPORT_LIMIT = 100;
     if (items.length > MAX_IMPORT_LIMIT) {
+      console.warn(`⚠️ Import blocked: ${items.length} items exceeds limit.`);
       return NextResponse.json({ 
         success: false, 
         error: `Import limit exceeded. Maximum ${MAX_IMPORT_LIMIT} connections allowed per file.` 
       }, { status: 400 });
     }
 
+    console.log(`📦 Processing ${items.length} items for import...`);
     let imported = 0;
+    let updated = 0;
     for (const item of items) {
-      if (!item.name || !item.host) continue;
+      if (!item.name || !item.host) {
+        console.warn('⏭️ Skipping item without name or host:', item.name || 'unnamed');
+        continue;
+      }
 
-      await repo.create({
+
+      const connectionData = {
         name: item.name,
         type: item.type || 'ssh',
         dbProvider: item.dbProvider || 'mongodb',
@@ -130,11 +153,30 @@ export async function POST(request) {
         sshTunnelPassword: reEncrypt(item.sshTunnelPassword, password, oldKey),
         sshTunnelPrivateKey: reEncrypt(item.sshTunnelPrivateKey, password, oldKey),
         sshTunnelPassphrase: reEncrypt(item.sshTunnelPassphrase, password, oldKey),
+      };
+
+      // Check if connection already exists to prevent duplicates
+      const existing = await repo.findOne({ 
+        name: item.name, 
+        host: item.host,
+        type: item.type || 'ssh'
       });
-      imported++;
+
+      if (existing) {
+        console.log(`🔄 Updating existing connection: ${item.name} (${existing._id})`);
+        await repo.update(existing._id, connectionData);
+        updated++;
+      } else {
+        console.log(`✨ Creating new connection: ${item.name}`);
+        await repo.create(connectionData);
+        imported++;
+      }
     }
 
-    return NextResponse.json({ success: true, count: imported });
+    console.log(`🏁 Import finished: ${imported} imported, ${updated} updated.`);
+    return NextResponse.json({ success: true, count: imported, updated });
+
+
   } catch (error) {
     console.error('Import Error:', error);
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
