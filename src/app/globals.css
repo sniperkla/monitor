@@ -729,7 +729,7 @@
 body {
   background: var(--bg-primary);
   color: var(--text-primary);
-  font-family: "Prompt", sans-serif;
+  font-family: "Inter", sans-serif;
   min-height: 100vh;
   overflow-x: hidden;
   overscroll-behavior-x: none;  
@@ -892,7 +892,7 @@ body {
   width: 100%;
   transition: all 0.3s ease;
   outline: none;
-  font-family: "Inter", "Prompt", sans-serif;
+  font-family: "Inter", sans-serif;
 }
 
 .input-field:focus {
@@ -917,7 +917,7 @@ body {
   outline: none;
   cursor: pointer;
   appearance: none;
-  font-family: "Inter", "Prompt", sans-serif;
+  font-family: "Inter", sans-serif;
 }
 
 .select-field:focus {

@@ -300,7 +300,8 @@ export default function Sidebar({ onNewConnection, onEditConnection }) {
           <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2" style={{ color: 'var(--text-muted)' }} />
           <input
             type="text"
-            className="input-field pl-9 text-sm"
+            className="input-field text-sm"
+            style={{ paddingLeft: '2.25rem' }}
             placeholder={t('ssh.searchPlaceHolder')}
             value={search}
             onChange={(e) => setSearch(e.target.value)}

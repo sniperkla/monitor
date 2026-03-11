@@ -53,7 +53,7 @@ const ConnectionPicker = ({ onSelect, search, setSearch, connections, t }) => {
 
   return (
     <div 
-      className="h-full flex flex-col items-center justify-center p-8 bg-transparent relative"
+      className="h-full w-full overflow-y-auto overflow-x-hidden bg-transparent relative"
       onDragOver={handlePickerDragOver}
       onDragLeave={handlePickerDragLeave}
       onDrop={handlePickerDrop}
@@ -71,69 +71,71 @@ const ConnectionPicker = ({ onSelect, search, setSearch, connections, t }) => {
           </div>
         </div>
       )}
-      <motion.div 
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.4, ease: "easeOut" }}
-        className="w-full max-w-lg flex flex-col items-center gap-6"
-      >
-        <div className="w-20 h-20 rounded-[2rem] bg-indigo-500/10 flex items-center justify-center border border-indigo-500/20 shadow-xl shadow-indigo-500/5 ring-1 ring-white/5">
-          <Server className="w-10 h-10 text-indigo-400" />
-        </div>
+      <div className="min-h-full flex items-center justify-center p-8">
+        <motion.div 
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.4, ease: "easeOut" }}
+          className="w-full max-w-lg flex flex-col items-center gap-6"
+        >
+          <div className="w-20 h-20 rounded-[2rem] bg-indigo-500/10 flex items-center justify-center border border-indigo-500/20 shadow-xl shadow-indigo-500/5 ring-1 ring-white/5">
+            <Server className="w-10 h-10 text-indigo-400" />
+          </div>
 
-        <div className="text-center space-y-2">
-          <h2 className="text-2xl font-bold text-white tracking-tight">
-            {t('files.layout.selectServer')}
-          </h2>
-          <p className="text-zinc-500 text-sm max-w-[280px] leading-relaxed mx-auto">
-            {t('files.layout.dropServer')}
-          </p>
-        </div>
+          <div className="text-center space-y-2">
+            <h2 className="text-2xl font-bold text-white tracking-tight">
+              {t('files.layout.selectServer')}
+            </h2>
+            <p className="text-zinc-500 text-sm max-w-[280px] leading-relaxed mx-auto">
+              {t('files.layout.dropServer')}
+            </p>
+          </div>
 
-        <div className="w-full relative group">
-          <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-500 group-focus-within:text-indigo-400 transition-colors" />
-          <input 
-            type="text"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder={t('files.layout.searchServer')}
-            className="w-full h-12 bg-white/5 border border-white/10 rounded-2xl pl-12 pr-4 text-white focus:outline-none focus:border-indigo-500/50 focus:ring-4 focus:ring-indigo-500/10 transition-all placeholder:text-zinc-600 backdrop-blur-sm"
-          />
-        </div>
+          <div className="w-full relative group">
+            <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-500 group-focus-within:text-indigo-400 transition-colors" />
+            <input 
+              type="text"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder={t('files.layout.searchServer')}
+              className="w-full h-12 bg-white/5 border border-white/10 rounded-2xl pl-12 pr-4 text-white focus:outline-none focus:border-indigo-500/50 focus:ring-4 focus:ring-indigo-500/10 transition-all placeholder:text-zinc-600 backdrop-blur-sm"
+            />
+          </div>
 
-        <div className="w-full max-h-[320px] overflow-y-auto custom-scrollbar rounded-2xl border border-white/5 bg-black/20 p-2 space-y-1 backdrop-blur-sm shadow-2xl">
-          {filteredConnections.length > 0 ? (
-            filteredConnections.map((conn) => (
-              <button
-                key={conn.id || conn._id}
-                onClick={() => onSelect(conn)}
-                className="w-full flex items-center gap-4 p-3 rounded-xl hover:bg-white/10 transition-all group text-left border border-transparent hover:border-white/5 shadow-sm active:scale-[0.98]"
-              >
-                <div className={`w-10 h-10 rounded-xl flex items-center justify-center text-white font-medium shadow-lg shrink-0`} 
-                   style={{ backgroundColor: conn.color || '#6366f1', background: `linear-gradient(135deg, ${conn.color || '#6366f1'}, ${conn.color || '#6366f1'}cc)` }}>
-                  {conn.type === 'ssh' ? <Monitor size={18} /> : <Database size={18} />}
-                </div>
-                <div className="flex-1 min-w-0">
-                  <div className="text-sm font-semibold text-zinc-200 truncate group-hover:text-white transition-colors">
-                    {conn.name}
+          <div className="w-full rounded-2xl border border-white/5 bg-black/20 p-2 space-y-1 backdrop-blur-sm shadow-2xl">
+            {filteredConnections.length > 0 ? (
+              filteredConnections.map((conn) => (
+                <button
+                  key={conn.id || conn._id}
+                  onClick={() => onSelect(conn)}
+                  className="w-full flex items-center gap-4 p-3 rounded-xl hover:bg-white/10 transition-all group text-left border border-transparent hover:border-white/5 shadow-sm active:scale-[0.98]"
+                >
+                  <div className={`w-10 h-10 rounded-xl flex items-center justify-center text-white font-medium shadow-lg shrink-0`} 
+                     style={{ backgroundColor: conn.color || '#6366f1', background: `linear-gradient(135deg, ${conn.color || '#6366f1'}, ${conn.color || '#6366f1'}cc)` }}>
+                    {conn.type === 'ssh' ? <Monitor size={18} /> : <Database size={18} />}
                   </div>
-                  <div className="text-[11px] text-zinc-500 truncate font-mono">
-                    {conn.host}
+                  <div className="flex-1 min-w-0">
+                    <div className="text-sm font-semibold text-zinc-200 truncate group-hover:text-white transition-colors">
+                      {conn.name}
+                    </div>
+                    <div className="text-[11px] text-zinc-500 truncate font-mono">
+                      {conn.host}
+                    </div>
                   </div>
-                </div>
-                <div className="w-8 h-8 rounded-full bg-white/5 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-all translate-x-1 group-hover:translate-x-0">
-                  <ChevronRight size={16} className="text-indigo-400" />
-                </div>
-              </button>
-            ))
-          ) : (
-            <div className="p-10 text-center opacity-40">
-              <Database className="w-10 h-10 text-zinc-500 mx-auto mb-3" />
-              <p className="text-xs font-medium uppercase tracking-[0.2em]">{t('files.layout.noServers')}</p>
-            </div>
-          )}
-        </div>
-      </motion.div>
+                  <div className="w-8 h-8 rounded-full bg-white/5 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-all translate-x-1 group-hover:translate-x-0">
+                    <ChevronRight size={16} className="text-indigo-400" />
+                  </div>
+                </button>
+              ))
+            ) : (
+              <div className="p-10 text-center opacity-40">
+                <Database className="w-10 h-10 text-zinc-500 mx-auto mb-3" />
+                <p className="text-xs font-medium uppercase tracking-[0.2em]">{t('files.layout.noServers')}</p>
+              </div>
+            )}
+          </div>
+        </motion.div>
+      </div>
     </div>
   );
 };
@@ -238,14 +240,26 @@ function Divider({ direction, onDrag, isActive }) {
   
   const handleMouseDown = useCallback((e) => {
     e.preventDefault();
+    const cur = isHoriz ? 'col-resize' : 'row-resize';
+    document.body.style.cursor = cur;
+    document.body.style.userSelect = 'none';
+
+    // Overlay blocks child panes from stealing pointer events during drag
+    const overlay = document.createElement('div');
+    overlay.style.cssText = `position:fixed;inset:0;z-index:99999;cursor:${cur};`;
+    document.body.appendChild(overlay);
+
     const handleMouseMove = (mm) => onDrag(mm);
     const handleMouseUp = () => {
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+      if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
       window.removeEventListener('mousemove', handleMouseMove);
       window.removeEventListener('mouseup', handleMouseUp);
     };
     window.addEventListener('mousemove', handleMouseMove);
     window.addEventListener('mouseup', handleMouseUp);
-  }, [onDrag]);
+  }, [onDrag, isHoriz]);
 
   return (
     <div
@@ -385,7 +399,8 @@ function LayoutRenderer({
 export default function FileLayout({ managers: propManagers, onCloseFileManager, onSplitFileManager }) {
   const { state, dispatch } = useApp();
   const { t } = useTranslation();
-  const { connections, activeFileManagers: globalManagers } = state;
+  const { connections: allConnections, activeFileManagers: globalManagers } = state;
+  const connections = allConnections.filter(c => c.type !== 'database');
   const managers = propManagers || globalManagers;
 
   const handledFmIdsRef = useRef(new Set());
@@ -525,9 +540,11 @@ export default function FileLayout({ managers: propManagers, onCloseFileManager,
     }
 
     setLayout(prev => {
-      if (!prev) return null;
+      if (!prev) return createPane(null);
       const remains = removePane(prev, targetId);
-      return (remains && remains.id === targetId) ? null : remains;
+      // Last pane removed — show empty connection picker instead of crashing
+      if (remains && remains.id === targetId) return createPane(null);
+      return remains;
     });
   }, [layout, dispatch, onCloseFileManager]);
 
@@ -560,7 +577,7 @@ export default function FileLayout({ managers: propManagers, onCloseFileManager,
   return (
     <div className="h-full w-full flex flex-col bg-[var(--bg-primary)] overflow-hidden">
       <LayoutRenderer
-        layout={layout}
+        layout={layout || createPane(null)}
         activePaneId={activePaneId}
         onFocusPane={handleFocusPane}
         onClosePane={handleClosePane}

@@ -220,6 +220,9 @@ export default function TerminalView({ connectionId, connectionName, host, color
   const [reconnectNonce, setReconnectNonce] = useState(0);
   const [showReconnect, setShowReconnect] = useState(false);
   const idleTimedOutRef = useRef(false);
+  const termDbUriRef = useRef(appState.dbConfig?.uri || '');
+  const termStatusRef = useRef(status);
+  useEffect(() => { termStatusRef.current = status; }, [status]);
 
   const outputLinesRef = useRef([]);
   const outputBufferRef = useRef('');
@@ -581,6 +584,22 @@ export default function TerminalView({ connectionId, connectionName, host, color
     };
   }, []);
 
+  // Refresh terminal when switching back to the terminal view tab
+  // (fixes garbled / corrupted text after the container was hidden)
+  useEffect(() => {
+    const handleViewActivated = () => {
+      if (!fitAddonRef.current || !termInstanceRef.current) return;
+      requestAnimationFrame(() => {
+        try {
+          fitAddonRef.current.fit();
+          termInstanceRef.current.refresh(0, termInstanceRef.current.rows - 1);
+        } catch (e) {}
+      });
+    };
+    window.addEventListener('terminal:view-activated', handleViewActivated);
+    return () => window.removeEventListener('terminal:view-activated', handleViewActivated);
+  }, []);
+
   // Resize observer to scale AI panel position
   useEffect(() => {
     if (!containerRef.current) return;
@@ -725,7 +744,7 @@ export default function TerminalView({ connectionId, connectionName, host, color
       path: '/api/socket',
       transports: ['websocket', 'polling'],
       query: {
-        dbUri: appState.dbConfig?.uri || ''
+        dbUri: termDbUriRef.current
       }
     });
     socketRef.current = socket;
@@ -806,6 +825,14 @@ export default function TerminalView({ connectionId, connectionName, host, color
     };
 
     socket.on('ssh:error', (data) => {
+      if (data.message === 'vault_not_ready') {
+        // Don't show as a hard error — vault unlock will trigger auto-reconnect
+        setStatus('error');
+        setErrorMsg('vault_not_ready');
+        resetAiOnDisconnect();
+        term.writeln(`\n\x1b[1;33m⚠ Waiting for vault to unlock...\x1b[0m`);
+        return;
+      }
       setStatus('error');
       setErrorMsg(data.message);
       idleTimedOutRef.current = false;
@@ -4343,6 +4370,17 @@ What is your move?`;
       termInstanceRef.current.focus();
     }
   };
+
+  // Auto-reconnect when vault unlocks (dbUri goes from empty → populated)
+  useEffect(() => {
+    const newUri = appState.dbConfig?.uri || '';
+    const prevUri = termDbUriRef.current;
+    termDbUriRef.current = newUri;
+    if (newUri && !prevUri && (termStatusRef.current === 'error' || termStatusRef.current === 'connecting')) {
+      console.log('🔓 Vault unlocked — retrying SSH terminal connection');
+      setReconnectNonce(n => n + 1);
+    }
+  }, [appState.dbConfig?.uri]);
 
   useEffect(() => {
     const cleanup = initTerminal();

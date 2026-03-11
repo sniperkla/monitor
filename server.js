@@ -523,15 +523,34 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
 
       try {
         let connection;
+
+        // Helper: check if a string is a valid 24-char MongoDB ObjectId
+        const isValidObjectId = (id) => /^[0-9a-fA-F]{24}$/.test(id);
         
         // Handle DB Connections
         if (connectionId && !connectionId.startsWith('local-')) {
-          if (!CurrentConnectionModel) {
-             socket.emit('ssh:error', { message: 'Vault not configured. Please setup your private database.' });
-             return;
+          if (CurrentConnectionModel) {
+            try {
+              // For MongoDB: only look up if connectionId looks like a real ObjectId
+              // For PostgreSQL/MySQL: the model's findById handles numeric IDs directly
+              if (isValidObjectId(connectionId) || typeof CurrentConnectionModel.findById === 'function') {
+                if (isValidObjectId(connectionId)) await connectMongo();
+                connection = await CurrentConnectionModel.findById(connectionId);
+              }
+            } catch (lookupErr) {
+              if (lookupErr.name === 'CastError') {
+                // connectionId is not a valid MongoDB ObjectId (e.g. a PostgreSQL integer ID)
+                // Fall through to connectionData below
+                connection = null;
+              } else {
+                throw lookupErr;
+              }
+            }
+          } else if (!connectionData) {
+            // Vault not configured and no fallback data — vault needs to unlock first
+            socket.emit('ssh:error', { message: 'vault_not_ready' });
+            return;
           }
-          await connectMongo();
-          connection = await CurrentConnectionModel.findById(connectionId);
         }
         
         // Use provided data if DB lookup fails or if it's a local/manual connection
@@ -568,13 +587,25 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
           });
         };
 
-        // Create session only for DB connections AND if Session model is available
+        // Create session only for valid DB connections AND if Session model is available
+        // For MongoDB: connectionId must be a valid ObjectId (skip for PostgreSQL integer IDs)
+        // For PostgreSQL/MySQL: the SQL Session model handles integer IDs natively
         let session = null;
         if (connectionId && !connectionId.startsWith('local-') && CurrentSessionModel) {
-          session = await CurrentSessionModel.create({
-            connectionId: connection._id,
-            status: 'active',
-          });
+          // Only use Mongoose session model for valid MongoDB ObjectIds
+          const isMgoSession = isValidObjectId(connectionId);
+          const isSqlSession = /^\d+$/.test(String(connectionId));
+          if (isMgoSession || isSqlSession) {
+            try {
+              session = await CurrentSessionModel.create({
+                connectionId: connection._id,
+                status: 'active',
+              });
+            } catch (sessionErr) {
+              // Non-fatal: session tracking is optional
+              console.warn('⚠️ Could not create session record:', sessionErr.message);
+            }
+          }
         }
 
         const sshClient = new Client();
@@ -602,7 +633,7 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
           // Request a PTY shell
           sshClient.shell({ term: 'xterm-256color', cols: cols || 120, rows: rows || 30 }, (err, stream) => {
             if (err) {
-              socket.emit('ssh:error', { message: err.message });
+              socket.emit('ssh:error', { message: err?.message || String(err) || 'Failed to open shell' });
               return;
             }
 
@@ -1819,7 +1850,7 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
           socket.emit('ssh:connected', { sessionId: session ? session._id : null });
 
           // Update connection status only for DB
-          if (connectionId && !connectionId.startsWith('local-')) {
+          if (connectionId && !connectionId.startsWith('local-') && isValidObjectId(connectionId)) {
             CurrentConnectionModel.findByIdAndUpdate(connectionId, {
               status: 'online',
               lastConnected: new Date(),
@@ -1839,7 +1870,7 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
             });
           }
 
-          if (connectionId && !connectionId.startsWith('local-')) {
+          if (connectionId && !connectionId.startsWith('local-') && isValidObjectId(connectionId)) {
             await CurrentConnectionModel.findByIdAndUpdate(connectionId, {
               status: 'offline',
             });
@@ -1938,7 +1969,7 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
         }
 
         // AUTO-MIGRATION: Update DB if we used an old key
-        if (needsMigration && connectionId && !connectionId.startsWith('local-')) {
+        if (needsMigration && connectionId && !connectionId.startsWith('local-') && isValidObjectId(connectionId)) {
             CurrentConnectionModel.findByIdAndUpdate(connectionId, {
               password: originalPass,
               privateKey: originalKey,
@@ -1994,7 +2025,12 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
         if (session.connectionId && !session.connectionId.startsWith('local-')) {
            const { Connection: CurrentConnectionModel } = await getModels(session.dbUri);
            if (CurrentConnectionModel) {
-             await CurrentConnectionModel.findByIdAndUpdate(session.connectionId, { status: 'offline' });
+             try {
+               await CurrentConnectionModel.findByIdAndUpdate(session.connectionId, { status: 'offline' });
+             } catch (updateErr) {
+               // Ignore CastError (e.g. PostgreSQL integer ID on MongoDB model)
+               if (updateErr.name !== 'CastError') console.warn('⚠️ Could not update connection status:', updateErr.message);
+             }
            }
         }
 

@@ -116,8 +116,14 @@ function Divider({ direction, onDrag, isActive }) {
     e.preventDefault();
     e.stopPropagation();
     dragging.current = true;
-    document.body.style.cursor = direction === 'horizontal' ? 'col-resize' : 'row-resize';
+    const cur = direction === 'horizontal' ? 'col-resize' : 'row-resize';
+    document.body.style.cursor = cur;
     document.body.style.userSelect = 'none';
+
+    // Overlay blocks xterm/iframes from stealing pointer events during drag
+    const overlay = document.createElement('div');
+    overlay.style.cssText = `position:fixed;inset:0;z-index:99999;cursor:${cur};`;
+    document.body.appendChild(overlay);
 
     const handleMouseMove = (e) => {
       if (!dragging.current) return;
@@ -128,6 +134,7 @@ function Divider({ direction, onDrag, isActive }) {
       dragging.current = false;
       document.body.style.cursor = '';
       document.body.style.userSelect = '';
+      if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
       window.removeEventListener('mousemove', handleMouseMove);
       window.removeEventListener('mouseup', handleMouseUp);
     };

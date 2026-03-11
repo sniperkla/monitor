@@ -64,7 +64,11 @@ export default function FilesApp({ onEditConnection, initialConnection, initialC
   };
 
   const handleCloseFileManager = (id) => {
-    setTabs(prev => prev.filter(t => t.id !== id));
+    setTabs(prev => {
+      const next = prev.filter(t => t.id !== id);
+      if (next.length === 0) setIsSelecting(true);
+      return next;
+    });
   };
 
   const handleSplitFileManager = (fmData) => {

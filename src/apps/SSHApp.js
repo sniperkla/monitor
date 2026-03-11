@@ -7,7 +7,7 @@ import FileTabs from '@/components/FileTabs';
 
 import ConnectionModal from '@/components/ConnectionModal';
 import { useApp } from '@/context/AppContext';
-import { useState, useRef, lazy, Suspense } from 'react';
+import { useState, useRef, useEffect, lazy, Suspense } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Database, PanelLeft, ChevronLeft, ChevronRight } from 'lucide-react';
 
@@ -26,6 +26,17 @@ export default function SSHApp({ windowId }) {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [modalMode, setModalMode] = useState('add'); // 'add' or 'edit'
   const [selectedConnection, setSelectedConnection] = useState(null);
+
+  // When switching back to the terminal view, signal all TerminalView instances
+  // to re-fit and refresh their viewport (fixes garbled text after tab switch).
+  useEffect(() => {
+    if (state.view === 'terminal') {
+      const timer = setTimeout(() => {
+        window.dispatchEvent(new CustomEvent('terminal:view-activated'));
+      }, 50);
+      return () => clearTimeout(timer);
+    }
+  }, [state.view]);
 
   const handleNewConnection = () => {
     setModalMode('add');

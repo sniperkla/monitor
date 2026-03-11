@@ -84,6 +84,20 @@ function createTar(files) {
   return result;
 }
 
+// Module-level socket pool — survives React remounts (e.g. Split pane restructuring).
+// Keyed by connectionId. On unmount we keep the socket alive for POOL_TTL ms;
+// if the same connectionId remounts within that time, we reuse it seamlessly.
+const POOL_TTL = 6000;
+const _fmSocketPool = typeof window !== 'undefined'
+  ? (window.__fmSocketPool || (window.__fmSocketPool = new Map()))
+  : new Map();
+
+const SFTP_REUSE_EVENTS = [
+  'heartbeat:pong', 'sftp:list', 'sftp:file_content', 'sftp:action_success',
+  'sftp:progress', 'sftp:download_start', 'sftp:download_chunk', 'sftp:download_done',
+  'sftp:error', 'ssh:error', 'ssh:idle_timeout',
+];
+
 export default function FileManager({ 
   connectionId, 
   connection, 
@@ -103,6 +117,8 @@ export default function FileManager({
   const setClipboard = (payload) => appDispatch({ type: 'SET_CLIPBOARD', payload });
   const [currentPath, setCurrentPath] = useState('.');
   const [files, setFiles] = useState([]);
+  const filesRef = useRef([]);
+  useEffect(() => { filesRef.current = files; }, [files]);
   const [loading, setLoading] = useState(true);
   const [status, setStatus] = useState('connecting'); // connecting, ssh_connecting, ready, error
   const [error, setError] = useState(null);
@@ -116,6 +132,7 @@ export default function FileManager({
   const [latency, setLatency] = useState(null);
   const [reconnectNonce, setReconnectNonce] = useState(0);
   const socketRef = useRef(null);
+  const dbUriRef = useRef(appState.dbConfig?.uri || '');
 
   // Context Menu State
   const [contextMenu, setContextMenu] = useState({ visible: false, x: 0, y: 0, file: null });
@@ -180,46 +197,89 @@ export default function FileManager({
   const connectionRef = useRef(connection);
   useEffect(() => { connectionRef.current = connection; }, [connection]);
 
+  // Auto-reconnect when vault unlocks (dbUri becomes available)
+  const statusRef = useRef(status);
+  useEffect(() => { statusRef.current = status; }, [status]);
+
   useEffect(() => {
-    console.log('📂 Initializing FileManager for:', connectionId);
-    // Don't reset if we are just receiving a status update (handled by removing connection from deps)
-    
-    setCurrentPath('.');
-    currentPathRef.current = '.';
-    setLoading(true);
-    setStatus('connecting');
+    const newUri = appState.dbConfig?.uri || '';
+    const prevUri = dbUriRef.current;
+    dbUriRef.current = newUri;
+    // Only trigger reconnect if vault just unlocked (uri was empty, now has value)
+    // and we're currently in an error or connecting state
+    if (newUri && !prevUri && (statusRef.current === 'error' || statusRef.current === 'connecting' || statusRef.current === 'ssh_connecting')) {
+      console.log('🔓 Vault unlocked — retrying SSH connection with private DB URI');
+      setReconnectNonce(n => n + 1);
+    }
+  }, [appState.dbConfig?.uri]);
+
+  useEffect(() => {
+    const poolEntry = _fmSocketPool.get(connectionId);
+    const isReused = !!(poolEntry?.socket?.connected);
+
+    let newSocket;
+    let timeout = null;
+
     setError(null);
 
-    const newSocket = io({
-      path: '/api/socket',
-      transports: ['websocket'],
-      query: {
-        dbUri: appState.dbConfig?.uri || ''
-      }
-    });
+    if (isReused) {
+      // ── SEAMLESS REUSE (e.g. Split pane) — no reconnect ──
+      clearTimeout(poolEntry.cleanupTimer);
+      newSocket = poolEntry.socket;
+      _fmSocketPool.delete(connectionId);
 
-    const timeout = setTimeout(() => {
-      if (status === 'connecting' || status === 'ssh_connecting') {
-        setStatus('error');
-        setError(t('files.status.timeout') || 'Connection timed out. Please check if the server is reachable.');
-        setLoading(false);
-      }
-    }, 15000);
-
-    newSocket.on('connect', () => {
-      console.log('🔌 Socket connected, sending ssh:connect');
-      setStatus('ssh_connecting');
-      // Use ref to get latest connection config without breaking effect
-      newSocket.emit('ssh:connect', { connectionId, connection: connectionRef.current });
-    });
-
-    newSocket.on('ssh:connected', () => {
-      console.log('✅ SSH connected, listing files');
+      // Restore state instantly from pool snapshot
+      const savedPath = poolEntry.currentPath || '.';
+      setCurrentPath(savedPath);
+      currentPathRef.current = savedPath;
+      setFiles(poolEntry.files || []);
+      filesRef.current = poolEntry.files || [];
       setStatus('ready');
-      newSocket.emit('sftp:list', '.');
-      // Update global connection status
-      appDispatch({ type: 'UPDATE_CONNECTION', payload: { _id: connectionId, status: 'online' } });
-    });
+      setLoading(false);
+
+      // Remove stale handlers from previous mount before re-registering
+      SFTP_REUSE_EVENTS.forEach(ev => newSocket.removeAllListeners(ev));
+
+      // Refresh the file list silently
+      newSocket.emit('sftp:list', savedPath);
+
+      console.log('♻️ FileManager: reusing socket for', connectionId, '— no reconnect');
+    } else {
+      // ── NEW CONNECTION ──
+      console.log('📂 Initializing FileManager for:', connectionId);
+      setCurrentPath('.');
+      currentPathRef.current = '.';
+      setLoading(true);
+      setStatus('connecting');
+
+      const currentDbUri = dbUriRef.current;
+      newSocket = io({
+        path: '/api/socket',
+        transports: ['websocket'],
+        query: { dbUri: currentDbUri }
+      });
+
+      timeout = setTimeout(() => {
+        if (statusRef.current === 'connecting' || statusRef.current === 'ssh_connecting') {
+          setStatus('error');
+          setError(t('files.status.timeout') || 'Connection timed out. Please check if the server is reachable.');
+          setLoading(false);
+        }
+      }, 15000);
+
+      newSocket.on('connect', () => {
+        console.log('🔌 Socket connected, sending ssh:connect');
+        setStatus('ssh_connecting');
+        newSocket.emit('ssh:connect', { connectionId, connection: connectionRef.current });
+      });
+
+      newSocket.on('ssh:connected', () => {
+        console.log('✅ SSH connected, listing files');
+        setStatus('ready');
+        newSocket.emit('sftp:list', '.');
+        appDispatch({ type: 'UPDATE_CONNECTION', payload: { _id: connectionId, status: 'online' } });
+      });
+    }
 
     newSocket.on('heartbeat:pong', (sentTimestamp) => {
       const now = Date.now();
@@ -227,8 +287,10 @@ export default function FileManager({
     });
 
     newSocket.on('sftp:list', (data) => {
-      // Validate that the returned list matches the path we are currently looking at
-      if (data.path !== currentPathRef.current) {
+      // Normalize paths before comparing to avoid '.' vs './' mismatches
+      const normReceived = (data.path || '.').replace(/\/$/, '') || '.';
+      const normCurrent  = (currentPathRef.current || '.').replace(/\/$/, '') || '.';
+      if (normReceived !== normCurrent) {
         console.warn('⚠️ Ignoring stale file list for:', data.path, 'current is:', currentPathRef.current);
         return;
       }
@@ -371,12 +433,30 @@ export default function FileManager({
     });
 
     newSocket.on('ssh:error', (err) => {
-      console.error('❌ SSH Error:', err);
-      setStatus('error');
-      setError(err.message);
-      setLoading(false);
+      const errMsg = err?.message || (typeof err === 'string' ? err : null) || 'SSH connection failed';
+      console.error('❌ SSH Error:', errMsg, err);
       clearTimeout(timeout);
+      if (errMsg === 'vault_not_ready') {
+        // Vault not unlocked yet — show waiting state, auto-retry when vault unlocks
+        setStatus('error');
+        setError('vault_not_ready');
+        setLoading(false);
+        return;
+      }
+      setStatus('error');
+      setError(errMsg);
+      setLoading(false);
       appDispatch({ type: 'UPDATE_CONNECTION', payload: { _id: connectionId, status: 'offline' } });
+      // Auto-retry once after 3s on the very first connection attempt (e.g. page refresh race).
+      // IMPORTANT: disconnect the socket first so the pool doesn't reuse a dead-SSH socket
+      // (the WebSocket layer stays connected even when SSH auth fails, which would cause
+      // the retry to pick up the dead socket and show an empty file list forever).
+      if (reconnectNonce === 0) {
+        newSocket.disconnect();
+        setTimeout(() => {
+          setReconnectNonce(n => n + 1);
+        }, 3000);
+      }
     });
 
     newSocket.on('ssh:idle_timeout', () => {
@@ -391,9 +471,25 @@ export default function FileManager({
     setSocket(newSocket);
 
     return () => {
-      console.log('🔌 Cleaning up FileManager socket');
-      newSocket.disconnect();
       clearTimeout(timeout);
+      // Save socket to pool with TTL instead of disconnecting immediately.
+      // If the same connectionId remounts within POOL_TTL ms (e.g. after Split),
+      // it will reuse the socket seamlessly without reconnecting.
+      _fmSocketPool.set(connectionId, {
+        socket: newSocket,
+        status: statusRef.current,
+        currentPath: currentPathRef.current,
+        files: filesRef.current,
+        cleanupTimer: setTimeout(() => {
+          const entry = _fmSocketPool.get(connectionId);
+          if (entry?.socket === newSocket) {
+            console.log('🔌 Pool TTL expired — disconnecting socket for', connectionId);
+            newSocket.emit('ssh:disconnect');
+            newSocket.disconnect();
+            _fmSocketPool.delete(connectionId);
+          }
+        }, POOL_TTL),
+      });
     };
   }, [connectionId, reconnectNonce]); // Removed 'connection' from dependencies to prevent loop
 
@@ -1999,6 +2095,17 @@ export default function FileManager({
           </div>
         )}
         {status === 'error' ? (
+          error === 'vault_not_ready' ? (
+            <div className="h-full flex flex-col items-center justify-center gap-4 text-center p-8">
+              <div className="w-16 h-16 bg-amber-500/10 rounded-full flex items-center justify-center mb-2 animate-pulse">
+                <ShieldAlert size={32} className="text-amber-400" />
+              </div>
+              <h3 className="text-lg font-bold text-[var(--text-primary)]">Waiting for Vault</h3>
+              <p className="text-sm text-[var(--text-muted)] max-w-md">
+                Unlock your private vault to reconnect. The file manager will automatically retry once the vault is open.
+              </p>
+            </div>
+          ) : (
           <div className="h-full flex flex-col items-center justify-center gap-4 text-center p-8">
             <div className="w-16 h-16 bg-red-500/10 rounded-full flex items-center justify-center mb-2">
               <AlertCircle size={32} className="text-red-400" />
@@ -2016,6 +2123,7 @@ export default function FileManager({
               Retry Connection
             </button>
           </div>
+          )
         ) : loading ? (
           <div className="h-full flex flex-col items-center justify-center gap-4">
             <div className="w-12 h-12 border-4 border-blue-500/20 border-t-blue-500 rounded-full animate-spin" />
