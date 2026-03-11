@@ -733,6 +733,8 @@ export default function FileManager({
     const next = (findBar.currentIndex + dir + matches.length) % matches.length;
     setFindBar(prev => ({ ...prev, currentIndex: next }));
     jumpToMatch(matches, next);
+    // Re-focus find input so subsequent Enter presses keep navigating (not inserting newlines)
+    setTimeout(() => findInputRef.current?.focus(), 0);
   }, [editor.content, findBar, computeMatches, jumpToMatch]);
 
   const findReplaceOne = useCallback(() => {

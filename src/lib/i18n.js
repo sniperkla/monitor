@@ -294,6 +294,7 @@ const resources = {
           foreground: "Text Color",
           cursor: "Cursor Color",
           opacity: "Background Opacity",
+          desc: "Customize terminal colors and typography",
         },
         display: {
           title: "Display",
@@ -357,6 +358,7 @@ const resources = {
           license: "License",
           licenseValue: "MIT",
           quote: '"Simplicity is the ultimate sophistication."',
+          desc: "App info & version",
         },
         relay: {
           installerTitle: "Relay Installer",
@@ -1357,7 +1359,12 @@ const resources = {
             top: "ด้านบน (Top)",
             left: "ด้านซ้าย (Left)",
             right: "ด้านขวา (Right)"
-          }
+          },
+          windowLayoutTitle: "รูปแบบการควบคุมหน้าต่าง",
+          windowLayouts: {
+            mac: "สไตล์ MacOS (ซ้าย)",
+            pc: "สไตล์ Windows (ขวา)"
+          },
         },
         terminal: {
           title: "เทอร์มินัล",
@@ -1370,6 +1377,7 @@ const resources = {
           foreground: "สีตัวอักษร",
           cursor: "สีเคอร์เซอร์",
           opacity: "ความโปร่งใสของพื้นหลัง",
+          desc: "ปรับแต่งสีและตัวอักษรของเทอร์มินัล",
         },
         display: {
           title: "จอแสดงผล",
@@ -1433,6 +1441,7 @@ const resources = {
           license: "สัญญาอนุญาต",
           licenseValue: "MIT",
           quote: '"ความเรียบง่ายคือความซับซ้อนขั้นสูงสุด"',
+          desc: "ข้อมูลแอปและเวอร์ชัน",
         },
         relay: {
           installerTitle: "เครื่องมือติดตั้ง Relay",
@@ -1491,6 +1500,7 @@ const resources = {
             tokenCreatedMsg: "สร้าง Relay Token แล้ว โปรดรันคำสั่งด้านล่าง",
             tokenError: "สร้าง Token ไม่สำเร็จ",
             tokenRevoked: "เพิกถอน Relay Token แล้ว",
+            tokenRevokedMsg: "Relay Token ถูกเพิกถอนแล้ว",
           },
           detected: "ถูกตรวจพบ",
           oneClick: "ติดตั้ง / ถอนการติดตั้งในคลิกเดียว",
@@ -2398,6 +2408,7 @@ const resources = {
           foreground: "文字颜色",
           cursor: "光标颜色",
           opacity: "背景不透明度",
+          desc: "自定义终端颜色与字体",
         },
         display: {
           title: "显示",
@@ -2461,6 +2472,7 @@ const resources = {
           license: "许可证",
           licenseValue: "MIT",
           quote: "“至繁归于至简”",
+          desc: "应用信息与版本",
         },
         relay: {
           installerTitle: "Relay 安装向导",
@@ -2515,11 +2527,11 @@ const resources = {
             downloadMsg: "{{filename}} — 双击以 {{mode}} 中继服务",
             presetApplied: "已应用预设",
             presetMsg: "Localhost URI 已设置",
-            tokenCreated: "Token Created",
-            tokenCreatedMsg: "Relay token generated. Run the command below.",
-            tokenError: "Failed to generate token",
-            tokenRevoked: "Revoked",
-            tokenRevokedMsg: "Relay token revoked.",
+            tokenCreated: "Token 已创建",
+            tokenCreatedMsg: "Relay Token 已生成，请运行下方命令。",
+            tokenError: "Token 生成失败",
+            tokenRevoked: "已撤销",
+            tokenRevokedMsg: "Relay Token 已撤销。",
           },
           detected: "已检测到",
           oneClick: "一键安装 / 卸载",
