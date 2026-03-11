@@ -27,10 +27,50 @@ function scoreSkill(skillName, query) {
   for (const kw of keywords) {
     if (q.includes(kw)) score += kw.length; // longer keyword match = higher relevance
   }
-  // Also do a direct name match
-  if (q.includes(skillName.replace(/-/g, ' ')) || q.includes(skillName)) {
-    score += 20;
+  
+  const normalizedName = skillName.toLowerCase().replace(/[-_]/g, ' ');
+  const skillRoot = skillName.toLowerCase().replace(/[-_]/g, '');
+  // Direct name match
+  if (q.includes(normalizedName) || q.includes(skillName.toLowerCase())) {
+    score += 50;
+  } else {
+    // Partial word matching (crucial for skills like "openclaw-install" vs user input "install openclaw")
+    const words = normalizedName.split(' ').filter(w => w.length > 2);
+    let matchedWords = 0;
+    for (const w of words) {
+        if (q.includes(w)) {
+            score += 10;
+            matchedWords++;
+        }
+    }
+    // Boost if multiple words match
+    if (matchedWords > 1) {
+        score += 20;
+    }
   }
+
+  // ── NEGATIVE MATCH: Prevent confusing similar product names ──
+  // e.g. user asks for "openclaw" but skill is "zeroclaw" — they share suffix "claw"
+  // but are different products. Suppress the match.
+  if (score > 0 && skillRoot.length > 4) {
+    const queryWords = q.split(/\s+/).filter(w => w.length > 3);
+    for (const qw of queryWords) {
+      const qwClean = qw.replace(/[-_]/g, '');
+      if (qwClean !== skillRoot && qwClean.length > 4) {
+        const minLen = Math.min(qwClean.length, skillRoot.length);
+        let commonSuffix = 0;
+        for (let ci = 1; ci <= minLen; ci++) {
+          if (qwClean[qwClean.length - ci] === skillRoot[skillRoot.length - ci]) commonSuffix++;
+          else break;
+        }
+        // If they share a 4+ char suffix but are different words → wrong product
+        if (commonSuffix >= 4 && !q.includes(skillRoot)) {
+          return 0; // Kill the score
+        }
+      }
+    }
+  }
+
   return score;
 }
 

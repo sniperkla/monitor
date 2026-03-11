@@ -100,7 +100,9 @@ function osReducer(state, action) {
   switch (action.type) {
     case 'OPEN_WINDOW': {
       // Check if window with same ID already exists (e.g. settings)
-      const existing = state.windows.find(w => w.id === action.payload.id);
+      // Also scan windowsByDesktop in case windows[] fell out of sync.
+      const existing = state.windows.find(w => w.id === action.payload.id)
+        || Object.values(state.windowsByDesktop || {}).flat().find(w => w.id === action.payload.id);
       if (existing) {
         const targetDesktopId = Object.entries(state.windowsByDesktop || {}).find(([, list]) =>
           Array.isArray(list) && list.some(w => w.id === existing.id)
@@ -143,11 +145,14 @@ function osReducer(state, action) {
 
       return {
         ...state,
-        windows: [...state.windows, newWindow],
-        // Add to current desktop
+        windows: [...state.windows.filter(w => w.id !== newWindow.id), newWindow],
+        // Add to current desktop, removing any stale entry with the same id first
         windowsByDesktop: {
           ...state.windowsByDesktop,
-          [state.currentDesktopId]: [...(state.windowsByDesktop[state.currentDesktopId] || []), newWindow],
+          [state.currentDesktopId]: [
+            ...(state.windowsByDesktop[state.currentDesktopId] || []).filter(w => w.id !== newWindow.id),
+            newWindow,
+          ],
         },
         activeWindowId: action.payload.id,
         nextZIndex: state.nextZIndex + 1,
@@ -430,10 +435,20 @@ function osReducer(state, action) {
       let hydratedWindowsByDesktop = state.windowsByDesktop;
       if (action.payload.windowsByDesktop && typeof action.payload.windowsByDesktop === 'object') {
         hydratedWindowsByDesktop = Object.fromEntries(
-          Object.entries(action.payload.windowsByDesktop).map(([desktopId, list]) => [
-            desktopId,
-            (Array.isArray(list) ? list : []).map(hydrateOne).filter(Boolean),
-          ])
+          Object.entries(action.payload.windowsByDesktop).map(([desktopId, list]) => {
+            const seen = new Set();
+            return [
+              desktopId,
+              (Array.isArray(list) ? list : [])
+                .map(hydrateOne)
+                .filter(Boolean)
+                .filter(w => {
+                  if (seen.has(w.id)) return false;
+                  seen.add(w.id);
+                  return true;
+                }),
+            ];
+          })
         );
       }
 

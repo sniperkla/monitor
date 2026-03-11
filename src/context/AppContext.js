@@ -224,7 +224,7 @@ export function AppProvider({ children }) {
       headers['x-vault-tunnel'] = JSON.stringify(state.dbConfig.tunnel);
     }
     return fetch(url, { ...options, headers, credentials: 'include' });
-  }, [state.dbConfig?.uri, state.dbConfig?.tunnel]);
+  }, [state.dbConfig]);
 
   const latestRequestIdRef = useRef(0);
 
@@ -338,6 +338,12 @@ export function AppProvider({ children }) {
       const savedActiveTermId = localStorage.getItem('ssh_monitor_active_terminal_id');
       if (savedActiveTermId) dispatch({ type: 'SET_ACTIVE_TERMINAL', payload: savedActiveTermId });
       
+      const savedActiveDbId = localStorage.getItem('ssh_monitor_active_database_browser_id');
+      if (savedActiveDbId) dispatch({ type: 'SET_ACTIVE_DATABASE_BROWSER', payload: savedActiveDbId });
+      
+      const savedActiveFmId = localStorage.getItem('ssh_monitor_active_file_manager_id');
+      if (savedActiveFmId) dispatch({ type: 'SET_ACTIVE_FILE_MANAGER', payload: savedActiveFmId });
+      
       const savedView = localStorage.getItem('ssh_monitor_active_view');
       if (savedView) dispatch({ type: 'SET_VIEW', payload: savedView });
     } catch (e) {
@@ -353,11 +359,13 @@ export function AppProvider({ children }) {
       localStorage.setItem('ssh_monitor_active_file_managers', JSON.stringify(state.activeFileManagers));
       localStorage.setItem('ssh_monitor_active_database_browsers', JSON.stringify(state.activeDatabaseBrowsers));
       localStorage.setItem('ssh_monitor_active_terminal_id', state.activeTerminalId || '');
+      localStorage.setItem('ssh_monitor_active_database_browser_id', state.activeDatabaseBrowserId || '');
+      localStorage.setItem('ssh_monitor_active_file_manager_id', state.activeFileManagerId || '');
       localStorage.setItem('ssh_monitor_active_view', state.view);
     } catch (e) {
       console.error('Failed to save workspace state:', e);
     }
-  }, [state.activeTerminals, state.activeFileManagers, state.activeDatabaseBrowsers, state.activeTerminalId, state.view]);
+  }, [state.activeTerminals, state.activeFileManagers, state.activeDatabaseBrowsers, state.activeTerminalId, state.activeDatabaseBrowserId, state.activeFileManagerId, state.view]);
 
   return (
     <AppContext.Provider value={{ state, dispatch, fetchConnections, apiFetch }}>

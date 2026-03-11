@@ -128,7 +128,7 @@ export function rewriteUriForTunnel(uri, localPort) {
  */
 export function parseUriHostPort(uri) {
   let remoteHost = 'localhost';
-  let remotePort = uri.startsWith('mysql://') ? 3306 : 27017;
+  let remotePort = uri.startsWith('mysql://') ? 3306 : (uri.startsWith('postgres://') || uri.startsWith('postgresql://')) ? 5432 : 27017;
   try {
     const url = new URL(uri);
     remoteHost = url.hostname || 'localhost';

@@ -79,8 +79,10 @@ export async function GET(request) {
           data[f] = encryptWithPassword(plain, password);
         });
       } else {
-        // Mode is encrypted BUT no password -> Keep current server-side encryption
-        fields.forEach(f => { data[f] = raw[f] || null; });
+        // If they chose 'encrypted' but didn't provide a password, 
+        // we can't export safely because the server key is about to be removed.
+        // For safety, clear these fields or skip.
+        fields.forEach(f => { data[f] = null; });
       }
 
       return data;

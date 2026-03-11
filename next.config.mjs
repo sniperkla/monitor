@@ -1,6 +1,6 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  serverExternalPackages: ['ssh2'],
+  serverExternalPackages: ['ssh2', 'pg', 'pg-native'],
   webpack: (config, { isServer }) => {
     if (!isServer) {
       config.resolve.fallback = {

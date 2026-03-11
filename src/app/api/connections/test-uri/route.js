@@ -1,7 +1,11 @@
 import { NextResponse } from 'next/server';
 import mongoose from 'mongoose';
 import mysql from 'mysql2/promise';
+import { createRequire } from 'module';
 import { checkRateLimit } from '@/lib/serverGuard';
+
+const require = createRequire(import.meta.url);
+const { Client } = require('pg');
 
 /**
  * POST - Test a raw database URI connection
@@ -145,9 +149,36 @@ async function testMySQLConnection(uri) {
 }
 
 async function testPostgresConnection(uri) {
-  // Note: PostgreSQL support would require pg package
-  return NextResponse.json({ 
-    success: false, 
-    error: 'PostgreSQL testing not yet implemented. Please install pg package.' 
-  }, { status: 501 });
+  const client = new Client({ connectionString: uri, connectionTimeoutMillis: 10000 });
+  try {
+    await client.connect();
+    const result = await client.query('SELECT version()');
+    const version = result.rows[0].version.split(' ').slice(0, 2).join(' ');
+    await client.end();
+
+    return NextResponse.json({
+      success: true,
+      message: `Successfully connected to ${version}`,
+      info: version
+    });
+
+  } catch (error) {
+    try { await client.end(); } catch (e) {}
+
+    let errorMessage = error.message;
+    if (error.code === 'ECONNREFUSED') {
+      errorMessage = 'ไม่สามารถเชื่อมต่อกับฐานข้อมูลได้ โปรดตรวจสอบ URI และตรวจสอบว่า PostgreSQL กำลังทำงานอยู่';
+    } else if (error.code === '28P01' || error.code === '28000') {
+      errorMessage = 'การยืนยันตัวตนล้มเหลว ตรวจสอบชื่อผู้ใช้และรหัสผ่าน';
+    } else if (error.code === 'ETIMEDOUT') {
+      errorMessage = 'การเชื่อมต่อหมดเวลา ตรวจสอบที่อยู่โฮสต์และพอร์ต';
+    } else if (error.code === '3D000') {
+      errorMessage = 'ไม่พบฐานข้อมูลที่ระบุ โปรดตรวจสอบชื่อฐานข้อมูล';
+    }
+
+    return NextResponse.json({
+      success: false,
+      error: errorMessage
+    }, { status: 400 });
+  }
 }

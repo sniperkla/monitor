@@ -108,6 +108,12 @@ export async function POST(request, { params }) {
           `SELECT * FROM \`${collection}\` LIMIT ${fetchSize} OFFSET ${offset}`
         );
         pageData = rows;
+      } else if (provider === 'postgres') {
+        const res = await pooled.db.query(
+          `SELECT * FROM "${collection}" LIMIT $1 OFFSET $2`,
+          [fetchSize, offset]
+        );
+        pageData = res.rows;
       }
 
       if (!pageData || pageData.length === 0) {

@@ -23,7 +23,7 @@ export async function GET(request, { params }) {
     const db = await connectDB();
     const repo = new ConnectionRepository(db);
 
-    if (db.type !== 'mysql' && !isValidMongoId(id)) {
+    if (db.type !== 'mysql' && db.type !== 'postgres' && !isValidMongoId(id)) {
       return NextResponse.json({ success: false, error: 'Invalid ID' }, { status: 400 });
     }
 
@@ -53,15 +53,18 @@ export async function PUT(request, { params }) {
     const db = await connectDB();
     const repo = new ConnectionRepository(db);
 
-    if (db.type !== 'mysql' && !isValidMongoId(id)) {
+    if (db.type !== 'mysql' && db.type !== 'postgres' && !isValidMongoId(id)) {
       return NextResponse.json({ success: false, error: 'Invalid ID' }, { status: 400 });
     }
 
     const body = await request.json();
 
     if (body.password) body.password = encrypt(body.password);
+    else delete body.password; // Don't overwrite stored password with empty
     if (body.privateKey) body.privateKey = encrypt(body.privateKey);
+    else delete body.privateKey; // Don't overwrite stored key with empty
     if (body.passphrase) body.passphrase = encrypt(body.passphrase);
+    else delete body.passphrase; // Don't overwrite stored passphrase with empty
     // SSH tunnel secrets
     if (body.sshTunnelPassword) body.sshTunnelPassword = encrypt(body.sshTunnelPassword);
     if (body.sshTunnelPrivateKey) body.sshTunnelPrivateKey = encrypt(body.sshTunnelPrivateKey);
@@ -94,7 +97,7 @@ export async function DELETE(request, { params }) {
     const db = await connectDB();
     const repo = new ConnectionRepository(db);
 
-    if (db.type !== 'mysql' && !isValidMongoId(id)) {
+    if (db.type !== 'mysql' && db.type !== 'postgres' && !isValidMongoId(id)) {
       return NextResponse.json({ success: false, error: 'Invalid ID' }, { status: 400 });
     }
 

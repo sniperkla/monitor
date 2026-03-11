@@ -1,37 +1,20 @@
 import connectDB from '@/lib/mongodb';
-import AiUsage from '@/models/AiUsage';
-import SystemSetting from '@/models/SystemSetting';
-
-/**
- * AI Token Limiter Utility
- * 
- * - Each user gets a separate AiUsage document in the central DB (by email).
- * - The global daily limit is stored in SystemSetting (key: 'ai_limits', value.dailyLimit).
- *   Default: 10,000 tokens/user/day.
- * - Resets every day at midnight UTC+7 (Bangkok timezone).
- * - Token estimation: ~1 token per 3.5 characters.
- */
+import { AiUsageRepository } from '@/lib/repositories/AiUsageRepository';
+import { SystemSettingRepository } from '@/lib/repositories/SystemSettingRepository';
 
 const UTC_PLUS_7_OFFSET_MS = 7 * 60 * 60 * 1000;
 
-/**
- * Get the "day key" in UTC+7 — e.g. "2026-02-18"
- */
 function getDayKeyUTC7(date = new Date()) {
   const shifted = new Date(date.getTime() + UTC_PLUS_7_OFFSET_MS);
   return `${shifted.getUTCFullYear()}-${String(shifted.getUTCMonth() + 1).padStart(2, '0')}-${String(shifted.getUTCDate()).padStart(2, '0')}`;
 }
 
-/**
- * Read the global daily limit from SystemSetting.
- * Falls back to 10,000 if not configured.
- */
-async function getGlobalDailyLimit() {
+async function getGlobalDailyLimit(db) {
   try {
-    // Prefer the newer key: 'ai_limits'
-    const doc = await SystemSetting.findOne({ key: 'ai_limits' });
-    // Backward/alternate support: some deployments used 'ai_usage_global'
-    const legacyDoc = doc ? null : await SystemSetting.findOne({ key: 'ai_usage_global' });
+    const repo = new SystemSettingRepository(db);
+    await repo.init();
+    const doc = await repo.findOne({ key: 'ai_limits' });
+    const legacyDoc = doc ? null : await repo.findOne({ key: 'ai_usage_global' });
 
     const chosen = doc || legacyDoc;
     const value = chosen?.value && typeof chosen.value === 'object' ? chosen.value : {};
@@ -45,52 +28,34 @@ async function getGlobalDailyLimit() {
   }
 }
 
-/**
- * Get or create the AiUsage document for a user.
- * Automatically resets if the UTC+7 day has changed.
- */
-async function getOrCreateUsage(email) {
+async function getOrCreateUsage(email, db) {
   const todayKey = getDayKeyUTC7();
-  let usage = await AiUsage.findOne({ email });
+  const repo = new AiUsageRepository(db);
+  await repo.init();
+  let usage = await repo.findOne({ email });
 
   if (!usage) {
-    // First time — create a fresh record
-    usage = await AiUsage.create({ email, dayKey: todayKey, tokensUsed: 0 });
+    usage = await repo.create({ email, dayKey: todayKey, tokensUsed: 0 });
   } else if (usage.dayKey !== todayKey) {
-    // New day in UTC+7 — reset tokens
     usage.dayKey = todayKey;
     usage.tokensUsed = 0;
     usage.lastUpdated = new Date();
-    await usage.save();
+    await repo.updateOne({ email }, { $set: { dayKey: todayKey, lastUpdated: new Date() } });
   }
 
   return usage;
 }
 
-/**
- * Check if the user can use AI, and optionally record token usage.
- * 
- * Call pattern in routes:
- *   1) Pre-check:  await checkAndTrackAiUsage(email, prompt, '', context) — checks limit, throws if exceeded
- *   2) Post-track: await checkAndTrackAiUsage(email, prompt, answer)     — records actual usage
- * 
- * @param {string} email - User email
- * @param {string} roughPrompt - The prompt text
- * @param {string} roughResponse - The AI response text (empty = pre-check only)
- * @param {string} roughContext - Extra context text sent to AI (terminal output, schema, etc.)
- * @returns {{ allowed: boolean, used: number, limit: number, remaining: number }}
- */
 export async function checkAndTrackAiUsage(email, roughPrompt, roughResponse = '', roughContext = '') {
-  await connectDB(process.env.MONGODB_URI, true);
+  const db = await connectDB(process.env.MONGODB_URI, true);
 
   if (!email) {
     throw new Error('AI usage tracking requires a user email.');
   }
 
-  const dailyLimit = await getGlobalDailyLimit();
-  const usage = await getOrCreateUsage(email);
+  const dailyLimit = await getGlobalDailyLimit(db);
+  const usage = await getOrCreateUsage(email, db);
 
-  // Hard block: user is already at or over limit — don't even estimate
   if (usage.tokensUsed >= dailyLimit) {
     throw new Error(
       `Daily AI limit reached (${usage.tokensUsed}/${dailyLimit} tokens used). Resets at midnight UTC+7.`
@@ -100,19 +65,18 @@ export async function checkAndTrackAiUsage(email, roughPrompt, roughResponse = '
   const estimatedPromptTokens = Math.ceil((roughPrompt.length + roughContext.length) / 3.5);
   const estimatedResponseTokens = roughResponse
     ? Math.ceil(roughResponse.length / 3.5)
-    : 300; // Conservative future-response estimate for pre-check
+    : 300;
 
-  // Pre-check: would this prompt + context + estimated response exceed limit?
   if (usage.tokensUsed + estimatedPromptTokens >= dailyLimit) {
     throw new Error(
       `Daily AI limit reached (${usage.tokensUsed}/${dailyLimit} tokens used). Resets at midnight UTC+7.`
     );
   }
 
-  // Post-track: record actual token usage (only when we have a response)
   if (roughResponse) {
     const tokensConsumed = estimatedPromptTokens + estimatedResponseTokens;
-    await AiUsage.updateOne(
+    const repo = new AiUsageRepository(db);
+    await repo.updateOne(
       { email },
       {
         $inc: { tokensUsed: tokensConsumed },
@@ -130,22 +94,19 @@ export async function checkAndTrackAiUsage(email, roughPrompt, roughResponse = '
   };
 }
 
-/**
- * Get current AI usage for a user (read-only, for UI display).
- */
 export async function getAiUsage(email) {
-  await connectDB(process.env.MONGODB_URI, true);
-
-  const dailyLimit = await getGlobalDailyLimit();
+  const db = await connectDB(process.env.MONGODB_URI, true);
+  const dailyLimit = await getGlobalDailyLimit(db);
 
   if (!email) {
     return { used: 0, limit: dailyLimit };
   }
 
   const todayKey = getDayKeyUTC7();
-  const usage = await AiUsage.findOne({ email });
+  const repo = new AiUsageRepository(db);
+  await repo.init();
+  const usage = await repo.findOne({ email });
 
-  // No record or different day = 0 usage
   if (!usage || usage.dayKey !== todayKey) {
     return { used: 0, limit: dailyLimit };
   }

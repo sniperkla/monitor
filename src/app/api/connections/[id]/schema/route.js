@@ -72,9 +72,25 @@ export async function POST(request, { params }) {
       if (rows.length === 0) return NextResponse.json({ success: true, data: [] });
       const tableKey = Object.keys(rows[0])[0];
       return NextResponse.json({ success: true, data: rows.map(r => r[tableKey]) });
-    }
 
-    return NextResponse.json({ success: false, error: 'Provider not supported' }, { status: 400 });
+    } else if (provider === 'postgres') {
+      const result = await pooled.db.query(
+        `SELECT table_name FROM information_schema.tables
+         WHERE table_schema = 'public' AND table_type = 'BASE TABLE'
+         ORDER BY table_name`
+      );
+
+      // Update status if it's a real DB connection
+      if (id && !id.startsWith('local-')) {
+        try {
+          const { ConnectionRepository } = await import('@/lib/repositories/ConnectionRepository');
+          const repo = new ConnectionRepository(await (await import('@/lib/mongodb')).default());
+          await repo.update(id, { status: 'online', lastConnected: new Date() });
+        } catch (e) {}
+      }
+
+      return NextResponse.json({ success: true, data: result.rows.map(r => r.table_name) });
+    }
   } catch (error) {
     console.error('Schema fetch error:', error);
     

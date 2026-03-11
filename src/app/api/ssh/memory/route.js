@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth/next';
 import { authOptions } from '@/lib/auth';
 import connectDB from '@/lib/mongodb';
-import { getSshMemoryModel } from '@/models/SshMemory';
+import { SshMemoryRepository } from '@/lib/repositories/SshMemoryRepository';
 
 // ── GET /api/ssh/memory?host=xxx ──────────────────────────────────────────────
 export async function GET(req) {
@@ -15,9 +15,10 @@ export async function GET(req) {
     if (!host) return NextResponse.json({ success: false, error: 'host required' }, { status: 400 });
 
     const db = await connectDB();
-    const SshMemory = getSshMemoryModel(db);
+    const repo = new SshMemoryRepository(db);
+    await repo.init();
 
-    const mem = await SshMemory.findOne({ userId: session.user.email, host }).lean();
+    const mem = await repo.findOne({ userId: session.user.email, host });
     return NextResponse.json({ success: true, memory: mem || null });
   } catch (e) {
     console.error('SshMemory GET error:', e);
@@ -40,7 +41,8 @@ export async function PATCH(req) {
     if (!host) return NextResponse.json({ success: false, error: 'host required' }, { status: 400 });
 
     const db = await connectDB();
-    const SshMemory = getSshMemoryModel(db);
+    const repo = new SshMemoryRepository(db);
+    await repo.init();
 
     const setFields = { lastSeenAt: new Date() };
     const pushFields = {};
@@ -105,11 +107,11 @@ export async function PATCH(req) {
     if (Object.keys(addToSetFields).length) update.$addToSet = addToSetFields;
     if (Object.keys(pushFields).length)    update.$push     = pushFields;
 
-    const mem = await SshMemory.findOneAndUpdate(
+    const mem = await repo.findOneAndUpdate(
       { userId: session.user.email, host },
       update,
       { upsert: true, new: true, setDefaultsOnInsert: true }
-    ).lean();
+    );
 
     return NextResponse.json({ success: true, memory: mem });
   } catch (e) {
@@ -129,8 +131,9 @@ export async function DELETE(req) {
     if (!host) return NextResponse.json({ success: false, error: 'host required' }, { status: 400 });
 
     const db = await connectDB();
-    const SshMemory = getSshMemoryModel(db);
-    await SshMemory.deleteOne({ userId: session.user.email, host });
+    const repo = new SshMemoryRepository(db);
+    await repo.init();
+    await repo.deleteOne({ userId: session.user.email, host });
     return NextResponse.json({ success: true });
   } catch (e) {
     return NextResponse.json({ success: false, error: e.message }, { status: 500 });

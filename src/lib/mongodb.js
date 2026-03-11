@@ -1,8 +1,12 @@
 import mongoose from "mongoose";
 import { headers } from "next/headers";
 import mysql from "mysql2/promise";
+import { createRequire } from 'module';
 import { getToken } from 'next-auth/jwt';
 import { createSSHTunnel, rewriteUriForTunnel, parseUriHostPort } from './sshTunnel.js';
+
+const require = createRequire(import.meta.url);
+const { Pool: PgPool } = require('pg');
 
 /**
  * Global is used here to maintain a cached connection across hot reloads
@@ -24,7 +28,10 @@ export async function getUriFromRequest() {
   try {
     const headersList = await headers();
     const clientUri = headersList.get('x-mongodb-uri');
-    if (clientUri) return clientUri;
+    const supported = ['mongodb://', 'mongodb+srv://', 'mysql://', 'postgres://', 'postgresql://'];
+    if (clientUri && supported.some(p => clientUri.startsWith(p))) {
+      return clientUri;
+    }
   } catch (e) {}
   return process.env.MONGODB_URI;
 }
@@ -139,12 +146,17 @@ async function getDynamicConnection(uri, tunnelConfig = null) {
       cachePrefix = `relay:${relayInfo.userId}:`;
       console.log(`🔗 [Local Relay] ${uri} → 127.0.0.1:${relayInfo.port}`);
     } else if (isLocalhost) {
-      // Localhost URI but no relay active — connecting directly would silently
-      // hit the SERVER's own local MongoDB, not the user's machine. Reject.
-      throw new Error(
-        'Local Relay Agent is not connected. ' +
-        'Run local-relay.js on your machine to access localhost databases.'
-      );
+      // Localhost URI but no relay active.
+      // In development the server itself is on localhost, so direct access is fine.
+      // In production, reject to avoid silently hitting the server's own loopback.
+      const isDev = process.env.NODE_ENV === 'development';
+      if (!isDev) {
+        throw new Error(
+          'Local Relay Agent is not connected. ' +
+          'Run local-relay.js on your machine to access localhost databases.'
+        );
+      }
+      // Dev mode: connect directly (server is on same machine as DB)
     }
   }
 
@@ -191,6 +203,27 @@ async function getDynamicConnection(uri, tunnelConfig = null) {
     return conn;
   }
 
+  if (connectUri.startsWith('postgres://') || connectUri.startsWith('postgresql://')) {
+    const pool = new PgPool({ connectionString: connectUri, max: 5, connectionTimeoutMillis: 10000 });
+    // Eagerly verify the connection is reachable
+    const testClient = await pool.connect();
+    testClient.release();
+    const conn = {
+      type: 'postgres',
+      pool,
+      query: (sql, params) => pool.query(sql, params),
+    };
+    connectionPool.set(cacheKey, conn);
+    return conn;
+  }
+
+  if (!connectUri.startsWith('mongodb://') && !connectUri.startsWith('mongodb+srv://')) {
+    throw new Error(
+      `Unsupported database URI scheme: "${connectUri.split(':')[0]}://". ` +
+      'Supported schemes: mongodb://, mongodb+srv://, mysql://'
+    );
+  }
+
   // Default to MongoDB
   const useTunnel = tunnelConfig?.enabled || cachePrefix.startsWith('relay:');
   const opts = {
@@ -205,22 +238,6 @@ async function getDynamicConnection(uri, tunnelConfig = null) {
 }
 
 /**
- * Normalise a MongoDB URI so that hostname variants (localhost, 127.0.0.1,
- * [::1]) and default-port omission all produce the same canonical string.
- * This lets us reliably detect when the Vault URI points at the same
- * database as the MONGODB_URI env var.
- */
-function normalizeMongoUri(raw) {
-  if (!raw) return '';
-  let u = raw.trim();
-  // Unify localhost variants
-  u = u.replace(/\b(localhost|127\.0\.0\.1|\[::1\])\b/gi, '127.0.0.1');
-  // Strip default MongoDB port (:27017) so "host" and "host:27017" match
-  u = u.replace(/:27017(?=\/|$)/, '');
-  return u;
-}
-
-/**
  * Main entry point for database connections.
  * @param {string} uri - Optional URI to connect to.
  * @param {boolean} isCenter - If true, connects to the global default instance.
@@ -228,17 +245,11 @@ function normalizeMongoUri(raw) {
 async function connectDB(uri = null, isCenter = false) {
   const targetUri = uri || (await getUriFromRequest());
 
-  // If this is the center DB (User storage), use the default connection.
-  // Compare both exact match AND normalised form so that
-  // "mongodb://localhost:27017/db" and "mongodb://127.0.0.1:27017/db" are
-  // recognised as the same center database.
-  const envUri = process.env.MONGODB_URI;
-  const isCenterUri =
-    isCenter ||
-    targetUri === envUri ||
-    (envUri && normalizeMongoUri(targetUri) === normalizeMongoUri(envUri));
+  // Non-MongoDB URIs must always go through the dynamic connection path
+  const isNonMongo = targetUri && !targetUri.startsWith('mongodb://') && !targetUri.startsWith('mongodb+srv://');
 
-  if (isCenterUri) {
+  // If this is the center DB (User storage), use the default connection
+  if (!isNonMongo && (isCenter || targetUri === process.env.MONGODB_URI)) {
     return connectCenter(targetUri);
   }
 

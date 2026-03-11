@@ -400,7 +400,7 @@ export default function Taskbar() {
 
         {/* Running Apps */}
         <div className={`flex-1 flex ${isVertical ? 'flex-col overflow-y-auto no-scrollbar py-1' : 'flex-row items-center overflow-x-auto no-scrollbar px-2'} gap-1.5 relative ${isVertical ? 'items-center' : ''}`}>
-          {(windowsByDesktop[currentDesktopId] || windows).map(win => (
+          {(windowsByDesktop[currentDesktopId] || windows).filter((win, idx, arr) => arr.findIndex(w => w.id === win.id) === idx).map(win => (
             <button
               key={win.id}
               onClick={() => {

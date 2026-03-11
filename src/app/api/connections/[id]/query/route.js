@@ -152,9 +152,41 @@ export async function POST(request, { params }) {
           result = rows;
         }
       return NextResponse.json({ success: true, data: result });
-    }
 
-    return NextResponse.json({ success: false, error: 'Provider not supported' }, { status: 400 });
+    } else if (provider === 'postgres') {
+      let result;
+      if (typeof query === 'object' && query.action) {
+        const { action, collection, data, filter } = query;
+        if (!collection) throw new Error('Table name is required');
+
+        if (action === 'find') {
+          const res = await pooled.db.query(`SELECT * FROM "${collection}" LIMIT 100`);
+          result = res.rows;
+        } else if (action === 'insertOne') {
+          const columns = Object.keys(data);
+          const placeholders = columns.map((_, i) => `$${i + 1}`).join(', ');
+          const sql = `INSERT INTO "${collection}" (${columns.map(c => `"${c}"`).join(', ')}) VALUES (${placeholders}) RETURNING *`;
+          const res = await pooled.db.query(sql, Object.values(data));
+          result = res.rows[0];
+        } else if (action === 'updateOne') {
+          const columns = Object.keys(data);
+          const setClause = columns.map((c, i) => `"${c}" = $${i + 1}`).join(', ');
+          const filterKey = Object.keys(filter)[0];
+          const sql = `UPDATE "${collection}" SET ${setClause} WHERE "${filterKey}" = $${columns.length + 1} RETURNING *`;
+          const res = await pooled.db.query(sql, [...Object.values(data), filter[filterKey]]);
+          result = res.rows[0];
+        } else if (action === 'deleteOne') {
+          const filterKey = Object.keys(filter)[0];
+          const sql = `DELETE FROM "${collection}" WHERE "${filterKey}" = $1 RETURNING *`;
+          const res = await pooled.db.query(sql, [filter[filterKey]]);
+          result = res.rows[0];
+        }
+      } else if (typeof query === 'string') {
+        const res = await pooled.db.query(query);
+        result = res.rows;
+      }
+      return NextResponse.json({ success: true, data: result });
+    }
   } catch (error) {
     console.error('Query execution error:', error);
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });

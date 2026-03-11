@@ -3,9 +3,9 @@ import { getServerSession } from 'next-auth/next';
 import { authOptions } from '@/lib/auth';
 import { checkRateLimit } from '@/lib/serverGuard';
 import connectDB from '@/lib/mongodb';
-import SystemSetting from '@/models/SystemSetting';
-import AiHistory from '@/models/AiHistory';
-import { getSshMemoryModel } from '@/models/SshMemory';
+import { SystemSettingRepository } from '@/lib/repositories/SystemSettingRepository';
+import { AiHistoryRepository } from '@/lib/repositories/AiHistoryRepository';
+import { SshMemoryRepository } from '@/lib/repositories/SshMemoryRepository';
 import { checkAndTrackAiUsage } from '@/utils/aiLimiter';
 import { readdir, readFile } from 'fs/promises';
 import { join } from 'path';
@@ -156,6 +156,32 @@ function matchSkills(skills, prompt, context) {
 
     const hasPrimaryInPrompt = primary.length ? primary.some(kw => promptText.includes(kw)) : true;
 
+    // ── NEGATIVE MATCH: Prevent confusing similar product names ──
+    // If the prompt mentions a specific product name (e.g. "openclaw") that is NOT
+    // this skill's name (e.g. "zeroclaw"), suppress the match even if words overlap.
+    // Extract potential product names from prompt: words that look like proper nouns / tool names
+    const promptWords = promptText.split(/\s+/).filter(w => w.length > 3);
+    let negativePenalty = false;
+    for (const pw of promptWords) {
+      // Check if the prompt word shares a suffix/root with the skill name but ISN'T the skill name
+      // e.g. "openclaw" shares "claw" with "zeroclaw" but they are different products
+      const skillRoot = skillName.replace(/[-_]/g, '');
+      const pwClean = pw.replace(/[-_]/g, '');
+      if (pwClean !== skillRoot && pwClean.length > 4 && skillRoot.length > 4) {
+        // Check if they share a common suffix of 4+ chars (e.g. "claw")
+        const minLen = Math.min(pwClean.length, skillRoot.length);
+        let commonSuffix = 0;
+        for (let ci = 1; ci <= minLen; ci++) {
+          if (pwClean[pwClean.length - ci] === skillRoot[skillRoot.length - ci]) commonSuffix++;
+          else break;
+        }
+        if (commonSuffix >= 4 && !promptText.includes(skillRoot)) {
+          negativePenalty = true;
+          break;
+        }
+      }
+    }
+
     // Scoring (prompt weighted much higher than context)
     let score = 0;
     if (nameHitPrompt) score += 10;
@@ -165,6 +191,8 @@ function matchSkills(skills, prompt, context) {
 
     // If primary keywords are defined, require prompt primary match.
     if (!hasPrimaryInPrompt) score = 0;
+    // If negative product name match, suppress
+    if (negativePenalty) score = 0;
 
     // Threshold to avoid accidental matches (e.g. URLs causing ssl-related hits)
     if (score >= 6) scored.push({ skill, score });
@@ -183,7 +211,8 @@ async function handleSshMemoryExtraction(userId, host, answer, goal = '') {
 
   try {
     const db = await connectDB();
-    const SshMemory = getSshMemoryModel(db);
+    const repo = new SshMemoryRepository(db);
+    await repo.init();
 
     const factMatch = answer.match(/<fact>([\s\S]*?)<\/fact>/i);
     const reminderMatch = answer.match(/<reminder>([\s\S]*?)<\/reminder>/i);
@@ -261,7 +290,7 @@ async function handleSshMemoryExtraction(userId, host, answer, goal = '') {
     if (Object.keys(addToSetFields).length) update.$addToSet = addToSetFields;
     if (Object.keys(pushFields).length) update.$push = pushFields;
 
-    await SshMemory.findOneAndUpdate(
+    await repo.findOneAndUpdate(
       { userId, host },
       update,
       { upsert: true, new: true, setDefaultsOnInsert: true }
@@ -301,7 +330,10 @@ export async function POST(req) {
       return NextResponse.json({ success: false, error: limitErr.message }, { status: 429 });
     }
 
-    const limitsSetting = await SystemSetting.findOne({ key: 'ai_limits' });
+    const centralDb = await connectDB();
+    const settingsRepo = new SystemSettingRepository(centralDb);
+    await settingsRepo.init();
+    const limitsSetting = await settingsRepo.findOne({ key: 'ai_limits' });
     const limitsValue = limitsSetting?.value && typeof limitsSetting.value === 'object' ? limitsSetting.value : {};
     const rateValue = limitsValue?.rate && typeof limitsValue.rate === 'object' ? limitsValue.rate : {};
     const sshPerMinute = Number.isFinite(Number(rateValue.sshPerMinute)) ? Math.max(1, Number(rateValue.sshPerMinute)) : 30;
@@ -318,7 +350,6 @@ export async function POST(req) {
       );
     }
 
-    await connectDB();
 
     let apiKeys = [];
     let currentIndex = 0;
@@ -330,13 +361,13 @@ export async function POST(req) {
     };
 
     try {
-      const keysSetting = await SystemSetting.findOne({ key: 'ai_api_keys' });
+      const keysSetting = await settingsRepo.findOne({ key: 'ai_api_keys' });
       if (keysSetting && keysSetting.value && Array.isArray(keysSetting.value.keys) && keysSetting.value.keys.length > 0) {
         apiKeys = keysSetting.value.keys;
         currentIndex = keysSetting.value.currentIndex || 0;
       }
 
-      const configSetting = await SystemSetting.findOne({ key: 'ai_config' });
+      const configSetting = await settingsRepo.findOne({ key: 'ai_config' });
       if (configSetting && configSetting.value) {
         aiConfig = { ...aiConfig, ...configSetting.value };
       }
@@ -388,7 +419,7 @@ export async function POST(req) {
     const skillBlock = matchedSkills.length > 0
       ? `\n📚 LOADED SKILLS (${matchedSkills.length} matched from ${allSkills.length} available):\n${matchedSkills.map(s => `--- ${s.name} [${s.source}] ---\n${s.content}`).join('\n\n')}\n`
       : allSkills.length > 0 
-        ? `\n📚 SKILLS: ${allSkills.length} skills available but none matched your request. Available: ${allSkills.map(s => s.name).join(', ')}\n`
+        ? `\n📚 SKILLS: ${allSkills.length} skills available but none matched. Use <search_skills> to find relevant skills.\n`
         : `\n📚 SKILLS: No skills installed. Add .md files to /skills folder or run: npx skills add NeverSight/skills_feed --skill <name>\n`;
 
     const normalizeAiXml = (xml) => {
@@ -476,14 +507,15 @@ ${safeContext || 'none'}`;
     const aiTask = typeof safePrefs.aiTask === 'string' ? safePrefs.aiTask : 'ssh';
 
     // ── LOAD SSH MEMORY ──
-    const db = await connectDB(customerDbUri);
-    const SshMemory = getSshMemoryModel(db);
+    const dbConnection = await connectDB(customerDbUri);
+    const repo = new SshMemoryRepository(dbConnection);
+    await repo.init();
 
     let memBlock = '';
     let memoryDoc = null;
     try {
       if (host) {
-        memoryDoc = await SshMemory.findOne({ userId: session.user.email, host }).lean();
+        memoryDoc = await repo.findOne({ userId: session.user.email, host });
         if (memoryDoc) {
           memBlock = `[SERVER BRAIN - PERSISTENT FACTS]
 OS: ${memoryDoc.os || 'unknown'}
@@ -1183,7 +1215,8 @@ Now output the <diff> needed to complete the request.`;
                     console.warn(`AI Rate limit hit on key index ${tryIndex} for model ${currentModel}. Rotating...`);
                 } else {
                     const errBody = await response.text().catch(() => '');
-                    throw new Error(`AI service error (${response.status}): ${errBody.slice(0, 200)}`);
+                    const prefix = String(apiKey || '').slice(0, 10);
+                    throw new Error(`AI service error (${response.status}) [Key: ${prefix}...]: ${errBody.slice(0, 200)}`);
                 }
             } catch (err) {
                 lastError = err;
@@ -1198,10 +1231,8 @@ Now output the <diff> needed to complete the request.`;
     if (successfulIndex !== -1) {
         if (apiKeys.length > 1 && successfulIndex !== 999) {
              const nextIndex = (successfulIndex + 1) % apiKeys.length;
-             SystemSetting.updateOne(
-               { key: 'ai_api_keys' },
-               { $set: { 'value.currentIndex': nextIndex } }
-             ).catch(e => console.error('Failed to update API key rotation index', e));
+             settingsRepo.update({ key: 'ai_api_keys' }, { 'value.currentIndex': nextIndex })
+               .catch(e => console.error('Failed to update API key rotation index', e));
         }
         
         let usageInfo = null;
@@ -1210,11 +1241,12 @@ Now output the <diff> needed to complete the request.`;
           
           // PERSIST HISTORY
           try {
+            const historyRepo = new AiHistoryRepository(centralDb);
+            await historyRepo.init();
             const missionTitle = contextPack?.goal || prompt.slice(0, 50);
             
-            // Find or update recent mission (within 1 hour)
             const oneHourAgo = new Date(Date.now() - 3600000);
-            let historyRecord = await AiHistory.findOne({
+            let historyRecord = await historyRepo.findOne({
               userId: session.user.email,
               type: 'terminal',
               title: missionTitle,
@@ -1226,12 +1258,12 @@ Now output the <diff> needed to complete the request.`;
                 { role: 'assistant', content: answer || '(no response)', metadata: { usedModel: actualUsedModel }, timestamp: new Date() }
             ];
             if (historyRecord) {
-              await AiHistory.updateOne(
+              await historyRepo.updateOne(
                 { _id: historyRecord._id },
                 { $push: { messages: { $each: newMessagePair } }, $set: { lastActive: new Date() } }
               );
             } else {
-              await AiHistory.create({
+              await historyRepo.create({
                 userId: session.user.email,
                 type: 'terminal',
                 title: missionTitle,

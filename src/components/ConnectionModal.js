@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useRef, useEffect, useCallback } from 'react';
+import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { useApp } from '@/context/AppContext';
 import { useOS } from '@/context/OSContext';
@@ -39,6 +39,17 @@ export default function ConnectionModal({ onClose, editConnection = null }) {
   const [isVerifying, setIsVerifying] = useState(false);
   const [revealTarget, setRevealTarget] = useState(null); // 'password' | 'privateKey' | 'passphrase'
   const [revealedSecrets, setRevealedSecrets] = useState({}); // { password: '...', ... }
+  
+  // OS Detection for helpful hints
+  const detectedOS = useMemo(() => {
+    if (typeof navigator === 'undefined') return 'unknown';
+    const ua  = navigator.userAgent || '';
+    const plt = (navigator.userAgentData?.platform || navigator.platform || '').toLowerCase();
+    if (/win/i.test(plt) || /windows/i.test(ua))  return 'windows';
+    if (/mac/i.test(plt) || /mac os/i.test(ua))   return 'macos';
+    if (/linux/i.test(plt) || /linux/i.test(ua))  return 'linux';
+    return 'unknown';
+  }, []);
 
   useEffect(() => {
     setMounted(true);
@@ -341,6 +352,16 @@ export default function ConnectionModal({ onClose, editConnection = null }) {
   const handleSubmit = async (e) => {
     e.preventDefault();
     setIsSubmitting(true);
+
+    // Validate: privateKey auth needs a key (either newly entered or already stored in DB)
+    if (form.type === 'ssh' && form.authType === 'privateKey' && !form.privateKey) {
+      const hasStoredKey = editConnection?.storage === 'db' && editConnection?.privateKey;
+      if (!hasStoredKey) {
+        addNotification({ title: 'Missing Private Key', message: 'Please upload or paste your private key before saving.', type: 'error' });
+        setIsSubmitting(false);
+        return;
+      }
+    }
 
     const payload = {
       name: form.name,
@@ -813,6 +834,11 @@ export default function ConnectionModal({ onClose, editConnection = null }) {
                     onChange={(e) => handleChange('username', e.target.value)}
                     required={(form.type !== 'database' || form.dbProvider !== 'sqlite') && form.authType !== 'none'}
                   />
+                  {form.dbProvider === 'postgres' && detectedOS === 'macos' && (
+                    <p className="text-[9px] text-amber-500 font-medium mt-1">
+                      ✨ On Mac, your username might be <code className="bg-amber-500/10 px-1 rounded text-amber-600">katanyoo</code> instead of "postgres"
+                    </p>
+                  )}
                 </div>
 
                 {form.type === 'database' && (
@@ -1085,7 +1111,7 @@ export default function ConnectionModal({ onClose, editConnection = null }) {
           {[
             { label: 'MongoDB', color: '#10b981', uri: 'mongodb://root:password@127.0.0.1:27017/admin?authSource=admin' },
             { label: 'MySQL', color: '#00758f', uri: 'mysql://root:password@127.0.0.1:3306/my_database' },
-            { label: 'Postgres', color: '#336791', uri: 'postgresql://postgres:password@127.0.0.1:5432/postgres' },
+            { label: 'Postgres', color: '#336791', uri: `postgresql://${detectedOS === 'macos' ? 'katanyoo' : 'postgres'}:password@127.0.0.1:5432/postgres` },
           ].map(preset => (
             <button
               key={preset.label}

@@ -6,7 +6,9 @@ import {
   Folder, File as FileIcon, ChevronLeft, ChevronRight, ChevronUp, ChevronDown, RefreshCw, 
   Download, Upload, Trash2, FolderPlus, Search, Grid, List as ListIcon,
   AlertCircle, Edit, FileText, X, Save, AlertTriangle, 
-  Copy, Scissors, Clipboard, Wifi, AtSign, Replace, Columns, Rows
+  Copy, Scissors, Clipboard, Wifi, AtSign, Replace, Columns, Rows,
+  Sparkles, Brain, Clock, Settings2, Languages, CornerDownLeft, 
+  MessagesSquare, BrainCircuit, ShieldAlert
 } from 'lucide-react';
 import io from 'socket.io-client';
 import * as fflate from 'fflate';
@@ -91,7 +93,11 @@ export default function FileManager({
   onSplit
 }) {
   const { t } = useTranslation();
-  const { state: appState, dispatch: appDispatch } = useApp();
+  const { state: appState, dispatch: appDispatch, apiFetch } = useApp();
+  useEffect(() => {
+    console.log('FileManager scope apiFetch:', typeof apiFetch, !!apiFetch);
+  }, [apiFetch]);
+
   const { state: osState, addNotification, removeNotification, updateNotification, showConfirm, showPrompt } = useOS();
   const { clipboard } = appState;
   const setClipboard = (payload) => appDispatch({ type: 'SET_CLIPBOARD', payload });
@@ -133,6 +139,25 @@ export default function FileManager({
   const lastDownloadRef = useRef(null); // { file, offset }
   const transferRef = useRef(null); // Keep a ref of transfer for loop cancellation
   const deleteBatchRef = useRef({ count: 0, total: 0, toastId: null });
+  
+  // AI State
+  const [aiOpen, setAiOpen] = useState(false);
+  const [aiPrompt, setAiPrompt] = useState('');
+  const [aiAnswer, setAiAnswer] = useState(null);
+  const [isAiLoading, setIsAiLoading] = useState(false);
+  const [aiError, setAiError] = useState(null);
+  const [aiHistoryOpen, setAiHistoryOpen] = useState(false);
+  const [aiSettingsOpen, setAiSettingsOpen] = useState(false);
+  const [autoTranslate, setAutoTranslate] = useState(false);
+  const [aiHistory, setAiHistory] = useState([]);
+  const [aiPanelSize, setAiPanelSize] = useState({ width: 380, height: 480 });
+  const [aiPanelPos, setAiPanelPos] = useState({ x: 200, y: 100 });
+  const [aiPanelContentRef] = [useRef(null)];
+  const [aiMode, setAiMode] = useState('manual'); // 'manual' | 'auto'
+  const [autoMode, setAutoMode] = useState(false);
+  const sshAiPrefs = osState?.sshAiPrefs || { preferSudo: true, aiModel: 'auto' };
+  const { setSshAiPrefs } = useOS();
+  const isLoggedIn = true; // Assume logged in for now to show AI button
 
   // Ref to track latest currentPath and active toast
   const currentPathRef = useRef(currentPath);
@@ -510,12 +535,61 @@ export default function FileManager({
     const newPos = mentionState.triggerPos + insertion.length;
     setEditor(prev => ({ ...prev, content: newContent, cursorPos: newPos }));
     setMentionState({ active: false, query: '', results: [], selectedIndex: 0, triggerPos: 0 });
+    
     setTimeout(() => {
       if (editorTextareaRef.current) {
         editorTextareaRef.current.focus();
         editorTextareaRef.current.setSelectionRange(newPos, newPos);
       }
     }, 0);
+  };
+
+  const handleAskAI = async (e) => {
+    if (e) e.preventDefault();
+    if (!aiPrompt.trim() || isAiLoading) return;
+
+    setIsAiLoading(true);
+    setAiError(null);
+    setAiAnswer(null);
+
+    if (typeof apiFetch === 'undefined') {
+      console.error('CRITICAL: apiFetch is not defined in handleAskAI scope!');
+      setAiError('System error: apiFetch is not defined. Please refresh.');
+      setIsAiLoading(false);
+      return;
+    }
+
+    try {
+      const res = await apiFetch(`/api/connections/${connectionId}/ai-query`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          prompt: aiPrompt,
+          provider: 'files', // Distinguish from db
+          schemaName: currentPath,
+          sampleData: files.slice(0, 50),
+          model: sshAiPrefs.aiModel || 'auto',
+          prefs: sshAiPrefs
+        })
+      });
+
+      const data = await res.json();
+      if (data.success) {
+        setAiAnswer(data.query);
+        // Extract thought if exists
+        const thoughtMatch = data.query.match(/<thought>([\s\S]*?)<\/thought>/i);
+        const cleanAnswer = data.query.replace(/<thought>[\s\S]*?<\/thought>/gi, '').replace(/<query>|<\/query>/gi, '').trim();
+        
+        setAiHistory([{ prompt: aiPrompt, answer: cleanAnswer, thought: thoughtMatch ? thoughtMatch[1] : null }, ...aiHistory].slice(0, 10));
+        setAiPrompt('');
+      } else {
+        setAiError(data.error || 'AI failed to generate response');
+      }
+    } catch (err) {
+      setAiError(err.message);
+    } finally {
+      setIsAiLoading(false);
+    }
   };
 
   // ── Find / Replace helpers ────────────────────────────────────────────────
@@ -2097,6 +2171,142 @@ export default function FileManager({
           <span className={status === 'ready' ? 'text-emerald-500' : status === 'error' ? 'text-rose-500' : 'text-amber-500'}>
             {status === 'ready' ? t('files.status.sftpActive') : status === 'error' ? t('files.status.connFailed') : t('files.status.initializing')}
           </span>
+          
+          {/* AI Helper Button */}
+          <div className="relative">
+            <button
+               onClick={() => { setAiOpen(!aiOpen); setAiHasOpenedOnce(true); }}
+               className={`flex items-center gap-1.5 px-2 py-1 rounded transition-all ${aiOpen ? 'bg-indigo-600 text-white' : 'hover:bg-white/5 text-[var(--accent-indigo)]'}`}
+            >
+               <Sparkles size={12} className={isAiLoading ? 'animate-spin' : ''} />
+               <span className="font-bold">AI</span>
+            </button>
+
+            {/* AI Panel */}
+            <AnimatePresence>
+               {aiOpen && (
+                 <motion.div
+                   initial={{ opacity: 0, scale: 0.95, y: 10 }}
+                   animate={{ opacity: 1, scale: 1, y: 0 }}
+                   exit={{ opacity: 0, scale: 0.95, y: 10 }}
+                   className="absolute bottom-full right-0 mb-2 w-80 bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-xl shadow-2xl p-4 z-50 flex flex-col gap-3"
+                   style={{ maxHeight: '70vh' }}
+                 >
+                    <div className="flex items-center justify-between border-b border-white/5 pb-2">
+                       <div className="flex items-center gap-2">
+                          <BrainCircuit size={16} className="text-indigo-400" />
+                          <span className="text-xs font-bold uppercase tracking-wider">{t('ai.title')}</span>
+                       </div>
+                       <div className="flex gap-1">
+                          <button onClick={() => setAiSettingsOpen(!aiSettingsOpen)} className={`p-1 rounded hover:bg-white/5 ${aiSettingsOpen ? 'text-indigo-400' : 'text-white/40'}`} title={t('ai.settings')}><Settings2 size={14} /></button>
+                          <button onClick={() => setAiOpen(false)} className="p-1 rounded hover:bg-white/5 text-white/40"><X size={14} /></button>
+                       </div>
+                    </div>
+
+                    {aiSettingsOpen ? (
+                       <div className="flex flex-col gap-3 animate-in fade-in slide-in-from-top-1 duration-200 overflow-y-auto custom-scrollbar pr-1" style={{ maxHeight: '300px' }}>
+                          <span className="text-[10px] font-bold text-white/40 uppercase tracking-widest">{t('ai.settings')}</span>
+                          
+                          <div className="space-y-3">
+                            <div className="flex items-center justify-between text-[11px]">
+                               <span>{t('ai.aiModel')}</span>
+                               <select value={sshAiPrefs.aiModel || 'auto'} onChange={(e) => setSshAiPrefs({ aiModel: e.target.value })} className="bg-black/40 border border-white/10 rounded px-1 py-0.5 outline-none text-[10px]">
+                                  <option value="auto">Auto</option>
+                                  <option value="llama-3.1-8b-instant">Llama 3.1 8B</option>
+                                  <option value="meta-llama/llama-4-scout-17b-16e-instruct">Llama 4 Scout</option>
+                                  <option value="manual">Manual Configuration</option>
+                               </select>
+                            </div>
+
+                            {sshAiPrefs.aiModel === 'manual' && (
+                               <div className="space-y-2 pt-2 border-t border-white/10">
+                                  <div className="flex flex-col gap-2">
+                                     <span className="text-[9px] font-bold text-purple-400/60 uppercase tracking-tighter">Quick Presets</span>
+                                     <div className="flex gap-2">
+                                        <button onClick={() => setSshAiPrefs({ aiEndpoint: 'https://openrouter.ai/api/v1/chat/completions', aiCustomModel: 'anthropic/claude-3.5-sonnet' })} className="text-[9px] px-2 py-1.5 rounded-lg bg-indigo-500/20 text-indigo-400 hover:bg-indigo-500/30 border border-indigo-500/30 transition-all active:scale-95 whitespace-nowrap">
+                                          🌐 OpenRouter
+                                        </button>
+                                        <button onClick={() => setSshAiPrefs({ aiEndpoint: 'https://api.openai.com/v1/chat/completions', aiCustomModel: 'gpt-4o' })} className="text-[9px] px-2 py-1.5 rounded-lg bg-emerald-500/20 text-emerald-400 hover:bg-emerald-500/30 border border-emerald-500/30 transition-all active:scale-95 whitespace-nowrap">
+                                          🟢 OpenAI
+                                        </button>
+                                     </div>
+                                  </div>
+                                  <input type="text" placeholder="Endpoint URL" value={sshAiPrefs.aiEndpoint || ''} onChange={(e) => setSshAiPrefs({ aiEndpoint: e.target.value })} className="w-full bg-black/40 border border-white/10 rounded px-2 py-1 text-[10px] outline-none focus:border-indigo-500/50" />
+                                  <input type="password" placeholder="API Key" value={sshAiPrefs.aiApiKey || ''} onChange={(e) => setSshAiPrefs({ aiApiKey: e.target.value })} className="w-full bg-black/40 border border-white/10 rounded px-2 py-1 text-[10px] outline-none focus:border-indigo-500/50" />
+                                  <input type="text" placeholder="Model Name" value={sshAiPrefs.aiCustomModel || ''} onChange={(e) => setSshAiPrefs({ aiCustomModel: e.target.value })} className="w-full bg-black/40 border border-white/10 rounded px-2 py-1 text-[10px] outline-none focus:border-indigo-500/50" />
+                               </div>
+                            )}
+                          </div>
+                          
+                          <button onClick={() => setAiSettingsOpen(false)} className="w-full py-1.5 bg-indigo-600 rounded text-white text-[10px] font-bold uppercase mt-2">Save Settings</button>
+                       </div>
+                    ) : (
+                       <div className="flex flex-col gap-2 flex-1 overflow-hidden">
+                          {/* Chat / Result Area */}
+                          <div className="flex-1 overflow-y-auto custom-scrollbar flex flex-col gap-3 min-h-[100px] max-h-[300px] pr-1">
+                             {aiHistory.length === 0 && !aiAnswer && !isAiLoading && (
+                                <div className="flex flex-col items-center justify-center gap-2 py-8 opacity-30">
+                                   <MessagesSquare size={32} />
+                                   <span className="text-[10px] uppercase font-bold tracking-widest text-center">Ask me anything about these files</span>
+                                </div>
+                             )}
+
+                             {isAiLoading && (
+                                <div className="flex items-start gap-2 animate-pulse">
+                                   <div className="w-6 h-6 rounded bg-indigo-500/20 flex items-center justify-center shrink-0"><Sparkles size={12} className="text-indigo-400" /></div>
+                                   <div className="bg-white/5 rounded-lg p-2 flex-1">
+                                      <div className="h-2 w-20 bg-white/20 rounded mb-1.5"></div>
+                                      <div className="h-2 w-32 bg-white/10 rounded"></div>
+                                   </div>
+                                </div>
+                             )}
+
+                             {aiAnswer && (
+                                <div className="bg-indigo-500/10 border border-indigo-500/20 rounded-lg p-3 text-[11px] leading-relaxed relative group">
+                                   <div className="absolute -top-2 -left-2 w-6 h-6 rounded bg-indigo-600 flex items-center justify-center shadow-lg"><Sparkles size={12} className="text-white" /></div>
+                                   <div className="text-[var(--text-primary)] whitespace-pre-wrap">{aiAnswer}</div>
+                                   <button onClick={() => navigator.clipboard.writeText(aiAnswer)} className="absolute top-2 right-2 p-1 rounded hover:bg-white/10 opacity-0 group-hover:opacity-100 transition-opacity"><Copy size={10} /></button>
+                                </div>
+                             )}
+
+                             {aiError && (
+                                <div className="bg-red-500/10 border border-red-500/20 rounded-lg p-3 text-[11px] text-red-400 flex items-start gap-2">
+                                   <ShieldAlert size={14} className="shrink-0" />
+                                   <span>{aiError}</span>
+                                </div>
+                             )}
+
+                             {aiHistory.slice(1).map((h, i) => (
+                                <div key={i} className="border-t border-white/5 pt-2 flex flex-col gap-1">
+                                   <div className="text-[9px] font-bold opacity-30 uppercase">{h.prompt}</div>
+                                   <div className="text-[10px] opacity-70">{h.answer.slice(0, 100)}{h.answer.length > 100 ? '...' : ''}</div>
+                                </div>
+                             ))}
+                          </div>
+
+                          {/* Input Area */}
+                          <div className="relative mt-auto">
+                             <textarea
+                                value={aiPrompt}
+                                onChange={(e) => setAiPrompt(e.target.value)}
+                                onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleAskAI(); } }}
+                                placeholder="Describe files, ask help..."
+                                className="w-full bg-black/40 border border-white/10 rounded-xl px-3 py-2 text-[11px] outline-none focus:border-indigo-500/50 resize-none min-h-[60px]"
+                             />
+                             <button
+                                onClick={handleAskAI}
+                                disabled={isAiLoading || !aiPrompt.trim()}
+                                className="absolute bottom-2 right-2 p-1.5 rounded-lg bg-indigo-600 text-white hover:bg-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed transition-all active:scale-90"
+                             >
+                                <CornerDownLeft size={14} />
+                             </button>
+                          </div>
+                       </div>
+                    )}
+                 </motion.div>
+               )}
+            </AnimatePresence>
+          </div>
         </div>
       </div>
     </div>

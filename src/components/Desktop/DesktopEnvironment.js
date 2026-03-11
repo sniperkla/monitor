@@ -36,12 +36,6 @@ export default function DesktopEnvironment() {
   const { state: osState, openWindow, setGlassmorphism, setIconSize, setSortBy, setWallpaper, updateIconPosition, setLanguage, setSelectedIcons, updateMultipleIconPositions, toggleMinimize, switchToPrevDesktop, switchToNextDesktop } = useOS();
   const { windows, iconSize, sortBy, currentDesktopId, windowsByDesktop, keyboardShortcuts } = osState;
   const { state: appState, dispatch: appDispatch, fetchConnections } = useApp();
-  const appStateRef = useRef(appState);
-  const appDispatchRef = useRef(appDispatch);
-  useEffect(() => {
-    appStateRef.current = appState;
-    appDispatchRef.current = appDispatch;
-  }, [appState, appDispatch]);
   
   const [contextMenu, setContextMenu] = useState(null); // { x, y }
   const [activeSubmenu, setActiveSubmenu] = useState(null);
@@ -401,11 +395,6 @@ export default function DesktopEnvironment() {
 
       // If dragged from TerminalApp → open as terminal directly (no menu)
       if (sourceAppType === 'terminal') {
-        const tmuxPaneId = e.dataTransfer.getData('application/tmux-pane-id');
-        const tmuxWindowId = e.dataTransfer.getData('application/tmux-window-id');
-        if (tmuxPaneId && tmuxWindowId) {
-          window.dispatchEvent(new CustomEvent(`close-tmux-pane-${tmuxWindowId}`, { detail: { paneId: tmuxPaneId } }));
-        }
         openStandaloneTerminal(conn);
         return;
       }
@@ -435,31 +424,18 @@ export default function DesktopEnvironment() {
         openStandaloneTerminal(connection);
       }
     };
-
-    const handlePopOutTerminal = (e) => {
-      const { connection } = e.detail;
-      if (connection) {
-        openStandaloneTerminal(connection);
-      }
-    };
-
     window.addEventListener('desktop-icon-drop', handleIconDrop);
-    window.addEventListener('pop-out-terminal', handlePopOutTerminal);
-    
-    return () => {
-      window.removeEventListener('desktop-icon-drop', handleIconDrop);
-      window.removeEventListener('pop-out-terminal', handlePopOutTerminal);
-    };
-  }, [/* openStandaloneTerminal dependencies handled by refs or closures in context */]);
+    return () => window.removeEventListener('desktop-icon-drop', handleIconDrop);
+  }, []);
 
   const openStandaloneTerminal = (conn, sourceStandaloneTermId = null) => {
     // Use unique ID so multiple standalone windows can coexist for same connection
     const winId = `standalone-term-${conn._id}-${Date.now()}`;
     
     // Close existing session in the manager if it exists (not standalone)
-    const existing = appStateRef.current.activeTerminals.find(t => t.connectionId === conn._id);
+    const existing = appState.activeTerminals.find(t => t.connectionId === conn._id);
     if (existing) {
-      appDispatchRef.current({ type: 'CLOSE_TERMINAL', payload: existing.id });
+      appDispatch({ type: 'CLOSE_TERMINAL', payload: existing.id });
     }
 
     openWindow(
@@ -477,9 +453,9 @@ export default function DesktopEnvironment() {
     const winId = `standalone-files-${conn._id}-${Date.now()}`;
 
     // Close existing session in the manager if it exists
-    const existing = appStateRef.current.activeFileManagers.find(f => f.connectionId === conn._id);
+    const existing = appState.activeFileManagers.find(f => f.connectionId === conn._id);
     if (existing) {
-      appDispatchRef.current({ type: 'CLOSE_FILE_MANAGER', payload: existing.id });
+      appDispatch({ type: 'CLOSE_FILE_MANAGER', payload: existing.id });
     }
 
     openWindow(
@@ -501,9 +477,9 @@ export default function DesktopEnvironment() {
     const winId = `standalone-db-${conn._id}`;
 
     // Close existing session in the manager if it exists
-    const existing = appStateRef.current.activeDatabaseBrowsers.find(b => b.connectionId === conn._id);
+    const existing = appState.activeDatabaseBrowsers.find(b => b.connectionId === conn._id);
     if (existing) {
-      appDispatchRef.current({ type: 'CLOSE_DATABASE_BROWSER', payload: existing.id });
+      appDispatch({ type: 'CLOSE_DATABASE_BROWSER', payload: existing.id });
     }
 
     openWindow(

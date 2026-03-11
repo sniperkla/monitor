@@ -16,6 +16,7 @@
 import net from 'net';
 import mongoose from 'mongoose';
 import mysql from 'mysql2/promise';
+import { Client as PgClient } from 'pg';
 import { Client as SshClient } from 'ssh2';
 import { decrypt } from '@/utils/encryption';
 
@@ -36,12 +37,19 @@ const MAX_POOL_SIZE = 20; // Max concurrent different connections
 async function resolveRelayForLocalhost(host, port, userId) {
   const isLocal = /^(localhost|127\.0\.0\.1)$/.test(host);
   if (!isLocal || !userId || !global.__activeRelays?.size) {
-    if (isLocal && userId) {
-      // Localhost but no relay connected — reject to avoid silently hitting the server's own DB
-      throw new Error(
-        'Local Relay Agent is not connected. ' +
-        'Run local-relay.js on your machine to access localhost databases.'
-      );
+    if (isLocal && userId && !global.__activeRelays?.size) {
+      // IF we are running the server locally on localhost, we don't NEED a relay to access the server's own loopback.
+      // This allows developers/local users to connect to their own DB without installing the relay.
+      const isRelayIgnored = process.env.NODE_ENV === 'development' || 
+                            (typeof window !== 'undefined' && window.location.hostname === 'localhost') ||
+                            (process.env.HOSTNAME === 'localhost' || process.env.HOSTNAME === '127.0.0.1');
+
+      if (!isRelayIgnored) {
+        throw new Error(
+          'Local Relay Agent is not connected. ' +
+          'Run local-relay.js on your machine to access localhost databases.'
+        );
+      }
     }
     return { host, port };
   }
@@ -56,9 +64,9 @@ async function resolveRelayForLocalhost(host, port, userId) {
 
   // Tell the relay's TCP proxy what to forward to
   relay.targetHost = host;
-  relay.targetPort = parseInt(port) || 27017;
+  relay.targetPort = parseInt(port) || 27017; // port is always pre-set to provider default before this call
 
-  console.log(`🔗 Relay: routing ${host}:${port} → 127.0.0.1:${relay.localPort} (user ${userId})`);
+  console.log(`🔗 Relay: routing ${host}:${relay.targetPort} → 127.0.0.1:${relay.localPort} (user ${userId})`);
   return { host: '127.0.0.1', port: relay.localPort };
 }
 
@@ -214,6 +222,11 @@ export async function getPooledConnection(conn) {
         await cached.db.ping();
         cached.lastUsed = Date.now();
         return cached;
+      } else if (provider === 'postgres') {
+        // Quick query to check if alive
+        await cached.db.query('SELECT 1');
+        cached.lastUsed = Date.now();
+        return cached;
       }
     } catch (e) {
       // Connection is dead, remove it
@@ -244,16 +257,30 @@ export async function getPooledConnection(conn) {
   // Create new connection
   let db;
   let tunnelKey = null;
+  let connectHost = conn.host;
 
-  if (provider === 'mongodb') {
-    let connectHost = conn.host;
-    let connectPort = conn.port || 27017;
+  // Set provider-specific default ports before relay resolution
+  const defaultPort = provider === 'postgres' ? 5432 : provider === 'mysql' ? 3306 : 27017;
+  let connectPort = conn.port || defaultPort;
 
-    // Auto-route localhost connections through the relay agent if one is active
+  // 1. Open SSH tunnel if requested
+  if (conn.sshTunnel) {
+    try {
+      const tunnel = await createSSHTunnel(conn);
+      connectHost = '127.0.0.1';
+      connectPort = tunnel.port;
+      tunnelKey = tunnel.tunnelKey;
+    } catch (err) {
+      throw new Error(`SSH Tunnel failed: ${err.message}`);
+    }
+  } else {
+    // 2. Otherwise, auto-route localhost connections through the relay agent if one is active
     const resolved = await resolveRelayForLocalhost(connectHost, connectPort, conn._userId);
     connectHost = resolved.host;
     connectPort = resolved.port;
+  }
 
+  if (provider === 'mongodb') {
     const tunnelConn = { ...conn, host: connectHost, port: connectPort, isSrv: false };
     const uri = buildMongoUri(tunnelConn, password);
     db = await mongoose.createConnection(uri, {
@@ -264,22 +291,23 @@ export async function getPooledConnection(conn) {
       directConnection: true,
     }).asPromise();
   } else if (provider === 'mysql') {
-    let connectHost = conn.host;
-    let connectPort = conn.port || 3306;
-
-    // Auto-route localhost connections through the relay agent if one is active
-    const resolved = await resolveRelayForLocalhost(connectHost, connectPort, conn._userId);
-    connectHost = resolved.host;
-    connectPort = resolved.port;
-
     db = await mysql.createConnection({
       host: connectHost,
       port: connectPort,
       user: conn.username || '',
       password: password || '',
       database: conn.database,
-      connectTimeout: tunnelKey ? 10000 : 5000,
     });
+  } else if (provider === 'postgres') {
+    db = new PgClient({
+      host: connectHost,
+      port: connectPort,
+      user: conn.username || '',
+      password: password || '',
+      database: conn.database,
+      connectionTimeoutMillis: 10000,
+    });
+    await db.connect();
   } else {
     throw new Error(`Provider ${provider} not supported`);
   }
@@ -308,7 +336,7 @@ export async function closePooledConnection(key) {
     const entry = globalPool.get(key);
     try {
       if (entry.provider === 'mongodb') await entry.db.close();
-      else if (entry.provider === 'mysql') await entry.db.end();
+      else if (entry.provider === 'mysql' || entry.provider === 'postgres') await entry.db.end();
     } catch (_) {}
     if (entry.tunnelKey) await closeSSHTunnel(entry.tunnelKey);
     globalPool.delete(key);
@@ -330,7 +358,7 @@ function startPoolCleanup() {
         console.log(`🧹 Pool: Cleaning idle connection: ${key}`);
         try {
           if (entry.provider === 'mongodb') await entry.db.close();
-          else if (entry.provider === 'mysql') await entry.db.end();
+          else if (entry.provider === 'mysql' || entry.provider === 'postgres') await entry.db.end();
         } catch (_) {}
         if (entry.tunnelKey) await closeSSHTunnel(entry.tunnelKey);
         globalPool.delete(key);

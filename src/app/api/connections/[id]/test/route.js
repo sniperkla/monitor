@@ -107,6 +107,10 @@ async function testDatabaseConnection(conn) {
     } else if (provider === 'mysql') {
       const [rows] = await pooled.db.query('SELECT VERSION() as version');
       return { success: true, info: `MySQL ${rows[0].version}` };
+    } else if (provider === 'postgres') {
+      const res = await pooled.db.query('SELECT version()');
+      const version = res.rows[0].version.split(' ').slice(0, 2).join(' ');
+      return { success: true, info: version };
     }
     return { success: false, error: `Provider ${provider} not supported for testing yet` };
   } catch (err) {

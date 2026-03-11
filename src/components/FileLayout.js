@@ -1,13 +1,142 @@
 'use client';
 
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useApp } from '@/context/AppContext';
 import FileManager from '@/components/FileManager';
 import { 
   Columns, Rows, Maximize2, Minimize2, X, 
-  ExternalLink, Server, Grid, List as ListIcon 
+  ExternalLink, Server, Grid, List as ListIcon, 
+  Monitor, Database, Search, ChevronRight, Upload 
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
+import { motion, AnimatePresence } from 'framer-motion';
+
+const ConnectionPicker = ({ onSelect, search, setSearch, connections, t }) => {
+  const [isDragOver, setIsDragOver] = useState(false);
+
+  const filteredConnections = useMemo(() => {
+    return connections.filter(conn => 
+      conn.name.toLowerCase().includes(search.toLowerCase()) ||
+      conn.host.toLowerCase().includes(search.toLowerCase())
+    );
+  }, [connections, search]);
+
+  const handlePickerDragOver = useCallback((e) => {
+    if (e.dataTransfer.types.includes('application/ssh-connection')) {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'copy';
+      setIsDragOver(true);
+    }
+  }, []);
+
+  const handlePickerDragLeave = useCallback((e) => {
+    if (e.currentTarget && !e.currentTarget.contains(e.relatedTarget)) {
+      setIsDragOver(false);
+    }
+  }, []);
+
+  const handlePickerDrop = useCallback((e) => {
+    e.preventDefault();
+    setIsDragOver(false);
+
+    const data = e.dataTransfer.getData('application/ssh-connection');
+    if (!data) return;
+
+    try {
+      const conn = JSON.parse(data);
+      if (conn.type === 'database') return;
+      onSelect(conn);
+    } catch (err) {
+      console.error('Drop parse error:', err);
+    }
+  }, [onSelect]);
+
+  return (
+    <div 
+      className="h-full flex flex-col items-center justify-center p-8 bg-transparent relative"
+      onDragOver={handlePickerDragOver}
+      onDragLeave={handlePickerDragLeave}
+      onDrop={handlePickerDrop}
+    >
+      {/* Drop highlight overlay */}
+      {isDragOver && (
+        <div className="absolute inset-4 rounded-2xl border-2 border-dashed border-indigo-500 bg-indigo-500/10 flex items-center justify-center z-10 pointer-events-none transition-all animate-pulse">
+          <div className="flex flex-col items-center gap-3">
+            <div className="w-14 h-14 rounded-2xl bg-indigo-500/20 flex items-center justify-center">
+              <Upload size={24} className="text-indigo-400" />
+            </div>
+            <span className="text-sm font-semibold text-indigo-400">
+              {t('files.dropToOpen') || 'Drop to open file manager'}
+            </span>
+          </div>
+        </div>
+      )}
+      <motion.div 
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.4, ease: "easeOut" }}
+        className="w-full max-w-lg flex flex-col items-center gap-6"
+      >
+        <div className="w-20 h-20 rounded-[2rem] bg-indigo-500/10 flex items-center justify-center border border-indigo-500/20 shadow-xl shadow-indigo-500/5 ring-1 ring-white/5">
+          <Server className="w-10 h-10 text-indigo-400" />
+        </div>
+
+        <div className="text-center space-y-2">
+          <h2 className="text-2xl font-bold text-white tracking-tight">
+            {t('files.layout.selectServer')}
+          </h2>
+          <p className="text-zinc-500 text-sm max-w-[280px] leading-relaxed mx-auto">
+            {t('files.layout.dropServer')}
+          </p>
+        </div>
+
+        <div className="w-full relative group">
+          <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-500 group-focus-within:text-indigo-400 transition-colors" />
+          <input 
+            type="text"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder={t('files.layout.searchServer')}
+            className="w-full h-12 bg-white/5 border border-white/10 rounded-2xl pl-12 pr-4 text-white focus:outline-none focus:border-indigo-500/50 focus:ring-4 focus:ring-indigo-500/10 transition-all placeholder:text-zinc-600 backdrop-blur-sm"
+          />
+        </div>
+
+        <div className="w-full max-h-[320px] overflow-y-auto custom-scrollbar rounded-2xl border border-white/5 bg-black/20 p-2 space-y-1 backdrop-blur-sm shadow-2xl">
+          {filteredConnections.length > 0 ? (
+            filteredConnections.map((conn) => (
+              <button
+                key={conn.id || conn._id}
+                onClick={() => onSelect(conn)}
+                className="w-full flex items-center gap-4 p-3 rounded-xl hover:bg-white/10 transition-all group text-left border border-transparent hover:border-white/5 shadow-sm active:scale-[0.98]"
+              >
+                <div className={`w-10 h-10 rounded-xl flex items-center justify-center text-white font-medium shadow-lg shrink-0`} 
+                   style={{ backgroundColor: conn.color || '#6366f1', background: `linear-gradient(135deg, ${conn.color || '#6366f1'}, ${conn.color || '#6366f1'}cc)` }}>
+                  {conn.type === 'ssh' ? <Monitor size={18} /> : <Database size={18} />}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="text-sm font-semibold text-zinc-200 truncate group-hover:text-white transition-colors">
+                    {conn.name}
+                  </div>
+                  <div className="text-[11px] text-zinc-500 truncate font-mono">
+                    {conn.host}
+                  </div>
+                </div>
+                <div className="w-8 h-8 rounded-full bg-white/5 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-all translate-x-1 group-hover:translate-x-0">
+                  <ChevronRight size={16} className="text-indigo-400" />
+                </div>
+              </button>
+            ))
+          ) : (
+            <div className="p-10 text-center opacity-40">
+              <Database className="w-10 h-10 text-zinc-500 mx-auto mb-3" />
+              <p className="text-xs font-medium uppercase tracking-[0.2em]">{t('files.layout.noServers')}</p>
+            </div>
+          )}
+        </div>
+      </motion.div>
+    </div>
+  );
+};
 
 // ─── Constants & Utils ──────────────────────────────────────────────────────
 
@@ -150,6 +279,7 @@ function LayoutRenderer({
 }) {
   const { t } = useTranslation();
   const containerRef = useRef(null);
+  const [search, setSearch] = useState('');
   const isHoriz = layout.type === 'split' ? layout.direction === 'horizontal' : false;
   const ratio = layout.type === 'split' ? (layout.ratio || 0.5) : 0.5;
 
@@ -193,31 +323,13 @@ function LayoutRenderer({
               onSplit={(dir) => onSplitPane(layout.id, dir)}
             />
           ) : (
-            <div 
-              onDragOver={(e) => {
-                if (e.dataTransfer.types.includes('application/ssh-connection')) {
-                  e.preventDefault();
-                  e.dataTransfer.dropEffect = 'copy';
-                }
-              }}
-              onDrop={(e) => {
-                const connData = e.dataTransfer.getData('application/ssh-connection');
-                if (connData) {
-                  try {
-                    const conn = JSON.parse(connData);
-                    onAssignConnection(layout.id, conn);
-                  } catch (err) {
-                    console.error('Failed to parse connection data:', err);
-                  }
-                }
-              }}
-              className="h-full flex flex-col items-center justify-center p-6 bg-[var(--bg-tertiary)]/30 italic text-[var(--text-muted)] text-xs border-2 border-dashed border-[var(--border-color)] m-4 rounded-2xl hover:bg-[var(--bg-tertiary)]/50 hover:border-[var(--accent-indigo)]/30 transition-all"
-            >
-              <div className="w-12 h-12 rounded-full bg-[var(--bg-primary)]/50 flex items-center justify-center mb-3 shadow-inner">
-                <Server size={20} className="text-[var(--text-muted)] opacity-50" />
-              </div>
-              {t('files.layout.dropServer')}
-            </div>
+            <ConnectionPicker 
+              onSelect={(conn) => onAssignConnection(layout.id, conn)}
+              search={search}
+              setSearch={setSearch}
+              connections={connections}
+              t={t}
+            />
           )}
         </div>
       </div>
@@ -276,30 +388,54 @@ export default function FileLayout({ managers: propManagers, onCloseFileManager,
   const { connections, activeFileManagers: globalManagers } = state;
   const managers = propManagers || globalManagers;
 
-  const [layout, setLayout] = useState(null);
-  const [activePaneId, setActivePaneId] = useState(null);
   const handledFmIdsRef = useRef(new Set());
 
-  // ── Sync with Managers ──
-  useEffect(() => {
+  const [layout, setLayout] = useState(() => {
     if (!managers || managers.length === 0) {
-      if (layout) setLayout(null);
-      handledFmIdsRef.current.clear();
-      return;
+      return createPane(null);
     }
 
-    setLayout(prev => {
-      let currentLayout = prev;
-      const newManagers = managers.filter(f => !handledFmIdsRef.current.has(f.id));
-      
-      if (newManagers.length === 0) {
-        // Check for closed managers
-        const currentIds = new Set(managers.map(f => f.id));
-        // This is tricky: we'd need to remove panes from layout if their FM id disappeared
-        // But for now let's focus on adding.
-        return currentLayout;
-      }
+    let currentLayout = null;
+    managers.forEach((m, idx) => {
+      handledFmIdsRef.current.add(m.id);
+      const fmData = {
+        id: m.id,
+        connectionId: m.connectionId,
+        connectionName: m.connectionName,
+        color: m.color,
+        connection: m.connection,
+      };
 
+      if (!currentLayout) {
+        currentLayout = createPane(fmData);
+      } else {
+        // Simple initial layout: stack them horizontally
+        currentLayout = splitPane(currentLayout, currentLayout.id, 'horizontal', fmData);
+      }
+    });
+
+    return currentLayout;
+  });
+
+  const [activePaneId, setActivePaneId] = useState(() => {
+    if (layout) {
+      const ids = getAllPaneIds(layout);
+      return ids[ids.length - 1];
+    }
+    return null;
+  });
+
+  const [search, setSearch] = useState('');
+
+  // ── Sync with Managers (Sync state during render for immediate updates) ──
+  const [prevManagers, setPrevManagers] = useState(managers);
+
+  if (managers !== prevManagers) {
+    setPrevManagers(managers);
+    
+    const newManagers = managers.filter(f => !handledFmIdsRef.current.has(f.id));
+    if (newManagers.length > 0) {
+      let currentLayout = layout;
       newManagers.forEach(newFm => {
         handledFmIdsRef.current.add(newFm.id);
         const fmData = {
@@ -310,10 +446,15 @@ export default function FileLayout({ managers: propManagers, onCloseFileManager,
           connection: newFm.connection,
         };
 
-        if (!currentLayout) {
-          const firstPane = createPane(fmData);
-          currentLayout = firstPane;
-          setActivePaneId(firstPane.id);
+        if (!currentLayout || (currentLayout.type === 'pane' && !currentLayout.fmData)) {
+          // If we have an empty picker pane, replace it or use it
+          if (currentLayout?.id === activePaneId) {
+            currentLayout = updatePaneData(currentLayout, activePaneId, fmData);
+          } else {
+            const firstPane = createPane(fmData);
+            currentLayout = firstPane;
+            setActivePaneId(firstPane.id);
+          }
         } else {
           currentLayout = splitPane(currentLayout, activePaneId, 'horizontal', fmData);
           // Auto-focus the newly created pane
@@ -321,11 +462,11 @@ export default function FileLayout({ managers: propManagers, onCloseFileManager,
           setActivePaneId(ids[ids.length - 1]);
         }
       });
-      return currentLayout;
-    });
-  }, [managers, activePaneId]);
+      setLayout(currentLayout);
+    }
+  }
 
-  // Handle pane removal when manager list shrinks
+  // ── Sync with Managers (for cleanup) ──
   useEffect(() => {
     if (!managers || !layout) return;
     const managerIds = new Set(managers.map(m => m.id));
@@ -414,13 +555,7 @@ export default function FileLayout({ managers: propManagers, onCloseFileManager,
     setLayout(prev => updateRatio(prev, splitId, newRatio));
   }, []);
 
-  if (!layout) {
-    return (
-      <div className="h-full flex items-center justify-center italic text-[var(--text-muted)]">
-        {t('files.noConnections')}
-      </div>
-    );
-  }
+  // No need for separate null check if we initialize layout
 
   return (
     <div className="h-full w-full flex flex-col bg-[var(--bg-primary)] overflow-hidden">

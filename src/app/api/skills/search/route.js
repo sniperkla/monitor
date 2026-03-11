@@ -65,6 +65,13 @@ export async function POST(req) {
               searchQuery = extracted;
               console.log(`[SkillsMP] Smart keywords: "${searchQuery}" (from: "${q}")`);
             }
+          } else {
+             const groqErr = await groqRes.json().catch(() => ({}));
+             if (groqRes.status === 401) {
+               console.warn('[SkillsMP] Groq 401: Invalid API Key. Falling back to raw query.');
+             } else {
+               console.warn(`[SkillsMP] Groq ${groqRes.status}: ${groqErr?.error?.message || 'Unknown error'}`);
+             }
           }
         } catch (e) {
           console.warn('[SkillsMP] Keyword extraction failed, using raw query:', e.message);
@@ -102,16 +109,21 @@ export async function POST(req) {
     // AI Search: data.data.data (vector store results)
     let skills = data?.data?.skills || data?.data?.data || data?.skills || [];
     
-    // Normalize skills content (AI search returns array of content objects)
+    // Normalize skills content (AI search returns array of content objects vs standard search having a single 'content' or 'markdown' field)
     skills = skills.map(skill => {
-        if (Array.isArray(skill.content)) {
-            const textContent = skill.content.find(c => c.type === 'text');
-            return {
-                ...skill,
-                content: textContent ? textContent.text : String(skill.content)
-            };
+        let content = skill.content || skill.markdown || skill.md_content || '';
+        if (Array.isArray(content)) {
+            const textContent = content.find(c => c.type === 'text');
+            content = textContent ? textContent.text : String(content);
         }
-        return skill;
+        return {
+            id: skill.id || skill._id || skill.slug, // Ensure we have a valid ID
+            name: skill.name || skill.title || 'Untitled Skill',
+            description: skill.description || skill.summary || '',
+            stars: skill.stars || 0,
+            version: skill.version || '1.0.0',
+            content: content // Ensure content is always mapped correctly
+        };
     });
 
     console.log(`[SkillsMP] Found ${skills.length} skills`);

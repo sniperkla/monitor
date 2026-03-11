@@ -9,23 +9,31 @@ export default function FilesApp({ onEditConnection, initialConnection, initialC
   const { t } = useTranslation();
   const { connections } = state;
   const sshConnections = connections.filter(c => c.type !== 'database');
-  const [tabs, setTabs] = useState([]);
-  const [isSelecting, setIsSelecting] = useState(!initialConnection);
-  const initialConnRef = useRef(initialConnection);
-  const initialConnIdRef = useRef(initialConnectionId);
 
-  // Auto-connect if initialConnection is provided
-  useEffect(() => {
-    if (initialConnRef.current) {
-      const conn = initialConnRef.current;
-      initialConnRef.current = null;
-      handleConnect(conn);
+  // Initialize tabs with initialConnection if provided
+  const [tabs, setTabs] = useState(() => {
+    if (initialConnection && initialConnection.storage !== 'manual') {
+      return [{
+        id: `files-${initialConnection._id}-${Date.now()}`,
+        connectionId: initialConnection._id,
+        connectionName: initialConnection.name,
+        color: initialConnection.color,
+        connection: initialConnection,
+      }];
     }
-  }, []);
+    return [];
+  });
+
+  const [isSelecting, setIsSelecting] = useState(() => {
+    if (initialConnection && initialConnection.storage !== 'manual') return false;
+    return !initialConnectionId;
+  });
+
+  const initialConnIdRef = useRef(initialConnectionId);
 
   // Restore mode: auto-connect from persisted initialConnectionId
   useEffect(() => {
-    if (initialConnRef.current) return;
+    if (tabs.length > 0) return;
     if (!initialConnIdRef.current) return;
     if (!connections || connections.length === 0) return;
 
@@ -34,7 +42,7 @@ export default function FilesApp({ onEditConnection, initialConnection, initialC
 
     initialConnIdRef.current = null;
     handleConnect(conn);
-  }, [connections]);
+  }, [connections, tabs.length]);
 
   const handleConnect = (conn) => {
     if (conn.storage === 'manual') {

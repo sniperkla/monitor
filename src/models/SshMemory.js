@@ -84,8 +84,16 @@ const SshMemorySchema = new mongoose.Schema({
 SshMemorySchema.index({ userId: 1, host: 1 }, { unique: true });
 
 export function getSshMemoryModel(dbConnection) {
+  // If no specific connection provided, fallback to default global mongoose
   const target = dbConnection || mongoose;
-  return target.models.SshMemory || target.model('SshMemory', SshMemorySchema);
+  
+  // Safety check for SQL connections that might be passed accidentally
+  if (!target || typeof target !== 'object' || (!target.models && target.type)) {
+    console.warn('[SshMemory] Requested model for non-Mongoose connection. Use SshMemoryRepository instead.');
+    return null;
+  }
+
+  return target.models?.SshMemory || target.model?.('SshMemory', SshMemorySchema);
 }
 
 export default mongoose.models.SshMemory || mongoose.model('SshMemory', SshMemorySchema);

@@ -43,6 +43,9 @@ export default function DatabaseView({ connection, onClose }) {
   const [aiSettingsOpen, setAiSettingsOpen] = useState(false);
   const [latency, setLatency] = useState(null);
   const [lastAiUpdate, setLastAiUpdate] = useState(0);
+  const [localAiPrefs, setLocalAiPrefs] = useState({ aiEndpoint: '', aiApiKey: '', aiCustomModel: '' });
+  const [connectRetryCount, setConnectRetryCount] = useState(0);
+  const connectRetryTimerRef = useRef(null);
   const socketRef = useRef(null);
   
   // Modal State
@@ -226,9 +229,44 @@ export default function DatabaseView({ connection, onClose }) {
         setShowAiHelp(false);
       }
     };
+    
+    // Auto-reconnect on window focus
+    const handleFocus = () => {
+      if (error) {
+        console.log("🗄 [DatabaseView] Window focused, attempting automatic reconnect...");
+        fetchSchema();
+      }
+    };
+
     document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, []);
+    window.addEventListener('focus', handleFocus);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+      window.removeEventListener('focus', handleFocus);
+      if (connectRetryTimerRef.current) clearTimeout(connectRetryTimerRef.current);
+    };
+  }, [error]);
+
+  // Sync local AI prefs when settings open
+  useEffect(() => {
+    if (aiSettingsOpen) {
+      setLocalAiPrefs({
+        aiEndpoint: osState?.sshAiPrefs?.aiEndpoint || '',
+        aiApiKey: osState?.sshAiPrefs?.aiApiKey || '',
+        aiCustomModel: osState?.sshAiPrefs?.aiCustomModel || ''
+      });
+    }
+  }, [aiSettingsOpen, osState?.sshAiPrefs]);
+
+  const handleSaveManualAi = () => {
+    setSshAiPrefs(localAiPrefs);
+    setAiSettingsOpen(false);
+    addNotification({
+      title: 'Settings Saved',
+      message: 'Manual AI configuration updated',
+      type: 'success'
+    });
+  };
   
   // COUNTDOWN LOGIC
   useEffect(() => {
@@ -252,6 +290,8 @@ export default function DatabaseView({ connection, onClose }) {
     if (!connection?._id || isSubmitting) return; 
     setLoading(true);
     setError(null);
+    if (connectRetryTimerRef.current) clearTimeout(connectRetryTimerRef.current);
+
     try {
       const res = await apiFetch(`/api/connections/${connection._id}/schema`, {
          method: 'POST',
@@ -271,6 +311,9 @@ export default function DatabaseView({ connection, onClose }) {
         setSchema(resData.data);
         if (resData.data.length > 0 && !selectedSchema) setSelectedSchema(resData.data[0]);
         
+        // Success: Reset retry count
+        setConnectRetryCount(0);
+
         // Mark as online in global state
         dispatch({ 
             type: 'UPDATE_CONNECTION', 
@@ -287,13 +330,30 @@ export default function DatabaseView({ connection, onClose }) {
             localStorage.setItem('ssh_monitor_connections', JSON.stringify(updated));
         }
       } else {
-        setError(resData.error || t('database.notifications.fetchFail'));
+        const errMsg = resData.error || t('database.notifications.fetchFail');
+        setError(errMsg);
+        scheduleConnectRetry();
       }
     } catch (err) {
       setError(err.message);
+      scheduleConnectRetry();
     } finally {
       setLoading(false);
     }
+  };
+
+  const scheduleConnectRetry = () => {
+    // Max 10 retries, exponential backoff starting at 2s, 4s, 8s... max 30s
+    if (connectRetryCount >= 10) return;
+    
+    const delay = Math.min(Math.pow(2, connectRetryCount + 1) * 1000, 30000);
+    console.log(`🗄 [DatabaseView] Reconnect attempt #${connectRetryCount + 1} in ${delay/1000}s...`);
+    
+    if (connectRetryTimerRef.current) clearTimeout(connectRetryTimerRef.current);
+    connectRetryTimerRef.current = setTimeout(() => {
+      setConnectRetryCount(prev => prev + 1);
+      fetchSchema();
+    }, delay);
   };
 
   const fetchData = async (schemaName, customFilter = null) => {
@@ -462,6 +522,11 @@ export default function DatabaseView({ connection, onClose }) {
     if (!isRetry) setIsAiLoading(true);
     
     const basePrompt = initialPrompt || currentPrompt;
+
+    if (typeof apiFetch === 'undefined') {
+      console.error('CRITICAL: apiFetch is not defined in DatabaseView handleAskAI scope!');
+      return;
+    }
 
     try {
       const res = await apiFetch(`/api/connections/${connection._id}/ai-query`, {
@@ -713,19 +778,27 @@ export default function DatabaseView({ connection, onClose }) {
                 setFilterQuery(cleanQuery);
                 setPendingAction(null);
                 const dbRes = await fetchData(selectedSchema, cleanQuery);
-                if (!dbRes?.success && retryCount < 3) {
+                if (!dbRes?.success && retryCount < 3 && dbRes.error !== 'User confirmation required') {
                     addNotification({ title: 'AI Auto-Fix', message: `Query failed. Asking AI to fix... (Attempt ${retryCount + 1}/3)`, type: 'info' });
                     return handleAskAI(null, `The query you generated failed with this error: ${dbRes.error}\n\nPlease fix the query, using correct syntax and table names.\nOriginal requirement: ${basePrompt}`, true, retryCount + 1, basePrompt);
+                }
+                if (dbRes?.error === 'User confirmation required') {
+                    setIsAiLoading(false);
+                    return;
                 }
             }
         } else {
             setFilterQuery(cleanQuery);
             setPendingAction(null);
             const dbRes = await fetchData(selectedSchema, cleanQuery);
-            if (!dbRes?.success && retryCount < 3) {
-                addNotification({ title: 'AI Auto-Fix', message: `Query failed. Asking AI to fix... (Attempt ${retryCount + 1}/3)`, type: 'info' });
-                return handleAskAI(null, `The query you generated failed with this error: ${dbRes.error}\n\nPlease fix the query, using correct syntax and table names.\nOriginal requirement: ${basePrompt}`, true, retryCount + 1, basePrompt);
-            }
+                if (!dbRes?.success && retryCount < 3 && dbRes.error !== 'User confirmation required') {
+                    addNotification({ title: 'AI Auto-Fix', message: `Query failed. Asking AI to fix... (Attempt ${retryCount + 1}/3)`, type: 'info' });
+                    return handleAskAI(null, `The query you generated failed with this error: ${dbRes.error}\n\nPlease fix the query, using correct syntax and table names.\nOriginal requirement: ${basePrompt}`, true, retryCount + 1, basePrompt);
+                }
+                if (dbRes?.error === 'User confirmation required') {
+                    setIsAiLoading(false);
+                    return;
+                }
         }
 
         if (!isRetry) {
@@ -1194,12 +1267,23 @@ export default function DatabaseView({ connection, onClose }) {
               <p className="text-sm text-[var(--text-muted)] max-w-md mx-auto mb-8 font-mono bg-black/20 p-4 rounded-xl border border-red-500/10">
                  {error}
               </p>
-               <button 
-                 onClick={fetchSchema}
-                 className="px-6 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold transition-all shadow-lg shadow-indigo-500/20"
-               >
-                 {t('database.errors.retry')}
-               </button>
+                <button 
+                  onClick={() => { setConnectRetryCount(0); fetchSchema(); }}
+                  className="px-6 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold transition-all shadow-lg shadow-indigo-500/20 mb-4"
+                >
+                  {t('database.errors.retry')}
+                </button>
+                {connectRetryCount > 0 && connectRetryCount < 10 && (
+                   <div className="flex items-center gap-2 text-[10px] text-amber-500/80 font-bold animate-pulse">
+                      <Loader2 size={12} className="animate-spin" />
+                      Retrying automatically (Attempt {connectRetryCount}/10)...
+                   </div>
+                )}
+                {connectRetryCount >= 10 && (
+                   <p className="text-[10px] text-red-400 font-bold">
+                      Automatic retry limit reached. Please check your connection and try again manually.
+                   </p>
+                )}
            </div>
         ) : (
            <div className="flex flex-col h-full">
@@ -1597,9 +1681,9 @@ export default function DatabaseView({ connection, onClose }) {
                                     className={`w-full bg-[var(--bg-primary)] border border-purple-500/30 rounded-xl py-2 pl-4 pr-12 text-xs focus:outline-none focus:border-purple-500 focus:ring-1 focus:ring-purple-500/20 text-[var(--text-primary)] placeholder:text-purple-400/40 dark:placeholder:text-purple-300/30 shadow-inner transition-all ${pendingAction ? 'opacity-50 cursor-not-allowed' : ''}`}
                                 />
                                 {usedAiModel && (
-                                   <div className="flex items-center gap-1.5 px-2 animate-in fade-in slide-in-from-left-2 duration-500">
-                                      <span className="text-[8px] font-bold text-purple-400/60 uppercase tracking-tighter">⚡ Used:</span>
-                                      <span className="text-[8px] font-medium text-purple-400/50 bg-purple-500/5 px-1.5 py-0.5 rounded border border-purple-500/10">
+                                   <div className="absolute top-full left-0 mt-1 flex items-center gap-1.5 px-2 animate-in fade-in slide-in-from-top-1 duration-500 z-10">
+                                      <span className="text-[9px] font-bold text-amber-500/80 uppercase tracking-tighter">⚡ Used:</span>
+                                      <span className="text-[9px] font-medium text-amber-500/60 bg-amber-500/5 px-1.5 py-0.5 rounded border border-amber-500/20 shadow-sm">
                                          {usedAiModel.split('/').pop().replace(/-/g, ' ')}
                                       </span>
                                    </div>
@@ -1668,52 +1752,127 @@ export default function DatabaseView({ connection, onClose }) {
                                 )}
                             </div>
 
-                            <div className="relative">
-                                <select 
-                                    value={aiModel} 
-                                    onChange={(e) => {
-                                        setAiModel(e.target.value);
-                                        if (e.target.value === 'manual') setAiSettingsOpen(true);
-                                    }} 
-                                    disabled={isAiLoading || !!pendingAction}
-                                    className={`text-[11px] rounded bg-purple-500/10 border border-purple-500/20 px-2 h-[38px] text-[var(--text-primary)] focus:outline-none focus:border-purple-500/50 cursor-pointer ${pendingAction ? 'opacity-50 cursor-not-allowed' : ''}`}
-                                    title="AI Model"
-                                >
-                                    <option value="auto">✨ Auto Select</option>
-                                    <option value="llama-3.1-8b-instant">🥉 Llama 3.1 8B (Thinking)</option>
-                                    <option value="meta-llama/llama-4-scout-17b-16e-instruct">🥇 Llama 4 Scout (Primary)</option>
-                                    <option value="llama-3.3-70b-versatile">🥈 Llama 3.3 70B (Heavy/Large)</option>
-                                    <option value="manual">🛠 Custom...</option>
-                                </select>
+                            <div className="flex items-center gap-2">
+                                <div className="relative">
+                                    <select 
+                                        value={aiModel} 
+                                        onChange={(e) => {
+                                            setAiModel(e.target.value);
+                                            if (e.target.value === 'manual') setAiSettingsOpen(true);
+                                        }} 
+                                        disabled={isAiLoading || !!pendingAction}
+                                        className={`text-[11px] rounded-xl bg-purple-500/10 border border-purple-500/20 px-3 h-[38px] text-[var(--text-primary)] focus:outline-none focus:border-purple-500/50 cursor-pointer transition-all ${pendingAction ? 'opacity-50 cursor-not-allowed' : ''}`}
+                                        title="AI Model"
+                                    >
+                                        <option value="auto">✨ Auto Select</option>
+                                        <option value="llama-3.1-8b-instant">🥉 Llama 3.1 8B (Thinking)</option>
+                                        <option value="meta-llama/llama-4-scout-17b-16e-instruct">🥇 Llama 4 Scout (Primary)</option>
+                                        <option value="llama-3.3-70b-versatile">🥈 Llama 3.3 70B (Heavy/Large)</option>
+                                        <option value="manual">🛠 Custom...</option>
+                                    </select>
+                                </div>
                                 
                                 {aiModel === 'manual' && (
-                                    <button 
-                                        onClick={() => setAiSettingsOpen(!aiSettingsOpen)} 
-                                        className="absolute -right-2 -top-2 bg-purple-500 text-white rounded-full p-0.5 shadow-lg border border-purple-400"
-                                        title="Configure Manual AI"
-                                    >
-                                        <Settings2 size={10} />
-                                    </button>
-                                )}
+                                    <div className="relative">
+                                        <button 
+                                            onClick={() => setAiSettingsOpen(!aiSettingsOpen)} 
+                                            className={`h-[38px] px-2.5 rounded-xl border transition-all flex items-center justify-center gap-2 ${
+                                                aiSettingsOpen 
+                                                ? 'bg-purple-500 text-white border-purple-400 shadow-lg shadow-purple-500/20' 
+                                                : 'bg-purple-500/10 text-purple-400 border-purple-500/20 hover:bg-purple-500/20'
+                                            }`}
+                                            title="Configure Manual AI"
+                                        >
+                                            <Settings2 size={16} />
+                                        </button>
 
-                                {aiSettingsOpen && aiModel === 'manual' && (
-                                    <div className="absolute top-10 right-0 w-64 p-3 bg-[var(--bg-secondary)] border border-purple-500/30 rounded-xl shadow-[0_20px_50px_rgba(0,0,0,0.5)] z-[100] animate-in slide-in-from-top-2 backdrop-blur-xl space-y-2">
-                                        <div className="flex items-center justify-between border-b border-purple-500/20 pb-1 mb-2">
-                                            <span className="text-[10px] font-bold text-purple-400 uppercase">Manual AI Settings</span>
-                                            <button onClick={() => setAiSettingsOpen(false)} className="text-[10px] text-purple-400/60 hover:text-purple-400">Close</button>
+                                        {aiSettingsOpen && (
+                                            <div className="fixed inset-0 z-[9999] bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-200" onClick={(e) => { if (e.target === e.currentTarget) setAiSettingsOpen(false); }}>
+                                                <div className="w-full max-w-sm p-5 bg-[var(--bg-secondary)] border border-purple-500/30 rounded-2xl shadow-[0_20px_80px_rgba(0,0,0,0.8)] animate-in zoom-in-95 duration-200 flex flex-col overflow-hidden max-h-[85vh]">
+                                                    <div className="flex items-center justify-between border-b border-purple-500/20 pb-3 mb-3 shrink-0">
+                                                        <span className="text-[11px] font-bold text-purple-400 uppercase tracking-widest flex items-center gap-2">
+                                                            <Settings2 size={14} />
+                                                            Manual AI Settings
+                                                        </span>
+                                                        <button onClick={() => setAiSettingsOpen(false)} className="text-purple-400/60 hover:text-purple-400 transition-colors p-1">
+                                                            <X size={16} />
+                                                        </button>
+                                                    </div>
+                                                
+                                                <div className="flex-1 overflow-y-auto custom-scrollbar pr-1 -mr-1 space-y-4 pb-2">
+                                                    <div className="flex flex-col gap-2">
+                                                        <span className="text-[9px] font-bold text-purple-400/60 uppercase tracking-tighter">Quick Presets</span>
+                                                        <div className="flex gap-2">
+                                                            <button onClick={() => setLocalAiPrefs({ ...localAiPrefs, aiEndpoint: 'https://openrouter.ai/api/v1/chat/completions', aiCustomModel: 'anthropic/claude-3.5-sonnet' })} className="flex-1 text-[9px] px-2 py-2 rounded-lg bg-purple-500/10 text-purple-400 hover:bg-purple-500/20 border border-purple-500/20 transition-all font-bold">
+                                                                🌐 OpenRouter
+                                                            </button>
+                                                            <button onClick={() => setLocalAiPrefs({ ...localAiPrefs, aiEndpoint: 'https://api.openai.com/v1/chat/completions', aiCustomModel: 'gpt-4o' })} className="flex-1 text-[9px] px-2 py-2 rounded-lg bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20 border border-emerald-500/20 transition-all font-bold">
+                                                                🟢 OpenAI
+                                                            </button>
+                                                        </div>
+                                                    </div>
+
+                                                    <div className="space-y-3">
+                                                        <div className="space-y-1.5">
+                                                            <div className="text-[9px] font-bold text-[var(--text-muted)] uppercase px-1">Endpoint URL</div>
+                                                            <input 
+                                                                type="text" 
+                                                                placeholder="https://..." 
+                                                                value={localAiPrefs.aiEndpoint} 
+                                                                onChange={(e) => setLocalAiPrefs({ ...localAiPrefs, aiEndpoint: e.target.value })} 
+                                                                className="w-full text-xs rounded-xl bg-[var(--bg-primary)] border border-[var(--border-color)] px-3 py-2.5 outline-none focus:border-purple-500 focus:ring-1 focus:ring-purple-500/20 transition-all" 
+                                                                style={{ color: 'var(--text-primary)' }} 
+                                                            />
+                                                        </div>
+                                                        
+                                                        <div className="space-y-1.5">
+                                                            <div className="text-[9px] font-bold text-[var(--text-muted)] uppercase px-1">API Key</div>
+                                                            <input 
+                                                                type="password" 
+                                                                placeholder="sk-..." 
+                                                                value={localAiPrefs.aiApiKey} 
+                                                                onChange={(e) => setLocalAiPrefs({ ...localAiPrefs, aiApiKey: e.target.value })} 
+                                                                className="w-full text-xs rounded-xl bg-[var(--bg-primary)] border border-[var(--border-color)] px-3 py-2.5 outline-none focus:border-purple-500 focus:ring-1 focus:ring-purple-500/20 transition-all" 
+                                                                style={{ color: 'var(--text-primary)' }} 
+                                                            />
+                                                        </div>
+
+                                                        <div className="space-y-1.5">
+                                                            <div className="text-[9px] font-bold text-[var(--text-muted)] uppercase px-1">Model Name</div>
+                                                            <input 
+                                                                type="text" 
+                                                                placeholder="e.g. gpt-4o" 
+                                                                value={localAiPrefs.aiCustomModel} 
+                                                                onChange={(e) => setLocalAiPrefs({ ...localAiPrefs, aiCustomModel: e.target.value })} 
+                                                                className="w-full text-xs rounded-xl bg-[var(--bg-primary)] border border-[var(--border-color)] px-3 py-2.5 outline-none focus:border-purple-500 focus:ring-1 focus:ring-purple-500/20 transition-all" 
+                                                                style={{ color: 'var(--text-primary)' }} 
+                                                            />
+                                                        </div>
+                                                    </div>
+
+                                                    <div className="text-[9px] text-[var(--text-muted)] italic leading-tight pt-1 opacity-60">
+                                                        Settings are shared with Terminal AI. Requires OpenAI-compatible endpoint.
+                                                    </div>
+                                                </div>
+
+                                                <div className="pt-3 border-t border-purple-500/10 flex gap-2 shrink-0">
+                                                    <button 
+                                                        onClick={() => setAiSettingsOpen(false)}
+                                                        className="flex-1 px-3 py-2.5 text-[10px] font-bold text-[var(--text-muted)] hover:text-white bg-[var(--bg-primary)] hover:bg-[var(--bg-tertiary)] rounded-xl transition-all border border-[var(--border-color)]"
+                                                    >
+                                                        {t('common.cancel')}
+                                                    </button>
+                                                    <button 
+                                                        onClick={handleSaveManualAi}
+                                                        className="flex-1 px-3 py-2.5 text-[10px] font-bold text-white bg-purple-600 hover:bg-purple-500 rounded-xl transition-all shadow-lg shadow-purple-500/20 flex items-center justify-center gap-2"
+                                                    >
+                                                        <Check size={14} />
+                                                        {t('common.save')}
+                                                    </button>
+                                                </div>
+                                            </div>
                                         </div>
-                                        <div className="flex gap-2 mb-2">
-                                           <button onClick={() => setSshAiPrefs({ aiEndpoint: 'https://openrouter.ai/api/v1/chat/completions', aiCustomModel: 'anthropic/claude-3.5-sonnet' })} className="text-[9px] px-2 py-1 rounded bg-purple-500/20 text-purple-400 hover:bg-purple-500/30 border border-purple-500/30 transition-colors" title="Use OpenRouter Preset">
-                                             🌐 OpenRouter
-                                           </button>
-                                           <button onClick={() => setSshAiPrefs({ aiEndpoint: 'https://api.openai.com/v1/chat/completions', aiCustomModel: 'gpt-4o' })} className="text-[9px] px-2 py-1 rounded bg-emerald-500/20 text-emerald-400 hover:bg-emerald-500/30 border border-emerald-500/30 transition-colors" title="Use default OpenAI Endpoint">
-                                             🟢 OpenAI
-                                           </button>
-                                        </div>
-                                        <input type="text" placeholder="Endpoint URL (e.g. OpenAI format)" value={osState?.sshAiPrefs?.aiEndpoint || ''} onChange={(e) => setSshAiPrefs({ aiEndpoint: e.target.value })} className="w-full text-[10px] rounded bg-black/30 border border-[var(--border-color)] px-2 py-1.5 outline-none focus:border-purple-500" style={{ color: 'var(--text-primary)' }} title="API Endpoint URL" />
-                                        <input type="password" placeholder="API Key" value={osState?.sshAiPrefs?.aiApiKey || ''} onChange={(e) => setSshAiPrefs({ aiApiKey: e.target.value })} className="w-full text-[10px] rounded bg-black/30 border border-[var(--border-color)] px-2 py-1.5 outline-none focus:border-purple-500" style={{ color: 'var(--text-primary)' }} title="API Key" />
-                                        <input type="text" placeholder="Model Name (e.g. gpt-4o, openrouter/auto)" value={osState?.sshAiPrefs?.aiCustomModel || ''} onChange={(e) => setSshAiPrefs({ aiCustomModel: e.target.value })} className="w-full text-[10px] rounded bg-black/30 border border-[var(--border-color)] px-2 py-1.5 outline-none focus:border-purple-500" style={{ color: 'var(--text-primary)' }} title="Custom Model Name" />
-                                        <div className="text-[9px] text-[var(--text-muted)] italic leading-tight pt-1">Settings are shared with Terminal AI config. Requires OpenAI-compatible endpoint.</div>
+                                        )}
                                     </div>
                                 )}
                             </div>

@@ -724,8 +724,6 @@ export default function TerminalView({ connectionId, connectionName, host, color
     const socket = io({
       path: '/api/socket',
       transports: ['websocket', 'polling'],
-      forceNew: true,
-      multiplex: false,
       query: {
         dbUri: appState.dbConfig?.uri || ''
       }
@@ -746,19 +744,13 @@ export default function TerminalView({ connectionId, connectionName, host, color
       setLatency(now - sentTimestamp);
     });
 
-    socket.on('ssh:connected', (data) => {
+    socket.on('ssh:connected', () => {
       setStatus('connected');
       updateConnectionStatus('online'); // Update global state
       idleTimedOutRef.current = false;
       setShowReconnect(false);
-      
-      const isReattached = data?.reattached;
-      if (isReattached) {
-        term.writeln(`\x1b[1;36m⇅  ${t('terminal.reattachedSession') || 'Re-attached to persistent session'}\x1b[0m\n`);
-      } else {
-        term.writeln(`\x1b[1;32m✓ ${t('terminal.connectedSuccess')}\x1b[0m\n`);
-        appendOutput(`✓ ${t('terminal.connectedSuccess')}\n`);
-      }
+      term.writeln(`\x1b[1;32m✓ ${t('terminal.connectedSuccess')}\x1b[0m\n`);
+      appendOutput(`✓ ${t('terminal.connectedSuccess')}\n`);
       term.writeln('\r');
       
       // Secondary dimension sync to ensure precision after handshake
@@ -771,8 +763,8 @@ export default function TerminalView({ connectionId, connectionName, host, color
         } catch (e) {}
       }, 100);
 
-      // Run initialCommand (e.g. tmux attach) ONLY if it's a new session
-      if (initialCommand && !isReattached) {
+      // Run initialCommand (e.g. tmux attach) once shell is ready
+      if (initialCommand) {
         setTimeout(() => {
           if (socket.connected) {
             socket.emit('ssh:input', initialCommand);
@@ -898,26 +890,17 @@ export default function TerminalView({ connectionId, connectionName, host, color
 
     const handleResize = () => performFit();
     window.addEventListener('resize', handleResize);
-    
-    // Remote restart listener (used by Dashboard to reconnect from a click)
-    const handleRemoteRestart = (e) => {
-      // Reconnect if the event targets this specific connection
-      if (e.detail?.terminalId === terminalId || e.detail?.connectionId === propsRef.current.connectionId) {
-        handleReconnect();
-      }
-    };
-    window.addEventListener('terminal:restart', handleRemoteRestart);
 
     const observer = new ResizeObserver(() => {
       // Small delay helps flexbox layouts finish settling
       setTimeout(performFit, 0);
       setTimeout(performFit, 50);
     });
+
     if (terminalRef.current) observer.observe(terminalRef.current);
 
     return () => {
       window.removeEventListener('resize', handleResize);
-      window.removeEventListener('terminal:restart', handleRemoteRestart);
       observer.disconnect();
     };
   }, [connectionId, appState.dbConfig?.uri, updateConnectionStatus]);
@@ -4369,30 +4352,15 @@ What is your move?`;
         cleanup.then(fn => fn && fn());
       }
       if (socketRef.current) {
-        // We do NOT emit 'ssh:disconnect' here because we want sessions to PERSIST
-        // when the component unmounts (e.g. during refresh or switching tabs).
-        // Only explicitly disconnect the socket.IO connection.
+        socketRef.current.emit('ssh:disconnect');
         socketRef.current.disconnect();
       }
       if (termInstanceRef.current) {
         termInstanceRef.current.dispose();
         termInstanceRef.current = null;
       }
-      // Update local status to offline
-      dispatch({ 
-        type: 'UPDATE_CONNECTION', 
-        payload: { _id: connectionId, status: 'offline' } 
-      });
     };
   }, [initTerminal, reconnectNonce]);
-
-  const handleManualDisconnect = () => {
-    if (socketRef.current) {
-      socketRef.current.emit('ssh:disconnect');
-      socketRef.current.disconnect();
-    }
-    setStatus('disconnected');
-  };
 
   const handleReconnect = () => {
     try {

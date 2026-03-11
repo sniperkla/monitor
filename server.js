@@ -30,6 +30,7 @@ const { Server } = require('socket.io');
 const { Client } = require('ssh2');
 const mongoose = require('mongoose');
 const mysql = require('mysql2/promise');
+const { Client: PgClient, Pool: PgPool } = require('pg');
 const { decrypt } = require('./src/utils/encryption');
 const compression = require('compression');
 
@@ -133,69 +134,13 @@ function getLatestCenterUri() {
 
 // Multi-tenant Model Pool
 const modelsPool = new Map();
-
-/**
- * Normalise a MongoDB URI so that hostname variants (localhost, 127.0.0.1)
- * and default-port omission all produce the same canonical string.
- */
-function normalizeMongoUri(raw) {
-  if (!raw) return '';
-  let u = raw.trim();
-  u = u.replace(/\b(localhost|127\.0\.0\.1|\[::1\])\b/gi, '127.0.0.1');
-  u = u.replace(/:27017(?=\/|$)/, '');
-  return u;
-}
-
-async function getModels(uri, userId) {
-  let targetUri = uri || getLatestCenterUri();
+async function getModels(uri) {
+  const targetUri = uri || getLatestCenterUri();
   if (!targetUri) {
      return { Connection: null, Session: null };
   }
 
-  // If URI targets localhost, try to route through Local Relay Agent
-  const isLocalhost = /localhost|127\.0\.0\.1/.test(targetUri);
-  if (isLocalhost && userId && global.__activeRelays?.size) {
-    const relay = global.__activeRelays.get(userId);
-    if (relay && relay.localPort) {
-      // Rewrite URI to go through the relay's local TCP proxy
-      try {
-        const url = new URL(targetUri);
-        url.hostname = '127.0.0.1';
-        url.port = String(relay.localPort);
-        const relayUri = url.toString();
-        console.log(`[getModels] 🔗 Rewriting localhost URI through relay port ${relay.localPort}`);
-        targetUri = relayUri;
-      } catch (e) {
-        console.warn('[getModels] Failed to rewrite URI for relay:', e.message);
-      }
-    }
-  }
-
-  // Check if target URI is actually the center database (normalize localhost variants)
-  const centerUri = getLatestCenterUri();
-  const isCenterDb = centerUri && normalizeMongoUri(targetUri) === normalizeMongoUri(centerUri);
-
-  if (isCenterDb) {
-    // Reuse the default mongoose connection for the center database
-    // This ensures consistency with the API routes that use connectDB()
-    if (mongoose.connection.readyState === 1) {
-      return {
-        type: 'mongodb',
-        Connection: mongoose.models.Connection || mongoose.model('Connection', ConnectionSchema),
-        Session: mongoose.models.Session || mongoose.model('Session', SessionSchema)
-      };
-    }
-    // If default connection not ready, connect it first
-    await connectMongo();
-    if (mongoose.connection.readyState === 1) {
-      return {
-        type: 'mongodb',
-        Connection: mongoose.models.Connection || mongoose.model('Connection', ConnectionSchema),
-        Session: mongoose.models.Session || mongoose.model('Session', SessionSchema)
-      };
-    }
-  }
-
+  
   if (modelsPool.has(targetUri)) {
     const cached = modelsPool.get(targetUri);
     if (cached.type === 'mysql') return cached;
@@ -293,6 +238,106 @@ async function getModels(uri, userId) {
     } catch (e) {
       console.warn('⚠️ MySQL Init Error:', e.message);
       return { type: 'mysql', Connection: null, Session: null };
+    }
+  }
+
+  if (targetUri.startsWith('postgres://') || targetUri.startsWith('postgresql://')) {
+    try {
+      const pool = new PgPool({ connectionString: targetUri, max: 5, connectionTimeoutMillis: 10000 });
+      const repo = {
+        type: 'postgres',
+        pool,
+        Connection: {
+          findById: async (id) => {
+            // PostgreSQL uses integer serial IDs — skip if id looks like a MongoDB ObjectId
+            if (!/^\d+$/.test(String(id))) return null;
+            const res = await pool.query('SELECT * FROM connections WHERE id = $1', [id]);
+            if (res.rows.length === 0) return null;
+            const r = res.rows[0];
+            return {
+              ...r,
+              _id: r.id.toString(),
+              tags: (typeof r.tags === 'string' ? JSON.parse(r.tags) : r.tags) || [],
+              isFavorite: !!r.isfavorite,
+              isSrv: !!r.issrv,
+              sshTunnel: !!r.sshtunnel,
+              database: r.database_name,
+              authType: r.authtype || 'password',
+              privateKey: r.privatekey || null,
+              passphrase: r.passphrase || null,
+            };
+          },
+          findByIdAndUpdate: async (id, data) => {
+            if (!/^\d+$/.test(String(id))) return true;
+            const fields = [];
+            const values = [];
+            let i = 0;
+            for (const [k, v] of Object.entries(data)) {
+              if (k === '_id' || k === 'id') continue;
+              const dbKey = k === 'database' ? 'database_name' : k;
+              fields.push(`${dbKey} = $${++i}`);
+              values.push(['isFavorite', 'isSrv', 'sshTunnel'].includes(k) ? !!v : v);
+            }
+            if (fields.length === 0) return true;
+            values.push(id);
+            await pool.query(`UPDATE connections SET ${fields.join(', ')} WHERE id = $${++i}`, values);
+            return true;
+          }
+        },
+        Session: {
+          create: async (data) => {
+            try {
+              await pool.query(`
+                CREATE TABLE IF NOT EXISTS ssh_sessions (
+                  id SERIAL PRIMARY KEY,
+                  "connectionId" INTEGER,
+                  "startTime" TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                  "endTime" TIMESTAMP,
+                  duration INTEGER,
+                  status VARCHAR(50) DEFAULT 'active',
+                  "errorMessage" TEXT,
+                  "createdAt" TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                  "updatedAt" TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+              `);
+              const res = await pool.query(
+                'INSERT INTO ssh_sessions ("connectionId", status) VALUES ($1, $2) RETURNING id',
+                [data.connectionId, data.status]
+              );
+              return { _id: res.rows[0].id, ...data, startTime: new Date() };
+            } catch (e) {
+              console.error('PostgreSQL Session Error:', e);
+              return null;
+            }
+          },
+          findByIdAndUpdate: async (id, data) => {
+            try {
+              if (!/^\d+$/.test(String(id))) return true;
+              const updates = [];
+              const values = [];
+              let i = 0;
+              for (const [k, v] of Object.entries(data)) {
+                if (k === '_id' || k === 'id') continue;
+                updates.push(`"${k}" = $${++i}`);
+                values.push(v instanceof Date ? v.toISOString() : v);
+              }
+              if (updates.length > 0) {
+                values.push(id);
+                await pool.query(`UPDATE ssh_sessions SET ${updates.join(', ')} WHERE id = $${++i}`, values);
+              }
+              return true;
+            } catch (e) {
+              console.error('PostgreSQL Session Update Error:', e);
+              return false;
+            }
+          }
+        }
+      };
+      modelsPool.set(targetUri, repo);
+      return repo;
+    } catch (e) {
+      console.warn('⚠️ PostgreSQL Init Error:', e.message);
+      return { type: 'postgres', Connection: null, Session: null };
     }
   }
 
@@ -411,7 +456,6 @@ app.prepare().then(async () => {
 
 // Track active SSH connections
 const activeSessions = new Map();
-const persistentSessions = new Map(); // Key: userId:connectionId, Value: sessionData
 
 // Idle timeout (10 minutes)
 const SSH_IDLE_TIMEOUT_MS = 10 * 60 * 1000;
@@ -473,394 +517,32 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
       socket.emit('heartbeat:pong', timestamp);
     });
 
+      socket.on('ssh:connect', async (data) => {
+      const { connectionId, connection: connectionData, cols, rows } = data;
+      const { Connection: CurrentConnectionModel, Session: CurrentSessionModel } = await getModels(dbUri);
 
-
-          // --- SFTP/SSH Helper Functions ---
-
-        const setupSocketListeners = (targetSocket, sessionData) => {
-          const { sshClient, stream, connectionId } = sessionData;
-          const { checkRateLimit, getConcurrencyLimiter, checkMemory } = require('./src/lib/serverGuard');
-
-          // Remove previous listeners if any (important for reattachment)
-          const sftpEvents = [
-             'sftp:list', 'sftp:mkdir', 'sftp:delete', 'sftp:readFile', 
-             'sftp:writeFile', 'sftp:applyPatch', 'sftp:copy', 'sftp:move', 'sftp:cross_server_transfer',
-             'sftp:upload', 'sftp:download', 'sftp:download_folder', 'sftp:search'
-          ];
-          const sshEvents = ['ssh:input', 'ssh:resize'];
-          sftpEvents.forEach(ev => targetSocket.removeAllListeners(ev));
-          sshEvents.forEach(ev => targetSocket.removeAllListeners(ev));
-
-          const emitSftpError = (err, prefix = '') => {
-            const message = typeof err === 'string' ? err : (err?.message || 'Unknown SFTP error');
-            targetSocket.emit('sftp:error', { message: prefix ? `${prefix}: ${message}` : message });
-          };
-
-          const getSftp = (cb) => {
-            if (sessionData && sessionData.sftp) {
-              return cb(null, sessionData.sftp);
-            }
-            if (!sshClient || sshClient._state === 'closed') return cb(new Error('SSH Connection Closed'));
-            sshClient.sftp((err, sftp) => {
-              if (err) return cb(err);
-              if (sessionData) sessionData.sftp = sftp;
-              cb(null, sftp);
-            });
-          };
-
-          // Forward SSH output to client
-          const onData = (data) => {
-            touchActivity();
-            targetSocket.emit('ssh:data', data.toString('utf-8'));
-          };
-          
-          if (stream.listenerCount('data') > 0) {
-             stream.removeAllListeners('data');
-             stream.removeAllListeners('stderr');
-          }
-          stream.on('data', onData);
-          if (stream.stderr) stream.stderr.on('data', onData);
-
-          stream.removeAllListeners('close');
-          stream.on('close', () => {
-            console.log(`📴 SSH stream closed for session ${connectionId}`);
-            targetSocket.emit('ssh:closed');
-            cleanupSession(targetSocket.id, true);
-          });
-
-          // Forward client input to SSH
-          targetSocket.on('ssh:input', (inputData) => {
-            touchActivity();
-            if (stream.writable) {
-              stream.write(inputData);
-            }
-          });
-
-          // Handle terminal resize
-          targetSocket.on('ssh:resize', ({ cols, rows }) => {
-            if (stream) {
-              stream.setWindow(rows, cols, 0, 0);
-            }
-          });
-
-          targetSocket.on('sftp:list', (path = '.') => {
-             console.log(`📂 [${targetSocket.id}] SFTP LIST REQUEST: ${path}`);
-             getSftp((err, sftp) => {
-               if (err) return fallbackFileListing(targetSocket, sshClient, path);
-               sftp.readdir(path === '.' ? './' : path, (err, list) => {
-                 if (err) return fallbackFileListing(targetSocket, sshClient, path);
-                 targetSocket.emit('sftp:list', { path, files: list });
-               });
-             });
-          });
-
-          targetSocket.on('sftp:mkdir', (path) => {
-            getSftp((err, sftp) => {
-              if (err) return emitSftpError(err);
-              sftp.mkdir(path, (err) => {
-                if (err) return emitSftpError(err);
-                targetSocket.emit('sftp:success', { message: 'Directory created', path });
-              });
-            });
-          });
-
-          targetSocket.on('sftp:delete', (path) => {
-            getSftp((err, sftp) => {
-              if (err) return emitSftpError(err);
-              sftp.lstat(path, (err, stats) => {
-                if (err) return emitSftpError(err);
-                const action = stats.isDirectory() ? sftp.rmdir : sftp.unlink;
-                action.call(sftp, path, (err) => {
-                  if (err) return emitSftpError(err);
-                  targetSocket.emit('sftp:success', { message: 'Deleted successfully', path });
-                });
-              });
-            });
-          });
-
-          targetSocket.on('sftp:readFile', (path) => {
-            getSftp((err, sftp) => {
-              if (err) return emitSftpError(err);
-              sftp.readFile(path, 'utf8', (err, data) => {
-                if (err) return emitSftpError(err);
-                targetSocket.emit('sftp:fileContent', { path, content: data });
-              });
-            });
-          });
-
-          targetSocket.on('sftp:writeFile', (data) => {
-            getSftp((err, sftp) => {
-              if (err) return emitSftpError(err);
-              sftp.writeFile(data.path, data.content, 'utf8', (err) => {
-                if (err) return emitSftpError(err);
-                targetSocket.emit('sftp:success', { message: 'File saved', path: data.path });
-              });
-            });
-          });
-
-          targetSocket.on('sftp:search', ({ query } = {}) => {
-            const q = String(query || '').trim();
-            if (!q) return targetSocket.emit('sftp:searchResult', { query: q, results: [], error: null });
-            if (!sshClient || sshClient._state === 'closed') return targetSocket.emit('sftp:error', { message: 'SSH not connected' });
-            
-            const escapedQ = q.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/`/g, '\\`').replace(/\$/g, '\\$');
-            const cmd = [
-              `find $HOME -iname "*${escapedQ}*" 2>/dev/null | head -150`,
-              `find / \\( -path "$HOME" -o -path /proc -o -path /sys -o -path /dev -o -path /run \\) -prune -o -iname "*${escapedQ}*" -print 2>/dev/null | head -100`,
-            ].join(' ; ');
-
-            let output = '';
-            let done = false;
-            sshClient.exec(cmd, (err, stream) => {
-              if (err) return targetSocket.emit('sftp:searchResult', { query: q, results: [], error: err.message });
-              stream.on('data', (d) => { output += d.toString(); });
-              stream.on('close', () => {
-                if (done) return;
-                done = true;
-                const results = output.split('\n').map(s => s.trim()).filter(Boolean);
-                targetSocket.emit('sftp:searchResult', { query: q, results });
-              });
-            });
-          });
-
-          // --- Complex Transfers (Upload/Download) ---
-          targetSocket.on('sftp:upload', ({ filename, path: destPath, size, offset = 0 }) => {
-            const mem = checkMemory(300);
-            if (!mem.safe) return targetSocket.emit('sftp:error', { message: 'Server busy' });
-            const limiter = getConcurrencyLimiter('file_transfer', 10);
-            if (!limiter.allowed) return targetSocket.emit('sftp:error', { message: 'Transfer limit reached' });
-
-            getSftp((err, sftp) => {
-              if (err) return emitSftpError(err);
-              const transferId = `up_${Date.now()}`;
-              const startUpload = (actualOffset) => {
-                sessionData.activeTransfers.add(transferId);
-                limiter.acquire();
-                const flags = actualOffset > 0 ? 'r+' : 'w';
-                const writeStream = sftp.createWriteStream(destPath, { flags, start: actualOffset });
-                let bytesReceivedInSession = 0;
-                
-                const chunkHandler = (chunk) => {
-                  writeStream.write(chunk, (err) => {
-                    if (err) return;
-                    bytesReceivedInSession += chunk.length;
-                    const totalTransferred = actualOffset + bytesReceivedInSession;
-                    targetSocket.emit(`sftp:upload_ack:${filename}`, { 
-                      received: chunk.length, totalTransferred, progress: Math.round((totalTransferred / size) * 100)
-                    });
-                  });
-                };
-
-                targetSocket.on(`sftp:upload_chunk:${filename}`, chunkHandler);
-                targetSocket.emit('sftp:can_upload', { filename, offset: actualOffset });
-                targetSocket.once(`sftp:upload_done:${filename}`, () => {
-                  writeStream.end();
-                  targetSocket.off(`sftp:upload_chunk:${filename}`, chunkHandler);
-                });
-                writeStream.on('close', () => {
-                  if (sessionData.activeTransfers.has(transferId)) { limiter.release(); sessionData.activeTransfers.delete(transferId); }
-                  targetSocket.emit('sftp:action_success', { action: 'upload', path: destPath });
-                });
-                writeStream.on('error', (err) => {
-                  if (sessionData.activeTransfers.has(transferId)) { limiter.release(); sessionData.activeTransfers.delete(transferId); }
-                  targetSocket.off(`sftp:upload_chunk:${filename}`, chunkHandler);
-                });
-              };
-
-              if (offset === 0) {
-                sftp.stat(destPath, (err, stats) => {
-                  if (!err && stats.isFile() && stats.size < size) startUpload(stats.size);
-                  else startUpload(0);
-                });
-              } else startUpload(offset);
-            });
-          });
-
-          targetSocket.on('sftp:download', ({ filePath, offset = 0 }) => {
-            getSftp((err, sftp) => {
-              if (err) return emitSftpError(err);
-              sftp.stat(filePath, (err, stats) => {
-                if (err) return emitSftpError(err);
-                const transferId = `down_${Date.now()}`;
-                const limiter = getConcurrencyLimiter('file_transfer', 10);
-                sessionData.activeTransfers.add(transferId);
-                limiter.acquire();
-                const readStream = sftp.createReadStream(filePath, { start: offset });
-                const fname = path.posix.basename(filePath);
-                targetSocket.emit('sftp:download_start', { filename: fname, size: stats.size, offset });
-                let bytesSent = 0;
-                readStream.on('data', (chunk) => {
-                  bytesSent += chunk.length;
-                  targetSocket.emit('sftp:download_chunk', { filename: fname, chunk, progress: Math.round(((offset + bytesSent) / stats.size) * 100), offset: offset + bytesSent });
-                });
-                readStream.on('end', () => {
-                  if (sessionData.activeTransfers.has(transferId)) { limiter.release(); sessionData.activeTransfers.delete(transferId); }
-                  targetSocket.emit('sftp:download_done', { filename: fname });
-                });
-                readStream.on('error', (err) => {
-                  if (sessionData.activeTransfers.has(transferId)) { limiter.release(); sessionData.activeTransfers.delete(transferId); }
-                });
-              });
-            });
-          });
-          
-          // ... Other listeners like download_folder can be added here if needed
-        };
-
-        socket.on('ssh:connect', async (data) => {
-        const { connectionId, connection: connectionData, cols, rows } = data;
+      try {
+        let connection;
         
-        // --- ⚡️ FAST RE-ATTACH: Check persistence immediately ⚡️ ---
-        // This MUST happen before DB lookups so re-attachment works even if Vault is locked.
-        const uId = socket.user?.sub || socket.user?.id || socket.user?.email || socket.user?.name || 'guest';
-        const persistentKey = `${uId}:${String(connectionId)}`;
-        const existingSession = persistentSessions.get(persistentKey);
+        // Handle DB Connections
+        if (connectionId && !connectionId.startsWith('local-')) {
+          if (!CurrentConnectionModel) {
+             socket.emit('ssh:error', { message: 'Vault not configured. Please setup your private database.' });
+             return;
+          }
+          await connectMongo();
+          connection = await CurrentConnectionModel.findById(connectionId);
+        }
         
-        console.log(`🔍 [SSH Connect] Checking persistence for key: ${persistentKey} (Found: ${!!existingSession})`);
-
-        if (existingSession && !existingSession.isCleaningUp) {
-          console.log(`🔄 Re-attaching to persistent session for ${existingSession.connectionId} (${persistentKey})`);
-          
-          if (existingSession.detachTimer) {
-            console.log(`⏰ Cancelled cleanup timer for ${persistentKey}`);
-            clearTimeout(existingSession.detachTimer);
-            existingSession.detachTimer = null;
-          }
-
-          // Cleanup any session currently on THIS socket
-          await cleanupSession(socket.id);
-          
-          const sessionData = existingSession;
-          const oldSocketId = sessionData.socketId;
-          if (oldSocketId && oldSocketId !== socket.id) {
-            activeSessions.delete(oldSocketId);
-          }
-          
-          sessionData.socketId = socket.id;
-          activeSessions.set(socket.id, sessionData);
-          persistentSessions.delete(persistentKey); 
-
-          setupSocketListeners(socket, sessionData);
-          socket.emit('ssh:connected', { sessionId: sessionData.session?._id || null, reattached: true });
-          
-          if (sessionData.stream) {
-            sessionData.stream.setWindow(rows || 30, cols || 120, 0, 0);
-          }
-          return;
+        // Use provided data if DB lookup fails or if it's a local/manual connection
+        if (!connection && connectionData) {
+          connection = connectionData;
         }
 
-        const { Connection: CurrentConnectionModel, Session: CurrentSessionModel } = await getModels(dbUri, uId);
-
-        try {
-          let connection;
-          
-          // Handle DB Connections
-          if (connectionId && !connectionId.startsWith('local-')) {
-            if (!CurrentConnectionModel) {
-               socket.emit('ssh:error', { message: 'Vault not configured. Please setup your private database.' });
-               return;
-            }
-            await connectMongo();
-            console.log(`[SSH DEBUG] Looking up connection ${connectionId} using dbUri: ${dbUri || 'CENTER'}`);
-            connection = await CurrentConnectionModel.findById(connectionId);
-            
-            // Fallback 1: Try center DB model
-            if (!connection && dbUri) {
-              console.log(`[SSH DEBUG] Model findById returned null. Trying center DB fallback...`);
-              try {
-                const { Connection: CenterModel } = await getModels(null, uId);
-                if (CenterModel) {
-                  connection = await CenterModel.findById(connectionId);
-                  if (connection) console.log(`[SSH DEBUG] ✅ Found connection in center DB fallback!`);
-                }
-              } catch (fbErr) {
-                console.log(`[SSH DEBUG] Center DB fallback failed:`, fbErr.message);
-              }
-            }
-
-            // Fallback 2: Raw MongoDB collection query (bypasses Mongoose model issues entirely)
-            if (!connection) {
-              console.log(`[SSH DEBUG] ⚠️ All model lookups failed. Trying raw MongoDB collection query...`);
-              try {
-                const { ObjectId } = require('mongoose').Types;
-                let oid;
-                try { oid = new ObjectId(connectionId); } catch (_) { oid = connectionId; }
-                
-                console.log(`[SSH DEBUG] Default mongoose readyState: ${mongoose.connection.readyState}`);
-                console.log(`[SSH DEBUG] Default mongoose db name: ${mongoose.connection.db?.databaseName || 'N/A'}`);
-                console.log(`[SSH DEBUG] Looking for _id: ${oid} (type: ${typeof oid})`);
-                
-                // Try on default mongoose connection first
-                if (mongoose.connection.readyState === 1) {
-                  const count = await mongoose.connection.db.collection('connections').countDocuments();
-                  const allIds = await mongoose.connection.db.collection('connections').find({}, { projection: { _id: 1, name: 1, host: 1 } }).toArray();
-                  console.log(`[SSH DEBUG] Default DB has ${count} connections:`, allIds.map(d => `${d._id} (${d.name})`));
-                  
-                  const rawDoc = await mongoose.connection.db.collection('connections').findOne({ _id: oid });
-                  if (rawDoc) {
-                    console.log(`[SSH DEBUG] ✅ Found via raw query on default connection!`);
-                    connection = rawDoc;
-                  } else {
-                    // Also try string match
-                    const rawDoc2 = await mongoose.connection.db.collection('connections').findOne({ _id: connectionId });
-                    if (rawDoc2) {
-                      console.log(`[SSH DEBUG] ✅ Found via string _id query!`);
-                      connection = rawDoc2;
-                    }
-                  }
-                }
-                
-                // If still not found, try on the dbUri connection
-                if (!connection && dbUri) {
-                  const targetConn = await mongoose.createConnection(dbUri, { serverSelectionTimeoutMS: 5000 }).asPromise();
-                  const count2 = await targetConn.db.collection('connections').countDocuments();
-                  console.log(`[SSH DEBUG] dbUri DB (${targetConn.db.databaseName}) has ${count2} connections`);
-
-                  if (count2 > 0) {
-                    const allIds2 = await targetConn.db.collection('connections').find({}, { projection: { _id: 1, name: 1 } }).toArray();
-                    console.log(`[SSH DEBUG] dbUri DB IDs:`, allIds2.map(d => `${d._id} (${d.name})`));
-                  }
-                  
-                  const rawDoc = await targetConn.db.collection('connections').findOne({ _id: oid });
-                  if (rawDoc) {
-                    console.log(`[SSH DEBUG] ✅ Found via raw query on dbUri connection!`);
-                    connection = rawDoc;
-                  }
-                  targetConn.close();
-                }
-              } catch (rawErr) {
-                console.log(`[SSH DEBUG] Raw query fallback failed:`, rawErr.message);
-              }
-            }
-            
-            if (!connection) {
-              console.log(`[SSH DEBUG] ⚠️ ALL DB lookups failed! connectionId=${connectionId}`);
-            }
-          }
-          
-          // Use provided data if DB lookup fails or if it's a local/manual connection
-          if (!connection && connectionData) {
-            connection = connectionData;
-          }
-
-          if (!connection) {
-            socket.emit('ssh:error', { message: 'Connection not found' });
-            return;
-          }
-
-          // DEBUG: What did we actually get from the DB?
-          const connObj = connection.toObject ? connection.toObject() : connection;
-          console.log('[SSH DEBUG] Connection from DB:', {
-            name: connObj.name,
-            host: connObj.host,
-            authType: connObj.authType,
-            hasPassword: !!connObj.password,
-            passwordPreview: connObj.password ? connObj.password.substring(0, 20) + '...' : 'NULL',
-            hasPrivateKey: !!connObj.privateKey,
-            pkPreview: connObj.privateKey ? connObj.privateKey.substring(0, 20) + '...' : 'NULL',
-            source: connection.toObject ? 'DB_MODEL' : 'CLIENT_DATA',
-            dbUri: dbUri ? dbUri.substring(0, 30) + '...' : 'NONE',
-          });
+        if (!connection) {
+          socket.emit('ssh:error', { message: 'Connection not found' });
+          return;
+        }
 
         // Cleanup any existing session on this socket before creating a new one
         await cleanupSession(socket.id);
@@ -900,6 +582,23 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
         sshClient.on('ready', () => {
           console.log(`✅ SSH ready for ${connection.host}`);
           
+          const emitSftpError = (err, prefix = '') => {
+            const message = typeof err === 'string' ? err : (err?.message || 'Unknown SFTP error');
+            socket.emit('sftp:error', { message: prefix ? `${prefix}: ${message}` : message });
+          };
+
+          const getSftp = (cb) => {
+            const sessionData = activeSessions.get(socket.id);
+            if (sessionData && sessionData.sftp) {
+              return cb(null, sessionData.sftp);
+            }
+            sshClient.sftp((err, sftp) => {
+              if (err) return cb(err);
+              if (sessionData) sessionData.sftp = sftp;
+              cb(null, sftp);
+            });
+          };
+          
           // Request a PTY shell
           sshClient.shell({ term: 'xterm-256color', cols: cols || 120, rows: rows || 30 }, (err, stream) => {
             if (err) {
@@ -908,26 +607,82 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
             }
 
             // Store active session
-            const uId = socket.user?.sub || socket.user?.id || socket.user?.email || socket.user?.name || 'guest';
-            const sessionData = { 
-              socketId: socket.id,
-              userId: uId,
+            activeSessions.set(socket.id, { 
               sshClient, 
               stream, 
               session, 
-              connectionId: String(connectionId), 
+              connectionId, 
               dbUri,
-              activeTransfers: new Set(),
+              activeTransfers: new Set(), // Track transfer IDs for cleanup
               lastActivityAt: Date.now(),
               lastIdleLogAt: 0,
               idleInterval: null,
-            };
-            activeSessions.set(socket.id, sessionData);
+            });
 
             ensureIdleWatcher();
-            setupSocketListeners(socket, sessionData);
+
+            // Forward SSH output to client
+            stream.on('data', (data) => {
+              touchActivity();
+              socket.emit('ssh:data', data.toString('utf-8'));
+            });
+
+            stream.stderr.on('data', (data) => {
+              touchActivity();
+              socket.emit('ssh:data', data.toString('utf-8'));
+            });
+
+            stream.on('close', () => {
+              console.log(`📴 SSH stream closed for socket ${socket.id}`);
+              socket.emit('ssh:closed');
+              // Don't cleanup everything immediately if we want to keep SFTP alive
+              // But we usually want to close both.
+            });
+
+            // Forward client input to SSH
+            socket.on('ssh:input', (inputData) => {
+              touchActivity();
+              if (stream.writable) {
+                stream.write(inputData);
+              }
+            });
+
+            // Handle terminal resize
+            socket.on('ssh:resize', ({ cols, rows }) => {
+              if (stream) {
+                stream.setWindow(rows, cols, 0, 0);
+              }
+            });
           });
-        });
+
+          // Register SFTP handlers immediately when ready
+          socket.on('sftp:list', (path = '.') => {
+            console.log(`📂 [${socket.id}] SFTP LIST REQUEST: ${path}`);
+            if (!sshClient || sshClient._state === 'closed') {
+               return socket.emit('sftp:error', { message: 'SSH Connection Closed' });
+            }
+
+            let sftpHandled = false;
+            const sftpTimeout = setTimeout(() => {
+              if (sftpHandled) return;
+              sftpHandled = true;
+              fallbackFileListing(socket, sshClient, path);
+            }, 2000);
+
+            getSftp((err, sftp) => {
+              if (sftpHandled) return;
+              clearTimeout(sftpTimeout);
+              sftpHandled = true;
+
+              if (err) return fallbackFileListing(socket, sshClient, path);
+
+              const targetPath = path === '.' ? './' : path;
+              sftp.readdir(targetPath, (err, list) => {
+                if (err) return fallbackFileListing(socket, sshClient, path);
+                socket.emit('sftp:list', { path, files: list });
+              });
+            });
+          });
 
           // ── Global SFTP Search (find across entire filesystem) ──────────────
           socket.on('sftp:search', ({ query } = {}) => {
@@ -2060,7 +1815,6 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
              });
           });
 
-
           // Notify client we are connected
           socket.emit('ssh:connected', { sessionId: session ? session._id : null });
 
@@ -2071,7 +1825,7 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
               lastConnected: new Date(),
             }).catch(console.error);
           }
-
+        });
 
         sshClient.on('error', async (err) => {
           console.error(`❌ SSH error: ${err?.message || err}`);
@@ -2129,7 +1883,12 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
           }
         } else if (connection.authType === 'privateKey') {
           console.log('🔑 Using Private Key auth for:', connection.host);
-          
+
+          if (!connection.privateKey) {
+            socket.emit('ssh:error', { message: 'No private key stored for this connection. Please edit the connection and upload your private key.' });
+            return;
+          }
+
           const { text: decryptedKey, success: keySuccess, usedOldKey: keyOld } = decryptWithMetadata(connection.privateKey);
           
           if (!keySuccess) {
@@ -2148,7 +1907,21 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
             socket.emit('ssh:error', { message: 'PPK format detected. Please convert to OpenSSH/PEM format.' });
             return;
           }
-          sshConfig.privateKey = decryptedKey;
+
+          // Normalize the private key: fix Windows line endings and trim outer whitespace
+          const normalizedKey = decryptedKey
+            ? decryptedKey.replace(/\r\n/g, '\n').replace(/\r/g, '\n').trim()
+            : null;
+
+          // Log key type for debugging (safe — shows only the header line)
+          console.log(`🔑 Key header: ${normalizedKey ? normalizedKey.split('\n')[0] : 'empty'}`);
+
+          if (!normalizedKey || !normalizedKey.startsWith('-----BEGIN')) {
+            socket.emit('ssh:error', { message: 'Invalid private key format. Key must be in PEM/OpenSSH format.' });
+            return;
+          }
+
+          sshConfig.privateKey = normalizedKey;
 
           if (connection.passphrase) {
             const { text: decryptedPassphrase, success: passSuccess, usedOldKey: passOld } = decryptWithMetadata(connection.passphrase);
@@ -2174,10 +1947,7 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
               .catch(err => console.error('❌ Migration failed:', err));
         }
 
-        console.log('[SSH DEBUG] Trying to connect with user:', sshConfig.username, 'to', sshConfig.host);
-        console.log('[SSH DEBUG] Auth Info: Password Length:', sshConfig.password ? sshConfig.password.length : 'none', 
-                    '| PrivateKey length:', sshConfig.privateKey ? sshConfig.privateKey.length : 'none',
-                    '| Passphrase length:', sshConfig.passphrase ? sshConfig.passphrase.length : 'none');
+        // console.log('Connecting with config:', { ...sshConfig, privateKey: 'REDACTED', password: 'REDACTED' });
         sshClient.connect(sshConfig);
       } catch (err) {
         console.error('SSH connect error:', err);
@@ -2185,150 +1955,67 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
       }
     });
 
-    socket.on('register:connection', (data) => {
-      const { connectionId } = data;
-      if (!connectionId) return;
-      
-      const session = activeSessions.get(socket.id) || {
-        socketId: socket.id,
-        connectionId,
-        dbUri,
-        lastActivityAt: Date.now()
-      };
-      
-      session.connectionId = connectionId;
-      activeSessions.set(socket.id, session);
-      console.log(`📌 Connection registered on socket ${socket.id}: ${connectionId}`);
-    });
-
     socket.on('ssh:disconnect', () => {
-      cleanupSession(socket.id, true); // Kill it for real if user explicitly disconnects
+      cleanupSession(socket.id);
     });
 
     socket.on('disconnect', () => {
       console.log(`🔌 Socket disconnected: ${socket.id}`);
-      detachSession(socket.id);
+      cleanupSession(socket.id);
     });
-
-    function detachSession(socketId) {
-      const session = activeSessions.get(socketId);
-      if (!session || !session.connectionId) {
-        console.log(`🔌 No active SSH session to detach for socket ${socketId}`);
-        return cleanupSession(socketId, true);
-      }
-
-      const uId = session.userId || 'guest';
-      const persistentKey = `${uId}:${String(session.connectionId)}`;
-      console.log(`🔌 Detaching session for ${persistentKey}. Waiting 5 minutes for re-attachment...`);
-      
-      session.detachTimer = setTimeout(() => {
-        console.log(`⏰ Persistence grace period expired for ${persistentKey}. Cleaning up.`);
-        cleanupSession(socketId, true);
-        persistentSessions.delete(persistentKey);
-      }, 5 * 60 * 1000); // 5 minutes
-
-      persistentSessions.set(persistentKey, session);
-      activeSessions.delete(socketId);
-      console.log(`🔌 Session ${persistentKey} successfully detached and moved to persistence.`);
-    }
   });
 
-
-  async function cleanupSession(socketId, forceKill = false) {
-    let session = activeSessions.get(socketId);
-    let pk = null;
-    if (!session && forceKill) {
-       for (const [key, s] of persistentSessions.entries()) {
-         if (s.socketId === socketId) {
-           session = s;
-           pk = key;
-           break;
-         }
-       }
-    } else if (session) {
-       pk = `${session.userId}:${session.connectionId}`;
-    }
-
+  async function cleanupSession(socketId) {
+    const session = activeSessions.get(socketId);
     if (session) {
-      const uId = session.userId || 'guest';
-      const connectionId = session.connectionId;
-      console.log(`🧹 Cleaning up session for ${uId}:${connectionId} (forceKill=${forceKill})`);
-      
       try {
         if (session.idleInterval) {
           clearInterval(session.idleInterval);
           session.idleInterval = null;
         }
+        if (session.sftp) {
+           // No explicit close needed for sftp if client is closed
+        }
+        if (session.sshClient) {
+           session.sshClient.end();
+        }
 
-        if (session.detachTimer) {
-          clearTimeout(session.detachTimer);
-          session.detachTimer = null;
-        }
-        
-        if (forceKill) {
-           if (session.sshClient) {
-             console.log(`🔌 Ending SSH client for ${connectionId}`);
-             session.sshClient.end();
-           }
-           if (pk) {
-             persistentSessions.delete(pk);
-             console.log(`🗑️ Removed ${pk} from persistent sessions.`);
-           }
-        }
-        
         if (session.session) {
-          try {
-            const endTime = new Date();
-            const duration = Math.floor((endTime - session.session.startTime) / 1000);
-            const { Session: CleanupSessionModel } = await getModels(session.dbUri, uId);
-            if (CleanupSessionModel) {
-              await CleanupSessionModel.findByIdAndUpdate(session.session._id, {
-                status: 'closed',
-                endTime,
-                duration,
-              });
-              console.log(`✅ Session record ${session.session._id} marked as closed.`);
-            }
-          } catch (e) {
-            console.error('Failed to update session record:', e.message);
-          }
+          const endTime = new Date();
+          const duration = Math.floor((endTime - session.session.startTime) / 1000);
+          const { Session: CleanupSessionModel } = await getModels(session.dbUri);
+          await CleanupSessionModel.findByIdAndUpdate(session.session._id, {
+            status: 'closed',
+            endTime,
+            duration,
+          });
         }
         
-        if (forceKill && connectionId && !String(connectionId).startsWith('local-')) {
-           try {
-             console.log(`📡 Updating DB status to offline for connection ${connectionId}`);
-             const { Connection: CurrentConnectionModel } = await getModels(session.dbUri, uId);
-             if (CurrentConnectionModel) {
-               const result = await CurrentConnectionModel.findByIdAndUpdate(connectionId, { status: 'offline' });
-               console.log(`✅ DB status updated for ${connectionId}:`, !!result);
-             } else {
-               console.warn(`⚠️ Could not find Connection model for ${connectionId}`);
-             }
-           } catch (e) {
-             console.error(`❌ Failed to update DB status for ${connectionId}:`, e.message);
+        if (session.connectionId && !session.connectionId.startsWith('local-')) {
+           const { Connection: CurrentConnectionModel } = await getModels(session.dbUri);
+           if (CurrentConnectionModel) {
+             await CurrentConnectionModel.findByIdAndUpdate(session.connectionId, { status: 'offline' });
            }
         }
 
+        // --- NEW: Cleanup any active file transfers ---
         if (session.activeTransfers && session.activeTransfers.size > 0) {
            const { getConcurrencyLimiter } = require('./src/lib/serverGuard');
            const limiter = getConcurrencyLimiter('file_transfer');
            for (const tId of session.activeTransfers) {
-              try { limiter.release(); } catch(e) {}
+              limiter.release();
               console.log(`🧹 Released capacity for abandoned transfer: ${tId}`);
            }
            session.activeTransfers.clear();
         }
       } catch (err) {
-        console.error('Error during session cleanup:', err);
+        console.error('Error cleaning up session:', err);
       }
       activeSessions.delete(socketId);
-    } else {
-      console.log(`🧹 Cleanup requested for socket ${socketId}, but no matching session found.`);
     }
   }
 
   // =======================================================================
-
   // LOCAL RELAY AGENT — WebSocket TCP proxy (free, no port forwarding needed)
   // Users run local-relay.js on their machine; it connects outward here.
   // =======================================================================
