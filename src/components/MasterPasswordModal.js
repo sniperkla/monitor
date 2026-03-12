@@ -165,23 +165,32 @@ export default function MasterPasswordModal() {
     await continueSetup(uri, null);
   };
 
-  const continueSetup = async (uri, tunnelConfig) => {
+  const continueSetup = async (uri, tunnelConfig, skipTest = false) => {
     setLoading(true);
     try {
-      // First test the URI (with tunnel if configured)
-      const testHeaders = { 'Content-Type': 'application/json' };
-      if (tunnelConfig) testHeaders['x-vault-tunnel'] = JSON.stringify(tunnelConfig);
+      if (!skipTest) {
+        // First test the URI (with tunnel if configured)
+        const testHeaders = { 'Content-Type': 'application/json' };
+        if (tunnelConfig) testHeaders['x-vault-tunnel'] = JSON.stringify(tunnelConfig);
 
-      const testRes = await fetch('/api/connections/test-uri', { 
-        method: 'POST',
-        headers: testHeaders,
-        body: JSON.stringify({ uri })
-      });
-      const testData = await testRes.json();
-      if (!testData.success) {
-        setError(testData.error || t('vault.errors.connectionFailed'));
-        setLoading(false);
-        return;
+        const testRes = await fetch('/api/connections/test-uri', { 
+          method: 'POST',
+          headers: testHeaders,
+          body: JSON.stringify({ uri })
+        });
+        const testData = await testRes.json();
+        if (!testData.success) {
+          // If relay is required, show relay reminder instead of a generic error
+          if (testData.relayRequired) {
+            setPendingSetup({ uri, tunnelConfig });
+            setShowRelayReminder(true);
+            setLoading(false);
+            return;
+          }
+          setError(testData.error || t('vault.errors.connectionFailed'));
+          setLoading(false);
+          return;
+        }
       }
 
       await setupVault(uri, masterPassword, tunnelConfig);
@@ -681,7 +690,7 @@ export default function MasterPasswordModal() {
                   type="button"
                   onClick={async () => {
                     setShowRelayReminder(false);
-                    if (pendingSetup) await continueSetup(pendingSetup.uri, pendingSetup.tunnelConfig);
+                    if (pendingSetup) await continueSetup(pendingSetup.uri, pendingSetup.tunnelConfig, true);
                     setPendingSetup(null);
                   }}
                   className="flex-1 py-2.5 rounded-xl bg-[var(--bg-card)] hover:bg-[var(--bg-card-hover)] border border-[var(--border-color)] text-[var(--text-secondary)] text-xs font-bold transition-all"

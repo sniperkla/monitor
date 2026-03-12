@@ -57,6 +57,7 @@ export async function POST(request) {
       } else if (process.env.NODE_ENV !== 'development') {
         return NextResponse.json({
           success: false,
+          relayRequired: true,
           error: 'Local Relay Agent is not connected. Please start local-relay.js on your machine to access localhost databases.'
         }, { status: 400 });
       }

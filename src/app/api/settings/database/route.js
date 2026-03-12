@@ -105,10 +105,14 @@ export async function POST(request) {
         effectiveUri = rewriteUriForTunnel(uri, relayInfo.port);
         console.log(`🔗 [settings/database] Relay active: ${uri} → ${effectiveUri}`);
       } else if (process.env.NODE_ENV !== 'development') {
+        // No relay active — save the URI without a live-connect test so user can connect relay later
+        console.warn('⚠️ [settings/database] Localhost URI with no active relay — saving without live-connect test');
+        writeConfig({ uri });
         return NextResponse.json({
-          success: false,
-          error: 'Local Relay Agent is not connected. Please start local-relay.js on your machine to access localhost databases.'
-        }, { status: 400 });
+          success: true,
+          skippedTest: true,
+          warning: 'Saved without connection test. Start Local Relay Agent to activate this database connection.'
+        });
       }
     }
 
