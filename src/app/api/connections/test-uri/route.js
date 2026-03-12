@@ -3,6 +3,8 @@ import mongoose from 'mongoose';
 import mysql from 'mysql2/promise';
 import { createRequire } from 'module';
 import { checkRateLimit } from '@/lib/serverGuard';
+import { getActiveRelayInfo } from '@/lib/mongodb';
+import { rewriteUriForTunnel } from '@/lib/sshTunnel';
 
 const require = createRequire(import.meta.url);
 const { Client } = require('pg');
@@ -44,13 +46,29 @@ export async function POST(request) {
       }, { status: 400 });
     }
 
+    // Rewrite localhost URIs through Local Relay Agent if one is active
+    let effectiveUri = uri;
+    const isLocalhost = /localhost|127\.0\.0\.1/.test(uri);
+    if (isLocalhost) {
+      const relayInfo = await getActiveRelayInfo(uri);
+      if (relayInfo) {
+        effectiveUri = rewriteUriForTunnel(uri, relayInfo.port);
+        console.log(`🔗 [test-uri] Relay active: ${uri} → ${effectiveUri}`);
+      } else if (process.env.NODE_ENV !== 'development') {
+        return NextResponse.json({
+          success: false,
+          error: 'Local Relay Agent is not connected. Please start local-relay.js on your machine to access localhost databases.'
+        }, { status: 400 });
+      }
+    }
+
     // Test connection based on protocol
-    if (uri.startsWith('mongodb://') || uri.startsWith('mongodb+srv://')) {
-      return await testMongoConnection(uri);
-    } else if (uri.startsWith('mysql://')) {
-      return await testMySQLConnection(uri);
-    } else if (uri.startsWith('postgres://') || uri.startsWith('postgresql://')) {
-      return await testPostgresConnection(uri);
+    if (effectiveUri.startsWith('mongodb://') || effectiveUri.startsWith('mongodb+srv://')) {
+      return await testMongoConnection(effectiveUri);
+    } else if (effectiveUri.startsWith('mysql://')) {
+      return await testMySQLConnection(effectiveUri);
+    } else if (effectiveUri.startsWith('postgres://') || effectiveUri.startsWith('postgresql://')) {
+      return await testPostgresConnection(effectiveUri);
     }
 
     return NextResponse.json({ 

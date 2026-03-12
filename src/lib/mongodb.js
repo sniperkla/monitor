@@ -56,7 +56,7 @@ export async function getTunnelFromRequest() {
  * and the URI targets localhost. Returns { port, userId } or null.
  * Updates the relay's targetHost/targetPort so the TCP proxy knows where to forward.
  */
-async function getActiveRelayInfo(uri) {
+export async function getActiveRelayInfo(uri) {
   if (!global.__activeRelays?.size) return null;
   if (!/localhost|127\.0\.0\.1/.test(uri)) return null;
 

@@ -5,6 +5,8 @@ import { Client } from 'pg';
 import fs from 'fs';
 import path from 'path';
 import { migrateConnections } from './migrate/migrator';
+import { getActiveRelayInfo } from '@/lib/mongodb';
+import { rewriteUriForTunnel } from '@/lib/sshTunnel';
 
 const CONFIG_PATH = path.join(process.cwd(), 'db-config.json');
 
@@ -94,10 +96,26 @@ export async function POST(request) {
       }
     }
 
+    // Rewrite localhost URIs through Local Relay Agent if one is active
+    let effectiveUri = uri;
+    const isLocalhost = /localhost|127\.0\.0\.1/.test(uri);
+    if (isLocalhost) {
+      const relayInfo = await getActiveRelayInfo(uri);
+      if (relayInfo) {
+        effectiveUri = rewriteUriForTunnel(uri, relayInfo.port);
+        console.log(`🔗 [settings/database] Relay active: ${uri} → ${effectiveUri}`);
+      } else if (process.env.NODE_ENV !== 'development') {
+        return NextResponse.json({
+          success: false,
+          error: 'Local Relay Agent is not connected. Please start local-relay.js on your machine to access localhost databases.'
+        }, { status: 400 });
+      }
+    }
+
     // 3. Try connecting
-    if (uri.startsWith('mongodb')) {
+    if (effectiveUri.startsWith('mongodb')) {
       try {
-        await mongoose.connect(uri, { 
+        await mongoose.connect(effectiveUri, { 
           bufferCommands: false,
           serverSelectionTimeoutMS: 5000,
         });
@@ -108,9 +126,9 @@ export async function POST(request) {
           error: `MongoDB connection failed: ${connectErr.message}` 
         }, { status: 400 });
       }
-    } else if (uri.startsWith('mysql://')) {
+    } else if (effectiveUri.startsWith('mysql://')) {
       try {
-        const connection = await mysql.createConnection(uri);
+        const connection = await mysql.createConnection(effectiveUri);
         await connection.ping();
         await connection.end();
         console.log('✅ Live-connected to new MySQL');
@@ -120,9 +138,9 @@ export async function POST(request) {
           error: `MySQL connection failed: ${connectErr.message}` 
         }, { status: 400 });
       }
-    } else if (uri.startsWith('postgres://') || uri.startsWith('postgresql://')) {
+    } else if (effectiveUri.startsWith('postgres://') || effectiveUri.startsWith('postgresql://')) {
       try {
-        const client = new Client({ connectionString: uri, connectionTimeoutMillis: 5000 });
+        const client = new Client({ connectionString: effectiveUri, connectionTimeoutMillis: 5000 });
         await client.connect();
         await client.end();
         console.log('✅ Live-connected to new PostgreSQL');

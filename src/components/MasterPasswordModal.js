@@ -152,9 +152,9 @@ export default function MasterPasswordModal() {
     }
 
     // If URI targets localhost, remind about Local Relay Agent
-    // (skip reminder if relay is already connected, or if non-MongoDB protocol since those connect directly via server-side drivers)
+    // This applies to ALL protocols (MongoDB, PostgreSQL, MySQL) when targeting localhost
     const isLocalhost = /localhost|127\.0\.0\.1/.test(uri);
-    const needsRelay = uri.startsWith('mongodb://') || uri.startsWith('mongodb+srv://');
+    const needsRelay = true; // all localhost DBs need relay when app is on remote server
     if (isLocalhost && !relayConnected && needsRelay) {
       setError('');
       setPendingSetup({ uri, tunnelConfig: null });
