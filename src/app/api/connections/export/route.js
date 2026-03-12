@@ -31,15 +31,17 @@ export async function GET(request) {
     await repo.init();
     const connections = await repo.findAll();
 
-    // Safe decrypt helper
+    // Safe decrypt helper — only returns plain text when decryption actually succeeded.
+    // decryptWithMetadata never throws; on failure it returns { text: originalEncryptedBlob, success: false }.
+    // Without the success check, we'd export the encrypted blob and corrupt credentials on import.
     const safeDecrypt = (value) => {
       if (!value) return null;
-      try {
-        return decryptWithMetadata(value).text;
-      } catch (err) {
-        console.warn('⚠️ Export: could not decrypt a field, skipping:', err.message);
+      const result = decryptWithMetadata(value);
+      if (!result.success) {
+        console.warn('⚠️ Export: could not decrypt a credential field — it will be null in the export.');
         return null;
       }
+      return result.text;
     };
 
     const exported = connections.map(conn => {
@@ -93,6 +95,7 @@ export async function GET(request) {
       data: exported,
       encrypted: mode !== 'plain',
       password_protected: !!password,
+      _verify: password ? encryptWithPassword('__ok__', password) : null,
     });
   } catch (error) {
     console.error('Export Error:', error);

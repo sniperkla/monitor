@@ -574,6 +574,9 @@ const resources = {
           deleteFail: "Failed to delete connection",
           testFail: "Test connection failed",
           importSuccess: "Import successful",
+          exportSuccess: "Connections exported successfully",
+          exportFail: "Export failed",
+          importFail: "Import failed",
         }
       },
       terminal: {
@@ -1831,6 +1834,9 @@ const resources = {
           deleteFail: "ลบการเชื่อมต่อไม่สำเร็จ",
           testFail: "การทดสอบการเชื่อมต่อล้มเหลว",
           importSuccess: "นำเข้าข้อมูลสำเร็จ",
+          exportSuccess: "ส่งออกการเชื่อมต่อสำเร็จ",
+          exportFail: "ส่งออกล้มเหลว",
+          importFail: "นำเข้าล้มเหลว",
         }
       },
       terminal: {
@@ -2687,6 +2693,9 @@ const resources = {
           deleteFail: "删除连接失败",
           testFail: "测试连接失败",
           importSuccess: "导入成功",
+          exportSuccess: "连接已成功导出",
+          exportFail: "导出失败",
+          importFail: "导入失败",
         }
       },
       terminal: {

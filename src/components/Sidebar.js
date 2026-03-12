@@ -18,6 +18,8 @@ export default function Sidebar({ onNewConnection, onEditConnection }) {
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState('all'); // all, favorites, online, offline
 
+  // Export / Import state — moved to Dashboard
+
 
 
 
@@ -461,7 +463,7 @@ export default function Sidebar({ onNewConnection, onEditConnection }) {
         )}
       </div>
 
-      {/* Add button */}
+      {/* Footer: Add connection */}
       <div className="p-4 border-t pb-16" style={{ borderColor: 'var(--border-color)' }}>
         <button className="btn-primary w-full justify-center" onClick={onNewConnection}>
           <Plus size={16} /> {t('ssh.newConnection')}

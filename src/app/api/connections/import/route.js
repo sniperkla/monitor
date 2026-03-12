@@ -5,7 +5,7 @@ import { checkRateLimit } from '@/lib/serverGuard';
 import connectDB from '@/lib/mongodb';
 import { ConnectionRepository } from '@/lib/repositories/ConnectionRepository';
 
-import { encrypt, decryptWithPassword, decryptWithMetadata } from '@/utils/encryption';
+import { encrypt, decryptWithPassword, decryptWithMetadata, encryptWithPassword } from '@/utils/encryption';
 import crypto from 'crypto';
 
 /**
@@ -72,8 +72,10 @@ function reEncrypt(value, password, oldKey, fieldName) {
      return encrypt(meta.text); 
   }
 
-  console.log(`[reEncrypt] ${fieldName} - All decryption failed! Defaulting to double-encrypting`);
-  return encrypt(value);
+  // All decryption methods failed. Return null rather than double-encrypting the blob,
+  // which would produce garbage that is indistinguishable from a valid encrypted field.
+  console.warn(`[reEncrypt] ${fieldName} - All decryption failed — storing null to avoid corrupted credential.`);
+  return null;
 }
 
 
@@ -119,6 +121,19 @@ export async function POST(request) {
       return NextResponse.json({ success: false, error: 'Expected an array of connections or { connections, oldEncryptionKey }' }, { status: 400 });
     }
 
+    // ── Password verification ──────────────────────────────────────────────────
+    // If the file has a _verify sentinel, check the password before touching any data.
+    if (body._verify && password) {
+      const check = decryptWithPassword(body._verify, password);
+      if (check !== '__ok__') {
+        console.warn('🔑 Import rejected: wrong password (verify sentinel mismatch)');
+        return NextResponse.json(
+          { success: false, error: 'WRONG_PASSWORD' },
+          { status: 422 }
+        );
+      }
+    }
+
     const MAX_IMPORT_LIMIT = 100;
     if (items.length > MAX_IMPORT_LIMIT) {
       console.warn(`⚠️ Import blocked: ${items.length} items exceeds limit.`);
@@ -131,12 +146,29 @@ export async function POST(request) {
     console.log(`📦 Processing ${items.length} items for import...`);
     let imported = 0;
     let updated = 0;
+    let credentialFailures = 0;
     for (const item of items) {
       if (!item.name || !item.host) {
         console.warn('⏭️ Skipping item without name or host:', item.name || 'unnamed');
         continue;
       }
 
+
+      const credFields = {
+        password: reEncrypt(item.password, password, oldKey, 'password'),
+        privateKey: reEncrypt(item.privateKey || item.privatekey, password, oldKey, 'privateKey'),
+        passphrase: reEncrypt(item.passphrase, password, oldKey, 'passphrase'),
+        sshTunnelPassword: reEncrypt(item.sshTunnelPassword, password, oldKey, 'sshTunnelPassword'),
+        sshTunnelPrivateKey: reEncrypt(item.sshTunnelPrivateKey, password, oldKey, 'sshTunnelPrivateKey'),
+        sshTunnelPassphrase: reEncrypt(item.sshTunnelPassphrase, password, oldKey, 'sshTunnelPassphrase'),
+      };
+      // A credential failure is when the original file had a value but reEncrypt returned null
+      const hadCredFailure = (
+        (item.password && !credFields.password) ||
+        (item.privateKey && !credFields.privateKey) ||
+        (item.passphrase && !credFields.passphrase)
+      );
+      if (hadCredFailure) credentialFailures++;
 
       const connectionData = {
         name: item.name,
@@ -147,10 +179,10 @@ export async function POST(request) {
         username: item.username || 'root',
         database: item.database || item.database_name || null,
         authType: item.authType || item.authtype || 'password',
-        password: reEncrypt(item.password, password, oldKey, 'password'),
-        privateKey: reEncrypt(item.privateKey || item.privatekey, password, oldKey, 'privateKey'),
+        password: credFields.password,
+        privateKey: credFields.privateKey,
         keyFileName: item.keyFileName || item.keyfilename || null,
-        passphrase: reEncrypt(item.passphrase, password, oldKey, 'passphrase'),
+        passphrase: credFields.passphrase,
         tags: item.tags || [],
         color: item.color || '#6366f1',
         notes: item.notes || '',
@@ -160,9 +192,9 @@ export async function POST(request) {
         sshTunnelPort: item.sshTunnelPort || 22,
         sshTunnelUser: item.sshTunnelUser || null,
         sshTunnelAuth: item.sshTunnelAuth || 'password',
-        sshTunnelPassword: reEncrypt(item.sshTunnelPassword, password, oldKey, 'sshTunnelPassword'),
-        sshTunnelPrivateKey: reEncrypt(item.sshTunnelPrivateKey, password, oldKey, 'sshTunnelPrivateKey'),
-        sshTunnelPassphrase: reEncrypt(item.sshTunnelPassphrase, password, oldKey, 'sshTunnelPassphrase'),
+        sshTunnelPassword: credFields.sshTunnelPassword,
+        sshTunnelPrivateKey: credFields.sshTunnelPrivateKey,
+        sshTunnelPassphrase: credFields.sshTunnelPassphrase,
       };
 
       // Check if connection already exists to prevent duplicates
@@ -183,8 +215,8 @@ export async function POST(request) {
       }
     }
 
-    console.log(`🏁 Import finished: ${imported} imported, ${updated} updated.`);
-    return NextResponse.json({ success: true, count: imported, updated });
+    console.log(`🏁 Import finished: ${imported} imported, ${updated} updated, ${credentialFailures} credential failures.`);
+    return NextResponse.json({ success: true, count: imported, updated, credentialFailures });
 
 
   } catch (error) {
