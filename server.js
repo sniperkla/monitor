@@ -134,27 +134,46 @@ function getLatestCenterUri() {
 
 // Multi-tenant Model Pool
 const modelsPool = new Map();
-async function getModels(uri) {
-  const targetUri = uri || getLatestCenterUri();
-  if (!targetUri) {
-     return { Connection: null, Session: null };
-  }
 
-  
-  if (modelsPool.has(targetUri)) {
-    const cached = modelsPool.get(targetUri);
-    if (cached.type === 'mysql') return cached;
-    if (cached.readyState === 1 || cached.readyState === 2) return { 
+/**
+ * Rewrite a localhost URI through the user's active Local Relay Agent.
+ * If no relay is active for this user, returns the URI unchanged.
+ */
+function rewriteUriViaRelay(uri, userId) {
+  if (!uri || !/localhost|127\.0\.0\.1/.test(uri)) return uri;
+  if (!userId || !global.__activeRelays?.size) return uri;
+  const relay = global.__activeRelays.get(userId);
+  if (!relay?.localPort) return uri;
+  // Extract original target port from URI and update relay target
+  const portMatch = uri.match(/:(\d+)\//);
+  if (portMatch) {
+    relay.targetHost = '127.0.0.1';
+    relay.targetPort = parseInt(portMatch[1]);
+  }
+  // Rewrite host:port → 127.0.0.1:{relay.localPort}
+  return uri.replace(/(localhost|127\.0\.0\.1):\d+/, `127.0.0.1:${relay.localPort}`);
+}
+
+async function getModels(uri, userId) {
+  let targetUri = uri || getLatestCenterUri();
+  if (!targetUri) return { Connection: null, Session: null };
+
+  // Route localhost URIs through the user's relay agent if one is active
+  const effectiveUri = rewriteUriViaRelay(targetUri, userId) || targetUri;
+  if (modelsPool.has(effectiveUri)) {
+    const cached = modelsPool.get(effectiveUri);
+    if (cached.type === 'mysql' || cached.type === 'postgres') return cached;
+    if (cached.readyState === 1 || cached.readyState === 2) return {
       type: 'mongodb',
       Connection: cached.models.Connection || cached.model('Connection', ConnectionSchema),
       Session: cached.models.Session || cached.model('Session', SessionSchema)
     };
-    modelsPool.delete(targetUri);
+    modelsPool.delete(effectiveUri);
   }
 
-  if (targetUri.startsWith('mysql://')) {
+  if (effectiveUri.startsWith('mysql://')) {
     try {
-      const pool = mysql.createPool(targetUri);
+      const pool = mysql.createPool(effectiveUri);
       const repo = {
         type: 'mysql',
         pool,
@@ -233,7 +252,7 @@ async function getModels(uri) {
           }
         }
       };
-      modelsPool.set(targetUri, repo);
+      modelsPool.set(effectiveUri, repo);
       return repo;
     } catch (e) {
       console.warn('⚠️ MySQL Init Error:', e.message);
@@ -241,9 +260,9 @@ async function getModels(uri) {
     }
   }
 
-  if (targetUri.startsWith('postgres://') || targetUri.startsWith('postgresql://')) {
+  if (effectiveUri.startsWith('postgres://') || effectiveUri.startsWith('postgresql://')) {
     try {
-      const pool = new PgPool({ connectionString: targetUri, max: 5, connectionTimeoutMillis: 10000 });
+      const pool = new PgPool({ connectionString: effectiveUri, max: 5, connectionTimeoutMillis: 10000 });
       const repo = {
         type: 'postgres',
         pool,
@@ -333,7 +352,7 @@ async function getModels(uri) {
           }
         }
       };
-      modelsPool.set(targetUri, repo);
+      modelsPool.set(effectiveUri, repo);
       return repo;
     } catch (e) {
       console.warn('⚠️ PostgreSQL Init Error:', e.message);
@@ -341,14 +360,14 @@ async function getModels(uri) {
     }
   }
 
-  if (!targetUri.startsWith('mongodb')) {
-    console.warn('⚠️ Unsupported target URI scheme:', targetUri);
+  if (!effectiveUri.startsWith('mongodb')) {
+    console.warn('⚠️ Unsupported target URI scheme:', effectiveUri);
     return { type: 'unknown', Connection: null, Session: null };
   }
 
   try {
-    const conn = await mongoose.createConnection(targetUri, { serverSelectionTimeoutMS: 5000 }).asPromise();
-    modelsPool.set(targetUri, conn);
+    const conn = await mongoose.createConnection(effectiveUri, { serverSelectionTimeoutMS: 5000 }).asPromise();
+    modelsPool.set(effectiveUri, conn);
     return {
       type: 'mongodb',
       Connection: conn.models.Connection || conn.model('Connection', ConnectionSchema),
@@ -519,7 +538,7 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
 
       socket.on('ssh:connect', async (data) => {
       const { connectionId, connection: connectionData, cols, rows } = data;
-      const { Connection: CurrentConnectionModel, Session: CurrentSessionModel } = await getModels(dbUri);
+      const { Connection: CurrentConnectionModel, Session: CurrentSessionModel } = await getModels(dbUri, socket.user?.sub);
 
       try {
         let connection;
@@ -541,6 +560,10 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
               if (lookupErr.name === 'CastError') {
                 // connectionId is not a valid MongoDB ObjectId (e.g. a PostgreSQL integer ID)
                 // Fall through to connectionData below
+                connection = null;
+              } else if (lookupErr.code === 'ECONNREFUSED' || lookupErr.message?.includes('Local Relay')) {
+                // Center DB unreachable (relay not running) — fall through to connectionData
+                console.warn('⚠️ Center DB unreachable for connection lookup — using provided connectionData:', lookupErr.message);
                 connection = null;
               } else {
                 throw lookupErr;
