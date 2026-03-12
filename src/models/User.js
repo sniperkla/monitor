@@ -65,6 +65,16 @@ const UserSchema = new mongoose.Schema({
     notifications: { type: Object, default: { system: true, terminal: false, desktop: true } },
     customWallpapers: { type: [String], default: [] },
     taskbarPosition: { type: String, default: 'bottom' },
+    windowLayout: { type: String, default: 'mac' },
+    keyboardShortcuts: { type: Object, default: {} },
+    desktops: { type: [Object], default: [] },
+    currentDesktopId: { type: String, default: 'desktop-1' },
+    windowsByDesktop: { type: Object, default: {} },
+    terminalSettings: { type: Object, default: {} },
+    exportNaming: { type: Object, default: {} },
+    aiHistory: { type: [Object], default: [] },
+    sshAiHistory: { type: [Object], default: [] },
+    sshAiPrefs: { type: Object, default: {} },
     openWindows: { type: [Object], default: [] }, // { id, appType, title, x, y, width, height, isMaximized, isMinimized, zIndex, props }
     timestamp: { type: Number, default: 0 },
     aiUsage: {

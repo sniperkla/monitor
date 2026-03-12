@@ -1065,6 +1065,18 @@ export function OSProvider({ children }) {
 
   const setWallpaper = (url) => {
     dispatch({ type: 'SET_WALLPAPER', payload: url });
+    // Immediately persist — don't wait for the 5s debounce
+    if (session?.user?.email) {
+      const newState = { ...stateRef.current, wallpaper: url };
+      const payload = serializeStateForSync(newState);
+      fetch('/api/user/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...JSON.parse(payload), timestamp: Date.now() }),
+      }).then(res => {
+        if (res.ok) lastSavedStateRef.current = payload;
+      }).catch(console.error);
+    }
   };
 
   const setGlassmorphism = (enabled) => {
@@ -1101,10 +1113,34 @@ export function OSProvider({ children }) {
 
   const addCustomWallpaper = (url) => {
     dispatch({ type: 'ADD_CUSTOM_WALLPAPER', payload: url });
+    if (session?.user?.email) {
+      const current = stateRef.current.customWallpapers || [];
+      const newState = { ...stateRef.current, customWallpapers: current.includes(url) ? current : [...current, url] };
+      const payload = serializeStateForSync(newState);
+      fetch('/api/user/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...JSON.parse(payload), timestamp: Date.now() }),
+      }).then(res => {
+        if (res.ok) lastSavedStateRef.current = payload;
+      }).catch(console.error);
+    }
   };
 
   const removeCustomWallpaper = (url) => {
     dispatch({ type: 'REMOVE_CUSTOM_WALLPAPER', payload: url });
+    if (session?.user?.email) {
+      const current = stateRef.current.customWallpapers || [];
+      const newState = { ...stateRef.current, customWallpapers: current.filter(w => w !== url) };
+      const payload = serializeStateForSync(newState);
+      fetch('/api/user/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...JSON.parse(payload), timestamp: Date.now() }),
+      }).then(res => {
+        if (res.ok) lastSavedStateRef.current = payload;
+      }).catch(console.error);
+    }
   };
 
   const setSortBy = (sort) => {

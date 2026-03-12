@@ -290,12 +290,23 @@ export default function FileManager({
       // Normalize paths before comparing to avoid '.' vs './' mismatches
       const normReceived = (data.path || '.').replace(/\/$/, '') || '.';
       const normCurrent  = (currentPathRef.current || '.').replace(/\/$/, '') || '.';
-      if (normReceived !== normCurrent) {
+
+      // If the client is still at the initial '.' state, the server may have resolved it
+      // to an absolute path (e.g. '/home/ubuntu'). Accept the response and sync currentPath
+      // to the server's resolved path so future navigation uses the real absolute path.
+      if (normCurrent === '.') {
+        if (normReceived !== '.') {
+          setCurrentPath(normReceived);
+          currentPathRef.current = normReceived;
+        }
+      } else if (normReceived !== normCurrent) {
         console.warn('⚠️ Ignoring stale file list for:', data.path, 'current is:', currentPathRef.current);
         return;
       }
+
       console.log('📋 Received file list:', data.files?.length);
       setFiles(data.files || []);
+      filesRef.current = data.files || [];
       setLoading(false);
       setStatus('ready');
       clearTimeout(timeout);
