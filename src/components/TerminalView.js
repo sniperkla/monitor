@@ -506,11 +506,10 @@ export default function TerminalView({ connectionId, connectionName, host, color
           `    echo "${esc}[1;36m✨ [AI Auto-Setup]${esc}[0m Attaching to tmux session...";`,
           `    tmux new-session -d -s ai-bg-task 2>/dev/null || true;`,
           `    exec tmux new-session -A -s main;`,
+          `  else`,
+          `    echo "${esc}[1;33m⚠ tmux install failed — staying in normal shell${esc}[0m";`,
           `  fi;`,
           `fi;`,
-          `else`,
-          `  echo "${esc}[1;33m⚠ tmux install failed — staying in normal shell${esc}[0m";`,
-          `fi`,
         ].join(' ');
         socketRef.current.emit('ssh:input', tmuxCmd + '\n');
       }
@@ -2620,6 +2619,10 @@ export default function TerminalView({ connectionId, connectionName, host, color
       explain: explain || null,
     });
     setAiDone(true);
+    // Focus terminal after a short delay so user can resume typing immediately
+    setTimeout(() => {
+      termInstanceRef.current?.focus();
+    }, 300);
   };
 
   const normalizeAiTerminalCommand = (command) => {
@@ -3229,6 +3232,18 @@ export default function TerminalView({ connectionId, connectionName, host, color
         throw new Error(data.error || 'AI request failed');
       }
       setLastAiUpdate(Date.now());
+      
+      // 🧪 Manual Mode Done Detection
+      if (parsed?.done) {
+        setTimeout(() => {
+          showAiDoneModal({
+            goal: effectivePrompt,
+            steps: [], // In manual mode we don't track auto steps
+            taskMode: sshAiPrefs?.aiTask || 'ssh',
+            explain: parsed.explain || 'Task completed.',
+          });
+        }, 100);
+      }
 
       // Sync AI usage across all windows immediately after use
       if (data.usage) {

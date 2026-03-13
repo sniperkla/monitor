@@ -309,18 +309,18 @@ async function getModels(uri, userId) {
               await pool.query(`
                 CREATE TABLE IF NOT EXISTS ssh_sessions (
                   id SERIAL PRIMARY KEY,
-                  "connectionId" INTEGER,
-                  "startTime" TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                  "endTime" TIMESTAMP,
+                  connection_id INTEGER,
+                  start_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                  end_time TIMESTAMP,
                   duration INTEGER,
                   status VARCHAR(50) DEFAULT 'active',
-                  "errorMessage" TEXT,
-                  "createdAt" TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                  "updatedAt" TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                  error_message TEXT,
+                  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
               `);
               const res = await pool.query(
-                'INSERT INTO ssh_sessions ("connectionId", status) VALUES ($1, $2) RETURNING id',
+                'INSERT INTO ssh_sessions (connection_id, status) VALUES ($1, $2) RETURNING id',
                 [data.connectionId, data.status]
               );
               return { _id: res.rows[0].id, ...data, startTime: new Date() };
@@ -337,7 +337,7 @@ async function getModels(uri, userId) {
               let i = 0;
               for (const [k, v] of Object.entries(data)) {
                 if (k === '_id' || k === 'id') continue;
-                updates.push(`"${k}" = $${++i}`);
+                updates.push(`${k === 'connectionId' ? 'connection_id' : k} = $${++i}`);
                 values.push(v instanceof Date ? v.toISOString() : v);
               }
               if (updates.length > 0) {
@@ -538,7 +538,8 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
 
       socket.on('ssh:connect', async (data) => {
       const { connectionId, connection: connectionData, cols, rows } = data;
-      const { Connection: CurrentConnectionModel, Session: CurrentSessionModel } = await getModels(dbUri, socket.user?.sub);
+      const repo = await getModels(dbUri, socket.user?.sub);
+      const { Connection: CurrentConnectionModel, Session: CurrentSessionModel } = repo;
 
       try {
         let connection;
@@ -616,10 +617,14 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
         let session = null;
         if (connectionId && !connectionId.startsWith('local-') && CurrentSessionModel) {
           // Only use Mongoose session model for valid MongoDB ObjectIds
-          const isMgoSession = isValidObjectId(connectionId);
-          const isSqlSession = /^\d+$/.test(String(connectionId));
+          const isMgoSession = repo.type === 'mongodb' && isValidObjectId(connectionId);
+          const isSqlSession = (repo.type === 'mysql' || repo.type === 'postgres') && /^\d+$/.test(String(connectionId));
           if (isMgoSession || isSqlSession) {
             try {
+              // Final safety: if MongoDB, ensure the ID we're saving is also a valid ObjectId
+              if (repo.type === 'mongodb' && !isValidObjectId(connection._id)) {
+                 throw new Error(`Cannot save non-ObjectId ${connection._id} to MongoDB session`);
+              }
               session = await CurrentSessionModel.create({
                 connectionId: connection._id,
                 status: 'active',
