@@ -828,6 +828,8 @@ export default function TerminalView({ connectionId, connectionName, host, color
       setExecuteConfirmOpen(false);
       setAiError(null);
       setAiAnswer(null);
+      setAiDone(false);
+      setAiDoneSummary(null);
       setInteractivePrompt(null);
       setPatchModalOpen(false);
       setPatchModalDiff('');
@@ -1162,8 +1164,8 @@ export default function TerminalView({ connectionId, connectionName, host, color
     let done = doneRawLower === 'true';
 
     // 🧪 ROBUSTNESS: Done Detection
-    if (!doneRawLower && explain.toLowerCase().includes('task complete') || explain.toLowerCase().includes('finished goal')) {
-       done = true;
+    if (!doneRawLower && looksLikeCompletionText(explain)) {
+      done = true;
     }
 
     // NOTE: The model uses <done>false</done> for normal "in progress" steps.
@@ -2147,12 +2149,66 @@ export default function TerminalView({ connectionId, connectionName, host, color
     return diags.slice(0, 5);
   };
 
+  // Shared helper: detect commands that are expected to run silently for a long time
+  // (package installs, downloads, builds). Used by waitForCommandSettle AND runAutoStep.
+  const isHeavyCommand = (cmd) => {
+    const c = String(cmd || '').toLowerCase();
+    return /\b(install|update|upgrade|setup|deploy|create-next-app)\b/.test(c)
+      || /\b(npm|yarn|pnpm|npx|pip|pip3|pip2|gem|bundle|composer|conda|bower|cargo|rustup)\b/.test(c)
+      || /\bgo\s+(install|build|get)\b/.test(c)
+      || /\b(mvn|mvnw|gradle|ant|sbt)\b/.test(c)
+      || /\b(dnf|yum|apt|apt-get|apt-cache|pacman|zypper|emerge|apk|brew|port|snap|flatpak)\s+(install|update|upgrade|remove|search)/.test(c)
+      || /\bdocker\s+(pull|build|push|run)\b/.test(c)
+      || /\bwget\b/.test(c)
+      || /\bcurl\s+.+(-[oO]|--output|--download-dir)/.test(c)
+      || /\bgit\s+clone\b/.test(c)
+      || /\btar\s+.*-[xjzJp]/.test(c)
+      || /\bunzip\b/.test(c)
+      || /\.\/(configure|bootstrap|autogen\.sh)\b/.test(c) // autoconf configure step
+      || /\bautoreconf\b/.test(c);                         // autoconf regeneration
+  };
+
+  const isCompilationCommand = (cmd) => {
+    const c = String(cmd || '').toLowerCase();
+    return /\bcargo\s+(build|install|test|check)\b/.test(c)
+      || /\bmake\b/.test(c)
+      || /\bcmake\b/.test(c)
+      || /\bgcc\b/.test(c)
+      || /\bg\+\+\b/.test(c)
+      || /\brustc\b/.test(c)
+      || /\bmvn\b/.test(c)
+      || /\bgradle\b/.test(c)
+      || /\bninja\b/.test(c)
+      || /\bmeson\b/.test(c)
+      || /\bbazel\s+(build|run|test)\b/.test(c);
+  };
+
+  const hasActiveCompilationOutput = (text) => {
+    const raw = String(text || '');
+    return /^\s*(Compiling|Linking|Building\s*\[)\b/im.test(raw)
+      || /^\s*(Finished|Running|Checking|warning:|error\[E)\b/im.test(raw)
+      || /\bmake\[\d+\]/i.test(raw)
+      || /\d+\/\d+:\s*\w/i.test(raw)
+      || /^\s*\[\d+\/\d+\]\s+/m.test(raw)
+      || /^\s*ninja:\s+/im.test(raw)
+      || /^\s*\[\s*\d+%\]\s+/m.test(raw);
+  };
+
   const looksLikeShellPrompt = (text) => {
     // Strip ANSI escape codes and non-printable characters first
-    const cleanText = String(text || '').replace(/[\u001b\u009b][[()#;?]*(?:[0-9]{1,4}(?:;[0-9]{0,4})*)?[0-9A-ORZcf-nqry=><]/g, '').replace(/[^\x20-\x7E\n\r]/g, '');
+    const cleanText = String(text || '')
+      .replace(/[\u001b\u009b][[()#;?]*(?:[0-9]{1,4}(?:;[0-9]{0,4})*)?[0-9A-ORZcf-nqry=><]/g, '')
+      .replace(/[^\x20-\x7E❯➜➔➤\n\r]/g, '');
     const lines = cleanText.split('\n').filter(l => l.trim().length > 0);
     const last = (lines[lines.length - 1] || '').trim();
     if (!last) return false;
+
+    // Exclude REPL prompts that look like shell prompts but aren't:
+    // Python REPL: '>>>' or '...' continuation; IPython/Jupyter: 'In [n]:'
+    if (/^>{3,}\s*$/.test(last)) return false;   // Python/Ruby >>> REPL
+    if (/^\.{3}\s*$/.test(last)) return false;   // Python ... continuation
+    if (/^In\s*\[\d*\]:\s*$/.test(last)) return false; // IPython/Jupyter In [n]:
+    if (/^\(Pdb\+?\)\s*$/.test(last)) return false;    // Python debugger (Pdb)
 
     // Common standard prompts: $, #, %, > and rich zsh themes: ❯, ➜, ➔, ➤
     if (/[$#%>❯➜➔➤]\s*$/.test(last)) return true;
@@ -2227,6 +2283,15 @@ export default function TerminalView({ connectionId, connectionName, host, color
       /\bnode\s+(-i|--interactive)/,              // node interactive
       /\birb\b/,                                   // ruby interactive
       /\bphp\s+-a/,                                // php interactive
+      /^(python|python3|python2|pypy3?)\s*$/,      // bare Python REPL (no script arg)
+      /^(node|nodejs)\s*$/,                        // bare Node.js REPL
+      /^(ruby)\s*$/,                               // bare Ruby REPL
+      /^(lua)\s*$/,                                // Lua REPL
+      /^(sqlite3)\s*$/,                            // SQLite interactive (no DB arg)
+      /^(mysql|mariadb)\b(?!.*\s-e\s)/,           // MySQL interactive shell
+      /^(psql)\b(?!.*\s-c\s)/,                    // PostgreSQL interactive shell
+      /^(redis-cli)\b(?!.*\s--scan\b)(?!.*\smonitor\b)/, // Redis interactive shell
+      /^(mongo|mongosh)\b/,                        // Mongo shell
       /\bsqlite3\s+/,                              // sqlite3 interactive
     ];
     return streamingPatterns.some(p => p.test(c));
@@ -2287,17 +2352,18 @@ export default function TerminalView({ connectionId, connectionName, host, color
 
     // Speed optimizations: reduce idle wait for normal commands
     let idleMs = 600; 
-    let stuckMs = 12000;
+    let stuckMs = 20000;
     
-    const isHeavy = /install|build|deploy|setup|create-next-app|npx|npm|dnf|yum|apt/.test(cmdLower);
+    // Use shared isHeavyCommand helper (defined above)
+    const isHeavy = isHeavyCommand(cmdLower);
     if (isHeavy) {
       idleMs = 4000; // Give installers more time to think
-      stuckMs = 30000; // Wait 30s before declaring stuck
+      stuckMs = 180000; // 3 minutes — package downloads/extractions can be silent for a long time
     }
 
     // Compilation commands: cargo build, make, cmake, gcc, g++, rustc, mvn, gradle
     // These can go completely silent for MINUTES during linking — never declare stuck during active compile
-    const isCompilationCmd = /\bcargo\s+(build|install|test|check)|\bmake\b|\bcmake\b|\bgcc\b|\bg\+\+\b|\brustc\b|\bmvn\b|\bgradle\b/.test(cmdLower);
+    const isCompilationCmd = isCompilationCommand(cmdLower);
     if (isCompilationCmd) {
       idleMs = 4000;
       stuckMs = 600000; // 10 min — prompt detection will exit early when shell prompt appears
@@ -2306,6 +2372,19 @@ export default function TerminalView({ connectionId, connectionName, host, color
     // Minimal override just to prevent flickering on very quick commands
     if (/^\[?ctrl\+c\]?$|^\^c$/.test(cmdLower)) {
       idleMs = 200;
+    }
+
+    // [Wait] inherits the timeout of the last real command so it doesn't time out too early
+    if (/^\[wait\]$/i.test(cmdLower)) {
+      const lastCmd = String(lastCommandSentAtRef._lastRealCmd || '');
+      const lastIsHeavy = isHeavyCommand(lastCmd);
+      if (lastIsHeavy) {
+        idleMs = 4000;
+        stuckMs = 180000;
+      } else {
+        idleMs = 2000;
+        stuckMs = 60000; // 1 minute wait before giving up on [Wait]
+      }
     }
 
     const start = Date.now();
@@ -2371,10 +2450,7 @@ export default function TerminalView({ connectionId, connectionName, host, color
       // Compilation guard: if the terminal shows active compilation progress (Compiling/Linking/Building/make),
       // keep the stuck timer from firing by continuously refreshing lastCheckSnap.
       // This prevents declaring 'stuck' during the silent linking phase of cargo/make/gcc.
-      const isActivelyCompiling = compilingActiveRe.test(snap)
-        || /^\s*(Finished|Running|Checking|warning:|error\[E)\b/im.test(snap)
-        || /\bmake\[\d+\]/i.test(snap)
-        || /\d+\/\d+:\s*\w/i.test(snap); // cargo progress line like "499/500: zeroclaw(bin)"
+      const isActivelyCompiling = hasActiveCompilationOutput(snap);
       if (isActivelyCompiling) {
         lastCheckSnap = snap; // Reset stuck timer — build is alive, just silent during linking
       }
@@ -2436,6 +2512,25 @@ export default function TerminalView({ connectionId, connectionName, host, color
     }
     if (/enter.*password/i.test(lastLine) || /new password/i.test(lastLine)) {
       return { kind: 'password', text: lastLine };
+    }
+    if (/enter passphrase for key/i.test(lastLine) || /enter same passphrase again/i.test(lastLine)) {
+      return { kind: 'passphrase', text: lastLine };
+    }
+    if (/^[^\n]{0,120}'s password\s*[:：]?\s*$/i.test(lastLine)) {
+      return { kind: 'password', text: lastLine };
+    }
+    if (/password for user\s+\S+\s*[:：]?\s*$/i.test(lastLine) || /enter password\s*[:：]?\s*$/i.test(lastLine)) {
+      return { kind: 'password', text: lastLine };
+    }
+    if (/passphrase/i.test(tailText) && /[:：]\s*$/.test(tailText)) {
+      const line = (lastFew.find(l => /passphrase/i.test(l)) || lastLine).trim();
+      return { kind: 'passphrase', text: line };
+    }
+    if (/(password|passphrase).*[:：]\s*$/i.test(tailText)) {
+      const line = (lastFew.find(l => /(password|passphrase).*[:：]\s*$/i.test(l)) || lastLine).trim();
+      return /passphrase/i.test(line)
+        ? { kind: 'passphrase', text: line }
+        : { kind: 'password', text: line };
     }
     // sudo password prompt
     if (/\[sudo\]\s+password/i.test(lastLine)) {
@@ -2502,6 +2597,119 @@ export default function TerminalView({ connectionId, connectionName, host, color
       return;
     }
     termInstanceRef.current?.focus();
+  };
+
+  const showAiDoneModal = ({ goal, steps = [], taskMode = 'ssh', thought = null, explain = null } = {}) => {
+    setAiError(null);
+    setAutoMode(false);
+    setAiOpen(true);
+    setAiHasOpenedOnce(true);
+    setAiDoneSummary({
+      goal: goal || autoGoal || aiPrompt || '',
+      steps: Array.isArray(steps) ? steps.slice(-30) : [],
+      taskMode,
+      thought: thought || null,
+      explain: explain || null,
+    });
+    setAiDone(true);
+  };
+
+  const normalizeAiTerminalCommand = (command) => {
+    let normalized = String(command || '').trim();
+    if (!normalized) return normalized;
+
+    if (autoMode && /^sudo\b/.test(normalized) && !/^sudo\s+-[^\n]*\bn\b/.test(normalized)) {
+      normalized = normalized.replace(/^sudo\b\s*/, 'sudo -n ');
+    }
+
+    if (/\btmux\s+send-keys\b/.test(normalized) && /-t\s+ai-bg-task(?=\s|$|["'])/.test(normalized)) {
+      normalized = normalized.replace(/\btmux\s+send-keys\b\s+-t\s+ai-bg-task(?=\s|$|["'])/, 'tmux has-session -t ai-bg-task 2>/dev/null || tmux new-session -d -s ai-bg-task; tmux send-keys -t ai-bg-task:0.0');
+    }
+
+    if (/^(?:sudo\s+)?systemctl\s+status\b/.test(normalized) && !/\s--no-pager\b/.test(normalized)) {
+      normalized += ' --no-pager';
+    }
+    if (/^(?:sudo\s+)?journalctl\b/.test(normalized) && !/\s--no-pager\b/.test(normalized)) {
+      normalized += ' --no-pager';
+    }
+
+    return normalized;
+  };
+
+  const isStdinBlockingCommand = (cmd) => {
+    const c = String(cmd || '').trim().toLowerCase();
+    if (!c) return false;
+    return /^cat\s*$/.test(c)
+      || /^cat\s*(>|>>)\s*\S+/.test(c)
+      || /^tee(?:\s+-a)?(?:\s+\S+)+\s*$/.test(c);
+  };
+
+  const isInteractiveReplCommand = (cmd) => {
+    const c = String(cmd || '').trim().toLowerCase();
+    if (!c) return false;
+    return /^(python|python3|python2|pypy3?|node|nodejs|ruby|lua|sqlite3)\s*$/.test(c)
+      || /^(mysql|mariadb)\b(?!.*\s-e\s)/.test(c)
+      || /^(psql)\b(?!.*\s-c\s)/.test(c)
+      || /^(redis-cli)\b(?!.*\s--scan\b)(?!.*\smonitor\b)/.test(c)
+      || /^(mongo|mongosh)\b/.test(c);
+  };
+
+  const tryAutoRecoverBlockedTerminal = async (snapshotOverride, commandOverride) => {
+    if (!socketRef.current?.connected) return null;
+
+    let snap = String(snapshotOverride ?? getOutputContext() ?? '');
+    if (!snap || looksLikeShellPrompt(snap)) return null;
+
+    const editorType = looksLikeEditorOrPager(snap);
+    const lastCmd = String(commandOverride ?? lastExecutedCommand ?? '').trim();
+    const lowerCmd = lastCmd.toLowerCase();
+    let attempted = false;
+
+    if (editorType === 'vim') {
+      attempted = true;
+      socketRef.current.emit('ssh:input', '\x1b');
+      await new Promise(r => setTimeout(r, 120));
+      socketRef.current.emit('ssh:input', ':q!\n');
+      await new Promise(r => setTimeout(r, 700));
+      snap = getOutputContext();
+
+      if (!looksLikeShellPrompt(snap) && looksLikeEditorOrPager(snap) === 'vim') {
+        socketRef.current.emit('ssh:input', '\x1b');
+        await new Promise(r => setTimeout(r, 120));
+        socketRef.current.emit('ssh:input', ':qa!\n');
+        await new Promise(r => setTimeout(r, 700));
+        snap = getOutputContext();
+      }
+    } else if (editorType === 'nano') {
+      attempted = true;
+      socketRef.current.emit('ssh:input', '\x18'); // Ctrl+X
+      await new Promise(r => setTimeout(r, 350));
+      snap = getOutputContext();
+
+      if (/save\s+(this\s+)?modified\s+buffer|save\s+buffer|modified buffer/i.test(snap)) {
+        socketRef.current.emit('ssh:input', 'n\n');
+        await new Promise(r => setTimeout(r, 700));
+        snap = getOutputContext();
+      }
+    } else if (isStdinBlockingCommand(lowerCmd) || isInteractiveReplCommand(lowerCmd)) {
+      attempted = true;
+      socketRef.current.emit('ssh:input', '\x03'); // Ctrl+C
+      await new Promise(r => setTimeout(r, 700));
+      snap = getOutputContext();
+    }
+
+    if (!attempted) return null;
+
+    setLastResultSnapshot(snap);
+    if (looksLikeShellPrompt(snap)) {
+      setLastResultAt((prev) => {
+        const next = Date.now();
+        const p = Number(prev || 0);
+        return next > p ? next : p + 1;
+      });
+    }
+    maybeHandleInteractivePrompt(snap);
+    return snap;
   };
 
   const detectTerminalError = (text) => {
@@ -2710,12 +2918,16 @@ export default function TerminalView({ connectionId, connectionName, host, color
   }, [lastResultSnapshot, sshAiPrefs?.aiTask]);
 
   const executeCommandAndCapture = async (command) => {
-    const cmd = String(command || '').replace(/[\r\n]+$/g, '');
+    const cmd = normalizeAiTerminalCommand(String(command || '').replace(/[\r\n]+$/g, ''));
     if (!cmd) return '';
     setLastExecutedCommand(cmd);
     lastCommandSentAtRef.current = Date.now();
     sawOutputAfterCommandRef.current = false;
     commandRunningRef.current = true; // Mark command as in-flight
+    // Track the last real shell command so [Wait] can inherit its timeout class
+    if (!/^\[wait\]$/i.test(cmd) && !/^\[?ctrl\+c\]?$|^\^c$/i.test(cmd)) {
+      lastCommandSentAtRef._lastRealCmd = cmd;
+    }
 
     try {
       if (socketRef.current?.connected) {
@@ -2783,7 +2995,10 @@ export default function TerminalView({ connectionId, connectionName, host, color
         }
 
         if (settled?.reason === 'editor') {
-          // Allow editors — return snapshot so AI can continue interacting
+          if (autoMode) {
+            const recoveredSnap = await tryAutoRecoverBlockedTerminal(snap, cmd);
+            if (recoveredSnap) return recoveredSnap;
+          }
           return snap;
         }
 
@@ -2809,6 +3024,12 @@ export default function TerminalView({ connectionId, connectionName, host, color
         }
 
         if (settled?.reason === 'busy' || settled?.reason === 'stuck') {
+          if (autoMode) {
+            const recoveredSnap = await tryAutoRecoverBlockedTerminal(snap, cmd);
+            if (recoveredSnap && looksLikeShellPrompt(recoveredSnap)) {
+              return recoveredSnap;
+            }
+          }
           // Command is still running (hit timeout). Do NOT fire lastResultAt here —
           // runAutoStep's own polling will re-check after seeing isStillRunning in the prompt.
           // Just update the snapshot so the AI sees fresh partial output.
@@ -3187,6 +3408,109 @@ export default function TerminalView({ connectionId, connectionName, host, color
     return fullSnap;
   };
 
+  function tokenizeCompletionText(text) {
+    return Array.from(new Set(
+      String(text || '')
+        .toLowerCase()
+        .replace(/[^a-z0-9\s-]/g, ' ')
+        .split(/\s+/)
+        .filter(token => token.length >= 4)
+        .filter(token => !new Set(['this', 'that', 'with', 'from', 'your', 'have', 'been', 'will', 'into', 'after', 'before', 'then', 'than']).has(token))
+    ));
+  }
+
+  function looksLikeCompletionText(text) {
+    const t = String(text || '').toLowerCase();
+    if (!t.trim()) return false;
+    return /(task complete|finished goal|goal achieved|completed successfully|issue resolved|successfully verified|verification passed|all set|done successfully|looks good|working now|fixed now)/.test(t);
+  }
+
+  function inferDynamicCompletionEvidence({ goal, output, lastCommand, err, isStillRunning, stepsDone }) {
+    if (err || isStillRunning || !stepsDone) {
+      return { done: false, reason: '', confidence: 0 };
+    }
+
+    const goalLower = String(goal || '').toLowerCase();
+    const outputLower = String(output || '').toLowerCase();
+    const commandLower = String(lastCommand || '').toLowerCase();
+
+    const positivePatterns = [
+      /\bsuccess(?:ful|fully)?\b/,
+      /\bcomplete(?:d)?\b/,
+      /\bverified?\b/,
+      /\bhealthy\b/,
+      /\bready\b/,
+      /\blistening\b/,
+      /\brunning\b/,
+      /\bactive\b/,
+      /\bonline\b/,
+      /\bpass(?:ed)?\b/,
+      /\bstarted\b/,
+      /\bcreated\b/,
+      /\bavailable\b/,
+      /\bok\b/,
+    ];
+    const negativePatterns = [
+      /\berror\b/,
+      /\bfailed?\b/,
+      /\bdenied\b/,
+      /\binvalid\b/,
+      /\bmissing\b/,
+      /not found/,
+      /\brefused\b/,
+      /\btraceback\b/,
+      /\bexception\b/,
+      /\bfatal\b/,
+      /\bpanic\b/,
+      /\bcannot\b/,
+      /\bunable\b/,
+      /\bemerg\b/,
+      /\bsyntax error\b/,
+      /\btest failed\b/,
+    ];
+    const absencePatterns = [
+      /\bnot found\b/,
+      /\bnot installed\b/,
+      /\bno such\b/,
+      /\bdoes not exist\b/,
+      /\balready (?:removed|deleted|absent|uninstalled)\b/,
+      /\bnothing to (?:remove|uninstall|delete|purge)\b/,
+    ];
+    const removalPatterns = [
+      /\bremoved?\b/,
+      /\buninstalled?\b/,
+      /\bpurged?\b/,
+      /\bdeleted?\b/,
+    ];
+    const verificationCommand = /(\bstatus\b|\bis-active\b|\bcheck\b|\btest\b|\bverify\b|\bhealth\b|\bcurl\b|\bss\b|\blsof\b|\bgrep\b|\bhead\b|\btail\b|\bnginx\s+-t\b)/.test(commandLower);
+    const removeIntent = /\b(remove|uninstall|delete|purge|clean\s+up|deinstall)\b/.test(goalLower);
+    const installIntent = /\b(install|setup|set up|deploy|add|enable|launch|start|run)\b/.test(goalLower) && !removeIntent;
+    const verifyIntent = /\b(check|verify|verification|status|test|inspect|diagnose|debug|health)\b/.test(goalLower) || verificationCommand;
+
+    const countHits = (patterns, text) => patterns.reduce((count, pattern) => count + (pattern.test(text) ? 1 : 0), 0);
+    const positiveHits = countHits(positivePatterns, outputLower);
+    const negativeHits = countHits(negativePatterns, outputLower);
+    const absenceHits = countHits(absencePatterns, outputLower);
+    const removalHits = countHits(removalPatterns, outputLower);
+    const goalTokens = tokenizeCompletionText(goalLower);
+    const overlapHits = goalTokens.reduce((count, token) => count + (outputLower.includes(token) ? 1 : 0), 0);
+
+    if (removeIntent && (absenceHits > 0 || removalHits > 0) && negativeHits === 0) {
+      return { done: true, reason: 'terminal shows the target is absent or removed', confidence: 0.98 };
+    }
+    if (verifyIntent && positiveHits > 0 && negativeHits === 0) {
+      return { done: true, reason: 'verification command returned positive output', confidence: 0.94 };
+    }
+    if (installIntent && positiveHits >= 2 && negativeHits === 0) {
+      return { done: true, reason: 'recent output indicates the service or deployment is healthy', confidence: 0.9 };
+    }
+    if (positiveHits >= 2 && overlapHits > 0 && negativeHits === 0) {
+      return { done: true, reason: 'goal terms overlap with positive terminal evidence', confidence: 0.84 };
+    }
+
+    return { done: false, reason: '', confidence: 0 };
+  }
+
   const handleSkillsSearch = async (query) => {
     if (!query) return;
     setSkillsSearchLoading(true);
@@ -3331,7 +3655,7 @@ export default function TerminalView({ connectionId, connectionName, host, color
     if (commandRunningRef.current) return;
     {
       const liveSnap = getOutputContext();
-      const isLivelyCompiling = /^\s*(Compiling|Linking|Building\s*\[)\b/im.test(liveSnap);
+      const isLivelyCompiling = hasActiveCompilationOutput(liveSnap);
       if (isLivelyCompiling && !looksLikeShellPrompt(liveSnap)) {
         console.log('[AI Agent] Compilation still in progress — deferring AI call by 4 s');
         if (autoTimerRef.current) clearTimeout(autoTimerRef.current);
@@ -3493,6 +3817,28 @@ CHANGE YOUR STRATEGY: Use different flags, check paths with absolute references,
         setTimeout(() => runAutoStep(nextSnap), 400);
         return;
       }
+
+      if ((editorType === 'vim' || editorType === 'nano') && (idleFor > 1200 || timeSinceCommand > 2500)) {
+        const recoveredSnap = await tryAutoRecoverBlockedTerminal(snap, lastExecutedCommand);
+        if (recoveredSnap) {
+          autoRunningRef.current = false;
+          setTimeout(() => runAutoStep(recoveredSnap), 400);
+          return;
+        }
+      }
+    }
+
+    if (!editorType && isStillRunning && (isStdinBlockingCommand(lastExecutedCommand) || isInteractiveReplCommand(lastExecutedCommand))) {
+      const idleFor = Date.now() - (lastOutputAtRef.current || 0);
+      const timeSinceCommand = Date.now() - (lastCommandSentAtRef.current || 0);
+      if (idleFor > 1200 || timeSinceCommand > 2500) {
+        const recoveredSnap = await tryAutoRecoverBlockedTerminal(snap, lastExecutedCommand);
+        if (recoveredSnap) {
+          autoRunningRef.current = false;
+          setTimeout(() => runAutoStep(recoveredSnap), 400);
+          return;
+        }
+      }
     }
 
     // ── Pre-AI Dynamic Blocker Recovery ───────────────────────────────────────
@@ -3556,7 +3902,7 @@ CHANGE YOUR STRATEGY: Use different flags, check paths with absolute references,
       } else if (interactive) {
         runningNote = `\n- ALERT: INTERACTIVE PROMPT DETECTED (${interactive.kind}). Use the <command> tag to answer it (e.g. <command>y</command> or <command>password</command>).`;
       } else if (isStillRunning) {
-        runningNote = `\n- ALERT: The terminal is STILL RUNNING your last command. DO NOT send a new command. Use [Wait] to allow more time. If it is a long output, use [Ctrl+C].`;
+        runningNote = `\n- ⛔ HARD BLOCK: The terminal is STILL RUNNING the previous command (no shell prompt visible). You MUST output <command>[Wait]</command> — sending ANY other command now will corrupt the terminal. Package installs can be silent for minutes. Keep waiting.`;
       }
 
       // === OS / Package Manager Detection (persistent across steps) ===
@@ -3577,19 +3923,20 @@ CHANGE YOUR STRATEGY: Use different flags, check paths with absolute references,
         ? `\n- CRITICAL: This is macOS. NEVER use apt-get, apt, yum, dnf, snap or rpm. Use 'brew' (Homebrew) ONLY. If brew is unavailable, install it first.`
         : '';
 
-      // FORCE AUTOMATIC WAIT: if clearly busy with no prompt, don't even ask AI - just wait 4 seconds and retry.
-      // We only call the AI if we are TRULY stuck (no output for >20s) or have an error/prompt.
-      // This saves a lot of tokens during long installations.
+      // FORCE AUTOMATIC WAIT: Never call the AI while a command is still running unless interaction
+      // (y/n prompt, password, pager) is explicitly needed. Keep polling until the shell prompt returns.
       const idleFor = Date.now() - (lastOutputAtRef.current || 0);
       const isInteractionNeeded = err || detectInteractivePrompt(snap) || looksLikeEditorOrPager(snap);
       
-      // Give heavy installers up to 10 minutes of silence before bothering the AI, otherwise 20s.
-      const cmdLower = String(lastExecutedCommand || '').toLowerCase();
-      const isHeavy = /install|build|deploy|setup|create-next-app|npx|npm|dnf|yum|apt|pacman|pip|gem|cargo|brew/.test(cmdLower);
-      const maxIdleTime = isHeavy ? 600000 : 20000;
+      // Use shared isHeavyCommand helper
+      const cmdLower = String(lastExecutedCommand || '');
+      const isHeavy = isHeavyCommand(cmdLower);
 
-      if (!isInteractionNeeded && isStillRunning && idleFor < maxIdleTime) {
-         const waitTime = isHeavy ? 4 : 1.5;
+      // HARD WAIT: if the terminal still has no shell prompt AND no interaction is needed,
+      // ALWAYS wait and retry — never call the AI regardless of how long idle has been.
+      // This is the core fix: the AI must NEVER send a new command while the previous one is running.
+      if (!isInteractionNeeded && isStillRunning) {
+         const waitTime = isHeavy ? 5 : 3;
          setAutoCountdown(Math.ceil(waitTime));
          if (autoTimerRef.current) clearTimeout(autoTimerRef.current);
          autoTimerRef.current = setTimeout(() => {
@@ -3617,34 +3964,17 @@ CHANGE YOUR STRATEGY: Use different flags, check paths with absolute references,
 
       const stepsDone = Array.isArray(autoStepHistory) ? autoStepHistory.length : 0;
 
-      // Evidence in the terminal that removal already succeeded
-      const removalDoneSignals = [
-        /successfully removed/i, /successfully uninstalled/i, /removal complete/i,
-        /uninstalled/i, /removed/i, /purged/i,
-        /no such file or directory/i, /not found/i, /is not installed/i,
-        /package.*not installed/i, /nothing to uninstall/i, /already uninstalled/i,
-      ];
-      const removalSuccess = stepsDone > 0 && isRemoveGoal && removalDoneSignals.some(r => r.test(recentOutputLower));
-      const removalSuccessHint = removalSuccess
-        ? `\n- NOTE: Terminal output ALREADY shows the removal succeeded or package is not present. You MUST set <done>true</done> NOW. Do NOT reinstall.`
-        : '';
-
-      // Dynamic Success Heuristic: Detect common patterns of success/uptime instead of hardcoded framework strings
-      // Covers: "Successfully installed", "Active (running)", "Up 3 hours", "Ready in 50ms", "Listening on port 3000"
-      const genericSuccessPatterns = [
-        /\b(successfully completed|successfully installed|successfully deployed)\b/i,
-        /\b(service|status).{0,20}\b(active|running|online)\b/i,
-        /\b(listening on|started on).{0,20}\b(port|http)\b/i,
-        /\b(ready in|done in).{0,20}\b(ms|s)\b/i,
-        /\bup\s+.{0,20}\b(minute|hour|day|second)s?\b/i, // Docker/Uptime
-      ];
-
       const isDeployGoal = isExecutionGoal && /\b(deploy|pm2|start|serve|launch|run|docker|systemctl)\b/i.test(goalLower);
-
-      const installSuccess = stepsDone > 0 && (isInstallGoal || isDeployGoal) && genericSuccessPatterns.some(p => p.test(recentOutputLower));
-      
-      const installSuccessHint = installSuccess
-        ? `\n- HINT: The terminal output suggests the goal is met (detected keywords like "Active", "Ready", or "Up"). If true, output <done>true</done>.`
+      const completionEvidence = inferDynamicCompletionEvidence({
+        goal,
+        output: postCmdContext || snap,
+        lastCommand: lastExecutedCommand,
+        err,
+        isStillRunning,
+        stepsDone,
+      });
+      const completionHint = completionEvidence.done
+        ? `\n- HINT: Recent terminal evidence suggests the goal is already satisfied (${completionEvidence.reason}). You SHOULD set <done>true</done> now.`
         : '';
 
       // Low-steps warning (disabled in infinite mode)
@@ -3751,7 +4081,7 @@ CHANGE YOUR STRATEGY: Use different flags, check paths with absolute references,
 
       const autoPrompt = `[AUTO] Goal: ${goal}
 State:
-- Status: ${terminalStatus}${runningNote}${osNote}${macOsRule}${removalSuccessHint}${installSuccessHint}${lowStepsWarn}
+- Status: ${terminalStatus}${runningNote}${osNote}${macOsRule}${completionHint}${lowStepsWarn}
 - Last Cmd: ${lastExecutedCommand || '(none — this is the FIRST step)'}
 - Error: ${err ? err.label : 'none'}${failureNote}
 - Recent steps: ${recentHistory || '(none)'}${skillsBlock}
@@ -3759,8 +4089,8 @@ State:
 ${String(contextToSend || '(no output)').slice(-4000)}
 
 RULES:
-1. If the goal was to REMOVE/UNINSTALL and the output shows it is gone or was not installed → <done>true</done> IMMEDIATELY.
-2. DYNAMIC SUCCESS: If the goal is (Check/Deploy/Install) AND the output contains "Active", "Running", "Listening", "Up", or "Ready" → <done>true</done>.
+1. If recent terminal evidence clearly shows the goal is already satisfied → <done>true</done> IMMEDIATELY.
+2. DYNAMIC SUCCESS: infer completion from the latest output, the goal, and the last command. If the verification/result is clearly positive, stop instead of continuing.
 3. VERIFY only if necessary. If the last command output confirms success (e.g. status code 0 or positive message), STOP.
 4. COMMAND: 1 shell command, [Wait], or [Ctrl+C]. NEVER install when goal is remove.
 5. macOS=brew, Linux=apt/dnf. No editors (nano/vim). To CREATE a new file, prefer quoted heredoc: \`cat << 'EOF' > filename\`. To EDIT an existing file, use a <diff> patch.
@@ -3829,12 +4159,6 @@ ${isExecutionGoal ? '⚡ EXECUTION GOAL: Run shell commands directly. Use `cat` 
           console.warn('[AI Agent] Model tried to set done=true while executing a command. Overriding to false to allow command execution and verification.');
           parsed.done = false;
         } else {
-          setAiError(null);
-          setAutoMode(false);
-          setAiOpen(true);
-          setAiHasOpenedOnce(true);
-          // Show a clear DONE status
-          setAiDone(true);
           // ✅ Save completed session to sshAiHistory
           setAutoStepHistory(prev => {
             const finalSteps = [...prev, {
@@ -3842,8 +4166,7 @@ ${isExecutionGoal ? '⚡ EXECUTION GOAL: Run shell commands directly. Use `cat` 
               explain: parsed.explain || 'Task complete.',
               status: 'success',
             }];
-            // Build summary for the popup
-            setAiDoneSummary({
+            showAiDoneModal({
               goal,
               steps: finalSteps.slice(-30),
               taskMode: sshAiPrefs.aiTask || 'ssh',
@@ -3988,12 +4311,7 @@ ${isExecutionGoal ? '⚡ EXECUTION GOAL: Run shell commands directly. Use `cat` 
 
           if (autoRepeatSigRef.current.count >= 2) {
             // Patch was already applied — AI is in a loop. Treat as done.
-            setAiError(null);
-            setAutoMode(false);
-            setAiDone(true);
-            setAiOpen(true);
-            setAiHasOpenedOnce(true);
-            setAiDoneSummary({
+            showAiDoneModal({
               goal,
               steps: autoStepHistory,
               taskMode: sshAiPrefs?.aiTask || 'code',
@@ -4064,6 +4382,22 @@ ${isExecutionGoal ? '⚡ EXECUTION GOAL: Run shell commands directly. Use `cat` 
         return;
       }
 
+      const parsedCommandTrim = String(parsed.command || '').trim();
+      const redundantFollowupCommand = !!parsedCommandTrim && (
+        isReadOnlyCommand(parsedCommandTrim) || /^\[wait\]$/i.test(parsedCommandTrim)
+      );
+
+      // === Client-side: dynamic completion guard ===
+      if (completionEvidence.done && (!parsedCommandTrim || redundantFollowupCommand)) {
+        showAiDoneModal({
+          goal,
+          steps: autoStepHistory,
+          taskMode: sshAiPrefs?.aiTask || 'ssh',
+          explain: parsed.explain || `✅ Goal already satisfied: ${completionEvidence.reason}.`,
+        });
+        return;
+      }
+
       // === No command and not done: AI is stuck (STALL DETECTION) ===
       if (!parsed.command || !String(parsed.command).trim()) {
         const needRetryKey = `${goal}::${lastExecutedCommand || ''}::${snap.slice(-100)}`;
@@ -4123,16 +4457,6 @@ What is your move?`;
       if (isRemoveGoal && isInstallCmd) {
         setAiError('Auto Mode stopped: AI tried to INSTALL when the goal was to REMOVE. This looks like a loop. Please check manually.');
         setAutoMode(false);
-        setAiOpen(true);
-        setAiHasOpenedOnce(true);
-        return;
-      }
-
-      // === Client-side: if removal clearly succeeded, force done ===
-      if (removalSuccess && !parsed.command) {
-        setAiError(null);
-        setAutoMode(false);
-        setAiDone(true);
         setAiOpen(true);
         setAiHasOpenedOnce(true);
         return;
@@ -6281,6 +6605,8 @@ What is your move?`;
                             detectedOsRef.current = null; // Re-detect OS for new session
                             autoSessionBackupIdRef.current = Date.now().toString(36); // Fresh backup ID for this session
                             preloadedSkillsRef.current = null; // will be set below
+                            setAiDone(false);
+                            setAiDoneSummary(null);
                             lastGoalRef.current = String(autoGoal || aiPrompt || '').trim();
                             setAutoStepHistory([]);
                             setAiError(null);

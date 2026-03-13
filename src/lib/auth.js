@@ -21,23 +21,38 @@ export const authOptions = {
       if (account.provider === "google") {
         try {
           await connectDB(process.env.MONGODB_URI, true);
-          let existingUser = await User.findOne({ email: user.email });
           const profileImage = profile.picture || user.image;
-          if (!existingUser) {
-            existingUser = await User.create({
+          const isAdminEmail = !!process.env.ADMIN_EMAIL && user.email === process.env.ADMIN_EMAIL;
+          const update = {
+            $set: {
               name: user.name,
-              email: user.email,
               image: profileImage,
               googleId: profile.sub,
-              role: process.env.ADMIN_EMAIL && user.email === process.env.ADMIN_EMAIL ? 'admin' : 'user',
-            });
-            console.log("🆕 New User created in DB Center:", user.email);
-          } else {
-            existingUser.name = user.name;
-            existingUser.image = profileImage;
-            await existingUser.save();
-            console.log("✅ User profile synced:", user.email);
-          }
+              ...(isAdminEmail ? { role: 'admin' } : {}),
+            },
+            $setOnInsert: {
+              email: user.email,
+              role: isAdminEmail ? 'admin' : 'user',
+            },
+          };
+          const dbUser = await User.findOneAndUpdate(
+            { email: user.email },
+            update,
+            {
+              new: true,
+              upsert: true,
+              setDefaultsOnInsert: true,
+            }
+          ).lean();
+
+          user.dbId = dbUser?._id?.toString?.() || null;
+          user.role = dbUser?.role || (isAdminEmail ? 'admin' : 'user');
+          user.vaultConfigured = !!dbUser?.vault?.isConfigured;
+          user.settings = dbUser?.settings || null;
+
+          console.log(dbUser?.createdAt && dbUser?.updatedAt && dbUser.createdAt.getTime?.() === dbUser.updatedAt.getTime?.()
+            ? "🆕 New User created in DB Center:"
+            : "✅ User profile synced:", user.email);
           return true;
         } catch (error) {
           console.error("❌ Error in signIn callback:", error);
@@ -52,20 +67,27 @@ export const authOptions = {
      * DB call ONLY on first sign-in (account is present). 
      * All subsequent calls just return the cached token — zero DB queries.
      */
-    async jwt({ token, account }) {
+    async jwt({ token, account, user }) {
       if (account) {
-        // First sign-in: fetch MongoDB _id and role once, store in the JWT.
-        try {
-          await connectDB(process.env.MONGODB_URI, true);
-          const dbUser = await User.findOne({ email: token.email }).lean();
-          if (dbUser) {
-            token.dbId           = dbUser._id.toString();
-            token.role           = dbUser.role || 'user';
-            token.vaultConfigured = dbUser.vault?.isConfigured || false;
-            token.settings       = dbUser.settings || null;
+        // First sign-in: prefer data already resolved in signIn to avoid a second DB query.
+        if (user?.dbId) {
+          token.dbId = user.dbId;
+          token.role = user.role || 'user';
+          token.vaultConfigured = !!user.vaultConfigured;
+          token.settings = user.settings || null;
+        } else {
+          try {
+            await connectDB(process.env.MONGODB_URI, true);
+            const dbUser = await User.findOne({ email: token.email }).lean();
+            if (dbUser) {
+              token.dbId = dbUser._id.toString();
+              token.role = dbUser.role || 'user';
+              token.vaultConfigured = dbUser.vault?.isConfigured || false;
+              token.settings = dbUser.settings || null;
+            }
+          } catch (e) {
+            console.error("JWT callback DB error:", e);
           }
-        } catch (e) {
-          console.error("JWT callback DB error:", e);
         }
       }
       return token;

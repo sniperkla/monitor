@@ -467,8 +467,8 @@ export async function POST(req) {
       return s;
     };
 
-    // Keep history tight — 2 turns (last 2 actions) is plenty with the rich prompt
-    const safeHistory = Array.isArray(history) ? history.slice(-2) : [];
+    // Keep history to 4 turns (last 4 actions) — enough context for multi-step auto mode
+    const safeHistory = Array.isArray(history) ? history.slice(-4) : [];
     const historyMessages = safeHistory.flatMap(h => {
       const msgs = [];
       if (h.role === 'user' && h.content) msgs.push({ role: 'user', content: String(h.content).slice(0, 400) });
@@ -590,7 +590,7 @@ Error Type → Recovery Action:
    STEP C: Fix the ROOT CAUSE shown in the journal
    STEP D: ONLY THEN retry: systemctl restart SERVICE
    ⚠️ NEVER retry systemctl restart without first running journalctl. Blind retries = infinite loop.
-7. "Connection refused"       → Check service running: systemctl status SERVICE. Check port binding: ss -tlnp.
+7. "Connection refused"       → Check service running: systemctl status SERVICE --no-pager. Check port binding: ss -tlnp.
 
 ESCALATION LADDER:
   Level 1: Fix obvious issue (typo, wrong path, missing sudo)
@@ -704,6 +704,8 @@ Mark steps as DONE when complete. Only check off after verification.
 4. NO PLACEHOLDERS: Use EXACT file content. Never use "existing context" as filler.
 5. NEVER output a <diff> and a <command> in the same response.
 6. After applying a diff, verify it: cat file | grep -A2 -B2 'changed_section'
+7. NEVER use interactive editors: vi, vim, nano. NEVER use stdin-blocking writes like <command>cat > file</command> or <command>tee file</command>.
+8. For NEW files, use ONE quoted heredoc command only: <command>cat << 'EOF' > file\n...\nEOF</command>. Do NOT start bare cat and then type content interactively.
 
 WHEN TO SET done=true (PATCH MODE):
 - ✅ You output a <diff> AND it is the final edit needed → done=true IMMEDIATELY
@@ -773,7 +775,7 @@ Verification: How will I confirm success?
 4. [ ] Final check / cleanup
 </plan>
 <command>Single shell command. Options:
-- Diagnostics: ps, ss, systemctl status, journalctl, df, free, curl
+- Diagnostics: ps, ss, systemctl status --no-pager, journalctl --no-pager, df, free, curl
 - Package: apt/dnf/apk install, npm/pip install
 - Process: pkill, kill, systemctl start/stop/restart
 - Control: [Wait], [Ctrl+C], y (for interactive prompts only)</command>
@@ -800,18 +802,25 @@ COMMAND INTELLIGENCE:
 - Conditional: test -f file && echo exists || echo missing
 - ⚠️ ALWAYS use --no-pager for journalctl and systemctl — NEVER omit it. Example: journalctl -xeu nginx.service -n 50 --no-pager. Without --no-pager the output opens in less which blocks the engine.
 - Use head -N to cap long outputs
+- NEVER use interactive editors or pagers for editing/inspection: vi, vim, nano, less, more, man.
+- NEVER use stdin-blocking commands such as bare <command>cat</command>, <command>cat > file</command>, or <command>tee file</command>. Use <command>cat FILE</command>, <command>head</command>, <command>tail</command>, or a single quoted heredoc instead.
 - sudo: ${preferSudo ? 'PREFERRED — use sudo for system-level ops. Set danger=false.' : 'AVOID unless necessary'}
 
-WAIT PROTOCOL:
-1. Output still flowing (progress bars) → [Wait]
-2. Shell prompt ($ or #) visible → ready for next command
-3. "(END)" or ":" pager → q to exit
-4. "(y/n)" → y or n
-5. NEVER send multiple commands while one is running
+WAIT PROTOCOL (MANDATORY — VIOLATIONS CAUSE BROKEN INSTALLS):
+1. Terminal shows "STILL RUNNING" or no shell prompt → YOU MUST output <command>[Wait]</command>. NO EXCEPTIONS.
+2. Output still flowing (progress bars, Downloading, Extracting, Installing) → <command>[Wait]</command>
+3. Shell prompt ($ or #) visible → ready for next command
+4. "(END)" or ":" pager → q to exit
+5. "(y/n)" → y or n
+6. NEVER send a shell command while another is running — this corrupts the terminal state.
+7. Package installs (yum/apt/dnf/pip/npm/gem/cargo/brew) can be SILENT for 1-3 minutes during download/extraction. Keep sending [Wait] until the prompt returns.
+8. If you see partial install output with no prompt → [Wait]. NEVER assume it finished.
+9. If you accidentally open vi/vim → exit with [ESC] then :q! ; if nano → ^X then N ; if a command is waiting for stdin (bare cat / cat > file / tee file) → [Ctrl+C].
 
 INTERACTIVE PROMPT HANDLING:
 - "(y/n)" or "[Y/n]" → y
-- "Password:" → send password or pause with interactive=sudo_password
+- "Password:" / "user@host's password:" / "Password for user postgres:" → treat as password input required; pause instead of guessing
+- For sudo in automation, prefer non-interactive failure over hanging: use sudo -n so missing credentials fail fast
 - "Are you sure?" → danger=true
 
 PROCESS & NETWORK DIAGNOSTICS:
@@ -836,11 +845,15 @@ ${structuredContext}`;
 TMUX ENVIRONMENT (ACTIVE):
 - This terminal is running inside tmux session 'main'. A dedicated background session 'ai-bg-task' also exists.
 - YOU MUST use tmux for ANY command that may block for more than a few seconds (installs, builds, downloads, service restarts, etc.).
-- Long-running command pattern: <command>tmux send-keys -t ai-bg-task "your_long_command > /tmp/task.log 2>&1" C-m</command>
-- Then check progress: <command>tail -n 30 /tmp/task.log</command>
-- Wait for completion: <command>tmux wait-for -L ai-bg-task 2>/dev/null; tail -n 30 /tmp/task.log</command>
-- Short/instant commands (ls, cat, systemctl status, grep, echo) can run directly without tmux.
+- Use ONE canonical log file and completion sentinel:
+- Start long job: <command>tmux has-session -t ai-bg-task 2>/dev/null || tmux new-session -d -s ai-bg-task; tmux send-keys -t ai-bg-task:0.0 "sh -lc 'your_long_command > /tmp/ai-bg-task.log 2>&1; code=$?; echo __AI_DONE__:$code >> /tmp/ai-bg-task.log'" C-m</command>
+- Check progress: <command>tail -n 30 /tmp/ai-bg-task.log</command>
+- Check completion: <command>grep '__AI_DONE__:' /tmp/ai-bg-task.log | tail -1 || tail -n 30 /tmp/ai-bg-task.log</command>
+- If the sentinel is absent, the job is still running → use <command>[Wait]</command> and check again later.
+- If tmux ever says "can't find pane" or "can't find session", recreate it first with: <command>tmux has-session -t ai-bg-task 2>/dev/null || tmux new-session -d -s ai-bg-task</command>
+- Short/instant commands (ls, cat FILE, systemctl status --no-pager, grep, echo) can run directly without tmux.
 - NEVER use 'tmux attach' or 'tmux attach-session' — you are already inside tmux.
+- NEVER use 'tmux wait-for -L' here — it can block forever without a matching unlock.
 - NEVER run blocking commands (yum install, npm install, cargo build, make, etc.) directly — always use tmux send-keys to ai-bg-task.` : '';
 
     const sys = (aiTask === 'code' ? codeEditorSys : sshCommandSys) + '\n' + backgroundTmuxSys + skillBlock;
@@ -1052,9 +1065,11 @@ Now output the <diff> needed to complete the request.`;
               usageInfo = await checkAndTrackAiUsage(session.user.email, prompt, full);
 
               try {
+                const streamHistoryRepo = new AiHistoryRepository(centralDb);
+                await streamHistoryRepo.init();
                 const missionTitle = contextPack?.goal || prompt.slice(0, 50);
                 const oneHourAgo = new Date(Date.now() - 3600000);
-                let historyRecord = await AiHistory.findOne({
+                let historyRecord = await streamHistoryRepo.findOne({
                   userId: session.user.email,
                   type: 'terminal',
                   title: missionTitle,
@@ -1066,12 +1081,12 @@ Now output the <diff> needed to complete the request.`;
                     { role: 'assistant', content: full || '(no response)', metadata: { usedModel }, timestamp: new Date() }
                   ];
                 if (historyRecord) {
-                  await AiHistory.updateOne(
+                  await streamHistoryRepo.updateOne(
                     { _id: historyRecord._id },
                     { $push: { messages: { $each: newMessagePair } }, $set: { lastActive: new Date() } }
                   );
                 } else {
-                  await AiHistory.create({
+                  await streamHistoryRepo.create({
                     userId: session.user.email,
                     type: 'terminal',
                     title: missionTitle,
