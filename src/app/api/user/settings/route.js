@@ -1,8 +1,29 @@
 import { NextResponse } from 'next/server';
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "@/lib/auth";
-import connectDB from "@/lib/mongodb";
+import mongoose from 'mongoose';
 import User from "@/models/User";
+import fs from 'fs';
+import path from 'path';
+
+function readCenterUri() {
+  try {
+    const p = path.join(process.cwd(), 'db-config.json');
+    if (fs.existsSync(p)) {
+      const c = JSON.parse(fs.readFileSync(p, 'utf-8'));
+      if (c.uri) return c.uri;
+    }
+  } catch (e) {}
+  return process.env.MONGODB_URI || null;
+}
+
+async function ensureConnected() {
+  if (mongoose.connection.readyState === 1) return; // already connected by server.js
+  const uri = readCenterUri();
+  if (!uri) throw new Error('No center DB URI configured');
+  if (!uri.startsWith('mongodb')) throw new Error('Settings require a MongoDB center DB');
+  await mongoose.connect(uri, { bufferCommands: false, serverSelectionTimeoutMS: 5000 });
+}
 
 export async function GET() {
   try {
@@ -11,19 +32,16 @@ export async function GET() {
       return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
     }
 
-    await connectDB(process.env.MONGODB_URI, true);
-    const user = await User.findOne({ email: session.user.email });
-
-    if (!user) {
-      return NextResponse.json({ success: false, error: 'User not found' }, { status: 404 });
-    }
+    await ensureConnected();
+    const user = await User.findOne({ email: session.user.email }).lean();
 
     return NextResponse.json({
       success: true,
-      settings: user.settings || {}
+      settings: user?.settings || {}
     });
   } catch (error) {
-    return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+    console.error('[settings] GET error:', error.message);
+    return NextResponse.json({ success: true, settings: {} }); // graceful fallback — use localStorage
   }
 }
 
@@ -35,19 +53,16 @@ export async function POST(request) {
     }
 
     const settings = await request.json();
-    await connectDB(process.env.MONGODB_URI, true);
 
-    const user = await User.findOneAndUpdate(
+    await ensureConnected();
+    await User.findOneAndUpdate(
       { email: session.user.email },
-      { $set: { settings: settings } },
-      { returnDocument: 'after', upsert: true }
+      { $set: { settings } },
+      { upsert: true, runValidators: false }
     );
 
-    return NextResponse.json({
-      success: true,
-      settings: user.settings
-    });
+    return NextResponse.json({ success: true });
   } catch (error) {
+    console.error('[settings] POST error:', error.message);
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
-  }
-}
+  }}

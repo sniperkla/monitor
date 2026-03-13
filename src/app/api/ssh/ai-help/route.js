@@ -833,11 +833,15 @@ EMOJIS FOR STATUS:
 ${structuredContext}`;
 
     const backgroundTmuxSys = autoTmux ? `
-BACKGROUND TASKS (TMUX):
-- A background tmux session named 'ai-bg-task' is available for long tasks.
-- Run blocking ops in background: <command>tmux send-keys -t ai-bg-task "your_long_command > /tmp/task.log 2>&1 &" C-m</command>
-- Check progress: <command>tail -n 20 /tmp/task.log</command>
-- NEVER attach to tmux (no 'tmux attach').` : '';
+TMUX ENVIRONMENT (ACTIVE):
+- This terminal is running inside tmux session 'main'. A dedicated background session 'ai-bg-task' also exists.
+- YOU MUST use tmux for ANY command that may block for more than a few seconds (installs, builds, downloads, service restarts, etc.).
+- Long-running command pattern: <command>tmux send-keys -t ai-bg-task "your_long_command > /tmp/task.log 2>&1" C-m</command>
+- Then check progress: <command>tail -n 30 /tmp/task.log</command>
+- Wait for completion: <command>tmux wait-for -L ai-bg-task 2>/dev/null; tail -n 30 /tmp/task.log</command>
+- Short/instant commands (ls, cat, systemctl status, grep, echo) can run directly without tmux.
+- NEVER use 'tmux attach' or 'tmux attach-session' — you are already inside tmux.
+- NEVER run blocking commands (yum install, npm install, cargo build, make, etc.) directly — always use tmux send-keys to ai-bg-task.` : '';
 
     const sys = (aiTask === 'code' ? codeEditorSys : sshCommandSys) + '\n' + backgroundTmuxSys + skillBlock;
 

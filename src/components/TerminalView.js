@@ -488,9 +488,28 @@ export default function TerminalView({ connectionId, connectionName, host, color
     if (sshAiPrefs?.autoTmux && status === 'connected' && !tmuxInitialized) {
       setTmuxInitialized(true);
       if (socketRef.current) {
-        // Send command to setup tmux in the background (no attach)
-        const tmuxCmd = `if ! command -v tmux &> /dev/null; then echo "\\n\\033[1;36m✨ [AI Auto-Setup]\\033[0m Installing tmux for background tasks..."; if command -v apt-get &> /dev/null; then sudo apt-get update && sudo apt-get install -y tmux; elif command -v yum &> /dev/null; then sudo yum install -y tmux; elif command -v dnf &> /dev/null; then sudo dnf install -y tmux; elif command -v apk &> /dev/null; then sudo apk add tmux; elif command -v pacman &> /dev/null; then sudo pacman -S --noconfirm tmux; fi; fi; if command -v tmux &> /dev/null; then tmux new -d -s ai-bg-task 2>/dev/null || true; echo "\\n\\033[1;36m✨ [AI Auto-Setup]\\033[0m Background tmux session 'ai-bg-task' is ready.\\n"; fi\n`;
-        socketRef.current.emit('ssh:input', tmuxCmd);
+        // Install tmux if missing, then attach the terminal to a persistent tmux session.
+        // Using 'new-session -A -s main' attaches to existing session or creates a new one.
+        const esc = '\x1b';
+        const tmuxCmd = [
+          `if ! command -v tmux &> /dev/null; then`,
+          `  echo "${esc}[1;36m✨ [AI Auto-Setup]${esc}[0m Installing tmux...";`,
+          `  if command -v apt-get &> /dev/null; then sudo apt-get install -y tmux -q;`,
+          `  elif command -v yum &> /dev/null; then sudo yum install -y tmux -q;`,
+          `  elif command -v dnf &> /dev/null; then sudo dnf install -y tmux -q;`,
+          `  elif command -v apk &> /dev/null; then sudo apk add tmux -q;`,
+          `  elif command -v pacman &> /dev/null; then sudo pacman -S --noconfirm tmux -q;`,
+          `  fi;`,
+          `fi;`,
+          `if command -v tmux &> /dev/null; then`,
+          `  echo "${esc}[1;36m✨ [AI Auto-Setup]${esc}[0m Attaching to tmux session...";`,
+          `  tmux new-session -d -s ai-bg-task 2>/dev/null || true;`,
+          `  exec tmux new-session -A -s main;`,
+          `else`,
+          `  echo "${esc}[1;33m⚠ tmux install failed — staying in normal shell${esc}[0m";`,
+          `fi`,
+        ].join(' ');
+        socketRef.current.emit('ssh:input', tmuxCmd + '\n');
       }
     }
   }, [sshAiPrefs?.autoTmux, status, tmuxInitialized]);
@@ -4672,18 +4691,26 @@ What is your move?`;
             minHeight={280}
             dragHandleClassName="ai-panel-drag-handle"
             cancel="button,input,textarea,select,option,label"
-            className="z-50"
-            style={{ position: 'fixed' }}
+            style={{ position: 'fixed', zIndex: 9999 }}
           >
             <div className="w-full h-full rounded-2xl border border-[var(--border-color)] bg-[var(--bg-secondary)]/95 backdrop-blur-2xl shadow-2xl overflow-hidden flex flex-col relative">
               {/* Header */}
               <div className="ai-panel-drag-handle flex items-center justify-between px-3 py-2 border-b border-[var(--border-color)] bg-[var(--bg-tertiary)]/30 dark:bg-black/20">
-                <div className="flex items-center gap-2">
-                  <Sparkles size={14} className="text-[var(--accent-indigo)]" />
-                  <span className="text-xs font-bold" style={{ color: 'var(--text-primary)' }}>{t('ai.title')}</span>
-                  {autoMode && (
-                    <span className="px-1.5 py-0.5 rounded text-[10px] bg-[var(--glow-emerald)] text-[var(--accent-emerald)] animate-pulse">{t('ai.running')}</span>
-                  )}
+                <div className="flex items-center gap-2 min-w-0">
+                  <Sparkles size={14} className="text-[var(--accent-indigo)] shrink-0" />
+                  <div className="flex flex-col min-w-0">
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs font-bold" style={{ color: 'var(--text-primary)' }}>{t('ai.title')}</span>
+                      {autoMode && (
+                        <span className="px-1.5 py-0.5 rounded text-[10px] bg-[var(--glow-emerald)] text-[var(--accent-emerald)] animate-pulse">{t('ai.running')}</span>
+                      )}
+                    </div>
+                    {(connectionName || host) && (
+                      <span className="text-[10px] font-mono truncate max-w-[180px]" style={{ color: 'var(--accent-indigo)', opacity: 0.75 }}>
+                        {connectionName || host}
+                      </span>
+                    )}
+                  </div>
                 </div>
                 <div className="flex items-center gap-2">
                   <button type="button" onClick={() => setAiHistoryOpen(v => !v)} className="p-1.5 rounded hover:bg-[var(--bg-tertiary)] dark:hover:bg-white/5" title={t('ai.history')} style={{ color: 'var(--text-secondary)' }}><Clock size={12} /></button>
@@ -4778,12 +4805,12 @@ What is your move?`;
               )}
 
               {aiSettingsOpen && (
-                <div className="absolute top-10 left-2 right-2 z-50 rounded-xl border border-white/10 bg-[var(--bg-secondary)] shadow-xl overflow-hidden">
-                  <div className="flex items-center justify-between px-3 py-2 border-b border-white/10">
+                <div className="absolute top-10 left-0 right-0 bottom-0 z-50 rounded-b-2xl border-t border-white/10 bg-[var(--bg-secondary)] shadow-xl flex flex-col overflow-hidden">
+                  <div className="flex items-center justify-between px-3 py-2 border-b border-white/10 shrink-0">
                     <span className="text-[10px] font-bold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>{t('ai.settings')}</span>
                     <button onClick={() => setAiSettingsOpen(false)} className="text-[10px] opacity-70 hover:opacity-100" style={{ color: 'var(--text-muted)' }}>{t('ai.close')}</button>
                   </div>
-                  <div className="p-3 space-y-3">
+                  <div className="flex-1 overflow-y-auto p-3 space-y-3 custom-scrollbar">
                     <label className="flex items-center justify-between text-[11px]" style={{ color: 'var(--text-primary)' }}>
                       <span>{t('ai.preferSudo')}</span>
                       <input type="checkbox" checked={!!sshAiPrefs.preferSudo} onChange={(e) => setSshAiPrefs({ preferSudo: e.target.checked })} disabled={!isLoggedIn} />
@@ -4876,15 +4903,13 @@ What is your move?`;
                         <input type="text" placeholder={t('ai.modelName')} value={sshAiPrefs.aiCustomModel || ''} onChange={e => setSshAiPrefs({ aiCustomModel: e.target.value })} disabled={!isLoggedIn} className="w-full text-[10px] rounded bg-black/30 border border-white/10 px-2 py-1.5 focus:border-indigo-500/50 outline-none" style={{ color: 'var(--text-primary)' }} title={t('ai.tooltips.model')} />
                       </div>
                     )}
-
-                    {/* Save Button */}
+                  </div>
+                  {/* Save button pinned at bottom, always visible */}
+                  <div className="shrink-0 p-3 border-t border-white/10">
                     <button
-                      onClick={() => {
-                        // Settings are already saved via setSshAiPrefs, just show feedback
-                        setAiSettingsOpen(false);
-                      }}
+                      onClick={() => setAiSettingsOpen(false)}
                       disabled={!isLoggedIn}
-                      className="w-full py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:bg-white/5 disabled:text-white/30 text-white text-xs font-bold uppercase tracking-wider transition-all active:scale-95 mt-2"
+                      className="w-full py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:bg-white/5 disabled:text-white/30 text-white text-xs font-bold uppercase tracking-wider transition-all active:scale-95"
                     >
                       💾 Save Settings
                     </button>
@@ -6361,12 +6386,12 @@ What is your move?`;
 
       {/* Mission Accomplished Premium Popup */}
       <AnimatePresence>
-        {aiDone && !autoMode && (
+        {aiDone && !autoMode && typeof document !== 'undefined' && createPortal(
           <motion.div 
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="fixed inset-0 z-[999] flex items-center justify-center p-4 backdrop-blur-sm bg-black/40"
+            className="fixed inset-0 z-[10000] flex items-center justify-center p-4 backdrop-blur-sm bg-black/40"
           >
             <motion.div
               initial={{ scale: 0.9, y: 20, opacity: 0 }}
@@ -6494,7 +6519,7 @@ What is your move?`;
               </motion.div>
             </motion.div>
           </motion.div>
-        )}
+        , document.body)}
       </AnimatePresence>
     </div>
   );

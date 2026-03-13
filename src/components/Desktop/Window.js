@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useLayoutEffect, useRef, useCallback } from 'react';
 import { Rnd } from 'react-rnd';
 import { useOS } from '@/context/OSContext';
 import { X, Minus, Maximize2, Minimize2, Square } from 'lucide-react';
@@ -116,6 +116,13 @@ export default function Window({ id, title, icon: Icon, component, isMinimized, 
     height: windowState.height || initialHeight || 600,
   });
 
+  // Always-current ref so the layout effect can read freeRect without it being a dep
+  const freeRectRef = useRef(freeRect);
+  useEffect(() => { freeRectRef.current = freeRect; }, [freeRect]);
+
+  // Track whether a real drag happened (not just a click/double-click)
+  const dragMovedRef = useRef(false);
+
   // Sync initial position if missing in global state (e.g. fresh open)
   useEffect(() => {
     if (windowState.x === undefined || windowState.y === undefined) {
@@ -171,27 +178,33 @@ export default function Window({ id, title, icon: Icon, component, isMinimized, 
   }, []); // Run once on mount
 
   // ── Imperative Snap/Maximize Control ──
-  useEffect(() => {
+  // useLayoutEffect fires synchronously before the browser paints — eliminates the
+  // one-frame teleport flash that useEffect caused when toggling maximize/restore.
+  // freeRect intentionally NOT in deps: restore reads the latest value via freeRectRef.
+  useLayoutEffect(() => {
     if (!rndRef.current) return;
 
-    let targetRect = freeRect;
-
     if (isMaximized || snapSide === 'top') {
-      targetRect = { x: safeArea.x, y: safeArea.y, width: safeArea.w, height: safeArea.h };
+      rndRef.current.updatePosition({ x: safeArea.x, y: safeArea.y });
+      rndRef.current.updateSize({ width: safeArea.w, height: safeArea.h });
     } else if (snapSide === 'left') {
-      targetRect = { x: safeArea.x, y: safeArea.y, width: Math.floor(safeArea.w / 2), height: safeArea.h };
+      rndRef.current.updatePosition({ x: safeArea.x, y: safeArea.y });
+      rndRef.current.updateSize({ width: Math.floor(safeArea.w / 2), height: safeArea.h });
     } else if (snapSide === 'right') {
-      targetRect = { x: safeArea.x + Math.floor(safeArea.w / 2), y: safeArea.y, width: Math.ceil(safeArea.w / 2), height: safeArea.h };
+      rndRef.current.updatePosition({ x: safeArea.x + Math.floor(safeArea.w / 2), y: safeArea.y });
+      rndRef.current.updateSize({ width: Math.ceil(safeArea.w / 2), height: safeArea.h });
+    } else {
+      // Restoring from snap/maximize — jump back to saved free rect before paint
+      const r = freeRectRef.current;
+      rndRef.current.updatePosition({ x: r.x, y: r.y });
+      rndRef.current.updateSize({ width: r.width, height: r.height });
     }
 
-    // Apply the target position/size
-    rndRef.current.updatePosition({ x: targetRect.x, y: targetRect.y });
-    rndRef.current.updateSize({ width: targetRect.width, height: targetRect.height });
-
-  }, [isMaximized, snapSide, screen.w, screen.h, freeRect, taskbarPosition]);
+  }, [isMaximized, snapSide, screen.w, screen.h, taskbarPosition]);
 
   // ── Drag handlers ──
   const handleDragStart = useCallback((e) => {
+    dragMovedRef.current = false; // reset — will be set true only on actual movement
     focusWindow(id);
     if (isSnappedOrMax && !isMaximized) {
       const restoreW = freeRect.width;
@@ -210,6 +223,7 @@ export default function Window({ id, title, icon: Icon, component, isMinimized, 
   }, [id, focusWindow, isSnappedOrMax, isMaximized, freeRect, screen, snapWindow, safeArea]);
 
   const handleDrag = useCallback((e) => {
+    dragMovedRef.current = true; // real drag movement detected
     const sw = window.innerWidth;
     const EDGE = 20;
     if (e.clientX <= EDGE) {
@@ -227,8 +241,9 @@ export default function Window({ id, title, icon: Icon, component, isMinimized, 
     if (snapPreview) {
       snapWindow(id, snapPreview);
       setSnapPreview(null);
-    } else {
-      // Clamp position using safeArea
+    } else if (dragMovedRef.current) {
+      // Only update freeRect when real drag movement occurred — prevents double-click
+      // from corrupting the saved restore position (Rnd fires dragStop on plain clicks too).
       const clampedX = Math.max(safeArea.x - freeRect.width + 100, Math.min(d.x, safeArea.x + safeArea.w - 100));
       const clampedY = Math.max(safeArea.y, Math.min(d.y, safeArea.y + safeArea.h - 40));
       
@@ -240,6 +255,7 @@ export default function Window({ id, title, icon: Icon, component, isMinimized, 
       
       updateWindowPosition(id, { position: { x: clampedX, y: clampedY } });
     }
+    dragMovedRef.current = false;
   }, [snapPreview, id, freeRect, safeArea, snapWindow, updateWindowPosition]);
 
   // ── Resize handlers ──
