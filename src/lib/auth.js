@@ -74,7 +74,7 @@ export const authOptions = {
           token.dbId = user.dbId;
           token.role = user.role || 'user';
           token.vaultConfigured = !!user.vaultConfigured;
-          token.settings = user.settings || null;
+          // IMPORTANT: Do not store user.settings in JWT to prevent HTTP 431 Error (Header Fields Too Large)
         } else {
           try {
             await connectDB(process.env.MONGODB_URI, true);
@@ -83,7 +83,6 @@ export const authOptions = {
               token.dbId = dbUser._id.toString();
               token.role = dbUser.role || 'user';
               token.vaultConfigured = dbUser.vault?.isConfigured || false;
-              token.settings = dbUser.settings || null;
             }
           } catch (e) {
             console.error("JWT callback DB error:", e);
@@ -101,7 +100,7 @@ export const authOptions = {
       session.user.id             = token.dbId || token.sub;
       session.user.role           = token.role || 'user';
       session.user.vaultConfigured = token.vaultConfigured || false;
-      session.user.settings       = token.settings || null;
+      // Do not spread settings here either
       return session;
     },
   },

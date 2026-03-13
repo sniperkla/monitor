@@ -833,11 +833,14 @@ export function OSProvider({ children }) {
             const localTimestamp = stateRef.current.timestamp || 0;
             const dbTimestamp = data.settings.timestamp || 0;
             
+            const lastSyncedEmail = localStorage.getItem('webtop_os_synced_email');
+            const isFreshLogin = lastSyncedEmail !== userEmail;
+
             console.log('[OS] DB Fetch - customWallpapers:', data.settings.customWallpapers);
             console.log('[OS] DB Fetch - local customWallpapers:', stateRef.current.customWallpapers);
-            console.log('[OS] Timestamps - DB:', dbTimestamp, 'Local:', localTimestamp);
+            console.log('[OS] Timestamps - DB:', dbTimestamp, 'Local:', localTimestamp, 'isFreshLogin:', isFreshLogin);
 
-            if (dbTimestamp > localTimestamp || (localTimestamp === 0 && dbTimestamp !== 0)) {
+            if (isFreshLogin || dbTimestamp > localTimestamp || (localTimestamp === 0 && dbTimestamp !== 0)) {
               console.log(`🔄 [OS] Hydrating from DB (DB: ${dbTimestamp}, Local: ${localTimestamp})`);
               
               // Sync i18n immediately if needed to prevent flicker
@@ -845,6 +848,7 @@ export function OSProvider({ children }) {
                  await i18n.changeLanguage(data.settings.language).catch(console.error);
               }
 
+              localStorage.setItem('webtop_os_synced_email', userEmail);
               lastSavedStateRef.current = serializeStateForSync(data.settings);
               dispatch({ type: 'SET_INITIAL_STATE', payload: data.settings });
             } else if (localTimestamp > dbTimestamp) {

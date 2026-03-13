@@ -492,19 +492,22 @@ export default function TerminalView({ connectionId, connectionName, host, color
         // Using 'new-session -A -s main' attaches to existing session or creates a new one.
         const esc = '\x1b';
         const tmuxCmd = [
-          `if ! command -v tmux &> /dev/null; then`,
-          `  echo "${esc}[1;36m✨ [AI Auto-Setup]${esc}[0m Installing tmux...";`,
-          `  if command -v apt-get &> /dev/null; then sudo apt-get install -y tmux -q;`,
-          `  elif command -v yum &> /dev/null; then sudo yum install -y tmux -q;`,
-          `  elif command -v dnf &> /dev/null; then sudo dnf install -y tmux -q;`,
-          `  elif command -v apk &> /dev/null; then sudo apk add tmux -q;`,
-          `  elif command -v pacman &> /dev/null; then sudo pacman -S --noconfirm tmux -q;`,
+          `if [ -z "$TMUX" ]; then`, // 🧪 Don't attach if already inside tmux
+          `  if ! command -v tmux &> /dev/null; then`,
+          `    echo "${esc}[1;36m✨ [AI Auto-Setup]${esc}[0m Installing tmux...";`,
+          `    if command -v apt-get &> /dev/null; then sudo apt-get install -y tmux -q;`,
+          `    elif command -v yum &> /dev/null; then sudo yum install -y tmux -q;`,
+          `    elif command -v dnf &> /dev/null; then sudo dnf install -y tmux -q;`,
+          `    elif command -v apk &> /dev/null; then sudo apk add tmux -q;`,
+          `    elif command -v pacman &> /dev/null; then sudo pacman -S --noconfirm tmux -q;`,
+          `    fi;`,
+          `  fi;`,
+          `  if command -v tmux &> /dev/null; then`,
+          `    echo "${esc}[1;36m✨ [AI Auto-Setup]${esc}[0m Attaching to tmux session...";`,
+          `    tmux new-session -d -s ai-bg-task 2>/dev/null || true;`,
+          `    exec tmux new-session -A -s main;`,
           `  fi;`,
           `fi;`,
-          `if command -v tmux &> /dev/null; then`,
-          `  echo "${esc}[1;36m✨ [AI Auto-Setup]${esc}[0m Attaching to tmux session...";`,
-          `  tmux new-session -d -s ai-bg-task 2>/dev/null || true;`,
-          `  exec tmux new-session -A -s main;`,
           `else`,
           `  echo "${esc}[1;33m⚠ tmux install failed — staying in normal shell${esc}[0m";`,
           `fi`,
@@ -2465,12 +2468,18 @@ export default function TerminalView({ connectionId, connectionName, host, color
   const detectInteractivePrompt = (text) => {
     const raw = String(text || '').trim();
     if (!raw) return null;
+
+    // 🧪 ROBUSTNESS: If a shell prompt is detected, any interactive prompt is already handled
+    // and is just part of the scrollback history. Do not re-trigger recovery.
+    if (looksLikeShellPrompt(raw)) return null;
+
     const t = raw.toLowerCase();
     const nonEmptyLines = raw.split('\n').map(l => String(l || '')).filter(l => l.trim().length > 0);
     const lastFew = nonEmptyLines.slice(-6);
     const lastLine = (lastFew[lastFew.length - 1] || '').trim();
     const lastLineLower = lastLine.toLowerCase();
     const tailText = lastFew.join('\n');
+    const tailTextLower = tailText.toLowerCase();
 
     // === Y/N Confirmation Prompts ===
     // yum/dnf/apt confirmation
@@ -2480,14 +2489,22 @@ export default function TerminalView({ connectionId, connectionName, host, color
     if (/(\(y\)|\[y\])/i.test(lastLine) && /(proceed|confirm|continue|ok to)/i.test(lastLine)) {
       return { kind: 'confirm_yn', text: lastLine };
     }
-    if (/proceed/i.test(t) && /(\?\s*\(y\))|(\(y\)\s*[:：]?\s*$)/i.test(t)) {
+    if (/proceed/i.test(tailTextLower) && /(\?\s*\(y\))|(\(y\)\s*[:：]?\s*$)/i.test(tailTextLower)) {
       return { kind: 'confirm_yn', text: lastLine };
     }
-    if (/is this ok/i.test(t) && /\[y/i.test(t)) {
-      return { kind: 'confirm_yn', text: lastLine };
+    // Match "is this ok" ONLY if it's recent (at the very end of tail)
+    if (/is this ok/i.test(tailTextLower) && /\[y/i.test(tailTextLower)) {
+      const idx = tailTextLower.lastIndexOf('is this ok');
+      if (idx !== -1 && tailTextLower.length - idx < 120) {
+        return { kind: 'confirm_yn', text: lastLine };
+      }
     }
     // apt "Do you want to continue?"
     if (/do you want to continue/i.test(lastLine)) {
+      return { kind: 'confirm_yn', text: lastLine };
+    }
+    // GPG Key Import
+    if (/importing.*gpg key/i.test(tailTextLower) && /is this ok/i.test(tailTextLower)) {
       return { kind: 'confirm_yn', text: lastLine };
     }
     // Generic confirmations ending with ? and containing yes/no words
@@ -2496,7 +2513,7 @@ export default function TerminalView({ connectionId, connectionName, host, color
     }
 
     // === Overwrite Prompts ===
-    if (/overwrite\s+.*\?/i.test(lastLine) || /already exists.*overwrite/i.test(t)) {
+    if (/overwrite\s+.*\?/i.test(lastLine) || /already exists.*overwrite/i.test(tailTextLower)) {
       return { kind: 'confirm_overwrite', text: lastLine };
     }
     if (/file exists.*replace/i.test(lastLine)) {
@@ -2522,28 +2539,26 @@ export default function TerminalView({ connectionId, connectionName, host, color
     if (/password for user\s+\S+\s*[:：]?\s*$/i.test(lastLine) || /enter password\s*[:：]?\s*$/i.test(lastLine)) {
       return { kind: 'password', text: lastLine };
     }
-    if (/passphrase/i.test(tailText) && /[:：]\s*$/.test(tailText)) {
-      const line = (lastFew.find(l => /passphrase/i.test(l)) || lastLine).trim();
-      return { kind: 'passphrase', text: line };
-    }
-    if (/(password|passphrase).*[:：]\s*$/i.test(tailText)) {
+    if (/(password|passphrase).*[:：]\s*$/i.test(tailTextLower)) {
       const line = (lastFew.find(l => /(password|passphrase).*[:：]\s*$/i.test(l)) || lastLine).trim();
-      return /passphrase/i.test(line)
-        ? { kind: 'passphrase', text: line }
-        : { kind: 'password', text: line };
+      return /passphrase/i.test(line) ? { kind: 'passphrase', text: line } : { kind: 'password', text: line };
     }
-    // sudo password prompt
+
+    // === sudo password prompt ===
     if (/\[sudo\]\s+password/i.test(lastLine)) {
       return { kind: 'sudo_password', text: lastLine };
     }
 
     // === Press ENTER / Any Key ===
-    if (/press.*enter/i.test(lastLine) || /press.*return/i.test(lastLine) || /press any key/i.test(lastLine) || /log file support is not available/i.test(lastLine)) {
+    if (/press.*enter/i.test(lastLine) || /press.*return/i.test(lastLine) || /press any key/i.test(lastLine)) {
       return { kind: 'press_enter', text: lastLine };
     }
-    if (/press.*enter/i.test(tailText) || /press.*return/i.test(tailText) || /press any key/i.test(tailText)) {
-      const line = (lastFew.find(l => /press.*(enter|return)/i.test(l) || /press any key/i.test(l)) || lastLine).trim();
-      return { kind: 'press_enter', text: line };
+    if (/press.*enter/i.test(tailTextLower) || /press.*return/i.test(tailTextLower) || /press any key/i.test(tailTextLower)) {
+      const idx = tailTextLower.lastIndexOf('press');
+      if (idx !== -1 && tailTextLower.length - idx < 120) {
+        const line = (lastFew.find(l => /press.*(enter|return)/i.test(l) || /press any key/i.test(l)) || lastLine).trim();
+        return { kind: 'press_enter', text: line };
+      }
     }
     if (/hit enter/i.test(lastLine) || /press.*to continue/i.test(lastLine)) {
       return { kind: 'press_enter', text: lastLine };
@@ -2553,33 +2568,23 @@ export default function TerminalView({ connectionId, connectionName, host, color
     if (/enter file in which to save/i.test(lastLine)) {
       return { kind: 'ssh_key_file', text: lastLine };
     }
-    if (/are you sure you want to continue connecting/i.test(t)) {
+    if (/are you sure you want to continue connecting/i.test(tailTextLower)) {
       return { kind: 'ssh_host_verify', text: lastLine };
     }
 
     // === Selection Prompts ===
-    // Numbered menu (e.g., "Select [1-3]:")
     if (/select.*\[\d/i.test(lastLine) || /choose.*\[\d/i.test(lastLine) || /option.*\[\d/i.test(lastLine)) {
       return { kind: 'selection', text: lastLine };
     }
-    // Generic choice prompt ending with colon after bracket options
     if (/\[\d+[-/]\d+\]\s*[:：]?\s*$/i.test(lastLine)) {
       return { kind: 'selection', text: lastLine };
     }
-
-    // === GPG Key Import ===
-    if (/importing.*gpg key/i.test(t) && /is this ok/i.test(t)) {
-      return { kind: 'confirm_yn', text: lastLine };
-    }
-
-    // === Disk/Partition Selection ===
     if (/select.*disk/i.test(lastLine) || /which.*partition/i.test(lastLine)) {
       return { kind: 'selection', text: lastLine };
     }
 
-    // === Generic "input required" (line ends with : or > and no prompt signs) ===
+    // === Generic "input required" ===
     if (/[:：]\s*$/.test(lastLine)) {
-      // Only if it looks like a question, not a normal shell output
       if (/\?\s*[:：]\s*$/i.test(lastLine) || /enter\s/i.test(lastLineLower) || /type\s/i.test(lastLineLower) || /provide\s/i.test(lastLineLower) || /specify\s/i.test(lastLineLower) || /write\s*[:：]\s*$/i.test(lastLineLower)) {
         return { kind: 'text_input', text: lastLine };
       }
@@ -2600,14 +2605,17 @@ export default function TerminalView({ connectionId, connectionName, host, color
   };
 
   const showAiDoneModal = ({ goal, steps = [], taskMode = 'ssh', thought = null, explain = null } = {}) => {
+    console.log('[AI Agent] SUCCESS: Triggering Completion Modal', { goal, stepsCount: steps?.length });
     setAiError(null);
     setAutoMode(false);
+    autoModeRef.current = false; 
+    autoRunningRef.current = false; // 🧪 Ensure engine lock is released
     setAiOpen(true);
     setAiHasOpenedOnce(true);
     setAiDoneSummary({
-      goal: goal || autoGoal || aiPrompt || '',
+      goal: goal || autoGoal || aiPrompt || 'Task complete',
       steps: Array.isArray(steps) ? steps.slice(-30) : [],
-      taskMode,
+      taskMode: taskMode || sshAiPrefs?.aiTask || 'ssh',
       thought: thought || null,
       explain: explain || null,
     });
@@ -3422,7 +3430,8 @@ export default function TerminalView({ connectionId, connectionName, host, color
   function looksLikeCompletionText(text) {
     const t = String(text || '').toLowerCase();
     if (!t.trim()) return false;
-    return /(task complete|finished goal|goal achieved|completed successfully|issue resolved|successfully verified|verification passed|all set|done successfully|looks good|working now|fixed now)/.test(t);
+    // 🧪 Expanded to catch more common AI "done" phrases seen in logs
+    return /(task complete|finished goal|goal achieved|completed successfully|issue resolved|successfully verified|verification passed|all set|done successfully|looks good|working now|fixed now|goal is (?:already )?satisfied|task is (?:already )?done|mission accomplished)/.test(t);
   }
 
   function inferDynamicCompletionEvidence({ goal, output, lastCommand, err, isStillRunning, stepsDone }) {
@@ -3680,10 +3689,14 @@ export default function TerminalView({ connectionId, connectionName, host, color
 
     let snap = String(snapshotOverride ?? lastResultSnapshot ?? getOutputContext() ?? '').trim();
     const err = detectTerminalError(snap);
+    let sudoNudge = '';
+    if (err?.type === 'permission_denied' && sshAiPrefs?.preferSudo) {
+      sudoNudge = `\n\n⚠️ PERMISSION DENIED: Your last command failed due to permissions. Since 'Prefer sudo' is enabled, please use 'sudo' for your next approach if appropriate.`;
+    }
 
     // 🔄 Loop detection & self-healing injection
     const loopKey = `${lastExecutedCommand || ''}::${normalizeForLoop(snap).slice(-200)}`;
-    let autoPromptExpansion = '';
+    let autoPromptExpansion = sudoNudge;
     
     // 🧪 ROBUSTNESS: If we are nudging, EXEMPT this turn from the Loop Detector
     // because no command has run yet, so the snapshot is EXPECTED to be identical.
@@ -3691,7 +3704,7 @@ export default function TerminalView({ connectionId, connectionName, host, color
       autoLoopRepeatRef.current += 1;
       // INJECT WARNING TO AI: Explain that it is repeating itself
       if (autoLoopRepeatRef.current >= 2) {
-        autoPromptExpansion = `\n\n⚠️ LOOP WARNING: Your last command produced NO change in the terminal output. 
+        autoPromptExpansion += `\n\n⚠️ LOOP WARNING: Your last command produced NO change in the terminal output. 
 REPEAT COUNT: ${autoLoopRepeatRef.current}. 
 CHANGE YOUR STRATEGY: Use different flags, check paths with absolute references, or use a diagnostic tool like 'ls -la' to see what's actually there.`;
       }
@@ -4160,30 +4173,37 @@ ${isExecutionGoal ? '⚡ EXECUTION GOAL: Run shell commands directly. Use `cat` 
           parsed.done = false;
         } else {
           // ✅ Save completed session to sshAiHistory
+          // NOTE: Do NOT call showAiDoneModal inside the setAutoStepHistory updater —
+          // React requires updater functions to be pure. Calling setState inside an
+          // updater causes those calls to be silently dropped (popup never appears).
+          // Instead, we compute finalSteps synchronously and call everything outside.
           setAutoStepHistory(prev => {
             const finalSteps = [...prev, {
               command: '',
               explain: parsed.explain || 'Task complete.',
               status: 'success',
             }];
-            showAiDoneModal({
-              goal,
-              steps: finalSteps.slice(-30),
-              taskMode: sshAiPrefs.aiTask || 'ssh',
-              thought: parsed.thought || null,
-              explain: parsed.explain || null,
-            });
-            const sessionEntry = {
-              id: Date.now().toString() + Math.random().toString(36).slice(2, 8),
-              createdAt: Date.now(),
-              type: 'auto',
-              prompt: goal,
-              steps: finalSteps.slice(-30),
-              done: true,
-            };
+
+            // Schedule side effects after the state batch is committed
             setTimeout(() => {
-              setSshAiHistory([sessionEntry, ...sshAiHistory.filter(e => e?.id !== sessionEntry.id)].slice(0, 30));
+              showAiDoneModal({
+                goal,
+                steps: finalSteps.slice(-30),
+                taskMode: sshAiPrefs.aiTask || 'ssh',
+                thought: parsed.thought || null,
+                explain: parsed.explain || null,
+              });
+              const sessionEntry = {
+                id: Date.now().toString() + Math.random().toString(36).slice(2, 8),
+                createdAt: Date.now(),
+                type: 'auto',
+                prompt: goal,
+                steps: finalSteps.slice(-30),
+                done: true,
+              };
+              setSshAiHistory(prev2 => [sessionEntry, ...prev2.filter(e => e?.id !== sessionEntry.id)].slice(0, 30));
             }, 0);
+
             return finalSteps;
           });
           return;
@@ -4311,12 +4331,14 @@ ${isExecutionGoal ? '⚡ EXECUTION GOAL: Run shell commands directly. Use `cat` 
 
           if (autoRepeatSigRef.current.count >= 2) {
             // Patch was already applied — AI is in a loop. Treat as done.
-            showAiDoneModal({
-              goal,
-              steps: autoStepHistory,
-              taskMode: sshAiPrefs?.aiTask || 'code',
-              explain: '✅ Patch was successfully applied. AI confirmed via re-check.',
-            });
+            setTimeout(() => {
+              showAiDoneModal({
+                goal,
+                steps: autoStepHistory,
+                taskMode: sshAiPrefs?.aiTask || 'code',
+                explain: '✅ Patch was successfully applied. AI confirmed via re-check.',
+              });
+            }, 0);
             return;
           }
 
@@ -4389,12 +4411,14 @@ ${isExecutionGoal ? '⚡ EXECUTION GOAL: Run shell commands directly. Use `cat` 
 
       // === Client-side: dynamic completion guard ===
       if (completionEvidence.done && (!parsedCommandTrim || redundantFollowupCommand)) {
-        showAiDoneModal({
-          goal,
-          steps: autoStepHistory,
-          taskMode: sshAiPrefs?.aiTask || 'ssh',
-          explain: parsed.explain || `✅ Goal already satisfied: ${completionEvidence.reason}.`,
-        });
+        setTimeout(() => {
+          showAiDoneModal({
+            goal,
+            steps: autoStepHistory,
+            taskMode: sshAiPrefs?.aiTask || 'ssh',
+            explain: parsed.explain || `✅ Goal already satisfied: ${completionEvidence.reason}.`,
+          });
+        }, 0);
         return;
       }
 
@@ -4516,9 +4540,26 @@ What is your move?`;
         }
       }
 
-      // === Execute the command ===
+      // === Execute a command or diff ===
       setAutoStepsRemaining((n) => (Number.isFinite(n) ? Math.max(0, n - 1) : n));
       const cmdTrim = String(parsed.command || '').trim();
+      
+      // 🧪 SENSITIVE OPERATIONS GUARD (Auto Mode)
+      // Pause if setting is enabled and command is dangerous OR AI explicitly flagged it
+      const confirmSensitive = sshAiPrefs?.confirmSensitive !== false;
+      const isDangerous = (confirmSensitive && isSensitiveCommand(cmdTrim)) || parsed.danger === true;
+      
+      if (isDangerous && cmdTrim) {
+        console.log('[AI Agent] PAUSED: Detected sensitive command in Auto Mode:', cmdTrim);
+        setAiError(`Auto Mode paused: AI proposed a sensitive command. Please review and execute manually if safe.`);
+        setAiAnswer(parsed);
+        setAutoMode(false);
+        setAiOpen(true);
+        setAiHasOpenedOnce(true);
+        // Note: we leave the command in the UI so the user can click 'Run' themselves.
+        return;
+      }
+
       if (cmdTrim) {
         autoRecentCommandsRef.current = [...autoRecentCommandsRef.current, cmdTrim].slice(-8);
         autoRecentSigsRef.current = [...autoRecentSigsRef.current, computeErrorSignature(snap)].slice(-8);
@@ -6712,7 +6753,7 @@ What is your move?`;
 
       {/* Mission Accomplished Premium Popup */}
       <AnimatePresence>
-        {aiDone && !autoMode && typeof document !== 'undefined' && createPortal(
+        {aiDone && typeof document !== 'undefined' && createPortal(
           <motion.div 
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
