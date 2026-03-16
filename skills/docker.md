@@ -1,3 +1,9 @@
+---
+name: docker
+keywords: [docker, container, image, dockerfile, docker-compose, dind]
+primary_keywords: [docker, dockerfile, docker compose, docker-compose]
+---
+
 # Docker Management Skill
 
 ## Description

@@ -1,3 +1,8 @@
+---
+name: firewall-management
+keywords: [firewall, port, ufw, firewalld, iptables, nftables, block, allow, deny]
+---
+
 # Firewall Management Skill
 
 ## Description

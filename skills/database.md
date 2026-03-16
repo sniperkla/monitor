@@ -1,3 +1,9 @@
+---
+name: database
+keywords: [mysql, postgres, mongodb, redis, sql, database, db]
+primary_keywords: [mysql, postgres, mongodb, redis, database]
+---
+
 # Database Management Skill
 
 ## Description

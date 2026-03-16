@@ -51,7 +51,7 @@ export default function TmuxApp({ initialConnection }) {
       if (socketRef.current) {
         // robustly handle format strings by writing to a tmp file first
         const formatString = '#{session_name}|#{session_windows}|#{session_attached}|#{session_activity}|#{?pane_current_command,#{pane_current_command},bash}';
-        const setupEcho = `echo "${formatString}" > /tmp/.web_tmux_fmt && echo "${SENTINEL_START}" && tmux list-sessions -F "$(< /tmp/.web_tmux_fmt)" 2>/dev/null; echo "${SENTINEL_END}"\r`;
+        const setupEcho = `echo "${formatString}" > /tmp/.web_tmux_fmt && echo "${SENTINEL_START}" && tmux list-sessions -F "$(cat /tmp/.web_tmux_fmt)" 2>/dev/null; echo "${SENTINEL_END}"\r`;
         socketRef.current.emit('ssh:input', setupEcho);
       }
     };
@@ -68,7 +68,7 @@ export default function TmuxApp({ initialConnection }) {
         if (!socketRef.current) return;
         const installCheck = `if ! command -v tmux &>/dev/null; then if command -v apt-get &>/dev/null; then sudo apt-get update && sudo apt-get install -y tmux -qq; elif command -v yum &>/dev/null; then sudo yum install -y tmux -q; elif command -v apk &>/dev/null; then sudo apk add tmux -q; fi; fi`;
         const formatString = '#{session_name}|#{session_windows}|#{session_attached}|#{session_activity}|#{?pane_current_command,#{pane_current_command},bash}';
-        const setupEcho = `${installCheck}; echo "${formatString}" > /tmp/.web_tmux_fmt && echo "${SENTINEL_START}" && tmux list-sessions -F "$(< /tmp/.web_tmux_fmt)" 2>/dev/null; echo "${SENTINEL_END}"\r`;
+        const setupEcho = `${installCheck}; echo "${formatString}" > /tmp/.web_tmux_fmt && echo "${SENTINEL_START}" && tmux list-sessions -F "$(cat /tmp/.web_tmux_fmt)" 2>/dev/null; echo "${SENTINEL_END}"\r`;
         socketRef.current.emit('ssh:input', setupEcho);
       }, 500);
     });
@@ -127,7 +127,7 @@ export default function TmuxApp({ initialConnection }) {
   const emitTmuxLs = () => {
     if (!socketRef.current) return;
     const formatString = '#{session_name}|#{session_windows}|#{session_attached}|#{session_activity}|#{?pane_current_command,#{pane_current_command},bash}';
-    const setupEcho = `echo "${formatString}" > /tmp/.web_tmux_fmt && echo "${TMUX_SENTINEL_START}" && tmux list-sessions -F "$(< /tmp/.web_tmux_fmt)" 2>/dev/null; echo "${TMUX_SENTINEL_END}"\r`;
+    const setupEcho = `echo "${formatString}" > /tmp/.web_tmux_fmt && echo "${TMUX_SENTINEL_START}" && tmux list-sessions -F "$(cat /tmp/.web_tmux_fmt)" 2>/dev/null; echo "${TMUX_SENTINEL_END}"\r`;
     socketRef.current.emit('ssh:input', setupEcho);
   };
 

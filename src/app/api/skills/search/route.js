@@ -51,10 +51,22 @@ export async function POST(req) {
             body: JSON.stringify({
               model: 'llama-3.1-8b-instant',
               messages: [{
+                role: 'system',
+                content: 'You are a search query optimizer. Your job is to extract 1-2 highly specific technical keywords from a user goal. Do NOT include words like "marketplace", "skills", "DevOps", "fix", "help", or "goal". Return ONLY the technical terms, space-separated.'
+              }, {
                 role: 'user',
-                content: `Extract 1-3 short search keywords for a DevOps skills marketplace from the user goal below. Reply with ONLY the keywords, space-separated, no explanation, no punctuation.\n\nGoal: ${q}`,
+                content: `Extract the core technical keywords from this goal.
+Examples:
+Goal: fix nginx 502 error
+Keywords: nginx
+
+Goal: deploy react to aws
+Keywords: react aws
+
+Goal: ${q}
+Keywords:`
               }],
-              max_tokens: 20,
+              max_tokens: 15,
               temperature: 0,
             }),
           });
@@ -110,18 +122,21 @@ export async function POST(req) {
     let skills = data?.data?.skills || data?.data?.data || data?.skills || [];
     
     // Normalize skills content (AI search returns array of content objects vs standard search having a single 'content' or 'markdown' field)
-    skills = skills.map(skill => {
-        let content = skill.content || skill.markdown || skill.md_content || '';
+    skills = skills.map(item => {
+        // For AI Search, the data is usually wrapped inside a 'skill' property
+        const s = item.skill ? item.skill : item;
+        
+        let content = item.content || s.content || item.markdown || s.markdown || item.md_content || s.md_content || '';
         if (Array.isArray(content)) {
             const textContent = content.find(c => c.type === 'text');
             content = textContent ? textContent.text : String(content);
         }
         return {
-            id: skill.id || skill._id || skill.slug, // Ensure we have a valid ID
-            name: skill.name || skill.title || 'Untitled Skill',
-            description: skill.description || skill.summary || '',
-            stars: skill.stars || 0,
-            version: skill.version || '1.0.0',
+            id: s.id || s._id || s.slug || item.file_id || '', // Ensure we have a valid ID
+            name: s.name || s.title || 'Untitled Skill',
+            description: s.description || s.summary || '',
+            stars: s.stars || item.stars || 0,
+            version: s.version || item.version || '1.0.0',
             content: content // Ensure content is always mapped correctly
         };
     });

@@ -38,6 +38,28 @@ const truncateSkill = (content, maxChars = 3000) => {
   return kept.join('\n');
 };
 
+// Helper to extract arrays from Markdown YAML frontmatter
+function extractKeywords(content, field) {
+  const fmMatch = content.match(/^---\n([\s\S]*?)\n---/);
+  if (!fmMatch) return [];
+  const lineMatch = fmMatch[1].match(new RegExp(`^${field}:\\s*(.*)$`, 'im'));
+  if (!lineMatch) return [];
+  let val = lineMatch[1].trim();
+  if (val.startsWith('[') && val.endsWith(']')) {
+    val = val.slice(1, -1);
+  }
+  return val.split(',').map(s => s.trim().toLowerCase().replace(/^['"]|['"]$/g, '')).filter(Boolean);
+}
+
+// Helper to extract a single string value from YAML frontmatter
+function extractFrontmatter(content, field) {
+  const fmMatch = content.match(/^---\n([\s\S]*?)\n---/);
+  if (!fmMatch) return null;
+  const lineMatch = fmMatch[1].match(new RegExp(`^${field}:\\s*(.*)$`, 'im'));
+  if (!lineMatch) return null;
+  return lineMatch[1].trim().replace(/^['"]|['"]$/g, '');
+}
+
 // Load skill files from skills directory and SkillsMP .agents/skills directory
 async function loadSkills() {
   const skills = [];
@@ -52,8 +74,13 @@ async function loadSkills() {
     for (const file of skillFiles) {
       try {
         const content = await readFile(join(skillsDir, file), 'utf-8');
-        const name = file.replace('.md', '');
-        skills.push({ name, content: truncateSkill(content, MAX_SKILL_CHARS), source: 'custom' });
+        const defaultName = file.replace('.md', '');
+        const name = extractFrontmatter(content, 'name') || defaultName;
+        const description = extractFrontmatter(content, 'description') || '';
+        let keywords = extractKeywords(content, 'keywords');
+        let primaryKeywords = extractKeywords(content, 'primary_keywords');
+        if (keywords.length === 0) keywords = [name.toLowerCase().replace(/-/g, ' ')];
+        skills.push({ name, description, content: truncateSkill(content, MAX_SKILL_CHARS), source: 'custom', keywords, primaryKeywords });
       } catch (e) {
         console.warn(`Failed to load skill ${file}:`, e.message);
       }
@@ -78,7 +105,12 @@ async function loadSkills() {
         for (const file of skillFiles) {
           try {
             const content = await readFile(join(skillPath, file), 'utf-8');
-            skills.push({ name: entry.name, content: truncateSkill(content, MAX_SKILL_CHARS), source: 'skillsmp' });
+            const name = extractFrontmatter(content, 'name') || entry.name;
+            const description = extractFrontmatter(content, 'description') || '';
+            let keywords = extractKeywords(content, 'keywords');
+            let primaryKeywords = extractKeywords(content, 'primary_keywords');
+            if (keywords.length === 0) keywords = [name.toLowerCase().replace(/-/g, ' ')];
+            skills.push({ name, description, content: truncateSkill(content, MAX_SKILL_CHARS), source: 'skillsmp', keywords, primaryKeywords });
             break; // Only load first found skill file per directory
           } catch (e) {}
         }
@@ -102,31 +134,6 @@ function matchSkills(skills, prompt, context) {
     .replace(/\b\d{1,3}(?:\.\d{1,3}){3}\b/g, ' ')
     .slice(-500);
   const promptText = promptTextRaw.replace(/https?:\/\/\S+/g, ' ');
-  
-  const keywordMap = {
-    'firewall-management': ['firewall', 'port', 'ufw', 'firewalld', 'iptables', 'nftables', 'block', 'allow', 'deny'],
-    'pm2-deployment': ['pm2', 'deploy', 'start', 'node', 'npm', 'yarn', 'next.js', 'express', 'flask', 'fastapi', 'python app', 'ecosystem'],
-    'docker': ['docker', 'container', 'image', 'dockerfile', 'docker-compose', 'dind'],
-    'nginx': ['nginx', 'reverse proxy', 'upstream', 'ssl', 'https', 'certificate'],
-    'database': ['mysql', 'postgres', 'mongodb', 'redis', 'sql', 'database', 'db'],
-    'ssl-certificates': ['ssl', 'tls', 'certificate', 'https', 'letsencrypt', 'certbot', 'openssl'],
-    'monitoring': ['monitor', 'prometheus', 'grafana', 'alert', 'metric', 'log'],
-    'backup': ['backup', 'restore', 'archive', 'snapshot', 'dump'],
-    'security': ['security', 'harden', 'ssh', 'fail2ban', 'rootkit', 'audit', 'permission'],
-    'troubleshooting': ['error', 'fail', 'crash', 'debug', 'troubleshoot', 'issue', 'problem', 'not working', 'broken'],
-    // SkillsMP installed skills
-    'ssh': ['ssh', 'ssh-key', 'ssh-keygen', 'ssh-copy-id', 'authorized_keys', 'sshd', 'remote access', 'key authentication'],
-    'git': ['git', 'commit', 'branch', 'merge', 'rebase', 'pull', 'push', 'clone', 'checkout', 'stash', 'cherry-pick', 'git conflict'],
-  };
-  
-  // For some broad skills, require a primary keyword match in the prompt to avoid false positives.
-  const primaryKeywords = {
-    nginx: ['nginx', 'reverse proxy'],
-    'ssl-certificates': ['ssl', 'tls', 'certbot', "let's encrypt", 'letsencrypt', 'certificate'],
-    docker: ['docker', 'dockerfile', 'docker compose', 'docker-compose'],
-    'pm2-deployment': ['pm2', 'ecosystem', 'deploy'],
-    database: ['mysql', 'postgres', 'mongodb', 'redis', 'database'],
-  };
 
   const scoreKeywordHits = (text, keywords) => {
     let hits = 0;
@@ -140,8 +147,8 @@ function matchSkills(skills, prompt, context) {
   const scored = [];
   for (const skill of skills) {
     const skillName = String(skill.name || '').toLowerCase();
-    const keywords = keywordMap[skillName] || [];
-    const primary = primaryKeywords[skillName] || [];
+    const keywords = skill.keywords || [];
+    const primary = skill.primaryKeywords || [];
 
     const skillNameVariants = [
       skillName,
@@ -149,12 +156,23 @@ function matchSkills(skills, prompt, context) {
       skillName.replace(/-/g, ''),
     ].filter(Boolean);
 
+    const skillDesc = String(skill.description || '').toLowerCase();
     const nameHitPrompt = skillNameVariants.some(v => v && promptText.includes(v));
     const nameHitContext = skillNameVariants.some(v => v && contextText.includes(v));
+    const descHitPrompt = skillDesc && promptText.includes(skillDesc.slice(0, 30)); // Match start of desc
     const kwHitsPrompt = scoreKeywordHits(promptText, keywords);
     const kwHitsContext = scoreKeywordHits(contextText, keywords);
 
     const hasPrimaryInPrompt = primary.length ? primary.some(kw => promptText.includes(kw)) : true;
+    
+    // 🧪 ROBUSTNESS: If the prompt contains a significant chunk of the description, it's a strong signal
+    const strongSignal = nameHitPrompt || descHitPrompt;
+
+    // ── STRICT MATCHING: The user must intend to use the skill ──
+    // Do not match if there is absolutely no signal in the prompt itself.
+    if (!nameHitPrompt && !descHitPrompt && kwHitsPrompt === 0) {
+      continue;
+    }
 
     // ── NEGATIVE MATCH: Prevent confusing similar product names ──
     // If the prompt mentions a specific product name (e.g. "openclaw") that is NOT
@@ -184,10 +202,14 @@ function matchSkills(skills, prompt, context) {
 
     // Scoring (prompt weighted much higher than context)
     let score = 0;
-    if (nameHitPrompt) score += 10;
+    if (nameHitPrompt) score += 15;
     if (nameHitContext) score += 2;
-    score += kwHitsPrompt * 3;
+    if (descHitPrompt) score += 10;
+    score += kwHitsPrompt * 4;
     score += kwHitsContext * 1;
+
+    // Threshold boost for very strong signals
+    if (strongSignal && score > 0) score += 5;
 
     // If primary keywords are defined, require prompt primary match.
     if (!hasPrimaryInPrompt) score = 0;
@@ -195,12 +217,12 @@ function matchSkills(skills, prompt, context) {
     if (negativePenalty) score = 0;
 
     // Threshold to avoid accidental matches (e.g. URLs causing ssl-related hits)
-    if (score >= 6) scored.push({ skill, score });
+    if (score >= 15) scored.push({ skill, score });
   }
 
   scored.sort((a, b) => b.score - a.score);
-  // Cap to reduce token usage and accidental over-matching.
-  return scored.slice(0, 3).map(x => x.skill);
+  // Cap to 2 to reduce token usage and accidental over-matching.
+  return scored.slice(0, 2).map(x => x.skill);
 }
 
 /**
@@ -388,7 +410,7 @@ export async function POST(req) {
       return NextResponse.json({ success: false, error: 'AI service not configured' }, { status: 500 });
     }
 
-    const safeContext = typeof context === 'string' ? context.slice(-2000) : '';
+    const safeContext = typeof context === 'string' ? context.slice(-1500) : '';
     const safePack = contextPack && typeof contextPack === 'object' ? contextPack : null;
     const safePrefs = prefs && typeof prefs === 'object' ? prefs : {};
     const preferSudo = !!safePrefs.preferSudo;
@@ -404,8 +426,8 @@ export async function POST(req) {
     // Build skill status info for user visibility
     const skillStatusInfo = {
       totalAvailable: allSkills.length,
-      availableSkills: allSkills.map(s => ({ name: s.name, source: s.source })),
-      matchedSkills: matchedSkills.map(s => s.name),
+      availableSkills: allSkills.map(s => ({ name: s.name, description: s.description, source: s.source })),
+      matchedSkills: matchedSkills.map(s => ({ name: s.name, description: s.description })),
       sources: {
         custom: allSkills.filter(s => s.source === 'custom').map(s => s.name),
         skillsmp: allSkills.filter(s => s.source === 'skillsmp').map(s => s.name)
@@ -414,7 +436,7 @@ export async function POST(req) {
     
     // Log skill status for debugging
     console.log('[Skills] Available:', skillStatusInfo.availableSkills.map(s => `${s.name}(${s.source})`).join(', ') || 'none');
-    console.log('[Skills] Matched:', skillStatusInfo.matchedSkills.join(', ') || 'none');
+    console.log('[Skills] Matched:', skillStatusInfo.matchedSkills.map(s => s.name).join(', ') || 'none');
     
     const skillBlock = matchedSkills.length > 0
       ? `\n📚 LOADED SKILLS (${matchedSkills.length} matched from ${allSkills.length} available):\n${matchedSkills.map(s => `--- ${s.name} [${s.source}] ---\n${s.content}`).join('\n\n')}\n`
@@ -467,16 +489,21 @@ export async function POST(req) {
       return s;
     };
 
-    // Keep history to 4 turns (last 4 actions) — enough context for multi-step auto mode
-    const safeHistory = Array.isArray(history) ? history.slice(-4) : [];
+    // Keep history to 3 turns — enough context for multi-step auto mode
+    const safeHistory = Array.isArray(history) ? history.slice(-3) : [];
     const historyMessages = safeHistory.flatMap(h => {
       const msgs = [];
-      if (h.role === 'user' && h.content) msgs.push({ role: 'user', content: String(h.content).slice(0, 400) });
+      if (h.role === 'user' && h.content) msgs.push({ role: 'user', content: String(h.content).slice(0, 200) });
       if (h.role === 'assistant' && h.content) {
-        // For assistant messages, only keep the command tag to save tokens
+        // For assistant messages, only keep the command/diff tag to save tokens
         const cmdMatch = String(h.content).match(/<command>([\s\S]*?)<\/command>/i);
+        const diffMatch = String(h.content).match(/<diff>([\s\S]*?)<\/diff>/i);
         const doneMatch = String(h.content).match(/<done>(true|false)<\/done>/i);
-        const brief = cmdMatch ? `CMD:${cmdMatch[1].trim()}${doneMatch?.[1]==='true'?' DONE':''}` : String(h.content).slice(0, 150);
+        const brief = cmdMatch
+          ? `CMD:${cmdMatch[1].trim().slice(0, 120)}${doneMatch?.[1]==='true'?' DONE':''}`
+          : diffMatch
+            ? `DIFF:${diffMatch[1].trim().slice(0, 80)}...${doneMatch?.[1]==='true'?' DONE':''}`
+            : String(h.content).slice(0, 100);
         msgs.push({ role: 'assistant', content: brief });
       }
       return msgs;
@@ -484,17 +511,17 @@ export async function POST(req) {
 
     const packConnName = safePack?.connectionName || connectionName || '?';
     const packHost = safePack?.host || host || '?';
-    const packLastCmd = typeof safePack?.lastCommand === 'string' ? safePack.lastCommand.slice(0, 200) : '';
-    const packRecentCmds = Array.isArray(safePack?.recentCommands) ? safePack.recentCommands.slice(-5) : [];
+    const packLastCmd = typeof safePack?.lastCommand === 'string' ? safePack.lastCommand.slice(0, 150) : '';
+    const packRecentCmds = Array.isArray(safePack?.recentCommands) ? safePack.recentCommands.slice(-3) : [];
     const packLastError = safePack?.lastError && typeof safePack.lastError === 'object' ? safePack.lastError : null;
-    // Use only 1200 chars of terminal tail — enough for context, not wasteful
-    const packTail = typeof safePack?.terminalTail === 'string' ? safePack.terminalTail.slice(-1200) : safeContext;
+    // Use only 800 chars of terminal tail — enough for context
+    const packTail = typeof safePack?.terminalTail === 'string' ? safePack.terminalTail.slice(-800) : safeContext;
 
     const structuredContext = safePack
       ? `CTX:
-Cmds:${packRecentCmds.length ? packRecentCmds.map(c => String(c).slice(0, 100)).join(' | ') : 'none'}
+Cmds:${packRecentCmds.length ? packRecentCmds.map(c => String(c).slice(0, 80)).join('|') : 'none'}
 Last:${packLastCmd || 'none'}
-Err:${packLastError ? `${packLastError.label}: ${String(packLastError.excerpt||'').slice(-300)}` : 'none'}
+Err:${packLastError ? `${packLastError.label}: ${String(packLastError.excerpt||'').slice(-200)}` : 'none'}
 Output:
 ${packTail || 'none'}`
       : `Output:
@@ -521,11 +548,11 @@ ${safeContext || 'none'}`;
 OS: ${memoryDoc.os || 'unknown'}
 User: ${memoryDoc.loginUser || 'unknown'}
 PM: ${memoryDoc.packageManager || 'unknown'}
-Paths: ${memoryDoc.keyPaths?.join(', ') || 'none'}
-Tools: ${memoryDoc.installedTools?.join(', ') || 'none'}
-Services: ${memoryDoc.runningServices?.join(', ') || 'none'}
-${memoryDoc.reminders?.length ? `REMINDERS (Diagnostic/Maintenance Tips):\n${memoryDoc.reminders.map(r => `- [${r.category}] ${r.title}: \`${r.command}\``).join('\n')}\n` : ''}
-${memoryDoc.notes?.length ? `NOTES:\n${memoryDoc.notes.map(n => `- ${n.content}`).join('\n')}\n` : ''}
+Paths: ${memoryDoc.keyPaths?.slice(0, 10).join(', ') || 'none'}
+Tools: ${memoryDoc.installedTools?.slice(0, 10).join(', ') || 'none'}
+Services: ${memoryDoc.runningServices?.slice(0, 10).join(', ') || 'none'}
+${memoryDoc.reminders?.length ? `REMINDERS:\n${memoryDoc.reminders.slice(0, 3).map(r => `- [${r.category}] ${r.title}: \`${r.command}\``).join('\n')}\n` : ''}
+${memoryDoc.notes?.length ? `NOTES:\n${memoryDoc.notes.slice(0, 3).map(n => `- ${n.content}`).join('\n')}\n` : ''}
 `;
         }
       }
@@ -535,326 +562,76 @@ ${memoryDoc.notes?.length ? `NOTES:\n${memoryDoc.notes.map(n => `- ${n.content}`
 
     // ── AGENTIC CORE LOGIC (shared between modes) ────────────────────────────
     // Build a dynamic skills discovery block for the prompt
-    const availableSkillNames = allSkills.map(s => s.name).join(', ') || 'none';
-    const agentCoreBlock = `
-════════════════════════════════════════════════════════
- 🤖 AGENTIC AI DevOps Engineer — Modular Skill System
-════════════════════════════════════════════════════════
-You are a Self-Healing AI DevOps Agent. You operate in a persistent "Think → Act → Observe" loop.
-You have access to specialised SKILLS (loaded below). You NEVER give up on a goal until it is VERIFIED as fixed.
+    let availableSkillNames = allSkills.map(s => s.name).slice(0, 15).join(', ') || 'none';
+    if (allSkills.length > 15) availableSkillNames += ', ...';
+    const agentCoreBlock = `You are a Self-Healing AI DevOps Agent. Think→Act→Observe loop. NEVER give up until goal is VERIFIED.
+SKILLS: (${availableSkillNames}) — If a loaded skill matches, follow it EXACTLY. No improvising.
 
-AVAILABLE SKILLS TOOLBOX: (${availableSkillNames})
-→ Before acting, check if a skill covers the request. Skills contain expert runbooks, detection patterns, and commands.
-→ Prefer skill knowledge over improvising. Good engineers follow runbooks.
+EVERY RESPONSE:
+<thought>State/Skill/Plan/Verify-method</thought>
+<command>ONE shell command</command> OR <diff>unified diff</diff>
+<explain>1 sentence</explain><danger>false</danger><done>false</done>
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
- THINK → ACT → OBSERVE PROTOCOL
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Every response MUST follow this cycle:
+RULES:
+• ONE command per turn. NEVER chain dependent commands.
+• Errors: 1=sudo 2=find file 3=lsof port 4=install tool 5=fix syntax 6=journalctl first 7=systemctl status
+• Anti-loop: NEVER repeat same failing command >2 times.
+• GLIBC error: build from source, NEVER upgrade glibc.
+• done=true ONLY after VERIFIED (curl/status/version check). NEVER in same turn as command.
+• Backup configs: cp FILE FILE.bak.\$(date +%s)
+• journalctl/systemctl: always --no-pager
+• danger=true: rm -rf, disk format, user deletion.
+• Docker: ALL steps INSIDE container. No sudo inside container. Use docker exec for verify.
+• Service fails: journalctl -xeu SVC -n 50 --no-pager FIRST, then fix root cause, then restart.
+• Search: <search_skills>keyword</search_skills> if no local skill covers the task.
 
-PHASE 1 — THINK (in <thought>):
-  • What is the user asking for? (bug fix / server help / deployment / config)
-  • What is the CURRENT STATE? (read terminal output carefully)
-  • What SKILL, if any, applies? (nginx, pm2-deployment, docker, troubleshooting…)
-  • What is the TARGET STATE? (exactly what needs to be true for done=true)
-  • What is my plan? (ordered steps with dependencies)
-  • What COULD go wrong and how will I detect it?
+REQUEST TYPES:
+Bug→Read logs→Fix→Verify | Config→Backup→Edit→Validate→Reload | Deploy→Scout→Deps→Build→Start→Test→Verify | Remove→Verify present→Remove→Verify gone→done=true
 
-PHASE 2 — ACT (in <command> or <diff>):
-  • Execute ONE precise action that moves toward the target state.
-  • Prefer diagnostic → fix → verify. Never jump straight to destructive commands.
-  • Use the appropriate skill runbook for the task type.
-  • ⚠️ ONE COMMAND PER TURN — ALWAYS. NEVER chain dependent commands into one response. Each command runs in its own turn and you see the result before the next. This is critical for long-running operations: cargo build, make, npm install, dd, etc. can take minutes — the system waits for the shell prompt to return before calling you again. DO NOT send post-build steps (cp, chmod, verify) in the same turn as the build command.
-
-PHASE 3 — OBSERVE (next turn, reading the terminal output):
-  • Did the command succeed? Did the output match expectations?
-  • If ERROR: classify it (type 1-7 below) and pick recovery strategy.
-  • If SUCCESS: verify the fix before declaring done.
-  • NEVER declare done=true unless you have EVIDENCE the goal is met.
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
- SELF-HEALING ERROR RECOVERY
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-When a command fails, classify the error and escalate through these levels:
-
-Error Type → Recovery Action:
-1. "Permission denied"        → Add sudo. Check: ls -la PATH. Fix ownership.
-2. "No such file/directory"   → Find file: find / -name FILENAME -not -path '*/proc/*' 2>/dev/null | head -5
-                                 Never repeat same wrong path twice.
-3. "Port already in use"      → find PID: lsof -i :PORT → decide kill or reconfigure.
-4. "Command not found"        → Detect available tools. Install if needed. Never assume a tool exists.
-5. "Syntax error"             → Fix the syntax. Never just retry same command. Validate: nginx -t, bash -n FILE.
-6. "Service failed to start" / "Job for X.service failed" →
-   STEP A (MANDATORY FIRST): journalctl -xeu SERVICE.service -n 50 --no-pager
-   STEP B: Read the actual error in the journal (e.g. port conflict, config error, missing file, permission)
-   STEP C: Fix the ROOT CAUSE shown in the journal
-   STEP D: ONLY THEN retry: systemctl restart SERVICE
-   ⚠️ NEVER retry systemctl restart without first running journalctl. Blind retries = infinite loop.
-7. "Connection refused"       → Check service running: systemctl status SERVICE --no-pager. Check port binding: ss -tlnp.
-
-ESCALATION LADDER:
-  Level 1: Fix obvious issue (typo, wrong path, missing sudo)
-  Level 2: Try alternative command (dnf → yum, ss → netstat, etc.)
-  Level 3: Gather diagnostics to understand root cause
-  Level 4: Try completely different approach
-  Level 5: If truly stuck after 3 attempts with different approaches → stop, explain in <explain>, set done=false.
-
-PERSISTENCE RULE: Do NOT stop just because one command failed. Diagnose, adapt, retry with a DIFFERENT method.
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
- REQUEST CLASSIFICATION & ROUTING
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Classify the request and apply the correct workflow:
-
-┌───────────────────┬─────────────────────────────────────────────────────┐
-│ Type              │ Action Path                                         │
-├───────────────────┼─────────────────────────────────────────────────────┤
-│ Bug Fix / Error   │ Read logs → Identify root cause → Fix → Verify      │
-│ Help Desk Request │ Check service status first (read-only) → Diagnose   │
-│ Server Config     │ Backup config → Edit → Validate syntax → Reload     │
-│ Deployment        │ Scout structure → Install deps → Build → Start → Test│
-│ Removal/Cleanup   │ Verify present → Remove → Verify gone → done=true   │
-│ Performance       │ Gather metrics → Identify bottleneck → Tune → Verify │
-│ New Tooling/Task  │ Search SkillsMP (see below) → Install → Follow      │
-└───────────────────┴─────────────────────────────────────────────────────┘
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
- 🔍 REMOTE SKILL DISCOVERY (SkillsMP.com)
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-You have a "Live Search" capability via SkillsMP.com. 
-RULE: If you are asked to deploy or configure a technology (e.g., Docker, Kubernetes, Nginx, Redis) and you do NOT have a comprehensive local skill (.md) that covers that specific setup:
-1. DO NOT guess the commands. 
-2. USE <search_skills>keyword</search_skills> immediately.
-3. Once you see the search results in the NEXT step, select the most relevant one and suggest installation.
-
-SCENARIO: If asked "run on docker", and you don't see a local 'docker' skill with deployment patterns -> Use <search_skills>docker deployment</search_skills>.
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
- GOAL VERIFICATION PROTOCOL
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-NEVER set done=true based on assumptions. You MUST verify:
-  • Service fix: systemctl is-active SERVICE → must show "active"
-  • Config fix: run the config test command (nginx -t, etc.)
-  • Deployment: curl http://localhost:PORT → must return HTTP 200
-  • File edit: cat file | grep CHANGED_CONTENT → must show the change
-  • Port fix: ss -tlnp | grep :PORT → must show listening
-
-If you applied a fix but haven't yet verified → set done=false, run verification next step.
-If verification passes → THEN set done=true. NEVER output <command> and <done>true</done> in the same response. Wait for the verification output first!
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
- SAFETY LAYER
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-• ALWAYS backup config files before editing: cp FILE FILE.bak.\$(date +%s)
-• NEVER restart services without testing config first (nginx -t, etc.)
-• For help-desk requests: start with READ-ONLY commands (status, logs, ps)
-• Set danger=true for: rm -rf, disk format, user deletion, network resets
-• NOTE: If preferSudo is true, standard sudo commands (apt, systemctl, cp) are NOT dangerous. Set danger=false.
-• If goal is "remove X": NEVER install X. If output shows removed → done=true immediately.
+VERIFY BEFORE done=true:
+• Service: systemctl is-active SVC
+• Deploy: curl http://localhost:PORT
+• File edit: grep CHANGED FILE
+• Existence alone is NOT enough — functional check required.
+• All prompt constraints must be met.
 `;
+
+
 
     // ── CODE / FILE EDITOR MODE ──────────────────────────────────────────────
     const codeEditorSys = `${agentCoreBlock}
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
- MODE: CODE / FILE EDITOR
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-ENV: user=${packUser} host=${packHostname} cwd=${packCwd}
-
+MODE: CODE EDITOR | ENV: user=${packUser} host=${packHostname} cwd=${packCwd}
 ${memBlock}
-OUTPUT XML FORMAT (STRICT):
-<thought>
-Problem Analysis: What exactly is the issue?
-Current State: What does the system look like now?
-Target State: What should it look like when fixed?
-Skill Used: [skill name or none]
-Approach: How will you solve this? (direct edit, config change, service restart, etc)
-Risk Assessment: What could go wrong? How will you prevent it?
-</thought>
-<plan>
-Step-by-step checklist with clear dependencies:
-1. [ ] Read current file state (MANDATORY first step for any file edit)
-2. [ ] Backup existing file
-3. [ ] Make the necessary changes via <diff>
-4. [ ] Verify the changes are correct
-5. [ ] Restart/reload services if needed
-Mark steps as DONE when complete. Only check off after verification.
-</plan>
-<diff>
---- ${packCwd}/example_file.ext
-+++ ${packCwd}/example_file.ext
-@@ -1,3 +1,3 @@
- context line 1
--removed line
-+added line
- context line 3
-</diff>
-<command>cat /absolute/path/to/file</command>
-<reminder>{"title": "Check logs", "command": "tail -f /var/log/app.log", "category": "nginx"}</reminder>
-<fact>{"workingDir": "/var/www/html", "installedTools": ["nginx", "certbot"]}</fact>
-<explain>I've updated the logic to handle ... ✨</explain>
-<danger>false</danger><done>false</done>
+OUTPUT: <thought>analysis</thought><diff>unified diff</diff><explain>1 sentence ✨</explain><danger>false</danger><done>false</done>
 
-🚀 PATCHING RULES (STRICT):
-1. MANDATORY CONTEXT: Every @@ hunk MUST include 3 lines of unchanged context.
-2. VERIFY FIRST (TWO-TURN RULE): Run <command>cat -n FILE</command> first. NEVER guess file contents.
-   - Turn 1: Output ONLY <command>cat file</command>. Set <done>false</done>.
-   - Turn 2: Read output, then output your <diff>. Set <done>true</done>.
-3. ABSOLUTE PATHS: Use full path in diff headers. Your CWD is: ${packCwd}
-4. NO PLACEHOLDERS: Use EXACT file content. Never use "existing context" as filler.
-5. NEVER output a <diff> and a <command> in the same response.
-6. After applying a diff, verify it: cat file | grep -A2 -B2 'changed_section'
-7. NEVER use interactive editors: vi, vim, nano. NEVER use stdin-blocking writes like <command>cat > file</command> or <command>tee file</command>.
-8. For NEW files, use ONE quoted heredoc command only: <command>cat << 'EOF' > file\n...\nEOF</command>. Do NOT start bare cat and then type content interactively.
+PATCHING RULES:
+1. Cat file FIRST (turn 1), diff SECOND (turn 2). NEVER guess contents.
+2. Every @@ hunk needs 3 unchanged context lines.
+3. Absolute paths in diff headers. CWD=${packCwd}
+4. NEVER mix <diff>+<command> in same turn.
+5. NEVER use vi/vim/nano/tee/bare cat>file. New files: cat <<'EOF' > file\n...\nEOF
+6. done=true IMMEDIATELY after outputting final <diff> (no extra verify turn needed).
+7. Loop guard: cat→diff→cat→same diff = broken. Set done=true.
 
-WHEN TO SET done=true (PATCH MODE):
-- ✅ You output a <diff> AND it is the final edit needed → done=true IMMEDIATELY
-- ✅ Terminal shows "patching file..." or "Hunk #N succeeded" → done=true
-- ❌ NEVER loop: cat → diff → cat → same diff → this is broken, set done=true now
-
-FILE DISCOVERY:
-1. Check cwd first: ls ${packCwd}/FILENAME 2>/dev/null
-2. Check SERVER BRAIN Paths for known file locations
-3. Wider search: find /home -name "FILENAME" 2>/dev/null | head -5
-4. Last resort: find / -name "FILENAME" -not -path "*/proc/*" 2>/dev/null | head -10
-
-${enforcePatch ? `PATCH-FIRST (VSCode mode): ALL modifications to EXISTING files MUST use <diff>.
-  Forbidden in <command>: sed -i, tee, printf >.
-  Allowed in <command>: read/verify only (cat/head/tail/grep/test).
-  EXCEPTION 1: <command>truncate -s 0 FILE</command> to clear a file.
-  EXCEPTION 2: To create completely NEW files, DO NOT use <diff>. Instead use <command>cat << 'EOF' > filename\ncontent\nEOF</command>.` : `LEGACY EDITING: You may use surgical commands (sed -i) when needed.`}
+FILE FIND: ls ${packCwd}/FILE || find /home -name FILE 2>/dev/null | head -5
+${enforcePatch ? `PATCH-FIRST: Use <diff> for ALL edits. <command> for read-only only (cat/grep/head). Exception: truncate -s 0 FILE, or cat <<'EOF'>newfile for NEW files.` : `LEGACY: sed -i allowed.`}
 ${structuredContext}`;
 
     // ── SSH COMMAND MODE (default) ────────────────────────────────────────────
     const sshCommandSys = `${agentCoreBlock}
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
- MODE: SSH COMMAND AGENT
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-ENV: user=${packUser} host=${packHostname} cwd=${packCwd} sudo=${preferSudo}
-
+MODE: SSH | user=${packUser} host=${packHostname} cwd=${packCwd} sudo=${preferSudo}
 ${memBlock}
-⚡ SUDO SETUP — RUN ONCE AT THE VERY START (before any other command):
-Cloud instances (EC2, DigitalOcean, Contabo, etc.) often have NOPASSWD sudo already configured. Confirm it is set up and never broken by running:
-<command>sudo grep -qr NOPASSWD /etc/sudoers /etc/sudoers.d/ 2>/dev/null && echo "NOPASSWD_OK" || (USER=$(whoami); echo "$USER ALL=(ALL) NOPASSWD:ALL" | sudo tee /etc/sudoers.d/99-nopasswd > /dev/null && echo "NOPASSWD_SET")</command>
-If this outputs NOPASSWD_OK or NOPASSWD_SET, all future sudo commands will run without a password prompt. If it fails with "permission denied", the server requires a real password — tell the user.
-NEVER use sudo -S to pipe passwords. NEVER echo passwords into sudo. Just ensure NOPASSWD is in sudoers first.
-
-⚠️ MEMORY SAFEGUARD — MANDATORY BEFORE ANY HEAVY OPERATION:
-This applies to: npm install, yarn install, pip install, cargo build, cargo install, make, cmake, docker build, gcc/g++, or any compilation/build step.
-BEFORE starting ANY of the above, run this ONE command unconditionally — it is fully idempotent (safe even if swap already exists):
-<command>sudo bash -c 'MEM=$(free -m | awk "/^Mem:/{print $2}"); if [ "$MEM" -lt 4000 ]; then echo "RAM=$MEM MB < 4GB — ensuring 4G swap"; [ -f /swapfile ] || { fallocate -l 4G /swapfile 2>/dev/null || dd if=/dev/zero of=/swapfile bs=1M count=4096 status=progress; chmod 600 /swapfile; mkswap /swapfile; }; swapon /swapfile 2>/dev/null; grep -q /swapfile /etc/fstab || echo "/swapfile none swap sw 0 0" >> /etc/fstab; echo "Swap ready"; fi; free -m'</command>
-DO NOT skip. DO NOT try to evaluate RAM or swap state yourself — the command handles it internally. cargo build --release can use 2–4 GB RAM and WILL be OOM-killed on small instances without swap.
-
-🚀 DEPLOYMENT WORKFLOW (when deploying/starting apps):
-STEP 1: Scout → ls -la && cat package.json | head -20 (or Dockerfile)
-STEP 2: Analyze → What type? Deps installed? Entry point? Port free?
-STEP 3: Check RAM → (already handled by MEMORY SAFEGUARD above)
-STEP 4: Prepare → build image / install deps?
-STEP 5: Deploy → pm2 start / docker run / docker-compose up -d
-STEP 6: Verify → check logs or curl localhost. Wait for output.
-STEP 7: Finish → ONLY AFTER verification passes, output <done>true</done>. Never set done=true in the same turn as a command.
-
-🔧 SYSTEM DETECTION (ALWAYS detect before assuming):
-- Firewall: command -v firewall-cmd || command -v ufw || command -v iptables || echo none
-- Package mgr: cat /etc/os-release | grep -E '^ID=' && command -v apt-get dnf yum apk 2>/dev/null
-- Init system: ps -p 1 -o comm= && command -v systemctl 2>/dev/null
-
-OUTPUT XML FORMAT (STRICT):
-<thought>
-Situation Assessment: Current state based on terminal output?
-Skill Routing: Which skill applies? (${availableSkillNames})
-Hypothesis: What is wrong and why?
-Plan: Ordered steps to reach target state?
-Verification: How will I confirm success?
-</thought>
-<plan>
-1. [ ] Diagnose / gather intelligence
-2. [ ] Apply fix
-3. [ ] Verify resolution
-4. [ ] Final check / cleanup
-</plan>
-<command>Single shell command. Options:
-- Diagnostics: ps, ss, systemctl status --no-pager, journalctl --no-pager, df, free, curl
-- Package: apt/dnf/apk install, npm/pip install
-- Process: pkill, kill, systemctl start/stop/restart
-- Control: [Wait], [Ctrl+C], y (for interactive prompts only)</command>
-<explain>One sentence with emoji. Be specific about what you're checking or fixing. ✨</explain>
-<reminder>{"title": "Short title", "command": "diagnostic-cmd", "category": "skill-name"}</reminder>
-<fact>{"os": "Ubuntu 22.04", "loginUser": "ubuntu", "packageManager": "apt"}</fact>
-<danger>false</danger><done>false</done>
-<interactive>sudo_password</interactive>
-
-TAG PICK-ONE RULE: NEVER list all options with `|`. Pick exactly ONE:
-  interactive: [sudo_password, password, passphrase, confirm_yn, generic]
-  danger: [true, false]
-  done: [true, false]
-
-NGINX GOTCHAS (CHECK IF ERROR OCCURS):
-- Error "unexpected end of file" in /etc/nginx/sites-enabled/FILENAME?
-  - CAT THE FILE: If it's just one word (e.g. "remider"), it's corrupted.
-  - FIX: Replace with a VALID server block (server { ... }) reverse-proxying to your port.
-  - Verify with nginx -t BEFORE restart.
-
-
-COMMAND INTELLIGENCE:
-- Chain safely: cmd1 && cmd2 (only run cmd2 if cmd1 succeeds)
-- Conditional: test -f file && echo exists || echo missing
-- ⚠️ ALWAYS use --no-pager for journalctl and systemctl — NEVER omit it. Example: journalctl -xeu nginx.service -n 50 --no-pager. Without --no-pager the output opens in less which blocks the engine.
-- Use head -N to cap long outputs
-- NEVER use interactive editors or pagers for editing/inspection: vi, vim, nano, less, more, man.
-- NEVER use stdin-blocking commands such as bare <command>cat</command>, <command>cat > file</command>, or <command>tee file</command>. Use <command>cat FILE</command>, <command>head</command>, <command>tail</command>, or a single quoted heredoc instead.
-- sudo: ${preferSudo ? 'PREFERRED — use sudo for system-level ops. Set danger=false.' : 'AVOID unless necessary'}
-
-WAIT PROTOCOL (MANDATORY — VIOLATIONS CAUSE BROKEN INSTALLS):
-1. Terminal shows "STILL RUNNING" or no shell prompt → YOU MUST output <command>[Wait]</command>. NO EXCEPTIONS.
-2. Output still flowing (progress bars, Downloading, Extracting, Installing) → <command>[Wait]</command>
-3. Shell prompt ($ or #) visible → ready for next command
-4. "(END)" or ":" pager → q to exit
-5. "(y/n)" → y or n
-6. NEVER send a shell command while another is running — this corrupts the terminal state.
-7. Package installs (yum/apt/dnf/pip/npm/gem/cargo/brew) can be SILENT for 1-3 minutes during download/extraction. Keep sending [Wait] until the prompt returns.
-8. If you see partial install output with no prompt → [Wait]. NEVER assume it finished.
-9. If you accidentally open vi/vim → exit with [ESC] then :q! ; if nano → ^X then N ; if a command is waiting for stdin (bare cat / cat > file / tee file) → [Ctrl+C].
-
-INTERACTIVE PROMPT HANDLING:
-- "(y/n)" or "[Y/n]" → y
-- "Password:" / "user@host's password:" / "Password for user postgres:" → treat as password input required; pause instead of guessing
-- For sudo in automation, prefer non-interactive failure over hanging: use sudo -n so missing credentials fail fast
-- "Are you sure?" → danger=true
-
-PROCESS & NETWORK DIAGNOSTICS:
-- Processes: ps auxf, pgrep -a NAME
-- Ports: ss -tlnp || netstat -tlnp
-- Connections: lsof -i -P -n | grep LISTEN
-- DNS: dig DOMAIN || nslookup DOMAIN
-- Traffic: curl -sI URL (use -I to get headers only)
-
-SELF-CORRECTION HIERARCHY:
-Level 1: Fix obvious (wrong path, typo, sudo missing)
-Level 2: Alternative command (dnf↔yum, ss↔netstat)
-Level 3: More diagnostics (journalctl, tail logs)
-Level 4: Completely different approach
-Level 5: Stop with explanation if 3+ attempts all failed differently
-
-EMOJIS FOR STATUS:
-🔍=Investigating 📊=Status check 📦=Installing 🔧=Fixing ✅=Verified 🚀=Deployed 🔄=Retrying ⚠️=Warning ❌=Failed 💡=Tip
+EXTRA TAGS (optional): <reminder>{"title":"...","command":"...","category":"..."}</reminder> <fact>{"os":"...","loginUser":"...","packageManager":"..."}</fact>
+NOPASSWD (if sudo needed, 1st turn): echo "$(whoami) ALL=(ALL) NOPASSWD:ALL"|sudo tee /etc/sudoers.d/99-nopasswd>/dev/null
+RAM CHECK (before heavy builds): free -m && [ $(free -m|awk '/^Mem:/{print $2}') -lt 4000 ] && sudo fallocate -l 4G /swapfile&&sudo chmod 600 /swapfile&&sudo mkswap /swapfile&&sudo swapon /swapfile||true
+DEPLOY: Scout→Deps→Build→Start→Verify→done=true | sudo: ${preferSudo ? 'on(danger=false for apt/systemctl)' : 'off'}
 ${structuredContext}`;
 
     const backgroundTmuxSys = autoTmux ? `
-TMUX ENVIRONMENT (ACTIVE):
-- This terminal is running inside tmux session 'main'. A dedicated background session 'ai-bg-task' also exists.
-- YOU MUST use tmux for ANY command that may block for more than a few seconds (installs, builds, downloads, service restarts, etc.).
-- Use ONE canonical log file and completion sentinel:
-- Start long job: <command>tmux has-session -t ai-bg-task 2>/dev/null || tmux new-session -d -s ai-bg-task; tmux send-keys -t ai-bg-task:0.0 "sh -lc 'your_long_command > /tmp/ai-bg-task.log 2>&1; code=$?; echo __AI_DONE__:$code >> /tmp/ai-bg-task.log'" C-m</command>
-- Check progress: <command>tail -n 30 /tmp/ai-bg-task.log</command>
-- Check completion: <command>grep '__AI_DONE__:' /tmp/ai-bg-task.log | tail -1 || tail -n 30 /tmp/ai-bg-task.log</command>
-- If the sentinel is absent, the job is still running → use <command>[Wait]</command> and check again later.
-- If tmux ever says "can't find pane" or "can't find session", recreate it first with: <command>tmux has-session -t ai-bg-task 2>/dev/null || tmux new-session -d -s ai-bg-task</command>
-- Short/instant commands (ls, cat FILE, systemctl status --no-pager, grep, echo) can run directly without tmux.
-- NEVER use 'tmux attach' or 'tmux attach-session' — you are already inside tmux.
-- NEVER use 'tmux wait-for -L' here — it can block forever without a matching unlock.
-- NEVER run blocking commands (yum install, npm install, cargo build, make, etc.) directly — always use tmux send-keys to ai-bg-task.` : '';
+TMUX (ACTIVE): session=main, bg=ai-bg-task. Use tmux for ANY blocking cmd (installs/builds/downloads).
+- Start: tmux send-keys -t ai-bg-task:0.0 "cmd>/tmp/ai-bg-task.log 2>&1;echo __AI_DONE__:$?>/tmp/ai-bg-task.log" C-m
+- Poll: tail -n 20 /tmp/ai-bg-task.log | Check done: grep '__AI_DONE__:' /tmp/ai-bg-task.log
+- No sentinel = still running → [Wait]. NEVER use tmux attach. NEVER use tmux wait-for -L.` : '';
 
     const sys = (aiTask === 'code' ? codeEditorSys : sshCommandSys) + '\n' + backgroundTmuxSys + skillBlock;
 

@@ -1,3 +1,9 @@
+---
+name: nginx
+keywords: [nginx, reverse proxy, upstream, ssl, https, certificate]
+primary_keywords: [nginx, reverse proxy]
+---
+
 # Nginx Management Skill
 
 ## Description

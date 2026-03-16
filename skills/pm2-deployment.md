@@ -1,3 +1,9 @@
+---
+name: pm2-deployment
+keywords: [pm2, deploy, start, node, npm, yarn, next.js, express, flask, fastapi, python app, ecosystem]
+primary_keywords: [pm2, ecosystem, deploy]
+---
+
 # PM2 Deployment Skill
 
 ## Description

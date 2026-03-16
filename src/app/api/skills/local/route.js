@@ -6,52 +6,71 @@ import { join } from 'path';
 
 export const dynamic = 'force-dynamic';
 
-// Keyword map for matching skills to goals
-const KEYWORD_MAP = {
-  'docker': ['docker', 'container', 'image', 'dockerfile', 'docker-compose', 'compose'],
-  'nginx': ['nginx', 'reverse proxy', 'upstream', 'proxy_pass', 'web server'],
-  'nginx-fail-recovery': ['nginx', 'fail', 'failure', 'nginx failed', 'nginx not working', 'nginx error', 'nginx restart', 'nginx permission', 'nginx config error', 'nginx journal', 'nginx recovery', 'nginx broken', 'nginx troubleshoot', 'nginx check'],
-  'pm2-deployment': ['pm2', 'deploy', 'node', 'npm', 'yarn', 'next.js', 'express', 'ecosystem'],
-  'ssl-certificates': ['ssl', 'tls', 'certificate', 'https', 'letsencrypt', 'certbot'],
-  'firewall-management': ['firewall', 'port', 'ufw', 'firewalld', 'iptables', 'allow', 'deny'],
-  'database': ['mysql', 'postgres', 'mongodb', 'redis', 'sql', 'database', 'db'],
-  'git': ['git', 'commit', 'branch', 'merge', 'clone', 'pull', 'push'],
-  'ssh': ['ssh', 'ssh-key', 'sshd', 'remote access', 'authorized_keys'],
-  'troubleshooting': ['error', 'fail', 'crash', 'debug', 'troubleshoot', 'not working', 'broken'],
-};
+// ── Dynamic Frontmatter Parsing ────────────────────────────────────
+// Extract a single string value from YAML frontmatter
+function extractFrontmatter(content, field) {
+  const fmMatch = content.match(/^---\n([\s\S]*?)\n---/);
+  if (!fmMatch) return null;
+  const lineMatch = fmMatch[1].match(new RegExp(`^${field}:\\s*(.*)$`, 'im'));
+  if (!lineMatch) return null;
+  return lineMatch[1].trim().replace(/^['"]|['"]$/g, '');
+}
 
-function scoreSkill(skillName, query) {
-  const q = query.toLowerCase();
-  const keywords = KEYWORD_MAP[skillName] || [];
-  let score = 0;
-  for (const kw of keywords) {
-    if (q.includes(kw)) score += kw.length; // longer keyword match = higher relevance
+// Extract array values from YAML frontmatter (e.g. keywords: [a, b, c])
+function extractKeywords(content, field) {
+  const fmMatch = content.match(/^---\n([\s\S]*?)\n---/);
+  if (!fmMatch) return [];
+  const lineMatch = fmMatch[1].match(new RegExp(`^${field}:\\s*(.*)$`, 'im'));
+  if (!lineMatch) return [];
+  let val = lineMatch[1].trim();
+  if (val.startsWith('[') && val.endsWith(']')) {
+    val = val.slice(1, -1);
   }
-  
-  const normalizedName = skillName.toLowerCase().replace(/[-_]/g, ' ');
-  const skillRoot = skillName.toLowerCase().replace(/[-_]/g, '');
-  // Direct name match
-  if (q.includes(normalizedName) || q.includes(skillName.toLowerCase())) {
+  return val.split(',').map(s => s.trim().toLowerCase().replace(/^['"]|['"]$/g, '')).filter(Boolean);
+}
+
+// ── Dynamic Skill Scoring ──────────────────────────────────────────
+// Score a skill against a query using its dynamically loaded keywords
+function scoreSkill(skill, query) {
+  const q = query.toLowerCase();
+  const skillName = String(skill.name || '').toLowerCase();
+  const keywords = skill.keywords || [];
+  const description = String(skill.description || '').toLowerCase();
+  let score = 0;
+
+  // 1. Keyword matching (from frontmatter)
+  for (const kw of keywords) {
+    if (q.includes(kw)) score += kw.length; // longer keyword = higher relevance
+  }
+
+  // 2. Description matching (weaker signal)
+  if (description) {
+    const descWords = description.split(/\s+/).filter(w => w.length > 3);
+    for (const dw of descWords) {
+      if (q.includes(dw)) score += 2;
+    }
+  }
+
+  // 3. Direct name match (strongest signal)
+  const normalizedName = skillName.replace(/[-_]/g, ' ');
+  const skillRoot = skillName.replace(/[-_]/g, '');
+  if (q.includes(normalizedName) || q.includes(skillName)) {
     score += 50;
   } else {
-    // Partial word matching (crucial for skills like "openclaw-install" vs user input "install openclaw")
+    // Partial word matching (e.g. "pm2 deployment" → "pm2-deployment")
     const words = normalizedName.split(' ').filter(w => w.length > 2);
     let matchedWords = 0;
     for (const w of words) {
-        if (q.includes(w)) {
-            score += 10;
-            matchedWords++;
-        }
+      if (q.includes(w)) {
+        score += 10;
+        matchedWords++;
+      }
     }
-    // Boost if multiple words match
-    if (matchedWords > 1) {
-        score += 20;
-    }
+    if (matchedWords > 1) score += 20;
   }
 
   // ── NEGATIVE MATCH: Prevent confusing similar product names ──
   // e.g. user asks for "openclaw" but skill is "zeroclaw" — they share suffix "claw"
-  // but are different products. Suppress the match.
   if (score > 0 && skillRoot.length > 4) {
     const queryWords = q.split(/\s+/).filter(w => w.length > 3);
     for (const qw of queryWords) {
@@ -63,9 +82,8 @@ function scoreSkill(skillName, query) {
           if (qwClean[qwClean.length - ci] === skillRoot[skillRoot.length - ci]) commonSuffix++;
           else break;
         }
-        // If they share a 4+ char suffix but are different words → wrong product
         if (commonSuffix >= 4 && !q.includes(skillRoot)) {
-          return 0; // Kill the score
+          return 0; // Kill the score — wrong product
         }
       }
     }
@@ -76,9 +94,15 @@ function scoreSkill(skillName, query) {
 
 export async function POST(req) {
   try {
-    const session = await getServerSession(authOptions);
+    // Session check is best-effort
+    let session = null;
+    try {
+      session = await getServerSession(authOptions);
+    } catch (e) {
+      console.warn('[Skills Local] Session resolution failed:', e.message);
+    }
     if (!session) {
-      return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
+      console.warn('[Skills Local] No session found — proceeding anyway.');
     }
 
     const { q } = await req.json();
@@ -88,20 +112,28 @@ export async function POST(req) {
 
     const allSkills = [];
 
-    // Load custom skills/ folder
+    // ── Load custom skills/ folder ──
     try {
       const skillsDir = join(process.cwd(), 'skills');
       const files = await readdir(skillsDir);
       for (const file of files.filter(f => f.endsWith('.md'))) {
         try {
           const content = await readFile(join(skillsDir, file), 'utf-8');
-          const name = file.replace('.md', '');
-          allSkills.push({ name, content, source: 'custom' });
+          const defaultName = file.replace('.md', '');
+          const name = extractFrontmatter(content, 'name') || defaultName;
+          const description = extractFrontmatter(content, 'description') || '';
+          let keywords = extractKeywords(content, 'keywords');
+          const tags = extractKeywords(content, 'tags');
+          // Merge tags into keywords for broader matching
+          if (tags.length > 0) keywords = [...new Set([...keywords, ...tags])];
+          // Fallback: use skill name as a keyword
+          if (keywords.length === 0) keywords = [name.toLowerCase().replace(/-/g, ' ')];
+          allSkills.push({ name, description, content, source: 'custom', keywords });
         } catch (e) { /* skip unreadable */ }
       }
     } catch (e) { /* skills dir doesn't exist */ }
 
-    // Load .agents/skills/ folder (installed from SkillsMP)
+    // ── Load .agents/skills/ folder (installed from SkillsMP) ──
     try {
       const agentsDir = join(process.cwd(), '.agents', 'skills');
       const entries = await readdir(agentsDir, { withFileTypes: true });
@@ -111,27 +143,38 @@ export async function POST(req) {
           const mdFiles = (await readdir(dirPath)).filter(f => f.endsWith('.md'));
           if (mdFiles.length > 0) {
             const content = await readFile(join(dirPath, mdFiles[0]), 'utf-8');
-            allSkills.push({ name: entry.name, content, source: 'installed' });
+            const name = extractFrontmatter(content, 'name') || entry.name;
+            const description = extractFrontmatter(content, 'description') || '';
+            let keywords = extractKeywords(content, 'keywords');
+            const tags = extractKeywords(content, 'tags');
+            if (tags.length > 0) keywords = [...new Set([...keywords, ...tags])];
+            if (keywords.length === 0) keywords = [name.toLowerCase().replace(/-/g, ' ')];
+            allSkills.push({ name, description, content, source: 'installed', keywords });
           }
         } catch (e) { /* skip */ }
       }
     } catch (e) { /* .agents dir doesn't exist */ }
 
-    // Score & rank by relevance to the query
+    // ── Score & rank by relevance using dynamic keywords ──
     const scored = allSkills
-      .map(s => ({ ...s, score: scoreSkill(s.name, q) }))
+      .map(s => ({ ...s, score: scoreSkill(s, q) }))
       .filter(s => s.score > 0)
       .sort((a, b) => b.score - a.score);
 
-    // Deduplicate: prefer higher-scoring variant when names share a prefix, max 3
+    // Deduplicate: prefer higher-scoring variant, max 3
     const seen = new Set();
     const matched = [];
     for (const s of scored) {
-      // Use full name as dedup key — skills with different suffixes (nginx vs nginx-fail-recovery)
-      // are distinct and should both be included
       if (!seen.has(s.name)) {
         seen.add(s.name);
-        matched.push({ name: s.name, content: s.content.slice(0, 800), source: s.source, score: s.score });
+        matched.push({
+          name: s.name,
+          description: s.description || '',
+          content: s.content.slice(0, 800),
+          source: s.source,
+          score: s.score,
+          keywords: s.keywords,
+        });
       }
       if (matched.length >= 3) break;
     }

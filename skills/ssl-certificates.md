@@ -1,3 +1,9 @@
+---
+name: ssl-certificates
+keywords: [ssl, tls, certificate, https, letsencrypt, certbot, openssl]
+primary_keywords: [ssl, tls, certbot, let's encrypt, letsencrypt, certificate]
+---
+
 # SSL/TLS Certificate Management Skill
 
 ## Description

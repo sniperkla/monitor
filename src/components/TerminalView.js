@@ -226,7 +226,6 @@ export default function TerminalView({ connectionId, connectionName, host, color
 
   const outputLinesRef = useRef([]);
   const outputBufferRef = useRef('');
-  const aiConversationRef = useRef([]); // conversation history for multi-step context
   const lastCommandSentAtRef = useRef(0);
   const sawOutputAfterCommandRef = useRef(false);
   const commandRunningRef = useRef(false); // true while executeCommandAndCapture is actively awaiting
@@ -244,12 +243,75 @@ export default function TerminalView({ connectionId, connectionName, host, color
   const mentionedFilesRef = useRef([]); // @mentioned absolute paths in current goal (for patch path accuracy)
   const autoSessionBackupIdRef = useRef(null); // single backup ID reused for the whole auto session (prevents .bak spam)
   const [noMentionWarning, setNoMentionWarning] = useState(false);
-  const [aiLoading, setAiLoading] = useState(false);
-  const [aiAnswer, setAiAnswer] = useState(null);
-  const [aiError, setAiError] = useState(null);
+  
+  // ── Mode-Specific AI State Storage ──
+  // We use separate state for Manual and Auto modes so their results don't mix.
+  const [manualAiLoading, setManualAiLoading] = useState(false);
+  const [autoAiLoading, setAutoAiLoading] = useState(false);
+
+  const [manualAiAnswer, setManualAiAnswer] = useState(null);
+  const [autoAiAnswer, setAutoAiAnswer] = useState(null);
+
+  const [manualAiError, setManualAiError] = useState(null);
+  const [autoAiError, setAutoAiError] = useState(null);
+
+  const [manualAiDone, setManualAiDone] = useState(false);
+  const [autoAiDone, setAutoAiDone] = useState(false);
+
+  const [manualAiDoneSummary, setManualAiDoneSummary] = useState(null);
+  const [autoAiDoneSummary, setAutoAiDoneSummary] = useState(null);
+
+  const [manualAiStreamText, setManualAiStreamText] = useState('');
+  const [autoAiStreamText, setAutoAiStreamText] = useState('');
+
+  const [manualAiStreaming, setManualAiStreaming] = useState(false);
+  const [autoAiStreaming, setAutoAiStreaming] = useState(false);
+
+  const [manualAiAnswerCollapsed, setManualAiAnswerCollapsed] = useState(false);
+  const [autoAiAnswerCollapsed, setAutoAiAnswerCollapsed] = useState(false);
+
+  const [manualFileChanges, setManualFileChanges] = useState(null);
+  const [autoFileChanges, setAutoFileChanges] = useState(null);
+
+  // ── Mode Selection Shims ──
+  // These variables dynamically point to the state of the CURRENT mode (aiMode).
+  // Note: aiMode is defined further down, so we use a functional approach or move it.
+  // We'll move aiMode declaration up to line 247 for stability.
+  const [aiMode, setAiMode] = useState('manual'); // manual | auto
+
+  const aiLoading = aiMode === 'manual' ? manualAiLoading : autoAiLoading;
+  const setAiLoading = aiMode === 'manual' ? setManualAiLoading : setAutoAiLoading;
+
+  const aiAnswer = aiMode === 'manual' ? manualAiAnswer : autoAiAnswer;
+  const setAiAnswer = (val) => aiMode === 'manual' ? setManualAiAnswer(val) : setAutoAiAnswer(val);
+
+  const aiError = aiMode === 'manual' ? manualAiError : autoAiError;
+  const setAiError = (val) => aiMode === 'manual' ? setManualAiError(val) : setAutoAiError(val);
+
+  const aiDone = aiMode === 'manual' ? manualAiDone : autoAiDone;
+  const setAiDone = (val) => aiMode === 'manual' ? setManualAiDone(val) : setAutoAiDone(val);
+
+  const aiDoneSummary = aiMode === 'manual' ? manualAiDoneSummary : autoAiDoneSummary;
+  const setAiDoneSummary = (val) => aiMode === 'manual' ? setManualAiDoneSummary(val) : setAutoAiDoneSummary(val);
+
+  const aiStreamText = aiMode === 'manual' ? manualAiStreamText : autoAiStreamText;
+  const setAiStreamText = (val) => aiMode === 'manual' ? setManualAiStreamText(val) : setAutoAiStreamText(val);
+
+  const aiStreaming = aiMode === 'manual' ? manualAiStreaming : autoAiStreaming;
+  const setAiStreaming = (val) => aiMode === 'manual' ? setManualAiStreaming(val) : setAutoAiStreaming(val);
+
+  const aiAnswerCollapsed = aiMode === 'manual' ? manualAiAnswerCollapsed : autoAiAnswerCollapsed;
+  const setAiAnswerCollapsed = (val) => aiMode === 'manual' ? setManualAiAnswerCollapsed(val) : setAutoAiAnswerCollapsed(val);
+
+  const fileChanges = aiMode === 'manual' ? manualFileChanges : autoFileChanges;
+  const setFileChanges = (val) => aiMode === 'manual' ? setManualFileChanges(val) : setAutoFileChanges(val);
+
+  const [manualChatHistory, setManualChatHistory] = useState([]);
+  const [autoChatHistory, setAutoChatHistory] = useState([]);
+  const chatHistory = aiMode === 'manual' ? manualChatHistory : autoChatHistory;
+  const setChatHistory = (val) => aiMode === 'manual' ? setManualChatHistory(val) : setAutoChatHistory(val);
+
   const [sshMemory, setSshMemory] = useState(null);
-  const [aiDone, setAiDone] = useState(false);
-  const [aiDoneSummary, setAiDoneSummary] = useState(null); // { goal, steps, taskMode }
   const [aiLimitHit, setAiLimitHit] = useState(false);
   const [aiLimitGoal, setAiLimitGoal] = useState(''); // save goal for resume
   const [autoStepHistory, setAutoStepHistory] = useState([]); // track steps for UI
@@ -268,18 +330,27 @@ export default function TerminalView({ connectionId, connectionName, host, color
   const [aiPanelDocked, setAiPanelDocked] = useState(false);
   const [aiPanelMinimized, setAiPanelMinimized] = useState(false);
   const [interactivePrompt, setInteractivePrompt] = useState(null);
+  const manualAiConversationRef = useRef([]);
+  const autoAiConversationRef = useRef([]);
+  const aiConversationRef = {
+    get current() { return aiMode === 'manual' ? manualAiConversationRef.current : autoAiConversationRef.current; },
+    set current(val) { 
+      if (aiMode === 'manual') manualAiConversationRef.current = val;
+      else autoAiConversationRef.current = val;
+    }
+  };
+
+  const [bgTaskLogs, setBgTaskLogs] = useState([]);
+  const [bgTaskStatus, setBgTaskStatus] = useState(null); // { active: bool, logFile: string }
+  const [showBgMonitor, setShowBgMonitor] = useState(false);
+  const bgPollTimerRef = useRef(null);
+
   const [lastExecutedCommand, setLastExecutedCommand] = useState('');
   const [lastResultSnapshot, setLastResultSnapshot] = useState('');
   const [lastResultAt, setLastResultAt] = useState(null);
-  const lastAutoExplainKeyRef = useRef('');
-  const [chatHistory, setChatHistory] = useState([]); // Chat-like conversation history
   const [lastResultCollapsed, setLastResultCollapsed] = useState(true); // Default collapsed for cleaner UI
-  const [aiAnswerCollapsed, setAiAnswerCollapsed] = useState(false); // Default expanded for new answers
   const [fileChangesCollapsed, setFileChangesCollapsed] = useState(true);
-  const [fileChanges, setFileChanges] = useState(null); // { diffText, files, added, removed } | null
   const [selectedDiffFile, setSelectedDiffFile] = useState('');
-  const [aiStreamText, setAiStreamText] = useState('');
-  const [aiStreaming, setAiStreaming] = useState(false);
   const [skillsSearchResults, setSkillsSearchResults] = useState(null);
   const [skillsSearchLoading, setSkillsSearchLoading] = useState(false);
   const [injectedSkills, setInjectedSkills] = useState(null); // { skills: [...], allAvailable: [...] } shown during engine start
@@ -292,6 +363,7 @@ export default function TerminalView({ connectionId, connectionName, host, color
   const [autoGoal, setAutoGoal] = useState('');
   const [autoCountdown, setAutoCountdown] = useState(0);
   const aiPanelContentRef = useRef(null);
+  const aiDoneRef = useRef(null);
   const autoRunningRef = useRef(false);
   const autoSeenRef = useRef(new Set());
   const autoVerifyKeyRef = useRef('');
@@ -302,11 +374,104 @@ export default function TerminalView({ connectionId, connectionName, host, color
   const autoRecentCommandsRef = useRef([]);
   const autoRecentSigsRef = useRef([]);
   const autoDiagKeyRef = useRef('');
-  const [aiMode, setAiMode] = useState('manual'); // manual | auto
+  const skillInjectionAttemptsRef = useRef(0); // Track skill injection attempts (0=none, 1=local, 2=skillsmp)
   const [lastAiUpdate, setLastAiUpdate] = useState(0);
   const autoTimerRef = useRef(null);
   const autoEmptyRetryRef = useRef('');
   const preloadedSkillsRef = useRef(null); // skills fetched before the first auto-step
+
+  // ─── DYNAMIC ADAPTIVE WAIT SYSTEM ───────────────────────────────────────────
+  // Fully dynamic - no hardcoded delays, all calculated from terminal state
+  const adaptiveWaitRef = useRef({
+    consecutiveBusy: 0,       // How many times terminal was still busy
+    lastActivityAt: 0,        // Last time we saw output activity
+    lastPromptAt: 0,          // Last time we saw a shell prompt
+    totalCommands: 0,         // Total commands run this session
+    avgCommandTime: 0,        // Average command execution time
+    recentWaits: [],          // Recent wait durations for learning
+  });
+
+  // Calculate dynamic wait time based purely on terminal state and history
+  const calculateDynamicWait = (isHeavy = false, hasCompilation = false, isApiRetry = false) => {
+    const state = adaptiveWaitRef.current;
+    const now = Date.now();
+    const idleTime = now - (lastOutputAtRef.current || now);
+    const timeSinceCommand = now - (lastCommandSentAtRef.current || now);
+    const timeSincePrompt = now - (state.lastPromptAt || now);
+    
+    // Calculate base wait from recent history (adaptive learning)
+    const recentWaits = state.recentWaits || [];
+    const avgRecentWait = recentWaits.length > 0 
+      ? recentWaits.reduce((a, b) => a + b, 0) / recentWaits.length 
+      : 1;
+    
+    // Minimum wait is based on idle time - if terminal is active, check frequently
+    const minWait = idleTime < 500 ? 0.5 : 1;
+    
+    // Calculate progression based on consecutive busy checks
+    // Uses exponential backoff with decay based on history
+    const busyMultiplier = Math.pow(1.5, state.consecutiveBusy);
+    
+    // Dynamic max based on command history and average execution time
+    const dynamicMax = state.avgCommandTime > 0 
+      ? Math.min(state.avgCommandTime * 2, 10)  // Cap at 2x average or 10s
+      : 5;  // Default max if no history
+
+    // API retries - scale with consecutive failures
+    if (isApiRetry) {
+      const apiWait = minWait + (state.consecutiveBusy * avgRecentWait * 0.5);
+      return Math.min(apiWait, dynamicMax);
+    }
+
+    // Compilation/build - use average recent wait as baseline
+    if (hasCompilation) {
+      const compWait = avgRecentWait + (state.consecutiveBusy * 0.3);
+      return Math.min(compWait, dynamicMax * 0.6);
+    }
+
+    // Heavy commands - scale with command complexity
+    if (isHeavy) {
+      const heavyWait = avgRecentWait * busyMultiplier;
+      return Math.min(heavyWait, dynamicMax * 0.75);
+    }
+
+    // Standard commands - fully adaptive
+    // If we've seen a prompt recently, terminal is responsive - check faster
+    if (timeSincePrompt < 5000) {
+      return Math.max(minWait, avgRecentWait * 0.5);
+    }
+    
+    // If idle but no prompt, progressive backoff
+    const standardWait = minWait + (state.consecutiveBusy * avgRecentWait * 0.2);
+    return Math.min(standardWait, dynamicMax);
+  };
+
+  // Record a wait for learning
+  const recordWait = (duration) => {
+    const state = adaptiveWaitRef.current;
+    state.recentWaits = [...(state.recentWaits || []), duration].slice(-10); // Keep last 10
+  };
+
+  // Increment busy counter when terminal is still running
+  const markTerminalBusy = () => {
+    adaptiveWaitRef.current.consecutiveBusy++;
+  };
+
+  // Reset wait state when command completes or activity detected
+  const resetAdaptiveWait = () => {
+    const state = adaptiveWaitRef.current;
+    state.consecutiveBusy = 0;
+    state.lastPromptAt = Date.now();
+    state.totalCommands++;
+    
+    // Update average command time from last command
+    if (lastCommandSentAtRef.current && lastOutputAtRef.current) {
+      const cmdTime = (Date.now() - lastCommandSentAtRef.current) / 1000;
+      state.avgCommandTime = state.avgCommandTime > 0 
+        ? (state.avgCommandTime + cmdTime) / 2 
+        : cmdTime;
+    }
+  };
   const containerRef = useRef(null);
   const autoModeRef = useRef(false);
   useEffect(() => { autoModeRef.current = autoMode; }, [autoMode]);
@@ -317,17 +482,26 @@ export default function TerminalView({ connectionId, connectionName, host, color
   useEffect(() => { aiModeRef.current = aiMode; }, [aiMode]);
   const bypassPasswordPauseRef = useRef(false); // skip predictive password-pause for one step after user resumes
   const skillsJustInjectedRef = useRef(false); // force full reset on next resume after skill injection
+  // Stores the reason for an engine pause + the pending command so Resume can inject meaningful context
+  const pauseReasonRef = useRef({ reason: null, pendingCommand: null }); // reason: 'sudo_password' | 'dangerous' | etc.
   // Tracks consecutive auto-unblock attempts for the same blocker kind.
   // Resets when the kind changes or the blocker is cleared.
   // After 3 failed attempts the engine falls through to the AI / stops gracefully.
   const autoBlockerRef = useRef({ kind: null, count: 0 });
 
-  // Keep activeSkills UI state in sync with preloadedSkillsRef after every auto step
+  // Auto-scroll exactly to Mission Accomplished summary when it appears
   useEffect(() => {
-    if (Array.isArray(preloadedSkillsRef.current) && preloadedSkillsRef.current.length > 0) {
-      setActiveSkills(preloadedSkillsRef.current);
+    if (aiDone && aiDoneSummary) {
+      setTimeout(() => {
+        if (aiDoneRef.current) {
+          aiDoneRef.current.scrollIntoView({
+            behavior: 'smooth',
+            block: 'start'
+          });
+        }
+      }, 400); // Slightly more delay to ensure it's rendered & animation started
     }
-  }, [lastResultAt]);
+  }, [aiDone, aiDoneSummary]);
 
   const [autoTranslate, setAutoTranslate] = useState(false);
   const [aiTranslations, setAiTranslations] = useState({ explain: '', warn: '', plan: '', thought: '' });
@@ -335,6 +509,13 @@ export default function TerminalView({ connectionId, connectionName, host, color
   const [tmuxInitialized, setTmuxInitialized] = useState(false);
   
   const sshAiPrefs = osState?.sshAiPrefs || { preferSudo: true, aiModel: 'auto' };
+  
+  // Reset tmux init flag when setting is toggled OFF
+  useEffect(() => {
+    if (!sshAiPrefs?.autoTmux) {
+      setTmuxInitialized(false);
+    }
+  }, [sshAiPrefs?.autoTmux]);
 
   // @mention helpers for AI prompt textareas
 
@@ -488,30 +669,32 @@ export default function TerminalView({ connectionId, connectionName, host, color
     if (sshAiPrefs?.autoTmux && status === 'connected' && !tmuxInitialized) {
       setTmuxInitialized(true);
       if (socketRef.current) {
-        // Install tmux if missing, then attach the terminal to a persistent tmux session.
-        // Using 'new-session -A -s main' attaches to existing session or creates a new one.
-        const esc = '\x1b';
-        const tmuxCmd = [
-          `if [ -z "$TMUX" ]; then`, // 🧪 Don't attach if already inside tmux
-          `  if ! command -v tmux &> /dev/null; then`,
-          `    echo "${esc}[1;36m✨ [AI Auto-Setup]${esc}[0m Installing tmux...";`,
-          `    if command -v apt-get &> /dev/null; then sudo apt-get install -y tmux -q;`,
-          `    elif command -v yum &> /dev/null; then sudo yum install -y tmux -q;`,
-          `    elif command -v dnf &> /dev/null; then sudo dnf install -y tmux -q;`,
-          `    elif command -v apk &> /dev/null; then sudo apk add tmux -q;`,
-          `    elif command -v pacman &> /dev/null; then sudo pacman -S --noconfirm tmux -q;`,
-          `    fi;`,
-          `  fi;`,
-          `  if command -v tmux &> /dev/null; then`,
-          `    echo "${esc}[1;36m✨ [AI Auto-Setup]${esc}[0m Attaching to tmux session...";`,
-          `    tmux new-session -d -s ai-bg-task 2>/dev/null || true;`,
-          `    exec tmux new-session -A -s main;`,
-          `  else`,
-          `    echo "${esc}[1;33m⚠ tmux install failed — staying in normal shell${esc}[0m";`,
-          `  fi;`,
-          `fi;`,
-        ].join(' ');
-        socketRef.current.emit('ssh:input', tmuxCmd + '\n');
+        // Delay slightly to ensure shell is ready for input
+        setTimeout(() => {
+          if (socketRef.current?.connected && sshAiPrefs?.autoTmux) {
+            // Install tmux if missing, then attach the terminal to a persistent tmux session.
+            const esc = '\x1b';
+            const tmuxCmd = [
+              `if [ -z "$TMUX" ]; then`, 
+              `  if ! command -v tmux &> /dev/null; then`,
+              `    echo "${esc}[1;36m✨ [AI Auto-Setup]${esc}[0m Installing tmux...";`,
+              `    if command -v apt-get &> /dev/null; then sudo apt-get install -y tmux -q;`,
+              `    elif command -v yum &> /dev/null; then sudo yum install -y tmux -q;`,
+              `    elif command -v dnf &> /dev/null; then sudo dnf install -y tmux -q;`,
+              `    elif command -v apk &> /dev/null; then sudo apk add tmux -q;`,
+              `    elif command -v pacman &> /dev/null; then sudo pacman -S --noconfirm tmux -q;`,
+              `    fi;`,
+              `  fi;`,
+              `  if command -v tmux &> /dev/null; then`,
+              `    echo "${esc}[1;36m✨ [AI Auto-Setup]${esc}[0m Attaching to main session...";`,
+              `    tmux new-session -d -s ai-bg-task 2>/dev/null || true;`,
+              `    exec tmux new-session -A -s main;`,
+              `  fi;`,
+              `fi;`,
+            ].join(' ');
+            socketRef.current.emit('ssh:input', tmuxCmd + '\n');
+          }
+        }, 600);
       }
     }
   }, [sshAiPrefs?.autoTmux, status, tmuxInitialized]);
@@ -876,6 +1059,49 @@ export default function TerminalView({ connectionId, connectionName, host, color
       appendOutput(`\n⚠ ${t('terminal.connectionClosed')}\n`);
     });
 
+    // --- Background Task Monitoring Logic ---
+    const monitorBgTasks = async () => {
+      if (status !== 'connected' || !sshAiPrefs?.autoTmux || !socketRef.current?.connected) return;
+
+      try {
+        const checkCmd = "tmux has-session -t ai-bg-task 2>/dev/null && echo 'ACTIVE' || echo 'INACTIVE'";
+        const res = await apiFetch(`/api/ssh/execute?connectionId=${connectionId}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ command: checkCmd }),
+        });
+        const data = await res.json();
+        const isActive = String(data.output || '').includes('ACTIVE');
+
+        if (isActive) {
+          const logFile = "/tmp/ai-bg-task.log";
+          const tailCmd = `[ -f ${logFile} ] && tail -n 5 ${logFile} || echo "(Awaiting log output...)"`;
+          const logRes = await apiFetch(`/api/ssh/execute?connectionId=${connectionId}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ command: tailCmd }),
+          });
+          const logData = await logRes.json();
+          const lines = String(logData.output || '').split('\n').filter(Boolean);
+          
+          setBgTaskLogs(lines);
+          setBgTaskStatus({ active: true, logFile });
+        } else {
+          setBgTaskStatus(null);
+          setBgTaskLogs([]);
+        }
+      } catch (e) {
+        console.warn('[Monitor] Background task polling failed:', e);
+      }
+    };
+
+    if (bgPollTimerRef.current) clearInterval(bgPollTimerRef.current);
+    if (status === 'connected') {
+      // Dynamic polling interval based on adaptive wait system
+      const bgPollInterval = Math.max((adaptiveWaitRef.current?.avgCommandTime || 2) * 1000, 2000);
+      bgPollTimerRef.current = setInterval(monitorBgTasks, bgPollInterval);
+    }
+
     socket.on('ssh:idle_timeout', () => {
       setStatus('closed');
       updateConnectionStatus('offline');
@@ -1100,8 +1326,17 @@ export default function TerminalView({ connectionId, connectionName, host, color
     };
 
     let command = getTag('command');
+    let safetyBlocked = false;
     
-    // 🧪 ROBUSTNESS: If command is empty but we see markdown code blocks (lazy AI), extract them!
+    // 🧪 ROBUSTNESS: If the AI put markdown code blocks INSIDE the <command> tag (common mistake), extract them.
+    if (command.includes('```')) {
+      const innerMdMatch = /```(?:bash|sh|shell|zsh)?\n([\s\S]*?)```/i.exec(command);
+      if (innerMdMatch) {
+        command = innerMdMatch[1].trim();
+      }
+    }
+
+    // 🧪 AUTO-RECOVERY: If no <command> tag but markdown code blocks exist (lazy AI)
     if (!command.trim()) {
       const mdBashRegex = /```(?:bash|sh|shell|zsh)?\n([\s\S]*?)```/i;
       const mdMatch = mdBashRegex.exec(String(raw || ''));
@@ -1109,6 +1344,51 @@ export default function TerminalView({ connectionId, connectionName, host, color
          command = mdMatch[1].trim();
          console.log('[AI Agent] Recovered command from markdown block:', command);
       }
+    }
+
+    // 🧪 CLEANUP: Remove common AI descriptive headers if they leaked into the command
+    // Use global /g flag to remove ALL occurrences of step headers and prose
+    command = command.replace(/^\s*\*\*Step\s+\d+[:.]?.*?\*\*\s*(\n\s*)*/gi, '');
+    command = command.replace(/^\s*###?\s+Step\s+\d+[:.]?.*?\n/gi, ''); // Also catch # Step 1:
+    command = command.replace(/^\s*Run the following (command|code|script).*?[:.]?(\n\s*)*/gi, '');
+    command = command.replace(/^\s*Here is the command to.*?:(\n\s*)*/gi, '');
+    command = command.trim();
+
+    let explain = getTag('explain');
+    // 🧪 ROBUSTNESS: If AI provides raw text without <explain> tag, use it as the explanation
+    if (!explain.trim()) {
+       const cleanRaw = String(raw || '').replace(/<[^>]+>[\s\S]*?<\/[^>]+>/gi, '').trim();
+       if (cleanRaw) {
+          explain = cleanRaw.split('\n')[0].slice(0, 150) + (cleanRaw.length > 150 ? '...' : '');
+       }
+    }
+
+    // 🚨 CRITICAL SAFETY: Block error messages being sent as commands.
+    // The AI sometimes copies terminal error output into <command> tags (e.g. GLIBC errors).
+    // Executing error text as bash can break the terminal (unmatched backticks → hung prompt).
+    const errorMessagePatterns = [
+      /version\s+[`']?GLIBC/i,                          // GLIBC_2.39 not found
+      /not found \(required by/i,                         // shared lib error
+      /\/lib(?:64)?\/.*\.so[.\d]*:\s/i,                  // /lib64/libc.so.6: ...
+      /:\s+permission denied/i,                           // bash: permission denied
+      /:\s+command not found$/im,                         // bash: xyz: command not found
+      /:\s+No such file or directory$/im,                // bash: xyz: No such file
+      /^error:\s/im,                                      // error: could not find...
+      /^fatal:\s/im,                                      // fatal: ...
+      /Traceback \(most recent call last\)/i,             // Python traceback
+      /^-bash:\s/im,                                      // -bash: ....
+      /^failed to solve:/i,                               // docker build error
+      /^process.*did not complete successfully: exit code:/i // generic compiler error
+    ];
+    
+    if (errorMessagePatterns.some(p => p.test(command))) {
+      console.warn('[AI Agent] 🚨 Blocked error message as command:', command.slice(0, 120));
+      safetyBlocked = true;
+      // Save the error text for display, but do NOT execute it
+      const safetyNote = `⚠️ AI tried to run an error message as a command: "${command.slice(0, 100)}..."`;
+      if (!explain.trim()) explain = safetyNote;
+      else explain = safetyNote + "\n\n" + explain;
+      command = '';
     }
 
     // 🧪 SAFETY: Block conversational text masquerading as a command
@@ -1123,15 +1403,6 @@ export default function TerminalView({ connectionId, connectionName, host, color
     }
 
     if (command.includes('&')) command = decodeEntities(command);
-    
-    let explain = getTag('explain');
-    // 🧪 ROBUSTNESS: If AI provides raw text without <explain> tag, use it as the explanation
-    if (!explain.trim()) {
-       const cleanRaw = String(raw || '').replace(/<[^>]+>[\s\S]*?<\/[^>]+>/gi, '').trim();
-       if (cleanRaw) {
-          explain = cleanRaw.split('\n')[0].slice(0, 150) + (cleanRaw.length > 150 ? '...' : '');
-       }
-    }
 
     const dangerRaw = getTag('danger');
     const warn = getTag('warn');
@@ -1166,7 +1437,20 @@ export default function TerminalView({ connectionId, connectionName, host, color
     let done = doneRawLower === 'true';
 
     // 🧪 ROBUSTNESS: Done Detection
-    if (!doneRawLower && looksLikeCompletionText(explain)) {
+    // If we have text that suggests completion, and the AI didn't provide a command/diff, override done=true.
+    // BUT: NEVER override to done=true if the raw AI response mentions errors/failures.
+    const rawNoTags = String(raw || '').replace(/<[^>]+>[\s\S]*?<\/[^>]+>/gi, '').trim();
+    const isImplicitDone = looksLikeCompletionText(explain) || looksLikeCompletionText(thought) || looksLikeCompletionText(rawNoTags);
+    const hasNoAction = !command.trim() && !diff.trim() && !searchSkills.trim();
+    
+    // 🛡️ ANTI-FALSE-POSITIVE: Check if the raw response itself mentions errors/failures
+    // This catches cases where the AI says "task complete" but its own thought mentions errors
+    const rawLower = String(raw || '').toLowerCase();
+    const hasErrorInResponse = /(permission denied|glibc.*not found|error:|failed|could not find|cannot connect|not running|docker.*denied)/i.test(rawLower);
+    
+    if (isImplicitDone && !hasErrorInResponse && (doneRawLower !== 'true' && hasNoAction)) {
+      done = true;
+    } else if (!doneRawLower && isImplicitDone && !hasErrorInResponse) {
       done = true;
     }
 
@@ -1182,7 +1466,37 @@ export default function TerminalView({ connectionId, connectionName, host, color
     const isGiveUpExplain = giveUpSignals.some(s => explainLower.includes(s));
     const doneFailed = doneRawLower === 'false' && !!doneRaw && (!hasWorkOutput) && isGiveUpExplain;
     const step = parseInt(stepRaw) || 1;
-    return { command, diff, explain, danger, warn, done, doneFailed, interactive, plan, thought, searchSkills, step, usedModel: metadata?.usedModel, raw: String(raw || '').trim() };
+
+    // 🧪 Clean up redundant meta-text from explain/thought that AI repeats from hints
+    const cleanupMetaText = (text) => {
+      if (!text) return text;
+      return text
+        // ☢️ NUCLEAR FILTER: Catch almost any sentence about goal satisfaction/terminal evidence
+        .replace(/(?:since|given|based on|according to|the recent|the provided)[\s\S]*?(?:goal|task|evidence|output|status|command|logs|shows|it is clear)[\s\S]*?(?:satisfied|met|done|finished|complete|resolved|achieved|success|is already|no need to continue)[\s\S]*?(\.|$|!)/gi, '')
+        .replace(/recent terminal evidence (?:clearly )?(?:suggests|shows|indicates)[\s\S]*?(\.|$|!)/gi, '')
+        .replace(/HINT: [\s\S]*?satisfied[\s\S]*?\./gi, '')
+        .replace(/I have (?:verified|confirmed)[\s\S]*?goal is (?:already )?(?:met|satisfied|done)[\s\S]*?(\.|$|!)/gi, '')
+        .replace(/The goal of [\s\S]*? is already (?:satisfied|met|done)[\s\S]*?(\.|$|!)/gi, '')
+        .trim();
+    };
+
+    return { 
+      command, 
+      diff, 
+      explain: cleanupMetaText(explain), 
+      danger, 
+      warn, 
+      done, 
+      doneFailed, 
+      interactive, 
+      plan, 
+      thought: cleanupMetaText(thought), 
+      searchSkills, 
+      step, 
+      usedModel: metadata?.usedModel, 
+      safetyBlocked,
+      raw: String(raw || '').trim() 
+    };
   };
 
   const isValidUnifiedDiff = (diffText) => {
@@ -2196,6 +2510,87 @@ export default function TerminalView({ connectionId, connectionName, host, color
       || /^\s*\[\s*\d+%\]\s+/m.test(raw);
   };
 
+  // Detect Docker image pull/download in progress - FULLY DYNAMIC
+  const hasActiveDockerPull = (text) => {
+    const raw = String(text || '');
+    const lines = raw.split('\n').filter(l => l.trim());
+    if (lines.length === 0) return false;
+    
+    const lastLine = (lines[lines.length - 1] || '').trim();
+    const lastLineLower = lastLine.toLowerCase();
+    
+    // === COMPLETION DETECTION ===
+    // These patterns indicate the pull is 100% DONE
+    const completionPatterns = [
+      /status:\s*downloaded\s+newer\s+image/i,
+      /status:\s*image\s+is\s+up\s+to\s+date/i,
+      /status:\s*downloaded\s+newer/i,
+      /digest:\s*sha256:[a-f0-9]{12,}/i,
+      /^docker\.io\/[\w\/-]+@sha256:/i,  // Final image reference
+    ];
+    
+    // Check if last line indicates completion
+    if (completionPatterns.some(p => p.test(lastLine))) return false;
+    if (/pull\s*complete/i.test(lastLine)) return false;
+    if (/status:\s*downloaded/i.test(lastLineLower)) return false;
+    
+    // Check for shell prompt after completion (definitive done)
+    if (looksLikeShellPrompt(raw)) return false;
+    
+    // === ACTIVE DOWNLOAD DETECTION ===
+    // Count active vs idle indicators
+    let activeSignals = 0;
+    let idleSignals = 0;
+    
+    // Check last 5 lines for activity
+    const recentLines = lines.slice(-5);
+    for (const line of recentLines) {
+      const lineLower = line.toLowerCase();
+      
+      // Active download indicators
+      if (/pulling from/i.test(line)) activeSignals++;
+      if (/downloading\b/i.test(line)) activeSignals++;
+      if (/extracting\b/i.test(line)) activeSignals++;
+      if (/^\s*\[\d+\/\d+\]/.test(line)) activeSignals++;
+      if (/^\s*\d+%/.test(line)) activeSignals++;
+      if (/get:\d+\s+http/i.test(line)) activeSignals++;
+      if (/fetched\s+\d+\s*kb/i.test(line)) activeSignals++;
+      if (/creating\s+container/i.test(line)) activeSignals++;
+      if (/starting\s+container/i.test(line)) activeSignals++;
+      
+      // Idle/completion indicators
+      if (/pull\s*complete/i.test(line)) idleSignals++;
+      if (/status:\s*downloaded/i.test(line)) idleSignals++;
+      if (/digest:\s*sha256:/i.test(line)) idleSignals++;
+    }
+    
+    // If more idle signals than active, consider done
+    if (idleSignals > activeSignals) return false;
+    
+    // If we have active signals and no completion, still running
+    if (activeSignals > 0 && idleSignals === 0) return true;
+    
+    // === ADAPTIVE TIMING CHECK ===
+    // Use the adaptive wait system to determine if we should wait longer
+    const state = adaptiveWaitRef.current;
+    const timeSinceOutput = Date.now() - (lastOutputAtRef.current || 0);
+    
+    // If output is recent (< 1s), likely still active
+    if (timeSinceOutput < 1000 && activeSignals > 0) return true;
+    
+    // If we've been waiting a long time with no new output, likely done
+    const avgWait = state?.avgCommandTime || 3;
+    if (timeSinceOutput > avgWait * 2000 && activeSignals === 0) return false;
+    
+    // Default: check if terminal has prompt
+    return !looksLikeShellPrompt(raw);
+  };
+
+  // Combined check for any active download/build process
+  const hasActiveDownloadOrBuild = (text) => {
+    return hasActiveCompilationOutput(text) || hasActiveDockerPull(text);
+  };
+
   const looksLikeShellPrompt = (text) => {
     // Strip ANSI escape codes and non-printable characters first
     const cleanText = String(text || '')
@@ -2605,24 +3000,35 @@ export default function TerminalView({ connectionId, connectionName, host, color
 
   const showAiDoneModal = ({ goal, steps = [], taskMode = 'ssh', thought = null, explain = null } = {}) => {
     console.log('[AI Agent] SUCCESS: Triggering Completion Modal', { goal, stepsCount: steps?.length });
+    
+    // Safety: Reset error and stop engine
     setAiError(null);
     setAutoMode(false);
     autoModeRef.current = false; 
-    autoRunningRef.current = false; // 🧪 Ensure engine lock is released
-    setAiOpen(true);
-    setAiHasOpenedOnce(true);
+    autoRunningRef.current = false; 
+
+    // Prepare summary data
     setAiDoneSummary({
       goal: goal || autoGoal || aiPrompt || 'Task complete',
-      steps: Array.isArray(steps) ? steps.slice(-30) : [],
+      steps: (Array.isArray(steps) ? steps : []).slice(-20),
       taskMode: taskMode || sshAiPrefs?.aiTask || 'ssh',
       thought: thought || null,
       explain: explain || null,
+      mode: aiMode, // NEW: Track which mode this summary belongs to
     });
-    setAiDone(true);
-    // Focus terminal after a short delay so user can resume typing immediately
+
+    // Pulse the state to ensure visibility
+    setAiOpen(true);
+    setAiHasOpenedOnce(true);
+    setAiDone(aiMode); // Changed true -> aiMode
+
+    // Forced pulses to overcome React batching/dropped updates
+    setTimeout(() => setAiDone(aiMode), 50);
+    setTimeout(() => setAiDone(aiMode), 250);
+    
     setTimeout(() => {
       termInstanceRef.current?.focus();
-    }, 300);
+    }, 500);
   };
 
   const normalizeAiTerminalCommand = (command) => {
@@ -2728,7 +3134,8 @@ export default function TerminalView({ connectionId, connectionName, host, color
     if (!t.trim()) return null;
 
     // Get the last few lines for more accurate detection (avoid false positives from old output)
-    const recentLines = t.split('\n').filter(Boolean).slice(-8).join('\n');
+    // Increased to 40 lines to catch errors pushed up by 'find', 'ls', or discovery commands
+    const recentLines = t.split('\n').filter(Boolean).slice(-40).join('\n');
 
     // === Command Not Found ===
     if (recentLines.includes('command not found')) return { type: 'command_not_found', label: 'Command not found', severity: 'high' };
@@ -2757,6 +3164,7 @@ export default function TerminalView({ connectionId, connectionName, host, color
 
     // === Docker / Container Errors ===
     if (/docker[:\s]/.test(t) && (/no such container/i.test(t) || /not running/i.test(t) || /failed to start/i.test(t))) return { type: 'docker_error', label: 'Docker error', severity: 'high' };
+    if (/failed to solve:/i.test(recentLines) || /process.*did not complete successfully: exit code:/i.test(recentLines)) return { type: 'docker_error', label: 'Docker build failed', severity: 'critical' };
     if (/kubernetes|kubectl/.test(t) && (/not found/i.test(t) || /error from server/i.test(t) || /refused/i.test(t))) return { type: 'k8s_error', label: 'Kubernetes error', severity: 'high' };
 
     // === Database Errors ===
@@ -2811,6 +3219,60 @@ export default function TerminalView({ connectionId, connectionName, host, color
     if (/could not locate.*repository/i.test(recentLines)) return { type: 'repo_error', label: 'Repository not found', severity: 'high' };
     if (/could not determine executable/i.test(recentLines)) return { type: 'npm_error', label: 'NPM Executable error', severity: 'high' };
     if (/invalid character/i.test(recentLines) && /project name/i.test(recentLines)) return { type: 'config_error', label: 'Invalid project name', severity: 'medium' };
+
+    return null;
+  };
+
+  // 🛡️ DEEP SCAN: Unlike detectTerminalError (which only checks last 20 lines),
+  // this scans the FULL terminal output for critical errors that would make
+  // a 'done=true' declaration invalid. Used as a veto gate everywhere.
+  const deepScanTerminalErrors = (text, goal) => {
+    const t = String(text || '').toLowerCase();
+    if (!t.trim()) return null;
+    const goalLower = String(goal || '').toLowerCase();
+
+    // Critical patterns that ALWAYS invalidate completion (regardless of line position)
+    const criticalPatterns = [
+      { pattern: /version.*glibc.*not found/i, label: 'GLIBC version mismatch', type: 'glibc_mismatch' },
+      { pattern: /glibc_[0-9].*not found/i, label: 'GLIBC version mismatch', type: 'glibc_mismatch' },
+      { pattern: /docker.*permission denied/i, label: 'Docker permission denied', type: 'docker_permission' },
+      { pattern: /permission denied.*docker/i, label: 'Docker permission denied', type: 'docker_permission' },
+      { pattern: /could not find.*cargo\.toml/i, label: 'Cargo.toml not found', type: 'build_error' },
+      { pattern: /cannot allocate memory/i, label: 'Out of memory', type: 'memory_error' },
+      { pattern: /no space left on device/i, label: 'Disk full', type: 'disk_full' },
+      { pattern: /killed.*oom/i, label: 'OOM killed', type: 'memory_error' },
+    ];
+
+    // Goal-specific patterns: if goal mentions docker, scan for docker errors anywhere
+    if (goalLower.includes('docker')) {
+      criticalPatterns.push(
+        { pattern: /docker:.*permission denied/i, label: 'Docker permission denied', type: 'docker_permission' },
+        { pattern: /dial unix.*docker\.sock.*permission denied/i, label: 'Docker socket permission denied', type: 'docker_permission' },
+        { pattern: /cannot connect to the docker daemon/i, label: 'Docker daemon not running', type: 'docker_error' },
+        { pattern: /failed to solve:.*did not complete successfully/i, label: 'Docker build failed', type: 'build_error' }
+      );
+    }
+
+    for (const { pattern, label, type } of criticalPatterns) {
+      if (pattern.test(t)) {
+        return { type, label, severity: 'critical' };
+      }
+    }
+
+    // Check if goal keywords appear near error keywords in the output
+    const goalWords = goalLower.split(/\s+/).filter(w => w.length > 3);
+    const errorIndicators = ['error', 'failed', 'not found', 'denied', 'fatal', 'cannot', 'unable'];
+    for (const gw of goalWords) {
+      if (t.includes(gw)) {
+        // Find lines containing the goal word
+        const lines = t.split('\n');
+        for (const line of lines) {
+          if (line.includes(gw) && errorIndicators.some(ei => line.includes(ei))) {
+            return { type: 'goal_error', label: `Error related to "${gw}" found in output`, severity: 'high' };
+          }
+        }
+      }
+    }
 
     return null;
   };
@@ -3084,6 +3546,14 @@ export default function TerminalView({ connectionId, connectionName, host, color
   };
 
   const handleAskAi = async (promptOverride) => {
+    // Fix state routing to Manual mode for this entire operation
+    const setAiLoading = setManualAiLoading;
+    const setAiAnswer = setManualAiAnswer;
+    const setAiError = setManualAiError;
+    const setAiDone = setManualAiDone;
+    const setAiDoneSummary = setManualAiDoneSummary;
+    const setAiStreaming = setManualAiStreaming;
+    const setAiStreamText = setManualAiStreamText;
     if (!isLoggedIn) {
       setAiError(t('ai.loginRequired'));
       return;
@@ -3133,6 +3603,7 @@ export default function TerminalView({ connectionId, connectionName, host, color
             host,
             prefs: sshAiPrefs,
             model: sshAiPrefs.aiModel || 'auto',
+            tmuxActive: !!sshAiPrefs?.autoTmux,
             history: aiConversationRef.current.slice(-8).slice(0, -1),
           }),
         });
@@ -3210,6 +3681,7 @@ export default function TerminalView({ connectionId, connectionName, host, color
             host,
             prefs: sshAiPrefs,
             model: sshAiPrefs.aiModel || 'auto',
+            tmuxActive: !!sshAiPrefs?.autoTmux,
             history: aiConversationRef.current.slice(-8).slice(0, -1),
           }),
         });
@@ -3302,56 +3774,144 @@ export default function TerminalView({ connectionId, connectionName, host, color
       setAiLoading(false);
       setAiStreaming(false);
       setAiStreamText('');
+      // NEW: Clear the active answer bubble in Manual Mode once it's safely moved to Chat History
+      // This prevents the "duplicate" appearance shown in the user's screenshot.
+      if (aiModeRef.current === 'manual') {
+        setAiAnswer(null);
+      }
     }
   };
 
-  // Fetch matching skills from LOCAL skills/*.md files AND external SkillsMP if needed
-  // Returns { skills: [...], allAvailable: [...] }
-  const fetchSkillsForGoal = async (goalStr) => {
-    let localSkills = [];
+  // Fetch matching skills with TIERED APPROACH:
+  // 1. Pure AI first (no skills)
+  // 2. Local skills on failure (mid-session injection)
+  // 3. SkillsMP last resort (strict relevance filtering)
+  // LIMIT: 1 skill per keyword/topic to prevent over-injection
+  // Returns { skills: [...], allAvailable: [...], tier: string }
+  const fetchSkillsForGoal = async (goalStr, tier = 'local', context = '') => {
+    let skills = [];
     let allAvailable = [];
     const detectedOs = String(detectedOsRef.current || '').toLowerCase();
+    const goalLower = String(goalStr || '').toLowerCase();
     
-    // Filter helper: Reject skills that clash with OS
-    const isOsCompatible = (s) => {
-      const text = (s.name + ' ' + (s.content || '') + ' ' + (s.description || '')).toLowerCase();
-      // If we are on Linux (CentOS/Ubuntu/Debian), reject explicit macOS skills
-      if (detectedOs.match(/linux|ubuntu|debian|centos|fedora|alpine/)) {
-         if (text.includes('macos') || text.includes('brew install') || text.includes('launchctl')) {
-            // Allow only if it explicitly mentions Linux too (rare)
-            if (!text.includes('linux') && !text.includes('ubuntu')) return false;
-         }
+    // Extract key terms from goal for relevance matching
+    const goalTerms = goalLower.split(/\s+/).filter(w => w.length > 3);
+    const goalKeywords = goalTerms.filter(w => 
+      !['install', 'setup', 'configure', 'run', 'start', 'deploy', 'the', 'and', 'with', 'using', 'ubuntu', 'debian', 'centos', 'fedora', 'alpine', 'amazon'].includes(w)
+    );
+    
+    // === RELEVANCE SCORING ===
+    // Score how relevant a skill is to the specific goal
+    // Returns { score, matchedKeyword } to track which keyword it matched
+    const scoreRelevance = (s) => {
+      const name = String(s.name || '').toLowerCase();
+      const desc = String(s.description || '').toLowerCase();
+      const content = String(s.content || '').toLowerCase();
+      const text = `${name} ${desc} ${content}`;
+      
+      let score = 0;
+      let matchedKeyword = null;
+      
+      // Check if skill name/desc contains goal keywords
+      for (const kw of goalKeywords) {
+        if (name.includes(kw)) {
+          score += 10;  // Name match is strongest
+          matchedKeyword = kw;
+        } else if (desc.includes(kw)) {
+          score += 5;    // Description match
+          matchedKeyword = kw;
+        } else if (content.includes(kw)) {
+          score += 2; // Content match
+          matchedKeyword = kw;
+        }
       }
-      // If we are on macOS, reject linux-only package managers
-      if (detectedOs.match(/macos|darwin/)) {
-         if (text.includes('apt-get') || text.includes('yum install') || text.includes('systemctl')) {
-            if (!text.includes('brew') && !text.includes('macos')) return false;
-         }
+      
+      // Penalize generic skills without specific keywords
+      if (name.match(/^(setup|install|configure|run)$/i) && goalKeywords.length > 0) {
+        const hasSpecificTerm = goalKeywords.some(kw => text.includes(kw));
+        if (!hasSpecificTerm) score -= 20;  // Heavy penalty for generic unrelated skills
       }
-      return true;
+      
+      // OS compatibility check
+      const osPenalty = checkOsCompatibility(text, detectedOs);
+      score += osPenalty;
+      
+      return { score: Math.max(score, 0), matchedKeyword };
     };
-
-    // 1. Try Local Skills
-    try {
-      const res = await apiFetch('/api/skills/local', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ q: goalStr }),
-      });
-      const data = await res.json();
-      if (data.success) {
-        localSkills = Array.isArray(data.skills) ? data.skills.filter(isOsCompatible) : [];
-        allAvailable = Array.isArray(data.allAvailable) ? data.allAvailable : [];
+    
+    // Check OS compatibility (returns penalty score)
+    const checkOsCompatibility = (text, os) => {
+      if (os.match(/linux|ubuntu|debian|centos|fedora|alpine|amazon/)) {
+        if (text.includes('macos') || text.includes('brew install') || text.includes('launchctl')) {
+          if (!text.includes('linux') && !text.includes('ubuntu')) return -50;
+        }
       }
-    } catch (e) {
-      console.warn('[Skills] Local fetch failed:', e);
-    }
-
-    // 2. Fallback: If local skills are insufficient (< 1), or all were filtered out
-    if (localSkills.length < 1) {
+      if (os.match(/macos|darwin/)) {
+        if (text.includes('apt-get') || text.includes('yum install') || text.includes('systemctl')) {
+          if (!text.includes('brew') && !text.includes('macos')) return -50;
+        }
+      }
+      return 0;
+    };
+    
+    // === SELECT BEST SKILL PER KEYWORD ===
+    // Groups skills by matched keyword, picks highest score per group
+    const selectBestPerKeyword = (scoredSkills, maxPerKeyword = 1) => {
+      const byKeyword = new Map();
+      
+      for (const s of scoredSkills) {
+        const kw = s._matchedKeyword || 'general';
+        if (!byKeyword.has(kw)) {
+          byKeyword.set(kw, []);
+        }
+        byKeyword.get(kw).push(s);
+      }
+      
+      // Sort each group by score and take top 1
+      const selected = [];
+      for (const [kw, skills] of byKeyword) {
+        skills.sort((a, b) => b._score - a._score);
+        selected.push(skills[0]);
+        console.log(`[Skills] Best for "${kw}": "${skills[0].name}" (score: ${skills[0]._score})`);
+      }
+      
+      return selected;
+    };
+    
+    // === TIER 1: LOCAL SKILLS ===
+    if (tier === 'local' || tier === 'skillsmp') {
       try {
-        console.log('[Skills] Local skills insufficient. Searching SkillsMP for:', goalStr);
-        // Add OS context to query to help the backend rank better results
+        const res = await apiFetch('/api/skills/local', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ q: goalStr }),
+        });
+        const data = await res.json();
+        if (data.success) {
+          const localRaw = Array.isArray(data.skills) ? data.skills : [];
+          // Score and filter by relevance
+          const scored = localRaw
+            .map(s => {
+              const { score, matchedKeyword } = scoreRelevance(s);
+              return { ...s, _score: score, _matchedKeyword: matchedKeyword };
+            })
+            .filter(s => s._score > 0);
+          
+          // Select best skill per keyword
+          skills = selectBestPerKeyword(scored);
+          allAvailable = Array.isArray(data.allAvailable) ? data.allAvailable : [];
+          console.log(`[Skills] Local: ${skills.length} skills (1 per keyword)`);
+        }
+      } catch (e) {
+        console.warn('[Skills] Local fetch failed:', e);
+      }
+    }
+    
+    // === TIER 2: SKILLSMP (LAST RESORT) ===
+    // Only search if tier is explicitly 'skillsmp' or local found nothing
+    if (tier === 'skillsmp' || (tier === 'local' && skills.length === 0)) {
+      try {
+        console.log('[Skills] Searching SkillsMP (last resort) for:', goalStr);
         const osContext = detectedOs ? ` for ${detectedOs}` : '';
         const externRes = await apiFetch('/api/skills/search', {
           method: 'POST',
@@ -3361,22 +3921,33 @@ export default function TerminalView({ connectionId, connectionName, host, color
         const externData = await externRes.json();
         
         if (externData.success && Array.isArray(externData.skills)) {
-             // Add unique external skills
-             const localNames = new Set(localSkills.map(s => s.name));
-             for (const s of externData.skills) {
-                 if (!localNames.has(s.name) && isOsCompatible(s)) {
-                     // Tag source clearly
-                     localSkills.push({ ...s, _source: 'skillsmp' });
-                 }
-                 if (localSkills.length >= 3) break; // Don't overwhelm context
-             }
+          // Score and filter with STRICT relevance
+          const externScored = externData.skills
+            .map(s => {
+              const { score, matchedKeyword } = scoreRelevance(s);
+              return { ...s, _score: score, _matchedKeyword: matchedKeyword, _source: 'skillsmp' };
+            })
+            .filter(s => s._score > 5);  // Higher threshold for external skills
+          
+          // Select best skill per keyword
+          const externSelected = selectBestPerKeyword(externScored);
+          
+          // Only add keywords not already covered by local skills
+          const localKeywords = new Set(skills.map(s => s._matchedKeyword));
+          for (const s of externSelected) {
+            if (!localKeywords.has(s._matchedKeyword)) {
+              skills.push(s);
+              console.log(`[Skills] SkillsMP: "${s.name}" for "${s._matchedKeyword}" (score: ${s._score})`);
+            }
+          }
         }
       } catch (e) {
         console.warn('[Skills] External SkillsMP search failed:', e);
       }
     }
     
-    return { skills: localSkills, allAvailable };
+    const usedTier = skills.length > 0 ? (skills.some(s => s._source === 'skillsmp') ? 'skillsmp' : 'local') : 'none';
+    return { skills, allAvailable, tier: usedTier };
   };
 
   // Extract a useful SkillsMP query from the current goal string and recent context
@@ -3443,10 +4014,29 @@ export default function TerminalView({ connectionId, connectionName, host, color
   }
 
   function looksLikeCompletionText(text) {
-    const t = String(text || '').toLowerCase();
-    if (!t.trim()) return false;
-    // 🧪 Expanded to catch more common AI "done" phrases seen in logs
-    return /(task complete|finished goal|goal achieved|completed successfully|issue resolved|successfully verified|verification passed|all set|done successfully|looks good|working now|fixed now|goal is (?:already )?satisfied|task is (?:already )?done|mission accomplished)/.test(t);
+    const t = String(text || '').toLowerCase().trim();
+    if (!t) return false;
+
+    // 🧪 SENTINEL GUARD: If the text contains the internal background task marker,
+    // it's a technical signal, NOT a human-readable completion message. 
+    // Ignore it here so the AI is forced to provide a proper explanation.
+    if (t.includes('__ai_done__') || t.includes('__bgtask')) return false;
+
+    const isIntentOrCheck = /^(i\s+will|i\s+need\s+to|i'm\s+(going\s+to|going|now|planning\s+to)|checking\s+(for|if|the)|let\s+me\s+check|looking\s+at|scouting|verifying\b)/i.test(t);
+    if (isIntentOrCheck) return false;
+
+    // 🧪 NEGATIVE CONTEXT: Even if it says "success", if it specifically mentions that an error still "indicates" 
+    // a need for more work, or if it uses "but/however" to describe a remaining problem, it's NOT done.
+    const hasRemainingProblem = /(but|however|although|error|instead|failed|indicates we|yet to|still requires|must now|need to)/i.test(t);
+    const didSolve = /(solved|fixed|resolved|finalized) the (error|issue|problem|mismatch)/i.test(t);
+    if (hasRemainingProblem && !didSolve) return false;
+
+    // 🧪 SKEPTICISM: Completion text must be definitive. If it sounds like discovery, it's not done.
+    const isDiscovery = /\b(found|located|see|presence|exists|existing)\b/i.test(t) && !/\b(working|verified|running|active)\b/i.test(t);
+    if (isDiscovery && !t.includes('success')) return false;
+
+    // 🧪 Expanded to catch common AI "done" phrases. Must be a declarative statement.
+    return /(task complete|finished goal|goal achieved|completed successfully|issue resolved|successfully verified|verification passed|all set|done successfully|looks good|working now|fixed now|already satisfied|goal[\s\S]*satisfied|task[\s\S]*satisfied|goal[\s\S]*done|task[\s\S]*done|mission accomplished|everything looks correct|evidence confirms completion|goal is met|goal is satisfied|already met|already finished)/.test(t);
   }
 
   function inferDynamicCompletionEvidence({ goal, output, lastCommand, err, isStillRunning, stepsDone }) {
@@ -3457,6 +4047,12 @@ export default function TerminalView({ connectionId, connectionName, host, color
     const goalLower = String(goal || '').toLowerCase();
     const outputLower = String(output || '').toLowerCase();
     const commandLower = String(lastCommand || '').toLowerCase();
+
+    // 🧪 BACKGROUND TASK SKEPTICISM: If the last command was a tmux backgrounding operation,
+    // a successful exit code only means the keys were SENT. It does NOT mean the task is done.
+    if (commandLower.includes('tmux') && (commandLower.includes('send-keys') || commandLower.includes('-d'))) {
+        return { done: false, reason: 'Background task initiated; awaiting verification.', confidence: 0 };
+    }
 
     const positivePatterns = [
       /\bsuccess(?:ful|fully)?\b/,
@@ -3516,20 +4112,49 @@ export default function TerminalView({ connectionId, connectionName, host, color
     const negativeHits = countHits(negativePatterns, outputLower);
     const absenceHits = countHits(absencePatterns, outputLower);
     const removalHits = countHits(removalPatterns, outputLower);
+    const isListingCommand = /(\bls\b|\bfind\b|\blist\b|\bdir\b)/.test(commandLower);
+    const isDockerCommand = /(\bdocker\b|\bdocker-compose\b)/.test(commandLower);
     const goalTokens = tokenizeCompletionText(goalLower);
     const overlapHits = goalTokens.reduce((count, token) => count + (outputLower.includes(token) ? 1 : 0), 0);
 
+    // 🧪 SKEPTICISM: If the last command was just 'ls' or 'find', seeing the terms in the output
+    // is NOT evidence of completion for an "install" or "fix" goal.
+    if (isListingCommand && (installIntent || !verifyIntent) && overlapHits > 0 && positiveHits < 2) {
+       return { done: false, reason: 'Listing files is not proof of installation or a fix.', confidence: 0 };
+    }
+
+    // 🧪 DOCKER SKEPTICISM: If goal is "install on docker" but last command wasn't docker-related,
+    // or if docker output doesn't show the name, we are NOT done.
+    if (goalLower.includes('docker') && !isDockerCommand) {
+       return { done: false, reason: 'Goal involves Docker; verification via docker commands is required.', confidence: 0 };
+    }
+
+    // Dynamic confidence calculation based on evidence strength and session history
+    const sessionReliability = adaptiveWaitRef.current?.totalCommands > 5 ? 0.05 : 0;
+    const baseConfidence = 0.85 + sessionReliability;
+
     if (removeIntent && (absenceHits > 0 || removalHits > 0) && negativeHits === 0) {
-      return { done: true, reason: 'terminal shows the target is absent or removed', confidence: 0.98 };
+      const confidence = Math.min(baseConfidence + 0.1 + (removalHits * 0.02), 0.99);
+      return { done: true, reason: 'terminal shows the target is absent or removed', confidence };
     }
     if (verifyIntent && positiveHits > 0 && negativeHits === 0) {
-      return { done: true, reason: 'verification command returned positive output', confidence: 0.94 };
+      // For docker, ensure hits are within a docker ps or similar
+      if (goalLower.includes('docker') && !isDockerCommand) return { done: false, reason: 'Docker-specific verification needed.', confidence: 0 };
+      const confidence = Math.min(baseConfidence + 0.05 + (positiveHits * 0.02), 0.98);
+      return { done: true, reason: 'verification command returned positive output', confidence };
     }
     if (installIntent && positiveHits >= 2 && negativeHits === 0) {
-      return { done: true, reason: 'recent output indicates the service or deployment is healthy', confidence: 0.9 };
+      const confidence = Math.min(baseConfidence + (positiveHits * 0.015), 0.95);
+      return { done: true, reason: 'recent output indicates the service or deployment is healthy', confidence };
     }
     if (positiveHits >= 2 && overlapHits > 0 && negativeHits === 0) {
-      return { done: true, reason: 'goal terms overlap with positive terminal evidence', confidence: 0.84 };
+      const confidence = Math.min(baseConfidence - 0.05 + (overlapHits * 0.02), 0.92);
+      return { done: true, reason: 'goal terms overlap with positive terminal evidence', confidence };
+    }
+
+    // 🧪 NEGATIVE SIGNAL GUARD: If ANY negative patterns are found, we are most likely NOT done.
+    if (negativeHits > 0) {
+        return { done: false, reason: 'Negative signals (errors/failures) detected in output', confidence: 0 };
     }
 
     return { done: false, reason: '', confidence: 0 };
@@ -3573,10 +4198,19 @@ export default function TerminalView({ connectionId, connectionName, host, color
         for (const s of data.skills) {
           if (!localNames.has(s.name)) allFound.push({ ...s, _source: 'skillsmp' });
         }
-        // If SkillsMP returned installable skills, show them in the results panel
-        const installable = data.skills.filter(s => s.id);
-        if (installable.length > 0) {
-          setSkillsSearchResults(installable);
+        // Auto-install installable SkillsMP skills silently (no button click needed)
+        const installable = data.skills.filter(s => s.id && s.content);
+        for (const skill of installable.slice(0, 2)) { // Max 2 auto-installs
+          try {
+            await apiFetch('/api/skills/install', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ id: skill.id, name: skill.name, description: skill.description || '', content: skill.content })
+            });
+            console.log(`[SkillsMP] Auto-installed skill: ${skill.name}`);
+          } catch (installErr) {
+            console.warn(`[SkillsMP] Auto-install failed for ${skill.name}:`, installErr);
+          }
         }
       }
     } catch (e) {
@@ -3584,17 +4218,32 @@ export default function TerminalView({ connectionId, connectionName, host, color
       console.warn('[Skills] SkillsMP search skipped:', e.message);
     }
 
-    // ── Step 3: Inject ALL found skills into preloadedSkillsRef for the AI prompt ──
-    // Deduplicate by category slug, max 3
-    const seen = new Set();
+    // ── Step 3: Inject skills with BALANCED fallback ──
+    // Prioritize high-quality local results, but ALWAYS leave room for SkillsMP (SMP)
+    // especially if the user goal is complex.
     const deduped = [];
-    for (const s of allFound) {
+    const seenSlugs = new Set();
+    
+    // First, pick the best 2 locals
+    const locals = allFound.filter(s => s._source === 'local');
+    for (const s of locals) {
       const slug = String(s.name || '').toLowerCase().split(/[-_\s]/)[0];
-      if (!seen.has(slug) && s.content) {
-        seen.add(slug);
+      if (!seenSlugs.has(slug) && s.content) {
+        seenSlugs.add(slug);
         deduped.push(s);
       }
-      if (deduped.length >= 3) break;
+      if (deduped.length >= 2) break;
+    }
+
+    // Then, fill with up to 3 SkillsMP results (the fallback/override)
+    const smp = allFound.filter(s => s._source === 'skillsmp');
+    for (const s of smp) {
+      const slug = String(s.name || '').toLowerCase().split(/[-_\s]/)[0];
+      if (!seenSlugs.has(slug) && s.content) {
+        seenSlugs.add(slug);
+        deduped.push(s);
+      }
+      if (deduped.length >= 5) break; // Total cap of 5 now
     }
 
     // Merge with any previously loaded skills (don't lose what was loaded on start)
@@ -3606,10 +4255,10 @@ export default function TerminalView({ connectionId, connectionName, host, color
         merged.push(s);
       }
     }
-    // Keep max 5 total skills in context
-    preloadedSkillsRef.current = merged.slice(0, 5);
+    // Final hard cap of 6 total skills for prompt efficiency
+    preloadedSkillsRef.current = merged.slice(0, 6);
     setActiveSkills(preloadedSkillsRef.current); // Update persistent UI state
-    console.log(`[SkillsMP] Injected ${deduped.length} new skills. Total available for prompt: ${preloadedSkillsRef.current.length}`, preloadedSkillsRef.current.map(s => s.name));
+    console.log(`[SkillsMP] Blended ${deduped.length} new skills (Prefer SMP fallback). Total: ${preloadedSkillsRef.current.length}`);
 
 
     // Show the injection panel to the user
@@ -3623,15 +4272,11 @@ export default function TerminalView({ connectionId, connectionName, host, color
     });
 
     if (deduped.length > 0) {
-      skillsJustInjectedRef.current = true; // force full fresh reset on next Resume
-      // If autoMode is still on, pause it so user gets a clean Resume with new skills
-      if (autoModeRef.current) {
-        autoModeRef.current = false;
-        setAutoMode(false);
-      }
-      setAiError(`Skills injected: ${deduped.map(s => s.name).join(', ')}. Click Resume Engine to start fresh with enhanced knowledge.`);
+      // Skills ready - AI will use them on next step (no need to pause)
+      console.log(`[Skills] Injected ${deduped.length} skills:`, deduped.map(s => s.name));
+      setAiError(null); // Clear any previous error
     } else {
-      setAiError(`No matching skills found for "${query}". Click Resume Engine to try a different approach.`);
+      setAiError(`No matching skills found for "${query}". AI will use pure reasoning.`);
     }
 
     setSkillsSearchLoading(false);
@@ -3639,7 +4284,7 @@ export default function TerminalView({ connectionId, connectionName, host, color
     setTimeout(() => setInjectedSkills(null), 10000);
   };
 
-  const handleInstallSkill = async (skill) => {
+  const handleInstallSkill = async (skill, autoResume = true) => {
     if (!skill?.id) return;
     setAiLoading(true);
     try {
@@ -3649,25 +4294,47 @@ export default function TerminalView({ connectionId, connectionName, host, color
         body: JSON.stringify({ 
           id: skill.id, 
           name: skill.name, 
+          description: skill.description || '',
           content: skill.content 
         })
       });
       const data = await res.json();
       if (data.success) {
-        setAiError(`✅ Skill "${skill.name}" installed! You can now Resume Engine to use it.`);
+        setAiError(`✅ Skill "${skill.name}" injected! Continuing engine...`);
         setSkillsSearchResults(prev => prev.filter(s => s.id !== skill.id));
+        
+        // Auto-resume engine if requested (inject automatic)
+        if (autoResume) {
+          setAiMode('auto');
+          setAutoMode(true);
+          const currentGoal = String(autoGoalRef.current || aiPromptRef.current || '').trim();
+          if (currentGoal) {
+            console.log('[AI Skill] Injection successful, resuming engine with goal:', currentGoal);
+            // Dynamic delay based on adaptive wait system
+            const resumeDelay = Math.max((adaptiveWaitRef.current?.avgCommandTime || 0.5) * 500, 200);
+            setTimeout(() => runAutoStep(), resumeDelay);
+          }
+        }
       } else {
-        setAiError(`Installation failed: ${data.error}`);
+        setAiError(`Injection failed: ${data.error}`);
+        setAiLoading(false);
       }
     } catch (err) {
-      console.error('Skill installation failed:', err);
-      setAiError(`Skill installation failed: ${err.message}`);
-    } finally {
+      console.error('Skill injection failed:', err);
+      setAiError(`Skill injection failed: ${err.message}`);
       setAiLoading(false);
     }
   };
 
   const runAutoStep = async (snapshotOverride, nudgeMsg = '') => {
+    // Fix state routing to Auto mode for this entire operation
+    const setAiLoading = setAutoAiLoading;
+    const setAiAnswer = setAutoAiAnswer;
+    const setAiError = setAutoAiError;
+    const setAiDone = setAutoAiDone;
+    const setAiDoneSummary = setAutoAiDoneSummary;
+    const setAiStreaming = setAutoAiStreaming;
+    const setAiStreamText = setAutoAiStreamText;
     if (!isLoggedIn) return;
     // Use refs instead of closed-over state — fixes stale-state bug when called from setTimeout
     if (aiModeRef.current !== 'auto') return;
@@ -3676,17 +4343,18 @@ export default function TerminalView({ connectionId, connectionName, host, color
     // ⛔ Hard guard: never call the AI while a compilation (cargo/make/gcc) is actively running.
     // "Compiling / Linking / Building" in the recent output means the process hasn't finished.
     // We reschedule in 4 s instead of wasting an API call.
-    if (commandRunningRef.current) return;
-    {
-      const liveSnap = getOutputContext();
-      const isLivelyCompiling = hasActiveCompilationOutput(liveSnap);
-      if (isLivelyCompiling && !looksLikeShellPrompt(liveSnap)) {
-        console.log('[AI Agent] Compilation still in progress — deferring AI call by 4 s');
-        if (autoTimerRef.current) clearTimeout(autoTimerRef.current);
-        autoTimerRef.current = setTimeout(() => runAutoStep(liveSnap), 4000);
-        return;
+      if (commandRunningRef.current) return;
+      {
+        const liveSnap = getOutputContext();
+        const isLivelyCompiling = hasActiveDownloadOrBuild(liveSnap);
+        if (isLivelyCompiling && !looksLikeShellPrompt(liveSnap)) {
+          const waitSec = calculateDynamicWait(false, true, false);
+          console.log(`[AI Agent] Download/build still in progress — deferring AI call by ${waitSec}s (adaptive)`);
+          if (autoTimerRef.current) clearTimeout(autoTimerRef.current);
+          autoTimerRef.current = setTimeout(() => runAutoStep(liveSnap), waitSec * 1000);
+          return;
+        }
       }
-    }
     if (Number.isFinite(autoStepsRemaining) && autoStepsRemaining <= 0) {
       setAiError(t('ai.autoFinished'));
       setAutoMode(false);
@@ -3758,6 +4426,66 @@ CHANGE YOUR STRATEGY: Use different flags, check paths with absolute references,
     const curKey = `${String(lastExecutedCommand || '').trim()}::${curSig}`;
     if (autoRepeatSigRef.current.key === curKey) {
       autoRepeatSigRef.current.count += 1;
+      
+      // === MID-SESSION SKILL INJECTION ON FAILURE ===
+      // After 3 repeated failures with no skills: inject LOCAL skills
+      // After 5 repeated failures: inject SkillsMP skills (last resort)
+      if (autoRepeatSigRef.current.count >= 3 && skillInjectionAttemptsRef.current === 0) {
+        console.log('[Skills] AI failing - injecting LOCAL skills (attempt 1)');
+        skillInjectionAttemptsRef.current = 1;
+        const goal = autoGoalRef.current || autoGoal || '';
+        fetchSkillsForGoal(goal, 'local', snap).then(({ skills }) => {
+          if (skills.length > 0) {
+            preloadedSkillsRef.current = skills;
+            setActiveSkills(skills);
+            setInjectedSkills({ skills, allAvailable: [] });
+            console.log(`[Skills] Injected ${skills.length} local skills mid-session`);
+            // Continue with enhanced context
+            autoRepeatSigRef.current = { key: curKey, count: 0 };
+            const injectWait = calculateDynamicWait(false, false, false) * 500;
+            setTimeout(() => runAutoStep(snap), injectWait);
+            return;
+          }
+        });
+        return;
+      }
+      
+      if (autoRepeatSigRef.current.count >= 5 && skillInjectionAttemptsRef.current === 1) {
+        console.log('[Skills] Local skills failed - REPLACING with SkillsMP (last resort)');
+        skillInjectionAttemptsRef.current = 2;
+        const goal = autoGoalRef.current || autoGoal || '';
+        fetchSkillsForGoal(goal, 'skillsmp', snap).then(({ skills }) => {
+          if (skills.length > 0) {
+            // REPLACE local skills completely - they didn't work
+            preloadedSkillsRef.current = skills;
+            setActiveSkills(skills);
+            setInjectedSkills({ skills, allAvailable: [] });
+            console.log(`[Skills] Replaced with ${skills.length} SkillsMP skills (local skills removed)`);
+            autoRepeatSigRef.current = { key: curKey, count: 0 };
+            const injectWait = calculateDynamicWait(false, false, false) * 500;
+            setTimeout(() => runAutoStep(snap), injectWait);
+            return;
+          } else {
+            // SkillsMP found nothing - clear skills and let AI continue raw
+            console.log('[Skills] SkillsMP found nothing - continuing without skills');
+            preloadedSkillsRef.current = [];
+            setActiveSkills([]);
+            autoRepeatSigRef.current = { key: curKey, count: 0 };
+          }
+        });
+        return;
+      }
+      
+      // After 7 failures even with SkillsMP - give up skills, let AI try raw
+      if (autoRepeatSigRef.current.count >= 7 && skillInjectionAttemptsRef.current >= 2) {
+        console.log('[Skills] All skills failed - clearing skills, AI must solve without help');
+        preloadedSkillsRef.current = [];
+        setActiveSkills([]);
+        setInjectedSkills(null);
+        skillInjectionAttemptsRef.current = 3;
+        autoRepeatSigRef.current = { key: curKey, count: 0 };
+      }
+      
       // After 2 repeats, reset so the AI gets a fresh attempt with richer context
       if (autoRepeatSigRef.current.count >= 2) {
         autoRepeatSigRef.current = { key: curKey, count: 0 };
@@ -3783,7 +4511,8 @@ CHANGE YOUR STRATEGY: Use different flags, check paths with absolute references,
       if (idleFor > 2000 || timeSinceCommand > 5000) {
         // Send Ctrl+C to exit the streaming command
         socketRef.current?.emit('ssh:input', '\x03');
-        await new Promise(r => setTimeout(r, 800));
+        const exitDelay = Math.max((adaptiveWaitRef.current?.avgCommandTime || 0.5) * 800, 300);
+        await new Promise(r => setTimeout(r, exitDelay));
         const nextSnap = getOutputContext();
         setLastResultSnapshot(nextSnap);
         setLastResultAt((prev) => {
@@ -3793,7 +4522,8 @@ CHANGE YOUR STRATEGY: Use different flags, check paths with absolute references,
         });
         // Re-check after exiting streaming mode
         autoRunningRef.current = false;
-        setTimeout(() => runAutoStep(nextSnap), 500);
+        const retryDelay = calculateDynamicWait(false, false, false) * 500;
+        setTimeout(() => runAutoStep(nextSnap), retryDelay);
         return;
       }
     }
@@ -3813,23 +4543,24 @@ CHANGE YOUR STRATEGY: Use different flags, check paths with absolute references,
           // (e.g. "Log file is already in use (press RETURN)"), we MUST send Enter
           // first to dismiss it before we can send 'q' to exit the pager.
           const needsReturn = /press\s+(return|enter)/i.test(currentSnap);
+          const baseDelay = Math.max((adaptiveWaitRef.current?.avgCommandTime || 0.5) * 600, 200);
           if (needsReturn) {
             socketRef.current?.emit('ssh:input', '\r');
-            await new Promise(r => setTimeout(r, 600));
+            await new Promise(r => setTimeout(r, baseDelay));
             currentSnap = getOutputContext();
           }
 
           // Step 2: If we're still in the pager (no shell prompt yet), send 'q'
           if (!looksLikeShellPrompt(currentSnap)) {
             socketRef.current?.emit('ssh:input', 'q');
-            await new Promise(r => setTimeout(r, 700));
+            await new Promise(r => setTimeout(r, baseDelay + 100));
 
             // Step 3: After 'q', flush any leftover chars with Ctrl+U
             // in case the pager exited before consuming the 'q'
             const snapAfterQ = getOutputContext();
             if (looksLikeShellPrompt(snapAfterQ)) {
               socketRef.current?.emit('ssh:input', '\x15'); // Ctrl+U — kill line
-              await new Promise(r => setTimeout(r, 200));
+              await new Promise(r => setTimeout(r, Math.max(baseDelay * 0.3, 100)));
             }
           }
         }
@@ -3842,7 +4573,8 @@ CHANGE YOUR STRATEGY: Use different flags, check paths with absolute references,
           return next > p ? next : p + 1;
         });
         autoRunningRef.current = false;
-        setTimeout(() => runAutoStep(nextSnap), 400);
+        const pagerRetryDelay = Math.max((adaptiveWaitRef.current?.avgCommandTime || 0.5) * 400, 150);
+        setTimeout(() => runAutoStep(nextSnap), pagerRetryDelay);
         return;
       }
 
@@ -3850,7 +4582,8 @@ CHANGE YOUR STRATEGY: Use different flags, check paths with absolute references,
         const recoveredSnap = await tryAutoRecoverBlockedTerminal(snap, lastExecutedCommand);
         if (recoveredSnap) {
           autoRunningRef.current = false;
-          setTimeout(() => runAutoStep(recoveredSnap), 400);
+          const editorRetryDelay = Math.max((adaptiveWaitRef.current?.avgCommandTime || 0.5) * 400, 150);
+          setTimeout(() => runAutoStep(recoveredSnap), editorRetryDelay);
           return;
         }
       }
@@ -3863,7 +4596,8 @@ CHANGE YOUR STRATEGY: Use different flags, check paths with absolute references,
         const recoveredSnap = await tryAutoRecoverBlockedTerminal(snap, lastExecutedCommand);
         if (recoveredSnap) {
           autoRunningRef.current = false;
-          setTimeout(() => runAutoStep(recoveredSnap), 400);
+          const replRetryDelay = Math.max((adaptiveWaitRef.current?.avgCommandTime || 0.5) * 400, 150);
+          setTimeout(() => runAutoStep(recoveredSnap), replRetryDelay);
           return;
         }
       }
@@ -3898,7 +4632,8 @@ CHANGE YOUR STRATEGY: Use different flags, check paths with absolute references,
               await new Promise(r => setTimeout(r, recovery.waitMs));
               const unblockSnap = getOutputContext();
               autoRunningRef.current = false;
-              setTimeout(() => runAutoStep(unblockSnap), 300);
+              const unblockRetryDelay = Math.max((adaptiveWaitRef.current?.avgCommandTime || 0.5) * 300, 100);
+              setTimeout(() => runAutoStep(unblockSnap), unblockRetryDelay);
               return;
             }
           }
@@ -3935,6 +4670,7 @@ CHANGE YOUR STRATEGY: Use different flags, check paths with absolute references,
 
       // === OS / Package Manager Detection (persistent across steps) ===
       const osFromSnap = isMacOs => isMacOs ? 'macOS (Darwin)'
+        : /amazon\s*linux|amzn|ec2-user@/i.test(snap) ? 'Amazon Linux'
         : /ubuntu|debian/i.test(snap) ? 'Ubuntu/Debian'
         : /centos|rhel|red hat/i.test(snap) ? 'CentOS/RHEL'
         : /fedora/i.test(snap) ? 'Fedora'
@@ -3942,14 +4678,26 @@ CHANGE YOUR STRATEGY: Use different flags, check paths with absolute references,
         : /arch linux/i.test(snap) ? 'Arch Linux'
         : null;
       const isMacOs = /darwin|macos|mac os x|apple m[0-9]|homebrew|sw_vers|ProductName:\s*mac/i.test(snap);
+      const isAmazonLinux = /amazon\s*linux|amzn|ec2-user@/i.test(snap);
       const freshOs = osFromSnap(isMacOs);
       if (freshOs && !detectedOsRef.current) detectedOsRef.current = freshOs;
       if (isMacOs && detectedOsRef.current !== 'macOS (Darwin)') detectedOsRef.current = 'macOS (Darwin)';
+      if (isAmazonLinux && detectedOsRef.current !== 'Amazon Linux') detectedOsRef.current = 'Amazon Linux';
       const detectedOs = detectedOsRef.current;
       const osNote = detectedOs ? `\n- OS: ${detectedOs}` : '';
-      const macOsRule = (detectedOs === 'macOS (Darwin)' || isMacOs)
+      const isRootContainer = /root@[a-f0-9]+:.*?#\s*$/im.test(snap);
+
+      const macOsRule = (!isRootContainer && (detectedOs === 'macOS (Darwin)' || isMacOs))
         ? `\n- CRITICAL: This is macOS. NEVER use apt-get, apt, yum, dnf, snap or rpm. Use 'brew' (Homebrew) ONLY. If brew is unavailable, install it first.`
         : '';
+      const amazonLinuxRule = (!isRootContainer && (detectedOs === 'Amazon Linux' || isAmazonLinux))
+        ? `\n- CRITICAL: This is Amazon Linux. NEVER use apt-get or apt. Use 'yum' ONLY. Example: sudo yum install -y docker`
+        : '';
+      const rootContainerRule = isRootContainer
+        ? `\n- CRITICAL: You are running as ROOT inside a container. Do NOT use 'sudo' (it is not installed and will cause 'command not found' errors). Just run commands directly (e.g. 'apt update', not 'sudo apt update'). Also IGNORE host OS package manager rules—you are in a container. Use apt/yum directly.`
+        : '';
+
+      const effectivePreferSudo = sshAiPrefs?.preferSudo && !isRootContainer;
 
       // FORCE AUTOMATIC WAIT: Never call the AI while a command is still running unless interaction
       // (y/n prompt, password, pager) is explicitly needed. Keep polling until the shell prompt returns.
@@ -3964,14 +4712,15 @@ CHANGE YOUR STRATEGY: Use different flags, check paths with absolute references,
       // ALWAYS wait and retry — never call the AI regardless of how long idle has been.
       // This is the core fix: the AI must NEVER send a new command while the previous one is running.
       if (!isInteractionNeeded && isStillRunning) {
-         const waitTime = isHeavy ? 5 : 3;
-         setAutoCountdown(Math.ceil(waitTime));
-         if (autoTimerRef.current) clearTimeout(autoTimerRef.current);
-         autoTimerRef.current = setTimeout(() => {
-           runAutoStep();
-         }, waitTime * 1000);
-         autoRunningRef.current = false; // Allow the timed retry to run
-         return; 
+        markTerminalBusy();
+        const waitTime = calculateDynamicWait(isHeavy, false, false);
+        setAutoCountdown(Math.ceil(waitTime));
+        if (autoTimerRef.current) clearTimeout(autoTimerRef.current);
+        autoTimerRef.current = setTimeout(() => {
+          runAutoStep();
+        }, waitTime * 1000);
+        autoRunningRef.current = false; // Allow the timed retry to run
+        return;
       }
 
       // === Goal intent detection (for safety guard below) ===
@@ -4001,9 +4750,19 @@ CHANGE YOUR STRATEGY: Use different flags, check paths with absolute references,
         isStillRunning,
         stepsDone,
       });
-      const completionHint = completionEvidence.done
-        ? `\n- HINT: Recent terminal evidence suggests the goal is already satisfied (${completionEvidence.reason}). You SHOULD set <done>true</done> now.`
-        : '';
+      // 🛡️ DEEP SCAN GATE: Before sending a "goal satisfied" hint to the AI,
+      // verify that the FULL terminal output has no critical errors.
+      // This prevents the hint from being sent when errors like GLIBC/docker have scrolled off.
+      let completionHint = '';
+      if (completionEvidence.done) {
+        const deepErrForHint = deepScanTerminalErrors(snap, goal);
+        if (deepErrForHint) {
+          completionHint = `\n[WARNING] COMPLETION_VETOED: Evidence looked positive but deep scan found critical error: "${deepErrForHint.label}". Do NOT set <done>true</done>. Fix this error first.`;
+          console.warn('[AI Agent] Suppressed completion hint due to deep scan error:', deepErrForHint.label);
+        } else {
+          completionHint = `\n[ACTION] TERMINAL_EVIDENCE_POSITIVE: Goal satisfied (Reason: ${completionEvidence.reason}). Set <done>true</done> now.`;
+        }
+      }
 
       // Low-steps warning (disabled in infinite mode)
       const lowStepsWarn = (Number.isFinite(autoStepsRemaining) && autoStepsRemaining <= 5)
@@ -4103,26 +4862,30 @@ CHANGE YOUR STRATEGY: Use different flags, check paths with absolute references,
           ).filter(Boolean).join('\n')
         : '';
         
+      // --- Version Mismatch Discovery ---
+      const outputText = String(contextToSend || '').toLowerCase();
+      const hasVersionMismatch = /version\s+[`"']glibc_\d+\.\d+[`"']\s+not\s+found/i.test(outputText) || 
+                                /requires\s+glibc_\d+\.\d+/i.test(outputText) ||
+                                /not\s+found\s+\(required\s+by/i.test(outputText);
+      const versionMismatchHint = hasVersionMismatch
+        ? `\n⚠️ CRITICAL: I see a GLIBC/Version library mismatch error.
+Root Cause: The pre-built binary is incompatible with this server's libraries.
+Solution: You MUST rebuild from source or use a static build. 
+Strategy: Try \`cargo build --release\` locally on the server, or if using Rust, add the MUSL target: \`rustup target add x86_64-unknown-linux-musl && cargo build --release --target x86_64-unknown-linux-musl\`.\n`
+        : '';
+
       const preventSearchRule = skillsInjected
         ? `\n7. SKILLS INJECTED: You have matched skills above. DO NOT use <search_skills> again. Use the content provided in [Skills] to solve the goal.`
         : '';
 
       const autoPrompt = `[AUTO] Goal: ${goal}
 State:
-- Status: ${terminalStatus}${runningNote}${osNote}${macOsRule}${completionHint}${lowStepsWarn}
-- Last Cmd: ${lastExecutedCommand || '(none — this is the FIRST step)'}
-- Error: ${err ? err.label : 'none'}${failureNote}
-- Recent steps: ${recentHistory || '(none)'}${skillsBlock}
-- Output (since last command):
-${String(contextToSend || '(no output)').slice(-4000)}
-
-RULES:
-1. If recent terminal evidence clearly shows the goal is already satisfied → <done>true</done> IMMEDIATELY.
-2. DYNAMIC SUCCESS: infer completion from the latest output, the goal, and the last command. If the verification/result is clearly positive, stop instead of continuing.
-3. VERIFY only if necessary. If the last command output confirms success (e.g. status code 0 or positive message), STOP.
-4. COMMAND: 1 shell command, [Wait], or [Ctrl+C]. NEVER install when goal is remove.
-5. macOS=brew, Linux=apt/dnf. No editors (nano/vim). To CREATE a new file, prefer quoted heredoc: \`cat << 'EOF' > filename\`. To EDIT an existing file, use a <diff> patch.
-${isExecutionGoal ? '⚡ EXECUTION GOAL: Run shell commands directly. Use `cat` heredocs for new files and <diff> for modifying configs.\n' : ''}${scoutFirstRule}${errorRootCauseRule}6. ${progressLine}${preventSearchRule || ''}${patchFirstAutoRules}${forceDiffNowRule}${autoPromptExpansion}`;
+- Status: ${terminalStatus}${runningNote}${osNote}${macOsRule}${amazonLinuxRule}${rootContainerRule}${completionHint}${lowStepsWarn}${versionMismatchHint}
+- Sudo: ${effectivePreferSudo ? 'on' : 'off'} | Cmd: ${lastExecutedCommand || '(first step)'} | Err: ${err ? err.label : 'none'}${failureNote}
+- Recent: ${recentHistory || 'none'}${skillsBlock}
+- Output:
+${String(contextToSend || '(no output)').slice(-1500)}
+${isExecutionGoal ? '⚡ EXECUTION: run commands directly.\n' : ''}${scoutFirstRule}${errorRootCauseRule}${preventSearchRule || ''}${patchFirstAutoRules}${forceDiffNowRule}Step ${stepsDone + 1}${Number.isFinite(autoStepsRemaining) && autoStepsRemaining <= 5 ? ` (${autoStepsRemaining} left — wrap up)` : ''}.${autoPromptExpansion}`;
 
       // Add to conversation history
       aiConversationRef.current = [
@@ -4141,6 +4904,7 @@ ${isExecutionGoal ? '⚡ EXECUTION GOAL: Run shell commands directly. Use `cat` 
           host,
           prefs: sshAiPrefs,
           model: sshAiPrefs.aiModel || 'auto',
+          tmuxActive: !!sshAiPrefs?.autoTmux,
           history: aiConversationRef.current.slice(-12),
         }),
       });
@@ -4170,6 +4934,7 @@ ${isExecutionGoal ? '⚡ EXECUTION GOAL: Run shell commands directly. Use `cat` 
           explain: parsed.explain || 'Executing command...',
           status: parsed.done ? 'success' : 'running'
         }].slice(-10)); // Keep last 10 steps in view
+
       }
 
       // Track AI response — keep only last 12 turns
@@ -4180,47 +4945,118 @@ ${isExecutionGoal ? '⚡ EXECUTION GOAL: Run shell commands directly. Use `cat` 
 
       // === AI says DONE (success) ===
       if (parsed.done) {
+        // 🛡️ VETO LOGIC: If the terminal contains a critical error matching the goal,
+        // do NOT allow the model to finish. It's likely hallucinating completion.
+        const currentSnap = getOutputContext();
+        const activeErr = detectTerminalError(currentSnap);
+        
+        // 🛡️ DEEP SCAN: Also scan the FULL output for critical errors that might have
+        // scrolled past the last-20-lines window (e.g. GLIBC errors after `find` output)
+        const deepErr = deepScanTerminalErrors(currentSnap, goal);
+        const effectiveErr = activeErr || deepErr;
+        
+        // Check if the error is relevant to the goal (e.g. goal contains "zeroclaw" and output has a zeroclaw error)
+        const goalLower = String(goal || '').toLowerCase();
+        const outputLower = String(currentSnap || '').toLowerCase();
+        const isGoalRelevant = goalLower.split(/\s+/).some(w => w.length > 3 && outputLower.includes(w));
+
+        const isActionGoal = /\b(install|fix|run|setup|start|deploy|update|build|create)\b/i.test(goalLower);
+        const isDiscoveryCmd = lastExecutedCommand && /^(\s*sudo\s+)?(\bls\b|\bfind\b|\bpwd\b|\bcat\b)/.test(lastExecutedCommand);
+
+        // 🛡️ DOCKER VETO: If goal mentions docker, require a docker command for verification
+        const goalHasDocker = goalLower.includes('docker');
+        const isDockerCmd = (cmd) => /(?:^|[;&|]\s*|\$\(\s*)(?:sudo\s+)?(?:[\/\w-]+\/)?(docker|docker-compose)\b/i.test(String(cmd || ''));
+        const lastCmdHasDocker = isDockerCmd(lastExecutedCommand);
+        // Check if ANY docker command was run in recent history (not just last command)
+        const recentCmdsHaveDocker = autoRecentCommandsRef.current?.some(isDockerCmd) || false;
+        // Check if Dockerfile was created but no docker build/run happened
+        const createdDockerfileOnly = (outputLower.includes('dockerfile') || String(lastExecutedCommand || '').toLowerCase().includes('dockerfile')) && 
+          !recentCmdsHaveDocker && !lastCmdHasDocker;
+        const dockerVeto = goalHasDocker && !lastCmdHasDocker && !recentCmdsHaveDocker;
+        const dockerfileOnlyVeto = goalHasDocker && createdDockerfileOnly;
+
+        const shouldVeto = (effectiveErr && (effectiveErr.severity === 'critical' || effectiveErr.severity === 'high') && isGoalRelevant) ||
+                           (effectiveErr && effectiveErr.severity === 'critical') ||
+                           (isActionGoal && isDiscoveryCmd && !outputLower.includes('success') && !outputLower.includes('installed')) ||
+                           dockerVeto ||
+                           dockerfileOnlyVeto;
+
+        if (shouldVeto) {
+          const vetoReason = effectiveErr
+            ? `Critical error detected: ${effectiveErr.label}`
+            : dockerfileOnlyVeto
+              ? `Dockerfile created but no docker build/run executed`
+              : dockerVeto
+                ? `Goal requires Docker but no docker command was run`
+                : `Found files but haven't verified the goal yet`;
+
+          console.warn('[AI Agent] Vetoing premature completion. Reason:', vetoReason);
+          setAiError(`Goal potentially not reached: ${vetoReason}. Retrying...`);
+
+          // Nudge the AI specifically about the error and its premature exit
+          const nudge = effectiveErr
+            ? `\n\n⚠️ REJECTED: You set <done>true</done> but the terminal shows an error: "${effectiveErr.label}". \nYou MUST fix this error before finishing. The goal is NOT met.`
+            : dockerfileOnlyVeto
+              ? `\n\n⚠️ REJECTED: You set <done>true</done> but you only created a Dockerfile. You MUST run 'docker build' and 'docker run' to complete a Docker-related goal.`
+              : dockerVeto
+                ? `\n\n⚠️ REJECTED: You set <done>true</done> but the goal mentions "docker" and no docker command was run. You must run 'docker build', 'docker run', or verify via 'docker ps' before finishing.`
+                : `\n\n⚠️ REJECTED: You set <done>true</done> after an 'ls' or discovery command. Simply seeing a file or folder is NOT evidence that the goal (e.g. installation/fix) is complete. You MUST verify that the tool actually works (e.g. check version, run status) before you are done.`;
+
+          const nudgeWait = calculateDynamicWait(false, false, false);
+          recordWait(nudgeWait);
+          setTimeout(() => runAutoStep(currentSnap, nudge), nudgeWait * 1000);
+          return;
+        }
+
+        // If AI also sent a command with done=true, execute it first then show modal
         if (parsed.command) {
-          // AI tried to execute a command AND set done=true in the same turn.
-          // This strips the command! We should execute the command, override done to false, 
-          // and let the loop run one more time to verify the result!
-          console.warn('[AI Agent] Model tried to set done=true while executing a command. Overriding to false to allow command execution and verification.');
-          parsed.done = false;
-        } else {
-          // ✅ Save completed session to sshAiHistory
-          // NOTE: Do NOT call showAiDoneModal inside the setAutoStepHistory updater —
-          // React requires updater functions to be pure. Calling setState inside an
-          // updater causes those calls to be silently dropped (popup never appears).
-          // Instead, we compute finalSteps synchronously and call everything outside.
-          setAutoStepHistory(prev => {
-            const finalSteps = [...prev, {
-              command: '',
+          console.warn('[AI Agent] Model executed a command while setting done=true. Executing command, but also marking as done.');
+          // Execute the command
+          const newSnap = await executeCommandAndCapture(parsed.command);
+          // Show done modal after command executes
+          const doneWait = calculateDynamicWait(false, false, false);
+          setTimeout(() => {
+            showAiDoneModal({
+              goal,
+              steps: autoStepHistory,
+              taskMode: sshAiPrefs.aiTask || 'ssh',
+              thought: parsed.thought || null,
               explain: parsed.explain || 'Task complete.',
-              status: 'success',
-            }];
+            });
+          }, doneWait * 1000);
+        } else {
+                  // ✅ Save completed session to sshAiHistory
+          // NOTE: Do NOT call showAiDoneModal inside the setAutoStepHistory updater.
+          // We compute finalSteps using the current state and schedule side effects outside.
+          const finalSteps = [...autoStepHistory, {
+            command: '',
+            explain: parsed.explain || 'Task complete.',
+            status: 'success',
+          }];
 
-            // Schedule side effects after the state batch is committed
-            setTimeout(() => {
-              showAiDoneModal({
-                goal,
-                steps: finalSteps.slice(-30),
-                taskMode: sshAiPrefs.aiTask || 'ssh',
-                thought: parsed.thought || null,
-                explain: parsed.explain || null,
-              });
-              const sessionEntry = {
-                id: Date.now().toString() + Math.random().toString(36).slice(2, 8),
-                createdAt: Date.now(),
-                type: 'auto',
-                prompt: goal,
-                steps: finalSteps.slice(-30),
-                done: true,
-              };
-              setSshAiHistory(prev2 => [sessionEntry, ...prev2.filter(e => e?.id !== sessionEntry.id)].slice(0, 30));
-            }, 0);
+          setAutoStepHistory(finalSteps);
 
-            return finalSteps;
-          });
+          // Schedule side effects outside the state updater
+          setTimeout(() => {
+            setAiDone(true); // Ensure state updates forcefully
+            showAiDoneModal({
+              goal,
+              steps: finalSteps.slice(-30),
+              taskMode: sshAiPrefs.aiTask || 'ssh',
+              thought: parsed.thought || null,
+              explain: parsed.explain || null,
+            });
+            const sessionEntry = {
+              id: Date.now().toString() + Math.random().toString(36).slice(2, 8),
+              createdAt: Date.now(),
+              type: 'auto',
+              prompt: goal,
+              steps: finalSteps.slice(-30),
+              done: true,
+            };
+            setSshAiHistory(prev2 => [sessionEntry, ...prev2.filter(e => e?.id !== sessionEntry.id)].slice(0, 30));
+          }, 50);
+
           return;
         }
       }
@@ -4250,36 +5086,29 @@ ${isExecutionGoal ? '⚡ EXECUTION GOAL: Run shell commands directly. Use `cat` 
         return;
       }
 
-      // === Interactive command warning: predictive pause ===
-      // Skip this pause if the user just manually resumed (bypassPasswordPauseRef is set)
-      // === Interactive command warning: predictive pause ===
-      // Skip this pause if the user just manually resumed (bypassPasswordPauseRef.current)
-      // We have reactive password handling via the terminal interactive prompt UI anyway.
-      if (parsed.interactive && !sshAiPrefs?.strictAutoMode && !bypassPasswordPauseRef.current) {
+      // === Interactive command handling: NO pause for sudo/password — engine continues ===
+      if (parsed.interactive) {
         const interactiveType = String(parsed.interactive).toLowerCase().trim();
-        
+
         // 🧪 SELF-HEALING: If the AI literally copied the pipe-separated format example,
         // it means it's hallucinating the template. Clear it to prevent a loop.
         const isExampleTemplate = interactiveType.includes('|') || interactiveType.includes('sudo_password|password');
-        
         if (isExampleTemplate) {
-          console.warn('[AI Agent] Detected literal template in <interactive> tag. Skipping pause to avoid loop.', parsed.interactive);
-          parsed.interactive = ''; // Clear it so it doesn't trigger below
+          console.warn('[AI Agent] Detected literal template in <interactive> tag. Clearing.', parsed.interactive);
+          parsed.interactive = '';
         }
 
-        // Guard: non-blocking types that don't require user input (just informational)
-        const isNonBlocking = /^(generic|confirm_yn)$/.test(interactiveType);
-        
-        if (parsed.interactive && !isNonBlocking && /(password|passphrase|multiple prompts)/i.test(interactiveType)) {
-          console.log('[AI Agent] Pausing for interactive command...', parsed.interactive);
-          setAiOpen(true);
-          setAiHasOpenedOnce(true);
-          setAiError(`Auto Mode paused: command requires ${parsed.interactive}. Click Resume to proceed anyway.`);
-          setAutoMode(false);
-          return;
+        // sudo_password / passphrase: do NOT pause — let the engine continue.
+        // If the terminal actually shows a password prompt, the reactive interactive UI
+        // will catch it. The AI's system prompt already sets up NOPASSWD automatically.
+        if (/(sudo_password|passphrase)/i.test(interactiveType)) {
+          console.log('[AI Agent] sudo/passphrase interactive hint — NOT pausing, engine continues.', parsed.interactive);
+          // Non-blocking warning visible in UI but does not stop execution
+          setAiError(`⚠️ Note: command may request sudo/passphrase — handling automatically.`);
+          setTimeout(() => setAiError(null), 4000); // auto-dismiss after 4s
         }
       }
-      bypassPasswordPauseRef.current = false; // consume the bypass after one step
+      bypassPasswordPauseRef.current = false; // consume any bypass flag
 
       // === SkillsMP Integration: Search for remote skills (disabled in code mode) ===
       if (parsed.searchSkills && String(parsed.searchSkills).trim() && sshAiPrefs?.aiTask !== 'code') {
@@ -4359,12 +5188,13 @@ ${isExecutionGoal ? '⚡ EXECUTION GOAL: Run shell commands directly. Use `cat` 
 
           // First repeat — give it one more chance to confirm and declare done
           setAiError(null);
-          setAutoCountdown(4);
+          const waitSec = calculateDynamicWait(false, false, false);
+          setAutoCountdown(Math.ceil(waitSec));
           if (autoTimerRef.current) clearTimeout(autoTimerRef.current);
           autoTimerRef.current = setTimeout(() => {
             autoRunningRef.current = false;
             runAutoStep();
-          }, 4000);
+          }, waitSec * 1000);
           return;
         }
         // Reset repeat counter when a new diff appears
@@ -4401,21 +5231,23 @@ ${isExecutionGoal ? '⚡ EXECUTION GOAL: Run shell commands directly. Use `cat` 
           }
         });
 
-        // Auto-close modal after 4 seconds to keep UI clean
+        // Auto-close modal after adaptive delay to keep UI clean
+        const modalCloseDelay = Math.min(adaptiveWaitRef.current.currentWait * 1000, 6000);
         setTimeout(() => {
           setPatchModalOpen(prev => {
             if (prev && lastAutoAppliedDiffRef.current === d) return false;
             return prev;
           });
-        }, 4000);
+        }, modalCloseDelay);
 
-        // Continue after a short delay to let the patch complete
-        setAutoCountdown(5);
+        // Continue after adaptive delay to let the patch complete
+        const waitSec = calculateDynamicWait(false, false, false);
+        setAutoCountdown(Math.ceil(waitSec));
         if (autoTimerRef.current) clearTimeout(autoTimerRef.current);
         autoTimerRef.current = setTimeout(() => {
           autoRunningRef.current = false;
           runAutoStep();
-        }, 5000);
+        }, waitSec * 1000);
         return;
       }
 
@@ -4427,13 +5259,15 @@ ${isExecutionGoal ? '⚡ EXECUTION GOAL: Run shell commands directly. Use `cat` 
       // === Client-side: dynamic completion guard ===
       if (completionEvidence.done && (!parsedCommandTrim || redundantFollowupCommand)) {
         setTimeout(() => {
+          setAiDone(true); // Ensure state updates forcefully
           showAiDoneModal({
             goal,
             steps: autoStepHistory,
             taskMode: sshAiPrefs?.aiTask || 'ssh',
+            thought: parsed.thought || null,
             explain: parsed.explain || `✅ Goal already satisfied: ${completionEvidence.reason}.`,
           });
-        }, 0);
+        }, 50);
         return;
       }
 
@@ -4454,29 +5288,79 @@ ${isExecutionGoal ? '⚡ EXECUTION GOAL: Run shell commands directly. Use `cat` 
         if (retryCount <= 2) {
           // 🧪 SELF-HEALING NUDGE: Remind the AI it MUST produce an action
           console.log(`[AI Agent] Nudging talkative AI (attempt ${retryCount}/2)...`);
-          const nudgeMsg = `\n\n⚠️ STALL WARNING: You provided no action (no <command> or <diff>).
+          
+          let nudgeMsg = `\n\n⚠️ STALL WARNING: You provided no action (no <command> or <diff>).
 In Auto Mode, every response MUST contain either a <command>, a <diff>, or set <done>true</done>.
 You cannot just explain; you must ACT.
 - Running diagnostics? Use <command>...command here...</command>.
 - Fix required? Use <diff>...patch here...</diff>.
 - Already verified the goal? Set <done>true</done>.
 What is your move?`;
+
+          // 🛡️ DYNAMIC NUDGE: If the stall was caused because we blocked an error message
+          if (parsed.safetyBlocked) {
+            nudgeMsg = `\n\n🚨 CRITICAL MISTAKE: You just tried to execute a terminal error message as a bash command!
+Do NOT copy-paste error output (like "GLIBC not found", "command not found", or "permission denied") into the <command> tag!
+That is not a valid command and will break the terminal. 
+You must write a VALID bash command to FIX the error (e.g. 'yum install -y docker' instead of just pasting the error).
+What completely valid bash command will you run next?`;
+          }
           
           autoRunningRef.current = false;
+          const stallWait = calculateDynamicWait(false, false, false);
+          recordWait(stallWait);
           if (autoTimerRef.current) clearTimeout(autoTimerRef.current);
-          autoTimerRef.current = setTimeout(() => runAutoStep(snap, nudgeMsg), 1000);
+          autoTimerRef.current = setTimeout(() => runAutoStep(snap, nudgeMsg), stallWait * 1000);
           return;
         }
 
         if (sshAiPrefs?.aiTask === 'code') {
           // Code mode: don't search skills — force the AI to produce a diff
           autoRunningRef.current = false;
+          const codeStallWait = calculateDynamicWait(false, false, false);
+          recordWait(codeStallWait);
           if (autoTimerRef.current) clearTimeout(autoTimerRef.current);
           autoTimerRef.current = setTimeout(() => runAutoStep(snap,
             `\n\n⚠️ STALL (Code Mode): You provided no action. In Code Edit mode you MUST either:\n- Read the file once with <command>cat path</command> if you haven't yet, OR\n- Output a <diff> patch immediately. Do NOT explain; ACT.`
-          ), 800);
+          ), codeStallWait * 1000);
           return;
         }
+        // 🧪 SELF-HEALING: If it's a stall but the text LOOKS like completion, treat as done!
+        // 🛡️ BUT: Only if the terminal has NO critical errors (deep scan)
+        if (looksLikeCompletionText(parsed.explain)) {
+          const stallSnap = getOutputContext();
+          const stallDeepErr = deepScanTerminalErrors(stallSnap, goal);
+          if (stallDeepErr) {
+            console.warn('[AI Agent] Stall looks like completion but deep scan found error:', stallDeepErr.label);
+            
+            // If we've already tried nudging the AI about this error multiple times, give up to prevent infinite loop
+            if (retryCount > 2) {
+              setAiError(`Auto Mode paused: AI thinks task is done, but there is a critical terminal error ("${stallDeepErr.label}"). Human intervention or new skill needed.`);
+              setAutoMode(false);
+              setAiOpen(true);
+              setAiHasOpenedOnce(true);
+              handleSkillsSearch(goal);
+              return;
+            }
+
+            // Don't force done — nudge the AI about the error
+            setTimeout(() => runAutoStep(stallSnap,
+              `\n\n⚠️ STALL + ERROR: Your response suggests completion, but the terminal shows a critical error: "${stallDeepErr.label}". This must be fixed before the task can be considered done.`
+            ), 1000);
+            return;
+          }
+          console.log('[AI Agent] Stall detected but text looks like completion (no errors). Forcing done.');
+          setTimeout(() => {
+            showAiDoneModal({
+              goal,
+              steps: autoStepHistory,
+              taskMode: sshAiPrefs?.aiTask || 'ssh',
+              explain: parsed.explain || '✅ Task complete (inferred from response).',
+            });
+          }, 0);
+          return;
+        }
+
         const _stallSkillQuery = skillQueryFromGoal(goal, recentOutputLower);
         console.log('[AI Agent] Stall detected — searching SkillsMP for:', _stallSkillQuery);
         setAiError(`Auto Mode paused: AI is stuck. Searching SkillsMP for "${_stallSkillQuery}" skills to help...`);
@@ -4644,6 +5528,7 @@ What is your move?`;
         // (The lastResultAt useEffect will also fire, but autoRunningRef.current will be
         //  false by then and the duplicate call will be blocked at the top of runAutoStep.)
         setLastResultSnapshot(snapAfter);
+        resetAdaptiveWait(); // Reset wait time since command completed successfully
         autoRunningRef.current = false; // release lock before scheduling
         setAutoCountdown(1);
         if (autoTimerRef.current) clearTimeout(autoTimerRef.current);
@@ -4657,11 +5542,12 @@ What is your move?`;
       if (apiRetryCountRef.current < 2) {
         apiRetryCountRef.current += 1;
         console.warn(`AI API failed, retrying (${apiRetryCountRef.current}/3)...`, e);
-        setAutoCountdown(5);
+        const waitSec = calculateDynamicWait(false, false, true);
+        setAutoCountdown(Math.ceil(waitSec));
         if (autoTimerRef.current) clearTimeout(autoTimerRef.current);
         autoTimerRef.current = setTimeout(() => {
           runAutoStep(snap);
-        }, 5000);
+        }, waitSec * 1000);
         return;
       }
       setAiError(e.message);
@@ -4678,6 +5564,24 @@ What is your move?`;
       aiPanelContentRef.current.scrollTop = aiPanelContentRef.current.scrollHeight;
     }
   }, [aiAnswer, aiError, interactivePrompt, autoCountdown, executeConfirmOpen]);
+
+  // Reactive Safety Net: If the AI Answer indicates it's done but the modal didn't open, force it.
+  useEffect(() => {
+    if (aiAnswer?.done && !aiDone) {
+      const timer = setTimeout(() => {
+        if (!aiDone && aiAnswer?.done) {
+          showAiDoneModal({
+            goal: autoGoal || aiPrompt || 'Task complete',
+            steps: autoStepHistory || [],
+            taskMode: sshAiPrefs?.aiTask || 'ssh',
+            explain: aiAnswer?.explain || null,
+            thought: aiAnswer?.thought || null
+          });
+        }
+      }, 300);
+      return () => clearTimeout(timer);
+    }
+  }, [aiAnswer?.done, aiDone, autoGoal, aiPrompt, autoStepHistory, sshAiPrefs]);
 
   useEffect(() => {
     if (aiMode !== 'auto') return;
@@ -4744,6 +5648,14 @@ What is your move?`;
   };
 
   const executeCommandInternal = (command) => {
+    // 🚨 LAST-LINE SAFETY: Never send error messages to the terminal
+    // The AI sometimes puts error output into <command> tags by mistake.
+    // Backticks in GLIBC errors (e.g. `GLIBC_2.39') break bash with unmatched quotes.
+    if (/GLIBC_\d|\/lib(?:64)?\/.*\.so.*:\s|not found \(required by|Traceback \(most recent call last\)/i.test(command)) {
+      console.error('[AI Agent] 🚨 BLOCKED execution of error message:', command.slice(0, 100));
+      return;
+    }
+    
     setLastExecutedCommand(command);
     if (socketRef.current?.connected) {
       if (/^\[?ctrl\+c\]?$|^\^c$/i.test(command)) {
@@ -4973,43 +5885,7 @@ What is your move?`;
           />
         </div>
 
-        {/* AI Processing Overlay — shown when auto mode is running */}
-        {autoMode && (
-          <div className="absolute inset-0 z-30 pointer-events-none flex items-end justify-end p-8">
-            <div className="flex flex-col items-center gap-4 animate-in slide-in-from-bottom-4 duration-300 pointer-events-auto">
-              <div className="bg-black/80 border border-emerald-500/40 rounded-2xl p-6 shadow-2xl shadow-emerald-500/10 flex flex-col items-center gap-3 max-w-[280px] text-center">
-                <div className="relative">
-                  <div className="absolute inset-0 bg-emerald-500/20 blur-xl rounded-full animate-pulse" />
-                  <div className="relative bg-black/40 border border-emerald-500/30 p-3 rounded-xl">
-                    <Sparkles className="text-emerald-400 animate-pulse" size={24} />
-                  </div>
-                  <div className="absolute -top-1 -right-1 bg-emerald-500 rounded-full p-1 border-2 border-black">
-                    <Lock size={10} className="text-black" />
-                  </div>
-                </div>
-                
-                <div className="space-y-1">
-                  <div className="text-sm font-bold text-emerald-300 tracking-tight">{t('ai.aiControlActive')}</div>
-                  <div className="text-[11px] text-emerald-400/60 leading-relaxed">{t('ai.aiControlDesc')}</div>
-                </div>
-
-                <div className="w-full h-px bg-white/5 my-1" />
-
-                <div className="flex items-center gap-2 text-[10px] text-emerald-400/80 font-mono">
-                  <span className="animate-ping w-1.5 h-1.5 rounded-full bg-emerald-500" />
-                  Step {(Array.isArray(autoStepHistory) ? autoStepHistory.length : 0) + 1} <span className="opacity-40">/</span> {Number.isFinite(MAX_AUTO_STEPS) ? MAX_AUTO_STEPS : '∞'}
-                </div>
-
-                <button
-                  onClick={() => setAutoMode(false)}
-                  className="mt-2 w-full py-2 rounded-lg bg-red-500/10 border border-red-500/20 text-red-400 text-xs font-bold hover:bg-red-500/20 transition-all active:scale-95"
-                >
-                  STOP AI & UNLOCK
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
+        {/* AI Processing Overlay removed per user request */}
 
         {showReconnect && (
           <div className="absolute top-3 left-5 z-50 flex items-center gap-2 pointer-events-auto">
@@ -5073,7 +5949,7 @@ What is your move?`;
             cancel="button,input,textarea,select,option,label"
             style={{ position: 'fixed', zIndex: 9999 }}
           >
-            <div className="w-full h-full rounded-2xl border border-[var(--border-color)] bg-[var(--bg-secondary)]/95 backdrop-blur-2xl shadow-2xl overflow-hidden flex flex-col relative">
+            <div className={`w-full h-full rounded-2xl border border-[var(--border-color)] bg-[var(--bg-secondary)]/95 backdrop-blur-2xl shadow-2xl overflow-hidden flex flex-col relative transition-all duration-700 ${aiLoading || autoRunningRef.current ? 'ai-glow-thinking' : aiDone ? 'ai-glow-accomplished' : ''}`}>
               {/* Header */}
               <div className="ai-panel-drag-handle flex items-center justify-between px-3 py-2 border-b border-[var(--border-color)] bg-[var(--bg-tertiary)]/30 dark:bg-black/20">
                 <div className="flex items-center gap-2 min-w-0">
@@ -5327,20 +6203,21 @@ What is your move?`;
                       </div>
                     )}
 
-                    {aiMode === 'auto' && (
-                      <div className="flex items-center gap-2 px-2 py-1 rounded-md bg-emerald-500/10 border border-emerald-500/20">
-                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse shadow-[0_0_8px_rgba(16,185,129,0.5)]" />
-                        <span className="text-[9px] font-bold text-emerald-400 uppercase tracking-wider">{t('ai.engineActive')}</span>
-                      </div>
-                    )}
+                     {/* Engine Active Badge — only show in Manual to avoid clutter in Auto (where title/glow are enough) */}
+                     {aiMode === 'manual' && autoMode && (
+                       <div className="flex items-center gap-2 px-2 py-1 rounded-md bg-emerald-500/10 border border-emerald-500/20">
+                         <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse shadow-[0_0_8px_rgba(16,185,129,0.5)]" />
+                         <span className="text-[9px] font-bold text-emerald-400 uppercase tracking-wider">{t('ai.engineActive')}</span>
+                       </div>
+                     )}
                   </div>
                 </div>
               </div>
 
               {/* Main Content */}
               <div ref={aiPanelContentRef} className="flex-1 overflow-y-auto px-4 pt-4 pb-10 space-y-4">
-                {/* Server Reminders / Tips */}
-                {sshMemory?.reminders?.length > 0 && (
+                {/* Server Reminders / Tips — Managed only in Manual Mode to keep Auto Mode focused */}
+                {aiMode === 'manual' && sshMemory?.reminders?.length > 0 && (
                   <div className="space-y-2">
                     <div className="flex items-center gap-2 mb-2 px-1">
                       <Brain size={12} className="text-purple-400" />
@@ -5391,8 +6268,8 @@ What is your move?`;
                           </div>
                         )}
                         
-                        {/* AI Message */}
-                        {msg.role === 'assistant' && (
+                        {/* AI Message — only show in Manual Mode to avoid redundancy with the Roadmap/Plan in Auto Mode */}
+                        {msg.role === 'assistant' && aiMode === 'manual' && (
                           <div className={`max-w-[90%] rounded-2xl rounded-tl-sm px-4 py-3 text-[12px] leading-relaxed shadow-lg ${
                             msg.danger ? 'bg-red-500/10 border border-red-500/20 text-red-100' : 
                             msg.done ? 'bg-emerald-500/10 border border-emerald-500/20 text-emerald-100' : 
@@ -5610,44 +6487,6 @@ What is your move?`;
                     : null)
                 )}
 
-                {/* Last Result Preview - Collapsible */}
-                {(lastExecutedCommand || lastResultSnapshot) && (
-                  <div className="rounded-lg border border-[var(--border-color)] bg-[var(--bg-tertiary)]/20 dark:bg-black/20 overflow-hidden">
-                    <div className="flex items-center justify-between px-3 py-1.5 border-b border-white/10 cursor-pointer hover:bg-white/5 transition-colors" onClick={() => setLastResultCollapsed(!lastResultCollapsed)}>
-                      <div className="flex items-center gap-2">
-                        <span className="text-[10px] font-medium uppercase" style={{ color: 'var(--text-muted)' }}>{t('ai.lastResult')}</span>
-                        <span className="text-[9px] opacity-50" style={{ color: 'var(--text-secondary)' }}>
-                          {lastResultCollapsed ? '(คลิกเพื่อขยาย)' : '(คลิกเพื่อย่อ)'}
-                        </span>
-                      </div>
-                      <div className="flex items-center gap-1">
-                        <button onClick={(e) => { e.stopPropagation(); refreshLastResultSnapshot(); }} className="p-1 rounded hover:bg-white/5" title={t('ai.refresh')}><RefreshCw size={10} /></button>
-                        <button onClick={(e) => { e.stopPropagation(); navigator.clipboard.writeText([lastExecutedCommand, lastResultSnapshot].filter(Boolean).join('\n')); }} className="p-1 rounded hover:bg-white/5" title={t('ai.copy')}><Copy size={10} /></button>
-                        <button className="p-1 rounded hover:bg-white/5" style={{ color: 'var(--text-muted)' }}>
-                          {lastResultCollapsed ? <ChevronDown size={14} /> : <ChevronUp size={14} />}
-                        </button>
-                      </div>
-                    </div>
-                    {!lastResultCollapsed && (
-                      <div className="p-3 space-y-2 animate-in fade-in slide-in-from-top-2 duration-200">
-                        {lastExecutedCommand && (
-                          <div className="text-xs font-mono opacity-80 truncate" style={{ color: 'var(--text-primary)' }}>{lastExecutedCommand}</div>
-                        )}
-                        {lastResultSnapshot && (
-                          <pre className="text-[10px] font-mono whitespace-pre-wrap break-words max-h-24 overflow-y-auto custom-scrollbar" style={{ color: 'var(--text-secondary)' }}>{lastResultSnapshot}</pre>
-                        )}
-                        <button onClick={() => {
-                          if (!isLoggedIn) { setAiError('Login required'); return; }
-                          const prompt = `Command: ${lastExecutedCommand || 'unknown'}\nOutput: ${lastResultSnapshot || getOutputContext() || 'none'}\nExplain and suggest next step.`;
-                          askAiWithPrompt(prompt);
-                        }} disabled={!isLoggedIn} className="w-full flex items-center justify-center gap-1.5 py-2 rounded bg-gradient-to-r from-[var(--accent-indigo)]/10 to-[var(--accent-purple,rgba(168,85,247,0.1))] hover:from-[var(--accent-indigo)]/20 hover:to-[var(--accent-purple,rgba(168,85,247,0.2))] border border-[var(--accent-indigo)]/20 text-xs font-medium text-[var(--accent-indigo)] hover:text-white transition-all shadow-sm group">
-                          <Sparkles size={12} className="text-[var(--accent-indigo)] group-hover:text-[var(--accent-indigo)] transition-colors" /> {t('terminal.explainOutput')}
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                )}
-
                 {/* File Changes (diff) - Collapsible */}
                 {sshAiPrefs?.aiTask === 'code' && fileChanges?.diffText && (
                   <div className="rounded-lg border border-[var(--border-color)] bg-[var(--bg-tertiary)]/20 dark:bg-black/20 overflow-hidden">
@@ -5741,8 +6580,9 @@ What is your move?`;
 
 
 
-                {aiAnswer && (
-                  <div className={`rounded-lg border overflow-hidden ${aiAnswer.danger ? 'border-red-500/30' : aiAnswer.done ? 'border-emerald-500/30' : 'border-white/10'}`}>
+                {/* Main AI Response Bubble - Hidden when done to show summary instead, and hidden in Auto Mode */}
+                {aiAnswer && !aiDone && aiMode === 'manual' && (
+                  <div className={`rounded-lg border overflow-hidden ${aiAnswer.danger ? 'border-red-500/30' : 'border-white/10'}`}>
                     {/* Header - Always visible, clickable to collapse */}
                     <div 
                       className={`px-3 py-2 cursor-pointer hover:opacity-80 transition-opacity ${aiAnswer.danger ? 'bg-red-500/10' : aiAnswer.done ? 'bg-emerald-500/10' : 'bg-black/20'}`}
@@ -5787,12 +6627,12 @@ What is your move?`;
                                <span>{autoTranslate && aiTranslations.warn ? aiTranslations.warn : (translatingAiText.warn ? '...' : aiAnswer.warn)}</span>
                              </div>
                            )}
-                           {aiAnswer.explain && (
+                           {aiAnswer.explain && aiAnswer.explain.trim().length > 0 && (
                              <div className="mb-3 text-[12px] leading-relaxed" style={{ color: 'var(--text-primary)' }}>
                                {autoTranslate && aiTranslations.explain ? aiTranslations.explain : (translatingAiText.explain ? '...' : aiAnswer.explain)}
                              </div>
                            )}
-                           {aiAnswer.thought && (
+                           {aiAnswer.thought && aiAnswer.thought.trim().length > 0 && (
                              <div className="p-2.5 rounded-lg border border-black/20 bg-black/20 overflow-hidden opacity-70 hover:opacity-100 transition-opacity">
                                <div className="text-[10px] font-medium leading-relaxed italic text-[var(--text-muted)]">
                                  "{autoTranslate && aiTranslations.thought ? aiTranslations.thought : (translatingAiText.thought ? '...' : aiAnswer.thought)}"
@@ -5818,7 +6658,6 @@ What is your move?`;
                         </div>
                       )}
 
-                      {/* Command Block */}
                       {aiAnswer.command && (
                         <div className="mt-2 rounded bg-black/40 border border-white/5 overflow-hidden">
                           <div className="px-2 py-1 text-[8px] font-mono text-[var(--text-muted)] uppercase tracking-wider bg-black/40 border-b border-white/5">Terminal Command</div>
@@ -5826,12 +6665,6 @@ What is your move?`;
                             {aiAnswer.command}
                           </pre>
                         </div>
-                      )}
-                      
-                      {!aiAnswer.command && aiAnswer.done && (
-                        <pre className="text-xs font-mono whitespace-pre-wrap break-words bg-[var(--bg-primary)]/50 dark:bg-black/40 border border-[var(--border-color)] rounded px-2 py-1.5" style={{ color: 'var(--text-primary)' }}>
-                          ✅ {t('ai.done')}!
-                        </pre>
                       )}
                     </div>
                     {aiAnswer.command && (
@@ -5890,7 +6723,12 @@ What is your move?`;
                               </div>
                               <div className="flex-1 min-w-0">
                                 <div className="text-[10px] font-bold text-emerald-300 truncate">{skill.name}</div>
-                                <div className="text-[8px] text-white/30 truncate">{skill.source === 'custom' ? 'Local skill' : 'Installed skill'} · injected into AI context</div>
+                                <div className="text-[8px] text-white/40 truncate mt-0.5">
+                                  {skill.description || (skill.source === 'custom' ? 'Local expert skill' : 'Installed SkillMP knowledge')}
+                                </div>
+                                <div className="text-[7px] text-white/20 uppercase tracking-tighter mt-0.5 font-bold">
+                                  Source: {skill._source || skill.source || 'local'} • Status: Injected
+                                </div>
                               </div>
                               <span className="text-[8px] text-emerald-400/50 font-bold uppercase shrink-0">Active</span>
                             </div>
@@ -5959,49 +6797,62 @@ What is your move?`;
                   </div>
                 )}
 
-                {/* SkillsMP Search Results */}
-                {skillsSearchResults && (
-                  <div className="rounded-xl border border-indigo-500/30 bg-indigo-500/10 overflow-hidden mb-3 animate-in fade-in zoom-in-95 duration-200">
-                    <div className="px-3 py-2 bg-indigo-600/20 border-b border-indigo-500/20 flex items-center justify-between">
-                      <div className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-wider text-indigo-300">
-                        <Search size={12} />
-                        SkillsMP Discovery
-                      </div>
-                      <button onClick={() => setSkillsSearchResults(null)} className="text-indigo-300/60 hover:text-indigo-300"><X size={12} /></button>
-                    </div>
-                    <div className="p-2 space-y-2 max-h-[300px] overflow-y-auto scrollbar-thin">
-                      {skillsSearchResults.length === 0 ? (
-                        <div className="py-4 text-center text-[10px] text-white/40">No matching skills found. Try a different query.</div>
-                      ) : (
-                        skillsSearchResults.map((skill, idx) => (
-                          <div key={idx} className="rounded-lg border border-white/5 bg-black/20 p-2.5 flex flex-col gap-2 hover:border-white/10 transition-colors">
-                            <div className="flex items-start justify-between gap-2">
-                              <div className="flex-1 min-w-0">
-                                <div className="text-[11px] font-bold text-white truncate">{skill.name}</div>
-                                <div className="text-[9px] text-white/50 line-clamp-2 mt-0.5 leading-snug">{skill.description || 'Expert-level infrastructure automation and runbooks.'}</div>
-                              </div>
-                              <button 
-                                onClick={() => handleInstallSkill(skill)}
-                                disabled={aiLoading}
-                                className="shrink-0 px-2 py-1 rounded bg-indigo-600 hover:bg-indigo-500 text-white text-[9px] font-bold uppercase transition-all active:scale-95 disabled:opacity-50"
-                              >
-                                {t('ai.install')}
-                              </button>
-                            </div>
-                            <div className="flex items-center gap-2">
-                              <span className="text-[8px] px-1.5 py-0.5 rounded-full bg-indigo-500/20 text-indigo-300 border border-indigo-500/20">Stars: {skill.stars || 0}</span>
-                              <span className="text-[8px] px-1.5 py-0.5 rounded-full bg-white/5 text-white/40 border border-white/10">v{skill.version || '1.0.0'}</span>
-                            </div>
+
+                {bgTaskStatus?.active && (
+                  <div className="rounded-xl border border-sky-500/30 bg-sky-500/5 p-3 mb-3 shadow-lg shadow-sky-500/5 animate-in fade-in slide-in-from-right-4 duration-500">
+                    <div className="flex items-center justify-between mb-2">
+                       <div className="flex items-center gap-2">
+                          <div className="relative h-2 w-2">
+                             <span className="absolute inset-0 rounded-full bg-sky-400 animate-ping opacity-75"></span>
+                             <span className="relative inline-block h-2 w-2 rounded-full bg-sky-500"></span>
                           </div>
-                        ))
-                      )}
+                          <span className="text-[10px] font-bold uppercase tracking-wider text-sky-400">Background Task Live</span>
+                       </div>
+                       <button onClick={() => setShowBgMonitor(!showBgMonitor)} className="text-[10px] text-sky-400/70 hover:text-sky-400 flex items-center gap-1 transition">
+                          {showBgMonitor ? 'Hide Logs' : 'Show Logs'} {showBgMonitor ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+                       </button>
                     </div>
+
+                    {showBgMonitor && (
+                      <div className="space-y-2 animate-in fade-in slide-in-from-top-2 duration-300">
+                         <div className="rounded bg-black/40 border border-sky-500/10 p-2 font-mono text-[9px] text-sky-200/80 max-h-32 overflow-y-auto scrollbar-thin">
+                            {bgTaskLogs.length > 0 ? (
+                              bgTaskLogs.map((l, i) => <div key={i} className="truncate select-text"> {l}</div>)
+                            ) : (
+                              <div className="opacity-50 italic">Initializing background stream...</div>
+                            )}
+                         </div>
+                         <div className="flex gap-2">
+                            <button onClick={() => handleExecuteCommand('tmux attach-session -t ai-bg-task')} className="flex-1 py-1.5 rounded bg-sky-500/20 hover:bg-sky-500/30 text-sky-300 text-[10px] font-bold transition border border-sky-500/20 flex items-center justify-center gap-1.5">
+                               <SquareArrowOutUpRight size={10} /> Attach Session
+                            </button>
+                            <button onClick={() => {
+                               if (!isLoggedIn) return;
+                               handleExecuteCommand('tmux kill-session -t ai-bg-task');
+                               setBgTaskStatus(null);
+                            }} className="px-3 py-1.5 rounded bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 text-[10px] font-bold transition border border-rose-500/20">
+                               Terminate
+                            </button>
+                         </div>
+                      </div>
+                    )}
+                    
+                    {!showBgMonitor && bgTaskLogs.length > 0 && (
+                       <div className="text-[9px] font-mono text-sky-400/60 truncate italic opacity-80 pl-4 py-0.5">
+                          Latest: {bgTaskLogs[bgTaskLogs.length - 1]}
+                       </div>
+                    )}
                   </div>
                 )}
 
                 {/* AI Plan / Intention */}
                 {aiAnswer && aiAnswer.plan && !aiAnswer.done && (
-                  <div className={`rounded-xl border border-[var(--accent-indigo)]/20 bg-[var(--accent-indigo)]/5 p-3 space-y-2 transition-all duration-500 ${aiLoading || autoRunningRef.current ? 'opacity-60 blur-[0.5px]' : ''}`}>
+                  <div className={`relative rounded-xl border border-[var(--accent-indigo)]/20 bg-[var(--accent-indigo)]/5 p-3 space-y-2 transition-all duration-500 ${aiLoading || autoRunningRef.current ? 'opacity-80' : ''}`}>
+                    {/* Premium Thinking Glow */}
+                    {(aiLoading || autoRunningRef.current) && (
+                      <div className="absolute -inset-[1px] rounded-xl bg-gradient-to-r from-indigo-500/20 via-purple-500/20 to-indigo-500/20 animate-pulse-slow -z-10 opacity-70" />
+                    )}
+                    
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-wider text-[var(--accent-indigo)]">
                         <ListChecks size={12} />
@@ -6088,8 +6939,8 @@ What is your move?`;
                   </div>
                 )}
 
-                {/* Auto Step History - Moved to bottom nest */}
-                {autoStepHistory.length > 0 && (
+                {/* Auto Step History - Moved to bottom nest — only show in Auto Mode to avoid cluttering Manual view */}
+                {autoStepHistory.length > 0 && aiMode === 'auto' && (
                   <div className="space-y-2 border-t border-white/5 pt-4">
                     <div className="flex items-center justify-between px-1">
                       <span className="text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)]">{t('ai.completedSteps')}</span>
@@ -6289,6 +7140,73 @@ What is your move?`;
                     </div>
                   </div>
                 )}
+              
+                {/* Mission Accomplished Inline Summary (Antigravity Style) */}
+                {aiDone && aiDoneSummary && (
+                  <motion.div 
+                    ref={aiDoneRef}
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    className="mt-4 rounded-2xl border border-emerald-500/30 bg-emerald-500/5 overflow-hidden animate-in fade-in zoom-in-95 duration-500"
+                  >
+                    <div className="relative p-4 flex flex-col items-center text-center">
+                       {/* Glow Effects */}
+                       <div className="absolute -top-12 -left-12 h-24 w-24 rounded-full bg-emerald-500/10 blur-[40px] pointer-events-none" />
+                       
+                       <div className="mb-3 flex h-12 w-12 items-center justify-center rounded-xl bg-gradient-to-br from-emerald-500/20 to-emerald-500/5 shadow-inner">
+                         <Trophy className="h-6 w-6 text-emerald-400" />
+                       </div>
+
+                       <h2 className="mb-2 text-base font-black tracking-tight text-white uppercase italic">
+                         {t('ai.missionAccomplished')}
+                       </h2>
+
+                       <div className="mb-4 flex items-start gap-1.5 rounded-lg border border-emerald-500/20 bg-black/40 px-3 py-1.5 text-[9px] font-semibold text-emerald-400/80 max-w-full">
+                         <Sparkles size={10} className="shrink-0 mt-0.5" />
+                         <span className="break-words text-left leading-snug">{aiDoneSummary.goal}</span>
+                       </div>
+
+                       {/* Final Explanation - Only show if it provides actual info */}
+                       {aiDoneSummary.explain && aiDoneSummary.explain.trim().length > 5 && (
+                         <div className="w-full rounded-xl border border-white/5 bg-white/5 px-3 py-2.5 text-[11px] leading-relaxed text-zinc-300 italic mb-4 text-left">
+                           "{aiDoneSummary.explain}"
+                         </div>
+                       )}
+
+                       {/* Step List */}
+                       {aiDoneSummary.steps && aiDoneSummary.steps.length > 0 && (
+                         <div className="w-full text-left space-y-2 mb-4">
+                            <div className="text-[9px] font-black uppercase tracking-widest text-emerald-400/50 mb-1 px-1">Actions Taken</div>
+                            <div className="max-h-[150px] overflow-y-auto scrollbar-thin pr-1 divide-y divide-white/5 bg-black/20 rounded-lg">
+                               {aiDoneSummary.steps.map((step, idx) => (
+                                 <div key={idx} className="p-2 flex items-start gap-2">
+                                   <div className="mt-0.5 shrink-0 h-3.5 w-3.5 rounded-full bg-emerald-500/15 border border-emerald-500/30 flex items-center justify-center">
+                                     <span className="text-[6px] font-black text-emerald-400">{idx + 1}</span>
+                                   </div>
+                                   <div className="min-w-0 flex-1">
+                                     {step.command && step.command !== '[Wait]' && (
+                                       <code className="block text-[8px] font-mono text-indigo-300/80 bg-indigo-500/5 px-1 rounded mb-0.5 truncate">{step.command}</code>
+                                     )}
+                                     <p className="text-[9px] text-zinc-400 leading-tight">{step.explain}</p>
+                                   </div>
+                                 </div>
+                               ))}
+                            </div>
+                         </div>
+                       )}
+
+                       <button 
+                         onClick={() => { setAiDone(false); setAiDoneSummary(null); }}
+                         className="group relative w-full overflow-hidden rounded-xl bg-emerald-500 px-4 py-2.5 transition-all hover:scale-[1.02] active:scale-[0.98]"
+                       >
+                         <div className="absolute inset-0 bg-gradient-to-r from-emerald-400 to-emerald-600 opacity-0 transition-opacity group-hover:opacity-100" />
+                         <span className="relative flex items-center justify-center gap-2 text-[10px] font-black uppercase tracking-widest text-emerald-950">
+                           {t('ai.dismissSummary')} <CornerDownLeft size={12} />
+                         </span>
+                       </button>
+                    </div>
+                  </motion.div>
+                )}
               </div>
 
               {/* ── Error Banner (bottom, most visible) ── */}
@@ -6323,9 +7241,9 @@ What is your move?`;
                               <span className="text-[10px] font-bold text-white/90">{skill.name}</span>
                               <span className="text-[8px] px-1 py-0.5 rounded bg-indigo-500/20 text-indigo-300 font-mono">{skill._source || skill.source || 'local'}</span>
                             </div>
-                            {skill.content && (
+                            {(skill.description || skill.content) && (
                               <p className="text-[9px] text-white/30 truncate mt-0.5 font-mono group-hover:text-white/50 transition-colors">
-                                {skill.content.replace(/^#+[^\n]*\n/, '').replace(/[#*`]/g, '').trim().slice(0, 120)}
+                                {skill.description || skill.content.replace(/^---[\s\S]*?---\n?/, '').replace(/^#+[^\n]*\n/, '').replace(/[#*`]/g, '').trim().slice(0, 120)}
                               </p>
                             )}
                           </div>
@@ -6336,16 +7254,9 @@ What is your move?`;
                 )}
                 <div className="p-4">
                 <div className="flex flex-col gap-3">
-                  {/* Status & Control Bar */}
+                  {/* AI Control Bar */}
                   {aiMode === 'auto' && (
-                    <div className="flex items-center justify-between px-1">
-                      <div className="flex items-center gap-3 text-[10px] font-mono">
-                         <div className="flex items-center gap-1.5 cursor-help" title={autoMode ? "The AI engine is actively managing the session" : "The AI engine is paused"}>
-                            <span className={`w-1.5 h-1.5 rounded-full ${autoMode ? 'bg-emerald-400 animate-pulse shadow-[0_0_8px_rgba(52,211,153,0.6)]' : 'bg-white/20'}`} />
-                            <span className={autoMode ? 'text-emerald-400 font-bold' : 'text-white/40'}>{autoMode ? 'ENGINE ACTIVE' : 'ENGINE READY'}</span>
-                         </div>
-                         <span className="opacity-20 text-white">|</span>
-                         <span className="text-white/60">Steps: <span className="text-white font-bold">{autoStepsRemaining}</span></span>
+                    <div className="flex items-center justify-end gap-2 px-1">
 
                          {!autoMode && aiMode === 'auto' && (
                            <button 
@@ -6407,25 +7318,35 @@ What is your move?`;
                                setLastResultAt(p => { const n = Date.now(); return n > (p || 0) ? n : (p || 0) + 1; });
                                setTimeout(() => {
                                  autoRunningRef.current = false;
+                                 // Build a specific resume nudge based on WHY we paused
+                                 let resumeNudge = '\n\n(RESUMED: Please provide your next <command> or <diff> immediately to continue the task.)';
+                                 if (!isNewGoal && !isSkillsResume) {
+                                   const { reason, pendingCommand } = pauseReasonRef.current;
+                                   if (reason && /(password|passphrase)/i.test(reason)) {
+                                     const cmdHint = pendingCommand ? ` Your pending command was: \`${pendingCommand}\`` : '';
+                                     resumeNudge = `\n\n(RESUMED after sudo/password pause: The user has handled the authentication (NOPASSWD may now be configured or the password was entered).${cmdHint} Continue from where you left off — if the command needed sudo, try it now. Do NOT restart from scratch.)`;
+                                   }
+                                   pauseReasonRef.current = { reason: null, pendingCommand: null }; // consume
+                                 }
                                  runAutoStep(null, (isNewGoal || isSkillsResume)
                                     ? '\n\n(FRESH START: Previous session cleared. Begin from scratch with the current terminal state and injected skills.)'
-                                    : '\n\n(RESUMED: Please provide your next <command> or <diff> immediately to continue the task.)');
+                                    : resumeNudge);
                                }, 300);
                              }}
-                             className={`flex items-center gap-1 px-2 py-0.5 rounded border text-[9px] font-bold transition-all ${
+                             className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-[10px] font-black tracking-widest uppercase transition-all shadow-sm ${
                                skillsSearchLoading
-                                 ? 'bg-white/3 border-white/5 text-white/25 cursor-not-allowed opacity-50'
+                                 ? 'bg-white/3 border-white/5 text-white/25 cursor-not-allowed'
                                  : 'bg-white/5 border-white/10 text-white/80 hover:bg-white/10 hover:text-white active:scale-95'
                              }`}
                            >
                              {skillsSearchLoading ? (
                                <>
-                                 <svg className="animate-spin" width={9} height={9} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10" strokeOpacity="0.3"/><path d="M12 2a10 10 0 0 1 10 10"/></svg>
-                                 LOADING SKILLS...
+                                 <svg className="animate-spin h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><circle cx="12" cy="12" r="10" strokeOpacity="0.3"/><path d="M12 2a10 10 0 0 1 10 10"/></svg>
+                                 LOADING
                                </>
                              ) : (
                                <>
-                                 <RefreshCw size={9} className="opacity-60" />
+                                 <RefreshCw size={11} />
                                  RESUME ENGINE
                                </>
                              )}
@@ -6442,67 +7363,64 @@ What is your move?`;
                                autoRunningRef.current = false;
                                runAutoStep(null, '\n\n(FORCE RESUME: Provide an action tag [<command>, <diff>, or <done>] immediately.)');
                              }}
-                             className="flex items-center gap-1.5 px-2 py-0.5 rounded bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-[9px] font-bold hover:bg-emerald-500/20 active:scale-95 transition-all"
+                             className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-[10px] font-black tracking-widest uppercase hover:bg-emerald-500/20 active:scale-95 transition-all shadow-sm"
                              title={t('ai.forceNextStep')}
                            >
-                             <CornerDownLeft size={10} />
-                             FORCE NEXT STEP
+                             <CornerDownLeft size={11} />
+                             FORCE STEP
                            </button>
                          )}
 
                          {activeSkills.length > 0 && (
                            <button 
                              onClick={() => setShowSkillsList(prev => !prev)}
-                             className={`flex items-center gap-1.5 px-2 py-0.5 rounded border text-[9px] font-bold transition-all ${showSkillsList ? 'bg-indigo-500/20 border-indigo-400/40 text-indigo-300' : 'bg-white/5 border-white/10 text-white/50 hover:bg-white/10 hover:text-white/80'}`}
+                             className={`flex items-center gap-2 px-3 py-1.5 rounded-lg border text-[10px] font-black tracking-widest uppercase transition-all shadow-sm ${showSkillsList ? 'bg-indigo-500 border-indigo-400 text-white shadow-[0_0_15px_rgba(99,102,241,0.3)]' : 'bg-white/5 border-white/10 text-white/40 hover:bg-white/10 hover:text-white/80'}`}
                              title={t('ai.viewActiveSkills')}
                            >
-                             <Brain size={10} />
+                             <Brain size={11} />
                              {activeSkills.length} SKILLS
                            </button>
                          )}
 
-                        {/* RESET button — always visible in auto mode for a clean fresh start */}
-                        {aiMode === 'auto' && (
-                          <button
-                            title={t('ai.clearAiHistory')}
-                            onClick={() => {
-                              // Full nuclear reset
-                              skillsJustInjectedRef.current = false;
-                              autoSeenRef.current = new Set();
-                              autoVerifyKeyRef.current = '';
-                              autoLastLoopKeyRef.current = '';
-                              autoLoopRepeatRef.current = 0;
-                              autoRepeatSigRef.current = { key: '', count: 0 };
-                              autoSameCommandRef.current = { cmd: '', count: 0 };
-                              autoEmptyRetryRef.current = '';
-                              autoBlockerRef.current = { kind: null, count: 0 };
-                              aiConversationRef.current = [];
-                              autoRecentCommandsRef.current = [];
-                              detectedOsRef.current = null;
-                              lastGoalRef.current = '';
-                              preloadedSkillsRef.current = [];
-                              autoSessionBackupIdRef.current = null; // reset backup session
-                              autoRunningRef.current = false;
-                              if (autoTimerRef.current) clearTimeout(autoTimerRef.current);
-                              setAutoStepHistory([]);
-                              setAutoStepsRemaining(MAX_AUTO_STEPS);
-                              setAutoMode(false);
-                              autoModeRef.current = false;
-                              setAutoCountdown(0);
-                              setAiError(null);
-                              setAiAnswer(null);
-                              setActiveSkills([]);
-                              setShowSkillsList(false);
-                              setInjectedSkills(null);
-                              setInteractivePrompt(null);
-                              console.log('[Auto Mode] FULL RESET by user');
-                            }}
-                            className="flex items-center gap-1 px-2 py-0.5 rounded bg-red-500/10 border border-red-500/20 text-red-400 text-[9px] font-bold hover:bg-red-500/20 hover:text-red-300 transition-all active:scale-95"
-                          >
-                            <RefreshCw size={9} className="opacity-60" />
-                            RESET
-                          </button>
-                        )}
+                        <button
+                          title={t('ai.clearAiHistory')}
+                          onClick={() => {
+                            // Full nuclear reset
+                            skillsJustInjectedRef.current = false;
+                            autoSeenRef.current = new Set();
+                            autoVerifyKeyRef.current = '';
+                            autoLastLoopKeyRef.current = '';
+                            autoLoopRepeatRef.current = 0;
+                            autoRepeatSigRef.current = { key: '', count: 0 };
+                            autoSameCommandRef.current = { cmd: '', count: 0 };
+                            autoEmptyRetryRef.current = '';
+                            autoBlockerRef.current = { kind: null, count: 0 };
+                            aiConversationRef.current = [];
+                            autoRecentCommandsRef.current = [];
+                            detectedOsRef.current = null;
+                            lastGoalRef.current = '';
+                            preloadedSkillsRef.current = [];
+                            autoSessionBackupIdRef.current = null;
+                            autoRunningRef.current = false;
+                            if (autoTimerRef.current) clearTimeout(autoTimerRef.current);
+                            setAutoStepHistory([]);
+                            setAutoStepsRemaining(MAX_AUTO_STEPS);
+                            setAutoMode(false);
+                            autoModeRef.current = false;
+                            setAiError(null);
+                            setAutoCountdown(0);
+                            setAiAnswer(null);
+                            setActiveSkills([]);
+                            setShowSkillsList(false);
+                            setInjectedSkills(null);
+                            setInteractivePrompt(null);
+                            console.log('[Auto Mode] FULL RESET by user');
+                          }}
+                          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-rose-500/10 border border-rose-500/20 text-rose-400 text-[10px] font-black tracking-widest uppercase hover:bg-rose-500/20 active:scale-95 transition-all shadow-sm"
+                        >
+                          <RefreshCw size={11} />
+                          RESET
+                        </button>
 
                         {autoCountdown > 0 && (
                           <div className="flex items-center gap-2">
@@ -6519,7 +7437,6 @@ What is your move?`;
                             </button>
                           </div>
                         )}
-                      </div>
                     </div>
                   )}
 
@@ -6674,49 +7591,22 @@ What is your move?`;
                             const _goalForSkills = String(autoGoal || aiPrompt || '').trim();
                             mentionedFilesRef.current = extractMentionedPaths(_goalForSkills);
 
-                            if (sshAiPrefs?.aiTask === 'code') {
-                              // Code mode: skip skill fetching — use pure AI performance
-                              preloadedSkillsRef.current = [];
-                              setSkillsSearchLoading(false);
-                              setAutoMode(true);
-                              setLastResultAt(() => Date.now() + Math.random());
-                              autoRunningRef.current = false;
-                              setTimeout(() => {
-                                if (autoModeRef.current && !autoRunningRef.current) runAutoStep();
-                              }, 300);
-                            } else {
-                            // ── Phase 1: Fetch relevant skills BEFORE first AI step ──
-                            setSkillsSearchLoading(true);
-                            setInjectedSkills(null);
-                            fetchSkillsForGoal(_goalForSkills).then(result => {
-                              const { skills: fetchedSkills, allAvailable } = result;
-                              preloadedSkillsRef.current = fetchedSkills;
-                              setActiveSkills(fetchedSkills); // Persistent state
-                              setSkillsSearchLoading(false);
-
-                              // Show the injected skills panel to the user
-                              setInjectedSkills({
-                                skills: fetchedSkills,
-                                allAvailable: allAvailable || [],
-                              });
-                              const skillNames = fetchedSkills.map(s => s.name).join(', ');
-                              console.log('[Skills] Available:', allAvailable.join(', '));
-                              console.log('[Skills] Matched:', skillNames || '(none)');
-
-                              // ── Phase 2: Now start auto mode with skills context ready ──
-                              setAutoMode(true);
-                              setLastResultAt(() => Date.now() + Math.random());
-                              autoRunningRef.current = false;
-                              setTimeout(() => {
-                                if (autoModeRef.current && !autoRunningRef.current) {
-                                  runAutoStep();
-                                }
-                              }, 300);
-
-                              // Auto-dismiss the injection panel after 8 seconds
-                              setTimeout(() => setInjectedSkills(null), 8000);
-                            });
-                            }
+                            // === NEW STRATEGY: Pure AI first, skills on failure ===
+                            // Start with NO skills - let AI try to solve the task
+                            // Skills will be injected mid-session if AI fails
+                            preloadedSkillsRef.current = [];
+                            setActiveSkills([]);
+                            setSkillsSearchLoading(false);
+                            skillInjectionAttemptsRef.current = 0; // Track injection attempts
+                            console.log('[Skills] Starting with pure AI (no skills) - will inject on failure');
+                            
+                            setAutoMode(true);
+                            setLastResultAt(() => Date.now() + Math.random());
+                            autoRunningRef.current = false;
+                            const startDelay = calculateDynamicWait(false, false, false) * 200;
+                            setTimeout(() => {
+                              if (autoModeRef.current && !autoRunningRef.current) runAutoStep();
+                            }, startDelay);
 
                           } else {
                             setAutoMode(false);
@@ -6765,144 +7655,6 @@ What is your move?`;
           document.body
         )}
       </div>
-
-      {/* Mission Accomplished Premium Popup */}
-      <AnimatePresence>
-        {aiDone && typeof document !== 'undefined' && createPortal(
-          <motion.div 
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="fixed inset-0 z-[10000] flex items-center justify-center p-4 backdrop-blur-sm bg-black/40"
-          >
-            <motion.div
-              initial={{ scale: 0.9, y: 20, opacity: 0 }}
-              animate={{ scale: 1, y: 0, opacity: 1 }}
-              exit={{ scale: 0.9, y: 20, opacity: 0 }}
-              transition={{ type: "spring", damping: 25, stiffness: 300 }}
-              className="relative w-full max-w-lg overflow-hidden rounded-3xl border border-emerald-500/30 bg-[#0c0c0c]/95 shadow-[0_0_50px_rgba(16,185,129,0.2)] backdrop-blur-2xl flex flex-col max-h-[85vh]"
-            >
-              {/* Glow Effects */}
-              <div className="absolute -top-24 -left-24 h-48 w-48 rounded-full bg-emerald-500/10 blur-[80px] pointer-events-none" />
-              <div className="absolute -bottom-24 -right-24 h-48 w-48 rounded-full bg-indigo-500/10 blur-[80px] pointer-events-none" />
-
-                <div className="relative flex flex-col items-center text-center px-8 pt-8 pb-4 shrink-0">
-                  {/* Animated Icon */}
-                  <motion.div
-                    initial={{ scale: 0 }}
-                    animate={{ scale: 1 }}
-                    transition={{ delay: 0.2, type: "spring" }}
-                    className="mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-gradient-to-br from-emerald-500/20 to-emerald-500/5 shadow-inner shrink-0"
-                  >
-                    <Trophy className="h-8 w-8 text-emerald-400" />
-                  </motion.div>
-
-                  <motion.h2
-                    initial={{ y: 10, opacity: 0 }}
-                    animate={{ y: 0, opacity: 1 }}
-                    transition={{ delay: 0.3 }}
-                    className="mb-2 text-xl font-black tracking-tight text-white"
-                  >
-                    {t('ai.missionAccomplished')}
-                  </motion.h2>
-
-                  {/* Goal pill — wraps neatly, no truncation problems */}
-                  <motion.div
-                    initial={{ y: 10, opacity: 0 }}
-                    animate={{ y: 0, opacity: 1 }}
-                    transition={{ delay: 0.4 }}
-                    className="mb-2 flex items-start gap-1.5 rounded-xl border border-emerald-500/20 bg-emerald-500/5 px-3 py-2 text-[10px] font-semibold text-emerald-400/80 max-w-full"
-                  >
-                    <Sparkles size={10} className="shrink-0 mt-0.5" />
-                    <span className="break-words text-left leading-snug">{aiDoneSummary?.goal || autoGoal}</span>
-                  </motion.div>
-
-                  {/* Mode badge */}
-                  {aiDoneSummary?.taskMode === 'code' && (
-                    <motion.div
-                      initial={{ opacity: 0 }}
-                      animate={{ opacity: 1 }}
-                      transition={{ delay: 0.45 }}
-                      className="mb-1 inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-teal-500/10 border border-teal-500/20 text-[9px] font-bold text-teal-400 uppercase tracking-wider"
-                    >
-                      🗒 Code Editor Mode
-                    </motion.div>
-                  )}
-                </div>
-
-              {/* Summary body — scrollable */}
-              <div className="relative flex-1 overflow-y-auto px-6 pb-2 space-y-3 min-h-0 custom-scrollbar">
-
-                {/* Final thought/explanation */}
-                {(aiDoneSummary?.explain || aiAnswer?.thought) && (
-                  <motion.div 
-                     initial={{ opacity: 0 }}
-                     animate={{ opacity: 1 }}
-                     transition={{ delay: 0.5 }}
-                     className="rounded-xl border border-white/5 bg-white/5 px-4 py-3 text-sm leading-relaxed text-zinc-300 italic"
-                  >
-                    "{aiDoneSummary?.explain || (autoTranslate && aiTranslations.thought ? aiTranslations.thought : (translatingAiText.thought ? '...' : aiAnswer?.thought))}"
-                  </motion.div>
-                )}
-
-                {/* Step-by-step summary */}
-                {aiDoneSummary?.steps && aiDoneSummary.steps.length > 0 && (
-                  <motion.div
-                    initial={{ opacity: 0, y: 10 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    transition={{ delay: 0.55 }}
-                    className="rounded-xl border border-white/5 bg-black/30 overflow-hidden"
-                  >
-                    <div className="flex items-center justify-between px-3 py-2 border-b border-white/5">
-                      <span className="text-[9px] font-black uppercase tracking-widest text-emerald-400/70">✅ Steps Completed</span>
-                      <span className="text-[9px] font-bold bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 px-2 py-0.5 rounded-full">
-                        {aiDoneSummary.steps.length} step{aiDoneSummary.steps.length !== 1 ? 's' : ''}
-                      </span>
-                    </div>
-                    <div className="divide-y divide-white/5">
-                      {aiDoneSummary.steps.map((step, idx) => (
-                        <div key={idx} className="px-3 py-2 flex items-start gap-2">
-                          <div className="mt-0.5 shrink-0 h-4 w-4 rounded-full bg-emerald-500/15 border border-emerald-500/30 flex items-center justify-center">
-                            <span className="text-[7px] font-black text-emerald-400">{idx + 1}</span>
-                          </div>
-                          <div className="min-w-0 flex-1">
-                            {step.command && step.command !== '[Wait]' && (
-                              <code className="block text-[9px] font-mono text-indigo-300/80 bg-indigo-500/5 px-1.5 py-0.5 rounded mb-0.5 truncate">
-                                {String(step.command).slice(0, 120)}
-                              </code>
-                            )}
-                            {step.explain && (
-                              <p className="text-[10px] text-zinc-400 leading-snug">{step.explain}</p>
-                            )}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </motion.div>
-                )}
-              </div>
-
-              {/* Footer button */}
-              <motion.div 
-                 initial={{ y: 20, opacity: 0 }}
-                 animate={{ y: 0, opacity: 1 }}
-                 transition={{ delay: 0.65 }}
-                 className="shrink-0 px-6 py-4 border-t border-white/5"
-              >
-                <button 
-                  onClick={() => { setAiDone(false); setAiDoneSummary(null); }}
-                  className="group relative w-full overflow-hidden rounded-xl bg-emerald-500 px-6 py-3 transition-all hover:scale-[1.02] active:scale-[0.98]"
-                >
-                  <div className="absolute inset-0 bg-gradient-to-r from-emerald-400 to-emerald-600 opacity-0 transition-opacity group-hover:opacity-100" />
-                  <span className="relative flex items-center justify-center gap-2 text-xs font-black uppercase tracking-widest text-emerald-950">
-                    {t('ai.dismissSummary')} <CornerDownLeft size={14} />
-                  </span>
-                </button>
-              </motion.div>
-            </motion.div>
-          </motion.div>
-        , document.body)}
-      </AnimatePresence>
     </div>
   );
 }

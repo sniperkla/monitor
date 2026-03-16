@@ -1,3 +1,8 @@
+---
+name: troubleshooting
+keywords: [error, fail, crash, debug, troubleshoot, issue, problem, not working, broken]
+---
+
 # System Troubleshooting Skill
 
 ## Description

@@ -14,7 +14,7 @@ export async function POST(req) {
       return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
     }
 
-    const { id, name, content } = await req.json();
+    const { id, name, content, description } = await req.json();
     if (!id || !name || !content) {
       return NextResponse.json({ success: false, error: 'Missing id, name or content' }, { status: 400 });
     }
@@ -27,9 +27,19 @@ export async function POST(req) {
     const safeName = name.replace(/[^a-z0-9\-]/gi, '-').toLowerCase();
     const filePath = join(skillsDir, `${safeName}.md`);
     
-    // Add skill metadata at the top
-    const header = `# ${name}\n\n[Remote ID: ${id} | Source: skillsmp.com]\n\n`;
-    await writeFile(filePath, header + content, 'utf-8');
+    // Check if content already has YAML frontmatter — if so, preserve it
+    const hasFrontmatter = /^---\n[\s\S]*?\n---/.test(content.trim());
+    let finalContent;
+    if (hasFrontmatter) {
+      // Content already has frontmatter from SkillsMP — use as-is
+      finalContent = content;
+    } else {
+      // Add proper YAML frontmatter so the dynamic skill loader can parse it
+      const desc = description ? `\ndescription: "${String(description).replace(/"/g, '\\"').slice(0, 200)}"` : '';
+      const frontmatter = `---\nname: ${name}${desc}\nkeywords: [${name.toLowerCase().replace(/[-_]/g, ', ')}]\nsource: skillsmp\nremote_id: ${id}\n---\n\n`;
+      finalContent = frontmatter + content;
+    }
+    await writeFile(filePath, finalContent, 'utf-8');
 
     return NextResponse.json({ 
       success: true, 
