@@ -1,4 +1,4 @@
-import { Terminal, Settings, Monitor, Database, Folder, AlertCircle, StickyNote, Book, MonitorPlay } from 'lucide-react';
+import { Terminal, Settings, Monitor, Database, Folder, AlertCircle, StickyNote, Book, MonitorPlay, Server } from 'lucide-react';
 
 import TerminalApp from '@/apps/TerminalApp';
 import SettingsApp from '@/apps/SettingsApp';
@@ -7,9 +7,31 @@ import FilesApp from '@/apps/FilesApp';
 import NotepadApp from '@/apps/NotepadApp';
 import WikiApp from '@/apps/WikiApp';
 import TmuxApp from '@/apps/TmuxApp';
-
+import DockerApp from '@/apps/DockerApp';
+import DatabaseBrowser from '@/components/DatabaseBrowser';
+ 
 // Add other apps here as needed
 export const AppRegistry = {
+  'database-browser': {
+    component: DatabaseBrowser,
+    icon: Database,
+    defaultTitle: 'Database Browser'
+  },
+  'database': {
+    component: DatabaseBrowser,
+    icon: Database,
+    defaultTitle: 'Database Browser'
+  },
+  'docker-app': {
+    component: DockerApp,
+    icon: Server,
+    defaultTitle: 'Docker'
+  },
+  'docker': {
+    component: DockerApp,
+    icon: Server,
+    defaultTitle: 'Docker'
+  },
   'wiki': {
     component: WikiApp,
     icon: Book,

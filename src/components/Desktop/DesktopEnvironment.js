@@ -7,7 +7,7 @@ import Taskbar from '@/components/Desktop/Taskbar';
 import SSHApp from '@/apps/SSHApp';
 import SettingsApp from '@/apps/SettingsApp';
 import { Terminal, Settings, FolderClosed, Monitor, RefreshCw, Plus, 
-  Image as ImageIcon, Layout, Grid, List, AlignLeft, SortAsc,
+  Image as ImageIcon, Layout, Grid, List, AlignLeft, SortAsc, Server,
   ChevronRight, Type, Calendar, HardDrive, Palette, MonitorCog, Globe, Maximize, Minimize, Database, Check, MonitorPlay
 } from 'lucide-react';
 import NotificationCenter from '@/components/Desktop/NotificationCenter';
@@ -25,6 +25,7 @@ import PWAHandler from './PWAHandler';
 import SpotlightSearch from './SpotlightSearch';
 import PreviewWindow from './PreviewWindow';
 import TmuxApp from '@/apps/TmuxApp';
+import DockerApp from '@/apps/DockerApp';
 import dynamic from 'next/dynamic';
 
 const DatabaseBrowser = dynamic(() => import('@/components/DatabaseBrowser'), {
@@ -258,6 +259,7 @@ export default function DesktopEnvironment() {
     { id: 'ssh-manager', title: t('apps.sshManager'), icon: Monitor, component: <SSHApp />, type: 'app', initialWidth: 1400, initialHeight: 820 },
     { id: 'terminal', title: t('apps.terminal'), icon: Terminal, component: <TerminalApp onEditConnection={handleEditConnection} />, type: 'app', initialWidth: 1100, initialHeight: 700 },
     { id: 'files', title: t('apps.files'), icon: FolderClosed, component: <FilesApp onEditConnection={handleEditConnection} />, type: 'app', initialWidth: 900, initialHeight: 600 },
+    { id: 'docker', title: 'Docker', icon: Server, component: <DockerApp />, type: 'app', initialWidth: 1000, initialHeight: 700 },
     { id: 'tmux', title: t('apps.tmux'), icon: MonitorPlay, component: <TmuxApp />, type: 'app', initialWidth: 1000, initialHeight: 650 },
     { id: 'settings', title: t('apps.settings'), icon: Settings, component: <SettingsApp />, type: 'app', initialWidth: 700, initialHeight: 500 },
   ];
@@ -428,7 +430,36 @@ export default function DesktopEnvironment() {
     return () => window.removeEventListener('desktop-icon-drop', handleIconDrop);
   }, []);
 
-  const openStandaloneTerminal = (conn, sourceStandaloneTermId = null) => {
+    useEffect(() => {
+      const handleOpenDocker = (e) => {
+          const conn = e.detail?.connection;
+          if (conn) openStandaloneDocker(conn);
+      };
+
+      const handleOpenTerminal = (e) => {
+        const { connection, initialCommand, title } = e.detail;
+        if (connection) openStandaloneTerminal(connection, null, initialCommand, title);
+      };
+
+      const handleOpenFiles = (e) => {
+        const { connection, connectionIdOverride, title } = e.detail;
+        if (connection) openStandaloneFiles(connection, connectionIdOverride, title);
+      };
+
+      window.addEventListener('open-docker-manager', handleOpenDocker);
+      window.addEventListener('open-terminal', handleOpenTerminal);
+      window.addEventListener('open-files', handleOpenFiles);
+      window.addEventListener('pop-out-terminal', handleOpenTerminal); // Compatibility
+
+      return () => {
+        window.removeEventListener('open-docker-manager', handleOpenDocker);
+        window.removeEventListener('open-terminal', handleOpenTerminal);
+        window.removeEventListener('open-files', handleOpenFiles);
+        window.removeEventListener('pop-out-terminal', handleOpenTerminal);
+      };
+    }, []);
+
+  const openStandaloneTerminal = (conn, sourceStandaloneTermId = null, initialCommand = null, titleOverride = null) => {
     // Use unique ID so multiple standalone windows can coexist for same connection
     const winId = `standalone-term-${conn._id}-${Date.now()}`;
     
@@ -440,30 +471,42 @@ export default function DesktopEnvironment() {
 
     openWindow(
       winId,
-      conn.name,
-      <TerminalApp onEditConnection={handleEditConnection} initialConnection={conn} />,
+      titleOverride || conn.name,
+      <TerminalApp onEditConnection={handleEditConnection} initialConnection={conn} initialCommand={initialCommand} />,
       Terminal,
-      { initialWidth: 900, initialHeight: 600, appType: 'terminal', props: { initialConnectionId: conn._id } }
+      { initialWidth: 900, initialHeight: 600, appType: 'terminal', props: { initialConnectionId: conn._id, initialCommand } }
     );
     setDropMenu(null);
   };
 
-  const openStandaloneFiles = (conn) => {
+  const openStandaloneFiles = (conn, connectionIdOverride = null, titleOverride = null) => {
     // Use unique ID so multiple standalone windows can coexist for same connection
-    const winId = `standalone-files-${conn._id}-${Date.now()}`;
+    const winId = `standalone-files-${connectionIdOverride || conn._id}-${Date.now()}`;
 
     // Close existing session in the manager if it exists
-    const existing = appState.activeFileManagers.find(f => f.connectionId === conn._id);
+    const existing = appState.activeFileManagers.find(f => f.connectionId === (connectionIdOverride || conn._id));
     if (existing) {
       appDispatch({ type: 'CLOSE_FILE_MANAGER', payload: existing.id });
     }
 
     openWindow(
       winId,
-      `Files: ${conn.name}`,
-      <FilesApp onEditConnection={handleEditConnection} initialConnection={conn} />,
+      titleOverride || `Files: ${conn.name}`,
+      <FilesApp onEditConnection={handleEditConnection} initialConnection={conn} initialConnectionId={connectionIdOverride} />,
       FolderClosed,
-      { initialWidth: 900, initialHeight: 600, appType: 'files-app', props: { initialConnectionId: conn._id } }
+      { initialWidth: 900, initialHeight: 600, appType: 'files-app', props: { initialConnectionId: connectionIdOverride || conn._id } }
+    );
+    setDropMenu(null);
+  };
+
+  const openStandaloneDocker = (conn) => {
+    const winId = `standalone-docker-${conn._id}-${Date.now()}`;
+    openWindow(
+      winId,
+      `Docker: ${conn.name}`,
+      <DockerApp initialConnection={conn} />,
+      Server,
+      { initialWidth: 1000, initialHeight: 700, appType: 'docker-app', props: { initialConnectionId: conn._id } }
     );
     setDropMenu(null);
   };

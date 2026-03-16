@@ -361,7 +361,10 @@ export default function FileManager({
     });
 
     newSocket.on('sftp:progress', (data) => {
-      setTransfer(prev => ({ ...prev, ...data }));
+      setTransfer(prev => {
+        if (!prev) return null; // Don't resurrect late progress messages
+        return { ...prev, ...data };
+      });
     });
 
     newSocket.on('sftp:download_start', ({ filename, size }) => {

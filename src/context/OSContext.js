@@ -252,6 +252,17 @@ function osReducer(state, action) {
           ])
         ),
       };
+    case 'SET_WINDOW_TITLE':
+      return {
+        ...state,
+        windows: state.windows.map(w => w.id === action.payload.id ? { ...w, title: action.payload.title } : w),
+        windowsByDesktop: Object.fromEntries(
+          Object.entries(state.windowsByDesktop || {}).map(([desktopId, list]) => [
+            desktopId,
+            (list || []).map(w => w.id === action.payload.id ? { ...w, title: action.payload.title } : w),
+          ])
+        ),
+      };
     case 'FOCUS_WINDOW':
       return {
         ...state,
@@ -413,13 +424,19 @@ function osReducer(state, action) {
         } else if (typeof w.id === 'string' && (w.id.startsWith('standalone-files-') || w.id.startsWith('files-'))) {
           Component = AppRegistry['files']?.component;
           Icon = AppRegistry['files']?.icon;
+        } else if (typeof w.id === 'string' && w.id.startsWith('standalone-docker-')) {
+          Component = AppRegistry['docker-app']?.component;
+          Icon = AppRegistry['docker-app']?.icon;
+        } else if (typeof w.id === 'string' && w.id.startsWith('standalone-db-')) {
+          Component = AppRegistry['database-browser']?.component;
+          Icon = AppRegistry['database-browser']?.icon;
         }
 
         if (!Component) return null;
         try {
           return {
             ...w,
-            component: <Component {...(w.props || {})} />,
+            component: <Component windowId={w.id} {...(w.props || {})} />,
             icon: Icon,
           };
         } catch (e) {
@@ -706,7 +723,7 @@ export function OSProvider({ children }) {
         const initialConnectionId = initialConnection._id || initialConnection.id;
         const next = { ...p };
         delete next.initialConnection;
-        if (initialConnectionId) next.initialConnectionId = initialConnectionId;
+        if (initialConnectionId && !next.initialConnectionId) next.initialConnectionId = initialConnectionId;
         return next;
       }
       return p;

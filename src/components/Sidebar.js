@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { useApp } from '@/context/AppContext';
 import {
   Server, Star, StarOff, Wifi, WifiOff, Clock, MoreVertical, Terminal, Edit, Trash2,  
-  RotateCw, Plus, Search, Filter, Key, Lock, BarChart3, TrendingUp, Zap, RefreshCw, Folder, AlertTriangle, X, Database,
+  RotateCw, Plus, Search, Filter, Key, Lock, BarChart3, TrendingUp, Zap, RefreshCw, Folder, Box, AlertTriangle, X, Database,
   PanelLeftClose, PanelLeft
 } from 'lucide-react';
 import { useState, useEffect } from 'react';
@@ -433,13 +433,26 @@ export default function Sidebar({ onNewConnection, onEditConnection }) {
                   </button>
                   
                   {conn.type !== 'database' && (
-                    <button
-                      className="btn-icon p-1.5 hover:bg-white/10 rounded"
-                      title={t('ssh.modal.actions.files')}
-                      onClick={(e) => { e.stopPropagation(); handleFiles(conn); }}
-                    >
-                      <Folder size={14} className={state.activeFileManagers.some(f => f.connectionId === conn._id) ? "text-indigo-400" : "text-blue-400"} />
-                    </button>
+                    <>
+                      <button
+                        className="btn-icon p-1.5 hover:bg-white/10 rounded"
+                        title={t('ssh.modal.actions.files')}
+                        onClick={(e) => { e.stopPropagation(); handleFiles(conn); }}
+                      >
+                        <Folder size={14} className={state.activeFileManagers.some(f => f.connectionId === conn._id) ? "text-indigo-400" : "text-blue-400"} />
+                      </button>
+                      
+                      <button
+                        className="btn-icon p-1.5 hover:bg-white/10 rounded"
+                        title="Docker Manager"
+                        onClick={(e) => { 
+                          e.stopPropagation(); 
+                          window.dispatchEvent(new CustomEvent('open-docker-manager', { detail: { connection: conn } })); 
+                        }}
+                      >
+                        <Box size={14} className="text-sky-400" />
+                      </button>
+                    </>
                   )}
 
                   <button

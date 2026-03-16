@@ -6,84 +6,85 @@ import TerminalView from '@/components/TerminalView';
 import { Server, Terminal as TermIcon, Zap, X, Plus } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
-export default function TerminalApp({ onEditConnection, initialConnection, initialConnectionId, initialCommand }) {
+export default function TerminalApp({ onEditConnection, initialConnection, initialConnectionId, initialCommand, windowId }) {
   const { state, dispatch } = useApp();
   const { t } = useTranslation();
   const { connections, standaloneTerminals } = state;
   const sshConnections = connections.filter(c => c.type !== 'database');
   const [activeTab, setActiveTab] = useState(null);
-  const [isSelecting, setIsSelecting] = useState(standaloneTerminals.length === 0 && !initialConnection);
+  
+  const [isSelecting, setIsSelecting] = useState(() => {
+    if (initialConnection || initialConnectionId) return false;
+    // Don't show selection screen if we have global standalone terminals already
+    return standaloneTerminals.length === 0;
+  });
+
   const initialConnRef = useRef(initialConnection);
   const initialConnIdRef = useRef(initialConnectionId);
   const standaloneTermIdRef = useRef(null);
-  const isStandalone = !!initialConnection;
+  const isStandalone = !!initialConnection || !!initialConnectionId;
+
+  // Persistence: When opened as the main Terminal app (not standalone-per-connection),
+  // we use the global standaloneTerminals state which is now persisted in AppContext.
+  // But we still need to manage the active tab locally for this window.
+
+  // Load persisted active tab on mount
+  useEffect(() => {
+    if (windowId && !activeTab) {
+      const saved = localStorage.getItem(`terminal-active-tab-${windowId}`);
+      if (saved) setActiveTab(saved);
+      else if (standaloneTerminals.length > 0) setActiveTab(standaloneTerminals[0].id);
+    }
+  }, [windowId, standaloneTerminals]);
+
+  // Save active tab on change
+  useEffect(() => {
+    if (windowId && activeTab) {
+      localStorage.setItem(`terminal-active-tab-${windowId}`, activeTab);
+    }
+  }, [activeTab, windowId]);
 
   // For standalone mode: keep connection in local state only (not global)
   const [localStandaloneTerm, setLocalStandaloneTerm] = useState(null);
 
-  // Auto-connect if initialConnection is provided
+  // Auto-connect if initialConnection or initialConnectionId is provided
   useEffect(() => {
+    if (!connections || connections.length === 0) return;
+    
+    let conn = null;
     if (initialConnRef.current) {
-      const conn = initialConnRef.current;
-      initialConnRef.current = null; // Only once
+      conn = initialConnRef.current;
+      initialConnRef.current = null;
+    } else if (initialConnIdRef.current) {
+      conn = connections.find(c => c._id === initialConnIdRef.current);
+      initialConnIdRef.current = null;
+    }
+
+    if (conn) {
       const termId = `term-${conn._id}-${Date.now()}`;
       standaloneTermIdRef.current = termId;
 
+      const termData = {
+        id: termId,
+        connectionId: conn._id,
+        connectionName: conn.name,
+        host: conn.host,
+        color: conn.color,
+        connection: conn,
+        initialCommand: initialCommand
+      };
+
       if (isStandalone) {
-        // Standalone mode: use local state only, do NOT add to global standaloneTerminals
-        // This prevents the tab from appearing in the multi-tab TerminalApp
-        setLocalStandaloneTerm({
-          id: termId,
-          connectionId: conn._id,
-          connectionName: conn.name,
-          host: conn.host,
-          color: conn.color,
-          connection: conn,
-          initialCommand: initialCommand
-        });
+        setLocalStandaloneTerm(termData);
+        setIsSelecting(false);
       } else {
-        dispatch({
-          type: 'OPEN_STANDALONE_TERMINAL',
-          payload: {
-            id: termId,
-            connectionId: conn._id,
-            connectionName: conn.name,
-            host: conn.host,
-            color: conn.color,
-            connection: conn,
-            initialCommand: initialCommand
-          },
-        });
+        dispatch({ type: 'OPEN_STANDALONE_TERMINAL', payload: termData });
         setActiveTab(termId);
         setIsSelecting(false);
       }
     }
-  }, [dispatch, isStandalone]);
+  }, [connections, initialCommand, isStandalone, dispatch]);
 
-  // Restore mode: auto-connect from persisted initialConnectionId
-  useEffect(() => {
-    if (initialConnRef.current) return;
-    if (!initialConnIdRef.current) return;
-    if (!connections || connections.length === 0) return;
-
-    const conn = connections.find((c) => c._id === initialConnIdRef.current);
-    if (!conn) return;
-
-    initialConnIdRef.current = null;
-    const termId = `term-${conn._id}-${Date.now()}`;
-    standaloneTermIdRef.current = termId;
-
-    // When restoring a Window, we always want a single local standalone terminal
-    // (not the shared multi-tab TerminalApp list)
-    setLocalStandaloneTerm({
-      id: termId,
-      connectionId: conn._id,
-      connectionName: conn.name,
-      host: conn.host,
-      color: conn.color,
-      connection: conn,
-    });
-  }, [connections]);
 
   // Auto-select latest terminal if a new one is added and we aren't selecting
   useEffect(() => {

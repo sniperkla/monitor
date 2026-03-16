@@ -2,44 +2,81 @@
 
 import { useApp } from '@/context/AppContext';
 import { X, Database, Edit, Plus } from 'lucide-react';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import DatabaseView from './DatabaseView';
 
-export default function DatabaseBrowser({ initialConnection, onEditConnection, onNewConnection }) {
+export default function DatabaseBrowser({ initialConnection, initialConnectionId, windowId, onEditConnection, onNewConnection }) {
   const { t } = useTranslation();
   const { state, dispatch } = useApp();
-  const { activeDatabaseBrowsers, standaloneDatabaseBrowsers } = state;
+  const { activeDatabaseBrowsers, standaloneDatabaseBrowsers, connections } = state;
   const activeTab = state.activeDatabaseBrowserId;
 
   const setActiveTab = (id) => {
     dispatch({ type: 'SET_ACTIVE_DATABASE_BROWSER', payload: id });
   };
 
-  const [isOpening, setIsOpening] = useState(!!initialConnection);
-  const isStandalone = !!initialConnection;
+  const [isOpening, setIsOpening] = useState(!!initialConnection || !!initialConnectionId);
+  const isStandalone = !!initialConnection || !!initialConnectionId;
+  const [restoredConnection, setRestoredConnection] = useState(initialConnection || null);
+  const initialConnIdRef = useRef(initialConnectionId);
 
-  // Auto-open initial connection if provided (for standalone mode)
+  // Restore mode: auto-connect from initialConnectionId or localStorage
   useEffect(() => {
-    if (initialConnection) {
+    if (restoredConnection) return;
+    if (!connections || connections.length === 0) return;
+
+    // 1. Try initial connection ID (passed via props on hydration)
+    if (initialConnIdRef.current) {
+      const conn = connections.find(c => c._id === initialConnIdRef.current);
+      if (conn) {
+        initialConnIdRef.current = null;
+        setRestoredConnection(conn);
+        return;
+      }
+    }
+
+    // 2. Fallback to localStorage persisted ID
+    if (windowId) {
+      const savedConnId = localStorage.getItem(`db-connection-${windowId}`);
+      if (savedConnId) {
+        const conn = connections.find(c => c._id === savedConnId);
+        if (conn) setRestoredConnection(conn);
+      }
+    }
+  }, [connections, windowId, restoredConnection]);
+
+  // Save selected connection whenever it changes
+  useEffect(() => {
+    if (restoredConnection?._id && windowId) {
+      localStorage.setItem(`db-connection-${windowId}`, restoredConnection._id);
+    }
+  }, [restoredConnection, windowId]);
+
+  // Use the restored connection for the rest of the logic
+  const connToUse = restoredConnection;
+
+  // Auto-open current connection if provided (for standalone mode)
+  useEffect(() => {
+    if (connToUse) {
       // Close matching manager tab if it exists
-      const existingInManager = activeDatabaseBrowsers.find(b => b.connectionId === initialConnection._id);
+      const existingInManager = activeDatabaseBrowsers.find(b => b.connectionId === connToUse._id);
       if (existingInManager) {
         dispatch({ type: 'CLOSE_DATABASE_BROWSER', payload: existingInManager.id });
       }
 
       // Check if already open in standalone
-      const existing = standaloneDatabaseBrowsers.find(b => b.connectionId === initialConnection._id);
+      const existing = standaloneDatabaseBrowsers.find(b => b.connectionId === connToUse._id);
       if (!existing) {
-        const dbId = `db-${initialConnection._id}-${Date.now()}`;
+        const dbId = `db-${connToUse._id}-${Date.now()}`;
         dispatch({
           type: 'OPEN_STANDALONE_DATABASE_BROWSER',
           payload: {
             id: dbId,
-            connectionId: initialConnection._id,
-            connectionName: initialConnection.name,
-            color: initialConnection.color,
-            connection: initialConnection,
+            connectionId: connToUse._id,
+            connectionName: connToUse.name,
+            color: connToUse.color,
+            connection: connToUse,
           },
         });
         setActiveTab(dbId);
@@ -48,7 +85,7 @@ export default function DatabaseBrowser({ initialConnection, onEditConnection, o
       }
       setIsOpening(false);
     }
-  }, [initialConnection]);
+  }, [connToUse]);
 
   const handleCloseTab = (id) => {
     if (isStandalone) {
@@ -61,8 +98,8 @@ export default function DatabaseBrowser({ initialConnection, onEditConnection, o
   const dbConnections = state.connections.filter(c => c.type === 'database');
 
   // For standalone: show loading until the standalone browser is registered
-  const standaloneBrowser = isStandalone
-    ? standaloneDatabaseBrowsers.find(b => b.connectionId === initialConnection._id)
+  const standaloneBrowser = (isStandalone && connToUse)
+    ? standaloneDatabaseBrowsers.find(b => b.connectionId === connToUse._id)
     : null;
 
   if (isStandalone && (isOpening || !standaloneBrowser)) {
@@ -70,7 +107,7 @@ export default function DatabaseBrowser({ initialConnection, onEditConnection, o
       <div className="h-full flex items-center justify-center bg-[var(--bg-primary)] rounded-3xl border border-[var(--border-color)]">
          <div className="text-center animate-pulse">
             <Database size={40} className="text-emerald-500 mx-auto mb-4" />
-            <p className="text-[var(--text-muted)] text-sm">{t('common.opening', { name: initialConnection.name })}</p>
+            <p className="text-[var(--text-muted)] text-sm">{t('common.opening', { name: connToUse?.name || '...' })}</p>
          </div>
       </div>
     );

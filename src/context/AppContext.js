@@ -204,6 +204,10 @@ function reducer(state, action) {
       return { ...state, activeFileManagers: action.payload };
     case 'SET_ACTIVE_DATABASE_BROWSERS':
       return { ...state, activeDatabaseBrowsers: action.payload };
+    case 'SET_ACTIVE_STANDALONE_TERMINALS':
+      return { ...state, standaloneTerminals: action.payload };
+    case 'SET_ACTIVE_STANDALONE_DATABASE_BROWSERS':
+      return { ...state, standaloneDatabaseBrowsers: action.payload };
     default:
 
       return state;
@@ -335,6 +339,20 @@ export function AppProvider({ children }) {
           dispatch({ type: 'SET_ACTIVE_DATABASE_BROWSERS', payload: dbs });
         }
       }
+      const savedStandaloneTerms = localStorage.getItem('ssh_monitor_standalone_terminals');
+      if (savedStandaloneTerms) {
+        const terms = JSON.parse(savedStandaloneTerms);
+        if (Array.isArray(terms) && terms.length > 0) {
+          dispatch({ type: 'SET_ACTIVE_STANDALONE_TERMINALS', payload: terms });
+        }
+      }
+      const savedStandaloneDbs = localStorage.getItem('ssh_monitor_standalone_database_browsers');
+      if (savedStandaloneDbs) {
+        const dbs = JSON.parse(savedStandaloneDbs);
+        if (Array.isArray(dbs) && dbs.length > 0) {
+          dispatch({ type: 'SET_ACTIVE_STANDALONE_DATABASE_BROWSERS', payload: dbs });
+        }
+      }
       const savedActiveTermId = localStorage.getItem('ssh_monitor_active_terminal_id');
       if (savedActiveTermId) dispatch({ type: 'SET_ACTIVE_TERMINAL', payload: savedActiveTermId });
       
@@ -358,6 +376,8 @@ export function AppProvider({ children }) {
       localStorage.setItem('ssh_monitor_active_terminals', JSON.stringify(state.activeTerminals));
       localStorage.setItem('ssh_monitor_active_file_managers', JSON.stringify(state.activeFileManagers));
       localStorage.setItem('ssh_monitor_active_database_browsers', JSON.stringify(state.activeDatabaseBrowsers));
+      localStorage.setItem('ssh_monitor_standalone_terminals', JSON.stringify(state.standaloneTerminals));
+      localStorage.setItem('ssh_monitor_standalone_database_browsers', JSON.stringify(state.standaloneDatabaseBrowsers));
       localStorage.setItem('ssh_monitor_active_terminal_id', state.activeTerminalId || '');
       localStorage.setItem('ssh_monitor_active_database_browser_id', state.activeDatabaseBrowserId || '');
       localStorage.setItem('ssh_monitor_active_file_manager_id', state.activeFileManagerId || '');
@@ -365,7 +385,7 @@ export function AppProvider({ children }) {
     } catch (e) {
       console.error('Failed to save workspace state:', e);
     }
-  }, [state.activeTerminals, state.activeFileManagers, state.activeDatabaseBrowsers, state.activeTerminalId, state.activeDatabaseBrowserId, state.activeFileManagerId, state.view]);
+  }, [state.activeTerminals, state.activeFileManagers, state.activeDatabaseBrowsers, state.standaloneTerminals, state.standaloneDatabaseBrowsers, state.activeTerminalId, state.activeDatabaseBrowserId, state.activeFileManagerId, state.view]);
 
   return (
     <AppContext.Provider value={{ state, dispatch, fetchConnections, apiFetch }}>

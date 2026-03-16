@@ -4,7 +4,7 @@ import { useTranslation } from 'react-i18next';
 import { FolderClosed, HardDrive, Server } from 'lucide-react';
 import FileLayout from '@/components/FileLayout';
 
-export default function FilesApp({ onEditConnection, initialConnection, initialConnectionId }) {
+export default function FilesApp({ onEditConnection, initialConnection, initialConnectionId, windowId }) {
   const { state, dispatch } = useApp();
   const { t } = useTranslation();
   const { connections } = state;
@@ -14,8 +14,8 @@ export default function FilesApp({ onEditConnection, initialConnection, initialC
   const [tabs, setTabs] = useState(() => {
     if (initialConnection && initialConnection.storage !== 'manual') {
       return [{
-        id: `files-${initialConnection._id}-${Date.now()}`,
-        connectionId: initialConnection._id,
+        id: `files-${initialConnectionId || initialConnection._id}-${Date.now()}`,
+        connectionId: initialConnectionId || initialConnection._id,
         connectionName: initialConnection.name,
         color: initialConnection.color,
         connection: initialConnection,
@@ -31,29 +31,73 @@ export default function FilesApp({ onEditConnection, initialConnection, initialC
 
   const initialConnIdRef = useRef(initialConnectionId);
 
+  // Load persisted tabs on mount
+  useEffect(() => {
+    if (tabs.length > 0 || initialConnectionId) return;
+    if (!windowId || !connections || connections.length === 0) return;
+
+    const savedTabs = localStorage.getItem(`files-tabs-${windowId}`);
+    if (savedTabs) {
+      try {
+        const parsed = JSON.parse(savedTabs);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          // Re-verify connections exist
+          const validTabs = parsed.map(tab => {
+            const conn = connections.find(c => c._id === tab.connectionId);
+            return conn ? { ...tab, connection: conn } : null;
+          }).filter(Boolean);
+          
+          if (validTabs.length > 0) {
+            setTabs(validTabs);
+            setIsSelecting(false);
+          }
+        }
+      } catch (e) {
+        console.error('Failed to load files tabs:', e);
+      }
+    }
+  }, [connections, windowId]);
+
+  // Save tabs on change
+  useEffect(() => {
+    if (windowId && tabs.length > 0) {
+      localStorage.setItem(`files-tabs-${windowId}`, JSON.stringify(tabs.map(t => ({ ...t, connection: undefined })))); // don't save full connection object
+    } else if (windowId && tabs.length === 0) {
+      localStorage.removeItem(`files-tabs-${windowId}`);
+    }
+  }, [tabs, windowId]);
+
   // Restore mode: auto-connect from persisted initialConnectionId
   useEffect(() => {
     if (tabs.length > 0) return;
-    if (!initialConnIdRef.current) return;
+    const targetId = initialConnIdRef.current;
+    if (!targetId) return;
     if (!connections || connections.length === 0) return;
 
-    const conn = connections.find((c) => c._id === initialConnIdRef.current);
+    let baseConnId = targetId;
+    if (typeof targetId === 'string' && targetId.startsWith('docker-')) {
+       // Format: docker-containerId:baseConnId
+       baseConnId = targetId.split(':').pop();
+    }
+
+    const conn = connections.find((c) => c._id === baseConnId);
     if (!conn) return;
 
     initialConnIdRef.current = null;
-    handleConnect(conn);
+    handleConnect(conn, targetId);
   }, [connections, tabs.length]);
 
-  const handleConnect = (conn) => {
+  const handleConnect = (conn, overrideId = null) => {
     if (conn.storage === 'manual') {
       onEditConnection(conn);
       return;
     }
 
-    const fileId = `files-${conn._id}-${Date.now()}`;
+    const connectionId = overrideId || conn._id;
+    const fileId = `files-${connectionId}-${Date.now()}`;
     const newTab = {
       id: fileId,
-      connectionId: conn._id,
+      connectionId: connectionId,
       connectionName: conn.name,
       color: conn.color,
       connection: conn,

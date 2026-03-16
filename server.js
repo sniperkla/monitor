@@ -537,7 +537,19 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
     });
 
       socket.on('ssh:connect', async (data) => {
-      const { connectionId, connection: connectionData, cols, rows } = data;
+      let { connectionId, connection: connectionData, cols, rows, dockerContainerId, dockerMode } = data;
+
+      // Extract docker info from connectionId if missing but prefixed
+      if (!dockerContainerId && connectionId && connectionId.startsWith('docker-')) {
+          const parts = connectionId.split(':');
+          const prefixMatch = parts[0].match(/docker-(.+)/);
+          if (prefixMatch) {
+              dockerContainerId = prefixMatch[1];
+              connectionId = parts[1];
+              dockerMode = true; 
+              console.log(`🐳 Detected Docker mode from ID: ${dockerContainerId} (Base ID: ${connectionId})`);
+          }
+      }
       const repo = await getModels(dbUri, socket.user?.sub);
       const { Connection: CurrentConnectionModel, Session: CurrentSessionModel } = repo;
 
@@ -561,6 +573,7 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
               if (lookupErr.name === 'CastError') {
                 // connectionId is not a valid MongoDB ObjectId (e.g. a PostgreSQL integer ID)
                 // Fall through to connectionData below
+                console.warn('⚠️ connectionId is not a valid ObjectId:', connectionId);
                 connection = null;
               } else if (lookupErr.code === 'ECONNREFUSED' || lookupErr.message?.includes('Local Relay')) {
                 // Center DB unreachable (relay not running) — fall through to connectionData
@@ -579,7 +592,10 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
         
         // Use provided data if DB lookup fails or if it's a local/manual connection
         if (!connection && connectionData) {
+          console.warn('⚠️ Falling back to provided connectionData (No DB lookup or DB failed)');
           connection = connectionData;
+        } else {
+          console.log(`✅ DB Lookup Success for ${connection?.host}. Has Password: ${!!connection?.password}, Has Key: ${!!connection?.privateKey}`);
         }
 
         if (!connection) {
@@ -603,6 +619,11 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
         const ensureSftp = (sessionData) => {
           return new Promise((resolve, reject) => {
             if (sessionData.sftp) return resolve(sessionData.sftp);
+            if (sessionData.dockerContainerId) {
+               // In Docker mode, we often don't want the host SFTP. 
+               // Resolve to null so callers can decide to use exec fallbacks.
+               return resolve(null);
+            }
             sessionData.sshClient.sftp((err, sftp) => {
               if (err) return reject(err);
               sessionData.sftp = sftp;
@@ -647,6 +668,9 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
           };
 
           const getSftp = (cb) => {
+            if (dockerContainerId) {
+              return cb(new Error("Docker mode forces SSH fallback"));
+            }
             const sessionData = activeSessions.get(socket.id);
             if (sessionData && sessionData.sftp) {
               return cb(null, sessionData.sftp);
@@ -657,6 +681,55 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
               cb(null, sftp);
             });
           };
+
+          // Setup basic session context immediately so subsequent handlers (like sftp:list) 
+          // have access to dockerContainerId even if shell() hasn't completed yet.
+          activeSessions.set(socket.id, { 
+            sshClient, 
+            session, 
+            connectionId, 
+            dbUri,
+            dockerContainerId,
+            activeTransfers: new Set(),
+            lastActivityAt: Date.now(),
+            lastIdleLogAt: 0,
+            idleInterval: null,
+          });
+
+          if (dockerContainerId) {
+              const origExec = sshClient.exec.bind(sshClient);
+              sshClient.exec = (cmd, options, cb) => {
+                  if (typeof options === 'function') {
+                      cb = options;
+                      options = {};
+                  }
+                  const safeCmd = typeof cmd === 'string' ? cmd.replace(/'/g, "'\\''") : cmd;
+                  
+                  // Detect if this is a command that needs stdin (like cat > or tar x)
+                  const isStreaming = cmd.includes('cat >') || cmd.includes('tar x') || cmd.includes('base64 -d');
+                  const dockerCmd = `docker exec ${isStreaming ? '-i' : ''} "${dockerContainerId}" sh -c '${safeCmd}'`;
+                  
+                  console.log(`🐳 [${socket.id}] DOCKER EXEC: ${dockerCmd}`);
+                  
+                  return origExec(dockerCmd, options, (err, stream) => {
+                      if (err) {
+                          console.error(`❌ [${socket.id}] DOCKER EXEC START FAILED: ${err.message}`);
+                          return cb(err);
+                      }
+                      
+                      // For non-streaming commands, we should ideally close stdin to ensure 
+                      // the docker process exits when it finishes its purely output-driven task.
+                      if (!isStreaming) {
+                          // Allow a tiny delay for the process to actually start before ending stdin
+                          setTimeout(() => {
+                              try { if (stream.writable) stream.end(); } catch(e) {}
+                          }, 50);
+                      }
+
+                      return cb(null, stream);
+                  });
+              };
+          }
           
           // Request a PTY shell
           sshClient.shell({ term: 'xterm-256color', cols: cols || 120, rows: rows || 30 }, (err, stream) => {
@@ -665,18 +738,11 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
               return;
             }
 
-            // Store active session
-            activeSessions.set(socket.id, { 
-              sshClient, 
-              stream, 
-              session, 
-              connectionId, 
-              dbUri,
-              activeTransfers: new Set(), // Track transfer IDs for cleanup
-              lastActivityAt: Date.now(),
-              lastIdleLogAt: 0,
-              idleInterval: null,
-            });
+            // Update session with existing stream
+            const sessionData = activeSessions.get(socket.id);
+            if (sessionData) {
+              sessionData.stream = stream;
+            }
 
             ensureIdleWatcher();
 
@@ -865,7 +931,17 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
 
            socket.on('sftp:mkdir', (path) => {
             getSftp((err, sftp) => {
-              if (err) return emitSftpError(err, 'SFTP Init');
+              if (err) {
+                 return sshClient.exec(`mkdir -p "${path}"`, (err, stream) => {
+                   if (err) return emitSftpError(err, 'Fallback mkdir failed');
+                   stream.on('data', () => {});
+                   stream.stderr.on('data', () => {});
+                   stream.on('close', (code) => {
+                     if (code === 0) socket.emit('sftp:action_success', { action: 'mkdir', path });
+                     else emitSftpError(`Exit code ${code}`, 'Mkdir failed');
+                   });
+                 });
+              }
               sftp.mkdir(path, (err) => {
                 if (err) return emitSftpError(err, 'Mkdir failed');
                 socket.emit('sftp:action_success', { action: 'mkdir', path });
@@ -882,6 +958,8 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
                  console.warn('⚠️ SFTP unavailable for delete. Using rm fallback.');
                  return sshClient.exec(`rm -rf "${path}"`, (err, stream) => {
                    if (err) return emitSftpError(err, 'Fallback delete failed');
+                   stream.on('data', () => {});
+                   stream.stderr.on('data', () => {});
                    stream.on('close', (code) => {
                      if (code === 0) socket.emit('sftp:action_success', { action: 'delete', path });
                      else emitSftpError(`Exit code ${code}`, 'Delete failed');
@@ -952,10 +1030,13 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
             console.log(`💾 [${socket.id}] SFTP WRITE: ${path} (${content.length} bytes)`);
             getSftp((err, sftp) => {
               if (err) {
-                 const b64 = Buffer.from(content).toString('base64');
-                 const cmd = `echo "${b64}" | base64 -d > "${path}"`;
+                 const cmd = content.length === 0 
+                   ? `touch "${path}"` 
+                   : `echo -n "${Buffer.from(content).toString('base64')}" | base64 -d > "${path}"`;
                  return sshClient.exec(cmd, (err, stream) => {
                     if (err) return emitSftpError(err, 'Fallback write failed');
+                    stream.on('data', () => {});
+                    stream.stderr.on('data', () => {});
                     stream.on('close', (code) => {
                       if (code === 0) socket.emit('sftp:action_success', { action: 'write', path });
                       else emitSftpError(`Exit code ${code}`, 'Write failed');
@@ -1374,7 +1455,24 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
           socket.on('sftp:cross_server_transfer', ({ srcConnId, srcPath, destPath, action }) => {
             console.log(`🌐 [${socket.id}] CROSS-SERVER: ${srcConnId}:${srcPath} -> CurrentServer:${destPath}`);
             
-            const srcSession = Array.from(activeSessions.values()).find(s => s.connectionId && String(s.connectionId) === String(srcConnId));
+            // Improved lookup to handle Docker-prefixed IDs
+            const srcSession = Array.from(activeSessions.values()).find(s => {
+              if (!s.connectionId) return false;
+              const sConnId = String(s.connectionId);
+              
+              // Direct match
+              if (sConnId === String(srcConnId)) return true;
+              
+              // Docker prefix match (docker-containerId:baseConnId)
+              if (String(srcConnId).startsWith('docker-') && s.dockerContainerId) {
+                const parts = String(srcConnId).split(':');
+                const dockerIdFromSrc = parts[0].replace('docker-', '');
+                const baseIdFromSrc = parts[1];
+                return s.dockerContainerId === dockerIdFromSrc && sConnId === baseIdFromSrc;
+              }
+              
+              return false;
+            });
             
             if (!srcSession) {
               console.error(`❌ [${socket.id}] Cross Transfer: Source session not found for ID ${srcConnId}`);
@@ -1400,12 +1498,29 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
                 const srcSftp = await ensureSftp(srcSession);
                 const destSession = activeSessions.get(socket.id);
                 if (!destSession) throw new Error("Destination session lost");
+                // destSftp might be null for Docker sessions; callers handle it
                 const destSftp = await ensureSftp(destSession);
+                const isDestDocker = !!destSession.dockerContainerId;
 
-                srcSftp.stat(srcPath, (err, stats) => {
-                  if (err) return finish(err);
+                // Use a helper to check if source is directory even if SFTP is weird
+                const checkSourceDir = () => {
+                   return new Promise((resolve) => {
+                      if (srcSftp) {
+                         srcSftp.stat(srcPath, (err, stats) => resolve(!err && stats.isDirectory()));
+                      } else {
+                         srcSession.sshClient.exec(`[ -d "${srcPath}" ]`, (err, stream) => {
+                            if (err) return resolve(false);
+                            stream.on('close', (code) => resolve(code === 0));
+                         });
+                      }
+                   });
+                };
 
-                  if (stats.isDirectory()) {
+                const isDir = await checkSourceDir();
+                
+                // For Docker EITHER at source or destination, or for folders, 
+                // we use the tar pipe method. It's the most reliable for streaming.
+                if (isDir || srcSession.dockerContainerId || destSession.dockerContainerId) {
                     const srcDir = path.posix.dirname(srcPath);
                     const srcBase = path.posix.basename(srcPath);
                     const destDir = path.posix.dirname(destPath);
@@ -1448,6 +1563,7 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
                         destStream.on('close', (code) => {
                           clearTimeout(transferTimer);
                           if (code === 0) {
+                            socket.emit('sftp:progress', { action: action === 'cut' ? 'move' : 'copy', filename: srcBase, progress: 100 });
                             socket.emit('sftp:action_success', { action: action === 'cut' ? 'move' : 'copy', path: destPath });
                             if (action === 'cut') srcSession.sshClient.exec(`rm -rf "${srcPath}"`, () => {});
                           } else {
@@ -1506,12 +1622,12 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
 
                          console.log(`✅ [${socket.id}] Upload complete!`);
                          clearTimeout(transferTimer);
+                          socket.emit("sftp:progress", { action: action === "cut" ? "move" : "copy", filename: path.posix.basename(srcPath), progress: 100 });
                          socket.emit('sftp:action_success', { action: action === 'cut' ? 'move' : 'copy', path: destPath });
                          if (action === 'cut') srcSftp.unlink(srcPath, () => {});
                       });
                     });
                   }
-                });
               } catch (err) {
                 finish(err);
               }
@@ -1659,64 +1775,77 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
             if (!sessionData) return;
 
             getSftp((err, sftp) => {
-               if (err) return emitSftpError(err, 'Upload SFTP Init');
+               // For Docker mode, getSftp returns null (managed by ensureSftp/getSftp logic); 
+               // If it's a real error and not Docker, then we stop.
+               if (err && !sessionData.dockerContainerId) return emitSftpError(err, 'Upload SFTP Init');
                
                const transferId = `up_${Date.now()}`;
                const startUpload = (actualOffset) => {
-                  // ... inside startUpload ...
                   sessionData.activeTransfers.add(transferId);
                   limiter.acquire(); 
 
-                  // Use 'r+' to allow writing at specific offset, 'w' for new file
-                  const flags = actualOffset > 0 ? 'r+' : 'w';
-                  const writeStream = sftp.createWriteStream(destPath, { flags, start: actualOffset });
-                  
-                  let bytesReceivedInSession = 0;
-                  
-                  const chunkHandler = (chunk) => {
-                    // Backpressure: only ack when data is actually written
-                    writeStream.write(chunk, (err) => {
-                       if (err) return emitSftpError(err, 'Stream Write Error');
-                       
-                       bytesReceivedInSession += chunk.length;
-                       const totalTransferred = actualOffset + bytesReceivedInSession;
-                       
-                       socket.emit(`sftp:upload_ack:${filename}`, { 
-                         received: chunk.length, 
-                         totalTransferred,
-                         progress: Math.round((totalTransferred / size) * 100)
-                       });
+                  const cleanup = () => {
+                    if (sessionData.activeTransfers.has(transferId)) {
+                        limiter.release();
+                        sessionData.activeTransfers.delete(transferId);
+                    }
+                  };
+
+                  const useFallback = !sftp || !!sessionData.dockerContainerId;
+
+                  const setupHandlers = (wStream) => {
+                    let bytesReceivedInSession = 0;
+                    const chunkHandler = (chunk) => {
+                      // Note: for exec streams, this is direct write to stdin
+                      wStream.write(chunk, (err) => {
+                         if (err) return emitSftpError(err, 'Stream Write Error');
+                         bytesReceivedInSession += chunk.length;
+                         const totalTransferred = actualOffset + bytesReceivedInSession;
+                         socket.emit(`sftp:upload_ack:${filename}`, { 
+                           received: chunk.length, 
+                           totalTransferred,
+                           progress: Math.round((totalTransferred / size) * 100)
+                         });
+                      });
+                    };
+
+                    socket.on(`sftp:upload_chunk:${filename}`, chunkHandler);
+                    socket.emit('sftp:can_upload', { filename, offset: actualOffset }); 
+
+                    socket.once(`sftp:upload_done:${filename}`, () => {
+                      if (wStream.writable) wStream.end();
+                      socket.off(`sftp:upload_chunk:${filename}`, chunkHandler);
+                    });
+
+                    wStream.on('close', () => {
+                      cleanup();
+                      socket.emit('sftp:action_success', { action: 'upload', path: destPath });
+                    });
+
+                    wStream.on('error', (err) => {
+                      cleanup();
+                      emitSftpError(err, 'Upload failed');
+                      socket.off(`sftp:upload_chunk:${filename}`, chunkHandler);
                     });
                   };
 
-                  socket.on(`sftp:upload_chunk:${filename}`, chunkHandler);
-                  socket.emit('sftp:can_upload', { filename, offset: actualOffset }); 
-
-                  socket.once(`sftp:upload_done:${filename}`, () => {
-                    writeStream.end();
-                    socket.off(`sftp:upload_chunk:${filename}`, chunkHandler);
-                  });
-
-                  writeStream.on('close', () => {
-                    if (sessionData.activeTransfers.has(transferId)) {
-                        limiter.release();
-                        sessionData.activeTransfers.delete(transferId);
-                    }
-                    socket.emit('sftp:action_success', { action: 'upload', path: destPath });
-                  });
-
-                  writeStream.on('error', (err) => {
-                    if (sessionData.activeTransfers.has(transferId)) {
-                        limiter.release();
-                        sessionData.activeTransfers.delete(transferId);
-                    }
-                    emitSftpError(err, 'Upload failed');
-                    socket.off(`sftp:upload_chunk:${filename}`, chunkHandler);
-                  });
+                  if (useFallback) {
+                    // Docker Focus: Use cat stream via exec (which is wrapped in docker exec)
+                    const cmd = `cat > "${destPath}"`;
+                    sshClient.exec(cmd, (err, stream) => {
+                      if (err) { cleanup(); return emitSftpError(err, 'Exec Fallback Start Failed'); }
+                      setupHandlers(stream);
+                      // Handled by setupHandlers: stream.end() will be called on sftp:upload_done
+                    });
+                  } else {
+                    const flags = actualOffset > 0 ? 'r+' : 'w';
+                    const writeStream = sftp.createWriteStream(destPath, { flags, start: actualOffset });
+                    setupHandlers(writeStream);
+                  }
                };
 
-               // Auto-Resume Detection: If client didn't specify offset, check if file exists
-               if (offset === 0) {
+               // Auto-Resume Detection: Only for SFTP (cat doesn't support seek)
+               if (offset === 0 && sftp && !sessionData.dockerContainerId) {
                   sftp.stat(destPath, (err, stats) => {
                      if (!err && stats.isFile() && stats.size < size) {
                         console.log(`🔍 [${socket.id}] Auto-resume detected: ${stats.size} bytes already present`);
@@ -1757,45 +1886,75 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
              const sessionData = activeSessions.get(socket.id);
              if (!sessionData) return;
 
-             getSftp((err, sftp) => {
-               if (err) return emitSftpError(err, 'Download SFTP Init');
-               
-               sftp.stat(filePath, (err, stats) => {
-                 if (err) return emitSftpError(err, 'Download Stat');
-                 
-                 const transferId = `down_${Date.now()}`;
-                 sessionData.activeTransfers.add(transferId);
-                 limiter.acquire();
+             const startDownload = (sftp, stats) => {
+               const transferId = `down_${Date.now()}`;
+               sessionData.activeTransfers.add(transferId);
+               limiter.acquire();
 
-                 const readStream = sftp.createReadStream(filePath, { start: offset });
-                 const filename = path.posix.basename(filePath);
-                 const totalSize = stats.size;
-                 
-                 socket.emit('sftp:download_start', { filename, size: totalSize, offset });
-                 
+               const cleanup = () => {
+                 if (sessionData && sessionData.activeTransfers.has(transferId)) {
+                      limiter.release();
+                      sessionData.activeTransfers.delete(transferId);
+                 }
+               };
+
+               const filename = path.posix.basename(filePath);
+               const totalSize = stats?.size || 0;
+               socket.emit('sftp:download_start', { filename, size: totalSize, offset });
+
+               const setupHandlers = (rStream) => {
                  let bytesSentInSession = 0;
-                 readStream.on('data', (chunk) => {
+                 rStream.on('data', (chunk) => {
                    bytesSentInSession += chunk.length;
-                   const progress = Math.round(((offset + bytesSentInSession) / totalSize) * 100);
+                   const progress = totalSize > 0 ? Math.round(((offset + bytesSentInSession) / totalSize) * 100) : 0;
                    socket.emit('sftp:download_chunk', { filename, chunk, progress, offset: offset + bytesSentInSession });
                  });
                  
-                 readStream.on('end', () => {
-                   if (sessionData && sessionData.activeTransfers.has(transferId)) {
-                        limiter.release();
-                        sessionData.activeTransfers.delete(transferId);
-                   }
+                 rStream.on('end', () => {
+                   cleanup();
                    socket.emit('sftp:download_done', { filename });
                  });
                  
-                 readStream.on('error', (err) => {
-                   if (sessionData && sessionData.activeTransfers.has(transferId)) {
-                        limiter.release();
-                        sessionData.activeTransfers.delete(transferId);
-                   }
+                 rStream.on('error', (err) => {
+                   cleanup();
                    emitSftpError(err, 'Download failed');
                  });
-               });
+               };
+
+               if (!sftp || !!sessionData.dockerContainerId) {
+                  sshClient.exec(`cat "${filePath}"`, (err, stream) => {
+                    if (err) { cleanup(); return emitSftpError(err, 'Download Exec failed'); }
+                    setupHandlers(stream);
+                  });
+               } else {
+                  const readStream = sftp.createReadStream(filePath, { start: offset });
+                  setupHandlers(readStream);
+               }
+             };
+
+             getSftp((err, sftp) => {
+               if (err && !sessionData.dockerContainerId) return emitSftpError(err, 'Download SFTP Init');
+               
+               if (sftp && !sessionData.dockerContainerId) {
+                 sftp.stat(filePath, (err, stats) => {
+                   if (err) return emitSftpError(err, 'Download Stat');
+                   startDownload(sftp, stats);
+                 });
+               } else {
+                 // Docker/Fallback path
+                 sshClient.exec(`ls -nl "${filePath}" | awk '{print $5}'`, (err, stream) => {
+                    let output = '';
+                    if (!err) {
+                       stream.on('data', (d) => output += d.toString());
+                       stream.on('close', () => {
+                          const size = parseInt(output.trim()) || 0;
+                          startDownload(null, { size });
+                       });
+                    } else {
+                       startDownload(null, { size: 0 });
+                    }
+                 });
+               }
              });
           });
 
@@ -1931,8 +2090,10 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
         if (connection.authType === 'password') {
           const { text, success, usedOldKey } = decryptWithMetadata(connection.password);
           if (!success) {
-             socket.emit('ssh:error', { message: 'Decryption failed. Owner has rotated encryption keys. Please re-enter your password in Connection Settings.' });
-             return;
+             if (!dockerContainerId) {
+                 socket.emit('ssh:error', { message: 'Decryption failed. Owner has rotated encryption keys. Please re-enter your password in Connection Settings.' });
+                 return;
+             }
           }
           sshConfig.password = text;
           if (usedOldKey) {
@@ -1940,47 +2101,53 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
              originalPass = encrypt(text); // Re-encrypt with NEW key
              console.log('🔄 Migrating password to new encryption key...');
           }
-        } else if (connection.authType === 'privateKey') {
+        } else if (connection.authType === 'key' || connection.privateKey || connection.authType === 'privateKey') {
           console.log('🔑 Using Private Key auth for:', connection.host);
 
           if (!connection.privateKey) {
-            socket.emit('ssh:error', { message: 'No private key stored for this connection. Please edit the connection and upload your private key.' });
-            return;
+            if (dockerContainerId) {
+               console.log("🐳 Skipping missing privateKey error for docker nested mode");
+            } else {
+               socket.emit('ssh:error', { message: 'No private key stored for this connection. Please edit the connection and upload your private key.' });
+               return;
+            }
+          } else {
+             const { text: decryptedKey, success: keySuccess, usedOldKey: keyOld } = decryptWithMetadata(connection.privateKey);
+             
+             if (!keySuccess) {
+                if (!dockerContainerId) {
+                   socket.emit('ssh:error', { message: 'Decryption failed. Owner has rotated encryption keys. Please re-enter your Private Key in Connection Settings.' });
+                   return;
+                }
+             } else {
+                if (keyOld) {
+                   needsMigration = true;
+                   originalKey = encrypt(decryptedKey);
+                   console.log('🔄 Migrating private key to new encryption key...');
+                }
+
+                if (decryptedKey && decryptedKey.includes('PuTTY-User-Key-File')) {
+                  console.warn('⚠️ .ppk file detected. Rejecting.');
+                  socket.emit('ssh:error', { message: 'PPK format detected. Please convert to OpenSSH/PEM format.' });
+                  return;
+                }
+
+                sshConfig.privateKey = decryptedKey;
+                
+                const normalizedKey = decryptedKey
+                  ? decryptedKey.replace(/\r\n/g, '\n').replace(/\r/g, '\n').trim()
+                  : null;
+
+                console.log(`🔑 Key header: ${normalizedKey ? normalizedKey.split('\n')[0] : 'empty'}`);
+
+                if (!normalizedKey || !normalizedKey.startsWith('-----BEGIN')) {
+                  socket.emit('ssh:error', { message: 'Invalid private key format. Key must be in PEM/OpenSSH format.' });
+                  return;
+                }
+
+                sshConfig.privateKey = normalizedKey;
+             }
           }
-
-          const { text: decryptedKey, success: keySuccess, usedOldKey: keyOld } = decryptWithMetadata(connection.privateKey);
-          
-          if (!keySuccess) {
-             socket.emit('ssh:error', { message: 'Decryption failed. Owner has rotated encryption keys. Please re-enter your Private Key in Connection Settings.' });
-             return;
-          }
-          
-          if (keyOld) {
-             needsMigration = true;
-             originalKey = encrypt(decryptedKey);
-             console.log('🔄 Migrating private key to new encryption key...');
-          }
-
-          if (decryptedKey && decryptedKey.includes('PuTTY-User-Key-File')) {
-            console.warn('⚠️ .ppk file detected. Rejecting.');
-            socket.emit('ssh:error', { message: 'PPK format detected. Please convert to OpenSSH/PEM format.' });
-            return;
-          }
-
-          // Normalize the private key: fix Windows line endings and trim outer whitespace
-          const normalizedKey = decryptedKey
-            ? decryptedKey.replace(/\r\n/g, '\n').replace(/\r/g, '\n').trim()
-            : null;
-
-          // Log key type for debugging (safe — shows only the header line)
-          console.log(`🔑 Key header: ${normalizedKey ? normalizedKey.split('\n')[0] : 'empty'}`);
-
-          if (!normalizedKey || !normalizedKey.startsWith('-----BEGIN')) {
-            socket.emit('ssh:error', { message: 'Invalid private key format. Key must be in PEM/OpenSSH format.' });
-            return;
-          }
-
-          sshConfig.privateKey = normalizedKey;
 
           if (connection.passphrase) {
             const { text: decryptedPassphrase, success: passSuccess, usedOldKey: passOld } = decryptWithMetadata(connection.passphrase);
@@ -1997,7 +2164,7 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
         }
 
         // AUTO-MIGRATION: Update DB if we used an old key
-        if (needsMigration && connectionId && !connectionId.startsWith('local-') && isValidObjectId(connectionId)) {
+        if (needsMigration && connectionId && !connectionId.startsWith('local-') && isValidObjectId(connectionId) && !dockerContainerId) {
             CurrentConnectionModel.findByIdAndUpdate(connectionId, {
               password: originalPass,
               privateKey: originalKey,
@@ -2006,7 +2173,13 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
               .catch(err => console.error('❌ Migration failed:', err));
         }
 
-        // console.log('Connecting with config:', { ...sshConfig, privateKey: 'REDACTED', password: 'REDACTED' });
+        if (!sshConfig.password && !sshConfig.privateKey && !dockerContainerId) {
+           return socket.emit('ssh:error', { message: 'No authentication valid.'});
+        }
+        
+        // dockerContainerId mode will implicitly proxy down. 
+        // Wait, NO! If dockerContainerId is active but we don't have keys, sshClient can NEVER connect!
+        // Because node.js is opening a TCP socket to the host!
         sshClient.connect(sshConfig);
       } catch (err) {
         console.error('SSH connect error:', err);
