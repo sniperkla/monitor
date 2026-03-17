@@ -1,25 +1,227 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
-import { Laptop, Terminal as TermIcon, Play, Square, RefreshCw, Box, Layers, MonitorPlay, ExternalLink, AlertTriangle, Trash2, Folder } from 'lucide-react';
+import { 
+  Laptop, Terminal as TermIcon, Play, Square, RefreshCw, Box, Layers, 
+  ExternalLink, AlertTriangle, Trash2, Folder, FileText, Star, Archive,
+  Download, Search, X, RotateCcw, Cpu, HardDrive, Clock, Activity,
+  ChevronDown, ChevronRight, Zap, Globe, Package, Shield,Plus, Share2,
+  Upload, Eye, EyeOff
+} from 'lucide-react';
 import { useApp } from '@/context/AppContext';
 import { useOS } from '@/context/OSContext';
-import TerminalView from '@/components/TerminalView';
-import FileManager from '@/components/FileManager';
+import DockerLogApp from '@/apps/DockerLogApp';
+import MacOSModalWindow from '@/components/MacOSModalWindow';
 import { io } from 'socket.io-client';
 
+// ── Utility & Sub-components ──────────────────
+function formatUptime(status) {
+  if (!status) return '';
+  const m = status.match(/Up\s+(.+)/i);
+  return m ? m[1] : status;
+}
+
+function StatCard({ icon: Icon, label, value, color = 'sky', sub }) {
+  const colors = {
+    sky: 'bg-sky-500/5 border-sky-500/15 text-sky-400',
+    emerald: 'bg-emerald-500/5 border-emerald-500/15 text-emerald-400',
+    rose: 'bg-rose-500/5 border-rose-500/15 text-rose-400',
+    amber: 'bg-amber-500/5 border-amber-500/15 text-amber-400',
+    violet: 'bg-violet-500/5 border-violet-500/15 text-violet-400',
+  };
+  return (
+    <div className={`flex-1 min-w-[120px] border rounded-xl p-3 flex items-center gap-3 ${colors[color]}`}>
+      <div className="opacity-60"><Icon size={18} /></div>
+      <div className="min-w-0">
+        <p className="text-[9px] uppercase font-bold opacity-60 tracking-wider">{label}</p>
+        <p className="text-lg font-bold leading-tight">{value}</p>
+        {sub && <p className="text-[9px] opacity-50">{sub}</p>}
+      </div>
+    </div>
+  );
+}
+
+function PullingFloater({ pullingTasks }) {
+  const entries = Object.entries(pullingTasks);
+  if (entries.length === 0) return null;
+
+  return (
+    <div className="fixed bottom-6 right-6 z-50 flex flex-col gap-2 max-w-sm" style={{ pointerEvents: 'auto' }}>
+      {entries.map(([name, task]) => (
+        <div 
+          key={name} 
+          className="bg-[#1a1f2e]/95 backdrop-blur-xl border border-sky-500/20 rounded-2xl p-4 shadow-2xl shadow-sky-500/5 animate-[slideUp_0.3s_ease-out]"
+        >
+          <div className="flex justify-between items-center mb-2">
+            <div className="min-w-0 mr-3">
+              <div className="flex items-center gap-2">
+                <Download size={12} className="text-sky-400 animate-bounce" />
+                <h4 className="text-xs font-bold truncate text-white">{name}</h4>
+              </div>
+              <p className="text-[10px] text-sky-400/70 font-mono italic truncate mt-0.5">{task.lastLine}</p>
+            </div>
+            <div className="text-right shrink-0">
+              <span className="text-lg font-bold text-sky-400 tabular-nums">{task.progress}%</span>
+              <p className="text-[9px] text-sky-400/60">{task.status}</p>
+            </div>
+          </div>
+          <div className="h-1.5 bg-white/5 rounded-full overflow-hidden">
+            <div 
+              className="h-full rounded-full transition-all duration-700 ease-out"
+              style={{ 
+                width: `${task.progress}%`,
+                backgroundImage: task.progress >= 100 
+                  ? 'linear-gradient(90deg, #10b981, #34d399)' 
+                  : 'linear-gradient(90deg, #0ea5e9, #38bdf8, #0ea5e9)',
+                backgroundSize: '200% 100%',
+                animation: task.progress < 100 ? 'shimmer 2s ease-in-out infinite' : 'none'
+              }} 
+            />
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function ImageComboBox({ value, onChange, options }) {
+  const [isOpen, setIsOpen] = useState(false);
+  const [isFocused, setIsFocused] = useState(false);
+
+  // Filter based on input, but if exactly matching or empty, could show all if we want.
+  // We'll show options containing the value or all if isOpen is forced.
+  const filtered = isOpen && !value ? options : options.filter(o => o.toLowerCase().includes((value || '').toLowerCase()));
+  const showDropdown = (isFocused || isOpen) && filtered.length > 0;
+
+  return (
+    <div className="relative" onFocus={() => setIsFocused(true)} onBlur={() => setTimeout(() => { setIsFocused(false); setIsOpen(false); }, 150)}>
+      <div className="relative flex items-center">
+        <input 
+          type="text"
+          required
+          autoFocus
+          autoComplete="off"
+          value={value || ''}
+          onChange={(e) => {
+            onChange(e.target.value);
+            setIsOpen(true);
+          }}
+          placeholder="e.g. nginx:latest, node:alpine..."
+          className="w-full bg-black/20 border border-white/10 rounded-lg pl-3 pr-8 py-2 text-sm text-[var(--text-primary)] focus:outline-none focus:border-emerald-500/50 focus:ring-1 focus:ring-emerald-500/50 transition-all font-mono"
+        />
+        <div 
+          className="absolute right-2 top-1/2 -translate-y-1/2 text-[var(--text-muted)] cursor-pointer hover:text-white transition-colors p-1"
+          onClick={() => {
+            setIsOpen((prev) => !prev);
+            setIsFocused(true);
+          }}
+        >
+          <ChevronDown size={14} className={`transition-transform duration-200 ${showDropdown ? 'rotate-180' : ''}`} />
+        </div>
+      </div>
+      
+      {showDropdown && (
+        <div className="absolute z-[70000] left-0 right-0 top-[calc(100%+4px)] max-h-[160px] overflow-y-auto custom-scrollbar bg-[var(--bg-card)] border border-[var(--border-color)] rounded-lg shadow-2xl backdrop-blur-xl">
+          {filtered.map(opt => (
+            <div 
+              key={opt}
+              className="px-3 py-2 text-sm font-mono text-[var(--text-primary)] hover:bg-emerald-500/20 cursor-pointer transition-colors border-b border-white/[0.02] last:border-0"
+              onMouseDown={(e) => {
+                e.preventDefault(); // Prevent blur
+                onChange(opt);
+                setIsOpen(false);
+                setIsFocused(false);
+              }}
+            >
+              {opt}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function TagPresetBadge({ tag, onClick }) {
+  return (
+    <button 
+      type="button" 
+      onClick={() => onClick(tag)}
+      className="px-1.5 py-0.5 rounded bg-white/5 border border-white/10 text-[9px] font-mono hover:bg-white/10 hover:border-sky-500/30 transition-all"
+    >
+      {tag}
+    </button>
+  );
+}
+
+// ── Main Component ────────────────────────────
 export default function DockerApp({ initialConnection, initialConnectionId, windowId }) {
   const { state } = useApp();
-  const { showConfirm } = useOS();
+  const { showConfirm, showPrompt, addNotification, openWindow, dispatch: osDispatch } = useOS();
   const { t } = useTranslation();
   
   // App state
-  const [activeTab, setActiveTab] = useState('dashboard'); // dashboard, terminal
+  const [activeTab, setActiveTab] = useState('containers');
   const [containers, setContainers] = useState([]);
+  const [images, setImages] = useState([]);
+  const [volumes, setVolumes] = useState([]);
+  const [networks, setNetworks] = useState([]);
+  const [searchResults, setSearchResults] = useState([]);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [pullingTasks, setPullingTasks] = useState({});
+  const [createModal, setCreateModal] = useState({ isOpen: false, image: '', name: '', tools: {} });
+
+  const availableTools = [
+    { id: 'curl', label: 'curl', desc: 'Command line tool for transferring data with URL syntax' },
+    { id: 'vim', label: 'vim', desc: 'Highly configurable text editor' },
+    { id: 'nano', label: 'nano', desc: 'Small, friendly text editor' },
+    { id: 'git', label: 'git', desc: 'Distributed version control system' },
+    { id: 'htop', label: 'htop', desc: 'Interactive process viewer' },
+    { id: 'net-tools', label: 'net-tools', desc: 'Network tools (ifconfig, netstat)' },
+    { id: 'iputils-ping', label: 'ping', desc: 'Send ICMP ECHO_REQUEST to network hosts' },
+    { id: 'wget', label: 'wget', desc: 'Non-interactive network downloader' },
+    { id: 'python3', label: 'python3', desc: 'Python programming language' },
+    { id: 'jq', label: 'jq', desc: 'Command-line JSON processor' },
+    { id: 'unzip', label: 'unzip', desc: 'Extract compressed files' },
+    { id: 'tmux', label: 'tmux', desc: 'Terminal multiplexer' },
+    { id: 'iproute2', label: 'iproute2', desc: 'Management of networking' }
+  ];
+
+  const commonImages = [
+    { name: 'nginx', icon: Globe },
+    { name: 'redis', icon: Activity },
+    { name: 'postgres', icon: HardDrive },
+    { name: 'node', icon: Zap },
+    { name: 'python', icon: Package },
+    { name: 'ubuntu', icon: Box },
+    { name: 'alpine', icon: Shield },
+    { name: 'mysql', icon: HardDrive }
+  ];
+
+  const commonTags = ['latest', 'alpine', 'slim', '22', '20', '18', 'debian', 'ubuntu', 'lts', 'nightly', 'onbuild'];
+
+  const pullingTasksRef = useRef({});
+
+  // Export / Import state
+  const [showExportPanel, setShowExportPanel] = useState(false);
+  const [exportPassword, setExportPassword] = useState('');
+  const [showExportPw, setShowExportPw] = useState(false);
+  const [showImportPanel, setShowImportPanel] = useState(false);
+  const [importPassword, setImportPassword] = useState('');
+  const [showImportPw, setShowImportPw] = useState(false);
+  const [importData, setImportData] = useState(null); 
+  const importFileRef = useRef(null);
+
+  useEffect(() => {
+    pullingTasksRef.current = pullingTasks;
+  }, [pullingTasks]);
   const [isLoading, setIsLoading] = useState(false);
-  const [activeContainer, setActiveContainer] = useState(null);
+  const [isSearching, setIsSearching] = useState(false);
   const [isDockerInstalled, setIsDockerInstalled] = useState(true);
+  const [expandedContainer, setExpandedContainer] = useState(null);
+  const [containerFilter, setContainerFilter] = useState('all'); // all, running, stopped
   
   // Connection selection
   const { connections, dbConfig } = state;
@@ -27,9 +229,8 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
   const [selectedConnection, setSelectedConnection] = useState(initialConnection || null);
 
   const initialConnIdRef = useRef(initialConnectionId);
-  const { dispatch: osDispatch } = useOS();
 
-  // Update window title when connection is selected
+  // Update window title
   useEffect(() => {
     if (selectedConnection && windowId) {
        osDispatch({ 
@@ -39,21 +240,14 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
     }
   }, [selectedConnection, windowId, osDispatch]);
 
-  // Restore mode: auto-connect from initialConnectionId or localStorage
+  // Restore connection state
   useEffect(() => {
     if (selectedConnection) return;
     if (!connections || connections.length === 0) return;
-
-    // 1. Try initial connection ID (passed via props on hydration)
     if (initialConnectionId) {
       const conn = connections.find(c => c._id === initialConnectionId);
-      if (conn) {
-        setSelectedConnection(conn);
-        return;
-      }
+      if (conn) { setSelectedConnection(conn); return; }
     }
-
-    // 2. Fallback to localStorage persisted ID
     if (windowId) {
       const savedConnId = localStorage.getItem(`docker-connection-${windowId}`);
       if (savedConnId) {
@@ -61,32 +255,34 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
         if (conn) setSelectedConnection(conn);
       }
     }
-  }, [connections, initialConnectionId, windowId]);
+  }, [connections, initialConnectionId, windowId, selectedConnection]);
 
-  // Save selected connection whenever it changes
+  // Restore active tab state
   useEffect(() => {
-    if (selectedConnection?._id && windowId) {
-      localStorage.setItem(`docker-connection-${windowId}`, selectedConnection._id);
+    if (windowId) {
+      const savedTab = localStorage.getItem(`docker-tab-${windowId}`);
+      if (savedTab) setActiveTab(savedTab);
     }
-  }, [selectedConnection, windowId]);
+  }, [windowId]);
 
-  // Restore mode: auto-connect from persisted initialConnectionId
+  // Save selected connection and tab
   useEffect(() => {
-    if (selectedConnection) return;
-    if (!initialConnIdRef.current) return;
-    if (!connections || connections.length === 0) return;
+    if (windowId) {
+      if (selectedConnection?._id) localStorage.setItem(`docker-connection-${windowId}`, selectedConnection._id);
+      localStorage.setItem(`docker-tab-${windowId}`, activeTab);
+    }
+  }, [selectedConnection, activeTab, windowId]);
 
-    const conn = connections.find((c) => c._id === initialConnIdRef.current);
-    if (!conn) return;
-
-    initialConnIdRef.current = null;
-    setSelectedConnection(conn);
-  }, [connections, selectedConnection]);
-
-  // Hidden terminal socket just for running docker commands in the background
   const socketRef = useRef(null);
 
-  // Connect background socket when a connection is selected
+  const emitDockerLs = useCallback(() => {
+    if (!socketRef.current) return;
+    socketRef.current.emit('docker:command', { action: 'list' });
+    socketRef.current.emit('docker:command', { action: 'images' });
+    socketRef.current.emit('docker:command', { action: 'volumes' });
+    socketRef.current.emit('docker:command', { action: 'networks' });
+  }, []);
+
   useEffect(() => {
     if (!selectedConnection) return;
     
@@ -94,132 +290,368 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
     socketRef.current = io({
       path: '/api/socket',
       transports: ['websocket', 'polling'],
-      query: {
-        dbUri: dbConfig?.uri || ''
-      }
+      query: { dbUri: dbConfig?.uri || '' }
     });
-
-    let stdoutBuffer = '';
-    const SENTINEL_CHECK_START = '---DOCKER_CHK_START---';
-    const SENTINEL_CHECK_END = '---DOCKER_CHK_END---';
-    const SENTINEL_START = '---DOCKER_LS_START---';
-    const SENTINEL_END   = '---DOCKER_LS_END---';
-    const stripAnsi = s => s.replace(/\x1b\[[0-9;]*[A-Za-z]|\x1b\][^\x07]*\x07|\r/g, '');
 
     socketRef.current.on('connect', () => {
-        socketRef.current.emit('ssh:connect', {
-          connectionId: selectedConnection._id,
-          connection: selectedConnection,
-        });
+      socketRef.current.emit('ssh:connect', {
+        connectionId: selectedConnection._id,
+        connection: selectedConnection,
       });
-  
-      socketRef.current.on('ssh:connected', () => {
-        setTimeout(() => {
-          if (!socketRef.current) return;
-          // First check if docker is installed and accessible
-          const checkCmd = `echo "${SENTINEL_CHECK_START}" && if command -v docker &> /dev/null && docker info &> /dev/null; then echo "OK"; else echo "MISSING"; fi && echo "${SENTINEL_CHECK_END}"\r`;
-          socketRef.current.emit('ssh:input', checkCmd);
-        }, 500);
-      });
-
-    // Robust parser
-    const parseOutput = (raw) => {
-        const clean = stripAnsi(raw);
-        
-        // Handle docker installation check
-        const chkStart = clean.indexOf(SENTINEL_CHECK_START);
-        const chkEnd = clean.indexOf(SENTINEL_CHECK_END, chkStart);
-        if (chkStart !== -1 && chkEnd !== -1) {
-            const block = clean.slice(chkStart + SENTINEL_CHECK_START.length, chkEnd).trim();
-            if (block.includes("MISSING")) {
-                setIsDockerInstalled(false);
-                setIsLoading(false);
-                stdoutBuffer = '';
-                return;
-            } else if (block.includes("OK")) {
-                setIsDockerInstalled(true);
-                stdoutBuffer = '';
-                // Now list containers
-                emitDockerLs();
-                return;
-            }
-        }
-
-        const si = clean.indexOf(SENTINEL_START);
-        const ei = clean.indexOf(SENTINEL_END, si);
-        if (si === -1 || ei === -1) return null; // not complete yet
-        
-        const block = clean.slice(si + SENTINEL_START.length, ei);
-        const parsed = [];
-        const lines = block.split('\n').filter(l => l.trim() && l.includes('|'));
-        
-        for (const line of lines) {
-          // Format expected: ID|Names|Image|Status|State|Ports
-          const [id, name, image, status, state, ports] = line.trim().split('|');
-          if (id && name) {
-            parsed.push({ 
-              id: id.trim(),
-              name: name.trim(), 
-              image: image || '', 
-              status: status || '', 
-              state: state ? state.toLowerCase().trim() : 'unknown',
-              ports: ports || '',
-              raw: line 
-            });
-          }
-        }
-        return parsed;
-      };
-
-    socketRef.current.on('ssh:data', (data) => {
-      stdoutBuffer += data;
-      const result = parseOutput(stdoutBuffer);
-      if (Array.isArray(result)) {
-        setContainers(result);
-        setIsLoading(false);
-        stdoutBuffer = ''; // clear so next command starts fresh
-      }
     });
 
-    socketRef.current.on('ssh:error', () => {
+    socketRef.current.on('ssh:connected', () => {
+      socketRef.current.emit('docker:command', { action: 'info' });
+    });
+
+    socketRef.current.on('docker:result', ({ action, output, args }) => {
       setIsLoading(false);
+      if (action === 'info') {
+        setIsDockerInstalled(true);
+        emitDockerLs();
+      } else if (action === 'list') {
+        try {
+          const lines = output.split('\n').filter(l => l.trim());
+          const parsed = lines.map(line => {
+            const data = JSON.parse(line);
+            const labels = data.Labels || '';
+            const stackMatch = labels.match(/com\.docker\.compose\.project=([^,]+)/);
+            
+            return {
+              id: data.ID,
+              name: data.Names,
+              image: data.Image,
+              status: data.Status,
+              state: data.State ? data.State.toLowerCase() : 'unknown',
+              ports: data.Ports,
+              size: data.Size,
+              createdAt: data.CreatedAt,
+              networks: data.Networks,
+              stack: stackMatch ? stackMatch[1] : null,
+              mounts: data.Mounts
+            };
+          });
+          setContainers(parsed);
+        } catch (e) {
+          console.error("Failed to parse Docker containers JSON:", e);
+        }
+      } else if (action === 'images') {
+        try {
+          const lines = output.split('\n').filter(l => l.trim());
+          const parsed = lines.map(line => JSON.parse(line));
+          setImages(parsed);
+        } catch (e) {
+          console.error("Failed to parse Docker images JSON:", e);
+        }
+      } else if (action === 'volumes') {
+        try {
+          const lines = output.split('\n').filter(l => l.trim());
+          const parsed = lines.map(line => JSON.parse(line));
+          setVolumes(parsed);
+        } catch (e) { /* volumes may not be supported */ }
+      } else if (action === 'networks') {
+        try {
+          const lines = output.split('\n').filter(l => l.trim());
+          const parsed = lines.map(line => JSON.parse(line));
+          setNetworks(parsed);
+        } catch (e) { /* networks may not be supported */ }
+      } else if (action === 'search') {
+        setIsSearching(false);
+        try {
+          const lines = output.split('\n').filter(l => l.trim());
+          const parsed = lines.map(line => JSON.parse(line));
+          setSearchResults(parsed);
+        } catch (e) {
+          console.error("Failed to parse Docker search JSON:", e);
+        }
+      } else if (action === 'pull:status' || action === 'build:status') {
+        const imageName = args?.[0];
+        if (!imageName || !pullingTasksRef.current[imageName]) return;
+
+        const taskType = pullingTasksRef.current[imageName].isBuild ? 'Build' : 'Pull';
+        const isFinished = output.includes('---FINISHED---');
+        const lines = output.split(/[\r\n]+/).filter(l => l.trim() && !l.includes('---FINISHED---'));
+        
+        // Exclude nohup warnings
+        const cleanLines = lines.filter(l => !l.includes('nohup:'));
+        
+        let progress = pullingTasksRef.current[imageName].progress || 0;
+        let status = pullingTasksRef.current[imageName].status || `${taskType}ing Layers...`;
+        let lastLine = cleanLines[cleanLines.length - 1] || 'Waiting for status...';
+
+        if (action === 'pull:status') {
+          cleanLines.forEach(line => {
+              const barMatch = line.match(/\[(=+)>?\s*\]/);
+              if (barMatch) {
+                  const bar = barMatch[1];
+                  const p = Math.min(Math.round((bar.length / 25) * 100), 99);
+                  if (p > progress) progress = p;
+                  if (line.includes('Downloading')) status = 'Downloading...';
+                  if (line.includes('Extracting')) status = 'Extracting...';
+              }
+              const pctMatch = line.match(/(\d+(?:\.\d+)?)%/);
+              if (pctMatch) {
+                  const p = Math.min(Math.round(parseFloat(pctMatch[1])), 99);
+                  if (p > progress) progress = p;
+              }
+          });
+
+          if (output.includes('Pull complete') || output.includes('up to date') || output.includes('Downloaded newer image')) {
+              progress = 100;
+              status = 'Complete';
+          }
+        } else {
+          // Build status logic
+          cleanLines.forEach(line => {
+            if (line.includes('DONE')) {
+                progress = Math.min(progress + 10, 99);
+            }
+          });
+          if (output.includes('naming to docker.io') || output.includes('writing image') || output.includes('Successfully built')) {
+              progress = 100;
+              status = 'Complete';
+          }
+        }
+
+        if (isFinished && progress < 100) {
+            progress = 100;
+            status = 'Complete';
+        }
+
+        const prevTask = pullingTasksRef.current[imageName];
+        if (isFinished && prevTask.runAfterBuild && !prevTask.runDispatched) {
+           const finalName = prevTask.runAfterBuild.name;
+           const targetTag = prevTask.runAfterBuild.tag;
+           
+           // Automatically Run the container since build is done
+           socketRef.current.emit('docker:command', { action: 'run', args: [finalName, targetTag] });
+           emitDockerLs();
+           addNotification({ title: 'Docker', message: `Custom image ${targetTag} built and started.`, type: 'success' });
+        }
+
+        setPullingTasks(prev => ({
+            ...prev,
+            [imageName]: { 
+              ...prev[imageName], 
+              lastLine, status, progress, 
+              isFinished, 
+              runDispatched: isFinished ? true : prev[imageName].runDispatched 
+            }
+        }));
+
+        if (isFinished || status === 'Complete') {
+            // Refresh immediately when we detect completion
+            if (pullingTasksRef.current[imageName]?.status !== 'Complete') {
+                emitDockerLs();
+            }
+
+            setTimeout(() => {
+                setPullingTasks(prev => {
+                    const next = { ...prev };
+                    delete next[imageName];
+                    return next;
+                });
+                emitDockerLs();
+            }, 3000);
+        }
+      } else if (action === 'pull' || action === 'build') {
+        // action started — no further action needed
+      } else if (action === 'rmi') {
+        emitDockerLs();
+        addNotification({ title: 'Docker', message: 'Image removed successfully', type: 'success' });
+        } else if (action === 'backup' || action === 'backup:status') {
+          const targetId = args?.[0];
+          if (!targetId || !pullingTasksRef.current[targetId]) return;
+
+          const isFinished = output.includes('---FINISHED---');
+          const lines = output.split(/[\r\n]+/).filter(l => l.trim() && !l.includes('---FINISHED---'));
+          let lastLine = lines[lines.length - 1] || 'Processing backup...';
+          
+          let status = 'Packaging...';
+          let progress = pullingTasksRef.current[targetId].progress || 10;
+
+          if (isFinished) {
+            progress = 100;
+            status = 'Complete';
+            const pathMatch = output.match(/BACKUP_PATH:(.+)/);
+            if (pathMatch) {
+              const fullPath = pathMatch[1].trim();
+              addNotification({ 
+                title: 'Backup Ready', 
+                message: `Project archived to ${fullPath}. You can now download it via File Manager.`, 
+                type: 'success' 
+              });
+            }
+          } else {
+            progress = Math.min(progress + 5, 95);
+          }
+
+          setPullingTasks(prev => ({
+            ...prev,
+            [targetId]: { ...prev[targetId], lastLine, status, progress, isFinished }
+          }));
+
+          if (isFinished) {
+            setTimeout(() => {
+              setPullingTasks(prev => {
+                const next = { ...prev };
+                delete next[targetId];
+                return next;
+              });
+            }, 5000);
+          }
+        } else {
+          emitDockerLs();
+        }
+      });
+
+    socketRef.current.on('docker:error', (err) => {
+      setIsLoading(false);
+      if (err.includes('command not found') || err.includes('not found')) {
+        setIsDockerInstalled(false);
+      } else {
+        addNotification({ title: 'Docker Error', message: err, type: 'error' });
+      }
     });
 
     return () => {
-      if (socketRef.current) {
-        socketRef.current.disconnect();
-        socketRef.current = null;
-      }
+      if (socketRef.current) socketRef.current.disconnect();
     };
-  }, [selectedConnection]);
+  }, [selectedConnection, dbConfig, emitDockerLs]);
 
-  const DOCKER_SENTINEL_START = '---DOCKER_LS_START---';
-  const DOCKER_SENTINEL_END   = '---DOCKER_LS_END---';
+  // Poll for pulling tasks
+  useEffect(() => {
+    const activeTaskNames = Object.keys(pullingTasks).filter(name => !pullingTasks[name].isFinished);
+    if (activeTaskNames.length === 0 || !socketRef.current) return;
 
-  const emitDockerLs = () => {
-    if (!socketRef.current) return;
-    const formatString = '{{.ID}}|{{.Names}}|{{.Image}}|{{.Status}}|{{.State}}|{{.Ports}}';
-    const setupEcho = `echo "${DOCKER_SENTINEL_START}" && docker ps -a --format "${formatString}" 2>/dev/null; echo "${DOCKER_SENTINEL_END}"\r`;
-    socketRef.current.emit('ssh:input', setupEcho);
-  };
+    const interval = setInterval(() => {
+        activeTaskNames.forEach(name => {
+            const task = pullingTasksRef.current[name];
+            let action = 'pull:status';
+            if (task?.isBuild) action = 'build:status';
+            if (task?.isBackup) action = 'backup:status';
+            socketRef.current.emit('docker:command', { action, args: [name] });
+        });
+    }, 2000);
+
+    return () => clearInterval(interval);
+  }, [pullingTasks]);
+
+  // Debounced Auto-Search
+  useEffect(() => {
+    if (!searchQuery.trim() || !socketRef.current) {
+      if (!searchQuery.trim()) setSearchResults([]);
+      return;
+    }
+    const timer = setTimeout(() => {
+      setIsSearching(true);
+      socketRef.current.emit('docker:command', { action: 'search', args: [searchQuery] });
+    }, 600);
+    return () => clearTimeout(timer);
+  }, [searchQuery, selectedConnection]);
 
   const fetchContainers = () => {
     if (socketRef.current) {
       setIsLoading(true);
       emitDockerLs();
-      setTimeout(() => setIsLoading(false), 4000); // safety fallback
     }
   };
 
-  const handleContainerAction = (id, action) => { // action: start, stop, restart, rm
+  const handleOpenCreateModal = (imageName = '') => {
+    setCreateModal({ isOpen: true, image: imageName, name: '', tools: {} });
+  };
+
+  const submitCreateContainer = (e) => {
+    if (e) e.preventDefault();
+    if (!createModal.image.trim()) return;
+    if (socketRef.current) {
+      setIsLoading(true);
+      const finalName = createModal.name.trim() || `app_${Math.floor(Math.random() * 100000)}`;
+      
+      const selectedTools = Object.keys(createModal.tools || {}).filter(k => createModal.tools[k]);
+      
+      if (selectedTools.length > 0) {
+          const toolsString = selectedTools.join(' ');
+          const safeBaseName = createModal.image.trim().replace(/[^a-zA-Z0-9.\-]/g, '_').toLowerCase();
+          const customTag = `${safeBaseName}-custom-${Date.now()}`;
+          
+          const dockerfileContent = `FROM ${createModal.image.trim()}\nUSER root\nRUN if command -v apk >/dev/null; then apk update && apk add --no-cache ${toolsString}; elif command -v apt-get >/dev/null; then apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y ${toolsString}; else echo "No supported package manager"; exit 1; fi\n`;
+          let base64Encoded = '';
+          try {
+              base64Encoded = btoa(dockerfileContent);
+          } catch(e) {
+              base64Encoded = Buffer.from(dockerfileContent).toString('base64');
+          }
+          
+          socketRef.current.emit('docker:command', { action: 'build', args: [customTag, base64Encoded] });
+          addNotification({ title: 'Docker', message: `Building custom image with tools: ${toolsString}`, type: 'info' });
+          
+          setPullingTasks(prev => ({
+              ...prev,
+              [customTag]: { 
+                  progress: 0, 
+                  status: 'Building Image...', 
+                  lastLine: 'Initializing build...', 
+                  startTime: Date.now(), 
+                  isBuild: true, 
+                  runAfterBuild: { name: finalName, tag: customTag } 
+              }
+          }));
+      } else {
+          socketRef.current.emit('docker:command', { action: 'run', args: [finalName, createModal.image.trim()] });
+      }
+    }
+    setCreateModal({ isOpen: false, image: '', name: '', tools: {} });
+  };
+
+  const handleContainerAction = (id, action) => {
     if (!socketRef.current) return;
     setIsLoading(true);
-    let cmd = '';
-    if (action === 'rm') cmd = `docker rm -f "${id}"\r`;
-    else cmd = `docker ${action} "${id}"\r`;
-    
-    socketRef.current.emit('ssh:input', cmd);
-    setTimeout(() => emitDockerLs(), 1200);
+    socketRef.current.emit('docker:command', { action, args: [id] });
+  };
+
+  const handleSearchImage = (e) => {
+    e.preventDefault();
+    if (!searchQuery.trim() || !socketRef.current) return;
+    setIsSearching(true);
+    setSearchResults([]);
+    socketRef.current.emit('docker:command', { action: 'search', args: [searchQuery] });
+  };
+
+  const handlePullImage = (imageName) => {
+    if (!socketRef.current) return;
+    addNotification({ title: 'Docker', message: `Background pull started for ${imageName}`, type: 'info' });
+    socketRef.current.emit('docker:command', { action: 'pull', args: [imageName] });
+    setPullingTasks(prev => ({
+        ...prev,
+        [imageName]: { progress: 0, status: 'Starting...', lastLine: 'Initializing...', startTime: Date.now() }
+    }));
+    setSearchResults([]);
+    setSearchQuery('');
+    setCreateModal(prev => ({ ...prev, pullingImage: null }));
+  };
+
+  const handleDeleteImage = (imageId, imageName) => {
+    showConfirm(`Remove image ${imageName}?`, () => {
+      if (!socketRef.current) return;
+      setIsLoading(true);
+      socketRef.current.emit('docker:command', { action: 'rmi', args: [imageId] });
+    }, 'Remove', 'Delete');
+  };
+
+  const fetchLogs = (id, name) => {
+    openWindow(
+      `docker-logs-${id}`,
+      `Logs: ${name}`,
+      <DockerLogApp initialConnection={selectedConnection} initialContainerId={id} initialContainerName={name} />,
+      FileText,
+      { 
+        initialWidth: 900, 
+        initialHeight: 600, 
+        appType: 'docker-logs',
+        props: { initialConnectionId: selectedConnection._id, initialContainerId: id, initialContainerName: name } 
+      }
+    );
   };
 
   const attachToContainer = (containerId, containerName) => {
@@ -232,248 +664,829 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
     }));
   };
 
-  const browseContainer = (containerId, containerName) => {
-    window.dispatchEvent(new CustomEvent('open-files', {
-      detail: {
-        connection: selectedConnection,
-        connectionIdOverride: `docker-${containerId}:${selectedConnection._id}`,
-        title: `Files: ${selectedConnection.name} (${containerName}) (Docker)`
+  const handleBackup = (containerId, containerName) => {
+    if (!socketRef.current) return;
+    addNotification({ title: 'Migration', message: `Calculating project size and starting backup for ${containerName}...`, type: 'info' });
+    socketRef.current.emit('docker:command', { action: 'backup', args: [containerId] });
+    setPullingTasks(prev => ({
+      ...prev,
+      [containerId]: { 
+        progress: 5, 
+        status: 'Backup Starting...', 
+        lastLine: 'Analyzing Docker Compose project...', 
+        startTime: Date.now(),
+        isBackup: true
       }
     }));
   };
 
-  // 1. SELECT CONNECTION SCREEN
+  const handleExportProject = async (container) => {
+    // Collect all relevant project data
+    const projectData = {
+      name: container.name,
+      image: container.image,
+      stack: container.stack,
+      networks: container.networks,
+      ports: container.ports,
+      source: 'docker-app-export',
+      timestamp: new Date().toISOString()
+    };
+    
+    const payload = JSON.stringify(projectData, null, 2);
+    const blob = new Blob([payload], { type: 'application/json' });
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = `docker_project_${container.name}_${new Date().toISOString().slice(0, 10)}.json`;
+    link.click();
+    URL.revokeObjectURL(link.href);
+    addNotification({ title: 'Export', message: 'Project configuration exported successfully', type: 'success' });
+  };
+
+  const handleImportFileChange = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (evt) => {
+      try {
+        const parsed = JSON.parse(evt.target.result);
+        if (parsed.source !== 'docker-app-export') {
+           throw new Error('Invalid project export file');
+        }
+        setImportData(parsed);
+        setCreateModal({
+          isOpen: true,
+          name: `${parsed.name}-imported`,
+          image: parsed.image,
+          tools: {},
+        });
+        addNotification({ title: 'Import', message: 'Configuration loaded into creation modal', type: 'info' });
+      } catch (err) {
+        addNotification({ title: 'Error', message: 'Invalid JSON file', type: 'error' });
+      }
+    };
+    reader.readAsText(file);
+    e.target.value = '';
+  };
+
+  const browseContainer = (containerId, containerName) => {
+    window.dispatchEvent(new CustomEvent('open-files', {
+      detail: {
+        connection: selectedConnection,
+        title: `Files: ${containerName}`
+      }
+    }));
+  };
+
+  // Filtered containers
+  const filteredContainers = useMemo(() => {
+    if (containerFilter === 'all') return containers;
+    if (containerFilter === 'running') return containers.filter(c => c.state === 'running');
+    return containers.filter(c => c.state !== 'running');
+  }, [containers, containerFilter]);
+
+  const runningCount = containers.filter(c => c.state === 'running').length;
+  const stoppedCount = containers.filter(c => c.state !== 'running').length;
+
+  // ── Connection Selector ──
   if (!selectedConnection) {
     return (
-      <div className="flex flex-col h-full bg-[var(--bg-primary)] text-[var(--text-primary)] overflow-hidden">
-        <div className="flex-1 overflow-y-auto z-20">
-            <div className="p-8 max-w-3xl mx-auto">
-              {/* Header */}
-              <div className="flex items-center gap-4 mb-8">
-                <div className="w-12 h-12 rounded-2xl flex items-center justify-center shadow-lg" style={{ background: 'linear-gradient(135deg, #1a1a2e, #16213e)', border: '1px solid rgba(14, 165, 233, 0.3)' }}>
-                  <Box size={22} className="text-sky-400" />
-                </div>
-                <div>
-                  <h1 className="text-2xl font-bold text-[var(--text-primary)] tracking-tight">Docker Manager</h1>
-                  <p className="text-[var(--text-secondary)] text-sm font-mono">$ select a server to manage docker containers</p>
-                </div>
-              </div>
-
-              {/* Connection Grid */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+      <div className="flex flex-col h-full bg-[var(--bg-primary)] p-8">
+        <div className="max-w-4xl mx-auto w-full text-center">
+            <div className="w-20 h-20 rounded-2xl bg-sky-500/10 flex items-center justify-center mx-auto mb-6">
+              <Box size={36} className="text-sky-400" />
+            </div>
+            <h1 className="text-3xl font-bold mb-2">Docker Manager</h1>
+            <p className="text-sm text-[var(--text-muted)] mb-8">Select a server to manage Docker containers</p>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 {sshConnections.map(conn => (
-                  <div 
-                    key={conn._id}
-                    onClick={() => setSelectedConnection(conn)}
-                    className="group relative p-4 rounded-xl border cursor-pointer transition-all hover:scale-[1.01] active:scale-[0.99] hover:bg-white/5"
-                    style={{ background: 'var(--bg-card)', borderColor: 'var(--border-color)' }}
-                  >
-                    <div className="flex items-center gap-3 mb-1">
-                      <div className="w-9 h-9 rounded-lg flex items-center justify-center shrink-0" style={{ background: `${conn.color}18`, border: `1px solid ${conn.color}30` }}>
-                        <Laptop size={16} style={{ color: conn.color }} />
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <h3 className="font-semibold text-[var(--text-primary)] truncate text-sm">{conn.name}</h3>
-                        <p className="text-[11px] text-[var(--text-muted)] font-mono truncate">{conn.host}</p>
-                      </div>
+                <div key={conn._id} onClick={() => setSelectedConnection(conn)} className="p-4 rounded-xl border border-[var(--border-color)] bg-[var(--bg-card)] cursor-pointer hover:bg-white/5 hover:border-sky-500/30 transition-all text-left group">
+                    <div className="flex items-center gap-4">
+                        <div className="w-10 h-10 rounded-lg flex items-center justify-center transition-transform group-hover:scale-110" style={{ background: `${conn.color}20`, color: conn.color }}>
+                            <Laptop size={20} />
+                        </div>
+                        <div>
+                            <h3 className="font-bold">{conn.name}</h3>
+                            <p className="text-xs text-[var(--text-muted)]">{conn.host}</p>
+                        </div>
                     </div>
-                  </div>
+                </div>
                 ))}
-                
-                {sshConnections.length === 0 && (
-                  <div className="col-span-full py-16 text-center rounded-2xl border border-dashed border-[var(--border-color)]">
-                    <p className="text-xs text-[var(--text-muted)] opacity-60">No SSH connections available.</p>
-                  </div>
-                )}
-              </div>
             </div>
         </div>
       </div>
     );
   }
 
-  // 2. DASHBOARD OR TERMINAL TAB SCREEN
+  // ── Tab config ──
+  const tabs = [
+    { id: 'containers', label: 'CONTAINERS', count: containers.length, color: 'sky' },
+    { id: 'images', label: 'IMAGES', count: images.length, color: 'emerald' },
+    { id: 'volumes', label: 'VOLUMES', count: volumes.length, color: 'violet' },
+    { id: 'networks', label: 'NETWORKS', count: networks.length, color: 'amber' },
+  ];
+
+  const tabColors = { sky: 'bg-sky-500', emerald: 'bg-emerald-500', violet: 'bg-violet-500', amber: 'bg-amber-500' };
+
   return (
-    <div className="flex flex-col h-full bg-[var(--bg-primary)] text-[var(--text-primary)] overflow-hidden">
-        {/* App Tab Bar */}
+    <div className="flex flex-col h-full bg-[var(--bg-primary)] text-[var(--text-primary)]">
+        {/* ── Toolbar ── */}
         <div className="flex items-center justify-between bg-[var(--bg-secondary)] border-b border-[var(--border-color)] px-4 h-12 shrink-0">
-          <div className="flex items-center gap-4">
-              <div className="flex items-center gap-2">
-                  <div className="w-6 h-6 rounded-md flex items-center justify-center" style={{ background: `${selectedConnection.color}20`, color: selectedConnection.color }}>
-                      <Box size={14} />
-                  </div>
-                  <span className="text-sm font-bold">{selectedConnection.name}</span>
-                  <span className="text-xs text-[var(--text-muted)] font-mono hidden md:inline ml-2">{selectedConnection.host}</span>
-              </div>
-              
-              <div className="h-4 w-px bg-[var(--border-color)] mx-2"></div>
-              
-              <button 
-                  onClick={() => setActiveTab('dashboard')}
-                  className={`px-3 py-1.5 text-xs font-semibold rounded-md transition-all flex items-center gap-2 ${activeTab === 'dashboard' ? 'bg-sky-500/20 text-sky-400 border border-sky-500/30' : 'text-[var(--text-secondary)] hover:bg-white/5'}`}
-              >
-                  <Layers size={14} />
-                  Containers
-              </button>
-          </div>
-          
-          <div className="flex items-center gap-2">
-              <button onClick={() => setSelectedConnection(null)} className="text-xs px-2 py-1 text-[var(--text-muted)] hover:text-[var(--text-primary)] transition-colors">
-                  Change Server
-              </button>
-          </div>
-        </div>
-        
-        {/* Main Content */}
-        <div className="flex-1 relative overflow-hidden bg-[var(--bg-primary)]">
-            
-            {/* Dashboard View */}
-            <div style={{ display: activeTab === 'dashboard' ? 'block' : 'none', height: '100%' }}>
-                <div className="p-6 h-full overflow-y-auto">
-                    
-                    {!isDockerInstalled ? (
-                        <div className="flex flex-col items-center justify-center p-12 text-center rounded-2xl border border-dashed border-rose-500/30 bg-rose-500/5 mt-4">
-                            <div className="w-16 h-16 rounded-full bg-rose-500/10 flex items-center justify-center mb-4">
-                                <AlertTriangle size={24} className="text-rose-400" />
-                            </div>
-                            <h3 className="font-bold text-[var(--text-primary)] mb-2">Docker Unavailable</h3>
-                            <p className="text-sm text-[var(--text-muted)] max-w-md">
-                                Docker is either not installed or you don't have permissions to run the 'docker' command. Ensure Docker is installed and the user is in the 'docker' group, or use sudo.
-                            </p>
-                        </div>
-                    ) : (
-                        <>
-                            <div className="flex items-center justify-between mb-6">
-                                <div>
-                                    <h2 className="text-xl font-bold flex items-center gap-2">
-                                        Docker Containers
-                                        {isLoading && <RefreshCw size={14} className="animate-spin text-[var(--text-muted)] ml-2" />}
-                                    </h2>
-                                </div>
-                                <div className="flex gap-2">
-                                    <button 
-                                        onClick={fetchContainers}
-                                        className="px-3 py-1.5 rounded-lg border border-[var(--border-color)] bg-white/5 hover:bg-white/10 flex items-center gap-2 text-xs font-semibold transition-all"
-                                    >
-                                        <RefreshCw size={12} />
-                                        Refresh
-                                    </button>
-                                </div>
-                            </div>
-                            
-                            <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-                                {containers.map(container => (
-                                    <div 
-                                        key={container.id} 
-                                        className="rounded-xl border border-[var(--border-color)] bg-[var(--bg-card)] p-4 flex flex-col gap-4 group transition-all hover:border-sky-500/30 shadow-sm"
-                                    >
-                                        <div className="flex items-center justify-between">
-                                            <div className="flex items-center gap-3">
-                                                <div className={`w-3 h-3 rounded-full ${container.state === 'running' ? 'bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.6)]' : 'bg-rose-400/50'}`} />
-                                                <h3 className="font-bold text-[var(--text-primary)] tracking-wide">{container.name}</h3>
-                                            </div>
-                                            <div className="flex items-center gap-2">
-                                                <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider ${container.state === 'running' ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' : 'bg-rose-500/10 text-rose-400 border border-rose-500/20'}`}>
-                                                    {container.state}
-                                                </span>
-                                            </div>
-                                        </div>
-                                        
-                                        <div className="flex flex-col gap-2 bg-black/30 p-3 rounded-lg border border-white/5 overflow-hidden">
-                                            <div className="flex items-center justify-between text-[11px] font-mono">
-                                                <span className="text-sky-400">Image</span>
-                                                <span className="text-white/80 bg-white/5 px-1.5 py-0.5 rounded truncate max-w-[200px]" title={container.image}>{container.image}</span>
-                                            </div>
-                                            <div className="flex items-center justify-between text-[11px] font-mono">
-                                                <span className="text-white/30">Status</span>
-                                                <span className="text-white/60 truncate" title={container.status}>{container.status}</span>
-                                            </div>
-                                            <div className="flex items-center justify-between text-[11px] font-mono">
-                                                <span className="text-white/30">Ports</span>
-                                                <span className="text-white/60 truncate max-w-[200px]" title={container.ports}>{container.ports || 'None'}</span>
-                                            </div>
-                                            <div className="flex items-center justify-between text-[11px] font-mono border-t border-white/5 pt-1.5 mt-0.5">
-                                                <span className="text-white/30">Container ID</span>
-                                                <span className="text-white/40">{container.id}</span>
-                                            </div>
-                                        </div>
-                                        
-                                        <div className="flex items-center gap-2 mt-auto pt-2">
-                                            {container.state === 'running' ? (
-                                                <button 
-                                                    onClick={() => handleContainerAction(container.id, 'stop')}
-                                                    className="flex-1 py-1.5 rounded-lg border border-orange-500/30 bg-orange-500/10 hover:bg-orange-500/20 text-orange-400 text-xs font-bold transition-all flex justify-center items-center gap-1.5"
-                                                >
-                                                    <Square size={12} /> Stop
-                                                </button>
-                                            ) : (
-                                                <button 
-                                                    onClick={() => handleContainerAction(container.id, 'start')}
-                                                    className="flex-1 py-1.5 rounded-lg border border-emerald-500/30 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 text-xs font-bold transition-all flex justify-center items-center gap-1.5"
-                                                >
-                                                    <Play size={12} /> Start
-                                                </button>
-                                            )}
-                                            
-                                            <button 
-                                                onClick={() => handleContainerAction(container.id, 'restart')}
-                                                className="flex-1 py-1.5 rounded-lg border border-[var(--border-color)] hover:bg-white/5 text-[var(--text-secondary)] text-xs font-bold transition-all flex justify-center items-center gap-1.5"
-                                            >
-                                                <RefreshCw size={12} /> Restart
-                                            </button>
-                                            
-                                            <button 
-                                                onClick={() => browseContainer(container.id, container.name)}
-                                                disabled={container.state !== 'running'}
-                                                className="flex-1 py-1.5 rounded-lg border border-indigo-500/30 bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-400 text-xs font-bold transition-all flex justify-center items-center gap-1.5 disabled:opacity-30 disabled:hover:bg-indigo-500/10"
-                                            >
-                                                <Folder size={12} /> Files
-                                            </button>
-                                            
-                                            <button 
-                                                onClick={() => attachToContainer(container.id, container.name)}
-                                                disabled={container.state !== 'running'}
-                                                className="flex-1 py-1.5 rounded-lg border border-sky-500/30 bg-sky-500/10 hover:bg-sky-500/20 text-sky-400 text-xs font-bold transition-all flex justify-center items-center gap-1.5 disabled:opacity-30 disabled:hover:bg-sky-500/10"
-                                            >
-                                                <TermIcon size={12} /> Exec
-                                            </button>
-                                            
-                                            <button 
-                                                onClick={() => {
-                                                    showConfirm(
-                                                        `Are you sure you want to completely remove container '${container.name}'?`,
-                                                        () => handleContainerAction(container.id, 'rm'),
-                                                        'Remove Container',
-                                                        'Remove',
-                                                        'Cancel'
-                                                    );
-                                                }}
-                                                className="w-8 flex-shrink-0 py-1.5 rounded-lg border border-red-500/30 hover:bg-red-500/10 text-red-400 transition-all flex justify-center items-center"
-                                                title="Remove Container"
-                                            >
-                                                <Trash2 size={12} />
-                                            </button>
-                                        </div>
-                                    </div>
-                                ))}
-                            </div>
-                            
-                            {!isLoading && containers.length === 0 && (
-                                <div className="flex flex-col items-center justify-center p-12 text-center rounded-2xl border border-dashed border-[var(--border-color)] bg-black/10 mt-4">
-                                    <div className="w-16 h-16 rounded-full bg-white/5 flex items-center justify-center mb-4">
-                                        <Box size={24} className="text-[var(--text-muted)]" />
-                                    </div>
-                                    <h3 className="font-bold text-[var(--text-primary)] mb-2">No containers found</h3>
-                                    <p className="text-sm text-[var(--text-muted)] max-w-sm">
-                                        There are no docker containers on this server, or the command could not be executed.
-                                    </p>
-                                </div>
-                            )}
-                        </>
-                    )}
+            <div className="flex items-center gap-4">
+                <span className="text-sm font-bold flex items-center gap-2">
+                    <Box size={14} className="text-sky-400" />
+                    {selectedConnection.name}
+                </span>
+                <div className="flex items-center gap-0.5 bg-black/20 p-0.5 rounded-lg">
+                    {tabs.map(tab => (
+                      <button 
+                        key={tab.id}
+                        onClick={() => setActiveTab(tab.id)} 
+                        className={`px-3 py-1 text-[10px] font-bold rounded-md transition-all flex items-center gap-1.5 ${
+                          activeTab === tab.id 
+                            ? `${tabColors[tab.color]} text-white shadow-lg` 
+                            : 'text-[var(--text-muted)] hover:text-white hover:bg-white/5'
+                        }`}
+                      >
+                        {tab.label}
+                        <span className={`text-[8px] px-1 py-0 rounded ${activeTab === tab.id ? 'bg-white/20' : 'bg-white/5'}`}>
+                          {tab.count}
+                        </span>
+                      </button>
+                    ))}
                 </div>
             </div>
+            <div className="flex items-center gap-3">
+                {/* Export/Import Buttons like SSH Manager */}
+                <div className="flex items-center gap-1.5 bg-black/20 p-0.5 rounded-lg mr-2">
+                  <button 
+                    onClick={() => importFileRef.current?.click()}
+                    className="px-2 py-1 text-[10px] font-bold rounded-md text-[var(--text-muted)] hover:text-white hover:bg-white/5 transition-all flex items-center gap-1"
+                    title="Import Project Metadata"
+                  >
+                    <Upload size={12} /> IMPORT
+                  </button>
+                  <input ref={importFileRef} type="file" accept=".json" className="hidden" onChange={handleImportFileChange} />
+                </div>
+                
+                {isLoading && <RefreshCw size={14} className="animate-spin text-sky-400" />}
+                <button onClick={fetchContainers} className="p-1.5 hover:bg-white/5 rounded-lg text-sky-400 transition-colors" title="Refresh">
+                    <RefreshCw size={14} className={isLoading ? 'animate-spin' : ''} />
+                </button>
+                <div className="w-px h-4 bg-white/10" />
+                <button onClick={() => setSelectedConnection(null)} className="text-[10px] text-[var(--text-muted)] hover:text-white transition-colors">SWITCH</button>
+            </div>
         </div>
+
+        {/* ── Content ── */}
+        <div className="flex-1 overflow-y-auto p-6 scrollbar-hide">
+            {!isDockerInstalled ? (
+                <div className="text-center py-20">
+                    <AlertTriangle size={48} className="text-rose-500 mx-auto mb-4" />
+                    <h2 className="text-xl font-bold mb-2">Docker Not Installed</h2>
+                    <p className="text-sm text-[var(--text-muted)]">Docker was not found on this server</p>
+                </div>
+            ) : (
+                <>
+                    {/* ── CONTAINERS TAB ── */}
+                    {activeTab === 'containers' && (
+                        <div className="flex flex-col gap-5">
+                            {/* Stats row */}
+                            <div className="flex gap-3 flex-wrap">
+                                <StatCard icon={Box} label="Total" value={containers.length} color="sky" />
+                                <StatCard icon={Activity} label="Running" value={runningCount} color="emerald" />
+                                <StatCard icon={Square} label="Stopped" value={stoppedCount} color="rose" />
+                            </div>
+
+                            {/* Filter and Action bar */}
+                            <div className="flex items-center justify-between">
+                                <div className="flex items-center gap-2">
+                                    {['all', 'running', 'stopped'].map(f => (
+                                      <button 
+                                        key={f}
+                                        onClick={() => setContainerFilter(f)}
+                                        className={`px-3 py-1 rounded-lg text-[10px] font-bold uppercase transition-all ${
+                                          containerFilter === f 
+                                            ? 'bg-sky-500/15 text-sky-400 border border-sky-500/30' 
+                                            : 'text-[var(--text-muted)] hover:text-white hover:bg-white/5 border border-transparent'
+                                        }`}
+                                      >
+                                        {f} {f === 'all' ? containers.length : f === 'running' ? runningCount : stoppedCount}
+                                      </button>
+                                    ))}
+                                </div>
+                                <button 
+                                  onClick={() => handleOpenCreateModal()}
+                                  className="px-3 py-1.5 rounded-lg bg-emerald-500 text-white text-[10px] font-bold hover:bg-emerald-600 shadow-lg active:scale-95 transition-all flex items-center gap-1.5"
+                                >
+                                  <Plus size={12} /> CREATE CONTAINER
+                                </button>
+                            </div>
+
+                            {/* Container list */}
+                            {filteredContainers.length === 0 ? (
+                              <div className="text-center py-16 opacity-40">
+                                <Box size={40} className="mx-auto mb-3" />
+                                <p className="text-sm font-bold">No containers found</p>
+                                <p className="text-xs mt-1">Pull an image and run it to get started</p>
+                              </div>
+                            ) : (
+                              <div className="grid grid-cols-1 xl:grid-cols-2 gap-3">
+                                {filteredContainers.map(c => {
+                                  const isExpanded = expandedContainer === c.id;
+                                  return (
+                                    <div 
+                                      key={c.id} 
+                                      className={`rounded-2xl border bg-[var(--bg-card)] transition-all duration-200 ${
+                                        c.state === 'running' 
+                                          ? 'border-emerald-500/15 hover:border-emerald-500/30' 
+                                          : 'border-[var(--border-color)] hover:border-sky-500/20'
+                                      } ${isExpanded ? 'ring-1 ring-sky-500/20' : ''}`}
+                                    >
+                                      {/* Container header */}
+                                      <div 
+                                        className="p-4 cursor-pointer flex items-start justify-between"
+                                        onClick={() => setExpandedContainer(isExpanded ? null : c.id)}
+                                      >
+                                        <div className="flex items-center gap-3 min-w-0">
+                                            <div className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 ${
+                                              c.state === 'running' 
+                                                ? 'bg-emerald-500/10 text-emerald-500' 
+                                                : 'bg-rose-500/10 text-rose-500'
+                                            }`}>
+                                                <Box size={18} />
+                                            </div>
+                                            <div className="min-w-0">
+                                                <h3 className="font-bold text-sm truncate flex items-center gap-2">
+                                                  <span>{c.name}</span>
+                                                  {c.stack && (
+                                                    <span className="px-1.5 py-0.5 text-[8px] bg-purple-500/10 text-purple-400 font-bold uppercase rounded-lg border border-purple-500/20 shadow-sm align-middle">
+                                                      ★ {c.stack}
+                                                    </span>
+                                                  )}
+                                                </h3>
+                                                <p className="text-[10px] font-mono text-[var(--text-muted)] truncate">{c.image}</p>
+                                                {c.ports && (
+                                                  <p className="text-[9px] font-mono text-sky-400/70 flex items-center gap-1 mt-0.5 truncate">
+                                                    <ExternalLink size={8} /> {c.ports}
+                                                  </p>
+                                                )}
+                                            </div>
+                                        </div>
+                                        <div className="flex items-center gap-2 shrink-0 ml-2">
+                                          <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                                            c.state === 'running' 
+                                              ? 'bg-emerald-500/10 text-emerald-400' 
+                                              : 'bg-rose-500/10 text-rose-400'
+                                          }`}>
+                                            {c.state === 'running' ? `● ${formatUptime(c.status)}` : c.status}
+                                          </span>
+                                          {isExpanded ? <ChevronDown size={14} className="opacity-30" /> : <ChevronRight size={14} className="opacity-30" />}
+                                        </div>
+                                      </div>
+
+                                      {/* Container details (expandable) */}
+                                      {isExpanded && (
+                                        <div className="px-4 pb-4 pt-0 border-t border-white/5 animate-[slideDown_0.15s_ease-out]">
+                                          <div className="grid grid-cols-2 gap-x-6 gap-y-1 text-[10px] text-[var(--text-muted)] py-3">
+                                            <div className="flex justify-between"><span>ID</span><span className="font-mono">{c.id.substring(0, 12)}</span></div>
+                                            <div className="flex justify-between"><span>Network</span><span className="font-mono">{c.networks || '-'}</span></div>
+                                            <div className="flex justify-between col-span-2 mt-1 border-t border-white/5 pt-1">
+                                              <span>Mounts</span>
+                                              <span className="font-mono truncate ml-4 opacity-70" title={c.mounts}>{c.mounts || '-'}</span>
+                                            </div>
+                                          </div>
+                                        </div>
+                                      )}
+
+                                      {/* Action buttons */}
+                                      <div className="flex items-center gap-1.5 px-4 pb-4">
+                                          {c.state === 'running' ? (
+                                              <button onClick={(e) => { e.stopPropagation(); handleContainerAction(c.id, 'stop'); }} className="flex-1 py-1.5 rounded-lg bg-orange-500/10 text-orange-400 text-[10px] font-bold hover:bg-orange-500/15 transition-all flex items-center justify-center gap-1">
+                                                <Square size={9} /> STOP
+                                              </button>
+                                          ) : (
+                                              <button onClick={(e) => { e.stopPropagation(); handleContainerAction(c.id, 'start'); }} className="flex-1 py-1.5 rounded-lg bg-emerald-500/10 text-emerald-400 text-[10px] font-bold hover:bg-emerald-500/15 transition-all flex items-center justify-center gap-1">
+                                                <Play size={9} /> START
+                                              </button>
+                                          )}
+                                          <button onClick={(e) => { e.stopPropagation(); handleContainerAction(c.id, 'restart'); }} className="py-1.5 px-2.5 rounded-lg bg-white/5 text-[10px] font-bold hover:bg-white/10 transition-all" title="Restart">
+                                            <RotateCcw size={10} />
+                                          </button>
+                                          <button onClick={(e) => { e.stopPropagation(); fetchLogs(c.id, c.name); }} className="flex-1 py-1.5 rounded-lg bg-white/5 text-[10px] font-bold hover:bg-white/10 transition-all flex items-center justify-center gap-1">
+                                            <FileText size={9} /> LOGS
+                                          </button>
+                                          <button onClick={(e) => { e.stopPropagation(); browseContainer(c.id, c.name); }} disabled={c.state !== 'running'} className="py-1.5 px-2.5 rounded-lg bg-white/5 text-[10px] font-bold disabled:opacity-20 hover:bg-white/10 transition-all" title="Files">
+                                            <Folder size={10} />
+                                          </button>
+                                          <button onClick={(e) => { e.stopPropagation(); attachToContainer(c.id, c.name); }} disabled={c.state !== 'running'} className="py-1.5 px-2.5 rounded-lg bg-white/5 text-[10px] font-bold disabled:opacity-20 hover:bg-white/10 transition-all" title="Exec">
+                                            <TermIcon size={10} />
+                                          </button>
+                                          <button 
+                                            onClick={(e) => { e.stopPropagation(); handleBackup(c.id, c.name); }} 
+                                            className="py-1.5 px-2.5 rounded-lg bg-emerald-500/10 text-emerald-400 text-[10px] font-bold hover:bg-emerald-500/20 transition-all flex items-center gap-1" 
+                                            title="Backup Files & Data (Heavy)"
+                                          >
+                                            <Archive size={10} />
+                                          </button>
+                                          <button 
+                                            onClick={(e) => { e.stopPropagation(); handleExportProject(c); }} 
+                                            className="py-1.5 px-2.5 rounded-lg bg-sky-500/10 text-sky-400 text-[10px] font-bold hover:bg-sky-500/20 transition-all flex items-center gap-1" 
+                                            title="Export Configuration (Light)"
+                                          >
+                                            <Share2 size={10} />
+                                          </button>
+                                          <button onClick={(e) => { e.stopPropagation(); showConfirm(`Delete ${c.name}?`, () => handleContainerAction(c.id, 'rm'), 'Remove', 'Delete'); }} className="py-1.5 px-2 rounded-lg border border-rose-500/20 text-rose-500 hover:bg-rose-500/10 transition-all">
+                                            <Trash2 size={10} />
+                                          </button>
+                                      </div>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            )}
+                        </div>
+                    )}
+
+                    {/* ── IMAGES TAB ── */}
+                    {activeTab === 'images' && (
+                        <div className="flex flex-col gap-5">
+                            {/* Stats row */}
+                            <div className="flex gap-3 flex-wrap">
+                                <StatCard icon={Layers} label="Local Images" value={images.length} color="emerald" />
+                                <StatCard 
+                                  icon={Package} 
+                                  label="Unused" 
+                                  value={images.filter(img => !containers.some(c => c.image.includes(img.Repository))).length} 
+                                  color="rose" 
+                                />
+                                <StatCard icon={Download} label="Pulling" value={Object.keys(pullingTasks).length} color="sky" />
+                            </div>
+
+                            {/* Search */}
+                            <form onSubmit={handleSearchImage} className="relative group">
+                                <div className="absolute left-4 top-1/2 -translate-y-1/2 text-[var(--text-muted)] transition-colors group-focus-within:text-emerald-400">
+                                  <Search size={16} />
+                                </div>
+                                <input 
+                                  type="text" 
+                                  value={searchQuery} 
+                                  onChange={(e) => setSearchQuery(e.target.value)} 
+                                  placeholder="Search Docker Hub..." 
+                                  className="w-full bg-[var(--bg-card)] border border-[var(--border-color)] rounded-xl py-3 pl-11 pr-28 text-sm focus:outline-none focus:border-emerald-500/50 transition-colors" 
+                                />
+                                {searchQuery && (
+                                  <button 
+                                    type="button"
+                                    onClick={() => { setSearchQuery(''); setSearchResults([]); }}
+                                    className="absolute right-[90px] top-1/2 -translate-y-1/2 p-1 hover:bg-white/10 rounded"
+                                  >
+                                    <X size={14} className="opacity-40" />
+                                  </button>
+                                )}
+                                <button 
+                                  type="submit" 
+                                  disabled={isSearching}
+                                  className="absolute right-2 top-1.5 bg-emerald-500 text-white px-4 py-2 rounded-lg text-xs font-bold hover:bg-emerald-600 transition-all disabled:opacity-50 flex items-center gap-1.5"
+                                >
+                                  {isSearching ? <RefreshCw size={12} className="animate-spin" /> : <Search size={12} />}
+                                  SEARCH
+                                </button>
+                            </form>
+
+                            {/* Pulling Progress Area (inline) */}
+                            {Object.entries(pullingTasks).map(([name, task]) => (
+                                <div key={name} className="bg-sky-500/5 border border-sky-500/10 rounded-2xl p-4 flex flex-col gap-2">
+                                    <div className="flex justify-between items-center">
+                                        <div className="min-w-0 mr-3">
+                                            <div className="flex items-center gap-2">
+                                              <Download size={12} className="text-sky-400 animate-bounce shrink-0" />
+                                              <h4 className="text-xs font-bold truncate">{name}</h4>
+                                            </div>
+                                            <p className="text-[10px] text-sky-400 font-mono italic truncate mt-0.5">{task.lastLine}</p>
+                                        </div>
+                                        <div className="text-right shrink-0">
+                                            <span className="text-lg font-bold text-sky-400 tabular-nums">{task.progress}%</span>
+                                            <p className="text-[9px] text-sky-400/60">{task.status}</p>
+                                        </div>
+                                    </div>
+                                    <div className="h-1.5 bg-white/5 rounded-full overflow-hidden">
+                                        <div 
+                                          className="h-full rounded-full transition-all duration-700" 
+                                          style={{ 
+                                            width: `${task.progress}%`,
+                                            backgroundImage: task.progress >= 100 
+                                              ? 'linear-gradient(90deg, #10b981, #34d399)' 
+                                              : 'linear-gradient(90deg, #0ea5e9, #38bdf8)',
+                                          }} 
+                                        />
+                                    </div>
+                                </div>
+                            ))}
+
+                            {/* Search Results */}
+                            {searchResults.length > 0 && (
+                                <div className="bg-[var(--bg-card)] border border-[var(--border-color)] rounded-xl overflow-hidden">
+                                    <div className="flex justify-between items-center px-4 py-3 border-b border-white/5">
+                                        <h3 className="text-[10px] font-bold text-emerald-400 tracking-widest flex items-center gap-2">
+                                          <Globe size={12} />
+                                          DOCKER HUB RESULTS
+                                          <span className="text-white/30 font-mono">{searchResults.length}</span>
+                                        </h3>
+                                        <button onClick={() => setSearchResults([])} className="text-[10px] opacity-50 hover:opacity-100 transition-opacity flex items-center gap-1">
+                                          <X size={10} /> CLEAR
+                                        </button>
+                                    </div>
+                                    <div className="flex flex-col divide-y divide-white/5 max-h-[400px] overflow-y-auto scrollbar-hide">
+                                        {searchResults.map((res, i) => (
+                                            <div key={i} className="flex items-center justify-between p-4 hover:bg-white/[0.03] transition-all group/res">
+                                                <div className="min-w-0 mr-4 flex-1">
+                                                    <div className="flex items-center gap-2 mb-1 flex-wrap">
+                                                        <span className="font-bold text-sm text-white">{res.Name}</span>
+                                                        {res.IsOfficial === "[OK]" && (
+                                                            <span className="text-[8px] bg-emerald-500/20 text-emerald-400 px-1.5 py-0.5 rounded font-bold flex items-center gap-1">
+                                                                <Shield size={8} /> OFFICIAL
+                                                            </span>
+                                                        )}
+                                                        <div className="flex items-center gap-1 bg-amber-500/10 text-amber-400 px-1.5 py-0.5 rounded text-[10px] font-bold">
+                                                            <Star size={9} fill="currentColor" />
+                                                            {res.StarCount || res.Stars || 0}
+                                                        </div>
+                                                    </div>
+                                                    <p className="text-[10px] text-[var(--text-muted)] line-clamp-1 leading-relaxed opacity-70 group-hover/res:opacity-100 transition-opacity">
+                                                        {res.Description || "No description provided."}
+                                                    </p>
+                                                </div>
+                                                <button 
+                                                    onClick={() => {
+                                                      setCreateModal(prev => ({ ...prev, pullingImage: res }));
+                                                    }}
+                                                    disabled={!!pullingTasks[res.Name] || !!pullingTasks[`${res.Name}:latest`]}
+                                                    className="shrink-0 px-4 py-2 rounded-lg bg-emerald-500 text-white text-[10px] font-bold hover:bg-emerald-600 transition-all shadow-lg active:scale-95 flex items-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed"
+                                                >
+                                                    {pullingTasks[res.Name] || pullingTasks[`${res.Name}:latest`] 
+                                                      ? <><RefreshCw size={11} className="animate-spin" /> PULLING</>
+                                                      : <><Download size={11} /> PULL TAG</>
+                                                    }
+                                                </button>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
+
+                            {/* Tag Selection Modal (Internal) */}
+                            {createModal.pullingImage && createPortal(
+                              <MacOSModalWindow
+                                isOpen={!!createModal.pullingImage}
+                                onClose={() => setCreateModal(prev => ({ ...prev, pullingImage: null }))}
+                                title={`Pull Image: ${createModal.pullingImage.Name}`}
+                                icon={Download}
+                                defaultWidth={400}
+                                defaultHeight={320}
+                                zIndexClassName="z-[75000]"
+                              >
+                                <div className="p-6 flex flex-col h-full">
+                                  <p className="text-sm text-[var(--text-muted)] mb-4 font-mono">{createModal.pullingImage.Name}</p>
+                                  
+                                  <label className="block text-xs font-bold text-[var(--text-muted)] mb-2 uppercase tracking-wide">Select Tag</label>
+                                  <div className="flex flex-wrap gap-1.5 mb-4">
+                                    {commonTags.map(tag => (
+                                      <button 
+                                        key={tag}
+                                        onClick={() => handlePullImage(`${createModal.pullingImage.Name}:${tag}`)}
+                                        className="px-3 py-1.5 rounded-lg bg-sky-500/10 border border-sky-500/20 text-sky-400 text-xs font-bold hover:bg-sky-500/20 transition-all"
+                                      >
+                                        {tag}
+                                      </button>
+                                    ))}
+                                  </div>
+
+                                  <div className="relative mt-2">
+                                    <label className="block text-xs font-bold text-[var(--text-muted)] mb-2 uppercase tracking-wide">Or Custom Tag</label>
+                                    <div className="flex gap-2">
+                                      <input 
+                                        type="text" 
+                                        defaultValue="latest"
+                                        id="custom-tag-input"
+                                        placeholder="e.g. 1.21-alpine"
+                                        className="flex-1 bg-black/20 border border-white/10 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-emerald-500"
+                                        onKeyDown={(e) => {
+                                          if (e.key === 'Enter') {
+                                            handlePullImage(`${createModal.pullingImage.Name}:${e.target.value || 'latest'}`);
+                                          }
+                                        }}
+                                      />
+                                      <button 
+                                        onClick={() => {
+                                          const val = document.getElementById('custom-tag-input').value;
+                                          handlePullImage(`${createModal.pullingImage.Name}:${val || 'latest'}`);
+                                        }}
+                                        className="px-4 py-2 bg-emerald-500 text-white rounded-lg text-xs font-bold hover:bg-emerald-600 shadow-lg"
+                                      >
+                                        PULL
+                                      </button>
+                                    </div>
+                                  </div>
+
+                                  <div className="mt-auto pt-4 flex justify-end">
+                                    <button 
+                                      onClick={() => setCreateModal(prev => ({ ...prev, pullingImage: null }))}
+                                      className="px-4 py-2 text-sm text-[var(--text-muted)] hover:text-white"
+                                    >
+                                      Cancel
+                                    </button>
+                                  </div>
+                                </div>
+                              </MacOSModalWindow>,
+                              document.body
+                            )}
+
+                            {/* Image Grid */}
+                            {images.length === 0 ? (
+                              <div className="text-center py-16 opacity-40">
+                                <Layers size={40} className="mx-auto mb-3" />
+                                <p className="text-sm font-bold">No images found</p>
+                                <p className="text-xs mt-1">Search Docker Hub and pull an image</p>
+                              </div>
+                            ) : (
+                              <div className="grid grid-cols-1 xl:grid-cols-2 gap-3">
+                                  {images.map((img, idx) => {
+                                      const fullTag = `${img.Repository}:${img.Tag}`;
+                                      const users = containers.filter(c => c.image === fullTag || c.image === img.ID || c.image.includes(img.Repository));
+                                      const isNone = img.Repository === '<none>';
+                                      return (
+                                          <div key={img.ID + idx} className="p-4 rounded-2xl border border-[var(--border-color)] bg-[var(--bg-card)] hover:border-emerald-500/20 transition-all group">
+                                              <div className="flex justify-between items-start mb-3">
+                                                  <div className="flex items-center gap-3 min-w-0">
+                                                      <div className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 ${
+                                                        isNone ? 'bg-white/5 text-white/30' : 'bg-emerald-500/10 text-emerald-500'
+                                                      }`}>
+                                                        <Layers size={18} />
+                                                      </div>
+                                                      <div className="min-w-0">
+                                                          <h3 className={`font-bold text-sm truncate ${isNone ? 'italic opacity-50' : ''}`}>
+                                                            {isNone ? '(untagged)' : img.Repository}
+                                                          </h3>
+                                                          <p className="text-[10px] text-[var(--text-muted)]">
+                                                            {isNone ? img.ID.substring(0, 20) : `Tag: ${img.Tag}`}
+                                                          </p>
+                                                      </div>
+                                                  </div>
+                                                  <div className="flex items-center gap-2 shrink-0">
+                                                    <span className="text-emerald-400 text-[10px] font-bold">{img.Size}</span>
+                                                    <span className={`text-[8px] font-bold px-2 py-0.5 rounded-full ${
+                                                      users.length > 0 ? 'bg-sky-500/10 text-sky-400' : 'bg-rose-500/10 text-rose-400'
+                                                    }`}>
+                                                      {users.length > 0 ? `${users.length} USED` : 'UNUSED'}
+                                                    </span>
+                                                  </div>
+                                              </div>
+                                              
+                                              {users.length > 0 && (
+                                                <div className="mb-3">
+                                                    <div className="flex flex-wrap gap-1">
+                                                        {users.map(u => (
+                                                          <span key={u.id} className="px-1.5 py-0.5 text-[9px] bg-sky-500/10 text-sky-400 rounded-md border border-sky-500/10">{u.name}</span>
+                                                        ))}
+                                                    </div>
+                                                </div>
+                                              )}
+
+                                              <div className="flex items-center gap-1.5">
+                                                <button 
+                                                  onClick={() => handleOpenCreateModal(!isNone ? fullTag : img.ID)} 
+                                                  className="flex-1 py-1.5 rounded-lg bg-emerald-500/10 text-emerald-400 text-[10px] font-bold hover:bg-emerald-500/15 transition-all flex items-center justify-center gap-1"
+                                                >
+                                                  <Play size={9} /> RUN
+                                                </button>
+                                                <button 
+                                                  onClick={() => handleDeleteImage(img.ID, isNone ? img.ID.substring(0,12) : fullTag)}
+                                                  disabled={users.length > 0}
+                                                  className="py-1.5 px-2.5 rounded-lg border border-rose-500/20 text-rose-500 hover:bg-rose-500/10 transition-all disabled:opacity-20 disabled:cursor-not-allowed"
+                                                  title={users.length > 0 ? 'Image is in use' : 'Remove image'}
+                                                >
+                                                  <Trash2 size={10} />
+                                                </button>
+                                              </div>
+                                          </div>
+                                      );
+                                  })}
+                              </div>
+                            )}
+                        </div>
+                    )}
+
+                    {/* ── VOLUMES TAB ── */}
+                    {activeTab === 'volumes' && (
+                      <div className="flex flex-col gap-5">
+                        <div className="flex gap-3">
+                          <StatCard icon={HardDrive} label="Volumes" value={volumes.length} color="violet" />
+                        </div>
+                        {volumes.length === 0 ? (
+                          <div className="text-center py-16 opacity-40">
+                            <HardDrive size={40} className="mx-auto mb-3" />
+                            <p className="text-sm font-bold">No volumes found</p>
+                          </div>
+                        ) : (
+                          <div className="grid grid-cols-1 xl:grid-cols-2 gap-3">
+                            {volumes.map((vol, i) => (
+                              <div key={i} className="p-4 rounded-2xl border border-[var(--border-color)] bg-[var(--bg-card)] hover:border-violet-500/20 transition-all">
+                                <div className="flex items-center gap-3 mb-2">
+                                  <div className="w-8 h-8 rounded-lg bg-violet-500/10 text-violet-400 flex items-center justify-center shrink-0">
+                                    <HardDrive size={14} />
+                                  </div>
+                                  <div className="min-w-0">
+                                    <h3 className="font-bold text-sm truncate">{vol.Name || vol.Driver || 'unnamed'}</h3>
+                                    <p className="text-[10px] text-[var(--text-muted)]">Driver: {vol.Driver || 'local'}</p>
+                                  </div>
+                                </div>
+                                {vol.Mountpoint && (
+                                  <p className="text-[9px] font-mono text-[var(--text-muted)] truncate">{vol.Mountpoint}</p>
+                                )}
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {/* ── NETWORKS TAB ── */}
+                    {activeTab === 'networks' && (
+                      <div className="flex flex-col gap-5">
+                        <div className="flex gap-3">
+                          <StatCard icon={Globe} label="Networks" value={networks.length} color="amber" />
+                        </div>
+                        {networks.length === 0 ? (
+                          <div className="text-center py-16 opacity-40">
+                            <Globe size={40} className="mx-auto mb-3" />
+                            <p className="text-sm font-bold">No networks found</p>
+                          </div>
+                        ) : (
+                          <div className="grid grid-cols-1 xl:grid-cols-2 gap-3">
+                            {networks.map((net, i) => (
+                              <div key={i} className="p-4 rounded-2xl border border-[var(--border-color)] bg-[var(--bg-card)] hover:border-amber-500/20 transition-all">
+                                <div className="flex items-center justify-between">
+                                  <div className="flex items-center gap-3 min-w-0">
+                                    <div className="w-8 h-8 rounded-lg bg-amber-500/10 text-amber-400 flex items-center justify-center shrink-0">
+                                      <Globe size={14} />
+                                    </div>
+                                    <div className="min-w-0">
+                                      <h3 className="font-bold text-sm truncate">{net.Name || 'unnamed'}</h3>
+                                      <p className="text-[10px] text-[var(--text-muted)]">
+                                        {net.Driver || 'bridge'} · {net.Scope || 'local'}
+                                      </p>
+                                    </div>
+                                  </div>
+                                  <span className="text-[9px] font-mono text-[var(--text-muted)]">{net.ID?.substring(0, 12)}</span>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                </>
+            )}
+        </div>
+
+        {/* Floating pull progress (visible from all tabs) */}
+        {activeTab !== 'images' && <PullingFloater pullingTasks={pullingTasks} />}
+
+        {/* Create Container Modal */}
+        {createModal.isOpen && createPortal(
+          <MacOSModalWindow
+            isOpen={createModal.isOpen}
+            onClose={() => setCreateModal(prev => ({ ...prev, isOpen: false }))}
+            title="Create Container"
+            icon={Box}
+            defaultWidth={480}
+            defaultHeight={460}
+            enableMaximize={false}
+            enableMinimize={false}
+            zIndexClassName="z-[60000]"
+          >
+            <form onSubmit={submitCreateContainer} className="flex flex-col h-full gap-4">
+              <div className="flex-1">
+                <div className="mb-4">
+                  <label className="block text-xs font-bold text-[var(--text-muted)] mb-1.5">Image (Preset or Custom String)</label>
+                  <ImageComboBox 
+                    value={createModal.image}
+                    onChange={(val) => setCreateModal(prev => ({ ...prev, image: val }))}
+                    options={Array.from(new Set(images.filter(img => img.Repository !== '<none>').map(img => `${img.Repository}:${img.Tag}`)))}
+                  />
+                  <div className="mt-2 flex flex-wrap gap-1.5">
+                    <span className="text-[9px] text-[var(--text-muted)] font-bold uppercase mr-1 pt-1 opacity-50">Tags:</span>
+                    {commonTags.slice(0, 5).map(tag => (
+                      <TagPresetBadge 
+                        key={tag} 
+                        tag={tag} 
+                        onClick={(t) => {
+                          const base = createModal.image.split(':')[0] || 'nginx';
+                          setCreateModal(prev => ({ ...prev, image: `${base}:${t}` }));
+                        }} 
+                      />
+                    ))}
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-[var(--text-muted)] mb-1.5">Container Name (Optional)</label>
+                  <input 
+                    type="text"
+                    value={createModal.name}
+                    onChange={(e) => setCreateModal(prev => ({ ...prev, name: e.target.value }))}
+                    placeholder="Leave blank to auto-generate"
+                    className="w-full bg-black/20 border border-white/10 rounded-lg px-3 py-2 text-sm text-[var(--text-primary)] focus:outline-none focus:border-sky-500/50 focus:ring-1 focus:ring-sky-500/50 transition-all font-mono"
+                  />
+                </div>
+
+                  <div className="mt-4 border-t border-white/5 pt-4">
+                    <label className="block text-xs font-bold text-[var(--text-muted)] mb-2 uppercase tracking-wide flex items-center gap-1.5">
+                      <Zap size={12} className="text-amber-400" />
+                      Image Presets
+                    </label>
+                    <div className="grid grid-cols-4 gap-2">
+                      {commonImages.map(img => (
+                        <button 
+                          key={img.name}
+                          type="button"
+                          onClick={() => setCreateModal(prev => ({ ...prev, image: `${img.name}:latest` }))}
+                          className={`p-2 rounded-xl border flex flex-col items-center gap-1 transition-all ${
+                            createModal.image.startsWith(img.name) 
+                              ? 'bg-sky-500/10 border-sky-500/30 text-sky-400' 
+                              : 'bg-white/5 border-transparent text-[var(--text-muted)] hover:bg-white/10 hover:text-white'
+                          }`}
+                        >
+                          <img.icon size={16} />
+                          <span className="text-[10px] font-bold uppercase">{img.name}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="mt-4 border-t border-white/5 pt-4">
+                  <label className="block text-xs font-bold text-[var(--text-muted)] mb-2 flex items-center gap-1.5">
+                    <Layers size={12} className="text-emerald-400" />
+                    Inject Additional Tools <span className="text-[10px] font-normal opacity-60 ml-1">(Builds a custom image automatically)</span>
+                  </label>
+                  <div className="grid grid-cols-2 gap-2 max-h-[140px] overflow-y-auto custom-scrollbar pr-2">
+                    {availableTools.map(tool => (
+                      <label key={tool.id} className="flex items-start gap-2 p-2 rounded-lg bg-white/5 hover:bg-white/10 cursor-pointer transition-colors border border-transparent hover:border-white/10">
+                        <div className="pt-0.5">
+                          <input 
+                            type="checkbox" 
+                            className="w-3 h-3 rounded-sm accent-emerald-500 bg-black/50 border-white/20"
+                            checked={!!createModal.tools?.[tool.id]}
+                            onChange={(e) => setCreateModal(prev => ({ 
+                                ...prev, 
+                                tools: { ...prev.tools, [tool.id]: e.target.checked }
+                            }))}
+                          />
+                        </div>
+                        <div className="min-w-0">
+                          <div className="text-[11px] font-bold text-white">{tool.label}</div>
+                          <div className="text-[9px] text-[var(--text-muted)] leading-tight truncate" title={tool.desc}>{tool.desc}</div>
+                        </div>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              </div>
+              <div className="flex justify-end gap-2 pt-4 border-t border-white/5 mt-auto">
+                <button 
+                  type="button" 
+                  onClick={() => setCreateModal(prev => ({ ...prev, isOpen: false }))}
+                  className="px-4 py-2 rounded-lg text-sm font-bold text-[var(--text-muted)] hover:bg-white/5 transition-all"
+                >
+                  Cancel
+                </button>
+                <button 
+                  type="submit"
+                  disabled={!createModal.image.trim()}
+                  className="px-4 py-2 rounded-lg text-sm font-bold bg-emerald-500 text-white hover:bg-emerald-600 transition-all disabled:opacity-50 shadow-lg"
+                >
+                  Create
+                </button>
+              </div>
+            </form>
+          </MacOSModalWindow>,
+          document.body
+        )}
+
+        <style jsx>{`
+          @keyframes slideUp {
+            from { opacity: 0; transform: translateY(10px); }
+            to   { opacity: 1; transform: translateY(0); }
+          }
+          @keyframes slideDown {
+            from { opacity: 0; max-height: 0; }
+            to   { opacity: 1; max-height: 200px; }
+          }
+          @keyframes shimmer {
+            0%   { background-position: 200% 0; }
+            100% { background-position: -200% 0; }
+          }
+        `}</style>
     </div>
   );
 }

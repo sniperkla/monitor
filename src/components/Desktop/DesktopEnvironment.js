@@ -500,7 +500,7 @@ export default function DesktopEnvironment() {
   };
 
   const openStandaloneDocker = (conn) => {
-    const winId = `standalone-docker-${conn._id}-${Date.now()}`;
+    const winId = `standalone-docker-${conn._id}`;
     openWindow(
       winId,
       `Docker: ${conn.name}`,

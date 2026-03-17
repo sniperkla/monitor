@@ -1,4 +1,4 @@
-import { Terminal, Settings, Monitor, Database, Folder, AlertCircle, StickyNote, Book, MonitorPlay, Server } from 'lucide-react';
+import { Terminal, Settings, Monitor, Database, Folder, AlertCircle, StickyNote, Book, MonitorPlay, Server, FileText } from 'lucide-react';
 
 import TerminalApp from '@/apps/TerminalApp';
 import SettingsApp from '@/apps/SettingsApp';
@@ -8,6 +8,7 @@ import NotepadApp from '@/apps/NotepadApp';
 import WikiApp from '@/apps/WikiApp';
 import TmuxApp from '@/apps/TmuxApp';
 import DockerApp from '@/apps/DockerApp';
+import DockerLogApp from '@/apps/DockerLogApp';
 import DatabaseBrowser from '@/components/DatabaseBrowser';
  
 // Add other apps here as needed
@@ -71,6 +72,11 @@ export const AppRegistry = {
     component: TmuxApp,
     icon: MonitorPlay,
     defaultTitle: 'Tmux Manager'
+  },
+  'docker-logs': {
+    component: DockerLogApp,
+    icon: FileText,
+    defaultTitle: 'Docker Logs'
   },
   // Add other known apps here if they are openable via window ID
 };

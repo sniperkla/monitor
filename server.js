@@ -319,6 +319,12 @@ async function getModels(uri, userId) {
                   updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
               `);
+              
+              // Ensure connection_id exists for older schemas
+              try {
+                await pool.query('ALTER TABLE ssh_sessions ADD COLUMN IF NOT EXISTS connection_id INTEGER');
+              } catch (e) { /* column might already exist */ }
+
               const res = await pool.query(
                 'INSERT INTO ssh_sessions (connection_id, status) VALUES ($1, $2) RETURNING id',
                 [data.connectionId, data.status]
@@ -610,7 +616,7 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
         const sftpEvents = [
           'sftp:list', 'sftp:mkdir', 'sftp:delete', 'sftp:readFile', 
           'sftp:writeFile', 'sftp:applyPatch', 'sftp:copy', 'sftp:move', 'sftp:cross_server_transfer',
-          'sftp:upload', 'sftp:download', 'sftp:download_folder', 'sftp:search'
+          'sftp:upload', 'sftp:download', 'sftp:download_folder', 'sftp:search', 'docker:command'
         ];
         const sshEvents = ['ssh:input', 'ssh:resize'];
         sftpEvents.forEach(ev => socket.removeAllListeners(ev));
@@ -806,6 +812,193 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
                 if (err) return fallbackFileListing(socket, sshClient, path);
                 socket.emit('sftp:list', { path, files: list });
               });
+            });
+          });
+          
+          // Track whether this socket's docker needs sudo (auto-detected on first 'info' call)
+          let dockerSudo = '';
+
+          // ── Docker Management (Secure Non-Interactive Mode) ──────────────
+          socket.on('docker:command', ({ action, args = [] }) => {
+            if (!sshClient || sshClient._state === 'closed') {
+               return socket.emit('docker:error', 'SSH Connection Closed');
+            }
+            
+            // Helper function to execute docker commands with sudo detection
+            const executeDockerCommand = (currentCmd, currentAction, currentArgs, attemptWithSudo = false) => {
+                const prefix = attemptWithSudo ? dockerSudo : dockerSudo; // Always use dockerSudo (which includes the password if needed)
+                const finalCmd = `${prefix}docker ${currentCmd}`; // Construct the command
+
+                console.log(`🐳 [${socket.id}] DOCKER EXEC: ${finalCmd}`);
+
+                sshClient.exec(finalCmd, (err, stream) => {
+                    if (err) {
+                        console.error(`❌ Docker exec failed:`, err);
+                        return socket.emit('docker:error', err.message);
+                    }
+                    
+                    let output = '';
+                    let stderr = '';
+                    
+                    stream.on('data', (d) => output += d.toString());
+                    stream.stderr.on('data', (d) => stderr += d.toString());
+                    
+                    stream.on('close', (code) => {
+                        // Sudo detection logic for 'info' command
+                        const combinedOutput = (output + stderr).toLowerCase();
+                        if (currentAction === 'info' && code !== 0 && combinedOutput.includes('permission denied') && !attemptWithSudo) {
+                            console.warn(`⚠️ Docker 'info' failed without sudo. Retrying with sudo.`);
+                            const escapedPass = (connection?.password || '').replace(/'/g, "'\\''");
+                            dockerSudo = connection?.password ? `echo '${escapedPass}' | sudo -S ` : `sudo `; // Remember for future commands
+                            
+                            // Re-execute the command with sudo
+                            return executeDockerCommand(currentCmd, currentAction, currentArgs, true);
+                        }
+
+                        // For pull and pull:status, always emit result even on non-zero exit
+                        // because the shell scripts can exit non-zero legitimately
+                        // (e.g. tmux not installed, grep finding no match)
+                        if (currentAction === 'pull:status' || currentAction === 'pull') {
+                           socket.emit('docker:result', { action: currentAction, output: output.trim(), code, args: currentArgs });
+                        } else if (code !== 0) {
+                           socket.emit('docker:error', stderr.trim() || `Docker ${currentAction} failed (code ${code})`);
+                        } else {
+                           socket.emit('docker:result', { action: currentAction, output: output.trim(), code, args: currentArgs });
+                        }
+                    });
+                });
+            };
+
+            let cmdSuffix = ''; // This will be the part after 'docker'
+            if (action === 'list') {
+               cmdSuffix = `ps -a --format "{{json .}}"`;
+            } else if (action === 'images') {
+               cmdSuffix = `image ls -a --format "{{json .}}"`;
+            } else if (action === 'search' && args.length > 0) {
+                 const query = String(args[0] || '').replace(/[^a-zA-Z0-9._\- ]/g, '').trim();
+                 if (!query) return socket.emit('docker:error', 'Invalid Search Query');
+                 cmdSuffix = `search --format "{{json .}}" "${query}"`;
+              } else if (action === 'volumes') {
+                 cmdSuffix = `volume ls --format "{{json .}}"`;
+              } else if (action === 'networks') {
+                 cmdSuffix = `network ls --format "{{json .}}"`;
+              } else if (action === 'rmi' && args.length > 0) {
+                 const targetId = String(args[0] || '').replace(/[^a-zA-Z0-9._/:-]/g, '');
+                 if (!targetId) return socket.emit('docker:error', 'Invalid Image ID');
+                 cmdSuffix = `rmi ${targetId}`;
+              } else if (action === 'info') {
+               cmdSuffix = `info --format "{{json .}}"`;
+            } else if (action === 'logs' && args.length > 0) {
+               const targetId = String(args[0] || '').replace(/[^a-zA-Z0-9._/:-]/g, '');
+               if (!targetId) return socket.emit('docker:error', 'Invalid Container ID');
+               cmdSuffix = `logs --tail 200 ${targetId}`;
+             } else if (action === 'run' && args.length >= 2) {
+                const name = String(args[0] || '').replace(/[^a-zA-Z0-9._-]/g, '');
+                const image = String(args[1] || '').replace(/[^a-zA-Z0-9.@/:-]/g, '');
+                if (!name || !image) return socket.emit('docker:error', 'Invalid Run Name/Image');
+                cmdSuffix = `run -d --name ${name} ${image}`;
+             } else if (action === 'pull' && args.length > 0) {
+                const image = String(args[0] || '').replace(/[^a-zA-Z0-9.@/:-]/g, '');
+                if (!image) return socket.emit('docker:error', 'Invalid Image Name');
+                const safeName = image.replace(/[^a-z0-9]/gi, '_');
+                 // Track using nohup exclusively to avoid stale tmux server group permissions
+                 cmdSuffix = `rm -f /tmp/pull_${safeName}.log; touch /tmp/pull_${safeName}.log; nohup sh -c '${dockerSudo}docker pull ${image} 2>&1 | tee /tmp/pull_${safeName}.log; echo "---FINISHED---" >> /tmp/pull_${safeName}.log' >/dev/null 2>&1 & echo STARTED`;
+             } else if (action === 'pull:status' && args.length > 0) {
+                 const image = String(args[0] || '').replace(/[^a-zA-Z0-9.@/:-]/g, '');
+                 if (!image) return socket.emit('docker:error', 'Invalid Image Name');
+                 const safeName = image.replace(/[^a-z0-9]/gi, '_');
+                 // Check log file with a "finished" detector
+                 // Use subshell with explicit exit 0 to avoid non-zero codes
+                 cmdSuffix = `(if [ -f "/tmp/pull_${safeName}.log" ]; then RUNNING=$(ps aux 2>/dev/null | grep -v grep | grep "${dockerSudo}docker pull ${image}" | wc -l); if [ "$RUNNING" = "0" ] && ! grep -q "---FINISHED---" "/tmp/pull_${safeName}.log"; then echo "---FINISHED---" >> /tmp/pull_${safeName}.log; fi; tr '\\r' '\\n' < "/tmp/pull_${safeName}.log" | tail -n 20; else echo "INITIALIZING..."; fi); exit 0`;
+             } else if (action === 'build' && args.length >= 2) {
+                 const tag = String(args[0] || '').replace(/[^a-zA-Z0-9._-]/g, '');
+                 const dockerfileBase64 = String(args[1] || '').replace(/[^a-zA-Z0-9+/=]/g, '');
+                 if (!tag || !dockerfileBase64) return socket.emit('docker:error', 'Invalid Build Parameters');
+                 const safeTag = tag.replace(/[^a-z0-9]/gi, '_');
+                 cmdSuffix = `rm -f /tmp/build_${safeTag}.log; touch /tmp/build_${safeTag}.log; nohup sh -c 'echo "${dockerfileBase64}" | base64 -d > /tmp/Dockerfile_${safeTag} && ${dockerSudo}docker build -t ${tag} -f /tmp/Dockerfile_${safeTag} . 2>&1 | tee /tmp/build_${safeTag}.log; echo "---FINISHED---" >> /tmp/build_${safeTag}.log; rm -f /tmp/Dockerfile_${safeTag}' >/dev/null 2>&1 & echo STARTED`;
+             } else if (action === 'build:status' && args.length > 0) {
+                 const tag = String(args[0] || '').replace(/[^a-zA-Z0-9._-]/g, '');
+                 if (!tag) return socket.emit('docker:error', 'Invalid Tag Name');
+                 const safeTag = tag.replace(/[^a-z0-9]/gi, '_');
+                 cmdSuffix = `(if [ -f "/tmp/build_${safeTag}.log" ]; then RUNNING=$(ps aux 2>/dev/null | grep -v grep | grep "docker build -t ${tag}" | wc -l); if [ "$RUNNING" = "0" ] && ! grep -q "---FINISHED---" "/tmp/build_${safeTag}.log"; then echo "---FINISHED---" >> /tmp/build_${safeTag}.log; fi; tr '\\r' '\\n' < "/tmp/build_${safeTag}.log" | tail -n 20; else echo "INITIALIZING..."; fi); exit 0`;
+             } else if (['start', 'stop', 'restart', 'rm'].includes(action) && args.length > 0) {
+               // Extract target ID and sanitize
+               const targetId = String(args[0] || '').replace(/[^a-zA-Z0-9._/:-]/g, '');
+                 } else if (action === 'backup' && args.length > 0) {
+                 const targetId = String(args[0] || '').replace(/[^a-zA-Z0-9._/:-]/g, '');
+                 if (!targetId) return socket.emit('docker:error', 'Invalid ID for backup');
+                 const safeId = targetId.substring(0, 12);
+                 cmdSuffix = `rm -f /tmp/backup_${safeId}.log; touch /tmp/backup_${safeId}.log; nohup sh -c '
+                    # 1. Try Docker Compose Label (working_dir)
+                    ROOT=$(${dockerSudo}docker inspect ${targetId} --format "{{ index .Config.Labels \\"com.docker.compose.project.working_dir\\" }}"); 
+                    
+                    # 2. Try Docker Compose Label (config_files directory)
+                    if [ -z "$ROOT" ]; then 
+                        ROOT=$(${dockerSudo}docker inspect ${targetId} --format "{{ index .Config.Labels \\"com.docker.compose.project.config_files\\" }}" | xargs dirname | head -n 1); 
+                    fi; 
+
+                    # 3. Fallback: Try to find any bind mount and use its parent directory
+                    if [ -z "$ROOT" ]; then
+                        BIND=$(${dockerSudo}docker inspect ${targetId} --format "{{ range .Mounts }}{{ if eq .Type \\"bind\\" }}{{ .Source }}{{ break }}{{ end }}{{ end }}");
+                        if [ -n "$BIND" ]; then 
+                            ROOT=$(dirname "$BIND"); 
+                        fi;
+                    fi;
+
+                    if [ -n "$ROOT" ] && [ -d "$ROOT" ]; then 
+                        echo "Found project root: $ROOT" >> /tmp/backup_${safeId}.log;
+                        cd "$ROOT" && ${dockerSudo}tar -czf /tmp/project_backup_${safeId}.tar.gz . 2>&1 | tee -a /tmp/backup_${safeId}.log; 
+                        echo "---FINISHED---" >> /tmp/backup_${safeId}.log; 
+                        echo "BACKUP_PATH:/tmp/project_backup_${safeId}.tar.gz" >> /tmp/backup_${safeId}.log; 
+                    else 
+                        echo "ERROR: Could not find project source directory. This usually happens for standalone containers not created with Docker Compose." > /tmp/backup_${safeId}.log; 
+                        echo "TIP: If you just want to move the configuration, use the Light Export (Share) button instead." >> /tmp/backup_${safeId}.log;
+                        echo "---FINISHED---" >> /tmp/backup_${safeId}.log; 
+                    fi' >/dev/null 2>&1 & echo STARTED`;
+             } else if (action === 'backup:status' && args.length > 0) {
+                 const targetId = String(args[0] || '').replace(/[^a-zA-Z0-9._/:-]/g, '');
+                 const safeId = targetId.substring(0, 12);
+                 cmdSuffix = `(if [ -f "/tmp/backup_${safeId}.log" ]; then RUNNING=$(ps aux 2>/dev/null | grep -v grep | grep "tar -czf /tmp/project_backup_${safeId}.tar.gz" | wc -l); if [ "$RUNNING" = "0" ] && ! grep -q "---FINISHED---" "/tmp/backup_${safeId}.log"; then echo "---FINISHED---" >> /tmp/backup_${safeId}.log; fi; tail -n 20 "/tmp/backup_${safeId}.log"; else echo "INITIALIZING..."; fi); exit 0`;
+             } else {
+               return socket.emit('docker:error', 'Invalid Docker action');
+            }
+
+            
+            // For pull & pull:status, cmdSuffix is a full shell script — execute directly
+            // For all other actions, cmdSuffix is the part after 'docker' — use executeDockerCommand
+            if (['pull', 'pull:status', 'build', 'build:status', 'backup', 'backup:status'].includes(action)) {
+                console.log(`🐳 [${socket.id}] DOCKER EXEC (raw): ${cmdSuffix.substring(0, 120)}...`);
+                sshClient.exec(cmdSuffix, (err, stream) => {
+                    if (err) {
+                        console.error(`❌ Docker exec failed:`, err);
+                        return socket.emit('docker:error', err.message);
+                    }
+                    let output = '';
+                    stream.on('data', (d) => output += d.toString());
+                    stream.stderr.on('data', () => {});
+                    stream.on('close', (code) => {
+                        socket.emit('docker:result', { action, output: output.trim(), code, args });
+                    });
+                });
+            } else {
+                executeDockerCommand(cmdSuffix, action, args);
+            }
+          });
+
+          // ── Generic SSH Exec (Non-Interactive) ──────────────
+          socket.on('ssh:exec', ({ command }) => {
+            if (!sshClient || sshClient._state === 'closed') {
+               return socket.emit('ssh:exec_error', 'SSH not connected');
+            }
+            sshClient.exec(command, (err, stream) => {
+               if (err) return socket.emit('ssh:exec_error', err.message);
+               let stdout = '';
+               let stderr = '';
+               stream.on('data', (d) => stdout += d.toString());
+               stream.stderr.on('data', (d) => stderr += d.toString());
+               stream.on('close', (code) => {
+                  socket.emit('ssh:exec_result', { stdout, stderr, code });
+               });
             });
           });
 
