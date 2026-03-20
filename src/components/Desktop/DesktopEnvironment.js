@@ -442,8 +442,8 @@ export default function DesktopEnvironment() {
       };
 
       const handleOpenFiles = (e) => {
-        const { connection, connectionIdOverride, title } = e.detail;
-        if (connection) openStandaloneFiles(connection, connectionIdOverride, title);
+        const { connection, connectionIdOverride, title, initialPath } = e.detail;
+        if (connection) openStandaloneFiles(connection, connectionIdOverride, title, initialPath);
       };
 
       window.addEventListener('open-docker-manager', handleOpenDocker);
@@ -479,7 +479,7 @@ export default function DesktopEnvironment() {
     setDropMenu(null);
   };
 
-  const openStandaloneFiles = (conn, connectionIdOverride = null, titleOverride = null) => {
+  const openStandaloneFiles = (conn, connectionIdOverride = null, titleOverride = null, initialPath = '.') => {
     // Use unique ID so multiple standalone windows can coexist for same connection
     const winId = `standalone-files-${connectionIdOverride || conn._id}-${Date.now()}`;
 
@@ -492,9 +492,22 @@ export default function DesktopEnvironment() {
     openWindow(
       winId,
       titleOverride || `Files: ${conn.name}`,
-      <FilesApp onEditConnection={handleEditConnection} initialConnection={conn} initialConnectionId={connectionIdOverride} />,
+      <FilesApp 
+        onEditConnection={handleEditConnection} 
+        initialConnection={conn} 
+        initialConnectionId={connectionIdOverride} 
+        initialPath={initialPath}
+      />,
       FolderClosed,
-      { initialWidth: 900, initialHeight: 600, appType: 'files-app', props: { initialConnectionId: connectionIdOverride || conn._id } }
+      { 
+        initialWidth: 900, 
+        initialHeight: 600, 
+        appType: 'files-app', 
+        props: { 
+          initialConnectionId: connectionIdOverride || conn._id,
+          initialPath 
+        } 
+      }
     );
     setDropMenu(null);
   };

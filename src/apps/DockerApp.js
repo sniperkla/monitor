@@ -7,14 +7,43 @@ import {
   Laptop, Terminal as TermIcon, Play, Square, RefreshCw, Box, Layers, 
   ExternalLink, AlertTriangle, Trash2, Folder, FileText, Star, Archive,
   Download, Search, X, RotateCcw, Cpu, HardDrive, Clock, Activity,
-  ChevronDown, ChevronRight, Zap, Globe, Package, Shield,Plus, Share2,
-  Upload, Eye, EyeOff
+  ChevronDown, ChevronRight, Zap, Globe, Package, Shield, Plus, Share2,
+  Upload, Eye, EyeOff, Settings, CircleCheck, CircleAlert
 } from 'lucide-react';
 import { useApp } from '@/context/AppContext';
 import { useOS } from '@/context/OSContext';
 import DockerLogApp from '@/apps/DockerLogApp';
 import MacOSModalWindow from '@/components/MacOSModalWindow';
+import ConfigEditorModal from '@/components/ConfigEditorModal';
 import { io } from 'socket.io-client';
+import { motion, AnimatePresence } from 'framer-motion';
+
+
+function getPresetsForImage(imageName) {
+  if (!imageName) return { ports: '', volumes: '', env: '' };
+  const img = imageName.toLowerCase();
+  let presets = { ports: '', volumes: '', env: '' };
+
+  if (img.includes('nginx')) {
+    presets.ports = '80:80';
+    presets.volumes = '/var/www/html:/usr/share/nginx/html';
+  } else if (img.includes('redis')) {
+    presets.ports = '6379:6379';
+  } else if (img.includes('postgres')) {
+    presets.ports = '5432:5432';
+    presets.volumes = 'pgdata:/var/lib/postgresql/data';
+  } else if (img.includes('mysql')) {
+    presets.ports = '3306:3306';
+    presets.volumes = 'mysql_data:/var/lib/mysql';
+  } else if (img.includes('node')) {
+    presets.ports = '3000:3000';
+  } else if (img.includes('mongo')) {
+    presets.ports = '27017:27017';
+    presets.env = 'MONGO_INITDB_ROOT_USERNAME=root,MONGO_INITDB_ROOT_PASSWORD=password123';
+    presets.volumes = 'mongo_data:/data/db';
+  }
+  return presets;
+}
 
 // ── Utility & Sub-components ──────────────────
 function formatUptime(status) {
@@ -90,20 +119,20 @@ function ImageComboBox({ value, onChange, options }) {
   const [isOpen, setIsOpen] = useState(false);
   const [isFocused, setIsFocused] = useState(false);
 
-  // Filter based on input, but if exactly matching or empty, could show all if we want.
-  // We'll show options containing the value or all if isOpen is forced.
-  const filtered = isOpen && !value ? options : options.filter(o => o.toLowerCase().includes((value || '').toLowerCase()));
-  const showDropdown = (isFocused || isOpen) && filtered.length > 0;
+  // Show suggestions if typed or explicitly opened
+  const filtered = options.filter(o => o.toLowerCase().includes((value || '').toLowerCase()));
+  const showDropdown = isOpen && filtered.length > 0;
 
   return (
-    <div className="relative" onFocus={() => setIsFocused(true)} onBlur={() => setTimeout(() => { setIsFocused(false); setIsOpen(false); }, 150)}>
+    <div className="relative" onBlur={() => setTimeout(() => { setIsOpen(false); setIsFocused(false); }, 150)}>
       <div className="relative flex items-center">
         <input 
           type="text"
           required
-          autoFocus
+          autoFocus={!value} // Only autoFocus if empty
           autoComplete="off"
           value={value || ''}
+          onFocus={() => setIsFocused(true)}
           onChange={(e) => {
             onChange(e.target.value);
             setIsOpen(true);
@@ -144,17 +173,7 @@ function ImageComboBox({ value, onChange, options }) {
   );
 }
 
-function TagPresetBadge({ tag, onClick }) {
-  return (
-    <button 
-      type="button" 
-      onClick={() => onClick(tag)}
-      className="px-1.5 py-0.5 rounded bg-white/5 border border-white/10 text-[9px] font-mono hover:bg-white/10 hover:border-sky-500/30 transition-all"
-    >
-      {tag}
-    </button>
-  );
-}
+
 
 // ── Main Component ────────────────────────────
 export default function DockerApp({ initialConnection, initialConnectionId, windowId }) {
@@ -163,6 +182,7 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
   const { t } = useTranslation();
   
   // App state
+  const [portStatus, setPortStatus] = useState(null); // 'checking', 'free', 'in-use', null
   const [activeTab, setActiveTab] = useState('containers');
   const [containers, setContainers] = useState([]);
   const [images, setImages] = useState([]);
@@ -171,36 +191,15 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
   const [searchResults, setSearchResults] = useState([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [pullingTasks, setPullingTasks] = useState({});
-  const [createModal, setCreateModal] = useState({ isOpen: false, image: '', name: '', tools: {} });
+  const [createModal, setCreateModal] = useState({ isOpen: false, image: '', name: '', ports: '', env: '', volumes: '', isManual: true });
+  const [configEditor, setConfigEditor] = useState({ isOpen: false, file: '', content: '', containerId: '', containerName: '' });
+  const [pruneVolumesModal, setPruneVolumesModal] = useState({ isOpen: false, confirmText: '' });
+  const [selectedVolumes, setSelectedVolumes] = useState([]);
 
-  const availableTools = [
-    { id: 'curl', label: 'curl', desc: 'Command line tool for transferring data with URL syntax' },
-    { id: 'vim', label: 'vim', desc: 'Highly configurable text editor' },
-    { id: 'nano', label: 'nano', desc: 'Small, friendly text editor' },
-    { id: 'git', label: 'git', desc: 'Distributed version control system' },
-    { id: 'htop', label: 'htop', desc: 'Interactive process viewer' },
-    { id: 'net-tools', label: 'net-tools', desc: 'Network tools (ifconfig, netstat)' },
-    { id: 'iputils-ping', label: 'ping', desc: 'Send ICMP ECHO_REQUEST to network hosts' },
-    { id: 'wget', label: 'wget', desc: 'Non-interactive network downloader' },
-    { id: 'python3', label: 'python3', desc: 'Python programming language' },
-    { id: 'jq', label: 'jq', desc: 'Command-line JSON processor' },
-    { id: 'unzip', label: 'unzip', desc: 'Extract compressed files' },
-    { id: 'tmux', label: 'tmux', desc: 'Terminal multiplexer' },
-    { id: 'iproute2', label: 'iproute2', desc: 'Management of networking' }
-  ];
+  const [pendingActions, setPendingActions] = useState({}); // { id: actionName }
 
-  const commonImages = [
-    { name: 'nginx', icon: Globe },
-    { name: 'redis', icon: Activity },
-    { name: 'postgres', icon: HardDrive },
-    { name: 'node', icon: Zap },
-    { name: 'python', icon: Package },
-    { name: 'ubuntu', icon: Box },
-    { name: 'alpine', icon: Shield },
-    { name: 'mysql', icon: HardDrive }
-  ];
 
-  const commonTags = ['latest', 'alpine', 'slim', '22', '20', '18', 'debian', 'ubuntu', 'lts', 'nightly', 'onbuild'];
+
 
   const pullingTasksRef = useRef({});
 
@@ -281,6 +280,7 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
     socketRef.current.emit('docker:command', { action: 'images' });
     socketRef.current.emit('docker:command', { action: 'volumes' });
     socketRef.current.emit('docker:command', { action: 'networks' });
+    socketRef.current.emit('docker:command', { action: 'vol-assoc' });
   }, []);
 
   useEffect(() => {
@@ -300,12 +300,75 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
       });
     });
 
+    // Background Polling logic to keep list fresh if changed externally
+    const pollInterval = setInterval(() => {
+      if (socketRef.current && socketRef.current.connected) {
+         // Background refresh without triggering global loading state
+         socketRef.current.emit('docker:command', { action: 'list' });
+         socketRef.current.emit('docker:command', { action: 'images' });
+         socketRef.current.emit('docker:command', { action: 'volumes' });
+         socketRef.current.emit('docker:command', { action: 'networks' });
+      }
+    }, 15000); // 15s is standard for decent balance between freshness and overhead
+
     socketRef.current.on('ssh:connected', () => {
       socketRef.current.emit('docker:command', { action: 'info' });
     });
 
     socketRef.current.on('docker:result', ({ action, output, args }) => {
       setIsLoading(false);
+      const targetId = args?.[0];
+      if (targetId) setPendingActions(prev => { const n = { ...prev }; delete n[targetId]; return n; });
+      
+      if (action === 'check-port') {
+        const isUsed = output.includes('IN_USE');
+        setPortStatus(isUsed ? 'in-use' : 'free');
+        return;
+      }
+
+      if (action === 'inspect') {
+        try {
+          const inspected = JSON.parse(output)[0];
+          if (inspected) {
+             const image = inspected.Config.Image;
+             const name = inspected.Name.replace(/^\//, '');
+             const portObj = inspected.HostConfig.PortBindings || {};
+             const ports = Object.keys(portObj).map(k => (portObj[k] && portObj[k][0]) ? `${portObj[k][0].HostPort}:${k.split('/')[0]}` : null).filter(x => x).join(',');
+             const envArr = (inspected.Config.Env || []).filter(e => !e.startsWith('PATH='));
+             const env = envArr.join(',');
+             
+             // Extract mounts
+             const mounts = (inspected.Mounts || []).map(m => `${m.Source}:${m.Destination}`).join(',');
+             
+             setCreateModal({ isOpen: true, image, name: name + '-config', ports, env, volumes: mounts });
+          }
+
+        } catch(e) {
+          console.error('Inspect parse error:', e);
+          addNotification({ title: 'Error', message: 'Failed to parse config', type: 'error' });
+        }
+      }
+
+      // Clean up run tasks from floater
+
+      if (['start', 'stop', 'restart', 'rm', 'rmi', 'run'].includes(action)) {
+        emitDockerLs();
+        
+        // Clean up any tasks associated with this run/image
+        if (action === 'run' || action === 'pull' || action === 'build') {
+           const targetName = args?.[0]; // Generic target
+           setPullingTasks(prev => {
+             const n = { ...prev };
+             Object.keys(n).forEach(key => {
+               if (key === targetName || key.toLowerCase() === (targetName || '').toLowerCase()) {
+                 delete n[key];
+               }
+             });
+             return n;
+           });
+        }
+      }
+
       if (action === 'info') {
         setIsDockerInstalled(true);
         emitDockerLs();
@@ -349,6 +412,28 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
           const parsed = lines.map(line => JSON.parse(line));
           setVolumes(parsed);
         } catch (e) { /* volumes may not be supported */ }
+      } else if (action === 'vol-assoc') {
+        const lines = output.split('\n').filter(l => l.startsWith('assoc:'));
+        const mapping = {};
+        lines.forEach(line => {
+           const parts = line.replace('assoc:', '').split('\t');
+           if (parts.length >= 3) {
+              const id = parts[0].trim();
+              const name = parts[1].trim().replace(/^\//, ''); // docker inspect names start with /
+              const vols = (parts[2] || '').trim().split(/\s+/).filter(v => v);
+              mapping[id] = vols;
+              mapping[name] = vols; // allow lookup by name too
+           }
+        });
+        
+        setContainers(prev => prev.map(c => {
+           // Enrich container with detailed volume info if found
+           const detailedVols = mapping[c.id] || mapping[c.name] || [];
+           if (detailedVols.length > 0) {
+              return { ...c, detailedMounts: detailedVols.join(',') };
+           }
+           return c;
+        }));
       } else if (action === 'networks') {
         try {
           const lines = output.split('\n').filter(l => l.trim());
@@ -500,6 +585,47 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
               });
             }, 5000);
           }
+        } else if (action === 'find-config') {
+          setIsLoading(false);
+          const parts = output.trim().split(':');
+          const type = parts[0];
+          const path = parts.slice(1).join(':');
+          if (type === 'FILE' && path) {
+             const cContext = window._currentConfigSearchContainer || {};
+             // We found a file. Read it.
+             socketRef.current.emit('docker:command', { action: 'read-config', args: [cContext.id, path] });
+          } else if (type === 'DIR' && path) {
+             // Found a dir. We don't have a GUI file manager for containers yet, so fallback to terminal
+             const cContext = window._currentConfigSearchContainer || { id: args[0], name: 'Container' };
+             const cmd = `docker exec -it ${cContext.id} sh -c "cd '${path}' 2>/dev/null && ls -la && echo '---' && echo 'Edit: vi <filename>' && sh; exit 0"`;
+             window.dispatchEvent(new CustomEvent('open-terminal', {
+               detail: { connection: selectedConnection, initialCommand: `${cmd}\r`, title: `Config: ${cContext.name}` }
+             }));
+             addNotification({ title: 'Config Search', message: 'Directory found, opened in terminal.', type: 'info' });
+          } else {
+             const cContext = window._currentConfigSearchContainer || { id: args[0], name: 'Container' };
+             const cmd = `docker exec -it ${cContext.id} sh -c "cd /etc && ls -la *.conf 2>/dev/null; echo '---'; echo 'Config not found automatically.'; sh"`;
+             window.dispatchEvent(new CustomEvent('open-terminal', {
+               detail: { connection: selectedConnection, initialCommand: `${cmd}\r`, title: `Config: ${cContext.name} (Fallback)` }
+             }));
+             addNotification({ title: 'Config Search', message: 'No config file found. Opening terminal fallback.', type: 'warning' });
+          }
+        } else if (action === 'read-config') {
+          setIsLoading(false);
+          const cContext = window._currentConfigSearchContainer || { id: args[0], name: 'Container' };
+          setConfigEditor({ isOpen: true, file: args[1], content: output, containerId: cContext.id, containerName: cContext.name });
+        } else if (action === 'write-config') {
+          setIsLoading(false);
+          addNotification({ title: 'Config Saved', message: `Saved ${args[1]} to container. Restart it for changes to apply.`, type: 'success' });
+        } else if (action === 'prune-volumes') {
+          setIsLoading(false);
+          addNotification({ title: 'Volumes Pruned', message: 'Unused volumes have been successfully deleted.', type: 'success' });
+          socketRef.current.emit('docker:command', { action: 'volumes' });
+        } else if (action === 'rm-volumes') {
+          setIsLoading(false);
+          addNotification({ title: 'Volumes Deleted', message: 'Selected volumes were deleted successfully.', type: 'success' });
+          setSelectedVolumes([]);
+          socketRef.current.emit('docker:command', { action: 'volumes' });
         } else {
           emitDockerLs();
         }
@@ -507,6 +633,8 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
 
     socketRef.current.on('docker:error', (err) => {
       setIsLoading(false);
+      setPendingActions({});
+
       if (err.includes('command not found') || err.includes('not found')) {
         setIsDockerInstalled(false);
       } else {
@@ -515,6 +643,7 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
     });
 
     return () => {
+      clearInterval(pollInterval);
       if (socketRef.current) socketRef.current.disconnect();
     };
   }, [selectedConnection, dbConfig, emitDockerLs]);
@@ -557,56 +686,101 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
     }
   };
 
-  const handleOpenCreateModal = (imageName = '') => {
-    setCreateModal({ isOpen: true, image: imageName, name: '', tools: {} });
+  // Handle auto-presets when image changes
+  useEffect(() => {
+    if (createModal.isOpen && createModal.image) {
+      const presets = getPresetsForImage(createModal.image);
+      setCreateModal(prev => {
+        // Only auto-fill if the field is currently empty or was previously a preset
+        const newState = { ...prev };
+        if (!prev.ports) newState.ports = presets.ports;
+        if (!prev.env) newState.env = presets.env;
+        if (!prev.volumes) newState.volumes = presets.volumes;
+        if (!prev.name && createModal.image) {
+          newState.name = createModal.image.split(':')[0].split('/').pop() + '_app';
+        }
+        return newState;
+      });
+    }
+  }, [createModal.image, createModal.isOpen]);
+
+  useEffect(() => {
+    if (createModal.isOpen && createModal.ports) {
+      const parts = createModal.ports.split(':');
+      const hostPort = parts[0]?.trim();
+      if (hostPort && !isNaN(hostPort) && socketRef.current) {
+        setPortStatus('checking');
+        socketRef.current.emit('docker:command', { action: 'check-port', args: [hostPort] });
+      } else {
+        setPortStatus(null);
+      }
+    } else {
+      setPortStatus(null);
+    }
+  }, [createModal.ports, createModal.isOpen]);
+
+  const handleOpenCreateModal = (imageName = '', fromAction = false) => {
+    let defaultPorts = '';
+    let defaultName = '';
+    
+    const imgL = imageName.toLowerCase();
+    if (imgL.includes('nginx')) { defaultPorts = '80:80'; defaultName = 'nginx_app'; }
+    else if (imgL.includes('mysql')) { defaultPorts = '3306:3306'; defaultName = 'mysql_db'; }
+    else if (imgL.includes('mongo')) { defaultPorts = '27017:27017'; defaultName = 'mongo_db'; }
+    else if (imgL.includes('redis')) { defaultPorts = '6379:6379'; defaultName = 'redis_cache'; }
+    else if (imgL.includes('postgres')) { defaultPorts = '5432:5432'; defaultName = 'postgres_db'; }
+    else if (imgL.includes('mariadb')) { defaultPorts = '3306:3306'; defaultName = 'mariadb_db'; }
+    else if (imgL.includes('rabbitmq')) { defaultPorts = '5672:5672'; defaultName = 'rabbitmq_srv'; }
+    else if (imgL.includes('influxdb')) { defaultPorts = '8086:8086'; defaultName = 'influx_db'; }
+
+    setCreateModal({ 
+      isOpen: true, 
+      image: imageName, 
+      name: defaultName || '', 
+      ports: defaultPorts || '', 
+      env: '', 
+      volumes: '',
+      isManual: !imageName && !fromAction
+    });
   };
+
 
   const submitCreateContainer = (e) => {
     if (e) e.preventDefault();
     if (!createModal.image.trim()) return;
     if (socketRef.current) {
       setIsLoading(true);
-      const finalName = createModal.name.trim() || `app_${Math.floor(Math.random() * 100000)}`;
+      const finalName = (createModal.name || '').trim() || `app_${Math.floor(Math.random() * 100000)}`;
+      const image = (createModal.image || '').trim();
+      const ports = (createModal.ports || '').trim(); // e.g. "8080:80"
+      const env = (createModal.env || '').trim();     // e.g. "KEY=VAL"
+      const volumes = (createModal.volumes || '').trim(); // e.g. "/host/path:/container/path"
       
-      const selectedTools = Object.keys(createModal.tools || {}).filter(k => createModal.tools[k]);
-      
-      if (selectedTools.length > 0) {
-          const toolsString = selectedTools.join(' ');
-          const safeBaseName = createModal.image.trim().replace(/[^a-zA-Z0-9.\-]/g, '_').toLowerCase();
-          const customTag = `${safeBaseName}-custom-${Date.now()}`;
-          
-          const dockerfileContent = `FROM ${createModal.image.trim()}\nUSER root\nRUN if command -v apk >/dev/null; then apk update && apk add --no-cache ${toolsString}; elif command -v apt-get >/dev/null; then apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y ${toolsString}; else echo "No supported package manager"; exit 1; fi\n`;
-          let base64Encoded = '';
-          try {
-              base64Encoded = btoa(dockerfileContent);
-          } catch(e) {
-              base64Encoded = Buffer.from(dockerfileContent).toString('base64');
-          }
-          
-          socketRef.current.emit('docker:command', { action: 'build', args: [customTag, base64Encoded] });
-          addNotification({ title: 'Docker', message: `Building custom image with tools: ${toolsString}`, type: 'info' });
-          
-          setPullingTasks(prev => ({
-              ...prev,
-              [customTag]: { 
-                  progress: 0, 
-                  status: 'Building Image...', 
-                  lastLine: 'Initializing build...', 
-                  startTime: Date.now(), 
-                  isBuild: true, 
-                  runAfterBuild: { name: finalName, tag: customTag } 
-              }
-          }));
-      } else {
-          socketRef.current.emit('docker:command', { action: 'run', args: [finalName, createModal.image.trim()] });
-      }
+      socketRef.current.emit('docker:command', { 
+        action: 'run', 
+        args: [finalName, image, ports, env, volumes] 
+      });
+
+
+      // Add to pullingTasks for visual feedback in the floater
+      setPullingTasks(prev => ({
+        ...prev,
+        [finalName || image]: { 
+          progress: 50, 
+          status: 'Creating...', 
+          lastLine: `Initializing container ${finalName || image}`, 
+          startTime: Date.now() 
+        }
+      }));
     }
-    setCreateModal({ isOpen: false, image: '', name: '', tools: {} });
+
+    setCreateModal({ isOpen: false, image: '', name: '', ports: '', env: '', volumes: '' });
   };
+
 
   const handleContainerAction = (id, action) => {
     if (!socketRef.current) return;
-    setIsLoading(true);
+    setPendingActions(prev => ({ ...prev, [id]: action }));
     socketRef.current.emit('docker:command', { action, args: [id] });
   };
 
@@ -638,6 +812,7 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
       socketRef.current.emit('docker:command', { action: 'rmi', args: [imageId] });
     }, 'Remove', 'Delete');
   };
+
 
   const fetchLogs = (id, name) => {
     openWindow(
@@ -717,8 +892,11 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
           isOpen: true,
           name: `${parsed.name}-imported`,
           image: parsed.image,
-          tools: {},
+          ports: '',
+          env: '',
+          volumes: ''
         });
+
         addNotification({ title: 'Import', message: 'Configuration loaded into creation modal', type: 'info' });
       } catch (err) {
         addNotification({ title: 'Error', message: 'Invalid JSON file', type: 'error' });
@@ -728,10 +906,50 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
     e.target.value = '';
   };
 
-  const browseContainer = (containerId, containerName) => {
+  const handleOpenServiceConfig = (c) => {
+    if (c.state !== 'running') return;
+    const img = (c.image || '').toLowerCase();
+
+    // Define candidate config paths per service (ordered by likelihood)
+    let candidates = null;
+
+    if (img.includes('nginx')) {
+      candidates = { paths: ['/etc/nginx/nginx.conf', '/etc/nginx/conf.d/default.conf', '/etc/nginx/conf.d'], isDir: false };
+    } else if (img.includes('apache') || img.includes('httpd')) {
+      candidates = { paths: ['/usr/local/apache2/conf/httpd.conf', '/etc/apache2/apache2.conf', '/etc/httpd/conf/httpd.conf'], isDir: false };
+    } else if (img.includes('redis')) {
+      candidates = { paths: ['/usr/local/etc/redis/redis.conf', '/etc/redis/redis.conf', '/etc/redis.conf'], isDir: false };
+    } else if (img.includes('postgres')) {
+      candidates = { paths: ['/var/lib/postgresql/data/postgresql.conf', '/etc/postgresql/postgresql.conf'], isDir: false };
+    } else if (img.includes('mysql') || img.includes('mariadb')) {
+      candidates = { paths: ['/etc/mysql/my.cnf', '/etc/my.cnf', '/etc/mysql/conf.d'], isDir: false };
+    } else if (img.includes('mongo')) {
+      candidates = { paths: ['/data/configdb/mongod.conf', '/etc/mongod.conf', '/etc/mongod.conf.orig', '/etc/mongo.conf'], isDir: false };
+    }
+
+    if (candidates) {
+      window._currentConfigSearchContainer = { id: c.id, name: c.name };
+      setIsLoading(true);
+      socketRef.current.emit('docker:command', { action: 'find-config', args: [c.id, ...candidates.paths] });
+    } else {
+      // Generic fallback — drop into /etc and list common config files
+      const cmd = `docker exec -it ${c.id} sh -c "cd /etc && ls -la *.conf 2>/dev/null; echo '---'; sh"`;
+      window.dispatchEvent(new CustomEvent('open-terminal', {
+        detail: {
+          connection: selectedConnection,
+          initialCommand: `${cmd}\r`,
+          title: `Config: ${c.name}`
+        }
+      }));
+    }
+  };
+
+
+  const browseContainer = (containerId, containerName, initialPath = '/') => {
     window.dispatchEvent(new CustomEvent('open-files', {
       detail: {
         connection: selectedConnection,
+        connectionIdOverride: `docker-${containerId}:${selectedConnection._id}`,
         title: `Files: ${containerName}`
       }
     }));
@@ -828,8 +1046,7 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
                   <input ref={importFileRef} type="file" accept=".json" className="hidden" onChange={handleImportFileChange} />
                 </div>
                 
-                {isLoading && <RefreshCw size={14} className="animate-spin text-sky-400" />}
-                <button onClick={fetchContainers} className="p-1.5 hover:bg-white/5 rounded-lg text-sky-400 transition-colors" title="Refresh">
+                <button onClick={fetchContainers} className="p-1.5 hover:bg-white/5 rounded-lg text-sky-400 transition-colors active:scale-90" title="Refresh">
                     <RefreshCw size={14} className={isLoading ? 'animate-spin' : ''} />
                 </button>
                 <div className="w-px h-4 bg-white/10" />
@@ -884,24 +1101,43 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
 
                             {/* Container list */}
                             {filteredContainers.length === 0 ? (
-                              <div className="text-center py-16 opacity-40">
-                                <Box size={40} className="mx-auto mb-3" />
-                                <p className="text-sm font-bold">No containers found</p>
-                                <p className="text-xs mt-1">Pull an image and run it to get started</p>
+                              <div className="text-center py-24 bg-black/10 rounded-3xl border border-dashed border-white/5">
+                                {isLoading ? (
+                                  <div className="flex flex-col items-center gap-4">
+                                     <div className="w-12 h-12 rounded-full border-4 border-emerald-500/20 border-t-emerald-500 animate-spin" />
+                                     <p className="text-sm font-bold text-emerald-400">Fetching Containers...</p>
+                                  </div>
+                                ) : (
+                                  <>
+                                    <Box size={40} className="mx-auto mb-3 opacity-20" />
+                                    <p className="text-sm font-bold opacity-60">No containers found</p>
+                                    <p className="text-[10px] mt-1 opacity-40">Pull an image and run it to get started</p>
+                                  </>
+                                )}
                               </div>
                             ) : (
                               <div className="grid grid-cols-1 xl:grid-cols-2 gap-3">
-                                {filteredContainers.map(c => {
-                                  const isExpanded = expandedContainer === c.id;
-                                  return (
-                                    <div 
-                                      key={c.id} 
-                                      className={`rounded-2xl border bg-[var(--bg-card)] transition-all duration-200 ${
-                                        c.state === 'running' 
-                                          ? 'border-emerald-500/15 hover:border-emerald-500/30' 
-                                          : 'border-[var(--border-color)] hover:border-sky-500/20'
-                                      } ${isExpanded ? 'ring-1 ring-sky-500/20' : ''}`}
-                                    >
+                                <AnimatePresence mode="popLayout">
+                                  {filteredContainers.map(c => {
+                                    const isExpanded = expandedContainer === c.id;
+                                    const isPending = pendingActions[c.id];
+                                    return (
+                                      <motion.div 
+                                        key={c.id} 
+                                        layout
+                                        initial={{ opacity: 0, scale: 0.9, y: 10 }}
+                                        animate={{ opacity: 1, scale: 1, y: 0 }}
+                                        exit={{ opacity: 0, scale: 0.8, x: -20, filter: 'blur(8px)' }}
+                                        transition={{ duration: 0.2, ease: "easeOut" }}
+                                        className={`rounded-2xl border bg-[var(--bg-card)] transition-all duration-200 ${
+                                          isPending ? 'opacity-60 pointer-events-none' : ''
+                                        } ${
+                                          c.state === 'running' 
+                                            ? 'border-emerald-500/15 hover:border-emerald-500/30' 
+                                            : 'border-[var(--border-color)] hover:border-sky-500/20'
+                                        } ${isExpanded ? 'ring-1 ring-sky-500/20' : ''}`}
+                                      >
+
                                       {/* Container header */}
                                       <div 
                                         className="p-4 cursor-pointer flex items-start justify-between"
@@ -989,19 +1225,32 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
                                             <Archive size={10} />
                                           </button>
                                           <button 
+                                            onClick={(e) => { e.stopPropagation(); handleOpenServiceConfig(c); }} 
+                                            disabled={c.state !== 'running'}
+                                            className="py-1.5 px-2.5 rounded-lg bg-indigo-500/10 text-indigo-400 text-[10px] font-bold disabled:opacity-20 hover:bg-indigo-500/20 transition-all flex items-center gap-1"
+                                            title="Service Config"
+                                          >
+                                            <Settings size={10} />
+                                          </button>
+                                          <button 
                                             onClick={(e) => { e.stopPropagation(); handleExportProject(c); }} 
                                             className="py-1.5 px-2.5 rounded-lg bg-sky-500/10 text-sky-400 text-[10px] font-bold hover:bg-sky-500/20 transition-all flex items-center gap-1" 
                                             title="Export Configuration (Light)"
                                           >
                                             <Share2 size={10} />
                                           </button>
-                                          <button onClick={(e) => { e.stopPropagation(); showConfirm(`Delete ${c.name}?`, () => handleContainerAction(c.id, 'rm'), 'Remove', 'Delete'); }} className="py-1.5 px-2 rounded-lg border border-rose-500/20 text-rose-500 hover:bg-rose-500/10 transition-all">
-                                            <Trash2 size={10} />
+                                          <button 
+                                            onClick={(e) => { e.stopPropagation(); showConfirm(`Delete ${c.name}?`, () => handleContainerAction(c.id, 'rm'), 'Remove', 'Delete'); }} 
+                                            className="py-1.5 px-2 rounded-lg border border-rose-500/20 text-rose-500 hover:bg-rose-500/10 transition-all flex items-center justify-center min-w-[32px]"
+                                            disabled={isPending}
+                                          >
+                                            {isPending === 'rm' ? <RefreshCw size={10} className="animate-spin text-rose-400" /> : <Trash2 size={10} />}
                                           </button>
                                       </div>
-                                    </div>
+                                    </motion.div>
                                   );
                                 })}
+                                </AnimatePresence>
                               </div>
                             )}
                         </div>
@@ -1254,7 +1503,7 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
 
                                               <div className="flex items-center gap-1.5">
                                                 <button 
-                                                  onClick={() => handleOpenCreateModal(!isNone ? fullTag : img.ID)} 
+                                                  onClick={() => handleOpenCreateModal(!isNone ? fullTag : img.ID, true)} 
                                                   className="flex-1 py-1.5 rounded-lg bg-emerald-500/10 text-emerald-400 text-[10px] font-bold hover:bg-emerald-500/15 transition-all flex items-center justify-center gap-1"
                                                 >
                                                   <Play size={9} /> RUN
@@ -1279,8 +1528,37 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
                     {/* ── VOLUMES TAB ── */}
                     {activeTab === 'volumes' && (
                       <div className="flex flex-col gap-5">
-                        <div className="flex gap-3">
-                          <StatCard icon={HardDrive} label="Volumes" value={volumes.length} color="violet" />
+                        <div className="flex items-center justify-between mb-4">
+                          <div className="flex gap-3">
+                            <StatCard icon={HardDrive} label="Volumes" value={volumes.length} color="violet" />
+                          </div>
+                          <div className="flex gap-2">
+                            {selectedVolumes.length > 0 && (
+                              <button 
+                                onClick={() => {
+                                  showConfirm(
+                                    `Are you sure you want to delete ${selectedVolumes.length} selected volume(s)? This cannot be undone.`,
+                                    () => {
+                                      setIsLoading(true);
+                                      socketRef.current.emit('docker:command', { action: 'rm-volumes', args: selectedVolumes });
+                                    },
+                                    'Delete Volumes'
+                                  );
+                                }}
+                                className="px-4 py-2 bg-rose-500 text-white rounded-xl text-xs font-bold transition-all flex items-center gap-2 shadow-lg shadow-rose-500/20 hover:bg-rose-600"
+                              >
+                                <Trash2 size={14} />
+                                Delete Selected ({selectedVolumes.length})
+                              </button>
+                            )}
+                            <button 
+                              onClick={() => setPruneVolumesModal({ isOpen: true, confirmText: '' })}
+                              className="px-4 py-2 bg-rose-500/10 text-rose-500 hover:bg-rose-500 hover:text-white rounded-xl text-xs font-bold transition-all flex items-center gap-2 border border-rose-500/20"
+                            >
+                              <Trash2 size={14} />
+                              Prune Unused
+                            </button>
+                          </div>
                         </div>
                         {volumes.length === 0 ? (
                           <div className="text-center py-16 opacity-40">
@@ -1289,22 +1567,74 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
                           </div>
                         ) : (
                           <div className="grid grid-cols-1 xl:grid-cols-2 gap-3">
-                            {volumes.map((vol, i) => (
-                              <div key={i} className="p-4 rounded-2xl border border-[var(--border-color)] bg-[var(--bg-card)] hover:border-violet-500/20 transition-all">
-                                <div className="flex items-center gap-3 mb-2">
-                                  <div className="w-8 h-8 rounded-lg bg-violet-500/10 text-violet-400 flex items-center justify-center shrink-0">
-                                    <HardDrive size={14} />
+                            {volumes.map((vol, i) => {
+                              const isSelected = selectedVolumes.includes(vol.Name);
+                              return (
+                                <div 
+                                  key={i} 
+                                  onClick={() => {
+                                    if (isSelected) {
+                                      setSelectedVolumes(prev => prev.filter(v => v !== vol.Name));
+                                    } else {
+                                      setSelectedVolumes(prev => [...prev, vol.Name]);
+                                    }
+                                  }}
+                                  className={`p-4 rounded-2xl border transition-all cursor-pointer select-none relative overflow-hidden group ${
+                                    isSelected ? 'border-violet-500 bg-violet-500/10' : 'border-[var(--border-color)] bg-[var(--bg-card)] hover:border-violet-500/30'
+                                  }`}
+                                >
+                                  <div className="flex items-center gap-3 mb-2 relative z-10">
+                                    <div className={`w-4 h-4 rounded my-auto flex items-center justify-center shrink-0 transition-colors ${isSelected ? 'bg-violet-500 border-violet-500' : 'border border-[var(--border-color)] group-hover:border-violet-500/50'}`}>
+                                      {isSelected && <div className="w-1.5 h-1.5 bg-white rounded-sm" />}
+                                    </div>
+                                    <div className="w-8 h-8 rounded-lg bg-violet-500/10 text-violet-400 flex items-center justify-center shrink-0">
+                                      <HardDrive size={14} />
+                                    </div>
+                                    <div className="min-w-0 flex-1">
+                                      <h3 className="font-bold text-sm truncate">{vol.Name || vol.Driver || 'unnamed'}</h3>
+                                      <p className="text-[10px] text-[var(--text-muted)]">Driver: {vol.Driver || 'local'}</p>
+                                    </div>
                                   </div>
-                                  <div className="min-w-0">
-                                    <h3 className="font-bold text-sm truncate">{vol.Name || vol.Driver || 'unnamed'}</h3>
-                                    <p className="text-[10px] text-[var(--text-muted)]">Driver: {vol.Driver || 'local'}</p>
-                                  </div>
+                                  {vol.Mountpoint && (
+                                    <button 
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        window.dispatchEvent(new CustomEvent('open-files', {
+                                          detail: {
+                                            connection: selectedConnection,
+                                            initialPath: vol.Mountpoint,
+                                            title: `Host Volume: ${vol.Name?.substring(0,12) || 'Unnamed'}`
+                                          }
+                                        }));
+                                      }}
+                                      className="text-left cursor-pointer group/link block w-full outline-none focus:outline-none focus:bg-white/5 rounded pl-[50px] pr-2 py-0.5 mt-1 transition-colors"
+                                      title="Open in Files App (Host)"
+                                    >
+                                      <span className="text-[9px] font-mono text-[var(--accent-indigo)] group-hover/link:underline truncate block relative z-10 duration-200">{vol.Mountpoint}</span>
+                                    </button>
+                                  )}
+                                  
+                                  {(() => {
+                                    const vName = (vol.Name || '').toLowerCase().trim();
+                                    if (!vName) return null;
+                                    const associated = containers.filter(c => {
+                                      const mounts = (c.detailedMounts || c.mounts || '').toLowerCase();
+                                      return mounts.includes(vName);
+                                    });
+                                    if (associated.length === 0) return null;
+                                    return (
+                                      <div className="flex flex-wrap gap-1 mt-3 pl-[50px] relative z-10">
+                                        {associated.map(c => (
+                                          <span key={c.id} className="px-1.5 py-0.5 bg-violet-500/10 text-violet-400 border border-violet-500/10 rounded-md text-[9px] font-bold">
+                                            {c.name}
+                                          </span>
+                                        ))}
+                                      </div>
+                                    );
+                                  })()}
                                 </div>
-                                {vol.Mountpoint && (
-                                  <p className="text-[9px] font-mono text-[var(--text-muted)] truncate">{vol.Mountpoint}</p>
-                                )}
-                              </div>
-                            ))}
+                              );
+                            })}
                           </div>
                         )}
                       </div>
@@ -1367,91 +1697,108 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
           >
             <form onSubmit={submitCreateContainer} className="flex flex-col h-full gap-4">
               <div className="flex-1">
-                <div className="mb-4">
-                  <label className="block text-xs font-bold text-[var(--text-muted)] mb-1.5">Image (Preset or Custom String)</label>
-                  <ImageComboBox 
-                    value={createModal.image}
-                    onChange={(val) => setCreateModal(prev => ({ ...prev, image: val }))}
-                    options={Array.from(new Set(images.filter(img => img.Repository !== '<none>').map(img => `${img.Repository}:${img.Tag}`)))}
-                  />
-                  <div className="mt-2 flex flex-wrap gap-1.5">
-                    <span className="text-[9px] text-[var(--text-muted)] font-bold uppercase mr-1 pt-1 opacity-50">Tags:</span>
-                    {commonTags.slice(0, 5).map(tag => (
-                      <TagPresetBadge 
-                        key={tag} 
-                        tag={tag} 
-                        onClick={(t) => {
-                          const base = createModal.image.split(':')[0] || 'nginx';
-                          setCreateModal(prev => ({ ...prev, image: `${base}:${t}` }));
-                        }} 
+              <div className="flex-1 space-y-5">
+                <div className="relative">
+                  <label className="block text-xs font-black text-[var(--text-muted)] mb-2 uppercase tracking-tight opacity-50">Base Image</label>
+                  {!createModal.isManual ? (
+                    <div className="flex items-center gap-3 bg-black/40 border border-sky-500/20 rounded-2xl p-4 transition-all hover:bg-black/50 hover:border-sky-500/40 group">
+                       <div className="w-10 h-10 rounded-xl bg-sky-500/10 flex items-center justify-center text-sky-400 group-hover:scale-110 transition-transform">
+                          <Package size={20} />
+                       </div>
+                       <div className="flex-1 min-w-0">
+                          <h4 className="text-sm font-bold text-white truncate">{createModal.image}</h4>
+                          <p className="text-[10px] text-sky-400 font-mono tracking-wider">LOCKED FROM ACTION</p>
+                       </div>
+                       <button 
+                         type="button" 
+                         onClick={() => setCreateModal(prev => ({ ...prev, isManual: true }))}
+                         className="text-[10px] text-[var(--text-muted)] hover:text-white underline px-3 py-1 opacity-50 hover:opacity-100"
+                        >Change</button>
+                    </div>
+                  ) : (
+                    <>
+                      <ImageComboBox 
+                        value={createModal.image}
+                        onChange={(val) => setCreateModal(prev => ({ ...prev, image: val }))}
+                        options={Array.from(new Set(images.filter(img => img.Repository !== '<none>').map(img => `${img.Repository}:${img.Tag}`)))}
                       />
-                    ))}
+                      <p className="mt-1.5 text-[9px] text-[var(--text-muted)] font-mono opacity-50 italic">Tip: Use fully qualified names (e.g., node:20-alpine)</p>
+                    </>
+                  )}
+                </div>
+
+
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-xs font-black text-[var(--text-muted)] mb-2 uppercase tracking-tight opacity-50">Container Name</label>
+                    <input 
+                      type="text"
+                      value={createModal.name}
+                      onChange={(e) => setCreateModal(prev => ({ ...prev, name: e.target.value }))}
+                      placeholder="e.g. my-app"
+                      className="w-full bg-black/30 border border-white/5 rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:border-sky-500/50 transition-all font-mono"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-black text-[var(--text-muted)] mb-2 uppercase tracking-tight opacity-50 text-amber-400">Port Mapping</label>
+                    <div className="relative">
+                      <input 
+                        type="text"
+                        value={createModal.ports}
+                        onChange={(e) => setCreateModal(prev => ({ ...prev, ports: e.target.value }))}
+                        placeholder="e.g. 8080:80"
+                        className={`w-full bg-black/30 border rounded-xl px-4 py-2.5 text-sm font-mono transition-all ${
+                          portStatus === 'in-use' ? 'border-rose-500/50 text-rose-300' : 
+                          portStatus === 'free' ? 'border-emerald-500/50 text-emerald-300' :
+                          'border-amber-500/10 text-amber-200 focus:border-amber-500/50'
+                        }`}
+                      />
+                      {portStatus && (
+                        <div className="absolute right-3 top-1/2 -translate-y-1/2 flex items-center gap-1.5">
+                          {portStatus === 'checking' && <RefreshCw size={10} className="animate-spin text-amber-400 opacity-50" />}
+                          {portStatus === 'free' && <CircleCheck size={10} className="text-emerald-400" />}
+                          {portStatus === 'in-use' && <CircleAlert size={10} className="text-rose-400" />}
+                          <span className={`text-[8px] font-bold uppercase ${
+                            portStatus === 'in-use' ? 'text-rose-400' : 
+                            portStatus === 'free' ? 'text-emerald-400' : 
+                            'text-amber-400 opacity-50'
+                          }`}>
+                            {portStatus}
+                          </span>
+                        </div>
+                      )}
+                    </div>
                   </div>
                 </div>
 
                 <div>
-                  <label className="block text-xs font-bold text-[var(--text-muted)] mb-1.5">Container Name (Optional)</label>
+                  <label className="block text-xs font-black text-[var(--text-muted)] mb-2 uppercase tracking-tight opacity-50 text-emerald-400">Environment Variables</label>
                   <input 
                     type="text"
-                    value={createModal.name}
-                    onChange={(e) => setCreateModal(prev => ({ ...prev, name: e.target.value }))}
-                    placeholder="Leave blank to auto-generate"
-                    className="w-full bg-black/20 border border-white/10 rounded-lg px-3 py-2 text-sm text-[var(--text-primary)] focus:outline-none focus:border-sky-500/50 focus:ring-1 focus:ring-sky-500/50 transition-all font-mono"
+                    value={createModal.env}
+                    onChange={(e) => setCreateModal(prev => ({ ...prev, env: e.target.value }))}
+                    placeholder="e.g. NODE_ENV=production,PORT=3000"
+                    className="w-full bg-black/30 border border-emerald-500/10 rounded-xl px-4 py-2.5 text-sm text-emerald-200 focus:outline-none focus:border-emerald-500/50 transition-all font-mono"
                   />
                 </div>
-
-                  <div className="mt-4 border-t border-white/5 pt-4">
-                    <label className="block text-xs font-bold text-[var(--text-muted)] mb-2 uppercase tracking-wide flex items-center gap-1.5">
-                      <Zap size={12} className="text-amber-400" />
-                      Image Presets
-                    </label>
-                    <div className="grid grid-cols-4 gap-2">
-                      {commonImages.map(img => (
-                        <button 
-                          key={img.name}
-                          type="button"
-                          onClick={() => setCreateModal(prev => ({ ...prev, image: `${img.name}:latest` }))}
-                          className={`p-2 rounded-xl border flex flex-col items-center gap-1 transition-all ${
-                            createModal.image.startsWith(img.name) 
-                              ? 'bg-sky-500/10 border-sky-500/30 text-sky-400' 
-                              : 'bg-white/5 border-transparent text-[var(--text-muted)] hover:bg-white/10 hover:text-white'
-                          }`}
-                        >
-                          <img.icon size={16} />
-                          <span className="text-[10px] font-bold uppercase">{img.name}</span>
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-
-                  <div className="mt-4 border-t border-white/5 pt-4">
-                  <label className="block text-xs font-bold text-[var(--text-muted)] mb-2 flex items-center gap-1.5">
-                    <Layers size={12} className="text-emerald-400" />
-                    Inject Additional Tools <span className="text-[10px] font-normal opacity-60 ml-1">(Builds a custom image automatically)</span>
-                  </label>
-                  <div className="grid grid-cols-2 gap-2 max-h-[140px] overflow-y-auto custom-scrollbar pr-2">
-                    {availableTools.map(tool => (
-                      <label key={tool.id} className="flex items-start gap-2 p-2 rounded-lg bg-white/5 hover:bg-white/10 cursor-pointer transition-colors border border-transparent hover:border-white/10">
-                        <div className="pt-0.5">
-                          <input 
-                            type="checkbox" 
-                            className="w-3 h-3 rounded-sm accent-emerald-500 bg-black/50 border-white/20"
-                            checked={!!createModal.tools?.[tool.id]}
-                            onChange={(e) => setCreateModal(prev => ({ 
-                                ...prev, 
-                                tools: { ...prev.tools, [tool.id]: e.target.checked }
-                            }))}
-                          />
-                        </div>
-                        <div className="min-w-0">
-                          <div className="text-[11px] font-bold text-white">{tool.label}</div>
-                          <div className="text-[9px] text-[var(--text-muted)] leading-tight truncate" title={tool.desc}>{tool.desc}</div>
-                        </div>
-                      </label>
-                    ))}
-                  </div>
-                </div>
               </div>
+
+              </div>
+              
+              <div className="mt-4 px-6 pb-6">
+                <label className="block text-xs font-black text-[var(--text-muted)] mb-2 uppercase tracking-tight opacity-50 text-indigo-400">Volume Mounts (Bind Mounts)</label>
+                <input 
+                  type="text"
+                  value={createModal.volumes}
+                  onChange={(e) => setCreateModal(prev => ({ ...prev, volumes: e.target.value }))}
+                  placeholder="e.g. /home/user/conf:/etc/nginx/conf.d, data_volume:/data"
+                  className="w-full bg-black/30 border border-indigo-500/10 rounded-xl px-4 py-2.5 text-sm text-indigo-200 focus:outline-none focus:border-indigo-500/50 transition-all font-mono"
+                />
+                <p className="mt-2 text-[10px] text-[var(--text-muted)] font-medium opacity-40">
+                  Tip: Mount local folders or files to paths inside the container.
+                </p>
+              </div>
+
               <div className="flex justify-end gap-2 pt-4 border-t border-white/5 mt-auto">
                 <button 
                   type="button" 
@@ -1471,6 +1818,73 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
             </form>
           </MacOSModalWindow>,
           document.body
+        )}
+
+        {configEditor.isOpen && (
+          <ConfigEditorModal
+            file={configEditor.file}
+            initialContent={configEditor.content}
+            onClose={() => setConfigEditor(prev => ({ ...prev, isOpen: false }))}
+            onSave={(newContent) => {
+              setIsLoading(true);
+              const b64 = btoa(unescape(encodeURIComponent(newContent)));
+              socketRef.current.emit('docker:command', { 
+                action: 'write-config', 
+                args: [configEditor.containerId, configEditor.file, b64] 
+              });
+            }}
+          />
+        )}
+
+        {pruneVolumesModal.isOpen && (
+          <MacOSModalWindow
+            isOpen
+            title="Prune Volumes"
+            icon={AlertTriangle}
+            onClose={() => setPruneVolumesModal({ isOpen: false, confirmText: '' })}
+            zIndexClassName="z-[9999]"
+            defaultWidth={360}
+            defaultHeight={200}
+            maxWidthClassName="max-w-[360px]"
+            closeOnOverlayClick
+          >
+            <div className="p-5 flex flex-col h-full bg-[var(--bg-primary)]">
+              <div className="text-[13px] leading-relaxed text-[var(--text-primary)] mb-4">
+                This will destroy all unused volumes and their data irreversibly.
+                To confirm, type <strong className="text-rose-400">delete</strong> below:
+              </div>
+              <input 
+                autoFocus
+                type="text"
+                placeholder="delete"
+                className="w-full bg-black/30 border border-white/10 rounded-xl px-4 py-2.5 text-sm outline-none font-mono text-[var(--text-primary)] focus:border-rose-500/50 transition-colors"
+                value={pruneVolumesModal.confirmText}
+                onChange={(e) => setPruneVolumesModal(prev => ({ ...prev, confirmText: e.target.value }))}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && pruneVolumesModal.confirmText === 'delete') {
+                    setIsLoading(true);
+                    socketRef.current.emit('docker:command', { action: 'prune-volumes' });
+                    setPruneVolumesModal({ isOpen: false, confirmText: '' });
+                  }
+                }}
+              />
+              <div className="mt-auto flex justify-end gap-2 pt-4 border-t border-white/5">
+                <button 
+                  onClick={() => setPruneVolumesModal({ isOpen: false, confirmText: '' })}
+                  className="px-4 py-2 rounded-lg text-sm font-bold text-[var(--text-muted)] hover:bg-white/5 transition-all"
+                >Cancel</button>
+                <button 
+                  disabled={pruneVolumesModal.confirmText !== 'delete'}
+                  onClick={() => {
+                    setIsLoading(true);
+                    socketRef.current.emit('docker:command', { action: 'prune-volumes' });
+                    setPruneVolumesModal({ isOpen: false, confirmText: '' });
+                  }}
+                  className="px-4 py-2 rounded-lg text-sm font-bold bg-rose-500 text-white hover:bg-rose-600 transition-all disabled:opacity-50"
+               >Prune</button>
+              </div>
+            </div>
+          </MacOSModalWindow>
         )}
 
         <style jsx>{`

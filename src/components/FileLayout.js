@@ -333,6 +333,7 @@ function LayoutRenderer({
               connectionName={layout.fmData.connectionName}
               connection={layout.fmData.connection}
               isSplit={true}
+              initialPath={layout.fmData.initialPath}
               onClosePane={() => onClosePane(layout.id)}
               onSplit={(dir) => onSplitPane(layout.id, dir)}
             />
@@ -419,6 +420,7 @@ export default function FileLayout({ managers: propManagers, onCloseFileManager,
         connectionName: m.connectionName,
         color: m.color,
         connection: m.connection,
+        initialPath: m.initialPath || '.'
       };
 
       if (!currentLayout) {
@@ -459,6 +461,7 @@ export default function FileLayout({ managers: propManagers, onCloseFileManager,
           connectionName: newFm.connectionName,
           color: newFm.color,
           connection: newFm.connection,
+          initialPath: newFm.initialPath || '.'
         };
 
         if (!currentLayout || (currentLayout.type === 'pane' && !currentLayout.fmData)) {

@@ -35,6 +35,14 @@ const { decrypt } = require('./src/utils/encryption');
 const compression = require('compression');
 
 const dev = process.env.NODE_ENV !== 'production';
+
+// Silence console logs in production
+if (!dev) {
+  const noop = () => {};
+  const methods = ['log', 'info', 'warn', 'error', 'debug', 'table', 'trace', 'dir', 'group', 'groupCollapsed', 'groupEnd', 'time', 'timeEnd', 'timeLog'];
+  methods.forEach(m => { if (console[m]) console[m] = noop; });
+}
+
 const hostname = dev ? 'localhost' : '0.0.0.0';
 const port = parseInt(process.env.PORT, 10) || 3000;
 
@@ -826,8 +834,17 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
             
             // Helper function to execute docker commands with sudo detection
             const executeDockerCommand = (currentCmd, currentAction, currentArgs, attemptWithSudo = false) => {
-                const prefix = attemptWithSudo ? dockerSudo : dockerSudo; // Always use dockerSudo (which includes the password if needed)
-                const finalCmd = `${prefix}docker ${currentCmd}`; // Construct the command
+                const escapedPass = (connection?.password || '').replace(/'/g, "'\\''");
+                
+                // If attemptWithSudo is true, use 'sudo su root -c' pattern. 
+                // We wrap the entire 'docker ...' command in single quotes.
+                const prefix = attemptWithSudo 
+                    ? `echo '${escapedPass}' | sudo -S su root -c ` 
+                    : '';
+                
+                const finalCmd = attemptWithSudo
+                    ? `${prefix} 'docker ${currentCmd.replace(/'/g, "'\\''")}'`
+                    : `docker ${currentCmd}`;
 
                 console.log(`🐳 [${socket.id}] DOCKER EXEC: ${finalCmd}`);
 
@@ -840,28 +857,44 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
                     let output = '';
                     let stderr = '';
                     
-                    stream.on('data', (d) => output += d.toString());
-                    stream.stderr.on('data', (d) => stderr += d.toString());
+                    stream.on('data', (d) => {
+                        // Filter out common .bashrc noise
+                        const cleaned = d.toString().replace(/\/home\/.+?\.bashrc: line \d+: .+?: No such file or directory\n?/g, '');
+                        output += cleaned;
+                    });
+                    stream.stderr.on('data', (d) => {
+                        const cleaned = d.toString().replace(/\/home\/.+?\.bashrc: line \d+: .+?: No such file or directory\n?/g, '');
+                        stderr += cleaned;
+                    });
                     
                     stream.on('close', (code) => {
+                        // Clean up again to be safe
+                        output = output.replace(/\/home\/.+?\.bashrc: line \d+: .+?: No such file or directory\n?/g, '').trim();
+                        stderr = stderr.replace(/\/home\/.+?\.bashrc: line \d+: .+?: No such file or directory\n?/g, '').trim();
+
                         // Sudo detection logic for 'info' command
                         const combinedOutput = (output + stderr).toLowerCase();
                         if (currentAction === 'info' && code !== 0 && combinedOutput.includes('permission denied') && !attemptWithSudo) {
-                            console.warn(`⚠️ Docker 'info' failed without sudo. Retrying with sudo.`);
-                            const escapedPass = (connection?.password || '').replace(/'/g, "'\\''");
-                            dockerSudo = connection?.password ? `echo '${escapedPass}' | sudo -S ` : `sudo `; // Remember for future commands
-                            
+                            console.warn(`⚠️ Docker 'info' failed without sudo. Retrying with sudo su root -c.`);
                             // Re-execute the command with sudo
                             return executeDockerCommand(currentCmd, currentAction, currentArgs, true);
                         }
 
                         // For pull and pull:status, always emit result even on non-zero exit
                         // because the shell scripts can exit non-zero legitimately
-                        // (e.g. tmux not installed, grep finding no match)
                         if (currentAction === 'pull:status' || currentAction === 'pull') {
                            socket.emit('docker:result', { action: currentAction, output: output.trim(), code, args: currentArgs });
                         } else if (code !== 0) {
-                           socket.emit('docker:error', stderr.trim() || `Docker ${currentAction} failed (code ${code})`);
+                           const errText = stderr.trim() || `Docker ${currentAction} failed (code ${code})`;
+                           socket.emit('docker:error', errText);
+
+                           // If 'docker run' fails to start (e.g. port already in use), it still creates the container 
+                           // and prints the 64-char ID to stdout. We should auto-remove this dead container.
+                           if (currentAction === 'run' && output.trim().length === 64) {
+                               const deadId = output.trim();
+                               console.log(`🧹 [${socket.id}] docker run failed, removing leftover container: ${deadId}`);
+                               sshClient.exec(`${prefix}docker rm -f ${deadId}`, () => {});
+                           }
                         } else {
                            socket.emit('docker:result', { action: currentAction, output: output.trim(), code, args: currentArgs });
                         }
@@ -874,6 +907,8 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
                cmdSuffix = `ps -a --format "{{json .}}"`;
             } else if (action === 'images') {
                cmdSuffix = `image ls -a --format "{{json .}}"`;
+            } else if (action === 'vol-assoc') {
+               cmdSuffix = `ids=$(docker ps -aq); [ -z "$ids" ] || docker inspect --format 'assoc:{{.ID}}\t{{.Name}}\t{{range .Mounts}}{{.Name}} {{end}}' $ids`;
             } else if (action === 'search' && args.length > 0) {
                  const query = String(args[0] || '').replace(/[^a-zA-Z0-9._\- ]/g, '').trim();
                  if (!query) return socket.emit('docker:error', 'Invalid Search Query');
@@ -895,8 +930,39 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
              } else if (action === 'run' && args.length >= 2) {
                 const name = String(args[0] || '').replace(/[^a-zA-Z0-9._-]/g, '');
                 const image = String(args[1] || '').replace(/[^a-zA-Z0-9.@/:-]/g, '');
-                if (!name || !image) return socket.emit('docker:error', 'Invalid Run Name/Image');
-                cmdSuffix = `run -d --name ${name} ${image}`;
+                const rawPorts = String(args[2] || '');
+                const rawEnv = String(args[3] || '');
+                const rawVolumes = String(args[4] || '');
+                if (!image) return socket.emit('docker:error', 'Invalid Image');
+                
+                let runArgs = ['-d'];
+                if (name) runArgs.push(`--name ${name}`);
+                
+                // Parse ports (e.g. "8080:80, 9000:9000")
+                if (rawPorts) {
+                  rawPorts.split(',').forEach(p => {
+                    const pair = p.trim().replace(/[^0-9:]/g, '');
+                    if (pair) runArgs.push(`-p ${pair}`);
+                  });
+                }
+                
+                // Parse env (e.g. "NODE_ENV=prod, PORT=3000")
+                if (rawEnv) {
+                  rawEnv.split(',').forEach(e => {
+                    const kv = e.trim().replace(/[^a-zA-Z0-9._=\-]/g, '');
+                    if (kv.includes('=')) runArgs.push(`-e "${kv}"`);
+                  });
+                }
+
+                // Parse volumes (e.g. "/host/path:/container/path, /data:/data")
+                if (rawVolumes) {
+                  rawVolumes.split(',').forEach(v => {
+                    const pair = v.trim().replace(/[^a-zA-Z0-9._/:-]/g, '');
+                    if (pair && pair.includes(':')) runArgs.push(`-v ${pair}`);
+                  });
+                }
+
+                cmdSuffix = `run ${runArgs.join(' ')} ${image}`;
              } else if (action === 'pull' && args.length > 0) {
                 const image = String(args[0] || '').replace(/[^a-zA-Z0-9.@/:-]/g, '');
                 if (!image) return socket.emit('docker:error', 'Invalid Image Name');
@@ -922,9 +988,14 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
                  const safeTag = tag.replace(/[^a-z0-9]/gi, '_');
                  cmdSuffix = `(if [ -f "/tmp/build_${safeTag}.log" ]; then RUNNING=$(ps aux 2>/dev/null | grep -v grep | grep "docker build -t ${tag}" | wc -l); if [ "$RUNNING" = "0" ] && ! grep -q "---FINISHED---" "/tmp/build_${safeTag}.log"; then echo "---FINISHED---" >> /tmp/build_${safeTag}.log; fi; tr '\\r' '\\n' < "/tmp/build_${safeTag}.log" | tail -n 20; else echo "INITIALIZING..."; fi); exit 0`;
              } else if (['start', 'stop', 'restart', 'rm'].includes(action) && args.length > 0) {
-               // Extract target ID and sanitize
                const targetId = String(args[0] || '').replace(/[^a-zA-Z0-9._/:-]/g, '');
-                 } else if (action === 'backup' && args.length > 0) {
+               if (!targetId) return socket.emit('docker:error', 'Invalid Target ID');
+               cmdSuffix = action === 'rm' ? `rm -f ${targetId}` : `${action} ${targetId}`;
+             } else if (action === 'inspect' && args.length > 0) {
+                const targetId = String(args[0] || '').replace(/[^a-zA-Z0-9._/:-]/g, '');
+                if (!targetId) return socket.emit('docker:error', 'Invalid Target ID');
+                cmdSuffix = `inspect ${targetId}`;
+             } else if (action === 'backup' && args.length > 0) {
                  const targetId = String(args[0] || '').replace(/[^a-zA-Z0-9._/:-]/g, '');
                  if (!targetId) return socket.emit('docker:error', 'Invalid ID for backup');
                  const safeId = targetId.substring(0, 12);
@@ -959,6 +1030,38 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
                  const targetId = String(args[0] || '').replace(/[^a-zA-Z0-9._/:-]/g, '');
                  const safeId = targetId.substring(0, 12);
                  cmdSuffix = `(if [ -f "/tmp/backup_${safeId}.log" ]; then RUNNING=$(ps aux 2>/dev/null | grep -v grep | grep "tar -czf /tmp/project_backup_${safeId}.tar.gz" | wc -l); if [ "$RUNNING" = "0" ] && ! grep -q "---FINISHED---" "/tmp/backup_${safeId}.log"; then echo "---FINISHED---" >> /tmp/backup_${safeId}.log; fi; tail -n 20 "/tmp/backup_${safeId}.log"; else echo "INITIALIZING..."; fi); exit 0`;
+             } else if (action === 'read-config' && args.length >= 2) {
+                 // args[0] = containerId, args[1] = filePath (inside container)
+                 const containerId = String(args[0] || '').replace(/[^a-zA-Z0-9._/:-]/g, '');
+                 const filePath = String(args[1] || '').replace(/[`$]/g, ''); // basic sanitize
+                 if (!containerId || !filePath) return socket.emit('docker:error', 'Invalid read-config args');
+                 cmdSuffix = `${dockerSudo}docker exec ${containerId} cat "${filePath}"`;
+             } else if (action === 'write-config' && args.length >= 3) {
+                 // args[0] = containerId, args[1] = filePath, args[2] = base64 content
+                 const containerId = String(args[0] || '').replace(/[^a-zA-Z0-9._/:-]/g, '');
+                 const filePath = String(args[1] || '').replace(/[`$]/g, '');
+                 const b64Content = String(args[2] || '');
+                 if (!containerId || !filePath) return socket.emit('docker:error', 'Invalid write-config args');
+                 cmdSuffix = `echo "${b64Content}" | base64 -d | ${dockerSudo}docker exec -i ${containerId} sh -c "cat > '${filePath}'"`;
+             } else if (action === 'find-config' && args.length >= 2) {
+                 // args[0] = containerId, args[1..n] = candidate paths to search
+                 const containerId = String(args[0] || '').replace(/[^a-zA-Z0-9._/:-]/g, '');
+                 if (!containerId) return socket.emit('docker:error', 'Invalid find-config args');
+                 const paths = args.slice(1).map(p => String(p).replace(/[`$]/g, ''));
+                 // Build a script that checks each path and returns the first found file/dir
+                 const checks = paths.map(p => `if [ -f '${p}' ]; then echo "FILE:${p}"; exit 0; fi; if [ -d '${p}' ]; then echo "DIR:${p}"; exit 0; fi`).join('; ');
+                 cmdSuffix = `${dockerSudo}docker exec ${containerId} sh -c "${checks}; echo 'NONE'"`;
+             } else if (action === 'prune-volumes') {
+                 cmdSuffix = `volume prune -f`;
+             } else if (action === 'rm-volumes' && args.length > 0) {
+                 const volumeIds = args.map(id => String(id).replace(/[^a-zA-Z0-9._/:-]/g, '')).filter(Boolean);
+                 if (volumeIds.length === 0) return socket.emit('docker:error', 'No valid volume IDs');
+                 cmdSuffix = `volume rm ${volumeIds.join(' ')}`;
+             } else if (action === 'check-port' && args.length > 0) {
+                 const port = String(args[0]).replace(/[^0-9]/g, '');
+                 if (!port) return socket.emit('docker:error', 'Invalid Port');
+                 // Check if port is in use on host (TCP listen)
+                 cmdSuffix = `sh -c "(ss -tuln 2>/dev/null || netstat -tuln) | grep -q -w ':${port}' && echo 'IN_USE' || echo 'FREE'"`;
              } else {
                return socket.emit('docker:error', 'Invalid Docker action');
             }
@@ -966,7 +1069,7 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
             
             // For pull & pull:status, cmdSuffix is a full shell script — execute directly
             // For all other actions, cmdSuffix is the part after 'docker' — use executeDockerCommand
-            if (['pull', 'pull:status', 'build', 'build:status', 'backup', 'backup:status'].includes(action)) {
+            if (['pull', 'pull:status', 'build', 'build:status', 'backup', 'backup:status', 'read-config', 'write-config', 'find-config', 'check-port'].includes(action)) {
                 console.log(`🐳 [${socket.id}] DOCKER EXEC (raw): ${cmdSuffix.substring(0, 120)}...`);
                 sshClient.exec(cmdSuffix, (err, stream) => {
                     if (err) {
@@ -984,6 +1087,7 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
                 executeDockerCommand(cmdSuffix, action, args);
             }
           });
+
 
           // ── Generic SSH Exec (Non-Interactive) ──────────────
           socket.on('ssh:exec', ({ command }) => {
@@ -1063,33 +1167,49 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
 
           // Helper for ls fallback
           function fallbackFileListing(socket, client, path) {
-            // Fix: ensure '.' is passed effectively or handled correctly
-            // If path is '.', use '.' as argument.
-            // If path is '.', use '.' as argument WITHOUT quotes because quotes on dot can be weird in some shells or handled weirdly?
-            // Actually, quotes are fine. But let's be safe.
             const target = path === '.' ? '.' : `"${path}"`;
-            const cmd = `ls -la --full-time ${target}`; 
-            console.log(`🔧 [${socket.id}] Running fallback command: ${cmd}`);
+            let cmd = `ls -la --full-time ${target}`; 
             
-            if (!client || client._state === 'closed') {
-               console.warn(`⚠️ [${socket.id}] Fallback skip: client not connected`);
-               return socket.emit('sftp:error', { message: 'SSH Client Disconnected during listing' });
-            }
-            client.exec(cmd, (err, stream) => {
-              if (err) {
-                 console.error(`❌ Fallback exec failed: ${err.message}`);
-                 return socket.emit('sftp:error', { message: 'Fallback command failed: ' + err.message });
-              }
-              
-              let output = '';
-              stream.on('data', (data) => { output += data.toString(); });
-              stream.on('close', () => {
-                const files = parseLsOutput(output);
-                console.log(`✅ Fallback found ${files.length} items`);
-                socket.emit('sftp:list', { path, files });
-              });
-              stream.stderr.on('data', (data) => console.error('Fallback stderr:', data.toString()));
-            });
+            const runLs = (currentCmd, isRetry = false) => {
+                console.log(`🔧 [${socket.id}] Running listing command: ${currentCmd}`);
+                if (!client || client._state === 'closed') {
+                   return socket.emit('sftp:error', { message: 'SSH Client Disconnected during listing' });
+                }
+                client.exec(currentCmd, (err, stream) => {
+                  if (err) return socket.emit('sftp:error', { message: 'Listing command failed: ' + err.message });
+                  
+                  let output = '';
+                  let stderr = '';
+                  stream.on('data', (data) => { output += data.toString(); });
+                  stream.stderr.on('data', (data) => { stderr += data.toString(); });
+                  stream.on('close', (code) => {
+                    if (stderr) console.warn(`⚠️ [${socket.id}] Listing stderr (Code: ${code}): ${stderr.trim()}`);
+                    
+                    // Retry with sudo if it failed, even if we don't have a password (might be passwordless sudo)
+                    const canTrySudo = code !== 0 && !isRetry;
+                    
+                    if (canTrySudo) {
+                        let escalatedCmd;
+                        if (connection?.password) {
+                            const b64Pass = Buffer.from(connection.password).toString('base64');
+                            const b64Cmd = Buffer.from(currentCmd).toString('base64');
+                            escalatedCmd = `echo "${b64Pass}" | base64 -d | sudo -S sh -c 'echo "${b64Cmd}" | base64 -d | sh'`;
+                        } else {
+                            // Try non-interactive sudo if no password is available
+                            escalatedCmd = `sudo -n sh -c '${currentCmd.replace(/'/g, "'\\''")}'`;
+                        }
+                        console.warn(`⚠️ [${socket.id}] Listing failed (Code: ${code}). Retrying with escalated command...`);
+                        return runLs(escalatedCmd, true);
+                    }
+                    
+                    const files = parseLsOutput(output);
+                    console.log(`✅ [${socket.id}] Listing found ${files.length} items (Code: ${code}, Output: ${output.length} bytes)`);
+                    socket.emit('sftp:list', { path, files });
+                  });
+                });
+            };
+            
+            runLs(cmd);
           }
 
           function parseLsOutput(output) {
@@ -1122,21 +1242,36 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
             }).filter(f => f !== null);
           }
 
-           socket.on('sftp:mkdir', (path) => {
+          socket.on('sftp:mkdir', (path) => {
+            console.log(`📂 [${socket.id}] SFTP MKDIR: ${path}`);
+            
+            const runMkdir = (isRetry = false) => {
+                const b64Pass = Buffer.from(connection.password || '').toString('base64');
+                const b64Cmd = Buffer.from(`mkdir -p "${path.replace(/'/g, "'\\''")}"`).toString('base64');
+                const escalatedCmd = isRetry && connection?.password 
+                  ? `echo "${b64Pass}" | base64 -d | sudo -S sh -c 'echo "${b64Cmd}" | base64 -d | sh'`
+                  : `mkdir -p "${path}"`;
+                
+                sshClient.exec(escalatedCmd, (err, stream) => {
+                  if (err) return emitSftpError(err, 'Mkdir failed');
+                  let stderr = '';
+                  stream.on('data', () => {});
+                  stream.stderr.on('data', d => stderr += d.toString());
+                  stream.on('close', (code) => {
+                    if (code !== 0 && !isRetry && stderr.toLowerCase().includes('permission denied') && connection?.password) {
+                        console.warn(`⚠️ [${socket.id}] Mkdir failed with Permission denied. Retrying with base64-sudo.`);
+                        return runMkdir(true);
+                    }
+                    if (code === 0) socket.emit('sftp:action_success', { action: 'mkdir', path });
+                    else emitSftpError(`Exit code ${code}`, 'Mkdir failed');
+                  });
+                });
+            };
+
             getSftp((err, sftp) => {
-              if (err) {
-                 return sshClient.exec(`mkdir -p "${path}"`, (err, stream) => {
-                   if (err) return emitSftpError(err, 'Fallback mkdir failed');
-                   stream.on('data', () => {});
-                   stream.stderr.on('data', () => {});
-                   stream.on('close', (code) => {
-                     if (code === 0) socket.emit('sftp:action_success', { action: 'mkdir', path });
-                     else emitSftpError(`Exit code ${code}`, 'Mkdir failed');
-                   });
-                 });
-              }
+              if (err) return runMkdir();
               sftp.mkdir(path, (err) => {
-                if (err) return emitSftpError(err, 'Mkdir failed');
+                if (err) return runMkdir();
                 socket.emit('sftp:action_success', { action: 'mkdir', path });
               });
             });
@@ -1145,44 +1280,37 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
           // Delete File/Directory
           socket.on('sftp:delete', (path) => {
             console.log(`🗑️ [${socket.id}] SFTP DELETE: ${path}`);
-            getSftp((err, sftp) => {
-              if (err) {
-                 // Fallback to rm
-                 console.warn('⚠️ SFTP unavailable for delete. Using rm fallback.');
-                 return sshClient.exec(`rm -rf "${path}"`, (err, stream) => {
-                   if (err) return emitSftpError(err, 'Fallback delete failed');
-                   stream.on('data', () => {});
-                   stream.stderr.on('data', () => {});
-                   stream.on('close', (code) => {
-                     if (code === 0) socket.emit('sftp:action_success', { action: 'delete', path });
-                     else emitSftpError(`Exit code ${code}`, 'Delete failed');
-                   });
-                 });
-              }
+            
+            const runRm = (isRetry = false) => {
+                const escalatedCmd = (isRetry && connection?.password)
+                  ? `echo "${Buffer.from(connection.password).toString('base64')}" | base64 -d | sudo -S sh -c 'rm -rf "${path.replace(/'/g, "'\\''")}"'`
+                  : `rm -rf "${path}"`;
+                
+                sshClient.exec(escalatedCmd, (err, stream) => {
+                  if (err) return emitSftpError(err, 'Delete failed');
+                  let stderr = '';
+                  stream.on('data', () => {});
+                  stream.stderr.on('data', d => stderr += d.toString());
+                  stream.on('close', (code) => {
+                    if (code !== 0 && !isRetry && stderr.toLowerCase().includes('permission denied') && connection?.password) {
+                        console.warn(`⚠️ [${socket.id}] Delete failed. Retrying with base64-sudo.`);
+                        return runRm(true);
+                    }
+                    if (code === 0) socket.emit('sftp:action_success', { action: 'delete', path });
+                    else emitSftpError(`Exit code ${code}`, 'Delete failed');
+                  });
+                });
+            };
 
-              // Try unlink first (for files), if fails try rmdir (for dirs)
-              // Or just use exec 'rm -rf' directly? Actually 'rm -rf' is safer often than manual recursion.
-              // Let's stick with 'rm -rf' even if SFTP is available if it's recursive?
-              // SFTP unlink is only for files. rmdir is for empty dirs.
-              // To be safe and powerful, let's just use 'rm -rf' via exec always if we can?
-              // But 'sftp' is safer for restricted shells. Let's try sftp.unlink first.
+            getSftp((err, sftp) => {
+              if (err) return runRm();
               
+              // Try unlink via SFTP first (cleaner)
               sftp.unlink(path, (err) => {
                 if (!err) return socket.emit('sftp:action_success', { action: 'delete', path });
-                
-                // If unlink failed, maybe it's a directory?
                 sftp.rmdir(path, (err2) => {
-                   if (!err2) return socket.emit('sftp:action_success', { action: 'delete', path });
-                   
-                   // If both failed, try fallback rm -rf
-                   console.log('⚠️ SFTP unlink/rmdir failed. Trying fallback rm -rf');
-                   sshClient.exec(`rm -rf "${path}"`, (err, stream) => {
-                      if (err) return emitSftpError(err, 'Delete failed');
-                      stream.on('close', (code) => {
-                        if (code === 0) socket.emit('sftp:action_success', { action: 'delete', path });
-                        else emitSftpError(`Exit code ${code}`, 'Delete failed');
-                      });
-                   });
+                    if (!err2) return socket.emit('sftp:action_success', { action: 'delete', path });
+                    runRm(); // Fallback to rm -rf which may use sudo
                 });
               });
             });
@@ -1191,29 +1319,38 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
           // Read File
           socket.on('sftp:readFile', (path) => {
             console.log(`📖 [${socket.id}] SFTP READ: ${path}`);
+            
+            const runCat = (isRetry = false) => {
+                const escalatedCmd = (isRetry && connection?.password)
+                  ? `echo "${Buffer.from(connection.password).toString('base64')}" | base64 -d | sudo -S cat "${path.replace(/'/g, "'\\''")}"`
+                  : `cat "${path}"`;
+                
+                sshClient.exec(escalatedCmd, (err, stream) => {
+                  if (err) return emitSftpError(err, 'Read failed');
+                  let content = '';
+                  let stderr = '';
+                  stream.on('data', d => content += d.toString());
+                  stream.stderr.on('data', d => stderr += d.toString());
+                  stream.on('close', (code) => {
+                    if (code !== 0 && !isRetry && stderr.toLowerCase().includes('permission denied') && connection?.password) {
+                        console.warn(`⚠️ [${socket.id}] Read failed. Retrying with base64-sudo.`);
+                        return runCat(true);
+                    }
+                    socket.emit('sftp:file_content', { path, content });
+                  });
+                });
+            };
+
             getSftp((err, sftp) => {
-              if (err) {
-                 return sshClient.exec(`cat "${path}"`, (err, stream) => {
-                   if (err) return emitSftpError(err, 'Fallback read failed');
-                   let content = '';
-                   stream.on('data', d => content += d.toString());
-                   stream.on('close', () => socket.emit('sftp:file_content', { path, content }));
-                 });
-              }
+              if (err) return runCat();
 
               const stream = sftp.createReadStream(path);
               let content = '';
               stream.on('data', d => content += d.toString());
               stream.on('end', () => socket.emit('sftp:file_content', { path, content }));
               stream.on('error', (err) => {
-                 console.error('SFTP Read Error:', err);
-                 // Fallback
-                 sshClient.exec(`cat "${path}"`, (err, stream) => {
-                   if (err) return emitSftpError(err, 'Read failed');
-                   let content = '';
-                   stream.on('data', d => content += d.toString());
-                   stream.on('close', () => socket.emit('sftp:file_content', { path, content }));
-                 });
+                  console.error('SFTP Read Error:', err);
+                  runCat();
               });
             });
           });
@@ -1221,27 +1358,48 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
           // Write File
           socket.on('sftp:writeFile', ({ path, content }) => {
             console.log(`💾 [${socket.id}] SFTP WRITE: ${path} (${content.length} bytes)`);
-            getSftp((err, sftp) => {
-              if (err) {
-                 const cmd = content.length === 0 
-                   ? `touch "${path}"` 
-                   : `echo -n "${Buffer.from(content).toString('base64')}" | base64 -d > "${path}"`;
-                 return sshClient.exec(cmd, (err, stream) => {
-                    if (err) return emitSftpError(err, 'Fallback write failed');
-                    stream.on('data', () => {});
-                    stream.stderr.on('data', () => {});
-                    stream.on('close', (code) => {
-                      if (code === 0) socket.emit('sftp:action_success', { action: 'write', path });
-                      else emitSftpError(`Exit code ${code}`, 'Write failed');
-                    });
-                 });
+            
+            const runWrite = (isRetry = false) => {
+              const b64 = Buffer.from(content).toString('base64');
+              const escapedPath = path.replace(/'/g, "'\\''");
+              let cmd = content.length === 0 
+                ? `touch "${path}"` 
+                : `echo -n "${b64}" | base64 -d > "${path}"`;
+                
+              if (isRetry && connection?.password) {
+                  const b64Pass = Buffer.from(connection.password).toString('base64');
+                  cmd = content.length === 0
+                    ? `echo "${b64Pass}" | base64 -d | sudo -S touch "${escapedPath}"`
+                    : `echo -n "${b64}" | base64 -d | echo "${b64Pass}" | base64 -d | sudo -S sh -c 'cat > "${escapedPath}"'`;
               }
 
-              const stream = sftp.createWriteStream(path);
-              stream.write(content);
-              stream.end();
-              stream.on('close', () => socket.emit('sftp:action_success', { action: 'write', path }));
-              stream.on('error', (err) => emitSftpError(err, 'Write failed'));
+              sshClient.exec(cmd, (err, stream) => {
+                if (err) return emitSftpError(err, 'Write failed');
+                let stderr = '';
+                stream.on('data', () => {});
+                stream.stderr.on('data', (d) => stderr += d.toString());
+                stream.on('close', (code) => {
+                  if (code !== 0 && !isRetry && stderr.toLowerCase().includes('permission denied') && connection?.password) {
+                      console.warn(`⚠️ [${socket.id}] Write failed. Retrying with base64-sudo.`);
+                      return runWrite(true);
+                  }
+                  if (code === 0) socket.emit('sftp:action_success', { action: 'write', path });
+                  else emitSftpError(`Exit code ${code}`, 'Write failed');
+                });
+              });
+            };
+
+            getSftp((err, sftp) => {
+              if (err) return runWrite();
+              
+              const ws = sftp.createWriteStream(path);
+              ws.on('close', () => socket.emit('sftp:action_success', { action: 'write', path }));
+              ws.on('error', (err) => {
+                  console.error('SFTP Write Error, retrying with cat:', err);
+                  runWrite();
+              });
+              ws.on('finish', () => {}); // Handle finish 
+              ws.end(content);
             });
           });
 

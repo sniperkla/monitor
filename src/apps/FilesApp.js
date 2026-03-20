@@ -4,7 +4,7 @@ import { useTranslation } from 'react-i18next';
 import { FolderClosed, HardDrive, Server } from 'lucide-react';
 import FileLayout from '@/components/FileLayout';
 
-export default function FilesApp({ onEditConnection, initialConnection, initialConnectionId, windowId }) {
+export default function FilesApp({ onEditConnection, initialConnection, initialConnectionId, windowId, initialPath }) {
   const { state, dispatch } = useApp();
   const { t } = useTranslation();
   const { connections } = state;
@@ -19,6 +19,7 @@ export default function FilesApp({ onEditConnection, initialConnection, initialC
         connectionName: initialConnection.name,
         color: initialConnection.color,
         connection: initialConnection,
+        initialPath: initialPath || '.'
       }];
     }
     return [];

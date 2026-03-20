@@ -410,7 +410,7 @@ export async function POST(req) {
       return NextResponse.json({ success: false, error: 'AI service not configured' }, { status: 500 });
     }
 
-    const safeContext = typeof context === 'string' ? context.slice(-1500) : '';
+    const safeContext = typeof context === 'string' ? context.slice(-20000) : '';
     const safePack = contextPack && typeof contextPack === 'object' ? contextPack : null;
     const safePrefs = prefs && typeof prefs === 'object' ? prefs : {};
     const preferSudo = !!safePrefs.preferSudo;
@@ -489,8 +489,8 @@ export async function POST(req) {
       return s;
     };
 
-    // Keep history to 3 turns — enough context for multi-step auto mode
-    const safeHistory = Array.isArray(history) ? history.slice(-3) : [];
+    // Keep history to 15 turns — enough context for long tasks
+    const safeHistory = Array.isArray(history) ? history.slice(-15) : [];
     const historyMessages = safeHistory.flatMap(h => {
       const msgs = [];
       if (h.role === 'user' && h.content) msgs.push({ role: 'user', content: String(h.content).slice(0, 200) });
@@ -500,10 +500,10 @@ export async function POST(req) {
         const diffMatch = String(h.content).match(/<diff>([\s\S]*?)<\/diff>/i);
         const doneMatch = String(h.content).match(/<done>(true|false)<\/done>/i);
         const brief = cmdMatch
-          ? `CMD:${cmdMatch[1].trim().slice(0, 120)}${doneMatch?.[1]==='true'?' DONE':''}`
+          ? `CMD:${cmdMatch[1].trim().slice(0, 300)}${doneMatch?.[1]==='true'?' DONE':''}`
           : diffMatch
-            ? `DIFF:${diffMatch[1].trim().slice(0, 80)}...${doneMatch?.[1]==='true'?' DONE':''}`
-            : String(h.content).slice(0, 100);
+            ? `DIFF:\n${diffMatch[1].trim().slice(0, 1500)}${diffMatch[1].length > 1500 ? '\n... (truncated)' : ''}${doneMatch?.[1]==='true'?'\nDONE':''}`
+            : String(h.content).slice(0, 500);
         msgs.push({ role: 'assistant', content: brief });
       }
       return msgs;
@@ -514,8 +514,8 @@ export async function POST(req) {
     const packLastCmd = typeof safePack?.lastCommand === 'string' ? safePack.lastCommand.slice(0, 150) : '';
     const packRecentCmds = Array.isArray(safePack?.recentCommands) ? safePack.recentCommands.slice(-3) : [];
     const packLastError = safePack?.lastError && typeof safePack.lastError === 'object' ? safePack.lastError : null;
-    // Use only 800 chars of terminal tail — enough for context
-    const packTail = typeof safePack?.terminalTail === 'string' ? safePack.terminalTail.slice(-800) : safeContext;
+    // Use 12k chars of terminal tail — enough to see full files
+    const packTail = typeof safePack?.terminalTail === 'string' ? safePack.terminalTail.slice(-12000) : safeContext;
 
     const structuredContext = safePack
       ? `CTX:
@@ -599,19 +599,26 @@ VERIFY BEFORE done=true:
 
 
     // ── CODE / FILE EDITOR MODE ──────────────────────────────────────────────
-    const codeEditorSys = `${agentCoreBlock}
-MODE: CODE EDITOR | ENV: user=${packUser} host=${packHostname} cwd=${packCwd}
+    // Code editor uses a simplified prompt WITHOUT skills or the full agentic core block
+    const codeEditorSys = `You are a precise File Editor AI. You edit files via unified diff patches delivered over SFTP.
+ENV: user=${packUser} host=${packHostname} cwd=${packCwd}
 ${memBlock}
-OUTPUT: <thought>analysis</thought><diff>unified diff</diff><explain>1 sentence ✨</explain><danger>false</danger><done>false</done>
+OUTPUT FORMAT (STRICT XML):
+<thought>brief analysis</thought>
+<diff>unified diff patch</diff> OR <command>read-only shell command</command>
+<explain>1 sentence summary</explain>
+<danger>false</danger>
+<done>true if edit is complete, false if more steps needed</done>
 
 PATCHING RULES:
 1. Cat file FIRST (turn 1), diff SECOND (turn 2). NEVER guess contents.
-2. Every @@ hunk needs 3 unchanged context lines.
+2. Every @@ hunk needs at least 6-10 unchanged context lines (use -u10 if available). Context is crucial for validation.
 3. Absolute paths in diff headers. CWD=${packCwd}
 4. NEVER mix <diff>+<command> in same turn.
 5. NEVER use vi/vim/nano/tee/bare cat>file. New files: cat <<'EOF' > file\n...\nEOF
-6. done=true IMMEDIATELY after outputting final <diff> (no extra verify turn needed).
-7. Loop guard: cat→diff→cat→same diff = broken. Set done=true.
+6. Set done=true in the SAME response as your final <diff>. Do NOT add extra verify turns.
+7. After a diff is applied successfully, you are DONE. Set <done>true</done>.
+8. Loop guard: if you already produced a diff and context says "PATCH APPLIED", set done=true immediately.
 
 FILE FIND: ls ${packCwd}/FILE || find /home -name FILE 2>/dev/null | head -5
 ${enforcePatch ? `PATCH-FIRST: Use <diff> for ALL edits. <command> for read-only only (cat/grep/head). Exception: truncate -s 0 FILE, or cat <<'EOF'>newfile for NEW files.` : `LEGACY: sed -i allowed.`}
@@ -633,7 +640,10 @@ TMUX (ACTIVE): session=main, bg=ai-bg-task. Use tmux for ANY blocking cmd (insta
 - Poll: tail -n 20 /tmp/ai-bg-task.log | Check done: grep '__AI_DONE__:' /tmp/ai-bg-task.log
 - No sentinel = still running → [Wait]. NEVER use tmux attach. NEVER use tmux wait-for -L.` : '';
 
-    const sys = (aiTask === 'code' ? codeEditorSys : sshCommandSys) + '\n' + backgroundTmuxSys + skillBlock;
+    // Code mode: skip skills entirely (pure AI, keep prompt lean)
+    const sys = aiTask === 'code'
+      ? codeEditorSys
+      : sshCommandSys + '\n' + backgroundTmuxSys + skillBlock;
 
 
     // Proactively inject file paths from memory into the user prompt if they match the filename

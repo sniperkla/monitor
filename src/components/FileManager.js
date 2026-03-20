@@ -97,12 +97,12 @@ const SFTP_REUSE_EVENTS = [
   'sftp:progress', 'sftp:download_start', 'sftp:download_chunk', 'sftp:download_done',
   'sftp:error', 'ssh:error', 'ssh:idle_timeout',
 ];
-
 export default function FileManager({ 
   connectionId, 
   connection, 
   connectionName,
   isSplit = false,
+  initialPath = '.',
   onClosePane,
   onSplit
 }) {
@@ -115,7 +115,9 @@ export default function FileManager({
   const { state: osState, addNotification, removeNotification, updateNotification, showConfirm, showPrompt } = useOS();
   const { clipboard } = appState;
   const setClipboard = (payload) => appDispatch({ type: 'SET_CLIPBOARD', payload });
-  const [currentPath, setCurrentPath] = useState('.');
+  const [currentPath, setCurrentPath] = useState(initialPath);
+  const [pathInput, setPathInput] = useState(initialPath);
+  const [isEditingPath, setIsEditingPath] = useState(false);
   const [files, setFiles] = useState([]);
   const filesRef = useRef([]);
   useEffect(() => { filesRef.current = files; }, [files]);
@@ -129,6 +131,7 @@ export default function FileManager({
   const [searchLoading, setSearchLoading] = useState(false);
   const isSearchMode = searchQuery.trim().length > 0;
   const searchDebounceRef = useRef(null);
+  const pathPreviewDebounceRef = useRef(null);
   const [latency, setLatency] = useState(null);
   const [reconnectNonce, setReconnectNonce] = useState(0);
   const socketRef = useRef(null);
@@ -184,7 +187,12 @@ export default function FileManager({
   
   const [uploadQueue, setUploadQueue] = useState([]); // Array of { file, path, offset }
   
-  useEffect(() => { currentPathRef.current = currentPath; }, [currentPath]);
+  useEffect(() => { 
+    currentPathRef.current = currentPath; 
+    if (!isEditingPath) {
+      setPathInput(currentPath);
+    }
+  }, [currentPath, isEditingPath]);
 
   useEffect(() => {
     // Close context menu on click elsewhere
@@ -228,8 +236,8 @@ export default function FileManager({
       newSocket = poolEntry.socket;
       _fmSocketPool.delete(connectionId);
 
-      // Restore state instantly from pool snapshot
-      const savedPath = poolEntry.currentPath || '.';
+      // Restore state instantly from pool snapshot, prioritizing initialPath if not default
+      const savedPath = (initialPath && initialPath !== '.') ? initialPath : (poolEntry.currentPath || '.');
       setCurrentPath(savedPath);
       currentPathRef.current = savedPath;
       setFiles(poolEntry.files || []);
@@ -246,9 +254,9 @@ export default function FileManager({
       console.log('♻️ FileManager: reusing socket for', connectionId, '— no reconnect');
     } else {
       // ── NEW CONNECTION ──
-      console.log('📂 Initializing FileManager for:', connectionId);
-      setCurrentPath('.');
-      currentPathRef.current = '.';
+      console.log('📂 Initializing FileManager for:', connectionId, 'at:', initialPath);
+      setCurrentPath(initialPath);
+      currentPathRef.current = initialPath;
       setLoading(true);
       setStatus('connecting');
 
@@ -274,9 +282,9 @@ export default function FileManager({
       });
 
       newSocket.on('ssh:connected', () => {
-        console.log('✅ SSH connected, listing files');
+        console.log('✅ SSH connected, listing files at:', currentPathRef.current);
         setStatus('ready');
-        newSocket.emit('sftp:list', '.');
+        newSocket.emit('sftp:list', currentPathRef.current);
         appDispatch({ type: 'UPDATE_CONNECTION', payload: { _id: connectionId, status: 'online' } });
       });
     }
@@ -1988,9 +1996,61 @@ export default function FileManager({
           <button onClick={goBack} disabled={currentPath === '.'} className="p-1.5 lg:p-2 hover:bg-[var(--border-color)] rounded-lg disabled:opacity-30 flex-shrink-0">
             <ChevronLeft size={18} />
           </button>
-          <div className="flex items-center gap-2 px-2 lg:px-3 py-1.5 bg-[var(--bg-primary)]/50 rounded-lg border border-[var(--border-color)] w-full min-w-0 max-w-sm">
+          <div 
+            className="flex items-center gap-2 px-2 lg:px-3 py-1.5 bg-[var(--bg-primary)]/50 rounded-lg border border-[var(--border-color)] w-full min-w-0 max-w-sm group/path cursor-text"
+            onClick={() => setIsEditingPath(true)}
+          >
             <Folder size={14} className="text-blue-400 flex-shrink-0" />
-            <span className="text-[11px] lg:text-xs font-mono truncate">{currentPath}</span>
+            {isEditingPath ? (
+              <input
+                autoFocus
+                type="text"
+                value={pathInput}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  setPathInput(val);
+                  
+                  // Auto-navigate preview as user types (only for absolute paths)
+                  if (val.trim().startsWith('/')) {
+                    if (pathPreviewDebounceRef.current) clearTimeout(pathPreviewDebounceRef.current);
+                    pathPreviewDebounceRef.current = setTimeout(() => {
+                      const targetPath = val.trim();
+                      if (targetPath && targetPath !== currentPathRef.current) {
+                        setCurrentPath(targetPath);
+                        currentPathRef.current = targetPath;
+                        refreshFiles(targetPath);
+                      }
+                    }, 600);
+                  }
+                }}
+                onBlur={() => { 
+                  // Close editing mode after a short delay to allow for Enter key processing
+                  setTimeout(() => {
+                    setIsEditingPath(false); 
+                    setPathInput(currentPath);
+                  }, 150);
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    if (pathPreviewDebounceRef.current) clearTimeout(pathPreviewDebounceRef.current);
+                    const targetPath = pathInput.trim() || '.';
+                    setCurrentPath(targetPath);
+                    currentPathRef.current = targetPath;
+                    refreshFiles(targetPath);
+                    setIsEditingPath(false);
+                  }
+                  if (e.key === 'Escape') {
+                    if (pathPreviewDebounceRef.current) clearTimeout(pathPreviewDebounceRef.current);
+                    setIsEditingPath(false);
+                    setPathInput(currentPath);
+                  }
+                }}
+                className="bg-transparent text-[11px] lg:text-xs font-mono focus:outline-none w-full text-[var(--text-primary)]"
+                onClick={(e) => e.stopPropagation()}
+              />
+            ) : (
+              <span className="text-[11px] lg:text-xs font-mono truncate">{currentPath}</span>
+            )}
           </div>
           <button onClick={() => refreshFiles()} className="p-1.5 lg:p-2 hover:bg-[var(--border-color)] rounded-lg flex-shrink-0">
             <RefreshCw size={18} className={loading ? 'animate-spin text-blue-400' : ''} />
@@ -2031,7 +2091,9 @@ export default function FileManager({
               placeholder={t('files.status.searchWhole')}
               value={searchQuery}
               onChange={(e) => { setSearchQuery(e.target.value); }}
-              onKeyDown={(e) => e.key === 'Escape' && setSearchQuery('')}
+              onKeyDown={(e) => {
+                if (e.key === 'Escape') setSearchQuery('');
+              }}
               className={`bg-[var(--bg-primary)]/50 border rounded-lg py-1.5 pl-9 pr-6 lg:pr-8 text-[11px] lg:text-xs focus:outline-none w-full text-[var(--text-primary)] transition-colors ${
                 isSearchMode ? 'border-blue-500/60 focus:border-blue-500' : 'border-[var(--border-color)] focus:border-blue-500/50'
               }`}

@@ -14,7 +14,7 @@ import {
   Loader2, AlertCircle, CheckCircle2, XCircle, X, Minus, Maximize2, Wifi,
   Sparkles, Copy, CornerDownLeft, ShieldAlert, Settings2, Clock, RefreshCw,
   ListChecks, Trophy, Search, Languages, Lock, Brain, ChevronDown, ChevronUp,
-  AtSign, Folder, File as FileIconAi
+  AtSign, Folder, File as FileIconAi, Container
 } from 'lucide-react';
 import { diff_match_patch } from 'diff-match-patch';
 
@@ -325,6 +325,8 @@ export default function TerminalView({ connectionId, connectionName, host, color
   const lastAutoAppliedDiffRef = useRef('');
   const [patchModalAutoApplied, setPatchModalAutoApplied] = useState(false);
   const [patchFileCollapsed, setPatchFileCollapsed] = useState({}); // per-file collapse in patch modal
+  const [expandedGaps, setExpandedGaps] = useState({}); // per-gap expansion: { file_path: { gap_index: true } }
+  const [showFullPatchFile, setShowFullPatchFile] = useState(false); // Global toggle to show all context
   const [aiPanelPos, setAiPanelPos] = useState({ x: typeof window !== 'undefined' ? window.innerWidth - 450 : 16, y: 64 });
   const [aiPanelSize, setAiPanelSize] = useState({ width: 420, height: 520 });
   const [aiPanelDocked, setAiPanelDocked] = useState(false);
@@ -367,6 +369,265 @@ export default function TerminalView({ connectionId, connectionName, host, color
   const autoRunningRef = useRef(false);
   const autoSeenRef = useRef(new Set());
   const autoVerifyKeyRef = useRef('');
+  
+  // Docker Compose Wizard State
+  const [dockerComposeWizardOpen, setDockerComposeWizardOpen] = useState(false);
+  const [dockerComposeOptions, setDockerComposeOptions] = useState({
+    nginx: false,
+    ssl: false,
+    redis: false,
+    postgres: false,
+    mongodb: false,
+    monitoring: false, // Prometheus + Grafana
+    elk: false, // Elasticsearch + Kibana + Logstash
+    multiStage: false, // Multi-stage build optimization
+  });
+  const [dockerComposeAnalyzing, setDockerComposeAnalyzing] = useState(false);
+  
+  // Analyze project to auto-detect needed services
+  const analyzeProjectForDockerCompose = async () => {
+    setDockerComposeAnalyzing(true);
+    const detected = {
+      nginx: false,
+      ssl: false,
+      redis: false,
+      postgres: false,
+      mongodb: false,
+      monitoring: false,
+      elk: false,
+      multiStage: false,
+    };
+    
+    try {
+      // Check for existing Dockerfile
+      const dockerfileCheck = await new Promise((resolve) => {
+        const cmd = 'cat Dockerfile 2>/dev/null || echo "NOT_FOUND"';
+        socketRef.current?.emit('ssh:input', cmd + '\n');
+        setTimeout(() => resolve(true), 500);
+      });
+      
+      // Check for package.json (Node.js project)
+      const packageCheck = await new Promise((resolve) => {
+        const cmd = 'cat package.json 2>/dev/null | head -50 || echo "NOT_FOUND"';
+        socketRef.current?.emit('ssh:input', cmd + '\n');
+        setTimeout(() => resolve(true), 500);
+      });
+      
+      // Check for requirements.txt (Python project)
+      const pythonCheck = await new Promise((resolve) => {
+        const cmd = 'cat requirements.txt 2>/dev/null | head -30 || echo "NOT_FOUND"';
+        socketRef.current?.emit('ssh:input', cmd + '\n');
+        setTimeout(() => resolve(true), 500);
+      });
+      
+      // Check for go.mod (Go project)
+      const goCheck = await new Promise((resolve) => {
+        const cmd = 'cat go.mod 2>/dev/null | head -20 || echo "NOT_FOUND"';
+        socketRef.current?.emit('ssh:input', cmd + '\n');
+        setTimeout(() => resolve(true), 500);
+      });
+      
+      // Get terminal output to analyze
+      const snap = getOutputContext();
+      const outputLower = snap.toLowerCase();
+      
+      // Detect Node.js dependencies
+      if (outputLower.includes('package.json') && !outputLower.includes('not_found')) {
+        // Check for common Node.js services
+        if (outputLower.includes('redis') || outputLower.includes('ioredis') || outputLower.includes('connect-redis')) {
+          detected.redis = true;
+          console.log('[Docker Compose] Detected Redis dependency');
+        }
+        if (outputLower.includes('pg') || outputLower.includes('postgres') || outputLower.includes('sequelize')) {
+          detected.postgres = true;
+          console.log('[Docker Compose] Detected PostgreSQL dependency');
+        }
+        if (outputLower.includes('mongoose') || outputLower.includes('mongodb')) {
+          detected.mongodb = true;
+          console.log('[Docker Compose] Detected MongoDB dependency');
+        }
+        if (outputLower.includes('express') || outputLower.includes('fastify') || outputLower.includes('nestjs')) {
+          detected.nginx = true; // Web app likely needs reverse proxy
+          console.log('[Docker Compose] Detected web framework - recommending Nginx');
+        }
+      }
+      
+      // Detect Python dependencies
+      if (outputLower.includes('requirements.txt') && !outputLower.includes('not_found')) {
+        if (outputLower.includes('redis') || outputLower.includes('aioredis')) {
+          detected.redis = true;
+        }
+        if (outputLower.includes('psycopg') || outputLower.includes('postgres') || outputLower.includes('sqlalchemy')) {
+          detected.postgres = true;
+        }
+        if (outputLower.includes('pymongo') || outputLower.includes('mongoengine')) {
+          detected.mongodb = true;
+        }
+        if (outputLower.includes('django') || outputLower.includes('flask') || outputLower.includes('fastapi')) {
+          detected.nginx = true;
+        }
+        detected.multiStage = true; // Python benefits from multi-stage builds
+      }
+      
+      // Detect Go dependencies
+      if (outputLower.includes('go.mod') && !outputLower.includes('not_found')) {
+        if (outputLower.includes('redis')) {
+          detected.redis = true;
+        }
+        if (outputLower.includes('postgres') || outputLower.includes('pgx')) {
+          detected.postgres = true;
+        }
+        if (outputLower.includes('mongo')) {
+          detected.mongodb = true;
+        }
+        detected.multiStage = true; // Go benefits from multi-stage builds
+      }
+      
+      // Check for existing Dockerfile for multi-stage detection
+      if (outputLower.includes('dockerfile') && !outputLower.includes('not_found')) {
+        if (outputLower.includes('from') && outputLower.includes('as ')) {
+          detected.multiStage = true; // Already has multi-stage
+        }
+      }
+      
+      // Check for .env file for production hints
+      const envCheck = await new Promise((resolve) => {
+        const cmd = 'cat .env 2>/dev/null | grep -i "redis\\|postgres\\|mongo" || echo "NOT_FOUND"';
+        socketRef.current?.emit('ssh:input', cmd + '\n');
+        setTimeout(() => resolve(true), 500);
+      });
+      
+    } catch (e) {
+      console.warn('[Docker Compose] Analysis failed:', e);
+    }
+    
+    setDockerComposeAnalyzing(false);
+    return detected;
+  };
+  
+  // === DEDICATED DOCKER GENERATION FUNCTION ===
+  // Generates Dockerfile and docker-compose.yml with step-by-step Auto Mode
+  const generateDockerCompose = async (options) => {
+    const selectedServices = Object.entries(options)
+      .filter(([, v]) => v)
+      .map(([k]) => k);
+    
+    // Build the goal with explicit instructions
+    let goalText = `Generate Docker configuration files for this project.\n\n`;
+    goalText += `STEP 1: Check if Dockerfile exists. If NOT, create one:\n`;
+    goalText += `- Analyze package.json, requirements.txt, or go.mod to detect language\n`;
+    goalText += `- Create appropriate Dockerfile with production optimizations\n`;
+    goalText += `- Use multi-stage build if beneficial\n\n`;
+    goalText += `STEP 2: Create docker-compose.yml with these services:\n`;
+    
+    // Add selected services with specific instructions
+    const serviceInstructions = [];
+    if (options.nginx) {
+      serviceInstructions.push(`nginx:
+  - Use nginx:alpine image
+  - Configure reverse proxy to app service
+  - Add upstream configuration
+  - Mount conf.d directory`);
+    }
+    if (options.ssl) {
+      serviceInstructions.push(`certbot:
+  - Use certbot/certbot image
+  - Mount /etc/letsencrypt for certificates
+  - Add volume for webroot challenge`);
+    }
+    if (options.redis) {
+      serviceInstructions.push(`redis:
+  - Use redis:7-alpine image
+  - Add healthcheck with redis-cli ping
+  - Mount data volume for persistence
+  - Expose port 6379`);
+    }
+    if (options.postgres) {
+      serviceInstructions.push(`postgres:
+  - Use postgres:15-alpine image
+  - Add healthcheck with pg_isready
+  - Mount data volume for persistence
+  - Set POSTGRES_DB, POSTGRES_USER, POSTGRES_PASSWORD env vars
+  - Expose port 5432`);
+    }
+    if (options.mongodb) {
+      serviceInstructions.push(`mongodb:
+  - Use mongo:7 image
+  - Add healthcheck with mongosh --eval "db.adminCommand('ping')"
+  - Mount data volume for persistence
+  - Set MONGO_INITDB_ROOT_USERNAME, MONGO_INITDB_ROOT_PASSWORD env vars
+  - Expose port 27017`);
+    }
+    if (options.monitoring) {
+      serviceInstructions.push(`prometheus:
+  - Use prom/prometheus image
+  - Mount prometheus.yml config
+  - Expose port 9090
+grafana:
+  - Use grafana/grafana image
+  - Mount data volume for dashboards
+  - Expose port 3000`);
+    }
+    if (options.elk) {
+      serviceInstructions.push(`elasticsearch:
+  - Use elasticsearch:8 image
+  - Set discovery.type=single-node
+  - Mount data volume
+  - Expose ports 9200, 9300
+kibana:
+  - Use kibana:8 image
+  - Link to elasticsearch
+  - Expose port 5601
+logstash:
+  - Use logstash:8 image
+  - Mount pipeline config`);
+    }
+    
+    if (serviceInstructions.length > 0) {
+      goalText += serviceInstructions.join('\n\n');
+    } else {
+      goalText += `app:
+  - Build from current directory
+  - Expose appropriate port
+  - Add healthcheck`;
+    }
+    
+    goalText += `\n\nSTEP 3: Add production-ready features to ALL services:\n`;
+    goalText += `- restart: always (auto-restart on failure/reboot)\n`;
+    goalText += `- healthchecks for critical services\n`;
+    goalText += `- resource limits (memory: 512M, cpus: 0.5)\n`;
+    goalText += `- logging with json-file driver and max-size/max-file rotation\n`;
+    goalText += `- depends_on with condition: service_healthy\n`;
+    goalText += `- isolated bridge network\n`;
+    goalText += `- labels for organization\n\n`;
+    goalText += `STEP 4: Create the files using cat << 'EOF' > filename syntax.\n`;
+    goalText += `STEP 5: Verify files were created with ls -la and cat the files.\n`;
+    goalText += `STEP 6: Show docker-compose config command to validate.\n\n`;
+    goalText += `DONE when both Dockerfile and docker-compose.yml exist and are valid.`;
+    
+    // Start Auto Mode with the generated goal
+    setAutoGoal(goalText);
+    setAiMode('auto');
+    setAutoStepsRemaining(20);
+    setAutoMode(true);
+    setAiOpen(true);
+    setAiHasOpenedOnce(true);
+    setAiError(null);
+    setAiAnswer(null);
+    setAiDone(false);
+    autoRunningRef.current = false;
+    codeModeLoopAttemptsRef.current = 0; // Reset code mode loop counter
+    skillInjectionAttemptsRef.current = 0; // Reset skill injection counter
+    diffFailureCountRef.current = 0; // Reset diff failure counter
+    
+    console.log('[Docker Generator] Starting Auto Mode with goal:', goalText);
+    
+    // Start the first auto step
+    const startDelay = calculateDynamicWait(false, false, false) * 200;
+    setTimeout(() => {
+      if (autoModeRef.current && !autoRunningRef.current) runAutoStep();
+    }, startDelay);
+  };
   const autoLastLoopKeyRef = useRef('');
   const autoLoopRepeatRef = useRef(0);
   const autoRepeatSigRef = useRef({ key: '', count: 0 });
@@ -375,6 +636,8 @@ export default function TerminalView({ connectionId, connectionName, host, color
   const autoRecentSigsRef = useRef([]);
   const autoDiagKeyRef = useRef('');
   const skillInjectionAttemptsRef = useRef(0); // Track skill injection attempts (0=none, 1=local, 2=skillsmp)
+  const codeModeLoopAttemptsRef = useRef(0); // Track code mode loop nudges (prevent infinite retry)
+  const diffFailureCountRef = useRef(0); // Track diff failures to suggest heredoc fallback
   const [lastAiUpdate, setLastAiUpdate] = useState(0);
   const autoTimerRef = useRef(null);
   const autoEmptyRetryRef = useRef('');
@@ -932,8 +1195,8 @@ export default function TerminalView({ connectionId, connectionName, host, color
       outputBufferRef.current = parts.pop() || '';
       if (parts.length) {
         outputLinesRef.current = outputLinesRef.current.concat(parts);
-        if (outputLinesRef.current.length > 40) {
-          outputLinesRef.current = outputLinesRef.current.slice(-40);
+        if (outputLinesRef.current.length > 1200) {
+          outputLinesRef.current = outputLinesRef.current.slice(-1200);
         }
       }
     };
@@ -1856,6 +2119,10 @@ export default function TerminalView({ connectionId, connectionName, host, color
       setLastPatchResultData(result.results || null);
       if (result.success) {
         console.log('[Patch] Auto-applied successfully:', result.summary);
+        // Reset loop counters on successful patch
+        codeModeLoopAttemptsRef.current = 0;
+        autoLoopRepeatRef.current = 0;
+        autoSameCommandRef.current = { cmd: '', count: 0 };
       } else {
         console.warn('[Patch] Auto-apply failed:', result.error || result.summary);
         setAiError(`Patch failed: ${result.error || result.summary || 'Unknown error'}`);
@@ -1940,12 +2207,12 @@ export default function TerminalView({ connectionId, connectionName, host, color
     if (fileSections.length === 0) {
       return (
         <div className="rounded-lg border border-white/10 overflow-hidden">
-          <div className="overflow-y-auto max-h-[420px] custom-scrollbar bg-black/40">
+          <div className="overflow-x-auto overflow-y-auto max-h-[420px] custom-scrollbar bg-black/40">
             {rawLines.map((line, idx) => {
               const isAdd = line.startsWith('+') && !line.startsWith('+++');
               const isDel = line.startsWith('-') && !line.startsWith('---');
               const isHunk = line.startsWith('@@');
-              let cls = 'whitespace-pre-wrap break-all px-4 py-[1px] text-[11px] font-mono flex';
+              let cls = 'whitespace-pre px-4 py-[1px] text-[11px] font-mono flex min-w-fit';
               if (isAdd) cls += ' bg-emerald-500/10 text-emerald-300';
               else if (isDel) cls += ' bg-red-500/10 text-red-300';
               else if (isHunk) cls += ' bg-indigo-500/20 text-indigo-300 font-semibold';
@@ -2055,7 +2322,7 @@ export default function TerminalView({ connectionId, connectionName, host, color
       }
 
       return (
-        <div key={fi} className="rounded-xl border border-white/10 overflow-hidden mb-3 last:mb-0 shadow-sm">
+        <div key={`${key}_${fi}`} className="rounded-xl border border-white/10 overflow-hidden mb-3 last:mb-0 shadow-sm">
           {/* ── File header ── */}
           <div className="flex items-center bg-[#1a1a2e] border-b border-white/10">
             <button
@@ -2095,13 +2362,15 @@ export default function TerminalView({ connectionId, connectionName, host, color
 
           {/* ── Diff content ── */}
           {!isCollapsed && (
-            <div className="overflow-y-auto max-h-[500px] custom-scrollbar font-mono text-[11px] bg-[#0d0d1a]">
+            <div className="overflow-x-auto overflow-y-auto max-h-[500px] custom-scrollbar font-mono text-[11px] bg-[#0d0d1a]">
               {displayLines.map((entry, li) => {
                 if (entry.type === 'gap') {
                   return (
-                    <div key={li} className="flex items-center gap-2 px-3 py-[3px] bg-[#111122]/60 border-y border-white/[0.04] text-[var(--text-muted)] opacity-40 text-[10px] select-none">
-                      <span>···</span>
-                      <span className="italic">{entry.count} unchanged line{entry.count !== 1 ? 's' : ''}</span>
+                    <div key={li} className="flex flex-col w-full border-y border-white/[0.04]">
+                      <div className="flex items-center gap-2 px-3 py-1.5 bg-[#111122]/60 text-[var(--text-muted)] opacity-50 text-[10px] select-none min-w-fit">
+                        <span>···</span>
+                        <span className="italic">{entry.count} lines hidden — Use "Show Unchanged" in header for full view</span>
+                      </div>
                     </div>
                   );
                 }
@@ -2111,7 +2380,7 @@ export default function TerminalView({ connectionId, connectionName, host, color
                 const lineNumStr = entry.lineNo != null ? String(entry.lineNo) : '';
 
                 return (
-                  <div key={li} className={`flex min-w-0 ${
+                  <div key={li} className={`flex min-w-fit ${
                     isAdd ? 'bg-emerald-500/10 hover:bg-emerald-500/15' :
                     isDel ? 'bg-red-500/10 hover:bg-red-500/15' :
                     'hover:bg-white/[0.03]'
@@ -2127,7 +2396,7 @@ export default function TerminalView({ connectionId, connectionName, host, color
                       {isAdd ? '+' : isDel ? '−' : ' '}
                     </span>
                     {/* Code content */}
-                    <span className={`flex-1 py-[2px] px-2 whitespace-pre-wrap break-all ${
+                    <span className={`flex-1 py-[2px] px-2 whitespace-pre ${
                       isAdd ? 'text-emerald-200' :
                       isDel ? 'text-red-200' :
                       'text-[var(--text-secondary)]'
@@ -2207,7 +2476,7 @@ export default function TerminalView({ connectionId, connectionName, host, color
       let i = 0;
       
       while (i < displayLines.length) {
-        if (displayLines[i].type !== 'ctx') {
+        if (displayLines[i].type !== 'ctx' || showFullPatchFile) {
           foldedLines.push(displayLines[i]);
           i++;
           continue;
@@ -2221,20 +2490,24 @@ export default function TerminalView({ connectionId, connectionName, host, color
           i++;
         }
 
-        if (ctxCount > CONTEXT_SIZE * 2 + 1) {
+        const gapKey = `${key}_${startIdx}`;
+        const isExpanded = expandedGaps?.[key]?.[startIdx] ?? false;
+
+        if (!isExpanded && ctxCount > CONTEXT_SIZE * 2 + 1) {
           // Add first few context lines
           for (let j = 0; j < CONTEXT_SIZE; j++) {
             foldedLines.push(displayLines[startIdx + j]);
           }
           // Add the gap
           const hiddenCount = ctxCount - (CONTEXT_SIZE * 2);
-          foldedLines.push({ type: 'gap', count: hiddenCount });
+          const hiddenLines = displayLines.slice(startIdx + CONTEXT_SIZE, i - CONTEXT_SIZE);
+          foldedLines.push({ type: 'gap', count: hiddenCount, lines: hiddenLines, gapId: startIdx, file: key });
           // Add the last few context lines
           for (let j = 0; j < CONTEXT_SIZE; j++) {
             foldedLines.push(displayLines[i - CONTEXT_SIZE + j]);
           }
         } else {
-          // Just push all ctx lines if it's small enough
+          // Just push all ctx lines if it's small enough or expanded
           for (let j = startIdx; j < i; j++) {
             foldedLines.push(displayLines[j]);
           }
@@ -2242,7 +2515,7 @@ export default function TerminalView({ connectionId, connectionName, host, color
       }
 
       return (
-        <div key={key} className="rounded-xl border border-white/10 overflow-hidden mb-3 last:mb-0 shadow-sm">
+        <div key={`${key}_${fi}`} className="rounded-xl border border-white/10 overflow-hidden mb-3 last:mb-0 shadow-sm">
           {/* FILE HEADER HTML IDENTICAL TO RENDERDIFFBYFILE */}
           <div className="flex items-center bg-[#1a1a2e] border-b border-white/10">
             <button
@@ -2284,14 +2557,27 @@ export default function TerminalView({ connectionId, connectionName, host, color
 
           {/* DIFF CONTENT */}
           {!isCollapsed && (
-            <div className="overflow-y-auto max-h-[500px] custom-scrollbar font-mono text-[11px] bg-[#0d0d1a]">
+            <div className="overflow-x-auto overflow-y-auto max-h-[500px] custom-scrollbar font-mono text-[11px] bg-[#0d0d1a]">
               {foldedLines.map((entry, li) => {
                 if (entry.type === 'gap') {
+                  const isExpanded = expandedGaps?.[key]?.[entry.gapId];
                   return (
-                    <div key={li} className="flex items-center gap-2 px-3 py-[3px] bg-[#111122]/60 border-y border-white/[0.04] text-[var(--text-muted)] opacity-40 text-[10px] select-none">
-                      <span>···</span>
-                      <span className="italic">{entry.count} unchanged line{entry.count !== 1 ? 's' : ''}</span>
-                    </div>
+                    <button
+                      key={li}
+                      type="button"
+                      onClick={() => {
+                        setExpandedGaps(prev => ({
+                          ...prev,
+                          [key]: { ...(prev[key] || {}), [entry.gapId]: true }
+                        }));
+                      }}
+                      className="flex items-center gap-2 w-full px-3 py-[6px] bg-[#111122]/80 hover:bg-[#1a1a2e] border-y border-white/[0.04] text-[var(--text-muted)] hover:text-white transition-colors text-[10px] select-none min-w-fit cursor-pointer group"
+                    >
+                      <span className="opacity-40 group-hover:opacity-100 transition-opacity">···</span>
+                      <span className="italic opacity-60 group-hover:opacity-100 transition-opacity">
+                        {entry.count} hidden lines — Click to expand
+                      </span>
+                    </button>
                   );
                 }
 
@@ -2300,7 +2586,7 @@ export default function TerminalView({ connectionId, connectionName, host, color
                 const lineNumStr = entry.lineNo != null ? String(entry.lineNo) : '';
 
                 return (
-                  <div key={li} className={`flex min-w-0 ${
+                  <div key={li} className={`flex min-w-fit ${
                     isAdd ? 'bg-emerald-500/10 hover:bg-emerald-500/15' :
                     isDel ? 'bg-red-500/10 hover:bg-red-500/15' :
                     'hover:bg-white/[0.03]'
@@ -2313,7 +2599,7 @@ export default function TerminalView({ connectionId, connectionName, host, color
                     }`}>
                       {isAdd ? '+' : isDel ? '−' : ' '}
                     </span>
-                    <span className={`flex-1 py-[2px] px-2 whitespace-pre-wrap break-all ${
+                    <span className={`flex-1 py-[2px] px-2 whitespace-pre ${
                       isAdd ? 'text-emerald-200' :
                       isDel ? 'text-red-200' :
                       'text-[var(--text-secondary)]'
@@ -2331,16 +2617,16 @@ export default function TerminalView({ connectionId, connectionName, host, color
   };
 
   const getOutputContext = () => {
-    const maxLines = 100;
-    const maxChars = 15000;
+    const maxLines = 1000;
+    const maxChars = 20000;
     const lines = outputLinesRef.current.slice(-maxLines);
     const joined = lines.join('\n') + (outputBufferRef.current ? '\n' + outputBufferRef.current : '');
     return joined.length > maxChars ? joined.slice(-maxChars) : joined;
   };
 
   const getOutputContextForAi = () => {
-    const maxLines = 200;
-    const maxChars = 15000;
+    const maxLines = 1000;
+    const maxChars = 20000;
     const lines = outputLinesRef.current.slice(-maxLines);
     const joined = lines.join('\n') + (outputBufferRef.current ? '\n' + outputBufferRef.current : '');
     const tail = joined.length > maxChars ? joined.slice(-maxChars) : joined;
@@ -3597,7 +3883,7 @@ export default function TerminalView({ connectionId, connectionName, host, color
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             prompt: effectivePrompt,
-            context: getOutputContext().slice(-2500),
+            context: getOutputContext().slice(-15000),
             contextPack: buildAiContextPack(),
             connectionName,
             host,
@@ -3675,7 +3961,7 @@ export default function TerminalView({ connectionId, connectionName, host, color
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             prompt: effectivePrompt,
-            context: getOutputContext().slice(-2500),
+            context: getOutputContext().slice(-15000),
             contextPack: buildAiContextPack(),
             connectionName,
             host,
@@ -3740,6 +4026,7 @@ export default function TerminalView({ connectionId, connectionName, host, color
         role: 'assistant', 
         content: parsed?.explain || data.answer,
         command: parsed?.command,
+        diff: parsed?.diff,
         danger: parsed?.danger,
         done: parsed?.done,
         warn: parsed?.warn,
@@ -4400,13 +4687,36 @@ CHANGE YOUR STRATEGY: Use different flags, check paths with absolute references,
 
     if (autoLoopRepeatRef.current >= 3) {
       if (sshAiPrefs?.aiTask === 'code') {
-        // Code mode: don't search skills — force the AI to produce a diff patch
+        // Code mode: track how many times we've tried to nudge
+        codeModeLoopAttemptsRef.current += 1;
+        
+        // After 3 code mode loop nudges, STOP - don't infinite retry
+        if (codeModeLoopAttemptsRef.current >= 3) {
+          console.log('[AI Agent] Code mode loop limit reached - stopping');
+          setAiError(`⚠️ Code Mode stopped: AI is stuck in a loop. Tried ${codeModeLoopAttemptsRef.current} times to produce a patch.
+
+Possible issues:
+- The file may not exist or path is wrong
+- The AI needs more context about the file
+- The goal may be unclear
+
+Try: Manually check the file exists, then restart with a clearer goal.`);
+          setAutoMode(false);
+          setAiOpen(true);
+          setAiHasOpenedOnce(true);
+          return;
+        }
+        
+        // Nudge AI to produce a diff patch
         autoLoopRepeatRef.current = 0;
         autoLastLoopKeyRef.current = '';
         autoRunningRef.current = false;
         if (autoTimerRef.current) clearTimeout(autoTimerRef.current);
         autoTimerRef.current = setTimeout(() => runAutoStep(snap,
-          `\n\n⚠️ LOOP DETECTED (Code Mode): You have run the same read command ${autoLoopRepeatRef.current + 3} times without producing a patch.\nYou MUST now output a <diff> patch to edit the file. Do NOT run cat/head/tail again. Use the file content you already have and produce the unified diff NOW.`
+          `\n\n⚠️ LOOP DETECTED (Code Mode - Attempt ${codeModeLoopAttemptsRef.current}/3): You have run the same read command multiple times without producing a patch.
+You MUST now output a <diff> patch to edit the file. Do NOT run cat/head/tail again. Use the file content you already have and produce the unified diff NOW.
+
+If you cannot produce a patch, explain why and set <done>true</done>.`
         ), 800);
         return;
       }
@@ -4820,7 +5130,33 @@ CHANGE YOUR STRATEGY: Use different flags, check paths with absolute references,
         : '';
 
       const patchFirstAutoRules = (sshAiPrefs?.aiTask === 'code' && sshAiPrefs?.enforcePatch !== false && !isExecutionGoal)
-        ? `\nPATCH-FIRST AUTO RULES (CODE EDIT MODE):\n- This is a CODE EDITING session. Use <command> ONLY for reading files (cat/head/tail/grep/ls/stat).\n- After reading the relevant files, produce a <diff> patch. Do NOT use sed/tee/printf/nano to write files.\n- To CREATE a new file, prefer using a single heredoc command: \`cat << 'EOF' > filename\` (quoted delimiter). Use <diff> for EDITS.\n${mentionedPathsRule}`
+        ? `\nPATCH-FIRST AUTO RULES (CODE EDIT MODE):
+- This is a CODE EDITING session. Use <command> ONLY for reading files (cat/head/tail/grep/ls/stat).
+- After reading the relevant files, choose ONE method to edit:
+
+METHOD 1 - Unified Diff (preferred for small edits):
+<diff>
+--- /absolute/path/to/file
++++ /absolute/path/to/file
+@@ -10,3 +10,3 @@
+ context line
+-old line
++new line
+ context line
+</diff>
+⚠️ DIFF RULES:
+- Use EXACT line content (copy from cat output, don't guess)
+- @@ line numbers must match actual file
+- Include 3 context lines before/after changes
+
+METHOD 2 - Heredoc (for creating/rewriting entire files):
+<command>cat << 'EOF' > /absolute/path/to/file
+complete file content here
+EOF</command>
+⚠️ Use 'EOF' (quoted) to prevent variable expansion
+
+${mentionedPathsRule}
+- If diff fails twice, switch to heredoc method to rewrite the entire file.`
         : (sshAiPrefs?.aiTask === 'code' && isExecutionGoal
           ? `\nNOTE: This is a DEPLOYMENT/EXECUTION task. Run shell commands (pm2, npm, git). To CREATE a new file (nginx.conf, Dockerfile), use \`cat << 'EOF' > filename\`. Ensure 'EOF' is quoted to prevent variable expansion ($var). Use <diff> mainly for EDITING existing files.\n${mentionedPathsRule}`
           : '');
@@ -4828,7 +5164,11 @@ CHANGE YOUR STRATEGY: Use different flags, check paths with absolute references,
       const recentReadOnlyCount = (autoRecentCommandsRef.current || []).slice(-6).filter(isReadOnlyCommand).length;
       // Only force-diff if we are in code-edit mode AND this is NOT an execution goal
       const forceDiffNowRule = (sshAiPrefs?.aiTask === 'code' && sshAiPrefs?.enforcePatch !== false && !isExecutionGoal && recentReadOnlyCount >= 2)
-        ? `\nIMPORTANT: You have already performed enough reads. STOP issuing read commands and output ONLY a <diff> patch now. Leave <command> empty.`
+        ? `\nIMPORTANT: You have already performed enough reads. Now CHOOSE ONE method:
+- METHOD 1: Output a <diff> patch with exact line content from your cat output
+- METHOD 2: Use heredoc to rewrite the file: <command>cat << 'EOF' > /path/to/file\n[complete content]\nEOF</command>
+
+Do NOT read the file again. ACT NOW.`
         : '';
 
       // === Scout-first: detect if this is the very first step for an execution goal ===
@@ -4943,8 +5283,11 @@ ${isExecutionGoal ? '⚡ EXECUTION: run commands directly.\n' : ''}${scoutFirstR
         { role: 'assistant', content: data.answer }
       ].slice(-12);
 
+      const aiSaidDoneWithDiff = parsed.done && parsed.diff && String(parsed.diff).trim();
+      const enforceDiffPatch = sshAiPrefs?.aiTask === 'code' || sshAiPrefs?.enforcePatch;
+
       // === AI says DONE (success) ===
-      if (parsed.done) {
+      if (parsed.done && !(aiSaidDoneWithDiff && enforceDiffPatch)) {
         // 🛡️ VETO LOGIC: If the terminal contains a critical error matching the goal,
         // do NOT allow the model to finish. It's likely hallucinating completion.
         const currentSnap = getOutputContext();
@@ -4975,11 +5318,20 @@ ${isExecutionGoal ? '⚡ EXECUTION: run commands directly.\n' : ''}${scoutFirstR
         const dockerVeto = goalHasDocker && !lastCmdHasDocker && !recentCmdsHaveDocker;
         const dockerfileOnlyVeto = goalHasDocker && createdDockerfileOnly;
 
-        const shouldVeto = (effectiveErr && (effectiveErr.severity === 'critical' || effectiveErr.severity === 'high') && isGoalRelevant) ||
-                           (effectiveErr && effectiveErr.severity === 'critical') ||
-                           (isActionGoal && isDiscoveryCmd && !outputLower.includes('success') && !outputLower.includes('installed')) ||
-                           dockerVeto ||
-                           dockerfileOnlyVeto;
+        let shouldVeto = false;
+        
+        if (sshAiPrefs?.aiTask === 'code') {
+          // In Code Editor mode, only critical errors block completion. 
+          // We DO NOT require docker execution or bash action verifications.
+          shouldVeto = (effectiveErr && (effectiveErr.severity === 'critical' || effectiveErr.severity === 'high') && isGoalRelevant) ||
+                       (effectiveErr && effectiveErr.severity === 'critical');
+        } else {
+          shouldVeto = (effectiveErr && (effectiveErr.severity === 'critical' || effectiveErr.severity === 'high') && isGoalRelevant) ||
+                       (effectiveErr && effectiveErr.severity === 'critical') ||
+                       (isActionGoal && isDiscoveryCmd && !outputLower.includes('success') && !outputLower.includes('installed')) ||
+                       dockerVeto ||
+                       dockerfileOnlyVeto;
+        }
 
         if (shouldVeto) {
           const vetoReason = effectiveErr
@@ -5024,6 +5376,7 @@ ${isExecutionGoal ? '⚡ EXECUTION: run commands directly.\n' : ''}${scoutFirstR
               explain: parsed.explain || 'Task complete.',
             });
           }, doneWait * 1000);
+          return;
         } else {
                   // ✅ Save completed session to sshAiHistory
           // NOTE: Do NOT call showAiDoneModal inside the setAutoStepHistory updater.
@@ -5139,6 +5492,11 @@ ${isExecutionGoal ? '⚡ EXECUTION: run commands directly.\n' : ''}${scoutFirstR
       // fix a config file (Dockerfile, package.json, ecosystem.config.js) mid-deploy via clean SFTP patch
       // instead of resorting to cat-heredoc or sed inline edits.
       // What's suppressed for execution goals is only the *forcing* rules (patchFirstAutoRules / forceDiffNowRule).
+      //
+      // KEY FIX: If AI returned diff + done=true, apply the patch and immediately complete.
+      // This prevents the loop where the AI generates the same diff over and over.
+      // aiSaidDoneWithDiff is defined above
+
       if (parsed.diff && String(parsed.diff).trim() && (sshAiPrefs?.aiTask === 'code' || sshAiPrefs?.enforcePatch)) {
         const d = String(parsed.diff).trim();
         if (!isValidUnifiedDiff(d)) {
@@ -5220,16 +5578,103 @@ ${isExecutionGoal ? '⚡ EXECUTION: run commands directly.\n' : ''}${scoutFirstR
         setPatchModalAutoApplied(true);
         setLastPatchResultData(null); // Clear for new run
         setPatchModalOpen(true);
+        
+        // Reset loop counters - patch is progress, not a loop
+        codeModeLoopAttemptsRef.current = 0;
+        autoLoopRepeatRef.current = 0;
+        autoLastLoopKeyRef.current = '';
 
         // Apply via SFTP + diff-match-patch
-        applyPatchViaSftp(d, backupId).then((result) => {
-          const files = result.files || [];
-          setLastPatchBackup({ id: backupId, files });
-          setLastPatchResultData(result.results || null);
-          if (!result.success) {
-            setAiError(`Auto Mode: Patch failed — ${result.error || result.summary || 'Unknown error'}`);
+        const result = await applyPatchViaSftp(d, backupId);
+        
+        const files = result.files || [];
+        setLastPatchBackup({ id: backupId, files });
+        setLastPatchResultData(result.results || null);
+        if (!result.success) {
+          // Track diff failures
+          diffFailureCountRef.current += 1;
+          
+          // After 2 diff failures, suggest heredoc fallback
+          if (diffFailureCountRef.current >= 2) {
+            setAiError(`⚠️ Patch failed ${diffFailureCountRef.current} times: ${result.error || result.summary || 'Unknown error'}
+
+🔄 FALLBACK SUGGESTION: Switch to heredoc method instead of diff.
+
+Instead of <diff>, use this format:
+<command>cat << 'EOF' > /absolute/path/to/file
+[complete file content here - copy from your earlier cat output]
+EOF</command>
+
+This rewrites the entire file and avoids diff matching issues.`);
+            diffFailureCountRef.current = 0; // Reset after suggestion
+          } else {
+            setAiError(`⚠️ Patch failed: ${result.error || result.summary || 'Unknown error'}
+
+The AI generated an invalid diff format. This can happen when:
+- File content doesn't match what AI expected
+- AI used wrong line numbers
+- AI included non-existent lines
+
+Try: Re-read the file and provide a new diff with exact line content.`);
           }
-        });
+          setAutoMode(false);
+          setAiOpen(true);
+          setAiHasOpenedOnce(true);
+          // Clear the timer so auto mode doesn't continue
+          if (autoTimerRef.current) {
+            clearTimeout(autoTimerRef.current);
+            autoTimerRef.current = null;
+          }
+          autoRunningRef.current = false;
+          return;
+        } else {
+          // Patch succeeded - reset all counters
+          codeModeLoopAttemptsRef.current = 0;
+          autoLoopRepeatRef.current = 0;
+          autoSameCommandRef.current = { cmd: '', count: 0 };
+          autoRepeatSigRef.current = { key: '', count: 0 };
+          diffFailureCountRef.current = 0; // Reset diff failure counter
+          console.log('[Patch] Applied successfully, all counters reset');
+
+          // KEY FIX: If AI said done=true alongside this diff, complete immediately after patch
+          if (aiSaidDoneWithDiff) {
+            console.log('[Patch] AI said done=true with diff — completing immediately');
+            const finalSteps = [...autoStepHistory, {
+              command: '',
+              explain: parsed.explain || '✅ File edited successfully.',
+              status: 'success',
+            }];
+            setAutoStepHistory(finalSteps);
+            setTimeout(() => {
+              setAiDone(true);
+              showAiDoneModal({
+                goal,
+                steps: finalSteps.slice(-30),
+                taskMode: 'code',
+                thought: parsed.thought || null,
+                explain: parsed.explain || '✅ File edited successfully.',
+              });
+            }, 50);
+            // Cancel the continuation timer
+            if (autoTimerRef.current) {
+              clearTimeout(autoTimerRef.current);
+              autoTimerRef.current = null;
+            }
+            autoRunningRef.current = false;
+            return;
+          }
+
+          // If NOT done, we must schedule the next step so the AI can verify the change.
+          // This prevents the code from falling through to the command execution line for the SAME turn.
+          console.log('[Patch] Scheduling next turn to verify changes...');
+          autoRunningRef.current = false;
+          setAutoCountdown(1);
+          if (autoTimerRef.current) clearTimeout(autoTimerRef.current);
+          autoTimerRef.current = setTimeout(() => {
+            runAutoStep(null, '\n\n(Patch applied successfully. Please verify your changes.)');
+          }, 1000);
+          return;
+        }
 
         // Auto-close modal after adaptive delay to keep UI clean
         const modalCloseDelay = Math.min(adaptiveWaitRef.current.currentWait * 1000, 6000);
@@ -5241,12 +5686,19 @@ ${isExecutionGoal ? '⚡ EXECUTION: run commands directly.\n' : ''}${scoutFirstR
         }, modalCloseDelay);
 
         // Continue after adaptive delay to let the patch complete
+        // NOTE: This timer will be cancelled in the promise callback if patch fails
         const waitSec = calculateDynamicWait(false, false, false);
         setAutoCountdown(Math.ceil(waitSec));
         if (autoTimerRef.current) clearTimeout(autoTimerRef.current);
         autoTimerRef.current = setTimeout(() => {
+          // Only continue if auto mode is still active (patch might have failed and stopped it)
+          if (!autoModeRef.current) {
+            console.log('[Auto Mode] Skipping runAutoStep - auto mode was stopped (likely patch failure)');
+            return;
+          }
           autoRunningRef.current = false;
-          runAutoStep();
+          // Provide context that patch was applied so AI knows to set done=true
+          runAutoStep(undefined, '\n\n✅ PATCH APPLIED SUCCESSFULLY. The file has been edited. If the goal is now met, set <done>true</done>.');
         }, waitSec * 1000);
         return;
       }
@@ -5315,13 +5767,35 @@ What completely valid bash command will you run next?`;
         }
 
         if (sshAiPrefs?.aiTask === 'code') {
-          // Code mode: don't search skills — force the AI to produce a diff
+          // Code mode: track stall attempts
+          codeModeLoopAttemptsRef.current += 1;
+          
+          if (codeModeLoopAttemptsRef.current >= 3) {
+            console.log('[AI Agent] Code mode stall limit reached - stopping');
+            setAiError(`⚠️ Code Mode stopped: AI keeps stalling without producing a patch.
+
+Possible issues:
+- The file may not exist or path is wrong
+- The AI needs more context about what to edit
+- The goal may be too complex
+
+Try: Provide the exact file path with @filename and clearer instructions.`);
+            setAutoMode(false);
+            setAiOpen(true);
+            setAiHasOpenedOnce(true);
+            return;
+          }
+          
           autoRunningRef.current = false;
           const codeStallWait = calculateDynamicWait(false, false, false);
           recordWait(codeStallWait);
           if (autoTimerRef.current) clearTimeout(autoTimerRef.current);
           autoTimerRef.current = setTimeout(() => runAutoStep(snap,
-            `\n\n⚠️ STALL (Code Mode): You provided no action. In Code Edit mode you MUST either:\n- Read the file once with <command>cat path</command> if you haven't yet, OR\n- Output a <diff> patch immediately. Do NOT explain; ACT.`
+            `\n\n⚠️ STALL (Code Mode - Attempt ${codeModeLoopAttemptsRef.current}/3): You provided no action. In Code Edit mode you MUST either:
+- Read the file once with <command>cat path</command> if you haven't yet, OR
+- Output a <diff> patch immediately. Do NOT explain; ACT.
+
+If you cannot proceed, set <done>true</done> and explain why.`
           ), codeStallWait * 1000);
           return;
         }
@@ -5397,12 +5871,34 @@ What completely valid bash command will you run next?`;
         // Guard: same read-only command repeated — in code mode force a diff, otherwise search skills
         if (autoSameCommandRef.current.count >= 2 && isReadOnlyCommand(nextCmdTrim)) {
           if (sshAiPrefs?.aiTask === 'code') {
-            // Code mode: don't pause/search — nudge AI to stop cat-looping and produce a patch
+            // Code mode: track attempts
+            codeModeLoopAttemptsRef.current += 1;
+            
+            if (codeModeLoopAttemptsRef.current >= 3) {
+              console.log('[AI Agent] Code mode read-loop limit reached - stopping');
+              setAiError(`⚠️ Code Mode stopped: AI keeps reading the same file without editing.
+
+File: ${nextCmdTrim}
+
+Possible issues:
+- The file content is not what AI expected
+- The AI doesn't know what to change
+- The edit instructions are unclear
+
+Try: Provide specific line numbers or text to change.`);
+              setAutoMode(false);
+              setAiOpen(true);
+              setAiHasOpenedOnce(true);
+              return;
+            }
+            
             autoSameCommandRef.current = { cmd: '', count: 0 };
             autoRunningRef.current = false;
             if (autoTimerRef.current) clearTimeout(autoTimerRef.current);
             autoTimerRef.current = setTimeout(() => runAutoStep(snap,
-              `\n\n⚠️ PATCH NOW (Code Mode): You have read '${nextCmdTrim}' ${autoSameCommandRef.current.count + 3} times. STOP issuing read commands. You already have the file content. Output a <diff> patch immediately to make the edit. Leave <command> empty.`
+              `\n\n⚠️ PATCH NOW (Code Mode - Attempt ${codeModeLoopAttemptsRef.current}/3): You have read '${nextCmdTrim}' multiple times. STOP issuing read commands. You already have the file content. Output a <diff> patch immediately to make the edit. Leave <command> empty.
+
+If you cannot edit this file, explain why and set <done>true</done>.`
             ), 800);
             return;
           }
@@ -5419,12 +5915,29 @@ What completely valid bash command will you run next?`;
         }
         if (autoSameCommandRef.current.count >= 2 && !isReadOnlyCommand(nextCmdTrim)) {
           if (sshAiPrefs?.aiTask === 'code') {
-            // Code mode: repeated non-read command — nudge to patch
+            // Code mode: track attempts for repeated non-read commands
+            codeModeLoopAttemptsRef.current += 1;
+            
+            if (codeModeLoopAttemptsRef.current >= 3) {
+              console.log('[AI Agent] Code mode command-loop limit reached - stopping');
+              setAiError(`⚠️ Code Mode stopped: AI keeps repeating the same command.
+
+Command: ${nextCmdTrim}
+
+In Code Edit mode, use <diff> to make file changes, not shell commands.`);
+              setAutoMode(false);
+              setAiOpen(true);
+              setAiHasOpenedOnce(true);
+              return;
+            }
+            
             autoSameCommandRef.current = { cmd: '', count: 0 };
             autoRunningRef.current = false;
             if (autoTimerRef.current) clearTimeout(autoTimerRef.current);
             autoTimerRef.current = setTimeout(() => runAutoStep(snap,
-              `\n\n⚠️ CODE MODE: You repeated the same command. In Code Edit mode, use <diff> to make file changes, not shell commands. Output the patch now.`
+              `\n\n⚠️ CODE MODE (Attempt ${codeModeLoopAttemptsRef.current}/3): You repeated the same command. In Code Edit mode, use <diff> to make file changes, not shell commands. Output the patch now.
+
+If this is a deployment task, switch task mode to 'deploy' instead of 'code'.`
             ), 800);
             return;
           }
@@ -5969,6 +6482,33 @@ What completely valid bash command will you run next?`;
                   </div>
                 </div>
                 <div className="flex items-center gap-2">
+                  <button 
+                    type="button" 
+                    onClick={async () => {
+                      setDockerComposeWizardOpen(true);
+                      setDockerComposeAnalyzing(true);
+                      setDockerComposeOptions({
+                        nginx: false,
+                        ssl: false,
+                        redis: false,
+                        postgres: false,
+                        mongodb: false,
+                        monitoring: false,
+                        elk: false,
+                        multiStage: false,
+                      });
+                      
+                      // Analyze project to auto-detect services
+                      const detected = await analyzeProjectForDockerCompose();
+                      setDockerComposeOptions(detected);
+                      setDockerComposeAnalyzing(false);
+                    }} 
+                    className="p-1.5 rounded hover:bg-[var(--bg-tertiary)] dark:hover:bg-white/5 flex items-center gap-1" 
+                    title="Generate Docker Compose (Auto-Detect Services)" 
+                    style={{ color: 'var(--text-secondary)' }}
+                  >
+                    <Container size={12} />
+                  </button>
                   <button type="button" onClick={() => setAiHistoryOpen(v => !v)} className="p-1.5 rounded hover:bg-[var(--bg-tertiary)] dark:hover:bg-white/5" title={t('ai.history')} style={{ color: 'var(--text-secondary)' }}><Clock size={12} /></button>
                   <button type="button" onClick={() => setAiSettingsOpen(v => !v)} className="p-1.5 rounded hover:bg-[var(--bg-tertiary)] dark:hover:bg-white/5" title={t('ai.settings')} style={{ color: 'var(--text-secondary)' }}><Settings2 size={12} /></button>
                   <button 
@@ -6085,7 +6625,7 @@ What completely valid bash command will you run next?`;
                         <span className="text-indigo-400">⚡</span>
                         {t('ai.autoApplyPatch')}
                       </span>
-                      <input type="checkbox" checked={!!sshAiPrefs?.autoApplyPatch} onChange={(e) => setSshAiPrefs({ autoApplyPatch: e.target.checked })} disabled={!isLoggedIn || sshAiPrefs?.enforcePatch === false || sshAiPrefs?.aiTask === 'code'} />
+                      <input type="checkbox" checked={!!sshAiPrefs?.autoApplyPatch} onChange={(e) => setSshAiPrefs({ autoApplyPatch: e.target.checked })} disabled={!isLoggedIn || sshAiPrefs?.enforcePatch === false} />
                     </label>
 
                     <label className="flex items-center justify-between text-[11px]" style={{ color: 'var(--text-primary)' }} title={t('ai.backgroundTasksDesc')}>
@@ -6348,22 +6888,60 @@ What completely valid bash command will you run next?`;
                                 </div>
                               )}
                               
-                              {/* Action Buttons for AI messages with commands */}
-                              {msg.command && (
+                              {msg.diff && (
+                                <div className="mt-2 rounded-lg bg-black/40 border border-white/10 overflow-hidden">
+                                  <div className="px-2 py-1 flex justify-between items-center text-[8px] font-mono text-white/40 uppercase tracking-wider bg-black/20">
+                                    <span>📝 Patch Preview</span>
+                                  </div>
+                                  <div className="p-2 overflow-x-auto max-h-[300px] overflow-y-auto custom-scrollbar">
+                                    {renderDiffByFile(msg.diff, {}, () => {})}
+                                  </div>
+                                </div>
+                              )}
+                              
+                              {/* Action Buttons for AI messages with commands or diffs */}
+                              {(msg.command || msg.diff) && (
                                 <div className="flex items-center gap-1 pt-2 mt-2 border-t border-white/5">
-                                  <button onClick={() => navigator.clipboard.writeText(msg.command)} className="flex-1 flex items-center justify-center gap-1 py-1.5 rounded bg-white/5 hover:bg-white/10 text-[10px] transition">
-                                    <Copy size={10} /> Copy
-                                  </button>
-                                  <button onClick={() => handleInsertCommand(msg.command)} className="flex-1 flex items-center justify-center gap-1 py-1.5 rounded bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-400 text-[10px] transition">
-                                    <CornerDownLeft size={10} /> Insert
-                                  </button>
-                                  <button onClick={() => {
-                                    if (!isLoggedIn) { setAiError(t('ai.loginRequired')); return; }
-                                    if (msg.danger) { setExecuteConfirmOpen(true); setAiAnswer({ ...msg, danger: true }); return; }
-                                    handleExecuteCommand(msg.command);
-                                  }} disabled={!isLoggedIn} className={`flex-1 flex items-center justify-center gap-1 py-1.5 rounded text-[10px] transition ${msg.danger ? 'bg-red-500/20 hover:bg-red-500/30 text-red-400' : 'bg-indigo-500/20 hover:bg-indigo-500/30 text-indigo-400'}`}>
-                                    <CornerDownLeft size={10} /> Run
-                                  </button>
+                                  {msg.command && (
+                                    <>
+                                      <button onClick={() => navigator.clipboard.writeText(msg.command)} className="flex-1 flex items-center justify-center gap-1 py-1.5 rounded bg-white/5 hover:bg-white/10 text-[10px] transition">
+                                        <Copy size={10} /> Copy
+                                      </button>
+                                      <button onClick={() => handleInsertCommand(msg.command)} className="flex-1 flex items-center justify-center gap-1 py-1.5 rounded bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-400 text-[10px] transition">
+                                        <CornerDownLeft size={10} /> Insert
+                                      </button>
+                                      <button onClick={() => {
+                                        if (!isLoggedIn) { setAiError(t('ai.loginRequired')); return; }
+                                        if (msg.danger) { setExecuteConfirmOpen(true); setAiAnswer({ ...msg, danger: true }); return; }
+                                        handleExecuteCommand(msg.command);
+                                      }} disabled={!isLoggedIn} className={`flex-1 flex items-center justify-center gap-1 py-1.5 rounded text-[10px] transition ${msg.danger ? 'bg-red-500/20 hover:bg-red-500/30 text-red-400' : 'bg-indigo-500/20 hover:bg-indigo-500/30 text-indigo-400'}`}>
+                                        <CornerDownLeft size={10} /> Run
+                                      </button>
+                                    </>
+                                  )}
+                                  {msg.diff && !msg.command && (
+                                    <>
+                                      <button onClick={() => navigator.clipboard.writeText(msg.diff)} className="flex-1 flex items-center justify-center gap-1 py-1.5 rounded bg-white/5 hover:bg-white/10 text-[10px] transition">
+                                        <Copy size={10} /> Copy Patch
+                                      </button>
+                                      <button onClick={() => {
+                                        setPatchModalDiff(msg.diff);
+                                        setPatchModalOpen(true);
+                                        setPatchModalAutoApplied(false);
+                                      }} className="flex-1 flex items-center justify-center gap-1 py-1.5 rounded bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-400 text-[10px] transition font-bold">
+                                        <FileIconAi size={10} /> Review / Apply Patch
+                                      </button>
+                                    </>
+                                  )}
+                                  {msg.diff && msg.command && (
+                                    <button onClick={() => {
+                                      setPatchModalDiff(msg.diff);
+                                      setPatchModalOpen(true);
+                                      setPatchModalAutoApplied(false);
+                                   }} className="flex-[0.5] flex items-center justify-center gap-1 py-1.5 rounded bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-400 text-[10px] transition font-bold">
+                                      <FileIconAi size={10} /> Patch
+                                    </button>
+                                  )}
                                 </div>
                               )}
                             </div>
@@ -6394,12 +6972,25 @@ What completely valid bash command will you run next?`;
                             style={{ position: 'relative' }}
                           >
                             <div className="w-full h-full rounded-xl border border-[var(--border-color)] bg-[var(--bg-secondary)] shadow-2xl overflow-hidden flex flex-col">
-                              <div className="patch-modal-drag-handle flex items-center justify-between px-4 py-3 border-b border-[var(--border-color)] cursor-move">
-                                <div className="flex items-center gap-2">
+                              <div className="patch-modal-drag-handle flex items-center justify-between px-4 py-3 border-b border-[var(--border-color)] cursor-move min-h-[50px]">
+                                <div className="flex items-center gap-4">
                                   <div className="text-xs font-bold uppercase tracking-wider" style={{ color: 'var(--text-primary)' }}>Patch Review</div>
                                   {patchModalAutoApplied && (
                                     <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-emerald-500/15 text-emerald-300 border border-emerald-500/20">Auto-applied</span>
                                   )}
+                                  
+                                  <label className="flex items-center gap-2 cursor-pointer group ml-2">
+                                    <input 
+                                      type="checkbox" 
+                                      checked={showFullPatchFile} 
+                                      onChange={(e) => {
+                                        setShowFullPatchFile(e.target.checked);
+                                        if (e.target.checked) setExpandedGaps({});
+                                      }}
+                                      className="w-3.5 h-3.5 rounded border-white/20 bg-black/40 text-indigo-500 focus:ring-offset-0 focus:ring-0"
+                                    />
+                                    <span className="text-[10px] uppercase font-bold tracking-tight text-[var(--text-muted)] group-hover:text-white transition-colors">Show Unchanged</span>
+                                  </label>
                                 </div>
                                 <button onClick={() => setPatchModalOpen(false)} className="p-1 rounded hover:bg-white/5" style={{ color: 'var(--text-muted)' }} title={t('ai.cancel')}>
                                   <X size={14} />
@@ -6466,7 +7057,12 @@ What completely valid bash command will you run next?`;
                                     const files = result.files || [];
                                     setLastPatchBackup({ id: backupId, files });
                                     setLastPatchResultData(result.results || null);
-                                    if (!result.success) {
+                                    if (result.success) {
+                                      // Reset loop counters on successful manual patch
+                                      codeModeLoopAttemptsRef.current = 0;
+                                      autoLoopRepeatRef.current = 0;
+                                      autoSameCommandRef.current = { cmd: '', count: 0 };
+                                    } else {
                                       setAiError(`Patch failed: ${result.error || result.summary || 'Unknown error'}`);
                                     }
                                     setPatchModalAutoApplied(true);
@@ -6922,6 +7518,8 @@ What completely valid bash command will you run next?`;
                             setAiMode('auto');
                             setAutoMode(true);
                             setAutoStepsRemaining(MAX_AUTO_STEPS);
+                            codeModeLoopAttemptsRef.current = 0; // Reset loop counter
+                            skillInjectionAttemptsRef.current = 0; // Reset skill injection
                             setLastResultAt(Date.now());
                           }
                         }}
@@ -7099,6 +7697,85 @@ What completely valid bash command will you run next?`;
                         }
                       }} disabled={!isLoggedIn} className="flex-1 py-1.5 rounded bg-red-600 hover:bg-red-500 text-white text-xs font-medium">{t('ai.execute')}</button>
                     </div>
+                  </div>
+                )}
+
+                {/* Docker Compose Wizard Modal */}
+                {dockerComposeWizardOpen && (
+                  <div className="rounded-lg border border-indigo-500/30 bg-indigo-500/10 p-3">
+                    <div className="flex items-center justify-between mb-3">
+                      <div className="flex items-center gap-2 text-xs font-bold text-indigo-400">
+                        <Container size={14} />
+                        Docker Compose Wizard
+                      </div>
+                      <button onClick={() => setDockerComposeWizardOpen(false)} className="p-1 rounded hover:bg-white/10">
+                        <X size={12} className="text-[var(--text-muted)]" />
+                      </button>
+                    </div>
+                    
+                    {dockerComposeAnalyzing ? (
+                      <div className="flex items-center gap-2 py-4 text-[11px] text-indigo-400">
+                        <Loader2 size={14} className="animate-spin" />
+                        Analyzing project dependencies...
+                      </div>
+                    ) : (
+                      <>
+                        <div className="text-[10px] opacity-70 mb-3" style={{ color: 'var(--text-secondary)' }}>
+                          Select services to include in your docker-compose.yml:
+                          {Object.values(dockerComposeOptions).some(v => v) && (
+                            <span className="ml-1 text-emerald-400">(Auto-detected services checked ✓)</span>
+                          )}
+                        </div>
+                        
+                        <div className="space-y-2 mb-4">
+                          {[
+                            { key: 'nginx', label: 'Nginx Reverse Proxy', desc: 'Load balancing, SSL termination, static files' },
+                            { key: 'ssl', label: 'SSL/HTTPS Support', desc: 'Let\'s Encrypt certificates, HTTPS redirect' },
+                            { key: 'redis', label: 'Redis Cache', desc: 'Session storage, caching, message queue' },
+                            { key: 'postgres', label: 'PostgreSQL Database', desc: 'Relational database with persistent volume' },
+                            { key: 'mongodb', label: 'MongoDB Database', desc: 'NoSQL database with persistent volume' },
+                            { key: 'monitoring', label: 'Monitoring Stack', desc: 'Prometheus + Grafana for metrics' },
+                            { key: 'elk', label: 'ELK Logging Stack', desc: 'Elasticsearch + Kibana + Logstash' },
+                            { key: 'multiStage', label: 'Multi-Stage Build', desc: 'Optimized production builds' },
+                          ].map(({ key, label, desc }) => (
+                            <label key={key} className={`flex items-start gap-2 cursor-pointer hover:bg-white/5 p-1.5 rounded ${dockerComposeOptions[key] ? 'bg-emerald-500/10 border border-emerald-500/30' : ''}`}>
+                              <input
+                                type="checkbox"
+                                checked={dockerComposeOptions[key]}
+                                onChange={(e) => setDockerComposeOptions(prev => ({ ...prev, [key]: e.target.checked }))}
+                                className="mt-0.5 w-3.5 h-3.5 rounded border-indigo-500 text-indigo-500 focus:ring-indigo-500"
+                              />
+                              <div className="flex-1 min-w-0">
+                                <div className="text-[11px] font-medium text-[var(--text-primary)] flex items-center gap-1">
+                                  {label}
+                                  {dockerComposeOptions[key] && <span className="text-[8px] text-emerald-400">✓ detected</span>}
+                                </div>
+                                <div className="text-[9px] opacity-60" style={{ color: 'var(--text-muted)' }}>{desc}</div>
+                              </div>
+                            </label>
+                          ))}
+                        </div>
+                        
+                        <div className="flex gap-2">
+                          <button 
+                            onClick={() => setDockerComposeWizardOpen(false)} 
+                            className="flex-1 py-1.5 rounded border border-white/10 hover:bg-white/5 text-xs font-medium" 
+                            style={{ color: 'var(--text-primary)' }}
+                          >
+                            Cancel
+                          </button>
+                          <button 
+                            onClick={() => {
+                              setDockerComposeWizardOpen(false);
+                              generateDockerCompose(dockerComposeOptions);
+                            }} 
+                            className="flex-1 py-1.5 rounded bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-medium"
+                          >
+                            Generate with AI
+                          </button>
+                        </div>
+                      </>
+                    )}
                   </div>
                 )}
 

@@ -1,5 +1,12 @@
 'use client';
 
+// Silence console logs in production
+if (process.env.NODE_ENV === 'production') {
+  const noop = () => {};
+  const methods = ['log', 'info', 'warn', 'error', 'debug', 'table', 'trace', 'dir', 'group', 'groupCollapsed', 'groupEnd', 'time', 'timeEnd', 'timeLog'];
+  methods.forEach(m => { if (console[m]) console[m] = noop; });
+}
+
 import { SessionProvider } from "next-auth/react";
 import { AppProvider } from "@/context/AppContext";
 import { OSProvider } from "@/context/OSContext";
