@@ -44,7 +44,11 @@ export default function FilesApp({ onEditConnection, initialConnection, initialC
         if (Array.isArray(parsed) && parsed.length > 0) {
           // Re-verify connections exist
           const validTabs = parsed.map(tab => {
-            const conn = connections.find(c => c._id === tab.connectionId);
+            let baseId = tab.connectionId;
+            if (typeof baseId === 'string' && baseId.startsWith('docker-')) {
+               baseId = baseId.split(':').pop();
+            }
+            const conn = connections.find(c => c._id === baseId);
             return conn ? { ...tab, connection: conn } : null;
           }).filter(Boolean);
           

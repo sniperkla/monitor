@@ -1679,6 +1679,42 @@ export default function SettingsApp({ initialTab }) {
                     <div className={`w-4 h-4 bg-white rounded-full shadow-lg transition-transform ${osState.terminalSettings?.cursorBlink !== false ? 'translate-x-5' : 'translate-x-0'}`} />
                   </div>
                 </div>
+
+                <div className="p-4 bg-[var(--bg-card)] border border-[var(--border-color)] rounded-2xl flex items-center justify-between group hover:bg-[var(--bg-card-hover)] transition-all">
+                  <div className="flex items-center gap-4">
+                    <div className="w-10 h-10 rounded-xl bg-[var(--bg-tertiary)] flex items-center justify-center">
+                      <Zap size={18} className="text-indigo-400" />
+                    </div>
+                    <div>
+                      <h4 className="text-sm font-bold text-[var(--text-primary)]">Tmux Mouse Scroll</h4>
+                      <p className="text-[10px] text-[var(--text-muted)] italic">Allow mouse wheel to scroll history within Tmux</p>
+                    </div>
+                  </div>
+                  <div 
+                    onClick={() => setTerminalSettings({ tmuxMouseScrolling: !osState.terminalSettings?.tmuxMouseScrolling })}
+                    className={`w-11 h-6 rounded-full p-1 transition-colors cursor-pointer ${osState.terminalSettings?.tmuxMouseScrolling ? 'bg-[var(--accent-indigo)]' : 'bg-gray-700'}`}
+                  >
+                    <div className={`w-4 h-4 bg-white rounded-full shadow-lg transition-transform ${osState.terminalSettings?.tmuxMouseScrolling ? 'translate-x-5' : 'translate-x-0'}`} />
+                  </div>
+                </div>
+
+                <div className="p-4 bg-[var(--bg-card)] border border-[var(--border-color)] rounded-2xl flex items-center justify-between group hover:bg-[var(--bg-card-hover)] transition-all">
+                  <div className="flex items-center gap-4">
+                    <div className="w-10 h-10 rounded-xl bg-[var(--bg-tertiary)] flex items-center justify-center">
+                      <Terminal size={18} className="text-emerald-400" />
+                    </div>
+                    <div>
+                      <h4 className="text-sm font-bold text-[var(--text-primary)]">Auto-Attach Tmux</h4>
+                      <p className="text-[10px] text-[var(--text-muted)] italic">Automatically open Tmux on every terminal start</p>
+                    </div>
+                  </div>
+                  <div 
+                    onClick={() => setTerminalSettings({ autoTmuxAttach: !osState.terminalSettings?.autoTmuxAttach })}
+                    className={`w-11 h-6 rounded-full p-1 transition-colors cursor-pointer ${osState.terminalSettings?.autoTmuxAttach ? 'bg-[var(--accent-emerald)]' : 'bg-gray-700'}`}
+                  >
+                    <div className={`w-4 h-4 bg-white rounded-full shadow-lg transition-transform ${osState.terminalSettings?.autoTmuxAttach ? 'translate-x-5' : 'translate-x-0'}`} />
+                  </div>
+                </div>
               </div>
 
 

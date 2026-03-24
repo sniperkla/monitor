@@ -19,6 +19,7 @@ import { io } from 'socket.io-client';
 import { motion, AnimatePresence } from 'framer-motion';
 
 
+const commonTags = ['latest', 'alpine', 'slim', 'edge', 'dev'];
 function getPresetsForImage(imageName) {
   if (!imageName) return { ports: '', volumes: '', env: '' };
   const img = imageName.toLowerCase();
@@ -1197,16 +1198,16 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
                                       {/* Action buttons */}
                                       <div className="flex items-center gap-1.5 px-4 pb-4">
                                           {c.state === 'running' ? (
-                                              <button onClick={(e) => { e.stopPropagation(); handleContainerAction(c.id, 'stop'); }} className="flex-1 py-1.5 rounded-lg bg-orange-500/10 text-orange-400 text-[10px] font-bold hover:bg-orange-500/15 transition-all flex items-center justify-center gap-1">
-                                                <Square size={9} /> STOP
+                                              <button onClick={(e) => { e.stopPropagation(); handleContainerAction(c.id, 'stop'); }} className="flex-1 py-1.5 rounded-lg bg-orange-500/10 text-orange-400 text-[10px] font-bold hover:bg-orange-500/15 transition-all flex items-center justify-center gap-1 whitespace-nowrap overflow-hidden">
+                                                {isPending === 'stop' ? <RefreshCw size={9} className="animate-spin" /> : <Square size={9} />} {isPending === 'stop' ? 'STOPPING' : 'STOP'}
                                               </button>
                                           ) : (
-                                              <button onClick={(e) => { e.stopPropagation(); handleContainerAction(c.id, 'start'); }} className="flex-1 py-1.5 rounded-lg bg-emerald-500/10 text-emerald-400 text-[10px] font-bold hover:bg-emerald-500/15 transition-all flex items-center justify-center gap-1">
-                                                <Play size={9} /> START
+                                              <button onClick={(e) => { e.stopPropagation(); handleContainerAction(c.id, 'start'); }} className="flex-1 py-1.5 rounded-lg bg-emerald-500/10 text-emerald-400 text-[10px] font-bold hover:bg-emerald-500/15 transition-all flex items-center justify-center gap-1 whitespace-nowrap overflow-hidden">
+                                                {isPending === 'start' ? <RefreshCw size={9} className="animate-spin" /> : <Play size={9} />} {isPending === 'start' ? 'STARTING' : 'START'}
                                               </button>
                                           )}
-                                          <button onClick={(e) => { e.stopPropagation(); handleContainerAction(c.id, 'restart'); }} className="py-1.5 px-2.5 rounded-lg bg-white/5 text-[10px] font-bold hover:bg-white/10 transition-all" title="Restart">
-                                            <RotateCcw size={10} />
+                                          <button onClick={(e) => { e.stopPropagation(); handleContainerAction(c.id, 'restart'); }} className="py-1.5 px-2.5 rounded-lg bg-white/5 text-[10px] font-bold hover:bg-white/10 transition-all flex items-center justify-center" title="Restart">
+                                            {isPending === 'restart' ? <RefreshCw size={10} className="animate-spin" /> : <RotateCcw size={10} />}
                                           </button>
                                           <button onClick={(e) => { e.stopPropagation(); fetchLogs(c.id, c.name); }} className="flex-1 py-1.5 rounded-lg bg-white/5 text-[10px] font-bold hover:bg-white/10 transition-all flex items-center justify-center gap-1">
                                             <FileText size={9} /> LOGS
@@ -1399,7 +1400,7 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
                                   
                                   <label className="block text-xs font-bold text-[var(--text-muted)] mb-2 uppercase tracking-wide">Select Tag</label>
                                   <div className="flex flex-wrap gap-1.5 mb-4">
-                                    {commonTags.map(tag => (
+                                    {(commonTags || []).map(tag => (
                                       <button 
                                         key={tag}
                                         onClick={() => handlePullImage(`${createModal.pullingImage.Name}:${tag}`)}

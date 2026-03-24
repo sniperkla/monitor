@@ -92,6 +92,7 @@ const initialState = {
       selectionBackground: 'rgba(99, 102, 241, 0.3)',
     },
     backgroundOpacity: 1,
+    tmuxMouseScrolling: false,
     customPresets: [] // Array of { id, name, settings }
   },
 };

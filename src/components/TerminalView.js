@@ -14,7 +14,7 @@ import {
   Loader2, AlertCircle, CheckCircle2, XCircle, X, Minus, Maximize2, Wifi,
   Sparkles, Copy, CornerDownLeft, ShieldAlert, Settings2, Clock, RefreshCw,
   ListChecks, Trophy, Search, Languages, Lock, Brain, ChevronDown, ChevronUp,
-  AtSign, Folder, File as FileIconAi, Container
+  AtSign, Folder, File as FileIconAi, Container, Zap, Mouse
 } from 'lucide-react';
 import { diff_match_patch } from 'diff-match-patch';
 
@@ -219,8 +219,14 @@ export default function TerminalView({ connectionId, connectionName, host, color
   const [latency, setLatency] = useState(null);
   const [reconnectNonce, setReconnectNonce] = useState(0);
   const [showReconnect, setShowReconnect] = useState(false);
+  const [showTmuxInstallBanner, setShowTmuxInstallBanner] = useState(false);
+  const [isInstallingTmux, setIsInstallingTmux] = useState(false);
+  const [tmuxInstallDistro, setTmuxInstallDistro] = useState(null); // 'apt', 'yum', 'apk'
+  const [hintPos, setHintPos] = useState(null);
   const idleTimedOutRef = useRef(false);
   const termDbUriRef = useRef(appState.dbConfig?.uri || '');
+  const termSettingsRef = useRef(osState?.terminalSettings || {});
+  useEffect(() => { termSettingsRef.current = osState?.terminalSettings || {}; }, [osState?.terminalSettings]);
   const termStatusRef = useRef(status);
   useEffect(() => { termStatusRef.current = status; }, [status]);
 
@@ -298,6 +304,31 @@ export default function TerminalView({ connectionId, connectionName, host, color
   const setAiStreamText = (val) => aiMode === 'manual' ? setManualAiStreamText(val) : setAutoAiStreamText(val);
 
   const aiStreaming = aiMode === 'manual' ? manualAiStreaming : autoAiStreaming;
+
+  // ── Terminal Synchronization & Redraw ──
+  const resizeTimerRef = useRef(null);
+  const lastDimsRef = useRef({ cols: 0, rows: 0 });
+
+  const performFit = useCallback(() => {
+    if (!fitAddonRef.current || !terminalRef.current || !termInstanceRef.current) return;
+    try {
+      fitAddonRef.current.fit();
+      const { cols, rows } = termInstanceRef.current;
+      const prev = lastDimsRef.current;
+
+      // Only sync if dimensions actually changed
+      if (cols !== prev.cols || rows !== prev.rows) {
+        lastDimsRef.current = { cols, rows };
+        if (socketRef.current?.connected) {
+          // ssh:resize triggers SIGWINCH on the server which tells apps (nano/vim/htop)
+          // to redraw themselves automatically — no need to send CTRL-L
+          socketRef.current.emit('ssh:resize', { cols, rows });
+        }
+      }
+    } catch (e) {
+      console.warn('Terminal fit failed:', e);
+    }
+  }, []);
   const setAiStreaming = (val) => aiMode === 'manual' ? setManualAiStreaming(val) : setAutoAiStreaming(val);
 
   const aiAnswerCollapsed = aiMode === 'manual' ? manualAiAnswerCollapsed : autoAiAnswerCollapsed;
@@ -927,40 +958,11 @@ logstash:
     return false;
   };
 
-  // Auto Tmux Init
+  // Duplicate AI Auto Tmux script removed because it conflicts with the socket handler
+  // The terminal setting handled in socket.on('ssh:connected') is now the sole source of truth
   useEffect(() => {
-    if (sshAiPrefs?.autoTmux && status === 'connected' && !tmuxInitialized) {
-      setTmuxInitialized(true);
-      if (socketRef.current) {
-        // Delay slightly to ensure shell is ready for input
-        setTimeout(() => {
-          if (socketRef.current?.connected && sshAiPrefs?.autoTmux) {
-            // Install tmux if missing, then attach the terminal to a persistent tmux session.
-            const esc = '\x1b';
-            const tmuxCmd = [
-              `if [ -z "$TMUX" ]; then`, 
-              `  if ! command -v tmux &> /dev/null; then`,
-              `    echo "${esc}[1;36m✨ [AI Auto-Setup]${esc}[0m Installing tmux...";`,
-              `    if command -v apt-get &> /dev/null; then sudo apt-get install -y tmux -q;`,
-              `    elif command -v yum &> /dev/null; then sudo yum install -y tmux -q;`,
-              `    elif command -v dnf &> /dev/null; then sudo dnf install -y tmux -q;`,
-              `    elif command -v apk &> /dev/null; then sudo apk add tmux -q;`,
-              `    elif command -v pacman &> /dev/null; then sudo pacman -S --noconfirm tmux -q;`,
-              `    fi;`,
-              `  fi;`,
-              `  if command -v tmux &> /dev/null; then`,
-              `    echo "${esc}[1;36m✨ [AI Auto-Setup]${esc}[0m Attaching to main session...";`,
-              `    tmux new-session -d -s ai-bg-task 2>/dev/null || true;`,
-              `    exec tmux new-session -A -s main;`,
-              `  fi;`,
-              `fi;`,
-            ].join(' ');
-            socketRef.current.emit('ssh:input', tmuxCmd + '\n');
-          }
-        }, 600);
-      }
-    }
-  }, [sshAiPrefs?.autoTmux, status, tmuxInitialized]);
+    // Left empty/removed to prevent inception and setting collision
+  }, []);
 
   // Handle translation when AI answer updates and autoTranslate is enabled
   useEffect(() => {
@@ -1120,6 +1122,21 @@ logstash:
       },
     });
   }, [dispatch, connectionId]);
+  const handleAutoInstallTmux = () => {
+    if (!socketRef.current || !socketRef.current.connected) return;
+    setIsInstallingTmux(true);
+    const script = `if command -v apt-get &>/dev/null; then sudo apt-get update && sudo apt-get install -y tmux; elif command -v yum &>/dev/null; then sudo yum install -y tmux; elif command -v apk &>/dev/null; then sudo apk add tmux; fi\r`;
+    socketRef.current.emit('ssh:input', script);
+    setTimeout(() => {
+      setShowTmuxInstallBanner(false);
+      setIsInstallingTmux(false);
+    }, 15000);
+  };
+
+  const dismissScrollHint = () => {
+    setShowScrollHint(false);
+    window.__isShowingScrollHint = false;
+  };
 
   const initTerminal = useCallback(async () => {
     // Dynamic imports for xterm (client-side only)
@@ -1249,11 +1266,53 @@ logstash:
         } catch (e) {}
       }, 100);
 
-      // Run initialCommand (e.g. tmux attach) once shell is ready
-      if (initialCommand) {
+      // Detect if initialCommand is a Docker exec (already provides its own shell)
+      const isDockerExec = initialCommand && /docker\s+exec/i.test(initialCommand);
+      
+      // Extract container name from Docker exec for tmux session naming
+      const getDockerSessionName = (cmd) => {
+        // Match container ID/name from "docker exec -it <id/name> ..."
+        const m = cmd.match(/docker\s+exec\s+(?:-\w+\s+)*(\S+)/i);
+        if (m && m[1]) {
+          // Clean the name for tmux (alphanumeric, dash, underscore only)
+          return 'docker-' + m[1].replace(/[^a-zA-Z0-9_-]/g, '').substring(0, 20);
+        }
+        return 'docker-session';
+      };
+
+      // Run initialCommand or handle Auto-Tmux setting
+      let finalCommand = initialCommand;
+      
+      const termSettings = termSettingsRef.current;
+      
+      if (isDockerExec && termSettings.autoTmuxAttach) {
+        // Wrap docker exec inside a dedicated tmux session on the HOST
+        // This keeps the docker session alive even if browser disconnects
+        const sessionName = getDockerSessionName(initialCommand);
+        // Strip trailing \r from initialCommand for clean wrapping
+        const cleanCmd = initialCommand.replace(/\\r$/, '').replace(/\r$/, '');
+        // Use TMUX= so we can create a separate session for Docker on the host
+        // Use -d on attach to force-detach any zombie/background connections that cause the 'dotted screen' shrink bug
+        finalCommand = `command -v tmux >/dev/null 2>&1 && (TMUX= tmux new-session -s ${sessionName} "${cleanCmd}" 2>/dev/null || TMUX= tmux attach -t ${sessionName} -d) || ${cleanCmd}\r`;
+      } else if (!finalCommand && termSettings.autoTmuxAttach) {
+        // Regular SSH terminal → attach to 'main' session
+        // Check $TMUX to prevent inception loop, and use -d to detach zombies causing the 'dotted' shrink bug
+        finalCommand = '[ -z "$TMUX" ] && command -v tmux >/dev/null 2>&1 && (tmux attach -t main -d || tmux new-session -s main)\r';
+      }
+
+      if (finalCommand) {
         setTimeout(() => {
           if (socket.connected) {
-            socket.emit('ssh:input', initialCommand);
+            socket.emit('ssh:input', finalCommand);
+            
+            // Enable tmux mouse scrolling if setting is on
+            if (termSettingsRef.current.tmuxMouseScrolling) {
+              setTimeout(() => {
+                if (socket.connected) {
+                  socket.emit('ssh:input', 'if command -v tmux >/dev/null 2>&1; then tmux set-option -g mouse on; fi\r');
+                }
+              }, 1200);
+            }
           }
         }, 800);
       }
@@ -1262,9 +1321,19 @@ logstash:
     });
 
     socket.on('ssh:data', (data) => {
+      const rawString = String(data || '');
       term.write(data);
       appendOutput(data);
       lastOutputAtRef.current = Date.now();
+
+      // Detect tmux missing or other common issues
+      if (!isInstallingTmux && (rawString.includes('tmux: command not found') || rawString.includes('not found: tmux'))) {
+        setShowTmuxInstallBanner(true);
+        // Attempt to detect distro from banner or prompt
+        if (rawString.includes('apt-get') || rawString.includes('Ubuntu') || rawString.includes('Debian')) setTmuxInstallDistro('apt');
+        else if (rawString.includes('yum') || rawString.includes('Amazon Linux') || rawString.includes('CentOS')) setTmuxInstallDistro('yum');
+        else if (rawString.includes('apk')) setTmuxInstallDistro('apk');
+      }
       if (lastCommandSentAtRef.current > 0) {
         sawOutputAfterCommandRef.current = true;
       }
@@ -1333,6 +1402,13 @@ logstash:
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ command: checkCmd }),
         });
+        
+        if (res.status === 404) {
+           // If the execute point doesn't exist for this connection, abort polling so it stops spamming
+           if (bgPollTimerRef.current) clearInterval(bgPollTimerRef.current);
+           return;
+        }
+
         const data = await res.json();
         const isActive = String(data.output || '').includes('ACTIVE');
 
@@ -1388,6 +1464,13 @@ logstash:
 
     term.onData((data) => {
       if (socket.connected && !autoModeRef.current) {
+        // Hide scroll hint on any key input to the terminal (typing, ctrl+c, etc)
+        // Arrows/Escape sequences continue to allow scrolling without hiding instantly if the user is in scroll mode.
+        const isMouseOrArrow = data.startsWith('\x1b[');
+        if (!isMouseOrArrow) {
+          setShowScrollHint(false);
+          window.__isShowingScrollHint = false;
+        }
         socket.emit('ssh:input', data);
       }
 
@@ -1417,16 +1500,6 @@ logstash:
       }
     });
     
-    // Improved resize handling with precision fitting
-    const performFit = () => {
-      if (!fitAddonRef.current || !terminalRef.current) return;
-      try {
-        fitAddonRef.current.fit();
-      } catch (e) {
-        console.warn('Terminal fit failed:', e);
-      }
-    };
-
     const handleResize = () => performFit();
     window.addEventListener('resize', handleResize);
 
@@ -1438,11 +1511,91 @@ logstash:
 
     if (terminalRef.current) observer.observe(terminalRef.current);
 
+    let clickStartPos = null;
+
+    const triggerHint = (e, isClick) => {
+      const termSettings = termSettingsRef.current;
+      if (!termSettings.tmuxMouseScrolling) return; // Only if mouse scroll is enabled
+      
+      // If Shift or Meta (Mac Option/Cmd) is held, the terminal emulator performs a native selection.
+      // In this case, Tmux does NOT enter copy mode, so we shouldn't show the warning.
+      if (e.shiftKey || e.metaKey || e.altKey) {
+        if (window.__isShowingScrollHint) {
+          setShowScrollHint(false);
+          window.__isShowingScrollHint = false;
+        }
+        return;
+      }
+
+      // Show hint when scrolling or clicking/dragging, don't auto-exit
+      if (!window.__isShowingScrollHint) {
+        window.__isShowingScrollHint = true;
+        // Distinguish if it was a mouse click/drag or a wheel scroll
+        window.__scrollHintIsClick = isClick; 
+        
+        if (isClick && terminalRef.current && clickStartPos) {
+          const rect = terminalRef.current.getBoundingClientRect();
+          setHintPos({ x: clickStartPos.x - rect.left, y: clickStartPos.y - rect.top });
+        } else {
+          setHintPos(null);
+        }
+        
+        setShowScrollHint(true);
+      }
+    };
+
+    const handleWheel = (e) => triggerHint(e, false);
+    
+    // Only trigger the popup if the user actually clicked and dragged (highlighted), not just clicked to focus
+    const handleMouseDown = (e) => {
+      clickStartPos = { x: e.clientX, y: e.clientY };
+    };
+
+    const handleMouseMove = (e) => {
+      if (clickStartPos) {
+        const dx = Math.abs(e.clientX - clickStartPos.x);
+        const dy = Math.abs(e.clientY - clickStartPos.y);
+        if (dx > 5 || dy > 5) {
+          triggerHint(e, true);
+        }
+      }
+    };
+
+    const handleMouseUp = () => {
+      clickStartPos = null;
+    };
+
+    // Listen for Shift/Option/Q/Escape keys being pressed directly to instantly dismiss the hint
+    const handleKeyDown = (e) => {
+      if (window.__isShowingScrollHint && (e.key === 'Shift' || e.key === 'Meta' || e.key === 'Alt' || e.key === 'Escape' || e.key === 'q' || e.key === 'Q' || e.key === 'Enter')) {
+        setShowScrollHint(false);
+        window.__isShowingScrollHint = false;
+      }
+    };
+    
+    const termEl = terminalRef.current;
+    // VERY IMPORTANT: Use capture: true so we get the events BEFORE xterm.js potentially stops propagation
+    if (termEl) {
+      termEl.addEventListener('wheel', handleWheel, { passive: true, capture: true });
+      termEl.addEventListener('mousedown', handleMouseDown, { passive: true, capture: true });
+      termEl.addEventListener('mousemove', handleMouseMove, { passive: true, capture: true });
+      window.addEventListener('mouseup', handleMouseUp, { passive: true, capture: true });
+    }
+    window.addEventListener('keydown', handleKeyDown, { passive: true, capture: true });
+
     return () => {
       window.removeEventListener('resize', handleResize);
+      window.removeEventListener('keydown', handleKeyDown, { capture: true });
+      window.removeEventListener('mouseup', handleMouseUp, { capture: true });
       observer.disconnect();
+      if (termEl) {
+        termEl.removeEventListener('wheel', handleWheel, { capture: true });
+        termEl.removeEventListener('mousedown', handleMouseDown, { capture: true });
+        termEl.removeEventListener('mousemove', handleMouseMove, { capture: true });
+      }
+      window.__isShowingScrollHint = false;
     };
-  }, [connectionId, appState.dbConfig?.uri, updateConnectionStatus]);
+  }, [connectionId, appState.dbConfig?.uri, updateConnectionStatus, performFit]);
 
   // Handle Dynamic Theme Updates for XTerm
   useEffect(() => {
@@ -6400,17 +6553,77 @@ If this is a deployment task, switch task mode to 'deploy' instead of 'code'.`
 
         {/* AI Processing Overlay removed per user request */}
 
+        <AnimatePresence>
+          {showScrollHint && (
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.9 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              style={
+                window.__scrollHintIsClick && hintPos
+                  ? { left: hintPos.x, top: Math.max(0, hintPos.y - 45) }
+                  : undefined
+              }
+              className={`absolute z-40 bg-indigo-500/90 text-white px-4 py-2 rounded-full text-xs font-bold shadow-lg shadow-indigo-500/20 backdrop-blur pointer-events-none flex flex-col items-center justify-center gap-1 text-center transform transition-all duration-100 ease-out ${
+                 !(window.__scrollHintIsClick && hintPos) ? 'top-12 left-1/2 -translate-x-1/2' : '-translate-x-1/2'
+              }`}
+            >
+              <div className="flex items-center justify-center gap-2">
+                <Mouse size={14} className="opacity-80" />
+                <span>
+                 {window.__scrollHintIsClick ? "Tmux Copy Mode (Hold Shift to copy normally)" : "Scroll Mode (Press Q or Esc to type)"}
+                </span>
+              </div>
+            </motion.div>
+          )}
+
+          {showTmuxInstallBanner && (
+            <motion.div 
+              initial={{ opacity: 0, y: -20 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="absolute top-4 left-1/2 -translate-x-1/2 z-[100] w-full max-w-sm px-4 pointer-events-auto"
+            >
+              <div className="bg-[#1e1e2e]/95 border border-indigo-500/30 rounded-2xl p-4 shadow-2xl flex items-center gap-4 backdrop-blur-md ring-1 ring-white/10">
+                <div className="w-10 h-10 rounded-full bg-indigo-500/10 flex items-center justify-center shrink-0">
+                  <Container size={20} className="text-indigo-400" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <h4 className="text-white font-bold text-sm">Tmux is missing</h4>
+                  <p className="text-gray-400 text-[10px] leading-relaxed mt-1">Install Tmux to enable persistent background tasks and multi-pane management.</p>
+                  <div className="flex gap-2 mt-3">
+                    <button 
+                      onClick={handleAutoInstallTmux}
+                      disabled={isInstallingTmux}
+                      className="px-4 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-[10px] font-bold transition-all flex items-center gap-2"
+                    >
+                      {isInstallingTmux ? <RefreshCw size={10} className="animate-spin" /> : <Zap size={10} />}
+                      {isInstallingTmux ? 'Installing...' : 'Install Now'}
+                    </button>
+                    <button 
+                      onClick={() => setShowTmuxInstallBanner(false)}
+                      className="px-3 py-1.5 rounded-lg border border-white/10 text-gray-400 hover:text-white hover:bg-white/5 text-[10px] font-bold transition-all"
+                    >
+                      Not Now
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
         {showReconnect && (
           <div className="absolute top-3 left-5 z-50 flex items-center gap-2 pointer-events-auto">
-            <button
-              type="button"
-              onClick={handleReconnect}
-              className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-semibold text-white bg-blue-600 hover:bg-blue-500 shadow-lg shadow-blue-500/20 border border-blue-500/40 transition-colors"
-              title={t('common.reconnect')}
-            >
-              <RefreshCw size={14} />
-              <span>{t('common.reconnect')}</span>
-            </button>
+              <button
+                type="button"
+                onClick={handleReconnect}
+                className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-semibold text-white bg-blue-600 hover:bg-blue-500 shadow-lg shadow-blue-500/20 border border-blue-500/40 transition-colors"
+                title={t('common.reconnect')}
+              >
+                <RefreshCw size={14} />
+                <span>{t('common.reconnect')}</span>
+              </button>
           </div>
         )}
 

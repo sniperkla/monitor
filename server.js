@@ -35,14 +35,6 @@ const { decrypt } = require('./src/utils/encryption');
 const compression = require('compression');
 
 const dev = process.env.NODE_ENV !== 'production';
-
-// Silence console logs in production
-if (!dev) {
-  const noop = () => {};
-  const methods = ['log', 'info', 'warn', 'error', 'debug', 'table', 'trace', 'dir', 'group', 'groupCollapsed', 'groupEnd', 'time', 'timeEnd', 'timeLog'];
-  methods.forEach(m => { if (console[m]) console[m] = noop; });
-}
-
 const hostname = dev ? 'localhost' : '0.0.0.0';
 const port = parseInt(process.env.PORT, 10) || 3000;
 
@@ -554,14 +546,13 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
       let { connectionId, connection: connectionData, cols, rows, dockerContainerId, dockerMode } = data;
 
       // Extract docker info from connectionId if missing but prefixed
-      if (!dockerContainerId && connectionId && connectionId.startsWith('docker-')) {
+      if (connectionId && typeof connectionId === 'string' && connectionId.startsWith('docker-')) {
           const parts = connectionId.split(':');
-          const prefixMatch = parts[0].match(/docker-(.+)/);
-          if (prefixMatch) {
-              dockerContainerId = prefixMatch[1];
+          if (parts.length >= 2) {
+              if (!dockerContainerId) dockerContainerId = parts[0].replace('docker-', '');
               connectionId = parts[1];
               dockerMode = true; 
-              console.log(`🐳 Detected Docker mode from ID: ${dockerContainerId} (Base ID: ${connectionId})`);
+              console.log(`🐳 Detected Docker mode: ${dockerContainerId} (Base ID: ${connectionId})`);
           }
       }
       const repo = await getModels(dbUri, socket.user?.sub);
@@ -676,6 +667,47 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
         sshClient.on('ready', () => {
           console.log(`✅ SSH ready for ${connection.host}`);
           
+          // ── Global SSH Exec Queue (Prevents "Channel open failure") ──────────
+          const SSH_MAX_CHANNELS = 5;
+          const execQueue = [];
+          let activeExecCount = 0;
+
+          const baseExec = sshClient.exec.bind(sshClient);
+          
+          const processExecQueue = () => {
+              if (execQueue.length === 0 || activeExecCount >= SSH_MAX_CHANNELS) return;
+              
+              const { cmd, options, cb } = execQueue.shift();
+              activeExecCount++;
+              
+              baseExec(cmd, options, (err, stream) => {
+                  if (err) {
+                      activeExecCount--;
+                      cb(err);
+                      processExecQueue();
+                      return;
+                  }
+                  
+                  stream.on('close', () => {
+                      activeExecCount--;
+                      processExecQueue();
+                  });
+                  
+                  cb(null, stream);
+              });
+          };
+
+          // Override exec with a queued version
+          sshClient.exec = (cmd, options, cb) => {
+              if (typeof options === 'function') {
+                  cb = options;
+                  options = {};
+              }
+              execQueue.push({ cmd, options, cb });
+              processExecQueue();
+          };
+          // ───────────────────────────────────────────────────────────────────
+          
           const emitSftpError = (err, prefix = '') => {
             const message = typeof err === 'string' ? err : (err?.message || 'Unknown SFTP error');
             socket.emit('sftp:error', { message: prefix ? `${prefix}: ${message}` : message });
@@ -711,7 +743,7 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
           });
 
           if (dockerContainerId) {
-              const origExec = sshClient.exec.bind(sshClient);
+              const baseExecForDocker = sshClient.exec.bind(sshClient);
               sshClient.exec = (cmd, options, cb) => {
                   if (typeof options === 'function') {
                       cb = options;
@@ -725,7 +757,7 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
                   
                   console.log(`🐳 [${socket.id}] DOCKER EXEC: ${dockerCmd}`);
                   
-                  return origExec(dockerCmd, options, (err, stream) => {
+                  return baseExecForDocker(dockerCmd, options, (err, stream) => {
                       if (err) {
                           console.error(`❌ [${socket.id}] DOCKER EXEC START FAILED: ${err.message}`);
                           return cb(err);
@@ -2524,8 +2556,11 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
               .catch(err => console.error('❌ Migration failed:', err));
         }
 
-        if (!sshConfig.password && !sshConfig.privateKey && !dockerContainerId) {
-           return socket.emit('ssh:error', { message: 'No authentication valid.'});
+        if (!sshConfig.password && !sshConfig.privateKey) {
+           const suffix = dockerContainerId ? ' (Host credentials required for Docker access)' : '';
+           const message = 'No authentication valid.' + suffix;
+           console.error(`❌ SSH Error: ${message} for host ${connection?.host || 'unknown'}`);
+           return socket.emit('ssh:error', { message });
         }
         
         // dockerContainerId mode will implicitly proxy down. 

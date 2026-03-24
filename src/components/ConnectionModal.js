@@ -246,6 +246,13 @@ export default function ConnectionModal({ onClose, editConnection = null }) {
         }
       };
 
+      if (form.authType === 'password') {
+        payload.connection.password = form.password || revealedSecrets.password || '';
+      } else if (form.authType === 'privateKey') {
+        payload.connection.privateKey = form.privateKey || revealedSecrets.privateKey || '';
+        payload.connection.passphrase = form.passphrase || revealedSecrets.passphrase || '';
+      }
+
       const res = await apiFetch(`/api/connections/local-test/test`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -379,13 +386,16 @@ export default function ConnectionModal({ onClose, editConnection = null }) {
       storage: form.targetStorage,
     };
 
-    if (form.authType === 'password' && form.password) {
-      payload.password = form.password;
+    const combinedPassword = form.password || revealedSecrets.password;
+    if (form.authType === 'password' && combinedPassword) {
+      payload.password = combinedPassword;
     }
     
     if (form.authType === 'privateKey') {
-      if (form.privateKey) payload.privateKey = form.privateKey;
-      if (form.passphrase) payload.passphrase = form.passphrase;
+      const combinedPrivateKey = form.privateKey || revealedSecrets.privateKey;
+      const combinedPassphrase = form.passphrase || revealedSecrets.passphrase;
+      if (combinedPrivateKey) payload.privateKey = combinedPrivateKey;
+      if (combinedPassphrase) payload.passphrase = combinedPassphrase;
     }
 
     try {
@@ -404,30 +414,36 @@ export default function ConnectionModal({ onClose, editConnection = null }) {
           });
           const encData = await encRes.json();
           if (encData.success) {
-             finalPayload.password = encData.data.password;
-             finalPayload.privateKey = encData.data.privateKey;
-             finalPayload.passphrase = encData.data.passphrase;
+             if (encData.data.password !== undefined) finalPayload.password = encData.data.password;
+             if (encData.data.privateKey !== undefined) finalPayload.privateKey = encData.data.privateKey;
+             if (encData.data.passphrase !== undefined) finalPayload.passphrase = encData.data.passphrase;
           }
       }
+
+      // Clean up undefined values from finalPayload so they don't overwrite existing
+      Object.keys(finalPayload).forEach(key => finalPayload[key] === undefined && delete finalPayload[key]);
+
 
       const data = { success: true, data: { ...finalPayload, _id: editConnection?._id || `local-${Date.now()}`, updatedAt: new Date().toISOString() } };
 
       if (form.targetStorage === 'localstorage') {
         const saved = JSON.parse(localStorage.getItem('ssh_monitor_connections') || '[]');
         let updated;
+        let savedConn;
         if (editConnection) {
           // Merge with existing to preserve fields like password if not updated
           updated = saved.map(c => c._id === editConnection._id ? { ...c, ...data.data } : c);
-          dispatch({ type: 'UPDATE_CONNECTION', payload: data.data });
+          savedConn = updated.find(c => c._id === editConnection._id);
+          dispatch({ type: 'UPDATE_CONNECTION', payload: savedConn });
         } else {
           updated = [data.data, ...saved];
-          dispatch({ type: 'ADD_CONNECTION', payload: data.data });
+          savedConn = data.data;
+          dispatch({ type: 'ADD_CONNECTION', payload: savedConn });
         }
         localStorage.setItem('ssh_monitor_connections', JSON.stringify(updated));
         addNotification({ title: t('common.success'), message: editConnection ? t('ssh.modal.buttons.update') : t('ssh.modal.buttons.save'), type: 'success' });
         
         // AUTO-OPEN after save
-        const savedConn = data.data;
         if (savedConn.type === 'database') {
           dispatch({
             type: 'OPEN_DATABASE_BROWSER',

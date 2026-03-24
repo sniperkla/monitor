@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Laptop, Terminal as TermIcon, Play, Square, Settings, RefreshCw, Layers, List, MonitorPlay, History, ExternalLink } from 'lucide-react';
+import { Laptop, Terminal as TermIcon, Play, Square, Settings, RefreshCw, Layers, List, MonitorPlay, History, ExternalLink, Zap } from 'lucide-react';
 import { useApp } from '@/context/AppContext';
 import { useOS } from '@/context/OSContext';
 import TerminalView from '@/components/TerminalView';
@@ -20,6 +20,8 @@ export default function TmuxApp({ initialConnection }) {
   const [activeSession, setActiveSession] = useState(null);
   const [newSessionPrompt, setNewSessionPrompt] = useState(false);
   const [newSessionName, setNewSessionName] = useState('');
+  const [tmuxDetected, setTmuxDetected] = useState(true);
+  const [isInstalling, setIsInstalling] = useState(false);
   
   // Connection selection
   const { connections, dbConfig } = state;
@@ -101,10 +103,19 @@ export default function TmuxApp({ initialConnection }) {
     
     socketRef.current.on('ssh:data', (data) => {
       stdoutBuffer += data;
+      
+      // Check for 'tmux not found' or similar in the whole stream if we haven't confirmed detection yet
+      if (stripAnsi(data).includes('tmux: command not found') || stripAnsi(data).includes('not found: tmux')) {
+          setTmuxDetected(false);
+      } else if (stripAnsi(data).includes(SENTINEL_START)) {
+          setTmuxDetected(true);
+      }
+
       const result = parseTmuxOutput(stdoutBuffer);
       if (result !== null) {
         setSessions(result);
         setIsLoading(false);
+        setTmuxDetected(true);
         stdoutBuffer = ''; // clear so next command starts fresh
       }
     });
@@ -153,6 +164,29 @@ export default function TmuxApp({ initialConnection }) {
     setIsLoading(true);
     socketRef.current.emit('ssh:input', `tmux kill-session -t "${name}"\r`);
     setTimeout(() => emitTmuxLs(), 1200);
+  };
+
+  const fixScrolling = () => {
+    if (!socketRef.current) return;
+    setIsLoading(true);
+    // Add to config AND apply immediately to the current server session
+    const cmd = `echo "set -g mouse on" >> ~/.tmux.conf; tmux source-file ~/.tmux.conf 2>/dev/null; tmux set-option -g mouse on\r`;
+    socketRef.current.emit('ssh:input', cmd);
+    setTimeout(() => {
+        setIsLoading(false);
+        alert("Tmux Mouse Mode enabled. You can now use your mouse wheel to scroll!");
+    }, 1000);
+  };
+
+  const handleInstallTmux = () => {
+    if (!socketRef.current) return;
+    setIsInstalling(true);
+    const cmd = `if command -v apt-get &>/dev/null; then sudo apt-get update && sudo apt-get install -y tmux; elif command -v yum &>/dev/null; then sudo yum install -y tmux; elif command -v apk &>/dev/null; then sudo apk add tmux; fi\r`;
+    socketRef.current.emit('ssh:input', cmd);
+    setTimeout(() => {
+        setIsInstalling(false);
+        fetchSessions();
+    }, 10000);
   };
 
   const attachToSession = (sessionName) => {
@@ -323,6 +357,14 @@ export default function TmuxApp({ initialConnection }) {
                         </div>
                         <div className="flex gap-2">
                             <button 
+                                onClick={fixScrolling}
+                                className="px-3 py-1.5 rounded-lg border border-indigo-500/30 bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-400 flex items-center gap-2 text-xs font-semibold transition-all"
+                                title="Enable mouse support for scrolling & window selection"
+                            >
+                                <Zap size={12} />
+                                Fix Scroll
+                            </button>
+                            <button 
                                 onClick={fetchSessions}
                                 className="px-3 py-1.5 rounded-lg border border-[var(--border-color)] bg-white/5 hover:bg-white/10 flex items-center gap-2 text-xs font-semibold transition-all"
                             >
@@ -440,18 +482,39 @@ export default function TmuxApp({ initialConnection }) {
                     {!isLoading && sessions.length === 0 && (
                         <div className="flex flex-col items-center justify-center p-12 text-center rounded-2xl border border-dashed border-[var(--border-color)] bg-black/10 mt-4">
                             <div className="w-16 h-16 rounded-full bg-white/5 flex items-center justify-center mb-4">
-                                <History size={24} className="text-[var(--text-muted)]" />
+                                {tmuxDetected ? (
+                                    <History size={24} className="text-[var(--text-muted)]" />
+                                ) : (
+                                    <Zap size={24} className="text-amber-500 animate-pulse" />
+                                )}
                             </div>
-                            <h3 className="font-bold text-[var(--text-primary)] mb-2">No active sessions</h3>
+                            <h3 className="font-bold text-[var(--text-primary)] mb-2">
+                                {tmuxDetected ? 'No active sessions' : 'Tmux not installed'}
+                            </h3>
                             <p className="text-sm text-[var(--text-muted)] max-w-sm">
-                                There are no active tmux sessions on this server. Sessions created by the AI agent or manually will appear here.
+                                {tmuxDetected 
+                                    ? 'There are no active tmux sessions on this server. Sessions created by the AI agent or manually will appear here.'
+                                    : 'Your server is missing the tmux package. You need to install it to take advantage of background tasks and persistent sessions.'
+                                }
                             </p>
-                            <button 
-                                onClick={() => { setNewSessionName(''); setNewSessionPrompt(true); }}
-                                className="mt-6 px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-sm transition-all"
-                            >
-                                Create Session
-                            </button>
+                            
+                            {tmuxDetected ? (
+                                <button 
+                                    onClick={() => { setNewSessionName(''); setNewSessionPrompt(true); }}
+                                    className="mt-6 px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-sm transition-all"
+                                >
+                                    Create Session
+                                </button>
+                            ) : (
+                                <button 
+                                    onClick={handleInstallTmux}
+                                    disabled={isInstalling}
+                                    className="mt-6 px-6 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-sm transition-all flex items-center gap-2 shadow-lg shadow-emerald-500/20"
+                                >
+                                    {isInstalling ? <RefreshCw size={14} className="animate-spin" /> : <Zap size={14} />}
+                                    {isInstalling ? 'Installing Tmux...' : 'Install Tmux Now'}
+                                </button>
+                            )}
                         </div>
                     )}
 
