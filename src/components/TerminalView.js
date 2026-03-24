@@ -222,6 +222,7 @@ export default function TerminalView({ connectionId, connectionName, host, color
   const [showTmuxInstallBanner, setShowTmuxInstallBanner] = useState(false);
   const [isInstallingTmux, setIsInstallingTmux] = useState(false);
   const [tmuxInstallDistro, setTmuxInstallDistro] = useState(null); // 'apt', 'yum', 'apk'
+  const [showScrollHint, setShowScrollHint] = useState(false);
   const [hintPos, setHintPos] = useState(null);
   const idleTimedOutRef = useRef(false);
   const termDbUriRef = useRef(appState.dbConfig?.uri || '');
