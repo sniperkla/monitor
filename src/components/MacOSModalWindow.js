@@ -176,11 +176,11 @@ export default function MacOSModalWindow({
   minHeight = 180,
   children,
   zIndexClassName = 'z-[50000]',
-  maxWidthClassName = 'max-w-sm',
+  maxWidthClassName = 'max-w-[calc(100vw-40px)] sm:max-w-md',
   maxHeightClassName = 'max-h-[85vh]',
-  contentClassName = 'p-4',
+  contentClassName = 'px-6 py-5',
   closeOnOverlayClick = false,
-  overlayClassName = '',
+  overlayClassName = 'bg-transparent',
   containerClassName = '',
   windowClassName = '',
   showTitleBar = true,
@@ -263,7 +263,58 @@ export default function MacOSModalWindow({
 
   const resolvedOverlayClassName = overlayClassName?.trim()
     ? overlayClassName
-    : 'bg-black/40';
+    : 'bg-transparent';
+
+  // Theme-specific variants for the window itself
+  const getThemeVariants = () => {
+    const theme = osState.theme || 'dark';
+    
+    if (theme === 'cyberpunk') {
+      return {
+        initial: { opacity: 0, scale: 0.9, filter: 'hue-rotate(-45deg) brightness(2)', y: 15 },
+        animate: { 
+          opacity: 1, 
+          scale: 1, 
+          filter: 'hue-rotate(0deg) brightness(1)', 
+          y: 0,
+          transition: { type: 'spring', damping: 15, stiffness: 100 }
+        },
+        exit: { opacity: 0, scale: 0.95, filter: 'hue-rotate(45deg)', y: 10 }
+      };
+    }
+    
+    if (theme === 'retro' || theme === 'fallout') {
+      return {
+        initial: { opacity: 0, scaleX: 0.001, scaleY: 0.1, filter: 'brightness(5)' },
+        animate: { 
+          opacity: 1, 
+          scaleX: 1, 
+          scaleY: 1,
+          filter: 'brightness(1)',
+          transition: { 
+            duration: 0.45, 
+            ease: "easeOut",
+            opacity: { duration: 0.1 }
+          }
+        },
+        exit: { opacity: 0, scaleX: 0, scaleY: 0.05, filter: 'brightness(3)' }
+      };
+    }
+    
+    // Default / Light / Dark
+    return {
+      initial: { opacity: 0, scale: 0.96, y: 12 },
+      animate: { 
+        opacity: 1, 
+        scale: 1, 
+        y: 0,
+        transition: { duration: 0.25, ease: [0.23, 1, 0.32, 1] }
+      },
+      exit: { opacity: 0, scale: 0.98, y: 8, transition: { duration: 0.15 } }
+    };
+  };
+
+  const variants = getThemeVariants();
 
   // Prevent body scroll when modal is open
   useEffect(() => {
@@ -300,8 +351,8 @@ export default function MacOSModalWindow({
                   ? (viewport.w || window.innerWidth)
                   : (typeof size?.width === 'number' ? size.width : (typeof defaultWidth === 'number' ? defaultWidth : 480)),
                 height: effectiveMaximized
-                  ? (viewport.h || window.innerHeight)
-                  : (typeof size?.height === 'number' ? size.height : (typeof defaultHeight === 'number' ? defaultHeight : 320)),
+                   ? (viewport.h || window.innerHeight)
+                   : (typeof size?.height === 'number' ? size.height : (typeof defaultHeight === 'number' ? defaultHeight : (draggable || resizable ? 320 : undefined))),
               }}
               position={effectiveMaximized ? { x: 0, y: 0 } : position}
               onDragStop={(e, d) => setPosition({ x: d.x, y: d.y })}
@@ -313,15 +364,18 @@ export default function MacOSModalWindow({
                 setPosition(pos);
               }}
               minWidth={minWidth}
-              minHeight={minHeight}
+              minHeight={120}
               bounds={effectiveMaximized ? undefined : 'window'}
               dragHandleClassName="modal-drag-handle"
               cancel="button,input,textarea,select,option,label,.nodrag"
               enableResizing={resizable && !effectiveMaximized}
               disableDragging={!draggable || effectiveMaximized}
-              style={{ zIndex: 1 }}
             >
-              <div
+              <motion.div
+                variants={variants}
+                initial="initial"
+                animate="animate"
+                exit="exit"
                 className={`flex flex-col overflow-hidden w-full h-full ${windowClassName}`}
                 onClick={(e) => e.stopPropagation()}
               >
@@ -330,7 +384,7 @@ export default function MacOSModalWindow({
                   style={{
                     background: 'var(--window-bg)',
                     boxShadow: effectiveMaximized ? 'none' : '0 25px 50px -12px rgba(0,0,0,0.5), 0 0 0 1px var(--border-color)',
-                    backdropFilter: 'blur(30px)',
+                    backdropFilter: osState.glassmorphism ? 'blur(20px)' : 'none',
                   }}
                 >
                   {showTitleBar && (
@@ -350,21 +404,16 @@ export default function MacOSModalWindow({
                     {children}
                   </div>
                 </div>
-              </div>
+              </motion.div>
             </Rnd>
           ) : (
             <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ 
-                opacity: 1,
-                width: effectiveMaximized ? '100%' : undefined,
-                height: effectiveMaximized ? '100%' : undefined,
-                maxWidth: effectiveMaximized ? '100%' : '100%',
-                maxHeight: effectiveMaximized ? '100%' : '100%',
-              }}
-              exit={{ opacity: 0 }}
+              variants={variants}
+              initial="initial"
+              animate="animate"
+              exit="exit"
               transition={{ duration: 0.15 }}
-              className={`w-full ${!effectiveMaximized ? maxWidthClassName : ''} ${!effectiveMaximized ? maxHeightClassName : ''} flex flex-col overflow-hidden ${windowClassName}`}
+              className={`${!effectiveMaximized ? 'w-auto min-w-[320px] ' + maxWidthClassName : 'w-full h-full'} ${!effectiveMaximized ? maxHeightClassName : ''} flex flex-col overflow-hidden ${windowClassName}`}
               onClick={(e) => e.stopPropagation()}
             >
               <div
@@ -372,7 +421,7 @@ export default function MacOSModalWindow({
                 style={{
                   background: 'var(--window-bg)',
                   boxShadow: effectiveMaximized ? 'none' : '0 25px 50px -12px rgba(0,0,0,0.5), 0 0 0 1px var(--border-color)',
-                  backdropFilter: 'blur(30px)',
+                  backdropFilter: osState.glassmorphism ? 'blur(20px)' : 'none',
                 }}
               >
                 {showTitleBar && (

@@ -211,8 +211,8 @@ export default function DockerLogApp({ initialConnection, initialConnectionId, i
         <div className="flex items-center justify-between px-4 h-10 border-b border-white/5 bg-white/5 shrink-0">
             <div className="flex items-center gap-2 truncate pr-4">
                 <FileText size={14} className="text-emerald-400" />
-                <span className="font-bold text-[var(--text-primary)] truncate">{containerName || 'Docker Logs'}</span>
-                <span className="text-[10px] opacity-40 pr-2">{containerId?.substring(0, 12)}</span>
+                <span className="font-bold text-gray-200 truncate">{containerName || 'Docker Logs'}</span>
+                <span className="text-[10px] text-gray-400 opacity-60 pr-2">{containerId?.substring(0, 12)}</span>
             </div>
             
             <div className="flex items-center gap-4">
@@ -227,7 +227,7 @@ export default function DockerLogApp({ initialConnection, initialConnectionId, i
                         value={searchQuery}
                         onChange={(e) => setSearchQuery(e.target.value)}
                         onKeyDown={handleSearchKeyDown}
-                        className="bg-black/40 border border-white/10 rounded-lg pl-8 pr-24 py-1.5 text-[11px] w-48 focus:w-72 focus:border-emerald-500/50 focus:outline-none transition-all placeholder:text-white/20"
+                        className="bg-black/40 text-white border border-white/10 rounded-lg pl-8 pr-24 py-1.5 text-[11px] w-48 focus:w-72 focus:border-emerald-500/50 focus:outline-none transition-all placeholder:text-white/30"
                     />
                     {searchQuery && (
                         <div className="absolute right-1.5 flex items-center gap-1">
@@ -289,7 +289,7 @@ export default function DockerLogApp({ initialConnection, initialConnectionId, i
         </div>
 
         {/* Footer info */}
-        <div className="px-4 py-1.5 border-t border-white/5 bg-black/20 flex justify-between items-center text-[9px] text-white/30 uppercase tracking-widest shrink-0">
+        <div className="px-4 py-1.5 border-t border-white/5 bg-black/20 flex justify-between items-center text-[9px] text-white/50 uppercase tracking-widest shrink-0">
             <div className="flex items-center gap-4">
                 <span>Tail: 200 lines</span>
                 <span>Buffer: {((logs?.length || 0)/1024).toFixed(1)} KB</span>

@@ -188,7 +188,7 @@ export default function DatabaseBrowser({ initialConnection, initialConnectionId
                           e.dataTransfer.setDragImage(ghost, 0, 0);
                           setTimeout(() => document.body.removeChild(ghost), 0);
                         }}
-                        className="flex flex-col items-center p-6 bg-white/5 hover:bg-white/10 rounded-3xl w-40 border border-white/5 hover:border-emerald-500/30 transition-all hover:scale-105 active:scale-95 shadow-xl group cursor-grab active:cursor-grabbing"
+                        className="flex flex-col items-center p-6 bg-[var(--bg-card)] hover:bg-[var(--bg-card-hover)] rounded-3xl w-40 border border-[var(--border-color)] hover:border-emerald-500/30 transition-all hover:scale-105 active:scale-95 shadow-xl group cursor-grab active:cursor-grabbing"
                       >
                         <div className="w-12 h-12 rounded-2xl flex items-center justify-center mb-3 transition-transform group-hover:scale-110" 
                           style={{ background: `${conn.color}15`, border: `1px solid ${conn.color}30` }}>
@@ -204,9 +204,9 @@ export default function DatabaseBrowser({ initialConnection, initialConnectionId
                   <button 
                     key="add-new-connection"
                     onClick={onNewConnection}
-                    className="flex flex-col items-center justify-center p-6 bg-white/5 hover:bg-emerald-500/10 rounded-3xl w-40 border border-dashed border-white/20 hover:border-emerald-500/40 transition-all hover:scale-105 active:scale-95 group"
+                    className="flex flex-col items-center justify-center p-6 bg-[var(--bg-card)] hover:bg-emerald-500/10 rounded-3xl w-40 border border-dashed border-[var(--border-color)] hover:border-emerald-500/40 transition-all hover:scale-105 active:scale-95 group"
                   >
-                    <div className="w-12 h-12 rounded-2xl flex items-center justify-center mb-3 bg-white/5 border border-white/10 group-hover:bg-emerald-500/20 group-hover:border-emerald-500/30 transition-all">
+                    <div className="w-12 h-12 rounded-2xl flex items-center justify-center mb-3 bg-[var(--bg-tertiary)] border border-[var(--border-color)] group-hover:bg-emerald-500/20 group-hover:border-emerald-500/30 transition-all">
                       <Plus size={24} className="text-[var(--text-muted)] group-hover:text-emerald-400" />
                     </div>
                     <span className="font-bold text-[10px] text-[var(--text-muted)] group-hover:text-emerald-400 uppercase tracking-tight">{t('database.launchpad.addConnection')}</span>

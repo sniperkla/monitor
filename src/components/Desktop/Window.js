@@ -123,8 +123,43 @@ export default function Window({ id, title, icon: Icon, component, isMinimized, 
   // Track whether a real drag happened (not just a click/double-click)
   const dragMovedRef = useRef(false);
 
-  // Sync initial position if missing in global state (e.g. fresh open)
+  // Track whether we've done the initial hydration sync so we can force-update Rnd once
+  const hasHydratedRef = useRef(false);
+
+  // Sync state when global state hydrates (e.g. from localStorage/DB after mount)
+  // We sync whenever global state changes, unless this window is currently being moved by the user.
   useEffect(() => {
+    if (windowState.x !== undefined && windowState.y !== undefined) {
+      // Don't overwrite if we are currently dragging/resizing
+      if (dragMovedRef.current) return;
+
+      const rect = {
+        x: windowState.x,
+        y: windowState.y,
+        width: windowState.width || initialWidth || 800,
+        height: windowState.height || initialHeight || 600,
+      };
+
+      // On first hydration OR meaningful difference — always force-update Rnd.
+      // react-rnd's internal re-resizable needs an explicit updateSize call to
+      // recalculate its resize-handle hit areas after the component mounts.
+      // Without this, a soft refresh (F5) restores position via `default` prop but
+      // the resize handles remain bound to stale internal dimensions.
+      const isFirstSync = !hasHydratedRef.current;
+      const hasMeaningfulDiff = Math.abs(freeRect.x - rect.x) > 1 || Math.abs(freeRect.y - rect.y) > 1 || 
+          Math.abs(freeRect.width - rect.width) > 1 || Math.abs(freeRect.height - rect.height) > 1;
+
+      if (isFirstSync || hasMeaningfulDiff) {
+        hasHydratedRef.current = true;
+        setFreeRect(rect);
+        if (rndRef.current) {
+          rndRef.current.updatePosition({ x: rect.x, y: rect.y });
+          rndRef.current.updateSize({ width: rect.width, height: rect.height });
+        }
+      }
+    }
+    
+    // Fallback sync if missing entirely in global state (freshly opened window)
     if (windowState.x === undefined || windowState.y === undefined) {
       updateWindowPosition(id, { 
         position: { 
@@ -135,7 +170,7 @@ export default function Window({ id, title, icon: Icon, component, isMinimized, 
         } 
       });
     }
-  }, []);
+  }, [windowState.x, windowState.y, windowState.width, windowState.height, id]);
 
   // Screen dimensions
   const [screen, setScreen] = useState({ w: 1200, h: 800 });
@@ -175,6 +210,18 @@ export default function Window({ id, title, icon: Icon, component, isMinimized, 
         } 
       });
     }
+
+    // Force Rnd to re-sync its internal resizable state on mount.
+    // After a soft refresh (F5), Rnd mounts with `default` values but its internal
+    // re-resizable component may have stale resize-handle bounds. This deferred
+    // updateSize call forces re-resizable to recalculate, fixing broken resize.
+    const timer = setTimeout(() => {
+      if (rndRef.current && !isMaximized && !snapSide) {
+        const r = freeRectRef.current;
+        rndRef.current.updateSize({ width: r.width, height: r.height });
+      }
+    }, 50);
+    return () => clearTimeout(timer);
   }, []); // Run once on mount
 
   // ── Imperative Snap/Maximize Control ──

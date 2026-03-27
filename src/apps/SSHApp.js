@@ -15,7 +15,7 @@ import dynamic from 'next/dynamic';
 
 const DatabaseBrowser = dynamic(() => import('@/components/DatabaseBrowser'), {
   ssr: false,
-  loading: () => <div className="h-full flex items-center justify-center bg-[var(--bg-primary)] rounded-3xl border border-[var(--border-color)] opacity-50 italic"> {typeof window !== 'undefined' && window.localStorage ? (require('@/lib/i18n').default.t('common.loading')) : 'Loading...'} </div>
+  loading: () => <div className="h-full flex items-center justify-center bg-transparent rounded-3xl opacity-50 italic"> {typeof window !== 'undefined' && window.localStorage ? (require('@/lib/i18n').default.t('common.loading')) : 'Loading...'} </div>
 });
 
 
@@ -51,7 +51,7 @@ export default function SSHApp({ windowId }) {
   };
 
   return (
-    <div className="flex h-full w-full bg-[var(--bg-primary)] text-[var(--text-primary)] font-sans overflow-hidden relative">
+    <div className="flex h-full w-full bg-transparent text-[var(--text-primary)] font-sans overflow-hidden relative">
       <Sidebar 
         onNewConnection={handleNewConnection} 
         onEditConnection={handleEditConnection} 
@@ -68,22 +68,22 @@ export default function SSHApp({ windowId }) {
         title={state.sidebarOpen ? 'Collapse Sidebar' : 'Expand Sidebar'}
       >
         <div className="flex flex-col items-center gap-1">
-           <div className="w-1 h-1 rounded-full bg-white/30 group-hover:bg-white/60" />
+           <div className={`w-1 h-1 rounded-full ${state.sidebarOpen ? 'bg-[var(--text-primary)]/30 group-hover:bg-[var(--text-primary)]/60' : 'bg-[var(--text-primary)]/30 group-hover:bg-[var(--text-primary)]/60'}`} />
            {state.sidebarOpen ? (
-             <ChevronLeft size={16} className="text-[var(--text-muted)] group-hover:text-white transition-colors" />
+             <ChevronLeft size={16} className="text-[var(--text-muted)] group-hover:text-[var(--text-primary)] transition-colors" />
            ) : (
-             <ChevronRight size={18} className="text-white animate-pulse" />
+             <ChevronRight size={18} className="text-[var(--text-primary)] animate-pulse" />
            )}
-           <div className="w-1 h-1 rounded-full bg-white/30 group-hover:bg-white/60" />
+           <div className={`w-1 h-1 rounded-full ${state.sidebarOpen ? 'bg-[var(--text-primary)]/30 group-hover:bg-[var(--text-primary)]/60' : 'bg-[var(--text-primary)]/30 group-hover:bg-[var(--text-primary)]/60'}`} />
         </div>
         
         {/* Visual feedback glow */}
-        <div className="absolute inset-0 bg-white/5 opacity-0 group-hover:opacity-100 transition-opacity" />
+        <div className="absolute inset-0 bg-[var(--text-primary)]/5 opacity-0 group-hover:opacity-100 transition-opacity" />
       </button>
 
-      <div className="flex-1 flex flex-col min-w-0 bg-[var(--bg-primary)] relative">
+      <div className="flex-1 flex flex-col min-w-0 bg-transparent relative">
         {/* Top Navigation */}
-        <div className="h-14 border-b border-[var(--border-color)] flex items-center px-6 bg-[var(--bg-primary)]/50 backdrop-blur-md sticky top-0 z-10">
+        <div className="h-14 border-b border-[var(--border-color)] flex items-center px-6 bg-[var(--bg-primary)]/20 backdrop-blur-md sticky top-0 z-10">
            <div className="flex items-center gap-4 flex-1">
              {/* Left space for sidebar toggle alignment if needed */}
            </div>

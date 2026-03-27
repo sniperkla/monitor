@@ -605,7 +605,7 @@ export default function ConnectionModal({ onClose, editConnection = null }) {
       maxHeightClassName="max-h-[80vh]"
       contentClassName="p-6 overflow-y-auto custom-scrollbar"
       closeOnOverlayClick
-      overlayClassName="bg-black/40 backdrop-blur-sm"
+      overlayClassName="bg-transparent"
     >
       <form onSubmit={handleSubmit} className="space-y-6">
           {/* Storage Selection */}

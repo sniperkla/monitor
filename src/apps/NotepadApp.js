@@ -91,7 +91,7 @@ export default function NotepadApp() {
 
   if (!isUnlocked) {
     return (
-      <div className="flex flex-col h-full bg-[var(--bg-primary)] items-center justify-center p-8 text-center">
+      <div className="flex flex-col h-full bg-transparent items-center justify-center p-8 text-center">
         <motion.div 
           initial={{ scale: 0.9, opacity: 0 }}
           animate={{ scale: 1, opacity: 1 }}
@@ -116,7 +116,7 @@ export default function NotepadApp() {
   }
 
   return (
-    <div className="flex h-full bg-[var(--bg-primary)] text-[var(--text-primary)] overflow-hidden font-sans">
+    <div className="flex h-full bg-transparent text-[var(--text-primary)] overflow-hidden font-sans">
       {/* Sidebar */}
       <div className="w-72 border-r border-[var(--border-color)] flex flex-col bg-[var(--bg-secondary)]/30">
         <div className="p-4 border-b border-[var(--border-color)] bg-[var(--bg-tertiary)]/10">
@@ -190,7 +190,7 @@ export default function NotepadApp() {
       </div>
 
       {/* Content */}
-      <div className="flex-1 flex flex-col bg-[var(--bg-primary)]">
+      <div className="flex-1 flex flex-col bg-transparent">
         {activeNote ? (
           <>
             <div className="h-14 border-b border-[var(--border-color)] flex items-center justify-between px-6 bg-[var(--bg-tertiary)]/5">

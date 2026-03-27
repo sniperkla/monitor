@@ -1028,31 +1028,34 @@ logstash:
     }
   }, [aiOpen, host, session?.user, sshMemory]);
 
-  // Ensure the panel fits gracefully on mount/resize
+  // Ensure the panel fits gracefully on mount/resize.
+  // Re-run whenever `status` changes so that after the async terminal init
+  // completes (fitAddonRef gets populated), we reliably attach the ResizeObserver.
+  // Previously this used `[]` deps and would exit early if the terminal hadn't
+  // finished initializing yet, leaving the ResizeObserver permanently unattached.
   useEffect(() => {
     if (!terminalRef.current || !fitAddonRef.current) return;
 
-    const performFit = () => {
-      try {
-        fitAddonRef.current.fit();
-      } catch (e) {
-        console.warn('FitAddon.fit() failed:', e);
-      }
-    };
-
-    // Initial fit
+    // Multiple fit attempts to catch hydration snaps/layout shifts
     performFit();
+    const t1 = setTimeout(performFit, 100);
+    const t2 = setTimeout(performFit, 500);
 
-    // Debounced fit on resize
+    // Debounce resize observer to avoid hammering fit() during drag-resize
+    let resizeTimer = null;
     const resizeObserver = new ResizeObserver(() => {
-      performFit();
+      clearTimeout(resizeTimer);
+      resizeTimer = setTimeout(performFit, 30);
     });
     resizeObserver.observe(terminalRef.current);
 
     return () => {
+      clearTimeout(t1);
+      clearTimeout(t2);
+      clearTimeout(resizeTimer);
       resizeObserver.disconnect();
     };
-  }, []);
+  }, [status, performFit]);
 
   // Refresh terminal when switching back to the terminal view tab
   // (fixes garbled / corrupted text after the container was hidden)
@@ -1220,7 +1223,7 @@ logstash:
     };
 
     term.writeln('\x1b[1;36m╔══════════════════════════════════════════╗\x1b[0m');
-    term.writeln(`\x1b[1;36m║\x1b[0m  \x1b[1;37m${t('terminal.connectingTo')} \x1b[1;33m${propsRef.current.connectionName}\x1b[0m`);
+    term.writeln(`\x1b[1;36m║\x1b[0m  \x1b[1m${t('terminal.connectingTo')} \x1b[1;33m${propsRef.current.connectionName}\x1b[0m`);
     term.writeln(`\x1b[1;36m║\x1b[0m  \x1b[90m${propsRef.current.host}\x1b[0m`);
     term.writeln('\x1b[1;36m╚══════════════════════════════════════════╝\x1b[0m');
     term.writeln('');
@@ -5895,7 +5898,7 @@ Try: Re-read the file and provide a new diff with exact line content.`);
           // 🧪 SELF-HEALING NUDGE: Remind the AI it MUST produce an action
           console.log(`[AI Agent] Nudging talkative AI (attempt ${retryCount}/2)...`);
           
-          let nudgeMsg = `\n\n⚠️ STALL WARNING: You provided no action (no <command> or <diff>).
+          let nudgeMsg = `\n\n[!] STALL WARNING: You provided no action (no <command> or <diff>).
 In Auto Mode, every response MUST contain either a <command>, a <diff>, or set <done>true</done>.
 You cannot just explain; you must ACT.
 - Running diagnostics? Use <command>...command here...</command>.
@@ -5926,7 +5929,7 @@ What completely valid bash command will you run next?`;
           
           if (codeModeLoopAttemptsRef.current >= 3) {
             console.log('[AI Agent] Code mode stall limit reached - stopping');
-            setAiError(`⚠️ Code Mode stopped: AI keeps stalling without producing a patch.
+            setAiError(`[!] Code Mode stopped: AI keeps stalling without producing a patch.
 
 Possible issues:
 - The file may not exist or path is wrong
@@ -5945,7 +5948,7 @@ Try: Provide the exact file path with @filename and clearer instructions.`);
           recordWait(codeStallWait);
           if (autoTimerRef.current) clearTimeout(autoTimerRef.current);
           autoTimerRef.current = setTimeout(() => runAutoStep(snap,
-            `\n\n⚠️ STALL (Code Mode - Attempt ${codeModeLoopAttemptsRef.current}/3): You provided no action. In Code Edit mode you MUST either:
+            `\n\n[!] STALL (Code Mode - Attempt ${codeModeLoopAttemptsRef.current}/3): You provided no action. In Code Edit mode you MUST either:
 - Read the file once with <command>cat path</command> if you haven't yet, OR
 - Output a <diff> patch immediately. Do NOT explain; ACT.
 
@@ -5973,7 +5976,7 @@ If you cannot proceed, set <done>true</done> and explain why.`
 
             // Don't force done — nudge the AI about the error
             setTimeout(() => runAutoStep(stallSnap,
-              `\n\n⚠️ STALL + ERROR: Your response suggests completion, but the terminal shows a critical error: "${stallDeepErr.label}". This must be fixed before the task can be considered done.`
+              `\n\n[!] STALL + ERROR: Your response suggests completion, but the terminal shows a critical error: "${stallDeepErr.label}". This must be fixed before the task can be considered done.`
             ), 1000);
             return;
           }
@@ -6030,7 +6033,7 @@ If you cannot proceed, set <done>true</done> and explain why.`
             
             if (codeModeLoopAttemptsRef.current >= 3) {
               console.log('[AI Agent] Code mode read-loop limit reached - stopping');
-              setAiError(`⚠️ Code Mode stopped: AI keeps reading the same file without editing.
+              setAiError(`[!] Code Mode stopped: AI keeps reading the same file without editing.
 
 File: ${nextCmdTrim}
 
@@ -6050,7 +6053,7 @@ Try: Provide specific line numbers or text to change.`);
             autoRunningRef.current = false;
             if (autoTimerRef.current) clearTimeout(autoTimerRef.current);
             autoTimerRef.current = setTimeout(() => runAutoStep(snap,
-              `\n\n⚠️ PATCH NOW (Code Mode - Attempt ${codeModeLoopAttemptsRef.current}/3): You have read '${nextCmdTrim}' multiple times. STOP issuing read commands. You already have the file content. Output a <diff> patch immediately to make the edit. Leave <command> empty.
+              `\n\n[!] PATCH NOW (Code Mode - Attempt ${codeModeLoopAttemptsRef.current}/3): You have read '${nextCmdTrim}' multiple times. STOP issuing read commands. You already have the file content. Output a <diff> patch immediately to make the edit. Leave <command> empty.
 
 If you cannot edit this file, explain why and set <done>true</done>.`
             ), 800);
@@ -6074,7 +6077,7 @@ If you cannot edit this file, explain why and set <done>true</done>.`
             
             if (codeModeLoopAttemptsRef.current >= 3) {
               console.log('[AI Agent] Code mode command-loop limit reached - stopping');
-              setAiError(`⚠️ Code Mode stopped: AI keeps repeating the same command.
+              setAiError(`[!] Code Mode stopped: AI keeps repeating the same command.
 
 Command: ${nextCmdTrim}
 
@@ -6089,7 +6092,7 @@ In Code Edit mode, use <diff> to make file changes, not shell commands.`);
             autoRunningRef.current = false;
             if (autoTimerRef.current) clearTimeout(autoTimerRef.current);
             autoTimerRef.current = setTimeout(() => runAutoStep(snap,
-              `\n\n⚠️ CODE MODE (Attempt ${codeModeLoopAttemptsRef.current}/3): You repeated the same command. In Code Edit mode, use <diff> to make file changes, not shell commands. Output the patch now.
+              `\n\n[!] CODE MODE (Attempt ${codeModeLoopAttemptsRef.current}/3): You repeated the same command. In Code Edit mode, use <diff> to make file changes, not shell commands. Output the patch now.
 
 If this is a deployment task, switch task mode to 'deploy' instead of 'code'.`
             ), 800);
@@ -6739,8 +6742,8 @@ If this is a deployment task, switch task mode to 'deploy' instead of 'code'.`
 
               {/* Popovers */}
               {aiHistoryOpen && (
-                <div className="absolute top-10 left-2 right-2 z-50 rounded-xl border border-white/10 bg-[var(--bg-secondary)] shadow-xl overflow-hidden">
-                  <div className="p-3 border-b border-white/10 flex items-center justify-between">
+                <div className="absolute top-10 left-2 right-2 z-50 rounded-xl border border-[var(--border-color)] bg-[var(--bg-secondary)] shadow-xl overflow-hidden">
+                  <div className="p-3 border-b border-[var(--border-color)] flex items-center justify-between">
                     <h4 className="text-[10px] font-bold text-indigo-400 uppercase tracking-widest">{t('ai.history')}</h4>
                     <button onClick={() => setAiHistoryOpen(false)} className="text-[10px] opacity-70 hover:opacity-100" style={{ color: 'var(--text-muted)' }}>{t('ai.close')}</button>
                   </div>
@@ -6777,7 +6780,7 @@ If this is a deployment task, switch task mode to 'deploy' instead of 'code'.`
                                   <div className="font-mono truncate opacity-50 text-[10px] mt-0.5">{h.command}</div>
                                 )}
                                 {isAuto && h.steps && (
-                                  <div className="text-[9px] opacity-40 mt-0.5">{h.steps.length} steps · {h.done ? '✅ Done' : '⚠ Stopped'}</div>
+                                  <div className="text-[9px] opacity-40 mt-0.5">{h.steps.length} steps · {h.done ? 'Finished' : 'Stopped'}</div>
                                 )}
                               </div>
                               {isAuto && (
@@ -7025,9 +7028,9 @@ If this is a deployment task, switch task mode to 'deploy' instead of 'code'.`
                         {/* AI Message — only show in Manual Mode to avoid redundancy with the Roadmap/Plan in Auto Mode */}
                         {msg.role === 'assistant' && aiMode === 'manual' && (
                           <div className={`max-w-[90%] rounded-2xl rounded-tl-sm px-4 py-3 text-[12px] leading-relaxed shadow-lg ${
-                            msg.danger ? 'bg-red-500/10 border border-red-500/20 text-red-100' : 
-                            msg.done ? 'bg-emerald-500/10 border border-emerald-500/20 text-emerald-100' : 
-                            'bg-[var(--bg-tertiary)]/60 border border-white/5 text-[var(--text-primary)]'
+                            msg.danger ? 'bg-red-500/10 border border-red-500/20 text-red-600 dark:text-red-200' : 
+                            msg.done ? 'bg-emerald-500/10 border border-emerald-500/20 text-emerald-600 dark:text-emerald-200' : 
+                            'bg-[var(--bg-tertiary)]/60 border border-[var(--border-color)] text-[var(--text-primary)]'
                           }`}>
                             <div className="flex items-center gap-1.5 mb-2">
                               <Sparkles size={12} className={msg.danger ? 'text-red-400' : msg.done ? 'text-emerald-400' : 'text-[var(--accent-indigo)]'} />
@@ -7096,15 +7099,15 @@ If this is a deployment task, switch task mode to 'deploy' instead of 'code'.`
                               )}
                               
                               {msg.command && (
-                                <div className="mt-2 rounded-lg bg-black/40 border border-white/10 overflow-hidden">
-                                  <div className="px-2 py-1 text-[8px] font-mono text-white/40 uppercase tracking-wider bg-black/20">💻 Command</div>
-                                  <pre className="text-[10px] font-mono p-2 text-white/90">{msg.command}</pre>
+                                <div className="mt-2 rounded-lg bg-[var(--bg-tertiary)]/20 border border-[var(--border-color)] overflow-hidden">
+                                  <div className="px-2 py-1 text-[8px] font-mono text-[var(--text-muted)] uppercase tracking-wider bg-[var(--bg-tertiary)]/30">💻 Command</div>
+                                  <pre className="text-[10px] font-mono p-2 text-[var(--text-primary)]">{msg.command}</pre>
                                 </div>
                               )}
                               
                               {msg.diff && (
-                                <div className="mt-2 rounded-lg bg-black/40 border border-white/10 overflow-hidden">
-                                  <div className="px-2 py-1 flex justify-between items-center text-[8px] font-mono text-white/40 uppercase tracking-wider bg-black/20">
+                                <div className="mt-2 rounded-lg bg-[var(--bg-tertiary)]/20 border border-[var(--border-color)] overflow-hidden">
+                                  <div className="px-2 py-1 flex justify-between items-center text-[8px] font-mono text-[var(--text-muted)] uppercase tracking-wider bg-[var(--bg-tertiary)]/30">
                                     <span>📝 Patch Preview</span>
                                   </div>
                                   <div className="p-2 overflow-x-auto max-h-[300px] overflow-y-auto custom-scrollbar">
@@ -7201,9 +7204,9 @@ If this is a deployment task, switch task mode to 'deploy' instead of 'code'.`
                                         setShowFullPatchFile(e.target.checked);
                                         if (e.target.checked) setExpandedGaps({});
                                       }}
-                                      className="w-3.5 h-3.5 rounded border-white/20 bg-black/40 text-indigo-500 focus:ring-offset-0 focus:ring-0"
+                                      className="w-3.5 h-3.5 rounded border-[var(--border-color)] bg-[var(--bg-tertiary)]/30 text-indigo-500 focus:ring-offset-0 focus:ring-0"
                                     />
-                                    <span className="text-[10px] uppercase font-bold tracking-tight text-[var(--text-muted)] group-hover:text-white transition-colors">Show Unchanged</span>
+                                    <span className="text-[10px] uppercase font-bold tracking-tight text-[var(--text-muted)] group-hover:text-[var(--text-primary)] transition-colors">Show Unchanged</span>
                                   </label>
                                 </div>
                                 <button onClick={() => setPatchModalOpen(false)} className="p-1 rounded hover:bg-white/5" style={{ color: 'var(--text-muted)' }} title={t('ai.cancel')}>
@@ -7221,7 +7224,7 @@ If this is a deployment task, switch task mode to 'deploy' instead of 'code'.`
                                       (filePath, backupId) => {
                                         if (!isLoggedIn) { setAiError('Login required'); return; }
                                         const safeFile = `'${String(filePath).replace(/'/g, "'\\''")} '`;
-                                        const cmd = `if [ -f ${safeFile}.bak.${backupId} ]; then mv ${safeFile}.bak.${backupId} ${safeFile}; echo "✅ Rolled back ${filePath}"; else echo "⚠️ No backup found for ${filePath}"; fi`;
+                                        const cmd = `if [ -f ${safeFile}.bak.${backupId} ]; then mv ${safeFile}.bak.${backupId} ${safeFile}; echo "[ROLLBACK] Restored ${filePath}"; else echo "[WARNING] No backup found for ${filePath}"; fi`;
                                         handleExecuteCommand(cmd, true);
                                       }
                                     )
@@ -7234,7 +7237,7 @@ If this is a deployment task, switch task mode to 'deploy' instead of 'code'.`
                                       (filePath, backupId) => {
                                         if (!isLoggedIn) { setAiError('Login required'); return; }
                                         const safeFile = `'${String(filePath).replace(/'/g, "'\\''")} '`;
-                                        const cmd = `if [ -f ${safeFile}.bak.${backupId} ]; then mv ${safeFile}.bak.${backupId} ${safeFile}; echo "✅ Rolled back ${filePath}"; else echo "⚠️ No backup found for ${filePath}"; fi`;
+                                        const cmd = `if [ -f ${safeFile}.bak.${backupId} ]; then mv ${safeFile}.bak.${backupId} ${safeFile}; echo "[ROLLBACK] Restored ${filePath}"; else echo "[WARNING] No backup found for ${filePath}"; fi`;
                                         handleExecuteCommand(cmd, true);
                                       }
                                     )
@@ -7513,12 +7516,12 @@ If this is a deployment task, switch task mode to 'deploy' instead of 'code'.`
                     </div>
                     <div className="p-3 space-y-2">
                       {/* All available skills */}
-                      <div className="text-[9px] text-white/40 font-mono leading-relaxed">
-                        <span className="text-emerald-400/70 font-bold">[Skills]</span> Available: {injectedSkills.allAvailable.length > 0 ? injectedSkills.allAvailable.join(', ') : 'none'}
+                      <div className="text-[9px] text-[var(--text-muted)] font-mono leading-relaxed">
+                        <span className="text-emerald-500/70 dark:text-emerald-400/70 font-bold">[Skills]</span> Available: {injectedSkills.allAvailable.length > 0 ? injectedSkills.allAvailable.join(', ') : 'none'}
                       </div>
                       {/* Matched skills with staggered animation */}
-                      <div className="text-[9px] text-white/40 font-mono leading-relaxed">
-                        <span className="text-emerald-400/70 font-bold">[Skills]</span> Matched: {injectedSkills.skills.length > 0 ? injectedSkills.skills.map(s => s.name).join(', ') : 'none'}
+                      <div className="text-[9px] text-[var(--text-muted)] font-mono leading-relaxed">
+                        <span className="text-emerald-500/70 dark:text-emerald-400/70 font-bold">[Skills]</span> Matched: {injectedSkills.skills.length > 0 ? injectedSkills.skills.map(s => s.name).join(', ') : 'none'}
                       </div>
                       {injectedSkills.skills.length > 0 && (
                         <div className="space-y-1.5 mt-2">
@@ -7532,11 +7535,11 @@ If this is a deployment task, switch task mode to 'deploy' instead of 'code'.`
                                 <CheckCircle2 size={10} className="text-emerald-400" />
                               </div>
                               <div className="flex-1 min-w-0">
-                                <div className="text-[10px] font-bold text-emerald-300 truncate">{skill.name}</div>
-                                <div className="text-[8px] text-white/40 truncate mt-0.5">
+                                <div className="text-[10px] font-bold text-emerald-600 dark:text-emerald-300 truncate">{skill.name}</div>
+                                <div className="text-[8px] text-[var(--text-muted)] truncate mt-0.5">
                                   {skill.description || (skill.source === 'custom' ? 'Local expert skill' : 'Installed SkillMP knowledge')}
                                 </div>
-                                <div className="text-[7px] text-white/20 uppercase tracking-tighter mt-0.5 font-bold">
+                                <div className="text-[7px] text-[var(--text-muted)]/50 uppercase tracking-tighter mt-0.5 font-bold">
                                   Source: {skill._source || skill.source || 'local'} • Status: Injected
                                 </div>
                               </div>
@@ -7712,7 +7715,7 @@ If this is a deployment task, switch task mode to 'deploy' instead of 'code'.`
                 {aiLimitHit && (
                   <div className="rounded-xl border border-amber-500/50 bg-amber-500/10 px-4 py-3 space-y-2">
                     <div className="flex items-center gap-2">
-                      <span className="text-xl">⚠️</span>
+                      <ShieldAlert size={24} className="text-amber-500" />
                       <div>
                         <div className="text-sm font-bold text-amber-300">{t('ai.limitReached')}</div>
                         <div className="text-[10px] text-amber-400/70 mt-0.5">{t('ai.limitDesc')}</div>
@@ -7780,7 +7783,7 @@ If this is a deployment task, switch task mode to 'deploy' instead of 'code'.`
                       : 'border-amber-500/30 bg-amber-500/10'
                   }`}>
                     <div className="text-xs font-medium mb-2" style={{ color: 'var(--text-primary)' }}>
-                      {interactivePrompt.kind === 'password' || interactivePrompt.kind === 'sudo_password' ? '🔒 Password Required' :
+                      {interactivePrompt.kind === 'password' || interactivePrompt.kind === 'sudo_password' ? 'Password Required' :
                        interactivePrompt.kind === 'passphrase' ? '🔑 Passphrase Required' :
                        interactivePrompt.kind === 'confirm_yn' || interactivePrompt.kind === 'confirm_overwrite' ? '❓ Confirmation Required' :
                        interactivePrompt.kind === 'ssh_host_verify' ? '🔗 SSH Host Verification' :

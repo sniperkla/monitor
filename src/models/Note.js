@@ -8,7 +8,10 @@ const NoteSchema = new mongoose.Schema({
 });
 
 export function getNoteModel(dbConnection) {
-  const target = dbConnection || mongoose;
+  // If we have a valid Mongoose connection (either an actual Connection object or the default mongoose instance), use its models.
+  // We check for .type (our SQL driver marker) or missing .model to detect non-Mongoose objects.
+  const target = (dbConnection && !dbConnection.type && dbConnection.model) ? dbConnection : mongoose;
+  
   return target.models.Note || target.model('Note', NoteSchema);
 }
 

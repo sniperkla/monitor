@@ -37,40 +37,48 @@
   --neumorphic-shadow-light: -6px -6px 12px rgba(255, 255, 255, 0.05);
 }
 
-/* Force Light Mode */
+/* Force Light Mode - Premium Aesthetic */
 .light {
-  --bg-primary: #ffffff;
-  --bg-secondary: #f8fafc;
-  --bg-tertiary: #f1f5f9;
-  --bg-card: rgba(255, 255, 255, 0.9);
+  --bg-primary: #fdfdfd;
+  --bg-secondary: #f4f5f7;
+  --bg-tertiary: #eaecf0;
+  --bg-card: rgba(255, 255, 255, 0.85);
   --bg-card-hover: rgba(255, 255, 255, 1);
-  --border-color: rgba(0, 0, 0, 0.1);
-  --border-hover: rgba(0, 0, 0, 0.18);
-  --text-primary: #0f172a;      /* Slate 900 */
-  --text-secondary: #334155;    /* Slate 700 */
-  --text-muted: #64748b;       /* Slate 500 */
-  --accent-indigo: #4f46e5;
-  --accent-indigo-hover: #4338ca;
+  --border-color: rgba(0, 0, 0, 0.08);
+  --border-hover: rgba(0, 0, 0, 0.15);
+  
+  --text-primary: #020617;       /* Slate 950 */
+  --text-secondary: #1e293b;     /* Slate 800 */
+  --text-muted: #475569;         /* Slate 600 */
+  
+  --accent-indigo: #4338ca;      /* Indigo 700 for better contrast on white */
+  --accent-indigo-hover: #3730a3;
   --accent-emerald: #059669;
   --accent-amber: #d97706;
   --accent-rose: #e11d48;
   --accent-cyan: #0891b2;
-  --accent-purple: #9333ea;
-  --glow-indigo: rgba(79, 70, 229, 0.08);
-  --glow-emerald: rgba(5, 150, 105, 0.08);
-  --glow-rose: rgba(225, 29, 72, 0.08);
+  --accent-purple: #7e22ce;
+  
+  --glow-indigo: rgba(79, 70, 229, 0.12);
+  --glow-emerald: rgba(5, 150, 105, 0.12);
+  --glow-rose: rgba(225, 29, 72, 0.12);
+  
   --terminal-bg: #ffffff;
-  --terminal-green: #15803d;    /* Emerald 700 for better contrast */
-  --window-bg: rgba(255, 255, 255, 0.95);
-  --taskbar-bg: rgba(255, 255, 255, 0.85);
-  --bg-primary-overlay: rgba(255, 255, 255, 0.6);
-  --shadow-strong: rgba(0, 0, 0, 0.15);
-  --bg-selected: rgba(79, 70, 229, 0.2);
-  --text-selected: #4f46e5;
-  --desktop-icon-text: var(--text-primary);
+  --terminal-green: #10b981;     /* Emerald 500 */
+  
+  --window-bg: rgba(255, 255, 255, 0.65);
+  --taskbar-bg: rgba(255, 255, 255, 0.75);
+  --bg-primary-overlay: rgba(255, 255, 255, 0.5);
+  
+  --shadow-strong: rgba(15, 23, 42, 0.15);       /* Sleek, soft shadow */
+  --bg-selected: rgba(79, 70, 229, 0.1);
+  --text-selected: #4338ca;
+  
+  --desktop-icon-text: #ffffff;
   --desktop-icon-glyph: var(--text-primary);
-  --neumorphic-shadow-dark: 6px 6px 12px rgba(0, 0, 0, 0.1);
-  --neumorphic-shadow-light: -6px -6px 12px rgba(255, 255, 255, 0.8);
+  
+  --neumorphic-shadow-dark: 6px 6px 12px rgba(15, 23, 42, 0.06);
+  --neumorphic-shadow-light: -6px -6px 12px rgba(255, 255, 255, 1);
 }
 
 /* Force Dark Mode (Redundant but good for explicit overrides) */
@@ -124,7 +132,7 @@
     --taskbar-bg: rgba(255, 255, 255, 0.85);
     --bg-selected: rgba(79, 70, 229, 0.2);
     --text-selected: #4f46e5;
-    --desktop-icon-text: var(--text-primary);
+    --desktop-icon-text: #ffffff;
     --desktop-icon-glyph: var(--text-primary);
     --neumorphic-shadow-dark: 6px 6px 12px rgba(0, 0, 0, 0.1);
     --neumorphic-shadow-light: -6px -6px 12px rgba(255, 255, 255, 0.8);
@@ -171,8 +179,8 @@
   --glow-rose: rgba(255, 51, 51, 0.15);
   --terminal-bg: #050505;
   --terminal-green: #1aff1a;
-  --window-bg: rgba(5, 5, 5, 0.98);
-  --taskbar-bg: rgba(5, 5, 5, 0.95);
+  --window-bg: rgba(5, 5, 5, 0.70);
+  --taskbar-bg: rgba(5, 5, 5, 0.65);
   --bg-primary-overlay: rgba(0, 5, 0, 0.85);
   --shadow-strong: rgba(24, 225, 44, 0.3);
   --bg-selected: rgba(24, 225, 44, 0.2);
@@ -292,6 +300,419 @@
   0% { filter: brightness(1) contrast(1); }
   50% { filter: brightness(1.1) contrast(1.1); }
   100% { filter: brightness(1) contrast(1); }
+}
+
+/* ========== FALLOUT DESKTOP ICON HOVER ========== */
+
+/* CRT jitter — rapid micro-shakes like a disturbed monitor */
+@keyframes fallout-crt-jitter {
+  0%   { transform: translate(0, 0) skewX(0deg); }
+  10%  { transform: translate(-1.5px, 0.5px) skewX(-0.5deg); }
+  20%  { transform: translate(1px, -0.5px) skewX(0.3deg); }
+  30%  { transform: translate(-0.5px, 1px) skewX(-0.2deg); }
+  40%  { transform: translate(1.5px, 0px) skewX(0.4deg); }
+  50%  { transform: translate(-1px, -0.5px) skewX(-0.3deg); }
+  60%  { transform: translate(0.5px, 0.5px) skewX(0.1deg); }
+  70%  { transform: translate(-1px, 0px) skewX(-0.4deg); }
+  80%  { transform: translate(1px, -0.5px) skewX(0.2deg); }
+  90%  { transform: translate(-0.5px, 0.5px) skewX(-0.1deg); }
+  100% { transform: translate(0, 0) skewX(0deg); }
+}
+
+/* Phosphor bloom glow pulse when hovering */
+@keyframes fallout-phosphor-bloom {
+  0%   { filter: brightness(1) drop-shadow(0 0 3px rgba(24, 225, 44, 0.3)); }
+  25%  { filter: brightness(1.3) drop-shadow(0 0 10px rgba(24, 225, 44, 0.7)); }
+  50%  { filter: brightness(1.1) drop-shadow(0 0 6px rgba(24, 225, 44, 0.5)); }
+  75%  { filter: brightness(1.4) drop-shadow(0 0 14px rgba(24, 225, 44, 0.8)); }
+  100% { filter: brightness(1) drop-shadow(0 0 3px rgba(24, 225, 44, 0.3)); }
+}
+
+/* Desktop icon hover for retro / fallout themes */
+.retro .desktop-icon:hover,
+.fallout .desktop-icon:hover {
+  animation: fallout-crt-jitter 0.3s steps(3) infinite, fallout-phosphor-bloom 1.2s ease-in-out infinite;
+}
+
+/* Add a static noise flash on the icon image container on hover */
+.retro .desktop-icon:hover > div:first-child,
+.fallout .desktop-icon:hover > div:first-child {
+  animation: fallout-crt-jitter 0.25s steps(5) infinite;
+}
+
+/* Override the default scale hover for retro/fallout — we use jitter instead */
+.retro .desktop-icon:hover .group-hover\:scale-110,
+.fallout .desktop-icon:hover .group-hover\:scale-110 {
+  transform: scale(1) !important;
+}
+
+/* ========== FALLOUT EXPLOSION EASTER EGG ANIMATIONS ========== */
+
+/* Particles fly outward in all directions */
+@keyframes fallout-particle-fly {
+  0% {
+    transform: translate(-50%, -50%) scale(1);
+    opacity: 1;
+  }
+  100% {
+    transform: translate(
+      calc(-50% + var(--fly-x)),
+      calc(-50% + var(--fly-y))
+    ) scale(0);
+    opacity: 0;
+  }
+}
+
+/* Bright nuclear flash at detonation center */
+@keyframes fallout-nuke-flash {
+  0% {
+    background: radial-gradient(circle, rgba(255,255,200,0.9) 0%, rgba(255,140,0,0.6) 30%, transparent 60%);
+    transform: scale(0.5);
+    opacity: 1;
+  }
+  40% {
+    background: radial-gradient(circle, rgba(255,255,255,1) 0%, rgba(255,200,50,0.8) 25%, rgba(255,80,0,0.4) 50%, transparent 70%);
+    transform: scale(1.5);
+    opacity: 0.9;
+  }
+  100% {
+    background: radial-gradient(circle, transparent 0%, transparent 100%);
+    transform: scale(2);
+    opacity: 0;
+  }
+}
+
+/* Expanding shockwave ring */
+@keyframes fallout-shockwave {
+  0% {
+    width: 10px;
+    height: 10px;
+    opacity: 0.8;
+    border-width: 2px;
+  }
+  100% {
+    width: 120px;
+    height: 120px;
+    opacity: 0;
+    border-width: 1px;
+    transform: translate(-50%, -50%);
+  }
+}
+
+/* ONE MASSIVE VOLUMETRIC MUSHROOM CLOUD CAP */
+@keyframes fallout-giant-mushroom-cap {
+  0%   { transform: translate(-50%, -10px) scale(0.1);  opacity: 1;    filter: brightness(3); }
+  5%   { transform: translate(-50%, -30px) scale(0.35); opacity: 1;    filter: brightness(2.6); }
+  10%  { transform: translate(-50%, -55px) scale(0.6);  opacity: 1;    filter: brightness(2.2); }
+  18%  { transform: translate(-50%, -85px) scale(0.9);  opacity: 1;    filter: brightness(1.8); }
+  28%  { transform: translate(-50%, -120px) scale(1.2); opacity: 1;    filter: brightness(1.4); }
+  38%  { transform: translate(-50%, -165px) scale(1.5); opacity: 0.97; filter: brightness(1.1); }
+  48%  { transform: translate(-50%, -215px) scale(1.8); opacity: 0.92; filter: brightness(0.85); }
+  58%  { transform: translate(-50%, -270px) scale(2.05); opacity: 0.82; filter: brightness(0.65) grayscale(0.15); }
+  68%  { transform: translate(-50%, -325px) scale(2.3); opacity: 0.65; filter: brightness(0.48) grayscale(0.35); }
+  78%  { transform: translate(-50%, -380px) scale(2.5); opacity: 0.45; filter: brightness(0.32) grayscale(0.55); }
+  88%  { transform: translate(-50%, -430px) scale(2.7); opacity: 0.22; filter: brightness(0.18) grayscale(0.78); }
+  95%  { transform: translate(-50%, -470px) scale(2.85); opacity: 0.08; filter: brightness(0.08) grayscale(0.92); }
+  100% { transform: translate(-50%, -500px) scale(3.0); opacity: 0;    filter: brightness(0.02) grayscale(1); }
+}
+
+/* Ground dust shockwave */
+@keyframes fallout-dust-ring {
+  0% { width: 40px; height: 10px; opacity: 1; transform: translate(-50%, 30px); border: 2px solid #ffcc00; }
+  40% { width: 160px; height: 40px; opacity: 0.6; transform: translate(-50%, 30px); border: 15px solid #ff4400; filter: blur(4px); }
+  100% { width: 350px; height: 80px; opacity: 0; transform: translate(-50%, 30px); border: 25px solid #444; filter: blur(12px); }
+}
+
+/* Icon disintegrates outward */
+@keyframes fallout-icon-disintegrate {
+  0% {
+    transform: scale(1);
+    opacity: 1;
+    filter: brightness(1);
+  }
+  30% {
+    transform: scale(1.15);
+    opacity: 0.8;
+    filter: brightness(3) saturate(0.5);
+  }
+  60% {
+    transform: scale(1.3) rotate(5deg);
+    opacity: 0.3;
+    filter: brightness(2) blur(2px);
+  }
+  100% {
+    transform: scale(0.2) rotate(-10deg);
+    opacity: 0;
+    filter: brightness(0) blur(6px);
+  }
+}
+
+/* Icon reforms from nuclear ash */
+@keyframes fallout-icon-reform {
+  0% {
+    transform: scale(0.1);
+    opacity: 0;
+    filter: brightness(0) blur(4px) drop-shadow(0 0 20px rgba(24, 225, 44, 0.8));
+  }
+  30% {
+    transform: scale(0.6);
+    opacity: 0.3;
+    filter: brightness(1.5) blur(2px) drop-shadow(0 0 15px rgba(24, 225, 44, 0.6));
+  }
+  70% {
+    transform: scale(1.08);
+    opacity: 0.9;
+    filter: brightness(1.2) blur(0px) drop-shadow(0 0 8px rgba(24, 225, 44, 0.4));
+  }
+  85% {
+    transform: scale(0.97);
+    opacity: 1;
+    filter: brightness(1.05) drop-shadow(0 0 4px rgba(24, 225, 44, 0.2));
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+    filter: brightness(1) drop-shadow(none);
+  }
+}
+
+/* ===== FULL SCREEN NUKE IMPACT ===== */
+
+/* Screen shake — applied to document.body */
+@keyframes fallout-screen-shake-anim {
+  0%   { transform: translate(0, 0) rotate(0deg); }
+  10%  { transform: translate(-6px, 3px) rotate(-0.3deg); }
+  20%  { transform: translate(5px, -4px) rotate(0.4deg); }
+  30%  { transform: translate(-4px, 5px) rotate(-0.2deg); }
+  40%  { transform: translate(6px, -2px) rotate(0.3deg); }
+  50%  { transform: translate(-3px, 4px) rotate(-0.1deg); }
+  60%  { transform: translate(4px, -3px) rotate(0.2deg); }
+  70%  { transform: translate(-2px, 2px) rotate(-0.1deg); }
+  80%  { transform: translate(1px, -1px) rotate(0.05deg); }
+  90%  { transform: translate(-1px, 0px) rotate(0deg); }
+  100% { transform: translate(0, 0) rotate(0deg); }
+}
+
+.fallout-screen-shake {
+  animation: fallout-screen-shake-anim 0.6s ease-out !important;
+}
+
+/* Full-screen white flash overlay */
+.fallout-fullscreen-flash {
+  position: fixed;
+  inset: 0;
+  z-index: 99999;
+  pointer-events: none;
+  animation: fallout-screen-flash 1.2s ease-out forwards;
+}
+
+@keyframes fallout-screen-flash {
+  0% {
+    background: rgba(255, 255, 255, 0);
+  }
+  8% {
+    background: rgba(255, 255, 230, 0.85);
+  }
+  15% {
+    background: rgba(255, 200, 100, 0.5);
+  }
+  30% {
+    background: rgba(255, 120, 0, 0.2);
+  }
+  50% {
+    background: rgba(255, 80, 0, 0.08);
+  }
+  100% {
+    background: rgba(0, 0, 0, 0);
+  }
+}
+
+/* Ground-zero fireball — white-hot center expanding */
+@keyframes fallout-fireball {
+  0% {
+    width: 10px;
+    height: 10px;
+    background: radial-gradient(circle, #ffffff 0%, #fffac8 30%, #ff8800 60%, transparent 80%);
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1);
+  }
+  30% {
+    width: 80px;
+    height: 80px;
+    background: radial-gradient(circle, #ffffff 0%, #ffcc00 20%, #ff6600 50%, transparent 80%);
+    opacity: 0.9;
+    transform: translate(-50%, -50%) scale(1);
+  }
+  60% {
+    width: 100px;
+    height: 100px;
+    background: radial-gradient(circle, #ffdd44 0%, #ff4400 40%, rgba(80,20,0,0.3) 70%, transparent 90%);
+    opacity: 0.5;
+    transform: translate(-50%, -50%) scale(1);
+  }
+  100% {
+    width: 120px;
+    height: 120px;
+    background: radial-gradient(circle, transparent 0%, transparent 100%);
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(1);
+  }
+}
+
+/* Embers drifting upward like ash in the wind */
+@keyframes fallout-ember-rise {
+  0% {
+    transform: translateY(0) scale(1);
+    opacity: 1;
+  }
+  100% {
+    transform: translateY(-80px) translateX(10px) scale(0.3);
+    opacity: 0;
+  }
+}
+
+/* Fireball stem — continuously growing, never freezes */
+@keyframes fallout-giant-mushroom-stem {
+  0%   { height: 0px;   opacity: 1;    transform: translate(-50%, 0%) scaleY(0); }
+  5%   { height: 25px;  opacity: 1;    transform: translate(-50%, -100%) scaleY(1); filter: brightness(2.5); }
+  12%  { height: 50px;  opacity: 0.95; transform: translate(-50%, -100%) scaleY(1); filter: brightness(2); }
+  22%  { height: 75px;  opacity: 0.88; transform: translate(-50%, -100%) scaleY(1); filter: brightness(1.5); }
+  35%  { height: 105px; opacity: 0.78; transform: translate(-50%, -100%) scaleY(1); filter: brightness(1.1); }
+  48%  { height: 135px; opacity: 0.62; transform: translate(-50%, -100%) scaleY(1); filter: brightness(0.75) grayscale(0.2); }
+  60%  { height: 165px; opacity: 0.45; transform: translate(-50%, -100%) scaleY(1); filter: brightness(0.5) grayscale(0.4); }
+  72%  { height: 190px; opacity: 0.3;  transform: translate(-50%, -100%) scaleY(1); filter: brightness(0.35) grayscale(0.6); }
+  84%  { height: 210px; opacity: 0.15; transform: translate(-50%, -100%) scaleY(1); filter: brightness(0.2) grayscale(0.8); }
+  95%  { height: 225px; opacity: 0.05; transform: translate(-50%, -100%) scaleY(1); filter: brightness(0.08) grayscale(0.95); }
+  100% { height: 230px; opacity: 0;    transform: translate(-50%, -100%) scaleY(1); filter: brightness(0.02) grayscale(1); }
+}
+
+/* Highly dynamic cinematic EMP/Radiation shockwave */
+@keyframes fallout-radiation-glow {
+  0% {
+    width: 0px;
+    height: 0px;
+    opacity: 1;
+    border-width: 100px;
+    backdrop-filter: contrast(3) hue-rotate(180deg) brightness(1.5);
+  }
+  30% {
+    opacity: 0.8;
+    backdrop-filter: contrast(1.5) hue-rotate(90deg) brightness(1.2);
+    border-width: 30px;
+  }
+  100% {
+    width: 1200px;
+    height: 1200px;
+    opacity: 0;
+    border-width: 1px;
+    backdrop-filter: contrast(1) hue-rotate(0deg) brightness(1);
+  }
+}
+
+@keyframes fallout-biohazard-flash {
+  0% { opacity: 0.4; transform: translate(-50%, -50%) scale(0.95); }
+  100% { opacity: 1; transform: translate(-50%, -50%) scale(1.05); }
+}
+
+/* Tearing Icon Slices (Pre-Explosion) */
+@keyframes fallout-slice-tear-1 {
+  0%   { transform: translateX(0) skew(0deg); clip-path: polygon(0 0, 100% 0, 100% 33%, 0 33%); filter: hue-rotate(0deg); }
+  25%  { transform: translateX(-4px) skew(-2deg); clip-path: polygon(0 0, 100% 0, 100% 35%, 0 31%); filter: hue-rotate(45deg); opacity: 0.9; }
+  50%  { transform: translateX(8px) skew(4deg); clip-path: polygon(0 0, 100% 0, 100% 30%, 0 36%); filter: hue-rotate(-45deg); opacity: 0.8; }
+  75%  { transform: translateX(-12px) skew(-8deg); clip-path: polygon(0 0, 100% 0, 100% 34%, 0 32%); filter: hue-rotate(90deg); opacity: 0.6; }
+  100% { transform: translateX(20px) skew(15deg); clip-path: polygon(0 0, 100% 0, 100% 33%, 0 33%); opacity: 0; }
+}
+
+@keyframes fallout-slice-tear-2 {
+  0%   { transform: translateX(0) skew(0deg); clip-path: polygon(0 33%, 100% 33%, 100% 66%, 0 66%); filter: hue-rotate(0deg); }
+  25%  { transform: translateX(5px) skew(3deg); clip-path: polygon(0 31%, 100% 35%, 100% 64%, 0 68%); filter: hue-rotate(-60deg); opacity: 0.9; }
+  50%  { transform: translateX(-10px) skew(-6deg); clip-path: polygon(0 36%, 100% 30%, 100% 70%, 0 62%); filter: hue-rotate(60deg); opacity: 0.8; }
+  75%  { transform: translateX(15px) skew(10deg); clip-path: polygon(0 32%, 100% 34%, 100% 66%, 0 66%); filter: hue-rotate(-120deg); opacity: 0.6; }
+  100% { transform: translateX(-25px) skew(-20deg); clip-path: polygon(0 33%, 100% 33%, 100% 66%, 0 66%); opacity: 0; }
+}
+
+@keyframes fallout-slice-tear-3 {
+  0%   { transform: translateX(0) skew(0deg); clip-path: polygon(0 66%, 100% 66%, 100% 100%, 0 100%); filter: hue-rotate(0deg); }
+  25%  { transform: translateX(-3px) skew(-1deg); clip-path: polygon(0 68%, 100% 64%, 100% 100%, 0 100%); filter: hue-rotate(90deg); opacity: 0.9; }
+  50%  { transform: translateX(12px) skew(8deg); clip-path: polygon(0 62%, 100% 70%, 100% 100%, 0 100%); filter: hue-rotate(-90deg); opacity: 0.8; }
+  75%  { transform: translateX(-18px) skew(-12deg); clip-path: polygon(0 66%, 100% 66%, 100% 100%, 0 100%); filter: hue-rotate(180deg); opacity: 0.6; }
+  100% { transform: translateX(30px) skew(25deg); clip-path: polygon(0 66%, 100% 66%, 100% 100%, 0 100%); opacity: 0; }
+}
+
+/* Scorched crater slowly fading */
+@keyframes fallout-crater-fade {
+  0%   { opacity: 1; }
+  70%  { opacity: 0.6; }
+  100% { opacity: 0; }
+}
+
+/* Irradiated icon pulsing green glow */
+@keyframes fallout-irradiated-pulse {
+  0%   { filter: hue-rotate(80deg) brightness(1.2) drop-shadow(0 0 8px rgba(50,255,50,0.6)); }
+  100% { filter: hue-rotate(100deg) brightness(1.5) drop-shadow(0 0 20px rgba(50,255,50,1)); }
+}
+
+/* CRT Damage Static — full screen overlay */
+.fallout-crt-damage {
+  position: fixed;
+  inset: 0;
+  z-index: 99998;
+  pointer-events: none;
+  background: repeating-linear-gradient(
+    0deg,
+    transparent,
+    transparent 2px,
+    rgba(0, 255, 0, 0.03) 2px,
+    rgba(0, 255, 0, 0.03) 4px
+  );
+  animation: fallout-crt-damage-anim 3s linear forwards;
+  mix-blend-mode: screen;
+}
+.fallout-crt-damage::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.15'/%3E%3C/svg%3E");
+  opacity: 0.4;
+  animation: fallout-static-flicker 0.1s steps(3) infinite;
+}
+
+@keyframes fallout-crt-damage-anim {
+  0%   { opacity: 1; }
+  50%  { opacity: 0.6; }
+  100% { opacity: 0; }
+}
+
+@keyframes fallout-static-flicker {
+  0%   { transform: translate(0, 0); }
+  33%  { transform: translate(-2px, 1px); }
+  66%  { transform: translate(1px, -1px); }
+  100% { transform: translate(0, 0); }
+}
+
+/* Radioactive Fallout Rain */
+.fallout-rain-container {
+  position: fixed;
+  inset: 0;
+  z-index: 99997;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+.fallout-rain-drop {
+  position: absolute;
+  top: -10px;
+  background: radial-gradient(circle, rgba(50,255,50,0.9) 0%, rgba(100,255,50,0.4) 60%, transparent 100%);
+  border-radius: 50%;
+  animation: fallout-rain-fall linear forwards;
+  box-shadow: 0 0 4px rgba(50,255,50,0.6);
+}
+
+@keyframes fallout-rain-fall {
+  0%   { transform: translateY(0) rotate(0deg); opacity: 0; }
+  10%  { opacity: 1; }
+  90%  { opacity: 0.5; }
+  100% { transform: translateY(110vh) rotate(360deg); opacity: 0; }
 }
 
 .retro::before {
@@ -470,8 +891,8 @@
   --glow-rose: rgba(255, 0, 255, 0.35);
   --terminal-bg: #030308;
   --terminal-green: #00f3ff;
-  --window-bg: rgba(5, 5, 16, 0.95);
-  --taskbar-bg: rgba(5, 5, 16, 0.9);
+  --window-bg: rgba(5, 5, 16, 0.70);
+  --taskbar-bg: rgba(5, 5, 16, 0.65);
   --bg-primary-overlay: rgba(0, 0, 5, 0.85);
   --shadow-strong: rgba(255, 0, 255, 0.4);
   --bg-selected: rgba(255, 0, 255, 0.25);

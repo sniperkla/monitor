@@ -509,12 +509,12 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
           const lastLogAt = cur.lastIdleLogAt || 0;
           if (Date.now() - lastLogAt > 30 * 1000) {
             cur.lastIdleLogAt = Date.now();
-            console.log(`🕒 SSH idle watcher socket ${socket.id}: idleFor=${idleFor}ms timeout=${SSH_IDLE_TIMEOUT_MS}ms`);
+            console.log(`[IDLE] SSH idle watcher socket ${socket.id}: idleFor=${idleFor}ms timeout=${SSH_IDLE_TIMEOUT_MS}ms`);
           }
         }
 
         if (idleFor > SSH_IDLE_TIMEOUT_MS) {
-          console.log(`⏳ SSH idle timeout for socket ${socket.id} (>${SSH_IDLE_TIMEOUT_MS}ms). Disconnecting.`);
+          console.log(`[TIMEOUT] SSH idle timeout for socket ${socket.id} (>${SSH_IDLE_TIMEOUT_MS}ms). Disconnecting.`);
           try {
             socket.emit('ssh:idle_timeout');
           } catch (e) {}
@@ -665,7 +665,7 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
         const sshClient = new Client();
 
         sshClient.on('ready', () => {
-          console.log(`✅ SSH ready for ${connection.host}`);
+          console.log(`[READY] SSH connection established for ${connection.host}`);
           
           // ── Global SSH Exec Queue (Prevents "Channel open failure") ──────────
           const SSH_MAX_CHANNELS = 5;
@@ -755,11 +755,11 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
                   const isStreaming = cmd.includes('cat >') || cmd.includes('tar x') || cmd.includes('base64 -d');
                   const dockerCmd = `docker exec ${isStreaming ? '-i' : ''} "${dockerContainerId}" sh -c '${safeCmd}'`;
                   
-                  console.log(`🐳 [${socket.id}] DOCKER EXEC: ${dockerCmd}`);
+                  console.log(`[DOCKER] [${socket.id}] EXEC: ${dockerCmd}`);
                   
                   return baseExecForDocker(dockerCmd, options, (err, stream) => {
                       if (err) {
-                          console.error(`❌ [${socket.id}] DOCKER EXEC START FAILED: ${err.message}`);
+                          console.error(`[ERROR] [${socket.id}] DOCKER EXEC START FAILED: ${err.message}`);
                           return cb(err);
                       }
                       
@@ -804,7 +804,7 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
             });
 
             stream.on('close', () => {
-              console.log(`📴 SSH stream closed for socket ${socket.id}`);
+              console.log(`[CLOSED] SSH stream closed for socket ${socket.id}`);
               socket.emit('ssh:closed');
               // Don't cleanup everything immediately if we want to keep SFTP alive
               // But we usually want to close both.
@@ -2578,7 +2578,7 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
     });
 
     socket.on('disconnect', () => {
-      console.log(`🔌 Socket disconnected: ${socket.id}`);
+      console.log(`[DISCONNECT] Socket disconnected: ${socket.id}`);
       cleanupSession(socket.id);
     });
   });

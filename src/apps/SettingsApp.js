@@ -311,11 +311,11 @@ export default function SettingsApp({ initialTab }) {
   };
 
   return (
-    <div className="flex h-full w-full bg-[var(--bg-primary)] text-[var(--text-primary)] border-[var(--border-color)] overflow-hidden relative">
+    <div className="flex h-full w-full bg-transparent text-[var(--text-primary)] border-[var(--border-color)] overflow-hidden relative">
       {/* Sidebar - responsive behavior */}
       <div className={`
         ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'}
-        fixed md:relative z-20 md:z-0 w-52 border-r border-[var(--border-color)] p-4 flex flex-col shrink-0 h-full overflow-y-auto custom-scrollbar transition-transform duration-300 bg-[var(--bg-primary)]
+        fixed md:relative z-20 md:z-0 w-52 border-r border-[var(--border-color)] p-4 flex flex-col shrink-0 h-full overflow-y-auto custom-scrollbar transition-transform duration-300 bg-transparent
       `}>
         {/* User Profile Section */}
         <div className="mb-8 px-2">
@@ -603,11 +603,9 @@ export default function SettingsApp({ initialTab }) {
                       <span className="block text-sm font-medium text-[var(--text-primary)]">{t('settings_ui.appearance.glassmorphism')}</span>
                       <span className="text-[10px] text-[var(--text-muted)]">{t('settings_ui.appearance.glassmorphismDesc')}</span>
                     </div>
-                    {glassmorphism && (
-                      <div className="w-10 h-5 bg-[var(--accent-indigo)] rounded-full relative">
-                        <div className="absolute top-1 right-1 w-3 h-3 bg-white rounded-full shadow-lg" />
-                      </div>
-                    )}
+                    <div className={`w-10 h-6 rounded-full p-1 transition-colors cursor-pointer ${glassmorphism ? 'bg-[var(--accent-indigo)]' : 'bg-slate-300 dark:bg-slate-700'}`}>
+                      <div className={`w-4 h-4 bg-white rounded-full shadow-lg transition-transform ${glassmorphism ? 'translate-x-4' : 'translate-x-0'}`} />
+                    </div>
                   </div>
                   <div 
                     className={`p-4 rounded-xl cursor-pointer transition-all border shadow-sm ${
@@ -619,11 +617,9 @@ export default function SettingsApp({ initialTab }) {
                       <span className="block text-sm font-medium text-[var(--text-primary)]">{t('settings_ui.appearance.opaqueMode')}</span>
                       <span className="text-[10px] text-[var(--text-muted)]">{t('settings_ui.appearance.opaqueModeDesc')}</span>
                     </div>
-                    {!glassmorphism && (
-                      <div className="w-10 h-5 bg-[var(--accent-indigo)] rounded-full relative">
-                        <div className="absolute top-1 right-1 w-3 h-3 bg-white rounded-full shadow-lg" />
-                      </div>
-                    )}
+                    <div className={`w-10 h-6 rounded-full p-1 transition-colors cursor-pointer ${!glassmorphism ? 'bg-[var(--accent-indigo)]' : 'bg-slate-300 dark:bg-slate-700'}`}>
+                      <div className={`w-4 h-4 bg-white rounded-full shadow-lg transition-transform ${!glassmorphism ? 'translate-x-4' : 'translate-x-0'}`} />
+                    </div>
                   </div>
                 </div>
               </div>
@@ -886,7 +882,7 @@ export default function SettingsApp({ initialTab }) {
                      </div>
                      <div 
                         onClick={() => setNotifications({ [item.id]: !isActive })}
-                        className={`w-11 h-6 rounded-full p-1 transition-colors cursor-pointer ${isActive ? 'bg-indigo-600' : 'bg-gray-700'}`}
+                        className={`w-11 h-6 rounded-full p-1 transition-colors cursor-pointer ${isActive ? 'bg-[var(--accent-indigo)]' : 'bg-slate-300 dark:bg-slate-700'}`}
                      >
                         <div className={`w-4 h-4 bg-white rounded-full shadow-lg transition-transform ${isActive ? 'translate-x-5' : 'translate-x-0'}`} />
                      </div>
@@ -1556,83 +1552,43 @@ export default function SettingsApp({ initialTab }) {
 
               {/* Terminal Colors */}
               <div className="pt-6 border-t border-[var(--border-color)]">
-                <h3 className="text-sm font-semibold mb-4 flex items-center gap-2">
+                <h3 className="text-sm font-semibold mb-6 flex items-center gap-2">
                    <Palette size={16} className="text-amber-400" />
                    {t('settings_ui.terminal.colors') || 'Terminal Colors'}
                 </h3>
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                  {/* Background */}
-                  <div className="space-y-3">
-                    <label className="text-xs font-bold text-[var(--text-muted)] uppercase tracking-widest">{t('settings_ui.terminal.background')}</label>
-                    <div className="flex items-center gap-3">
-                       <div className="relative w-10 h-10 rounded-xl border-2 border-[var(--border-color)] overflow-hidden bg-[var(--bg-tertiary)] flex-shrink-0 shadow-inner group">
-                         <div 
-                           className="absolute inset-0 transition-transform group-hover:scale-110" 
-                           style={{ backgroundColor: osState.terminalSettings?.theme?.background || '#0c0c0c' }} 
-                         />
+                <div className="space-y-4">
+                  {[
+                    { key: 'background', label: t('settings_ui.terminal.background'), colorId: 'amber', default: '#0c0c0c' },
+                    { key: 'foreground', label: t('settings_ui.terminal.foreground'), colorId: 'emerald', default: '#e4e4e7' },
+                    { key: 'cursor', label: t('settings_ui.terminal.cursor'), colorId: 'indigo', default: '#6366f1' }
+                  ].map(c => (
+                    <div key={c.key} className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 p-4 rounded-2xl bg-[var(--bg-card)] border border-[var(--border-color)]">
+                      <div className="flex flex-col">
+                        <span className="text-sm font-bold text-[var(--text-primary)]">{c.label}</span>
+                        <span className="text-[10px] text-[var(--text-muted)] font-mono uppercase opacity-60">{c.key}</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                         <div className="relative w-10 h-10 rounded-xl border border-[var(--border-color)] overflow-hidden bg-[var(--bg-tertiary)] flex-shrink-0 shadow-sm group">
+                           <div 
+                             className="absolute inset-0 transition-transform group-hover:scale-110" 
+                             style={{ backgroundColor: osState.terminalSettings?.theme?.[c.key] || c.default }} 
+                           />
+                           <input 
+                             type="color" 
+                             value={osState.terminalSettings?.theme?.[c.key] || c.default}
+                             onChange={(e) => updateTerminalTheme(c.key, e.target.value)}
+                             className="absolute inset-0 opacity-0 cursor-pointer w-[200%] h-[200%] -left-1/2 -top-1/2"
+                           />
+                         </div>
                          <input 
-                           type="color" 
-                           value={osState.terminalSettings?.theme?.background || '#0c0c0c'}
-                           onChange={(e) => updateTerminalTheme('background', e.target.value)}
-                           className="absolute inset-0 opacity-0 cursor-pointer w-[200%] h-[200%] -left-1/2 -top-1/2"
+                           type="text"
+                           value={osState.terminalSettings?.theme?.[c.key] || c.default}
+                           onChange={(e) => updateTerminalTheme(c.key, e.target.value)}
+                           className={`w-28 h-10 bg-[var(--bg-tertiary)] border border-[var(--border-color)] rounded-xl px-3 text-xs font-mono text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent-indigo)] transition-all`}
                          />
-                       </div>
-                       <input 
-                         type="text"
-                         value={osState.terminalSettings?.theme?.background || '#0c0c0c'}
-                         onChange={(e) => updateTerminalTheme('background', e.target.value)}
-                         className="flex-1 h-10 bg-[var(--bg-tertiary)] border border-[var(--border-color)] rounded-xl px-3 text-[10px] font-mono text-amber-400 focus:outline-none focus:border-amber-500 transition-all shadow-sm"
-                       />
+                      </div>
                     </div>
-                  </div>
-                  {/* Foreground */}
-                  <div className="space-y-3">
-                    <label className="text-xs font-bold text-[var(--text-muted)] uppercase tracking-widest">{t('settings_ui.terminal.foreground')}</label>
-                    <div className="flex items-center gap-3">
-                       <div className="relative w-10 h-10 rounded-xl border-2 border-[var(--border-color)] overflow-hidden bg-[var(--bg-tertiary)] flex-shrink-0 shadow-inner group">
-                         <div 
-                           className="absolute inset-0 transition-transform group-hover:scale-110" 
-                           style={{ backgroundColor: osState.terminalSettings?.theme?.foreground || '#e4e4e7' }} 
-                         />
-                         <input 
-                           type="color" 
-                           value={osState.terminalSettings?.theme?.foreground || '#e4e4e7'}
-                           onChange={(e) => updateTerminalTheme('foreground', e.target.value)}
-                           className="absolute inset-0 opacity-0 cursor-pointer w-[200%] h-[200%] -left-1/2 -top-1/2"
-                         />
-                       </div>
-                       <input 
-                         type="text"
-                         value={osState.terminalSettings?.theme?.foreground || '#e4e4e7'}
-                         onChange={(e) => updateTerminalTheme('foreground', e.target.value)}
-                         className="flex-1 h-10 bg-[var(--bg-tertiary)] border border-[var(--border-color)] rounded-xl px-3 text-[10px] font-mono text-emerald-400 focus:outline-none focus:border-emerald-500 transition-all shadow-sm"
-                       />
-                    </div>
-                  </div>
-                  {/* Cursor */}
-                  <div className="space-y-3">
-                    <label className="text-xs font-bold text-[var(--text-muted)] uppercase tracking-widest">{t('settings_ui.terminal.cursor')}</label>
-                    <div className="flex items-center gap-3">
-                       <div className="relative w-10 h-10 rounded-xl border-2 border-[var(--border-color)] overflow-hidden bg-[var(--bg-tertiary)] flex-shrink-0 shadow-inner group">
-                         <div 
-                           className="absolute inset-0 transition-transform group-hover:scale-110" 
-                           style={{ backgroundColor: osState.terminalSettings?.theme?.cursor || '#6366f1' }} 
-                         />
-                         <input 
-                           type="color" 
-                           value={osState.terminalSettings?.theme?.cursor || '#6366f1'}
-                           onChange={(e) => updateTerminalTheme('cursor', e.target.value)}
-                           className="absolute inset-0 opacity-0 cursor-pointer w-[200%] h-[200%] -left-1/2 -top-1/2"
-                         />
-                       </div>
-                       <input 
-                         type="text"
-                         value={osState.terminalSettings?.theme?.cursor || '#6366f1'}
-                         onChange={(e) => updateTerminalTheme('cursor', e.target.value)}
-                         className="flex-1 h-10 bg-[var(--bg-tertiary)] border border-[var(--border-color)] rounded-xl px-3 text-[10px] font-mono text-indigo-400 focus:outline-none focus:border-indigo-500 transition-all shadow-sm"
-                       />
-                    </div>
-                  </div>
+                  ))}
                 </div>
               </div>
 
@@ -1674,7 +1630,7 @@ export default function SettingsApp({ initialTab }) {
                   </div>
                   <div 
                     onClick={() => setTerminalSettings({ cursorBlink: !osState.terminalSettings?.cursorBlink })}
-                    className={`w-11 h-6 rounded-full p-1 transition-colors cursor-pointer ${osState.terminalSettings?.cursorBlink !== false ? 'bg-[var(--accent-emerald)]' : 'bg-gray-700'}`}
+                    className={`w-11 h-6 rounded-full p-1 transition-colors cursor-pointer ${osState.terminalSettings?.cursorBlink !== false ? 'bg-[var(--accent-emerald)]' : 'bg-slate-300 dark:bg-slate-700'}`}
                   >
                     <div className={`w-4 h-4 bg-white rounded-full shadow-lg transition-transform ${osState.terminalSettings?.cursorBlink !== false ? 'translate-x-5' : 'translate-x-0'}`} />
                   </div>
@@ -1692,7 +1648,7 @@ export default function SettingsApp({ initialTab }) {
                   </div>
                   <div 
                     onClick={() => setTerminalSettings({ tmuxMouseScrolling: !osState.terminalSettings?.tmuxMouseScrolling })}
-                    className={`w-11 h-6 rounded-full p-1 transition-colors cursor-pointer ${osState.terminalSettings?.tmuxMouseScrolling ? 'bg-[var(--accent-indigo)]' : 'bg-gray-700'}`}
+                    className={`w-11 h-6 rounded-full p-1 transition-colors cursor-pointer ${osState.terminalSettings?.tmuxMouseScrolling ? 'bg-[var(--accent-indigo)]' : 'bg-slate-300 dark:bg-slate-700'}`}
                   >
                     <div className={`w-4 h-4 bg-white rounded-full shadow-lg transition-transform ${osState.terminalSettings?.tmuxMouseScrolling ? 'translate-x-5' : 'translate-x-0'}`} />
                   </div>
@@ -1710,7 +1666,7 @@ export default function SettingsApp({ initialTab }) {
                   </div>
                   <div 
                     onClick={() => setTerminalSettings({ autoTmuxAttach: !osState.terminalSettings?.autoTmuxAttach })}
-                    className={`w-11 h-6 rounded-full p-1 transition-colors cursor-pointer ${osState.terminalSettings?.autoTmuxAttach ? 'bg-[var(--accent-emerald)]' : 'bg-gray-700'}`}
+                    className={`w-11 h-6 rounded-full p-1 transition-colors cursor-pointer ${osState.terminalSettings?.autoTmuxAttach ? 'bg-[var(--accent-emerald)]' : 'bg-slate-300 dark:bg-slate-700'}`}
                   >
                     <div className={`w-4 h-4 bg-white rounded-full shadow-lg transition-transform ${osState.terminalSettings?.autoTmuxAttach ? 'translate-x-5' : 'translate-x-0'}`} />
                   </div>

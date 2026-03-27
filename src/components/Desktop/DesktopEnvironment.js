@@ -421,6 +421,8 @@ export default function DesktopEnvironment() {
         openStandaloneTerminal(connection);
       } else if (targetAppId === 'files') {
         openStandaloneFiles(connection);
+      } else if (targetAppId === 'docker') {
+        openStandaloneDocker(connection);
       } else if (targetAppId === 'ssh-manager') {
         // Default to terminal for SSH manager drop if it's a drag-action
         openStandaloneTerminal(connection);
@@ -633,11 +635,11 @@ export default function DesktopEnvironment() {
   const taskbarPos = osState.taskbarPosition || 'bottom';
   const getDesktopPadding = () => {
     switch (taskbarPos) {
-      case 'top': return 'pt-16';
-      case 'bottom': return 'pb-16';
+      case 'top': return 'pt-14';
+      case 'bottom': return 'pb-14';
       case 'left': return 'pl-16';
       case 'right': return 'pr-16';
-      default: return 'pb-16';
+      default: return 'pb-14';
     }
   };
 
@@ -1006,6 +1008,16 @@ export default function DesktopEnvironment() {
                     <div className="text-left">
                       <span className="text-[13px] text-[var(--text-secondary)] group-hover:text-[var(--text-selected)] block font-medium">Open File Manager</span>
                       <span className="text-[10px] text-[var(--text-muted)] group-hover:text-[var(--text-selected)]/70">Browse remote files</span>
+                    </div>
+                  </button>
+                  <button
+                    onClick={() => openStandaloneDocker(dropMenu.connection)}
+                    className="w-full flex items-center gap-3 px-4 py-2.5 hover:bg-[var(--bg-selected)] transition-colors group"
+                  >
+                    <Server size={16} className="text-sky-400 group-hover:text-[var(--text-selected)]" />
+                    <div className="text-left">
+                      <span className="text-[13px] text-[var(--text-secondary)] group-hover:text-[var(--text-selected)] block font-medium">Open Docker</span>
+                      <span className="text-[10px] text-[var(--text-muted)] group-hover:text-[var(--text-selected)]/70">Manage server containers</span>
                     </div>
                   </button>
                 </>

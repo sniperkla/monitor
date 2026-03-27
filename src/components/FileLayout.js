@@ -83,53 +83,53 @@ const ConnectionPicker = ({ onSelect, search, setSearch, connections, t }) => {
           </div>
 
           <div className="text-center space-y-2">
-            <h2 className="text-2xl font-bold text-white tracking-tight">
+            <h2 className="text-2xl font-bold text-[var(--text-primary)] tracking-tight">
               {t('files.layout.selectServer')}
             </h2>
-            <p className="text-zinc-500 text-sm max-w-[280px] leading-relaxed mx-auto">
+            <p className="text-[var(--text-muted)] text-sm max-w-[280px] leading-relaxed mx-auto">
               {t('files.layout.dropServer')}
             </p>
           </div>
 
           <div className="w-full relative group">
-            <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-500 group-focus-within:text-indigo-400 transition-colors" />
+            <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-[var(--text-muted)] group-focus-within:text-[var(--accent-indigo)] transition-colors" />
             <input 
               type="text"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               placeholder={t('files.layout.searchServer')}
-              className="w-full h-12 bg-white/5 border border-white/10 rounded-2xl pl-12 pr-4 text-white focus:outline-none focus:border-indigo-500/50 focus:ring-4 focus:ring-indigo-500/10 transition-all placeholder:text-zinc-600 backdrop-blur-sm"
+              className="w-full h-12 bg-[var(--bg-card)] border border-[var(--border-color)] rounded-2xl pl-12 pr-4 text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent-indigo)]/50 focus:ring-4 focus:ring-[var(--accent-indigo)]/10 transition-all placeholder:text-[var(--text-muted)] backdrop-blur-sm shadow-sm"
             />
           </div>
 
-          <div className="w-full rounded-2xl border border-white/5 bg-black/20 p-2 space-y-1 backdrop-blur-sm shadow-2xl">
+          <div className="w-full rounded-2xl border border-[var(--border-color)] bg-[var(--bg-card)] p-2 space-y-1 backdrop-blur-sm shadow-xl">
             {filteredConnections.length > 0 ? (
               filteredConnections.map((conn) => (
                 <button
                   key={conn.id || conn._id}
                   onClick={() => onSelect(conn)}
-                  className="w-full flex items-center gap-4 p-3 rounded-xl hover:bg-white/10 transition-all group text-left border border-transparent hover:border-white/5 shadow-sm active:scale-[0.98]"
+                  className="w-full flex items-center gap-4 p-3 rounded-xl hover:bg-[var(--bg-card-hover)] transition-all group text-left border border-transparent hover:border-[var(--border-hover)] active:scale-[0.98]"
                 >
                   <div className={`w-10 h-10 rounded-xl flex items-center justify-center text-white font-medium shadow-lg shrink-0`} 
                      style={{ backgroundColor: conn.color || '#6366f1', background: `linear-gradient(135deg, ${conn.color || '#6366f1'}, ${conn.color || '#6366f1'}cc)` }}>
                     {conn.type === 'ssh' ? <Monitor size={18} /> : <Database size={18} />}
                   </div>
                   <div className="flex-1 min-w-0">
-                    <div className="text-sm font-semibold text-zinc-200 truncate group-hover:text-white transition-colors">
+                    <div className="text-sm font-semibold text-[var(--text-primary)] truncate transition-colors">
                       {conn.name}
                     </div>
-                    <div className="text-[11px] text-zinc-500 truncate font-mono">
+                    <div className="text-[11px] text-[var(--text-muted)] truncate font-mono">
                       {conn.host}
                     </div>
                   </div>
-                  <div className="w-8 h-8 rounded-full bg-white/5 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-all translate-x-1 group-hover:translate-x-0">
-                    <ChevronRight size={16} className="text-indigo-400" />
+                  <div className="w-8 h-8 rounded-full bg-[var(--bg-tertiary)] flex items-center justify-center opacity-0 group-hover:opacity-100 transition-all translate-x-1 group-hover:translate-x-0">
+                    <ChevronRight size={16} className="text-[var(--accent-indigo)]" />
                   </div>
                 </button>
               ))
             ) : (
               <div className="p-10 text-center opacity-40">
-                <Database className="w-10 h-10 text-zinc-500 mx-auto mb-3" />
+                <Database className="w-10 h-10 text-[var(--text-muted)] mx-auto mb-3" />
                 <p className="text-xs font-medium uppercase tracking-[0.2em]">{t('files.layout.noServers')}</p>
               </div>
             )}

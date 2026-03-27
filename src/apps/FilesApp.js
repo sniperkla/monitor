@@ -125,10 +125,10 @@ export default function FilesApp({ onEditConnection, initialConnection, initialC
   };
 
   return (
-    <div className="flex flex-col h-full bg-[var(--bg-primary)] text-[var(--text-primary)] overflow-hidden">
+    <div className="flex flex-col h-full bg-transparent text-[var(--text-primary)] overflow-hidden">
       <div className="flex-1 min-h-0 relative">
         {isSelecting ? (
-          <div className="absolute inset-0 bg-[var(--bg-primary)] overflow-y-auto z-10">
+          <div className="absolute inset-0 bg-[var(--bg-primary)]/40 overflow-y-auto z-10">
             <div className="p-8 max-w-3xl mx-auto">
               <div className="flex items-center gap-4 mb-8">
                 <div className="w-12 h-12 rounded-2xl flex items-center justify-center shadow-lg" style={{ background: 'var(--glow-indigo)', border: '1px solid var(--accent-indigo)' }}>

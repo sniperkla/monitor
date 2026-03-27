@@ -173,34 +173,34 @@ function PaneConnectionPicker({ connections, onSelect, onSplitH, onSplitV, paneI
   const sshConnections = connections.filter(c => c.type !== 'database');
 
   return (
-    <div className="h-full flex flex-col items-center justify-center bg-[#0a0a0a] p-6">
+    <div className="h-full flex flex-col items-center justify-center bg-[var(--bg-primary)] p-6">
       <div className="w-14 h-14 rounded-2xl flex items-center justify-center mb-4"
         style={{ background: 'linear-gradient(135deg, rgba(74,222,128,0.1), rgba(34,211,238,0.1))', border: '1px solid rgba(74,222,128,0.2)' }}>
-        <Terminal size={24} className="text-emerald-400" />
+        <Terminal size={24} className="text-emerald-500 dark:text-emerald-400" />
       </div>
-      <h3 className="text-sm font-bold text-white/80 mb-1 tracking-tight">Select Server</h3>
-      <p className="text-[11px] text-white/30 mb-5 font-mono">$ ssh connect</p>
+      <h3 className="text-sm font-bold text-[var(--text-primary)]/80 mb-1 tracking-tight">Select Server</h3>
+      <p className="text-[11px] text-[var(--text-primary)]/30 mb-5 font-mono">$ ssh connect</p>
 
       <div className="w-full max-w-sm space-y-1.5 max-h-[240px] overflow-y-auto custom-scrollbar px-1">
         {sshConnections.map(conn => (
           <button
             key={conn._id}
             onClick={() => onSelect(conn)}
-            className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg border border-white/5 bg-white/[0.02] hover:bg-white/[0.06] hover:border-white/10 transition-all group text-left"
+            className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg border border-[var(--border-color)]/5 bg-[var(--text-primary)]/[0.02] hover:bg-[var(--text-primary)]/[0.06] hover:border-[var(--border-color)]/10 transition-all group text-left"
           >
             <div className="w-7 h-7 rounded-md flex items-center justify-center shrink-0"
               style={{ background: `${conn.color || '#6366f1'}15`, border: `1px solid ${conn.color || '#6366f1'}30` }}>
               <Server size={13} style={{ color: conn.color || '#6366f1' }} />
             </div>
             <div className="flex-1 min-w-0">
-              <div className="text-xs font-semibold text-white/80 truncate">{conn.name}</div>
-              <div className="text-[10px] text-white/30 font-mono truncate">{conn.host}</div>
+              <div className="text-xs font-semibold text-[var(--text-primary)]/80 truncate">{conn.name}</div>
+              <div className="text-[10px] text-[var(--text-primary)]/30 font-mono truncate">{conn.host}</div>
             </div>
             <div className={`w-1.5 h-1.5 rounded-full ${conn.status === 'online' ? 'bg-emerald-400' : 'bg-red-500/60'}`} />
           </button>
         ))}
         {sshConnections.length === 0 && (
-          <div className="text-center py-8 text-white/20 text-xs font-mono">No SSH connections</div>
+          <div className="text-center py-8 text-[var(--text-primary)]/20 text-xs font-mono">No SSH connections</div>
         )}
       </div>
     </div>
@@ -254,7 +254,7 @@ function LayoutRenderer({ layout, activePaneId, onFocusPane, onClosePane, onSpli
           minWidth: 0,
           minHeight: 0,
           overflow: 'hidden',
-          outline: isActive ? '1px solid rgba(74,222,128,0.35)' : '1px solid rgba(255,255,255,0.04)',
+          outline: isActive ? '1px solid rgba(74,222,128,0.35)' : '1px solid var(--border-color)',
           transition: 'outline-color 0.15s',
         }}
         onClick={(e) => {
@@ -267,8 +267,8 @@ function LayoutRenderer({ layout, activePaneId, onFocusPane, onClosePane, onSpli
           className="flex items-center justify-between px-2 shrink-0"
           style={{
             height: '26px',
-            background: isActive ? 'rgba(74,222,128,0.06)' : 'rgba(255,255,255,0.02)',
-            borderBottom: isActive ? '1px solid rgba(74,222,128,0.15)' : '1px solid rgba(255,255,255,0.04)',
+            background: isActive ? 'rgba(74,222,128,0.06)' : 'var(--bg-tertiary)',
+            borderBottom: isActive ? '1px solid rgba(74,222,128,0.15)' : '1px solid var(--border-color)',
             transition: 'all 0.15s',
           }}
         >
@@ -276,26 +276,26 @@ function LayoutRenderer({ layout, activePaneId, onFocusPane, onClosePane, onSpli
             {layout.termData && (
               <>
                 <div className="w-1.5 h-1.5 rounded-full" style={{ background: layout.termData.color || '#6366f1' }} />
-                <span className="text-[10px] font-mono text-white/50 truncate max-w-[120px]">
+                <span className="text-[10px] font-mono text-[var(--text-primary)]/50 truncate max-w-[120px]">
                   {layout.termData.connectionName}
                 </span>
               </>
             )}
             {!layout.termData && (
-              <span className="text-[10px] font-mono text-white/20">empty</span>
+              <span className="text-[10px] font-mono text-[var(--text-primary)]/20">empty</span>
             )}
           </div>
           <div className="flex items-center gap-0.5">
             <button
               onClick={(e) => { e.stopPropagation(); onSplitPane(layout.id, 'horizontal'); }}
-              className="p-0.5 rounded hover:bg-white/10 text-white/30 hover:text-white/60 transition-colors"
+              className="p-0.5 rounded hover:bg-[var(--text-primary)]/10 text-[var(--text-primary)]/30 hover:text-[var(--text-primary)]/60 transition-colors"
               title="Split Vertical (Ctrl+B %)"
             >
               <Columns size={10} />
             </button>
             <button
               onClick={(e) => { e.stopPropagation(); onSplitPane(layout.id, 'vertical'); }}
-              className="p-0.5 rounded hover:bg-white/10 text-white/30 hover:text-white/60 transition-colors"
+              className="p-0.5 rounded hover:bg-[var(--text-primary)]/10 text-[var(--text-primary)]/30 hover:text-[var(--text-primary)]/60 transition-colors"
               title="Split Horizontal (Ctrl+B &quot;)"
             >
               <Rows size={10} />
@@ -307,7 +307,7 @@ function LayoutRenderer({ layout, activePaneId, onFocusPane, onClosePane, onSpli
                    detail: { terminalId: layout.termData?.connectionId } 
                  }));
                }}
-               className="p-0.5 rounded hover:bg-white/10 text-white/30 hover:text-white/60 transition-colors"
+               className="p-0.5 rounded hover:bg-[var(--text-primary)]/10 text-[var(--text-primary)]/30 hover:text-[var(--text-primary)]/60 transition-colors"
                title="Restart Session"
              >
                <RefreshCw size={10} />
@@ -331,14 +331,14 @@ function LayoutRenderer({ layout, activePaneId, onFocusPane, onClosePane, onSpli
                   setTimeout(() => document.body.removeChild(ghost), 0);
                 }
               }}
-              className="p-0.5 rounded hover:bg-white/10 text-white/30 hover:text-white/60 transition-colors cursor-grab active:cursor-grabbing"
+              className="p-0.5 rounded hover:bg-[var(--text-primary)]/10 text-[var(--text-primary)]/30 hover:text-[var(--text-primary)]/60 transition-colors cursor-grab active:cursor-grabbing"
               title="Pop out to Window (Drag to Desktop)"
             >
               <ExternalLink size={10} />
             </button>
             <button
               onClick={(e) => { e.stopPropagation(); onClosePane(layout.id); }}
-              className="p-0.5 rounded hover:bg-red-500/20 text-white/30 hover:text-red-400 transition-colors"
+              className="p-0.5 rounded hover:bg-red-500/20 text-[var(--text-primary)]/30 hover:text-red-400 transition-colors"
               title="Close Pane (Ctrl+B x)"
             >
               <X size={10} />
@@ -853,13 +853,13 @@ export default function TmuxLayout({ windowId = 'default', isTmuxMode = false })
   // Render
   if (windows.length === 0) {
     return (
-      <div className="h-full flex flex-col items-center justify-center bg-black/40 backdrop-blur-sm border border-white/5 rounded-xl">
+      <div className="h-full flex flex-col items-center justify-center bg-[var(--bg-primary)] backdrop-blur-sm border border-[var(--border-color)] rounded-xl">
         <div className="p-8 text-center space-y-4">
-          <div className="w-16 h-16 bg-white/5 rounded-full flex items-center justify-center mx-auto border border-white/10 animate-pulse">
-             <Terminal size={32} className="text-white/20" />
+          <div className="w-16 h-16 bg-[var(--text-primary)]/5 rounded-full flex items-center justify-center mx-auto border border-[var(--border-color)]/10 animate-pulse">
+             <Terminal size={32} className="text-[var(--text-primary)]/20" />
           </div>
-          <p className="text-white/30 font-mono text-sm tracking-widest uppercase">No Active Sessions</p>
-          <p className="text-white/10 text-xs max-w-xs mx-auto">Select a connection from the sidebar to start a new tmux workspace.</p>
+          <p className="text-[var(--text-primary)]/30 font-mono text-sm tracking-widest uppercase">No Active Sessions</p>
+          <p className="text-[var(--text-primary)]/10 text-xs max-w-xs mx-auto">Select a connection from the sidebar to start a new tmux workspace.</p>
         </div>
       </div>
     );
@@ -894,7 +894,7 @@ export default function TmuxLayout({ windowId = 'default', isTmuxMode = false })
                       <Maximize2 size={11} className="text-emerald-400" />
                       <span className="text-[10px] font-bold text-emerald-400 tracking-wider">ZOOMED — {getPaneById(win.layout, zoomedPaneId)?.termData?.connectionName}</span>
                     </div>
-                    <button onClick={() => setZoomedPaneId(null)} className="text-[10px] text-white/30 hover:text-white/60 font-mono">Ctrl+B z</button>
+                    <button onClick={() => setZoomedPaneId(null)} className="text-[10px] text-[var(--text-primary)]/30 hover:text-[var(--text-primary)]/60 font-mono">Ctrl+B z</button>
                   </div>
                   <div className="flex-1 relative overflow-hidden">
                     <PortalAnchor paneId={zoomedPaneId} onRegisterRef={registerPortalRef} />

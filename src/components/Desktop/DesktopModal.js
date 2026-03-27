@@ -64,7 +64,7 @@ export default function DesktopModal() {
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
         exit={{ opacity: 0 }}
-        className="fixed inset-0 z-[100000] flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm"
+        className="fixed inset-0 z-[100000] flex items-center justify-center p-4 bg-transparent"
         onClick={handleCancel}
       >
         <div onClick={(e) => e.stopPropagation()}>
@@ -75,14 +75,14 @@ export default function DesktopModal() {
             onClose={handleCancel}
             zIndexClassName="z-[100000]"
             draggable={true}
-            resizable={true}
+            resizable={false}
             defaultWidth={400}
-            defaultHeight={modal.type === 'prompt' ? 300 : 220}
+            defaultHeight={modal.type === 'prompt' ? 220 : 180}
             minWidth={320}
-            minHeight={180}
-            contentClassName="px-6 py-6"
+            minHeight={150}
+            contentClassName="px-6 pt-5 pb-8"
             closeOnOverlayClick
-            overlayClassName="bg-black/40 backdrop-blur-sm"
+            overlayClassName="bg-transparent"
             enableMinimize={false}
             enableMaximize={false}
           >
@@ -91,14 +91,16 @@ export default function DesktopModal() {
             </p>
 
             {modal.type === 'prompt' && (
-              <input
-                autoFocus
-                type="text"
-                value={promptValue}
-                onChange={(e) => setPromptValue(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && handleConfirm()}
-                className="w-full px-4 py-3 bg-[var(--bg-primary)] border border-[var(--border-color)] rounded-xl text-sm text-[var(--text-primary)] placeholder-[var(--text-muted)] focus:outline-none focus:border-indigo-500/50 focus:ring-1 focus:ring-indigo-500/25 transition-all mb-4"
-              />
+              <div className="relative">
+                <input
+                  autoFocus
+                  type="text"
+                  value={promptValue}
+                  onChange={(e) => setPromptValue(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && handleConfirm()}
+                  className="w-full px-4 py-2.5 bg-black/20 dark:bg-black/40 border border-[var(--border-color)] rounded-xl text-sm text-[var(--text-primary)] placeholder-[var(--text-muted)] focus:outline-none focus:border-indigo-500/50 focus:ring-1 focus:ring-indigo-500/25 transition-all mb-4"
+                />
+              </div>
             )}
 
             <div className="flex items-center justify-end gap-3 mt-4">

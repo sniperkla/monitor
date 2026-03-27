@@ -254,7 +254,7 @@ export default function SpotlightSearch() {
       minHeight={300}
       contentClassName="p-0"
       closeOnOverlayClick
-      overlayClassName="bg-black/40 backdrop-blur-sm"
+      overlayClassName="bg-transparent"
       containerClassName="items-start pt-[18vh]"
       windowClassName="shadow-2xl"
       enableMinimize={false}

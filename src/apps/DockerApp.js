@@ -956,21 +956,43 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
     }));
   };
 
+  // Unique Stacks
+  const uniqueStacks = useMemo(() => {
+    const stacks = new Set();
+    containers.forEach(c => {
+      if (c.stack) stacks.add(`stack:${c.stack}`);
+    });
+    return Array.from(stacks).sort();
+  }, [containers]);
+
   // Filtered containers
   const filteredContainers = useMemo(() => {
     if (containerFilter === 'all') return containers;
     if (containerFilter === 'running') return containers.filter(c => c.state === 'running');
-    return containers.filter(c => c.state !== 'running');
+    if (containerFilter === 'stopped') return containers.filter(c => c.state !== 'running');
+    if (containerFilter.startsWith('stack:')) {
+      const targetStack = containerFilter.replace('stack:', '');
+      return containers.filter(c => c.stack === targetStack);
+    }
+    return containers;
   }, [containers, containerFilter]);
 
-  const runningCount = containers.filter(c => c.state === 'running').length;
-  const stoppedCount = containers.filter(c => c.state !== 'running').length;
+  const getFilterCount = useCallback((f) => {
+    if (f === 'all') return containers.length;
+    if (f === 'running') return containers.filter(c => c.state === 'running').length;
+    if (f === 'stopped') return containers.filter(c => c.state !== 'running').length;
+    if (f.startsWith('stack:')) return containers.filter(c => c.stack === f.replace('stack:', '')).length;
+    return 0;
+  }, [containers]);
+
+  const runningCount = getFilterCount('running');
+  const stoppedCount = getFilterCount('stopped');
 
   // ── Connection Selector ──
   if (!selectedConnection) {
     return (
-      <div className="flex flex-col h-full bg-[var(--bg-primary)] p-8">
-        <div className="max-w-4xl mx-auto w-full text-center">
+      <div className="flex flex-col h-full bg-transparent overflow-y-auto custom-scrollbar">
+        <div className="max-w-4xl mx-auto w-full text-center p-8 pb-16">
             <div className="w-20 h-20 rounded-2xl bg-sky-500/10 flex items-center justify-center mx-auto mb-6">
               <Box size={36} className="text-sky-400" />
             </div>
@@ -978,7 +1000,23 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
             <p className="text-sm text-[var(--text-muted)] mb-8">Select a server to manage Docker containers</p>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 {sshConnections.map(conn => (
-                <div key={conn._id} onClick={() => setSelectedConnection(conn)} className="p-4 rounded-xl border border-[var(--border-color)] bg-[var(--bg-card)] cursor-pointer hover:bg-white/5 hover:border-sky-500/30 transition-all text-left group">
+                <div 
+                  key={conn._id} 
+                  draggable
+                  onDragStart={(e) => {
+                    e.dataTransfer.setData('application/ssh-connection', JSON.stringify(conn));
+                    e.dataTransfer.effectAllowed = 'copy';
+                    const ghost = document.createElement('div');
+                    ghost.className = 'flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-semibold text-white';
+                    ghost.style.cssText = `background:${conn.color || '#6366f1'};position:fixed;top:-100px;left:-100px;z-index:99999;opacity:0.9;border-radius:8px;padding:6px 14px;pointer-events:none;`;
+                    ghost.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="8" x="2" y="14" rx="2"/><rect width="20" height="8" x="2" y="2" rx="2"/><line x1="6" x2="6.01" y1="18" y2="18"/><line x1="6" x2="6.01" y1="6" y2="6"/></svg> ${conn.name}`;
+                    document.body.appendChild(ghost);
+                    e.dataTransfer.setDragImage(ghost, 0, 0);
+                    setTimeout(() => document.body.removeChild(ghost), 0);
+                  }}
+                  onClick={() => setSelectedConnection(conn)} 
+                  className="p-4 rounded-xl border border-[var(--border-color)] bg-[var(--bg-card)] hover:bg-[var(--bg-card-hover)] hover:border-sky-500/30 transition-all text-left group cursor-grab active:cursor-grabbing"
+                >
                     <div className="flex items-center gap-4">
                         <div className="w-10 h-10 rounded-lg flex items-center justify-center transition-transform group-hover:scale-110" style={{ background: `${conn.color}20`, color: conn.color }}>
                             <Laptop size={20} />
@@ -1007,7 +1045,7 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
   const tabColors = { sky: 'bg-sky-500', emerald: 'bg-emerald-500', violet: 'bg-violet-500', amber: 'bg-amber-500' };
 
   return (
-    <div className="flex flex-col h-full bg-[var(--bg-primary)] text-[var(--text-primary)]">
+    <div className="flex flex-col h-full bg-transparent text-[var(--text-primary)]">
         {/* ── Toolbar ── */}
         <div className="flex items-center justify-between bg-[var(--bg-secondary)] border-b border-[var(--border-color)] px-4 h-12 shrink-0">
             <div className="flex items-center gap-4">
@@ -1077,20 +1115,30 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
 
                             {/* Filter and Action bar */}
                             <div className="flex items-center justify-between">
-                                <div className="flex items-center gap-2">
-                                    {['all', 'running', 'stopped'].map(f => (
-                                      <button 
-                                        key={f}
-                                        onClick={() => setContainerFilter(f)}
-                                        className={`px-3 py-1 rounded-lg text-[10px] font-bold uppercase transition-all ${
-                                          containerFilter === f 
-                                            ? 'bg-sky-500/15 text-sky-400 border border-sky-500/30' 
-                                            : 'text-[var(--text-muted)] hover:text-white hover:bg-white/5 border border-transparent'
-                                        }`}
-                                      >
-                                        {f} {f === 'all' ? containers.length : f === 'running' ? runningCount : stoppedCount}
-                                      </button>
-                                    ))}
+                                <div className="flex items-center gap-2 overflow-x-auto scrollbar-hide shrink-0 pb-1 max-w-[70%]">
+                                    {['all', 'running', 'stopped', ...uniqueStacks].map(f => {
+                                      const isActive = containerFilter === f;
+                                      const isStack = f.startsWith('stack:');
+                                      const label = isStack ? `★ ${f.replace('stack:', '')}` : f;
+                                      
+                                      return (
+                                        <button 
+                                          key={f}
+                                          onClick={() => setContainerFilter(f)}
+                                          className={`px-3 py-1 rounded-lg text-[10px] font-bold uppercase transition-all shrink-0 ${
+                                            isActive 
+                                              ? isStack 
+                                                ? 'bg-purple-500/15 text-purple-500 dark:text-purple-400 border border-purple-500/30'
+                                                : 'bg-sky-500/15 text-sky-500 dark:text-sky-400 border border-sky-500/30'
+                                              : isStack
+                                                ? 'text-[var(--text-muted)] hover:text-purple-500 dark:hover:text-purple-400 hover:bg-purple-500/5 border border-transparent'
+                                                : 'text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-black/5 dark:hover:bg-white/5 border border-transparent'
+                                          }`}
+                                        >
+                                          {label} <span className="opacity-70 ml-1">{getFilterCount(f)}</span>
+                                        </button>
+                                      );
+                                    })}
                                 </div>
                                 <button 
                                   onClick={() => handleOpenCreateModal()}
@@ -1224,14 +1272,6 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
                                             title="Backup Files & Data (Heavy)"
                                           >
                                             <Archive size={10} />
-                                          </button>
-                                          <button 
-                                            onClick={(e) => { e.stopPropagation(); handleOpenServiceConfig(c); }} 
-                                            disabled={c.state !== 'running'}
-                                            className="py-1.5 px-2.5 rounded-lg bg-indigo-500/10 text-indigo-400 text-[10px] font-bold disabled:opacity-20 hover:bg-indigo-500/20 transition-all flex items-center gap-1"
-                                            title="Service Config"
-                                          >
-                                            <Settings size={10} />
                                           </button>
                                           <button 
                                             onClick={(e) => { e.stopPropagation(); handleExportProject(c); }} 
@@ -1849,7 +1889,7 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
             maxWidthClassName="max-w-[360px]"
             closeOnOverlayClick
           >
-            <div className="p-5 flex flex-col h-full bg-[var(--bg-primary)]">
+            <div className="p-5 flex flex-col h-full bg-transparent">
               <div className="text-[13px] leading-relaxed text-[var(--text-primary)] mb-4">
                 This will destroy all unused volumes and their data irreversibly.
                 To confirm, type <strong className="text-rose-400">delete</strong> below:

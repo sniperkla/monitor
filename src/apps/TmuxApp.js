@@ -166,17 +166,6 @@ export default function TmuxApp({ initialConnection }) {
     setTimeout(() => emitTmuxLs(), 1200);
   };
 
-  const fixScrolling = () => {
-    if (!socketRef.current) return;
-    setIsLoading(true);
-    // Add to config AND apply immediately to the current server session
-    const cmd = `echo "set -g mouse on" >> ~/.tmux.conf; tmux source-file ~/.tmux.conf 2>/dev/null; tmux set-option -g mouse on\r`;
-    socketRef.current.emit('ssh:input', cmd);
-    setTimeout(() => {
-        setIsLoading(false);
-        alert("Tmux Mouse Mode enabled. You can now use your mouse wheel to scroll!");
-    }, 1000);
-  };
 
   const handleInstallTmux = () => {
     if (!socketRef.current) return;
@@ -356,14 +345,6 @@ export default function TmuxApp({ initialConnection }) {
                             <p className="text-sm text-[var(--text-muted)]">View and manage background terminal sessions</p>
                         </div>
                         <div className="flex gap-2">
-                            <button 
-                                onClick={fixScrolling}
-                                className="px-3 py-1.5 rounded-lg border border-indigo-500/30 bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-400 flex items-center gap-2 text-xs font-semibold transition-all"
-                                title="Enable mouse support for scrolling & window selection"
-                            >
-                                <Zap size={12} />
-                                Fix Scroll
-                            </button>
                             <button 
                                 onClick={fetchSessions}
                                 className="px-3 py-1.5 rounded-lg border border-[var(--border-color)] bg-white/5 hover:bg-white/10 flex items-center gap-2 text-xs font-semibold transition-all"

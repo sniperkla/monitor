@@ -78,7 +78,9 @@ export default function MasterPasswordModal() {
   const inputRef = useRef(null);
 
   useEffect(() => {
-    setMounted(true);
+    // Wait for system boot sequence to complete before showing the vault login
+    const timer = setTimeout(() => setMounted(true), 2500);
+    return () => clearTimeout(timer);
   }, []);
 
   // Auto-set mode based on vault status

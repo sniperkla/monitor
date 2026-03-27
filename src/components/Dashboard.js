@@ -649,7 +649,7 @@ function ConnectionCard({ conn, onClick }) {
       onClick={onClick}
     >
       <div className="absolute top-4 right-4 flex gap-1 items-center">
-         <span className="text-[9px] font-bold uppercase py-0.5 px-2 bg-white/5 rounded-full border border-white/10" style={{ color: conn.color }}>
+         <span className="text-[9px] font-bold uppercase py-0.5 px-2 bg-[var(--text-primary)]/5 rounded-full border border-[var(--text-primary)]/10" style={{ color: conn.color }}>
            {conn.type === 'database' ? (conn.dbProvider || 'db').toUpperCase() : 'SSH'}
          </span>
          <div className={`w-2 h-2 rounded-full ${isOnline ? 'bg-emerald-500 animate-pulse' : 'bg-rose-500'}`} />

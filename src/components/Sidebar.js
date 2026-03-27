@@ -274,7 +274,7 @@ export default function Sidebar({ onNewConnection, onEditConnection }) {
           </div>
           <button 
             onClick={(e) => { e.stopPropagation(); dispatch({ type: 'TOGGLE_SIDEBAR' }); }}
-            className="p-1.5 rounded-lg hover:bg-[var(--bg-tertiary)] transition-colors text-[var(--text-muted)] hover:text-white"
+            className="p-1.5 rounded-lg hover:bg-[var(--bg-tertiary)] transition-colors text-[var(--text-muted)] hover:text-[var(--text-primary)]"
             title="Collapse Sidebar"
           >
             <PanelLeftClose size={18} />
@@ -435,7 +435,7 @@ export default function Sidebar({ onNewConnection, onEditConnection }) {
                   {conn.type !== 'database' && (
                     <>
                       <button
-                        className="btn-icon p-1.5 hover:bg-white/10 rounded"
+                        className="btn-icon p-1.5 hover:bg-[var(--bg-card-hover)] rounded"
                         title={t('ssh.modal.actions.files')}
                         onClick={(e) => { e.stopPropagation(); handleFiles(conn); }}
                       >
@@ -443,7 +443,7 @@ export default function Sidebar({ onNewConnection, onEditConnection }) {
                       </button>
                       
                       <button
-                        className="btn-icon p-1.5 hover:bg-white/10 rounded"
+                        className="btn-icon p-1.5 hover:bg-[var(--bg-card-hover)] rounded"
                         title="Docker Manager"
                         onClick={(e) => { 
                           e.stopPropagation(); 
@@ -456,14 +456,14 @@ export default function Sidebar({ onNewConnection, onEditConnection }) {
                   )}
 
                   <button
-                    className="btn-icon p-1.5 hover:bg-white/10 rounded"
+                    className="btn-icon p-1.5 hover:bg-[var(--bg-card-hover)] rounded"
                     title={t('ssh.modal.actions.edit')}
                     onClick={(e) => { e.stopPropagation(); onEditConnection(conn); }}
                   >
                     <Edit size={14} />
                   </button>
                   <button
-                    className="btn-icon p-1.5 hover:bg-white/10 rounded"
+                    className="btn-icon p-1.5 hover:bg-[var(--bg-card-hover)] rounded"
                     title={t('ssh.modal.actions.delete')}
                     onClick={(e) => { e.stopPropagation(); handleDelete(conn._id); }}
                   >

@@ -13,6 +13,7 @@ import { useSession, signOut } from 'next-auth/react';
 import { useTranslation } from 'react-i18next';
 import TerminalApp from '@/apps/TerminalApp';
 import FilesApp from '@/apps/FilesApp';
+import AppIcon from '@/components/common/AppIcon';
 import PreviewWindow from './PreviewWindow';
 import AiUsageBar from '@/components/AiUsageBar';
 import { useAIUsagePolling } from '@/hooks/useAIUsage';
@@ -151,8 +152,8 @@ export default function Taskbar() {
     taskbar fixed z-[10000] transition-all duration-300 bg-transparent
     ${taskbarPosition === 'bottom' ? 'bottom-0 left-0 w-full h-[var(--taskbar-size,56px)]' : ''}
     ${taskbarPosition === 'top' ? 'top-0 left-0 w-full h-[var(--taskbar-size,56px)]' : ''}
-    ${taskbarPosition === 'left' ? 'top-0 left-0 h-full w-[var(--taskbar-size,56px)]' : ''}
-    ${taskbarPosition === 'right' ? 'top-0 right-0 h-full w-[var(--taskbar-size,56px)]' : ''}
+    ${taskbarPosition === 'left' ? 'top-0 left-0 h-full w-16' : ''}
+    ${taskbarPosition === 'right' ? 'top-0 right-0 h-full w-16' : ''}
   `;
 
   // Start menu positioning based on taskbar position
@@ -250,17 +251,21 @@ export default function Taskbar() {
           display: 'flex',
           flexDirection: isVertical ? 'column' : 'row',
           alignItems: 'center',
-          justifyContent: isVertical ? 'center' : 'center',
-          padding: isVertical ? '0.5rem 0' : '0.5rem 0.75rem',
+          justifyContent: 'center',
+          padding: 0,
           cursor: 'default'
         }}
       >
         <div
-          className={`flex ${isVertical ? 'flex-col py-2 px-2' : 'flex-row px-3 py-2'} items-center gap-2 rounded-2xl border border-[var(--border-color)] bg-[var(--bg-secondary)] shadow-2xl backdrop-blur-xl`}
+          className={`flex ${isVertical ? 'flex-col py-3 px-1 w-full h-full' : 'flex-row px-3 py-2 w-full h-full'} items-center gap-2 rounded-none border-0 bg-[var(--bg-secondary)] shadow-2xl backdrop-blur-xl ${
+            isVertical 
+              ? (taskbarPosition === 'left' ? 'border-r border-[var(--border-color)]' : 'border-l border-[var(--border-color)]')
+              : (taskbarPosition === 'top' ? 'border-b border-[var(--border-color)]' : 'border-t border-[var(--border-color)]')
+          }`}
           style={{
             background: glassmorphism ? 'var(--taskbar-bg)' : 'var(--bg-primary)',
             backdropFilter: glassmorphism ? 'blur(18px)' : 'none',
-            boxShadow: '0 18px 45px var(--shadow-strong), 0 0 0 1px var(--border-color)'
+            boxShadow: '0 0 30px var(--shadow-strong)'
           }}
         >
         <div className={`flex ${isVertical ? 'flex-col' : 'flex-row'} items-center gap-2 relative`} ref={startMenuRef}>
@@ -269,7 +274,7 @@ export default function Taskbar() {
               setStartMenuOpen(!startMenuOpen);
               setContextMenu(null);
             }}
-            className={`w-10 h-10 rounded-2xl transition-all flex items-center justify-center shadow-lg shrink-0 border border-[var(--accent-indigo)]/30 ${
+            className={`${isVertical ? 'w-10 h-10' : 'w-10 h-10'} rounded-2xl transition-all flex items-center justify-center shadow-lg shrink-0 border border-[var(--accent-indigo)]/30 ${
               startMenuOpen ? 'bg-[var(--bg-selected)] scale-95' : 'bg-[var(--bg-selected)] hover:opacity-90 active:scale-90 shadow-[var(--glow-indigo)]/50'
             }`}
           >
@@ -370,8 +375,8 @@ export default function Taskbar() {
                       }}
                       className="w-full flex items-center gap-3 px-3 py-2 rounded-xl hover:bg-[var(--bg-tertiary)] transition-colors group"
                     >
-                      <div className={`p-2 rounded-lg bg-[var(--bg-primary)] group-hover:bg-[var(--bg-card-hover)] text-[var(--accent-indigo)]`}>
-                        <app.icon size={18} />
+                      <div className={`w-8 h-8 rounded-lg ${state.theme === 'retro' || state.theme === 'fallout' || state.theme === 'cyberpunk' ? '' : 'bg-[var(--bg-primary)]'} group-hover:bg-[var(--bg-card-hover)] flex items-center justify-center p-1`}>
+                        <AppIcon id={app.id} size={16} theme={state.theme} iconStyle={state.iconStyle} />
                       </div>
                       <div className="text-left">
                         <span className="block text-sm font-medium text-[var(--text-primary)]">{app.title}</span>
@@ -417,12 +422,7 @@ export default function Taskbar() {
                   : 'bg-[var(--bg-card)] hover:bg-[var(--bg-tertiary)] border-[var(--border-color)]'}
               `}
             >
-              {win.icon && (
-                <win.icon
-                  size={16}
-                   className={`text-[var(--accent-indigo)] group-hover:scale-110 transition-transform shrink-0 ${isHorizontal ? 'opacity-90 dark:opacity-100' : ''}`}
-                />
-              )}
+              <AppIcon id={win.id.split('-')[0]} size={20} theme={state.theme} iconStyle={state.iconStyle} />
               {activeWindowId === win.id && !win.isMinimized && (
                 <motion.div
                   layoutId="taskbar-active"

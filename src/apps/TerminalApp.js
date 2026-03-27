@@ -139,10 +139,10 @@ export default function TerminalApp({ onEditConnection, initialConnection, initi
   // In standalone mode, render just the single terminal without tabs (uses local state)
   if (isStandalone || localStandaloneTerm) {
     if (!localStandaloneTerm) {
-      return <div className="flex flex-col h-full bg-[var(--bg-primary)] overflow-hidden" />;
+      return <div className="flex flex-col h-full bg-transparent overflow-hidden" />;
     }
     return (
-      <div className="flex flex-col h-full bg-[var(--bg-primary)] overflow-hidden">
+      <div className="flex flex-col h-full bg-transparent overflow-hidden">
         <TerminalView 
           connectionId={localStandaloneTerm.connectionId}
           connectionName={localStandaloneTerm.connectionName}
@@ -157,7 +157,7 @@ export default function TerminalApp({ onEditConnection, initialConnection, initi
   }
 
   return (
-    <div className="flex flex-col h-full bg-[var(--bg-primary)] text-[var(--text-primary)] overflow-hidden">
+    <div className="flex flex-col h-full bg-transparent text-[var(--text-primary)] overflow-hidden">
       {/* App Tab Bar */}
       <div className="flex items-center bg-[var(--bg-secondary)] border-b border-[var(--border-color)] px-2 h-10 shrink-0">
         <div className="flex flex-1 items-center gap-1 overflow-x-auto no-scrollbar h-full">
@@ -208,7 +208,7 @@ export default function TerminalApp({ onEditConnection, initialConnection, initi
       <div className="flex-1 min-h-0 relative">
         {/* Connection Picker - Layered on top if selecting */}
         {isSelecting && (
-          <div className="absolute inset-0 bg-[var(--bg-primary)] overflow-y-auto z-20">
+          <div className="absolute inset-0 bg-[var(--bg-primary)]/40 overflow-y-auto z-20">
             <div className="p-8 max-w-3xl mx-auto">
               {/* Header */}
               <div className="flex items-center gap-4 mb-8">
