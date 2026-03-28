@@ -27,6 +27,8 @@ import PreviewWindow from './PreviewWindow';
 import TmuxApp from '@/apps/TmuxApp';
 import DockerApp from '@/apps/DockerApp';
 import dynamic from 'next/dynamic';
+import FalloutPeople from './FalloutPeople';
+import NuclearExplosion from './NuclearExplosion';
 
 const DatabaseBrowser = dynamic(() => import('@/components/DatabaseBrowser'), {
   ssr: false,
@@ -51,6 +53,14 @@ export default function DesktopEnvironment() {
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [showPreview, setShowPreview] = useState(false);
   const [hideDesktopContent, setHideDesktopContent] = useState(false);
+  const [isFalloutIdleMode, setIsFalloutIdleMode] = useState(false);
+  const [activeExplosions, setActiveExplosions] = useState([]);
+  const [isExplodingFlash, setIsExplodingFlash] = useState(false);
+  const [isShaking, setIsShaking] = useState(false);
+  const preFalloutPositionsRef = useRef(null);
+  const idleTimerRef = useRef(null);
+  
+  const isFallout = osState.theme === 'retro' || osState.theme === 'fallout';
 
   const openWindowRef = useRef(openWindow);
   useEffect(() => { openWindowRef.current = openWindow; });
@@ -63,6 +73,69 @@ export default function DesktopEnvironment() {
     window.addEventListener('open-settings-tab', handleOpenSettingsTab);
     return () => window.removeEventListener('open-settings-tab', handleOpenSettingsTab);
   }, []);
+
+  // Always track latest icon positions in a ref (avoids stale closure)
+  const latestIconPositionsRef = useRef(osState.iconPositions);
+  useEffect(() => { latestIconPositionsRef.current = osState.iconPositions; }, [osState.iconPositions]);
+
+  // Idle Time watcher for Fallout Screensaver Mode
+  useEffect(() => {
+    if (!isFallout) {
+      if (isFalloutIdleMode) setIsFalloutIdleMode(false);
+      return;
+    }
+
+    const resetIdleTimer = () => {
+      // If already in idle mode, DO NOT exit automatically. The user must click the 'Exit' button.
+      if (isFalloutIdleMode) return;
+      
+      if (idleTimerRef.current) clearTimeout(idleTimerRef.current);
+      idleTimerRef.current = setTimeout(() => {
+        // Backup positions before entering screensaver (use ref for latest data)
+        if (!preFalloutPositionsRef.current) {
+          preFalloutPositionsRef.current = { ...latestIconPositionsRef.current };
+        }
+        setIsFalloutIdleMode(true);
+      }, 10000); // 10s idle activates wasteland
+    };
+
+    const events = ['mousemove', 'mousedown', 'keydown', 'scroll', 'touchstart'];
+    events.forEach(e => window.addEventListener(e, resetIdleTimer));
+    
+    // Also trigger idle mode instantly when a bomb goes off!
+    const triggerIdleInstantly = (e) => {
+      // Backup positions BEFORE the first interaction in idle mode
+      if (!preFalloutPositionsRef.current) {
+        preFalloutPositionsRef.current = { ...latestIconPositionsRef.current };
+      }
+
+      setIsFalloutIdleMode(true);
+      
+      // Global Impact Effects
+      setIsExplodingFlash(true);
+      setIsShaking(true);
+      setTimeout(() => setIsExplodingFlash(false), 1500);
+      setTimeout(() => setIsShaking(false), 1200);
+
+      // Global Visual Explosion Layer
+      if (e.detail?.x !== undefined) {
+        setActiveExplosions(prev => [
+          ...prev, 
+          { id: `exp-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`, x: e.detail.x, y: e.detail.y }
+        ]);
+      }
+    };
+    window.addEventListener('fallout-explosion', triggerIdleInstantly);
+
+    // Initial timer
+    resetIdleTimer();
+
+    return () => {
+      events.forEach(e => window.removeEventListener(e, resetIdleTimer));
+      window.removeEventListener('fallout-explosion', triggerIdleInstantly);
+      if (idleTimerRef.current) clearTimeout(idleTimerRef.current);
+    };
+  }, [isFalloutIdleMode, isFallout]);
 
   useEffect(() => {
     setMounted(true);
@@ -651,7 +724,7 @@ export default function DesktopEnvironment() {
       onMouseDown={handleMouseDown}
       onMouseMove={handleMouseMove}
       onMouseUp={handleMouseUp}
-      className={`h-screen w-screen relative overflow-hidden bg-cover bg-center select-none desktop-env ${!osState.glassmorphism ? 'no-glass' : ''}`}
+      className={`h-screen w-screen relative overflow-hidden bg-cover bg-center select-none desktop-env ${!osState.glassmorphism ? 'no-glass' : ''} ${isShaking ? 'fallout-screen-shake' : ''}`}
       style={{
         backgroundImage: `url("${osState.wallpaper}")`,
         fontFamily: "'Inter', sans-serif",
@@ -716,7 +789,7 @@ export default function DesktopEnvironment() {
       </AnimatePresence>
 
       {/* Desktop Icons */}
-      <div className={`absolute inset-0 pointer-events-none ${getDesktopPadding()} ${isRefreshing ? 'opacity-0' : 'opacity-100'}`}>
+      <div className={`absolute inset-0 pointer-events-none ${getDesktopPadding()} ${isRefreshing ? 'opacity-0' : 'opacity-100'} ${isFalloutIdleMode ? 'z-[10]' : 'z-[1]'}`}>
         <div 
           className="desktop-layer relative w-full h-full pointer-events-auto"
           onContextMenu={handleContextMenu}
@@ -737,6 +810,7 @@ export default function DesktopEnvironment() {
               initialWidth={icon.initialWidth}
               initialHeight={icon.initialHeight}
               defaultPos={{ x: 20, y: 20 + idx * 110 }}
+              isFalloutIdleMode={isFalloutIdleMode}
             />
           ))}
         </div>
@@ -1026,6 +1100,56 @@ export default function DesktopEnvironment() {
           </motion.div>
         )}
       </AnimatePresence>
+
+      {/* --- FALLOUT SCREENSAVER MINIGAME LAYER --- */}
+      {isFalloutIdleMode && (
+         <div className="fixed inset-0 z-[6] pointer-events-none">
+            {/* Sky Drop Zone Instruction */}
+            <div className="absolute top-0 left-0 right-0 h-[300px] flex items-center justify-center border-b-4 border-dashed border-red-500/30 bg-red-950/10 backdrop-blur-sm transition-opacity duration-1000" style={{ pointerEvents: 'none' }}>
+               <span className="text-red-500/60 font-mono text-4xl font-black uppercase tracking-[0.2em] pointer-events-none animate-pulse text-center px-20">
+                  ☢️ SKY DROP ZONE ☢️<br/>
+                  <span className="text-xl">DRAG APPS HERE TO DEPLOY NUCLEAR BOMBER</span>
+               </span>
+            </div>
+            
+            <FalloutPeople theme={osState.theme} isIdleMode={isFalloutIdleMode} />
+            <WastelandOverlay />
+            
+            {/* Exit Button manually breaks minigame state */}
+            <div className="pointer-events-auto absolute bottom-24 right-8 z-[9000]">
+               <button 
+                  onClick={() => {
+                     setIsFalloutIdleMode(false);
+                     // Restore positions instantly
+                     if (preFalloutPositionsRef.current) {
+                        updateMultipleIconPositions(preFalloutPositionsRef.current);
+                        preFalloutPositionsRef.current = null;
+                     }
+                  }}
+                  className="px-6 py-2 bg-red-900/80 hover:bg-red-700 text-red-100 font-mono font-bold border border-red-500 flex items-center gap-2 rounded-sm"
+               >
+                  <RefreshCw size={14} className="animate-spin-slow" />
+                  EXIT WASTELAND MODE
+               </button>
+            </div>
+         </div>
+      )}
+
+      {/* Global Visual Explosions Layer */}
+      <div className="fixed inset-0 pointer-events-none z-[10000]">
+         <AnimatePresence>
+            {isExplodingFlash && <motion.div initial={{ opacity: 1 }} exit={{ opacity: 0 }} className="fallout-fullscreen-flash" />}
+            {activeExplosions.map(exp => (
+               <NuclearExplosion 
+                 key={exp.id} 
+                 id={exp.id} 
+                 x={exp.x} 
+                 y={exp.y} 
+                 onComplete={(id) => setActiveExplosions(prev => prev.filter(e => e.id !== id))} 
+               />
+            ))}
+         </AnimatePresence>
+      </div>
     </div>
   );
 }
@@ -1045,6 +1169,75 @@ function ContextItem({ icon: Icon, label, onClick, onHover, shortcut }) {
       <span className="text-[13px] text-[var(--text-secondary)] group-hover:text-[var(--text-selected)] flex-1">{label}</span>
       {shortcut && <span className="text-[11px] text-[var(--text-muted)] group-hover:text-[var(--text-selected)]/70">{shortcut}</span>}
     </button>
+  );
+}
+
+function WastelandOverlay() {
+  const [drops, setDrops] = useState([]);
+  const [ash, setAsh] = useState([]);
+
+  useEffect(() => {
+    // Generate rain drops
+    const initialDrops = [];
+    for (let i = 0; i < 40; i++) {
+      initialDrops.push({
+        id: i,
+        left: Math.random() * 100,
+        delay: Math.random() * 5,
+        duration: 0.5 + Math.random() * 0.5
+      });
+    }
+    setDrops(initialDrops);
+
+    // Generate ash/embers
+    const initialAsh = [];
+    for (let i = 0; i < 20; i++) {
+      initialAsh.push({
+        id: i,
+        left: Math.random() * 100,
+        delay: Math.random() * 8,
+        duration: 4 + Math.random() * 4,
+        size: 2 + Math.random() * 4
+      });
+    }
+    setAsh(initialAsh);
+  }, []);
+
+  return (
+    <div className="fixed inset-0 pointer-events-none z-[10]">
+      <div className="fallout-rain-container">
+        {drops.map(d => (
+          <div 
+            key={d.id} 
+            className="fallout-rain-drop"
+            style={{
+              left: `${d.left}%`,
+              animationDelay: `${d.delay}s`,
+              animationDuration: `${d.duration}s`,
+              animationIterationCount: 'infinite'
+            }}
+          />
+        ))}
+      </div>
+      <div className="absolute inset-0 overflow-hidden">
+        {ash.map(a => (
+          <div 
+            key={a.id}
+            className="absolute rounded-full bg-white/20"
+            style={{
+              width: a.size,
+              height: a.size,
+              left: `${a.left}%`,
+              top: '-10px',
+              animation: `fallout-ash-drift ${a.duration}s ${a.delay}s linear infinite`,
+              boxShadow: '0 0 5px rgba(255,255,255,0.2)'
+            }}
+          />
+        ))}
+      </div>
+      {/* Radioactive Scanline layer */}
+      <div className="fallout-crt-damage" />
+    </div>
   );
 }
 

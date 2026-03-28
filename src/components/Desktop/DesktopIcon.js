@@ -4,16 +4,19 @@ import { useOS } from '@/context/OSContext';
 import { useState, useRef, useEffect, useCallback } from 'react';
 import AppIcon from '@/components/common/AppIcon';
 
-export default function DesktopIcon({ id, title, icon: Icon, component, defaultPos, initialWidth, initialHeight }) {
+export default function DesktopIcon({ id, title, icon: Icon, component, defaultPos, initialWidth, initialHeight, isFalloutIdleMode }) {
   const { state, openWindow, updateIconPosition, setSortBy, setSelectedIcons, toggleIconSelection, updateMultipleIconPositions } = useOS();
   const { selectedIconIds } = state;
   const isSelected = selectedIconIds.includes(id);
   const [isDragging, setIsDragging] = useState(false);
-  const dragRef = useRef({ startX: 0, startY: 0, snapshot: null });
+  const [consumedAsAmmo, setConsumedAsAmmo] = useState(false);
+  const dragRef = useRef({ startX: 0, startY: 0, snapshot: null, isConsumed: false });
+  const hoverTimeoutRef = useRef(null);
   const iconRef = useRef(null);
   
   const position = state.iconPositions[id] || defaultPos || { x: 0, y: 0 };
   const iconSize = state.iconSize || 'medium';
+  const isFalloutTheme = state.theme === 'retro' || state.theme === 'fallout';
 
   const handleDoubleClick = () => {
     openWindow(id, title, component, Icon, { initialWidth, initialHeight });
@@ -105,12 +108,69 @@ export default function DesktopIcon({ id, title, icon: Icon, component, defaultP
       // (avoids stale closure reading old state.iconPositions)
       dragRef.current.lastPositions = updates;
       updateMultipleIconPositions(updates);
+
+      // --- HOVER TO AIRSTRIKE LOGIC ---
+      const myLatestY = updates[id]?.y;
+      if (isFalloutTheme && isFalloutIdleMode && myLatestY !== undefined) {
+        if (myLatestY < 300) {
+          if (!hoverTimeoutRef.current) {
+             hoverTimeoutRef.current = setTimeout(() => {
+                if (dragRef.current.isConsumed) return;
+                dragRef.current.isConsumed = true;
+                
+                const myLatestX = dragRef.current.lastPositions?.[id]?.x || updates[id].x;
+                window.dispatchEvent(
+                  new CustomEvent('fallout-airstrike', { detail: { x: myLatestX, y: myLatestY } })
+                );
+                setConsumedAsAmmo(true);
+                
+                // End drag manually
+                setIsDragging(false);
+                window.removeEventListener('pointermove', handlePointerMove);
+                window.removeEventListener('pointerup', handlePointerUp);
+             }, 800); // 800ms hover threshold
+          }
+        } else {
+          if (hoverTimeoutRef.current) {
+            clearTimeout(hoverTimeoutRef.current);
+            hoverTimeoutRef.current = null;
+          }
+        }
+      }
     };
 
-    const handlePointerUp = () => {
+    const handlePointerUp = (e) => {
       setIsDragging(false);
       window.removeEventListener('pointermove', handlePointerMove);
       window.removeEventListener('pointerup', handlePointerUp);
+
+      if (hoverTimeoutRef.current) {
+        clearTimeout(hoverTimeoutRef.current);
+        hoverTimeoutRef.current = null;
+      }
+
+      const latestX = dragRef.current.lastPositions?.[id]?.x;
+      const latestY = dragRef.current.lastPositions?.[id]?.y;
+
+      // Abort if already consumed by the hover timeout
+      if (dragRef.current.isConsumed) return;
+
+      // Special Fallout Interaction: Drag icon to the Sky to call an airstrike!
+      // The icon "disappears" like ammunition being loaded into the bomber
+      if (isFalloutTheme && isFalloutIdleMode && latestY !== undefined && latestY < 300) {
+          // Dispatch airstrike event (plane only, no self-detonation)
+          window.dispatchEvent(
+            new CustomEvent('fallout-airstrike', {
+               detail: { x: latestX, y: latestY }
+            })
+          );
+          dragRef.current.isConsumed = true;
+          // Hide icon visually (it becomes the "ammo")
+          setConsumedAsAmmo(true);
+          dragRef.current.snapshot = null;
+          dragRef.current.lastPositions = null;
+          return; // Skip normal grid-snap logic
+      }
 
       // Grid snap all moved icons using the latest dragged positions
       // (not state.iconPositions which is stale due to React closure)
@@ -139,7 +199,7 @@ export default function DesktopIcon({ id, title, icon: Icon, component, defaultP
 
     window.addEventListener('pointermove', handlePointerMove);
     window.addEventListener('pointerup', handlePointerUp);
-  }, [id, isSelected, selectedIconIds, state.iconPositions, defaultPos]);
+  }, [id, isSelected, selectedIconIds, state.iconPositions, defaultPos, isFalloutTheme, isFalloutIdleMode]);
 
   const handleDragOver = (e) => {
     if (e.dataTransfer.types.includes('application/ssh-connection') || e.dataTransfer.types.includes('Files')) {
@@ -167,7 +227,11 @@ export default function DesktopIcon({ id, title, icon: Icon, component, defaultP
   };
 
   // ========== FALLOUT EXPLOSION EASTER EGG ==========
-  const isFalloutTheme = state.theme === 'retro' || state.theme === 'fallout';
+  // Reset ammo state when exiting wasteland mode
+  useEffect(() => {
+    if (!isFalloutIdleMode) setConsumedAsAmmo(false);
+  }, [isFalloutIdleMode]);
+
   const [isExploding, setIsExploding] = useState(false);
   const [isReforming, setIsReforming] = useState(false);
   const [isArmed, setIsArmed] = useState(false);
@@ -477,7 +541,7 @@ export default function DesktopIcon({ id, title, icon: Icon, component, defaultP
 
   const triggerScreenShake = useCallback(() => {
     document.body.classList.add('fallout-screen-shake');
-    setTimeout(() => document.body.classList.remove('fallout-screen-shake'), 800);
+    setTimeout(() => document.body.classList.remove('fallout-screen-shake'), 1200);
   }, []);
 
   const triggerFullScreenFlash = useCallback(() => {
@@ -545,10 +609,10 @@ export default function DesktopIcon({ id, title, icon: Icon, component, defaultP
         document.body.appendChild(crtDamage);
         setTimeout(() => crtDamage.remove(), 3000);
 
-        // Spawn radioactive fallout rain across the viewport
+        // Spawn radioactive fallout rain across the viewport (Optimized Count)
         const rainContainer = document.createElement('div');
         rainContainer.className = 'fallout-rain-container';
-        for (let i = 0; i < 60; i++) {
+        for (let i = 0; i < 20; i++) {
           const drop = document.createElement('div');
           drop.className = 'fallout-rain-drop';
           drop.style.left = `${Math.random() * 100}%`;
@@ -609,15 +673,15 @@ export default function DesktopIcon({ id, title, icon: Icon, component, defaultP
   const renderExplosion = () => {
     if (!isExploding) return null;
 
-    // Main debris particles — 120 chunks flying outward
+    // Main debris particles — 40 chunks flying outward (Optimized from 120)
     const debris = [];
-    for (let i = 0; i < 120; i++) {
-      const angle = (360 / 120) * i + (Math.random() * 20 - 10);
-      const distance = 80 + Math.random() * 200; // Huge blast radius
-      const size = 1 + Math.random() * 6;
-      const delay = Math.random() * 0.15;
-      const duration = 0.5 + Math.random() * 0.8;
-      const colors = ['#ff4400', '#ff6600', '#ffaa00', '#ffdd00', '#18e12c', '#ff2200', '#fff5a0'];
+    for (let i = 0; i < 40; i++) {
+      const angle = (360 / 40) * i + (Math.random() * 20 - 10);
+      const distance = 80 + Math.random() * 150; 
+      const size = 1 + Math.random() * 5;
+      const delay = Math.random() * 0.1;
+      const duration = 0.4 + Math.random() * 0.6;
+      const colors = ['#ff4400', '#ff6600', '#ffaa00', '#18e12c', '#ff2200'];
       const color = colors[i % colors.length];
       debris.push(
         <div
@@ -639,11 +703,11 @@ export default function DesktopIcon({ id, title, icon: Icon, component, defaultP
       );
     }
 
-    // Ember sparks — 50 smaller, slower, drifting upward
+    // Ember sparks — 15 smaller, slower (Optimized from 50)
     const embers = [];
-    for (let i = 0; i < 50; i++) {
-      const x = -80 + Math.random() * 160;
-      const delay = 0.1 + Math.random() * 0.6;
+    for (let i = 0; i < 15; i++) {
+      const x = -60 + Math.random() * 120;
+      const delay = 0.1 + Math.random() * 0.4;
       embers.push(
         <div
           key={`e-${i}`}
@@ -685,21 +749,19 @@ export default function DesktopIcon({ id, title, icon: Icon, component, defaultP
           }}
         />
 
-        {/* Triple shockwave rings */}
+        {/* Refractive Shockwave Rings (Improved Realism) */}
         {[
-          { delay: '0s', duration: '0.8s', color: '#ff660090', width: 3 },
-          { delay: '0.1s', duration: '1s', color: '#ffaa0070', width: 2 },
-          { delay: '0.25s', duration: '1.2s', color: '#18e12c40', width: 1 },
+          { delay: '0s', duration: '1s' },
+          { delay: '0.15s', duration: '1.4s' },
+          { delay: '0.3s', duration: '1.8s' },
         ].map((ring, i) => (
           <div
             key={`ring-${i}`}
             className="absolute pointer-events-none rounded-full"
             style={{
-              width: 10, height: 10,
               left: '50%', top: '50%',
               transform: 'translate(-50%, -50%)',
-              border: `${ring.width}px solid ${ring.color}`,
-              animation: `fallout-shockwave ${ring.duration} ${ring.delay} ease-out forwards`,
+              animation: `fallout-shockwave ${ring.duration} ${ring.delay} cubic-bezier(0, 0, 0.2, 1) forwards`,
             }}
           />
         ))}
@@ -710,12 +772,12 @@ export default function DesktopIcon({ id, title, icon: Icon, component, defaultP
         {/* Embers drifting up */}
         {embers}
 
-        {/* Ground Dust Shockwave */}
+        {/* Ground Dust Shockwave (Realistic Debris Cloud) */}
         <div
           className="absolute pointer-events-none rounded-full"
           style={{
             left: '50%', top: '50%',
-            animation: 'fallout-dust-ring 3s ease-out forwards',
+            animation: 'fallout-dust-ring 3s cubic-bezier(0.1, 0.9, 0.2, 1) forwards',
           }}
         />
 
@@ -724,11 +786,9 @@ export default function DesktopIcon({ id, title, icon: Icon, component, defaultP
           <defs>
             <filter id={`mushroom-smoke-filter-${id}`} x="-50%" y="-50%" width="200%" height="200%">
               {/* Generate chaotic, bubbling fractal noise */}
-              <feTurbulence type="fractalNoise" baseFrequency="0.015 0.02" numOctaves="4" result="noise">
-                {/* A tiny animation on the noise seed would be cool, but static noise moving through the displacement map is enough */}
-              </feTurbulence>
-              {/* Displace the CSS gradients using the noise so they warp and boil into cauliflower shapes */}
-              <feDisplacementMap in="SourceGraphic" in2="noise" scale="40" xChannelSelector="R" yChannelSelector="G" result="displaced" />
+              <feTurbulence type="fractalNoise" baseFrequency="0.03" numOctaves="2" result="noise" />
+              {/* Lower displacement scale (15) for much faster rendering */}
+              <feDisplacementMap in="SourceGraphic" in2="noise" scale="15" xChannelSelector="R" yChannelSelector="G" result="displaced" />
               {/* Soften the edges and boost the thick center alpha to simulate heavy soot/smoke */}
               <feGaussianBlur in="displaced" stdDeviation="4" result="blur" />
               <feComponentTransfer in="blur">
@@ -798,6 +858,7 @@ export default function DesktopIcon({ id, title, icon: Icon, component, defaultP
         ${isSelected ? 'bg-[var(--accent-indigo)]/15 border border-[var(--accent-indigo)]/40 shadow-[0_8px_24px_rgba(0,0,0,0.15)] ring-1 ring-[var(--accent-indigo)]/20' : 'border border-transparent'}
         ${isDragging ? 'z-50 opacity-90' : ''}
         ${isExploding ? 'z-50' : ''}
+        ${consumedAsAmmo ? 'pointer-events-none' : ''}
       `}
       data-icon-id={id}
       onDoubleClick={handleDoubleClick}
@@ -816,6 +877,7 @@ export default function DesktopIcon({ id, title, icon: Icon, component, defaultP
                     impactTransform ? 'transform 0.05s cubic-bezier(0, 0.9, 0.1, 1)' : 
                     'transform 0.8s cubic-bezier(0.3, -0.3, 0.2, 1.4), left 0.15s ease, top 0.15s ease',
         touchAction: 'none',
+        opacity: consumedAsAmmo ? 0 : undefined,
       }}
     >
       {/* Ghost Shadow (Grid Snap Preview) */}
@@ -865,22 +927,57 @@ export default function DesktopIcon({ id, title, icon: Icon, component, defaultP
         }}
       >
         <div className={`${sizes.iconBox} ${state.theme === 'retro' || state.theme === 'fallout' || state.theme === 'cyberpunk' ? '' : styleClass} rounded-2xl flex items-center justify-center overflow-hidden relative`}>
-          {isArmed ? (
-            <>
-              {/* Splitting the icon into 3 physical tearing slices */}
-              {[1, 2, 3].map((slice) => (
-                <div 
-                  key={slice}
-                  className="absolute inset-0 flex items-center justify-center"
-                  style={{ animation: `fallout-slice-tear-${slice} 2.5s ease-in forwards` }}
+          {(() => {
+            const InnerIcon = () => (
+              isFalloutIdleMode && !consumedAsAmmo ? (
+                <svg 
+                  viewBox="0 0 100 100" 
+                  className="w-[85%] h-[85%] filter drop-shadow-[0_8px_12px_rgba(0,0,0,0.6)] transform transition-transform hover:scale-110 active:scale-95"
                 >
-                  <AppIcon id={id} size={sizes.icon} theme={state.theme} iconStyle={state.iconStyle} isDesktop={true} />
-                </div>
-              ))}
-            </>
-          ) : (
-            <AppIcon id={id} size={sizes.icon} theme={state.theme} iconStyle={state.iconStyle} isDesktop={true} />
-          )}
+                  {/* Tail fin assembly */}
+                  <rect x="35" y="10" width="30" height="25" fill="#334155" />
+                  <rect x="25" y="10" width="10" height="22" fill="#1e293b" rx="2" />
+                  <rect x="65" y="10" width="10" height="22" fill="#1e293b" rx="2" />
+                  <line x1="25" y1="20" x2="75" y2="20" stroke="#0f172a" strokeWidth="2" />
+                  
+                  {/* Main Cylindrical Body */}
+                  <rect x="38" y="35" width="24" height="40" fill="#475569" />
+                  <rect x="42" y="35" width="4" height="40" fill="#334155" />
+                  
+                  {/* Yellow Hazard Band */}
+                  <rect x="38" y="45" width="24" height="6" fill="#eab308" />
+                  <circle cx="50" cy="48" r="1.5" fill="#854d0e" />
+
+                  {/* Nose Cone */}
+                  <path d="M 38 75 L 62 75 L 56 95 L 44 95 Z" fill="#334155" />
+                  <path d="M 44 95 L 56 95 L 53 98 L 47 98 Z" fill="#1e293b" />
+                  
+                  {/* Highlight / Shine on body */}
+                  <rect x="56" y="35" width="2" height="40" fill="#94a3b8" opacity="0.4" />
+                </svg>
+              ) : (
+                <AppIcon id={id} size={sizes.icon} theme={state.theme} iconStyle={state.iconStyle} isDesktop={true} />
+              )
+            );
+
+            if (isArmed) {
+              return (
+                <>
+                  {[1, 2, 3].map((slice) => (
+                    <div 
+                      key={slice}
+                      className="absolute inset-0 flex items-center justify-center"
+                      style={{ animation: `fallout-slice-tear-${slice} 2.5s ease-in forwards` }}
+                    >
+                      <InnerIcon />
+                    </div>
+                  ))}
+                </>
+              );
+            }
+
+            return <InnerIcon />;
+          })()}
         </div>
       </div>
       <span 
