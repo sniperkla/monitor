@@ -8,7 +8,7 @@ import SSHApp from '@/apps/SSHApp';
 import SettingsApp from '@/apps/SettingsApp';
 import { Terminal, Settings, FolderClosed, Monitor, RefreshCw, Plus, 
   Image as ImageIcon, Layout, Grid, List, AlignLeft, SortAsc, Server,
-  ChevronRight, Type, Calendar, HardDrive, Palette, MonitorCog, Globe, Maximize, Minimize, Database, Check, MonitorPlay
+  ChevronRight, Type, Calendar, HardDrive, Palette, MonitorCog, Globe, Maximize, Minimize, Database, Check, MonitorPlay, Bomb
 } from 'lucide-react';
 import NotificationCenter from '@/components/Desktop/NotificationCenter';
 import { useState, useEffect, useRef, cloneElement, isValidElement } from 'react';
@@ -54,7 +54,6 @@ export default function DesktopEnvironment() {
   const [showPreview, setShowPreview] = useState(false);
   const [hideDesktopContent, setHideDesktopContent] = useState(false);
   const [isFalloutIdleMode, setIsFalloutIdleMode] = useState(false);
-  const [activeExplosions, setActiveExplosions] = useState([]);
   const [isExplodingFlash, setIsExplodingFlash] = useState(false);
   const [isShaking, setIsShaking] = useState(false);
   const preFalloutPositionsRef = useRef(null);
@@ -86,53 +85,31 @@ export default function DesktopEnvironment() {
     }
 
     const resetIdleTimer = () => {
-      // If already in idle mode, DO NOT exit automatically. The user must click the 'Exit' button.
-      if (isFalloutIdleMode) return;
-      
-      if (idleTimerRef.current) clearTimeout(idleTimerRef.current);
-      idleTimerRef.current = setTimeout(() => {
-        // Backup positions before entering screensaver (use ref for latest data)
-        if (!preFalloutPositionsRef.current) {
-          preFalloutPositionsRef.current = { ...latestIconPositionsRef.current };
-        }
-        setIsFalloutIdleMode(true);
-      }, 10000); // 10s idle activates wasteland
+      // Screensaver behavior disabled as per user request
     };
 
     const events = ['mousemove', 'mousedown', 'keydown', 'scroll', 'touchstart'];
     events.forEach(e => window.addEventListener(e, resetIdleTimer));
     
-    // Also trigger idle mode instantly when a bomb goes off!
-    const triggerIdleInstantly = (e) => {
-      // Backup positions BEFORE the first interaction in idle mode
-      if (!preFalloutPositionsRef.current) {
-        preFalloutPositionsRef.current = { ...latestIconPositionsRef.current };
-      }
-
-      setIsFalloutIdleMode(true);
-      
+    // Keep the global impact effects (flash/shake/overlays) on 'fallout-explosion' event 
+    // triggered by hovering icons, but DO NOT enter full screen screensaver mode.
+    const triggerImpactEffects = (e) => {
       // Global Impact Effects
       setIsExplodingFlash(true);
       setIsShaking(true);
       setTimeout(() => setIsExplodingFlash(false), 1500);
       setTimeout(() => setIsShaking(false), 1200);
 
-      // Global Visual Explosion Layer
-      if (e.detail?.x !== undefined) {
-        setActiveExplosions(prev => [
-          ...prev, 
-          { id: `exp-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`, x: e.detail.x, y: e.detail.y }
-        ]);
-      }
+      // Removed 2D CSS explosion popup logic per user request
     };
-    window.addEventListener('fallout-explosion', triggerIdleInstantly);
+    window.addEventListener('fallout-explosion', triggerImpactEffects);
 
     // Initial timer
     resetIdleTimer();
 
     return () => {
       events.forEach(e => window.removeEventListener(e, resetIdleTimer));
-      window.removeEventListener('fallout-explosion', triggerIdleInstantly);
+      window.removeEventListener('fallout-explosion', triggerImpactEffects);
       if (idleTimerRef.current) clearTimeout(idleTimerRef.current);
     };
   }, [isFalloutIdleMode, isFallout]);
@@ -329,6 +306,7 @@ export default function DesktopEnvironment() {
   };
 
   const DESKTOP_ICONS = [
+    { id: 'fallout-game', title: 'Nuclear Strike', icon: Bomb, component: <div className="absolute inset-0 bg-black pointer-events-auto overflow-hidden"><FalloutPeople theme={osState?.theme || 'retro'} isIdleMode={true} /><WastelandOverlay /></div>, type: 'app', initialWidth: 1000, initialHeight: 700 },
     { id: 'ssh-manager', title: t('apps.sshManager'), icon: Monitor, component: <SSHApp />, type: 'app', initialWidth: 1400, initialHeight: 820 },
     { id: 'terminal', title: t('apps.terminal'), icon: Terminal, component: <TerminalApp onEditConnection={handleEditConnection} />, type: 'app', initialWidth: 1100, initialHeight: 700 },
     { id: 'files', title: t('apps.files'), icon: FolderClosed, component: <FilesApp onEditConnection={handleEditConnection} />, type: 'app', initialWidth: 900, initialHeight: 600 },
@@ -1103,14 +1081,7 @@ export default function DesktopEnvironment() {
 
       {/* --- FALLOUT SCREENSAVER MINIGAME LAYER --- */}
       {isFalloutIdleMode && (
-         <div className="fixed inset-0 z-[6] pointer-events-none">
-            {/* Sky Drop Zone Instruction */}
-            <div className="absolute top-0 left-0 right-0 h-[300px] flex items-center justify-center border-b-4 border-dashed border-red-500/30 bg-red-950/10 backdrop-blur-sm transition-opacity duration-1000" style={{ pointerEvents: 'none' }}>
-               <span className="text-red-500/60 font-mono text-4xl font-black uppercase tracking-[0.2em] pointer-events-none animate-pulse text-center px-20">
-                  ☢️ SKY DROP ZONE ☢️<br/>
-                  <span className="text-xl">DRAG APPS HERE TO DEPLOY NUCLEAR BOMBER</span>
-               </span>
-            </div>
+         <div className="fixed inset-0 z-[15] pointer-events-none">
             
             <FalloutPeople theme={osState.theme} isIdleMode={isFalloutIdleMode} />
             <WastelandOverlay />
@@ -1135,19 +1106,11 @@ export default function DesktopEnvironment() {
          </div>
       )}
 
-      {/* Global Visual Explosions Layer */}
+      {/* Global Visual Explosions Layer (Flash Only) */}
       <div className="fixed inset-0 pointer-events-none z-[10000]">
          <AnimatePresence>
             {isExplodingFlash && <motion.div initial={{ opacity: 1 }} exit={{ opacity: 0 }} className="fallout-fullscreen-flash" />}
-            {activeExplosions.map(exp => (
-               <NuclearExplosion 
-                 key={exp.id} 
-                 id={exp.id} 
-                 x={exp.x} 
-                 y={exp.y} 
-                 onComplete={(id) => setActiveExplosions(prev => prev.filter(e => e.id !== id))} 
-               />
-            ))}
+            {/* Removed 2D CSS Explosion popup component */}
          </AnimatePresence>
       </div>
     </div>

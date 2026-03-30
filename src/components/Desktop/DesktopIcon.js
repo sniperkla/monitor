@@ -554,7 +554,7 @@ export default function DesktopIcon({ id, title, icon: Icon, component, defaultP
   const hoverDelayTimerRef = useRef(null);
 
   const handleMouseEnter = useCallback(() => {
-    if (!isFalloutTheme || isExploding || isReforming) return;
+    if (!isFalloutTheme || isExploding || isReforming || isFalloutIdleMode) return;
     
     // Don't trigger the apocalyptic audio instantly. Give the user a 1-second grace period 
     // so they can double-click or swipe past icons without annoyance.
@@ -593,9 +593,15 @@ export default function DesktopIcon({ id, title, icon: Icon, component, defaultP
         // Dispatch explosion event to affect other icons globally
         const rect = iconRef.current?.getBoundingClientRect();
         if (rect) {
+          const impactPoint = { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2, sourceId: id };
           window.dispatchEvent(
             new CustomEvent('fallout-explosion', {
-              detail: { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2, sourceId: id }
+              detail: impactPoint
+            })
+          );
+          window.dispatchEvent(
+            new CustomEvent('fallout-strike-request', {
+              detail: impactPoint
             })
           );
         }
@@ -929,35 +935,7 @@ export default function DesktopIcon({ id, title, icon: Icon, component, defaultP
         <div className={`${sizes.iconBox} ${state.theme === 'retro' || state.theme === 'fallout' || state.theme === 'cyberpunk' ? '' : styleClass} rounded-2xl flex items-center justify-center overflow-hidden relative`}>
           {(() => {
             const InnerIcon = () => (
-              isFalloutIdleMode && !consumedAsAmmo ? (
-                <svg 
-                  viewBox="0 0 100 100" 
-                  className="w-[85%] h-[85%] filter drop-shadow-[0_8px_12px_rgba(0,0,0,0.6)] transform transition-transform hover:scale-110 active:scale-95"
-                >
-                  {/* Tail fin assembly */}
-                  <rect x="35" y="10" width="30" height="25" fill="#334155" />
-                  <rect x="25" y="10" width="10" height="22" fill="#1e293b" rx="2" />
-                  <rect x="65" y="10" width="10" height="22" fill="#1e293b" rx="2" />
-                  <line x1="25" y1="20" x2="75" y2="20" stroke="#0f172a" strokeWidth="2" />
-                  
-                  {/* Main Cylindrical Body */}
-                  <rect x="38" y="35" width="24" height="40" fill="#475569" />
-                  <rect x="42" y="35" width="4" height="40" fill="#334155" />
-                  
-                  {/* Yellow Hazard Band */}
-                  <rect x="38" y="45" width="24" height="6" fill="#eab308" />
-                  <circle cx="50" cy="48" r="1.5" fill="#854d0e" />
-
-                  {/* Nose Cone */}
-                  <path d="M 38 75 L 62 75 L 56 95 L 44 95 Z" fill="#334155" />
-                  <path d="M 44 95 L 56 95 L 53 98 L 47 98 Z" fill="#1e293b" />
-                  
-                  {/* Highlight / Shine on body */}
-                  <rect x="56" y="35" width="2" height="40" fill="#94a3b8" opacity="0.4" />
-                </svg>
-              ) : (
-                <AppIcon id={id} size={sizes.icon} theme={state.theme} iconStyle={state.iconStyle} isDesktop={true} />
-              )
+              <AppIcon id={id} size={sizes.icon} theme={state.theme} iconStyle={state.iconStyle} isDesktop={true} />
             );
 
             if (isArmed) {
