@@ -430,10 +430,307 @@ const buildParachuteNuke = () => {
   return group;
 };
 
+const buildStrikeJet = () => {
+  const group = new THREE.Group();
+  group.name = 'strike_jet';
+
+  const bodyMat = makeMaterial({ color: '#7b8794', roughness: 0.34, metalness: 0.68 });
+  const trimMat = makeMaterial({ color: '#4b5563', roughness: 0.4, metalness: 0.54 });
+  const darkMat = makeMaterial({ color: '#111827', roughness: 0.28, metalness: 0.64 });
+  const glassMat = makeMaterial({ color: '#8eb7d0', roughness: 0.06, metalness: 0.9, transparent: true, opacity: 0.52 });
+  const glowMat = makeMaterial({ color: '#38bdf8', emissive: '#67e8f9', emissiveIntensity: 1.8, transparent: true, opacity: 0.42 });
+
+  addMesh({
+    parent: group,
+    name: 'jet_fuselage',
+    geometry: new THREE.CylinderGeometry(4.6, 7.8, 126, 18),
+    material: bodyMat,
+    rotation: [0, 0, -Math.PI / 2]
+  });
+  addMesh({
+    parent: group,
+    name: 'jet_nose',
+    geometry: new THREE.ConeGeometry(5.2, 30, 16),
+    material: trimMat,
+    position: [74, 0.5, 0],
+    rotation: [0, 0, -Math.PI / 2]
+  });
+  addMesh({
+    parent: group,
+    name: 'jet_canopy',
+    geometry: new THREE.SphereGeometry(6.8, 18, 14),
+    material: glassMat,
+    position: [28, 8.4, 0],
+    scale: [1.85, 0.7, 0.92]
+  });
+  addMesh({
+    parent: group,
+    name: 'jet_spine',
+    geometry: new THREE.BoxGeometry(42, 5, 10),
+    material: trimMat,
+    position: [-2, 7.4, 0]
+  });
+  addMesh({
+    parent: group,
+    name: 'jet_main_wing',
+    geometry: new THREE.BoxGeometry(48, 2.4, 120),
+    material: bodyMat,
+    position: [-6, 0.4, 0],
+    rotation: [0, 0, -0.09]
+  });
+  [-1, 1].forEach((side) => {
+    addMesh({
+      parent: group,
+      name: side < 0 ? 'jet_wingtip_left' : 'jet_wingtip_right',
+      geometry: new THREE.BoxGeometry(40, 1.8, 42),
+      material: trimMat,
+      position: [-26, 0.2, side * 58],
+      rotation: [0, side * 0.08, side * -0.22]
+    });
+    addMesh({
+      parent: group,
+      name: side < 0 ? 'jet_tailplane_left' : 'jet_tailplane_right',
+      geometry: new THREE.BoxGeometry(20, 1.7, 34),
+      material: trimMat,
+      position: [-46, 6, side * 22],
+      rotation: [0, side * 0.06, side * -0.06]
+    });
+    addMesh({
+      parent: group,
+      name: side < 0 ? 'jet_stabilizer_left' : 'jet_stabilizer_right',
+      geometry: new THREE.BoxGeometry(14, 18, 2.2),
+      material: trimMat,
+      position: [-50, 16, side * 7],
+      rotation: [0.12, 0, side * 0.24]
+    });
+    addMesh({
+      parent: group,
+      name: side < 0 ? 'jet_intake_left' : 'jet_intake_right',
+      geometry: new THREE.CylinderGeometry(3.4, 4.4, 16, 12),
+      material: darkMat,
+      position: [4, -1.6, side * 13.5],
+      rotation: [0, 0, -Math.PI / 2]
+    });
+    addMesh({
+      parent: group,
+      name: side < 0 ? 'jet_afterburner_left' : 'jet_afterburner_right',
+      geometry: new THREE.CylinderGeometry(2.6, 1.4, 12, 12),
+      material: glowMat,
+      position: [-66, -1.1, side * 4.2],
+      rotation: [0, 0, -Math.PI / 2]
+    });
+  });
+  addMesh({
+    parent: group,
+    name: 'jet_engine_block',
+    geometry: new THREE.BoxGeometry(22, 7.5, 16),
+    material: darkMat,
+    position: [-54, 0, 0]
+  });
+  addMesh({
+    parent: group,
+    name: 'jet_centerline_tank',
+    geometry: new THREE.CylinderGeometry(2.8, 3.4, 22, 10),
+    material: trimMat,
+    position: [-20, -5.4, 0],
+    rotation: [0, 0, -Math.PI / 2]
+  });
+  [-1, 1].forEach((side) => {
+    addMesh({
+      parent: group,
+      name: side < 0 ? 'jet_pylon_left' : 'jet_pylon_right',
+      geometry: new THREE.BoxGeometry(12, 2, 6),
+      material: darkMat,
+      position: [-12, -4.4, side * 30]
+    });
+    addMesh({
+      parent: group,
+      name: side < 0 ? 'jet_missile_left' : 'jet_missile_right',
+      geometry: new THREE.CylinderGeometry(1.1, 1.4, 18, 10),
+      material: trimMat,
+      position: [-10, -6.2, side * 30],
+      rotation: [0, 0, -Math.PI / 2]
+    });
+  });
+
+  return group;
+};
+
+const buildGroundArmor = ({
+  name,
+  hullColor,
+  turretColor,
+  accentColor,
+  barrelLength = 24,
+  hullLength = 48,
+  hullHeight = 14,
+  hullWidth = 28,
+  turretRadius = 10,
+  apc = false
+}) => {
+  const group = new THREE.Group();
+  group.name = name;
+
+  const hullMat = makeMaterial({ color: hullColor, roughness: 0.62, metalness: 0.32 });
+  const turretMat = makeMaterial({ color: turretColor, roughness: 0.54, metalness: 0.38 });
+  const trackMat = makeMaterial({ color: '#161b22', roughness: 0.84, metalness: 0.18 });
+  const trimMat = makeMaterial({ color: '#475569', roughness: 0.5, metalness: 0.42 });
+  const glowMat = makeMaterial({ color: accentColor, emissive: accentColor, emissiveIntensity: 1.45, transparent: true, opacity: 0.38 });
+
+  addMesh({
+    parent: group,
+    name: 'vehicle_hull_base',
+    geometry: new THREE.BoxGeometry(hullLength, hullHeight, hullWidth),
+    material: hullMat,
+    position: [0, 9, 0]
+  });
+  addMesh({
+    parent: group,
+    name: 'vehicle_glacis',
+    geometry: new THREE.BoxGeometry(hullLength * 0.42, hullHeight * 0.45, hullWidth * 0.86),
+    material: trimMat,
+    position: [hullLength * 0.18, 15.5, 0],
+    rotation: [0, 0, -0.2]
+  });
+  addMesh({
+    parent: group,
+    name: 'vehicle_rear_deck',
+    geometry: new THREE.BoxGeometry(hullLength * 0.36, hullHeight * 0.3, hullWidth * 0.72),
+    material: trimMat,
+    position: [-hullLength * 0.18, 14.5, 0]
+  });
+  addMesh({
+    parent: group,
+    name: 'vehicle_track_left',
+    geometry: new THREE.BoxGeometry(hullLength * 1.05, 6, 5.8),
+    material: trackMat,
+    position: [0, 3.8, hullWidth * 0.45]
+  });
+  addMesh({
+    parent: group,
+    name: 'vehicle_track_right',
+    geometry: new THREE.BoxGeometry(hullLength * 1.05, 6, 5.8),
+    material: trackMat,
+    position: [0, 3.8, -hullWidth * 0.45]
+  });
+  addMesh({
+    parent: group,
+    name: 'vehicle_track_guard_left',
+    geometry: new THREE.BoxGeometry(hullLength * 0.9, 3.8, 4.4),
+    material: trimMat,
+    position: [0, 10, hullWidth * 0.41]
+  });
+  addMesh({
+    parent: group,
+    name: 'vehicle_track_guard_right',
+    geometry: new THREE.BoxGeometry(hullLength * 0.9, 3.8, 4.4),
+    material: trimMat,
+    position: [0, 10, -hullWidth * 0.41]
+  });
+  [-1, 1].forEach((side, index) => {
+    addMesh({
+      parent: group,
+      name: `vehicle_exhaust_glow_${index}`,
+      geometry: new THREE.CylinderGeometry(1.6, 1.1, 8, 10),
+      material: glowMat,
+      position: [-hullLength * 0.54, 11.5, side * 5.4],
+      rotation: [0, 0, -Math.PI / 2]
+    });
+  });
+  addMesh({
+    parent: group,
+    name: 'vehicle_sensor_glow',
+    geometry: new THREE.SphereGeometry(1.8, 10, 10),
+    material: glowMat,
+    position: [hullLength * 0.14, 18.8, apc ? 4 : 0]
+  });
+
+  const turretRoot = new THREE.Group();
+  turretRoot.name = 'vehicle_turret_root';
+  turretRoot.position.set(apc ? 4 : 2, apc ? 17 : 19, 0);
+  group.add(turretRoot);
+
+  addMesh({
+    parent: turretRoot,
+    name: 'vehicle_turret_body',
+    geometry: apc
+      ? new THREE.BoxGeometry(20, 7, 16)
+      : new THREE.CylinderGeometry(turretRadius, turretRadius * 1.08, 8, 18),
+    material: turretMat,
+    position: [0, 0, 0]
+  });
+  addMesh({
+    parent: turretRoot,
+    name: 'vehicle_barrel',
+    geometry: new THREE.CylinderGeometry(apc ? 1.2 : 1.5, apc ? 1.4 : 1.8, barrelLength, 12),
+    material: trackMat,
+    position: [barrelLength * 0.5 + (apc ? 8 : 10), 0.6, 0],
+    rotation: [0, 0, -Math.PI / 2]
+  });
+  addMesh({
+    parent: turretRoot,
+    name: 'vehicle_barrel_shroud',
+    geometry: new THREE.CylinderGeometry(apc ? 2.1 : 2.8, apc ? 2.4 : 3.2, apc ? 10 : 14, 12),
+    material: trimMat,
+    position: [apc ? 11 : 12, 0.6, 0],
+    rotation: [0, 0, -Math.PI / 2]
+  });
+  addMesh({
+    parent: turretRoot,
+    name: 'vehicle_muzzle_glow',
+    geometry: new THREE.SphereGeometry(apc ? 1.2 : 1.4, 10, 10),
+    material: glowMat,
+    position: [barrelLength + (apc ? 8 : 10), 0.6, 0]
+  });
+
+  if (apc) {
+    addMesh({
+      parent: group,
+      name: 'vehicle_troop_compartment',
+      geometry: new THREE.BoxGeometry(24, 11, 20),
+      material: turretMat,
+      position: [-6, 18, 0]
+    });
+    addMesh({
+      parent: group,
+      name: 'vehicle_rear_door',
+      geometry: new THREE.BoxGeometry(5, 10, 16),
+      material: trimMat,
+      position: [-hullLength * 0.5 + 2, 15, 0]
+    });
+  }
+
+  return group;
+};
+
 const root = new THREE.Group();
 root.name = 'airstrike_assets_root';
 root.add(buildBomberPlane());
 root.add(buildParachuteNuke());
+root.add(buildStrikeJet());
+root.add(buildGroundArmor({
+  name: 'battle_tank',
+  hullColor: '#4b5d3a',
+  turretColor: '#3f5332',
+  accentColor: '#f59e0b',
+  barrelLength: 28,
+  hullLength: 50,
+  hullHeight: 14,
+  hullWidth: 28,
+  turretRadius: 9.5
+}));
+root.add(buildGroundArmor({
+  name: 'battle_apc',
+  hullColor: '#2f4f7f',
+  turretColor: '#26436b',
+  accentColor: '#38bdf8',
+  barrelLength: 18,
+  hullLength: 46,
+  hullHeight: 13,
+  hullWidth: 26,
+  turretRadius: 8,
+  apc: true
+}));
 
 const scene = new THREE.Scene();
 scene.add(root);

@@ -3,6 +3,9 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
+    "fallout:assets": "node scripts/generateFalloutAssets.mjs",
+    "predev": "npm run fallout:assets",
+    "prebuild": "npm run fallout:assets",
     "dev": "NODE_OPTIONS='--dns-result-order=ipv4first' node server.js",
     "build": "next build",
     "start": "NODE_ENV=production NODE_OPTIONS='--dns-result-order=ipv4first' node server.js",

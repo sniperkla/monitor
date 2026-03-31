@@ -74,10 +74,21 @@ const getTerrainPointFromRay = (ray, maxDistance = 12000, steps = 96) => {
   return null;
 };
 
-const getVaultEntryPoint = (bunker) => ({
-  x: bunker.x,
-  z: bunker.z + 42
-});
+const getVaultEntryPoint = (bunker) => {
+  if (!bunker) return { x: 0, z: 42 };
+  if (bunker.type === 'facility') {
+    if (bunker.kind === 'war_factory') return { x: bunker.x, z: bunker.z + 54 };
+    if (bunker.kind === 'field_hospital') return { x: bunker.x + 10, z: bunker.z + 40 };
+    if (bunker.kind === 'tech_lab') return { x: bunker.x, z: bunker.z + 48 };
+    if (bunker.kind === 'powerplant') return { x: bunker.x - 8, z: bunker.z + 44 };
+    if (bunker.kind === 'radar_tower') return { x: bunker.x, z: bunker.z + 46 };
+    return { x: bunker.x, z: bunker.z + 42 };
+  }
+  return {
+    x: bunker.x,
+    z: bunker.z + 42
+  };
+};
 
 const getDeployAngle = (bunker, target) => {
   if (!bunker || !target) return -Math.PI / 2;
@@ -85,6 +96,11 @@ const getDeployAngle = (bunker, target) => {
 };
 
 const PLANE_MODEL_SCALE = 0.6;
+const JET_MODEL_SCALE = 0.58;
+const GROUND_ARMOR_MODEL_SCALE = 0.4;
+const SOLDIER_MODEL_SCALE = 0.9;
+const SOLDIER_MOVE_SPEED_MULTIPLIER = 0.78;
+const TANK_MOVE_SPEED_MULTIPLIER = 0.82;
 const PLANE_BOMB_BAY_OFFSET = { x: -10, y: -13, z: 0 };
 const BOMB_DROP_GRAVITY = 2.5;
 const BOMB_RENDER_SCALE = 3.2;
@@ -105,6 +121,10 @@ const PLANE_BASE_ALTITUDE = 350;
 const PLANE_ALTITUDE_VARIANCE = 80;
 const PLANE_START_DISTANCE = WORLD_WIDTH * 1.5;
 const PLANE_BANK_LIMIT = 0.22;
+const TANK_HULL_TURN_RATE = 4.4;
+const TANK_IDLE_TURN_RATE = 2.2;
+const TANK_TURRET_TURN_RATE = 6.8;
+const TANK_MODEL_RECOIL_DISTANCE = 3.1;
 const AIRSTRIKE_DEBUG = false;
 const AUTO_AIRSTRIKES_ENABLED = false;
 const TARGET_INDICATOR_HEIGHT = 8;
@@ -122,6 +142,10 @@ const LEVEL_INTERMISSION_SECONDS = 5;
 const LEVEL_CLEAR_CREDIT_REWARD = 130;
 const LEVEL_CLEAR_BUNKER_REPAIR = 180;
 const MANUAL_STRIKE_COST = 95;
+const ORBITAL_LANCE_COST = 72;
+const FIRESTORM_COST = 64;
+const ORBITAL_LANCE_COOLDOWN_MS = 10500;
+const FIRESTORM_COOLDOWN_MS = 9200;
 const CIVILIAN_RESCUE_REWARD = 8;
 const KAIJU_KILL_REWARD = 110;
 const MINI_MONSTER_KILL_REWARD = 42;
@@ -133,17 +157,34 @@ const KAIJU_MINI_MOVE_MULTIPLIER = 0.62;
 const KAIJU_WANDER_MOVE_MULTIPLIER = 0.7;
 const KAIJU_ATTACK_RATE_MULTIPLIER = 0.76;
 const KAIJU_COLLATERAL_DAMAGE_INTERVAL = 0.24;
+const KAIJU_ATTACK_POSE_SECONDS = 0.62;
+const KAIJU_SMASH_POSE_SECONDS = 0.78;
+const KAIJU_SPECIAL_WINDUP_SECONDS = 0.72;
+const KAIJU_SPECIAL_PULSE_SECONDS = 1.1;
 const BARRICADE_LIFETIME_MS = 38000;
 const BARRICADE_MAX_HP = 860;
 const DEPLOY_OPTIONS = {
   squad: { label: 'Rangers', icon: '🪖', cost: 28, countLabel: 'x4', description: 'Cheap rifle squad that holds the line.' },
   gunner_team: { label: 'Gunner Team', icon: '🔫', cost: 44, countLabel: 'x3', description: 'Auto-rifle team with stronger close suppression.' },
   sniper_team: { label: 'Sniper Team', icon: '🎯', cost: 52, countLabel: 'x2', description: 'Long-range marksmen for high-value kaiju damage.' },
+  rpg_team: { label: 'RPG Team', icon: '💥', cost: 64, countLabel: 'x2', description: 'Heavy anti-kaiju rockets with strong burst damage.' },
+  missile_team: { label: 'Missile Team', icon: '🚀', cost: 88, countLabel: 'x2', description: 'Long-range guided missiles for elite monster hunting.' },
   engineer_team: { label: 'Engineers', icon: '🛠️', cost: 48, countLabel: 'x2', description: 'Support crew that repairs vaults and defenses.' },
   barricade: { label: 'Barricade', icon: '🧱', cost: 40, countLabel: 'x1', description: 'Temporary wall that slows kaiju pushes.' },
   tank: { label: 'Tank', icon: '🚜', cost: 72, countLabel: 'x1', description: 'Strong anti-kaiju armor for mid range.' },
   apc: { label: 'APC', icon: '🚛', cost: 96, countLabel: 'x1', description: 'Fast support armor that repositions and fires quickly.' },
   jet: { label: 'Jet', icon: '✈️', cost: 120, countLabel: 'x1', description: 'Fast strike support against wounded targets.' }
+};
+const DEPLOY_TRAINING_DURATIONS = {
+  squad: 4.2,
+  gunner_team: 5.1,
+  sniper_team: 5.8,
+  rpg_team: 6.2,
+  missile_team: 7.6,
+  engineer_team: 4.8,
+  tank: 8.2,
+  apc: 7.2,
+  jet: 9.2
 };
 const BUILD_OPTIONS = {
   powerplant: {
@@ -188,6 +229,56 @@ const BUILD_OPTIONS = {
     description: 'Improves command control and reduces nuke rearm time.'
   }
 };
+const FACILITY_INTERACTION_OPTIONS = {
+  powerplant: {
+    label: 'Grid Overdrive',
+    tag: 'Economy',
+    cost: 36,
+    cooldownMs: 26000,
+    durationMs: 14000,
+    description: 'Boosts credits and speeds production from the grid.'
+  },
+  war_factory: {
+    label: 'Battle Refit',
+    tag: 'Armor',
+    cost: 42,
+    cooldownMs: 24000,
+    durationMs: 12000,
+    description: 'Repairs armor near the factory and accelerates heavy output.'
+  },
+  aa_site: {
+    label: 'Flak Surge',
+    tag: 'AA',
+    cost: 32,
+    cooldownMs: 18000,
+    durationMs: 10000,
+    description: 'Temporarily increases anti-air fire rate and damage.'
+  },
+  field_hospital: {
+    label: 'Triage Pulse',
+    tag: 'Support',
+    cost: 34,
+    cooldownMs: 19000,
+    durationMs: 12000,
+    description: 'Supercharges frontline healing around the hospital.'
+  },
+  tech_lab: {
+    label: 'Uplink Burst',
+    tag: 'Tech',
+    cost: 44,
+    cooldownMs: 22000,
+    durationMs: 12000,
+    description: 'Cuts strike cooldowns and improves advanced training.'
+  },
+  radar_tower: {
+    label: 'Threat Scan',
+    tag: 'Intel',
+    cost: 28,
+    cooldownMs: 20000,
+    durationMs: 12000,
+    description: 'Marks active kaiju and improves battlefield coordination.'
+  }
+};
 const UPGRADE_OPTIONS = {
   tank_mk2: {
     label: 'Tank MK-II',
@@ -208,12 +299,41 @@ const DEPLOY_UNLOCK_REQUIREMENTS = {
   squad: [],
   gunner_team: ['powerplant'],
   sniper_team: ['tech_lab'],
+  rpg_team: ['war_factory'],
+  missile_team: ['tech_lab', 'war_factory'],
   engineer_team: ['powerplant'],
   barricade: [],
   tank: ['war_factory'],
   apc: ['war_factory', 'field_hospital'],
   jet: ['tech_lab']
 };
+const BUILDING_DEPLOY_OPTIONS = {
+  powerplant: ['squad', 'gunner_team', 'engineer_team', 'barricade'],
+  war_factory: ['tank', 'apc', 'rpg_team', 'barricade'],
+  field_hospital: ['squad', 'engineer_team', 'apc'],
+  tech_lab: ['sniper_team', 'gunner_team', 'missile_team', 'jet'],
+  radar_tower: ['jet'],
+  aa_site: []
+};
+const UNIT_PRODUCTION_SOURCES = {
+  squad: ['powerplant', 'field_hospital'],
+  gunner_team: ['powerplant', 'tech_lab'],
+  sniper_team: ['tech_lab'],
+  rpg_team: ['war_factory'],
+  missile_team: ['tech_lab'],
+  engineer_team: ['powerplant', 'field_hospital'],
+  barricade: ['powerplant', 'war_factory'],
+  tank: ['war_factory'],
+  apc: ['war_factory', 'field_hospital'],
+  jet: ['tech_lab', 'radar_tower']
+};
+const canBuildingProduceUnit = (buildingKind, unitType) => (
+  !!buildingKind && (BUILDING_DEPLOY_OPTIONS[buildingKind] || []).includes(unitType)
+);
+const getFacilityInteractionOption = (kind) => FACILITY_INTERACTION_OPTIONS[kind] || null;
+
+const isQueuedDeployUnit = (unitType) => unitType !== 'barricade';
+const getProductionSourcesForUnit = (unitType) => UNIT_PRODUCTION_SOURCES[unitType] || [];
 const DEFAULT_BUILDINGS = Object.freeze({
   powerplant: false,
   war_factory: false,
@@ -228,6 +348,17 @@ const DEFAULT_UPGRADES = Object.freeze({
 });
 const POWERPLANT_INCOME_BONUS = 4;
 const RADAR_TOWER_INCOME_BONUS = 2;
+const POWERPLANT_OVERDRIVE_INCOME_PER_SECOND = 18;
+const POWERPLANT_OVERDRIVE_TRAINING_MULTIPLIER = 1.35;
+const WAR_FACTORY_REFIT_REPAIR = 150;
+const WAR_FACTORY_REFIT_RADIUS = 240;
+const WAR_FACTORY_TRAINING_MULTIPLIER = 1.55;
+const HOSPITAL_TRIAGE_MULTIPLIER = 2.35;
+const TECH_LAB_TRAINING_MULTIPLIER = 1.4;
+const TECH_LAB_STRIKE_COOLDOWN_MULTIPLIER = 0.82;
+const RADAR_SCAN_STRIKE_DAMAGE_MULTIPLIER = 1.12;
+const AA_SITE_SURGE_DAMAGE_MULTIPLIER = 1.8;
+const AA_SITE_SURGE_RELOAD_MULTIPLIER = 1.85;
 const TANK_MK2_DAMAGE_MULTIPLIER = 1.65;
 const TANK_MK2_RELOAD_MULTIPLIER = 1.25;
 const APC_DAMAGE_MULTIPLIER = 0.82;
@@ -250,6 +381,7 @@ const ENGINEER_ARMOR_REPAIR_RATE = 18;
 const ENGINEER_BUILD_BOOST_PER_ENGINEER = 0.85;
 const ENGINEER_BARRICADE_REBUILD_COOLDOWN = 14000;
 const RADAR_NUKE_COOLDOWN_MULTIPLIER = 0.76;
+const SUPPORT_STRIKE_RADAR_COOLDOWN_MULTIPLIER = 0.88;
 const RANGER_DRILL_DAMAGE_MULTIPLIER = 1.14;
 const RANGER_DRILL_FIRE_MULTIPLIER = 1.15;
 const RANGER_DRILL_HP_BONUS = 8;
@@ -260,10 +392,107 @@ const FACILITY_BUILD_MIN_SPACING = 54;
 const NUKE_AFTERFIRE_PATCH_COUNT = 4;
 const NUKE_AFTERFIRE_PATCH_TTL = 11;
 const NUKE_AFTERFIRE_CORE_LIFETIME = 14;
+const ORBITAL_LANCE_DURATION = 2.25;
+const FIRESTORM_EFFECT_DURATION = 3.2;
+const FIRESTORM_PATCH_TTL = 9.5;
+const KINETIC_SPEAR_COST = 125;
+const KINETIC_SPEAR_COOLDOWN_MS = 18000;
+const KINETIC_SPEAR_DURATION = 1.85;
+const ELEMENT_ADVANTAGE_DAMAGE_MULTIPLIER = 1.55;
+const ELEMENT_RESIST_DAMAGE_MULTIPLIER = 0.74;
+const ELEMENT_META = {
+  radiation: { label: 'Radiation', shortLabel: 'RAD', color: '#bef264' },
+  ion: { label: 'Ion', shortLabel: 'ION', color: '#7dd3fc' },
+  fire: { label: 'Thermal', shortLabel: 'FIRE', color: '#fb923c' },
+  reactor: { label: 'Reactor', shortLabel: 'CORE', color: '#84cc16' },
+  tide: { label: 'Tide', shortLabel: 'TIDE', color: '#60a5fa' },
+  bio: { label: 'Bio', shortLabel: 'BIO', color: '#22c55e' },
+  armor: { label: 'Armor', shortLabel: 'ARMOR', color: '#cbd5e1' },
+  ash: { label: 'Ash', shortLabel: 'ASH', color: '#a78bfa' },
+  storm: { label: 'Storm', shortLabel: 'STORM', color: '#facc15' }
+};
 
 const cloneDefaultBuildings = () => ({ ...DEFAULT_BUILDINGS });
 const cloneDefaultUpgrades = () => ({ ...DEFAULT_UPGRADES });
 const cloneDefaultBuildQueue = () => Object.fromEntries(Object.keys(DEFAULT_BUILDINGS).map((key) => [key, false]));
+const SUPPORT_STRIKE_OPTIONS = {
+  nuke: {
+    key: 'nuke',
+    label: 'Nuke',
+    icon: '☢️',
+    cost: MANUAL_STRIKE_COST,
+    cooldownMs: MANUAL_STRIKE_COOLDOWN_MS,
+    requires: [],
+    statusLabel: 'NUKE',
+    element: 'radiation',
+    description: 'Strategic bomber drop with wide annihilation radius.',
+    preview: {
+      outerRadius: NUKE_DESTRUCTION_PREVIEW_RADIUS,
+      middleRadius: NUKE_CASUALTY_PREVIEW_RADIUS,
+      coreRadius: NUKE_SEVERE_PREVIEW_RADIUS,
+      ringColor: '#ef4444',
+      beamColor: '#f87171',
+      accentColor: '#fb923c'
+    }
+  },
+  orbital_lance: {
+    key: 'orbital_lance',
+    label: 'Orbital Lance',
+    icon: '⚡',
+    cost: ORBITAL_LANCE_COST,
+    cooldownMs: ORBITAL_LANCE_COOLDOWN_MS,
+    requires: ['tech_lab'],
+    statusLabel: 'LANCE',
+    element: 'ion',
+    description: 'Precision satellite beam that punches through clustered kaiju.',
+    preview: {
+      outerRadius: 190,
+      middleRadius: 120,
+      coreRadius: 74,
+      ringColor: '#38bdf8',
+      beamColor: '#67e8f9',
+      accentColor: '#93c5fd'
+    }
+  },
+  firestorm: {
+    key: 'firestorm',
+    label: 'Firestorm',
+    icon: '🔥',
+    cost: FIRESTORM_COST,
+    cooldownMs: FIRESTORM_COOLDOWN_MS,
+    requires: ['powerplant'],
+    statusLabel: 'FIRE',
+    element: 'fire',
+    description: 'Incendiary strike that blankets the ground in burning fuel.',
+    preview: {
+      outerRadius: 250,
+      middleRadius: 165,
+      coreRadius: 96,
+      ringColor: '#f97316',
+      beamColor: '#fb923c',
+      accentColor: '#facc15'
+    }
+  },
+  kinetic_spear: {
+    key: 'kinetic_spear',
+    label: 'Kinetic Spear',
+    icon: '☄️',
+    cost: KINETIC_SPEAR_COST,
+    cooldownMs: KINETIC_SPEAR_COOLDOWN_MS,
+    requires: ['tech_lab', 'radar_tower'],
+    statusLabel: 'SPEAR',
+    element: 'ion',
+    description: 'Single-target orbital penetrator that devastates one kaiju with a focused strike.',
+    preview: {
+      outerRadius: 120,
+      middleRadius: 72,
+      coreRadius: 32,
+      ringColor: '#e2e8f0',
+      beamColor: '#f8fafc',
+      accentColor: '#7dd3fc'
+    }
+  }
+};
 const getBuildPlacementState = (buildings = DEFAULT_BUILDINGS, buildQueue = {}) => {
   const merged = { ...buildings };
   Object.keys(buildQueue || {}).forEach((key) => {
@@ -276,6 +505,8 @@ const getDeployUnlockState = (buildings = DEFAULT_BUILDINGS) => ({
   squad: true,
   gunner_team: hasPrerequisites(buildings, DEPLOY_UNLOCK_REQUIREMENTS.gunner_team),
   sniper_team: hasPrerequisites(buildings, DEPLOY_UNLOCK_REQUIREMENTS.sniper_team),
+  rpg_team: hasPrerequisites(buildings, DEPLOY_UNLOCK_REQUIREMENTS.rpg_team),
+  missile_team: hasPrerequisites(buildings, DEPLOY_UNLOCK_REQUIREMENTS.missile_team),
   engineer_team: hasPrerequisites(buildings, DEPLOY_UNLOCK_REQUIREMENTS.engineer_team),
   barricade: true,
   tank: hasPrerequisites(buildings, DEPLOY_UNLOCK_REQUIREMENTS.tank),
@@ -288,62 +519,93 @@ const BUNKER_BASE_HP = 2600;
 const TANK_SHELL_DAMAGE = 12;
 const SOLDIER_RIFLE_DAMAGE = 0.75;
 const JET_MISSILE_DAMAGE = 170;
+const SOLDIER_EXPLOSIVE_SPLASH_RADIUS = 125;
+const SOLDIER_RPG_DAMAGE = 34;
+const SOLDIER_MISSILE_DAMAGE = 58;
 const SOLDIER_LOADOUTS = [
   {
     key: 'rifleman',
     label: 'Rifle',
-    hp: 84,
-    attackRange: 180,
-    idealRange: 130,
-    retreatRange: 72,
-    attackDamage: 1.15,
+    hp: 108,
+    attackRange: 200,
+    idealRange: 158,
+    retreatRange: 104,
+    attackDamage: 1.35,
     fireRate: 0.09,
-    moveSpeed: 2.8,
+    moveSpeed: 2.05,
     color: '#166534'
   },
   {
     key: 'marksman',
     label: 'Long Range',
-    hp: 72,
-    attackRange: 260,
-    idealRange: 205,
-    retreatRange: 120,
-    attackDamage: 2.05,
+    hp: 94,
+    attackRange: 310,
+    idealRange: 248,
+    retreatRange: 162,
+    attackDamage: 2.6,
     fireRate: 0.055,
-    moveSpeed: 2.45,
+    moveSpeed: 1.82,
     color: '#14532d'
   },
   {
     key: 'gunner',
     label: 'Auto Rifle',
-    hp: 96,
-    attackRange: 155,
-    idealRange: 110,
-    retreatRange: 65,
-    attackDamage: 0.82,
+    hp: 122,
+    attackRange: 175,
+    idealRange: 136,
+    retreatRange: 88,
+    attackDamage: 0.96,
     fireRate: 0.17,
-    moveSpeed: 2.6,
+    moveSpeed: 1.95,
     color: '#3f6212'
+  },
+  {
+    key: 'rpg',
+    label: 'RPG',
+    hp: 114,
+    attackRange: 255,
+    idealRange: 214,
+    retreatRange: 156,
+    attackDamage: SOLDIER_RPG_DAMAGE,
+    splashRadius: SOLDIER_EXPLOSIVE_SPLASH_RADIUS,
+    projectileType: 'missile',
+    fireRate: 0.038,
+    moveSpeed: 1.76,
+    color: '#854d0e'
+  },
+  {
+    key: 'missile',
+    label: 'Missile',
+    hp: 102,
+    attackRange: 360,
+    idealRange: 308,
+    retreatRange: 228,
+    attackDamage: SOLDIER_MISSILE_DAMAGE,
+    splashRadius: SOLDIER_EXPLOSIVE_SPLASH_RADIUS + 20,
+    projectileType: 'missile',
+    fireRate: 0.026,
+    moveSpeed: 1.6,
+    color: '#1d4ed8'
   },
   {
     key: 'engineer',
     label: 'Engineer',
-    hp: 88,
+    hp: 102,
     attackRange: 120,
     idealRange: 100,
     retreatRange: 60,
     attackDamage: 0.45,
     fireRate: 0.045,
-    moveSpeed: 2.6,
+    moveSpeed: 1.9,
     color: '#0f766e'
   }
 ];
 const KAIJU_VARIANT_CONFIG = {
-  godzilla: { displayName: 'godzilla', hpMult: 1.12, scaleMin: 4.2, scaleMax: 6.3, moveMult: 0.84, attackMult: 0.9 },
-  octopus: { displayName: 'octopus', hpMult: 0.96, scaleMin: 3.9, scaleMax: 5.8, moveMult: 0.8, attackMult: 0.86 },
-  spider: { displayName: 'spider', hpMult: 0.92, scaleMin: 3.7, scaleMax: 5.9, moveMult: 0.88, attackMult: 0.9 },
-  beetle: { displayName: 'titan beetle', hpMult: 1.08, scaleMin: 4.1, scaleMax: 6.1, moveMult: 0.82, attackMult: 0.92 },
-  wyrm: { displayName: 'ash wyrm', hpMult: 1.02, scaleMin: 4.4, scaleMax: 6.4, moveMult: 0.8, attackMult: 0.9 },
+  godzilla: { displayName: 'godzilla', hpMult: 1.12, scaleMin: 4.2, scaleMax: 6.3, moveMult: 0.84, attackMult: 0.9, element: 'reactor', weakAgainst: 'radiation', resistAgainst: 'fire' },
+  octopus: { displayName: 'octopus', hpMult: 0.96, scaleMin: 3.9, scaleMax: 5.8, moveMult: 0.8, attackMult: 0.86, element: 'tide', weakAgainst: 'ion', resistAgainst: 'fire' },
+  spider: { displayName: 'spider', hpMult: 0.92, scaleMin: 3.7, scaleMax: 5.9, moveMult: 0.88, attackMult: 0.9, element: 'bio', weakAgainst: 'fire', resistAgainst: 'radiation' },
+  beetle: { displayName: 'titan beetle', hpMult: 1.08, scaleMin: 4.1, scaleMax: 6.1, moveMult: 0.82, attackMult: 0.92, element: 'armor', weakAgainst: 'ion', resistAgainst: 'fire' },
+  wyrm: { displayName: 'ash wyrm', hpMult: 1.02, scaleMin: 4.4, scaleMax: 6.4, moveMult: 0.8, attackMult: 0.9, element: 'ash', weakAgainst: 'radiation', resistAgainst: 'fire' },
   spicie_bird: {
     displayName: 'spicie bird',
     hpMult: 0.88,
@@ -351,6 +613,9 @@ const KAIJU_VARIANT_CONFIG = {
     scaleMax: 5.5,
     moveMult: 0.72,
     attackMult: 0.84,
+    element: 'storm',
+    weakAgainst: 'ion',
+    resistAgainst: 'radiation',
     flying: true,
     cruiseHeight: 130
   }
@@ -363,9 +628,11 @@ const KAIJU_VARIANT_POOLS = [
 const DYNAMIC_RENDER_TYPES = new Set([
   'plane', 'bomb', 'kaiju', 'mushroom', 'kaiju_attack', 'firebreath',
   'bullet', 'shell', 'jet', 'missile', 'missile_impact', 'impact_puff',
-  'barricade', 'facility', 'soldier', 'tank',
+  'barricade', 'facility', 'soldier', 'tank', 'support_fx', 'kaiju_special_fx',
   'muzzle_flash', 'corpse', 'kaiju_corpse', 'scorch'
 ]);
+const COMMANDABLE_UNIT_TYPES = new Set(['soldier', 'tank']);
+const REPAIRABLE_COMMAND_TARGET_TYPES = new Set(['bunker', 'facility', 'barricade', 'tank']);
 
 const getPlaneBombSpawnPosition = (plane) => {
   const yaw = -Math.atan2(plane.vz || 0, plane.vx || 0.001);
@@ -433,12 +700,157 @@ const getKaijuDisplayName = (variant) => (
   KAIJU_VARIANT_CONFIG[variant]?.displayName || variant
 );
 
+const getSupportStrikeOption = (key) => (
+  SUPPORT_STRIKE_OPTIONS[key] || SUPPORT_STRIKE_OPTIONS.nuke
+);
+
+const createDefaultSupportCooldownMap = () => Object.fromEntries(
+  Object.keys(SUPPORT_STRIKE_OPTIONS)
+    .filter((key) => key !== 'nuke')
+    .map((key) => [key, 0])
+);
+
+const createDefaultSupportCanArmMap = () => Object.fromEntries(
+  Object.keys(SUPPORT_STRIKE_OPTIONS).map((key) => [key, key === 'nuke'])
+);
+
+const getSupportStrikePreview = (key) => (
+  getSupportStrikeOption(key)?.preview || SUPPORT_STRIKE_OPTIONS.nuke.preview
+);
+
+const getElementMeta = (element) => (
+  ELEMENT_META[element] || { label: String(element || 'unknown').toUpperCase(), shortLabel: String(element || 'UNK').toUpperCase(), color: '#cbd5e1' }
+);
+
 const getKaijuVariantTuning = (variant) => (
   KAIJU_VARIANT_CONFIG[variant] || KAIJU_VARIANT_CONFIG.godzilla
 );
 
+const getKaijuElementalProfile = (kaijuOrVariant) => {
+  const variant = typeof kaijuOrVariant === 'string' ? kaijuOrVariant : kaijuOrVariant?.variant;
+  const tuning = getKaijuVariantTuning(variant);
+  return {
+    element: tuning.element || 'reactor',
+    weakAgainst: tuning.weakAgainst || 'radiation',
+    resistAgainst: tuning.resistAgainst || null
+  };
+};
+
+const getKaijuSpecialEffectKind = (variant) => {
+  if (variant === 'octopus') return 'ink';
+  if (variant === 'spider') return 'web';
+  if (variant === 'beetle' || variant === 'spicie_bird') return 'lightning';
+  if (variant === 'wyrm') return 'ash';
+  return 'reactor';
+};
+
+const getKaijuTelegraphColor = (kind = 'reactor') => {
+  if (kind === 'ink') return '#7c3aed';
+  if (kind === 'web') return '#dbeafe';
+  if (kind === 'lightning') return '#67e8f9';
+  if (kind === 'smash') return '#fb923c';
+  if (kind === 'ash') return '#84cc16';
+  return '#f59e0b';
+};
+
+const getKaijuSpecialFxPalette = (kind = 'reactor') => {
+  if (kind === 'ink') {
+    return {
+      primary: '#8b5cf6',
+      secondary: '#d8b4fe',
+      core: '#f5d0fe',
+      smoke: '#3b0764'
+    };
+  }
+  if (kind === 'web') {
+    return {
+      primary: '#e0f2fe',
+      secondary: '#93c5fd',
+      core: '#ffffff',
+      smoke: '#cbd5e1'
+    };
+  }
+  if (kind === 'lightning') {
+    return {
+      primary: '#67e8f9',
+      secondary: '#0ea5e9',
+      core: '#ecfeff',
+      smoke: '#0f172a'
+    };
+  }
+  if (kind === 'ash') {
+    return {
+      primary: '#84cc16',
+      secondary: '#bef264',
+      core: '#f7fee7',
+      smoke: '#1a2e05'
+    };
+  }
+  return {
+    primary: '#fb923c',
+    secondary: '#facc15',
+    core: '#fff7ed',
+    smoke: '#4a1d0d'
+  };
+};
+
+const spawnKaijuSpecialFxEntity = (entities, kaiju, phase = 'burst', options = {}) => {
+  if (!entities || !kaiju) return null;
+  const kind = options.kind || kaiju.specialEffectKind || getKaijuSpecialEffectKind(kaiju.variant);
+  const baseScale = Math.max(1.8, kaiju.scale || 5);
+  const effect = {
+    id: `kaiju-special-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    type: 'kaiju_special_fx',
+    sourceId: kaiju.id,
+    variant: kaiju.variant,
+    kind,
+    phase,
+    x: kaiju.x,
+    y: kaiju.y || getTerrainHeight(kaiju.x, kaiju.z),
+    z: kaiju.z,
+    scale: baseScale,
+    duration: options.duration || (phase === 'charge' ? KAIJU_SPECIAL_WINDUP_SECONDS : KAIJU_SPECIAL_PULSE_SECONDS),
+    dead: false
+  };
+  entities.push(effect);
+  return effect;
+};
+
+const getStrikeElementKey = (abilityKey = 'nuke') => (
+  getSupportStrikeOption(abilityKey)?.element || 'radiation'
+);
+
+const getElementalStrikeModifier = (abilityKey, kaiju) => {
+  const attackElement = getStrikeElementKey(abilityKey);
+  const profile = getKaijuElementalProfile(kaiju);
+  if (profile.weakAgainst === attackElement) {
+    return { multiplier: ELEMENT_ADVANTAGE_DAMAGE_MULTIPLIER, state: 'advantage', attackElement, profile };
+  }
+  if (profile.resistAgainst === attackElement) {
+    return { multiplier: ELEMENT_RESIST_DAMAGE_MULTIPLIER, state: 'resist', attackElement, profile };
+  }
+  return { multiplier: 1, state: 'neutral', attackElement, profile };
+};
+
+const applyKaijuElementalDamage = (kaiju, baseDamage, abilityKey) => {
+  if (!kaiju || kaiju.dead) return 0;
+  const modifier = getElementalStrikeModifier(abilityKey, kaiju);
+  const appliedDamage = baseDamage * modifier.multiplier;
+  kaiju.hp -= appliedDamage;
+  kaiju.lastElementState = modifier.state;
+  kaiju.lastElement = modifier.attackElement;
+  kaiju.lastElementHitAt = Date.now();
+  return appliedDamage;
+};
+
 const getFrameScaledStep = (delta, referenceFps = KAIJU_FRAME_RATE_REFERENCE) => (
   THREE.MathUtils.clamp((delta || 1 / referenceFps) * referenceFps, 0.55, 1.6)
+);
+
+const wrapAngle = (angle) => Math.atan2(Math.sin(angle), Math.cos(angle));
+
+const dampAngle = (current, target, rate, delta) => (
+  current + wrapAngle(target - current) * Math.min(1, (delta || 0) * rate)
 );
 
 const getKaijuSizeSpeedFactor = (kaiju) => {
@@ -469,6 +881,109 @@ const isFlyingKaijuVariant = (variant) => !!KAIJU_VARIANT_CONFIG[variant]?.flyin
 
 const isFlyingKaiju = (kaiju) => !!kaiju && kaiju.type === 'kaiju' && isFlyingKaijuVariant(kaiju.variant);
 const isBrokenStructure = (entity) => !!entity && (entity.state === 'broken' || entity.destroyed || (entity.hp ?? 1) <= 0);
+const isCommandableUnit = (entity) => !!entity && COMMANDABLE_UNIT_TYPES.has(entity.type) && !entity.dead;
+const isRepairableCommandTarget = (entity) => {
+  if (!entity || entity.dead || !REPAIRABLE_COMMAND_TARGET_TYPES.has(entity.type)) return false;
+  if (entity.type === 'bunker') return !isBrokenStructure(entity) && (entity.hp || 0) < (entity.maxHp || BUNKER_BASE_HP);
+  if (entity.type === 'facility') return !isBrokenStructure(entity) && (entity.hp || 0) < (entity.maxHp || 1000);
+  if (entity.type === 'barricade') return (entity.hp || 0) < (entity.maxHp || BARRICADE_MAX_HP);
+  if (entity.type === 'tank') return (entity.hp || 0) < (entity.maxHp || TANK_BASE_HP);
+  return false;
+};
+const clearUnitOrder = (unit) => {
+  if (!unit) return;
+  unit.orderType = 'hold';
+  unit.orderTargetId = undefined;
+  unit.orderX = undefined;
+  unit.orderZ = undefined;
+  unit.commandTargetX = undefined;
+  unit.commandTargetZ = undefined;
+  unit.attackFormationAngle = undefined;
+  unit.attackFormationRadius = undefined;
+  unit.attackFormationRow = undefined;
+  if (unit.type === 'soldier' && unit.weaponType === 'engineer') {
+    unit.repairTargetX = undefined;
+    unit.repairTargetZ = undefined;
+  }
+};
+const issueMoveOrder = (unit, target) => {
+  if (!unit || !target) return;
+  unit.orderType = 'move';
+  unit.orderTargetId = undefined;
+  unit.orderX = target.x;
+  unit.orderZ = target.z;
+  unit.commandTargetX = target.x;
+  unit.commandTargetZ = target.z;
+};
+const issueAttackMoveOrder = (unit, target) => {
+  if (!unit || !target) return;
+  unit.orderType = 'attack_move';
+  unit.orderTargetId = undefined;
+  unit.orderX = target.x;
+  unit.orderZ = target.z;
+  unit.commandTargetX = target.x;
+  unit.commandTargetZ = target.z;
+};
+const issueAttackOrder = (unit, targetEntity, formation = null) => {
+  if (!unit || !targetEntity) return;
+  unit.orderType = 'attack';
+  unit.orderTargetId = targetEntity.id;
+  unit.orderX = targetEntity.x;
+  unit.orderZ = targetEntity.z;
+  unit.commandTargetX = undefined;
+  unit.commandTargetZ = undefined;
+  unit.attackFormationAngle = formation?.angle;
+  unit.attackFormationRadius = formation?.radius;
+  unit.attackFormationRow = formation?.row;
+};
+const issueRepairOrder = (unit, targetEntity) => {
+  if (!unit || !targetEntity) return;
+  unit.orderType = 'repair';
+  unit.orderTargetId = targetEntity.id;
+  unit.orderX = targetEntity.x;
+  unit.orderZ = targetEntity.z;
+  unit.commandTargetX = undefined;
+  unit.commandTargetZ = undefined;
+};
+const issueGroupAttackOrder = (units, targetEntity) => {
+  if (!units?.length || !targetEntity) return;
+  const center = units.reduce((acc, unit) => {
+    acc.x += unit.x || 0;
+    acc.z += unit.z || 0;
+    return acc;
+  }, { x: 0, z: 0 });
+  center.x /= units.length;
+  center.z /= units.length;
+  const baseAngle = Math.atan2(center.z - targetEntity.z, center.x - targetEntity.x);
+  const cols = Math.min(4, units.length);
+  units.forEach((unit, index) => {
+    const row = Math.floor(index / cols);
+    const col = index % cols;
+    const centeredCol = col - (Math.min(cols, units.length) - 1) / 2;
+    const angle = baseAngle + centeredCol * 0.32;
+    const baseRadius = unit.type === 'tank' ? 156 : Math.max(unit.idealRange || 130, 112);
+    const radius = baseRadius + row * (unit.type === 'tank' ? 22 : 18);
+    issueAttackOrder(unit, targetEntity, { angle, radius, row });
+  });
+  if (typeof window !== 'undefined') {
+    window._falloutUnitCommandMarkers = units.map((unit, index) => {
+      const cols = Math.min(4, units.length);
+      const row = Math.floor(index / cols);
+      const col = index % cols;
+      const centeredCol = col - (Math.min(cols, units.length) - 1) / 2;
+      const angle = baseAngle + centeredCol * 0.32;
+      const baseRadius = unit.type === 'tank' ? 156 : Math.max(unit.idealRange || 130, 112);
+      const radius = baseRadius + row * (unit.type === 'tank' ? 22 : 18);
+      return {
+        id: unit.id,
+        x: targetEntity.x + Math.cos(angle) * radius,
+        z: targetEntity.z + Math.sin(angle) * radius,
+        at: Date.now(),
+        type: 'attack'
+      };
+    });
+  }
+};
 const markStructureBroken = (entity) => {
   if (!entity) return;
   entity.hp = 0;
@@ -494,6 +1009,20 @@ const markKaijuDefeated = (kaiju) => {
   kaiju.vz = 0;
   kaiju.staggered = false;
   kaiju.staggerTimer = 0;
+  kaiju.rotation = kaiju.rotation ?? 0;
+  kaiju.deathYaw = kaiju.deathYaw ?? kaiju.rotation;
+  kaiju.deathTiltX = kaiju.deathTiltX ?? 0.24;
+  kaiju.deathRollZ = kaiju.deathRollZ ?? (
+    kaiju.variant === 'octopus' ? Math.PI / 2.5 :
+    kaiju.variant === 'spider' ? Math.PI / 3.2 :
+    kaiju.variant === 'spicie_bird' ? Math.PI / 3 :
+    Math.PI / 2.9
+  );
+  kaiju.attackPoseUntil = 0;
+  kaiju.smashPoseUntil = 0;
+  kaiju.specialChargeStartedAt = 0;
+  kaiju.specialReleaseAt = 0;
+  kaiju.specialPulseUntil = 0;
   if (kaiju.state !== 'dead' && kaiju.state !== 'dying') {
     kaiju.state = 'dying';
     kaiju.deathStartedAt = Date.now();
@@ -517,6 +1046,8 @@ const applySoldierLoadout = (entity, seed = 0) => {
   entity.idealRange = loadout.idealRange;
   entity.retreatRange = loadout.retreatRange;
   entity.attackDamage = loadout.attackDamage;
+  entity.splashRadius = loadout.splashRadius || 0;
+  entity.projectileType = loadout.projectileType || 'bullet';
   entity.fireRate = loadout.fireRate;
   entity.combatSpeed = loadout.moveSpeed;
   entity.hp = loadout.hp;
@@ -572,7 +1103,12 @@ const damageTank = (entity, damage, options = {}) => {
   if (entity.hp <= 0) {
     entity.hp = 0;
     entity.state = 'broken';
-    entity.dead = true;
+    entity.destroyed = true;
+    entity.destroyedAt = entity.destroyedAt || Date.now();
+    entity.vx = 0;
+    entity.vz = 0;
+    entity.reloadTimer = Math.max(entity.reloadTimer || 0, 9999);
+    clearUnitOrder(entity);
   }
 };
 
@@ -702,6 +1238,9 @@ const createKaijuCorpseEntity = (entity) => ({
   variant: entity.variant,
   scale: entity.scale || 5,
   rotation: entity.rotation || 0,
+  deathYaw: entity.deathYaw ?? entity.rotation ?? 0,
+  deathTiltX: entity.deathTiltX ?? 0.18,
+  deathRollZ: entity.deathRollZ ?? Math.PI / 2.8,
   isMini: !!entity.isMini,
   dead: false
 });
@@ -994,6 +1533,78 @@ const THEMES = [
     houseScale: 1.2, treeScale: 1.2, carSpeed: 5 // Escaping!
   }
 ];
+const ENVIRONMENT_VARIANTS = [
+  {
+    key: 'ashen_front',
+    label: 'Ashen Front',
+    terrainBase: '#6a5947',
+    terrainTint: '#88735f',
+    patchA: '#9a8167',
+    patchB: '#5a4a3b',
+    crack: '#221712',
+    debrisA: '#b69a7e',
+    debrisB: '#7a6554',
+    overlay: '#8a5a34',
+    fog: '#8f7157',
+    ambient: '#ffe5c7',
+    directional: '#ffd2a8',
+    accent: '#f97316'
+  },
+  {
+    key: 'toxic_bloom',
+    label: 'Toxic Bloom',
+    terrainBase: '#4a6336',
+    terrainTint: '#62854a',
+    patchA: '#87ab62',
+    patchB: '#3c522b',
+    crack: '#1a2912',
+    debrisA: '#aec27e',
+    debrisB: '#718752',
+    overlay: '#a3d948',
+    fog: '#6d8f4a',
+    ambient: '#f0ffe6',
+    directional: '#d9f99d',
+    accent: '#a3e635'
+  },
+  {
+    key: 'ember_storm',
+    label: 'Ember Storm',
+    terrainBase: '#734737',
+    terrainTint: '#9c6451',
+    patchA: '#c17c62',
+    patchB: '#613b2e',
+    crack: '#27160f',
+    debrisA: '#d08b6a',
+    debrisB: '#8b5944',
+    overlay: '#f59e61',
+    fog: '#a46442',
+    ambient: '#ffe7d1',
+    directional: '#fdba74',
+    accent: '#fb7185'
+  },
+  {
+    key: 'dead_zone',
+    label: 'Dead Zone',
+    terrainBase: '#606976',
+    terrainTint: '#7d8796',
+    patchA: '#a1adbc',
+    patchB: '#4b5561',
+    crack: '#171d24',
+    debrisA: '#c2cad6',
+    debrisB: '#737d8b',
+    overlay: '#b5c0cf',
+    fog: '#7a8696',
+    ambient: '#e2e8f0',
+    directional: '#cbd5e1',
+    accent: '#93c5fd'
+  }
+];
+
+const pickRandomEnvironmentVariant = (previousKey = null) => {
+  const pool = ENVIRONMENT_VARIANTS.filter((variant) => variant.key !== previousKey);
+  const source = pool.length ? pool : ENVIRONMENT_VARIANTS;
+  return source[Math.floor(Math.random() * source.length)] || ENVIRONMENT_VARIANTS[0];
+};
 
 const RESOLUTION_PRESETS = {
   performance: {
@@ -1144,6 +1755,29 @@ const getInitialResolutionPreset = () => {
   return saved && RESOLUTION_PRESETS[saved] ? saved : DEFAULT_RESOLUTION_PRESET;
 };
 const getResolutionProfile = (preset) => RESOLUTION_PRESETS[preset] || RESOLUTION_PRESETS[DEFAULT_RESOLUTION_PRESET];
+const FPS_CAP_OPTIONS = {
+  '30': {
+    label: '30 FPS',
+    note: 'Cooler / smoother battery life',
+    frameMs: 1000 / 30
+  },
+  '60': {
+    label: '60 FPS',
+    note: 'Recommended',
+    frameMs: 1000 / 60
+  },
+  unlimited: {
+    label: 'Unlimited',
+    note: 'Use full monitor refresh',
+    frameMs: 0
+  }
+};
+const DEFAULT_FPS_CAP = '60';
+const getInitialFpsCap = () => {
+  if (typeof window === 'undefined') return DEFAULT_FPS_CAP;
+  const saved = window.localStorage.getItem('fallout-fps-cap');
+  return saved && FPS_CAP_OPTIONS[saved] ? saved : DEFAULT_FPS_CAP;
+};
 const getAdaptiveQualityProfile = (baseProfile, stressLevel = 'normal') => {
   if (!baseProfile) return baseProfile;
   if (stressLevel === 'normal') {
@@ -1215,7 +1849,7 @@ const AudioManager = {
   // Minimum interval (seconds) between plays of the same sound type
   _COOLDOWN_MAP: {
     bomb: 0.3, nuke: 2.0, tank_fire: 0.25, plane_engine: 0.9, plane_flyby: 2.2,
-    tank_engine: 1.0, gun: 0.12, scream: 0.8, kaiju_roar: 2.5,
+    jet_engine: 0.7, tank_engine: 0.7, gun: 0.12, scream: 0.8, kaiju_roar: 2.5,
     fire_breath: 1.5, missile_launch: 0.5, target_confirm: 0.15,
     target_blocked: 0.2, bomb_whistle: 1.2, kaiju_step: 0.5
   },
@@ -1344,18 +1978,55 @@ const AudioManager = {
       scheduleRelease(3);
 
     } else if (type === 'tank_fire') {
-      const noise = ctx.createBufferSource();
-      noise.buffer = this.getPinkNoise(ctx, 0.3);
-      const lowpass = ctx.createBiquadFilter();
-      lowpass.type = 'lowpass';
-      lowpass.frequency.setValueAtTime(1500, t);
-      lowpass.frequency.exponentialRampToValueAtTime(100, t + 0.25);
-      const gain = ctx.createGain();
-      gain.gain.setValueAtTime(0.4, t);
-      gain.gain.exponentialRampToValueAtTime(0.01, t + 0.3);
-      noise.connect(lowpass).connect(gain).connect(ctx.destination);
-      noise.start(t); noise.stop(t + 0.3);
-      scheduleRelease(0.3);
+      const dur = options.duration || 0.46;
+      const vol = options.volume || 0.22;
+
+      const crack = ctx.createOscillator();
+      const crackGain = ctx.createGain();
+      crack.type = 'square';
+      crack.frequency.setValueAtTime(1800, t);
+      crack.frequency.exponentialRampToValueAtTime(160, t + dur * 0.16);
+      crackGain.gain.setValueAtTime(vol * 0.65, t);
+      crackGain.gain.exponentialRampToValueAtTime(0.01, t + dur * 0.12);
+
+      const boom = ctx.createOscillator();
+      const boomGain = ctx.createGain();
+      boom.type = 'triangle';
+      boom.frequency.setValueAtTime(118, t);
+      boom.frequency.exponentialRampToValueAtTime(28, t + dur);
+      boomGain.gain.setValueAtTime(vol * 0.78, t);
+      boomGain.gain.exponentialRampToValueAtTime(0.01, t + dur);
+
+      const ring = ctx.createOscillator();
+      const ringGain = ctx.createGain();
+      ring.type = 'sawtooth';
+      ring.frequency.setValueAtTime(420, t + 0.03);
+      ring.frequency.exponentialRampToValueAtTime(92, t + dur * 0.55);
+      ringGain.gain.setValueAtTime(0.0001, t);
+      ringGain.gain.linearRampToValueAtTime(vol * 0.14, t + 0.04);
+      ringGain.gain.exponentialRampToValueAtTime(0.01, t + dur * 0.55);
+
+      const blast = ctx.createBufferSource();
+      blast.buffer = this.getPinkNoise(ctx, dur);
+      const blastFilter = ctx.createBiquadFilter();
+      blastFilter.type = 'bandpass';
+      blastFilter.frequency.setValueAtTime(1100, t);
+      blastFilter.frequency.exponentialRampToValueAtTime(180, t + dur);
+      blastFilter.Q.value = 0.8;
+      const blastGain = ctx.createGain();
+      blastGain.gain.setValueAtTime(vol * 0.28, t);
+      blastGain.gain.exponentialRampToValueAtTime(0.01, t + dur * 0.8);
+
+      crack.connect(crackGain).connect(ctx.destination);
+      boom.connect(boomGain).connect(ctx.destination);
+      ring.connect(ringGain).connect(ctx.destination);
+      blast.connect(blastFilter).connect(blastGain).connect(ctx.destination);
+
+      crack.start(t); crack.stop(t + dur * 0.18);
+      boom.start(t); boom.stop(t + dur);
+      ring.start(t + 0.03); ring.stop(t + dur * 0.58);
+      blast.start(t); blast.stop(t + dur);
+      scheduleRelease(dur);
 
     } else if (type === 'plane_engine') {
       const dur = options.duration || 0.8;
@@ -1448,17 +2119,95 @@ const AudioManager = {
       scheduleRelease(dur);
 
     } else if (type === 'tank_engine') {
-      const dur = options.duration || 0.2;
-      const vol = options.volume || 0.03;
+      const dur = options.duration || 0.34;
+      const vol = options.volume || 0.035;
+
+      const rumble = ctx.createOscillator();
+      const rumbleGain = ctx.createGain();
+      rumble.type = 'sawtooth';
+      rumble.frequency.setValueAtTime(56, t);
+      rumble.frequency.linearRampToValueAtTime(46, t + dur);
+
+      const pulse = ctx.createOscillator();
+      const pulseGain = ctx.createGain();
+      const wobble = ctx.createOscillator();
+      const wobbleGain = ctx.createGain();
+      pulse.type = 'triangle';
+      pulse.frequency.setValueAtTime(88, t);
+      pulse.frequency.linearRampToValueAtTime(74, t + dur);
+      wobble.type = 'sine';
+      wobble.frequency.setValueAtTime(6.2, t);
+      wobbleGain.gain.setValueAtTime(3.8, t);
+
+      const treadNoise = ctx.createBufferSource();
+      treadNoise.buffer = this.getPinkNoise(ctx, dur);
+      const treadFilter = ctx.createBiquadFilter();
+      treadFilter.type = 'bandpass';
+      treadFilter.frequency.setValueAtTime(120, t);
+      treadFilter.frequency.linearRampToValueAtTime(160, t + dur * 0.7);
+      treadFilter.Q.value = 0.9;
+      const treadGain = ctx.createGain();
+
+      rumbleGain.gain.setValueAtTime(vol * 0.7, t);
+      rumbleGain.gain.linearRampToValueAtTime(0.01, t + dur);
+      pulseGain.gain.setValueAtTime(vol * 0.35, t);
+      pulseGain.gain.linearRampToValueAtTime(0.01, t + dur);
+      treadGain.gain.setValueAtTime(vol * 0.32, t);
+      treadGain.gain.linearRampToValueAtTime(0.01, t + dur);
+
+      wobble.connect(wobbleGain);
+      wobbleGain.connect(pulse.frequency);
+      rumble.connect(rumbleGain).connect(ctx.destination);
+      pulse.connect(pulseGain).connect(ctx.destination);
+      treadNoise.connect(treadFilter).connect(treadGain).connect(ctx.destination);
+
+      rumble.start(t); rumble.stop(t + dur);
+      pulse.start(t); pulse.stop(t + dur);
+      wobble.start(t); wobble.stop(t + dur);
+      treadNoise.start(t); treadNoise.stop(t + dur);
+      scheduleRelease(dur);
+
+    } else if (type === 'jet_engine') {
+      const dur = options.duration || 0.42;
+      const vol = options.volume || 0.09;
+      const turbine = ctx.createOscillator();
+      const whine = ctx.createOscillator();
       const noise = ctx.createBufferSource();
       noise.buffer = this.getPinkNoise(ctx, dur);
-      const lowpass = ctx.createBiquadFilter();
-      lowpass.type = 'lowpass';
-      lowpass.frequency.value = 200;
-      const gain = ctx.createGain();
-      gain.gain.setValueAtTime(vol, t);
-      gain.gain.linearRampToValueAtTime(0.01, t + dur);
-      noise.connect(lowpass).connect(gain).connect(ctx.destination);
+      const turbineGain = ctx.createGain();
+      const whineGain = ctx.createGain();
+      const noiseGain = ctx.createGain();
+      const bandpass = ctx.createBiquadFilter();
+      bandpass.type = 'bandpass';
+      bandpass.frequency.setValueAtTime(340, t);
+      bandpass.frequency.linearRampToValueAtTime(520, t + dur * 0.4);
+      bandpass.frequency.linearRampToValueAtTime(280, t + dur);
+      bandpass.Q.value = 0.65;
+
+      turbine.type = 'sawtooth';
+      turbine.frequency.setValueAtTime(118, t);
+      turbine.frequency.linearRampToValueAtTime(154, t + dur * 0.35);
+      turbine.frequency.linearRampToValueAtTime(128, t + dur);
+
+      whine.type = 'triangle';
+      whine.frequency.setValueAtTime(340, t);
+      whine.frequency.linearRampToValueAtTime(520, t + dur * 0.28);
+      whine.frequency.linearRampToValueAtTime(280, t + dur);
+
+      turbineGain.gain.setValueAtTime(vol * 0.42, t);
+      turbineGain.gain.linearRampToValueAtTime(0.01, t + dur);
+      whineGain.gain.setValueAtTime(vol * 0.16, t);
+      whineGain.gain.linearRampToValueAtTime(vol * 0.3, t + dur * 0.22);
+      whineGain.gain.linearRampToValueAtTime(0.01, t + dur);
+      noiseGain.gain.setValueAtTime(vol * 0.14, t);
+      noiseGain.gain.linearRampToValueAtTime(0.01, t + dur);
+
+      turbine.connect(turbineGain).connect(ctx.destination);
+      whine.connect(whineGain).connect(ctx.destination);
+      noise.connect(bandpass).connect(noiseGain).connect(ctx.destination);
+
+      turbine.start(t); turbine.stop(t + dur);
+      whine.start(t); whine.stop(t + dur);
       noise.start(t); noise.stop(t + dur);
       scheduleRelease(dur);
 
@@ -1724,7 +2473,7 @@ function createSoldierReinforcement(id, bunker, index = 0) {
     panicDecisionTimer: 0,
     targetBunkerId: bunker.id,
     color: ['#14532d', '#166534', '#3f6212', '#4d7c0f'][index % 4],
-    scale: 0.9 + Math.random() * 0.22,
+    scale: 1.22 + Math.random() * 0.28,
     idleTimer: 40 + Math.random() * 80,
     deployShieldUntil: Date.now() + DEPLOY_PROTECTION_MS
   };
@@ -1748,7 +2497,7 @@ function createTankReinforcement(id, bunker, tankConfig = {}) {
     y: getTerrainHeight(entry.x, entry.z + 12),
     vx: 0,
     vz: 0,
-    scale: tankConfig.scale || 1.2,
+    scale: tankConfig.scale || 1.36,
     state: 'driving',
     variant,
     speedMultiplier: tankConfig.speedMultiplier || 1,
@@ -1793,7 +2542,7 @@ function createFacilityEntity(id, kind, bunker, slotIndex = 0, target = null) {
   const z = target?.z ?? (cz + Math.sin(angle) * dist);
   const maxHp = kind === 'aa_site' ? 950 : kind === 'radar_tower' ? 900 : kind === 'field_hospital' ? 1050 : 1200;
   const visualScale = kind === 'war_factory'
-    ? 2.35
+    ? 2.8
     : kind === 'field_hospital'
     ? 1.95
     : kind === 'tech_lab'
@@ -1820,6 +2569,12 @@ function createFacilityEntity(id, kind, bunker, slotIndex = 0, target = null) {
     buildProgress: 1,
     buildDuration: FACILITY_BUILD_DURATION,
     buildElapsed: FACILITY_BUILD_DURATION,
+    productionQueue: [],
+    trainingUnitType: null,
+    trainingProgress: 0,
+    trainingRemaining: 0,
+    abilityActiveUntil: 0,
+    abilityCooldownUntil: 0,
     visualScale,
     state: 'online',
     destroyed: false,
@@ -1839,6 +2594,27 @@ function createJetReinforcement(id, kaiju) {
     vz: 0,
     targetKaiju: { x: kaiju.x, y: kaiju.y, z: kaiju.z },
     fired: false,
+    dead: false
+  };
+}
+
+function createJetReinforcementFromFacility(id, kaiju, facility) {
+  const startX = facility?.x ?? 0;
+  const startZ = facility?.z ?? 0;
+  const liftOffset = facility?.kind === 'radar_tower' ? 48 : 28;
+  const angle = Math.atan2((kaiju?.z ?? 0) - startZ, (kaiju?.x ?? 0) - startX);
+  const speed = 12;
+  return {
+    id,
+    type: 'jet',
+    x: startX + Math.cos(angle) * 36,
+    y: (facility?.y || getTerrainHeight(startX, startZ)) + 56 + liftOffset,
+    z: startZ + Math.sin(angle) * 36,
+    vx: Math.cos(angle) * speed,
+    vz: Math.sin(angle) * speed,
+    targetKaiju: { x: kaiju.x, y: kaiju.y, z: kaiju.z },
+    fired: false,
+    launchedFromFacilityId: facility?.id || null,
     dead: false
   };
 }
@@ -2198,6 +2974,18 @@ const EntityPerson = memo(({ entityId, entityLookupRef, index, entitiesRef }) =>
   
   return (
     <group ref={group} position={[p.x, 0, p.z]} scale={[p.scale, p.scale, p.scale]}>
+      {p.selected && (
+        <group position={[0, 0.35, 0]} rotation={[-Math.PI / 2, 0, 0]} renderOrder={6}>
+          <mesh>
+            <ringGeometry args={[9.4, 10.9, 24]} />
+            <meshBasicMaterial color={p.weaponType === 'engineer' ? '#2dd4bf' : '#86efac'} transparent opacity={0.9} depthWrite={false} toneMapped={false} />
+          </mesh>
+          <mesh>
+            <circleGeometry args={[1.5, 18]} />
+            <meshBasicMaterial color="#d9f99d" transparent opacity={0.8} depthWrite={false} toneMapped={false} />
+          </mesh>
+        </group>
+      )}
       {/* === TORSO / BODY === */}
       <group ref={bodyRef} position={[0, 8, 0]}>
         {/* Main torso - realistic proportions */}
@@ -2837,206 +3625,650 @@ const EntityCar = memo(({ index, entitiesRef }) => {
   );
 });
 
-const EntityTank = memo(({ entityId, entityLookupRef, index, entitiesRef }) => {
+const EntityTank = memo(({ entityId, entityLookupRef, index, entitiesRef, frameSnapshotRef }) => {
   const group = useRef();
-  const turret = useRef();
+  const modelNodesRef = useRef({});
   const fireAnim = useRef(0);
   const soundCooldown = useRef(0);
-  const turretAngle = useRef(0);
-  const hullMats = useRef([]);
   const smokeMeshes = useRef([]);
+  const smokeOffsetsRef = useRef(
+    Array.from({ length: 4 }, (_, smokeIndex) => ({
+      x: (Math.random() - 0.5) * 6,
+      y: 5 + smokeIndex * 0.5,
+      z: (Math.random() - 0.5) * 5,
+      speed: 0.8 + Math.random() * 0.45,
+      scale: 0.85 + Math.random() * 0.55,
+      phase: Math.random() * Math.PI * 2
+    }))
+  );
+  const materialStatesRef = useRef([]);
   const wasBroken = useRef(false);
-  
+  const initialTank = getTrackedEntity({ entitiesRef, entityLookupRef, entityId, index });
+  const tankAssetName = initialTank?.variant === 'apc' ? 'battle_apc' : 'battle_tank';
+  const useStandaloneTankAsset = false;
+  const [assetReady, setAssetReady] = useState(
+    useStandaloneTankAsset ? Boolean(tankTestAssetCache.scene) : Boolean(airstrikeAssetCache.scene)
+  );
+  const [assetFailed, setAssetFailed] = useState(
+    useStandaloneTankAsset ? Boolean(tankTestAssetCache.error) : Boolean(airstrikeAssetCache.error)
+  );
+
+  const registerArmorMaterial = (material) => {
+    if (!material || materialStatesRef.current.some((entry) => entry.material === material)) return;
+    materialStatesRef.current.push({
+      material,
+      color: material.color?.clone?.() || null,
+      emissive: material.emissive?.clone?.() || null,
+      emissiveIntensity: material.emissiveIntensity ?? 0
+    });
+  };
+
+  const tankScene = useMemo(() => {
+    const sourceScene = useStandaloneTankAsset ? tankTestAssetCache.scene : airstrikeAssetCache.scene;
+    if (!assetReady || !sourceScene || !tankAssetName) return null;
+    materialStatesRef.current = [];
+    const clone = useStandaloneTankAsset
+      ? cloneGlbSceneRoot(sourceScene)
+      : cloneNamedGlbGroup(sourceScene, tankAssetName);
+    if (!clone) return null;
+    clone.traverse((node) => {
+      if (node.position && !node.userData.basePosition) node.userData.basePosition = node.position.clone();
+      if (node.rotation && !node.userData.baseRotation) node.userData.baseRotation = node.rotation.clone();
+      if (node.scale && !node.userData.baseScale) node.userData.baseScale = node.scale.clone();
+      if (!node.isMesh) return;
+      if (Array.isArray(node.material)) node.material.forEach(registerArmorMaterial);
+      else registerArmorMaterial(node.material);
+    });
+    if (useStandaloneTankAsset) {
+      clone.updateMatrixWorld(true);
+      const bounds = new THREE.Box3().setFromObject(clone);
+      const size = new THREE.Vector3();
+      bounds.getSize(size);
+      const maxDim = Math.max(size.x || 0, size.y || 0, size.z || 0, 1);
+      const normalizeScale = 52 / maxDim;
+      clone.scale.multiplyScalar(normalizeScale);
+      clone.updateMatrixWorld(true);
+
+      const normalizedBounds = new THREE.Box3().setFromObject(clone);
+      const center = new THREE.Vector3();
+      normalizedBounds.getCenter(center);
+      clone.position.x -= center.x;
+      clone.position.z -= center.z;
+      clone.position.y -= normalizedBounds.min.y;
+      clone.updateMatrixWorld(true);
+    }
+    modelNodesRef.current = clone.userData?.namedNodes || {};
+    return clone;
+  }, [assetReady, tankAssetName, useStandaloneTankAsset]);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!assetReady && !assetFailed) {
+      (useStandaloneTankAsset ? loadTankTestAsset() : loadAirstrikeAsset())
+        .then(() => {
+          if (!cancelled) setAssetReady(true);
+        })
+        .catch(() => {
+          if (!cancelled) setAssetFailed(true);
+        });
+    }
+    return () => {
+      cancelled = true;
+    };
+  }, [assetReady, assetFailed, useStandaloneTankAsset]);
+
+  useEffect(() => () => disposeClonedMaterials(tankScene), [tankScene]);
+
   useFrame((state, delta) => {
-    // Force render update
-    
     const p = getTrackedEntity({ entitiesRef, entityLookupRef, entityId, index });
-    if (!p || p.dead) { 
-      if (group.current) group.current.visible = false; 
-      return; 
+    if (!p || p.dead) {
+      if (group.current) group.current.visible = false;
+      return;
     }
     if (!group.current) return;
-    
-    // Update cooldowns using refs (no re-renders)
-    soundCooldown.current = Math.max(0, soundCooldown.current - delta);
-    fireAnim.current = Math.max(0, fireAnim.current - delta * 5);
-    
-    // Tanks can still fire when broken (props) - check for broken state
-    const isBroken = p.state === 'broken';
-    
-    // === BROKEN VISUAL: darken hull + show smoke ===
-    if (isBroken && !wasBroken.current) {
-        wasBroken.current = true;
-        hullMats.current.forEach(mat => {
-            if (mat) { mat.color.set('#1a1a1a'); mat.emissive && mat.emissive.set('#331100'); mat.emissiveIntensity = 0.3; }
-        });
-        // Tilt slightly like damaged
-        if (group.current) group.current.rotation.z = (Math.random() - 0.5) * 0.15;
-    }
-    // Animate smoke particles rising from broken tank
-    if (isBroken) {
-        smokeMeshes.current.forEach((sm, i) => {
-            if (!sm) return;
-            sm.visible = true;
-            const t = (Date.now() * 0.001 + i * 1.3) % 3; // Loop every 3 seconds per particle
-            sm.position.y = 5 + t * 12;
-            sm.scale.setScalar(0.5 + t * 0.8);
-            if (sm.material) sm.material.opacity = Math.max(0, 0.6 - t * 0.2);
-        });
-    }
 
-    let followingCommand = false;
-    if (!isBroken && p.commandTargetX !== undefined && p.commandTargetZ !== undefined) {
-      const cmdDx = p.commandTargetX - p.x;
-      const cmdDz = p.commandTargetZ - p.z;
-      const cmdDist = Math.sqrt(cmdDx * cmdDx + cmdDz * cmdDz);
-      if (cmdDist > 18) {
-        const cmdAngle = Math.atan2(cmdDz, cmdDx);
-        p.vx = Math.cos(cmdAngle) * 3.3;
-        p.vz = Math.sin(cmdAngle) * 3.3;
-        p.state = 'driving';
-        turretAngle.current = -cmdAngle + Math.PI;
-        followingCommand = true;
-      } else {
-        p.commandTargetX = undefined;
-        p.commandTargetZ = undefined;
-      }
-    }
-    
-    let nearestKaiju = null;
-    let minDist = Infinity;
-    if (!followingCommand) {
-      entitiesRef.current.forEach(k => {
-          if (k.type === 'kaiju' && !isKaijuDefeated(k) && !isFlyingKaijuVariant(k.variant)) {
-             const kd = Math.sqrt(Math.pow(k.x - p.x, 2) + Math.pow(k.z - p.z, 2));
-             if (kd < minDist) { minDist = kd; nearestKaiju = k; }
+    const ds = getFrameScaledStep(delta);
+    const time = state.clock.elapsedTime;
+    const armorScale = GROUND_ARMOR_MODEL_SCALE * (p.scale || 1);
+    const isBroken = p.state === 'broken';
+    const turretRoot = modelNodesRef.current.vehicle_turret_root;
+    const barrelNode = modelNodesRef.current.vehicle_barrel;
+    const shroudNode = modelNodesRef.current.vehicle_barrel_shroud;
+    const muzzleGlow = modelNodesRef.current.vehicle_muzzle_glow;
+    const sensorGlow = modelNodesRef.current.vehicle_sensor_glow;
+    const groundKaijus = frameSnapshotRef?.current?.ready
+      ? frameSnapshotRef.current.groundKaijus
+      : entitiesRef.current.filter((entity) => (
+          entity.type === 'kaiju' && !isKaijuDefeated(entity) && !isFlyingKaiju(entity)
+        ));
+
+    soundCooldown.current = Math.max(0, soundCooldown.current - delta);
+    fireAnim.current = Math.max(0, fireAnim.current - delta * 4.8);
+
+    if (isBroken !== wasBroken.current) {
+      wasBroken.current = isBroken;
+      materialStatesRef.current.forEach(({ material, color, emissive, emissiveIntensity }) => {
+        if (!material) return;
+        if (isBroken) {
+          if (material.color) material.color.set('#1a1a1a');
+          if (material.emissive) {
+            material.emissive.set('#2b1204');
+            material.emissiveIntensity = 0.28;
           }
+        } else {
+          if (material.color && color) material.color.copy(color);
+          if (material.emissive && emissive) {
+            material.emissive.copy(emissive);
+            material.emissiveIntensity = emissiveIntensity;
+          }
+        }
       });
     }
-    
-    if (nearestKaiju) {
-        // UNIQUE COMBAT POSITIONING: Prevent tanks from clumping up
-        p.targetDist = p.targetDist || (150 + Math.random() * 150); // 150 to 300 unit engagement range
-        p.orbitOffset = p.orbitOffset || ((Math.random() - 0.5) * 1.5); // Spread tanks out
-        
-        let angleToKaiju = Math.atan2(nearestKaiju.z - p.z, nearestKaiju.x - p.x);
-        turretAngle.current = -angleToKaiju + Math.PI;
-        
-        // KITE AI: Maintain optimal distance
-        if (!isBroken && minDist < p.targetDist - 40) {
-           const revSpeed = 1.0;
-           p.vx = -Math.cos(angleToKaiju + p.orbitOffset) * revSpeed;
-           p.vz = -Math.sin(angleToKaiju + p.orbitOffset) * revSpeed;
-        } else if (!isBroken && minDist > p.targetDist + 40) {
-           const speed = 2.5;
-           p.vx = Math.cos(angleToKaiju + p.orbitOffset) * speed;
-           p.vz = Math.sin(angleToKaiju + p.orbitOffset) * speed;
-           p.state = 'driving';
-        } else {
-           p.vx = 0; p.vz = 0; // Hold position
+
+    p.reloadTimer = Math.max(0, (p.reloadTimer || 0) - delta);
+    p.vx = p.vx || 0;
+    p.vz = p.vz || 0;
+    p.y = getTerrainHeight(p.x, p.z);
+    p.targetDist = p.targetDist || (p.variant === 'apc' ? 170 + Math.random() * 90 : 185 + Math.random() * 105);
+    p.orbitOffset = p.orbitOffset || ((Math.random() - 0.5) * 0.9);
+
+    const initialHeading = p.vx || p.vz ? -Math.atan2(p.vz, p.vx) : (p.rotation ?? 0);
+    p.renderHullYaw = p.renderHullYaw ?? initialHeading;
+    p.renderTurretWorldYaw = p.renderTurretWorldYaw ?? p.renderHullYaw;
+    p.renderBank = p.renderBank ?? 0;
+    p.renderBob = p.renderBob ?? 0;
+
+    let desiredHullYaw = p.renderHullYaw;
+    let desiredTurretWorldYaw = p.renderTurretWorldYaw;
+    let moving = false;
+    let nearestKaiju = null;
+    let minDist = Infinity;
+    let followCommand = false;
+
+    const isAttackMove = p.orderType === 'attack_move';
+    const moveTargetX = (p.orderType === 'move' || isAttackMove) ? p.orderX : p.commandTargetX;
+    const moveTargetZ = (p.orderType === 'move' || isAttackMove) ? p.orderZ : p.commandTargetZ;
+    const attackTarget = p.orderType === 'attack' ? entityLookupRef?.current?.get?.(p.orderTargetId) : null;
+
+    if (!isBroken && moveTargetX !== undefined && moveTargetZ !== undefined) {
+      let nearbyAttackMoveKaiju = null;
+      if (isAttackMove) {
+        groundKaijus.forEach((candidate) => {
+          if (!candidate || isKaijuDefeated(candidate)) return;
+          const dist = Math.hypot(candidate.x - p.x, candidate.z - p.z);
+          if (dist <= p.targetDist + 110 && (!nearbyAttackMoveKaiju || dist < nearbyAttackMoveKaiju.dist)) {
+            nearbyAttackMoveKaiju = { entity: candidate, dist };
+          }
+        });
+      }
+      const cmdDx = moveTargetX - p.x;
+      const cmdDz = moveTargetZ - p.z;
+      const cmdDist = Math.hypot(cmdDx, cmdDz);
+      if (cmdDist > 16 && !nearbyAttackMoveKaiju) {
+        const commandHeading = Math.atan2(cmdDz, cmdDx);
+        const speed = (p.variant === 'apc' ? 3.35 : 3.05) * Math.max(0.7, p.speedMultiplier || 1) * TANK_MOVE_SPEED_MULTIPLIER;
+        p.vx = Math.cos(commandHeading) * speed;
+        p.vz = Math.sin(commandHeading) * speed;
+        desiredHullYaw = -commandHeading;
+        desiredTurretWorldYaw = desiredHullYaw;
+        p.state = 'driving';
+        moving = true;
+        followCommand = true;
+      } else {
+        if (!isAttackMove || cmdDist <= 16) clearUnitOrder(p);
+      }
+    }
+
+    if (!followCommand && attackTarget && !isKaijuDefeated(attackTarget) && !isFlyingKaiju(attackTarget)) {
+      nearestKaiju = attackTarget;
+      minDist = Math.hypot((attackTarget.x || 0) - p.x, (attackTarget.z || 0) - p.z);
+    } else if (!followCommand && (isAttackMove || !p.orderType)) {
+      groundKaijus.forEach((candidate) => {
+        if (!candidate || isKaijuDefeated(candidate)) return;
+        const dist = Math.hypot(candidate.x - p.x, candidate.z - p.z);
+        if (dist < minDist) {
+          minDist = dist;
+          nearestKaiju = candidate;
         }
-        
-        // REALISTIC RELOAD MECHANICS — broken tanks fire slower
-        p.reloadTimer = Math.max(0, (p.reloadTimer || 0) - delta);
-        const reloadScale = Math.max(0.2, p.reloadMultiplier || 1);
-        const reloadTime = (isBroken ? 3.0 + Math.random() * 2.0 : 1.5 + Math.random() * 1.0) / reloadScale;
-        
-        if (!isBroken && p.reloadTimer <= 0 && minDist < p.targetDist + 80) { 
-            p.reloadTimer = reloadTime;
-            AudioManager.play('tank_fire');
-            nearestKaiju.hp -= TANK_SHELL_DAMAGE * Math.max(0.8, p.damageMultiplier || 1);
-            if (nearestKaiju.hp <= 0) markKaijuDefeated(nearestKaiju);
-            
-            // Spawn tank shell effect from turret tip
-            const turretTipX = p.x + Math.cos(angleToKaiju) * 15;
-            const turretTipZ = p.z + Math.sin(angleToKaiju) * 15;
-            entitiesRef.current.push({
-                id: `shell-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-                type: 'shell',
-                x: turretTipX, y: 15, z: turretTipZ,
-                targetX: nearestKaiju.x, targetY: nearestKaiju.y + 40, targetZ: nearestKaiju.z,
-                age: 0, dead: false
-            });
-            // Spawn muzzle flash
-            entitiesRef.current.push({
-                id: `muzzleflash-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-                type: 'muzzle_flash',
-                x: turretTipX, y: 15, z: turretTipZ,
-                age: 0, dead: false
-            });
-            // Trigger powerful recoil animation
-            fireAnim.current = 1;
-        }
-        
-        // Tank engine rumble - only play when moving
-        if ((Math.abs(p.vx) > 0 || Math.abs(p.vz) > 0) && soundCooldown.current <= 0 && Math.random() < 0.05) {
-           AudioManager.play('tank_engine', { volume: 0.04, duration: 0.2 });
-           soundCooldown.current = 0.6;
-        }
+      });
+    }
+
+    if (nearestKaiju && (p.orderType === 'attack' || isAttackMove || !p.orderType)) {
+      const dx = nearestKaiju.x - p.x;
+      const dz = nearestKaiju.z - p.z;
+      const angleToKaiju = Math.atan2(dz, dx);
+      desiredTurretWorldYaw = -angleToKaiju;
+
+      if (!isBroken && minDist < p.targetDist - 32) {
+        const retreatHeading = angleToKaiju + Math.PI + p.orbitOffset * 0.4;
+        const reverseSpeed = (p.variant === 'apc' ? 1.55 : 1.2) * Math.max(0.72, p.speedMultiplier || 1) * TANK_MOVE_SPEED_MULTIPLIER;
+        p.vx = Math.cos(retreatHeading) * reverseSpeed;
+        p.vz = Math.sin(retreatHeading) * reverseSpeed;
+        desiredHullYaw = -retreatHeading;
+        moving = true;
+        p.state = 'driving';
+      } else if (!isBroken && minDist > p.targetDist + 38) {
+        const approachHeading = angleToKaiju + p.orbitOffset * 0.18;
+        const advanceSpeed = (p.variant === 'apc' ? 3.05 : 2.7) * Math.max(0.72, p.speedMultiplier || 1) * TANK_MOVE_SPEED_MULTIPLIER;
+        p.vx = Math.cos(approachHeading) * advanceSpeed;
+        p.vz = Math.sin(approachHeading) * advanceSpeed;
+        desiredHullYaw = -approachHeading;
+        moving = true;
+        p.state = 'driving';
+      } else {
+        p.vx = THREE.MathUtils.damp(p.vx, 0, 7, delta);
+        p.vz = THREE.MathUtils.damp(p.vz, 0, 7, delta);
+        desiredHullYaw = desiredTurretWorldYaw;
+        p.state = 'holding';
+      }
+
+      const reloadScale = Math.max(0.2, p.reloadMultiplier || 1);
+      const reloadTime = (p.variant === 'apc' ? 1.25 + Math.random() * 0.7 : 1.8 + Math.random() * 0.85) / reloadScale;
+      const turretError = Math.abs(wrapAngle(desiredTurretWorldYaw - p.renderTurretWorldYaw));
+      if (!isBroken && p.reloadTimer <= 0 && minDist < p.targetDist + 96 && turretError < 0.18) {
+        const muzzleWorldYaw = p.renderTurretWorldYaw;
+        const forwardX = Math.cos(muzzleWorldYaw);
+        const forwardZ = -Math.sin(muzzleWorldYaw);
+        const muzzleReach = (p.variant === 'apc' ? 11.5 : 14.6) * (p.scale || 1);
+        const muzzleHeight = (p.variant === 'apc' ? 6.4 : 7.6) * (p.scale || 1);
+        const muzzleX = p.x + forwardX * muzzleReach;
+        const muzzleZ = p.z + forwardZ * muzzleReach;
+
+        p.reloadTimer = reloadTime;
+        AudioManager.play('tank_fire', { volume: p.variant === 'apc' ? 0.17 : 0.23 });
+        nearestKaiju.hp -= TANK_SHELL_DAMAGE * Math.max(p.variant === 'apc' ? 0.76 : 0.9, p.damageMultiplier || 1);
+        if (nearestKaiju.hp <= 0) markKaijuDefeated(nearestKaiju);
+
+        entitiesRef.current.push({
+          id: `shell-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+          type: 'shell',
+          x: muzzleX,
+          y: (p.y || 0) + muzzleHeight,
+          z: muzzleZ,
+          targetX: nearestKaiju.x,
+          targetY: (nearestKaiju.y || 0) + 40,
+          targetZ: nearestKaiju.z,
+          age: 0,
+          dead: false
+        });
+        entitiesRef.current.push({
+          id: `muzzleflash-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+          type: 'muzzle_flash',
+          x: muzzleX,
+          y: (p.y || 0) + muzzleHeight,
+          z: muzzleZ,
+          age: 0,
+          dead: false
+        });
+        fireAnim.current = 1;
+      }
     } else {
-        // Slow down and stop if nothing to attack
-        p.vx *= 0.95;
-        p.vz *= 0.95;
+      p.vx = THREE.MathUtils.damp(p.vx, 0, 5, delta);
+      p.vz = THREE.MathUtils.damp(p.vz, 0, 5, delta);
+      if (Math.abs(p.vx) < 0.06) p.vx = 0;
+      if (Math.abs(p.vz) < 0.06) p.vz = 0;
+      if (p.orderType === 'attack' && (!attackTarget || isKaijuDefeated(attackTarget) || isFlyingKaiju(attackTarget))) {
+        clearUnitOrder(p);
+      }
+      p.state = isBroken ? 'broken' : (p.orderType === 'hold' ? 'holding' : 'idle');
     }
-    
-    // Apply movement
-    if (!isBroken && (p.vx || p.vz)) {
-        p.x += p.vx;
-        p.z += p.vz;
-        // Rotate body to face movement direction
-        group.current.rotation.y = Math.atan2(p.vz, p.vx);
+
+    if (!isBroken) {
+      p.x += p.vx * ds;
+      p.z += p.vz * ds;
+      p.y = getTerrainHeight(p.x, p.z);
     }
-    
-    group.current.position.set(p.x, 8 * p.scale, p.z);
-    
-    // Turret rotation and recoil animation
-    if (turret.current) {
-        turret.current.rotation.y = turretAngle.current;
-        turret.current.position.z = fireAnim.current * -3; // Recoil back
-        turret.current.position.y = 2 + fireAnim.current * 1; // Slight jump up
-        // Drooping turret on broken tank
-        if (isBroken) turret.current.rotation.x = 0.15;
+
+    const speed = Math.hypot(p.vx, p.vz);
+    const targetBank = THREE.MathUtils.clamp(wrapAngle(desiredHullYaw - p.renderHullYaw) * 0.12, -0.06, 0.06) + (isBroken ? -0.12 : 0);
+    const targetBob = !isBroken && speed > 0.18
+      ? Math.sin(time * (p.variant === 'apc' ? 16 : 13.5) + (p.orbitOffset || 0) * 4) * Math.min(0.22, speed * 0.045)
+      : 0;
+    p.renderHullYaw = dampAngle(p.renderHullYaw, desiredHullYaw, moving ? TANK_HULL_TURN_RATE : TANK_IDLE_TURN_RATE, delta);
+    p.renderTurretWorldYaw = dampAngle(p.renderTurretWorldYaw, desiredTurretWorldYaw, TANK_TURRET_TURN_RATE, delta);
+    p.renderTurretYaw = wrapAngle(p.renderTurretWorldYaw - p.renderHullYaw);
+    p.renderBank = THREE.MathUtils.lerp(p.renderBank, targetBank, Math.min(1, delta * 4.2));
+    p.renderBob = THREE.MathUtils.lerp(p.renderBob, targetBob, Math.min(1, delta * 6));
+    p.rotation = p.renderHullYaw;
+
+    group.current.position.set(p.x, (p.y || 0) + p.renderBob, p.z);
+    group.current.rotation.set(0, p.renderHullYaw, p.renderBank);
+    group.current.visible = true;
+
+    if (turretRoot) {
+      turretRoot.rotation.y = p.renderTurretYaw;
+      turretRoot.rotation.x = isBroken ? 0.07 : 0;
     }
+    [barrelNode, shroudNode, muzzleGlow].forEach((node, nodeIndex) => {
+      if (!node?.userData?.basePosition) return;
+      node.position.copy(node.userData.basePosition);
+      node.position.x -= fireAnim.current * (nodeIndex === 0 ? TANK_MODEL_RECOIL_DISTANCE : TANK_MODEL_RECOIL_DISTANCE * 0.72);
+    });
+    if (muzzleGlow) {
+      setCloudOpacity(muzzleGlow, isBroken ? 0.06 : 0.08 + fireAnim.current * 0.5);
+      const pulse = 1 + fireAnim.current * 0.6;
+      if (muzzleGlow.userData.baseScale) {
+        muzzleGlow.scale.set(
+          muzzleGlow.userData.baseScale.x * pulse,
+          muzzleGlow.userData.baseScale.y * pulse,
+          muzzleGlow.userData.baseScale.z * pulse
+        );
+      }
+    }
+    if (sensorGlow) {
+      setCloudOpacity(
+        sensorGlow,
+        isBroken
+          ? 0.05
+          : 0.12 + (nearestKaiju ? 0.12 : 0) + Math.sin(time * 4.5 + (p.orbitOffset || 0)) * 0.03
+      );
+    }
+    [0, 1].forEach((glowIndex) => {
+      const exhaustGlow = modelNodesRef.current[`vehicle_exhaust_glow_${glowIndex}`];
+      if (!exhaustGlow) return;
+      setCloudOpacity(
+        exhaustGlow,
+        isBroken
+          ? 0.08 + Math.sin(time * 3 + glowIndex) * 0.02
+          : 0.09 + Math.min(0.22, speed * 0.05) + Math.sin(time * 8 + glowIndex * 1.5) * 0.04
+      );
+    });
+
+    smokeMeshes.current.forEach((mesh, smokeIndex) => {
+      if (!mesh) return;
+      if (!isBroken) {
+        mesh.visible = false;
+        return;
+      }
+      const smokeProfile = smokeOffsetsRef.current[smokeIndex];
+      const loop = (time * smokeProfile.speed + smokeProfile.phase) % 3.2;
+      mesh.visible = true;
+      mesh.position.set(
+        smokeProfile.x + Math.sin(time * 0.6 + smokeProfile.phase) * 0.8,
+        smokeProfile.y + loop * 3.8,
+        smokeProfile.z + Math.cos(time * 0.55 + smokeProfile.phase) * 0.6
+      );
+      mesh.scale.setScalar(smokeProfile.scale + loop * 0.4);
+      if (mesh.material) mesh.material.opacity = Math.max(0, 0.42 - loop * 0.1);
+    });
+
+    if (!isBroken && speed > 0.28 && soundCooldown.current <= 0) {
+      AudioManager.play('tank_engine', {
+        volume: p.variant === 'apc' ? 0.034 + speed * 0.004 : 0.04 + speed * 0.004,
+        duration: 0.3
+      });
+      soundCooldown.current = p.variant === 'apc' ? 0.34 : 0.42;
+    }
+
+    group.current.scale.setScalar(armorScale);
   });
 
   const p = getTrackedEntity({ entitiesRef, entityLookupRef, entityId, index });
   if (!p || p.dead) return null;
-  const hullColor = p.variant === 'apc' ? '#1d4ed8' : '#166534';
-  const turretColor = p.variant === 'apc' ? '#1e40af' : '#14532d';
+
+  const registerFallbackMaterial = (material) => {
+    if (!material) return;
+    registerArmorMaterial(material);
+  };
+
   return (
-    <group ref={group} position={[p.x, 8 * p.scale, p.z]} scale={[p.scale, p.scale, p.scale]}>
-       {/* Hull */}
-       <mesh position={[0, -2, 0]}>
-          <boxGeometry args={[16, 6, 10]} />
-          <meshStandardMaterial ref={el => { if(el) hullMats.current.push(el); }} color={hullColor} />
-       </mesh>
-       {/* Treads */}
-       <mesh position={[0, -5, 5]}>
-          <boxGeometry args={[20, 3, 3]} />
-          <meshStandardMaterial ref={el => { if(el) hullMats.current.push(el); }} color="#171717" />
-       </mesh>
-       <mesh position={[0, -5, -5]}>
-          <boxGeometry args={[20, 3, 3]} />
-          <meshStandardMaterial ref={el => { if(el) hullMats.current.push(el); }} color="#171717" />
-       </mesh>
-       {/* Turret */}
-       <group ref={turret} position={[0, 2, 0]}>
-          <mesh position={[0, 0, 0]}>
-             <cylinderGeometry args={[4, 4, 3, 32]} />
-             <meshStandardMaterial ref={el => { if(el) hullMats.current.push(el); }} color={turretColor} />
+    <group ref={group} position={[p.x, p.y || 0, p.z]} scale={[GROUND_ARMOR_MODEL_SCALE * (p.scale || 1), GROUND_ARMOR_MODEL_SCALE * (p.scale || 1), GROUND_ARMOR_MODEL_SCALE * (p.scale || 1)]}>
+      {p.selected && (
+        <group position={[0, 0.4, 0]} rotation={[-Math.PI / 2, 0, 0]} renderOrder={6}>
+          <mesh>
+            <ringGeometry args={[18, 20.4, 28]} />
+            <meshBasicMaterial color={p.variant === 'apc' ? '#67e8f9' : '#86efac'} transparent opacity={0.9} depthWrite={false} toneMapped={false} />
           </mesh>
-          <mesh position={[10, 0, 0]} rotation={[0, 0, Math.PI / 2]}>
-             <cylinderGeometry args={[0.8, 0.8, 16, 16]} />
-             <meshStandardMaterial ref={el => { if(el) hullMats.current.push(el); }} color="#171717" />
+          <mesh>
+            <circleGeometry args={[2.2, 20]} />
+            <meshBasicMaterial color="#d9f99d" transparent opacity={0.78} depthWrite={false} toneMapped={false} />
           </mesh>
-       </group>
-       {/* Smoke particles (hidden until broken) */}
-       {[0, 1, 2, 3].map(i => (
-          <mesh key={`smoke-${i}`} visible={false} ref={el => { if(el) smokeMeshes.current.push(el); }} position={[(Math.random()-0.5)*6, 5, (Math.random()-0.5)*4]}>
-             <sphereGeometry args={[2 + Math.random(), 8, 8]} />
-             <meshBasicMaterial color="#222222" transparent opacity={0.5} />
+        </group>
+      )}
+      {tankScene && !useStandaloneTankAsset ? (
+        <group position={[0, 0, 0]} rotation={[0, 0, 0]}>
+          <primitive object={tankScene} />
+        </group>
+      ) : (
+        <>
+          <mesh position={[0, 9, 0]}>
+            <boxGeometry args={[50, 14, 28]} />
+            <meshStandardMaterial ref={registerFallbackMaterial} color={p.variant === 'apc' ? '#2f4f7f' : '#4b5d3a'} roughness={0.62} metalness={0.32} />
           </mesh>
-       ))}
+          <mesh position={[8, 15.5, 0]} rotation={[0, 0, -0.2]}>
+            <boxGeometry args={[20, 6.2, 24]} />
+            <meshStandardMaterial ref={registerFallbackMaterial} color="#475569" roughness={0.5} metalness={0.42} />
+          </mesh>
+          <mesh position={[0, 3.8, 12]}>
+            <boxGeometry args={[52, 6, 5.8]} />
+            <meshStandardMaterial ref={registerFallbackMaterial} color="#161b22" roughness={0.84} metalness={0.18} />
+          </mesh>
+          <mesh position={[0, 3.8, -12]}>
+            <boxGeometry args={[52, 6, 5.8]} />
+            <meshStandardMaterial ref={registerFallbackMaterial} color="#161b22" roughness={0.84} metalness={0.18} />
+          </mesh>
+          <group position={[p.variant === 'apc' ? 4 : 2, p.variant === 'apc' ? 17 : 19, 0]}>
+            <mesh>
+              {p.variant === 'apc' ? <boxGeometry args={[20, 7, 16]} /> : <cylinderGeometry args={[9.5, 10.2, 8, 18]} />}
+              <meshStandardMaterial ref={registerFallbackMaterial} color={p.variant === 'apc' ? '#26436b' : '#3f5332'} roughness={0.54} metalness={0.38} />
+            </mesh>
+            <mesh position={[p.variant === 'apc' ? 17 : 24, 0.6, 0]} rotation={[0, 0, -Math.PI / 2]}>
+              <cylinderGeometry args={[p.variant === 'apc' ? 1.2 : 1.5, p.variant === 'apc' ? 1.4 : 1.8, p.variant === 'apc' ? 18 : 28, 12]} />
+              <meshStandardMaterial ref={registerFallbackMaterial} color="#161b22" roughness={0.42} metalness={0.48} />
+            </mesh>
+          </group>
+          {p.variant === 'apc' ? (
+            <mesh position={[-6, 18, 0]}>
+              <boxGeometry args={[24, 11, 20]} />
+              <meshStandardMaterial ref={registerFallbackMaterial} color="#26436b" roughness={0.54} metalness={0.38} />
+            </mesh>
+          ) : null}
+        </>
+      )}
+      {smokeOffsetsRef.current.map((offset, smokeIndex) => (
+        <mesh
+          key={`tank-smoke-${smokeIndex}`}
+          visible={false}
+          ref={(el) => { smokeMeshes.current[smokeIndex] = el; }}
+          position={[offset.x, offset.y, offset.z]}
+        >
+          <sphereGeometry args={[1.9 + smokeIndex * 0.18, 8, 8]} />
+          <meshBasicMaterial color="#2c2c2c" transparent opacity={0.35} />
+        </mesh>
+      ))}
+    </group>
+  );
+});
+
+const SOLDIER_ASSET_NAME_BY_WEAPON = {
+  rifleman: 'unit_soldier_rifleman',
+  marksman: 'unit_soldier_marksman',
+  gunner: 'unit_soldier_gunner',
+  rpg: 'unit_soldier_rpg',
+  missile: 'unit_soldier_missile',
+  engineer: 'unit_soldier_engineer'
+};
+
+const EntitySoldierGLB = memo(({ entityId, entityLookupRef, index, entitiesRef }) => {
+  const group = useRef();
+  const visualRef = useRef();
+  const repairBeamRef = useRef();
+  const repairSparkRef = useRef();
+  const muzzleFlashRef = useRef();
+  const muzzleHaloRef = useRef();
+  const [assetReady, setAssetReady] = useState(Boolean(humanUnitsAssetCache.scene));
+  const [assetFailed, setAssetFailed] = useState(Boolean(humanUnitsAssetCache.error));
+  const p = getTrackedEntity({ entitiesRef, entityLookupRef, entityId, index });
+  const assetName = SOLDIER_ASSET_NAME_BY_WEAPON[p?.weaponType || 'rifleman'] || 'unit_soldier_rifleman';
+
+  const soldierScene = useMemo(() => {
+    if (!assetReady || !humanUnitsAssetCache.scene) return null;
+    return cloneNamedGlbGroup(humanUnitsAssetCache.scene, assetName);
+  }, [assetReady, assetName]);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!assetReady && !assetFailed) {
+      loadHumanUnitsAsset()
+        .then((scene) => {
+          if (!cancelled && scene) setAssetReady(true);
+          if (!cancelled && !scene) setAssetFailed(true);
+        })
+        .catch(() => {
+          if (!cancelled) setAssetFailed(true);
+        });
+    }
+    return () => {
+      cancelled = true;
+    };
+  }, [assetReady, assetFailed]);
+
+  useEffect(() => () => disposeClonedMaterials(soldierScene), [soldierScene]);
+
+  useFrame((state, delta) => {
+    const current = getTrackedEntity({ entitiesRef, entityLookupRef, entityId, index });
+    if (!current || current.dead) {
+      if (group.current) group.current.visible = false;
+      return;
+    }
+    if (!group.current) return;
+
+    const speed = Math.hypot(current.vx || 0, current.vz || 0);
+    const moving = speed > 0.04;
+    const facingAngle = Number.isFinite(current.aimAngle)
+      ? current.aimAngle
+      : Math.atan2(current.vz || 0, current.vx || 0);
+    const targetYaw = -facingAngle + Math.PI / 2;
+    const bob = moving ? Math.sin(state.clock.elapsedTime * 7.2) * Math.min(1.2, speed * 0.22) : 0;
+    const now = Date.now();
+    const firing = (current.firePoseUntil || 0) > now;
+    const flashing = (current.muzzleFlashUntil || 0) > now;
+    const attackPose = current.state === 'attacking_kaiju' || firing;
+    const sway = moving ? Math.sin(state.clock.elapsedTime * 10.5) * Math.min(0.08, speed * 0.02) : 0;
+    const recoil = firing ? Math.sin(state.clock.elapsedTime * 48) * 0.07 : 0;
+
+    group.current.visible = true;
+    group.current.position.set(current.x, (current.y || 0) + bob, current.z);
+    group.current.rotation.y = dampAngle(group.current.rotation.y || 0, targetYaw, 7.5, delta);
+    const posturePitch = attackPose ? 0.16 : current.state === 'repairing' ? 0.12 : 0;
+    group.current.rotation.x = THREE.MathUtils.lerp(group.current.rotation.x, posturePitch, Math.min(1, delta * 5));
+
+    if (visualRef.current) {
+      visualRef.current.rotation.x = THREE.MathUtils.lerp(
+        visualRef.current.rotation.x,
+        attackPose ? -0.08 + recoil : 0,
+        Math.min(1, delta * 10)
+      );
+      visualRef.current.rotation.z = THREE.MathUtils.lerp(
+        visualRef.current.rotation.z,
+        sway + (firing ? 0.03 : 0),
+        Math.min(1, delta * 8)
+      );
+      visualRef.current.position.z = THREE.MathUtils.lerp(
+        visualRef.current.position.z,
+        firing ? -0.9 : 0,
+        Math.min(1, delta * 12)
+      );
+      visualRef.current.position.y = THREE.MathUtils.lerp(
+        visualRef.current.position.y,
+        attackPose ? 0.5 : 0,
+        Math.min(1, delta * 8)
+      );
+    }
+
+    if (muzzleFlashRef.current && muzzleHaloRef.current) {
+      const flashScale = current.weaponType === 'missile' ? 1.8 : current.weaponType === 'rpg' ? 1.45 : current.weaponType === 'gunner' ? 1.2 : 1;
+      const flashColor = current.weaponType === 'missile' ? '#fb923c' : current.weaponType === 'rpg' ? '#f97316' : '#fde68a';
+      muzzleFlashRef.current.visible = flashing;
+      muzzleHaloRef.current.visible = flashing;
+      if (flashing) {
+        const pulse = 0.9 + Math.sin(state.clock.elapsedTime * 64) * 0.22;
+        muzzleFlashRef.current.scale.setScalar(flashScale * pulse);
+        muzzleHaloRef.current.scale.set(flashScale * 1.8 * pulse, flashScale * 1.1 * pulse, flashScale * 1.8 * pulse);
+        if (muzzleFlashRef.current.material) {
+          muzzleFlashRef.current.material.color.set(flashColor);
+          muzzleFlashRef.current.material.opacity = 0.72 + pulse * 0.16;
+        }
+        if (muzzleHaloRef.current.material) {
+          muzzleHaloRef.current.material.color.set(flashColor);
+          muzzleHaloRef.current.material.opacity = 0.28 + pulse * 0.12;
+        }
+      }
+    }
+
+    if (repairBeamRef.current && repairSparkRef.current) {
+      const repairing = current.weaponType === 'engineer' && current.state === 'repairing' && Number.isFinite(current.repairTargetX) && Number.isFinite(current.repairTargetZ);
+      repairBeamRef.current.visible = repairing;
+      repairSparkRef.current.visible = repairing;
+      if (repairing) {
+        const dx = current.repairTargetX - current.x;
+        const dz = current.repairTargetZ - current.z;
+        const beamLength = Math.max(10, Math.hypot(dx, dz));
+        const beamAngle = Math.atan2(dz, dx);
+        const pulse = 0.82 + Math.sin(state.clock.elapsedTime * 18) * 0.18;
+        repairBeamRef.current.rotation.z = -beamAngle;
+        repairBeamRef.current.scale.set(beamLength / 20, pulse, pulse);
+        repairBeamRef.current.position.set(dx * 0.5, 16.2, dz * 0.5);
+        repairSparkRef.current.position.set(dx, 16.2, dz);
+        repairSparkRef.current.scale.setScalar(0.95 + pulse * 0.6);
+        if (repairBeamRef.current.material) repairBeamRef.current.material.opacity = 0.32 + pulse * 0.24;
+        if (repairSparkRef.current.material) repairSparkRef.current.material.opacity = 0.38 + pulse * 0.28;
+      }
+    }
+  });
+
+  if (!p || p.dead) return null;
+
+  return (
+    <group ref={group} position={[p.x, p.y || 0, p.z]} scale={[SOLDIER_MODEL_SCALE * (p.scale || 1), SOLDIER_MODEL_SCALE * (p.scale || 1), SOLDIER_MODEL_SCALE * (p.scale || 1)]}>
+      {p.selected && (
+        <group position={[0, 0.35, 0]} rotation={[-Math.PI / 2, 0, 0]} renderOrder={6}>
+          <mesh>
+            <ringGeometry args={[13, 15, 28]} />
+            <meshBasicMaterial color={p.weaponType === 'engineer' ? '#2dd4bf' : '#86efac'} transparent opacity={0.95} depthWrite={false} toneMapped={false} />
+          </mesh>
+          <mesh>
+            <circleGeometry args={[2.2, 18]} />
+            <meshBasicMaterial color="#d9f99d" transparent opacity={0.84} depthWrite={false} toneMapped={false} />
+          </mesh>
+        </group>
+      )}
+      <group ref={visualRef}>
+        {soldierScene ? (
+          <primitive object={soldierScene} />
+        ) : (
+          <group>
+          <mesh position={[0, 12, 0]}>
+            <capsuleGeometry args={[3.2, 12, 6, 10]} />
+            <meshStandardMaterial color={p.weaponType === 'engineer' ? '#0f766e' : '#4b5563'} roughness={0.86} metalness={0.08} />
+          </mesh>
+          <mesh position={[0, 24, 0]}>
+            <sphereGeometry args={[4.4, 14, 12]} />
+            <meshStandardMaterial color="#c68642" roughness={0.72} />
+          </mesh>
+          <mesh position={[0, 29, -1]}>
+            <cylinderGeometry args={[4.8, 4.5, 4.2, 12]} />
+            <meshStandardMaterial color="#374151" roughness={0.78} metalness={0.18} />
+          </mesh>
+          </group>
+        )}
+        <mesh ref={muzzleHaloRef} visible={false} position={[0, 15.2, 11.4]} rotation={[-Math.PI / 2, 0, 0]} renderOrder={5}>
+          <ringGeometry args={[1.2, 2.8, 16]} />
+          <meshBasicMaterial color="#fde68a" transparent opacity={0.34} depthWrite={false} toneMapped={false} />
+        </mesh>
+        <mesh ref={muzzleFlashRef} visible={false} position={[0, 15.4, 12.6]} rotation={[0, 0, Math.PI / 2]} renderOrder={6}>
+          <coneGeometry args={[1.3, 4.4, 8]} />
+          <meshBasicMaterial color="#fde68a" transparent opacity={0.8} depthWrite={false} toneMapped={false} />
+        </mesh>
+      </group>
+      <mesh ref={repairBeamRef} visible={false} position={[0, 16.2, 0]} renderOrder={4}>
+        <boxGeometry args={[20, 0.52, 0.52]} />
+        <meshBasicMaterial color="#5eead4" transparent opacity={0.45} depthWrite={false} toneMapped={false} />
+      </mesh>
+      <mesh ref={repairSparkRef} visible={false} position={[0, 16.2, 0]} renderOrder={5}>
+        <sphereGeometry args={[1.1, 8, 8]} />
+        <meshBasicMaterial color="#facc15" transparent opacity={0.7} depthWrite={false} toneMapped={false} />
+      </mesh>
     </group>
   );
 });
@@ -3469,7 +4701,10 @@ const EntityKaijuCorpse = memo(({ entityId, index, entitiesRef, entityLookupRef 
   const glowTone = p.variant === 'octopus' ? '#a78bfa' : p.variant === 'spicie_bird' ? '#f59e0b' : '#fb923c';
 
   return (
-    <group position={[p.x, (p.y || 0) + Math.max(1.5, scale * 0.12), p.z]} rotation={[0.18, p.rotation || 0, Math.PI / 2.8]}>
+    <group
+      position={[p.x, (p.y || 0) + Math.max(1.5, scale * 0.12), p.z]}
+      rotation={[p.deathTiltX ?? 0.18, p.deathYaw ?? p.rotation ?? 0, p.deathRollZ ?? Math.PI / 2.8]}
+    >
       <mesh scale={[scale * 1.15, scale * 0.4, scale * 0.75]}>
         <capsuleGeometry args={[10, 26, 6, 10]} />
         <meshStandardMaterial color={tone} roughness={0.96} metalness={0.04} />
@@ -4277,36 +5512,134 @@ const EntityMuzzleFlash = ({ entityId, index, entitiesRef, entityLookupRef }) =>
 
 const EntityJet = ({ entityId, index, entitiesRef, entityLookupRef }) => {
   const group = useRef();
-  useFrame((state) => {
+  const modelNodesRef = useRef({});
+  const [assetReady, setAssetReady] = useState(Boolean(airstrikeAssetCache.scene));
+  const [assetFailed, setAssetFailed] = useState(Boolean(airstrikeAssetCache.error));
+
+  const jetScene = useMemo(() => {
+    if (!assetReady || !airstrikeAssetCache.scene) return null;
+    const clone = cloneNamedGlbGroup(airstrikeAssetCache.scene, 'strike_jet');
+    if (!clone) return null;
+    clone.traverse((node) => {
+      if (node.position && !node.userData.basePosition) node.userData.basePosition = node.position.clone();
+      if (node.rotation && !node.userData.baseRotation) node.userData.baseRotation = node.rotation.clone();
+      if (node.scale && !node.userData.baseScale) node.userData.baseScale = node.scale.clone();
+    });
+    modelNodesRef.current = clone.userData?.namedNodes || {};
+    return clone;
+  }, [assetReady]);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!assetReady && !assetFailed) {
+      loadAirstrikeAsset()
+        .then(() => {
+          if (!cancelled) setAssetReady(true);
+        })
+        .catch(() => {
+          if (!cancelled) setAssetFailed(true);
+        });
+    }
+    return () => {
+      cancelled = true;
+    };
+  }, [assetReady, assetFailed]);
+
+  useEffect(() => () => disposeClonedMaterials(jetScene), [jetScene]);
+
+  useFrame((state, delta) => {
     const p = getTrackedEntity({ entitiesRef, entityLookupRef, entityId, index });
-    if (!p || p.dead) { if (group.current) group.current.visible = false; return; }
+    if (!p || p.dead) {
+      if (group.current) group.current.visible = false;
+      return;
+    }
+    if (!group.current) return;
+
+    const time = state.clock.elapsedTime;
+    const speed = Math.hypot(p.vx || 0, p.vz || 0);
+    const targetYaw = -Math.atan2(p.vz || 0.001, p.vx || 0.001);
+    const prevYaw = p.renderYaw ?? targetYaw;
+    const yawDelta = wrapAngle(targetYaw - prevYaw);
+    const previousY = p.renderPrevY ?? (p.y || 0);
+    const verticalSpeed = ((p.y || 0) - previousY) / Math.max(delta, 0.001);
+
+    p.renderPrevY = p.y || 0;
+    p.renderYaw = prevYaw + yawDelta * Math.min(1, delta * 4.6);
+    p.renderRoll = THREE.MathUtils.lerp(
+      p.renderRoll ?? 0,
+      THREE.MathUtils.clamp(yawDelta * 3.3, -0.7, 0.7) + (p.fired ? 0.08 : 0),
+      Math.min(1, delta * 4.8)
+    );
+    p.renderPitch = THREE.MathUtils.lerp(
+      p.renderPitch ?? 0,
+      THREE.MathUtils.clamp(-verticalSpeed * 0.006, -0.18, 0.18) + Math.cos(time * 1.8 + (p.flightAge || 0)) * 0.02,
+      Math.min(1, delta * 3.6)
+    );
+
     group.current.position.set(p.x, p.y, p.z);
-    group.current.rotation.y = -Math.atan2(p.vz || 0, p.vx || 1);
-    // Slight roll when turning or high speed
-    group.current.rotation.z = Math.sin(Date.now() * 0.01) * 0.05;
+    group.current.rotation.y = p.renderYaw;
+    group.current.rotation.x = p.renderPitch;
+    group.current.rotation.z = p.renderRoll;
+    group.current.visible = true;
+
+    const burnerBoost = p.fired ? 0.16 : 0.08;
+    ['jet_afterburner_left', 'jet_afterburner_right'].forEach((nodeName, burnerIndex) => {
+      const burner = modelNodesRef.current[nodeName];
+      if (!burner) return;
+      setCloudOpacity(
+        burner,
+        0.14 + burnerBoost + Math.min(0.16, speed * 0.015) + Math.sin(time * 18 + burnerIndex * 1.8) * 0.06
+      );
+      if (burner.userData.baseScale) {
+        const scalePulse = 1 + Math.sin(time * 14 + burnerIndex * 1.4) * 0.08 + burnerBoost * 0.45;
+        burner.scale.set(
+          burner.userData.baseScale.x * scalePulse,
+          burner.userData.baseScale.y * (1 + burnerBoost * 0.8),
+          burner.userData.baseScale.z * scalePulse
+        );
+      }
+    });
+    ['jet_missile_left', 'jet_missile_right'].forEach((nodeName) => {
+      const missile = modelNodesRef.current[nodeName];
+      if (missile) missile.visible = !p.fired;
+    });
+    const centerlineTank = modelNodesRef.current.jet_centerline_tank;
+    if (centerlineTank && centerlineTank.userData.baseRotation) {
+      centerlineTank.rotation.copy(centerlineTank.userData.baseRotation);
+      centerlineTank.rotation.x += Math.sin(time * 4.2 + (p.flightAge || 0)) * 0.02;
+    }
   });
+
   return (
-    <group ref={group} scale={[0.6, 0.6, 0.6]}>
-      {/* Sleek Delta Wing Body */}
-      <mesh rotation={[0, 0, Math.PI / 2]}>
-        <cylinderGeometry args={[4, 8, 120, 8]} />
-        <meshStandardMaterial color="#4b5563" metalness={0.8} roughness={0.2} />
-      </mesh>
-      {/* Delta Wings */}
-      <mesh position={[-20, 0, 0]} rotation={[0, 0, 0]}>
-        <boxGeometry args={[60, 2, 100]} />
-        <meshStandardMaterial color="#374151" metalness={0.7} />
-      </mesh>
-      {/* Cockpit Canopy */}
-      <mesh position={[40, 5, 0]}>
-        <sphereGeometry args={[5, 16, 16]} scale={[2, 1, 1]} />
-        <meshStandardMaterial color="#1e293b" transparent opacity={0.6} metalness={0.9} />
-      </mesh>
-      {/* Afterburner glow */}
-      <mesh position={[-65, 0, 0]} rotation={[0, 0, Math.PI / 2]}>
-        <cylinderGeometry args={[4, 1, 15, 8]} />
-        <meshBasicMaterial color="#38bdf8" />
-      </mesh>
+    <group ref={group} scale={[JET_MODEL_SCALE, JET_MODEL_SCALE, JET_MODEL_SCALE]}>
+      {jetScene ? (
+        <primitive object={jetScene} />
+      ) : (
+        <>
+          <mesh rotation={[0, 0, -Math.PI / 2]}>
+            <cylinderGeometry args={[4.6, 7.8, 126, 18]} />
+            <meshStandardMaterial color="#7b8794" metalness={0.68} roughness={0.34} />
+          </mesh>
+          <mesh position={[28, 8.4, 0]} scale={[1.85, 0.7, 0.92]}>
+            <sphereGeometry args={[6.8, 16, 12]} />
+            <meshStandardMaterial color="#8eb7d0" metalness={0.9} roughness={0.08} transparent opacity={0.5} />
+          </mesh>
+          <mesh position={[-6, 0.4, 0]} rotation={[0, 0, -0.09]}>
+            <boxGeometry args={[48, 2.4, 120]} />
+            <meshStandardMaterial color="#7b8794" metalness={0.58} roughness={0.36} />
+          </mesh>
+          <mesh position={[-54, 0, 0]}>
+            <boxGeometry args={[22, 7.5, 16]} />
+            <meshStandardMaterial color="#111827" metalness={0.64} roughness={0.28} />
+          </mesh>
+          {[-1, 1].map((side) => (
+            <mesh key={`jet-burner-fallback-${side}`} position={[-66, -1.1, side * 4.2]} rotation={[0, 0, -Math.PI / 2]}>
+              <cylinderGeometry args={[2.6, 1.4, 12, 12]} />
+              <meshBasicMaterial color="#38bdf8" />
+            </mesh>
+          ))}
+        </>
+      )}
     </group>
   );
 };
@@ -4604,7 +5937,14 @@ const worldPropsAssetCache = {
 
 const cloneOpaqueMaterial = (material) => {
   if (!material) return material;
-  return material.clone();
+  const clone = material.clone();
+  clone.transparent = false;
+  clone.opacity = 1;
+  clone.alphaTest = 0;
+  clone.depthWrite = true;
+  clone.depthTest = true;
+  clone.side = THREE.DoubleSide;
+  return clone;
 };
 
 const cloneNamedGlbGroup = (scene, name) => {
@@ -4627,6 +5967,32 @@ const cloneNamedGlbGroup = (scene, name) => {
     }
   });
   clone.userData.namedNodes = namedNodes;
+  return clone;
+};
+
+const cloneGlbSceneRoot = (scene) => {
+  if (!scene) return null;
+  const clone = scene.clone(true);
+  const namedNodes = {};
+  let meshCount = 0;
+  clone.traverse((object) => {
+    object.visible = true;
+    if (object.name) {
+      namedNodes[object.name] = object;
+    }
+    if (!object.isMesh) return;
+    meshCount += 1;
+    object.castShadow = false;
+    object.receiveShadow = false;
+    object.frustumCulled = false;
+    if (Array.isArray(object.material)) {
+      object.material = object.material.map(cloneOpaqueMaterial);
+    } else {
+      object.material = cloneOpaqueMaterial(object.material);
+    }
+  });
+  clone.userData.namedNodes = namedNodes;
+  clone.userData.meshCount = meshCount;
   return clone;
 };
 
@@ -4696,6 +6062,12 @@ const airstrikeAssetCache = {
   promise: null,
   error: null
 };
+const TANK_TEST_GLB_PATH = '/fallout/tank.glb';
+const tankTestAssetCache = {
+  scene: null,
+  promise: null,
+  error: null
+};
 
 const BASE_STRUCTURES_GLB_PATH = '/fallout/base_structures.glb';
 const baseStructuresAssetCache = {
@@ -4703,8 +6075,20 @@ const baseStructuresAssetCache = {
   promise: null,
   error: null
 };
+const COMMAND_EFFECTS_GLB_PATH = '/fallout/command_effects.glb';
+const commandEffectsAssetCache = {
+  scene: null,
+  promise: null,
+  error: null
+};
 const KAIJU_ASSETS_GLB_PATH = '/fallout/kaiju_assets.glb';
 const kaijuAssetsAssetCache = {
+  scene: null,
+  promise: null,
+  error: null
+};
+const HUMAN_UNITS_GLB_PATH = '/fallout/human_units.glb';
+const humanUnitsAssetCache = {
   scene: null,
   promise: null,
   error: null
@@ -4722,6 +6106,11 @@ const FACILITY_BROKEN_STRUCTURE_ASSET_NAMES = Object.fromEntries(
 );
 const BUNKER_STRUCTURE_ASSET_NAME = 'vault_bunker';
 const BUNKER_BROKEN_STRUCTURE_ASSET_NAME = 'vault_bunker_broken';
+const COMMAND_EFFECT_ASSET_NAMES = {
+  orbital_lance: 'support_orbital_lance',
+  firestorm: 'support_firestorm',
+  kinetic_spear: 'support_kinetic_spear'
+};
 const KAIJU_STRUCTURE_ASSET_NAMES = {
   godzilla: 'kaiju_godzilla',
   octopus: 'kaiju_octopus',
@@ -4754,6 +6143,29 @@ const loadAirstrikeAsset = () => {
   return airstrikeAssetCache.promise;
 };
 
+const loadTankTestAsset = () => {
+  if (typeof window === 'undefined') return Promise.resolve(null);
+  if (tankTestAssetCache.scene) return Promise.resolve(tankTestAssetCache.scene);
+  if (tankTestAssetCache.promise) return tankTestAssetCache.promise;
+
+  const loader = new GLTFLoader();
+  tankTestAssetCache.promise = loader.loadAsync(TANK_TEST_GLB_PATH)
+    .then((gltf) => {
+      tankTestAssetCache.scene = gltf.scene;
+      tankTestAssetCache.error = null;
+      tankTestAssetCache.promise = null;
+      return gltf.scene;
+    })
+    .catch((error) => {
+      tankTestAssetCache.error = error;
+      tankTestAssetCache.promise = null;
+      console.error('Failed to load test tank GLB', error);
+      throw error;
+    });
+
+  return tankTestAssetCache.promise;
+};
+
 const loadBaseStructuresAsset = () => {
   if (typeof window === 'undefined') return Promise.resolve(null);
   if (baseStructuresAssetCache.scene) return Promise.resolve(baseStructuresAssetCache.scene);
@@ -4775,6 +6187,30 @@ const loadBaseStructuresAsset = () => {
     });
 
   return baseStructuresAssetCache.promise;
+};
+
+const loadCommandEffectsAsset = () => {
+  if (typeof window === 'undefined') return Promise.resolve(null);
+  if (commandEffectsAssetCache.scene) return Promise.resolve(commandEffectsAssetCache.scene);
+  if (commandEffectsAssetCache.promise) return commandEffectsAssetCache.promise;
+  if (commandEffectsAssetCache.error) return Promise.resolve(null);
+
+  const loader = new GLTFLoader();
+  commandEffectsAssetCache.promise = loader.loadAsync(COMMAND_EFFECTS_GLB_PATH)
+    .then((gltf) => {
+      commandEffectsAssetCache.scene = gltf.scene;
+      commandEffectsAssetCache.error = null;
+      commandEffectsAssetCache.promise = null;
+      return gltf.scene;
+    })
+    .catch((error) => {
+      commandEffectsAssetCache.error = error;
+      commandEffectsAssetCache.promise = null;
+      console.warn('Command effects GLB unavailable, using fallback support visuals.', error);
+      return null;
+    });
+
+  return commandEffectsAssetCache.promise;
 };
 
 const loadKaijuAssetsAsset = () => {
@@ -4800,6 +6236,29 @@ const loadKaijuAssetsAsset = () => {
   return kaijuAssetsAssetCache.promise;
 };
 
+const loadHumanUnitsAsset = () => {
+  if (typeof window === 'undefined') return Promise.resolve(null);
+  if (humanUnitsAssetCache.scene) return Promise.resolve(humanUnitsAssetCache.scene);
+  if (humanUnitsAssetCache.promise) return humanUnitsAssetCache.promise;
+
+  const loader = new GLTFLoader();
+  humanUnitsAssetCache.promise = loader.loadAsync(HUMAN_UNITS_GLB_PATH)
+    .then((gltf) => {
+      humanUnitsAssetCache.scene = gltf.scene;
+      humanUnitsAssetCache.error = null;
+      humanUnitsAssetCache.promise = null;
+      return gltf.scene;
+    })
+    .catch((error) => {
+      humanUnitsAssetCache.error = error;
+      humanUnitsAssetCache.promise = null;
+      console.warn('Failed to load human units GLB, using fallback soldier render.', error);
+      return null;
+    });
+
+  return humanUnitsAssetCache.promise;
+};
+
 const EntityMushroomCloud = memo(({ entityId, index, entitiesRef, entityLookupRef }) => {
   const groupRef = useRef();
   const fallbackStemRef = useRef();
@@ -4818,6 +6277,7 @@ const EntityMushroomCloud = memo(({ entityId, index, entitiesRef, entityLookupRe
     cloudNodesRef.current = clone.userData.namedNodes || {};
     return clone;
   }, [assetReady]);
+  const useFallback = !cloudScene;
 
   useEffect(() => {
     let cancelled = false;
@@ -4883,7 +6343,6 @@ const EntityMushroomCloud = memo(({ entityId, index, entitiesRef, entityLookupRe
     }
 
     const nodes = cloudNodesRef.current;
-    const useFallback = !cloudScene;
 
     if (!useFallback) {
       const stem = nodes.nuke_stem;
@@ -4925,38 +6384,38 @@ const EntityMushroomCloud = memo(({ entityId, index, entitiesRef, entityLookupRe
     }
 
     if (fallbackStemRef.current) {
-      fallbackStemRef.current.visible = useFallback;
+      fallbackStemRef.current.visible = true;
       fallbackStemRef.current.scale.set(0.9 + progress * 1.2, 0.6 + progress * 3.2, 0.9 + progress * 1.2);
       fallbackStemRef.current.position.y = 32 + progress * 92;
-      fallbackStemRef.current.material.opacity = fadeAlpha * 0.6;
+      fallbackStemRef.current.material.opacity = fadeAlpha * (cloudScene ? 0.22 : 0.6);
     }
 
     if (fallbackCapRef.current) {
-      fallbackCapRef.current.visible = useFallback;
+      fallbackCapRef.current.visible = true;
       fallbackCapRef.current.scale.set(1.2 + progress * 2.2, 0.7 + progress * 0.8, 1.2 + progress * 2.2);
       fallbackCapRef.current.position.y = 126 + progress * 120;
-      fallbackCapRef.current.material.opacity = fadeAlpha * 0.72;
+      fallbackCapRef.current.material.opacity = fadeAlpha * (cloudScene ? 0.26 : 0.72);
     }
 
     if (fallbackRingRef.current) {
-      fallbackRingRef.current.visible = useFallback;
+      fallbackRingRef.current.visible = true;
       fallbackRingRef.current.scale.setScalar(0.6 + Math.pow(ringProgress, 0.58) * 12);
       fallbackRingRef.current.position.y = 2 + ringProgress * 4;
-      fallbackRingRef.current.material.opacity = fadeAlpha * (1 - ringProgress) * 0.32;
+      fallbackRingRef.current.material.opacity = fadeAlpha * (1 - ringProgress) * (cloudScene ? 0.2 : 0.32);
     }
 
     if (fallbackFlashRef.current) {
-      fallbackFlashRef.current.visible = useFallback && blastFlash > 0.02;
+      fallbackFlashRef.current.visible = blastFlash > 0.02;
       fallbackFlashRef.current.scale.setScalar(1 + blastFlash * 7.5);
       fallbackFlashRef.current.position.y = 48 + blastFlash * 18;
-      fallbackFlashRef.current.material.opacity = fadeAlpha * blastFlash * 0.46;
+      fallbackFlashRef.current.material.opacity = fadeAlpha * blastFlash * (cloudScene ? 0.24 : 0.46);
     }
 
     if (fallbackEmberRef.current) {
-      fallbackEmberRef.current.visible = useFallback && emberGlow > 0.02;
+      fallbackEmberRef.current.visible = emberGlow > 0.02;
       fallbackEmberRef.current.scale.setScalar(0.9 + emberGlow * 2.8);
       fallbackEmberRef.current.position.y = 22;
-      fallbackEmberRef.current.material.opacity = fadeAlpha * emberGlow * 0.54;
+      fallbackEmberRef.current.material.opacity = fadeAlpha * emberGlow * (cloudScene ? 0.3 : 0.54);
     }
 
     if (lightRef.current) {
@@ -5127,6 +6586,237 @@ const EntityImpactPuff = memo(({ entityId, index, entitiesRef, entityLookupRef }
         <sphereGeometry args={[10, 12, 10]} />
         <meshBasicMaterial color="#8b7355" transparent opacity={0.3} />
       </mesh>
+    </group>
+  );
+});
+
+const EntitySupportStrikeEffect = memo(({ entityId, index, entitiesRef, entityLookupRef }) => {
+  const group = useRef();
+  const effectNodesRef = useRef({});
+  const [assetReady, setAssetReady] = useState(Boolean(commandEffectsAssetCache.scene));
+  const [assetFailed, setAssetFailed] = useState(Boolean(commandEffectsAssetCache.error));
+
+  const trackedEffect = getTrackedEntity({ entitiesRef, entityLookupRef, entityId, index });
+  const assetName = trackedEffect ? COMMAND_EFFECT_ASSET_NAMES[trackedEffect.kind] : null;
+  const effectScene = useMemo(() => {
+    if (!assetReady || !commandEffectsAssetCache.scene || !assetName) return null;
+    const clone = cloneNamedGlbGroup(commandEffectsAssetCache.scene, assetName);
+    effectNodesRef.current = clone?.userData?.namedNodes || {};
+    return clone;
+  }, [assetReady, assetName]);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!assetReady && !assetFailed) {
+      loadCommandEffectsAsset()
+        .then(() => {
+          if (!cancelled) setAssetReady(true);
+        })
+        .catch(() => {
+          if (!cancelled) setAssetFailed(true);
+        });
+    }
+    return () => {
+      cancelled = true;
+    };
+  }, [assetReady, assetFailed]);
+
+  useEffect(() => () => disposeClonedMaterials(effectScene), [effectScene]);
+
+  useFrame((state) => {
+    const p = getTrackedEntity({ entitiesRef, entityLookupRef, entityId, index });
+    if (!p || p.dead) {
+      if (group.current) group.current.visible = false;
+      return;
+    }
+    if (!group.current) return;
+
+    const progress = THREE.MathUtils.clamp((p.age || 0) / Math.max(0.01, p.duration || 1), 0, 1);
+    const fade = Math.max(0, 1 - progress);
+    const time = state.clock.elapsedTime;
+    const baseY = getTerrainHeight(p.x, p.z);
+    group.current.position.set(p.x, baseY + 0.6, p.z);
+    group.current.visible = true;
+
+    if (p.kind === 'orbital_lance') {
+      const beam = effectNodesRef.current.support_orbital_lance_beam;
+      const core = effectNodesRef.current.support_orbital_lance_core;
+      const ringInner = effectNodesRef.current.support_orbital_lance_ring_inner;
+      const ringOuter = effectNodesRef.current.support_orbital_lance_ring_outer;
+      const flareTop = effectNodesRef.current.support_orbital_lance_flare_top;
+      const flareBase = effectNodesRef.current.support_orbital_lance_flare_base;
+      const impact = effectNodesRef.current.support_orbital_lance_impact;
+      const shock = effectNodesRef.current.support_orbital_lance_shock;
+      const beamPulse = 0.82 + Math.sin(time * 28) * 0.16;
+      if (beam) {
+        beam.scale.set(1 + beamPulse * 0.24, 0.42 + fade * 1.35, 1 + beamPulse * 0.24);
+        setCloudOpacity(beam, 0.28 + fade * 0.62);
+      }
+      if (core) {
+        core.scale.setScalar(1.05 + beamPulse * 1.45 + (1 - progress) * 0.55);
+        core.position.y = 14 + Math.sin(time * 16) * 1.8;
+        setCloudOpacity(core, 0.42 + fade * 0.58);
+      }
+      if (ringInner) {
+        ringInner.rotation.y += 0.06;
+        ringInner.scale.setScalar(1 + progress * 2.2);
+        setCloudOpacity(ringInner, 0.28 + fade * 0.46);
+      }
+      if (ringOuter) {
+        ringOuter.rotation.y -= 0.04;
+        ringOuter.scale.setScalar(0.9 + progress * 3.4);
+        setCloudOpacity(ringOuter, 0.22 + fade * 0.36);
+      }
+      if (flareTop) {
+        flareTop.position.y = 180 + Math.sin(time * 9) * 6;
+        flareTop.scale.setScalar(1.1 + beamPulse * 0.88);
+        setCloudOpacity(flareTop, 0.28 + fade * 0.48);
+      }
+      if (flareBase) {
+        flareBase.scale.setScalar(1.05 + Math.sin(time * 11) * 0.16 + (1 - progress) * 0.72);
+        setCloudOpacity(flareBase, 0.24 + fade * 0.38);
+      }
+      if (impact) {
+        impact.scale.setScalar(0.9 + progress * 2.8);
+        setCloudOpacity(impact, Math.max(0, 0.44 - progress * 0.22));
+      }
+      if (shock) {
+        shock.scale.setScalar(0.9 + progress * 4.6);
+        setCloudOpacity(shock, Math.max(0, 0.36 - progress * 0.18));
+      }
+      return;
+    }
+
+    if (p.kind === 'firestorm') {
+      const ring = effectNodesRef.current.support_firestorm_ring;
+      const core = effectNodesRef.current.support_firestorm_core;
+      const shock = effectNodesRef.current.support_firestorm_shock;
+      const plume = effectNodesRef.current.support_firestorm_plume;
+      if (ring) {
+        ring.scale.setScalar(1 + progress * 4.9);
+        ring.rotation.y += 0.03;
+        setCloudOpacity(ring, Math.max(0, 0.54 - progress * 0.28));
+      }
+      if (core) {
+        const pulse = 0.78 + Math.sin(time * 12) * 0.16;
+        core.scale.setScalar(1.25 + pulse * 0.82 + (1 - progress) * 1.2);
+        core.position.y = 12 + pulse * 6;
+        setCloudOpacity(core, 0.28 + fade * 0.58);
+      }
+      if (shock) {
+        shock.scale.setScalar(0.9 + progress * 5.8);
+        setCloudOpacity(shock, Math.max(0, 0.42 - progress * 0.28));
+      }
+      if (plume) {
+        plume.position.y = 22 + progress * 40;
+        plume.scale.set(1.15 + progress * 1.5, 0.8 + progress * 2.2, 1.15 + progress * 1.5);
+        setCloudOpacity(plume, 0.18 + fade * 0.34);
+      }
+      for (let i = 0; i < 6; i++) {
+        const flame = effectNodesRef.current[`support_firestorm_flame_${i}`];
+        if (!flame) continue;
+        const pulse = 0.7 + Math.sin(time * (10 + i) + i) * 0.2;
+        flame.position.y = 12 + pulse * (10 + i * 0.7);
+        flame.scale.set(1.15 + pulse * 0.28, 1.05 + pulse * 0.72, 1.15 + pulse * 0.28);
+        setCloudOpacity(flame, 0.24 + fade * 0.56);
+      }
+      for (let i = 0; i < 4; i++) {
+        const smoke = effectNodesRef.current[`support_firestorm_smoke_${i}`];
+        if (!smoke) continue;
+        const rise = ((p.age || 0) * (0.22 + i * 0.03)) % 1;
+        smoke.position.y = 20 + rise * 46;
+        smoke.scale.setScalar(1.1 + rise * 1.2);
+        setCloudOpacity(smoke, Math.max(0, 0.22 + fade * 0.34 - rise * 0.12));
+      }
+      return;
+    }
+
+    if (p.kind === 'kinetic_spear') {
+      const shaft = effectNodesRef.current.support_kinetic_spear_shaft;
+      const tip = effectNodesRef.current.support_kinetic_spear_tip;
+      const flare = effectNodesRef.current.support_kinetic_spear_flare;
+      const impact = effectNodesRef.current.support_kinetic_spear_impact;
+      const ring = effectNodesRef.current.support_kinetic_spear_ring;
+      const descent = Math.max(0, 1 - progress);
+      if (shaft) {
+        shaft.position.y = 140 + descent * 220;
+        shaft.scale.set(1, 0.9 + fade * 1.15, 1);
+        setCloudOpacity(shaft, 0.16 + fade * 0.34);
+      }
+      if (tip) {
+        tip.position.y = 38 + descent * 252;
+        tip.rotation.y += 0.08;
+        tip.scale.setScalar(0.95 + fade * 0.18);
+        setCloudOpacity(tip, 0.42 + fade * 0.38);
+      }
+      if (flare) {
+        flare.position.y = 18 + Math.sin(time * 18) * 3;
+        flare.scale.setScalar(0.8 + fade * 1.25);
+        setCloudOpacity(flare, 0.18 + fade * 0.48);
+      }
+      if (impact) {
+        impact.scale.setScalar(0.95 + progress * 3.4);
+        setCloudOpacity(impact, Math.max(0, 0.46 - progress * 0.24));
+      }
+      if (ring) {
+        ring.scale.setScalar(0.82 + progress * 4.8);
+        setCloudOpacity(ring, Math.max(0, 0.4 - progress * 0.2));
+      }
+      return;
+    }
+  });
+
+  if (!trackedEffect) return null;
+
+  return (
+    <group ref={group} visible={false}>
+      {effectScene && <primitive object={effectScene} />}
+      {trackedEffect.kind === 'orbital_lance' ? (
+        <>
+          <mesh position={[0, 130, 0]}>
+            <cylinderGeometry args={[7, 10, 260, 16]} />
+            <meshBasicMaterial color="#67e8f9" transparent opacity={0.48} depthWrite={false} />
+          </mesh>
+          <mesh position={[0, 9, 0]}>
+            <sphereGeometry args={[22, 10, 10]} />
+            <meshBasicMaterial color="#dbeafe" transparent opacity={0.42} blending={THREE.AdditiveBlending} depthWrite={false} />
+          </mesh>
+          <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 1.1, 0]}>
+            <ringGeometry args={[38, 66, 36]} />
+            <meshBasicMaterial color="#7dd3fc" transparent opacity={0.34} depthWrite={false} />
+          </mesh>
+        </>
+      ) : trackedEffect.kind === 'kinetic_spear' ? (
+        <>
+          <mesh position={[0, 180, 0]}>
+            <cylinderGeometry args={[2.6, 3.2, 300, 10]} />
+            <meshBasicMaterial color="#e2e8f0" transparent opacity={0.28} depthWrite={false} />
+          </mesh>
+          <mesh position={[0, 20, 0]}>
+            <sphereGeometry args={[16, 12, 10]} />
+            <meshBasicMaterial color="#f8fafc" transparent opacity={0.44} blending={THREE.AdditiveBlending} depthWrite={false} />
+          </mesh>
+          <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 1.5, 0]}>
+            <ringGeometry args={[24, 42, 28]} />
+            <meshBasicMaterial color="#bae6fd" transparent opacity={0.38} depthWrite={false} />
+          </mesh>
+        </>
+      ) : (
+        <>
+          <mesh position={[0, 6, 0]}>
+            <sphereGeometry args={[18, 10, 10]} />
+            <meshBasicMaterial color="#fb923c" transparent opacity={0.42} blending={THREE.AdditiveBlending} depthWrite={false} />
+          </mesh>
+          <mesh rotation={[-Math.PI / 2, 0, 0]}>
+            <ringGeometry args={[40, 64, 30]} />
+            <meshBasicMaterial color="#f97316" transparent opacity={0.32} depthWrite={false} />
+          </mesh>
+          <mesh position={[0, 24, 0]}>
+            <cylinderGeometry args={[10, 20, 56, 12]} />
+            <meshBasicMaterial color="#fdba74" transparent opacity={0.2} depthWrite={false} blending={THREE.AdditiveBlending} />
+          </mesh>
+        </>
+      )}
     </group>
   );
 });
@@ -5892,6 +7582,27 @@ const EntityKaiju = ({ entityId, index, entitiesRef, entityLookupRef, frameSnaps
   const hpBar = useRef();
   const jawRef = useRef();
   const kaijuNodesRef = useRef({});
+  const godzillaHeadRef = useRef();
+  const godzillaTorsoRef = useRef();
+  const godzillaPelvisRef = useRef();
+  const godzillaChestSeamRef = useRef();
+  const godzillaArmRefs = useRef([]);
+  const godzillaLegRefs = useRef([]);
+  const godzillaTailRefs = useRef([]);
+  const godzillaSpineRefs = useRef([]);
+  const octopusMantleRef = useRef();
+  const octopusMembraneRef = useRef();
+  const octopusBeakRef = useRef();
+  const octopusTentacleRefs = useRef([]);
+  const beetleBodyRef = useRef();
+  const beetleElytraRef = useRef();
+  const beetleCollarRef = useRef();
+  const beetleJawRef = useRef();
+  const beetleLegRefs = useRef([]);
+  const wyrmHeadRef = useRef();
+  const wyrmCrestRef = useRef();
+  const wyrmSegmentRefs = useRef([]);
+  const wyrmSpineRefs = useRef([]);
   const spiderRootRef = useRef();
   const spiderAbdomenRef = useRef();
   const spiderThoraxRef = useRef();
@@ -5903,6 +7614,11 @@ const EntityKaiju = ({ entityId, index, entitiesRef, entityLookupRef, frameSnaps
   const birdRightWingRef = useRef();
   const birdTailRef = useRef();
   const birdHeadRef = useRef();
+  const specialAuraOuterRef = useRef();
+  const specialAuraInnerRef = useRef();
+  const specialAuraCoreRef = useRef();
+  const attackFlashRef = useRef();
+  const specialOrbRefs = useRef([]);
   const { camera } = useThree();
   const spiderLegConfigs = useMemo(() => {
     const anchorZ = [9, 3, -4, -12];
@@ -5943,6 +7659,11 @@ const EntityKaiju = ({ entityId, index, entitiesRef, entityLookupRef, frameSnaps
   const kaijuScene = useMemo(() => {
     if (!assetReady || !kaijuAssetsAssetCache.scene || !kaijuAssetName) return null;
     const clone = cloneNamedGlbGroup(kaijuAssetsAssetCache.scene, kaijuAssetName);
+    clone?.traverse?.((node) => {
+      if (node.position && !node.userData.basePosition) node.userData.basePosition = node.position.clone();
+      if (node.rotation && !node.userData.baseRotation) node.userData.baseRotation = node.rotation.clone();
+      if (node.scale && !node.userData.baseScale) node.userData.baseScale = node.scale.clone();
+    });
     kaijuNodesRef.current = clone?.userData?.namedNodes || {};
     return clone;
   }, [assetReady, kaijuAssetName]);
@@ -5965,6 +7686,36 @@ const EntityKaiju = ({ entityId, index, entitiesRef, entityLookupRef, frameSnaps
 
   useEffect(() => {
     const nodes = kaijuScene?.userData?.namedNodes || {};
+    godzillaPelvisRef.current = nodes.kaiju_godzilla_pelvis || null;
+    godzillaTorsoRef.current = nodes.kaiju_godzilla_torso || null;
+    godzillaChestSeamRef.current = nodes.kaiju_godzilla_chest_seam || null;
+    godzillaHeadRef.current = nodes.kaiju_godzilla_head || null;
+    godzillaArmRefs.current = [
+      nodes.kaiju_godzilla_arm_0 || null,
+      nodes.kaiju_godzilla_arm_1 || null
+    ];
+    godzillaLegRefs.current = [
+      nodes.kaiju_godzilla_leg_0 || null,
+      nodes.kaiju_godzilla_leg_1 || null
+    ];
+    godzillaTailRefs.current = Array.from({ length: 9 }, (_, tailIndex) => nodes[`kaiju_godzilla_tail_${tailIndex}`] || null);
+    godzillaSpineRefs.current = Array.from({ length: 8 }, (_, spineIndex) => nodes[`kaiju_godzilla_spine_${spineIndex}`] || null);
+    octopusMantleRef.current = nodes.kaiju_octopus_mantle || null;
+    octopusMembraneRef.current = nodes.kaiju_octopus_membrane || null;
+    octopusBeakRef.current = nodes.kaiju_octopus_beak || null;
+    octopusTentacleRefs.current = Array.from({ length: 8 }, (_, tentacleIndex) => nodes[`kaiju_octopus_tentacle_${tentacleIndex}`] || null);
+    beetleBodyRef.current = nodes.kaiju_beetle_body || null;
+    beetleElytraRef.current = nodes.kaiju_beetle_elytra || null;
+    beetleCollarRef.current = nodes.kaiju_beetle_collar || null;
+    beetleJawRef.current = nodes.kaiju_beetle_jaw || null;
+    beetleLegRefs.current = Array.from({ length: 3 }, (_, row) => ([
+      nodes[`kaiju_beetle_leg_${row}_0`] || null,
+      nodes[`kaiju_beetle_leg_${row}_1`] || null
+    ]));
+    wyrmHeadRef.current = nodes.kaiju_wyrm_head || null;
+    wyrmCrestRef.current = nodes.kaiju_wyrm_crest || null;
+    wyrmSegmentRefs.current = Array.from({ length: 8 }, (_, segmentIndex) => nodes[`kaiju_wyrm_segment_${segmentIndex}`] || null);
+    wyrmSpineRefs.current = Array.from({ length: 6 }, (_, spineIndex) => nodes[`kaiju_wyrm_spine_${spineIndex}`] || null);
     jawRef.current = nodes.kaiju_godzilla_jaw || nodes.kaiju_beetle_jaw || nodes.kaiju_wyrm_jaw || null;
     spiderRootRef.current = nodes.kaiju_spider_root || null;
     spiderAbdomenRef.current = nodes.kaiju_spider_abdomen || null;
@@ -5984,6 +7735,12 @@ const EntityKaiju = ({ entityId, index, entitiesRef, entityLookupRef, frameSnaps
     birdRightWingRef.current = nodes.kaiju_bird_right_wing || null;
     birdTailRef.current = nodes.kaiju_bird_tail || null;
     birdHeadRef.current = nodes.kaiju_bird_head || null;
+    [specialAuraOuterRef, specialAuraInnerRef, specialAuraCoreRef, attackFlashRef].forEach((ref) => {
+      if (ref.current) ref.current.visible = false;
+    });
+    specialOrbRefs.current.forEach((orb) => {
+      if (orb) orb.visible = false;
+    });
 
     return () => {
       if (kaijuScene) disposeClonedMaterials(kaijuScene);
@@ -6013,8 +7770,31 @@ const EntityKaiju = ({ entityId, index, entitiesRef, entityLookupRef, frameSnaps
     const damageStageLive = hpRatio <= 0.2 ? 3 : hpRatio <= 0.45 ? 2 : hpRatio <= 0.7 ? 1 : 0;
     const isFlyingVariant = isFlyingKaijuVariant(p.variant);
     const variantTuning = getKaijuVariantTuning(p.variant);
+    const effectMeta = getElementMeta(variantTuning.element);
     const frameStep = getFrameScaledStep(delta);
     const baseScale = p.scale || 10;
+    const specialEffectKind = p.specialEffectKind || getKaijuSpecialEffectKind(p.variant);
+
+    if (p.specialReleaseAt && now >= p.specialReleaseAt) {
+      spawnKaijuChaosBurst(entitiesRef.current, p);
+      p.specialReleaseAt = null;
+      p.specialChargeStartedAt = null;
+      p.specialPulseStartedAt = now;
+      p.specialPulseUntil = now + KAIJU_SPECIAL_PULSE_SECONDS;
+      p.specialPulseDuration = KAIJU_SPECIAL_PULSE_SECONDS;
+    }
+    if (p.specialPulseUntil && now >= p.specialPulseUntil) {
+      p.specialPulseUntil = null;
+      p.specialPulseStartedAt = null;
+    }
+    if (p.attackPoseUntil && now >= p.attackPoseUntil) {
+      p.attackPoseUntil = null;
+      p.attackPoseStartedAt = null;
+    }
+    if (p.smashPoseUntil && now >= p.smashPoseUntil) {
+      p.smashPoseUntil = null;
+      p.smashPoseStartedAt = null;
+    }
 
     if (p.state === 'dying') {
       p.vx = 0;
@@ -6022,10 +7802,13 @@ const EntityKaiju = ({ entityId, index, entitiesRef, entityLookupRef, frameSnaps
       if (!Number.isFinite(p.y)) {
         p.y = isFlyingVariant ? (p.flightBaseHeight || getTerrainHeight(p.x, p.z) + 80) : getTerrainHeight(p.x, p.z);
       }
+      const deathTiltX = p.deathTiltX ?? 0.24;
+      const deathRollZ = p.deathRollZ ?? Math.PI / 2.9;
       group.current.position.set(p.x, p.y, p.z);
-      group.current.rotation.y = p.rotation ?? group.current.rotation.y;
+      group.current.rotation.y = p.deathYaw ?? p.rotation ?? group.current.rotation.y;
       group.current.position.y -= (delta || 0.016) * 30;
-      group.current.rotation.x -= (delta || 0.016) * 1.5;
+      group.current.rotation.x += (deathTiltX - group.current.rotation.x) * Math.min(1, (delta || 0.016) * 6);
+      group.current.rotation.z += (deathRollZ - group.current.rotation.z) * Math.min(1, (delta || 0.016) * 5);
       if (jawRef.current) jawRef.current.rotation.x = Math.PI / 4;
       group.current.scale.set(baseScale, baseScale, baseScale);
 
@@ -6194,6 +7977,18 @@ const EntityKaiju = ({ entityId, index, entitiesRef, entityLookupRef, frameSnaps
            // RANGED ATTACK SYSTEM
            const attackChance = (p.variant === 'spicie_bird' ? 0.038 : 0.03) * kaijuAttackStep; 
            if (Math.random() < attackChance) {
+             p.attackPoseStartedAt = now;
+             p.attackPoseUntil = now + KAIJU_ATTACK_POSE_SECONDS;
+             p.attackPoseDuration = KAIJU_ATTACK_POSE_SECONDS;
+             p.attackTelegraphKind = p.variant === 'octopus'
+               ? 'ink'
+               : p.variant === 'spider'
+               ? 'web'
+               : p.variant === 'spicie_bird'
+               ? 'lightning'
+               : p.variant === 'beetle'
+               ? 'lightning'
+               : 'fire';
              const attackId = `attack-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
              
              if (p.variant === 'octopus') {
@@ -6273,6 +8068,10 @@ const EntityKaiju = ({ entityId, index, entitiesRef, entityLookupRef, frameSnaps
            
            const attackSpeed = (structureTarget.type === 'barricade' ? 0.05 : 0.028) * kaijuAttackStep;
            if (Math.random() < attackSpeed) {
+             p.smashPoseStartedAt = now;
+             p.smashPoseUntil = now + KAIJU_SMASH_POSE_SECONDS;
+             p.smashPoseDuration = KAIJU_SMASH_POSE_SECONDS;
+             p.attackTelegraphKind = 'smash';
              const incomingDamage = structureTarget.type === 'barricade'
                ? ((structureTarget.deployShieldUntil && structureTarget.deployShieldUntil > Date.now())
                  ? BARRICADE_KAIJU_DAMAGE * 0.45
@@ -6310,9 +8109,11 @@ const EntityKaiju = ({ entityId, index, entitiesRef, entityLookupRef, frameSnaps
     } else {
        // No targets - wander
        const wanderSpeed = 0.5 * kaijuMoveStep * KAIJU_WANDER_MOVE_MULTIPLIER;
-       p.x += Math.sin(Date.now() * 0.0005) * wanderSpeed;
-       p.z += Math.cos(Date.now() * 0.0005) * wanderSpeed;
-       group.current.rotation.y = Date.now() * 0.0005;
+       p.wanderSeed = p.wanderSeed || Math.random() * Math.PI * 2;
+       const wanderTime = now * 0.35 + p.wanderSeed;
+       p.x += Math.sin(wanderTime) * wanderSpeed;
+       p.z += Math.cos(wanderTime) * wanderSpeed;
+       group.current.rotation.y = wanderTime;
        p.rotation = group.current.rotation.y;
        p.state = 'wandering';
     }
@@ -6320,8 +8121,16 @@ const EntityKaiju = ({ entityId, index, entitiesRef, entityLookupRef, frameSnaps
     if (!p.nextRageBurstAt) {
       p.nextRageBurstAt = now + 2.5 + Math.random() * 2;
     }
-    if (p.state !== 'dying' && now >= p.nextRageBurstAt) {
-      spawnKaijuChaosBurst(entitiesRef.current, p);
+    if (
+      p.state !== 'dying' &&
+      now >= p.nextRageBurstAt &&
+      !p.specialReleaseAt &&
+      !p.specialPulseUntil
+    ) {
+      p.specialEffectKind = specialEffectKind;
+      p.specialChargeStartedAt = now;
+      p.specialReleaseAt = now + KAIJU_SPECIAL_WINDUP_SECONDS;
+      p.specialWindupDuration = KAIJU_SPECIAL_WINDUP_SECONDS;
       p.nextRageBurstAt = now + 4.5 + Math.random() * 3.5 + (p.variant === 'octopus' ? 0.8 : 0);
     }
     
@@ -6368,128 +8177,368 @@ const EntityKaiju = ({ entityId, index, entitiesRef, entityLookupRef, frameSnaps
       p.y = getTerrainHeight(p.x, p.z);
     }
     group.current.position.set(p.x, p.y, p.z);
-    
-    // Natural breathing animation
-    const breathe = Math.sin(Date.now() * 0.002) * 0.03;
+    group.current.rotation.y = p.rotation ?? group.current.rotation.y;
+
+    const attackPoseProgress = p.attackPoseUntil
+      ? THREE.MathUtils.clamp((p.attackPoseUntil - now) / Math.max(0.01, p.attackPoseDuration || KAIJU_ATTACK_POSE_SECONDS), 0, 1)
+      : 0;
+    const smashPoseProgress = p.smashPoseUntil
+      ? THREE.MathUtils.clamp((p.smashPoseUntil - now) / Math.max(0.01, p.smashPoseDuration || KAIJU_SMASH_POSE_SECONDS), 0, 1)
+      : 0;
+    const specialChargeProgress = p.specialReleaseAt && p.specialChargeStartedAt !== null && p.specialChargeStartedAt !== undefined
+      ? THREE.MathUtils.clamp((now - p.specialChargeStartedAt) / Math.max(0.01, p.specialWindupDuration || KAIJU_SPECIAL_WINDUP_SECONDS), 0, 1)
+      : 0;
+    const specialPulseProgress = p.specialPulseUntil && p.specialPulseStartedAt !== null && p.specialPulseStartedAt !== undefined
+      ? THREE.MathUtils.clamp((p.specialPulseUntil - now) / Math.max(0.01, p.specialPulseDuration || KAIJU_SPECIAL_PULSE_SECONDS), 0, 1)
+      : 0;
+    const specialIntensity = Math.max(specialChargeProgress, specialPulseProgress);
+    const motionTarget = THREE.MathUtils.clamp(
+      movedDistance * (isFlyingVariant ? 12 : p.variant === 'spider' ? 13 : p.variant === 'octopus' ? 8 : 9)
+      + ((p.state === 'hunting' || p.state === 'approaching') ? 0.5 : 0)
+      + (attackPoseProgress + smashPoseProgress) * 0.28
+      + specialChargeProgress * 0.4,
+      0.06,
+      isFlyingVariant ? 1.8 : 1.55
+    );
+    p.motionBlend = THREE.MathUtils.lerp(p.motionBlend || 0, motionTarget, Math.min(1, delta * 4.2));
+    p.motionPhase = (p.motionPhase || 0) + delta * (
+      1.1 + p.motionBlend * (
+        p.variant === 'spider'
+          ? 6.4
+          : isFlyingVariant
+          ? 7.1
+          : p.variant === 'octopus'
+          ? 4.4
+          : p.variant === 'wyrm'
+          ? 5.2
+          : p.variant === 'beetle'
+          ? 4.9
+          : 4.2
+      )
+    );
+    const locomotionTime = p.motionPhase;
+    const locomotionWave = Math.sin(locomotionTime);
+    const locomotionWaveFast = Math.sin(locomotionTime * 2);
+    const breathe = Math.sin(now * 2 + (p.motionSeed || 0)) * 0.03;
+    const bodyBob = p.variant === 'spider'
+      ? Math.abs(locomotionWave) * baseScale / 10.5
+      : isFlyingVariant
+      ? Math.abs(locomotionWave) * baseScale / 12
+      : Math.abs(locomotionWave) * baseScale / 5.6;
+
+    group.current.position.y = p.y + bodyBob * Math.min(1, p.motionBlend + 0.2);
     group.current.scale.set(
       baseScale,
-      baseScale * (1 + (p.variant === 'spider' ? breathe * 0.4 : isFlyingVariant ? breathe * 0.25 : breathe)),
+      baseScale * (1 + (p.variant === 'spider' ? breathe * 0.35 : isFlyingVariant ? breathe * 0.22 : breathe) + specialChargeProgress * 0.03),
       baseScale
     );
-    
-    // Idle sway when not moving much
-    const idleSway = Math.sin(Date.now() * 0.001) * 0.02;
-    group.current.rotation.z = p.variant === 'spider' ? idleSway * 0.45 : isFlyingVariant ? idleSway * 0.2 : idleSway;
+
     group.current.rotation.x = p.variant === 'spider'
-      ? 0.025 + Math.sin(Date.now() * 0.0015) * 0.008
+      ? 0.025 + locomotionWave * 0.01 + attackPoseProgress * 0.04 + smashPoseProgress * 0.12 + specialChargeProgress * 0.06
       : isFlyingVariant
-      ? -0.08 + Math.sin(Date.now() * 0.0022) * 0.02
-      : Math.sin(Date.now() * 0.0015) * 0.015;
+      ? -0.08 + locomotionWave * 0.022 - attackPoseProgress * 0.05 - smashPoseProgress * 0.08 - specialChargeProgress * 0.04
+      : locomotionWave * 0.02 - attackPoseProgress * 0.06 - smashPoseProgress * 0.12 + specialChargeProgress * 0.04;
+    group.current.rotation.z = p.variant === 'spider'
+      ? locomotionWave * 0.02
+      : isFlyingVariant
+      ? Math.sin(locomotionTime * 0.8) * 0.02
+      : Math.sin(locomotionTime * 0.75) * 0.05;
     if (damageStageLive > 0) {
-      const woundShake = Math.sin(state.clock.elapsedTime * (damageStageLive >= 2 ? 7.2 : 4.8)) * 0.01 * damageStageLive;
+      const woundShake = Math.sin(now * (damageStageLive >= 2 ? 7.2 : 4.8)) * 0.01 * damageStageLive;
       group.current.rotation.z += woundShake * (p.variant === 'spider' ? 0.8 : 1);
       group.current.rotation.x += damageStageLive >= 2 ? 0.01 + woundShake * 0.4 : 0;
     }
-    
-    // More dynamic movement when walking
-    if (p.state !== 'attacking_bunker' && p.state !== 'dying') {
-        const walkBob = Math.sin(Date.now() * 0.008) * (p.variant === 'spider' ? 0.022 : isFlyingVariant ? 0.03 : 0.05);
-        group.current.position.y = p.y + Math.abs(walkBob) * (p.variant === 'spider' ? baseScale / 9 : isFlyingVariant ? baseScale / 11 : baseScale / 5);
-        group.current.rotation.z = Math.sin(Date.now() * 0.006) * (p.variant === 'spider' ? 0.035 : isFlyingVariant ? 0.028 : 0.08);
-    }
-    
-    // Attack anticipation - lean back before striking
-    if (p.state === 'attacking_bunker') {
-        const attackWindup = Math.sin(Date.now() * 0.01) * 0.15;
-        if (group.current) {
-            group.current.position.set(p.x, p.y, p.z);
-            group.current.rotation.y = p.rotation ?? group.current.rotation.y;
-            group.current.rotation.x = p.variant === 'spider'
-              ? 0.14 + attackWindup * 0.2
-              : p.variant === 'spicie_bird'
-              ? -0.24 + attackWindup * 0.14
-              : -0.1 + attackWindup;
-        }
-    }
-    
+
+    const jawBase = p.variant === 'beetle' ? 0.18 : p.variant === 'wyrm' ? 0.14 : 0.08;
     if (jawRef.current) {
-       jawRef.current.rotation.x = 0.4 + Math.sin(Date.now() * 0.005) * 0.3;
+      const jawOpen = jawBase + p.motionBlend * 0.05 + attackPoseProgress * 0.42 + smashPoseProgress * 0.12 + specialIntensity * 0.52 + Math.sin(now * 5.8) * 0.05;
+      jawRef.current.rotation.x = jawOpen;
+    }
+
+    if (p.variant === 'godzilla') {
+      if (godzillaPelvisRef.current) {
+        const basePos = godzillaPelvisRef.current.userData.basePosition;
+        const baseRot = godzillaPelvisRef.current.userData.baseRotation;
+        if (basePos) godzillaPelvisRef.current.position.y = basePos.y + Math.abs(locomotionWave) * 1.6 - smashPoseProgress * 0.9;
+        if (baseRot) godzillaPelvisRef.current.rotation.x = baseRot.x + locomotionWave * 0.04;
+      }
+      if (godzillaTorsoRef.current) {
+        const baseRot = godzillaTorsoRef.current.userData.baseRotation;
+        if (baseRot) {
+          godzillaTorsoRef.current.rotation.x = baseRot.x + locomotionWave * 0.05 - attackPoseProgress * 0.12 - smashPoseProgress * 0.16 + specialChargeProgress * 0.08;
+          godzillaTorsoRef.current.rotation.z = locomotionWaveFast * 0.018;
+        }
+      }
+      if (godzillaHeadRef.current) {
+        const baseRot = godzillaHeadRef.current.userData.baseRotation;
+        if (baseRot) {
+          godzillaHeadRef.current.rotation.x = baseRot.x + locomotionWave * 0.04 + attackPoseProgress * 0.22 + specialIntensity * 0.18;
+          godzillaHeadRef.current.rotation.y = Math.sin(locomotionTime * 0.5) * 0.08;
+        }
+      }
+      if (godzillaChestSeamRef.current?.material) {
+        godzillaChestSeamRef.current.material.emissiveIntensity = 0.72 + specialChargeProgress * 2.2 + specialPulseProgress * 1.4 + damageStageLive * 0.18;
+      }
+      godzillaArmRefs.current.forEach((arm, armIndex) => {
+        if (!arm) return;
+        const side = armIndex === 0 ? -1 : 1;
+        const baseRot = arm.userData.baseRotation;
+        if (!baseRot) return;
+        arm.rotation.x = baseRot.x + locomotionWave * 0.08 - attackPoseProgress * 0.18 + specialChargeProgress * 0.12;
+        arm.rotation.z = baseRot.z + side * (locomotionWave * 0.2 + attackPoseProgress * 0.36 + smashPoseProgress * 0.18);
+      });
+      godzillaLegRefs.current.forEach((leg, legIndex) => {
+        if (!leg) return;
+        const stride = Math.sin(locomotionTime + legIndex * Math.PI);
+        const baseRot = leg.userData.baseRotation;
+        if (!baseRot) return;
+        leg.rotation.x = baseRot.x + stride * 0.24 + smashPoseProgress * 0.08;
+        leg.rotation.z = baseRot.z + stride * (legIndex === 0 ? -0.05 : 0.05);
+      });
+      godzillaTailRefs.current.forEach((tail, tailIndex) => {
+        if (!tail) return;
+        const baseRot = tail.userData.baseRotation;
+        if (!baseRot) return;
+        tail.rotation.y = baseRot.y + Math.sin(locomotionTime * 0.52 - tailIndex * 0.34) * (0.16 + tailIndex * 0.015) + specialPulseProgress * 0.04;
+        tail.rotation.x = baseRot.x + Math.cos(locomotionTime * 0.34 - tailIndex * 0.22) * 0.04;
+      });
+      godzillaSpineRefs.current.forEach((spine, spineIndex) => {
+        if (!spine) return;
+        const baseRot = spine.userData.baseRotation;
+        if (!baseRot) return;
+        spine.rotation.z = baseRot.z + Math.sin(locomotionTime * 0.7 + spineIndex * 0.5) * 0.06;
+        if (spine.material) spine.material.emissiveIntensity = (spineIndex % 3 === 0 ? 0.7 : 0.2) + specialChargeProgress * 1.4 + specialPulseProgress * 0.8;
+      });
+    }
+
+    if (p.variant === 'octopus') {
+      if (octopusMantleRef.current) {
+        const baseScaleNode = octopusMantleRef.current.userData.baseScale;
+        const basePos = octopusMantleRef.current.userData.basePosition;
+        if (baseScaleNode) {
+          octopusMantleRef.current.scale.set(
+            baseScaleNode.x * (1 + Math.sin(locomotionTime * 0.55) * 0.04 + specialChargeProgress * 0.06),
+            baseScaleNode.y * (1 + Math.cos(locomotionTime * 0.44) * 0.08 + attackPoseProgress * 0.04),
+            baseScaleNode.z * (1 + Math.sin(locomotionTime * 0.5) * 0.04)
+          );
+        }
+        if (basePos) octopusMantleRef.current.position.y = basePos.y + Math.abs(locomotionWave) * 1.2;
+      }
+      if (octopusMembraneRef.current?.material) {
+        octopusMembraneRef.current.material.opacity = 0.36 + specialChargeProgress * 0.18 + specialPulseProgress * 0.1;
+      }
+      if (octopusBeakRef.current) {
+        const baseRot = octopusBeakRef.current.userData.baseRotation;
+        if (baseRot) octopusBeakRef.current.rotation.x = baseRot.x + attackPoseProgress * 0.3 + smashPoseProgress * 0.14;
+      }
+      octopusTentacleRefs.current.forEach((tentacle, tentacleIndex) => {
+        if (!tentacle) return;
+        const baseRot = tentacle.userData.baseRotation;
+        if (!baseRot) return;
+        const sweep = Math.sin(locomotionTime * 0.92 + tentacleIndex * 0.75);
+        tentacle.rotation.x = baseRot.x + sweep * 0.18 + smashPoseProgress * 0.05;
+        tentacle.rotation.y = baseRot.y + Math.cos(locomotionTime * 0.5 + tentacleIndex * 0.6) * 0.16 + specialChargeProgress * 0.12;
+        tentacle.rotation.z = sweep * 0.05;
+      });
     }
 
     if (p.variant === 'spider') {
-      const crawlSpeed = THREE.MathUtils.clamp(movedDistance * 16 + (p.state === 'hunting' || p.state === 'approaching' ? 1.1 : 0.45), 0.45, 2.5);
-      const crawlTime = state.clock.elapsedTime * crawlSpeed * 2.8;
-      const attackSpread = p.state === 'attacking' || p.state === 'attacking_bunker' ? 0.22 : 0;
-      const crouchAmount = p.state === 'attacking_bunker' ? 1 : p.state === 'attacking' ? 0.72 : p.state === 'hunting' || p.state === 'approaching' ? 0.5 : 0.28;
+      const crawlSpeed = THREE.MathUtils.clamp(p.motionBlend * 2.4 + (p.state === 'hunting' || p.state === 'approaching' ? 1.1 : 0.45), 0.45, 2.8);
+      const crawlTime = locomotionTime * crawlSpeed;
+      const attackSpread = attackPoseProgress * 0.22 + specialChargeProgress * 0.2 + specialPulseProgress * 0.16;
+      const crouchAmount = smashPoseProgress > 0
+        ? 1
+        : attackPoseProgress > 0
+        ? 0.78
+        : p.state === 'hunting' || p.state === 'approaching'
+        ? 0.52
+        : 0.28;
 
       if (spiderRootRef.current) {
         spiderRootRef.current.position.y = 4.8 - crouchAmount * 1.6 + Math.abs(Math.sin(crawlTime * 0.55)) * 0.35;
-        spiderRootRef.current.rotation.x = 0.06 + crouchAmount * 0.08 + Math.sin(crawlTime * 0.32) * 0.02;
+        spiderRootRef.current.rotation.x = 0.06 + crouchAmount * 0.08 + Math.sin(crawlTime * 0.32) * 0.02 + specialChargeProgress * 0.04;
       }
       if (spiderAbdomenRef.current) {
         spiderAbdomenRef.current.position.y = 15.3 + Math.sin(crawlTime * 0.42 + 0.8) * 0.65;
-        spiderAbdomenRef.current.rotation.x = -0.16 + Math.sin(crawlTime * 0.34 + 0.5) * 0.05;
+        spiderAbdomenRef.current.rotation.x = -0.16 + Math.sin(crawlTime * 0.34 + 0.5) * 0.05 - specialChargeProgress * 0.04;
         spiderAbdomenRef.current.rotation.z = Math.sin(crawlTime * 0.45) * 0.025;
       }
       if (spiderThoraxRef.current) {
-        spiderThoraxRef.current.rotation.x = 0.08 + Math.sin(crawlTime * 0.5) * 0.02;
+        spiderThoraxRef.current.rotation.x = 0.08 + Math.sin(crawlTime * 0.5) * 0.02 + attackPoseProgress * 0.05;
       }
       if (spiderHeadRef.current) {
-        spiderHeadRef.current.rotation.x = -0.08 + crouchAmount * 0.12 + Math.sin(crawlTime * 0.62) * 0.025;
+        spiderHeadRef.current.rotation.x = -0.08 + crouchAmount * 0.12 + Math.sin(crawlTime * 0.62) * 0.025 + specialChargeProgress * 0.08;
       }
       spiderPedipalpRefs.current.forEach((pedipalp, index) => {
         if (!pedipalp) return;
         const side = index === 0 ? -1 : 1;
-        pedipalp.rotation.x = 0.38 + crouchAmount * 0.16 + Math.sin(crawlTime * 0.85 + index * 0.9) * 0.08;
+        pedipalp.rotation.x = 0.38 + crouchAmount * 0.16 + Math.sin(crawlTime * 0.85 + index * 0.9) * 0.08 + specialPulseProgress * 0.08;
         pedipalp.rotation.z = side * (-0.28 - attackSpread * 0.35);
       });
-      spiderLegRefs.current.forEach((leg, index) => {
+      spiderLegRefs.current.forEach((leg, legIndex) => {
         if (!leg) return;
-        const config = spiderLegConfigs[index];
+        const config = spiderLegConfigs[legIndex];
         if (!config) return;
         const step = Math.sin(crawlTime + config.phase);
         const plant = Math.cos(crawlTime + config.phase * 0.6);
-        const limp = damageStageLive >= 2 && (index === 1 || index === 6) ? damageStageLive * 0.1 : 0;
+        const limp = damageStageLive >= 2 && (legIndex === 1 || legIndex === 6) ? damageStageLive * 0.1 : 0;
         if (leg.upper) {
           leg.upper.rotation.y = config.yaw + config.stride * step;
           leg.upper.rotation.z = config.side * (config.splay + config.lift * Math.max(0, step) + attackSpread - limp);
         }
         if (leg.mid) {
           leg.mid.rotation.z = config.side * (-0.9 - config.lift * 0.8 * Math.max(0, -step) + limp * 0.7);
-          leg.mid.rotation.x = -0.1 + Math.abs(step) * 0.08;
+          leg.mid.rotation.x = -0.1 + Math.abs(step) * 0.08 + specialChargeProgress * 0.04;
         }
         if (leg.lower) {
-          leg.lower.rotation.z = config.side * (0.84 + config.lift * 0.55 * Math.max(0, step) + limp);
+          leg.lower.rotation.z = config.side * (0.84 + config.lift * 0.55 * Math.max(0, step) + limp + specialPulseProgress * 0.08);
           leg.lower.rotation.x = 0.12 + Math.max(0, plant) * 0.06;
         }
       });
     }
+
+    if (p.variant === 'beetle') {
+      if (beetleBodyRef.current) {
+        const baseRot = beetleBodyRef.current.userData.baseRotation;
+        if (baseRot) beetleBodyRef.current.rotation.x = baseRot.x + locomotionWave * 0.08 + smashPoseProgress * 0.05;
+      }
+      if (beetleElytraRef.current) {
+        const baseRot = beetleElytraRef.current.userData.baseRotation;
+        if (baseRot) beetleElytraRef.current.rotation.x = baseRot.x + attackPoseProgress * 0.12 + specialChargeProgress * 0.18;
+      }
+      if (beetleCollarRef.current) {
+        const baseRot = beetleCollarRef.current.userData.baseRotation;
+        if (baseRot) beetleCollarRef.current.rotation.x = baseRot.x + Math.sin(locomotionTime * 0.7) * 0.05;
+      }
+      if (beetleJawRef.current) {
+        const baseRot = beetleJawRef.current.userData.baseRotation;
+        if (baseRot) {
+          beetleJawRef.current.rotation.x = baseRot.x + attackPoseProgress * 0.18 + specialChargeProgress * 0.12;
+          beetleJawRef.current.rotation.y = Math.sin(locomotionTime * 0.4) * 0.06;
+        }
+      }
+      beetleLegRefs.current.forEach((pair, row) => {
+        pair.forEach((leg, legIndex) => {
+          if (!leg) return;
+          const baseRot = leg.userData.baseRotation;
+          if (!baseRot) return;
+          const side = legIndex === 0 ? -1 : 1;
+          const step = Math.sin(locomotionTime * 1.15 + row * 0.72 + legIndex * Math.PI);
+          leg.rotation.x = baseRot.x + Math.abs(step) * 0.12;
+          leg.rotation.z = baseRot.z + side * (step * 0.2 - specialChargeProgress * 0.08);
+        });
+      });
+    }
+
+    if (p.variant === 'wyrm') {
+      wyrmSegmentRefs.current.forEach((segment, segmentIndex) => {
+        if (!segment) return;
+        const basePos = segment.userData.basePosition;
+        const baseRot = segment.userData.baseRotation;
+        const wave = Math.sin(locomotionTime * 0.88 - segmentIndex * 0.42);
+        if (basePos) {
+          segment.position.x = basePos.x + wave * (2.2 + segmentIndex * 0.4);
+          segment.position.y = basePos.y + Math.abs(wave) * 0.65;
+        }
+        if (baseRot) {
+          segment.rotation.y = baseRot.y + wave * 0.16;
+          segment.rotation.x = baseRot.x + Math.cos(locomotionTime * 0.52 - segmentIndex * 0.28) * 0.04;
+        }
+      });
+      wyrmSpineRefs.current.forEach((spine, spineIndex) => {
+        if (!spine) return;
+        const baseRot = spine.userData.baseRotation;
+        if (baseRot) spine.rotation.z = baseRot.z + Math.sin(locomotionTime * 0.9 + spineIndex * 0.45) * 0.08;
+        if (spine.material) spine.material.emissiveIntensity = 0.34 + specialChargeProgress * 1.1 + specialPulseProgress * 0.6;
+      });
+      if (wyrmHeadRef.current) {
+        const baseRot = wyrmHeadRef.current.userData.baseRotation;
+        if (baseRot) {
+          wyrmHeadRef.current.rotation.x = baseRot.x + attackPoseProgress * 0.16 + specialChargeProgress * 0.12 + Math.sin(locomotionTime * 0.6) * 0.05;
+          wyrmHeadRef.current.rotation.y = Math.sin(locomotionTime * 0.42) * 0.09;
+        }
+      }
+      if (wyrmCrestRef.current?.material) {
+        wyrmCrestRef.current.material.emissiveIntensity = 0.34 + specialChargeProgress * 1.3 + specialPulseProgress * 0.7;
+      }
+    }
+
     if (p.variant === 'spicie_bird') {
-      const flapSpeed = THREE.MathUtils.clamp(
-        movedDistance * 12 + (p.state === 'hunting' || p.state === 'approaching' ? 2.4 : 1.5),
-        1.2,
-        4.2
-      );
-      const flap = Math.sin(state.clock.elapsedTime * flapSpeed * 4.6);
-      const glide = Math.sin(state.clock.elapsedTime * 1.4 + (p.flightPhase || 0)) * 0.04;
+      const flapSpeed = THREE.MathUtils.clamp(p.motionBlend * 2.8 + (p.state === 'hunting' || p.state === 'approaching' ? 2.4 : 1.5), 1.2, 4.6);
+      const flap = Math.sin(locomotionTime * flapSpeed);
+      const glide = Math.sin(now * 1.4 + (p.flightPhase || 0)) * 0.04;
       if (birdRootRef.current) {
         birdRootRef.current.position.y = 12 + Math.abs(flap) * 1.2;
-        birdRootRef.current.rotation.x = -0.08 + glide;
+        birdRootRef.current.rotation.x = -0.08 + glide - attackPoseProgress * 0.06 - specialChargeProgress * 0.08;
       }
       if (birdLeftWingRef.current) {
-        birdLeftWingRef.current.rotation.z = -0.38 + flap * 0.78;
+        birdLeftWingRef.current.rotation.z = -0.38 + flap * (0.78 + specialChargeProgress * 0.18) - specialPulseProgress * 0.12;
         birdLeftWingRef.current.rotation.y = -0.08 + flap * 0.06;
       }
       if (birdRightWingRef.current) {
-        birdRightWingRef.current.rotation.z = 0.38 - flap * 0.78;
+        birdRightWingRef.current.rotation.z = 0.38 - flap * (0.78 + specialChargeProgress * 0.18) + specialPulseProgress * 0.12;
         birdRightWingRef.current.rotation.y = 0.08 - flap * 0.06;
       }
       if (birdTailRef.current) {
-        birdTailRef.current.rotation.x = 0.3 + Math.sin(state.clock.elapsedTime * 2.1) * 0.08;
+        birdTailRef.current.rotation.x = 0.3 + Math.sin(now * 2.1) * 0.08 + specialChargeProgress * 0.08;
       }
       if (birdHeadRef.current) {
-        birdHeadRef.current.rotation.x = 0.12 + Math.sin(state.clock.elapsedTime * 2.7) * 0.07;
+        birdHeadRef.current.rotation.x = 0.12 + Math.sin(now * 2.7) * 0.07 + attackPoseProgress * 0.12 + specialChargeProgress * 0.16;
       }
+    }
+
+    const specialColor = effectMeta.color || '#cbd5e1';
+    const attackColor = p.attackTelegraphKind === 'ink'
+      ? '#7c3aed'
+      : p.attackTelegraphKind === 'web'
+      ? '#dbeafe'
+      : p.attackTelegraphKind === 'lightning'
+      ? '#67e8f9'
+      : p.attackTelegraphKind === 'smash'
+      ? '#fb923c'
+      : specialEffectKind === 'ash'
+      ? '#84cc16'
+      : '#f59e0b';
+    if (specialAuraOuterRef.current?.material && specialAuraInnerRef.current?.material && specialAuraCoreRef.current?.material) {
+      const auraVisible = specialIntensity > 0.01;
+      const outerScale = 1 + specialChargeProgress * 1.4 + specialPulseProgress * 0.5;
+      specialAuraOuterRef.current.visible = auraVisible;
+      specialAuraInnerRef.current.visible = auraVisible;
+      specialAuraCoreRef.current.visible = auraVisible;
+      specialAuraOuterRef.current.scale.set(outerScale, outerScale, outerScale);
+      specialAuraInnerRef.current.scale.set(0.92 + specialChargeProgress * 0.75, 0.92 + specialChargeProgress * 0.75, 1);
+      specialAuraCoreRef.current.scale.setScalar(0.85 + specialIntensity * 0.65);
+      [specialAuraOuterRef.current, specialAuraInnerRef.current, specialAuraCoreRef.current].forEach((mesh) => {
+        mesh.material.color.set(mesh === specialAuraCoreRef.current ? attackColor : specialColor);
+      });
+      specialAuraOuterRef.current.material.opacity = specialChargeProgress * 0.4 + specialPulseProgress * 0.26;
+      specialAuraInnerRef.current.material.opacity = specialChargeProgress * 0.26 + specialPulseProgress * 0.18;
+      specialAuraCoreRef.current.material.opacity = specialChargeProgress * 0.18 + specialPulseProgress * 0.14;
+      specialAuraCoreRef.current.position.y = 18 + Math.sin(now * 8) * 1.6;
+    }
+    specialOrbRefs.current.forEach((orb, orbIndex) => {
+      if (!orb?.material) return;
+      const auraVisible = specialIntensity > 0.01;
+      orb.visible = auraVisible;
+      if (!auraVisible) return;
+      const angle = now * (2.2 + orbIndex * 0.18) + (orbIndex / Math.max(1, specialOrbRefs.current.length)) * Math.PI * 2;
+      const radius = 16 + specialChargeProgress * 12 + (orbIndex % 2) * 4;
+      orb.position.set(Math.cos(angle) * radius, 12 + Math.sin(now * 3.2 + orbIndex) * 4, Math.sin(angle) * radius);
+      orb.scale.setScalar(0.9 + specialIntensity * 0.5 + (orbIndex % 3) * 0.08);
+      orb.material.color.set(attackColor);
+      orb.material.opacity = 0.14 + specialIntensity * 0.38;
+    });
+    if (attackFlashRef.current?.material) {
+      const attackFlashIntensity = Math.max(attackPoseProgress, smashPoseProgress * 0.9, specialPulseProgress * 0.4);
+      attackFlashRef.current.visible = attackFlashIntensity > 0.01;
+      attackFlashRef.current.position.set(
+        0,
+        p.variant === 'spider' ? 14 : p.variant === 'spicie_bird' ? 20 : p.variant === 'octopus' ? 14 : 24,
+        p.variant === 'spider' ? 16 : p.variant === 'spicie_bird' ? 22 : p.variant === 'wyrm' ? 20 : 18
+      );
+      attackFlashRef.current.scale.setScalar(0.9 + attackFlashIntensity * 1.6);
+      attackFlashRef.current.material.color.set(attackColor);
+      attackFlashRef.current.material.opacity = attackFlashIntensity * 0.42;
     }
 
     if (hpBar.current) hpBar.current.lookAt(camera.position);
@@ -7011,6 +9060,35 @@ const EntityKaiju = ({ entityId, index, entitiesRef, entityLookupRef, frameSnaps
     <group ref={group}>
       {renderVariant()}
 
+      <group>
+        <mesh ref={specialAuraOuterRef} visible={false} rotation={[-Math.PI / 2, 0, 0]} position={[0, 2.5, 0]}>
+          <ringGeometry args={[18, 28, 32]} />
+          <meshBasicMaterial color="#22c55e" transparent opacity={0} side={THREE.DoubleSide} blending={THREE.AdditiveBlending} depthWrite={false} />
+        </mesh>
+        <mesh ref={specialAuraInnerRef} visible={false} rotation={[-Math.PI / 2, 0, 0]} position={[0, 3.1, 0]}>
+          <ringGeometry args={[8, 16, 24]} />
+          <meshBasicMaterial color="#22c55e" transparent opacity={0} side={THREE.DoubleSide} blending={THREE.AdditiveBlending} depthWrite={false} />
+        </mesh>
+        <mesh ref={specialAuraCoreRef} visible={false} position={[0, 18, 0]}>
+          <sphereGeometry args={[6, 12, 12]} />
+          <meshBasicMaterial color="#fb923c" transparent opacity={0} blending={THREE.AdditiveBlending} depthWrite={false} />
+        </mesh>
+        {[0, 1, 2, 3].map((orbIndex) => (
+          <mesh
+            key={`kaiju-special-orb-${orbIndex}`}
+            ref={(el) => { specialOrbRefs.current[orbIndex] = el; }}
+            visible={false}
+          >
+            <sphereGeometry args={[1.8 + (orbIndex % 2) * 0.35, 8, 8]} />
+            <meshBasicMaterial color="#fde047" transparent opacity={0} blending={THREE.AdditiveBlending} depthWrite={false} />
+          </mesh>
+        ))}
+        <mesh ref={attackFlashRef} visible={false}>
+          <sphereGeometry args={[4.2, 10, 10]} />
+          <meshBasicMaterial color="#fb923c" transparent opacity={0} blending={THREE.AdditiveBlending} depthWrite={false} />
+        </mesh>
+      </group>
+
       {/* HP Bar Overlay floating directly above head, adjusting for height */}
       <group ref={hpBar} position={[0, Math.max(40, 600 / (p.scale || 10)), 0]}>
          <mesh position={[0, 0, -0.1]}>
@@ -7037,6 +9115,7 @@ const MemoEntityMissileImpact = memo(EntityMissileImpact);
 const MemoEntityImpactPuff = memo(EntityImpactPuff);
 const MemoEntityPlane = memo(EntityPlane);
 const MemoEntityBomb = memo(EntityBomb);
+const MemoEntitySupportStrikeEffect = memo(EntitySupportStrikeEffect);
 const MemoEntityBunker = memo(EntityBunker);
 const MemoEntityFacility = memo(EntityFacility);
 const MemoEntityBarricade = memo(EntityBarricade);
@@ -7065,6 +9144,7 @@ const DynamicEntitySync = memo(({ entitiesRef, entityLookupRef, frameSnapshotRef
         // ONLY return dynamic entities out of the main array
         if (p.type === 'plane') return <MemoEntityPlane key={p.id} entityId={p.id} entitiesRef={entitiesRef} entityLookupRef={entityLookupRef} />;
         if (p.type === 'bomb') return <MemoEntityBomb key={p.id} entityId={p.id} entitiesRef={entitiesRef} entityLookupRef={entityLookupRef} />;
+        if (p.type === 'support_fx') return <MemoEntitySupportStrikeEffect key={p.id} entityId={p.id} entitiesRef={entitiesRef} entityLookupRef={entityLookupRef} />;
         if (p.type === 'kaiju') return <MemoEntityKaiju key={p.id} entityId={p.id} entitiesRef={entitiesRef} entityLookupRef={entityLookupRef} frameSnapshotRef={frameSnapshotRef} setGameState={setGameState} />;
         if (p.type === 'mushroom') return <EntityMushroomCloud key={p.id} entityId={p.id} entitiesRef={entitiesRef} entityLookupRef={entityLookupRef} />;
         if (p.type === 'kaiju_attack') return <MemoEntityKaijuAttack key={p.id} entityId={p.id} entitiesRef={entitiesRef} entityLookupRef={entityLookupRef} />;
@@ -7075,8 +9155,8 @@ const DynamicEntitySync = memo(({ entitiesRef, entityLookupRef, frameSnapshotRef
         if (p.type === 'missile') return <MemoEntityMissile key={p.id} entityId={p.id} entitiesRef={entitiesRef} entityLookupRef={entityLookupRef} />;
         if (p.type === 'missile_impact') return <MemoEntityMissileImpact key={p.id} entityId={p.id} entitiesRef={entitiesRef} entityLookupRef={entityLookupRef} />;
         if (p.type === 'impact_puff') return <MemoEntityImpactPuff key={p.id} entityId={p.id} entitiesRef={entitiesRef} entityLookupRef={entityLookupRef} />;
-        if (p.type === 'soldier') return <EntityPerson key={p.id} entityId={p.id} entitiesRef={entitiesRef} entityLookupRef={entityLookupRef} />;
-        if (p.type === 'tank') return <EntityTank key={p.id} entityId={p.id} entitiesRef={entitiesRef} entityLookupRef={entityLookupRef} />;
+        if (p.type === 'soldier') return <EntitySoldierGLB key={p.id} entityId={p.id} entitiesRef={entitiesRef} entityLookupRef={entityLookupRef} />;
+        if (p.type === 'tank') return <EntityTank key={p.id} entityId={p.id} entitiesRef={entitiesRef} entityLookupRef={entityLookupRef} frameSnapshotRef={frameSnapshotRef} />;
         if (p.type === 'barricade') return <MemoEntityBarricade key={p.id} entityId={p.id} entitiesRef={entitiesRef} entityLookupRef={entityLookupRef} />;
         if (p.type === 'facility') return <MemoEntityFacility key={p.id} entityId={p.id} entitiesRef={entitiesRef} entityLookupRef={entityLookupRef} />;
         if (p.type === 'muzzle_flash') return <MemoEntityMuzzleFlash key={p.id} entityId={p.id} entitiesRef={entitiesRef} entityLookupRef={entityLookupRef} />;
@@ -7105,8 +9185,11 @@ const DummyWarmup = memo(({ qualityProfile }) => {
     loadNukeCloudAsset().catch(() => {});
     loadWorldPropsAsset().catch(() => {});
     loadAirstrikeAsset().catch(() => {});
+    loadTankTestAsset().catch(() => {});
     loadBaseStructuresAsset().catch(() => {});
+    loadCommandEffectsAsset().catch(() => {});
     loadKaijuAssetsAsset().catch(() => {});
+    loadHumanUnitsAsset().catch(() => {});
     rafA = window.requestAnimationFrame(() => {
       rafB = window.requestAnimationFrame(() => setEnabled(false));
     });
@@ -7126,7 +9209,7 @@ const DummyWarmup = memo(({ qualityProfile }) => {
   );
 });
 
-const VillageScene = ({ themeConfig, setNukeCount, setGameState, pollution, qualityProfile }) => {
+const VillageScene = ({ themeConfig, environmentVariant, setNukeCount, setGameState, pollution, qualityProfile }) => {
   const entitiesRef = useRef([]);
   const entityLookupRef = useRef(new Map());
   const [mounted, setMounted] = useState(false);
@@ -7143,6 +9226,8 @@ const VillageScene = ({ themeConfig, setNukeCount, setGameState, pollution, qual
     confirmedTarget: null,
     cooldownUntil: 0,
     manualStrikeArmed: false,
+    armedSupportKey: null,
+    supportCooldowns: createDefaultSupportCooldownMap(),
     pendingDeploy: null,
     pendingBuild: null
   });
@@ -7168,6 +9253,16 @@ const VillageScene = ({ themeConfig, setNukeCount, setGameState, pollution, qual
     active: false,
     target: null
   });
+  const selectionRef = useRef({
+    active: false,
+    moved: false,
+    startClientX: 0,
+    startClientY: 0,
+    endClientX: 0,
+    endClientY: 0
+  });
+  const selectedUnitIdsRef = useRef(new Set());
+  const selectedProductionBuildingIdRef = useRef(null);
   const pointerRaycasterRef = useRef(new THREE.Raycaster());
   const pointerNdcRef = useRef(new THREE.Vector2());
   const buildDragRef = useRef({
@@ -7199,6 +9294,110 @@ const VillageScene = ({ themeConfig, setNukeCount, setGameState, pollution, qual
       ? frameSnapshotRef.current.liveBarricades
       : entitiesRef.current.filter(e => e.type === 'barricade' && !e.dead)
   );
+  const getProductionFacilities = () => (
+    frameSnapshotRef.current.ready
+      ? frameSnapshotRef.current.liveFacilities.filter((entity) => !entity.constructing && !isBrokenStructure(entity) && !entity.dead)
+      : entitiesRef.current.filter((entity) => entity.type === 'facility' && !entity.dead && !entity.constructing && !isBrokenStructure(entity))
+  );
+  const syncSelectedProductionBuildingMeta = () => {
+    if (typeof window === 'undefined') return;
+    const entity = selectedProductionBuildingIdRef.current
+      ? entityLookupRef.current.get(selectedProductionBuildingIdRef.current)
+      : null;
+    const valid = entity && entity.type === 'facility' && !entity.dead && !entity.constructing && !isBrokenStructure(entity);
+    if (!valid) {
+      selectedProductionBuildingIdRef.current = null;
+      window._falloutSelectedProductionBuilding = null;
+      return;
+    }
+    const interaction = getFacilityInteractionOption(entity.kind);
+    const now = Date.now();
+    window._falloutSelectedProductionBuilding = {
+      id: entity.id,
+      kind: entity.kind,
+      label: BUILD_OPTIONS[entity.kind]?.label || entity.kind,
+      icon: BUILD_OPTIONS[entity.kind]?.icon || '🏗️',
+      units: BUILDING_DEPLOY_OPTIONS[entity.kind] || [],
+      queue: Array.isArray(entity.productionQueue) ? entity.productionQueue.map((job) => job.unitType) : [],
+      trainingUnitType: entity.trainingUnitType || null,
+      trainingProgress: entity.trainingProgress || 0,
+      action: interaction ? {
+        label: interaction.label,
+        tag: interaction.tag,
+        cost: interaction.cost,
+        description: interaction.description,
+        ready: (entity.abilityCooldownUntil || 0) <= now,
+        cooldownRemaining: Math.max(0, (entity.abilityCooldownUntil || 0) - now),
+        activeRemaining: Math.max(0, (entity.abilityActiveUntil || 0) - now)
+      } : null
+    };
+  };
+  const clearSelectedProductionBuilding = () => {
+    selectedProductionBuildingIdRef.current = null;
+    syncSelectedProductionBuildingMeta();
+  };
+  const setSelectedProductionBuilding = (entity) => {
+    if (!entity || entity.type !== 'facility' || entity.constructing || entity.dead || isBrokenStructure(entity)) {
+      clearSelectedProductionBuilding();
+      return;
+    }
+    selectedProductionBuildingIdRef.current = entity.id;
+    syncSelectedProductionBuildingMeta();
+  };
+  const getSelectedProductionBuilding = () => {
+    const entity = selectedProductionBuildingIdRef.current
+      ? entityLookupRef.current.get(selectedProductionBuildingIdRef.current)
+      : null;
+    return entity && entity.type === 'facility' && !entity.dead && !entity.constructing && !isBrokenStructure(entity)
+      ? entity
+      : null;
+  };
+  const getProductionSourceForUnit = (unitType, preferredBuildingId = null) => {
+    const allowedKinds = getProductionSourcesForUnit(unitType);
+    if (!allowedKinds.length) return getBestDeployBunker();
+    const facilities = getProductionFacilities();
+    if (preferredBuildingId) {
+      const preferred = facilities.find((entity) => entity.id === preferredBuildingId && allowedKinds.includes(entity.kind));
+      if (preferred) return preferred;
+    }
+    const selectedBuilding = getSelectedProductionBuilding();
+    if (selectedBuilding && allowedKinds.includes(selectedBuilding.kind)) return selectedBuilding;
+    const nearestBunker = getBestDeployBunker();
+    if (!nearestBunker) return facilities.find((entity) => allowedKinds.includes(entity.kind)) || null;
+    const ranked = facilities
+      .filter((entity) => allowedKinds.includes(entity.kind))
+      .sort((a, b) => (
+        Math.hypot((a.x || 0) - nearestBunker.x, (a.z || 0) - nearestBunker.z)
+        - Math.hypot((b.x || 0) - nearestBunker.x, (b.z || 0) - nearestBunker.z)
+      ));
+    return ranked[0] || null;
+  };
+  const getFacilityDeployTarget = (sourceFacility) => {
+    const closestKaiju = getAliveKaijus().sort((a, b) => (
+      Math.hypot((a.x || 0) - sourceFacility.x, (a.z || 0) - sourceFacility.z)
+      - Math.hypot((b.x || 0) - sourceFacility.x, (b.z || 0) - sourceFacility.z)
+    ))[0];
+    if (closestKaiju) return clampStrikeTarget({ x: closestKaiju.x, z: closestKaiju.z });
+    const entry = getVaultEntryPoint(sourceFacility);
+    return clampStrikeTarget({ x: entry.x, z: entry.z - 160 });
+  };
+  const enqueueFacilityProduction = (facility, unitType) => {
+    if (!facility || facility.type !== 'facility') return false;
+    facility.productionQueue = Array.isArray(facility.productionQueue) ? facility.productionQueue : [];
+    facility.productionQueue.push({
+      id: `${unitType}-queue-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      unitType,
+      duration: DEPLOY_TRAINING_DURATIONS[unitType] || 5.5
+    });
+    if (!facility.trainingUnitType) {
+      const nextJob = facility.productionQueue[0];
+      facility.trainingUnitType = nextJob?.unitType || null;
+      facility.trainingRemaining = nextJob?.duration || 0;
+      facility.trainingProgress = 0;
+    }
+    syncSelectedProductionBuildingMeta();
+    return true;
+  };
   const rebuildFrameSnapshot = () => {
     const snapshot = frameSnapshotRef.current;
     entityLookupRef.current.clear();
@@ -7287,7 +9486,161 @@ const VillageScene = ({ themeConfig, setNukeCount, setGameState, pollution, qual
       }
     });
 
+    if (selectedUnitIdsRef.current.size) {
+      let changed = false;
+      selectedUnitIdsRef.current.forEach((id) => {
+        const entity = entityLookupRef.current.get(id);
+        if (!isCommandableUnit(entity)) {
+          selectedUnitIdsRef.current.delete(id);
+          changed = true;
+        }
+      });
+      if (changed) syncSelectedUnitsMeta();
+    }
+    if (selectedProductionBuildingIdRef.current) {
+      const selectedFacility = entityLookupRef.current.get(selectedProductionBuildingIdRef.current);
+      if (!selectedFacility || selectedFacility.type !== 'facility' || selectedFacility.dead || selectedFacility.constructing || isBrokenStructure(selectedFacility)) {
+        clearSelectedProductionBuilding();
+      } else {
+        syncSelectedProductionBuildingMeta();
+      }
+    }
+
     return snapshot;
+  };
+  const syncSelectionOverlay = () => {
+    if (typeof window === 'undefined') return;
+    if (!selectionRef.current.active) {
+      window._falloutSelectionBox = null;
+      return;
+    }
+    const { startClientX, startClientY, endClientX, endClientY, moved } = selectionRef.current;
+    if (!moved) {
+      window._falloutSelectionBox = null;
+      return;
+    }
+    const left = Math.min(startClientX, endClientX);
+    const top = Math.min(startClientY, endClientY);
+    window._falloutSelectionBox = {
+      left,
+      top,
+      width: Math.abs(endClientX - startClientX),
+      height: Math.abs(endClientY - startClientY)
+    };
+  };
+  const syncSelectedUnitsMeta = () => {
+    if (typeof window === 'undefined') return;
+    window._falloutSelectedUnitIds = Array.from(selectedUnitIdsRef.current);
+    window._falloutSelectedUnitCount = selectedUnitIdsRef.current.size;
+  };
+  const clearUnitSelection = () => {
+    entitiesRef.current.forEach((entity) => {
+      if (isCommandableUnit(entity)) entity.selected = false;
+    });
+    selectedUnitIdsRef.current.clear();
+    syncSelectedUnitsMeta();
+    if (typeof window !== 'undefined') {
+      window._falloutGroupCommandTarget = null;
+      window._falloutUnitCommandMarkers = [];
+    }
+  };
+  const setSelectedUnits = (entities, additive = false) => {
+    const selectedIds = new Set(additive ? selectedUnitIdsRef.current : []);
+    if (!additive) {
+      entitiesRef.current.forEach((entity) => {
+        if (isCommandableUnit(entity)) entity.selected = false;
+      });
+    }
+    entities.forEach((entity) => {
+      if (!isCommandableUnit(entity)) return;
+      entity.selected = true;
+      selectedIds.add(entity.id);
+    });
+    entitiesRef.current.forEach((entity) => {
+      if (!isCommandableUnit(entity)) return;
+      if (!selectedIds.has(entity.id)) entity.selected = false;
+    });
+    selectedUnitIdsRef.current = selectedIds;
+    syncSelectedUnitsMeta();
+    if (typeof window !== 'undefined' && selectedIds.size < 2) window._falloutGroupCommandTarget = null;
+  };
+  const getSelectedUnits = () => (
+    entitiesRef.current.filter((entity) => isCommandableUnit(entity) && selectedUnitIdsRef.current.has(entity.id))
+  );
+  const getUnitsForControlGroup = (groupKey = 'all') => {
+    if (groupKey === 'armor') return entitiesRef.current.filter((entity) => entity.type === 'tank' && !entity.dead);
+    if (groupKey === 'engineers') return entitiesRef.current.filter((entity) => entity.type === 'soldier' && !entity.dead && entity.weaponType === 'engineer');
+    if (groupKey === 'squads') return entitiesRef.current.filter((entity) => entity.type === 'soldier' && !entity.dead && entity.weaponType !== 'engineer');
+    return entitiesRef.current.filter((entity) => isCommandableUnit(entity) && !entity.dead);
+  };
+  const projectEntityToClient = (entity, canvasRect) => {
+    if (!entity || !canvasRect) return null;
+    const vec = new THREE.Vector3(entity.x || 0, (entity.y || 0) + (entity.type === 'tank' ? 22 : 16), entity.z || 0);
+    vec.project(camera);
+    if (vec.z < -1 || vec.z > 1) return null;
+    return {
+      x: canvasRect.left + ((vec.x + 1) * 0.5) * canvasRect.width,
+      y: canvasRect.top + ((-vec.y + 1) * 0.5) * canvasRect.height
+    };
+  };
+  const getClosestProjectedEntity = (clientX, clientY, entities, canvasRect, maxDistance = 28) => {
+    let closest = null;
+    let closestDist = maxDistance;
+    entities.forEach((entity) => {
+      const point = projectEntityToClient(entity, canvasRect);
+      if (!point) return;
+      const dist = Math.hypot(point.x - clientX, point.y - clientY);
+      if (dist <= closestDist) {
+        closestDist = dist;
+        closest = entity;
+      }
+    });
+    return closest;
+  };
+  const getSelectionBoxUnits = (canvasRect) => {
+    const { startClientX, startClientY, endClientX, endClientY } = selectionRef.current;
+    const minX = Math.min(startClientX, endClientX);
+    const maxX = Math.max(startClientX, endClientX);
+    const minY = Math.min(startClientY, endClientY);
+    const maxY = Math.max(startClientY, endClientY);
+    return entitiesRef.current.filter((entity) => {
+      if (!isCommandableUnit(entity)) return false;
+      const point = projectEntityToClient(entity, canvasRect);
+      return !!point && point.x >= minX && point.x <= maxX && point.y >= minY && point.y <= maxY;
+    });
+  };
+  const issueGroupMoveOrder = (units, target, options = {}) => {
+    if (!units.length || !target) return;
+    const heading = 0;
+    if (typeof window !== 'undefined') {
+      window._falloutGroupCommandTarget = {
+        x: target.x,
+        z: target.z,
+        at: Date.now()
+      };
+    }
+    const markers = [];
+    units.forEach((unit, index) => {
+      const row = Math.floor(index / 4);
+      const col = index % 4;
+      const centeredCol = col - Math.min(3, units.length - 1) / 2;
+      const offsetX = centeredCol * 22;
+      const offsetZ = row * 20;
+      const slotTarget = {
+        x: target.x + Math.cos(heading) * offsetX - Math.sin(heading) * offsetZ,
+        z: target.z + Math.sin(heading) * offsetX + Math.cos(heading) * offsetZ
+      };
+      if (options.attackMove) issueAttackMoveOrder(unit, slotTarget);
+      else issueMoveOrder(unit, slotTarget);
+      markers.push({
+        id: unit.id,
+        x: slotTarget.x,
+        z: slotTarget.z,
+        at: Date.now(),
+        type: options.attackMove ? 'attack_move' : 'move'
+      });
+    });
+    if (typeof window !== 'undefined') window._falloutUnitCommandMarkers = markers;
   };
   const clearDeployDrag = () => {
     deployDragRef.current.active = false;
@@ -7332,6 +9685,14 @@ const VillageScene = ({ themeConfig, setNukeCount, setGameState, pollution, qual
   };
   const getDeployUnlocks = () => getDeployUnlockState(economyRef.current.buildings);
   const isDeployUnlocked = (unitType) => !!getDeployUnlocks()[unitType];
+  const getLiveFacilityBuildState = () => {
+    const nextState = cloneDefaultBuildings();
+    entitiesRef.current.forEach((entity) => {
+      if (entity?.type !== 'facility' || entity.dead || entity.constructing || isBrokenStructure(entity)) return;
+      nextState[entity.kind] = true;
+    });
+    return nextState;
+  };
   const getBuildPlacementBlockRadius = (entity) => {
     if (!entity) return FACILITY_BUILD_MIN_SPACING;
     if (entity.type === 'bunker') return FACILITY_BUILD_MIN_SPACING + 26;
@@ -7353,6 +9714,8 @@ const VillageScene = ({ themeConfig, setNukeCount, setGameState, pollution, qual
     }
     const blockedByStructure = entitiesRef.current.some((entity) => {
       if (entity.type !== 'facility' && entity.type !== 'bunker' && entity.type !== 'barricade') return false;
+      if (entity.type === 'facility' && (entity.dead || entity.constructing || isBrokenStructure(entity))) return false;
+      if (entity.type === 'bunker' && (entity.dead || isBrokenStructure(entity))) return false;
       if (entity.type === 'barricade' && entity.dead) return false;
       return Math.hypot(entity.x - clamped.x, entity.z - clamped.z) < getBuildPlacementBlockRadius(entity);
     });
@@ -7387,7 +9750,7 @@ const VillageScene = ({ themeConfig, setNukeCount, setGameState, pollution, qual
   const canPurchaseBuilding = (buildingKey) => {
     const option = BUILD_OPTIONS[buildingKey];
     if (!option) return false;
-    if (economyRef.current.buildings[buildingKey]) return false;
+    if (getLiveFacilityBuildState()[buildingKey]) return false;
     if (economyRef.current.buildQueue?.[buildingKey]) return false;
     if (!hasPrerequisites(getBuildPlacementState(economyRef.current.buildings, economyRef.current.buildQueue), option.requires || [])) return false;
     if (economyRef.current.credits < option.cost) return false;
@@ -7414,17 +9777,22 @@ const VillageScene = ({ themeConfig, setNukeCount, setGameState, pollution, qual
   };
   const spawnSquadFromBunker = (bunker, target) => {
     const angle = getDeployAngle(bunker, target);
+    const attackTarget = getAliveKaijus().sort((a, b) => (
+      Math.hypot((a.x || 0) - target.x, (a.z || 0) - target.z)
+      - Math.hypot((b.x || 0) - target.x, (b.z || 0) - target.z)
+    ))[0] || null;
     for (let i = 0; i < 4; i++) {
       const soldier = applySoldierTrainingBonuses(
         createSoldierReinforcement(`soldier-deploy-${Date.now()}-${i}-${Math.random().toString(36).slice(2, 6)}`, bunker, i),
         economyRef.current.upgrades
       );
-      soldier.vx = Math.cos(angle) * (soldier.combatSpeed || 2.6);
-      soldier.vz = Math.sin(angle) * (soldier.combatSpeed || 2.6);
+      soldier.vx = Math.cos(angle) * (soldier.combatSpeed || 2.6) * SOLDIER_MOVE_SPEED_MULTIPLIER;
+      soldier.vz = Math.sin(angle) * (soldier.combatSpeed || 2.6) * SOLDIER_MOVE_SPEED_MULTIPLIER;
       soldier.aimAngle = angle;
       soldier.state = 'walking';
-      soldier.commandTargetX = target.x;
-      soldier.commandTargetZ = target.z;
+      soldier.selected = false;
+      if (attackTarget) issueAttackOrder(soldier, attackTarget);
+      else issueMoveOrder(soldier, target);
       entitiesRef.current.push(soldier);
     }
   };
@@ -7435,6 +9803,10 @@ const VillageScene = ({ themeConfig, setNukeCount, setGameState, pollution, qual
       spreadStep = 0.34
     } = config;
     const angle = getDeployAngle(bunker, target);
+    const attackTarget = getAliveKaijus().sort((a, b) => (
+      Math.hypot((a.x || 0) - target.x, (a.z || 0) - target.z)
+      - Math.hypot((b.x || 0) - target.x, (b.z || 0) - target.z)
+    ))[0] || null;
     for (let i = 0; i < count; i++) {
       const soldier = applySoldierTrainingBonuses(
         createSpecialistSoldier(
@@ -7448,12 +9820,13 @@ const VillageScene = ({ themeConfig, setNukeCount, setGameState, pollution, qual
       const formationOffset = (i - (count - 1) / 2) * spreadStep;
       soldier.x += Math.cos(angle + Math.PI / 2) * formationOffset * 18;
       soldier.z += Math.sin(angle + Math.PI / 2) * formationOffset * 18;
-      soldier.vx = Math.cos(angle) * (soldier.combatSpeed || 2.6);
-      soldier.vz = Math.sin(angle) * (soldier.combatSpeed || 2.6);
+      soldier.vx = Math.cos(angle) * (soldier.combatSpeed || 2.6) * SOLDIER_MOVE_SPEED_MULTIPLIER;
+      soldier.vz = Math.sin(angle) * (soldier.combatSpeed || 2.6) * SOLDIER_MOVE_SPEED_MULTIPLIER;
       soldier.aimAngle = angle;
       soldier.state = 'walking';
-      soldier.commandTargetX = target.x;
-      soldier.commandTargetZ = target.z;
+      soldier.selected = false;
+      if (loadoutKey === 'engineer' || !attackTarget) issueMoveOrder(soldier, target);
+      else issueAttackOrder(soldier, attackTarget);
       entitiesRef.current.push(soldier);
     }
   };
@@ -7467,12 +9840,17 @@ const VillageScene = ({ themeConfig, setNukeCount, setGameState, pollution, qual
       }
     );
     const angle = getDeployAngle(bunker, target);
-    const speed = 3.2 * (tank.speedMultiplier || 1);
+    const speed = 3.2 * (tank.speedMultiplier || 1) * TANK_MOVE_SPEED_MULTIPLIER;
     tank.vx = Math.cos(angle) * speed;
     tank.vz = Math.sin(angle) * speed;
-    tank.rotation = angle - Math.PI / 2;
-    tank.commandTargetX = target.x;
-    tank.commandTargetZ = target.z;
+    tank.rotation = -angle;
+    tank.selected = false;
+    const attackTarget = getAliveKaijus().sort((a, b) => (
+      Math.hypot((a.x || 0) - target.x, (a.z || 0) - target.z)
+      - Math.hypot((b.x || 0) - target.x, (b.z || 0) - target.z)
+    ))[0] || null;
+    if (attackTarget) issueAttackOrder(tank, attackTarget);
+    else issueMoveOrder(tank, target);
     entitiesRef.current.push(tank);
   };
   const spawnAPCFromBunker = (bunker, target) => {
@@ -7488,12 +9866,17 @@ const VillageScene = ({ themeConfig, setNukeCount, setGameState, pollution, qual
       }
     );
     const angle = getDeployAngle(bunker, target);
-    const speed = 3.35 * (tank.speedMultiplier || 1);
+    const speed = 3.35 * (tank.speedMultiplier || 1) * TANK_MOVE_SPEED_MULTIPLIER;
     tank.vx = Math.cos(angle) * speed;
     tank.vz = Math.sin(angle) * speed;
-    tank.rotation = angle - Math.PI / 2;
-    tank.commandTargetX = target.x;
-    tank.commandTargetZ = target.z;
+    tank.rotation = -angle;
+    tank.selected = false;
+    const attackTarget = getAliveKaijus().sort((a, b) => (
+      Math.hypot((a.x || 0) - target.x, (a.z || 0) - target.z)
+      - Math.hypot((b.x || 0) - target.x, (b.z || 0) - target.z)
+    ))[0] || null;
+    if (attackTarget) issueAttackOrder(tank, attackTarget);
+    else issueMoveOrder(tank, target);
     entitiesRef.current.push(tank);
   };
   const spawnBarricade = (bunker, target) => {
@@ -7550,26 +9933,132 @@ const VillageScene = ({ themeConfig, setNukeCount, setGameState, pollution, qual
     queueDeployFeedback(true);
     return true;
   };
-  const launchJetSupport = () => {
+  const activateFacilityInteraction = (facilityId) => {
+    const facility = facilityId ? entityLookupRef.current.get(facilityId) : getSelectedProductionBuilding();
+    const option = getFacilityInteractionOption(facility?.kind);
+    const now = Date.now();
+    if (!facility || facility.type !== 'facility' || facility.dead || facility.constructing || isBrokenStructure(facility) || !option) return false;
+    if ((facility.abilityCooldownUntil || 0) > now) return false;
+    if (!spendCommandCredits(option.cost)) return false;
+
+    facility.abilityActiveUntil = now + option.durationMs;
+    facility.abilityCooldownUntil = now + option.cooldownMs;
+    facility.abilityPulseUntil = now + 900;
+
+    if (facility.kind === 'powerplant') {
+      addCredits(18);
+    } else if (facility.kind === 'war_factory') {
+      frameSnapshotRef.current.liveTanks.forEach((ally) => {
+        if (!ally || ally.dead) return;
+        const dist = Math.hypot((ally.x || 0) - facility.x, (ally.z || 0) - facility.z);
+        if (dist > WAR_FACTORY_REFIT_RADIUS) return;
+        ally.hp = Math.min(ally.maxHp || TANK_BASE_HP, (ally.hp || 0) + WAR_FACTORY_REFIT_REPAIR);
+        if (ally.state === 'broken' && (ally.hp || 0) > (ally.maxHp || TANK_BASE_HP) * 0.34) ally.state = 'driving';
+      });
+    } else if (facility.kind === 'tech_lab') {
+      const compressCooldown = (until) => {
+        if (!until || until <= now) return until;
+        return now + (until - now) * TECH_LAB_STRIKE_COOLDOWN_MULTIPLIER;
+      };
+      targetingRef.current.cooldownUntil = compressCooldown(targetingRef.current.cooldownUntil);
+      Object.keys(targetingRef.current.supportCooldowns || {}).forEach((key) => {
+        targetingRef.current.supportCooldowns[key] = compressCooldown(targetingRef.current.supportCooldowns[key]);
+      });
+      economyRef.current.techOverclockUntil = facility.abilityActiveUntil;
+    } else if (facility.kind === 'radar_tower') {
+      economyRef.current.radarScanUntil = facility.abilityActiveUntil;
+      frameSnapshotRef.current.aliveKaijus.forEach((kaiju) => {
+        kaiju.lastElementHitAt = now;
+        kaiju.lastElementState = 'advantage';
+      });
+    }
+
+    syncSelectedProductionBuildingMeta();
+    AudioManager.play('target_confirm', { volume: 0.12, duration: 0.18 });
+    queueDeployFeedback(true);
+    return true;
+  };
+  const launchJetSupport = (sourceFacility = null) => {
     const targetKaiju = getAliveKaijus().sort((a, b) => {
       const aRatio = a.hp / a.maxHp;
       const bRatio = b.hp / b.maxHp;
       return aRatio - bRatio;
     })[0];
     if (!targetKaiju) return false;
-    entitiesRef.current.push(createJetReinforcement(`jet-deploy-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, targetKaiju));
-    AudioManager.play('plane_engine', { volume: 0.12, duration: 0.45 });
+    entitiesRef.current.push(
+      sourceFacility
+        ? createJetReinforcementFromFacility(`jet-deploy-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, targetKaiju, sourceFacility)
+        : createJetReinforcement(`jet-deploy-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, targetKaiju)
+    );
+    AudioManager.play('jet_engine', { volume: 0.12, duration: 0.48 });
     return true;
+  };
+  const getSupportStrikeCooldownRemaining = (abilityKey = 'nuke') => {
+    if (abilityKey === 'nuke') {
+      return Math.max(0, targetingRef.current.cooldownUntil - Date.now());
+    }
+    return Math.max(0, (targetingRef.current.supportCooldowns?.[abilityKey] || 0) - Date.now());
+  };
+  const hasActiveSupportStrike = () => (
+    entitiesRef.current.some((e) => (
+      (((e.type === 'plane' || e.type === 'bomb') && e.isManual) || (e.type === 'support_fx' && e.isManual))
+      && !e.dead
+    ))
+  );
+  const canLaunchSupportStrike = (abilityKey = 'nuke') => {
+    const option = getSupportStrikeOption(abilityKey);
+    if (!option) return false;
+    if (!hasPrerequisites(economyRef.current.buildings || {}, option.requires || [])) return false;
+    if (targetingRef.current.isStrikeInProgress) return false;
+    if (hasActiveSupportStrike()) return false;
+    if (getSupportStrikeCooldownRemaining(abilityKey) > 0) return false;
+    return true;
+  };
+  const canArmSupportStrike = (abilityKey = 'nuke') => {
+    const option = getSupportStrikeOption(abilityKey);
+    if (!option) return false;
+    return canLaunchSupportStrike(abilityKey) && economyRef.current.credits >= option.cost;
+  };
+  const getManualStrikeCooldownRemaining = () => getSupportStrikeCooldownRemaining('nuke');
+  const hasActiveManualStrike = () => hasActiveSupportStrike();
+  const canLaunchManualStrike = () => canLaunchSupportStrike('nuke');
+  const canArmManualStrike = () => canArmSupportStrike('nuke');
+  const getFacilityStrikeDamageMultiplier = () => {
+    let multiplier = 1;
+    const now = Date.now();
+    if ((economyRef.current.techOverclockUntil || 0) > now) multiplier *= 1.14;
+    if ((economyRef.current.radarScanUntil || 0) > now) multiplier *= RADAR_SCAN_STRIKE_DAMAGE_MULTIPLIER;
+    return multiplier;
+  };
+  const setSupportStrikeCooldown = (abilityKey) => {
+    const option = getSupportStrikeOption(abilityKey);
+    if (!option) return 0;
+    const multiplier = economyRef.current.buildings?.radar_tower
+      ? (abilityKey === 'nuke' ? RADAR_NUKE_COOLDOWN_MULTIPLIER : SUPPORT_STRIKE_RADAR_COOLDOWN_MULTIPLIER)
+      : 1;
+    const cooldownMs = Math.round(option.cooldownMs * multiplier);
+    if (abilityKey === 'nuke') {
+      targetingRef.current.cooldownUntil = Date.now() + cooldownMs;
+    } else {
+      targetingRef.current.supportCooldowns[abilityKey] = Date.now() + cooldownMs;
+    }
+    return cooldownMs;
   };
   const clearPendingStrikeArm = () => {
     targetingRef.current.manualStrikeArmed = false;
+    targetingRef.current.armedSupportKey = null;
     window._falloutManualStrikeArmed = false;
+    window._falloutArmedSupportKey = null;
+    window._falloutSupportPreview = null;
   };
-  const setPendingStrikeArm = () => {
-    targetingRef.current.manualStrikeArmed = true;
+  const setPendingStrikeArm = (abilityKey = 'nuke') => {
+    targetingRef.current.manualStrikeArmed = abilityKey === 'nuke';
+    targetingRef.current.armedSupportKey = abilityKey;
     targetingRef.current.pendingDeploy = null;
     targetingRef.current.pendingBuild = null;
-    window._falloutManualStrikeArmed = true;
+    window._falloutManualStrikeArmed = abilityKey === 'nuke';
+    window._falloutArmedSupportKey = abilityKey;
+    window._falloutSupportPreview = getSupportStrikePreview(abilityKey);
     window._falloutPendingDeploy = null;
     window._falloutPendingBuild = null;
     window._falloutTargetConfirmedFlash = false;
@@ -7662,6 +10151,9 @@ const VillageScene = ({ themeConfig, setNukeCount, setGameState, pollution, qual
         id: `kaiju-l${level}-${Date.now()}-${i}`,
         type: 'kaiju',
         variant,
+        element: variantConfig.element,
+        weakAgainst: variantConfig.weakAgainst,
+        resistAgainst: variantConfig.resistAgainst,
         x,
         y: spawnY,
         z,
@@ -7689,6 +10181,9 @@ const VillageScene = ({ themeConfig, setNukeCount, setGameState, pollution, qual
         id: `mini-kaiju-l${level}-${Date.now()}-${i}`,
         type: 'kaiju',
         variant,
+        element: variantConfig.element,
+        weakAgainst: variantConfig.weakAgainst,
+        resistAgainst: variantConfig.resistAgainst,
         x,
         y: spawnY,
         z,
@@ -7852,12 +10347,16 @@ const VillageScene = ({ themeConfig, setNukeCount, setGameState, pollution, qual
     targetingRef.current.confirmedTarget = null;
     targetingRef.current.cooldownUntil = 0;
     targetingRef.current.manualStrikeArmed = false;
+    targetingRef.current.armedSupportKey = null;
+    targetingRef.current.supportCooldowns = createDefaultSupportCooldownMap();
     targetingRef.current.pendingDeploy = null;
     targetingRef.current.pendingBuild = null;
     window._falloutConfirmedTarget = null;
     window._falloutStrikeCooldownRemaining = 0;
     window._falloutManualStrikeInFlight = false;
     window._falloutManualStrikeArmed = false;
+    window._falloutArmedSupportKey = null;
+    window._falloutSupportPreview = null;
     window._falloutBombCamActive = false;
     window._falloutBombCamBombId = null;
     window._falloutDeployCosts = DEPLOY_OPTIONS;
@@ -7872,6 +10371,9 @@ const VillageScene = ({ themeConfig, setNukeCount, setGameState, pollution, qual
     window._falloutDeployAnchor = null;
     window._falloutDeployDragActive = false;
     window._falloutDeployDragTarget = null;
+    window._falloutSelectedProductionBuilding = null;
+    window._falloutGroupCommandTarget = null;
+    window._falloutUnitCommandMarkers = [];
     window._falloutBuildDragActive = false;
     window._falloutBuildDragTarget = null;
     window._falloutBuildFallbackTarget = null;
@@ -7882,24 +10384,6 @@ const VillageScene = ({ themeConfig, setNukeCount, setGameState, pollution, qual
     clearBuildDrag();
     setMounted(true);
   }, [themeConfig]);
-
-  const getManualStrikeCooldownRemaining = () => (
-    Math.max(0, targetingRef.current.cooldownUntil - Date.now())
-  );
-
-  const hasActiveManualStrike = () => (
-    entitiesRef.current.some(e => (e.type === 'plane' || e.type === 'bomb') && e.isManual && !e.dead)
-  );
-
-  const canLaunchManualStrike = () => {
-    if (targetingRef.current.isStrikeInProgress) return false;
-    if (hasActiveManualStrike()) return false;
-    if (getManualStrikeCooldownRemaining() > 0) return false;
-    return true;
-  };
-  const canArmManualStrike = () => (
-    canLaunchManualStrike() && economyRef.current.credits >= MANUAL_STRIKE_COST
-  );
 
   const setConfirmedTarget = (target) => {
     targetingRef.current.confirmedTarget = target;
@@ -7922,7 +10406,7 @@ const VillageScene = ({ themeConfig, setNukeCount, setGameState, pollution, qual
       AudioManager.play('target_blocked');
       return false;
     }
-    if (!spendCommandCredits(MANUAL_STRIKE_COST)) {
+    if (!spendCommandCredits(getSupportStrikeOption('nuke').cost)) {
       clearPendingStrikeArm();
       AudioManager.play('target_blocked');
       return false;
@@ -7951,6 +10435,284 @@ const VillageScene = ({ themeConfig, setNukeCount, setGameState, pollution, qual
     AudioManager.play('plane_flyby', { volume: 0.11, duration: 1.4 });
     setTimeout(() => { window._falloutTargetConfirmedFlash = false; }, 500);
     return true;
+  };
+
+  const applyOrbitalLancePulse = (x, z, intensity = 1) => {
+    const outerRadius = 190;
+    const midRadius = 120;
+    const coreRadius = 74;
+    const supportDamageMultiplier = getFacilityStrikeDamageMultiplier();
+
+    entitiesRef.current.forEach((other) => {
+      if (!other || other.dead || other.type === 'support_fx' || other.type === 'scorch' || other.type === 'plane' || other.type === 'bomb' || other.type === 'mushroom') return;
+      const dist = Math.hypot((other.x || 0) - x, (other.z || 0) - z);
+      if (dist > outerRadius) return;
+
+      if (other.type === 'kaiju') {
+        const damage = (dist < coreRadius ? 240 * intensity : dist < midRadius ? 148 * intensity : 72 * intensity) * supportDamageMultiplier;
+        applyKaijuElementalDamage(other, damage, 'orbital_lance');
+        other.staggered = true;
+        other.staggerTimer = Math.max(other.staggerTimer || 0, 70 + damage * 0.18);
+        if (other.hp <= 0) markKaijuDefeated(other);
+      } else if (other.type === 'house') {
+        other.state = dist < coreRadius ? 'ruined' : 'broken';
+      } else if (other.type === 'tree' || other.type === 'car') {
+        other.state = 'broken';
+      }
+    });
+
+    pushImpactPuffEntity(entitiesRef.current, x, z, getTerrainHeight(x, z) + 10);
+    if (Math.random() < 0.7) {
+      pushImpactPuffEntity(entitiesRef.current, x + (Math.random() - 0.5) * 36, z + (Math.random() - 0.5) * 36, getTerrainHeight(x, z) + 8);
+    }
+  };
+
+  const spawnFirestormPatch = (x, z, radius = 56) => {
+    const patch = clampStrikeTarget({ x, z });
+    const supportDamageMultiplier = getFacilityStrikeDamageMultiplier();
+    pushScorchEntity(entitiesRef.current, patch.x, patch.z, radius, {
+      kind: 'firestorm_patch',
+      temporary: true,
+      ttl: FIRESTORM_PATCH_TTL + Math.random() * 2.2,
+      burnLife: FIRESTORM_PATCH_TTL,
+      coreLife: FIRESTORM_PATCH_TTL * 0.7,
+      smokeLife: FIRESTORM_PATCH_TTL * 0.88,
+      baseColor: '#160c07',
+      ringColor: '#3f1f11',
+      coreColor: '#ff6b1a',
+      heatColor: '#ff9b2f',
+      baseOpacity: 0.82,
+      coreOpacity: 0.52,
+      heatOpacity: 0.24,
+      flameCount: 4,
+      smokeCount: 3,
+      firePulseSpeed: 5.8 + Math.random() * 1.2,
+      smokeDrift: 4.2 + Math.random() * 2.4,
+      burnRadius: radius * 2.3,
+      damagePerSecond: 42 * supportDamageMultiplier,
+      damageRadius: radius * 1.35,
+      affectsFlying: false,
+      element: 'fire'
+    });
+    pushImpactPuffEntity(entitiesRef.current, patch.x, patch.z, getTerrainHeight(patch.x, patch.z) + 5);
+    entitiesRef.current.forEach((other) => {
+      if (!other || other.dead || other.type !== 'kaiju' || isFlyingKaiju(other)) return;
+      const dist = Math.hypot((other.x || 0) - patch.x, (other.z || 0) - patch.z);
+      if (dist > radius * 1.28) return;
+      const damage = Math.max(18, (radius * 1.28 - dist) * 0.95) * supportDamageMultiplier;
+      applyKaijuElementalDamage(other, damage, 'firestorm');
+      other.staggered = true;
+      other.staggerTimer = Math.max(other.staggerTimer || 0, 42);
+      if (other.hp <= 0) markKaijuDefeated(other);
+    });
+  };
+
+  const getFocusedKaijuStrikeTarget = (target, maxLockRadius = 160) => {
+    if (!target) return null;
+    const clampedTarget = clampStrikeTarget(target);
+    let best = null;
+    let bestDist = Infinity;
+    getAliveKaijus().forEach((kaiju) => {
+      const dist = Math.hypot((kaiju.x || 0) - clampedTarget.x, (kaiju.z || 0) - clampedTarget.z);
+      if (dist < bestDist) {
+        bestDist = dist;
+        best = kaiju;
+      }
+    });
+    if (!best) return null;
+    if (bestDist > maxLockRadius) return null;
+    return best;
+  };
+
+  const beginSupportStrikeCast = (abilityKey, target) => {
+    const clampedTarget = clampStrikeTarget(target);
+    const option = getSupportStrikeOption(abilityKey);
+    clearPendingDeploy();
+    clearPendingBuild();
+    if (!option || !canLaunchSupportStrike(abilityKey)) {
+      clearPendingStrikeArm();
+      AudioManager.play('target_blocked');
+      return null;
+    }
+    if (!spendCommandCredits(option.cost)) {
+      clearPendingStrikeArm();
+      AudioManager.play('target_blocked');
+      return null;
+    }
+    clearPendingStrikeArm();
+    targetingRef.current.isStrikeInProgress = true;
+    setConfirmedTarget(clampedTarget);
+    window._nukeInteractionTriggered = true;
+    window._falloutTargetConfirmedFlash = true;
+    window._falloutManualStrikeInFlight = true;
+    window._falloutStrikeCooldownRemaining = 0;
+    if (cutsceneTimer.current > 0) cutsceneTimer.current = 0.1;
+    AudioManager.play('target_confirm');
+    setTimeout(() => { window._falloutTargetConfirmedFlash = false; }, 500);
+    return { clampedTarget, option };
+  };
+
+  const launchOrbitalLance = (target) => {
+    const cast = beginSupportStrikeCast('orbital_lance', target);
+    if (!cast) return false;
+    const { clampedTarget } = cast;
+    const effect = {
+      id: `support-orbital-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      type: 'support_fx',
+      kind: 'orbital_lance',
+      x: clampedTarget.x,
+      y: getTerrainHeight(clampedTarget.x, clampedTarget.z),
+      z: clampedTarget.z,
+      age: 0,
+      duration: ORBITAL_LANCE_DURATION,
+      pulseSchedule: [0.04, 0.42, 0.92],
+      pulseIndex: 0,
+      isManual: true,
+      dead: false
+    };
+    entitiesRef.current.push(effect);
+    applyOrbitalLancePulse(clampedTarget.x, clampedTarget.z, 1.05);
+    pushScorchEntity(entitiesRef.current, clampedTarget.x, clampedTarget.z, 48, {
+      kind: 'orbital_lance_mark',
+      temporary: true,
+      ttl: 3.2,
+      smokeCount: 2,
+      flameCount: 0,
+      coreOpacity: 0.28,
+      heatOpacity: 0.18,
+      baseColor: '#050b14',
+      ringColor: '#123048',
+      coreColor: '#38bdf8',
+      heatColor: '#67e8f9'
+    });
+    const cooldownMs = setSupportStrikeCooldown('orbital_lance');
+    window._falloutStrikeCooldownRemaining = cooldownMs;
+    AudioManager.play('missile_launch', { volume: 0.16, duration: 0.22 });
+    AudioManager.play('bomb', { volume: 0.06, duration: 0.1 });
+    return true;
+  };
+
+  const launchFirestormStrike = (target) => {
+    const cast = beginSupportStrikeCast('firestorm', target);
+    if (!cast) return false;
+    const { clampedTarget } = cast;
+    const nearestKaiju = getAliveKaijus().sort((a, b) => (
+      Math.hypot(a.x - clampedTarget.x, a.z - clampedTarget.z) - Math.hypot(b.x - clampedTarget.x, b.z - clampedTarget.z)
+    ))[0];
+    const heading = nearestKaiju
+      ? Math.atan2(nearestKaiju.z - clampedTarget.z, nearestKaiju.x - clampedTarget.x)
+      : Math.random() * Math.PI * 2;
+    const lineAngle = heading + Math.PI / 2;
+    const offsets = [-160, -80, 0, 80, 160];
+
+    entitiesRef.current.push({
+      id: `support-firestorm-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      type: 'support_fx',
+      kind: 'firestorm',
+      x: clampedTarget.x,
+      y: getTerrainHeight(clampedTarget.x, clampedTarget.z),
+      z: clampedTarget.z,
+      age: 0,
+      duration: FIRESTORM_EFFECT_DURATION,
+      isManual: true,
+      dead: false
+    });
+
+    offsets.forEach((offset, index) => {
+      const patchX = clampedTarget.x + Math.cos(lineAngle) * offset;
+      const patchZ = clampedTarget.z + Math.sin(lineAngle) * offset;
+      spawnFirestormPatch(patchX, patchZ, 56 + (index % 2) * 8);
+    });
+
+    const cooldownMs = setSupportStrikeCooldown('firestorm');
+    window._falloutStrikeCooldownRemaining = cooldownMs;
+    AudioManager.play('missile_launch', { volume: 0.12, duration: 0.18 });
+    AudioManager.play('bomb', { volume: 0.08, duration: 0.18 });
+    return true;
+  };
+
+  const launchKineticSpear = (target) => {
+    const cast = beginSupportStrikeCast('kinetic_spear', target);
+    if (!cast) return false;
+    const supportDamageMultiplier = getFacilityStrikeDamageMultiplier();
+    const focusedKaiju = getFocusedKaijuStrikeTarget(cast.clampedTarget, 180);
+    const impactX = focusedKaiju ? focusedKaiju.x : cast.clampedTarget.x;
+    const impactZ = focusedKaiju ? focusedKaiju.z : cast.clampedTarget.z;
+    const impactY = getTerrainHeight(impactX, impactZ);
+
+    entitiesRef.current.push({
+      id: `support-spear-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      type: 'support_fx',
+      kind: 'kinetic_spear',
+      x: impactX,
+      y: impactY,
+      z: impactZ,
+      age: 0,
+      duration: KINETIC_SPEAR_DURATION,
+      isManual: true,
+      dead: false
+    });
+
+    entitiesRef.current.forEach((other) => {
+      if (!other || other.dead || other.type === 'support_fx' || other.type === 'plane' || other.type === 'bomb' || other.type === 'mushroom') return;
+      const dist = Math.hypot((other.x || 0) - impactX, (other.z || 0) - impactZ);
+      if (other.type === 'kaiju') {
+        const isPrimary = focusedKaiju && other.id === focusedKaiju.id;
+        if (isPrimary) {
+          applyKaijuElementalDamage(other, 560 * supportDamageMultiplier, 'kinetic_spear');
+          other.staggered = true;
+          other.staggerTimer = Math.max(other.staggerTimer || 0, 150);
+          other.specialState = 'impaled';
+          other.specialTimer = Math.max(other.specialTimer || 0, 1.1);
+        } else if (dist <= 88) {
+          applyKaijuElementalDamage(other, Math.max(70, 180 - dist * 1.1) * supportDamageMultiplier, 'kinetic_spear');
+          other.staggered = true;
+          other.staggerTimer = Math.max(other.staggerTimer || 0, 78);
+        }
+        if (other.hp <= 0) markKaijuDefeated(other);
+      } else if ((other.type === 'house' || other.type === 'facility' || other.type === 'bunker') && dist <= 42) {
+        if (other.type === 'house') other.state = 'ruined';
+      } else if ((other.type === 'tree' || other.type === 'car') && dist <= 54) {
+        other.state = 'broken';
+      }
+    });
+
+    pushImpactPuffEntity(entitiesRef.current, impactX, impactZ, impactY + 12);
+    pushImpactPuffEntity(entitiesRef.current, impactX + 12, impactZ - 8, impactY + 8);
+    pushScorchEntity(entitiesRef.current, impactX, impactZ, 36, {
+      kind: 'kinetic_spear_mark',
+      temporary: true,
+      ttl: 4.8,
+      smokeCount: 2,
+      flameCount: 1,
+      coreOpacity: 0.34,
+      heatOpacity: 0.2,
+      baseColor: '#06080d',
+      ringColor: '#2f3f56',
+      coreColor: '#e2e8f0',
+      heatColor: '#7dd3fc',
+      burnRadius: 64,
+      damagePerSecond: 16,
+      damageRadius: 54,
+      affectsFlying: false,
+      element: 'ion'
+    });
+
+    const cooldownMs = setSupportStrikeCooldown('kinetic_spear');
+    window._falloutStrikeCooldownRemaining = cooldownMs;
+    AudioManager.play('missile_launch', { volume: 0.14, duration: 0.16 });
+    AudioManager.play('bomb', { volume: 0.18, duration: 0.14 });
+    AudioManager.play('target_confirm', { volume: 0.18, duration: 0.2 });
+    return true;
+  };
+
+  const launchSupportStrike = (abilityKey, target) => {
+    if (!target) return false;
+    if (abilityKey === 'nuke') return launchManualStrike(target, { idPrefix: 'plane-manual', speed: 7 });
+    if (abilityKey === 'orbital_lance') return launchOrbitalLance(target);
+    if (abilityKey === 'firestorm') return launchFirestormStrike(target);
+    if (abilityKey === 'kinetic_spear') return launchKineticSpear(target);
+    return false;
   };
 
   useEffect(() => {
@@ -8017,6 +10779,7 @@ const VillageScene = ({ themeConfig, setNukeCount, setGameState, pollution, qual
 
     const handleDeploySelection = (event) => {
       const unitType = event?.detail?.unitType;
+      const sourceBuildingId = event?.detail?.sourceBuildingId || null;
       const option = DEPLOY_OPTIONS[unitType];
       if (!option) return;
       if (!isDeployUnlocked(unitType)) {
@@ -8024,16 +10787,27 @@ const VillageScene = ({ themeConfig, setNukeCount, setGameState, pollution, qual
         clearPendingDeploy();
         return;
       }
-      if (unitType === 'jet') {
-        if (!getAliveKaijus().length || economyRef.current.credits < option.cost) {
+      const productionSource = getProductionSourceForUnit(unitType, sourceBuildingId);
+      if (isQueuedDeployUnit(unitType) && !productionSource) {
+        queueDeployFeedback(false);
+        clearPendingDeploy();
+        return;
+      }
+      if (isQueuedDeployUnit(unitType)) {
+        if (!productionSource || economyRef.current.credits < option.cost) {
           queueDeployFeedback(false);
           clearPendingDeploy();
           return;
         }
-        window.dispatchEvent(new CustomEvent('fallout-deploy-unit', { detail: { unitType } }));
+        if (!spendCommandCredits(option.cost) || !enqueueFacilityProduction(productionSource, unitType)) {
+          queueDeployFeedback(false);
+          return;
+        }
+        queueDeployFeedback(true);
+        clearPendingDeploy();
         return;
       }
-      if (!getBestDeployBunker() || !getAliveKaijus().length || economyRef.current.credits < option.cost) {
+      if ((!getBestDeployBunker() && !productionSource) || !getAliveKaijus().length || economyRef.current.credits < option.cost) {
         queueDeployFeedback(false);
         clearPendingDeploy();
         return;
@@ -8046,6 +10820,7 @@ const VillageScene = ({ themeConfig, setNukeCount, setGameState, pollution, qual
     const handleDeployRequest = (event) => {
       const unitType = event?.detail?.unitType;
       const target = event?.detail?.target;
+      const sourceBuildingId = event?.detail?.sourceBuildingId || null;
       const option = DEPLOY_OPTIONS[unitType];
       if (!option) return;
       if (!isDeployUnlocked(unitType)) {
@@ -8055,7 +10830,8 @@ const VillageScene = ({ themeConfig, setNukeCount, setGameState, pollution, qual
       }
 
       const bunker = getBestDeployBunker();
-      if (!bunker || !getAliveKaijus().length) {
+      const productionSource = getProductionSourceForUnit(unitType, sourceBuildingId) || bunker;
+      if (!productionSource || !getAliveKaijus().length) {
         queueDeployFeedback(false);
         clearPendingDeploy();
         return;
@@ -8069,27 +10845,33 @@ const VillageScene = ({ themeConfig, setNukeCount, setGameState, pollution, qual
       let success = true;
       if (unitType === 'squad') {
         if (!target) success = false;
-        else spawnSquadFromBunker(bunker, target);
+        else spawnSquadFromBunker(productionSource, target);
       } else if (unitType === 'gunner_team') {
         if (!target) success = false;
-        else spawnSpecialistTeamFromBunker(bunker, target, { count: 3, loadoutKey: 'gunner', spreadStep: 0.4 });
+        else spawnSpecialistTeamFromBunker(productionSource, target, { count: 3, loadoutKey: 'gunner', spreadStep: 0.4 });
       } else if (unitType === 'sniper_team') {
         if (!target) success = false;
-        else spawnSpecialistTeamFromBunker(bunker, target, { count: 2, loadoutKey: 'marksman', spreadStep: 0.5 });
+        else spawnSpecialistTeamFromBunker(productionSource, target, { count: 2, loadoutKey: 'marksman', spreadStep: 0.5 });
+      } else if (unitType === 'rpg_team') {
+        if (!target) success = false;
+        else spawnSpecialistTeamFromBunker(productionSource, target, { count: 2, loadoutKey: 'rpg', spreadStep: 0.56 });
+      } else if (unitType === 'missile_team') {
+        if (!target) success = false;
+        else spawnSpecialistTeamFromBunker(productionSource, target, { count: 2, loadoutKey: 'missile', spreadStep: 0.64 });
       } else if (unitType === 'engineer_team') {
         if (!target) success = false;
-        else spawnSpecialistTeamFromBunker(bunker, target, { count: 2, loadoutKey: 'engineer', spreadStep: 0.42 });
+        else spawnSpecialistTeamFromBunker(productionSource, target, { count: 2, loadoutKey: 'engineer', spreadStep: 0.42 });
       } else if (unitType === 'barricade') {
         if (!target) success = false;
-        else spawnBarricade(bunker, target);
+        else spawnBarricade(productionSource, target);
       } else if (unitType === 'tank') {
         if (!target) success = false;
-        else spawnTankFromBunker(bunker, target);
+        else spawnTankFromBunker(productionSource, target);
       } else if (unitType === 'apc') {
         if (!target) success = false;
-        else spawnAPCFromBunker(bunker, target);
+        else spawnAPCFromBunker(productionSource, target);
       } else if (unitType === 'jet') {
-        success = launchJetSupport();
+        success = launchJetSupport(productionSource?.type === 'facility' ? productionSource : null);
       } else {
         success = false;
       }
@@ -8130,17 +10912,44 @@ const VillageScene = ({ themeConfig, setNukeCount, setGameState, pollution, qual
       const purchased = purchaseUpgrade(upgradeKey);
       if (!purchased) queueDeployFeedback(false);
     };
-    const handleNukeArmSelection = () => {
-      if (targetingRef.current.manualStrikeArmed) {
+    const toggleSupportArm = (abilityKey = 'nuke') => {
+      const activeKey = targetingRef.current.armedSupportKey || (targetingRef.current.manualStrikeArmed ? 'nuke' : null);
+      if (activeKey === abilityKey) {
         clearPendingStrikeArm();
         return;
       }
-      if (!canArmManualStrike()) {
+      if (!canArmSupportStrike(abilityKey)) {
         queueDeployFeedback(false);
         return;
       }
-      setPendingStrikeArm();
+      setPendingStrikeArm(abilityKey);
       queueDeployFeedback(true);
+    };
+    const handleSupportArmSelection = (event) => {
+      toggleSupportArm(event?.detail?.abilityKey || 'nuke');
+    };
+    const handleNukeArmSelection = () => {
+      toggleSupportArm('nuke');
+    };
+    const handleControlGroupSelection = (event) => {
+      const groupKey = event?.detail?.groupKey || 'all';
+      const units = getUnitsForControlGroup(groupKey);
+      if (units.length) {
+        setSelectedUnits(units, false);
+        queueDeployFeedback(true);
+      } else {
+        clearUnitSelection();
+        queueDeployFeedback(false);
+      }
+    };
+    const handleClearProductionSelection = () => {
+      clearSelectedProductionBuilding();
+    };
+    const handleFacilityInteraction = (event) => {
+      const facilityId = event?.detail?.facilityId || selectedProductionBuildingIdRef.current || null;
+      if (!activateFacilityInteraction(facilityId)) {
+        queueDeployFeedback(false);
+      }
     };
 
     window.addEventListener('fallout-select-deploy', handleDeploySelection);
@@ -8149,6 +10958,10 @@ const VillageScene = ({ themeConfig, setNukeCount, setGameState, pollution, qual
     window.addEventListener('fallout-purchase-building', handleBuildingPurchase);
     window.addEventListener('fallout-purchase-upgrade', handleUpgradePurchase);
     window.addEventListener('fallout-arm-nuke', handleNukeArmSelection);
+    window.addEventListener('fallout-arm-support', handleSupportArmSelection);
+    window.addEventListener('fallout-select-control-group', handleControlGroupSelection);
+    window.addEventListener('fallout-clear-production-building', handleClearProductionSelection);
+    window.addEventListener('fallout-facility-action', handleFacilityInteraction);
     return () => {
       window.removeEventListener('fallout-select-deploy', handleDeploySelection);
       window.removeEventListener('fallout-deploy-unit', handleDeployRequest);
@@ -8156,6 +10969,10 @@ const VillageScene = ({ themeConfig, setNukeCount, setGameState, pollution, qual
       window.removeEventListener('fallout-purchase-building', handleBuildingPurchase);
       window.removeEventListener('fallout-purchase-upgrade', handleUpgradePurchase);
       window.removeEventListener('fallout-arm-nuke', handleNukeArmSelection);
+      window.removeEventListener('fallout-arm-support', handleSupportArmSelection);
+      window.removeEventListener('fallout-select-control-group', handleControlGroupSelection);
+      window.removeEventListener('fallout-clear-production-building', handleClearProductionSelection);
+      window.removeEventListener('fallout-facility-action', handleFacilityInteraction);
     };
   }, [themeConfig]);
 
@@ -8195,6 +11012,7 @@ const VillageScene = ({ themeConfig, setNukeCount, setGameState, pollution, qual
 
   const detonateBomb = (bomb, impactX = bomb.x, impactZ = bomb.z) => {
     if (!bomb || bomb.detonated) return;
+    const supportDamageMultiplier = getFacilityStrikeDamageMultiplier();
 
     const blastX = impactX;
     const blastZ = impactZ;
@@ -8273,8 +11091,12 @@ const VillageScene = ({ themeConfig, setNukeCount, setGameState, pollution, qual
         const damageMultiplier = other.type === 'facility'
           ? (bomb.isManual ? 2.4 : 1.9)
           : bomb.isManual ? 3.8 : 3.2;
-        const damage = Math.max(0, damageRadius - dist) * damageMultiplier;
-        other.hp -= damage;
+        const damage = Math.max(0, damageRadius - dist) * damageMultiplier * supportDamageMultiplier;
+        if (other.type === 'kaiju' && bomb.isManual) {
+          applyKaijuElementalDamage(other, damage, 'nuke');
+        } else {
+          other.hp -= damage;
+        }
         if ((other.type === 'bunker' || other.type === 'facility') && damage > 0) {
           other.lastDamagedAt = Date.now();
         }
@@ -8306,7 +11128,7 @@ const VillageScene = ({ themeConfig, setNukeCount, setGameState, pollution, qual
       } else if (other.type === 'car' || other.type === 'tank') {
         if (dist < structureDamageRadius * 0.82) {
           if (other.type === 'tank') {
-            const blastDamage = dist < severeStructureRadius ? 260 : 165;
+            const blastDamage = (dist < severeStructureRadius ? 260 : 165) * supportDamageMultiplier;
             damageTank(other, blastDamage, { breakOnHit: dist < severeStructureRadius * 0.82 });
           } else {
             other.state = 'broken';
@@ -8333,8 +11155,9 @@ const VillageScene = ({ themeConfig, setNukeCount, setGameState, pollution, qual
     
     // === GLOBAL STRIKE PROGRESSION STATUS ===
     // Check if the current manual strike has cleared
-    const activeManualStrike = hasActiveManualStrike();
-    const cooldownRemaining = getManualStrikeCooldownRemaining();
+    const armedSupportKey = targetingRef.current.armedSupportKey || (targetingRef.current.manualStrikeArmed ? 'nuke' : null);
+    const activeManualStrike = hasActiveSupportStrike();
+    const cooldownRemaining = armedSupportKey ? getSupportStrikeCooldownRemaining(armedSupportKey) : 0;
     if (targetingRef.current.isStrikeInProgress) {
        if (!activeManualStrike) {
           targetingRef.current.isStrikeInProgress = false;
@@ -8367,7 +11190,7 @@ const VillageScene = ({ themeConfig, setNukeCount, setGameState, pollution, qual
     const hasPointerTarget = !!window._falloutMouseTarget;
     const isDeployMode = !!targetingRef.current.pendingDeploy;
     const isBuildMode = !!targetingRef.current.pendingBuild;
-    const isStrikeMode = !!targetingRef.current.manualStrikeArmed;
+    const isStrikeMode = !!armedSupportKey;
     const placementTarget = window._falloutMouseTarget || window._falloutBuildFallbackTarget || null;
     const buildPlacement = isBuildMode && placementTarget
       ? validateBuildingPlacement(placementTarget, { snap: true })
@@ -8375,7 +11198,9 @@ const VillageScene = ({ themeConfig, setNukeCount, setGameState, pollution, qual
     const deployUnlocks = getDeployUnlocks();
     window._falloutTargetProgress = !isDeployMode && !isBuildMode && isStrikeMode && hasPointerTarget ? 1 : 0;
     window._falloutManualStrikeInFlight = targetingRef.current.isStrikeInProgress || activeManualStrike;
-    window._falloutManualStrikeArmed = isStrikeMode;
+    window._falloutManualStrikeArmed = armedSupportKey === 'nuke';
+    window._falloutArmedSupportKey = armedSupportKey;
+    window._falloutSupportPreview = armedSupportKey ? getSupportStrikePreview(armedSupportKey) : null;
     window._falloutPendingDeploy = targetingRef.current.pendingDeploy;
     window._falloutPendingBuild = targetingRef.current.pendingBuild;
     window._falloutDeployDragActive = !!deployDragRef.current.active;
@@ -8523,7 +11348,7 @@ const VillageScene = ({ themeConfig, setNukeCount, setGameState, pollution, qual
     gcCounter.current++;
     if (gcCounter.current >= 120) {
       gcCounter.current = 0;
-      const ephemeralTypes = new Set(['bullet', 'shell', 'muzzle_flash', 'missile', 'missile_impact', 'impact_puff', 'corpse', 'mushroom', 'kaiju_attack', 'firebreath']);
+      const ephemeralTypes = new Set(['bullet', 'shell', 'muzzle_flash', 'missile', 'missile_impact', 'impact_puff', 'corpse', 'mushroom', 'kaiju_attack', 'firebreath', 'support_fx']);
       const before = entitiesRef.current.length;
       entitiesRef.current = entitiesRef.current.filter(e => {
         if (e.dead && (ephemeralTypes.has(e.type) || (e.type === 'scorch' && e.temporary))) return false;
@@ -8537,6 +11362,11 @@ const VillageScene = ({ themeConfig, setNukeCount, setGameState, pollution, qual
     if (setGameState) {
        if (waveRef.current.transitioning && state.clock.elapsedTime >= waveRef.current.nextWaveAt) {
          pruneDefeatedKaijus();
+         if (typeof window !== 'undefined') {
+           window.dispatchEvent(new CustomEvent('fallout-level-environment-shift', {
+             detail: { level: waveRef.current.nextLevel }
+           }));
+         }
          spawnKaijuWave(waveRef.current.nextLevel);
          currentSectorNameRef.current = nextSectorNameRef.current || currentSectorNameRef.current;
          nextSectorNameRef.current = pickRandomSectorName(
@@ -8611,20 +11441,38 @@ const VillageScene = ({ themeConfig, setNukeCount, setGameState, pollution, qual
        
        // Publish stats for HUD (every ~30 frames to avoid overhead)
        if (gcCounter.current % 30 === 0) {
-        window._falloutGameStats = {
-          bunkers: bunkers.map(b => ({ hp: b.hp, maxHp: b.maxHp, dead: b.dead || isBrokenStructure(b) })),
-          tanks: frameSnapshot.liveTanks.filter(e => e.state !== 'broken').length,
-          soldiers: frameSnapshot.liveSoldiers.length,
-          jets: frameSnapshot.liveJets.length,
-          credits: Math.floor(economyRef.current.credits),
-          incomePerSecond,
-          nukeCost: MANUAL_STRIKE_COST,
-          nukeArmed: isStrikeMode,
-          nukeCanArm: canArmManualStrike(),
-          deployCosts: DEPLOY_OPTIONS,
+         const selectedUnits = getSelectedUnits();
+         const supportCooldowns = Object.fromEntries(
+            Object.keys(SUPPORT_STRIKE_OPTIONS).map((key) => [key, getSupportStrikeCooldownRemaining(key)])
+         );
+         const supportCanArm = Object.fromEntries(
+           Object.keys(SUPPORT_STRIKE_OPTIONS).map((key) => [key, canArmSupportStrike(key)])
+         );
+         window._falloutGameStats = {
+           bunkers: bunkers.map(b => ({ hp: b.hp, maxHp: b.maxHp, dead: b.dead || isBrokenStructure(b) })),
+           tanks: frameSnapshot.liveTanks.filter(e => e.state !== 'broken').length,
+           soldiers: frameSnapshot.liveSoldiers.length,
+           jets: frameSnapshot.liveJets.length,
+           credits: Math.floor(economyRef.current.credits),
+           incomePerSecond,
+           nukeCost: MANUAL_STRIKE_COST,
+           nukeArmed: armedSupportKey === 'nuke',
+           nukeCanArm: canArmSupportStrike('nuke'),
+           supportOptions: SUPPORT_STRIKE_OPTIONS,
+           armedSupportKey,
+           selection: {
+             count: selectedUnits.length,
+             squads: selectedUnits.filter((unit) => unit.type === 'soldier' && unit.weaponType !== 'engineer').length,
+             engineers: selectedUnits.filter((unit) => unit.type === 'soldier' && unit.weaponType === 'engineer').length,
+             armor: selectedUnits.filter((unit) => unit.type === 'tank').length
+           },
+           selectedProductionBuilding: window._falloutSelectedProductionBuilding || null,
+           supportCooldowns,
+           supportCanArm,
+           deployCosts: DEPLOY_OPTIONS,
           deployUnlocks: getDeployUnlocks(),
           buildOptions: BUILD_OPTIONS,
-          buildState: { ...economyRef.current.buildings },
+          buildState: getLiveFacilityBuildState(),
           buildQueue: { ...economyRef.current.buildQueue },
           construction: entitiesRef.current
             .filter(e => e.type === 'facility' && !e.dead && !isBrokenStructure(e) && e.constructing)
@@ -8640,6 +11488,7 @@ const VillageScene = ({ themeConfig, setNukeCount, setGameState, pollution, qual
              upcomingLevel: waveRef.current.transitioning ? waveRef.current.nextLevel : waveRef.current.level,
              sectorName: currentSectorNameRef.current,
              nextSectorName: waveRef.current.transitioning ? nextSectorNameRef.current : currentSectorNameRef.current,
+             environmentLabel: environmentVariant?.label || 'Frontier',
              totalLevels: waveRef.current.totalLevels,
              intermission: waveRef.current.transitioning,
              nextWaveSeconds: waveRef.current.transitioning
@@ -8647,22 +11496,64 @@ const VillageScene = ({ themeConfig, setNukeCount, setGameState, pollution, qual
                : 0,
              remainingKaijus: aliveKaijus.length
            },
-           kaijus: kaijus.map(k => ({
-             hp: Math.max(0, k.hp),
-             maxHp: k.maxHp,
-             dead: isKaijuDefeated(k),
-             state: isKaijuDefeated(k) ? (k.dead || k.state === 'dead' ? 'dead' : 'dying') : (k.state || 'alive'),
-             variant: k.variant,
-             level: k.level
-           }))
-         };
-       }
-    }
+            kaijus: kaijus.map(k => ({
+              displayName: getKaijuDisplayName(k.variant),
+              hp: Math.max(0, k.hp),
+              maxHp: k.maxHp,
+              dead: isKaijuDefeated(k),
+              state: isKaijuDefeated(k) ? (k.dead || k.state === 'dead' ? 'dead' : 'dying') : (k.state || 'alive'),
+              variant: k.variant,
+              level: k.level,
+              element: getKaijuElementalProfile(k).element,
+              weakAgainst: getKaijuElementalProfile(k).weakAgainst,
+              resistAgainst: getKaijuElementalProfile(k).resistAgainst,
+              lastElementState: k.lastElementState || 'neutral',
+              lastElementHitAt: k.lastElementHitAt || 0
+            }))
+          };
+        }
+     }
 
-     entitiesRef.current.forEach(p => {
-      if (p.dead || p.type === 'tree' || p.type === 'house' || p.type === 'scorch') return;
-      
-      if (p.type === 'plane') {
+      entitiesRef.current.forEach((scorch) => {
+       if (!scorch || scorch.dead || scorch.type !== 'scorch' || !scorch.damagePerSecond || !scorch.damageRadius) return;
+       scorch.nextDamageTick = (scorch.nextDamageTick ?? 0) - delta;
+       if (scorch.nextDamageTick > 0) return;
+       const tickWindow = 0.22;
+       scorch.nextDamageTick = tickWindow;
+       entitiesRef.current.forEach((other) => {
+         if (!other || other.dead || other.type !== 'kaiju') return;
+         if (!scorch.affectsFlying && isFlyingKaiju(other)) return;
+         const dist = Math.hypot((other.x || 0) - scorch.x, (other.z || 0) - scorch.z);
+         if (dist > scorch.damageRadius) return;
+         const damageFalloff = Math.max(0.22, 1 - dist / scorch.damageRadius);
+         const appliedDamage = scorch.damagePerSecond * tickWindow * damageFalloff;
+         const strikeKey = scorch.element === 'fire' ? 'firestorm' : scorch.element === 'radiation' ? 'nuke' : null;
+         if (strikeKey) applyKaijuElementalDamage(other, appliedDamage, strikeKey);
+         else other.hp -= appliedDamage;
+         other.staggered = true;
+         other.staggerTimer = Math.max(other.staggerTimer || 0, 18);
+         if (other.hp <= 0) markKaijuDefeated(other);
+       });
+     });
+
+      entitiesRef.current.forEach(p => {
+       if (p.dead || p.type === 'tree' || p.type === 'house' || p.type === 'scorch') return;
+       
+       if (p.type === 'support_fx') {
+         p.age = (p.age || 0) + delta;
+         if (p.kind === 'orbital_lance' && Array.isArray(p.pulseSchedule)) {
+           while (p.pulseIndex < p.pulseSchedule.length && p.age >= p.pulseSchedule[p.pulseIndex]) {
+             applyOrbitalLancePulse(p.x, p.z, p.pulseIndex === 0 ? 1 : 0.72);
+             p.pulseIndex += 1;
+           }
+         }
+         if (p.age >= (p.duration || 0)) {
+           p.dead = true;
+         }
+         return;
+       }
+
+       if (p.type === 'plane') {
          // Clamp ds to prevent huge jumps on laggy frames
          const clampedDs = Math.min(ds, 2.0); // Max 2x normal frame speed
          p.x += p.vx * clampedDs;
@@ -8857,6 +11748,8 @@ const VillageScene = ({ themeConfig, setNukeCount, setGameState, pollution, qual
          }
       }
       else if (p.type === 'facility') {
+        const now = Date.now();
+        const abilityActive = (p.abilityActiveUntil || 0) > now;
         p.y = getTerrainHeight(p.x, p.z);
         if (p.hp <= 0) {
           if (p.constructing && economyRef.current.buildQueue?.[p.kind]) {
@@ -8893,8 +11786,11 @@ const VillageScene = ({ themeConfig, setNukeCount, setGameState, pollution, qual
             return;
           }
         }
-        if (p.kind === 'field_hospital') {
-          const healDelta = delta;
+        if (abilityActive && p.kind === 'powerplant') {
+          addCredits(POWERPLANT_OVERDRIVE_INCOME_PER_SECOND * delta);
+        }
+      if (p.kind === 'field_hospital') {
+          const healDelta = delta * (abilityActive ? HOSPITAL_TRIAGE_MULTIPLIER : 1);
           frameSnapshot.aliveBunkers.forEach((ally) => {
             const dist = Math.hypot((ally.x || 0) - p.x, (ally.z || 0) - p.z);
             if (dist < HOSPITAL_HEAL_RANGE * 1.18) {
@@ -8919,8 +11815,67 @@ const VillageScene = ({ themeConfig, setNukeCount, setGameState, pollution, qual
             }
           });
         }
+        p.productionQueue = Array.isArray(p.productionQueue) ? p.productionQueue : [];
+        if ((BUILDING_DEPLOY_OPTIONS[p.kind] || []).length > 0) {
+          if (!p.trainingUnitType && p.productionQueue.length > 0) {
+            p.trainingUnitType = p.productionQueue[0].unitType;
+            p.trainingRemaining = p.productionQueue[0].duration;
+            p.trainingProgress = 0;
+          }
+          if (p.trainingUnitType) {
+            const activeJob = p.productionQueue[0];
+            const duration = activeJob?.duration || DEPLOY_TRAINING_DURATIONS[p.trainingUnitType] || 5.5;
+            const trainingBoost = p.kind === 'powerplant' && abilityActive
+              ? POWERPLANT_OVERDRIVE_TRAINING_MULTIPLIER
+              : p.kind === 'war_factory' && abilityActive
+              ? WAR_FACTORY_TRAINING_MULTIPLIER
+              : p.kind === 'tech_lab' && abilityActive
+              ? TECH_LAB_TRAINING_MULTIPLIER
+              : 1;
+            p.trainingRemaining = Math.max(0, (p.trainingRemaining || duration) - delta * trainingBoost);
+            p.trainingProgress = THREE.MathUtils.clamp(1 - (p.trainingRemaining / duration), 0, 1);
+            if (p.trainingRemaining <= 0) {
+              const trainedUnitType = activeJob?.unitType || p.trainingUnitType;
+              const autoTarget = getFacilityDeployTarget(p);
+              let success = true;
+              if (trainedUnitType === 'squad') {
+                spawnSquadFromBunker(p, autoTarget);
+              } else if (trainedUnitType === 'gunner_team') {
+                spawnSpecialistTeamFromBunker(p, autoTarget, { count: 3, loadoutKey: 'gunner', spreadStep: 0.4 });
+              } else if (trainedUnitType === 'sniper_team') {
+                spawnSpecialistTeamFromBunker(p, autoTarget, { count: 2, loadoutKey: 'marksman', spreadStep: 0.5 });
+              } else if (trainedUnitType === 'rpg_team') {
+                spawnSpecialistTeamFromBunker(p, autoTarget, { count: 2, loadoutKey: 'rpg', spreadStep: 0.56 });
+              } else if (trainedUnitType === 'missile_team') {
+                spawnSpecialistTeamFromBunker(p, autoTarget, { count: 2, loadoutKey: 'missile', spreadStep: 0.64 });
+              } else if (trainedUnitType === 'engineer_team') {
+                spawnSpecialistTeamFromBunker(p, autoTarget, { count: 2, loadoutKey: 'engineer', spreadStep: 0.42 });
+              } else if (trainedUnitType === 'tank') {
+                spawnTankFromBunker(p, autoTarget);
+              } else if (trainedUnitType === 'apc') {
+                spawnAPCFromBunker(p, autoTarget);
+              } else if (trainedUnitType === 'jet') {
+                success = launchJetSupport(p);
+              }
+              if (success !== false) {
+                p.productionQueue.shift();
+                AudioManager.play('target_confirm', { volume: 0.08, duration: 0.14 });
+              }
+              const nextJob = p.productionQueue[0];
+              p.trainingUnitType = nextJob?.unitType || null;
+              p.trainingRemaining = nextJob?.duration || 0;
+              p.trainingProgress = nextJob ? 0 : 0;
+              syncSelectedProductionBuildingMeta();
+            }
+          }
+          if (selectedProductionBuildingIdRef.current === p.id) {
+            syncSelectedProductionBuildingMeta();
+          }
+        }
         if (p.kind === 'aa_site') {
-          p.reloadTimer = Math.max(0, (p.reloadTimer || 0) - delta);
+          const aaReloadFactor = abilityActive ? AA_SITE_SURGE_RELOAD_MULTIPLIER : 1;
+          const aaDamageFactor = abilityActive ? AA_SITE_SURGE_DAMAGE_MULTIPLIER : 1;
+          p.reloadTimer = Math.max(0, (p.reloadTimer || 0) - delta * aaReloadFactor);
           let targetFlyingKaiju = null;
           let targetDist = AA_SITE_RANGE;
           frameSnapshot.flyingKaijus.forEach((candidate) => {
@@ -8938,7 +11893,7 @@ const VillageScene = ({ themeConfig, setNukeCount, setGameState, pollution, qual
             p.turretYaw = Math.atan2(targetFlyingKaiju.x - p.x, targetFlyingKaiju.z - p.z);
             if (p.reloadTimer <= 0) {
               p.reloadTimer = AA_SITE_RELOAD_TIME + Math.random() * 0.18;
-              targetFlyingKaiju.hp -= AA_SITE_DAMAGE * (targetFlyingKaiju.isMini ? 1.2 : 1);
+              targetFlyingKaiju.hp -= AA_SITE_DAMAGE * aaDamageFactor * (targetFlyingKaiju.isMini ? 1.2 : 1);
               if (targetFlyingKaiju.hp <= 0) markKaijuDefeated(targetFlyingKaiju);
               entitiesRef.current.push({
                 id: `aa-tracer-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
@@ -8955,6 +11910,21 @@ const VillageScene = ({ themeConfig, setNukeCount, setGameState, pollution, qual
               AudioManager.play('gun', { profile: 'gunner', volume: 0.12 });
             }
           }
+        }
+        if (abilityActive && p.kind === 'radar_tower') {
+          economyRef.current.radarScanUntil = Math.max(economyRef.current.radarScanUntil || 0, p.abilityActiveUntil || 0);
+        }
+        if (abilityActive && p.kind === 'tech_lab') {
+          economyRef.current.techOverclockUntil = Math.max(economyRef.current.techOverclockUntil || 0, p.abilityActiveUntil || 0);
+        }
+        if (abilityActive && p.kind === 'war_factory') {
+          frameSnapshot.liveTanks.forEach((ally) => {
+            if (!ally || ally.dead) return;
+            const dist = Math.hypot((ally.x || 0) - p.x, (ally.z || 0) - p.z);
+            if (dist < WAR_FACTORY_REFIT_RADIUS) {
+              ally.hp = Math.min(ally.maxHp || TANK_BASE_HP, (ally.hp || 0) + delta * 18);
+            }
+          });
         }
       }
       else if (p.type === 'barricade') {
@@ -9092,13 +12062,27 @@ const VillageScene = ({ themeConfig, setNukeCount, setGameState, pollution, qual
          }
       }
       else if (p.type === 'soldier') {
-         if (p.commandTargetX !== undefined && p.commandTargetZ !== undefined) {
-           const cdx = p.commandTargetX - p.x;
-           const cdz = p.commandTargetZ - p.z;
+         const isAttackMove = p.orderType === 'attack_move';
+         const moveTargetX = (p.orderType === 'move' || isAttackMove) ? p.orderX : p.commandTargetX;
+         const moveTargetZ = (p.orderType === 'move' || isAttackMove) ? p.orderZ : p.commandTargetZ;
+         const orderTarget = p.orderTargetId ? entityLookupRef.current.get(p.orderTargetId) : null;
+         if (moveTargetX !== undefined && moveTargetZ !== undefined) {
+           let nearbyAttackMoveKaiju = null;
+           if (isAttackMove) {
+             frameSnapshot.aliveKaijus.forEach((candidate) => {
+               if (!candidate || isKaijuDefeated(candidate) || isFlyingKaiju(candidate)) return;
+               const dist = Math.hypot((candidate.x || 0) - p.x, (candidate.z || 0) - p.z);
+               if (dist <= (p.attackRange || 180) + 70 && (!nearbyAttackMoveKaiju || dist < nearbyAttackMoveKaiju.dist)) {
+                 nearbyAttackMoveKaiju = { entity: candidate, dist };
+               }
+             });
+           }
+           const cdx = moveTargetX - p.x;
+           const cdz = moveTargetZ - p.z;
            const commandDist = Math.sqrt(cdx * cdx + cdz * cdz);
-           if (commandDist > 12) {
+           if (commandDist > 12 && !nearbyAttackMoveKaiju) {
              const cAngle = Math.atan2(cdz, cdx);
-             const commandSpeed = (p.combatSpeed || 2.6) * 1.1;
+             const commandSpeed = (p.combatSpeed || 2.6) * SOLDIER_MOVE_SPEED_MULTIPLIER;
              p.state = 'walking';
              p.aimAngle = cAngle;
              p.vx = Math.cos(cAngle) * commandSpeed;
@@ -9109,35 +12093,19 @@ const VillageScene = ({ themeConfig, setNukeCount, setGameState, pollution, qual
              p.hurtTimer = Math.max(0, (p.hurtTimer || 0) - delta);
              return;
            }
-           p.commandTargetX = undefined;
-           p.commandTargetZ = undefined;
+           if (!isAttackMove || commandDist <= 12) clearUnitOrder(p);
          }
 
-         if (p.weaponType === 'engineer') {
-           let repairTarget = null;
-           let repairDist = Infinity;
-           frameSnapshot.repairTargets.forEach((entity) => {
-             if (!entity) return;
-             const repairable =
-               (entity.type === 'bunker' && (entity.hp || 0) < (entity.maxHp || BUNKER_BASE_HP)) ||
-               (entity.type === 'facility' && (entity.hp || 0) < (entity.maxHp || 1000)) ||
-               (entity.type === 'barricade' && !entity.dead && (entity.hp || 0) < (entity.maxHp || BARRICADE_MAX_HP)) ||
-               (entity.type === 'tank' && (entity.hp || 0) < (entity.maxHp || TANK_BASE_HP));
-             if (!repairable) return;
-             const dist = Math.hypot((entity.x || 0) - p.x, (entity.z || 0) - p.z);
-             if (dist < repairDist) {
-               repairDist = dist;
-               repairTarget = entity;
-             }
-           });
-
+         if (p.weaponType === 'engineer' && p.orderType === 'repair') {
+           const repairTarget = isRepairableCommandTarget(orderTarget) ? orderTarget : null;
            if (repairTarget) {
              const dx = repairTarget.x - p.x;
              const dz = repairTarget.z - p.z;
-             const dist = Math.max(0.001, Math.hypot(dx, dz));
+             const repairDist = Math.hypot(dx, dz);
+             const dist = Math.max(0.001, repairDist);
              p.aimAngle = Math.atan2(dz, dx);
              if (repairDist > ENGINEER_REPAIR_RANGE * 0.58) {
-               const moveSpeed = (p.combatSpeed || 2.6) * 0.82;
+               const moveSpeed = (p.combatSpeed || 2.6) * SOLDIER_MOVE_SPEED_MULTIPLIER * 0.9;
                p.state = 'walking';
                p.vx = (dx / dist) * moveSpeed;
                p.vz = (dz / dist) * moveSpeed;
@@ -9175,137 +12143,135 @@ const VillageScene = ({ themeConfig, setNukeCount, setGameState, pollution, qual
              p.hurtTimer = Math.max(0, (p.hurtTimer || 0) - delta);
              return;
            }
-
-           const bestBunker = getBestDeployBunker();
-           const aliveKaijus = frameSnapshot.aliveKaijus;
-           const canRebuildBarricade = bestBunker && aliveKaijus.length > 0 && (!p.nextBarricadeBuildAt || Date.now() >= p.nextBarricadeBuildAt);
-           if (canRebuildBarricade) {
-             const nearestActiveBarricade = frameSnapshot.liveBarricades.some((entity) => {
-               if (!entity || entity.dead) return false;
-               return Math.hypot((entity.x || 0) - bestBunker.x, (entity.z || 0) - bestBunker.z) < 130;
-             });
-             if (!nearestActiveBarricade) {
-               entitiesRef.current.push(createBarricadeEntity(`engineer-barricade-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, bestBunker, { x: p.x, z: p.z }));
-               p.nextBarricadeBuildAt = Date.now() + ENGINEER_BARRICADE_REBUILD_COOLDOWN;
-               p.state = 'repairing';
-               p.repairTargetX = p.x;
-               p.repairTargetZ = p.z;
-               AudioManager.play('target_confirm', { volume: 0.06, duration: 0.1 });
-               p.hurtTimer = Math.max(0, (p.hurtTimer || 0) - delta);
-               return;
-             }
-           }
+           clearUnitOrder(p);
+         }
+         if (p.weaponType === 'engineer') {
            p.repairTargetX = undefined;
            p.repairTargetZ = undefined;
          }
 
          let nearestKaiju = null;
          let minDist = Infinity;
-         frameSnapshot.groundKaijus.forEach(k => {
-            if (k.type === 'kaiju' && !isKaijuDefeated(k) && !isFlyingKaijuVariant(k.variant)) {
-               const kd = Math.sqrt(Math.pow(k.x - p.x, 2) + Math.pow(k.z - p.z, 2));
-               if (kd < minDist) { minDist = kd; nearestKaiju = k; }
+        if (p.orderType === 'attack' && orderTarget && orderTarget.type === 'kaiju' && !isKaijuDefeated(orderTarget) && !isFlyingKaiju(orderTarget)) {
+          nearestKaiju = orderTarget;
+          minDist = Math.hypot(orderTarget.x - p.x, orderTarget.z - p.z);
+        } else if (isAttackMove) {
+          frameSnapshot.aliveKaijus.forEach((candidate) => {
+            if (!candidate || isKaijuDefeated(candidate) || isFlyingKaiju(candidate)) return;
+            const dist = Math.hypot((candidate.x || 0) - p.x, (candidate.z || 0) - p.z);
+            if (dist < minDist) {
+              minDist = dist;
+              nearestKaiju = candidate;
             }
-         });
+          });
+        }
 
-         if (nearestKaiju && minDist < (p.attackRange || 180) + 30) {
-            const dx = nearestKaiju.x - p.x;
-            const dz = nearestKaiju.z - p.z;
-            const aAngle = Math.atan2(dz, dx);
-            p.aimAngle = aAngle;
-            const attackRange = p.attackRange || 180;
-            const idealRange = p.idealRange || 130;
-            const retreatRange = p.retreatRange || 72;
-            const combatSpeed = p.combatSpeed || 2.7;
-
-            if (minDist <= attackRange) {
-               p.state = 'attacking_kaiju';
-               if (minDist < retreatRange) {
-                   p.vx = -Math.cos(aAngle) * combatSpeed * 0.8;
-                   p.vz = -Math.sin(aAngle) * combatSpeed * 0.8;
-                   p.x += p.vx * ds;
-                   p.z += p.vz * ds;
-               } else if (minDist > idealRange + 18) {
-                   p.vx = Math.cos(aAngle) * combatSpeed * 0.65;
-                   p.vz = Math.sin(aAngle) * combatSpeed * 0.65;
-                   p.x += p.vx * ds;
-                   p.z += p.vz * ds;
-               } else {
-                   p.vx = 0;
-                   p.vz = 0;
-               }
-
-               if (Math.random() < (p.fireRate || 0.08)) {
-                   AudioManager.play('gun', {
-                     profile: p.weaponType,
-                     volume: p.weaponType === 'marksman' ? 0.2 : p.weaponType === 'gunner' ? 0.14 : 0.17
-                   });
-                   nearestKaiju.hp -= p.attackDamage || SOLDIER_RIFLE_DAMAGE;
-                   if (nearestKaiju.hp <= 0) markKaijuDefeated(nearestKaiju);
-                   // Spawn bullet tracer effect
-                   entitiesRef.current.push({
-                       id: `bullet-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-                       type: 'bullet',
-                       x: p.x, y: 10, z: p.z,
-                       targetX: nearestKaiju.x, targetY: nearestKaiju.y + 30, targetZ: nearestKaiju.z,
-                       age: 0, dead: false
-                   });
-               }
-            } else {
-               p.x += Math.cos(aAngle) * combatSpeed * ds;
-               p.z += Math.sin(aAngle) * combatSpeed * ds;
-               p.vx = Math.cos(aAngle) * combatSpeed;
-               p.vz = Math.sin(aAngle) * combatSpeed;
-               p.state = 'walking'; 
-            }
-         } else if (nearestKaiju) {
+        if (nearestKaiju) {
            const dx = nearestKaiju.x - p.x;
            const dz = nearestKaiju.z - p.z;
            const aAngle = Math.atan2(dz, dx);
            p.aimAngle = aAngle;
-           p.state = 'walking';
-           p.vx = Math.cos(aAngle) * (p.combatSpeed || 2.5);
-           p.vz = Math.sin(aAngle) * (p.combatSpeed || 2.5);
-           p.x += p.vx * ds;
-           p.z += p.vz * ds;
-         } else if (p.state === 'fleeing') {
-          p.x += p.fleeVx * ds;
-          p.z += p.fleeVz * ds;
-          p.fleeVx *= 0.99; p.fleeVz *= 0.99;
-          
-          if (p.vy !== undefined) {
-             p.y = (p.y || 0) + p.vy * ds;
-             p.vy -= 1.0 * ds; // Gravity
-             const g = getTerrainHeight(p.x, p.z);
-             if (p.y < g) { 
-               p.y = g; p.vy = -p.vy * 0.5; // Bounce
-               if (Math.abs(p.vy) < 2) p.vy = undefined;
-             }
-          }
-          
-          p.idleTimer--;
-          
-          if (p.x < -WORLD_WIDTH/2 || p.x > WORLD_WIDTH/2 || p.z < -WORLD_DEPTH/2 || p.z > WORLD_DEPTH/2) {
-             p.dead = true;
-             return;
-          }
-          if (p.idleTimer <= 0 || (Math.abs(p.fleeVx) < 0.5 && Math.abs(p.fleeVz) < 0.5)) {
-            p.state = 'idle';
-            p.vx = (Math.random() - 0.5) * 1; p.vz = (Math.random() - 0.5) * 1;
-            p.idleTimer = 100 + Math.random() * 200;
-          }
-        } else if (p.state === 'walking') {
-          p.x += p.vx * ds; p.z += p.vz * ds;
-          p.idleTimer--;
-          if (p.idleTimer <= 0) { p.state = 'idle'; p.idleTimer = 20 + Math.random() * 60; /* Stand briefly */ }
+           const attackRange = p.attackRange || 180;
+           const idealRange = p.idealRange || 130;
+           const retreatRange = p.retreatRange || 72;
+           const combatSpeed = p.combatSpeed || 2.7;
+           const pressureRange = Math.max(retreatRange, idealRange - 16);
+           const holdWindow = 18;
+           const formationAngle = p.attackFormationAngle ?? (aAngle + Math.PI);
+           const formationRadius = p.attackFormationRadius ?? Math.max(idealRange, 112);
+           const anchorX = nearestKaiju.x + Math.cos(formationAngle) * formationRadius;
+           const anchorZ = nearestKaiju.z + Math.sin(formationAngle) * formationRadius;
+           const anchorDx = anchorX - p.x;
+           const anchorDz = anchorZ - p.z;
+           const anchorDist = Math.hypot(anchorDx, anchorDz);
+
+           if (p.orderType === 'attack' && minDist > attackRange * 0.9 && anchorDist > 10) {
+               const anchorAngle = Math.atan2(anchorDz, anchorDx);
+               const approachSpeed = combatSpeed * SOLDIER_MOVE_SPEED_MULTIPLIER * THREE.MathUtils.clamp(anchorDist / 90, 0.44, 0.92);
+               p.x += Math.cos(anchorAngle) * approachSpeed * ds;
+               p.z += Math.sin(anchorAngle) * approachSpeed * ds;
+               p.vx = Math.cos(anchorAngle) * approachSpeed;
+               p.vz = Math.sin(anchorAngle) * approachSpeed;
+               p.state = 'walking';
+           } else if (minDist <= attackRange) {
+              p.state = 'attacking_kaiju';
+              if (minDist < retreatRange) {
+                  p.vx = -Math.cos(aAngle) * combatSpeed * SOLDIER_MOVE_SPEED_MULTIPLIER * 0.92;
+                  p.vz = -Math.sin(aAngle) * combatSpeed * SOLDIER_MOVE_SPEED_MULTIPLIER * 0.92;
+                  p.x += p.vx * ds;
+                  p.z += p.vz * ds;
+              } else if (minDist < pressureRange) {
+                  const strafeDir = ((p.panicSeed || 0) % 2 > 1 ? 1 : -1);
+                  const lateralX = -Math.sin(aAngle) * strafeDir;
+                  const lateralZ = Math.cos(aAngle) * strafeDir;
+                  p.vx = lateralX * combatSpeed * SOLDIER_MOVE_SPEED_MULTIPLIER * 0.38;
+                  p.vz = lateralZ * combatSpeed * SOLDIER_MOVE_SPEED_MULTIPLIER * 0.38;
+                  p.x += p.vx * ds;
+                  p.z += p.vz * ds;
+              } else if (minDist > idealRange + holdWindow) {
+                  p.vx = Math.cos(aAngle) * combatSpeed * SOLDIER_MOVE_SPEED_MULTIPLIER * 0.32;
+                  p.vz = Math.sin(aAngle) * combatSpeed * SOLDIER_MOVE_SPEED_MULTIPLIER * 0.32;
+                  p.x += p.vx * ds;
+                  p.z += p.vz * ds;
+              } else {
+                  p.vx = 0;
+                  p.vz = 0;
+              }
+
+              if (Math.random() < (p.fireRate || 0.08)) {
+                  const shotNow = Date.now();
+                  p.firePoseUntil = shotNow + (p.projectileType === 'missile' ? 220 : p.weaponType === 'gunner' ? 140 : 110);
+                  p.muzzleFlashUntil = shotNow + (p.projectileType === 'missile' ? 140 : p.weaponType === 'gunner' ? 90 : 70);
+                  if (p.projectileType === 'missile') {
+                    entitiesRef.current.push({
+                      id: `missile-${Date.now()}-${Math.random()}`,
+                      type: 'missile',
+                      x: p.x,
+                      y: 14,
+                      z: p.z,
+                      targetX: nearestKaiju.x,
+                      targetY: nearestKaiju.y + 28,
+                      targetZ: nearestKaiju.z,
+                      damage: p.attackDamage || SOLDIER_RPG_DAMAGE,
+                      splashRadius: p.splashRadius || SOLDIER_EXPLOSIVE_SPLASH_RADIUS,
+                      speed: p.weaponType === 'missile' ? 11.5 : 9.2,
+                      dead: false
+                    });
+                    AudioManager.play('missile_launch', { volume: p.weaponType === 'missile' ? 0.14 : 0.1, duration: 0.16 });
+                  } else {
+                    AudioManager.play('gun', {
+                      profile: p.weaponType,
+                      volume: p.weaponType === 'marksman' ? 0.2 : p.weaponType === 'gunner' ? 0.14 : 0.17
+                    });
+                    nearestKaiju.hp -= p.attackDamage || SOLDIER_RIFLE_DAMAGE;
+                    if (nearestKaiju.hp <= 0) markKaijuDefeated(nearestKaiju);
+                    entitiesRef.current.push({
+                        id: `bullet-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+                        type: 'bullet',
+                        x: p.x, y: 10, z: p.z,
+                        targetX: nearestKaiju.x, targetY: nearestKaiju.y + 30, targetZ: nearestKaiju.z,
+                        age: 0, dead: false
+                    });
+                  }
+              }
+           } else {
+               const closeSpeed = combatSpeed * SOLDIER_MOVE_SPEED_MULTIPLIER * 0.52;
+               p.x += Math.cos(aAngle) * closeSpeed * ds;
+               p.z += Math.sin(aAngle) * closeSpeed * ds;
+               p.vx = Math.cos(aAngle) * closeSpeed;
+               p.vz = Math.sin(aAngle) * closeSpeed;
+               p.state = 'walking';
+            }
         } else {
-          p.idleTimer--;
-          if (p.idleTimer <= 0) {
-            p.state = 'walking';
-            p.vx = (Math.random() - 0.5) * 2; p.vz = (Math.random() - 0.5) * 1.5;
-            p.idleTimer = 150 + Math.random() * 300; // Walk for a long time
-          }
-        }
+           p.state = 'holding';
+           p.vx = THREE.MathUtils.damp(p.vx || 0, 0, 6, delta);
+           p.vz = THREE.MathUtils.damp(p.vz || 0, 0, 6, delta);
+           if (Math.abs(p.vx) < 0.01) p.vx = 0;
+           if (Math.abs(p.vz) < 0.01) p.vz = 0;
+           if (p.orderType === 'attack' && (!orderTarget || isKaijuDefeated(orderTarget))) {
+             clearUnitOrder(p);
+           }
+         }
 
         p.y = getTerrainHeight(p.x, p.z);
         p.hurtTimer = Math.max(0, (p.hurtTimer || 0) - delta);
@@ -9371,7 +12337,7 @@ const VillageScene = ({ themeConfig, setNukeCount, setGameState, pollution, qual
          // Engine sound
          p.engineSoundTimer = (p.engineSoundTimer || 0) + ds;
          if (p.engineSoundTimer > 60) {
-            AudioManager.play('plane_engine', { volume: 0.1 });
+            AudioManager.play('jet_engine', { volume: 0.1, duration: 0.42 });
             p.engineSoundTimer = 0;
          }
          
@@ -9398,14 +12364,16 @@ const VillageScene = ({ themeConfig, setNukeCount, setGameState, pollution, qual
             // Damage Kaiju
             frameSnapshot.aliveKaijus.forEach(k => {
                const kd = Math.sqrt(Math.pow(k.x - p.targetX, 2) + Math.pow(k.z - p.targetZ, 2));
-               if (kd < 150) {
-                  k.hp -= JET_MISSILE_DAMAGE;
+               const splashRadius = p.splashRadius || 150;
+               const splashDamage = p.damage || JET_MISSILE_DAMAGE;
+               if (kd < splashRadius) {
+                  k.hp -= splashDamage * Math.max(0.42, 1 - kd / splashRadius);
                   if (k.hp <= 0) markKaijuDefeated(k);
                }
             });
             AudioManager.play('bomb');
          } else {
-            const speed = 14;
+            const speed = p.speed || 14;
             p.x += (dx / dist) * speed * ds;
             p.y += (dy / dist) * speed * ds;
             p.z += (dz / dist) * speed * ds;
@@ -9421,7 +12389,8 @@ const VillageScene = ({ themeConfig, setNukeCount, setGameState, pollution, qual
       window.dispatchEvent(new CustomEvent('fallout-deploy-unit', {
         detail: {
           unitType: pendingDeploy,
-          target: clampStrikeTarget(target)
+          target: clampStrikeTarget(target),
+          sourceBuildingId: selectedProductionBuildingIdRef.current || null
         }
       }));
       return;
@@ -9436,8 +12405,8 @@ const VillageScene = ({ themeConfig, setNukeCount, setGameState, pollution, qual
       }));
       return;
     }
-    if (targetingRef.current.manualStrikeArmed) {
-      launchManualStrike(target, { idPrefix: 'plane-manual', speed: 7 });
+    if (targetingRef.current.armedSupportKey) {
+      launchSupportStrike(targetingRef.current.armedSupportKey, target);
     }
   };
   const getPointerStrikeTargetFromClient = (clientX, clientY) => {
@@ -9457,7 +12426,7 @@ const VillageScene = ({ themeConfig, setNukeCount, setGameState, pollution, qual
   const syncPointerPreviewTarget = (nextTarget) => {
     if (!nextTarget) return;
     window._falloutMouseTarget = nextTarget;
-    if (targetingRef.current.pendingBuild || targetingRef.current.pendingDeploy || targetingRef.current.manualStrikeArmed) {
+    if (targetingRef.current.pendingBuild || targetingRef.current.pendingDeploy || targetingRef.current.armedSupportKey) {
       window._falloutBuildFallbackTarget = nextTarget;
     }
     if (targetingRef.current.pendingDeploy && deployDragRef.current.active) {
@@ -9468,6 +12437,40 @@ const VillageScene = ({ themeConfig, setNukeCount, setGameState, pollution, qual
   useEffect(() => {
     const canvas = gl?.domElement;
     if (!canvas) return undefined;
+    const resolveSelectableUnit = (clientX, clientY) => (
+      getClosestProjectedEntity(
+        clientX,
+        clientY,
+        entitiesRef.current.filter(isCommandableUnit),
+        canvas.getBoundingClientRect(),
+        26
+      )
+    );
+    const resolveSelectableProductionBuilding = (clientX, clientY) => (
+      getClosestProjectedEntity(
+        clientX,
+        clientY,
+        getProductionFacilities().filter((entity) => !!getFacilityInteractionOption(entity.kind) || (BUILDING_DEPLOY_OPTIONS[entity.kind] || []).length > 0),
+        canvas.getBoundingClientRect(),
+        34
+      )
+    );
+    const resolveCommandTarget = (clientX, clientY) => {
+      const rect = canvas.getBoundingClientRect();
+      const hoveredKaiju = getClosestProjectedEntity(clientX, clientY, getAliveKaijus(), rect, 42);
+      if (hoveredKaiju) return { type: 'kaiju', entity: hoveredKaiju };
+      const hoveredRepairTarget = getClosestProjectedEntity(
+        clientX,
+        clientY,
+        entitiesRef.current.filter(isRepairableCommandTarget),
+        rect,
+        34
+      );
+      if (hoveredRepairTarget) return { type: 'repair', entity: hoveredRepairTarget };
+      const terrainTarget = getPointerStrikeTargetFromClient(clientX, clientY);
+      if (terrainTarget) return { type: 'ground', target: terrainTarget };
+      return null;
+    };
 
     const resolveActionTarget = (clientX, clientY) => (
       getPointerStrikeTargetFromClient(clientX, clientY)
@@ -9479,21 +12482,65 @@ const VillageScene = ({ themeConfig, setNukeCount, setGameState, pollution, qual
     );
 
     const handleCanvasPointerDown = (event) => {
+      if (event.button === 2) {
+        const selectedUnits = getSelectedUnits();
+        if (!selectedUnits.length || targetingRef.current.pendingDeploy || targetingRef.current.pendingBuild || targetingRef.current.armedSupportKey) return;
+        const commandTarget = resolveCommandTarget(event.clientX, event.clientY);
+        if (!commandTarget) return;
+        event.preventDefault();
+        if (commandTarget.type === 'kaiju') {
+          issueGroupAttackOrder(
+            selectedUnits.filter((unit) => !(unit.type === 'tank' && isFlyingKaiju(commandTarget.entity))),
+            commandTarget.entity
+          );
+          AudioManager.play('target_confirm', { volume: 0.08, duration: 0.12 });
+          return;
+        }
+        if (commandTarget.type === 'repair') {
+          selectedUnits.forEach((unit) => {
+            if (unit.type === 'soldier' && unit.weaponType === 'engineer') issueRepairOrder(unit, commandTarget.entity);
+            else issueMoveOrder(unit, { x: commandTarget.entity.x, z: commandTarget.entity.z });
+          });
+          AudioManager.play('target_confirm', { volume: 0.08, duration: 0.12 });
+          return;
+        }
+        issueGroupMoveOrder(selectedUnits, commandTarget.target, { attackMove: true });
+        AudioManager.play('target_confirm', { volume: 0.08, duration: 0.12 });
+        return;
+      }
       if (event.button !== 0) return;
       const nextTarget = getPointerStrikeTargetFromClient(event.clientX, event.clientY);
-      if (!nextTarget) return;
-      syncPointerPreviewTarget(nextTarget);
+      if (nextTarget) syncPointerPreviewTarget(nextTarget);
       if (targetingRef.current.pendingDeploy) {
+        if (!nextTarget) return;
         deployDragRef.current.active = true;
         setDeployDragTarget(nextTarget);
         window._falloutDeployDragActive = true;
+        return;
       }
+      if (targetingRef.current.pendingBuild || targetingRef.current.armedSupportKey) return;
+      selectionRef.current.active = true;
+      selectionRef.current.moved = false;
+      selectionRef.current.startClientX = event.clientX;
+      selectionRef.current.startClientY = event.clientY;
+      selectionRef.current.endClientX = event.clientX;
+      selectionRef.current.endClientY = event.clientY;
+      syncSelectionOverlay();
     };
 
     const handleCanvasPointerMove = (event) => {
       const nextTarget = getPointerStrikeTargetFromClient(event.clientX, event.clientY);
-      if (!nextTarget) return;
-      syncPointerPreviewTarget(nextTarget);
+      if (nextTarget) syncPointerPreviewTarget(nextTarget);
+      if (selectionRef.current.active && !targetingRef.current.pendingDeploy && !targetingRef.current.pendingBuild && !targetingRef.current.armedSupportKey) {
+        selectionRef.current.endClientX = event.clientX;
+        selectionRef.current.endClientY = event.clientY;
+        const dragDist = Math.hypot(
+          selectionRef.current.endClientX - selectionRef.current.startClientX,
+          selectionRef.current.endClientY - selectionRef.current.startClientY
+        );
+        selectionRef.current.moved = dragDist > 10;
+        syncSelectionOverlay();
+      }
     };
 
     const handleCanvasPointerUp = (event) => {
@@ -9508,28 +12555,68 @@ const VillageScene = ({ themeConfig, setNukeCount, setGameState, pollution, qual
         if (nextTarget) deployManualStrike(nextTarget);
         return;
       }
-      if (targetingRef.current.manualStrikeArmed && nextTarget) {
+      if (targetingRef.current.armedSupportKey && nextTarget) {
         deployManualStrike(nextTarget);
+        return;
+      }
+      if (selectionRef.current.active) {
+        const rect = canvas.getBoundingClientRect();
+        if (selectionRef.current.moved) {
+          const units = getSelectionBoxUnits(rect);
+          if (units.length) {
+            setSelectedUnits(units, event.shiftKey);
+            clearSelectedProductionBuilding();
+          } else if (!event.shiftKey) {
+            clearUnitSelection();
+            clearSelectedProductionBuilding();
+          }
+        } else {
+          const clickedUnit = resolveSelectableUnit(event.clientX, event.clientY);
+          if (clickedUnit) {
+            setSelectedUnits([clickedUnit], event.shiftKey);
+            clearSelectedProductionBuilding();
+          } else {
+            const clickedBuilding = resolveSelectableProductionBuilding(event.clientX, event.clientY);
+            if (clickedBuilding) {
+              if (!event.shiftKey) clearUnitSelection();
+              setSelectedProductionBuilding(clickedBuilding);
+            } else if (!event.shiftKey) {
+              clearUnitSelection();
+              clearSelectedProductionBuilding();
+            }
+          }
+        }
+        selectionRef.current.active = false;
+        selectionRef.current.moved = false;
+        window._falloutSelectionBox = null;
       }
     };
 
     const handleCanvasPointerLeave = () => {
-      if (!targetingRef.current.pendingDeploy && !targetingRef.current.pendingBuild && !targetingRef.current.manualStrikeArmed) {
+      if (!targetingRef.current.pendingDeploy && !targetingRef.current.pendingBuild && !targetingRef.current.armedSupportKey) {
         window._falloutMouseTarget = null;
       }
       if (!deployDragRef.current.active) clearDeployDrag();
+      selectionRef.current.active = false;
+      selectionRef.current.moved = false;
+      window._falloutSelectionBox = null;
+    };
+    const handleContextMenu = (event) => {
+      if (getSelectedUnits().length) event.preventDefault();
     };
 
     canvas.addEventListener('pointerdown', handleCanvasPointerDown);
     canvas.addEventListener('pointermove', handleCanvasPointerMove);
     canvas.addEventListener('pointerup', handleCanvasPointerUp);
     canvas.addEventListener('pointerleave', handleCanvasPointerLeave);
+    canvas.addEventListener('contextmenu', handleContextMenu);
 
     return () => {
       canvas.removeEventListener('pointerdown', handleCanvasPointerDown);
       canvas.removeEventListener('pointermove', handleCanvasPointerMove);
       canvas.removeEventListener('pointerup', handleCanvasPointerUp);
       canvas.removeEventListener('pointerleave', handleCanvasPointerLeave);
+      canvas.removeEventListener('contextmenu', handleContextMenu);
     };
   }, [camera, gl]);
 
@@ -9551,9 +12638,13 @@ const VillageScene = ({ themeConfig, setNukeCount, setGameState, pollution, qual
         return null;
       })}
       {/* RUGGED MOUNTAIN TERRAIN */}
-      <MountainTerrain themeConfig={themeConfig} pollution={pollution} qualityProfile={qualityProfile} />
+      <MountainTerrain themeConfig={themeConfig} environmentVariant={environmentVariant} pollution={pollution} qualityProfile={qualityProfile} />
 
       <TargetIndicator />
+      <GroupSelectionIndicator entitiesRef={entitiesRef} />
+      <UnitCommandMarkers />
+      <ProductionBuildingIndicator entitiesRef={entitiesRef} />
+      <AttackTargetIndicator entitiesRef={entitiesRef} />
     </>
   );
 };
@@ -9571,6 +12662,11 @@ const GameHUD = () => {
     nukeCost: MANUAL_STRIKE_COST,
     nukeArmed: false,
     nukeCanArm: true,
+    supportOptions: SUPPORT_STRIKE_OPTIONS,
+    armedSupportKey: null,
+    supportCooldowns: { nuke: 0, ...createDefaultSupportCooldownMap() },
+    supportCanArm: createDefaultSupportCanArmMap(),
+    selectedProductionBuilding: null,
     deployCosts: DEPLOY_OPTIONS,
     deployUnlocks: getDeployUnlockState(cloneDefaultBuildings()),
     buildOptions: BUILD_OPTIONS,
@@ -9596,7 +12692,11 @@ const GameHUD = () => {
   const [pendingDeploy, setPendingDeploy] = useState(null);
   const [pendingBuild, setPendingBuild] = useState(null);
   const [bombCamActive, setBombCamActive] = useState(false);
-  const [activePanel, setActivePanel] = useState('deploy');
+  const [activePanel, setActivePanel] = useState('build');
+  const [buildPanelMode, setBuildPanelMode] = useState('structures');
+  const [showTechMap, setShowTechMap] = useState(false);
+  const [showBunkerDetails, setShowBunkerDetails] = useState(false);
+  const [showSupportPanel, setShowSupportPanel] = useState(false);
   
   useEffect(() => {
     const interval = setInterval(() => {
@@ -9614,8 +12714,10 @@ const GameHUD = () => {
       setPendingBuild(nextPendingBuild);
       setBombCamActive(nextBombCamActive);
       
+      const nextArmedSupportKey = window._falloutArmedSupportKey || (window._falloutManualStrikeArmed ? 'nuke' : null);
+      const nextSupportOptions = window._falloutGameStats?.supportOptions || SUPPORT_STRIKE_OPTIONS;
       if (nextBombCamActive) setLockStatus('GUIDE');
-      else if (window._falloutManualStrikeArmed) setLockStatus('NUKE');
+      else if (nextArmedSupportKey) setLockStatus(nextSupportOptions[nextArmedSupportKey]?.statusLabel || 'STRIKE');
       else if (buildDragging) setLockStatus('SITE');
       else if (nextPendingBuild) setLockStatus('BUILD');
       else if (deployDragging) setLockStatus('PATH');
@@ -9631,13 +12733,15 @@ const GameHUD = () => {
 
   useEffect(() => {
     if (pendingBuild) setActivePanel('build');
-    else if (pendingDeploy) setActivePanel('deploy');
-  }, [pendingBuild, pendingDeploy]);
+  }, [pendingBuild]);
 
   const isStrikeLocked = lockStatus === 'READY' || lockStatus === 'INBOUND' || lockStatus === 'PLACE' || lockStatus === 'GUIDE' || lockStatus === 'BUILD' || lockStatus === 'SITE';
   const aliveBunkerCount = stats.bunkers.filter(b => !b.dead).length;
   const activeKaijus = stats.kaijus.filter(k => !k.dead);
   const activeFlyingKaijus = activeKaijus.filter(k => isFlyingKaijuVariant(k.variant));
+  const bunkerHealthRatio = stats.bunkers.length
+    ? stats.bunkers.reduce((sum, bunker) => sum + Math.max(0, bunker.hp || 0), 0) / Math.max(1, stats.bunkers.reduce((sum, bunker) => sum + Math.max(1, bunker.maxHp || 0), 0))
+    : 0;
   const hasAASite = !!stats.buildState?.aa_site;
   const hasBattlefieldPressure = activeKaijus.length > 0 || !!stats.wave?.intermission;
   const missionStepLabel = stats.wave?.intermission
@@ -9646,13 +12750,34 @@ const GameHUD = () => {
   const visibleDeployOptions = Object.entries(stats.deployCosts || DEPLOY_OPTIONS);
   const pendingDeployOption = pendingDeploy ? (stats.deployCosts || DEPLOY_OPTIONS)[pendingDeploy] : null;
   const pendingBuildOption = pendingBuild ? (stats.buildOptions || BUILD_OPTIONS)[pendingBuild] : null;
+  const supportOptions = stats.supportOptions || SUPPORT_STRIKE_OPTIONS;
+  const armedSupportKey = stats.armedSupportKey || (stats.nukeArmed ? 'nuke' : null);
+  const supportCooldowns = stats.supportCooldowns || { nuke: 0, ...createDefaultSupportCooldownMap() };
+  const supportCanArm = stats.supportCanArm || createDefaultSupportCanArmMap();
+  const activeSupportOption = armedSupportKey ? supportOptions[armedSupportKey] : null;
+  const selection = stats.selection || { count: 0, squads: 0, engineers: 0, armor: 0 };
+  const selectedProductionBuilding = stats.selectedProductionBuilding || null;
+  const productionQueue = selectedProductionBuilding?.queue || [];
+  const selectedBuildingAction = selectedProductionBuilding?.action || null;
+  const queueCounts = productionQueue.reduce((acc, unitType) => {
+    acc[unitType] = (acc[unitType] || 0) + 1;
+    return acc;
+  }, {});
+  const currentSupportCooldownMs = armedSupportKey ? (supportCooldowns[armedSupportKey] || 0) : cooldownMs;
+  const activeSupportAdvantageCount = activeSupportOption
+    ? activeKaijus.filter((k) => k.weakAgainst === activeSupportOption.element).length
+    : 0;
   const visibleBuildOptions = Object.entries(stats.buildOptions || BUILD_OPTIONS);
+  const visibleDeployPanelOptions = selectedProductionBuilding?.kind
+    ? visibleDeployOptions.filter(([key]) => canBuildingProduceUnit(selectedProductionBuilding.kind, key))
+    : visibleDeployOptions;
   const visibleUpgradeOptions = Object.entries(stats.upgradeOptions || UPGRADE_OPTIONS);
   const buildPlacementState = getBuildPlacementState(stats.buildState || {}, stats.buildQueue || {});
   const constructionByKind = (stats.construction || []).reduce((acc, entry) => {
     acc[entry.kind] = entry;
     return acc;
   }, {});
+
   const techTreeRows = [
     ['powerplant'],
     ['war_factory', 'field_hospital'],
@@ -9679,7 +12804,21 @@ const GameHUD = () => {
     return 'ready';
   };
   const handleDeployClick = (unitType) => {
-    window.dispatchEvent(new CustomEvent('fallout-select-deploy', { detail: { unitType } }));
+    window.dispatchEvent(new CustomEvent('fallout-select-deploy', {
+      detail: {
+        unitType,
+        sourceBuildingId: selectedProductionBuilding?.id || null
+      }
+    }));
+  };
+  const handleProductionModalClose = () => {
+    window.dispatchEvent(new CustomEvent('fallout-clear-production-building'));
+  };
+  const handleFacilityActionClick = () => {
+    if (!selectedProductionBuilding?.id) return;
+    window.dispatchEvent(new CustomEvent('fallout-facility-action', {
+      detail: { facilityId: selectedProductionBuilding.id }
+    }));
   };
   const handleBuildClick = (buildingType) => {
     window.dispatchEvent(new CustomEvent('fallout-select-building', { detail: { buildingType } }));
@@ -9687,12 +12826,18 @@ const GameHUD = () => {
   const handleUpgradeClick = (upgradeType) => {
     window.dispatchEvent(new CustomEvent('fallout-purchase-upgrade', { detail: { upgradeType } }));
   };
+  const handleControlGroupClick = (groupKey) => {
+    window.dispatchEvent(new CustomEvent('fallout-select-control-group', { detail: { groupKey } }));
+  };
+  const handleSupportClick = (abilityKey) => {
+    window.dispatchEvent(new CustomEvent('fallout-arm-support', { detail: { abilityKey } }));
+  };
   const handleNukeClick = () => {
-    window.dispatchEvent(new CustomEvent('fallout-arm-nuke'));
+    handleSupportClick('nuke');
   };
 
-  const objectiveText = stats.nukeArmed
-    ? `Nuke armed: click land to paint target ($${stats.nukeCost || MANUAL_STRIKE_COST})`
+  const objectiveText = activeSupportOption
+    ? `${activeSupportOption.label} armed: click land to fire ($${activeSupportOption.cost})${activeSupportAdvantageCount > 0 ? ` • bonus on ${activeSupportAdvantageCount} target${activeSupportAdvantageCount > 1 ? 's' : ''}` : ''}`
     : pendingDeployOption
     ? `Place ${pendingDeployOption.label}: drag path on land`
     : pendingBuildOption
@@ -9706,13 +12851,44 @@ const GameHUD = () => {
     : 'Hold vaults and eliminate hostiles';
 
   const card = {
-    background: 'rgba(0,0,0,0.6)',
-    backdropFilter: 'blur(8px)',
-    border: '1px solid rgba(255,255,255,0.1)',
-    borderRadius: '12px',
-    padding: '8px 10px',
-    marginBottom: '6px'
+    background: 'linear-gradient(180deg, rgba(3,10,24,0.82), rgba(4,18,24,0.72))',
+    backdropFilter: 'blur(14px)',
+    border: '1px solid rgba(148,163,184,0.16)',
+    borderRadius: '18px',
+    boxShadow: '0 12px 36px rgba(2,8,23,0.28), inset 0 1px 0 rgba(255,255,255,0.05)',
+    padding: '12px 14px',
+    marginBottom: '8px'
   };
+  const compactScroller = {
+    maxHeight: '34vh',
+    overflowY: 'auto',
+    paddingRight: '4px',
+    scrollbarWidth: 'thin'
+  };
+  const commandDockStyle = {
+    ...card,
+    maxHeight: '38vh',
+    display: 'flex',
+    flexDirection: 'column',
+    overflow: 'hidden'
+  };
+  const panelScroller = {
+    flex: 1,
+    minHeight: 0,
+    overflowY: 'auto',
+    paddingRight: '4px',
+    scrollbarWidth: 'thin'
+  };
+  const supportButtonStyle = (active, disabled, optionKey) => ({
+    borderRadius: '12px',
+    border: active ? '1px solid rgba(248,113,113,0.9)' : `1px solid ${optionKey === 'orbital_lance' ? 'rgba(56,189,248,0.38)' : optionKey === 'firestorm' ? 'rgba(249,115,22,0.34)' : optionKey === 'kinetic_spear' ? 'rgba(226,232,240,0.34)' : 'rgba(249,115,22,0.3)'}`,
+    background: active
+      ? (optionKey === 'orbital_lance' ? 'rgba(8,47,73,0.5)' : optionKey === 'firestorm' ? 'rgba(124,45,18,0.5)' : optionKey === 'kinetic_spear' ? 'rgba(30,41,59,0.58)' : 'rgba(127,29,29,0.4)')
+      : disabled
+      ? 'rgba(255,255,255,0.04)'
+      : 'linear-gradient(180deg, rgba(15,23,42,0.62), rgba(15,23,42,0.4))',
+    color: active ? '#f8fafc' : disabled ? '#64748b' : '#e2e8f0'
+  });
 
   return (
     <>
@@ -9740,66 +12916,135 @@ const GameHUD = () => {
               Level Clear
             </div>
             <div style={{ fontSize: '12px', color: '#bbf7d0', marginTop: '6px' }}>
-              Moving to {stats.wave?.nextSectorName || stats.wave?.sectorName || 'next sector'} for level {stats.wave?.upcomingLevel || stats.wave?.level || 1} in {stats.wave?.nextWaveSeconds || 0}s
+              Moving to {stats.wave?.nextSectorName || stats.wave?.sectorName || 'next sector'} • {stats.wave?.environmentLabel || 'Frontier'} for level {stats.wave?.upcomingLevel || stats.wave?.level || 1} in {stats.wave?.nextWaveSeconds || 0}s
             </div>
           </div>
         </div>
       )}
       <div
         className="absolute top-3 left-3 z-30 pointer-events-auto select-none"
-        style={{ fontFamily: "'Courier New', monospace", width: 'min(92vw, 320px)' }}
+        style={{ fontFamily: "'Courier New', monospace", width: 'min(92vw, 390px)', maxHeight: 'calc(100vh - 24px)', overflowY: 'auto', paddingRight: '4px' }}
       >
-        <div style={card}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '10px', color: '#94a3b8', letterSpacing: '0.12em' }}>
-          <span>STATUS {lockStatus}</span>
-          <span>LV {stats.wave?.level || 1}/{stats.wave?.totalLevels || TOTAL_KAIJU_LEVELS}</span>
+        <div style={{ ...card, padding: '10px 12px' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'auto auto auto', alignItems: 'center', gap: '10px', fontSize: '12px', color: '#e2e8f0' }}>
+          <span style={{ fontWeight: 700, color: '#f8fafc' }}>💰 {stats.credits}</span>
+          <span style={{ color: '#cbd5e1' }}>+{stats.incomePerSecond || 0}/s</span>
+          <span style={{ justifySelf: 'end', color: '#f8fafc' }}>{stats.wave?.intermission ? `NEXT ${stats.wave?.nextWaveSeconds || 0}s` : `${stats.wave?.remainingKaijus || 0} HOSTILES`}</span>
         </div>
-        <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '6px', fontSize: '12px', color: '#e2e8f0' }}>
-          <span>💰 {stats.credits}</span>
-          <span>+{stats.incomePerSecond || 0}/s</span>
-          <span>{stats.wave?.intermission ? `NEXT ${stats.wave?.nextWaveSeconds || 0}s` : `${stats.wave?.remainingKaijus || 0} HOSTILES`}</span>
-        </div>
-        <div style={{ marginTop: '6px', display: 'flex', justifyContent: 'space-between', fontSize: '10px', color: '#86efac', letterSpacing: '0.12em' }}>
-          <span>SECTOR {stats.wave?.sectorName || 'Village'}</span>
-          <span>{missionStepLabel}</span>
-        </div>
-        {stats.wave?.intermission && (
-          <div style={{ marginTop: '4px', fontSize: '10px', color: '#bbf7d0', letterSpacing: '0.12em' }}>
-            NEXT SECTOR {stats.wave?.nextSectorName || stats.wave?.sectorName || 'Village'}
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginTop: '8px', gap: '10px' }}>
+          <div style={{ minWidth: 0 }}>
+            <div style={{ fontSize: '10px', color: '#94a3b8', letterSpacing: '0.16em' }}>
+              STATUS {lockStatus} • LV {stats.wave?.level || 1}/{stats.wave?.totalLevels || TOTAL_KAIJU_LEVELS}
+            </div>
+            <div style={{ marginTop: '4px', fontSize: '10px', color: '#86efac', letterSpacing: '0.11em', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+              SECTOR {stats.wave?.sectorName || 'Village'} • {stats.wave?.environmentLabel || 'Frontier'} • {missionStepLabel}
+            </div>
+            {selection.count > 0 && (
+              <div style={{ marginTop: '5px', fontSize: '9px', color: '#bfdbfe', letterSpacing: '0.1em', textTransform: 'uppercase' }}>
+                Selected {selection.count} • Inf {selection.squads} • Eng {selection.engineers} • Armor {selection.armor}
+              </div>
+            )}
           </div>
-        )}
-        <button
-          onClick={handleNukeClick}
-          disabled={!stats.nukeArmed && !stats.nukeCanArm}
-          style={{
-            marginTop: '8px',
-            width: '100%',
-            borderRadius: '8px',
-            border: stats.nukeArmed ? '1px solid rgba(248,113,113,0.95)' : '1px solid rgba(249,115,22,0.35)',
-            background: stats.nukeArmed ? 'rgba(127,29,29,0.45)' : (!stats.nukeCanArm ? 'rgba(255,255,255,0.04)' : 'rgba(154,52,18,0.2)'),
-            color: stats.nukeArmed ? '#fee2e2' : (!stats.nukeCanArm ? '#64748b' : '#ffedd5'),
-            padding: '7px 8px',
-            fontSize: '10px',
-            textTransform: 'uppercase',
-            display: 'flex',
-            justifyContent: 'space-between'
-          }}
-        >
-          <span>{stats.nukeArmed ? 'Cancel Nuke' : 'Arm Nuke'}</span>
-          <span>{stats.nukeArmed ? 'ACTIVE' : cooldownMs > 0 ? 'REARM' : `$${stats.nukeCost || MANUAL_STRIKE_COST}`}</span>
-        </button>
-        {cooldownMs > 0 && (
+          {stats.wave?.intermission && (
+            <div style={{ flexShrink: 0, fontSize: '9px', color: '#bbf7d0', letterSpacing: '0.12em', textAlign: 'right' }}>
+              NEXT {stats.wave?.nextSectorName || stats.wave?.sectorName || 'Village'}
+            </div>
+          )}
+        </div>
+        <div style={{ marginTop: '10px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px' }}>
+          <div style={{ fontSize: '9px', color: '#94a3b8', letterSpacing: '0.18em', textTransform: 'uppercase' }}>
+            Strike Console
+          </div>
+          <button
+            onClick={() => setShowSupportPanel((value) => !value)}
+            style={{
+              borderRadius: '999px',
+              border: '1px solid rgba(148,163,184,0.22)',
+              background: 'rgba(15,23,42,0.42)',
+              color: '#cbd5e1',
+              padding: '4px 8px',
+              fontSize: '8px',
+              letterSpacing: '0.14em',
+              textTransform: 'uppercase'
+            }}
+          >
+            {showSupportPanel ? 'Compact' : 'Expand'}
+          </button>
+        </div>
+        <div style={{ marginTop: '8px', display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: '6px' }}>
+          {Object.values(supportOptions).map((option) => {
+            const active = armedSupportKey === option.key;
+            const hasReq = hasPrerequisites(buildPlacementState, option.requires || []);
+            const cooldown = supportCooldowns[option.key] || 0;
+            const affordable = stats.credits >= option.cost;
+            const canArm = !!supportCanArm[option.key];
+            const elementMeta = getElementMeta(option.element);
+            const strongTargets = activeKaijus.filter((k) => k.weakAgainst === option.element).length;
+            const resistantTargets = activeKaijus.filter((k) => k.resistAgainst === option.element).length;
+            const waiting = !active && hasReq && cooldown <= 0 && affordable && !canArm;
+            const disabled = !active && (!hasReq || cooldown > 0 || !affordable || waiting);
+            const badge = !hasReq
+              ? 'LOCK'
+              : active
+              ? 'ACTIVE'
+              : cooldown > 0
+              ? `${Math.ceil(cooldown / 1000)}s`
+              : !affordable
+              ? 'LOW'
+              : waiting
+              ? 'WAIT'
+              : `$${option.cost}`;
+            return (
+              <button
+                key={option.key}
+                onClick={() => handleSupportClick(option.key)}
+                disabled={disabled}
+                style={{
+                  ...supportButtonStyle(active, disabled, option.key),
+                  padding: showSupportPanel ? '9px 10px' : '8px 9px',
+                  fontSize: '9px',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: showSupportPanel ? '4px' : '2px',
+                  alignItems: 'flex-start',
+                  minHeight: showSupportPanel ? '62px' : '46px',
+                  textAlign: 'left'
+                }}
+              >
+                <div style={{ width: '100%', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '8px' }}>
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ fontSize: '10px', letterSpacing: '0.06em', textTransform: 'uppercase', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                      {option.icon} {option.label}
+                    </div>
+                    <div style={{ marginTop: showSupportPanel ? '2px' : '1px', fontSize: '7px', color: elementMeta.color, letterSpacing: '0.16em', textTransform: 'uppercase' }}>
+                      {elementMeta.shortLabel}
+                    </div>
+                  </div>
+                  <span style={{ fontSize: '8px', color: active ? '#fecaca' : '#cbd5e1', letterSpacing: '0.18em', textTransform: 'uppercase', flexShrink: 0 }}>
+                    {badge}
+                  </span>
+                </div>
+                {showSupportPanel && (
+                  <div style={{ fontSize: '7px', color: '#94a3b8', letterSpacing: '0.12em', textTransform: 'uppercase' }}>
+                    {strongTargets > 0 ? `+${strongTargets} weak` : resistantTargets > 0 ? `${resistantTargets} resist` : 'ready'}
+                  </div>
+                )}
+              </button>
+            );
+          })}
+        </div>
+        {currentSupportCooldownMs > 0 && activeSupportOption && (
           <div style={{ marginTop: '6px', height: '4px', borderRadius: '4px', background: '#1f2937', overflow: 'hidden' }}>
             <div
               style={{
                 height: '100%',
-                width: `${Math.max(0, 100 - Math.min(100, (cooldownMs / MANUAL_STRIKE_COOLDOWN_MS) * 100))}%`,
-                background: '#f97316'
+                width: `${Math.max(0, 100 - Math.min(100, (currentSupportCooldownMs / activeSupportOption.cooldownMs) * 100))}%`,
+                background: activeSupportOption.key === 'orbital_lance' ? '#38bdf8' : activeSupportOption.key === 'firestorm' ? '#f97316' : '#f97316'
               }}
             />
           </div>
         )}
-        {!cooldownMs && targetLock > 0 && (
+        {!currentSupportCooldownMs && targetLock > 0 && (
           <div style={{ marginTop: '6px', height: '4px', borderRadius: '4px', background: '#1f2937', overflow: 'hidden' }}>
             <div style={{ height: '100%', width: `${Math.floor(targetLock * 100)}%`, background: '#ef4444' }} />
           </div>
@@ -9807,12 +13052,13 @@ const GameHUD = () => {
         <div
           style={{
             marginTop: '8px',
-            borderRadius: '8px',
+            borderRadius: '12px',
             border: '1px solid rgba(148,163,184,0.16)',
-            background: 'rgba(15,23,42,0.55)',
-            padding: '6px 8px',
-            fontSize: '10px',
-            color: '#bfdbfe'
+            background: 'linear-gradient(180deg, rgba(15,23,42,0.7), rgba(15,23,42,0.5))',
+            padding: '7px 10px',
+            fontSize: '8px',
+            color: '#dbeafe',
+            lineHeight: 1.4
           }}
         >
           {objectiveText}
@@ -9820,14 +13066,35 @@ const GameHUD = () => {
       </div>
 
       <div style={card}>
-        <div style={{ fontSize: '10px', color: '#94a3b8', letterSpacing: '0.14em', marginBottom: '6px' }}>BUNKERS</div>
-        {stats.bunkers.map((b, i) => (
-          <div key={i} style={{ marginBottom: '5px' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '10px', color: b.hp <= 0 ? '#ef4444' : '#e2e8f0' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: showBunkerDetails ? '10px' : 0 }}>
+          <div style={{ fontSize: '10px', color: '#94a3b8', letterSpacing: '0.18em' }}>BUNKERS</div>
+          <button
+            onClick={() => setShowBunkerDetails((value) => !value)}
+            style={{
+              borderRadius: '999px',
+              border: '1px solid rgba(148,163,184,0.22)',
+              background: 'rgba(15,23,42,0.4)',
+              color: '#cbd5e1',
+              padding: '4px 8px',
+              fontSize: '8px',
+              letterSpacing: '0.14em',
+              textTransform: 'uppercase'
+            }}
+          >
+            {showBunkerDetails ? 'Hide' : 'Show'}
+          </button>
+        </div>
+        <div style={{ display: 'flex', justifyContent: 'space-between', gap: '10px', fontSize: '10px', color: '#e2e8f0', marginBottom: showBunkerDetails ? '8px' : 0 }}>
+          <span>{aliveBunkerCount}/{stats.bunkers.length} online</span>
+          <span>{Math.round(bunkerHealthRatio * 100)}% integrity</span>
+        </div>
+        {showBunkerDetails && stats.bunkers.map((b, i) => (
+          <div key={i} style={{ marginBottom: '10px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', color: b.hp <= 0 ? '#ef4444' : '#e2e8f0' }}>
               <span>{b.hp <= 0 ? '💀' : '🛡️'} #{i + 1}</span>
               <span>{b.hp <= 0 ? 'DESTROYED' : `${Math.round(b.hp)}/${b.maxHp}`}</span>
             </div>
-            <div style={{ height: '4px', background: '#1e293b', borderRadius: '3px', overflow: 'hidden', marginTop: '2px' }}>
+            <div style={{ height: '6px', background: 'rgba(30,41,59,0.9)', borderRadius: '999px', overflow: 'hidden', marginTop: '6px' }}>
               <div
                 style={{
                   width: `${Math.max(0, (b.hp / b.maxHp) * 100)}%`,
@@ -9840,10 +13107,9 @@ const GameHUD = () => {
         ))}
       </div>
 
-      <div style={card}>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '6px', marginBottom: '8px' }}>
+        <div style={commandDockStyle}>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginBottom: '10px', position: 'sticky', top: 0, background: 'linear-gradient(180deg, rgba(3,10,24,0.92), rgba(3,10,24,0.72))', paddingBottom: '8px', zIndex: 1 }}>
           {[
-            { key: 'deploy', label: 'Deploy' },
             { key: 'build', label: 'Build' },
             { key: 'threat', label: `Threat (${activeKaijus.length})` }
           ].map((tab) => (
@@ -9851,12 +13117,14 @@ const GameHUD = () => {
               key={tab.key}
               onClick={() => setActivePanel(tab.key)}
               style={{
-                borderRadius: '8px',
+                borderRadius: '12px',
                 border: activePanel === tab.key ? '1px solid rgba(16,185,129,0.9)' : '1px solid rgba(148,163,184,0.25)',
-                background: activePanel === tab.key ? 'rgba(6,95,70,0.42)' : 'rgba(15,23,42,0.45)',
+                background: activePanel === tab.key ? 'linear-gradient(180deg, rgba(6,95,70,0.5), rgba(6,78,59,0.35))' : 'linear-gradient(180deg, rgba(15,23,42,0.52), rgba(15,23,42,0.36))',
                 color: activePanel === tab.key ? '#ecfdf5' : '#cbd5e1',
                 fontSize: '10px',
-                padding: '6px 4px'
+                padding: '9px 8px',
+                textTransform: 'uppercase',
+                letterSpacing: '0.08em'
               }}
             >
               {tab.label}
@@ -9864,139 +13132,145 @@ const GameHUD = () => {
           ))}
         </div>
 
-        {activePanel === 'deploy' && (
-          <>
-            <div style={{ display: 'flex', gap: '12px', fontSize: '12px', color: '#e2e8f0', marginBottom: '8px' }}>
-              <span>🪖 {stats.soldiers}</span>
-              <span>🚜 {stats.tanks}</span>
-              <span>✈️ {stats.jets}</span>
+        <div style={panelScroller}>
+          {activePanel === 'build' && (
+            <>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginBottom: '10px' }}>
+              {[
+                { key: 'structures', label: 'Structures' },
+                { key: 'upgrades', label: 'Upgrades' }
+              ].map((tab) => (
+                <button
+                  key={tab.key}
+                  onClick={() => setBuildPanelMode(tab.key)}
+                  style={{
+                    borderRadius: '10px',
+                    border: buildPanelMode === tab.key ? '1px solid rgba(34,197,94,0.75)' : '1px solid rgba(148,163,184,0.2)',
+                    background: buildPanelMode === tab.key ? 'rgba(6,95,70,0.34)' : 'rgba(15,23,42,0.32)',
+                    color: buildPanelMode === tab.key ? '#ecfdf5' : '#cbd5e1',
+                    padding: '8px 6px',
+                    fontSize: '9px',
+                    textTransform: 'uppercase'
+                  }}
+                >
+                  {tab.label}
+                </button>
+              ))}
             </div>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px' }}>
-              {visibleDeployOptions.map(([key, option]) => {
-                const isUnlocked = (stats.deployUnlocks || {})[key] !== false;
-                const blocked = !isUnlocked || stats.credits < option.cost || aliveBunkerCount <= 0 || !hasBattlefieldPressure || !!pendingBuildOption;
-                const selected = pendingDeploy === key;
-                return (
-                  <button
-                    key={key}
-                    onClick={() => handleDeployClick(key)}
-                    disabled={blocked}
-                    style={{
-                      borderRadius: '9px',
-                      border: selected ? '1px solid rgba(110,231,183,0.9)' : '1px solid rgba(74,222,128,0.28)',
-                      background: blocked ? 'rgba(255,255,255,0.04)' : selected ? 'rgba(6,95,70,0.45)' : 'rgba(21,128,61,0.14)',
-                      color: blocked ? '#64748b' : selected ? '#ecfdf5' : '#dcfce7',
-                      padding: '8px 6px',
-                      fontSize: '10px',
-                      display: 'flex',
-                      justifyContent: 'space-between',
-                      textTransform: 'uppercase'
-                    }}
-                  >
-                    <span>{option.icon} {option.label}</span>
-                    <span>{!isUnlocked ? 'LOCK' : selected ? 'READY' : `$${option.cost}`}</span>
-                  </button>
-                );
-              })}
-            </div>
-          </>
-        )}
-
-        {activePanel === 'build' && (
-          <>
             <div
               style={{
-                borderRadius: '10px',
+                borderRadius: '14px',
                 border: '1px solid rgba(34,197,94,0.18)',
                 background: 'linear-gradient(180deg, rgba(5,46,22,0.38), rgba(15,23,42,0.55))',
-                padding: '8px',
-                marginBottom: '8px'
+                padding: '10px 12px',
+                marginBottom: '10px'
               }}
             >
-              <div style={{ fontSize: '10px', color: '#86efac', letterSpacing: '0.14em', marginBottom: '6px' }}>TECH TREE</div>
-              <div style={{ display: 'grid', gap: '6px' }}>
-                {techTreeRows.map((row, rowIndex) => (
-                  <div key={`tech-row-${rowIndex}`} style={{ display: 'grid', gridTemplateColumns: `repeat(${row.length}, minmax(0, 1fr))`, gap: '6px' }}>
-                    {row.map((buildingKey) => {
-                      const option = (stats.buildOptions || BUILD_OPTIONS)[buildingKey];
-                      const status = getBuildNodeStatus(buildingKey);
-                      const statusLabel =
-                        status === 'online' ? 'ONLINE' :
-                        status === 'building' ? `${Math.round((constructionByKind[buildingKey]?.progress || 0) * 100)}%` :
-                        status === 'selected' ? 'PLACE' :
-                        status === 'locked' ? 'LOCK' :
-                        status === 'waiting' ? 'SAVE' :
-                        'READY';
-                      const borderColor =
-                        status === 'online' ? 'rgba(74,222,128,0.72)' :
-                        status === 'building' ? 'rgba(45,212,191,0.72)' :
-                        status === 'selected' ? 'rgba(34,197,94,0.92)' :
-                        status === 'locked' ? 'rgba(100,116,139,0.38)' :
-                        status === 'waiting' ? 'rgba(250,204,21,0.35)' :
-                        'rgba(59,130,246,0.36)';
-                      const bgColor =
-                        status === 'online' ? 'rgba(21,128,61,0.28)' :
-                        status === 'building' ? 'rgba(13,148,136,0.2)' :
-                        status === 'selected' ? 'rgba(6,95,70,0.42)' :
-                        status === 'locked' ? 'rgba(255,255,255,0.03)' :
-                        status === 'waiting' ? 'rgba(113,63,18,0.2)' :
-                        'rgba(8,47,73,0.22)';
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: showTechMap ? '10px' : 0 }}>
+                <div style={{ fontSize: '10px', color: '#86efac', letterSpacing: '0.18em' }}>TECH MAP</div>
+                <button
+                  onClick={() => setShowTechMap((value) => !value)}
+                  style={{
+                    borderRadius: '999px',
+                    border: '1px solid rgba(148,163,184,0.22)',
+                    background: 'rgba(15,23,42,0.42)',
+                    color: '#cbd5e1',
+                    padding: '4px 8px',
+                    fontSize: '8px',
+                    letterSpacing: '0.14em',
+                    textTransform: 'uppercase'
+                  }}
+                >
+                  {showTechMap ? 'Hide' : 'Show'}
+                </button>
+              </div>
+              {showTechMap && (
+                <>
+                  <div style={{ display: 'grid', gap: '10px' }}>
+                    {techTreeRows.map((row, rowIndex) => (
+                      <div key={`tech-row-${rowIndex}`} style={{ display: 'grid', gridTemplateColumns: `repeat(${row.length}, minmax(0, 1fr))`, gap: '10px' }}>
+                        {row.map((buildingKey) => {
+                          const option = (stats.buildOptions || BUILD_OPTIONS)[buildingKey];
+                          const status = getBuildNodeStatus(buildingKey);
+                          const statusLabel =
+                            status === 'online' ? 'ONLINE' :
+                            status === 'building' ? `${Math.round((constructionByKind[buildingKey]?.progress || 0) * 100)}%` :
+                            status === 'selected' ? 'PLACE' :
+                            status === 'locked' ? 'LOCK' :
+                            status === 'waiting' ? 'SAVE' :
+                            'READY';
+                          const borderColor =
+                            status === 'online' ? 'rgba(74,222,128,0.72)' :
+                            status === 'building' ? 'rgba(45,212,191,0.72)' :
+                            status === 'selected' ? 'rgba(34,197,94,0.92)' :
+                            status === 'locked' ? 'rgba(100,116,139,0.38)' :
+                            status === 'waiting' ? 'rgba(250,204,21,0.35)' :
+                            'rgba(59,130,246,0.36)';
+                          const bgColor =
+                            status === 'online' ? 'rgba(21,128,61,0.28)' :
+                            status === 'building' ? 'rgba(13,148,136,0.2)' :
+                            status === 'selected' ? 'rgba(6,95,70,0.42)' :
+                            status === 'locked' ? 'rgba(255,255,255,0.03)' :
+                            status === 'waiting' ? 'rgba(113,63,18,0.2)' :
+                            'rgba(8,47,73,0.22)';
+                          return (
+                            <button
+                              key={buildingKey}
+                              onClick={() => handleBuildClick(buildingKey)}
+                              disabled={status === 'online' || status === 'building' || status === 'locked' || status === 'waiting' || aliveBunkerCount <= 0 || !!pendingDeployOption}
+                              style={{
+                                borderRadius: '14px',
+                                border: `1px solid ${borderColor}`,
+                                background: bgColor,
+                                color: status === 'locked' ? '#64748b' : '#e2e8f0',
+                                padding: '11px 10px',
+                                textAlign: 'left'
+                              }}
+                            >
+                              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', textTransform: 'uppercase' }}>
+                                <span>{option.icon} {option.label}</span>
+                                <span>{statusLabel}</span>
+                              </div>
+                              <div style={{ marginTop: '6px', fontSize: '10px', color: status === 'locked' ? '#475569' : '#93c5fd', lineHeight: 1.45 }}>
+                                {status === 'locked'
+                                  ? `Needs ${(option.requires || []).map((req) => (stats.buildOptions || BUILD_OPTIONS)[req]?.label || req).join(' + ')}`
+                                  : option.description}
+                              </div>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    ))}
+                  </div>
+                  <div style={{ display: 'grid', gap: '8px', marginTop: '12px' }}>
+                    {unlockSummary.map((entry) => {
+                      const online = !!(stats.buildState || {})[entry.building];
                       return (
-                        <button
-                          key={buildingKey}
-                          onClick={() => handleBuildClick(buildingKey)}
-                          disabled={status === 'online' || status === 'building' || status === 'locked' || status === 'waiting' || aliveBunkerCount <= 0 || !!pendingDeployOption}
+                        <div
+                          key={`summary-${entry.building}`}
                           style={{
-                            borderRadius: '9px',
-                            border: `1px solid ${borderColor}`,
-                            background: bgColor,
-                            color: status === 'locked' ? '#64748b' : '#e2e8f0',
-                            padding: '7px 6px',
-                            textAlign: 'left'
+                            borderRadius: '12px',
+                            border: `1px solid ${online ? 'rgba(74,222,128,0.35)' : 'rgba(148,163,184,0.16)'}`,
+                            background: online ? 'rgba(21,128,61,0.16)' : 'rgba(15,23,42,0.34)',
+                            padding: '9px 10px'
                           }}
                         >
-                          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '10px', textTransform: 'uppercase' }}>
-                            <span>{option.icon} {option.label}</span>
-                            <span>{statusLabel}</span>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '9px', textTransform: 'uppercase', color: online ? '#dcfce7' : '#cbd5e1' }}>
+                            <span>{entry.title}</span>
+                            <span>{online ? 'ACTIVE' : 'LOCKED'}</span>
                           </div>
-                          <div style={{ marginTop: '4px', fontSize: '9px', color: status === 'locked' ? '#475569' : '#93c5fd' }}>
-                            {status === 'locked'
-                              ? `Needs ${(option.requires || []).map((req) => (stats.buildOptions || BUILD_OPTIONS)[req]?.label || req).join(' + ')}`
-                              : option.description}
+                          <div style={{ marginTop: '2px', fontSize: '8px', letterSpacing: '0.18em', textTransform: 'uppercase', color: online ? '#6ee7b7' : '#64748b' }}>
+                            {entry.tag}
                           </div>
-                        </button>
+                          <div style={{ marginTop: '3px', fontSize: '9px', color: online ? '#86efac' : '#94a3b8' }}>
+                            Unlocks: {entry.unlocks.join(' • ')}
+                          </div>
+                        </div>
                       );
                     })}
                   </div>
-                ))}
-              </div>
-              <div style={{ display: 'grid', gap: '5px', marginTop: '8px' }}>
-                {unlockSummary.map((entry) => {
-                  const online = !!(stats.buildState || {})[entry.building];
-                  return (
-                    <div
-                      key={`summary-${entry.building}`}
-                      style={{
-                        borderRadius: '8px',
-                        border: `1px solid ${online ? 'rgba(74,222,128,0.35)' : 'rgba(148,163,184,0.16)'}`,
-                        background: online ? 'rgba(21,128,61,0.16)' : 'rgba(15,23,42,0.34)',
-                        padding: '6px 7px'
-                      }}
-                    >
-                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '9px', textTransform: 'uppercase', color: online ? '#dcfce7' : '#cbd5e1' }}>
-                        <span>{entry.title}</span>
-                        <span>{online ? 'ACTIVE' : 'LOCKED'}</span>
-                      </div>
-                      <div style={{ marginTop: '2px', fontSize: '8px', letterSpacing: '0.18em', textTransform: 'uppercase', color: online ? '#6ee7b7' : '#64748b' }}>
-                        {entry.tag}
-                      </div>
-                      <div style={{ marginTop: '3px', fontSize: '9px', color: online ? '#86efac' : '#94a3b8' }}>
-                        Unlocks: {entry.unlocks.join(' • ')}
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
+                </>
+              )}
             </div>
             {!!(stats.construction || []).length && (
               <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '6px', marginBottom: '8px' }}>
@@ -10027,6 +13301,7 @@ const GameHUD = () => {
                 ))}
               </div>
             )}
+            {buildPanelMode === 'structures' && (
             <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '6px' }}>
               {visibleBuildOptions.map(([key, option]) => {
                 const built = !!(stats.buildState || {})[key];
@@ -10058,7 +13333,9 @@ const GameHUD = () => {
                 );
               })}
             </div>
-            <div style={{ marginTop: '8px', display: 'grid', gridTemplateColumns: '1fr', gap: '6px' }}>
+            )}
+            {buildPanelMode === 'upgrades' && (
+            <div style={{ marginTop: '2px', display: 'grid', gridTemplateColumns: '1fr', gap: '6px' }}>
               {visibleUpgradeOptions.map(([key, option]) => {
                 const purchased = !!(stats.upgradeState || {})[key];
                 const hasReq = hasPrerequisites(stats.buildState || {}, option.requires || []);
@@ -10086,19 +13363,34 @@ const GameHUD = () => {
                 );
               })}
             </div>
-          </>
-        )}
+            )}
+            </>
+          )}
 
-        {activePanel === 'threat' && (
-          <div style={{ maxHeight: '220px', overflowY: 'auto' }}>
+          {activePanel === 'threat' && (
+            <div style={{ maxHeight: 'none', overflowY: 'visible' }}>
             {activeKaijus.length === 0 && (
               <div style={{ fontSize: '10px', color: '#fca5a5', opacity: 0.8 }}>No active kaiju.</div>
             )}
             {activeKaijus.map((k, i) => (
               <div key={i} style={{ marginBottom: '7px' }}>
+                {(() => {
+                  const elementMeta = getElementMeta(k.element);
+                  const weakMeta = getElementMeta(k.weakAgainst);
+                  const resistMeta = k.resistAgainst ? getElementMeta(k.resistAgainst) : null;
+                  const recentElementHit = k.lastElementHitAt && Date.now() - k.lastElementHitAt < 1800;
+                  return (
+                    <>
                 <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '10px', color: '#fca5a5' }}>
                   <span>👹 {k.displayName || getKaijuDisplayName(k.variant)}</span>
                   <span>{`${Math.round(Math.max(0, k.hp))}/${k.maxHp}`}</span>
+                </div>
+                <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', marginTop: '3px', fontSize: '8px', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+                  <span style={{ color: elementMeta.color }}>Type {elementMeta.shortLabel}</span>
+                  <span style={{ color: weakMeta.color }}>Weak {weakMeta.shortLabel}</span>
+                  {resistMeta && <span style={{ color: '#fda4af' }}>Resist {resistMeta.shortLabel}</span>}
+                  {recentElementHit && k.lastElementState === 'advantage' && <span style={{ color: '#86efac' }}>Bonus Hit</span>}
+                  {recentElementHit && k.lastElementState === 'resist' && <span style={{ color: '#fca5a5' }}>Resisted</span>}
                 </div>
                 <div style={{ height: '4px', background: '#450a0a', borderRadius: '3px', overflow: 'hidden', marginTop: '2px' }}>
                   <div
@@ -10109,19 +13401,208 @@ const GameHUD = () => {
                     }}
                   />
                 </div>
+                    </>
+                  );
+                })()}
               </div>
             ))}
-          </div>
-        )}
+            </div>
+          )}
+        </div>
         </div>
       </div>
+
+      {selectedProductionBuilding && (
+        <div
+          className="absolute inset-0 z-40 flex items-end justify-center pointer-events-none select-none sm:items-center"
+          style={{ fontFamily: "'Courier New', monospace" }}
+        >
+          <div
+            style={{
+              width: 'min(92vw, 500px)',
+              marginBottom: '18px',
+              borderRadius: '22px',
+              border: '1px solid rgba(74,222,128,0.32)',
+              background: 'linear-gradient(180deg, rgba(2,6,23,0.96), rgba(7,18,27,0.94))',
+              boxShadow: '0 20px 50px rgba(2,8,23,0.38), 0 0 40px rgba(16,185,129,0.12)',
+              padding: '18px',
+              pointerEvents: 'auto'
+            }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', alignItems: 'flex-start' }}>
+              <div>
+                <div style={{ fontSize: '10px', color: '#86efac', letterSpacing: '0.2em', textTransform: 'uppercase' }}>
+                  Production Building
+                </div>
+                <div style={{ marginTop: '6px', fontSize: '22px', color: '#ecfdf5', textTransform: 'uppercase' }}>
+                  {selectedProductionBuilding.icon} {selectedProductionBuilding.label}
+                </div>
+                <div style={{ marginTop: '6px', fontSize: '10px', color: '#a7f3d0', letterSpacing: '0.14em', textTransform: 'uppercase' }}>
+                  {(selectedProductionBuilding.units || []).length > 0 ? 'Queue units or trigger the structure command' : 'Trigger the structure command'}
+                </div>
+              </div>
+              <button
+                onClick={handleProductionModalClose}
+                style={{
+                  borderRadius: '12px',
+                  border: '1px solid rgba(148,163,184,0.25)',
+                  background: 'rgba(15,23,42,0.55)',
+                  color: '#cbd5e1',
+                  padding: '8px 12px',
+                  fontSize: '11px',
+                  textTransform: 'uppercase'
+                }}
+              >
+                Close
+              </button>
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: '10px', marginTop: '14px', marginBottom: '14px' }}>
+              {[
+                { icon: '🪖', label: 'Inf', value: stats.soldiers },
+                { icon: '🚜', label: 'Armor', value: stats.tanks },
+                { icon: '✈️', label: 'Air', value: stats.jets }
+              ].map((item) => (
+                <div
+                  key={item.label}
+                  style={{
+                    borderRadius: '12px',
+                    border: '1px solid rgba(148,163,184,0.16)',
+                    background: 'rgba(15,23,42,0.42)',
+                    padding: '8px 10px'
+                  }}
+                >
+                  <div style={{ fontSize: '8px', color: '#94a3b8', letterSpacing: '0.14em', textTransform: 'uppercase' }}>{item.label}</div>
+                  <div style={{ marginTop: '2px', fontSize: '11px', color: '#e2e8f0' }}>{item.icon} {item.value}</div>
+                </div>
+              ))}
+            </div>
+
+            {selectedBuildingAction && (
+              <div
+                style={{
+                  marginBottom: '14px',
+                  borderRadius: '16px',
+                  border: '1px solid rgba(34,211,238,0.22)',
+                  background: 'linear-gradient(180deg, rgba(6,78,59,0.18), rgba(8,47,73,0.18))',
+                  padding: '12px'
+                }}
+              >
+                <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', alignItems: 'center' }}>
+                  <div>
+                    <div style={{ fontSize: '8px', color: '#67e8f9', letterSpacing: '0.18em', textTransform: 'uppercase' }}>
+                      {selectedBuildingAction.tag} ability
+                    </div>
+                    <div style={{ marginTop: '4px', fontSize: '15px', color: '#ecfeff', textTransform: 'uppercase' }}>
+                      {selectedBuildingAction.label}
+                    </div>
+                    <div style={{ marginTop: '4px', fontSize: '10px', color: '#bfdbfe', lineHeight: 1.45 }}>
+                      {selectedBuildingAction.description}
+                    </div>
+                  </div>
+                  <button
+                    onClick={handleFacilityActionClick}
+                    disabled={!selectedBuildingAction.ready || stats.credits < selectedBuildingAction.cost}
+                    style={{
+                      minWidth: '118px',
+                      borderRadius: '14px',
+                      border: '1px solid rgba(34,211,238,0.3)',
+                      background: !selectedBuildingAction.ready || stats.credits < selectedBuildingAction.cost ? 'rgba(255,255,255,0.04)' : 'rgba(8,145,178,0.22)',
+                      color: !selectedBuildingAction.ready || stats.credits < selectedBuildingAction.cost ? '#64748b' : '#cffafe',
+                      padding: '12px 10px',
+                      fontSize: '11px',
+                      textTransform: 'uppercase'
+                    }}
+                  >
+                    {!selectedBuildingAction.ready ? `${Math.ceil(selectedBuildingAction.cooldownRemaining / 1000)}s` : `$${selectedBuildingAction.cost}`}
+                  </button>
+                </div>
+                <div style={{ marginTop: '8px', display: 'flex', justifyContent: 'space-between', fontSize: '8px', color: '#94a3b8', letterSpacing: '0.14em', textTransform: 'uppercase' }}>
+                  <span>{selectedBuildingAction.activeRemaining > 0 ? `Active ${Math.ceil(selectedBuildingAction.activeRemaining / 1000)}s` : 'Standby'}</span>
+                  <span>{selectedBuildingAction.ready ? 'Ready' : 'Cooldown'}</span>
+                </div>
+              </div>
+            )}
+
+            {(selectedProductionBuilding.trainingUnitType || productionQueue.length > 0) && (
+              <div
+                style={{
+                  marginBottom: '14px',
+                  borderRadius: '14px',
+                  border: '1px solid rgba(125,211,252,0.22)',
+                  background: 'rgba(8,47,73,0.24)',
+                  padding: '10px 12px'
+                }}
+              >
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '9px', color: '#bae6fd', textTransform: 'uppercase', letterSpacing: '0.14em' }}>
+                  <span>Training</span>
+                  <span>{selectedProductionBuilding.trainingUnitType ? (DEPLOY_OPTIONS[selectedProductionBuilding.trainingUnitType]?.label || selectedProductionBuilding.trainingUnitType) : 'Queue Idle'}</span>
+                </div>
+                {selectedProductionBuilding.trainingUnitType && (
+                  <div style={{ marginTop: '6px', height: '5px', background: 'rgba(15,23,42,0.65)', borderRadius: '999px', overflow: 'hidden' }}>
+                    <div
+                      style={{
+                        height: '100%',
+                        width: `${Math.round((selectedProductionBuilding.trainingProgress || 0) * 100)}%`,
+                        background: 'linear-gradient(90deg, #22d3ee, #86efac)'
+                      }}
+                    />
+                  </div>
+                )}
+                <div style={{ marginTop: '6px', fontSize: '8px', color: '#bfdbfe', letterSpacing: '0.12em', textTransform: 'uppercase' }}>
+                  Queue {productionQueue.length}
+                </div>
+              </div>
+            )}
+
+            {(visibleDeployPanelOptions.length > 0 || !selectedBuildingAction) && (
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+              {visibleDeployPanelOptions.map(([key, option]) => {
+                const isUnlocked = (stats.deployUnlocks || {})[key] !== false;
+                const blocked = !isUnlocked || stats.credits < option.cost || aliveBunkerCount <= 0 || !hasBattlefieldPressure || !!pendingBuildOption;
+                const queued = queueCounts[key] || 0;
+                const manualPlace = !isQueuedDeployUnit(key);
+                const selected = pendingDeploy === key;
+                return (
+                  <button
+                    key={key}
+                    onClick={() => handleDeployClick(key)}
+                    disabled={blocked}
+                    style={{
+                      borderRadius: '14px',
+                      border: selected ? '1px solid rgba(110,231,183,0.9)' : '1px solid rgba(74,222,128,0.28)',
+                      background: blocked ? 'rgba(255,255,255,0.04)' : selected ? 'rgba(6,95,70,0.45)' : 'rgba(21,128,61,0.14)',
+                      color: blocked ? '#64748b' : selected ? '#ecfdf5' : '#dcfce7',
+                      padding: '12px 10px',
+                      fontSize: '11px',
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      textTransform: 'uppercase'
+                    }}
+                  >
+                    <span>{option.icon} {option.label}</span>
+                    <span>{!isUnlocked ? 'LOCK' : manualPlace ? (selected ? 'READY' : `$${option.cost}`) : queued > 0 ? `Q${queued}` : `$${option.cost}`}</span>
+                  </button>
+                );
+              })}
+              {!visibleDeployPanelOptions.length && (
+                <div style={{ gridColumn: '1 / -1', borderRadius: '10px', border: '1px dashed rgba(148,163,184,0.22)', padding: '10px 8px', fontSize: '9px', color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.12em' }}>
+                  This building has no deploy units.
+                </div>
+              )}
+            </div>
+            )}
+          </div>
+        </div>
+      )}
     </>
   );
 };
 
-const SettingsMenu = ({ resolutionPreset, setResolutionPreset }) => {
+const SettingsMenu = ({ resolutionPreset, setResolutionPreset, fpsCap, setFpsCap }) => {
   const [open, setOpen] = useState(false);
   const currentPreset = RESOLUTION_PRESETS[resolutionPreset] || RESOLUTION_PRESETS[DEFAULT_RESOLUTION_PRESET];
+  const currentFpsCap = FPS_CAP_OPTIONS[fpsCap] || FPS_CAP_OPTIONS[DEFAULT_FPS_CAP];
 
   return (
     <div
@@ -10138,6 +13619,30 @@ const SettingsMenu = ({ resolutionPreset, setResolutionPreset }) => {
           </div>
           <div className="mb-3 text-[10px] text-green-500/70">
             Current: {currentPreset.label}
+          </div>
+          <div className="mb-2 text-[10px] font-bold tracking-[0.24em] text-cyan-300 uppercase">
+            Frame Cap
+          </div>
+          <div className="mb-3 grid grid-cols-3 gap-2">
+            {Object.entries(FPS_CAP_OPTIONS).map(([key, option]) => {
+              const active = key === fpsCap;
+              return (
+                <button
+                  key={key}
+                  onClick={() => setFpsCap(key)}
+                  className={`rounded-xl border px-2 py-2 text-left transition-all ${
+                    active
+                      ? 'border-cyan-300/55 bg-cyan-500/18 text-cyan-100 shadow-[0_0_16px_rgba(34,211,238,0.16)]'
+                      : 'border-white/10 bg-white/5 text-slate-200 hover:border-cyan-500/20 hover:bg-cyan-500/8'
+                  }`}
+                >
+                  <div className="text-[10px] font-bold tracking-[0.08em] uppercase">{option.label}</div>
+                </button>
+              );
+            })}
+          </div>
+          <div className="mb-3 text-[10px] text-cyan-400/70">
+            Frame cap: {currentFpsCap.note}
           </div>
           <div className="space-y-2">
             {Object.entries(RESOLUTION_PRESETS).map(([key, preset]) => {
@@ -10170,6 +13675,7 @@ const SettingsMenu = ({ resolutionPreset, setResolutionPreset }) => {
         <div>
           <div className="text-[9px] tracking-[0.28em] text-green-400/80 uppercase">Settings</div>
           <div className="mt-1 text-[12px] font-bold tracking-[0.12em] uppercase">{currentPreset.label}</div>
+          <div className="mt-1 text-[9px] tracking-[0.18em] text-cyan-300/80 uppercase">{currentFpsCap.label}</div>
         </div>
         <div className="ml-4 rounded-full border border-green-400/30 bg-green-500/10 px-2 py-1 text-[10px] font-bold tracking-[0.16em] uppercase">
           {open ? 'Close' : 'Open'}
@@ -10177,6 +13683,31 @@ const SettingsMenu = ({ resolutionPreset, setResolutionPreset }) => {
       </button>
     </div>
   );
+};
+
+const FrameRateController = ({ fpsCap }) => {
+  const { invalidate, setFrameloop } = useThree();
+
+  useEffect(() => {
+    const option = FPS_CAP_OPTIONS[fpsCap] || FPS_CAP_OPTIONS[DEFAULT_FPS_CAP];
+    if (!option || option.frameMs <= 0) {
+      setFrameloop('always');
+      return undefined;
+    }
+
+    setFrameloop('demand');
+    invalidate();
+    const interval = window.setInterval(() => {
+      invalidate();
+    }, Math.max(16, Math.round(option.frameMs)));
+
+    return () => {
+      window.clearInterval(interval);
+      setFrameloop('always');
+    };
+  }, [fpsCap, invalidate, setFrameloop]);
+
+  return null;
 };
 
 const NukeImpactOverlay = ({ blastFx }) => {
@@ -10256,15 +13787,392 @@ const NukeImpactOverlay = ({ blastFx }) => {
   );
 };
 
+const RTSSelectionOverlay = () => {
+  const [overlay, setOverlay] = useState({ box: null, count: 0, squads: 0, engineers: 0, armor: 0 });
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      const stats = window._falloutGameStats || {};
+      const selection = stats.selection || {};
+      setOverlay({
+        box: window._falloutSelectionBox || null,
+        count: window._falloutSelectedUnitCount || 0,
+        squads: selection.squads || 0,
+        engineers: selection.engineers || 0,
+        armor: selection.armor || 0
+      });
+    }, 33);
+    return () => clearInterval(interval);
+  }, []);
+
+  return (
+    <>
+      {overlay.box && (
+        <div
+          className="absolute z-40 pointer-events-none border border-lime-300/80 bg-lime-300/10"
+          style={{
+            left: overlay.box.left,
+            top: overlay.box.top,
+            width: overlay.box.width,
+            height: overlay.box.height,
+            boxShadow: '0 0 14px rgba(163,230,53,0.22)'
+          }}
+        />
+      )}
+      {overlay.count > 0 && (
+        <div
+          className="absolute top-4 right-28 z-40 pointer-events-none rounded-xl border border-lime-400/35 bg-black/60 px-3 py-2 text-[11px] font-mono uppercase tracking-[0.28em] text-lime-200 backdrop-blur-sm"
+        >
+          Group {overlay.count} | SQ {overlay.squads} | EN {overlay.engineers} | AR {overlay.armor}
+        </div>
+      )}
+    </>
+  );
+};
+
+const GroupSelectionIndicator = ({ entitiesRef }) => {
+  const groupRef = useRef();
+  const outerRingRef = useRef();
+  const innerRingRef = useRef();
+  const pulseRef = useRef();
+  const commandLineRef = useRef();
+  const targetRingRef = useRef();
+  const targetDotRef = useRef();
+
+  useFrame((state) => {
+    if (!groupRef.current) return;
+    const selectedIds = new Set(window._falloutSelectedUnitIds || []);
+    const selectedUnits = entitiesRef.current.filter((entity) => (
+      isCommandableUnit(entity) &&
+      !entity.dead &&
+      (selectedIds.has(entity.id) || entity.selected)
+    ));
+    if (selectedUnits.length < 2) {
+      groupRef.current.visible = false;
+      return;
+    }
+
+    let centerX = 0;
+    let centerZ = 0;
+    selectedUnits.forEach((unit) => {
+      centerX += unit.x || 0;
+      centerZ += unit.z || 0;
+    });
+    centerX /= selectedUnits.length;
+    centerZ /= selectedUnits.length;
+
+    let maxDist = 26;
+    selectedUnits.forEach((unit) => {
+      maxDist = Math.max(maxDist, Math.hypot((unit.x || 0) - centerX, (unit.z || 0) - centerZ));
+    });
+
+    const radius = Math.max(34, maxDist + 22);
+    const pulse = 1 + Math.sin(state.clock.elapsedTime * 3.4) * 0.025;
+    groupRef.current.visible = true;
+    groupRef.current.position.set(centerX, getTerrainHeight(centerX, centerZ) + 1.2, centerZ);
+    groupRef.current.rotation.y = 0;
+
+    if (outerRingRef.current) {
+      outerRingRef.current.scale.set(radius, radius, 1);
+    }
+    if (innerRingRef.current) {
+      innerRingRef.current.scale.set(radius * 0.7, radius * 0.7, 1);
+    }
+    if (pulseRef.current) {
+      const pulseScale = radius * pulse;
+      pulseRef.current.scale.set(pulseScale, pulseScale, 1);
+      if (pulseRef.current.material) {
+        pulseRef.current.material.opacity = 0.14 + Math.sin(state.clock.elapsedTime * 3.4) * 0.025;
+      }
+    }
+
+    const hasPlacementMode = !!(window._falloutPendingDeploy || window._falloutPendingBuild || window._falloutArmedSupportKey);
+    const hoveredTarget = !hasPlacementMode ? window._falloutMouseTarget : null;
+    const storedCommandTarget = window._falloutGroupCommandTarget;
+    const showStoredTarget = storedCommandTarget && Date.now() - (storedCommandTarget.at || 0) < 1800;
+    const target = hoveredTarget || (showStoredTarget ? storedCommandTarget : null);
+
+    if (commandLineRef.current) {
+      commandLineRef.current.visible = !!target;
+    }
+    if (targetRingRef.current) {
+      targetRingRef.current.visible = !!target;
+    }
+    if (targetDotRef.current) {
+      targetDotRef.current.visible = !!target;
+    }
+
+    if (target) {
+      const targetY = getTerrainHeight(target.x, target.z) + 0.8;
+      const dx = target.x - centerX;
+      const dz = target.z - centerZ;
+      const distance = Math.max(10, Math.hypot(dx, dz));
+      const angle = Math.atan2(dx, dz);
+      const midX = centerX + dx * 0.5;
+      const midZ = centerZ + dz * 0.5;
+      const lineY = Math.max(getTerrainHeight(midX, midZ), Math.min(targetY, groupRef.current.position.y)) + 0.6;
+
+      if (commandLineRef.current) {
+        commandLineRef.current.position.set(midX, lineY, midZ);
+        commandLineRef.current.rotation.set(-Math.PI / 2, angle, 0);
+        commandLineRef.current.scale.set(distance, 1.4, 1);
+      }
+
+      if (targetRingRef.current) {
+        targetRingRef.current.position.set(target.x, targetY, target.z);
+        targetRingRef.current.rotation.set(-Math.PI / 2, 0, 0);
+        const targetScale = hoveredTarget ? 18 : 16;
+        targetRingRef.current.scale.set(targetScale, targetScale, 1);
+      }
+
+      if (targetDotRef.current) {
+        targetDotRef.current.position.set(target.x, targetY + 0.02, target.z);
+        targetDotRef.current.rotation.set(-Math.PI / 2, 0, 0);
+        const dotScale = hoveredTarget ? 4.8 : 4.2;
+        targetDotRef.current.scale.set(dotScale, dotScale, 1);
+      }
+    }
+  });
+
+  return (
+    <group ref={groupRef} visible={false} renderOrder={7}>
+      <mesh ref={outerRingRef} rotation={[-Math.PI / 2, 0, 0]}>
+        <ringGeometry args={[0.96, 1, 56]} />
+        <meshBasicMaterial color="#86efac" transparent opacity={0.92} depthWrite={false} toneMapped={false} />
+      </mesh>
+      <mesh ref={innerRingRef} rotation={[-Math.PI / 2, 0, 0]}>
+        <ringGeometry args={[0.94, 1, 40]} />
+        <meshBasicMaterial color="#22c55e" transparent opacity={0.42} depthWrite={false} toneMapped={false} />
+      </mesh>
+      <mesh ref={pulseRef} rotation={[-Math.PI / 2, 0, 0]}>
+        <ringGeometry args={[0.92, 1, 48]} />
+        <meshBasicMaterial color="#4ade80" transparent opacity={0.18} depthWrite={false} toneMapped={false} />
+      </mesh>
+      {Array.from({ length: 4 }, (_, index) => (
+        <mesh
+          key={`group-tick-${index}`}
+          position={[0, 1.24, 0]}
+          rotation={[-Math.PI / 2, 0, (Math.PI / 2) * index]}
+        >
+          <planeGeometry args={[0.24, 0.02]} />
+          <meshBasicMaterial color="#bbf7d0" transparent opacity={0.72} depthWrite={false} toneMapped={false} />
+        </mesh>
+      ))}
+      <mesh ref={commandLineRef} visible={false}>
+        <planeGeometry args={[1, 0.06]} />
+        <meshBasicMaterial color="#86efac" transparent opacity={0.72} depthWrite={false} toneMapped={false} />
+      </mesh>
+      <mesh ref={targetRingRef} visible={false}>
+        <ringGeometry args={[0.82, 1, 40]} />
+        <meshBasicMaterial color="#bbf7d0" transparent opacity={0.8} depthWrite={false} toneMapped={false} />
+      </mesh>
+      <mesh ref={targetDotRef} visible={false}>
+        <ringGeometry args={[0.38, 1, 24]} />
+        <meshBasicMaterial color="#4ade80" transparent opacity={0.56} depthWrite={false} toneMapped={false} />
+      </mesh>
+    </group>
+  );
+};
+
+const ProductionBuildingIndicator = ({ entitiesRef }) => {
+  const groupRef = useRef();
+  const ringRef = useRef();
+  const pulseRef = useRef();
+
+  useFrame((state) => {
+    const selectedBuilding = window._falloutSelectedProductionBuilding;
+    const entity = selectedBuilding?.id
+      ? entitiesRef.current.find((item) => item.id === selectedBuilding.id && item.type === 'facility' && !item.dead && !item.constructing && !isBrokenStructure(item))
+      : null;
+
+    if (!groupRef.current) return;
+    if (!entity) {
+      groupRef.current.visible = false;
+      return;
+    }
+
+    const baseRadius = Math.max(18, 18 * (entity.visualScale || 1));
+    const pulse = 1 + Math.sin(state.clock.elapsedTime * 2.8) * 0.04;
+    const y = getTerrainHeight(entity.x, entity.z) + 0.9;
+    groupRef.current.visible = true;
+    groupRef.current.position.set(entity.x, y, entity.z);
+    groupRef.current.rotation.y = 0;
+
+    if (ringRef.current) ringRef.current.scale.set(baseRadius, baseRadius, 1);
+    if (pulseRef.current) {
+      pulseRef.current.scale.set(baseRadius * pulse, baseRadius * pulse, 1);
+      if (pulseRef.current.material) {
+        pulseRef.current.material.opacity = 0.16 + Math.sin(state.clock.elapsedTime * 2.8) * 0.03;
+      }
+    }
+  });
+
+  return (
+    <group ref={groupRef} visible={false} renderOrder={7}>
+      <mesh ref={pulseRef} rotation={[-Math.PI / 2, 0, 0]}>
+        <ringGeometry args={[0.9, 1, 40]} />
+        <meshBasicMaterial color="#22d3ee" transparent opacity={0.16} depthWrite={false} toneMapped={false} />
+      </mesh>
+      <mesh ref={ringRef} rotation={[-Math.PI / 2, 0, 0]}>
+        <ringGeometry args={[0.94, 1, 48]} />
+        <meshBasicMaterial color="#67e8f9" transparent opacity={0.82} depthWrite={false} toneMapped={false} />
+      </mesh>
+      <mesh position={[0, 8, 0]}>
+        <cylinderGeometry args={[0.55, 0.55, 12, 10]} />
+        <meshBasicMaterial color="#a5f3fc" transparent opacity={0.8} depthWrite={false} toneMapped={false} />
+      </mesh>
+    </group>
+  );
+};
+
+const AttackTargetIndicator = ({ entitiesRef }) => {
+  const groupRef = useRef();
+  const groundRingRef = useRef();
+  const topRingRef = useRef();
+  const beamRef = useRef();
+
+  useFrame((state) => {
+    if (!groupRef.current) return;
+
+    const selectedIds = new Set(window._falloutSelectedUnitIds || []);
+    if (!selectedIds.size) {
+      groupRef.current.visible = false;
+      return;
+    }
+
+    const targetCounts = new Map();
+    entitiesRef.current.forEach((entity) => {
+      if (!isCommandableUnit(entity) || entity.dead || !selectedIds.has(entity.id)) return;
+      if (entity.orderType !== 'attack' || !entity.orderTargetId) return;
+      targetCounts.set(entity.orderTargetId, (targetCounts.get(entity.orderTargetId) || 0) + 1);
+    });
+
+    let targetId = null;
+    let targetCount = 0;
+    targetCounts.forEach((count, id) => {
+      if (count > targetCount) {
+        targetCount = count;
+        targetId = id;
+      }
+    });
+
+    const target = targetId
+      ? entitiesRef.current.find((entity) => entity.id === targetId && entity.type === 'kaiju' && !isKaijuDefeated(entity))
+      : null;
+
+    if (!target) {
+      groupRef.current.visible = false;
+      return;
+    }
+
+    const baseY = getTerrainHeight(target.x, target.z) + 1.4;
+    const targetHeight = Math.max(44, (target.scale || 1) * 28);
+    const pulse = 1 + Math.sin(state.clock.elapsedTime * 4.8) * 0.06;
+    const ringRadius = Math.max(20, 16 + (target.scale || 1) * 6.5);
+
+    groupRef.current.visible = true;
+    groupRef.current.position.set(target.x, baseY, target.z);
+
+    if (groundRingRef.current) {
+      groundRingRef.current.scale.set(ringRadius * pulse, ringRadius * pulse, 1);
+    }
+    if (topRingRef.current) {
+      topRingRef.current.position.y = targetHeight;
+      topRingRef.current.scale.set((ringRadius * 0.72) * pulse, (ringRadius * 0.72) * pulse, 1);
+    }
+    if (beamRef.current) {
+      beamRef.current.position.y = targetHeight * 0.5;
+      beamRef.current.scale.set(1, targetHeight, 1);
+      if (beamRef.current.material) {
+        beamRef.current.material.opacity = 0.18 + Math.sin(state.clock.elapsedTime * 4.8) * 0.04;
+      }
+    }
+  });
+
+  return (
+    <group ref={groupRef} visible={false} renderOrder={8}>
+      <mesh ref={groundRingRef} rotation={[-Math.PI / 2, 0, 0]}>
+        <ringGeometry args={[0.9, 1, 40]} />
+        <meshBasicMaterial color="#f87171" transparent opacity={0.88} depthWrite={false} toneMapped={false} />
+      </mesh>
+      <mesh ref={beamRef}>
+        <cylinderGeometry args={[0.3, 0.3, 1, 8]} />
+        <meshBasicMaterial color="#fb7185" transparent opacity={0.2} depthWrite={false} toneMapped={false} />
+      </mesh>
+      <mesh ref={topRingRef} rotation={[-Math.PI / 2, 0, 0]}>
+        <ringGeometry args={[0.82, 1, 28]} />
+        <meshBasicMaterial color="#fecaca" transparent opacity={0.74} depthWrite={false} toneMapped={false} />
+      </mesh>
+      {Array.from({ length: 4 }, (_, index) => (
+        <mesh
+          key={`attack-target-tick-${index}`}
+          position={[0, 0.05, 0]}
+          rotation={[-Math.PI / 2, 0, (Math.PI / 2) * index]}
+        >
+          <planeGeometry args={[0.28, 0.03]} />
+          <meshBasicMaterial color="#fecaca" transparent opacity={0.86} depthWrite={false} toneMapped={false} />
+        </mesh>
+      ))}
+    </group>
+  );
+};
+
+const UnitCommandMarkers = () => {
+  const markerRefs = useRef([]);
+
+  useFrame((state) => {
+    const markers = (window._falloutUnitCommandMarkers || []).filter((marker) => Date.now() - (marker.at || 0) < 2200);
+    if (typeof window !== 'undefined') {
+      window._falloutUnitCommandMarkers = markers;
+    }
+    markerRefs.current.forEach((ref, index) => {
+      if (!ref) return;
+      const marker = markers[index];
+      if (!marker) {
+        ref.visible = false;
+        return;
+      }
+      const age = (Date.now() - (marker.at || 0)) / 2200;
+      const pulse = 1 + Math.sin(state.clock.elapsedTime * 7 + index * 0.8) * 0.08;
+      const scale = (marker.type === 'attack' ? 9 : marker.type === 'attack_move' ? 7.5 : 6.5) * pulse * (1 - age * 0.22);
+      ref.visible = true;
+      ref.position.set(marker.x, getTerrainHeight(marker.x, marker.z) + 0.65, marker.z);
+      ref.rotation.set(-Math.PI / 2, 0, 0);
+      ref.scale.set(scale, scale, 1);
+      if (ref.material) {
+        ref.material.opacity = Math.max(0, 0.9 - age * 0.7);
+        ref.material.color.set(marker.type === 'attack' ? '#fca5a5' : marker.type === 'attack_move' ? '#93c5fd' : '#86efac');
+      }
+    });
+  });
+
+  return (
+    <group renderOrder={8}>
+      {Array.from({ length: 16 }, (_, index) => (
+        <mesh
+          key={`unit-command-marker-${index}`}
+          ref={(node) => { markerRefs.current[index] = node; }}
+          visible={false}
+        >
+          <ringGeometry args={[0.72, 1, 28]} />
+          <meshBasicMaterial transparent opacity={0.85} depthWrite={false} toneMapped={false} />
+        </mesh>
+      ))}
+    </group>
+  );
+};
+
 export default function FalloutPeople({ theme, isIdleMode }) {
   const isFallout = (theme === 'retro' || theme === 'fallout') && isIdleMode;
   const { data: session } = useSession();
   
   const [nukeCount, setNukeCount] = useState(0);
   const [activeTheme, setActiveTheme] = useState(null);
+  const [environmentVariant, setEnvironmentVariant] = useState(() => ENVIRONMENT_VARIANTS[0]);
   const [gameState, setGameState] = useState('playing'); // 'playing', 'won', 'lost'
   const [retryId, setRetryId] = useState(0);
   const [resolutionPreset, setResolutionPreset] = useState(getInitialResolutionPreset);
+  const [fpsCap, setFpsCap] = useState(getInitialFpsCap);
   const [currentLevel, setCurrentLevel] = useState(1);
   const [blastFx, setBlastFx] = useState({ active: false, progress: 0, intensity: 0, screenX: 50, screenY: 50 });
   const [stressLevel, setStressLevel] = useState('normal');
@@ -10279,6 +14187,11 @@ export default function FalloutPeople({ theme, isIdleMode }) {
     if (typeof window === 'undefined') return;
     window.localStorage.setItem('fallout-resolution-preset', resolutionPreset);
   }, [resolutionPreset]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    window.localStorage.setItem('fallout-fps-cap', fpsCap);
+  }, [fpsCap]);
 
   useEffect(() => {
     if (typeof window === 'undefined' || !isFallout) return undefined;
@@ -10453,6 +14366,7 @@ export default function FalloutPeople({ theme, isIdleMode }) {
       setNukeCount(0);
       setGameState('playing');
       setCurrentLevel(1);
+      setEnvironmentVariant(pickRandomEnvironmentVariant());
       window._nukeInteractionTriggered = false;
       setActiveTheme(THEMES[Math.floor(Math.random() * THEMES.length)]);
       runProgressRef.current = { maxLevel: 1, kaijuKills: 0, nukesUsed: 0 };
@@ -10460,6 +14374,7 @@ export default function FalloutPeople({ theme, isIdleMode }) {
       lastProgressSignatureRef.current = '';
     } else {
       setActiveTheme(null);
+      setEnvironmentVariant(ENVIRONMENT_VARIANTS[0]);
       setGameState('playing');
       setNukeCount(0);
       setCurrentLevel(1);
@@ -10471,6 +14386,15 @@ export default function FalloutPeople({ theme, isIdleMode }) {
       AudioManager.cleanup();
       window._falloutGameStats = null;
     };
+  }, [isFallout]);
+
+  useEffect(() => {
+    if (!isFallout) return undefined;
+    const handleEnvironmentShift = () => {
+      setEnvironmentVariant((previous) => pickRandomEnvironmentVariant(previous?.key));
+    };
+    window.addEventListener('fallout-level-environment-shift', handleEnvironmentShift);
+    return () => window.removeEventListener('fallout-level-environment-shift', handleEnvironmentShift);
   }, [isFallout]);
 
 
@@ -10548,13 +14472,13 @@ export default function FalloutPeople({ theme, isIdleMode }) {
   const sunSize = 800 * (1 + pollution * 0.5); // Reduced size for performance
   
   // Fog: slightly transparent so we can still see things
-  const fogColor = new THREE.Color(bgColor);
+  const fogColor = new THREE.Color(environmentVariant?.fog || bgColor).lerp(new THREE.Color(bgColor), 0.62);
   const fogNear = 1200 - pollution * 600;
   const fogFar = 3000 - pollution * 1000;
   
   // Ambient Brightness (Keeps the scene well-lit even at max pollution)
-  const ambientIntensity = Math.max(1.5, 2.0 - pollution * 0.5);
-  const directionalIntensity = Math.max(1.0, 1.5 - pollution * 0.5);
+  const ambientIntensity = Math.max(1.75, 2.18 - pollution * 0.34);
+  const directionalIntensity = Math.max(1.18, 1.68 - pollution * 0.34);
 
   return (
     <div className="fixed inset-0 z-[5] pointer-events-none" style={{ overflow: 'hidden' }}>
@@ -10563,8 +14487,8 @@ export default function FalloutPeople({ theme, isIdleMode }) {
         <div 
           className="absolute inset-0 z-10 pointer-events-none"
           style={{
-            background: `radial-gradient(circle, transparent 50%, rgba(0,0,0,${pollution * 0.4}) 100%)`,
-            backgroundColor: `rgba(255, 120, 20, ${pollution * 0.1})`
+            background: `radial-gradient(circle, transparent 58%, rgba(0,0,0,${pollution * 0.24}) 100%)`,
+            backgroundColor: `rgba(255, 140, 40, ${pollution * 0.06})`
           }}
         />
       )}
@@ -10573,7 +14497,7 @@ export default function FalloutPeople({ theme, isIdleMode }) {
         <div 
           className="absolute inset-0 z-10 pointer-events-none"
           style={{
-            background: `linear-gradient(transparent, rgba(120, 53, 15, ${pollution * 0.15}))`,
+            background: `linear-gradient(transparent, rgba(120, 53, 15, ${pollution * 0.08}))`,
             animation: 'fallout-ash-drift 8s linear infinite',
           }}
         />
@@ -10584,7 +14508,7 @@ export default function FalloutPeople({ theme, isIdleMode }) {
          key={`fallout-canvas-${resolutionPreset}`}
          className="w-full h-full pointer-events-auto"
          style={{ imageRendering: resolutionProfile.pixelated ? 'pixelated' : 'auto' }}
-         frameloop="always"
+         frameloop={fpsCap === 'unlimited' ? 'always' : 'demand'}
          shadows={resolutionProfile.shadows ? 'percentage' : false}
          dpr={resolutionProfile.dpr}
          gl={{
@@ -10595,6 +14519,7 @@ export default function FalloutPeople({ theme, isIdleMode }) {
          }}
          camera={{ position: [0, 400, 600], fov: 60, rotation: [-Math.PI / 8, 0, 0], far: 20000 }}
       >
+        <FrameRateController fpsCap={fpsCap} />
         {/* === ATMOSPHERIC LIGHTING === */}
         <color attach="background" args={[bgColor]} />
         
@@ -10604,14 +14529,14 @@ export default function FalloutPeople({ theme, isIdleMode }) {
         {/* Ambient light - warm wasteland tones */}
         <ambientLight 
           intensity={ambientIntensity} 
-          color={pollution > 0.5 ? '#ff6b35' : pollution > 0.2 ? '#ffa07a' : '#fff5e6'} 
+          color={pollution > 0.5 ? '#ff6b35' : environmentVariant?.ambient || (pollution > 0.2 ? '#ffa07a' : '#fff5e6')} 
         />
         
         {/* Main sun - harsh directional with shadows */}
         <directionalLight 
           position={[200, 500, 200]} 
           intensity={directionalIntensity}
-          color={pollution > 0.3 ? '#ff8c42' : '#fffaf0'}
+          color={pollution > 0.3 ? '#ff8c42' : environmentVariant?.directional || '#fffaf0'}
           castShadow={resolutionProfile.shadows}
           shadow-mapSize-width={resolutionProfile.shadowMapSize || 256}
           shadow-mapSize-height={resolutionProfile.shadowMapSize || 256}
@@ -10682,6 +14607,7 @@ export default function FalloutPeople({ theme, isIdleMode }) {
         <VillageScene 
           key={`${retryId}-${resolutionPreset}`}
           themeConfig={activeTheme} 
+          environmentVariant={environmentVariant}
           setNukeCount={setNukeCount} 
           setGameState={setGameState} 
           pollution={pollution}
@@ -10698,9 +14624,12 @@ export default function FalloutPeople({ theme, isIdleMode }) {
       {gameState === 'playing' && (
         <GameHUD />
       )}
+      {gameState === 'playing' && <RTSSelectionOverlay />}
       <SettingsMenu
         resolutionPreset={resolutionPreset}
         setResolutionPreset={setResolutionPreset}
+        fpsCap={fpsCap}
+        setFpsCap={setFpsCap}
       />
 
       {/* Game Over / Victory Overlay */}
@@ -10778,7 +14707,10 @@ const TargetIndicator = () => {
       const isLocked = window._falloutTargetConfirmedFlash;
       const confirmedTarget = window._falloutConfirmedTarget;
       const cooldownRemaining = window._falloutStrikeCooldownRemaining || 0;
-      const manualStrikeArmed = !!window._falloutManualStrikeArmed;
+      const armedSupportKey = window._falloutArmedSupportKey || (window._falloutManualStrikeArmed ? 'nuke' : null);
+      const strikePreview = armedSupportKey
+        ? (window._falloutSupportPreview || getSupportStrikePreview(armedSupportKey))
+        : getSupportStrikePreview('nuke');
       const pendingDeploy = window._falloutPendingDeploy || null;
       const pendingBuild = window._falloutPendingBuild || null;
       const deployAnchor = window._falloutDeployAnchor || null;
@@ -10796,7 +14728,7 @@ const TargetIndicator = () => {
         ? deployDragTarget
         : pendingBuild
         ? (buildPlacementTarget || buildDragTarget || target || buildFallbackTarget)
-        : manualStrikeArmed
+        : armedSupportKey
         ? target
         : null;
 
@@ -10811,19 +14743,53 @@ const TargetIndicator = () => {
          const s = 1 + (isLocked ? 0.3 : Math.sin(state.clock.elapsedTime * 6) * 0.1);
          group.current.scale.set(s, s, s);
          
-         if (ring.current) ring.current.rotation.z += 0.05;
-         if (ring.current) ring.current.visible = !usingPlacementPreview;
-         if (centerRing.current) centerRing.current.visible = !usingPlacementPreview;
-         if (crosshairA.current) crosshairA.current.visible = !usingPlacementPreview;
-         if (crosshairB.current) crosshairB.current.visible = !usingPlacementPreview;
-         if (beamRef.current) beamRef.current.visible = !usingPlacementPreview;
-         if (progressRing.current) {
-            progressRing.current.scale.set(progress, progress, 1);
-            progressRing.current.visible = !usingPlacementPreview && progress > 0;
-         }
-         if (severePreviewRing.current) severePreviewRing.current.visible = !usingPlacementPreview;
-         if (casualtyPreviewRing.current) casualtyPreviewRing.current.visible = !usingPlacementPreview;
-         if (destructionPreviewRing.current) destructionPreviewRing.current.visible = !usingPlacementPreview;
+          const outerScale = (strikePreview?.outerRadius || NUKE_DESTRUCTION_PREVIEW_RADIUS) / NUKE_DESTRUCTION_PREVIEW_RADIUS;
+          const midScale = (strikePreview?.middleRadius || NUKE_CASUALTY_PREVIEW_RADIUS) / NUKE_CASUALTY_PREVIEW_RADIUS;
+          const coreScale = (strikePreview?.coreRadius || NUKE_SEVERE_PREVIEW_RADIUS) / NUKE_SEVERE_PREVIEW_RADIUS;
+          if (ring.current) {
+            ring.current.rotation.z += 0.05;
+            ring.current.visible = !usingPlacementPreview;
+            if (ring.current.material) ring.current.material.color.set(strikePreview?.ringColor || '#ef4444');
+          }
+          if (centerRing.current) {
+            centerRing.current.visible = !usingPlacementPreview;
+            if (centerRing.current.material) centerRing.current.material.color.set(strikePreview?.ringColor || '#ef4444');
+          }
+          if (crosshairA.current) {
+            crosshairA.current.visible = !usingPlacementPreview;
+            if (crosshairA.current.material) crosshairA.current.material.color.set(strikePreview?.beamColor || '#f87171');
+          }
+          if (crosshairB.current) {
+            crosshairB.current.visible = !usingPlacementPreview;
+            if (crosshairB.current.material) crosshairB.current.material.color.set(strikePreview?.beamColor || '#f87171');
+          }
+          if (beamRef.current) {
+            beamRef.current.visible = !usingPlacementPreview;
+            if (beamRef.current.material) {
+              beamRef.current.material.color.set(strikePreview?.beamColor || '#f87171');
+              beamRef.current.material.opacity = armedSupportKey === 'orbital_lance' ? 0.18 : armedSupportKey === 'firestorm' ? 0.1 : 0.12;
+            }
+          }
+          if (progressRing.current) {
+             progressRing.current.scale.set(progress, progress, 1);
+             progressRing.current.visible = !usingPlacementPreview && progress > 0;
+             if (progressRing.current.material) progressRing.current.material.color.set(strikePreview?.beamColor || '#f87171');
+          }
+          if (severePreviewRing.current) {
+            severePreviewRing.current.visible = !usingPlacementPreview && !!armedSupportKey;
+            severePreviewRing.current.scale.setScalar(coreScale);
+            if (severePreviewRing.current.material) severePreviewRing.current.material.color.set(strikePreview?.ringColor || '#ef4444');
+          }
+          if (casualtyPreviewRing.current) {
+            casualtyPreviewRing.current.visible = !usingPlacementPreview && !!armedSupportKey;
+            casualtyPreviewRing.current.scale.setScalar(midScale);
+            if (casualtyPreviewRing.current.material) casualtyPreviewRing.current.material.color.set(strikePreview?.beamColor || '#fb923c');
+          }
+          if (destructionPreviewRing.current) {
+            destructionPreviewRing.current.visible = !usingPlacementPreview && !!armedSupportKey;
+            destructionPreviewRing.current.scale.setScalar(outerScale);
+            if (destructionPreviewRing.current.material) destructionPreviewRing.current.material.color.set(strikePreview?.accentColor || '#f59e0b');
+          }
          if (deployPreviewRing.current) {
            deployPreviewRing.current.visible = !!pendingDeploy;
            const deployScale = 1 + Math.sin(state.clock.elapsedTime * 5) * 0.05;
@@ -11154,7 +15120,7 @@ const FalloutAshParticle = ({ index, pollution }) => {
   );
 };
 
-const MountainTerrain = memo(({ themeConfig, pollution, qualityProfile }) => {
+const MountainTerrain = memo(({ themeConfig, environmentVariant, pollution, qualityProfile }) => {
   // Use useMemo for geometry so it doesn't rebuild every render
   const geometry = useMemo(() => {
     const segments = qualityProfile?.terrainSegments || 96;
@@ -11181,7 +15147,7 @@ const MountainTerrain = memo(({ themeConfig, pollution, qualityProfile }) => {
     const ctx = canvas.getContext('2d');
     
     // Base terrain color logic - brighten the default wasteland look
-    const baseColor = themeConfig?.biome === 'wasteland' ? '#4a3d2e' : '#2d4c1e';
+    const baseColor = environmentVariant?.terrainBase || (themeConfig?.biome === 'wasteland' ? '#4a3d2e' : '#2d4c1e');
     ctx.fillStyle = baseColor;
     ctx.fillRect(0, 0, textureSize, textureSize);
     
@@ -11190,17 +15156,19 @@ const MountainTerrain = memo(({ themeConfig, pollution, qualityProfile }) => {
         const x = Math.random() * textureSize;
         const y = Math.random() * textureSize;
         const r = 10 + Math.random() * 40;
-        const shade = Math.random() > 0.5 ? '#5c6d31' : '#3a4a1c';
+        const shade = Math.random() > 0.5
+          ? (environmentVariant?.patchA || '#5c6d31')
+          : (environmentVariant?.patchB || '#3a4a1c');
         ctx.beginPath();
         ctx.arc(x, y, r, 0, Math.PI * 2);
         ctx.fillStyle = shade;
-        ctx.globalAlpha = 0.3;
+        ctx.globalAlpha = 0.38;
         ctx.fill();
     }
     
     // Add dirt/cracks pattern
-    ctx.globalAlpha = 0.15;
-    ctx.strokeStyle = '#2a1f18';
+    ctx.globalAlpha = 0.2;
+    ctx.strokeStyle = environmentVariant?.crack || '#2a1f18';
     ctx.lineWidth = 1;
     for (let i = 0; i < terrainCrackCount; i++) {
         ctx.beginPath();
@@ -11216,12 +15184,14 @@ const MountainTerrain = memo(({ themeConfig, pollution, qualityProfile }) => {
     }
     
     // Add small debris/stones
-    ctx.globalAlpha = 0.2;
+    ctx.globalAlpha = 0.28;
     for (let i = 0; i < terrainDebrisCount; i++) {
         const x = Math.random() * textureSize;
         const y = Math.random() * textureSize;
         const size = 1 + Math.random() * 3;
-        ctx.fillStyle = Math.random() > 0.5 ? '#6a5a45' : '#4d453b';
+        ctx.fillStyle = Math.random() > 0.5
+          ? (environmentVariant?.debrisA || '#6a5a45')
+          : (environmentVariant?.debrisB || '#4d453b');
         ctx.fillRect(x, y, size, size);
     }
     
@@ -11234,7 +15204,7 @@ const MountainTerrain = memo(({ themeConfig, pollution, qualityProfile }) => {
     texture.anisotropy = qualityProfile?.terrainAnisotropy || 8;
     texture.needsUpdate = true;
     return texture;
-  }, [themeConfig, qualityProfile]);
+  }, [themeConfig, environmentVariant, qualityProfile]);
 
   const burnMarks = useMemo(() => (
     [...Array(qualityProfile?.burnMarkCount || 8)].map(() => ({
@@ -11244,6 +15214,17 @@ const MountainTerrain = memo(({ themeConfig, pollution, qualityProfile }) => {
       opacity: 0.3 + Math.random() * 0.2
     }))
   ), [qualityProfile?.burnMarkCount]);
+  const environmentAccents = useMemo(() => (
+    [...Array(8)].map((_, index) => ({
+      x: (Math.random() - 0.5) * WORLD_WIDTH * 1.2,
+      z: (Math.random() - 0.5) * WORLD_DEPTH * 1.2,
+      radius: 36 + Math.random() * 90,
+      stretch: 0.5 + Math.random() * 1.1,
+      rotation: Math.random() * Math.PI,
+      opacity: 0.08 + Math.random() * 0.12,
+      lift: 0.18 + index * 0.01
+    }))
+  ), [environmentVariant?.key]);
 
   return (
     <group>
@@ -11255,8 +15236,8 @@ const MountainTerrain = memo(({ themeConfig, pollution, qualityProfile }) => {
       >
          <meshStandardMaterial 
             map={terrainTexture}
-            color={themeConfig?.biome === 'wasteland' ? '#6b5742' : '#3a5f27'} 
-            roughness={0.9} 
+            color={environmentVariant?.terrainTint || (themeConfig?.biome === 'wasteland' ? '#6b5742' : '#3a5f27')} 
+            roughness={0.84} 
             metalness={0.05}
             flatShading={false}
          />
@@ -11267,10 +15248,10 @@ const MountainTerrain = memo(({ themeConfig, pollution, qualityProfile }) => {
         <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.5, 0]}>
           <planeGeometry args={[WORLD_WIDTH * 4, WORLD_DEPTH * 4]} />
           <meshStandardMaterial 
-            color="#3b2210"
+            color={environmentVariant?.overlay || '#3b2210'}
             roughness={1}
             transparent
-            opacity={pollution * 0.25}
+            opacity={pollution * 0.14}
           />
         </mesh>
       )}
@@ -11289,7 +15270,28 @@ const MountainTerrain = memo(({ themeConfig, pollution, qualityProfile }) => {
                 color="#0c0805"
                 roughness={1}
                 transparent
-                opacity={mark.opacity}
+                opacity={mark.opacity * 0.72}
+              />
+            </mesh>
+          ))}
+        </group>
+      )}
+
+      {environmentVariant && (
+        <group>
+          {environmentAccents.map((accent, i) => (
+            <mesh
+              key={`${environmentVariant.key}-accent-${i}`}
+              rotation={[-Math.PI / 2, 0, accent.rotation]}
+              position={[accent.x, accent.lift, accent.z]}
+              scale={[accent.stretch, 1, 1]}
+            >
+              <circleGeometry args={[accent.radius, 20]} />
+              <meshStandardMaterial
+                color={environmentVariant.accent}
+                roughness={1}
+                transparent
+                opacity={accent.opacity}
               />
             </mesh>
           ))}
