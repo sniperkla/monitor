@@ -35,7 +35,7 @@ const clampStrikeTarget = ({ x, z }) => ({
   z: Math.max(-HALF_WORLD_DEPTH, Math.min(HALF_WORLD_DEPTH, z))
 });
 
-const getTerrainPointFromRay = (ray, maxDistance = 12000, steps = 96) => {
+const getTerrainPointFromRay = (ray, maxDistance = 12000, steps = 128) => {
   if (!ray) return null;
 
   const samplePoint = new THREE.Vector3();
@@ -881,6 +881,22 @@ const isFlyingKaijuVariant = (variant) => !!KAIJU_VARIANT_CONFIG[variant]?.flyin
 
 const isFlyingKaiju = (kaiju) => !!kaiju && kaiju.type === 'kaiju' && isFlyingKaijuVariant(kaiju.variant);
 const isBrokenStructure = (entity) => !!entity && (entity.state === 'broken' || entity.destroyed || (entity.hp ?? 1) <= 0);
+const getUnitTypeName = (unit) => {
+  if (!unit) return 'Unit';
+  if (unit.type === 'tank') return unit.variant === 'apc' ? 'APC' : 'Battle Tank';
+  if (unit.type === 'soldier') {
+    const loadout = (SOLDIER_LOADOUTS || []).find(l => l.key === unit.weaponType);
+    return loadout ? loadout.label : 'Soldier';
+  }
+  return unit.type.charAt(0).toUpperCase() + unit.type.slice(1);
+};
+
+const showCommandFeedback = (text) => {
+  if (typeof window !== 'undefined') {
+    window._falloutCommandFeedback = { text, at: Date.now() };
+    window.dispatchEvent(new CustomEvent('fallout-command-feedback', { detail: { text } }));
+  }
+};
 const isCommandableUnit = (entity) => !!entity && COMMANDABLE_UNIT_TYPES.has(entity.type) && !entity.dead;
 const isRepairableCommandTarget = (entity) => {
   if (!entity || entity.dead || !REPAIRABLE_COMMAND_TARGET_TYPES.has(entity.type)) return false;
@@ -3630,6 +3646,8 @@ const EntityTank = memo(({ entityId, entityLookupRef, index, entitiesRef, frameS
   const modelNodesRef = useRef({});
   const fireAnim = useRef(0);
   const soundCooldown = useRef(0);
+  const selectionFlashRef = useRef();
+  const selectionBeamRef = useRef();
   const smokeMeshes = useRef([]);
   const smokeOffsetsRef = useRef(
     Array.from({ length: 4 }, (_, smokeIndex) => ({
@@ -3809,6 +3827,19 @@ const EntityTank = memo(({ entityId, entityLookupRef, index, entitiesRef, frameS
         const speed = (p.variant === 'apc' ? 3.35 : 3.05) * Math.max(0.7, p.speedMultiplier || 1) * TANK_MOVE_SPEED_MULTIPLIER;
         p.vx = Math.cos(commandHeading) * speed;
         p.vz = Math.sin(commandHeading) * speed;
+
+        // Structure avoidance for tanks
+        allBunkers.forEach(b => {
+          const bdx = p.x - b.x;
+          const bdz = p.z - b.z;
+          const bd = Math.hypot(bdx, bdz);
+          if (bd < 52) {
+             const push = (52 - bd) / 52;
+             p.x += (bdx / Math.max(0.1, bd)) * push * 5;
+             p.z += (bdz / Math.max(0.1, bd)) * push * 5;
+          }
+        });
+
         desiredHullYaw = -commandHeading;
         desiredTurretWorldYaw = desiredHullYaw;
         p.state = 'driving';
@@ -4001,6 +4032,21 @@ const EntityTank = memo(({ entityId, entityLookupRef, index, entitiesRef, frameS
     }
 
     group.current.scale.setScalar(armorScale);
+
+    if (selectionFlashRef.current && selectionBeamRef.current) {
+      const remainingPulse = (p.selectionPulseUntil || 0) - Date.now();
+      const pulsing = remainingPulse > 0;
+      selectionFlashRef.current.visible = pulsing;
+      selectionBeamRef.current.visible = pulsing;
+      if (pulsing) {
+        const progress = 1 - Math.max(0, remainingPulse / 1000);
+        selectionFlashRef.current.scale.setScalar(1 + progress * 2.2);
+        selectionFlashRef.current.material.opacity = (1 - progress) * 0.88;
+        selectionBeamRef.current.position.y = 12 + progress * 32;
+        selectionBeamRef.current.scale.set(1 + progress * 0.8, 1, 1 + progress * 0.8);
+        selectionBeamRef.current.material.opacity = Math.pow(1 - progress, 1.4) * 0.48;
+      }
+    }
   });
 
   const p = getTrackedEntity({ entitiesRef, entityLookupRef, entityId, index });
@@ -4025,6 +4071,14 @@ const EntityTank = memo(({ entityId, entityLookupRef, index, entitiesRef, frameS
           </mesh>
         </group>
       )}
+      <mesh ref={selectionFlashRef} visible={false} rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.5, 0]} renderOrder={7}>
+        <ringGeometry args={[22, 26, 32]} />
+        <meshBasicMaterial color="#ffffff" transparent opacity={0} depthWrite={false} blending={THREE.AdditiveBlending} toneMapped={false} />
+      </mesh>
+      <mesh ref={selectionBeamRef} visible={false} position={[0, 12, 0]} renderOrder={6}>
+        <cylinderGeometry args={[12, 18, 24, 16]} />
+        <meshBasicMaterial color="#86efac" transparent opacity={0} depthWrite={false} blending={THREE.AdditiveBlending} toneMapped={false} />
+      </mesh>
       {tankScene && !useStandaloneTankAsset ? (
         <group position={[0, 0, 0]} rotation={[0, 0, 0]}>
           <primitive object={tankScene} />
@@ -4096,6 +4150,8 @@ const EntitySoldierGLB = memo(({ entityId, entityLookupRef, index, entitiesRef }
   const repairSparkRef = useRef();
   const muzzleFlashRef = useRef();
   const muzzleHaloRef = useRef();
+  const selectionFlashRef = useRef();
+  const selectionBeamRef = useRef();
   const [assetReady, setAssetReady] = useState(Boolean(humanUnitsAssetCache.scene));
   const [assetFailed, setAssetFailed] = useState(Boolean(humanUnitsAssetCache.error));
   const p = getTrackedEntity({ entitiesRef, entityLookupRef, entityId, index });
@@ -4215,6 +4271,21 @@ const EntitySoldierGLB = memo(({ entityId, entityLookupRef, index, entitiesRef }
         if (repairSparkRef.current.material) repairSparkRef.current.material.opacity = 0.38 + pulse * 0.28;
       }
     }
+
+    if (selectionFlashRef.current && selectionBeamRef.current) {
+      const pulseTime = (current.selectionPulseUntil || 0) - now;
+      const pulsing = pulseTime > 0;
+      selectionFlashRef.current.visible = pulsing;
+      selectionBeamRef.current.visible = pulsing;
+      if (pulsing) {
+        const progress = 1 - Math.max(0, pulseTime / 1000);
+        selectionFlashRef.current.scale.setScalar(1 + progress * 2.8);
+        selectionFlashRef.current.material.opacity = (1 - progress) * 0.82;
+        selectionBeamRef.current.position.y = 8 + progress * 24;
+        selectionBeamRef.current.scale.set(1 + progress * 0.5, 1, 1 + progress * 0.5);
+        selectionBeamRef.current.material.opacity = Math.pow(1 - progress, 1.5) * 0.44;
+      }
+    }
   });
 
   if (!p || p.dead) return null;
@@ -4268,6 +4339,14 @@ const EntitySoldierGLB = memo(({ entityId, entityLookupRef, index, entitiesRef }
       <mesh ref={repairSparkRef} visible={false} position={[0, 16.2, 0]} renderOrder={5}>
         <sphereGeometry args={[1.1, 8, 8]} />
         <meshBasicMaterial color="#facc15" transparent opacity={0.7} depthWrite={false} toneMapped={false} />
+      </mesh>
+      <mesh ref={selectionFlashRef} visible={false} rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.45, 0]} renderOrder={7}>
+        <ringGeometry args={[14, 16, 24]} />
+        <meshBasicMaterial color="#ffffff" transparent opacity={0} depthWrite={false} blending={THREE.AdditiveBlending} toneMapped={false} />
+      </mesh>
+      <mesh ref={selectionBeamRef} visible={false} position={[0, 8, 0]} renderOrder={6}>
+        <cylinderGeometry args={[4.2, 6.8, 16, 12]} />
+        <meshBasicMaterial color="#86efac" transparent opacity={0} depthWrite={false} blending={THREE.AdditiveBlending} toneMapped={false} />
       </mesh>
     </group>
   );
@@ -7799,20 +7878,24 @@ const EntityKaiju = ({ entityId, index, entitiesRef, entityLookupRef, frameSnaps
     if (p.state === 'dying') {
       p.vx = 0;
       p.vz = 0;
+      const groundY = getTerrainHeight(p.x, p.z);
       if (!Number.isFinite(p.y)) {
-        p.y = isFlyingVariant ? (p.flightBaseHeight || getTerrainHeight(p.x, p.z) + 80) : getTerrainHeight(p.x, p.z);
+        p.y = isFlyingVariant ? (p.flightHeight || groundY + 200) : groundY;
       }
+      
+      const fallSpeed = isFlyingVariant && p.y > groundY + 10 ? 70 : 18;
+      p.y -= (delta || 0.016) * fallSpeed;
+      
       const deathTiltX = p.deathTiltX ?? 0.24;
       const deathRollZ = p.deathRollZ ?? Math.PI / 2.9;
       group.current.position.set(p.x, p.y, p.z);
       group.current.rotation.y = p.deathYaw ?? p.rotation ?? group.current.rotation.y;
-      group.current.position.y -= (delta || 0.016) * 30;
       group.current.rotation.x += (deathTiltX - group.current.rotation.x) * Math.min(1, (delta || 0.016) * 6);
       group.current.rotation.z += (deathRollZ - group.current.rotation.z) * Math.min(1, (delta || 0.016) * 5);
       if (jawRef.current) jawRef.current.rotation.x = Math.PI / 4;
       group.current.scale.set(baseScale, baseScale, baseScale);
 
-      if (group.current.position.y < -baseScale * 2) {
+      if (p.y < groundY - baseScale * 0.8) {
         if (!p.deathRemainsSpawned) {
           pushScorchEntity(entitiesRef.current, p.x, p.z, Math.max(70, baseScale * 18));
           entitiesRef.current.push(createKaijuCorpseEntity(p));
@@ -10761,7 +10844,8 @@ const VillageScene = ({ themeConfig, environmentVariant, setNukeCount, setGameSt
     };
 
     const handleWheel = (e) => {
-       targetZoom.current = Math.max(0.4, Math.min(3.0, targetZoom.current - e.deltaY * 0.001));
+      if (e.target.closest('.fallout-ui-area')) return;
+      targetZoom.current = Math.max(0.4, Math.min(3.0, targetZoom.current - e.deltaY * 0.001));
     };
     window.addEventListener('wheel', handleWheel, { passive: false });
     
@@ -11896,7 +11980,7 @@ const VillageScene = ({ themeConfig, environmentVariant, setNukeCount, setGameSt
               targetFlyingKaiju.hp -= AA_SITE_DAMAGE * aaDamageFactor * (targetFlyingKaiju.isMini ? 1.2 : 1);
               if (targetFlyingKaiju.hp <= 0) markKaijuDefeated(targetFlyingKaiju);
               entitiesRef.current.push({
-                id: `aa-tracer-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+                id: `aa-tracer-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
                 type: 'bullet',
                 x: p.x,
                 y: p.y + 20,
@@ -12087,6 +12171,30 @@ const VillageScene = ({ themeConfig, environmentVariant, setNukeCount, setGameSt
              p.aimAngle = cAngle;
              p.vx = Math.cos(cAngle) * commandSpeed;
              p.vz = Math.sin(cAngle) * commandSpeed;
+
+             // Building Avoidance for soldiers
+             frameSnapshot.allBunkers.forEach(b => {
+               const bdx = p.x - b.x;
+               const bdz = p.z - b.z;
+               const bd = Math.hypot(bdx, bdz);
+               if (bd < 38) {
+                 const push = (38 - bd) / 38;
+                 p.x += (bdx / Math.max(1, bd)) * push * 4.5;
+                 p.z += (bdz / Math.max(1, bd)) * push * 4.5;
+               }
+             });
+             frameSnapshot.liveFacilities.forEach(f => {
+               const fdx = p.x - f.x;
+               const fdz = p.z - f.z;
+               const fd = Math.hypot(fdx, fdz);
+               const radius = 42 * (f.visualScale || 1);
+               if (fd < radius) {
+                 const push = (radius - fd) / radius;
+                 p.x += (fdx / Math.max(1, fd)) * push * 4.5;
+                 p.z += (fdz / Math.max(1, fd)) * push * 4.5;
+               }
+             });
+
              p.x += p.vx * ds;
              p.z += p.vz * ds;
              p.y = getTerrainHeight(p.x, p.z);
@@ -12224,7 +12332,7 @@ const VillageScene = ({ themeConfig, environmentVariant, setNukeCount, setGameSt
                   p.muzzleFlashUntil = shotNow + (p.projectileType === 'missile' ? 140 : p.weaponType === 'gunner' ? 90 : 70);
                   if (p.projectileType === 'missile') {
                     entitiesRef.current.push({
-                      id: `missile-${Date.now()}-${Math.random()}`,
+                      id: `missile-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
                       type: 'missile',
                       x: p.x,
                       y: 14,
@@ -12315,7 +12423,7 @@ const VillageScene = ({ themeConfig, environmentVariant, setNukeCount, setGameSt
             if (Math.abs(diff) < 0.2 && Math.sqrt(dx*dx + dz*dz) < 400) {
                 p.fired = true;
                 entitiesRef.current.push({
-                   id: `missile-${Date.now()}-${Math.random()}`,
+                   id: `missile-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
                    type: 'missile',
                    x: p.x, y: p.y - 10, z: p.z,
                    targetX: p.targetKaiju.x, 
@@ -12355,7 +12463,7 @@ const VillageScene = ({ themeConfig, environmentVariant, setNukeCount, setGameSt
          if (dist < 30 || (dist > prevDist && dist < 150)) {
             p.dead = true;
             entitiesRef.current.push({
-               id: `missile-impact-${Date.now()}`,
+               id: `missile-impact-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
                type: 'missile_impact',
                x: p.targetX, y: p.targetY, z: p.targetZ,
                dead: false
@@ -12504,7 +12612,7 @@ const VillageScene = ({ themeConfig, environmentVariant, setNukeCount, setGameSt
           AudioManager.play('target_confirm', { volume: 0.08, duration: 0.12 });
           return;
         }
-        issueGroupMoveOrder(selectedUnits, commandTarget.target, { attackMove: true });
+        issueGroupMoveOrder(selectedUnits, commandTarget.target, { attackMove: false });
         AudioManager.play('target_confirm', { volume: 0.08, duration: 0.12 });
         return;
       }
@@ -12592,6 +12700,34 @@ const VillageScene = ({ themeConfig, environmentVariant, setNukeCount, setGameSt
       }
     };
 
+    const handleCanvasDoubleClick = (event) => {
+      if (event.button !== 0) return;
+      const clickedUnit = resolveSelectableUnit(event.clientX, event.clientY);
+      if (clickedUnit) {
+        const units = entitiesRef.current.filter((entity) => {
+          if (!isCommandableUnit(entity)) return false;
+          if (entity.type !== clickedUnit.type) return false;
+          // For soldiers, they must share the same weapon type (rifleman, sniper, etc)
+          if (entity.type === 'soldier' && entity.weaponType !== clickedUnit.weaponType) return false;
+          return true;
+        });
+        if (units.length) {
+          const pulseDuration = 1000;
+          const pulseUntil = Date.now() + pulseDuration;
+          units.forEach((u) => {
+            u.selectionPulseUntil = pulseUntil;
+          });
+          setSelectedUnits(units, event.shiftKey);
+          clearSelectedProductionBuilding();
+          const unitTypeName = getUnitTypeName(clickedUnit);
+          showCommandFeedback(`Selected ${units.length} ${unitTypeName}${units.length > 1 ? (unitTypeName.endsWith('s') ? "'" : "s") : ""}`);
+          if (typeof AudioManager !== 'undefined') {
+            AudioManager.play('target_confirm', { volume: 0.12, duration: 0.16 });
+          }
+        }
+      }
+    };
+
     const handleCanvasPointerLeave = () => {
       if (!targetingRef.current.pendingDeploy && !targetingRef.current.pendingBuild && !targetingRef.current.armedSupportKey) {
         window._falloutMouseTarget = null;
@@ -12608,6 +12744,7 @@ const VillageScene = ({ themeConfig, environmentVariant, setNukeCount, setGameSt
     canvas.addEventListener('pointerdown', handleCanvasPointerDown);
     canvas.addEventListener('pointermove', handleCanvasPointerMove);
     canvas.addEventListener('pointerup', handleCanvasPointerUp);
+    canvas.addEventListener('dblclick', handleCanvasDoubleClick);
     canvas.addEventListener('pointerleave', handleCanvasPointerLeave);
     canvas.addEventListener('contextmenu', handleContextMenu);
 
@@ -12615,6 +12752,7 @@ const VillageScene = ({ themeConfig, environmentVariant, setNukeCount, setGameSt
       canvas.removeEventListener('pointerdown', handleCanvasPointerDown);
       canvas.removeEventListener('pointermove', handleCanvasPointerMove);
       canvas.removeEventListener('pointerup', handleCanvasPointerUp);
+      canvas.removeEventListener('dblclick', handleCanvasDoubleClick);
       canvas.removeEventListener('pointerleave', handleCanvasPointerLeave);
       canvas.removeEventListener('contextmenu', handleContextMenu);
     };
@@ -12697,6 +12835,21 @@ const GameHUD = () => {
   const [showTechMap, setShowTechMap] = useState(false);
   const [showBunkerDetails, setShowBunkerDetails] = useState(false);
   const [showSupportPanel, setShowSupportPanel] = useState(false);
+  const [commandFeedback, setCommandFeedback] = useState(null);
+  const feedbackTimerRef = useRef(null);
+
+  useEffect(() => {
+    const handleFeedback = (event) => {
+      setCommandFeedback(event.detail.text);
+      if (feedbackTimerRef.current) clearTimeout(feedbackTimerRef.current);
+      feedbackTimerRef.current = setTimeout(() => setCommandFeedback(null), 3500);
+    };
+    window.addEventListener('fallout-command-feedback', handleFeedback);
+    return () => {
+      window.removeEventListener('fallout-command-feedback', handleFeedback);
+      if (feedbackTimerRef.current) clearTimeout(feedbackTimerRef.current);
+    };
+  }, []);
   
   useEffect(() => {
     const interval = setInterval(() => {
@@ -12922,7 +13075,7 @@ const GameHUD = () => {
         </div>
       )}
       <div
-        className="absolute top-3 left-3 z-30 pointer-events-auto select-none"
+        className="fallout-ui-area absolute top-3 left-3 z-30 pointer-events-auto select-none"
         style={{ fontFamily: "'Courier New', monospace", width: 'min(92vw, 390px)', maxHeight: 'calc(100vh - 24px)', overflowY: 'auto', paddingRight: '4px' }}
       >
         <div style={{ ...card, padding: '10px 12px' }}>
@@ -13047,6 +13200,24 @@ const GameHUD = () => {
         {!currentSupportCooldownMs && targetLock > 0 && (
           <div style={{ marginTop: '6px', height: '4px', borderRadius: '4px', background: '#1f2937', overflow: 'hidden' }}>
             <div style={{ height: '100%', width: `${Math.floor(targetLock * 100)}%`, background: '#ef4444' }} />
+          </div>
+        )}
+        {commandFeedback && (
+          <div
+            style={{
+              marginTop: '8px',
+              borderRadius: '10px',
+              border: '1px solid rgba(74,222,128,0.4)',
+              background: 'rgba(6,78,59,0.3)',
+              padding: '6px 10px',
+              fontSize: '9px',
+              color: '#86efac',
+              fontWeight: 'bold',
+              letterSpacing: '0.04em',
+              textTransform: 'uppercase'
+            }}
+          >
+             {commandFeedback}
           </div>
         )}
         <div
@@ -13606,7 +13777,7 @@ const SettingsMenu = ({ resolutionPreset, setResolutionPreset, fpsCap, setFpsCap
 
   return (
     <div
-      className="absolute right-4 bottom-24 z-50 pointer-events-auto select-none sm:right-6 sm:bottom-28"
+      className="fallout-ui-area absolute right-4 bottom-24 z-50 pointer-events-auto select-none sm:right-6 sm:bottom-28"
       style={{ fontFamily: "'Courier New', monospace" }}
     >
       {open && (
