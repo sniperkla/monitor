@@ -99,6 +99,8 @@ const PLANE_MODEL_SCALE = 0.6;
 const JET_MODEL_SCALE = 0.58;
 const GROUND_ARMOR_MODEL_SCALE = 0.4;
 const SOLDIER_MODEL_SCALE = 0.9;
+const TANK_BASE_ENTITY_SCALE = 2.45;
+const APC_BASE_ENTITY_SCALE = 1.88;
 const SOLDIER_MOVE_SPEED_MULTIPLIER = 0.78;
 const TANK_MOVE_SPEED_MULTIPLIER = 0.82;
 const PLANE_BOMB_BAY_OFFSET = { x: -10, y: -13, z: 0 };
@@ -522,6 +524,14 @@ const JET_MISSILE_DAMAGE = 170;
 const SOLDIER_EXPLOSIVE_SPLASH_RADIUS = 125;
 const SOLDIER_RPG_DAMAGE = 34;
 const SOLDIER_MISSILE_DAMAGE = 58;
+const SOLDIER_WEAPON_EQUIP_MS = {
+  rifleman: 280,
+  marksman: 340,
+  gunner: 380,
+  rpg: 440,
+  missile: 520,
+  engineer: 260
+};
 const SOLDIER_LOADOUTS = [
   {
     key: 'rifleman',
@@ -1069,8 +1079,29 @@ const applySoldierLoadout = (entity, seed = 0) => {
   entity.hp = loadout.hp;
   entity.maxHp = loadout.hp;
   entity.color = loadout.color;
+  entity.weaponEquipped = true;
+  entity.weaponEquipStartedAt = Date.now();
+  entity.weaponEquipUntil = entity.weaponEquipStartedAt;
   entity.dead = false;
   return entity;
+};
+
+const ensureSoldierWeaponEquipped = (entity, now = Date.now()) => {
+  if (!entity) return false;
+  if (entity.weaponEquipped) return true;
+
+  const equipUntil = entity.weaponEquipUntil || 0;
+  if (equipUntil > now) return false;
+
+  if ((entity.weaponEquipStartedAt || 0) > 0 && equipUntil > 0 && equipUntil <= now) {
+    entity.weaponEquipped = true;
+    return true;
+  }
+
+  const equipDuration = SOLDIER_WEAPON_EQUIP_MS[entity.weaponType] || 320;
+  entity.weaponEquipStartedAt = now;
+  entity.weaponEquipUntil = now + equipDuration;
+  return false;
 };
 
 const applySoldierTrainingBonuses = (entity, upgrades = DEFAULT_UPGRADES) => {
@@ -1613,6 +1644,23 @@ const ENVIRONMENT_VARIANTS = [
     ambient: '#e2e8f0',
     directional: '#cbd5e1',
     accent: '#93c5fd'
+  },
+  {
+    key: 'urban_decay',
+    label: 'Urban Decay',
+    terrainBase: '#3f464f',
+    terrainTint: '#505964',
+    patchA: '#6f7a88',
+    patchB: '#343b44',
+    crack: '#1a1e25',
+    debrisA: '#8f97a3',
+    debrisB: '#555f6d',
+    overlay: '#6b7280',
+    fog: '#6b7280',
+    ambient: '#d7dde5',
+    directional: '#f1f5f9',
+    accent: '#94a3b8',
+    urbanScene: true
   }
 ];
 
@@ -2513,7 +2561,7 @@ function createTankReinforcement(id, bunker, tankConfig = {}) {
     y: getTerrainHeight(entry.x, entry.z + 12),
     vx: 0,
     vz: 0,
-    scale: tankConfig.scale || 1.36,
+    scale: tankConfig.scale ?? (variant === 'apc' ? APC_BASE_ENTITY_SCALE : TANK_BASE_ENTITY_SCALE),
     state: 'driving',
     variant,
     speedMultiplier: tankConfig.speedMultiplier || 1,
@@ -3341,18 +3389,28 @@ const EntityPerson = memo(({ entityId, entityLookupRef, index, entitiesRef }) =>
         )}
         {p.type === 'soldier' && (
           <group position={[-0.2, -1.15, 0.35]} rotation={[0.05, p.weaponType === 'marksman' ? 0.18 : 0.06, -Math.PI / 2]}>
-            <mesh position={[0, 1.4, 0]}>
-              <boxGeometry args={[p.weaponType === 'marksman' ? 3.8 : p.weaponType === 'gunner' ? 2.9 : p.weaponType === 'engineer' ? 2.2 : 3.1, 0.18, 0.24]} />
-              <meshStandardMaterial color="#111827" roughness={0.72} metalness={0.22} />
+            <mesh position={[-0.25, 1.38, 0]}>
+              <boxGeometry args={[p.weaponType === 'missile' ? 4.4 : p.weaponType === 'rpg' ? 4.1 : p.weaponType === 'marksman' ? 3.9 : p.weaponType === 'gunner' ? 3.4 : p.weaponType === 'engineer' ? 2.6 : 3.2, p.weaponType === 'missile' ? 0.34 : p.weaponType === 'rpg' ? 0.34 : 0.24, p.weaponType === 'missile' ? 0.4 : p.weaponType === 'rpg' ? 0.36 : p.weaponType === 'engineer' ? 0.34 : 0.28]} />
+              <meshStandardMaterial color={p.weaponType === 'engineer' ? '#4b5563' : '#111827'} roughness={0.58} metalness={0.32} />
             </mesh>
-            <mesh position={[0.65, 0.7, 0]}>
-              <boxGeometry args={[0.2, 1.15, 0.22]} />
-              <meshStandardMaterial color="#1f2937" roughness={0.75} />
+            <mesh position={[0.55, p.weaponType === 'missile' ? 1.72 : 1.56, 0]}>
+              <boxGeometry args={[p.weaponType === 'marksman' ? 2.0 : p.weaponType === 'missile' ? 2.1 : 1.5, p.weaponType === 'missile' ? 0.2 : 0.14, 0.18]} />
+              <meshStandardMaterial color="#64748b" roughness={0.48} metalness={0.4} />
+            </mesh>
+            <mesh position={[0.55, 0.76, 0]}>
+              <boxGeometry args={[0.22, p.weaponType === 'engineer' ? 0.82 : p.weaponType === 'missile' ? 1.35 : p.weaponType === 'rpg' ? 1.28 : p.weaponType === 'gunner' ? 1.22 : 1.1, p.weaponType === 'missile' ? 0.3 : 0.22]} />
+              <meshStandardMaterial color={p.weaponType === 'engineer' ? '#374151' : '#1f2937'} roughness={0.72} />
             </mesh>
             <mesh position={[-1.15, 1.46, 0]}>
-              <boxGeometry args={[1.3, 0.14, 0.18]} />
-              <meshStandardMaterial color="#5b4636" roughness={0.92} />
+              <boxGeometry args={[p.weaponType === 'missile' ? 1.55 : p.weaponType === 'rpg' ? 1.45 : 1.3, p.weaponType === 'missile' ? 0.3 : 0.16, p.weaponType === 'missile' ? 0.36 : 0.2]} />
+              <meshStandardMaterial color={p.weaponType === 'engineer' ? '#f59e0b' : p.weaponType === 'marksman' ? '#374151' : '#5b4636'} roughness={0.88} metalness={p.weaponType === 'engineer' ? 0.22 : 0.06} />
             </mesh>
+            {p.weaponType !== 'engineer' && (
+              <mesh position={[1.55, 1.42, 0]} rotation={[0, 0, Math.PI / 2]}>
+                <cylinderGeometry args={[p.weaponType === 'rpg' ? 0.14 : p.weaponType === 'missile' ? 0.12 : 0.08, p.weaponType === 'rpg' ? 0.14 : p.weaponType === 'missile' ? 0.12 : 0.08, p.weaponType === 'marksman' ? 2.1 : p.weaponType === 'gunner' ? 1.9 : p.weaponType === 'rpg' ? 2.4 : p.weaponType === 'missile' ? 1.2 : 1.6, 8]} />
+                <meshStandardMaterial color="#0f172a" roughness={0.4} metalness={0.56} />
+              </mesh>
+            )}
             {p.weaponType === 'marksman' && (
               <mesh position={[0.45, 1.65, 0]}>
                 <cylinderGeometry args={[0.08, 0.08, 0.9, 8]} />
@@ -3360,16 +3418,40 @@ const EntityPerson = memo(({ entityId, entityLookupRef, index, entitiesRef }) =>
               </mesh>
             )}
             {p.weaponType === 'gunner' && (
-              <mesh position={[0.55, 0.8, 0]}>
-                <boxGeometry args={[0.5, 0.45, 0.34]} />
-                <meshStandardMaterial color="#374151" roughness={0.8} />
+              <mesh position={[0.62, 0.7, 0]}>
+                <boxGeometry args={[0.55, 0.72, 0.42]} />
+                <meshStandardMaterial color="#4b5563" roughness={0.76} />
               </mesh>
             )}
-            {p.weaponType === 'engineer' && (
-              <mesh position={[0.2, 0.92, 0]}>
-                <boxGeometry args={[0.35, 0.9, 0.3]} />
-                <meshStandardMaterial color="#f59e0b" roughness={0.78} metalness={0.26} />
+            {p.weaponType === 'rpg' && (
+              <mesh position={[2.45, 1.44, 0]} rotation={[0, 0, -Math.PI / 2]}>
+                <coneGeometry args={[0.22, 0.62, 8]} />
+                <meshStandardMaterial color="#fbbf24" roughness={0.42} metalness={0.24} />
               </mesh>
+            )}
+            {p.weaponType === 'missile' && (
+              <>
+                <mesh position={[1.55, 1.72, 0.18]} rotation={[0, 0, Math.PI / 2]}>
+                  <cylinderGeometry args={[0.13, 0.13, 2.2, 8]} />
+                  <meshStandardMaterial color="#64748b" roughness={0.42} metalness={0.34} />
+                </mesh>
+                <mesh position={[1.55, 1.14, -0.18]} rotation={[0, 0, Math.PI / 2]}>
+                  <cylinderGeometry args={[0.13, 0.13, 2.2, 8]} />
+                  <meshStandardMaterial color="#475569" roughness={0.42} metalness={0.34} />
+                </mesh>
+              </>
+            )}
+            {p.weaponType === 'engineer' && (
+              <>
+                <mesh position={[1.25, 1.38, 0]} rotation={[0, 0, Math.PI / 2]}>
+                  <cylinderGeometry args={[0.11, 0.11, 1.25, 8]} />
+                  <meshStandardMaterial color="#e5e7eb" roughness={0.34} metalness={0.64} />
+                </mesh>
+                <mesh position={[1.95, 1.38, 0]} rotation={[0, 0, -Math.PI / 2]}>
+                  <coneGeometry args={[0.16, 0.42, 8]} />
+                  <meshStandardMaterial color="#fde68a" roughness={0.34} metalness={0.34} />
+                </mesh>
+              </>
             )}
           </group>
         )}
@@ -3759,6 +3841,12 @@ const EntityTank = memo(({ entityId, entityLookupRef, index, entitiesRef, frameS
       : entitiesRef.current.filter((entity) => (
           entity.type === 'kaiju' && !isKaijuDefeated(entity) && !isFlyingKaiju(entity)
         ));
+    const allBunkers = frameSnapshotRef?.current?.ready
+      ? frameSnapshotRef.current.allBunkers
+      : entitiesRef.current.filter(e => e.type === 'bunker' && !e.dead);
+    const liveFacilities = frameSnapshotRef?.current?.ready
+      ? frameSnapshotRef.current.liveFacilities
+      : entitiesRef.current.filter(e => e.type === 'facility' && !e.dead);
 
     soundCooldown.current = Math.max(0, soundCooldown.current - delta);
     fireAnim.current = Math.max(0, fireAnim.current - delta * 4.8);
@@ -3837,6 +3925,17 @@ const EntityTank = memo(({ entityId, entityLookupRef, index, entitiesRef, frameS
              const push = (52 - bd) / 52;
              p.x += (bdx / Math.max(0.1, bd)) * push * 5;
              p.z += (bdz / Math.max(0.1, bd)) * push * 5;
+          }
+        });
+        liveFacilities.forEach(f => {
+          const fdx = p.x - f.x;
+          const fdz = p.z - f.z;
+          const fd = Math.hypot(fdx, fdz);
+          const radius = 58 * (f.visualScale || 1);
+          if (fd < radius) {
+            const push = (radius - fd) / radius;
+            p.x += (fdx / Math.max(1, fd)) * push * 5;
+            p.z += (fdz / Math.max(1, fd)) * push * 5;
           }
         });
 
@@ -4146,12 +4245,20 @@ const SOLDIER_ASSET_NAME_BY_WEAPON = {
 const EntitySoldierGLB = memo(({ entityId, entityLookupRef, index, entitiesRef }) => {
   const group = useRef();
   const visualRef = useRef();
+  const soldierRigRef = useRef(null);
   const repairBeamRef = useRef();
   const repairSparkRef = useRef();
   const muzzleFlashRef = useRef();
   const muzzleHaloRef = useRef();
   const selectionFlashRef = useRef();
   const selectionBeamRef = useRef();
+  
+  // Procedural Animation Refs
+  const walkCycle = useRef(0);
+  const legLRef = useRef();
+  const legRRef = useRef();
+  const armLRef = useRef();
+  const armRRef = useRef();
   const [assetReady, setAssetReady] = useState(Boolean(humanUnitsAssetCache.scene));
   const [assetFailed, setAssetFailed] = useState(Boolean(humanUnitsAssetCache.error));
   const p = getTrackedEntity({ entitiesRef, entityLookupRef, entityId, index });
@@ -4161,6 +4268,24 @@ const EntitySoldierGLB = memo(({ entityId, entityLookupRef, index, entitiesRef }
     if (!assetReady || !humanUnitsAssetCache.scene) return null;
     return cloneNamedGlbGroup(humanUnitsAssetCache.scene, assetName);
   }, [assetReady, assetName]);
+  const soldierRig = useMemo(
+    () => (soldierScene ? buildSoldierAnimationRig(soldierScene) : null),
+    [soldierScene]
+  );
+  const soldierRigReady = useMemo(
+    () => Boolean(
+      soldierRig &&
+      soldierRig.torso?.node &&
+      soldierRig.head?.node &&
+      soldierRig.armLeft?.node &&
+      soldierRig.armRight?.node &&
+      soldierRig.legLeft?.node &&
+      soldierRig.legRight?.node &&
+      (soldierRig.weapon?.node || soldierRig.tool?.node)
+    ),
+    [soldierRig]
+  );
+  const useFallbackSoldierMesh = !soldierScene || !soldierRigReady;
 
   useEffect(() => {
     let cancelled = false;
@@ -4181,6 +4306,13 @@ const EntitySoldierGLB = memo(({ entityId, entityLookupRef, index, entitiesRef }
 
   useEffect(() => () => disposeClonedMaterials(soldierScene), [soldierScene]);
 
+  useEffect(() => {
+    soldierRigRef.current = soldierRigReady ? soldierRig : null;
+    return () => {
+      soldierRigRef.current = null;
+    };
+  }, [soldierRig, soldierRigReady]);
+
   useFrame((state, delta) => {
     const current = getTrackedEntity({ entitiesRef, entityLookupRef, entityId, index });
     if (!current || current.dead) {
@@ -4197,9 +4329,12 @@ const EntitySoldierGLB = memo(({ entityId, entityLookupRef, index, entitiesRef }
     const targetYaw = -facingAngle + Math.PI / 2;
     const bob = moving ? Math.sin(state.clock.elapsedTime * 7.2) * Math.min(1.2, speed * 0.22) : 0;
     const now = Date.now();
+    const weaponReady = ensureSoldierWeaponEquipped(current, now);
+    const equipping = !weaponReady && (current.weaponEquipUntil || 0) > now;
     const firing = (current.firePoseUntil || 0) > now;
     const flashing = (current.muzzleFlashUntil || 0) > now;
-    const attackPose = current.state === 'attacking_kaiju' || firing;
+    const attackPose = firing || equipping || (current.state === 'attacking_kaiju' && weaponReady);
+    const repairPose = current.weaponType === 'engineer' && current.state === 'repairing';
     const sway = moving ? Math.sin(state.clock.elapsedTime * 10.5) * Math.min(0.08, speed * 0.02) : 0;
     const recoil = firing ? Math.sin(state.clock.elapsedTime * 48) * 0.07 : 0;
 
@@ -4230,6 +4365,174 @@ const EntitySoldierGLB = memo(({ entityId, entityLookupRef, index, entitiesRef }
         attackPose ? 0.5 : 0,
         Math.min(1, delta * 8)
       );
+      
+      // Procedural Walk Animation for fallback meshes
+      walkCycle.current += speed * 4.5 * delta * 60;
+      const swing = moving ? Math.sin(walkCycle.current) * 0.6 : 0;
+      const armSwing = moving ? Math.sin(walkCycle.current) * 0.45 : 0;
+      
+      if (legLRef.current) legLRef.current.rotation.x = swing;
+      if (legRRef.current) legRRef.current.rotation.x = -swing;
+      
+      if (armLRef.current) armLRef.current.rotation.x = attackPose ? -1.2 : current.state === 'repairing' ? -0.8 : -armSwing;
+      if (armRRef.current) armRRef.current.rotation.x = attackPose ? -1.2 : current.state === 'repairing' ? -0.8 : armSwing;
+    }
+
+    const rig = soldierRigRef.current;
+    if (rig) {
+      const baseMoveSpeed = Math.max(0.1, (current.combatSpeed || 2.6) * SOLDIER_MOVE_SPEED_MULTIPLIER);
+      const normalizedSpeed = THREE.MathUtils.clamp(speed / baseMoveSpeed, 0, 1.35);
+      const locomotion = moving ? THREE.MathUtils.clamp(normalizedSpeed, 0, 1) : 0;
+      const isRunning = locomotion > 0.72;
+      const stepFrequency = moving ? THREE.MathUtils.lerp(5.2, 9.8, locomotion) : 1.5;
+      walkCycle.current += delta * stepFrequency * (0.8 + normalizedSpeed * 0.55);
+
+      const stride = Math.sin(walkCycle.current);
+      const oppositeStride = Math.sin(walkCycle.current + Math.PI);
+      const strideLift = Math.max(0, Math.sin(walkCycle.current - Math.PI * 0.15));
+      const oppositeStrideLift = Math.max(0, Math.sin(walkCycle.current + Math.PI - Math.PI * 0.15));
+      const bounce = Math.abs(Math.sin(walkCycle.current * 2));
+      const idleBreath = Math.sin(state.clock.elapsedTime * 1.9) * 0.02;
+      const movementAmount = locomotion * (attackPose ? 0.34 : repairPose ? 0.44 : 1);
+      const legSwing = stride * (isRunning ? 0.78 : 0.56) * movementAmount;
+      const armSwing = stride * (isRunning ? 0.52 : 0.34) * movementAmount;
+      const torsoRise = bounce * (isRunning ? 0.65 : 0.42) * movementAmount;
+      const torsoLean = attackPose ? -0.2 : repairPose ? -0.26 : -movementAmount * 0.08;
+      const torsoRoll = attackPose ? 0 : stride * 0.03 * movementAmount;
+      const weaponCarrier = rig.weapon || rig.tool;
+
+      applyRigTransform(rig.legLeft, delta, {
+        rotation: { x: legSwing, z: -stride * 0.03 * movementAmount },
+        position: { y: strideLift * 0.18 * movementAmount, z: Math.max(0, legSwing) * 0.28 }
+      }, 11);
+      applyRigTransform(rig.legRight, delta, {
+        rotation: { x: -legSwing, z: oppositeStride * 0.03 * movementAmount },
+        position: { y: oppositeStrideLift * 0.18 * movementAmount, z: Math.max(0, -legSwing) * 0.28 }
+      }, 11);
+      applyRigTransform(rig.bootLeft, delta, {
+        rotation: { x: -legSwing * 0.42, z: -stride * 0.02 * movementAmount },
+        position: { y: strideLift * 0.1 * movementAmount, z: Math.max(0, legSwing) * 0.18 }
+      }, 12);
+      applyRigTransform(rig.bootRight, delta, {
+        rotation: { x: legSwing * 0.42, z: oppositeStride * 0.02 * movementAmount },
+        position: { y: oppositeStrideLift * 0.1 * movementAmount, z: Math.max(0, -legSwing) * 0.18 }
+      }, 12);
+
+      applyRigTransform(rig.torso, delta, {
+        position: { y: torsoRise + idleBreath * 0.8, z: moving ? -movementAmount * 0.25 : 0 },
+        rotation: { x: torsoLean + idleBreath, z: torsoRoll }
+      }, 9);
+      applyRigTransform(rig.vest, delta, {
+        position: { y: torsoRise * 0.86 },
+        rotation: { x: torsoLean * 0.72, z: torsoRoll * 0.8 }
+      }, 9);
+      applyRigTransform(rig.pack, delta, {
+        position: { y: torsoRise * 0.7, z: moving ? -movementAmount * 0.16 : 0 },
+        rotation: { x: -torsoLean * 0.24 + bounce * 0.05 * movementAmount, z: -torsoRoll * 0.7 }
+      }, 8);
+      applyRigTransform(rig.belt, delta, {
+        position: { y: torsoRise * 0.55 },
+        rotation: { z: torsoRoll * 1.1 }
+      }, 8);
+
+      const combatHold =
+        current.weaponType === 'missile'
+          ? {
+              leftArm: { x: -1.16, y: 0.22, z: 0.58 },
+              rightArm: { x: -1.08 + recoil * 0.28, y: -0.14, z: -0.42 },
+              weapon: {
+                position: { x: -2.1, y: 5.4, z: -1.9 },
+                rotation: { x: -0.26 + recoil * 0.18, y: -0.08, z: 1.16 }
+              }
+            }
+          : current.weaponType === 'rpg'
+            ? {
+                leftArm: { x: -1.08, y: 0.18, z: 0.48 },
+                rightArm: { x: -1.02 + recoil * 0.24, y: -0.1, z: -0.34 },
+                weapon: {
+                  position: { x: -2.35, y: 4.9, z: -1.4 },
+                  rotation: { x: -0.18 + recoil * 0.2, y: 0.04, z: 1.12 }
+                }
+              }
+            : current.weaponType === 'engineer'
+              ? {
+                  leftArm: { x: -1.02, y: 0.16, z: 0.36 },
+                  rightArm: { x: -1.06 + recoil * 0.2, y: -0.06, z: -0.28 },
+                  weapon: {
+                    position: { x: -2.55, y: 4.2, z: -1.15 },
+                    rotation: { x: -0.12 + recoil * 0.18, y: 0.06, z: 1.18 }
+                  }
+                }
+              : {
+                  leftArm: { x: -1.04, y: 0.18, z: 0.42 },
+                  rightArm: { x: -1.08 + recoil * 0.28, y: -0.08, z: -0.3 },
+                  weapon: {
+                    position: { x: -2.8, y: 4.4, z: -1.2 },
+                    rotation: { x: -0.12 + recoil * 0.24, y: 0.08, z: 1.24 }
+                  }
+                };
+      const leftArmRotation = attackPose
+        ? combatHold.leftArm
+        : repairPose
+          ? { x: -0.66 + bounce * 0.12, y: -0.06, z: 0.22 }
+          : { x: -armSwing * 0.95, z: -stride * 0.05 * movementAmount };
+      const rightArmRotation = attackPose
+        ? combatHold.rightArm
+        : repairPose
+          ? { x: -0.88 + stride * 0.16, y: 0.14, z: -0.3 }
+          : { x: armSwing * 0.82, z: stride * 0.05 * movementAmount };
+
+      applyRigTransform(rig.armLeft, delta, { rotation: leftArmRotation, position: { y: torsoRise * 0.35 } }, 10);
+      applyRigTransform(rig.armRight, delta, { rotation: rightArmRotation, position: { y: torsoRise * 0.28 } }, 10);
+      applyRigTransform(rig.padLeft, delta, {
+        rotation: { x: leftArmRotation.x * 0.6, z: leftArmRotation.z * 0.8 },
+        position: { y: torsoRise * 0.34 }
+      }, 10);
+      applyRigTransform(rig.padRight, delta, {
+        rotation: { x: rightArmRotation.x * 0.6, z: rightArmRotation.z * 0.8 },
+        position: { y: torsoRise * 0.28 }
+      }, 10);
+
+      applyRigTransform(rig.head, delta, {
+        position: { y: torsoRise * 0.5 + idleBreath * 0.9 },
+        rotation: { x: -torsoLean * 0.35 - idleBreath * 0.4, y: moving ? stride * 0.03 * movementAmount : 0 }
+      }, 7);
+      applyRigTransform(rig.helmet, delta, {
+        position: { y: torsoRise * 0.48 + idleBreath * 0.8 },
+        rotation: { x: -torsoLean * 0.3, y: moving ? stride * 0.025 * movementAmount : 0 }
+      }, 7);
+      applyRigTransform(rig.visor, delta, {
+        position: { y: torsoRise * 0.46 + idleBreath * 0.75 },
+        rotation: { x: -torsoLean * 0.22 }
+      }, 7);
+      applyRigTransform(rig.neckWrap, delta, {
+        position: { y: torsoRise * 0.43 + idleBreath * 0.4 },
+        rotation: { x: -torsoLean * 0.18 }
+      }, 7);
+
+      applyRigTransform(weaponCarrier, delta, {
+        position: attackPose
+          ? combatHold.weapon.position
+          : {
+              y: repairPose ? 0.22 : torsoRise * 0.18,
+              z: moving ? stride * 0.1 * movementAmount : 0
+            },
+        rotation: attackPose
+          ? combatHold.weapon.rotation
+          : {
+              x: repairPose ? -0.22 : stride * 0.04 * movementAmount,
+              y: 0,
+              z: repairPose ? -0.18 : -stride * 0.04 * movementAmount
+            }
+      }, 12);
+      applyRigTransform(rig.toolCanister, delta, {
+        rotation: { x: bounce * 0.05 * movementAmount, z: -stride * 0.05 * movementAmount },
+        position: { y: torsoRise * 0.44 }
+      }, 8);
+      applyRigTransform(rig.torch, delta, {
+        rotation: { x: repairPose ? -0.2 + bounce * 0.08 : stride * 0.08 * movementAmount, z: repairPose ? -0.24 : 0 },
+        position: { y: torsoRise * 0.22, z: repairPose ? 0.18 : 0 }
+      }, 10);
     }
 
     if (muzzleFlashRef.current && muzzleHaloRef.current) {
@@ -4305,22 +4608,67 @@ const EntitySoldierGLB = memo(({ entityId, entityLookupRef, index, entitiesRef }
         </group>
       )}
       <group ref={visualRef}>
-        {soldierScene ? (
+        {!useFallbackSoldierMesh ? (
           <primitive object={soldierScene} />
         ) : (
-          <group>
-          <mesh position={[0, 12, 0]}>
-            <capsuleGeometry args={[3.2, 12, 6, 10]} />
-            <meshStandardMaterial color={p.weaponType === 'engineer' ? '#0f766e' : '#4b5563'} roughness={0.86} metalness={0.08} />
-          </mesh>
-          <mesh position={[0, 24, 0]}>
-            <sphereGeometry args={[4.4, 14, 12]} />
-            <meshStandardMaterial color="#c68642" roughness={0.72} />
-          </mesh>
-          <mesh position={[0, 29, -1]}>
-            <cylinderGeometry args={[4.8, 4.5, 4.2, 12]} />
-            <meshStandardMaterial color="#374151" roughness={0.78} metalness={0.18} />
-          </mesh>
+          <group position={[0, 9, 0]}>
+            {/* Torso */}
+            <mesh position={[0, 4, 0]}>
+              <boxGeometry args={[6, 8, 4]} />
+              <AliveMaterial color={p.weaponType === 'engineer' ? '#0f766e' : '#4b5563'} roughness={0.86} metalness={0.08} />
+            </mesh>
+            {/* Backpack / Gear */}
+            <mesh position={[0, 4, -3]}>
+              <boxGeometry args={[5, 6, 3]} />
+              <AliveMaterial color="#374151" roughness={0.9} />
+            </mesh>
+            {/* Head */}
+            <mesh position={[0, 9.5, 0]}>
+              <sphereGeometry args={[2.5, 12, 12]} />
+              <AliveMaterial color="#c68642" roughness={0.72} />
+            </mesh>
+            {/* Combat Helmet */}
+            <mesh position={[0, 10.2, 0]} rotation={[0.1, 0, 0]}>
+              <cylinderGeometry args={[2.8, 2.8, 2.5, 12]} />
+              <AliveMaterial color="#374151" roughness={0.78} metalness={0.18} />
+            </mesh>
+
+            {/* Left Arm (Pivot from shoulder) */}
+            <group ref={armLRef} position={[-4, 7, 0]}>
+              <mesh position={[0, -3.5, 0]}>
+                <boxGeometry args={[2, 7, 2.5]} />
+                <AliveMaterial color="#4b5563" />
+              </mesh>
+            </group>
+            
+            {/* Right Arm */}
+            <group ref={armRRef} position={[4, 7, 0]}>
+              <mesh position={[0, -3.5, 0]}>
+                <boxGeometry args={[2, 7, 2.5]} />
+                <AliveMaterial color="#4b5563" />
+              </mesh>
+              {/* Fallback Weapon attached to Right Arm */}
+              <mesh position={[0, -5, 4]}>
+                <boxGeometry args={[1, 1, 8]} />
+                <AliveMaterial color="#111827" roughness={0.5} />
+              </mesh>
+            </group>
+
+            {/* Left Leg (Pivot from hip) */}
+            <group ref={legLRef} position={[-1.6, 0, 0]}>
+              <mesh position={[0, -4.5, 0]}>
+                <boxGeometry args={[2.4, 9, 2.4]} />
+                <AliveMaterial color={p.weaponType === 'engineer' ? '#115e59' : '#1f2937'} />
+              </mesh>
+            </group>
+            
+            {/* Right Leg */}
+            <group ref={legRRef} position={[1.6, 0, 0]}>
+              <mesh position={[0, -4.5, 0]}>
+                <boxGeometry args={[2.4, 9, 2.4]} />
+                <AliveMaterial color={p.weaponType === 'engineer' ? '#115e59' : '#1f2937'} />
+              </mesh>
+            </group>
           </group>
         )}
         <mesh ref={muzzleHaloRef} visible={false} position={[0, 15.2, 11.4]} rotation={[-Math.PI / 2, 0, 0]} renderOrder={5}>
@@ -4524,27 +4872,58 @@ const EntityHouse = memo(({ index, entitiesRef }) => {
         {intactModel ? (
           <primitive object={intactModel} />
         ) : (
-          <>
-            <mesh position={[0, 19, 0]}>
-              <boxGeometry args={[28, 30, 28]} />
-              <meshStandardMaterial color={entity.color} roughness={0.82} />
+          <group position={[0, 16, 0]}>
+            {/* Main building block */}
+            <mesh position={[0, 0, 0]}>
+              <boxGeometry args={[26, 32, 26]} />
+              <AliveMaterial color={entity.color} roughness={0.88} metalness={0.12} />
             </mesh>
-            <mesh position={[0, 37, 0]}>
-              <boxGeometry args={[30, 4, 18]} />
-              <meshStandardMaterial color={entity.roofColor} roughness={0.84} />
+            {/* Foundation rim */}
+            <mesh position={[0, -14, 0]}>
+              <boxGeometry args={[28, 4, 28]} />
+              <AliveMaterial color="#2d2d2d" roughness={0.95} metalness={0.05} />
             </mesh>
-          </>
+            {/* Modern sloped roof */}
+            <mesh position={[0, 20, 0]} rotation={[0, Math.PI / 4, 0]}>
+              <cylinderGeometry args={[1, 24, 8, 4]} />
+              <AliveMaterial color={entity.roofColor || '#1f2937'} roughness={0.7} metalness={0.4} />
+            </mesh>
+            {/* Windows (glowing) */}
+            {[-6, 6].map((wx, i) => (
+              <mesh key={`win-f-${i}`} position={[wx, 4, 13.2]}>
+                <boxGeometry args={[6, 8, 0.5]} />
+                <AliveMaterial color="#e0f2fe" emissive="#38bdf8" emissiveIntensity={0.6} roughness={0.2} metalness={0.8} />
+              </mesh>
+            ))}
+            {[-6, 6].map((wx, i) => (
+              <mesh key={`win-b-${i}`} position={[wx, 4, -13.2]}>
+                <boxGeometry args={[6, 8, 0.5]} />
+                <AliveMaterial color="#e0f2fe" emissive="#38bdf8" emissiveIntensity={0.6} roughness={0.2} metalness={0.8} />
+              </mesh>
+            ))}
+            {/* Entrance door */}
+            <mesh position={[0, -8, 13.5]}>
+              <boxGeometry args={[8, 12, 1]} />
+              <AliveMaterial color="#475569" roughness={0.6} metalness={0.5} />
+            </mesh>
+          </group>
         )}
       </group>
 
-      <group ref={broken} visible={false} scale={[entity.scale, entity.scale, entity.scale]}>
+      <group ref={broken} scale={[entity.scale, entity.scale, entity.scale]}>
         {brokenModel ? (
           <primitive object={brokenModel} />
         ) : (
-          <mesh position={[0, 4, 0]}>
-            <boxGeometry args={[36, 9, 36]} />
-            <meshStandardMaterial color="#3b2213" roughness={0.96} />
-          </mesh>
+          <group position={[0, 12, 0]}>
+            <mesh position={[0, 0, 0]}>
+              <boxGeometry args={[26, 24, 26]} />
+              <AliveMaterial color={entity.color} roughness={0.95} metalness={0.1} />
+            </mesh>
+            <mesh position={[0, 14, 0]} rotation={[0.2, 0.4, -0.1]}>
+              <boxGeometry args={[28, 3, 16]} />
+              <AliveMaterial color={entity.roofColor || '#1f2937'} roughness={0.8} metalness={0.3} />
+            </mesh>
+          </group>
         )}
         {[0, 1].map((i) => (
           <mesh
@@ -4731,6 +5110,294 @@ const EntityTree = memo(({ index, entitiesRef }) => {
           </mesh>
         ))}
       </group>
+    </group>
+  );
+});
+
+const STREET_PROP_ASSET_NAMES = {
+  lamp: 'prop_street_lamp',
+  pole: 'prop_utility_pole',
+  sign: 'prop_street_sign',
+  barrier: 'prop_road_barrier',
+  crate: 'prop_supply_crate',
+  wreck: 'prop_street_wreck'
+};
+
+const hashStableString = (value) => {
+  const text = String(value || '');
+  let hash = 2166136261;
+  for (let i = 0; i < text.length; i++) {
+    hash ^= text.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return hash >>> 0;
+};
+
+const pseudoRandomFromSeed = (seed, offset = 0) => {
+  const raw = Math.sin((seed + 1) * 12.9898 + offset * 78.233) * 43758.5453;
+  return raw - Math.floor(raw);
+};
+
+const getHouseBasisVectors = (house) => {
+  const yaw = house?.rotation || 0;
+  return {
+    forwardX: Math.sin(yaw),
+    forwardZ: Math.cos(yaw),
+    rightX: Math.cos(yaw),
+    rightZ: -Math.sin(yaw)
+  };
+};
+
+const clampStreetPropPosition = (x, z, padding = 80) => ({
+  x: Math.max(-HALF_WORLD_WIDTH + padding, Math.min(HALF_WORLD_WIDTH - padding, x)),
+  z: Math.max(-HALF_WORLD_DEPTH + padding, Math.min(HALF_WORLD_DEPTH - padding, z))
+});
+
+const getStreetPropThemePalette = (themeName) => {
+  if (themeName === 'city') {
+    return {
+      palette: {
+        street_metal: '#475569',
+        street_emissive: '#fef3c7',
+        street_panel: '#2563eb',
+        street_warning: '#f97316',
+        street_wood: '#8b5e34',
+        street_crate: '#6b4423',
+        street_tarp: '#334155',
+        street_glass: '#93c5fd',
+        street_wreck: '#7f1d1d'
+      },
+      emissive: {
+        street_emissive: 0.52,
+        street_glass: 0.1
+      }
+    };
+  }
+  if (themeName === 'militarybase') {
+    return {
+      palette: {
+        street_metal: '#4b5563',
+        street_emissive: '#fde68a',
+        street_panel: '#365314',
+        street_warning: '#d97706',
+        street_wood: '#5b3a1a',
+        street_crate: '#556b2f',
+        street_tarp: '#1f2937',
+        street_glass: '#7dd3fc',
+        street_wreck: '#4b5563'
+      },
+      emissive: {
+        street_emissive: 0.42,
+        street_glass: 0.08
+      }
+    };
+  }
+  return {
+    palette: {
+      street_metal: '#64748b',
+      street_emissive: '#fde68a',
+      street_panel: '#1d4ed8',
+      street_warning: '#f59e0b',
+      street_wood: '#7c4a22',
+      street_crate: '#8b5e34',
+      street_tarp: '#475569',
+      street_glass: '#93c5fd',
+      street_wreck: '#7f1d1d'
+    },
+    emissive: {
+      street_emissive: 0.46,
+      street_glass: 0.1
+    }
+  };
+};
+
+const pushStreetPropPlacement = (placements, house, themeName, asset, seed, variantIndex = 0) => {
+  const { forwardX, forwardZ, rightX, rightZ } = getHouseBasisVectors(house);
+  const footprint = 24 + (house.scale || 1) * 10 + (house.style === 'tower' ? 18 : 0);
+  const sideSign = pseudoRandomFromSeed(seed, 7 + variantIndex) > 0.5 ? 1 : -1;
+  let forwardDistance = footprint;
+  let lateralDistance = 0;
+  let rotationY = house.rotation || 0;
+  let scale = 1;
+
+  if (asset === 'lamp') {
+    forwardDistance = footprint + 12 + pseudoRandomFromSeed(seed, 11 + variantIndex) * 18;
+    lateralDistance = sideSign * (footprint * 0.7 + 10 + pseudoRandomFromSeed(seed, 13 + variantIndex) * 16);
+    rotationY = pseudoRandomFromSeed(seed, 17 + variantIndex) * Math.PI * 2;
+    scale = 0.92 + pseudoRandomFromSeed(seed, 19 + variantIndex) * 0.22;
+  } else if (asset === 'pole') {
+    forwardDistance = footprint + 18 + pseudoRandomFromSeed(seed, 23 + variantIndex) * 26;
+    lateralDistance = sideSign * (footprint + 14 + pseudoRandomFromSeed(seed, 29 + variantIndex) * 18);
+    rotationY = (house.rotation || 0) + (pseudoRandomFromSeed(seed, 31 + variantIndex) - 0.5) * 0.18;
+    scale = 0.95 + pseudoRandomFromSeed(seed, 37 + variantIndex) * 0.28;
+  } else if (asset === 'sign') {
+    forwardDistance = footprint + 8 + pseudoRandomFromSeed(seed, 41 + variantIndex) * 14;
+    lateralDistance = sideSign * (footprint * 0.55 + 4 + pseudoRandomFromSeed(seed, 43 + variantIndex) * 10);
+    rotationY = (house.rotation || 0) + (sideSign > 0 ? Math.PI / 2 : -Math.PI / 2);
+    scale = 0.88 + pseudoRandomFromSeed(seed, 47 + variantIndex) * 0.16;
+  } else if (asset === 'barrier') {
+    forwardDistance = footprint + 14 + pseudoRandomFromSeed(seed, 53 + variantIndex) * 16;
+    lateralDistance = sideSign * (6 + pseudoRandomFromSeed(seed, 59 + variantIndex) * 10);
+    rotationY = (house.rotation || 0) + Math.PI / 2 + (pseudoRandomFromSeed(seed, 61 + variantIndex) - 0.5) * 0.16;
+    scale = 0.92 + pseudoRandomFromSeed(seed, 67 + variantIndex) * 0.18;
+  } else if (asset === 'crate') {
+    forwardDistance = footprint * (themeName === 'militarybase' ? 0.18 : -0.08) + pseudoRandomFromSeed(seed, 71 + variantIndex) * 12;
+    lateralDistance = sideSign * (footprint * 0.72 + 5 + pseudoRandomFromSeed(seed, 73 + variantIndex) * 14);
+    rotationY = pseudoRandomFromSeed(seed, 79 + variantIndex) * Math.PI * 2;
+    scale = 0.86 + pseudoRandomFromSeed(seed, 83 + variantIndex) * 0.26;
+  } else if (asset === 'wreck') {
+    forwardDistance = footprint + 26 + pseudoRandomFromSeed(seed, 89 + variantIndex) * 26;
+    lateralDistance = sideSign * (footprint + 10 + pseudoRandomFromSeed(seed, 97 + variantIndex) * 22);
+    rotationY = (house.rotation || 0) + Math.PI / 2 + (pseudoRandomFromSeed(seed, 101 + variantIndex) - 0.5) * 0.7;
+    scale = 0.9 + pseudoRandomFromSeed(seed, 103 + variantIndex) * 0.32;
+  }
+
+  const worldX = house.x + forwardX * forwardDistance + rightX * lateralDistance;
+  const worldZ = house.z + forwardZ * forwardDistance + rightZ * lateralDistance;
+  const clamped = clampStreetPropPosition(worldX, worldZ);
+  placements.push({
+    key: `${house.id}-${asset}-${variantIndex}`,
+    asset,
+    x: clamped.x,
+    y: getTerrainHeight(clamped.x, clamped.z),
+    z: clamped.z,
+    rotationY,
+    scale
+  });
+};
+
+const createStreetPropPlacements = (houses, themeName = 'village') => {
+  if (!Array.isArray(houses) || !houses.length) return [];
+
+  const sortedHouses = [...houses].sort((a, b) => String(a.id).localeCompare(String(b.id)));
+  const placements = [];
+  const primaryPools = {
+    village: ['lamp', 'lamp', 'sign', 'crate', 'pole', 'barrier'],
+    city: ['lamp', 'lamp', 'pole', 'sign', 'barrier', 'wreck'],
+    militarybase: ['barrier', 'crate', 'crate', 'pole', 'lamp', 'wreck']
+  };
+  const secondaryChances = {
+    village: 0.26,
+    city: 0.34,
+    militarybase: 0.42
+  };
+  const secondaryPools = {
+    village: ['crate', 'sign', 'lamp'],
+    city: ['barrier', 'sign', 'wreck'],
+    militarybase: ['crate', 'barrier', 'pole']
+  };
+  const primaryPool = primaryPools[themeName] || primaryPools.village;
+  const secondaryPool = secondaryPools[themeName] || secondaryPools.village;
+  const secondaryChance = secondaryChances[themeName] ?? secondaryChances.village;
+
+  sortedHouses.forEach((house, houseIndex) => {
+    const seed = hashStableString(`${themeName}:${house.id}:${houseIndex}`);
+    const primaryAsset = primaryPool[Math.floor(pseudoRandomFromSeed(seed, 1) * primaryPool.length) % primaryPool.length];
+    pushStreetPropPlacement(placements, house, themeName, primaryAsset, seed, 0);
+
+    if (pseudoRandomFromSeed(seed, 2) < secondaryChance) {
+      const secondaryAsset = secondaryPool[Math.floor(pseudoRandomFromSeed(seed, 3) * secondaryPool.length) % secondaryPool.length];
+      if (secondaryAsset !== primaryAsset || themeName === 'militarybase') {
+        pushStreetPropPlacement(placements, house, themeName, secondaryAsset, seed, 1);
+      }
+    }
+  });
+
+  return placements;
+};
+
+const StaticStreetProps = memo(({ entitiesRef, themeConfig }) => {
+  const [assetReady, setAssetReady] = useState(Boolean(worldPropsAssetCache.scene));
+  const [assetFailed, setAssetFailed] = useState(Boolean(worldPropsAssetCache.error));
+  const [houseSnapshot, setHouseSnapshot] = useState([]);
+  const themeName = themeConfig?.name || 'village';
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!assetReady && !assetFailed) {
+      loadWorldPropsAsset()
+        .then(() => {
+          if (!cancelled) setAssetReady(true);
+        })
+        .catch(() => {
+          if (!cancelled) setAssetFailed(true);
+        });
+    }
+    return () => {
+      cancelled = true;
+    };
+  }, [assetReady, assetFailed]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return undefined;
+    const rafId = window.requestAnimationFrame(() => {
+      const nextSnapshot = (entitiesRef?.current || [])
+        .filter(entity => entity?.type === 'house' && !entity.dead)
+        .map((house) => ({
+          id: house.id,
+          x: house.x,
+          z: house.z,
+          rotation: house.rotation || 0,
+          scale: house.scale || 1,
+          scaleY: house.scaleY || 1,
+          style: house.style || 'gable'
+        }));
+      setHouseSnapshot(nextSnapshot);
+    });
+    return () => {
+      window.cancelAnimationFrame(rafId);
+    };
+  }, [entitiesRef, themeName]);
+
+  const placements = useMemo(
+    () => createStreetPropPlacements(houseSnapshot, themeName),
+    [houseSnapshot, themeName]
+  );
+
+  const paletteConfig = useMemo(
+    () => getStreetPropThemePalette(themeName),
+    [themeName]
+  );
+
+  const themedProps = useMemo(() => {
+    if (!assetReady || assetFailed || !worldPropsAssetCache.scene) return [];
+
+    return placements.map((placement) => {
+      const assetName = STREET_PROP_ASSET_NAMES[placement.asset];
+      if (!assetName) return null;
+      const clone = cloneNamedGlbGroup(worldPropsAssetCache.scene, assetName);
+      if (!clone) return null;
+      tintPropClone(clone, paletteConfig.palette, paletteConfig.emissive);
+      clone.traverse((node) => {
+        if (!node.isMesh) return;
+        node.castShadow = true;
+        node.receiveShadow = true;
+      });
+      return {
+        ...placement,
+        object: clone
+      };
+    }).filter(Boolean);
+  }, [assetReady, assetFailed, placements, paletteConfig]);
+
+  useEffect(() => () => {
+    themedProps.forEach((entry) => disposeClonedMaterials(entry.object));
+  }, [themedProps]);
+
+  if (!themedProps.length) return null;
+
+  return (
+    <group>
+      {themedProps.map((entry) => (
+        <group
+          key={entry.key}
+          position={[entry.x, entry.y, entry.z]}
+          rotation={[0, entry.rotationY, 0]}
+          scale={[entry.scale, entry.scale, entry.scale]}
+        >
+          <primitive object={entry.object} />
+        </group>
+      ))}
     </group>
   );
 });
@@ -6014,17 +6681,116 @@ const worldPropsAssetCache = {
   error: null
 };
 
-const cloneOpaqueMaterial = (material) => {
+const globalShaderUniforms = {
+  time: { value: 0 },
+  pollution: { value: 0 }
+};
+
+const enhanceMaterialWithAliveShader = (material) => {
   if (!material) return material;
   const clone = material.clone();
-  clone.transparent = false;
-  clone.opacity = 1;
-  clone.alphaTest = 0;
+  // Keep all original material settings — only add shader effects on top
   clone.depthWrite = true;
   clone.depthTest = true;
-  clone.side = THREE.DoubleSide;
+
+  clone.onBeforeCompile = (shader) => {
+    shader.uniforms.globalTime = globalShaderUniforms.time;
+    shader.uniforms.globalPollution = globalShaderUniforms.pollution;
+
+    // ── Vertex: expose world-space position and normal ───────────────────
+    shader.vertexShader = shader.vertexShader.replace(
+      '#include <common>',
+      `#include <common>
+       varying vec3 vWPos;
+       varying vec3 vWNorm;`
+    );
+    shader.vertexShader = shader.vertexShader.replace(
+      '#include <worldpos_vertex>',
+      `#include <worldpos_vertex>
+       vWPos  = (modelMatrix * vec4(transformed, 1.0)).xyz;
+       vWNorm = normalize(mat3(modelMatrix) * normal);`
+    );
+
+    // ── Fragment: purely ADDITIVE enhancement — never darken the base ───
+    shader.fragmentShader = shader.fragmentShader.replace(
+      '#include <common>',
+      `#include <common>
+       uniform float globalTime;
+       uniform float globalPollution;
+       varying vec3 vWPos;
+       varying vec3 vWNorm;
+
+       float aliveNoise(vec2 p) {
+         return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+       }`
+    );
+
+    shader.fragmentShader = shader.fragmentShader.replace(
+      '#include <dithering_fragment>',
+      `#include <dithering_fragment>
+
+       // ── Preserve 100% of Three.js PBR output (textures, roughness, etc.) ──
+       vec3 base = gl_FragColor.rgb;
+       vec3 viewDir = normalize(cameraPosition - vWPos);
+       vec3 sunDir = normalize(vec3(0.55, 1.0, 0.4));
+       vec3 halfDir = normalize(sunDir + viewDir);
+
+       float cosTheta = max(dot(vWNorm, viewDir), 0.0);
+       float fresnel  = pow(1.0 - cosTheta, 4.0);
+       vec3 rimTint   = mix(vec3(0.58, 0.72, 0.95), vec3(1.0, 0.58, 0.26), globalPollution * 0.85);
+       vec3 rimAdd    = rimTint * fresnel * (0.18 + globalPollution * 0.08);
+
+       float hemiMix = clamp(vWNorm.y * 0.5 + 0.5, 0.0, 1.0);
+       vec3 skyTint  = mix(vec3(0.48, 0.58, 0.74), vec3(0.74, 0.42, 0.2), globalPollution);
+       vec3 groundTint = mix(vec3(0.16, 0.13, 0.1), vec3(0.18, 0.12, 0.08), globalPollution);
+       vec3 hemiAdd = mix(groundTint, skyTint, hemiMix) * 0.12;
+
+       float wrap = pow(max(dot(vWNorm, sunDir) * 0.5 + 0.5, 0.0), 1.6);
+       vec3 wrapAdd = vec3(1.0, 0.9, 0.76) * wrap * 0.06;
+
+       float spec = pow(max(dot(vWNorm, halfDir), 0.0), 72.0);
+       float micro = aliveNoise(vWPos.xz * 0.35 + globalTime * 0.025);
+       vec3 specAdd = vec3(1.0, 0.97, 0.88) * spec * (0.18 + micro * 0.16);
+
+       float heat = sin(globalTime * 1.4 + vWPos.x * 0.022 + vWPos.z * 0.019) * 0.5 + 0.5;
+       vec3 heatAdd = heat * mix(vec3(0.02, 0.025, 0.03), vec3(0.05, 0.03, 0.015), globalPollution) * 0.9;
+
+       float dist = length(cameraPosition - vWPos);
+       float haze = smoothstep(700.0, 2600.0, dist);
+       vec3 hazeTint = mix(vec3(0.72, 0.8, 0.9), vec3(0.78, 0.54, 0.36), globalPollution);
+
+       vec3 finalColor = base + rimAdd + hemiAdd + wrapAdd + specAdd + heatAdd;
+       finalColor = mix(finalColor, finalColor * 0.94 + hazeTint * 0.18, haze * 0.18);
+
+       finalColor = min(finalColor, vec3(1.9));
+
+       gl_FragColor = vec4(finalColor, gl_FragColor.a);
+      `
+    );
+  };
   return clone;
 };
+
+const makeGeometryAlive = (object) => {
+  // Intentionally left empty — do NOT recompute vertex normals.
+  // The .glb files contain carefully baked split/hard-edge normals that
+  // define all the panel lines, seams and surface detail. Calling
+  // computeVertexNormals() would average them away into a featureless blob.
+};
+
+// React component wrapper for standard materials to inject the alive shader
+const AliveMaterial = memo(({ color, roughness = 0.8, metalness = 0.2, emissive, emissiveIntensity, side = THREE.FrontSide, transparent = false, opacity = 1 }) => {
+  const material = useMemo(() => {
+    const mat = new THREE.MeshStandardMaterial({ color, roughness, metalness, emissive, emissiveIntensity, side, transparent, opacity });
+    return enhanceMaterialWithAliveShader(mat);
+  }, [color, roughness, metalness, emissive, emissiveIntensity, side, transparent, opacity]);
+
+  useEffect(() => {
+    return () => material?.dispose?.();
+  }, [material]);
+
+  return <primitive object={material} attach="material" />;
+});
 
 const cloneNamedGlbGroup = (scene, name) => {
   const source = scene?.getObjectByName?.(name);
@@ -6036,17 +6802,93 @@ const cloneNamedGlbGroup = (scene, name) => {
       namedNodes[object.name] = object;
     }
     if (!object.isMesh) return;
-    object.castShadow = false;
-    object.receiveShadow = false;
+    object.castShadow = true;
+    object.receiveShadow = true;
     object.frustumCulled = false;
+    makeGeometryAlive(object);
     if (Array.isArray(object.material)) {
-      object.material = object.material.map(cloneOpaqueMaterial);
+      object.material = object.material.map(enhanceMaterialWithAliveShader);
     } else {
-      object.material = cloneOpaqueMaterial(object.material);
+      object.material = enhanceMaterialWithAliveShader(object.material);
     }
   });
   clone.userData.namedNodes = namedNodes;
   return clone;
+};
+
+const findCloneNodeByPrefix = (object, prefix) => {
+  if (!object || !prefix) return null;
+  const namedNodes = object.userData?.namedNodes || {};
+  if (namedNodes[prefix]) return namedNodes[prefix];
+  const entry = Object.entries(namedNodes).find(([name]) => name === prefix || name.startsWith(`${prefix}_`));
+  return entry?.[1] || null;
+};
+
+const snapshotNodeTransform = (node) => {
+  if (!node) return null;
+  return {
+    position: node.position.clone(),
+    rotation: node.rotation.clone(),
+    scale: node.scale.clone()
+  };
+};
+
+const buildSoldierAnimationRig = (object) => {
+  if (!object) return null;
+
+  const makePart = (prefix) => {
+    const node = findCloneNodeByPrefix(object, prefix);
+    if (!node) return null;
+    return {
+      node,
+      base: snapshotNodeTransform(node)
+    };
+  };
+
+  return {
+    torso: makePart('unit_torso'),
+    vest: makePart('unit_vest'),
+    pack: makePart('unit_pack'),
+    belt: makePart('unit_belt'),
+    head: makePart('unit_head'),
+    helmet: makePart('unit_helmet'),
+    visor: makePart('unit_visor'),
+    neckWrap: makePart('unit_neck_wrap'),
+    legLeft: makePart('unit_leg_left'),
+    legRight: makePart('unit_leg_right'),
+    bootLeft: makePart('unit_boot_left'),
+    bootRight: makePart('unit_boot_right'),
+    armLeft: makePart('unit_arm_left'),
+    armRight: makePart('unit_arm_right'),
+    padLeft: makePart('unit_pad_left'),
+    padRight: makePart('unit_pad_right'),
+    weapon: makePart('unit_weapon'),
+    tool: makePart('unit_tool'),
+    toolCanister: makePart('unit_tool_canister'),
+    torch: makePart('unit_torch')
+  };
+};
+
+const applyRigTransform = (part, delta, targets = {}, damping = 10) => {
+  if (!part?.node || !part.base) return;
+
+  const t = Math.min(1, delta * damping);
+  const { node, base } = part;
+  const position = targets.position || {};
+  const rotation = targets.rotation || {};
+  const scale = targets.scale || {};
+
+  node.position.x = THREE.MathUtils.lerp(node.position.x, base.position.x + (position.x || 0), t);
+  node.position.y = THREE.MathUtils.lerp(node.position.y, base.position.y + (position.y || 0), t);
+  node.position.z = THREE.MathUtils.lerp(node.position.z, base.position.z + (position.z || 0), t);
+
+  node.rotation.x = THREE.MathUtils.lerp(node.rotation.x, base.rotation.x + (rotation.x || 0), t);
+  node.rotation.y = THREE.MathUtils.lerp(node.rotation.y, base.rotation.y + (rotation.y || 0), t);
+  node.rotation.z = THREE.MathUtils.lerp(node.rotation.z, base.rotation.z + (rotation.z || 0), t);
+
+  node.scale.x = THREE.MathUtils.lerp(node.scale.x, base.scale.x * (scale.x || 1), t);
+  node.scale.y = THREE.MathUtils.lerp(node.scale.y, base.scale.y * (scale.y || 1), t);
+  node.scale.z = THREE.MathUtils.lerp(node.scale.z, base.scale.z * (scale.z || 1), t);
 };
 
 const cloneGlbSceneRoot = (scene) => {
@@ -6061,13 +6903,14 @@ const cloneGlbSceneRoot = (scene) => {
     }
     if (!object.isMesh) return;
     meshCount += 1;
-    object.castShadow = false;
-    object.receiveShadow = false;
+    object.castShadow = true;
+    object.receiveShadow = true;
     object.frustumCulled = false;
+    makeGeometryAlive(object);
     if (Array.isArray(object.material)) {
-      object.material = object.material.map(cloneOpaqueMaterial);
+      object.material = object.material.map(enhanceMaterialWithAliveShader);
     } else {
-      object.material = cloneOpaqueMaterial(object.material);
+      object.material = enhanceMaterialWithAliveShader(object.material);
     }
   });
   clone.userData.namedNodes = namedNodes;
@@ -7058,78 +7901,89 @@ const EntityBunker = memo(({ entityId, index, entitiesRef, entityLookupRef }) =>
         </group>
       ) : (
         <group ref={shellRef} position={[0, -2, 0]}>
+          {/* Main Vault Dome */}
           <mesh position={[0, 7, -6]} scale={[1.2, 0.82, 1.46]}>
-             <sphereGeometry args={[28, 18, 14]} />
-             <meshStandardMaterial color={isCritical ? '#3f2a2a' : isDamaged ? '#475569' : '#4b5563'} roughness={0.95} />
+             <sphereGeometry args={[28, 24, 20]} />
+             <AliveMaterial color={isCritical ? '#3f2a2a' : isDamaged ? '#475569' : '#4b5563'} roughness={0.95} />
           </mesh>
           <mesh position={[0, 15, -14]} scale={[1.45, 0.72, 1.85]}>
-             <sphereGeometry args={[18, 18, 12]} />
-             <meshStandardMaterial color={isCritical ? '#4b3b31' : isDamaged ? '#4b5563' : '#3f4b36'} roughness={1} />
+             <sphereGeometry args={[18, 24, 16]} />
+             <AliveMaterial color={isCritical ? '#4b3b31' : isDamaged ? '#4b5563' : '#3f4b36'} roughness={1} />
           </mesh>
+          {/* Main Bunker Core */}
           <mesh position={[0, 3, 10]}>
              <boxGeometry args={[42, 8, 54]} />
-             <meshStandardMaterial color={isCritical ? '#3f3f46' : '#4b5563'} roughness={0.92} />
+             <AliveMaterial color={isCritical ? '#3f3f46' : '#4b5563'} roughness={0.92} />
           </mesh>
-          <mesh position={[0, 11, 22]}>
-             <boxGeometry args={[28, 18, 26]} />
-             <meshStandardMaterial color={isCritical ? '#4b5563' : '#5b6570'} roughness={0.84} />
+          {/* Bunker entrance tunnel ribs */}
+          <mesh position={[0, 11, 24]}>
+             <cylinderGeometry args={[16, 16, 26, 16]} rotation={[Math.PI / 2, 0, 0]} />
+             <AliveMaterial color={isCritical ? '#4b5563' : '#5b6570'} roughness={0.84} />
           </mesh>
-          <mesh position={[0, 12, 31]}>
-             <boxGeometry args={[24, 22, 7]} />
-             <meshStandardMaterial color="#23272f" roughness={0.9} />
+          {/* Bunker outer rim */}
+          <mesh position={[0, 11, 31]}>
+             <torusGeometry args={[16, 4, 16, 32]} />
+             <AliveMaterial color="#23272f" roughness={0.9} />
           </mesh>
-          <mesh position={[0, 5, 34]}>
-             <boxGeometry args={[18, 6, 12]} />
-             <meshStandardMaterial color={isCritical ? '#3f1d1d' : '#303845'} roughness={0.9} />
+          {/* Concrete Sloped Checkpoint */}
+          <mesh position={[0, 3, 34]} rotation={[-Math.PI / 8, 0, 0]}>
+             <boxGeometry args={[22, 12, 14]} />
+             <AliveMaterial color={isCritical ? '#3f1d1d' : '#303845'} roughness={0.9} />
           </mesh>
+          {/* Reinforced Side Buttresses */}
           {[[-16, 12, 18], [16, 12, 18]].map((buttress, i) => (
             <mesh key={`vault-buttress-${i}`} position={buttress} rotation={[0.24, 0, 0]}>
-               <boxGeometry args={[7, 22, 18]} />
-               <meshStandardMaterial color={isCritical ? '#4b5563' : '#4b5563'} roughness={0.92} />
+               <boxGeometry args={[7, 26, 22]} />
+               <AliveMaterial color={isCritical ? '#2a333d' : '#4b5563'} roughness={0.92} />
             </mesh>
           ))}
 
-          <group ref={entryRef} position={[0, 12, 34.5]}>
+          <group ref={entryRef} position={[0, 11, 31.5]}>
+            {/* Massive Gear Vault Door */}
             <mesh ref={doorRef} rotation={[Math.PI / 2, 0, 0]}>
-               <cylinderGeometry args={[10.5, 10.5, 4, 32]} />
-               <meshStandardMaterial color={isCritical ? '#64748b' : '#94a3b8'} metalness={0.86} roughness={0.26} />
+               <cylinderGeometry args={[11, 11, 4, 32]} />
+               <AliveMaterial color={isCritical ? '#64748b' : '#94a3b8'} metalness={0.86} roughness={0.26} />
             </mesh>
             <mesh rotation={[Math.PI / 2, 0, 0]} position={[0, 0, 1.4]}>
                <cylinderGeometry args={[8.6, 8.6, 2.2, 24]} />
-               <meshStandardMaterial color="#475569" metalness={0.78} roughness={0.34} />
+               <AliveMaterial color="#475569" metalness={0.78} roughness={0.34} />
             </mesh>
             {[0, 1, 2, 3, 4, 5].map(i => (
                <mesh key={`vault-spoke-${i}`} rotation={[0, 0, (i * Math.PI) / 3]} position={[0, 0, 1.9]}>
                   <boxGeometry args={[17, 1.6, 1.8]} />
-                  <meshStandardMaterial color="#64748b" metalness={0.82} roughness={0.34} />
+                  <AliveMaterial color="#64748b" metalness={0.82} roughness={0.34} />
                </mesh>
             ))}
             <mesh position={[0, 0, 2.3]}>
                <sphereGeometry args={[2.7, 12, 12]} />
-               <meshStandardMaterial color="#e2e8f0" metalness={0.84} roughness={0.2} />
+               <AliveMaterial color="#e2e8f0" metalness={0.84} roughness={0.2} />
             </mesh>
           </group>
 
-          <mesh position={[0, 25, 21]}>
-             <boxGeometry args={[30, 2.8, 8]} />
-             <meshStandardMaterial color="#374151" roughness={0.76} metalness={0.2} />
+          {/* Exterior Emergency Light Bar */}
+          <mesh position={[0, 28, 18]}>
+             <boxGeometry args={[32, 2.8, 8]} />
+             <AliveMaterial color="#374151" roughness={0.76} metalness={0.2} />
           </mesh>
-          {[[-8, 27, 22], [8, 27, 22]].map((light, i) => (
+          {[[-10, 30, 19], [10, 30, 19]].map((light, i) => (
             <mesh key={`vault-light-${i}`} position={light} ref={(el) => { lightRefs.current[i] = el; }}>
-               <cylinderGeometry args={[1.2, 1.2, 2.8]} />
-               <meshStandardMaterial color="#f97316" emissive="#fb923c" emissiveIntensity={2.6} />
+               <cylinderGeometry args={[1.5, 1.5, 3.5, 12]} />
+               <AliveMaterial color="#f97316" emissive="#fb923c" emissiveIntensity={2.6} />
             </mesh>
           ))}
+          {/* Security Guard Rails */}
           {[[-10, 9, 36], [10, 9, 36]].map((rail, i) => (
             <mesh key={`vault-rail-${i}`} position={rail}>
                <boxGeometry args={[2, 8, 2]} />
-               <meshStandardMaterial color="#9ca3af" metalness={0.52} roughness={0.34} />
+               <AliveMaterial color="#9ca3af" metalness={0.52} roughness={0.34} />
             </mesh>
           ))}
           <mesh position={[0, 13, 38]}>
              <boxGeometry args={[20, 1, 3]} />
-             <meshStandardMaterial color="#9ca3af" metalness={0.5} roughness={0.38} />
+             <AliveMaterial color="#9ca3af" metalness={0.5} roughness={0.38} />
           </mesh>
+
+          {/* Smoke fx */}
           {[[-6, 18, 20], [7, 20, 24], [0, 16, 28]].map((smokePos, i) => (
             <mesh
               key={`vault-smoke-${i}`}
@@ -7148,10 +8002,11 @@ const EntityBunker = memo(({ entityId, index, entitiesRef, entityLookupRef }) =>
               <meshBasicMaterial color={isCritical ? '#1f2937' : '#334155'} transparent opacity={0.22} />
             </mesh>
           ))}
+          {/* Damage decals */}
           {isDamaged && [[-8, 6, 31], [7, 9, 29], [0, 14, 18]].map((scar, i) => (
             <mesh key={`vault-scar-${i}`} position={scar} rotation={[0.2 + i * 0.1, i * 0.55, 0.12]}>
                <boxGeometry args={[8 + i * 2, 0.6, 0.9]} />
-               <meshStandardMaterial color="#3f0d0d" emissive={isCritical ? '#7f1d1d' : '#451a03'} emissiveIntensity={isCritical ? 0.8 : 0.35} roughness={1} />
+               <AliveMaterial color="#3f0d0d" emissive={isCritical ? '#7f1d1d' : '#451a03'} emissiveIntensity={isCritical ? 0.8 : 0.35} roughness={1} />
             </mesh>
           ))}
         </group>
@@ -7317,204 +8172,284 @@ const EntityFacility = memo(({ entityId, index, entitiesRef, entityLookupRef }) 
         <>
           {isPowerplant && (
             <group>
+              {/* Main reactor building */}
               <mesh position={[0, 8, 0]}>
                 <boxGeometry args={[34, 16, 28]} />
-                <meshStandardMaterial color="#334155" roughness={0.8} metalness={0.3} />
+                <AliveMaterial color="#334155" roughness={0.8} metalness={0.3} />
               </mesh>
-              <mesh position={[0, 20, -10]}>
-                <boxGeometry args={[36, 4, 10]} />
-                <meshStandardMaterial color="#475569" roughness={0.68} metalness={0.34} />
+              {/* Sloped buttress front */}
+              <mesh position={[0, 4, 18]} rotation={[-0.2, 0, 0]}>
+                <boxGeometry args={[30, 8, 12]} />
+                <AliveMaterial color="#1e293b" roughness={0.9} metalness={0.18} />
               </mesh>
-              <mesh position={[0, 4, 18]}>
-                <cylinderGeometry args={[18, 19, 4, 18]} />
-                <meshStandardMaterial color="#111827" roughness={0.9} metalness={0.18} />
+              {/* Reactor Core Dome */}
+              <mesh position={[0, 16, -2]}>
+                <sphereGeometry args={[12, 24, 16, 0, Math.PI * 2, 0, Math.PI / 2]} />
+                <AliveMaterial color="#475569" roughness={0.68} metalness={0.6} />
               </mesh>
-              {[[-8, 20, -4], [8, 20, -4]].map((stack, idx) => (
-                <mesh key={`plant-stack-${idx}`} position={stack}>
-                  <cylinderGeometry args={[2.6, 3.2, 22, 12]} />
-                  <meshStandardMaterial color="#475569" roughness={0.72} metalness={0.28} />
-                </mesh>
+              {/* Glowing inner reactor ring wrapper */}
+              <mesh position={[0, 16.5, -2]} rotation={[Math.PI / 2, 0, 0]}>
+                <torusGeometry args={[12.5, 0.8, 16, 32]} />
+                <AliveMaterial color="#fcd34d" emissive="#f59e0b" emissiveIntensity={2} roughness={0.2} metalness={0.8} />
+              </mesh>
+              {/* Cooling Towers */}
+              {[[-12, 12, -10], [12, 12, -10]].map((stack, idx) => (
+                <group key={`plant-stack-${idx}`} position={stack}>
+                  <mesh>
+                    <cylinderGeometry args={[2.5, 4, 24, 16]} />
+                    <AliveMaterial color="#475569" roughness={0.72} metalness={0.28} />
+                  </mesh>
+                  {/* Glowing vent at top */}
+                  <mesh position={[0, 12.1, 0]} rotation={[Math.PI / 2, 0, 0]}>
+                    <ringGeometry args={[1.5, 2.5, 16]} />
+                    <AliveMaterial color="#fcd34d" emissive="#f59e0b" emissiveIntensity={1.5} roughness={0.2} />
+                  </mesh>
+                </group>
               ))}
+              {/* Power conduit pipes */}
               {[[-14, 14, 9], [14, 14, 9]].map((tank, idx) => (
-                <mesh key={`plant-tank-${idx}`} position={tank}>
-                  <cylinderGeometry args={[5.2, 5.2, 12, 14]} />
-                  <meshStandardMaterial color="#64748b" roughness={0.6} metalness={0.38} />
+                <mesh key={`plant-tank-${idx}`} position={tank} rotation={[0, 0, Math.PI / 2]}>
+                  <cylinderGeometry args={[3, 3, 12, 12]} />
+                  <AliveMaterial color="#64748b" roughness={0.6} metalness={0.38} />
                 </mesh>
               ))}
-              <mesh position={[0, 18, 8]}>
-                <boxGeometry args={[26, 6, 10]} />
-                <meshStandardMaterial color="#1f2937" roughness={0.76} metalness={0.32} />
-              </mesh>
-              <pointLight position={[0, 18, 11]} color="#f59e0b" intensity={2.1} distance={120} />
+              <pointLight position={[0, 18, -2]} color="#f59e0b" intensity={2.1} distance={120} />
             </group>
           )}
           {isFactory && (
             <group>
+              {/* Main assembly hall */}
               <mesh position={[0, 10, 0]}>
                 <boxGeometry args={[44, 20, 34]} />
-                <meshStandardMaterial color="#374151" roughness={0.84} metalness={0.26} />
+                <AliveMaterial color="#374151" roughness={0.84} metalness={0.26} />
               </mesh>
-              <mesh position={[0, 14, 20]}>
-                <boxGeometry args={[24, 18, 6]} />
-                <meshStandardMaterial color="#0f172a" roughness={0.56} metalness={0.56} />
-              </mesh>
-              <mesh position={[0, 8, 17]}>
-                <boxGeometry args={[18, 11, 2]} />
-                <meshStandardMaterial color="#111827" roughness={0.62} metalness={0.52} />
-              </mesh>
-              <mesh position={[0, 22, -8]}>
-                <boxGeometry args={[32, 4, 14]} />
-                <meshStandardMaterial color="#475569" roughness={0.7} metalness={0.28} />
-              </mesh>
-              <mesh position={[0, 25, -8]}>
-                <boxGeometry args={[22, 2, 8]} />
-                <meshStandardMaterial color="#0f172a" roughness={0.58} metalness={0.5} />
-              </mesh>
-              {[[-17, 20, -8], [17, 20, -8]].map((stack, idx) => (
-                <mesh key={`factory-stack-${idx}`} position={stack}>
-                  <boxGeometry args={[5, 14, 5]} />
-                  <meshStandardMaterial color="#1f2937" roughness={0.72} metalness={0.34} />
+              {/* Ribbed Industrial Roof */}
+              {[[-11, 22, 0], [11, 22, 0]].map((roof, idx) => (
+                <mesh key={`factory-roof-${idx}`} position={roof} rotation={[0, 0, Math.PI / 4]}>
+                  <cylinderGeometry args={[1, 14, 34, 4]} />
+                  <AliveMaterial color="#1e293b" roughness={0.7} metalness={0.28} />
                 </mesh>
               ))}
-              {[[-18, 5, -12], [18, 5, -12]].map((track, idx) => (
+              {/* Heavy front gate extension */}
+              <mesh position={[0, 12, 18]}>
+                <boxGeometry args={[28, 14, 12]} />
+                <AliveMaterial color="#0f172a" roughness={0.56} metalness={0.56} />
+              </mesh>
+              {/* Glowing assembly garage doors */}
+              {[-8, 8].map((doorX, idx) => (
+                <mesh key={`factory-door-${idx}`} position={[doorX, 6, 24.1]}>
+                  <boxGeometry args={[10, 12, 0.4]} />
+                  <AliveMaterial color="#fef08a" emissive="#eab308" emissiveIntensity={1.2} roughness={0.2} metalness={0.8} />
+                </mesh>
+              ))}
+              {/* Exhaust stacks */}
+              {[[-17, 20, -8], [17, 20, -8], [-17, 20, 8], [17, 20, 8]].map((stack, idx) => (
+                <mesh key={`factory-stack-${idx}`} position={stack}>
+                  <cylinderGeometry args={[1.5, 2, 8, 16]} />
+                  <AliveMaterial color="#1f2937" roughness={0.72} metalness={0.34} />
+                </mesh>
+              ))}
+              {/* Exterior tank tracks / construction crane rails */}
+              {[[-24, 2, 0], [24, 2, 0]].map((track, idx) => (
                 <mesh key={`factory-track-${idx}`} position={track}>
-                  <boxGeometry args={[8, 2.6, 18]} />
-                  <meshStandardMaterial color="#4b5563" roughness={0.82} metalness={0.24} />
+                  <boxGeometry args={[4, 4, 38]} />
+                  <AliveMaterial color="#4b5563" roughness={0.82} metalness={0.24} />
                 </mesh>
               ))}
             </group>
           )}
           {isHospital && (
             <group>
+              {/* Modern pristine hospital base */}
               <mesh position={[0, 8, 0]}>
                 <boxGeometry args={[34, 16, 30]} />
-                <meshStandardMaterial color="#dbeafe" roughness={0.84} metalness={0.18} />
+                <AliveMaterial color="#dbeafe" roughness={0.6} metalness={0.1} />
               </mesh>
-              <mesh position={[0, 12, 18]}>
-                <boxGeometry args={[30, 10, 8]} />
-                <meshStandardMaterial color="#f8fafc" roughness={0.78} metalness={0.12} />
+              {/* Slanted hospital roof facade */}
+              <mesh position={[0, 18, 0]}>
+                <cylinderGeometry args={[13, 17, 4, 4]} rotation={[0, Math.PI / 4, 0]} />
+                <AliveMaterial color="#bfdbfe" roughness={0.5} metalness={0.2} />
               </mesh>
-              <mesh position={[0, 17, 0]}>
-                <boxGeometry args={[16, 4, 12]} />
-                <meshStandardMaterial color="#1e293b" roughness={0.72} metalness={0.22} />
-              </mesh>
-              <mesh position={[0, 19.5, 15]}>
-                <boxGeometry args={[8, 8, 2.4]} />
-                <meshStandardMaterial color="#ef4444" roughness={0.6} metalness={0.12} />
-              </mesh>
-              <mesh position={[0, 19.5, 15]}>
-                <boxGeometry args={[2.4, 8, 8]} />
-                <meshStandardMaterial color="#ef4444" roughness={0.6} metalness={0.12} />
-              </mesh>
-              {[[-10, 15, -6], [10, 15, -6]].map((pad, idx) => (
-                <mesh key={`med-pad-${idx}`} position={pad}>
-                  <cylinderGeometry args={[4, 4.8, 2.6, 12]} />
-                  <meshStandardMaterial color="#93c5fd" roughness={0.68} metalness={0.16} />
+              {/* Helipad on roof annex */}
+              <group position={[0, 14, 18]}>
+                <mesh position={[0, 0, 0]}>
+                  <boxGeometry args={[24, 12, 24]} />
+                  <AliveMaterial color="#f8fafc" roughness={0.78} metalness={0.12} />
                 </mesh>
-              ))}
+                <mesh position={[0, 6.1, 0]} rotation={[-Math.PI / 2, 0, 0]}>
+                  <ringGeometry args={[6, 8, 32]} />
+                  <AliveMaterial color="#ef4444" roughness={0.8} />
+                </mesh>
+              </group>
+              {/* Diagnostic windows wrapper */}
+              <mesh position={[0, 8, 15.2]}>
+                <boxGeometry args={[28, 6, 0.5]} />
+                <AliveMaterial color="#93c5fd" emissive="#3b82f6" emissiveIntensity={0.8} roughness={0.2} metalness={0.8} />
+              </mesh>
+              {/* Center Med-Cross */}
+              <group position={[0, 16, 15.2]}>
+                <mesh>
+                  <boxGeometry args={[8, 2.4, 0.4]} />
+                  <AliveMaterial color="#fca5a5" emissive="#ef4444" emissiveIntensity={1.5} roughness={0.2} />
+                </mesh>
+                <mesh>
+                  <boxGeometry args={[2.4, 8, 0.4]} />
+                  <AliveMaterial color="#fca5a5" emissive="#ef4444" emissiveIntensity={1.5} roughness={0.2} />
+                </mesh>
+              </group>
+              {/* Quarantine triage tents */}
               {[[-18, 6, -12], [18, 6, -12]].map((tent, idx) => (
                 <mesh key={`med-tent-${idx}`} position={tent} rotation={[0, idx === 0 ? -0.18 : 0.18, 0]}>
-                  <boxGeometry args={[10, 8, 14]} />
-                  <meshStandardMaterial color="#cbd5e1" roughness={0.92} metalness={0.06} />
+                  <cylinderGeometry args={[5, 5, 12, 16, 1, false, 0, Math.PI]} rotation={[Math.PI / 2, 0, 0]} />
+                  <AliveMaterial color="#cbd5e1" roughness={0.92} metalness={0.06} />
                 </mesh>
               ))}
             </group>
           )}
           {isLab && (
             <group>
-              <mesh position={[0, 10, 0]}>
-                <cylinderGeometry args={[12, 14, 20, 16]} />
-                <meshStandardMaterial color="#1e293b" roughness={0.72} metalness={0.34} />
+              {/* Sci-Fi Science Dome */}
+              <mesh position={[0, 12, 0]}>
+                <sphereGeometry args={[16, 32, 24, 0, Math.PI * 2, 0, Math.PI / 2]} />
+                <AliveMaterial color="#1e293b" roughness={0.5} metalness={0.6} />
               </mesh>
-              <mesh position={[0, 8, 18]}>
-                <boxGeometry args={[24, 14, 10]} />
-                <meshStandardMaterial color="#0f172a" roughness={0.58} metalness={0.52} />
+              <mesh position={[0, 6, 0]}>
+                <cylinderGeometry args={[16, 18, 12, 32]} />
+                <AliveMaterial color="#0f172a" roughness={0.7} metalness={0.4} />
               </mesh>
+              {/* Attached data center wing */}
+              <mesh position={[0, 8, 16]}>
+                <boxGeometry args={[26, 14, 12]} />
+                <AliveMaterial color="#1e293b" roughness={0.58} metalness={0.52} />
+              </mesh>
+              {/* Sensor mast / Dish Base */}
               <mesh position={[0, 24, 0]}>
-                <cylinderGeometry args={[7, 8, 9, 16]} />
-                <meshStandardMaterial color="#334155" roughness={0.65} metalness={0.36} />
+                <cylinderGeometry args={[4, 6, 12, 16]} />
+                <AliveMaterial color="#334155" roughness={0.65} metalness={0.36} />
               </mesh>
-              <mesh position={[0, 39, 0]}>
-                <cylinderGeometry args={[2.6, 3.4, 18, 12]} />
-                <meshStandardMaterial color="#64748b" roughness={0.48} metalness={0.62} />
+              <mesh position={[0, 36, 0]}>
+                <cylinderGeometry args={[1, 2, 16, 12]} />
+                <AliveMaterial color="#64748b" roughness={0.48} metalness={0.62} />
               </mesh>
-              <group ref={dishRef} position={[0, 31, 0]}>
+              {/* Communications array */}
+              <group ref={dishRef} position={[0, 30, 0]}>
                 <mesh rotation={[-Math.PI / 2.8, 0, 0]}>
-                  <cylinderGeometry args={[0.5, 7.8, 4.2, 24, 1, true]} />
-                  <meshStandardMaterial color="#cbd5e1" roughness={0.26} metalness={0.82} side={THREE.DoubleSide} />
+                  <cylinderGeometry args={[0.5, 9, 3, 24, 1, false]} />
+                  <AliveMaterial color="#cbd5e1" roughness={0.2} metalness={0.9} />
                 </mesh>
-                <mesh position={[0, 0, -2.8]}>
-                  <sphereGeometry args={[1.8, 12, 12]} />
-                  <meshStandardMaterial color="#22d3ee" emissive="#22d3ee" emissiveIntensity={1.3} />
+                <mesh position={[0, 2, -2]}>
+                  <sphereGeometry args={[1.5, 12, 12]} />
+                  <AliveMaterial color="#22d3ee" emissive="#06b6d4" emissiveIntensity={2.5} />
+                </mesh>
+                {/* Orbital telemetry ring */}
+                <mesh rotation={[Math.PI / 2, 0, 0]} position={[0, 0, 0]}>
+                  <torusGeometry args={[10, 0.4, 8, 32]} />
+                  <AliveMaterial color="#38bdf8" emissive="#0284c7" emissiveIntensity={1.5} />
                 </mesh>
               </group>
+              {/* Sub-surface coolant ring */}
+              <mesh position={[0, 2, 0]} rotation={[Math.PI / 2, 0, 0]}>
+                <torusGeometry args={[17, 1, 16, 32]} />
+                <AliveMaterial color="#38bdf8" emissive="#0ea5e9" emissiveIntensity={1.2} />
+              </mesh>
             </group>
           )}
           {isRadar && (
             <group>
-              <mesh position={[0, 7, 0]}>
-                <cylinderGeometry args={[11, 14, 14, 16]} />
-                <meshStandardMaterial color="#1f2937" roughness={0.8} metalness={0.28} />
+              {/* Radar Command Tower */}
+              <mesh position={[0, 9, 0]}>
+                <cylinderGeometry args={[10, 14, 18, 16]} />
+                <AliveMaterial color="#1f2937" roughness={0.8} metalness={0.28} />
               </mesh>
+              {/* Angular support braces */}
               {[[-8, 17, -8], [8, 17, -8], [-8, 17, 8], [8, 17, 8]].map((brace, idx) => (
-                <mesh key={`radar-brace-${idx}`} position={brace} rotation={[0, 0, idx < 2 ? -0.14 : 0.14]}>
-                  <boxGeometry args={[2, 22, 2]} />
-                  <meshStandardMaterial color="#94a3b8" roughness={0.48} metalness={0.56} />
+                <mesh key={`radar-brace-${idx}`} position={brace} rotation={[0, 0, idx < 2 ? -0.16 : 0.16]}>
+                  <boxGeometry args={[2.5, 20, 2.5]} />
+                  <AliveMaterial color="#94a3b8" roughness={0.48} metalness={0.56} />
                 </mesh>
               ))}
-              <mesh position={[0, 24, 0]}>
-                <cylinderGeometry args={[2.4, 3.2, 34, 12]} />
-                <meshStandardMaterial color="#94a3b8" roughness={0.45} metalness={0.58} />
+              {/* Central Array Mast */}
+              <mesh position={[0, 26, 0]}>
+                <cylinderGeometry args={[2, 4, 34, 12]} />
+                <AliveMaterial color="#334155" roughness={0.5} metalness={0.65} />
               </mesh>
-              <mesh position={[0, 43, 0]}>
-                <sphereGeometry args={[5.6, 16, 16]} />
-                <meshStandardMaterial color="#22d3ee" emissive="#22d3ee" emissiveIntensity={0.8} roughness={0.28} metalness={0.46} />
+              {/* Top Sensor bulb */}
+              <mesh position={[0, 44, 0]}>
+                <sphereGeometry args={[4.5, 16, 16]} />
+                <AliveMaterial color="#22d3ee" emissive="#0ea5e9" emissiveIntensity={1.2} roughness={0.28} metalness={0.8} />
               </mesh>
-              <mesh ref={radarDishRef} position={[0, 31, 0]} rotation={[0, 0, 0]}>
-                <torusGeometry args={[11, 0.9, 8, 24]} />
-                <meshStandardMaterial color="#cbd5e1" roughness={0.34} metalness={0.72} />
-              </mesh>
+              {/* Spinning dual-dish array */}
+              <group ref={radarDishRef} position={[0, 32, 0]} rotation={[0, 0, 0]}>
+                <mesh rotation={[Math.PI / 2, 0, 0]}>
+                  <torusGeometry args={[11, 1, 8, 32]} />
+                  <AliveMaterial color="#cbd5e1" roughness={0.34} metalness={0.72} />
+                </mesh>
+                <mesh position={[0, 5, 0]} rotation={[Math.PI / 2, 0, 0]}>
+                  <torusGeometry args={[7, 0.6, 6, 24]} />
+                  <AliveMaterial color="#94a3b8" roughness={0.4} metalness={0.8} />
+                </mesh>
+                <mesh position={[0, -5, 0]}>
+                  <cylinderGeometry args={[1, 1, 14, 8]} />
+                  <AliveMaterial color="#e2e8f0" roughness={0.2} metalness={0.9} />
+                </mesh>
+              </group>
             </group>
           )}
           {isAA && (
             <group>
+              {/* Heavy armored bunker base */}
               <mesh position={[0, 8, 0]}>
-                <cylinderGeometry args={[15, 18, 16, 10]} />
-                <meshStandardMaterial color="#1f2937" roughness={0.86} metalness={0.24} />
+                <cylinderGeometry args={[13, 19, 16, 12]} />
+                <AliveMaterial color="#1f2937" roughness={0.86} metalness={0.24} />
               </mesh>
+              {/* Concrete foundation ring */}
               <mesh position={[0, 4, 0]}>
-                <cylinderGeometry args={[23, 25, 4, 18]} />
-                <meshStandardMaterial color="#111827" roughness={0.92} metalness={0.18} />
+                <cylinderGeometry args={[22, 24, 4, 20]} />
+                <AliveMaterial color="#111827" roughness={0.92} metalness={0.05} />
               </mesh>
+              {/* Turret pivot ring */}
               <mesh position={[0, 16, 0]}>
-                <cylinderGeometry args={[9, 11, 6, 12]} />
-                <meshStandardMaterial color="#334155" roughness={0.7} metalness={0.34} />
+                <cylinderGeometry args={[9, 11, 6, 16]} />
+                <AliveMaterial color="#334155" roughness={0.6} metalness={0.54} />
               </mesh>
+              {/* Turret assembly */}
               <group ref={aaTurretRef} position={[0, 20, 0]}>
+                {/* Turret Head */}
                 <mesh>
-                  <boxGeometry args={[15, 5, 10]} />
-                  <meshStandardMaterial color="#0f172a" roughness={0.56} metalness={0.55} />
+                  <boxGeometry args={[14, 8, 12]} />
+                  <AliveMaterial color="#0f172a" roughness={0.56} metalness={0.65} />
                 </mesh>
-                <mesh ref={aaBarrelRef} position={[0, 1, 6]}>
-                  <boxGeometry args={[5.5, 1.1, 10.5]} />
-                  <meshStandardMaterial color="#475569" roughness={0.44} metalness={0.66} />
-                </mesh>
-                <mesh position={[-3.2, 0.4, 6]}>
-                  <cylinderGeometry args={[0.65, 0.65, 9.4, 8]} />
-                  <meshStandardMaterial color="#64748b" roughness={0.4} metalness={0.72} />
-                </mesh>
-                <mesh position={[3.2, 0.4, 6]}>
-                  <cylinderGeometry args={[0.65, 0.65, 9.4, 8]} />
-                  <meshStandardMaterial color="#64748b" roughness={0.4} metalness={0.72} />
-                </mesh>
-                <mesh position={[0, 1.4, -3.4]}>
-                  <boxGeometry args={[3.6, 2.2, 2.1]} />
-                  <meshStandardMaterial color="#111827" emissive="#22d3ee" emissiveIntensity={0.35} />
+                {/* Barrel Housing */}
+                <group ref={aaBarrelRef} position={[0, 1, 6]}>
+                  <mesh position={[0, 0, 2]}>
+                    <boxGeometry args={[6, 3, 12]} />
+                    <AliveMaterial color="#1e293b" roughness={0.6} metalness={0.66} />
+                  </mesh>
+                  {/* Quad-Barrels */}
+                  {[-2, 2].map(bx => (
+                    [-0.8, 0.8].map(by => (
+                      <mesh key={`aa-barrel-${bx}-${by}`} position={[bx, by, 6]}>
+                        <cylinderGeometry args={[0.4, 0.4, 14, 8]} rotation={[Math.PI / 2, 0, 0]} />
+                        <AliveMaterial color="#475569" roughness={0.4} metalness={0.82} />
+                      </mesh>
+                    ))
+                  ))}
+                  {/* Barrel vent holes / heat shields */}
+                  <mesh position={[0, 0, 9]}>
+                    <boxGeometry args={[5.5, 2.5, 4]} />
+                    <AliveMaterial color="#0b1324" roughness={0.8} metalness={0.9} />
+                  </mesh>
+                </group>
+                {/* Radar targeting eye */}
+                <mesh position={[0, 2.5, -3]}>
+                  <boxGeometry args={[4, 3, 3]} />
+                  <AliveMaterial color="#111827" emissive="#f43f5e" emissiveIntensity={1.2} />
                 </mesh>
               </group>
+              {/* Deep protective moat ring */}
               <mesh position={[0, 1.6, 0]}>
-                <cylinderGeometry args={[19, 19, 1.6, 20]} />
-                <meshStandardMaterial color="#0b1324" roughness={0.95} />
+                <cylinderGeometry args={[18, 18, 1.6, 24]} />
+                <AliveMaterial color="#0b1324" roughness={0.95} />
               </mesh>
             </group>
           )}
@@ -9268,7 +10203,6 @@ const DummyWarmup = memo(({ qualityProfile }) => {
     loadNukeCloudAsset().catch(() => {});
     loadWorldPropsAsset().catch(() => {});
     loadAirstrikeAsset().catch(() => {});
-    loadTankTestAsset().catch(() => {});
     loadBaseStructuresAsset().catch(() => {});
     loadCommandEffectsAsset().catch(() => {});
     loadKaijuAssetsAsset().catch(() => {});
@@ -9942,7 +10876,7 @@ const VillageScene = ({ themeConfig, environmentVariant, setNukeCount, setGameSt
       bunker,
       {
         variant: 'apc',
-        scale: 1.02,
+        scale: APC_BASE_ENTITY_SCALE,
         speedMultiplier: APC_SPEED_MULTIPLIER,
         damageMultiplier: (economyRef.current.tankDamageMultiplier || 1) * APC_DAMAGE_MULTIPLIER,
         reloadMultiplier: (economyRef.current.tankReloadMultiplier || 1) * APC_RELOAD_MULTIPLIER
@@ -10380,7 +11314,7 @@ const VillageScene = ({ themeConfig, environmentVariant, setNukeCount, setGameSt
             y: getTerrainHeight(dir.x, dir.z),
             vx: dir.vx,
             vz: dir.vz,
-            scale: 1.2,
+            scale: TANK_BASE_ENTITY_SCALE * 0.94,
             state: 'driving',
             reloadTimer: Math.random() * 3.0, // Stagger initial firing so they don't fire at once
             hp: TANK_BASE_HP,
@@ -11234,6 +12168,14 @@ const VillageScene = ({ themeConfig, environmentVariant, setNukeCount, setGameSt
 
   useFrame((state, delta) => {
     if (!themeConfig || !mounted) return;
+
+    // Update global shader time uniform so all alive-shader animations run
+    globalShaderUniforms.time.value = state.clock.elapsedTime;
+    globalShaderUniforms.pollution.value = THREE.MathUtils.lerp(
+      globalShaderUniforms.pollution.value,
+      pollution,
+      0.03
+    );
 
     const frameSnapshot = rebuildFrameSnapshot();
     
@@ -12326,8 +13268,11 @@ const VillageScene = ({ themeConfig, environmentVariant, setNukeCount, setGameSt
                   p.vz = 0;
               }
 
-              if (Math.random() < (p.fireRate || 0.08)) {
-                  const shotNow = Date.now();
+              const combatNow = Date.now();
+              const weaponReady = ensureSoldierWeaponEquipped(p, combatNow);
+
+              if (weaponReady && Math.random() < (p.fireRate || 0.08)) {
+                  const shotNow = combatNow;
                   p.firePoseUntil = shotNow + (p.projectileType === 'missile' ? 220 : p.weaponType === 'gunner' ? 140 : 110);
                   p.muzzleFlashUntil = shotNow + (p.projectileType === 'missile' ? 140 : p.weaponType === 'gunner' ? 90 : 70);
                   if (p.projectileType === 'missile') {
@@ -12775,6 +13720,7 @@ const VillageScene = ({ themeConfig, environmentVariant, setNukeCount, setGameSt
         if (p.type === 'barricade') return <MemoEntityBarricade key={p.id} entityId={p.id} entitiesRef={entitiesRef} entityLookupRef={entityLookupRef} />;
         return null;
       })}
+      <StaticStreetProps entitiesRef={entitiesRef} themeConfig={themeConfig} />
       {/* RUGGED MOUNTAIN TERRAIN */}
       <MountainTerrain themeConfig={themeConfig} environmentVariant={environmentVariant} pollution={pollution} qualityProfile={qualityProfile} />
 
@@ -13941,7 +14887,8 @@ const NukeImpactOverlay = ({ blastFx }) => {
           opacity: heatOpacity,
           transform: `scale(${heatScale})`,
           background: `radial-gradient(circle at ${offsetX} ${offsetY}, rgba(255,210,110,0.22) 0%, rgba(255,120,20,0.1) 14%, rgba(255,255,255,0) 34%),
-            repeating-linear-gradient(90deg, rgba(255,255,255,0.02) 0 3px, rgba(255,160,64,0.01) 3px 7px, rgba(0,0,0,0) 7px 12px)`,
+            radial-gradient(circle at ${offsetX} ${offsetY}, rgba(255,168,66,0.06) 12%, rgba(145,58,18,0.05) 36%, rgba(0,0,0,0) 68%),
+            linear-gradient(135deg, rgba(255,205,120,0.04) 0%, rgba(255,130,45,0.03) 38%, rgba(0,0,0,0) 72%)`,
           filter: 'blur(10px)'
         }}
       />
@@ -14353,6 +15300,16 @@ export default function FalloutPeople({ theme, isIdleMode }) {
   const progressLoadedRef = useRef(false);
   const resultSavedRef = useRef(false);
   const lastProgressSignatureRef = useRef('');
+
+  useEffect(() => {
+    if (typeof document === 'undefined' || !isFallout) return undefined;
+    document.documentElement.classList.add('fallout-no-scanlines');
+    document.body.classList.add('fallout-no-scanlines');
+    return () => {
+      document.documentElement.classList.remove('fallout-no-scanlines');
+      document.body.classList.remove('fallout-no-scanlines');
+    };
+  }, [isFallout]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -15312,6 +16269,9 @@ const MountainTerrain = memo(({ themeConfig, environmentVariant, pollution, qual
     const terrainPatchCount = qualityProfile?.terrainPatchCount || 200;
     const terrainCrackCount = qualityProfile?.terrainCrackCount || 50;
     const terrainDebrisCount = qualityProfile?.terrainDebrisCount || 500;
+    const terrainSmearCount = Math.max(12, Math.floor(terrainPatchCount * 0.22));
+    const terrainRustCount = Math.max(20, Math.floor(terrainPatchCount * 0.35));
+    const isUrbanTerrain = Boolean(environmentVariant?.urbanScene || themeConfig?.name === 'city');
     const canvas = document.createElement('canvas');
     canvas.width = textureSize;
     canvas.height = textureSize;
@@ -15335,6 +16295,26 @@ const MountainTerrain = memo(({ themeConfig, environmentVariant, pollution, qual
         ctx.fillStyle = shade;
         ctx.globalAlpha = 0.38;
         ctx.fill();
+    }
+
+    // Add stretched erosion smears to break circular patch repetition
+    for (let i = 0; i < terrainSmearCount; i++) {
+      const x = Math.random() * textureSize;
+      const y = Math.random() * textureSize;
+      const rx = 28 + Math.random() * 120;
+      const ry = 10 + Math.random() * 34;
+      const rot = Math.random() * Math.PI;
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.rotate(rot);
+      ctx.beginPath();
+      ctx.ellipse(0, 0, rx, ry, 0, 0, Math.PI * 2);
+      ctx.fillStyle = Math.random() > 0.55
+        ? (environmentVariant?.overlay || '#3b2210')
+        : (environmentVariant?.debrisA || '#6a5a45');
+      ctx.globalAlpha = 0.12 + Math.random() * 0.14;
+      ctx.fill();
+      ctx.restore();
     }
     
     // Add dirt/cracks pattern
@@ -15365,10 +16345,54 @@ const MountainTerrain = memo(({ themeConfig, environmentVariant, pollution, qual
           : (environmentVariant?.debrisB || '#4d453b');
         ctx.fillRect(x, y, size, size);
     }
+
+    // Add warm/cold mineral specks for more lively micro variation
+    ctx.globalAlpha = 0.14;
+    for (let i = 0; i < terrainRustCount; i++) {
+      const x = Math.random() * textureSize;
+      const y = Math.random() * textureSize;
+      const r = 1.4 + Math.random() * 3.8;
+      ctx.beginPath();
+      ctx.arc(x, y, r, 0, Math.PI * 2);
+      ctx.fillStyle = Math.random() > 0.5 ? '#7a5132' : '#4a5a48';
+      ctx.fill();
+    }
+
+    if (isUrbanTerrain) {
+      const roadBands = Math.max(4, Math.floor(textureSize / 180));
+      ctx.globalAlpha = 0.18;
+      for (let i = 0; i < roadBands; i++) {
+        const vertical = i % 2 === 0;
+        const laneWidth = textureSize * (0.05 + Math.random() * 0.038);
+        const center = (textureSize / (roadBands + 1)) * (i + 1) + (Math.random() - 0.5) * textureSize * 0.04;
+        ctx.fillStyle = Math.random() > 0.5 ? '#2a313a' : '#252b33';
+        if (vertical) {
+          ctx.fillRect(center - laneWidth * 0.5, 0, laneWidth, textureSize);
+        } else {
+          ctx.fillRect(0, center - laneWidth * 0.5, textureSize, laneWidth);
+        }
+      }
+
+      const slabCount = Math.max(26, Math.floor(terrainPatchCount * 0.4));
+      ctx.globalAlpha = 0.14;
+      for (let i = 0; i < slabCount; i++) {
+        const x = Math.random() * textureSize;
+        const y = Math.random() * textureSize;
+        const w = 18 + Math.random() * 90;
+        const h = 18 + Math.random() * 70;
+        const rot = (Math.random() - 0.5) * 0.3;
+        ctx.save();
+        ctx.translate(x, y);
+        ctx.rotate(rot);
+        ctx.fillStyle = Math.random() > 0.5 ? '#6b7280' : '#7c8593';
+        ctx.fillRect(-w * 0.5, -h * 0.5, w, h);
+        ctx.restore();
+      }
+    }
     
     const texture = new THREE.CanvasTexture(canvas);
     texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
-    texture.repeat.set(8, 8);
+    texture.repeat.set(isUrbanTerrain ? 3 : 8, isUrbanTerrain ? 3 : 8);
     texture.generateMipmaps = true;
     texture.minFilter = THREE.LinearMipmapLinearFilter;
     texture.magFilter = THREE.LinearFilter;
@@ -15386,58 +16410,266 @@ const MountainTerrain = memo(({ themeConfig, environmentVariant, pollution, qual
     }))
   ), [qualityProfile?.burnMarkCount]);
   const environmentAccents = useMemo(() => (
-    [...Array(8)].map((_, index) => ({
-      x: (Math.random() - 0.5) * WORLD_WIDTH * 1.2,
-      z: (Math.random() - 0.5) * WORLD_DEPTH * 1.2,
-      radius: 36 + Math.random() * 90,
-      stretch: 0.5 + Math.random() * 1.1,
-      rotation: Math.random() * Math.PI,
-      opacity: 0.08 + Math.random() * 0.12,
-      lift: 0.18 + index * 0.01
-    }))
+    [...Array(8)].map((_, index) => {
+      const x = (Math.random() - 0.5) * WORLD_WIDTH * 1.2;
+      const z = (Math.random() - 0.5) * WORLD_DEPTH * 1.2;
+      const lift = 0.22 + index * 0.015;
+      return {
+        x,
+        z,
+        y: getTerrainHeight(x, z) + lift,
+        radius: 36 + Math.random() * 90,
+        stretch: 0.5 + Math.random() * 1.1,
+        rotation: Math.random() * Math.PI,
+        opacity: 0.08 + Math.random() * 0.12
+      };
+    })
   ), [environmentVariant?.key]);
+
+  const terrainMeshRef = useRef(null);
+
+  // Animate terrain shader uniforms every frame
+  useFrame((state) => {
+    const mat = terrainMeshRef.current?.material;
+    if (mat?.uniforms) {
+      mat.uniforms.uTime.value = state.clock.elapsedTime;
+      mat.uniforms.uPollution.value = THREE.MathUtils.lerp(
+        mat.uniforms.uPollution.value,
+        pollution,
+        0.02
+      );
+    }
+  });
+
+  const terrainShaderMaterial = useMemo(() => {
+    const baseColor     = new THREE.Color(environmentVariant?.terrainBase   || '#5a6e35');
+    const tintColor     = new THREE.Color(environmentVariant?.terrainTint   || '#7a9045');
+    const patchAColor   = new THREE.Color(environmentVariant?.patchA        || '#6b8c42');
+    const patchBColor   = new THREE.Color(environmentVariant?.patchB        || '#4a5e28');
+    const accentColor   = new THREE.Color(environmentVariant?.accent        || '#a3e635');
+    const overlayColor  = new THREE.Color(environmentVariant?.overlay       || '#3b2210');
+    const crackColor    = new THREE.Color(environmentVariant?.crack         || '#1a1208');
+    const urbanFactor   = environmentVariant?.urbanScene || themeConfig?.name === 'city' ? 1 : 0;
+
+    return new THREE.ShaderMaterial({
+      uniforms: {
+        uTime:       { value: 0 },
+        uPollution:  { value: pollution },
+        uMap:        { value: terrainTexture },
+        uBase:       { value: baseColor },
+        uTint:       { value: tintColor },
+        uPatchA:     { value: patchAColor },
+        uPatchB:     { value: patchBColor },
+        uAccent:     { value: accentColor },
+        uOverlay:    { value: overlayColor },
+        uCrack:      { value: crackColor },
+        uUrban:      { value: urbanFactor },
+      },
+      vertexShader: `
+        varying vec2  vUv;
+        varying vec3  vWorldPos;
+        varying vec3  vWorldNormal;
+        varying float vHeight;
+
+        void main() {
+          vUv         = uv;
+          // World-space normal (correct for directional lighting)
+          vWorldNormal = normalize(mat3(modelMatrix) * normal);
+          vec4 wPos   = modelMatrix * vec4(position, 1.0);
+          vWorldPos   = wPos.xyz;
+          // position.z is terrain elevation in local PlaneGeometry space
+          vHeight     = position.z;
+          gl_Position = projectionMatrix * viewMatrix * wPos;
+        }
+      `,
+      fragmentShader: `
+        uniform float     uTime;
+        uniform float     uPollution;
+        uniform sampler2D uMap;
+        uniform vec3      uBase;
+        uniform vec3      uTint;
+        uniform vec3      uPatchA;
+        uniform vec3      uPatchB;
+        uniform vec3      uAccent;
+        uniform vec3      uOverlay;
+        uniform vec3      uCrack;
+        uniform float     uUrban;
+
+        varying vec2  vUv;
+        varying vec3  vWorldPos;
+        varying vec3  vWorldNormal;
+        varying float vHeight;
+
+        // Quick value noise
+        float hash(vec2 p) {
+          return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+        }
+        float noise(vec2 p) {
+          vec2 i = floor(p);
+          vec2 f = fract(p);
+          f = f * f * (3.0 - 2.0 * f);
+          float a = hash(i);
+          float b = hash(i + vec2(1.0, 0.0));
+          float c = hash(i + vec2(0.0, 1.0));
+          float d = hash(i + vec2(1.0, 1.0));
+          return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+        }
+        float fbm(vec2 p) {
+          float v = 0.0;
+          float a = 0.5;
+          for (int i = 0; i < 4; i++) {
+            v += a * noise(p);
+            p *= 2.1;
+            a *= 0.5;
+          }
+          return v;
+        }
+
+        void main() {
+          // ── Multi-scale texture blend to avoid tiled-looking terrain ──────
+          vec3 texFine = texture2D(uMap, vUv * 0.25).rgb;
+          vec3 texMacro = texture2D(uMap, vUv * 0.08 + vec2(0.17, 0.31)).rgb;
+          vec3 tex = mix(texMacro, texFine, 0.68);
+
+          // ── World-space FBM noise for large terrain variation ─────────────
+          vec2 wUv   = vWorldPos.xz * 0.0018;
+          float n1   = fbm(wUv + 0.5);
+          float n2   = fbm(wUv * 2.3 + vec2(4.2, 1.7));
+          float n3   = fbm(wUv * 4.8 + vec2(-3.4, 2.1));
+          float micro = noise(vWorldPos.xz * 0.03 + vec2(uTime * 0.01));
+          float ridges = fbm(wUv * 6.2 + vec2(5.3, -8.1));
+          float urban = clamp(uUrban, 0.0, 1.0);
+
+          // ── Base color blend with terrain tint ───────────────────────────
+          vec3 ground = mix(uBase, uTint, n1 * 0.7);
+          ground      = mix(ground, uPatchA, smoothstep(0.58, 0.82, n2) * 0.52);
+          ground      = mix(ground, uPatchB, smoothstep(0.66, 0.92, 1.0 - n1) * 0.46);
+
+          // Merge with texture detail
+          ground = mix(ground, tex * ground * 1.25, 0.58);
+          ground *= 0.92 + (n3 - 0.5) * 0.18 + (micro - 0.5) * 0.05;
+
+          // ── Height-based tinting: valleys darker, peaks lighter ──────────
+          float hFactor = clamp((vHeight + 10.0) / 80.0, 0.0, 1.0);
+          ground = mix(ground * 0.58, ground * 1.22, hFactor);
+
+          // ── Noise-derived detail normal for richer lighting depth ─────────
+          float eps = 0.0025;
+          float hL = fbm((wUv + vec2(-eps, 0.0)) * 5.2 + vec2(2.0, 1.3));
+          float hR = fbm((wUv + vec2( eps, 0.0)) * 5.2 + vec2(2.0, 1.3));
+          float hD = fbm((wUv + vec2(0.0, -eps)) * 5.2 + vec2(2.0, 1.3));
+          float hU = fbm((wUv + vec2(0.0,  eps)) * 5.2 + vec2(2.0, 1.3));
+          vec3 detailNormal = normalize(vec3((hL - hR) * 2.1, 1.0, (hD - hU) * 2.1));
+          vec3 terrainNormal = normalize(mix(vWorldNormal, detailNormal, 0.3));
+
+          // ── Slope-based rock tinting (normals pointing sideways = cliffs) ─
+          float slopeFactor = 1.0 - abs(terrainNormal.y);
+          vec3  rockColor   = mix(uBase * 0.46, vec3(0.41, 0.36, 0.31), 0.65);
+          ground = mix(ground, rockColor, smoothstep(0.3, 0.74, slopeFactor) * 0.68);
+          ground += smoothstep(0.62, 0.86, ridges) * (0.028 + hFactor * 0.018) * mix(uPatchA, uTint, 0.5);
+
+          float dustMask = smoothstep(0.62, 0.96, terrainNormal.y) * (0.35 + n2 * 0.45);
+          vec3 dustColor = mix(vec3(0.34, 0.28, 0.18), vec3(0.43, 0.31, 0.2), uPollution * 0.4);
+          vec3 urbanDust = mix(vec3(0.32, 0.34, 0.38), vec3(0.42, 0.44, 0.48), 0.48 + uPollution * 0.26);
+          ground = mix(ground, mix(ground * 1.06, mix(dustColor, urbanDust, urban), 0.38 + urban * 0.16), dustMask * mix(0.18, 0.26, urban));
+
+          // ── Organic grass breakup (noise-based, avoids visible striping) ──
+          float grassMask = smoothstep(0.6, 1.0, n1) * clamp(1.0 - slopeFactor * 2.0, 0.0, 1.0);
+          grassMask *= (1.0 - urban * 0.92);
+          vec2 grassUv = vWorldPos.xz * 0.0048;
+          vec2 grassWarp = vec2(
+            fbm(grassUv * 1.3 + vec2(uTime * 0.018, -uTime * 0.013)),
+            fbm(grassUv * 1.1 + vec2(-uTime * 0.015, uTime * 0.017) + 7.3)
+          );
+          float grassDetail = fbm(grassUv + grassWarp * 0.9 + n2 * 0.6);
+          float grassHighlight = smoothstep(0.48, 0.8, grassDetail) * grassMask;
+          float turfVariation = smoothstep(0.28, 0.72, n3 + noise(vWorldPos.xz * 0.009) * 0.32);
+          ground = mix(ground, ground * mix(0.92, 1.08, grassDetail), grassMask * 0.14);
+          ground += mix(uPatchA, uAccent, 0.35) * grassHighlight * 0.045;
+          ground = mix(ground, mix(ground, uPatchB * 0.9, 0.22), turfVariation * grassMask * 0.16);
+
+          // ── Flowing radiation puddles / wet patches ───────────────────────
+          float puddle = fbm(wUv * 3.0 + vec2(uTime * 0.04, uTime * 0.03));
+          float pudMask = smoothstep(0.62, 0.72, puddle)
+                        * smoothstep(0.0, 0.15, hFactor)          // valleys only
+                        * clamp(1.0 - slopeFactor * 3.0, 0.0, 1.0); // flat only
+          vec3 radColor = mix(vec3(0.15, 0.38, 0.08), uAccent * 0.7, uPollution);
+          radColor = mix(radColor, vec3(0.19, 0.21, 0.24), urban * 0.8);
+          float puddleShimmer = sin(uTime * 3.5 + vWorldPos.x * 0.3) * 0.5 + 0.5;
+          ground = mix(ground, radColor * (0.54 + puddleShimmer * 0.42), pudMask * (0.42 + uPollution * 0.22));
+
+          float crackMask = smoothstep(0.56, 0.82, tex.g + (1.0 - tex.r) * 0.35);
+          ground = mix(ground, uCrack * 0.9, crackMask * 0.18);
+          float asphaltMask = smoothstep(0.42, 0.8, tex.b + n2 * 0.32);
+          ground = mix(ground, mix(vec3(0.20, 0.22, 0.26), vec3(0.27, 0.30, 0.34), n1), asphaltMask * urban * 0.24);
+
+          float wornTrack = fbm(wUv * 1.7 + vec2(9.1, -2.4));
+          float wornMask = smoothstep(0.54, 0.67, wornTrack + n2 * 0.14) * clamp(1.0 - slopeFactor * 1.8, 0.0, 1.0);
+          vec3 wornColor = mix(uOverlay, uCrack, 0.42) * 1.08;
+          ground = mix(ground, wornColor, wornMask * 0.14);
+          float cavity = smoothstep(0.35, 0.95, 1.0 - terrainNormal.y) * (0.3 + n3 * 0.4);
+          ground *= 1.0 - cavity * 0.14;
+
+          // ── Pollution overlay (blackens the ground at high pollution) ─────
+          ground = mix(ground, uCrack * 0.42 + uOverlay * 0.58, uPollution * 0.38);
+
+          // ── Sky/sun light (directional, world-space) ──────────────────────
+          vec3 viewDir = normalize(cameraPosition - vWorldPos);
+          vec3  sunDir  = normalize(vec3(0.4, 1.0, 0.3));
+          vec3  halfDir = normalize(sunDir + viewDir);
+          float NdotL   = max(dot(terrainNormal, sunDir), 0.0);
+          float wrapLight = max(dot(terrainNormal, sunDir) * 0.5 + 0.5, 0.0);
+          vec3 skyTint = mix(vec3(0.48, 0.60, 0.72), vec3(0.66, 0.46, 0.30), uPollution);
+          vec3 bounceTint = mix(vec3(0.18, 0.16, 0.12), vec3(0.16, 0.11, 0.08), uPollution);
+          vec3 ambientLight = mix(bounceTint, skyTint, clamp(terrainNormal.y * 0.5 + 0.5, 0.0, 1.0));
+          vec3 sunLight = vec3(1.0, 0.95, 0.78) * (0.28 + NdotL * 0.95 + wrapLight * 0.12);
+          float puddleSpec = pow(max(dot(terrainNormal, halfDir), 0.0), 64.0) * pudMask * (0.18 + puddleShimmer * 0.12);
+          float sheen = pow(max(dot(terrainNormal, halfDir), 0.0), 20.0) * grassMask * 0.05;
+          float horizon = smoothstep(0.0, 0.45, 1.0 - abs(terrainNormal.y));
+          vec3 horizonTint = mix(vec3(0.08, 0.09, 0.1), vec3(0.16, 0.10, 0.06), uPollution);
+
+          // ── Horizon atmospheric tint (distant terrain slightly hazy) ──────
+          float dist = length(vWorldPos.xz) / 1800.0;
+          float haze = smoothstep(0.35, 1.0, dist);
+          vec3 hazeColor = mix(vec3(0.58, 0.67, 0.56), vec3(0.68, 0.54, 0.44), uPollution);
+
+          // ── Assemble final color ──────────────────────────────────────────
+          vec3 final = ground * (ambientLight * 0.82 + sunLight);
+          final += vec3(1.0, 0.96, 0.84) * puddleSpec;
+          final += uAccent * sheen * 0.35;
+          final = mix(final, final + horizonTint * 0.12, horizon * 0.22);
+          final = mix(final, hazeColor * mix(final, ground, 0.25), haze * (0.24 + uPollution * 0.18));
+          final = min(final, vec3(1.65));
+
+          gl_FragColor = vec4(final, 1.0);
+        }
+      `,
+      side: THREE.FrontSide,
+    });
+  }, [environmentVariant, terrainTexture, themeConfig?.name]);
 
   return (
     <group>
-      <mesh 
-         geometry={geometry} 
-         rotation={[-Math.PI / 2, 0, 0]} 
+      <mesh
+         ref={terrainMeshRef}
+         geometry={geometry}
+         rotation={[-Math.PI / 2, 0, 0]}
          position={[0, 0, 0]}
          receiveShadow={qualityProfile?.shadows}
-      >
-         <meshStandardMaterial 
-            map={terrainTexture}
-            color={environmentVariant?.terrainTint || (themeConfig?.biome === 'wasteland' ? '#6b5742' : '#3a5f27')} 
-            roughness={0.84} 
-            metalness={0.05}
-            flatShading={false}
-         />
-      </mesh>
-      
-      {/* Scorched ground overlay for pollution (Significantly brightened from pitch black) */}
-      {pollution > 0.3 && (
-        <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.5, 0]}>
-          <planeGeometry args={[WORLD_WIDTH * 4, WORLD_DEPTH * 4]} />
-          <meshStandardMaterial 
-            color={environmentVariant?.overlay || '#3b2210'}
-            roughness={1}
-            transparent
-            opacity={pollution * 0.14}
-          />
-        </mesh>
-      )}
-      
+         material={terrainShaderMaterial}
+      />
+
       {/* Burn marks / destruction zones */}
       {pollution > 0.5 && (
         <group>
           {burnMarks.map((mark, i) => (
-            <mesh 
+            <mesh
               key={`burn-${i}`}
               rotation={[-Math.PI / 2, 0, 0]}
               position={[mark.x, 0.3, mark.z]}
             >
               <circleGeometry args={[mark.radius, 16]} />
-              <meshStandardMaterial 
+              <meshStandardMaterial
                 color="#0c0805"
                 roughness={1}
                 transparent
@@ -15454,7 +16686,7 @@ const MountainTerrain = memo(({ themeConfig, environmentVariant, pollution, qual
             <mesh
               key={`${environmentVariant.key}-accent-${i}`}
               rotation={[-Math.PI / 2, 0, accent.rotation]}
-              position={[accent.x, accent.lift, accent.z]}
+              position={[accent.x, accent.y, accent.z]}
               scale={[accent.stretch, 1, 1]}
             >
               <circleGeometry args={[accent.radius, 20]} />
@@ -15463,13 +16695,17 @@ const MountainTerrain = memo(({ themeConfig, environmentVariant, pollution, qual
                 roughness={1}
                 transparent
                 opacity={accent.opacity}
+                depthWrite={false}
+                polygonOffset
+                polygonOffsetFactor={-2}
+                polygonOffsetUnits={-3}
               />
             </mesh>
           ))}
         </group>
       )}
-      
-      {/* Add a slightly darker base under the hills to avoid floating artifacts */}
+
+      {/* Solid base below terrain to prevent holes */}
       <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -20, 0]}>
          <planeGeometry args={[WORLD_WIDTH * 4, WORLD_DEPTH * 4]} />
          <meshBasicMaterial color="#000" />

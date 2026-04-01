@@ -1519,13 +1519,9 @@ body {
   inset: 0;
   z-index: 999998;
   pointer-events: none;
-  background: repeating-linear-gradient(
-    0deg,
-    rgba(0, 0, 0, 0.15),
-    rgba(0, 0, 0, 0.15) 1px,
-    transparent 1px,
-    transparent 2px
-  );
+  background:
+    radial-gradient(circle at 50% 50%, rgba(255, 255, 255, 0.08) 0%, rgba(255, 170, 60, 0.05) 24%, rgba(0, 0, 0, 0) 62%),
+    linear-gradient(135deg, rgba(255, 120, 40, 0.04) 0%, rgba(0, 0, 0, 0) 68%);
   animation: fallout-crt-flicker 3s infinite alternate;
 }
 
@@ -1562,4 +1558,3 @@ body {
   0% { transform: translateY(0) translateX(0); }
   100% { transform: translateY(110vh) translateX(-20vw); }
 }
-

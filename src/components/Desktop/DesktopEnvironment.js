@@ -1198,8 +1198,7 @@ function WastelandOverlay() {
           />
         ))}
       </div>
-      {/* Radioactive Scanline layer */}
-      <div className="fallout-crt-damage" />
+      {/* Keep fallout rain/ash only; CRT damage stripes are triggered contextually elsewhere */}
     </div>
   );
 }
