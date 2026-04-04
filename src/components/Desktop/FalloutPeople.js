@@ -98,9 +98,9 @@ const getDeployAngle = (bunker, target) => {
 const PLANE_MODEL_SCALE = 0.6;
 const JET_MODEL_SCALE = 0.58;
 const GROUND_ARMOR_MODEL_SCALE = 0.4;
+const TANK_VISUAL_SCALE_MULTIPLIER = 1.38;
+const APC_VISUAL_SCALE_MULTIPLIER = 1.14;
 const SOLDIER_MODEL_SCALE = 0.9;
-const TANK_BASE_ENTITY_SCALE = 2.45;
-const APC_BASE_ENTITY_SCALE = 1.88;
 const SOLDIER_MOVE_SPEED_MULTIPLIER = 0.78;
 const TANK_MOVE_SPEED_MULTIPLIER = 0.82;
 const PLANE_BOMB_BAY_OFFSET = { x: -10, y: -13, z: 0 };
@@ -394,12 +394,12 @@ const FACILITY_BUILD_MIN_SPACING = 54;
 const NUKE_AFTERFIRE_PATCH_COUNT = 4;
 const NUKE_AFTERFIRE_PATCH_TTL = 11;
 const NUKE_AFTERFIRE_CORE_LIFETIME = 14;
-const ORBITAL_LANCE_DURATION = 2.25;
-const FIRESTORM_EFFECT_DURATION = 3.2;
+const ORBITAL_LANCE_DURATION = 7.5;
+const FIRESTORM_EFFECT_DURATION = 10.0;
 const FIRESTORM_PATCH_TTL = 9.5;
 const KINETIC_SPEAR_COST = 125;
 const KINETIC_SPEAR_COOLDOWN_MS = 18000;
-const KINETIC_SPEAR_DURATION = 1.85;
+const KINETIC_SPEAR_DURATION = 6.5;
 const ELEMENT_ADVANTAGE_DAMAGE_MULTIPLIER = 1.55;
 const ELEMENT_RESIST_DAMAGE_MULTIPLIER = 0.74;
 const ELEMENT_META = {
@@ -1079,9 +1079,9 @@ const applySoldierLoadout = (entity, seed = 0) => {
   entity.hp = loadout.hp;
   entity.maxHp = loadout.hp;
   entity.color = loadout.color;
-  entity.weaponEquipped = true;
-  entity.weaponEquipStartedAt = Date.now();
-  entity.weaponEquipUntil = entity.weaponEquipStartedAt;
+  entity.weaponEquipped = false;
+  entity.weaponEquipStartedAt = 0;
+  entity.weaponEquipUntil = 0;
   entity.dead = false;
   return entity;
 };
@@ -1548,7 +1548,7 @@ const THEMES = [
   {
     name: 'village',
     population: 200, carCount: 15, treeCount: 40, houseCount: 40, birdCount: 30,
-    groundColor: '#65a30d', groundPolluted: '#3f3f2d',
+    groundColor: '#65a30d', groundPolluted: '#6b5f44',
     houseColors: ['#fef3c7', '#fcd34d', '#ffedd5'], roofColors: ['#991b1b', '#b45309'],
     carColors: ['#dc2626', '#2563eb', '#16a34a', '#ca8a04', '#111827', '#f8fafc'],
     personColors: ['#ef4444', '#3b82f6', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899', '#14b8a6', '#f97316'],
@@ -1559,8 +1559,8 @@ const THEMES = [
   {
     name: 'city',
     population: 350, carCount: 60, treeCount: 10, houseCount: 80, birdCount: 8,
-    groundColor: '#475569', groundPolluted: '#0f172a', // Asphalt / Concrete
-    houseColors: ['#94a3b8', '#64748b', '#cbd5e1', '#334155'], roofColors: ['#334155', '#1e293b'], // Skyscrapers
+    groundColor: '#475569', groundPolluted: '#4b5563', // Asphalt / Concrete
+    houseColors: ['#94a3b8', '#64748b', '#cbd5e1', '#475569'], roofColors: ['#64748b', '#7b8da4', '#94a3b8'], // Skyscrapers
     carColors: ['#000000', '#ffffff', '#facc15', '#facc15', '#ef4444'], // Lots of yellow cabs
     personColors: ['#000000', '#333333', '#111111', '#555555', '#cccccc', '#94a3b8'], // Monotone coats
     skyColor: '#93c5fd', skyPolluted: '#1e1b4b',
@@ -1571,7 +1571,7 @@ const THEMES = [
   {
     name: 'militarybase',
     population: 150, carCount: 30, treeCount: 15, houseCount: 35, birdCount: 0,
-    groundColor: '#78350f', groundPolluted: '#451a03', // Mud/Dirt
+    groundColor: '#78350f', groundPolluted: '#7c4a24', // Mud/Dirt
     houseColors: ['#4d7c0f', '#3f6212', '#14532d'], roofColors: ['#3f6212', '#14532d', '#052e16'], // Barracks
     carColors: ['#14532d', '#166534', '#064e3b'], // Army jeeps / trucks
     personColors: ['#14532d', '#166534', '#3f6212', '#78350f', '#000000'], // Camouflage
@@ -1584,10 +1584,10 @@ const ENVIRONMENT_VARIANTS = [
   {
     key: 'ashen_front',
     label: 'Ashen Front',
-    terrainBase: '#6a5947',
-    terrainTint: '#88735f',
-    patchA: '#9a8167',
-    patchB: '#5a4a3b',
+    terrainBase: '#88735f',
+    terrainTint: '#a68c72',
+    patchA: '#b79a7d',
+    patchB: '#705e4d',
     crack: '#221712',
     debrisA: '#b69a7e',
     debrisB: '#7a6554',
@@ -1600,10 +1600,10 @@ const ENVIRONMENT_VARIANTS = [
   {
     key: 'toxic_bloom',
     label: 'Toxic Bloom',
-    terrainBase: '#4a6336',
-    terrainTint: '#62854a',
-    patchA: '#87ab62',
-    patchB: '#3c522b',
+    terrainBase: '#5f7d45',
+    terrainTint: '#76985a',
+    patchA: '#99ba72',
+    patchB: '#4b6336',
     crack: '#1a2912',
     debrisA: '#aec27e',
     debrisB: '#718752',
@@ -1616,10 +1616,10 @@ const ENVIRONMENT_VARIANTS = [
   {
     key: 'ember_storm',
     label: 'Ember Storm',
-    terrainBase: '#734737',
-    terrainTint: '#9c6451',
-    patchA: '#c17c62',
-    patchB: '#613b2e',
+    terrainBase: '#8a5845',
+    terrainTint: '#b5755f',
+    patchA: '#d38e72',
+    patchB: '#734638',
     crack: '#27160f',
     debrisA: '#d08b6a',
     debrisB: '#8b5944',
@@ -1632,10 +1632,10 @@ const ENVIRONMENT_VARIANTS = [
   {
     key: 'dead_zone',
     label: 'Dead Zone',
-    terrainBase: '#606976',
-    terrainTint: '#7d8796',
-    patchA: '#a1adbc',
-    patchB: '#4b5561',
+    terrainBase: '#788291',
+    terrainTint: '#97a2b1',
+    patchA: '#b8c3d0',
+    patchB: '#616b78',
     crack: '#171d24',
     debrisA: '#c2cad6',
     debrisB: '#737d8b',
@@ -1644,23 +1644,6 @@ const ENVIRONMENT_VARIANTS = [
     ambient: '#e2e8f0',
     directional: '#cbd5e1',
     accent: '#93c5fd'
-  },
-  {
-    key: 'urban_decay',
-    label: 'Urban Decay',
-    terrainBase: '#3f464f',
-    terrainTint: '#505964',
-    patchA: '#6f7a88',
-    patchB: '#343b44',
-    crack: '#1a1e25',
-    debrisA: '#8f97a3',
-    debrisB: '#555f6d',
-    overlay: '#6b7280',
-    fog: '#6b7280',
-    ambient: '#d7dde5',
-    directional: '#f1f5f9',
-    accent: '#94a3b8',
-    urbanScene: true
   }
 ];
 
@@ -1822,12 +1805,12 @@ const getResolutionProfile = (preset) => RESOLUTION_PRESETS[preset] || RESOLUTIO
 const FPS_CAP_OPTIONS = {
   '30': {
     label: '30 FPS',
-    note: 'Cooler / smoother battery life',
+    note: 'Default · Coolest · Saves battery',
     frameMs: 1000 / 30
   },
   '60': {
     label: '60 FPS',
-    note: 'Recommended',
+    note: 'Smoother (runs hotter)',
     frameMs: 1000 / 60
   },
   unlimited: {
@@ -1836,7 +1819,7 @@ const FPS_CAP_OPTIONS = {
     frameMs: 0
   }
 };
-const DEFAULT_FPS_CAP = '60';
+const DEFAULT_FPS_CAP = '30';
 const getInitialFpsCap = () => {
   if (typeof window === 'undefined') return DEFAULT_FPS_CAP;
   const saved = window.localStorage.getItem('fallout-fps-cap');
@@ -1908,23 +1891,163 @@ const AudioManager = {
   ctx: null,
   _cooldowns: {},     // Per-type cooldown timestamps
   _activeCount: 0,    // Total active audio nodes
-  _MAX_CONCURRENT: 12, // Hard cap on simultaneous sounds
+  _MAX_CONCURRENT: 20, // Hard cap on simultaneous sounds
+  _activeVoices: [],  // Track active voices with type and end time for eviction
   _noiseCache: {},    // Cache noise buffers to avoid regeneration
+  _masterInput: null,
+  _masterCtx: null,
+  _driveCurveCache: {},
   // Minimum interval (seconds) between plays of the same sound type
   _COOLDOWN_MAP: {
-    bomb: 0.3, nuke: 2.0, tank_fire: 0.25, plane_engine: 0.9, plane_flyby: 2.2,
+    bomb: 0.3, nuke: 6.5, tank_fire: 0.25, plane_engine: 0.9, plane_flyby: 2.2,
     jet_engine: 0.7, tank_engine: 0.7, gun: 0.12, scream: 0.8, kaiju_roar: 2.5,
     fire_breath: 1.5, missile_launch: 0.5, target_confirm: 0.15,
-    target_blocked: 0.2, bomb_whistle: 1.2, kaiju_step: 0.5
+    target_blocked: 0.2, bomb_whistle: 1.2, kaiju_step: 0.5,
+    orbital_lance: 8.0, firestorm: 8.5, kinetic_spear: 5.0
   },
   init() {
     if (!this.ctx && typeof window !== 'undefined') {
        try {
          const AudioContext = window.AudioContext || window.webkitAudioContext;
          this.ctx = new AudioContext();
+         this.ensureMasterBus(this.ctx);
        } catch(e) {}
     }
     return this.ctx;
+  },
+  createImpulseResponse(ctx, duration = 2.4, decay = 2.8) {
+    const length = Math.max(1, Math.floor(ctx.sampleRate * duration));
+    const impulse = ctx.createBuffer(2, length, ctx.sampleRate);
+    for (let channel = 0; channel < impulse.numberOfChannels; channel++) {
+      const data = impulse.getChannelData(channel);
+      for (let i = 0; i < length; i++) {
+        const t = i / length;
+        const envelope = Math.pow(1 - t, decay);
+        const early = i < length * 0.12 ? 1.0 : 0.55;
+        data[i] = (Math.random() * 2 - 1) * envelope * early;
+      }
+    }
+    return impulse;
+  },
+  getDriveCurve(amount = 24) {
+    const key = String(Math.round(amount));
+    if (this._driveCurveCache[key]) return this._driveCurveCache[key];
+    const samples = 1024;
+    const curve = new Float32Array(samples);
+    const drive = Math.max(1, amount);
+    for (let i = 0; i < samples; i++) {
+      const x = (i * 2) / samples - 1;
+      curve[i] = Math.tanh(x * drive * 0.08);
+    }
+    this._driveCurveCache[key] = curve;
+    return curve;
+  },
+  getSoundProfile(type, options = {}) {
+    const isUi = type === 'target_confirm' || type === 'target_blocked';
+    const isExplosion = type === 'bomb' || type === 'nuke' || type === 'tank_fire' || type === 'missile_launch' || type === 'orbital_lance' || type === 'firestorm' || type === 'kinetic_spear';
+    const isEngine = type === 'plane_engine' || type === 'plane_flyby' || type === 'jet_engine' || type === 'tank_engine';
+    const isCreature = type === 'scream' || type === 'kaiju_roar' || type === 'kaiju_step' || type === 'fire_breath';
+    const isWeapon = type === 'gun' || type === 'bomb_whistle';
+
+    if (isUi) return { highpass: 120, lowpass: 3200, drive: 10, trim: 0.86, pan: 0.04 };
+    if (isExplosion) return { highpass: 18, lowpass: 5800, drive: 36, trim: 0.98, pan: 0.08 };
+    if (isEngine) return { highpass: 32, lowpass: 3600, drive: 22, trim: 0.92, pan: 0.12 };
+    if (isCreature) return { highpass: 26, lowpass: 3000, drive: 28, trim: 0.95, pan: 0.08 };
+    if (isWeapon) return { highpass: 40, lowpass: 4800, drive: 20, trim: 0.9, pan: 0.1 };
+    return {
+      highpass: options.highpass || 28,
+      lowpass: options.lowpass || 5200,
+      drive: options.drive || 16,
+      trim: options.trim || 0.9,
+      pan: options.pan || 0.08
+    };
+  },
+  createVoiceBus(ctx, type, options = {}) {
+    const master = this.ensureMasterBus(ctx) || ctx.destination;
+    const profile = this.getSoundProfile(type, options);
+    const input = ctx.createGain();
+    const highpass = ctx.createBiquadFilter();
+    const lowpass = ctx.createBiquadFilter();
+    const shaper = ctx.createWaveShaper();
+    const compressor = ctx.createDynamicsCompressor();
+    const output = ctx.createGain();
+    const panner = typeof ctx.createStereoPanner === 'function' ? ctx.createStereoPanner() : null;
+
+    input.gain.value = 1;
+    highpass.type = 'highpass';
+    highpass.frequency.value = profile.highpass;
+    lowpass.type = 'lowpass';
+    lowpass.frequency.value = profile.lowpass;
+    shaper.curve = this.getDriveCurve(profile.drive);
+    shaper.oversample = '4x';
+    compressor.threshold.value = -18;
+    compressor.knee.value = 12;
+    compressor.ratio.value = 2.4;
+    compressor.attack.value = 0.003;
+    compressor.release.value = 0.14;
+    output.gain.value = profile.trim;
+
+    if (panner) {
+      panner.pan.value = (Math.random() - 0.5) * profile.pan * 2;
+    }
+
+    input.connect(highpass);
+    highpass.connect(lowpass);
+    lowpass.connect(shaper);
+    shaper.connect(compressor);
+    compressor.connect(output);
+    if (panner) {
+      output.connect(panner);
+      panner.connect(master);
+    } else {
+      output.connect(master);
+    }
+
+    return input;
+  },
+  ensureMasterBus(ctx) {
+    if (this._masterInput && this._masterCtx === ctx) return this._masterInput;
+
+    const input = ctx.createGain();
+    const dry = ctx.createGain();
+    const wet = ctx.createGain();
+    const convolver = ctx.createConvolver();
+    const highpass = ctx.createBiquadFilter();
+    const lowpass = ctx.createBiquadFilter();
+    const compressor = ctx.createDynamicsCompressor();
+    const limiter = ctx.createGain();
+
+    convolver.buffer = this.createImpulseResponse(ctx, 2.6, 3.0);
+
+    highpass.type = 'highpass';
+    highpass.frequency.value = 22;
+    lowpass.type = 'lowpass';
+    lowpass.frequency.value = 6200;
+
+    dry.gain.value = 0.92;
+    wet.gain.value = 0.18;
+
+    compressor.threshold.value = -26;
+    compressor.knee.value = 18;
+    compressor.ratio.value = 3.5;
+    compressor.attack.value = 0.005;
+    compressor.release.value = 0.22;
+
+    limiter.gain.value = 0.92;
+
+    input.connect(dry);
+    input.connect(convolver);
+    convolver.connect(wet);
+    dry.connect(highpass);
+    wet.connect(highpass);
+    highpass.connect(lowpass);
+    lowpass.connect(compressor);
+    compressor.connect(limiter);
+    limiter.connect(ctx.destination);
+
+    this._masterInput = input;
+    this._masterCtx = ctx;
+    return input;
   },
   // Cleanup when game ends
   cleanup() {
@@ -1934,7 +2057,11 @@ const AudioManager = {
     }
     this._cooldowns = {};
     this._activeCount = 0;
+    this._activeVoices = [];
     this._noiseCache = {};
+    this._masterInput = null;
+    this._masterCtx = null;
+    this._driveCurveCache = {};
   },
   // Cached white noise buffer
   getNoiseBuffer(ctx, duration) {
@@ -1971,6 +2098,22 @@ const AudioManager = {
     }
     return this._noiseCache[key];
   },
+  getBrownNoise(ctx, duration) {
+    const key = `brown_${Math.round(duration * 10)}`;
+    if (!this._noiseCache[key]) {
+      const bufferSize = ctx.sampleRate * duration;
+      const buffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
+      const data = buffer.getChannelData(0);
+      let last = 0;
+      for (let i = 0; i < bufferSize; i++) {
+        const white = Math.random() * 2 - 1;
+        last = (last + 0.02 * white) / 1.02;
+        data[i] = last * 3.5;
+      }
+      this._noiseCache[key] = buffer;
+    }
+    return this._noiseCache[key];
+  },
   play(type, options = {}) {
     const ctx = this.init();
     if (!ctx) return;
@@ -1984,500 +2127,1023 @@ const AudioManager = {
     const lastPlayed = this._cooldowns[type] || 0;
     if (now - lastPlayed < cooldown) return; // Too soon, skip
     
-    // --- Global concurrent limit ---
-    if (this._activeCount >= this._MAX_CONCURRENT) return;
+    // Priority types that should never be silenced
+    const PRIORITY_TYPES = { gun: true, tank_fire: true, missile_launch: true, bomb: true, nuke: true, orbital_lance: true, firestorm: true, kinetic_spear: true };
+    const isPriority = !!PRIORITY_TYPES[type];
+    const AMBIENT_TYPES = { tank_engine: true, plane_engine: true, jet_engine: true, kaiju_step: true };
+    
+    // --- Global concurrent limit with priority eviction ---
+    // Clean up expired voices first
+    this._activeVoices = (this._activeVoices || []).filter(v => v.endTime > t);
+    this._activeCount = this._activeVoices.length;
+    
+    if (this._activeCount >= this._MAX_CONCURRENT) {
+      if (isPriority) {
+        // Try to evict lowest-priority ambient voice
+        const ambientIdx = this._activeVoices.findIndex(v => AMBIENT_TYPES[v.type]);
+        if (ambientIdx !== -1) {
+          this._activeVoices.splice(ambientIdx, 1);
+          this._activeCount = this._activeVoices.length;
+        } else {
+          return; // All slots are priority, can't evict
+        }
+      } else {
+        return; // Non-priority sound, skip
+      }
+    }
     
     this._cooldowns[type] = now;
+    // Create voice bus AFTER guards pass (avoids leaked audio nodes)
+    const destination = this.createVoiceBus(ctx, type, options);
     this._activeCount++;
     
-    // Helper: auto-decrement active count after duration
+    // Helper: register voice and auto-release after duration
     const scheduleRelease = (dur) => {
-      setTimeout(() => { this._activeCount = Math.max(0, this._activeCount - 1); }, dur * 1000);
+      const voice = { type, endTime: t + dur };
+      this._activeVoices.push(voice);
     };
     
     if (type === 'bomb') {
-      const noise = ctx.createBufferSource();
-      noise.buffer = this.getPinkNoise(ctx, 1.2);
-      const lowpass = ctx.createBiquadFilter();
-      lowpass.type = 'lowpass';
-      lowpass.frequency.setValueAtTime(300, t);
-      lowpass.frequency.exponentialRampToValueAtTime(40, t + 0.8);
-      const gain = ctx.createGain();
-      gain.gain.setValueAtTime(0.5, t);
-      gain.gain.exponentialRampToValueAtTime(0.01, t + 1.0);
-      noise.connect(lowpass).connect(gain).connect(ctx.destination);
-      noise.start(t); noise.stop(t + 1.0);
-      const sub = ctx.createOscillator();
-      const subGain = ctx.createGain();
-      sub.type = 'sine';
-      sub.frequency.setValueAtTime(60, t);
-      sub.frequency.exponentialRampToValueAtTime(25, t + 0.5);
-      subGain.gain.setValueAtTime(0.35, t);
-      subGain.gain.exponentialRampToValueAtTime(0.01, t + 0.5);
-      sub.connect(subGain).connect(ctx.destination);
-      sub.start(t); sub.stop(t + 0.5);
-      scheduleRelease(1.0);
+      // ── Realistic explosive concussion ──
+      // Layer 1: deep pressure wave — brown noise through steep lowpass
+      const dur = 1.4;
+      const pressure = ctx.createBufferSource();
+      pressure.buffer = this.getBrownNoise(ctx, dur);
+      const pressLP = ctx.createBiquadFilter();
+      pressLP.type = 'lowpass';
+      pressLP.frequency.setValueAtTime(180, t);
+      pressLP.frequency.exponentialRampToValueAtTime(28, t + dur * 0.7);
+      const pressGain = ctx.createGain();
+      pressGain.gain.setValueAtTime(0.52, t);
+      pressGain.gain.exponentialRampToValueAtTime(0.001, t + dur);
+      pressure.connect(pressLP).connect(pressGain).connect(destination);
+      pressure.start(t); pressure.stop(t + dur);
+      // Layer 2: initial crack — white noise burst, highpass to remove mud
+      const snap = ctx.createBufferSource();
+      snap.buffer = this.getNoiseBuffer(ctx, 0.06);
+      const snapHP = ctx.createBiquadFilter();
+      snapHP.type = 'highpass'; snapHP.frequency.value = 2200;
+      const snapGain = ctx.createGain();
+      snapGain.gain.setValueAtTime(0.18, t);
+      snapGain.gain.exponentialRampToValueAtTime(0.001, t + 0.06);
+      snap.connect(snapHP).connect(snapGain).connect(destination);
+      snap.start(t); snap.stop(t + 0.06);
+      // Layer 3: debris scatter — pink noise shaped into mid-band crackle
+      const debris = ctx.createBufferSource();
+      debris.buffer = this.getPinkNoise(ctx, 0.6);
+      const debrisBP = ctx.createBiquadFilter();
+      debrisBP.type = 'bandpass'; debrisBP.frequency.setValueAtTime(640, t);
+      debrisBP.frequency.exponentialRampToValueAtTime(120, t + 0.6); debrisBP.Q.value = 0.5;
+      const debrisGain = ctx.createGain();
+      debrisGain.gain.setValueAtTime(0.16, t + 0.02);
+      debrisGain.gain.exponentialRampToValueAtTime(0.001, t + 0.6);
+      debris.connect(debrisBP).connect(debrisGain).connect(destination);
+      debris.start(t + 0.01); debris.stop(t + 0.6);
+      // Layer 4: sub thump — sine only, no audible pitch
+      const sub = ctx.createOscillator(); sub.type = 'sine';
+      sub.frequency.setValueAtTime(42, t); sub.frequency.exponentialRampToValueAtTime(18, t + 0.4);
+      const subG = ctx.createGain();
+      subG.gain.setValueAtTime(0.38, t); subG.gain.exponentialRampToValueAtTime(0.001, t + 0.4);
+      sub.connect(subG).connect(destination); sub.start(t); sub.stop(t + 0.4);
+      scheduleRelease(dur);
 
     } else if (type === 'nuke') {
-      const sub = ctx.createOscillator();
-      const subGain = ctx.createGain();
-      sub.type = 'sine';
-      sub.frequency.setValueAtTime(35, t);
-      sub.frequency.exponentialRampToValueAtTime(12, t + 3);
-      subGain.gain.setValueAtTime(0.5, t);
-      subGain.gain.exponentialRampToValueAtTime(0.01, t + 3);
-      sub.connect(subGain).connect(ctx.destination);
-      sub.start(t); sub.stop(t + 3);
-      const noise = ctx.createBufferSource();
-      noise.buffer = this.getPinkNoise(ctx, 3);
-      const lowpass = ctx.createBiquadFilter();
-      lowpass.type = 'lowpass';
-      lowpass.frequency.setValueAtTime(600, t);
-      lowpass.frequency.exponentialRampToValueAtTime(50, t + 2.5);
-      const noiseGain = ctx.createGain();
-      noiseGain.gain.setValueAtTime(0.4, t);
-      noiseGain.gain.exponentialRampToValueAtTime(0.01, t + 3);
-      noise.connect(lowpass).connect(noiseGain).connect(ctx.destination);
-      noise.start(t); noise.stop(t + 3);
-      scheduleRelease(3);
+      // ══════════════════════════════════════════════════════════════
+      // NUCLEAR DETONATION — cinematic 10-layer, 6-second soundscape
+      // Phase 1: Flash/EMP  Phase 2: Shockwave  Phase 3: Fireball
+      // Phase 4: Mushroom   Phase 5: Aftermath  Phase 6: Decay
+      // ══════════════════════════════════════════════════════════════
+      const dur = 6.0;
+
+      // ── Layer 1: EMP flash — instant full-spectrum white noise spike ──
+      // The blinding flash arrives at speed of light — a sharp crack
+      const emp = ctx.createBufferSource();
+      emp.buffer = this.getNoiseBuffer(ctx, 0.06);
+      const empHP = ctx.createBiquadFilter();
+      empHP.type = 'highpass'; empHP.frequency.value = 4000;
+      const empG = ctx.createGain();
+      empG.gain.setValueAtTime(0.35, t);
+      empG.gain.exponentialRampToValueAtTime(0.001, t + 0.05);
+      emp.connect(empHP).connect(empG).connect(destination);
+      emp.start(t); emp.stop(t + 0.06);
+
+      // ── Layer 2: Shockwave crack — broadband concussion burst ──
+      // The wall of compressed air arrives ~0.02s after flash
+      const crack = ctx.createBufferSource();
+      crack.buffer = this.getNoiseBuffer(ctx, 0.12);
+      const crackBP = ctx.createBiquadFilter();
+      crackBP.type = 'bandpass'; crackBP.frequency.value = 1200; crackBP.Q.value = 0.3;
+      const crackG = ctx.createGain();
+      crackG.gain.setValueAtTime(0.001, t);
+      crackG.gain.linearRampToValueAtTime(0.42, t + 0.015);
+      crackG.gain.exponentialRampToValueAtTime(0.001, t + 0.12);
+      crack.connect(crackBP).connect(crackG).connect(destination);
+      crack.start(t + 0.02); crack.stop(t + 0.14);
+
+      // ── Layer 3: Dual sub-bass pressure dome — two sine oscillators ──
+      // Fundamental sub (22Hz→6Hz) + harmonic (44Hz→12Hz) for chest-punch
+      const sub1 = ctx.createOscillator(); sub1.type = 'sine';
+      sub1.frequency.setValueAtTime(22, t);
+      sub1.frequency.exponentialRampToValueAtTime(6, t + dur);
+      const sub1G = ctx.createGain();
+      sub1G.gain.setValueAtTime(0.001, t);
+      sub1G.gain.linearRampToValueAtTime(0.52, t + 0.04);
+      sub1G.gain.setValueAtTime(0.52, t + 0.5);
+      sub1G.gain.exponentialRampToValueAtTime(0.001, t + dur);
+      sub1.connect(sub1G).connect(destination);
+      sub1.start(t); sub1.stop(t + dur);
+
+      const sub2 = ctx.createOscillator(); sub2.type = 'sine';
+      sub2.frequency.setValueAtTime(44, t);
+      sub2.frequency.exponentialRampToValueAtTime(12, t + dur * 0.7);
+      const sub2G = ctx.createGain();
+      sub2G.gain.setValueAtTime(0.001, t);
+      sub2G.gain.linearRampToValueAtTime(0.28, t + 0.04);
+      sub2G.gain.exponentialRampToValueAtTime(0.001, t + dur * 0.7);
+      sub2.connect(sub2G).connect(destination);
+      sub2.start(t); sub2.stop(t + dur * 0.7);
+
+      // ── Layer 4: Shockwave body — heavy brown noise wall ──
+      // The massive air-displacement pressure wall
+      const body = ctx.createBufferSource();
+      body.buffer = this.getBrownNoise(ctx, dur * 0.7);
+      const bodyLP = ctx.createBiquadFilter();
+      bodyLP.type = 'lowpass';
+      bodyLP.frequency.setValueAtTime(520, t);
+      bodyLP.frequency.exponentialRampToValueAtTime(25, t + dur * 0.65);
+      const bodyG = ctx.createGain();
+      bodyG.gain.setValueAtTime(0.001, t);
+      bodyG.gain.linearRampToValueAtTime(0.52, t + 0.03);
+      bodyG.gain.setValueAtTime(0.48, t + 0.4);
+      bodyG.gain.exponentialRampToValueAtTime(0.001, t + dur * 0.7);
+      body.connect(bodyLP).connect(bodyG).connect(destination);
+      body.start(t); body.stop(t + dur * 0.7);
+
+      // ── Layer 5: Fireball roar — pink noise swell for the billowing inferno ──
+      // Rises after the shockwave as the fireball expands upward
+      const roar = ctx.createBufferSource();
+      roar.buffer = this.getPinkNoise(ctx, dur);
+      const roarBP = ctx.createBiquadFilter();
+      roarBP.type = 'bandpass';
+      roarBP.frequency.setValueAtTime(120, t);
+      roarBP.frequency.linearRampToValueAtTime(340, t + 0.8);
+      roarBP.frequency.exponentialRampToValueAtTime(50, t + dur);
+      roarBP.Q.value = 0.35;
+      const roarG = ctx.createGain();
+      roarG.gain.setValueAtTime(0.001, t);
+      roarG.gain.linearRampToValueAtTime(0.36, t + 0.5);
+      roarG.gain.setValueAtTime(0.32, t + 1.5);
+      roarG.gain.exponentialRampToValueAtTime(0.001, t + dur);
+      roar.connect(roarBP).connect(roarG).connect(destination);
+      roar.start(t + 0.08); roar.stop(t + dur);
+
+      // ── Layer 6: Air suction / vacuum collapse ──
+      // After shockwave passes, air rushes BACK toward the blast center
+      const suction = ctx.createBufferSource();
+      suction.buffer = this.getPinkNoise(ctx, 1.8);
+      const suctionHP = ctx.createBiquadFilter();
+      suctionHP.type = 'highpass';
+      suctionHP.frequency.setValueAtTime(180, t + 0.6);
+      suctionHP.frequency.linearRampToValueAtTime(800, t + 1.6);
+      suctionHP.frequency.linearRampToValueAtTime(100, t + 2.4);
+      const suctionG = ctx.createGain();
+      suctionG.gain.setValueAtTime(0.001, t);
+      suctionG.gain.linearRampToValueAtTime(0.18, t + 1.2);
+      suctionG.gain.exponentialRampToValueAtTime(0.001, t + 2.4);
+      suction.connect(suctionHP).connect(suctionG).connect(destination);
+      suction.start(t + 0.6); suction.stop(t + 2.4);
+
+      // ── Layer 7: Mushroom cloud churn — modulated deep rumble ──
+      // Low churning rumble as the mushroom cap billows and rolls
+      const churn = ctx.createBufferSource();
+      churn.buffer = this.getBrownNoise(ctx, dur * 0.75);
+      const churnLP = ctx.createBiquadFilter();
+      churnLP.type = 'lowpass';
+      churnLP.frequency.setValueAtTime(200, t + 1.0);
+      churnLP.frequency.linearRampToValueAtTime(280, t + 2.5);
+      churnLP.frequency.exponentialRampToValueAtTime(40, t + dur * 0.75);
+      const churnG = ctx.createGain();
+      churnG.gain.setValueAtTime(0.001, t);
+      churnG.gain.linearRampToValueAtTime(0.22, t + 1.5);
+      churnG.gain.setValueAtTime(0.2, t + 2.5);
+      churnG.gain.exponentialRampToValueAtTime(0.001, t + dur * 0.75);
+      churn.connect(churnLP).connect(churnG).connect(destination);
+      churn.start(t + 0.8); churn.stop(t + dur * 0.75);
+
+      // ── Layer 8: Secondary detonations — staggered crackle bursts ──
+      // Fuel tanks, ammo dumps, gas lines igniting in the blast zone
+      const sec = ctx.createBufferSource();
+      sec.buffer = this.getNoiseBuffer(ctx, 2.5);
+      const secBP = ctx.createBiquadFilter();
+      secBP.type = 'bandpass';
+      secBP.frequency.setValueAtTime(600, t + 1.2);
+      secBP.frequency.linearRampToValueAtTime(1400, t + 2.0);
+      secBP.frequency.exponentialRampToValueAtTime(200, t + 3.7);
+      secBP.Q.value = 0.8;
+      const secG = ctx.createGain();
+      secG.gain.setValueAtTime(0.001, t);
+      secG.gain.linearRampToValueAtTime(0.12, t + 1.5);
+      secG.gain.linearRampToValueAtTime(0.14, t + 2.2);
+      secG.gain.exponentialRampToValueAtTime(0.001, t + 3.7);
+      sec.connect(secBP).connect(secG).connect(destination);
+      sec.start(t + 1.2); sec.stop(t + 3.7);
+
+      // ── Layer 9: Ground tremor — very low frequency earth shake ──
+      // The ground itself shakes — sub-audible rumble felt in the body
+      const tremor = ctx.createOscillator(); tremor.type = 'sine';
+      tremor.frequency.setValueAtTime(10, t);
+      tremor.frequency.linearRampToValueAtTime(16, t + 1.0);
+      tremor.frequency.exponentialRampToValueAtTime(4, t + dur * 0.7);
+      const tremorG = ctx.createGain();
+      tremorG.gain.setValueAtTime(0.001, t);
+      tremorG.gain.linearRampToValueAtTime(0.18, t + 0.3);
+      tremorG.gain.setValueAtTime(0.16, t + 1.0);
+      tremorG.gain.exponentialRampToValueAtTime(0.001, t + dur * 0.7);
+      tremor.connect(tremorG).connect(destination);
+      tremor.start(t + 0.05); tremor.stop(t + dur * 0.7);
+
+      // ── Layer 10: Debris rain + distant thunder echo ──
+      // Debris falling from the sky + reflected shockwave off terrain
+      const rain = ctx.createBufferSource();
+      rain.buffer = this.getNoiseBuffer(ctx, dur * 0.6);
+      const rainBP = ctx.createBiquadFilter();
+      rainBP.type = 'bandpass';
+      rainBP.frequency.setValueAtTime(1800, t + 2.0);
+      rainBP.frequency.exponentialRampToValueAtTime(250, t + dur);
+      rainBP.Q.value = 0.6;
+      const rainG = ctx.createGain();
+      rainG.gain.setValueAtTime(0.001, t);
+      rainG.gain.linearRampToValueAtTime(0.09, t + 2.5);
+      rainG.gain.setValueAtTime(0.08, t + 3.5);
+      rainG.gain.exponentialRampToValueAtTime(0.001, t + dur);
+      rain.connect(rainBP).connect(rainG).connect(destination);
+      rain.start(t + 1.8); rain.stop(t + dur);
+
+      // Distant thunder — delayed brown noise pulse (reflected shockwave)
+      const thunder = ctx.createBufferSource();
+      thunder.buffer = this.getBrownNoise(ctx, 2.0);
+      const thunderLP = ctx.createBiquadFilter();
+      thunderLP.type = 'lowpass';
+      thunderLP.frequency.setValueAtTime(300, t + 3.0);
+      thunderLP.frequency.exponentialRampToValueAtTime(50, t + 5.5);
+      const thunderG = ctx.createGain();
+      thunderG.gain.setValueAtTime(0.001, t);
+      thunderG.gain.linearRampToValueAtTime(0.14, t + 3.4);
+      thunderG.gain.exponentialRampToValueAtTime(0.001, t + 5.5);
+      thunder.connect(thunderLP).connect(thunderG).connect(destination);
+      thunder.start(t + 3.0); thunder.stop(t + 5.5);
+
+      scheduleRelease(dur);
+
+    } else if (type === 'orbital_lance') {
+      // ══════════════════════════════════════════════════════════════
+      // ORBITAL LANCE — precision ion beam from orbit, 5-layer, 4s
+      // Phase 1: EMP crack  Phase 2: Beam hum  Phase 3: Discharge
+      // ══════════════════════════════════════════════════════════════
+      const dur = 4.0;
+      const vol = options.volume || 1.0;
+      // Layer 1: EMP crack — white noise burst, steeply highpassed
+      const crack = ctx.createBufferSource();
+      crack.buffer = this.getNoiseBuffer(ctx, 0.08);
+      const crackHP = ctx.createBiquadFilter();
+      crackHP.type = 'highpass'; crackHP.frequency.value = 3200;
+      const crackG = ctx.createGain();
+      crackG.gain.setValueAtTime(vol * 0.36, t);
+      crackG.gain.exponentialRampToValueAtTime(0.001, t + 0.08);
+      crack.connect(crackHP).connect(crackG).connect(destination);
+      crack.start(t); crack.stop(t + 0.08);
+      // Layer 2: Ion beam hum — sine swept 880→110→44Hz
+      const hum = ctx.createOscillator(); hum.type = 'sine';
+      hum.frequency.setValueAtTime(880, t);
+      hum.frequency.exponentialRampToValueAtTime(110, t + 0.55);
+      hum.frequency.exponentialRampToValueAtTime(44, t + dur * 0.55);
+      const humG = ctx.createGain();
+      humG.gain.setValueAtTime(0.001, t);
+      humG.gain.linearRampToValueAtTime(vol * 0.40, t + 0.1);
+      humG.gain.setValueAtTime(vol * 0.34, t + 0.4);
+      humG.gain.exponentialRampToValueAtTime(0.001, t + dur * 0.55);
+      hum.connect(humG).connect(destination);
+      hum.start(t); hum.stop(t + dur * 0.55);
+      // Layer 3: Electric discharge crackle — pink noise, mid-high bandpass
+      const discharge = ctx.createBufferSource();
+      discharge.buffer = this.getPinkNoise(ctx, 1.8);
+      const dischargeBP = ctx.createBiquadFilter();
+      dischargeBP.type = 'bandpass';
+      dischargeBP.frequency.setValueAtTime(1800, t + 0.06);
+      dischargeBP.frequency.exponentialRampToValueAtTime(380, t + 1.8);
+      dischargeBP.Q.value = 0.6;
+      const dischargeG = ctx.createGain();
+      dischargeG.gain.setValueAtTime(0.001, t);
+      dischargeG.gain.linearRampToValueAtTime(vol * 0.26, t + 0.1);
+      dischargeG.gain.setValueAtTime(vol * 0.22, t + 0.5);
+      dischargeG.gain.exponentialRampToValueAtTime(0.001, t + 1.8);
+      discharge.connect(dischargeBP).connect(dischargeG).connect(destination);
+      discharge.start(t + 0.06); discharge.stop(t + 1.8);
+      // Layer 4: Deep impact thud — brown noise, sub-bass concussion
+      const thud = ctx.createBufferSource();
+      thud.buffer = this.getBrownNoise(ctx, 1.2);
+      const thudLP = ctx.createBiquadFilter();
+      thudLP.type = 'lowpass';
+      thudLP.frequency.setValueAtTime(240, t);
+      thudLP.frequency.exponentialRampToValueAtTime(28, t + 1.0);
+      const thudG = ctx.createGain();
+      thudG.gain.setValueAtTime(0.001, t);
+      thudG.gain.linearRampToValueAtTime(vol * 0.50, t + 0.04);
+      thudG.gain.exponentialRampToValueAtTime(0.001, t + 1.2);
+      thud.connect(thudLP).connect(thudG).connect(destination);
+      thud.start(t); thud.stop(t + 1.2);
+      // Layer 5: Resonant aftermath — low-frequency sustain
+      const res = ctx.createOscillator(); res.type = 'sine';
+      res.frequency.setValueAtTime(55, t + 0.3);
+      res.frequency.exponentialRampToValueAtTime(20, t + dur);
+      const resG = ctx.createGain();
+      resG.gain.setValueAtTime(0.001, t);
+      resG.gain.linearRampToValueAtTime(vol * 0.16, t + 0.5);
+      resG.gain.exponentialRampToValueAtTime(0.001, t + dur);
+      res.connect(resG).connect(destination);
+      res.start(t + 0.3); res.stop(t + dur);
+      scheduleRelease(dur);
+
+    } else if (type === 'firestorm') {
+      // ══════════════════════════════════════════════════════════════
+      // FIRESTORM — napalm carpet ignition, 5-layer, 5.5-second
+      // Phase 1: Ignition  Phase 2: Fire rush  Phase 3: Rolling burn
+      // ══════════════════════════════════════════════════════════════
+      const dur = 5.5;
+      const vol = options.volume || 1.0;
+      // Layer 1: Multi-burst ignition — staggered white-noise pops
+      for (let i = 0; i < 4; i++) {
+        const burst = ctx.createBufferSource();
+        burst.buffer = this.getNoiseBuffer(ctx, 0.06 + i * 0.02);
+        const burstBP = ctx.createBiquadFilter();
+        burstBP.type = 'bandpass'; burstBP.frequency.value = 1200 + i * 400; burstBP.Q.value = 0.8;
+        const burstG = ctx.createGain();
+        burstG.gain.setValueAtTime(vol * (0.26 - i * 0.04), t + i * 0.08);
+        burstG.gain.exponentialRampToValueAtTime(0.001, t + i * 0.08 + 0.1);
+        burst.connect(burstBP).connect(burstG).connect(destination);
+        burst.start(t + i * 0.08); burst.stop(t + i * 0.08 + 0.12);
+      }
+      // Layer 2: Fire rush — pink noise whoosh (combustion air displacement)
+      const rush = ctx.createBufferSource();
+      rush.buffer = this.getPinkNoise(ctx, 2.4);
+      const rushLP = ctx.createBiquadFilter();
+      rushLP.type = 'lowpass';
+      rushLP.frequency.setValueAtTime(180, t);
+      rushLP.frequency.linearRampToValueAtTime(1800, t + 0.4);
+      rushLP.frequency.exponentialRampToValueAtTime(240, t + 2.4);
+      const rushG = ctx.createGain();
+      rushG.gain.setValueAtTime(0.001, t);
+      rushG.gain.linearRampToValueAtTime(vol * 0.46, t + 0.28);
+      rushG.gain.setValueAtTime(vol * 0.38, t + 0.9);
+      rushG.gain.exponentialRampToValueAtTime(0.001, t + 2.4);
+      rush.connect(rushLP).connect(rushG).connect(destination);
+      rush.start(t + 0.1); rush.stop(t + 2.4);
+      // Layer 3: Sub-bass pressure — brown noise concussive wave
+      const pressure = ctx.createBufferSource();
+      pressure.buffer = this.getBrownNoise(ctx, 1.4);
+      const pressLP2 = ctx.createBiquadFilter();
+      pressLP2.type = 'lowpass';
+      pressLP2.frequency.setValueAtTime(360, t);
+      pressLP2.frequency.exponentialRampToValueAtTime(26, t + 1.2);
+      const pressG2 = ctx.createGain();
+      pressG2.gain.setValueAtTime(0.001, t);
+      pressG2.gain.linearRampToValueAtTime(vol * 0.56, t + 0.05);
+      pressG2.gain.exponentialRampToValueAtTime(0.001, t + 1.4);
+      pressure.connect(pressLP2).connect(pressG2).connect(destination);
+      pressure.start(t); pressure.stop(t + 1.4);
+      // Layer 4: Rolling burn — pink noise sustained flame roar
+      const burn = ctx.createBufferSource();
+      burn.buffer = this.getPinkNoise(ctx, dur);
+      const burnBP = ctx.createBiquadFilter();
+      burnBP.type = 'bandpass';
+      burnBP.frequency.setValueAtTime(80, t + 0.4);
+      burnBP.frequency.linearRampToValueAtTime(260, t + 1.5);
+      burnBP.frequency.exponentialRampToValueAtTime(55, t + dur);
+      burnBP.Q.value = 0.4;
+      const burnG = ctx.createGain();
+      burnG.gain.setValueAtTime(0.001, t);
+      burnG.gain.linearRampToValueAtTime(vol * 0.32, t + 1.0);
+      burnG.gain.setValueAtTime(vol * 0.28, t + 2.2);
+      burnG.gain.exponentialRampToValueAtTime(0.001, t + dur);
+      burn.connect(burnBP).connect(burnG).connect(destination);
+      burn.start(t + 0.4); burn.stop(t + dur);
+      // Layer 5: Heat-wind sub tone — infrasonic sine
+      const heatTone = ctx.createOscillator(); heatTone.type = 'sine';
+      heatTone.frequency.setValueAtTime(32, t + 0.2);
+      heatTone.frequency.linearRampToValueAtTime(16, t + dur * 0.8);
+      const heatG = ctx.createGain();
+      heatG.gain.setValueAtTime(0.001, t);
+      heatG.gain.linearRampToValueAtTime(vol * 0.22, t + 0.6);
+      heatG.gain.exponentialRampToValueAtTime(0.001, t + dur * 0.8);
+      heatTone.connect(heatG).connect(destination);
+      heatTone.start(t + 0.2); heatTone.stop(t + dur * 0.8);
+      scheduleRelease(dur);
+
+    } else if (type === 'kinetic_spear') {
+      // ══════════════════════════════════════════════════════════════
+      // KINETIC SPEAR — hypersonic tungsten rod impact, 5-layer, 3.5s
+      // Phase 1: Sonic boom  Phase 2: Seismic thud  Phase 3: Metal ring
+      // ══════════════════════════════════════════════════════════════
+      const dur = 3.5;
+      const vol = options.volume || 1.0;
+      // Layer 1: Supersonic crack — ultra-brief white noise spike (sonic boom)
+      const sonic = ctx.createBufferSource();
+      sonic.buffer = this.getNoiseBuffer(ctx, 0.04);
+      const sonicHP = ctx.createBiquadFilter();
+      sonicHP.type = 'highpass'; sonicHP.frequency.value = 2800;
+      const sonicG = ctx.createGain();
+      sonicG.gain.setValueAtTime(vol * 0.54, t);
+      sonicG.gain.exponentialRampToValueAtTime(0.001, t + 0.04);
+      sonic.connect(sonicHP).connect(sonicG).connect(destination);
+      sonic.start(t); sonic.stop(t + 0.04);
+      // Layer 2: Kinetic impact thud — brown noise, extremely low-pass slam
+      const thud2 = ctx.createBufferSource();
+      thud2.buffer = this.getBrownNoise(ctx, 0.9);
+      const thudLP2 = ctx.createBiquadFilter();
+      thudLP2.type = 'lowpass';
+      thudLP2.frequency.setValueAtTime(280, t);
+      thudLP2.frequency.exponentialRampToValueAtTime(16, t + 0.7);
+      const thudG2 = ctx.createGain();
+      thudG2.gain.setValueAtTime(0.001, t);
+      thudG2.gain.linearRampToValueAtTime(vol * 0.68, t + 0.02);
+      thudG2.gain.exponentialRampToValueAtTime(0.001, t + 0.9);
+      thud2.connect(thudLP2).connect(thudG2).connect(destination);
+      thud2.start(t); thud2.stop(t + 0.9);
+      // Layer 3: Metallic ring — sawtooth through tight bandpass
+      const ringOsc = ctx.createOscillator(); ringOsc.type = 'sawtooth';
+      ringOsc.frequency.setValueAtTime(220, t + 0.02);
+      ringOsc.frequency.exponentialRampToValueAtTime(52, t + dur * 0.7);
+      const ringFilter = ctx.createBiquadFilter();
+      ringFilter.type = 'bandpass'; ringFilter.frequency.value = 880; ringFilter.Q.value = 4;
+      const ringG2 = ctx.createGain();
+      ringG2.gain.setValueAtTime(0.001, t);
+      ringG2.gain.linearRampToValueAtTime(vol * 0.24, t + 0.05);
+      ringG2.gain.exponentialRampToValueAtTime(0.001, t + dur * 0.7);
+      ringOsc.connect(ringFilter).connect(ringG2).connect(destination);
+      ringOsc.start(t + 0.02); ringOsc.stop(t + dur * 0.7);
+      // Layer 4: Seismic sub rumble — deep brown noise aftermath
+      const seismic = ctx.createBufferSource();
+      seismic.buffer = this.getBrownNoise(ctx, 1.8);
+      const seisLP = ctx.createBiquadFilter();
+      seisLP.type = 'lowpass';
+      seisLP.frequency.setValueAtTime(120, t + 0.05);
+      seisLP.frequency.exponentialRampToValueAtTime(20, t + 1.6);
+      const seisG = ctx.createGain();
+      seisG.gain.setValueAtTime(0.001, t);
+      seisG.gain.linearRampToValueAtTime(vol * 0.38, t + 0.08);
+      seisG.gain.exponentialRampToValueAtTime(0.001, t + 1.8);
+      seismic.connect(seisLP).connect(seisG).connect(destination);
+      seismic.start(t + 0.02); seismic.stop(t + 1.8);
+      // Layer 5: Debris scatter — white noise tail
+      const debris2 = ctx.createBufferSource();
+      debris2.buffer = this.getNoiseBuffer(ctx, dur - 0.3);
+      const debrBP = ctx.createBiquadFilter();
+      debrBP.type = 'bandpass';
+      debrBP.frequency.setValueAtTime(1200, t + 0.2);
+      debrBP.frequency.exponentialRampToValueAtTime(160, t + dur - 0.3);
+      debrBP.Q.value = 0.7;
+      const debrG = ctx.createGain();
+      debrG.gain.setValueAtTime(0.001, t);
+      debrG.gain.linearRampToValueAtTime(vol * 0.14, t + 0.28);
+      debrG.gain.exponentialRampToValueAtTime(0.001, t + dur - 0.3);
+      debris2.connect(debrBP).connect(debrG).connect(destination);
+      debris2.start(t + 0.2); debris2.stop(t + dur - 0.3);
+      scheduleRelease(dur);
 
     } else if (type === 'tank_fire') {
-      const dur = options.duration || 0.46;
+      // ── Cannon shot: concussive pressure + muzzle blast ──
+      const dur = options.duration || 0.55;
       const vol = options.volume || 0.22;
-
-      const crack = ctx.createOscillator();
-      const crackGain = ctx.createGain();
-      crack.type = 'square';
-      crack.frequency.setValueAtTime(1800, t);
-      crack.frequency.exponentialRampToValueAtTime(160, t + dur * 0.16);
-      crackGain.gain.setValueAtTime(vol * 0.65, t);
-      crackGain.gain.exponentialRampToValueAtTime(0.01, t + dur * 0.12);
-
-      const boom = ctx.createOscillator();
-      const boomGain = ctx.createGain();
-      boom.type = 'triangle';
-      boom.frequency.setValueAtTime(118, t);
-      boom.frequency.exponentialRampToValueAtTime(28, t + dur);
-      boomGain.gain.setValueAtTime(vol * 0.78, t);
-      boomGain.gain.exponentialRampToValueAtTime(0.01, t + dur);
-
-      const ring = ctx.createOscillator();
-      const ringGain = ctx.createGain();
-      ring.type = 'sawtooth';
-      ring.frequency.setValueAtTime(420, t + 0.03);
-      ring.frequency.exponentialRampToValueAtTime(92, t + dur * 0.55);
-      ringGain.gain.setValueAtTime(0.0001, t);
-      ringGain.gain.linearRampToValueAtTime(vol * 0.14, t + 0.04);
-      ringGain.gain.exponentialRampToValueAtTime(0.01, t + dur * 0.55);
-
-      const blast = ctx.createBufferSource();
-      blast.buffer = this.getPinkNoise(ctx, dur);
-      const blastFilter = ctx.createBiquadFilter();
-      blastFilter.type = 'bandpass';
-      blastFilter.frequency.setValueAtTime(1100, t);
-      blastFilter.frequency.exponentialRampToValueAtTime(180, t + dur);
-      blastFilter.Q.value = 0.8;
-      const blastGain = ctx.createGain();
-      blastGain.gain.setValueAtTime(vol * 0.28, t);
-      blastGain.gain.exponentialRampToValueAtTime(0.01, t + dur * 0.8);
-
-      crack.connect(crackGain).connect(ctx.destination);
-      boom.connect(boomGain).connect(ctx.destination);
-      ring.connect(ringGain).connect(ctx.destination);
-      blast.connect(blastFilter).connect(blastGain).connect(ctx.destination);
-
-      crack.start(t); crack.stop(t + dur * 0.18);
-      boom.start(t); boom.stop(t + dur);
-      ring.start(t + 0.03); ring.stop(t + dur * 0.58);
-      blast.start(t); blast.stop(t + dur);
+      // Muzzle blast — white noise burst, very short
+      const muzzle = ctx.createBufferSource();
+      muzzle.buffer = this.getNoiseBuffer(ctx, 0.05);
+      const muzzleHP = ctx.createBiquadFilter();
+      muzzleHP.type = 'highpass'; muzzleHP.frequency.value = 1800;
+      const muzzleG = ctx.createGain();
+      muzzleG.gain.setValueAtTime(vol * 0.7, t);
+      muzzleG.gain.exponentialRampToValueAtTime(0.001, t + 0.05);
+      muzzle.connect(muzzleHP).connect(muzzleG).connect(destination);
+      muzzle.start(t); muzzle.stop(t + 0.05);
+      // Pressure body — brown noise lowpassed
+      const press = ctx.createBufferSource();
+      press.buffer = this.getBrownNoise(ctx, dur);
+      const pressLP = ctx.createBiquadFilter();
+      pressLP.type = 'lowpass'; pressLP.frequency.setValueAtTime(220, t);
+      pressLP.frequency.exponentialRampToValueAtTime(35, t + dur);
+      const pressG = ctx.createGain();
+      pressG.gain.setValueAtTime(vol * 0.85, t);
+      pressG.gain.exponentialRampToValueAtTime(0.001, t + dur);
+      press.connect(pressLP).connect(pressG).connect(destination);
+      press.start(t); press.stop(t + dur);
+      // Concussion ring — sub sine thump
+      const thump = ctx.createOscillator(); thump.type = 'sine';
+      thump.frequency.setValueAtTime(55, t); thump.frequency.exponentialRampToValueAtTime(22, t + dur * 0.4);
+      const thumpG = ctx.createGain();
+      thumpG.gain.setValueAtTime(vol * 0.6, t); thumpG.gain.exponentialRampToValueAtTime(0.001, t + dur * 0.4);
+      thump.connect(thumpG).connect(destination); thump.start(t); thump.stop(t + dur * 0.4);
+      // Shell casing rattle — delayed pink noise snippet
+      const casing = ctx.createBufferSource();
+      casing.buffer = this.getPinkNoise(ctx, 0.12);
+      const casingBP = ctx.createBiquadFilter();
+      casingBP.type = 'bandpass'; casingBP.frequency.value = 2800; casingBP.Q.value = 1.5;
+      const casingG = ctx.createGain();
+      casingG.gain.setValueAtTime(vol * 0.08, t + 0.06);
+      casingG.gain.exponentialRampToValueAtTime(0.001, t + 0.18);
+      casing.connect(casingBP).connect(casingG).connect(destination);
+      casing.start(t + 0.06); casing.stop(t + 0.18);
       scheduleRelease(dur);
 
     } else if (type === 'plane_engine') {
-      const dur = options.duration || 0.8;
+      // ── Prop-engine drone: shaped noise only, no oscillator pitch ──
+      const dur = options.duration || 0.9;
       const vol = options.volume || 0.08;
-      const rumble = ctx.createOscillator();
-      const turbine = ctx.createOscillator();
-      const noise = ctx.createBufferSource();
-      noise.buffer = this.getPinkNoise(ctx, dur);
-      const noiseFilter = ctx.createBiquadFilter();
-      noiseFilter.type = 'bandpass';
-      noiseFilter.frequency.setValueAtTime(120, t);
-      noiseFilter.frequency.linearRampToValueAtTime(220, t + dur * 0.65);
-      noiseFilter.Q.value = 0.6;
-      const gain = ctx.createGain();
-      const noiseGain = ctx.createGain();
-      const wobble = ctx.createOscillator();
-      const wobbleGain = ctx.createGain();
-
-      rumble.type = 'sawtooth';
-      rumble.frequency.setValueAtTime(62 + Math.random() * 6, t);
-      rumble.frequency.linearRampToValueAtTime(54 + Math.random() * 5, t + dur);
-
-      turbine.type = 'triangle';
-      turbine.frequency.setValueAtTime(118 + Math.random() * 12, t);
-      turbine.frequency.linearRampToValueAtTime(145 + Math.random() * 10, t + dur * 0.6);
-
-      wobble.type = 'sine';
-      wobble.frequency.setValueAtTime(5.5 + Math.random() * 1.5, t);
-      wobbleGain.gain.setValueAtTime(4, t);
-
-      gain.gain.setValueAtTime(vol, t);
-      gain.gain.linearRampToValueAtTime(0.01, t + dur);
-      noiseGain.gain.setValueAtTime(vol * 0.38, t);
-      noiseGain.gain.linearRampToValueAtTime(0.01, t + dur);
-
-      wobble.connect(wobbleGain);
-      wobbleGain.connect(turbine.frequency);
-      rumble.connect(gain).connect(ctx.destination);
-      turbine.connect(gain);
-      noise.connect(noiseFilter).connect(noiseGain).connect(ctx.destination);
-
-      rumble.start(t); rumble.stop(t + dur);
-      turbine.start(t); turbine.stop(t + dur);
-      wobble.start(t); wobble.stop(t + dur);
-      noise.start(t); noise.stop(t + dur);
+      // Core drone — brown noise through tight lowpass (feels like air vibration)
+      const drone = ctx.createBufferSource();
+      drone.buffer = this.getBrownNoise(ctx, dur);
+      const droneLP = ctx.createBiquadFilter();
+      droneLP.type = 'lowpass'; droneLP.frequency.setValueAtTime(160 + Math.random() * 30, t);
+      droneLP.frequency.linearRampToValueAtTime(100 + Math.random() * 20, t + dur);
+      const droneG = ctx.createGain();
+      droneG.gain.setValueAtTime(vol * 0.9, t);
+      droneG.gain.linearRampToValueAtTime(0.001, t + dur);
+      drone.connect(droneLP).connect(droneG).connect(destination);
+      drone.start(t); drone.stop(t + dur);
+      // Exhaust wash — pink noise bandpass mid-range
+      const wash = ctx.createBufferSource();
+      wash.buffer = this.getPinkNoise(ctx, dur);
+      const washBP = ctx.createBiquadFilter();
+      washBP.type = 'bandpass'; washBP.frequency.setValueAtTime(240 + Math.random() * 40, t);
+      washBP.frequency.linearRampToValueAtTime(140 + Math.random() * 30, t + dur); washBP.Q.value = 0.4;
+      const washG = ctx.createGain();
+      washG.gain.setValueAtTime(vol * 0.5, t);
+      washG.gain.linearRampToValueAtTime(0.001, t + dur);
+      wash.connect(washBP).connect(washG).connect(destination);
+      wash.start(t); wash.stop(t + dur);
+      // Sub-bass airframe rumble
+      const sub = ctx.createOscillator(); sub.type = 'sine';
+      sub.frequency.setValueAtTime(34 + Math.random() * 6, t);
+      sub.frequency.linearRampToValueAtTime(28 + Math.random() * 4, t + dur);
+      const subG = ctx.createGain();
+      subG.gain.setValueAtTime(vol * 0.35, t);
+      subG.gain.linearRampToValueAtTime(0.001, t + dur);
+      sub.connect(subG).connect(destination); sub.start(t); sub.stop(t + dur);
       scheduleRelease(dur);
 
     } else if (type === 'plane_flyby') {
-      const dur = options.duration || 1.7;
+      // ── Doppler flyover: noise volume swell + sub sweep ──
+      const dur = options.duration || 1.8;
       const vol = options.volume || 0.12;
-      const rumble = ctx.createOscillator();
-      const whine = ctx.createOscillator();
-      const noise = ctx.createBufferSource();
-      noise.buffer = this.getPinkNoise(ctx, dur);
-      const lowpass = ctx.createBiquadFilter();
-      lowpass.type = 'lowpass';
-      lowpass.frequency.setValueAtTime(420, t);
-      lowpass.frequency.linearRampToValueAtTime(150, t + dur);
-      const gain = ctx.createGain();
-      const whineGain = ctx.createGain();
-      const noiseGain = ctx.createGain();
-
-      rumble.type = 'sawtooth';
-      rumble.frequency.setValueAtTime(82, t);
-      rumble.frequency.linearRampToValueAtTime(52, t + dur);
-
-      whine.type = 'triangle';
-      whine.frequency.setValueAtTime(180, t);
-      whine.frequency.linearRampToValueAtTime(120, t + dur * 0.5);
-      whine.frequency.linearRampToValueAtTime(78, t + dur);
-
-      gain.gain.setValueAtTime(vol * 0.4, t);
-      gain.gain.linearRampToValueAtTime(vol, t + dur * 0.18);
-      gain.gain.linearRampToValueAtTime(0.01, t + dur);
-
-      whineGain.gain.setValueAtTime(vol * 0.16, t);
-      whineGain.gain.linearRampToValueAtTime(vol * 0.28, t + dur * 0.22);
-      whineGain.gain.linearRampToValueAtTime(0.01, t + dur);
-
-      noiseGain.gain.setValueAtTime(vol * 0.08, t);
-      noiseGain.gain.linearRampToValueAtTime(vol * 0.18, t + dur * 0.25);
-      noiseGain.gain.linearRampToValueAtTime(0.01, t + dur);
-
-      rumble.connect(gain).connect(ctx.destination);
-      whine.connect(whineGain).connect(ctx.destination);
-      noise.connect(lowpass).connect(noiseGain).connect(ctx.destination);
-      rumble.start(t); rumble.stop(t + dur);
-      whine.start(t); whine.stop(t + dur);
-      noise.start(t); noise.stop(t + dur);
+      // Main body — brown noise with swell-then-fade envelope
+      const body = ctx.createBufferSource();
+      body.buffer = this.getBrownNoise(ctx, dur);
+      const bodyLP = ctx.createBiquadFilter();
+      bodyLP.type = 'lowpass'; bodyLP.frequency.setValueAtTime(260, t);
+      bodyLP.frequency.linearRampToValueAtTime(380, t + dur * 0.3);
+      bodyLP.frequency.linearRampToValueAtTime(90, t + dur);
+      const bodyG = ctx.createGain();
+      bodyG.gain.setValueAtTime(vol * 0.15, t);
+      bodyG.gain.linearRampToValueAtTime(vol, t + dur * 0.25);
+      bodyG.gain.exponentialRampToValueAtTime(0.001, t + dur);
+      body.connect(bodyLP).connect(bodyG).connect(destination);
+      body.start(t); body.stop(t + dur);
+      // Wind shear — white noise highpass
+      const wind = ctx.createBufferSource();
+      wind.buffer = this.getNoiseBuffer(ctx, dur);
+      const windHP = ctx.createBiquadFilter();
+      windHP.type = 'highpass'; windHP.frequency.setValueAtTime(1200, t);
+      windHP.frequency.linearRampToValueAtTime(600, t + dur);
+      const windG = ctx.createGain();
+      windG.gain.setValueAtTime(0.001, t);
+      windG.gain.linearRampToValueAtTime(vol * 0.14, t + dur * 0.2);
+      windG.gain.exponentialRampToValueAtTime(0.001, t + dur);
+      wind.connect(windHP).connect(windG).connect(destination);
+      wind.start(t); wind.stop(t + dur);
+      // Sub pressure
+      const sub = ctx.createOscillator(); sub.type = 'sine';
+      sub.frequency.setValueAtTime(38, t); sub.frequency.linearRampToValueAtTime(22, t + dur);
+      const subG = ctx.createGain();
+      subG.gain.setValueAtTime(vol * 0.3, t);
+      subG.gain.linearRampToValueAtTime(0.001, t + dur);
+      sub.connect(subG).connect(destination); sub.start(t); sub.stop(t + dur);
       scheduleRelease(dur);
 
     } else if (type === 'tank_engine') {
-      const dur = options.duration || 0.34;
+      // ── Diesel idle: all noise, no pitched oscillators ──
+      const dur = options.duration || 0.4;
       const vol = options.volume || 0.035;
-
-      const rumble = ctx.createOscillator();
-      const rumbleGain = ctx.createGain();
-      rumble.type = 'sawtooth';
-      rumble.frequency.setValueAtTime(56, t);
-      rumble.frequency.linearRampToValueAtTime(46, t + dur);
-
-      const pulse = ctx.createOscillator();
-      const pulseGain = ctx.createGain();
-      const wobble = ctx.createOscillator();
-      const wobbleGain = ctx.createGain();
-      pulse.type = 'triangle';
-      pulse.frequency.setValueAtTime(88, t);
-      pulse.frequency.linearRampToValueAtTime(74, t + dur);
-      wobble.type = 'sine';
-      wobble.frequency.setValueAtTime(6.2, t);
-      wobbleGain.gain.setValueAtTime(3.8, t);
-
-      const treadNoise = ctx.createBufferSource();
-      treadNoise.buffer = this.getPinkNoise(ctx, dur);
-      const treadFilter = ctx.createBiquadFilter();
-      treadFilter.type = 'bandpass';
-      treadFilter.frequency.setValueAtTime(120, t);
-      treadFilter.frequency.linearRampToValueAtTime(160, t + dur * 0.7);
-      treadFilter.Q.value = 0.9;
-      const treadGain = ctx.createGain();
-
-      rumbleGain.gain.setValueAtTime(vol * 0.7, t);
-      rumbleGain.gain.linearRampToValueAtTime(0.01, t + dur);
-      pulseGain.gain.setValueAtTime(vol * 0.35, t);
-      pulseGain.gain.linearRampToValueAtTime(0.01, t + dur);
-      treadGain.gain.setValueAtTime(vol * 0.32, t);
-      treadGain.gain.linearRampToValueAtTime(0.01, t + dur);
-
-      wobble.connect(wobbleGain);
-      wobbleGain.connect(pulse.frequency);
-      rumble.connect(rumbleGain).connect(ctx.destination);
-      pulse.connect(pulseGain).connect(ctx.destination);
-      treadNoise.connect(treadFilter).connect(treadGain).connect(ctx.destination);
-
-      rumble.start(t); rumble.stop(t + dur);
-      pulse.start(t); pulse.stop(t + dur);
-      wobble.start(t); wobble.stop(t + dur);
-      treadNoise.start(t); treadNoise.stop(t + dur);
+      // Diesel chug — brown noise lowpassed to ~100Hz
+      const chug = ctx.createBufferSource();
+      chug.buffer = this.getBrownNoise(ctx, dur);
+      const chugLP = ctx.createBiquadFilter();
+      chugLP.type = 'lowpass'; chugLP.frequency.setValueAtTime(95, t);
+      chugLP.frequency.linearRampToValueAtTime(70, t + dur);
+      const chugG = ctx.createGain();
+      chugG.gain.setValueAtTime(vol * 0.9, t);
+      chugG.gain.linearRampToValueAtTime(0.001, t + dur);
+      chug.connect(chugLP).connect(chugG).connect(destination);
+      chug.start(t); chug.stop(t + dur);
+      // Track clatter — white noise bandpass
+      const clatter = ctx.createBufferSource();
+      clatter.buffer = this.getNoiseBuffer(ctx, dur);
+      const clatterBP = ctx.createBiquadFilter();
+      clatterBP.type = 'bandpass'; clatterBP.frequency.setValueAtTime(420, t);
+      clatterBP.frequency.linearRampToValueAtTime(260, t + dur); clatterBP.Q.value = 1.4;
+      const clatterG = ctx.createGain();
+      clatterG.gain.setValueAtTime(vol * 0.3, t);
+      clatterG.gain.linearRampToValueAtTime(0.001, t + dur);
+      clatter.connect(clatterBP).connect(clatterG).connect(destination);
+      clatter.start(t); clatter.stop(t + dur);
+      // Exhaust puff — pink noise short burst
+      const puff = ctx.createBufferSource();
+      puff.buffer = this.getPinkNoise(ctx, dur * 0.5);
+      const puffLP = ctx.createBiquadFilter();
+      puffLP.type = 'lowpass'; puffLP.frequency.value = 200;
+      const puffG = ctx.createGain();
+      puffG.gain.setValueAtTime(vol * 0.25, t);
+      puffG.gain.exponentialRampToValueAtTime(0.001, t + dur * 0.5);
+      puff.connect(puffLP).connect(puffG).connect(destination);
+      puff.start(t); puff.stop(t + dur * 0.5);
       scheduleRelease(dur);
 
     } else if (type === 'jet_engine') {
-      const dur = options.duration || 0.42;
+      // ── Jet turbine: shaped noise roar, no tonal oscillators ──
+      const dur = options.duration || 0.5;
       const vol = options.volume || 0.09;
-      const turbine = ctx.createOscillator();
-      const whine = ctx.createOscillator();
-      const noise = ctx.createBufferSource();
-      noise.buffer = this.getPinkNoise(ctx, dur);
-      const turbineGain = ctx.createGain();
-      const whineGain = ctx.createGain();
-      const noiseGain = ctx.createGain();
-      const bandpass = ctx.createBiquadFilter();
-      bandpass.type = 'bandpass';
-      bandpass.frequency.setValueAtTime(340, t);
-      bandpass.frequency.linearRampToValueAtTime(520, t + dur * 0.4);
-      bandpass.frequency.linearRampToValueAtTime(280, t + dur);
-      bandpass.Q.value = 0.65;
-
-      turbine.type = 'sawtooth';
-      turbine.frequency.setValueAtTime(118, t);
-      turbine.frequency.linearRampToValueAtTime(154, t + dur * 0.35);
-      turbine.frequency.linearRampToValueAtTime(128, t + dur);
-
-      whine.type = 'triangle';
-      whine.frequency.setValueAtTime(340, t);
-      whine.frequency.linearRampToValueAtTime(520, t + dur * 0.28);
-      whine.frequency.linearRampToValueAtTime(280, t + dur);
-
-      turbineGain.gain.setValueAtTime(vol * 0.42, t);
-      turbineGain.gain.linearRampToValueAtTime(0.01, t + dur);
-      whineGain.gain.setValueAtTime(vol * 0.16, t);
-      whineGain.gain.linearRampToValueAtTime(vol * 0.3, t + dur * 0.22);
-      whineGain.gain.linearRampToValueAtTime(0.01, t + dur);
-      noiseGain.gain.setValueAtTime(vol * 0.14, t);
-      noiseGain.gain.linearRampToValueAtTime(0.01, t + dur);
-
-      turbine.connect(turbineGain).connect(ctx.destination);
-      whine.connect(whineGain).connect(ctx.destination);
-      noise.connect(bandpass).connect(noiseGain).connect(ctx.destination);
-
-      turbine.start(t); turbine.stop(t + dur);
-      whine.start(t); whine.stop(t + dur);
-      noise.start(t); noise.stop(t + dur);
+      // Turbine core — pink noise through sweeping bandpass
+      const core = ctx.createBufferSource();
+      core.buffer = this.getPinkNoise(ctx, dur);
+      const coreBP = ctx.createBiquadFilter();
+      coreBP.type = 'bandpass'; coreBP.frequency.setValueAtTime(280, t);
+      coreBP.frequency.linearRampToValueAtTime(460, t + dur * 0.3);
+      coreBP.frequency.linearRampToValueAtTime(200, t + dur); coreBP.Q.value = 0.5;
+      const coreG = ctx.createGain();
+      coreG.gain.setValueAtTime(vol * 0.7, t);
+      coreG.gain.linearRampToValueAtTime(0.001, t + dur);
+      core.connect(coreBP).connect(coreG).connect(destination);
+      core.start(t); core.stop(t + dur);
+      // Hot exhaust — brown noise low rumble
+      const exhaust = ctx.createBufferSource();
+      exhaust.buffer = this.getBrownNoise(ctx, dur);
+      const exhaustLP = ctx.createBiquadFilter();
+      exhaustLP.type = 'lowpass'; exhaustLP.frequency.setValueAtTime(140, t);
+      exhaustLP.frequency.linearRampToValueAtTime(60, t + dur);
+      const exhaustG = ctx.createGain();
+      exhaustG.gain.setValueAtTime(vol * 0.55, t);
+      exhaustG.gain.linearRampToValueAtTime(0.001, t + dur);
+      exhaust.connect(exhaustLP).connect(exhaustG).connect(destination);
+      exhaust.start(t); exhaust.stop(t + dur);
+      // High-freq air shriek — white noise highpassed
+      const shriek = ctx.createBufferSource();
+      shriek.buffer = this.getNoiseBuffer(ctx, dur);
+      const shriekHP = ctx.createBiquadFilter();
+      shriekHP.type = 'highpass'; shriekHP.frequency.setValueAtTime(2400, t);
+      shriekHP.frequency.linearRampToValueAtTime(1200, t + dur);
+      const shriekG = ctx.createGain();
+      shriekG.gain.setValueAtTime(vol * 0.12, t);
+      shriekG.gain.linearRampToValueAtTime(0.001, t + dur);
+      shriek.connect(shriekHP).connect(shriekG).connect(destination);
+      shriek.start(t); shriek.stop(t + dur);
       scheduleRelease(dur);
 
     } else if (type === 'gun') {
+      // ── Gunfire: shaped noise transients, no pitched square/saw ──
       const profile = options.profile || 'rifleman';
       const vol = options.volume || (profile === 'gunner' ? 0.15 : profile === 'marksman' ? 0.18 : 0.16);
-      const dur = profile === 'gunner' ? 0.12 : profile === 'marksman' ? 0.18 : 0.14;
-
-      const crack = ctx.createOscillator();
-      const crackGain = ctx.createGain();
-      crack.type = 'square';
-      crack.frequency.setValueAtTime(profile === 'marksman' ? 1220 : profile === 'gunner' ? 820 : 980, t);
-      crack.frequency.exponentialRampToValueAtTime(profile === 'marksman' ? 180 : 130, t + dur * 0.55);
-      crackGain.gain.setValueAtTime(vol, t);
-      crackGain.gain.exponentialRampToValueAtTime(0.01, t + dur * 0.22);
-
-      const body = ctx.createOscillator();
-      const bodyGain = ctx.createGain();
-      body.type = 'triangle';
-      body.frequency.setValueAtTime(profile === 'marksman' ? 150 : 190, t);
-      body.frequency.exponentialRampToValueAtTime(55, t + dur);
-      bodyGain.gain.setValueAtTime(vol * 0.3, t);
-      bodyGain.gain.exponentialRampToValueAtTime(0.01, t + dur);
-
-      const burst = ctx.createBufferSource();
-      burst.buffer = this.getNoiseBuffer(ctx, dur);
-      const burstFilter = ctx.createBiquadFilter();
-      burstFilter.type = 'bandpass';
-      burstFilter.frequency.setValueAtTime(profile === 'marksman' ? 1700 : 1350, t);
-      burstFilter.frequency.exponentialRampToValueAtTime(profile === 'gunner' ? 680 : 520, t + dur);
-      burstFilter.Q.value = profile === 'marksman' ? 1.8 : 1.2;
-      const burstGain = ctx.createGain();
-      burstGain.gain.setValueAtTime(vol * 0.46, t);
-      burstGain.gain.exponentialRampToValueAtTime(0.01, t + dur);
-
+      const dur = profile === 'gunner' ? 0.16 : profile === 'marksman' ? 0.24 : 0.18;
+      // Supersonic crack — white noise spike
+      const crack = ctx.createBufferSource();
+      crack.buffer = this.getNoiseBuffer(ctx, 0.03);
+      const crackHP = ctx.createBiquadFilter();
+      crackHP.type = 'highpass';
+      crackHP.frequency.value = profile === 'marksman' ? 3200 : profile === 'gunner' ? 1800 : 2400;
+      const crackG = ctx.createGain();
+      crackG.gain.setValueAtTime(vol * 0.8, t);
+      crackG.gain.exponentialRampToValueAtTime(0.001, t + 0.03);
+      crack.connect(crackHP).connect(crackG).connect(destination);
+      crack.start(t); crack.stop(t + 0.03);
+      // Muzzle blast body — pink noise bandpass
+      const blast = ctx.createBufferSource();
+      blast.buffer = this.getPinkNoise(ctx, dur);
+      const blastBP = ctx.createBiquadFilter();
+      blastBP.type = 'bandpass';
+      blastBP.frequency.setValueAtTime(profile === 'marksman' ? 600 : 900, t);
+      blastBP.frequency.exponentialRampToValueAtTime(120, t + dur); blastBP.Q.value = 0.6;
+      const blastG = ctx.createGain();
+      blastG.gain.setValueAtTime(vol * 0.55, t);
+      blastG.gain.exponentialRampToValueAtTime(0.001, t + dur);
+      blast.connect(blastBP).connect(blastG).connect(destination);
+      blast.start(t); blast.stop(t + dur);
+      // Sub concussion — sine only
+      const sub = ctx.createOscillator(); sub.type = 'sine';
+      sub.frequency.setValueAtTime(profile === 'marksman' ? 65 : 80, t);
+      sub.frequency.exponentialRampToValueAtTime(30, t + dur * 0.5);
+      const subG = ctx.createGain();
+      subG.gain.setValueAtTime(vol * 0.3, t);
+      subG.gain.exponentialRampToValueAtTime(0.001, t + dur * 0.5);
+      sub.connect(subG).connect(destination); sub.start(t); sub.stop(t + dur * 0.5);
+      // Echo tail — brown noise lowpass
       const tail = ctx.createBufferSource();
-      tail.buffer = this.getPinkNoise(ctx, dur * 1.25);
-      const tailFilter = ctx.createBiquadFilter();
-      tailFilter.type = 'lowpass';
-      tailFilter.frequency.setValueAtTime(profile === 'marksman' ? 620 : 440, t);
-      const tailGain = ctx.createGain();
-      tailGain.gain.setValueAtTime(vol * (profile === 'marksman' ? 0.16 : 0.1), t + dur * 0.08);
-      tailGain.gain.exponentialRampToValueAtTime(0.01, t + dur * 1.2);
-
-      crack.connect(crackGain).connect(ctx.destination);
-      body.connect(bodyGain).connect(ctx.destination);
-      burst.connect(burstFilter).connect(burstGain).connect(ctx.destination);
-      tail.connect(tailFilter).connect(tailGain).connect(ctx.destination);
-
-      crack.start(t); crack.stop(t + dur * 0.28);
-      body.start(t); body.stop(t + dur);
-      burst.start(t); burst.stop(t + dur);
-      tail.start(t); tail.stop(t + dur * 1.2);
-      scheduleRelease(dur * 1.2);
+      tail.buffer = this.getBrownNoise(ctx, dur * 1.4);
+      const tailLP = ctx.createBiquadFilter();
+      tailLP.type = 'lowpass'; tailLP.frequency.value = profile === 'marksman' ? 300 : 200;
+      const tailG = ctx.createGain();
+      tailG.gain.setValueAtTime(0.001, t);
+      tailG.gain.linearRampToValueAtTime(vol * 0.12, t + dur * 0.15);
+      tailG.gain.exponentialRampToValueAtTime(0.001, t + dur * 1.3);
+      tail.connect(tailLP).connect(tailG).connect(destination);
+      tail.start(t + 0.01); tail.stop(t + dur * 1.4);
+      scheduleRelease(dur * 1.4);
 
     } else if (type === 'scream') {
-      const noise = ctx.createBufferSource();
-      noise.buffer = this.getPinkNoise(ctx, 0.5);
-      const formant = ctx.createBiquadFilter();
-      formant.type = 'bandpass';
-      formant.frequency.setValueAtTime(900 + Math.random() * 200, t);
-      formant.frequency.linearRampToValueAtTime(500, t + 0.5);
-      formant.Q.value = 6;
-      const gain = ctx.createGain();
-      gain.gain.setValueAtTime(0.2, t);
-      gain.gain.linearRampToValueAtTime(0.01, t + 0.5);
-      noise.connect(formant).connect(gain).connect(ctx.destination);
-      noise.start(t); noise.stop(t + 0.5);
-      scheduleRelease(0.5);
+      // ── Human scream: formant-filtered noise, breathy not tonal ──
+      const dur = 0.8;
+      // Vocal cord noise — pink noise through two formant bandpasses
+      const vocal = ctx.createBufferSource();
+      vocal.buffer = this.getPinkNoise(ctx, dur);
+      const formant1 = ctx.createBiquadFilter();
+      formant1.type = 'bandpass';
+      formant1.frequency.setValueAtTime(900 + Math.random() * 200, t);
+      formant1.frequency.linearRampToValueAtTime(550 + Math.random() * 100, t + dur);
+      formant1.Q.value = 6;
+      const formant2 = ctx.createBiquadFilter();
+      formant2.type = 'bandpass';
+      formant2.frequency.setValueAtTime(2200 + Math.random() * 300, t);
+      formant2.frequency.linearRampToValueAtTime(1400 + Math.random() * 200, t + dur);
+      formant2.Q.value = 4;
+      const vocalG1 = ctx.createGain();
+      vocalG1.gain.setValueAtTime(0.2, t); vocalG1.gain.linearRampToValueAtTime(0.001, t + dur);
+      const vocalG2 = ctx.createGain();
+      vocalG2.gain.setValueAtTime(0.08, t); vocalG2.gain.linearRampToValueAtTime(0.001, t + dur * 0.7);
+      vocal.connect(formant1).connect(vocalG1).connect(destination);
+      vocal.connect(formant2).connect(vocalG2).connect(destination);
+      vocal.start(t); vocal.stop(t + dur);
+      // Breath rush — white noise highpass
+      const breath = ctx.createBufferSource();
+      breath.buffer = this.getNoiseBuffer(ctx, dur * 0.6);
+      const breathHP = ctx.createBiquadFilter();
+      breathHP.type = 'highpass'; breathHP.frequency.value = 2600;
+      const breathG = ctx.createGain();
+      breathG.gain.setValueAtTime(0.04, t); breathG.gain.exponentialRampToValueAtTime(0.001, t + dur * 0.5);
+      breath.connect(breathHP).connect(breathG).connect(destination);
+      breath.start(t); breath.stop(t + dur * 0.6);
+      // Chest resonance — brown noise lowpass
+      const chest = ctx.createBufferSource();
+      chest.buffer = this.getBrownNoise(ctx, dur);
+      const chestLP = ctx.createBiquadFilter();
+      chestLP.type = 'lowpass'; chestLP.frequency.value = 180;
+      const chestG = ctx.createGain();
+      chestG.gain.setValueAtTime(0.06, t); chestG.gain.linearRampToValueAtTime(0.001, t + dur);
+      chest.connect(chestLP).connect(chestG).connect(destination);
+      chest.start(t); chest.stop(t + dur);
+      scheduleRelease(dur);
 
     } else if (type === 'kaiju_roar') {
-      const noise = ctx.createBufferSource();
-      noise.buffer = this.getPinkNoise(ctx, 1.5);
-      const lowpass = ctx.createBiquadFilter();
-      lowpass.type = 'lowpass';
-      lowpass.frequency.setValueAtTime(800, t);
-      lowpass.frequency.linearRampToValueAtTime(200, t + 1.5);
-      const gain = ctx.createGain();
-      gain.gain.setValueAtTime(0.35, t);
-      gain.gain.linearRampToValueAtTime(0.01, t + 1.5);
-      noise.connect(lowpass).connect(gain).connect(ctx.destination);
-      noise.start(t); noise.stop(t + 1.5);
-      const growl = ctx.createOscillator();
-      const growlGain = ctx.createGain();
-      growl.type = 'sine';
-      growl.frequency.setValueAtTime(70, t);
-      growl.frequency.linearRampToValueAtTime(35, t + 1.5);
-      growlGain.gain.setValueAtTime(0.3, t);
-      growlGain.gain.linearRampToValueAtTime(0.01, t + 1.5);
-      growl.connect(growlGain).connect(ctx.destination);
-      growl.start(t); growl.stop(t + 1.5);
-      scheduleRelease(1.5);
+      // ── Monster roar: massive noise-based vocal + sub-bass ──
+      const dur = 2.4;
+      // Core bellow — brown noise lowpassed heavily
+      const bellow = ctx.createBufferSource();
+      bellow.buffer = this.getBrownNoise(ctx, dur);
+      const bellowLP = ctx.createBiquadFilter();
+      bellowLP.type = 'lowpass';
+      bellowLP.frequency.setValueAtTime(420, t);
+      bellowLP.frequency.linearRampToValueAtTime(80, t + dur);
+      const bellowG = ctx.createGain();
+      bellowG.gain.setValueAtTime(0.001, t);
+      bellowG.gain.linearRampToValueAtTime(0.35, t + 0.15);
+      bellowG.gain.linearRampToValueAtTime(0.28, t + dur * 0.5);
+      bellowG.gain.exponentialRampToValueAtTime(0.001, t + dur);
+      bellow.connect(bellowLP).connect(bellowG).connect(destination);
+      bellow.start(t); bellow.stop(t + dur);
+      // Vocal formant — pink noise through resonant bandpass
+      const vocal = ctx.createBufferSource();
+      vocal.buffer = this.getPinkNoise(ctx, dur);
+      const vocalBP = ctx.createBiquadFilter();
+      vocalBP.type = 'bandpass';
+      vocalBP.frequency.setValueAtTime(280, t);
+      vocalBP.frequency.linearRampToValueAtTime(140, t + dur); vocalBP.Q.value = 2.5;
+      const vocalG = ctx.createGain();
+      vocalG.gain.setValueAtTime(0.001, t);
+      vocalG.gain.linearRampToValueAtTime(0.18, t + 0.2);
+      vocalG.gain.exponentialRampToValueAtTime(0.001, t + dur * 0.8);
+      vocal.connect(vocalBP).connect(vocalG).connect(destination);
+      vocal.start(t); vocal.stop(t + dur);
+      // Sub-bass earth shake — sine only
+      const sub = ctx.createOscillator(); sub.type = 'sine';
+      sub.frequency.setValueAtTime(24, t); sub.frequency.exponentialRampToValueAtTime(10, t + dur);
+      const subG = ctx.createGain();
+      subG.gain.setValueAtTime(0.001, t);
+      subG.gain.linearRampToValueAtTime(0.32, t + 0.1);
+      subG.gain.exponentialRampToValueAtTime(0.001, t + dur);
+      sub.connect(subG).connect(destination); sub.start(t); sub.stop(t + dur);
+      // High shriek layer — noise burst
+      const shriek = ctx.createBufferSource();
+      shriek.buffer = this.getNoiseBuffer(ctx, dur * 0.4);
+      const shriekBP = ctx.createBiquadFilter();
+      shriekBP.type = 'bandpass'; shriekBP.frequency.setValueAtTime(1600, t);
+      shriekBP.frequency.linearRampToValueAtTime(600, t + dur * 0.4); shriekBP.Q.value = 3;
+      const shriekG = ctx.createGain();
+      shriekG.gain.setValueAtTime(0.001, t);
+      shriekG.gain.linearRampToValueAtTime(0.08, t + 0.08);
+      shriekG.gain.exponentialRampToValueAtTime(0.001, t + dur * 0.35);
+      shriek.connect(shriekBP).connect(shriekG).connect(destination);
+      shriek.start(t); shriek.stop(t + dur * 0.4);
+      scheduleRelease(dur);
 
     } else if (type === 'fire_breath') {
-      const noise = ctx.createBufferSource();
-      noise.buffer = this.getPinkNoise(ctx, 0.8);
-      const bandpass = ctx.createBiquadFilter();
-      bandpass.type = 'bandpass';
-      bandpass.frequency.setValueAtTime(300, t);
-      bandpass.frequency.linearRampToValueAtTime(1500, t + 0.3);
-      bandpass.frequency.linearRampToValueAtTime(150, t + 0.8);
-      const gain = ctx.createGain();
-      gain.gain.setValueAtTime(0.2, t);
-      gain.gain.linearRampToValueAtTime(0.01, t + 0.8);
-      noise.connect(bandpass).connect(gain).connect(ctx.destination);
-      noise.start(t); noise.stop(t + 0.8);
-      scheduleRelease(0.8);
+      // ── Flamethrower: sustained noise roar ──
+      const dur = 1.0;
+      // Main flame — pink noise through rising-then-falling bandpass
+      const flame = ctx.createBufferSource();
+      flame.buffer = this.getPinkNoise(ctx, dur);
+      const flameBP = ctx.createBiquadFilter();
+      flameBP.type = 'bandpass';
+      flameBP.frequency.setValueAtTime(200, t);
+      flameBP.frequency.linearRampToValueAtTime(1200, t + dur * 0.25);
+      flameBP.frequency.linearRampToValueAtTime(100, t + dur); flameBP.Q.value = 0.4;
+      const flameG = ctx.createGain();
+      flameG.gain.setValueAtTime(0.001, t);
+      flameG.gain.linearRampToValueAtTime(0.22, t + 0.08);
+      flameG.gain.linearRampToValueAtTime(0.18, t + dur * 0.6);
+      flameG.gain.exponentialRampToValueAtTime(0.001, t + dur);
+      flame.connect(flameBP).connect(flameG).connect(destination);
+      flame.start(t); flame.stop(t + dur);
+      // Gas rush — white noise highpass
+      const gas = ctx.createBufferSource();
+      gas.buffer = this.getNoiseBuffer(ctx, dur * 0.7);
+      const gasHP = ctx.createBiquadFilter();
+      gasHP.type = 'highpass'; gasHP.frequency.setValueAtTime(1800, t);
+      gasHP.frequency.linearRampToValueAtTime(800, t + dur * 0.7);
+      const gasG = ctx.createGain();
+      gasG.gain.setValueAtTime(0.06, t); gasG.gain.exponentialRampToValueAtTime(0.001, t + dur * 0.6);
+      gas.connect(gasHP).connect(gasG).connect(destination);
+      gas.start(t); gas.stop(t + dur * 0.7);
+      // Sub bass rumble — brown noise lowpass
+      const rumble = ctx.createBufferSource();
+      rumble.buffer = this.getBrownNoise(ctx, dur);
+      const rumbleLP = ctx.createBiquadFilter();
+      rumbleLP.type = 'lowpass'; rumbleLP.frequency.value = 80;
+      const rumbleG = ctx.createGain();
+      rumbleG.gain.setValueAtTime(0.1, t); rumbleG.gain.exponentialRampToValueAtTime(0.001, t + dur);
+      rumble.connect(rumbleLP).connect(rumbleG).connect(destination);
+      rumble.start(t); rumble.stop(t + dur);
+      scheduleRelease(dur);
 
     } else if (type === 'missile_launch') {
-      const noise = ctx.createBufferSource();
-      noise.buffer = this.getNoiseBuffer(ctx, 0.35);
-      const bandpass = ctx.createBiquadFilter();
-      bandpass.type = 'bandpass';
-      bandpass.frequency.setValueAtTime(200, t);
-      bandpass.frequency.exponentialRampToValueAtTime(1500, t + 0.35);
-      const gain = ctx.createGain();
-      gain.gain.setValueAtTime(0.25, t);
-      gain.gain.exponentialRampToValueAtTime(0.01, t + 0.35);
-      noise.connect(bandpass).connect(gain).connect(ctx.destination);
-      noise.start(t); noise.stop(t + 0.35);
-      scheduleRelease(0.35);
-    } else if (type === 'target_confirm') {
-      const osc = ctx.createOscillator();
-      const gain = ctx.createGain();
-      osc.type = 'square';
-      osc.frequency.setValueAtTime(620, t);
-      osc.frequency.linearRampToValueAtTime(980, t + 0.08);
-      gain.gain.setValueAtTime(0.08, t);
-      gain.gain.exponentialRampToValueAtTime(0.01, t + 0.12);
-      osc.connect(gain).connect(ctx.destination);
-      osc.start(t); osc.stop(t + 0.12);
-      scheduleRelease(0.12);
-    } else if (type === 'target_blocked') {
-      const osc = ctx.createOscillator();
-      const gain = ctx.createGain();
-      osc.type = 'sawtooth';
-      osc.frequency.setValueAtTime(240, t);
-      osc.frequency.linearRampToValueAtTime(170, t + 0.14);
-      gain.gain.setValueAtTime(0.06, t);
-      gain.gain.exponentialRampToValueAtTime(0.01, t + 0.14);
-      osc.connect(gain).connect(ctx.destination);
-      osc.start(t); osc.stop(t + 0.14);
-      scheduleRelease(0.14);
-    } else if (type === 'bomb_whistle') {
-      const dur = options.duration || 1.45;
-      const vol = options.volume || 0.075;
-      const osc = ctx.createOscillator();
-      const overtone = ctx.createOscillator();
-      const noise = ctx.createBufferSource();
-      noise.buffer = this.getNoiseBuffer(ctx, dur);
-      const bandpass = ctx.createBiquadFilter();
-      bandpass.type = 'bandpass';
-      bandpass.frequency.setValueAtTime(1500, t);
-      bandpass.frequency.exponentialRampToValueAtTime(420, t + dur);
-      bandpass.Q.value = 8;
-      const gain = ctx.createGain();
-      const overtoneGain = ctx.createGain();
-      const noiseGain = ctx.createGain();
-
-      osc.type = 'triangle';
-      osc.frequency.setValueAtTime(1650, t);
-      osc.frequency.exponentialRampToValueAtTime(310, t + dur);
-      overtone.type = 'sine';
-      overtone.frequency.setValueAtTime(2200, t);
-      overtone.frequency.exponentialRampToValueAtTime(520, t + dur * 0.9);
-
-      gain.gain.setValueAtTime(vol, t);
-      gain.gain.linearRampToValueAtTime(vol * 0.82, t + dur * 0.35);
-      gain.gain.exponentialRampToValueAtTime(0.01, t + dur);
-      overtoneGain.gain.setValueAtTime(vol * 0.32, t);
-      overtoneGain.gain.exponentialRampToValueAtTime(0.01, t + dur * 0.85);
-      noiseGain.gain.setValueAtTime(vol * 0.18, t);
-      noiseGain.gain.linearRampToValueAtTime(vol * 0.12, t + dur * 0.4);
-      noiseGain.gain.exponentialRampToValueAtTime(0.01, t + dur);
-
-      osc.connect(gain).connect(ctx.destination);
-      overtone.connect(overtoneGain).connect(ctx.destination);
-      noise.connect(bandpass).connect(noiseGain).connect(ctx.destination);
-      osc.start(t); osc.stop(t + dur);
-      overtone.start(t); overtone.stop(t + dur);
-      noise.start(t); noise.stop(t + dur);
+      // ── Rocket motor ignition: whoosh + pressure pop ──
+      const dur = 0.5;
+      // Ignition pop — white noise burst
+      const pop = ctx.createBufferSource();
+      pop.buffer = this.getNoiseBuffer(ctx, 0.04);
+      const popHP = ctx.createBiquadFilter();
+      popHP.type = 'highpass'; popHP.frequency.value = 1400;
+      const popG = ctx.createGain();
+      popG.gain.setValueAtTime(0.2, t); popG.gain.exponentialRampToValueAtTime(0.001, t + 0.04);
+      pop.connect(popHP).connect(popG).connect(destination);
+      pop.start(t); pop.stop(t + 0.04);
+      // Motor burn — pink noise bandpass sweep upward
+      const motor = ctx.createBufferSource();
+      motor.buffer = this.getPinkNoise(ctx, dur);
+      const motorBP = ctx.createBiquadFilter();
+      motorBP.type = 'bandpass';
+      motorBP.frequency.setValueAtTime(180, t);
+      motorBP.frequency.exponentialRampToValueAtTime(1400, t + dur * 0.7); motorBP.Q.value = 0.5;
+      const motorG = ctx.createGain();
+      motorG.gain.setValueAtTime(0.22, t);
+      motorG.gain.linearRampToValueAtTime(0.12, t + dur * 0.5);
+      motorG.gain.exponentialRampToValueAtTime(0.001, t + dur);
+      motor.connect(motorBP).connect(motorG).connect(destination);
+      motor.start(t); motor.stop(t + dur);
+      // Sub thump
+      const sub = ctx.createOscillator(); sub.type = 'sine';
+      sub.frequency.setValueAtTime(48, t); sub.frequency.exponentialRampToValueAtTime(25, t + 0.15);
+      const subG = ctx.createGain();
+      subG.gain.setValueAtTime(0.15, t); subG.gain.exponentialRampToValueAtTime(0.001, t + 0.15);
+      sub.connect(subG).connect(destination); sub.start(t); sub.stop(t + 0.15);
       scheduleRelease(dur);
-    } else if (type === 'kaiju_step') {
-      const sub = ctx.createOscillator();
-      const subGain = ctx.createGain();
-      sub.type = 'sine';
-      sub.frequency.setValueAtTime(52, t);
-      sub.frequency.exponentialRampToValueAtTime(28, t + 0.24);
-      subGain.gain.setValueAtTime(0.14, t);
-      subGain.gain.exponentialRampToValueAtTime(0.01, t + 0.24);
-      sub.connect(subGain).connect(ctx.destination);
-      sub.start(t); sub.stop(t + 0.24);
 
-      const noise = ctx.createBufferSource();
-      noise.buffer = this.getPinkNoise(ctx, 0.24);
-      const lowpass = ctx.createBiquadFilter();
-      lowpass.type = 'lowpass';
-      lowpass.frequency.setValueAtTime(110, t);
-      const noiseGain = ctx.createGain();
-      noiseGain.gain.setValueAtTime(0.06, t);
-      noiseGain.gain.exponentialRampToValueAtTime(0.01, t + 0.24);
-      noise.connect(lowpass).connect(noiseGain).connect(ctx.destination);
-      noise.start(t); noise.stop(t + 0.24);
-      scheduleRelease(0.24);
+    } else if (type === 'target_confirm') {
+      // ── Soft UI chirp: filtered noise tick, not a beep ──
+      const dur = 0.14;
+      const tick = ctx.createBufferSource();
+      tick.buffer = this.getNoiseBuffer(ctx, dur);
+      const tickBP = ctx.createBiquadFilter();
+      tickBP.type = 'bandpass'; tickBP.frequency.value = 2800; tickBP.Q.value = 12;
+      const tickG = ctx.createGain();
+      tickG.gain.setValueAtTime(0.07, t);
+      tickG.gain.exponentialRampToValueAtTime(0.001, t + dur);
+      tick.connect(tickBP).connect(tickG).connect(destination);
+      tick.start(t); tick.stop(t + dur);
+      // Sub click
+      const click = ctx.createBufferSource();
+      click.buffer = this.getBrownNoise(ctx, 0.03);
+      const clickLP = ctx.createBiquadFilter();
+      clickLP.type = 'lowpass'; clickLP.frequency.value = 400;
+      const clickG = ctx.createGain();
+      clickG.gain.setValueAtTime(0.04, t); clickG.gain.exponentialRampToValueAtTime(0.001, t + 0.03);
+      click.connect(clickLP).connect(clickG).connect(destination);
+      click.start(t); click.stop(t + 0.03);
+      scheduleRelease(dur);
+
+    } else if (type === 'target_blocked') {
+      // ── UI reject: low thud, not a buzzer ──
+      const dur = 0.18;
+      const thud = ctx.createBufferSource();
+      thud.buffer = this.getBrownNoise(ctx, dur);
+      const thudLP = ctx.createBiquadFilter();
+      thudLP.type = 'lowpass'; thudLP.frequency.setValueAtTime(200, t);
+      thudLP.frequency.exponentialRampToValueAtTime(60, t + dur);
+      const thudG = ctx.createGain();
+      thudG.gain.setValueAtTime(0.06, t); thudG.gain.exponentialRampToValueAtTime(0.001, t + dur);
+      thud.connect(thudLP).connect(thudG).connect(destination);
+      thud.start(t); thud.stop(t + dur);
+      // Rattle — pink noise bandpass
+      const rattle = ctx.createBufferSource();
+      rattle.buffer = this.getPinkNoise(ctx, dur);
+      const rattleBP = ctx.createBiquadFilter();
+      rattleBP.type = 'bandpass'; rattleBP.frequency.value = 340; rattleBP.Q.value = 2;
+      const rattleG = ctx.createGain();
+      rattleG.gain.setValueAtTime(0.03, t); rattleG.gain.exponentialRampToValueAtTime(0.001, t + dur);
+      rattle.connect(rattleBP).connect(rattleG).connect(destination);
+      rattle.start(t); rattle.stop(t + dur);
+      scheduleRelease(dur);
+
+    } else if (type === 'bomb_whistle') {
+      // ── Falling ordnance: air-tearing noise, not a pitched whistle ──
+      const dur = options.duration || 1.6;
+      const vol = options.volume || 0.075;
+      // Descending wind tear — white noise through sweeping bandpass
+      const tear = ctx.createBufferSource();
+      tear.buffer = this.getNoiseBuffer(ctx, dur);
+      const tearBP = ctx.createBiquadFilter();
+      tearBP.type = 'bandpass';
+      tearBP.frequency.setValueAtTime(3200, t);
+      tearBP.frequency.exponentialRampToValueAtTime(300, t + dur); tearBP.Q.value = 6;
+      const tearG = ctx.createGain();
+      tearG.gain.setValueAtTime(vol * 0.7, t);
+      tearG.gain.linearRampToValueAtTime(vol, t + dur * 0.4);
+      tearG.gain.exponentialRampToValueAtTime(0.001, t + dur);
+      tear.connect(tearBP).connect(tearG).connect(destination);
+      tear.start(t); tear.stop(t + dur);
+      // Low air compression — brown noise
+      const comp = ctx.createBufferSource();
+      comp.buffer = this.getBrownNoise(ctx, dur);
+      const compLP = ctx.createBiquadFilter();
+      compLP.type = 'lowpass'; compLP.frequency.setValueAtTime(160, t);
+      compLP.frequency.linearRampToValueAtTime(300, t + dur);
+      const compG = ctx.createGain();
+      compG.gain.setValueAtTime(vol * 0.3, t);
+      compG.gain.linearRampToValueAtTime(vol * 0.6, t + dur * 0.7);
+      compG.gain.exponentialRampToValueAtTime(0.001, t + dur);
+      comp.connect(compLP).connect(compG).connect(destination);
+      comp.start(t); comp.stop(t + dur);
+      // Flutter — pink noise tight resonance
+      const flutter = ctx.createBufferSource();
+      flutter.buffer = this.getPinkNoise(ctx, dur);
+      const flutterBP = ctx.createBiquadFilter();
+      flutterBP.type = 'bandpass';
+      flutterBP.frequency.setValueAtTime(1600, t);
+      flutterBP.frequency.exponentialRampToValueAtTime(180, t + dur); flutterBP.Q.value = 10;
+      const flutterG = ctx.createGain();
+      flutterG.gain.setValueAtTime(vol * 0.2, t);
+      flutterG.gain.exponentialRampToValueAtTime(0.001, t + dur * 0.9);
+      flutter.connect(flutterBP).connect(flutterG).connect(destination);
+      flutter.start(t); flutter.stop(t + dur);
+      scheduleRelease(dur);
+
+    } else if (type === 'kaiju_step') {
+      // ── Massive footfall: ground impact, no pitched tone ──
+      const dur = 0.35;
+      // Impact thud — brown noise lowpassed
+      const impact = ctx.createBufferSource();
+      impact.buffer = this.getBrownNoise(ctx, dur);
+      const impactLP = ctx.createBiquadFilter();
+      impactLP.type = 'lowpass'; impactLP.frequency.setValueAtTime(90, t);
+      impactLP.frequency.exponentialRampToValueAtTime(30, t + dur);
+      const impactG = ctx.createGain();
+      impactG.gain.setValueAtTime(0.16, t); impactG.gain.exponentialRampToValueAtTime(0.001, t + dur);
+      impact.connect(impactLP).connect(impactG).connect(destination);
+      impact.start(t); impact.stop(t + dur);
+      // Sub thump — sine
+      const sub = ctx.createOscillator(); sub.type = 'sine';
+      sub.frequency.setValueAtTime(38, t); sub.frequency.exponentialRampToValueAtTime(14, t + dur * 0.6);
+      const subG = ctx.createGain();
+      subG.gain.setValueAtTime(0.14, t); subG.gain.exponentialRampToValueAtTime(0.001, t + dur * 0.6);
+      sub.connect(subG).connect(destination); sub.start(t); sub.stop(t + dur * 0.6);
+      // Debris scatter — pink noise bandpass
+      const scatter = ctx.createBufferSource();
+      scatter.buffer = this.getPinkNoise(ctx, dur);
+      const scatterBP = ctx.createBiquadFilter();
+      scatterBP.type = 'bandpass'; scatterBP.frequency.setValueAtTime(400, t);
+      scatterBP.frequency.exponentialRampToValueAtTime(100, t + dur); scatterBP.Q.value = 0.6;
+      const scatterG = ctx.createGain();
+      scatterG.gain.setValueAtTime(0.001, t);
+      scatterG.gain.linearRampToValueAtTime(0.06, t + 0.04);
+      scatterG.gain.exponentialRampToValueAtTime(0.001, t + dur);
+      scatter.connect(scatterBP).connect(scatterG).connect(destination);
+      scatter.start(t + 0.02); scatter.stop(t + dur);
+      scheduleRelease(dur);
     } else {
-      // Unknown type, release immediately
+      // Unknown type, release immediately — just remove from count
       this._activeCount = Math.max(0, this._activeCount - 1);
     }
   }
@@ -2561,7 +3227,7 @@ function createTankReinforcement(id, bunker, tankConfig = {}) {
     y: getTerrainHeight(entry.x, entry.z + 12),
     vx: 0,
     vz: 0,
-    scale: tankConfig.scale ?? (variant === 'apc' ? APC_BASE_ENTITY_SCALE : TANK_BASE_ENTITY_SCALE),
+    scale: tankConfig.scale || (variant === 'apc' ? 1.12 : 1.72),
     state: 'driving',
     variant,
     speedMultiplier: tankConfig.speedMultiplier || 1,
@@ -2729,11 +3395,11 @@ function createTree(id, theme) {
     id, type: 'tree', dead: false, state: 'idle',
     x: pos.x,
     z: pos.z,
-    color: theme.name === 'militarybase' ? '#064e3b' : '#15803d',
+    color: theme.name === 'militarybase' ? '#2f855a' : '#3fa34d',
     variant,
-    trunkColor: theme.name === 'militarybase' ? '#5b3a1a' : '#7c4a22',
-    canopyColor: theme.name === 'militarybase' ? '#365314' : '#166534',
-    canopyAccent: theme.name === 'militarybase' ? '#4d7c0f' : '#22c55e',
+    trunkColor: theme.name === 'militarybase' ? '#8a5a30' : '#a66a3a',
+    canopyColor: theme.name === 'militarybase' ? '#4f8b3a' : '#2f855a',
+    canopyAccent: theme.name === 'militarybase' ? '#84cc16' : '#4ade80',
     lean: (Math.random() - 0.5) * 0.12,
     scale,
   };
@@ -2768,8 +3434,8 @@ function createHouse(id, theme) {
       : ['#e7e5e4', '#d6d3d1', '#fef3c7'][Math.floor(Math.random() * 3)],
     foundationColor: theme.name === 'city' ? '#475569' : '#7c6f64',
     windowColor: theme.name === 'city'
-      ? ['#1e293b', '#334155', '#3f4c63'][Math.floor(Math.random() * 3)]
-      : ['#475569', '#52606d', '#334155'][Math.floor(Math.random() * 3)],
+      ? ['#4a5a6e', '#5a6a7e', '#6a7a8e'][Math.floor(Math.random() * 3)]
+      : ['#5a6a7e', '#6a7a8e', '#5e6e82'][Math.floor(Math.random() * 3)],
     accentColor: theme.name === 'city'
       ? ['#94a3b8', '#64748b', '#cbd5e1'][Math.floor(Math.random() * 3)]
       : ['#b45309', '#92400e', '#a16207'][Math.floor(Math.random() * 3)],
@@ -2799,8 +3465,20 @@ function createBird(id, theme) {
   };
 }
 
+const getPersonLodLevel = (detailMode, distanceSq) => {
+  const thresholds = detailMode === 'minimal'
+    ? { full: 180 * 180, medium: 420 * 420 }
+    : detailMode === 'lean'
+    ? { full: 260 * 260, medium: 620 * 620 }
+    : { full: 360 * 360, medium: 840 * 840 };
+
+  if (distanceSq <= thresholds.full) return 'full';
+  if (distanceSq <= thresholds.medium) return 'medium';
+  return 'low';
+};
+
 // Realistic Fallout-style Human Character with Physics
-const EntityPerson = memo(({ entityId, entityLookupRef, index, entitiesRef }) => {
+const EntityPerson = memo(({ entityId, entityLookupRef, index, entitiesRef, qualityProfile }) => {
   const group = useRef();
   const bodyRef = useRef();
   const headRef = useRef();
@@ -2819,6 +3497,18 @@ const EntityPerson = memo(({ entityId, entityLookupRef, index, entitiesRef }) =>
   const walkCycle = useRef(0);
   const breathCycle = useRef(0);
   const inertiaDampening = useRef({ x: 0, z: 0 });
+  const frameSkip = useRef(0);
+  const nextLodCheckRef = useRef(0);
+  const detailMode = qualityProfile?.detailMode || 'full';
+  const [lodLevel, setLodLevel] = useState(detailMode === 'minimal' ? 'medium' : 'full');
+  const lodLevelRef = useRef(lodLevel);
+  const { camera } = useThree();
+
+  useEffect(() => {
+    const nextLevel = detailMode === 'minimal' ? 'medium' : detailMode === 'lean' ? 'medium' : 'full';
+    lodLevelRef.current = nextLevel;
+    setLodLevel(nextLevel);
+  }, [detailMode]);
   
   // (Optimized: Cloth and hair physics are procedurally simulated via simple Math.sin for performance)
   
@@ -2829,9 +3519,24 @@ const EntityPerson = memo(({ entityId, entityLookupRef, index, entitiesRef }) =>
       return; 
     }
     if (!group.current) return;
+
+    if (state.clock.elapsedTime >= nextLodCheckRef.current) {
+      const dx = camera.position.x - (p.x || 0);
+      const dy = camera.position.y - ((p.y || 0) + 8);
+      const dz = camera.position.z - (p.z || 0);
+      const nextLevel = getPersonLodLevel(detailMode, dx * dx + dy * dy + dz * dz);
+      if (nextLevel !== lodLevelRef.current) {
+        lodLevelRef.current = nextLevel;
+        setLodLevel(nextLevel);
+      }
+      nextLodCheckRef.current = state.clock.elapsedTime + 0.24;
+    }
     
-    const time = Date.now() * 0.001;
-    const ds = delta * 60;
+    const currentLod = lodLevelRef.current;
+    const isLowLod = currentLod === 'low';
+    const skipSecondaryMotion = currentLod !== 'full';
+    const time = state.clock.elapsedTime;
+    const ds = Math.min(delta, 0.05) * 60;
     
     // Grounded physics - weight and inertia
     const targetX = p.x;
@@ -2847,9 +3552,13 @@ const EntityPerson = memo(({ entityId, entityLookupRef, index, entitiesRef }) =>
     group.current.position.x += inertiaDampening.current.x;
     group.current.position.z += inertiaDampening.current.z;
     group.current.position.y = p.y || 0;
+
+    // At low LOD (distant entity), skip expensive animation every other frame
+    frameSkip.current = (frameSkip.current + 1) % 2;
+    if (isLowLod && frameSkip.current !== 0) return;
     
     // Breathing animation - subtle chest expansion
-    breathCycle.current = Math.sin(time * 2) * 0.02;
+    breathCycle.current = Math.sin(time * 2) * (isLowLod ? 0.012 : 0.02);
     if (bodyRef.current) {
       bodyRef.current.scale.x = 1 + breathCycle.current;
       bodyRef.current.scale.z = 1 + breathCycle.current * 0.5;
@@ -2868,8 +3577,8 @@ const EntityPerson = memo(({ entityId, entityLookupRef, index, entitiesRef }) =>
       const walkSpeed = isRunning ? 14 : 6;
       walkCycle.current += speed * walkSpeed * delta;
       
-      const swing = Math.sin(walkCycle.current) * (isRunning ? 0.75 : 0.25);
-      const armDrive = Math.sin(walkCycle.current + 0.35) * (isRunning ? 0.55 : 0.18);
+      const swing = Math.sin(walkCycle.current) * (isRunning ? 0.75 : 0.25) * (isLowLod ? 0.8 : 1);
+      const armDrive = Math.sin(walkCycle.current + 0.35) * (isRunning ? 0.55 : 0.18) * (isLowLod ? 0.75 : 1);
       
       // Leg animation
       if (leftLegRef.current && rightLegRef.current) {
@@ -2900,7 +3609,7 @@ const EntityPerson = memo(({ entityId, entityLookupRef, index, entitiesRef }) =>
       }
       
       // Body bob with weight
-      const bob = Math.abs(Math.sin(walkCycle.current * 2)) * (isRunning ? 0.2 : 0.05);
+      const bob = Math.abs(Math.sin(walkCycle.current * 2)) * (isRunning ? 0.2 : 0.05) * (isLowLod ? 0.85 : 1);
       group.current.position.y += bob;
       
       // Direction facing
@@ -2913,7 +3622,7 @@ const EntityPerson = memo(({ entityId, entityLookupRef, index, entitiesRef }) =>
       }
     } else {
       // Idle - subtle weight shift
-      const idleSway = Math.sin(time * 0.5) * 0.02;
+      const idleSway = Math.sin(time * 0.5) * (isLowLod ? 0.012 : 0.02);
       if (bodyRef.current) {
         bodyRef.current.rotation.x = 0;
         bodyRef.current.rotation.z = idleSway;
@@ -2950,38 +3659,38 @@ const EntityPerson = memo(({ entityId, entityLookupRef, index, entitiesRef }) =>
     }
     
     // Optimized Math-based physics
-    const windForce = Math.sin(time * 1.5) * 0.02;
-    const movementForce = isMoving ? speed * 0.1 : 0;
+    const windForce = skipSecondaryMotion ? 0 : Math.sin(time * 1.5) * 0.02;
+    const movementForce = isMoving ? speed * (isLowLod ? 0.06 : 0.1) : 0;
     
     // Apply cloth physics to visual
-    if (clothRef.current) {
+    if (clothRef.current && !skipSecondaryMotion) {
       const clothSwing = movementForce * Math.sin(walkCycle.current);
       clothRef.current.rotation.x = clothSwing * 0.3;
       clothRef.current.rotation.z = windForce * 2;
     }
     
     // Apply hair physics
-    if (hairRef.current) {
+    if (hairRef.current && !skipSecondaryMotion) {
       const avgOffset = windForce * 10 + movementForce * Math.sin(walkCycle.current * 1.2) * 2;
       hairRef.current.rotation.z = avgOffset * 0.5;
     }
     
     // Gear swing physics (backpack, belt items)
-    if (gearRef.current) {
+    if (gearRef.current && !skipSecondaryMotion) {
       const gearSwing = Math.sin(walkCycle.current * 0.8) * (isMoving ? 0.1 : 0.02);
       gearRef.current.rotation.x = gearSwing;
     }
     
     // Head tracking - slight look around
     if (headRef.current) {
-      const lookX = Math.sin(time * 0.3) * 0.1;
-      const lookY = Math.sin(time * 0.2) * 0.05;
+      const lookX = skipSecondaryMotion ? 0 : Math.sin(time * 0.3) * 0.1;
+      const lookY = skipSecondaryMotion ? 0 : Math.sin(time * 0.2) * 0.05;
       headRef.current.rotation.y = lookX;
       headRef.current.rotation.x = lookY;
     }
     
     // Fleeing state - panic animation
-    if (p.state === 'fleeing') {
+    if (p.state === 'fleeing' && !skipSecondaryMotion) {
       if (bodyRef.current) {
         bodyRef.current.rotation.z += Math.sin(time * 11 + (p.panicSeed || 0)) * 0.08;
       }
@@ -3035,13 +3744,116 @@ const EntityPerson = memo(({ entityId, entityLookupRef, index, entitiesRef }) =>
   const hasMask = seed % 6 === 0;
   const hasBackpack = seed % 3 !== 0;
   const hasArmor = seed % 4 === 1;
+  const isSoldier = p.type === 'soldier';
+  const renderFullDetails = lodLevel === 'full';
+  const renderMediumDetails = lodLevel !== 'low';
+  const headSegments = renderFullDetails ? 16 : 10;
+  const eyeSegments = renderFullDetails ? 8 : 6;
+  const hairSegments = renderFullDetails ? 12 : 8;
+  const limbRadialSegments = renderFullDetails ? 8 : 6;
+  const ringSegments = renderFullDetails ? 24 : 16;
+  const hairStrands = Array.from({ length: renderFullDetails ? 6 : 3 }, (_, strandIndex) => ({
+    key: `${seed}-${strandIndex}`,
+    position: [
+      Math.sin(seed * 0.47 + strandIndex * 1.37) * 0.38,
+      0.08 + ((strandIndex % 3) * 0.12),
+      Math.cos(seed * 0.31 + strandIndex * 0.91) * 0.22
+    ],
+    rotation: [
+      Math.sin(seed * 0.23 + strandIndex * 0.52) * 0.22,
+      (seed * 0.41 + strandIndex * 1.63) % (Math.PI * 2),
+      0
+    ]
+  }));
+
+  if (!renderMediumDetails) {
+    return (
+      <group ref={group} position={[p.x, 0, p.z]} scale={[p.scale, p.scale, p.scale]}>
+        {p.selected && (
+          <group position={[0, 0.35, 0]} rotation={[-Math.PI / 2, 0, 0]} renderOrder={6}>
+            <mesh>
+              <ringGeometry args={[9.2, 10.6, 14]} />
+              <meshBasicMaterial color={p.weaponType === 'engineer' ? '#2dd4bf' : '#86efac'} transparent opacity={0.84} depthWrite={false} toneMapped={false} />
+            </mesh>
+          </group>
+        )}
+        <group ref={bodyRef} position={[0, 8, 0]}>
+          <mesh>
+            <boxGeometry args={[2.3, 4.1, 1.35]} />
+            <meshStandardMaterial color={clothColor} roughness={0.92} metalness={0.08} />
+          </mesh>
+          {isSoldier && (
+            <mesh position={[0, 0.1, 0.76]}>
+              <boxGeometry args={[2.18, 2.15, 0.28]} />
+              <meshStandardMaterial color={soldierVestColor} roughness={0.88} metalness={0.16} />
+            </mesh>
+          )}
+        </group>
+        <group ref={headRef} position={[0, 11.15, 0]}>
+          <mesh>
+            <sphereGeometry args={[1, 10, 10]} />
+            <meshStandardMaterial color={skinTone} roughness={0.74} metalness={0} />
+          </mesh>
+          {isSoldier ? (
+            <mesh position={[0, 0.95, 0]}>
+              <sphereGeometry args={[1.12, 10, 10]} />
+              <meshStandardMaterial color="#4b5563" roughness={0.82} metalness={0.16} />
+            </mesh>
+          ) : (
+            <mesh ref={hairRef} position={[0, 0.72, -0.08]}>
+              <sphereGeometry args={[1.06, 8, 8]} />
+              <meshStandardMaterial color={hairColor} roughness={0.92} />
+            </mesh>
+          )}
+        </group>
+        <group ref={leftArmRef} position={[-1.35, 9, 0]}>
+          <mesh position={[0, -0.35, 0]}>
+            <capsuleGeometry args={[0.28, 2.4, 3, 6]} />
+            <meshStandardMaterial color={clothColor} roughness={0.88} />
+          </mesh>
+        </group>
+        <group ref={rightArmRef} position={[1.35, 9, 0]}>
+          <mesh position={[0, -0.35, 0]}>
+            <capsuleGeometry args={[0.28, 2.4, 3, 6]} />
+            <meshStandardMaterial color={clothColor} roughness={0.88} />
+          </mesh>
+          {isSoldier && (
+            <mesh position={[-0.32, -1.2, 0.34]} rotation={[0.05, 0.08, -Math.PI / 2]}>
+              <boxGeometry args={[2.6, 0.16, 0.2]} />
+              <meshStandardMaterial color="#111827" roughness={0.72} metalness={0.2} />
+            </mesh>
+          )}
+        </group>
+        <group ref={leftLegRef} position={[-0.52, 4.6, 0]}>
+          <mesh position={[0, -0.1, 0.05]}>
+            <capsuleGeometry args={[0.34, 3.2, 3, 6]} />
+            <meshStandardMaterial color="#3d2914" roughness={0.9} />
+          </mesh>
+        </group>
+        <group ref={rightLegRef} position={[0.52, 4.6, 0]}>
+          <mesh position={[0, -0.1, 0.05]}>
+            <capsuleGeometry args={[0.34, 3.2, 3, 6]} />
+            <meshStandardMaterial color="#3d2914" roughness={0.9} />
+          </mesh>
+        </group>
+        <mesh ref={repairBeamRef} visible={false} position={[0, 10.6, 0]} renderOrder={4}>
+          <boxGeometry args={[18, 0.45, 0.45]} />
+          <meshBasicMaterial color="#5eead4" transparent opacity={0.45} depthWrite={false} toneMapped={false} />
+        </mesh>
+        <mesh ref={repairSparkRef} visible={false} position={[0, 10.6, 0]} renderOrder={5}>
+          <sphereGeometry args={[0.9, 6, 6]} />
+          <meshBasicMaterial color="#facc15" transparent opacity={0.7} depthWrite={false} toneMapped={false} />
+        </mesh>
+      </group>
+    );
+  }
   
   return (
     <group ref={group} position={[p.x, 0, p.z]} scale={[p.scale, p.scale, p.scale]}>
       {p.selected && (
         <group position={[0, 0.35, 0]} rotation={[-Math.PI / 2, 0, 0]} renderOrder={6}>
           <mesh>
-            <ringGeometry args={[9.4, 10.9, 24]} />
+            <ringGeometry args={[9.4, 10.9, ringSegments]} />
             <meshBasicMaterial color={p.weaponType === 'engineer' ? '#2dd4bf' : '#86efac'} transparent opacity={0.9} depthWrite={false} toneMapped={false} />
           </mesh>
           <mesh>
@@ -3073,26 +3885,30 @@ const EntityPerson = memo(({ entityId, entityLookupRef, index, entitiesRef }) =>
         </mesh>
         
         {/* Radiation damage / dirt patches */}
-        <mesh position={[0.5, -0.5, 0.71]}>
-          <circleGeometry args={[0.3, 8]} />
-          <meshStandardMaterial 
-            color="#2a1f1a"
-            roughness={1}
-            transparent
-            opacity={0.6}
-          />
-        </mesh>
+        {renderFullDetails && (
+          <mesh position={[0.5, -0.5, 0.71]}>
+            <circleGeometry args={[0.3, 8]} />
+            <meshStandardMaterial 
+              color="#2a1f1a"
+              roughness={1}
+              transparent
+              opacity={0.6}
+            />
+          </mesh>
+        )}
         
         {/* Torn fabric edges */}
-        <mesh position={[-1.1, 0, 0]} rotation={[0, Math.PI/2, 0]}>
-          <planeGeometry args={[1.4, 3]} />
-          <meshStandardMaterial 
-            color={clothColor}
-            roughness={1}
-            side={THREE.DoubleSide}
-          />
-        </mesh>
-        {p.type === 'soldier' && (
+        {renderFullDetails && (
+          <mesh position={[-1.1, 0, 0]} rotation={[0, Math.PI/2, 0]}>
+            <planeGeometry args={[1.4, 3]} />
+            <meshStandardMaterial 
+              color={clothColor}
+              roughness={1}
+              side={THREE.DoubleSide}
+            />
+          </mesh>
+        )}
+        {isSoldier && (
           <>
             <mesh position={[0, 0.15, 0.84]}>
               <boxGeometry args={[2.35, 2.35, 0.38]} />
@@ -3157,11 +3973,11 @@ const EntityPerson = memo(({ entityId, entityLookupRef, index, entitiesRef }) =>
         
         {/* Eyes */}
         <mesh position={[-0.35, 0.1, 0.9]}>
-          <sphereGeometry args={[0.15, 8, 8]} />
+          <sphereGeometry args={[0.15, eyeSegments, eyeSegments]} />
           <meshStandardMaterial color="#f5f5dc" />
         </mesh>
         <mesh position={[0.35, 0.1, 0.9]}>
-          <sphereGeometry args={[0.15, 8, 8]} />
+          <sphereGeometry args={[0.15, eyeSegments, eyeSegments]} />
           <meshStandardMaterial color="#f5f5dc" />
         </mesh>
         
@@ -3191,7 +4007,7 @@ const EntityPerson = memo(({ entityId, entityLookupRef, index, entitiesRef }) =>
         </mesh>
         
         {/* Radiation scars */}
-        {hasScars && (
+        {renderFullDetails && hasScars && (
           <mesh position={[0.4, 0.2, 0.98]}>
             <planeGeometry args={[0.3, 0.05]} />
             <meshStandardMaterial 
@@ -3204,18 +4020,20 @@ const EntityPerson = memo(({ entityId, entityLookupRef, index, entitiesRef }) =>
         )}
         
         {/* Dirt/grime on face */}
-        <mesh position={[-0.3, -0.2, 0.95]}>
-          <circleGeometry args={[0.2, 6]} />
-          <meshStandardMaterial 
-            color="#3d2914"
-            roughness={1}
-            transparent
-            opacity={0.4}
-          />
-        </mesh>
+        {renderFullDetails && (
+          <mesh position={[-0.3, -0.2, 0.95]}>
+            <circleGeometry args={[0.2, 6]} />
+            <meshStandardMaterial 
+              color="#3d2914"
+              roughness={1}
+              transparent
+              opacity={0.4}
+            />
+          </mesh>
+        )}
         
         {/* Beard stubble */}
-        {hasBeard && (
+        {renderFullDetails && hasBeard && (
           <mesh position={[0, -0.5, 0.75]}>
             <sphereGeometry args={[0.5, 8, 8]} />
             <meshStandardMaterial 
@@ -3230,7 +4048,7 @@ const EntityPerson = memo(({ entityId, entityLookupRef, index, entitiesRef }) =>
         {/* Hair - physics affected */}
         <group ref={hairRef} position={[0, 0.9, -0.1]}>
           <mesh>
-            <sphereGeometry args={[1.15, 12, 12]} />
+            <sphereGeometry args={[1.15, hairSegments, hairSegments]} />
             <meshStandardMaterial 
               color={hairColor}
               roughness={0.9}
@@ -3238,17 +4056,13 @@ const EntityPerson = memo(({ entityId, entityLookupRef, index, entitiesRef }) =>
           </mesh>
           
           {/* Messy hair strands */}
-          {[...Array(6)].map((_, i) => (
+          {hairStrands.map((strand) => (
             <mesh 
-              key={i} 
-              position={[
-                (Math.random() - 0.5) * 1.5, 
-                Math.random() * 0.5, 
-                (Math.random() - 0.5) * 1
-              ]}
-              rotation={[Math.random() * 0.3, Math.random() * Math.PI * 2, 0]}
+              key={strand.key}
+              position={strand.position}
+              rotation={strand.rotation}
             >
-              <capsuleGeometry args={[0.08, 0.4, 4, 8]} />
+              <capsuleGeometry args={[0.08, 0.4, 3, renderFullDetails ? 8 : 6]} />
               <meshStandardMaterial 
                 color={hairColor}
                 roughness={0.95}
@@ -3258,7 +4072,7 @@ const EntityPerson = memo(({ entityId, entityLookupRef, index, entitiesRef }) =>
         </group>
         
         {/* Goggles / eyewear */}
-        {hasGoggles && (
+        {renderFullDetails && hasGoggles && (
           <group position={[0, 0.1, 1]}>
             <mesh position={[-0.35, 0, 0]}>
               <cylinderGeometry args={[0.2, 0.2, 0.15, 12]} />
@@ -3285,7 +4099,7 @@ const EntityPerson = memo(({ entityId, entityLookupRef, index, entitiesRef }) =>
         )}
         
         {/* Gas mask / respirator */}
-        {hasMask && (
+        {renderFullDetails && hasMask && (
           <mesh position={[0, -0.2, 1.1]}>
             <boxGeometry args={[0.8, 0.6, 0.4]} />
             <meshStandardMaterial 
@@ -3295,10 +4109,10 @@ const EntityPerson = memo(({ entityId, entityLookupRef, index, entitiesRef }) =>
             />
           </mesh>
         )}
-        {p.type === 'soldier' && (
+        {isSoldier && (
           <>
             <mesh position={[0, 1.1, -0.05]}>
-              <sphereGeometry args={[1.22, 16, 16]} />
+              <sphereGeometry args={[1.22, headSegments, headSegments]} />
               <meshStandardMaterial color="#4b5563" roughness={0.82} metalness={0.18} />
             </mesh>
             <mesh position={[0, 0.88, 0.8]}>
@@ -3319,7 +4133,7 @@ const EntityPerson = memo(({ entityId, entityLookupRef, index, entitiesRef }) =>
       <group ref={leftArmRef} position={[-1.5, 9, 0]}>
         {/* Upper arm */}
         <mesh position={[0, 0.5, 0]}>
-          <capsuleGeometry args={[0.35, 1.5, 4, 8]} />
+          <capsuleGeometry args={[0.35, 1.5, 4, limbRadialSegments]} />
           <meshStandardMaterial 
             color={clothColor}
             roughness={0.9}
@@ -3328,7 +4142,7 @@ const EntityPerson = memo(({ entityId, entityLookupRef, index, entitiesRef }) =>
         
         {/* Lower arm */}
         <mesh position={[0, -0.8, 0]}>
-          <capsuleGeometry args={[0.3, 1.3, 4, 8]} />
+          <capsuleGeometry args={[0.3, 1.3, 4, limbRadialSegments]} />
           <meshStandardMaterial 
             color={skinTone}
             roughness={0.7}
@@ -3353,7 +4167,7 @@ const EntityPerson = memo(({ entityId, entityLookupRef, index, entitiesRef }) =>
       
       <group ref={rightArmRef} position={[1.5, 9, 0]}>
         <mesh position={[0, 0.5, 0]}>
-          <capsuleGeometry args={[0.35, 1.5, 4, 8]} />
+          <capsuleGeometry args={[0.35, 1.5, 4, limbRadialSegments]} />
           <meshStandardMaterial 
             color={clothColor}
             roughness={0.9}
@@ -3361,7 +4175,7 @@ const EntityPerson = memo(({ entityId, entityLookupRef, index, entitiesRef }) =>
         </mesh>
         
         <mesh position={[0, -0.8, 0]}>
-          <capsuleGeometry args={[0.3, 1.3, 4, 8]} />
+          <capsuleGeometry args={[0.3, 1.3, 4, limbRadialSegments]} />
           <meshStandardMaterial 
             color={skinTone}
             roughness={0.7}
@@ -3377,7 +4191,7 @@ const EntityPerson = memo(({ entityId, entityLookupRef, index, entitiesRef }) =>
         </mesh>
         
         {/* Improvised armor / bracer */}
-        {hasArmor && (
+        {renderFullDetails && hasArmor && (
           <mesh position={[0, -0.8, 0.35]}>
             <boxGeometry args={[0.35, 1, 0.15]} />
             <meshStandardMaterial 
@@ -3387,30 +4201,20 @@ const EntityPerson = memo(({ entityId, entityLookupRef, index, entitiesRef }) =>
             />
           </mesh>
         )}
-        {p.type === 'soldier' && (
+        {isSoldier && (
           <group position={[-0.2, -1.15, 0.35]} rotation={[0.05, p.weaponType === 'marksman' ? 0.18 : 0.06, -Math.PI / 2]}>
-            <mesh position={[-0.25, 1.38, 0]}>
-              <boxGeometry args={[p.weaponType === 'missile' ? 4.4 : p.weaponType === 'rpg' ? 4.1 : p.weaponType === 'marksman' ? 3.9 : p.weaponType === 'gunner' ? 3.4 : p.weaponType === 'engineer' ? 2.6 : 3.2, p.weaponType === 'missile' ? 0.34 : p.weaponType === 'rpg' ? 0.34 : 0.24, p.weaponType === 'missile' ? 0.4 : p.weaponType === 'rpg' ? 0.36 : p.weaponType === 'engineer' ? 0.34 : 0.28]} />
-              <meshStandardMaterial color={p.weaponType === 'engineer' ? '#4b5563' : '#111827'} roughness={0.58} metalness={0.32} />
+            <mesh position={[0, 1.4, 0]}>
+              <boxGeometry args={[p.weaponType === 'marksman' ? 3.8 : p.weaponType === 'gunner' ? 2.9 : p.weaponType === 'engineer' ? 2.2 : 3.1, 0.18, 0.24]} />
+              <meshStandardMaterial color="#111827" roughness={0.72} metalness={0.22} />
             </mesh>
-            <mesh position={[0.55, p.weaponType === 'missile' ? 1.72 : 1.56, 0]}>
-              <boxGeometry args={[p.weaponType === 'marksman' ? 2.0 : p.weaponType === 'missile' ? 2.1 : 1.5, p.weaponType === 'missile' ? 0.2 : 0.14, 0.18]} />
-              <meshStandardMaterial color="#64748b" roughness={0.48} metalness={0.4} />
-            </mesh>
-            <mesh position={[0.55, 0.76, 0]}>
-              <boxGeometry args={[0.22, p.weaponType === 'engineer' ? 0.82 : p.weaponType === 'missile' ? 1.35 : p.weaponType === 'rpg' ? 1.28 : p.weaponType === 'gunner' ? 1.22 : 1.1, p.weaponType === 'missile' ? 0.3 : 0.22]} />
-              <meshStandardMaterial color={p.weaponType === 'engineer' ? '#374151' : '#1f2937'} roughness={0.72} />
+            <mesh position={[0.65, 0.7, 0]}>
+              <boxGeometry args={[0.2, 1.15, 0.22]} />
+              <meshStandardMaterial color="#1f2937" roughness={0.75} />
             </mesh>
             <mesh position={[-1.15, 1.46, 0]}>
-              <boxGeometry args={[p.weaponType === 'missile' ? 1.55 : p.weaponType === 'rpg' ? 1.45 : 1.3, p.weaponType === 'missile' ? 0.3 : 0.16, p.weaponType === 'missile' ? 0.36 : 0.2]} />
-              <meshStandardMaterial color={p.weaponType === 'engineer' ? '#f59e0b' : p.weaponType === 'marksman' ? '#374151' : '#5b4636'} roughness={0.88} metalness={p.weaponType === 'engineer' ? 0.22 : 0.06} />
+              <boxGeometry args={[1.3, 0.14, 0.18]} />
+              <meshStandardMaterial color="#5b4636" roughness={0.92} />
             </mesh>
-            {p.weaponType !== 'engineer' && (
-              <mesh position={[1.55, 1.42, 0]} rotation={[0, 0, Math.PI / 2]}>
-                <cylinderGeometry args={[p.weaponType === 'rpg' ? 0.14 : p.weaponType === 'missile' ? 0.12 : 0.08, p.weaponType === 'rpg' ? 0.14 : p.weaponType === 'missile' ? 0.12 : 0.08, p.weaponType === 'marksman' ? 2.1 : p.weaponType === 'gunner' ? 1.9 : p.weaponType === 'rpg' ? 2.4 : p.weaponType === 'missile' ? 1.2 : 1.6, 8]} />
-                <meshStandardMaterial color="#0f172a" roughness={0.4} metalness={0.56} />
-              </mesh>
-            )}
             {p.weaponType === 'marksman' && (
               <mesh position={[0.45, 1.65, 0]}>
                 <cylinderGeometry args={[0.08, 0.08, 0.9, 8]} />
@@ -3418,40 +4222,16 @@ const EntityPerson = memo(({ entityId, entityLookupRef, index, entitiesRef }) =>
               </mesh>
             )}
             {p.weaponType === 'gunner' && (
-              <mesh position={[0.62, 0.7, 0]}>
-                <boxGeometry args={[0.55, 0.72, 0.42]} />
-                <meshStandardMaterial color="#4b5563" roughness={0.76} />
+              <mesh position={[0.55, 0.8, 0]}>
+                <boxGeometry args={[0.5, 0.45, 0.34]} />
+                <meshStandardMaterial color="#374151" roughness={0.8} />
               </mesh>
-            )}
-            {p.weaponType === 'rpg' && (
-              <mesh position={[2.45, 1.44, 0]} rotation={[0, 0, -Math.PI / 2]}>
-                <coneGeometry args={[0.22, 0.62, 8]} />
-                <meshStandardMaterial color="#fbbf24" roughness={0.42} metalness={0.24} />
-              </mesh>
-            )}
-            {p.weaponType === 'missile' && (
-              <>
-                <mesh position={[1.55, 1.72, 0.18]} rotation={[0, 0, Math.PI / 2]}>
-                  <cylinderGeometry args={[0.13, 0.13, 2.2, 8]} />
-                  <meshStandardMaterial color="#64748b" roughness={0.42} metalness={0.34} />
-                </mesh>
-                <mesh position={[1.55, 1.14, -0.18]} rotation={[0, 0, Math.PI / 2]}>
-                  <cylinderGeometry args={[0.13, 0.13, 2.2, 8]} />
-                  <meshStandardMaterial color="#475569" roughness={0.42} metalness={0.34} />
-                </mesh>
-              </>
             )}
             {p.weaponType === 'engineer' && (
-              <>
-                <mesh position={[1.25, 1.38, 0]} rotation={[0, 0, Math.PI / 2]}>
-                  <cylinderGeometry args={[0.11, 0.11, 1.25, 8]} />
-                  <meshStandardMaterial color="#e5e7eb" roughness={0.34} metalness={0.64} />
-                </mesh>
-                <mesh position={[1.95, 1.38, 0]} rotation={[0, 0, -Math.PI / 2]}>
-                  <coneGeometry args={[0.16, 0.42, 8]} />
-                  <meshStandardMaterial color="#fde68a" roughness={0.34} metalness={0.34} />
-                </mesh>
-              </>
+              <mesh position={[0.2, 0.92, 0]}>
+                <boxGeometry args={[0.35, 0.9, 0.3]} />
+                <meshStandardMaterial color="#f59e0b" roughness={0.78} metalness={0.26} />
+              </mesh>
             )}
           </group>
         )}
@@ -3470,7 +4250,7 @@ const EntityPerson = memo(({ entityId, entityLookupRef, index, entitiesRef }) =>
       <group ref={leftLegRef} position={[-0.6, 4.5, 0]}>
         {/* Thigh */}
         <mesh position={[0, 1, 0]}>
-          <capsuleGeometry args={[0.45, 1.8, 4, 8]} />
+          <capsuleGeometry args={[0.45, 1.8, 4, limbRadialSegments]} />
           <meshStandardMaterial 
             color="#3d2914"
             roughness={0.9}
@@ -3479,7 +4259,7 @@ const EntityPerson = memo(({ entityId, entityLookupRef, index, entitiesRef }) =>
         
         {/* Calf */}
         <mesh position={[0, -0.8, 0]}>
-          <capsuleGeometry args={[0.4, 1.6, 4, 8]} />
+          <capsuleGeometry args={[0.4, 1.6, 4, limbRadialSegments]} />
           <meshStandardMaterial 
             color="#3d2914"
             roughness={0.9}
@@ -3496,18 +4276,20 @@ const EntityPerson = memo(({ entityId, entityLookupRef, index, entitiesRef }) =>
         </mesh>
         
         {/* Knee pad */}
-        <mesh position={[0, 0.2, 0.45]}>
-          <boxGeometry args={[0.5, 0.4, 0.15]} />
-          <meshStandardMaterial 
-            color="#2a2a2a"
-            roughness={0.7}
-          />
-        </mesh>
+        {renderFullDetails && (
+          <mesh position={[0, 0.2, 0.45]}>
+            <boxGeometry args={[0.5, 0.4, 0.15]} />
+            <meshStandardMaterial 
+              color="#2a2a2a"
+              roughness={0.7}
+            />
+          </mesh>
+        )}
       </group>
       
       <group ref={rightLegRef} position={[0.6, 4.5, 0]}>
         <mesh position={[0, 1, 0]}>
-          <capsuleGeometry args={[0.45, 1.8, 4, 8]} />
+          <capsuleGeometry args={[0.45, 1.8, 4, limbRadialSegments]} />
           <meshStandardMaterial 
             color="#3d2914"
             roughness={0.9}
@@ -3515,7 +4297,7 @@ const EntityPerson = memo(({ entityId, entityLookupRef, index, entitiesRef }) =>
         </mesh>
         
         <mesh position={[0, -0.8, 0]}>
-          <capsuleGeometry args={[0.4, 1.6, 4, 8]} />
+          <capsuleGeometry args={[0.4, 1.6, 4, limbRadialSegments]} />
           <meshStandardMaterial 
             color="#3d2914"
             roughness={0.9}
@@ -3534,7 +4316,7 @@ const EntityPerson = memo(({ entityId, entityLookupRef, index, entitiesRef }) =>
       {/* === GEAR / EQUIPMENT === */}
       <group ref={gearRef} position={[0, 9, 0]}>
         {/* Backpack */}
-        {hasBackpack && (
+        {renderMediumDetails && hasBackpack && (
           <mesh position={[0, 0, -0.9]}>
             <boxGeometry args={[1.4, 2.2, 0.8]} />
             <meshStandardMaterial 
@@ -3554,34 +4336,42 @@ const EntityPerson = memo(({ entityId, entityLookupRef, index, entitiesRef }) =>
         </mesh>
         
         {/* Belt pouches */}
-        <mesh position={[-0.7, -1, 0.3]}>
-          <boxGeometry args={[0.4, 0.5, 0.25]} />
-          <meshStandardMaterial color="#3d2914" />
-        </mesh>
-        <mesh position={[0.7, -1, 0.3]}>
-          <boxGeometry args={[0.4, 0.5, 0.25]} />
-          <meshStandardMaterial color="#3d2914" />
-        </mesh>
+        {renderFullDetails && (
+          <>
+            <mesh position={[-0.7, -1, 0.3]}>
+              <boxGeometry args={[0.4, 0.5, 0.25]} />
+              <meshStandardMaterial color="#3d2914" />
+            </mesh>
+            <mesh position={[0.7, -1, 0.3]}>
+              <boxGeometry args={[0.4, 0.5, 0.25]} />
+              <meshStandardMaterial color="#3d2914" />
+            </mesh>
+          </>
+        )}
         
         {/* Shoulder strap */}
-        <mesh position={[0.9, 1, 0]} rotation={[0, 0, 0.3]}>
-          <boxGeometry args={[0.15, 3, 0.05]} />
-          <meshStandardMaterial color="#2a1f14" />
-        </mesh>
+        {renderFullDetails && (
+          <mesh position={[0.9, 1, 0]} rotation={[0, 0, 0.3]}>
+            <boxGeometry args={[0.15, 3, 0.05]} />
+            <meshStandardMaterial color="#2a1f14" />
+          </mesh>
+        )}
         
         {/* Canteen */}
-        <mesh position={[0.85, -0.5, 0.4]}>
-          <cylinderGeometry args={[0.15, 0.12, 0.5, 8]} />
-          <meshStandardMaterial 
-            color="#556b2f"
-            metalness={0.1}
-            roughness={0.7}
-          />
-        </mesh>
+        {renderFullDetails && (
+          <mesh position={[0.85, -0.5, 0.4]}>
+            <cylinderGeometry args={[0.15, 0.12, 0.5, 8]} />
+            <meshStandardMaterial 
+              color="#556b2f"
+              metalness={0.1}
+              roughness={0.7}
+            />
+          </mesh>
+        )}
       </group>
       
       {/* === IMPROVISED ARMOR === */}
-      {hasArmor && (
+      {renderFullDetails && hasArmor && (
         <group position={[0, 8.5, 0]}>
           {/* Chest plate - scrap metal */}
           <mesh position={[0, 0.5, 0.75]}>
@@ -3625,7 +4415,7 @@ const EntityPerson = memo(({ entityId, entityLookupRef, index, entitiesRef }) =>
       )}
       
       {/* === DUST PARTICLES (footsteps) === */}
-      {(p.vx || p.vz) && Math.random() < 0.1 && (
+      {renderFullDetails && (p.vx || p.vz) && Math.random() < 0.1 && (
         <mesh position={[
           group.current?.position.x || p.x,
           0.1,
@@ -3649,6 +4439,7 @@ const EntityCar = memo(({ index, entitiesRef }) => {
   const broken = useRef();
   const smokeMeshes = useRef([]);
   const wreckTilt = useRef((Math.random() - 0.5) * 0.35);
+  const frameSkip = useRef(0);
   
   useFrame((state) => {
     const p = entitiesRef.current[index];
@@ -3663,14 +4454,18 @@ const EntityCar = memo(({ index, entitiesRef }) => {
     
     if (isBroken) {
        group.current.rotation.set(0.2, p.vx > 0 ? Math.PI / 2 : -Math.PI / 2, wreckTilt.current);
-       smokeMeshes.current.forEach((sm, i) => {
-          if (!sm) return;
-          sm.visible = true;
-          const t = (Date.now() * 0.0012 + i * 0.9) % 2.8;
-          sm.position.y = 4 + t * 7;
-          sm.scale.setScalar(0.5 + t * 0.55);
-          if (sm.material) sm.material.opacity = Math.max(0, 0.42 - t * 0.12);
-       });
+       frameSkip.current = (frameSkip.current + 1) % 2;
+       if (frameSkip.current === 0) {
+         const t0 = state.clock.elapsedTime;
+         smokeMeshes.current.forEach((sm, i) => {
+            if (!sm) return;
+            sm.visible = true;
+            const t = (t0 * 1.2 + i * 0.9) % 2.8;
+            sm.position.y = 4 + t * 7;
+            sm.scale.setScalar(0.5 + t * 0.55);
+            if (sm.material) sm.material.opacity = Math.max(0, 0.42 - t * 0.12);
+         });
+       }
     } else if (p.state === 'fleeing') {
        // Cars flip sideways chaotically
        group.current.rotation.x += 0.1;
@@ -3745,13 +4540,8 @@ const EntityTank = memo(({ entityId, entityLookupRef, index, entitiesRef, frameS
   const wasBroken = useRef(false);
   const initialTank = getTrackedEntity({ entitiesRef, entityLookupRef, entityId, index });
   const tankAssetName = initialTank?.variant === 'apc' ? 'battle_apc' : 'battle_tank';
-  const useStandaloneTankAsset = false;
-  const [assetReady, setAssetReady] = useState(
-    useStandaloneTankAsset ? Boolean(tankTestAssetCache.scene) : Boolean(airstrikeAssetCache.scene)
-  );
-  const [assetFailed, setAssetFailed] = useState(
-    useStandaloneTankAsset ? Boolean(tankTestAssetCache.error) : Boolean(airstrikeAssetCache.error)
-  );
+  const [assetReady, setAssetReady] = useState(Boolean(airstrikeAssetCache.scene));
+  const [assetFailed, setAssetFailed] = useState(Boolean(airstrikeAssetCache.error));
 
   const registerArmorMaterial = (material) => {
     if (!material || materialStatesRef.current.some((entry) => entry.material === material)) return;
@@ -3764,12 +4554,10 @@ const EntityTank = memo(({ entityId, entityLookupRef, index, entitiesRef, frameS
   };
 
   const tankScene = useMemo(() => {
-    const sourceScene = useStandaloneTankAsset ? tankTestAssetCache.scene : airstrikeAssetCache.scene;
+    const sourceScene = airstrikeAssetCache.scene;
     if (!assetReady || !sourceScene || !tankAssetName) return null;
     materialStatesRef.current = [];
-    const clone = useStandaloneTankAsset
-      ? cloneGlbSceneRoot(sourceScene)
-      : cloneNamedGlbGroup(sourceScene, tankAssetName);
+    const clone = cloneNamedGlbGroup(sourceScene, tankAssetName);
     if (!clone) return null;
     clone.traverse((node) => {
       if (node.position && !node.userData.basePosition) node.userData.basePosition = node.position.clone();
@@ -3779,32 +4567,14 @@ const EntityTank = memo(({ entityId, entityLookupRef, index, entitiesRef, frameS
       if (Array.isArray(node.material)) node.material.forEach(registerArmorMaterial);
       else registerArmorMaterial(node.material);
     });
-    if (useStandaloneTankAsset) {
-      clone.updateMatrixWorld(true);
-      const bounds = new THREE.Box3().setFromObject(clone);
-      const size = new THREE.Vector3();
-      bounds.getSize(size);
-      const maxDim = Math.max(size.x || 0, size.y || 0, size.z || 0, 1);
-      const normalizeScale = 52 / maxDim;
-      clone.scale.multiplyScalar(normalizeScale);
-      clone.updateMatrixWorld(true);
-
-      const normalizedBounds = new THREE.Box3().setFromObject(clone);
-      const center = new THREE.Vector3();
-      normalizedBounds.getCenter(center);
-      clone.position.x -= center.x;
-      clone.position.z -= center.z;
-      clone.position.y -= normalizedBounds.min.y;
-      clone.updateMatrixWorld(true);
-    }
     modelNodesRef.current = clone.userData?.namedNodes || {};
     return clone;
-  }, [assetReady, tankAssetName, useStandaloneTankAsset]);
+  }, [assetReady, tankAssetName]);
 
   useEffect(() => {
     let cancelled = false;
     if (!assetReady && !assetFailed) {
-      (useStandaloneTankAsset ? loadTankTestAsset() : loadAirstrikeAsset())
+      loadAirstrikeAsset()
         .then(() => {
           if (!cancelled) setAssetReady(true);
         })
@@ -3815,7 +4585,7 @@ const EntityTank = memo(({ entityId, entityLookupRef, index, entitiesRef, frameS
     return () => {
       cancelled = true;
     };
-  }, [assetReady, assetFailed, useStandaloneTankAsset]);
+  }, [assetReady, assetFailed]);
 
   useEffect(() => () => disposeClonedMaterials(tankScene), [tankScene]);
 
@@ -3829,7 +4599,8 @@ const EntityTank = memo(({ entityId, entityLookupRef, index, entitiesRef, frameS
 
     const ds = getFrameScaledStep(delta);
     const time = state.clock.elapsedTime;
-    const armorScale = GROUND_ARMOR_MODEL_SCALE * (p.scale || 1);
+    const armorVisualMultiplier = p.variant === 'apc' ? APC_VISUAL_SCALE_MULTIPLIER : TANK_VISUAL_SCALE_MULTIPLIER;
+    const armorScale = GROUND_ARMOR_MODEL_SCALE * (p.scale || 1) * armorVisualMultiplier;
     const isBroken = p.state === 'broken';
     const turretRoot = modelNodesRef.current.vehicle_turret_root;
     const barrelNode = modelNodesRef.current.vehicle_barrel;
@@ -4157,7 +4928,7 @@ const EntityTank = memo(({ entityId, entityLookupRef, index, entitiesRef, frameS
   };
 
   return (
-    <group ref={group} position={[p.x, p.y || 0, p.z]} scale={[GROUND_ARMOR_MODEL_SCALE * (p.scale || 1), GROUND_ARMOR_MODEL_SCALE * (p.scale || 1), GROUND_ARMOR_MODEL_SCALE * (p.scale || 1)]}>
+    <group ref={group} position={[p.x, p.y || 0, p.z]} scale={[(GROUND_ARMOR_MODEL_SCALE * (p.scale || 1)) * (p.variant === 'apc' ? APC_VISUAL_SCALE_MULTIPLIER : TANK_VISUAL_SCALE_MULTIPLIER), (GROUND_ARMOR_MODEL_SCALE * (p.scale || 1)) * (p.variant === 'apc' ? APC_VISUAL_SCALE_MULTIPLIER : TANK_VISUAL_SCALE_MULTIPLIER), (GROUND_ARMOR_MODEL_SCALE * (p.scale || 1)) * (p.variant === 'apc' ? APC_VISUAL_SCALE_MULTIPLIER : TANK_VISUAL_SCALE_MULTIPLIER)]}>
       {p.selected && (
         <group position={[0, 0.4, 0]} rotation={[-Math.PI / 2, 0, 0]} renderOrder={6}>
           <mesh>
@@ -4178,7 +4949,7 @@ const EntityTank = memo(({ entityId, entityLookupRef, index, entitiesRef, frameS
         <cylinderGeometry args={[12, 18, 24, 16]} />
         <meshBasicMaterial color="#86efac" transparent opacity={0} depthWrite={false} blending={THREE.AdditiveBlending} toneMapped={false} />
       </mesh>
-      {tankScene && !useStandaloneTankAsset ? (
+      {tankScene ? (
         <group position={[0, 0, 0]} rotation={[0, 0, 0]}>
           <primitive object={tankScene} />
         </group>
@@ -4255,6 +5026,7 @@ const EntitySoldierGLB = memo(({ entityId, entityLookupRef, index, entitiesRef }
   
   // Procedural Animation Refs
   const walkCycle = useRef(0);
+  const frameSkip = useRef(0);
   const legLRef = useRef();
   const legRRef = useRef();
   const armLRef = useRef();
@@ -4268,24 +5040,6 @@ const EntitySoldierGLB = memo(({ entityId, entityLookupRef, index, entitiesRef }
     if (!assetReady || !humanUnitsAssetCache.scene) return null;
     return cloneNamedGlbGroup(humanUnitsAssetCache.scene, assetName);
   }, [assetReady, assetName]);
-  const soldierRig = useMemo(
-    () => (soldierScene ? buildSoldierAnimationRig(soldierScene) : null),
-    [soldierScene]
-  );
-  const soldierRigReady = useMemo(
-    () => Boolean(
-      soldierRig &&
-      soldierRig.torso?.node &&
-      soldierRig.head?.node &&
-      soldierRig.armLeft?.node &&
-      soldierRig.armRight?.node &&
-      soldierRig.legLeft?.node &&
-      soldierRig.legRight?.node &&
-      (soldierRig.weapon?.node || soldierRig.tool?.node)
-    ),
-    [soldierRig]
-  );
-  const useFallbackSoldierMesh = !soldierScene || !soldierRigReady;
 
   useEffect(() => {
     let cancelled = false;
@@ -4307,11 +5061,11 @@ const EntitySoldierGLB = memo(({ entityId, entityLookupRef, index, entitiesRef }
   useEffect(() => () => disposeClonedMaterials(soldierScene), [soldierScene]);
 
   useEffect(() => {
-    soldierRigRef.current = soldierRigReady ? soldierRig : null;
+    soldierRigRef.current = soldierScene ? buildSoldierAnimationRig(soldierScene) : null;
     return () => {
       soldierRigRef.current = null;
     };
-  }, [soldierRig, soldierRigReady]);
+  }, [soldierScene]);
 
   useFrame((state, delta) => {
     const current = getTrackedEntity({ entitiesRef, entityLookupRef, entityId, index });
@@ -4329,7 +5083,7 @@ const EntitySoldierGLB = memo(({ entityId, entityLookupRef, index, entitiesRef }
     const targetYaw = -facingAngle + Math.PI / 2;
     const bob = moving ? Math.sin(state.clock.elapsedTime * 7.2) * Math.min(1.2, speed * 0.22) : 0;
     const now = Date.now();
-    const weaponReady = ensureSoldierWeaponEquipped(current, now);
+    const weaponReady = !!current.weaponEquipped;
     const equipping = !weaponReady && (current.weaponEquipUntil || 0) > now;
     const firing = (current.firePoseUntil || 0) > now;
     const flashing = (current.muzzleFlashUntil || 0) > now;
@@ -4379,14 +5133,17 @@ const EntitySoldierGLB = memo(({ entityId, entityLookupRef, index, entitiesRef }
     }
 
     const rig = soldierRigRef.current;
+    frameSkip.current = (frameSkip.current + 1) % 2;
+    const skipRigAnim = frameSkip.current !== 0 && !firing && !flashing;
     if (rig) {
       const baseMoveSpeed = Math.max(0.1, (current.combatSpeed || 2.6) * SOLDIER_MOVE_SPEED_MULTIPLIER);
       const normalizedSpeed = THREE.MathUtils.clamp(speed / baseMoveSpeed, 0, 1.35);
       const locomotion = moving ? THREE.MathUtils.clamp(normalizedSpeed, 0, 1) : 0;
-      const isRunning = locomotion > 0.72;
       const stepFrequency = moving ? THREE.MathUtils.lerp(5.2, 9.8, locomotion) : 1.5;
       walkCycle.current += delta * stepFrequency * (0.8 + normalizedSpeed * 0.55);
 
+      if (!skipRigAnim) {
+      const isRunning = locomotion > 0.72;
       const stride = Math.sin(walkCycle.current);
       const oppositeStride = Math.sin(walkCycle.current + Math.PI);
       const strideLift = Math.max(0, Math.sin(walkCycle.current - Math.PI * 0.15));
@@ -4397,7 +5154,7 @@ const EntitySoldierGLB = memo(({ entityId, entityLookupRef, index, entitiesRef }
       const legSwing = stride * (isRunning ? 0.78 : 0.56) * movementAmount;
       const armSwing = stride * (isRunning ? 0.52 : 0.34) * movementAmount;
       const torsoRise = bounce * (isRunning ? 0.65 : 0.42) * movementAmount;
-      const torsoLean = attackPose ? -0.2 : repairPose ? -0.26 : -movementAmount * 0.08;
+      const torsoLean = attackPose ? -0.32 : repairPose ? -0.26 : -movementAmount * 0.08;
       const torsoRoll = attackPose ? 0 : stride * 0.03 * movementAmount;
       const weaponCarrier = rig.weapon || rig.tool;
 
@@ -4435,96 +5192,82 @@ const EntitySoldierGLB = memo(({ entityId, entityLookupRef, index, entitiesRef }
         rotation: { z: torsoRoll * 1.1 }
       }, 8);
 
-      const combatHold =
-        current.weaponType === 'missile'
-          ? {
-              leftArm: { x: -1.16, y: 0.22, z: 0.58 },
-              rightArm: { x: -1.08 + recoil * 0.28, y: -0.14, z: -0.42 },
-              weapon: {
-                position: { x: -2.1, y: 5.4, z: -1.9 },
-                rotation: { x: -0.26 + recoil * 0.18, y: -0.08, z: 1.16 }
-              }
-            }
-          : current.weaponType === 'rpg'
-            ? {
-                leftArm: { x: -1.08, y: 0.18, z: 0.48 },
-                rightArm: { x: -1.02 + recoil * 0.24, y: -0.1, z: -0.34 },
-                weapon: {
-                  position: { x: -2.35, y: 4.9, z: -1.4 },
-                  rotation: { x: -0.18 + recoil * 0.2, y: 0.04, z: 1.12 }
-                }
-              }
-            : current.weaponType === 'engineer'
-              ? {
-                  leftArm: { x: -1.02, y: 0.16, z: 0.36 },
-                  rightArm: { x: -1.06 + recoil * 0.2, y: -0.06, z: -0.28 },
-                  weapon: {
-                    position: { x: -2.55, y: 4.2, z: -1.15 },
-                    rotation: { x: -0.12 + recoil * 0.18, y: 0.06, z: 1.18 }
-                  }
-                }
-              : {
-                  leftArm: { x: -1.04, y: 0.18, z: 0.42 },
-                  rightArm: { x: -1.08 + recoil * 0.28, y: -0.08, z: -0.3 },
-                  weapon: {
-                    position: { x: -2.8, y: 4.4, z: -1.2 },
-                    rotation: { x: -0.12 + recoil * 0.24, y: 0.08, z: 1.24 }
-                  }
-                };
-      const leftArmRotation = attackPose
-        ? combatHold.leftArm
+      // Weapon class drives arm pose + weapon raise offsets
+      const wClass = (current.weaponType === 'rpg' || current.weaponType === 'missile')
+        ? 'launcher'
+        : current.weaponType === 'engineer'
+          ? 'tool'
+          : 'rifle';
+
+      // Per-class aim poses (mirror values from Soldier.js getAimPoseByClass)
+      const aimArmL = attackPose
+        ? wClass === 'launcher' ? { x: -1.06 + (firing ? -0.06 : 0), y: 0.22, z: 0.54 }
+          : wClass === 'tool'     ? { x: -0.88, y: 0.14, z: 0.24 }
+          :                        { x: -1.02 + (firing ? -0.04 : 0), y: 0.18, z: 0.4 }
         : repairPose
           ? { x: -0.66 + bounce * 0.12, y: -0.06, z: 0.22 }
           : { x: -armSwing * 0.95, z: -stride * 0.05 * movementAmount };
-      const rightArmRotation = attackPose
-        ? combatHold.rightArm
+
+      const aimArmR = attackPose
+        ? wClass === 'launcher' ? { x: -1.04 + recoil * 0.38 + (firing ? -0.1 : 0), y: -0.14, z: -0.34 }
+          : wClass === 'tool'     ? { x: -0.96 + stride * 0.16, y: -0.06, z: -0.18 }
+          :                        { x: -1.08 + recoil * 0.45, y: -0.08, z: -0.28 }
         : repairPose
           ? { x: -0.88 + stride * 0.16, y: 0.14, z: -0.3 }
           : { x: armSwing * 0.82, z: stride * 0.05 * movementAmount };
 
-      applyRigTransform(rig.armLeft, delta, { rotation: leftArmRotation, position: { y: torsoRise * 0.35 } }, 10);
-      applyRigTransform(rig.armRight, delta, { rotation: rightArmRotation, position: { y: torsoRise * 0.28 } }, 10);
+      applyRigTransform(rig.armLeft, delta, { rotation: aimArmL, position: { y: torsoRise * 0.35 } }, 10);
+      applyRigTransform(rig.armRight, delta, { rotation: aimArmR, position: { y: torsoRise * 0.28 } }, 10);
       applyRigTransform(rig.padLeft, delta, {
-        rotation: { x: leftArmRotation.x * 0.6, z: leftArmRotation.z * 0.8 },
+        rotation: { x: aimArmL.x * 0.6, z: (aimArmL.z || 0) * 0.8 },
         position: { y: torsoRise * 0.34 }
       }, 10);
       applyRigTransform(rig.padRight, delta, {
-        rotation: { x: rightArmRotation.x * 0.6, z: rightArmRotation.z * 0.8 },
+        rotation: { x: aimArmR.x * 0.6, z: (aimArmR.z || 0) * 0.8 },
         position: { y: torsoRise * 0.28 }
       }, 10);
 
       applyRigTransform(rig.head, delta, {
         position: { y: torsoRise * 0.5 + idleBreath * 0.9 },
-        rotation: { x: -torsoLean * 0.35 - idleBreath * 0.4, y: moving ? stride * 0.03 * movementAmount : 0 }
+        rotation: {
+          x: attackPose ? -0.14 : -torsoLean * 0.35 - idleBreath * 0.4,
+          y: attackPose ? 0 : (moving ? stride * 0.03 * movementAmount : 0)
+        }
       }, 7);
       applyRigTransform(rig.helmet, delta, {
         position: { y: torsoRise * 0.48 + idleBreath * 0.8 },
-        rotation: { x: -torsoLean * 0.3, y: moving ? stride * 0.025 * movementAmount : 0 }
+        rotation: {
+          x: attackPose ? -0.1 : -torsoLean * 0.3,
+          y: attackPose ? 0 : (moving ? stride * 0.025 * movementAmount : 0)
+        }
       }, 7);
       applyRigTransform(rig.visor, delta, {
         position: { y: torsoRise * 0.46 + idleBreath * 0.75 },
-        rotation: { x: -torsoLean * 0.22 }
+        rotation: { x: attackPose ? -0.08 : -torsoLean * 0.22 }
       }, 7);
       applyRigTransform(rig.neckWrap, delta, {
         position: { y: torsoRise * 0.43 + idleBreath * 0.4 },
-        rotation: { x: -torsoLean * 0.18 }
+        rotation: { x: attackPose ? -0.06 : -torsoLean * 0.18 }
       }, 7);
 
-      applyRigTransform(weaponCarrier, delta, {
-        position: attackPose
-          ? combatHold.weapon.position
-          : {
-              y: repairPose ? 0.22 : torsoRise * 0.18,
-              z: moving ? stride * 0.1 * movementAmount : 0
-            },
-        rotation: attackPose
-          ? combatHold.weapon.rotation
-          : {
-              x: repairPose ? -0.22 : stride * 0.04 * movementAmount,
-              y: 0,
-              z: repairPose ? -0.18 : -stride * 0.04 * movementAmount
-            }
-      }, 12);
+      // Weapon position/rotation – raised to proper aiming stance when attacking
+      const aimWepPos = attackPose
+        ? wClass === 'launcher' ? { x: -0.12, y: 0.85, z: -0.95 + (firing ? -0.35 : 0) }
+          : wClass === 'tool'     ? { x:  0.08, y: 0.62, z: -0.7  }
+          :                        { x:  0.05, y: 1.05, z: -1.1  + (firing ? -0.3  : 0) }
+        : repairPose
+          ? { x: 0, y: 0.22, z: 0 }
+          : { x: 0, y: torsoRise * 0.18, z: moving ? stride * 0.1 * movementAmount : 0 };
+
+      const aimWepRot = attackPose
+        ? wClass === 'launcher' ? { x: -0.28 + (firing ? 0.18 : 0), y:  0.04, z: -0.06 }
+          : wClass === 'tool'     ? { x: -0.18 + (firing ? 0.12 : 0), y:  0.06, z: -0.04 }
+          :                        { x: -0.32 + recoil * 0.24,        y:  0.05, z: -0.05 }
+        : repairPose
+          ? { x: -0.22, y: 0, z: -0.18 }
+          : { x: stride * 0.04 * movementAmount, y: 0, z: -stride * 0.04 * movementAmount };
+
+      applyRigTransform(weaponCarrier, delta, { position: aimWepPos, rotation: aimWepRot }, 12);
       applyRigTransform(rig.toolCanister, delta, {
         rotation: { x: bounce * 0.05 * movementAmount, z: -stride * 0.05 * movementAmount },
         position: { y: torsoRise * 0.44 }
@@ -4533,6 +5276,7 @@ const EntitySoldierGLB = memo(({ entityId, entityLookupRef, index, entitiesRef }
         rotation: { x: repairPose ? -0.2 + bounce * 0.08 : stride * 0.08 * movementAmount, z: repairPose ? -0.24 : 0 },
         position: { y: torsoRise * 0.22, z: repairPose ? 0.18 : 0 }
       }, 10);
+      } // end !skipRigAnim
     }
 
     if (muzzleFlashRef.current && muzzleHaloRef.current) {
@@ -4608,7 +5352,7 @@ const EntitySoldierGLB = memo(({ entityId, entityLookupRef, index, entitiesRef }
         </group>
       )}
       <group ref={visualRef}>
-        {!useFallbackSoldierMesh ? (
+        {soldierScene ? (
           <primitive object={soldierScene} />
         ) : (
           <group position={[0, 9, 0]}>
@@ -4731,6 +5475,7 @@ const EntityHouse = memo(({ index, entitiesRef }) => {
   const smokeMeshes = useRef([]);
   const collapseProgress = useRef(0);
   const fallDir = useRef(Math.random() * Math.PI * 2);
+  const frameSkip = useRef(0);
   const [assetReady, setAssetReady] = useState(Boolean(worldPropsAssetCache.scene));
   const [assetFailed, setAssetFailed] = useState(Boolean(worldPropsAssetCache.error));
   const entity = entitiesRef.current[index];
@@ -4809,7 +5554,7 @@ const EntityHouse = memo(({ index, entitiesRef }) => {
   useEffect(() => () => disposeClonedMaterials(brokenModel), [brokenModel]);
   useEffect(() => () => disposeClonedMaterials(ruinedModel), [ruinedModel]);
 
-  useFrame((_, delta) => {
+  useFrame((state, delta) => {
     const p = entitiesRef.current[index];
     if (!p || p.dead) {
       if (group.current) group.current.visible = false;
@@ -4843,14 +5588,18 @@ const EntityHouse = memo(({ index, entitiesRef }) => {
         if (ruined.current) ruined.current.visible = isRuinedState;
       }
 
-      smokeMeshes.current.forEach((sm, i) => {
-        if (!sm) return;
-        sm.visible = true;
-        const t = (Date.now() * 0.0009 + i * 0.8) % 3.4;
-        sm.position.y = sm.userData.baseY + t * 6;
-        sm.scale.setScalar(sm.userData.baseScale + t * 0.35);
-        if (sm.material) sm.material.opacity = Math.max(0, 0.36 - t * 0.08);
-      });
+      frameSkip.current = (frameSkip.current + 1) % 2;
+      if (frameSkip.current === 0) {
+        const t0 = state.clock.elapsedTime;
+        smokeMeshes.current.forEach((sm, i) => {
+          if (!sm) return;
+          sm.visible = true;
+          const t = (t0 * 0.9 + i * 0.8) % 3.4;
+          sm.position.y = sm.userData.baseY + t * 6;
+          sm.scale.setScalar(sm.userData.baseScale + t * 0.35);
+          if (sm.material) sm.material.opacity = Math.max(0, 0.36 - t * 0.08);
+        });
+      }
     } else {
       if (intact.current) intact.current.visible = true;
       if (broken.current) broken.current.visible = false;
@@ -4989,11 +5738,14 @@ const EntityTree = memo(({ index, entitiesRef }) => {
     if (!assetReady || !worldPropsAssetCache.scene || !entity) return null;
     const clone = cloneNamedGlbGroup(worldPropsAssetCache.scene, isPine ? 'tree_pine' : 'tree_broadleaf');
     tintPropClone(clone, {
-      tree_trunk: entity.trunkColor || '#7c4a22',
-      tree_root: '#4b2e16',
-      tree_branch: entity.trunkColor || '#7c4a22',
-      tree_canopy: entity.canopyColor || entity.color || '#166534',
-      tree_canopy_accent: entity.canopyAccent || entity.color || '#22c55e'
+      tree_trunk: entity.trunkColor || '#a66a3a',
+      tree_root: '#704626',
+      tree_branch: entity.trunkColor || '#a66a3a',
+      tree_canopy: entity.canopyColor || entity.color || '#2f855a',
+      tree_canopy_accent: entity.canopyAccent || entity.color || '#4ade80'
+    }, {
+      tree_canopy: 0.08,
+      tree_canopy_accent: 0.14
     });
     return clone;
   }, [assetReady, isPine, entity?.trunkColor, entity?.canopyColor, entity?.canopyAccent, entity?.color]);
@@ -5002,10 +5754,14 @@ const EntityTree = memo(({ index, entitiesRef }) => {
     if (!assetReady || !worldPropsAssetCache.scene || !entity) return null;
     const clone = cloneNamedGlbGroup(worldPropsAssetCache.scene, isPine ? 'tree_broken_pine' : 'tree_broken_broadleaf');
     tintPropClone(clone, {
-      tree_trunk: '#45210b',
-      tree_fallen_trunk: '#5b2d0f',
-      tree_canopy: entity.canopyColor || entity.color || '#166534',
-      tree_canopy_accent: entity.canopyAccent || entity.color || '#22c55e'
+      tree_trunk: entity.trunkColor || '#8a542b',
+      tree_fallen_trunk: entity.trunkColor || '#9b6236',
+      tree_splinter: entity.trunkColor || '#a66a3a',
+      tree_canopy: entity.canopyColor || entity.color || '#2f855a',
+      tree_canopy_accent: entity.canopyAccent || entity.color || '#4ade80'
+    }, {
+      tree_canopy: 0.08,
+      tree_canopy_accent: 0.14
     });
     return clone;
   }, [assetReady, isPine, entity?.canopyColor, entity?.canopyAccent, entity?.color]);
@@ -5114,294 +5870,6 @@ const EntityTree = memo(({ index, entitiesRef }) => {
   );
 });
 
-const STREET_PROP_ASSET_NAMES = {
-  lamp: 'prop_street_lamp',
-  pole: 'prop_utility_pole',
-  sign: 'prop_street_sign',
-  barrier: 'prop_road_barrier',
-  crate: 'prop_supply_crate',
-  wreck: 'prop_street_wreck'
-};
-
-const hashStableString = (value) => {
-  const text = String(value || '');
-  let hash = 2166136261;
-  for (let i = 0; i < text.length; i++) {
-    hash ^= text.charCodeAt(i);
-    hash = Math.imul(hash, 16777619);
-  }
-  return hash >>> 0;
-};
-
-const pseudoRandomFromSeed = (seed, offset = 0) => {
-  const raw = Math.sin((seed + 1) * 12.9898 + offset * 78.233) * 43758.5453;
-  return raw - Math.floor(raw);
-};
-
-const getHouseBasisVectors = (house) => {
-  const yaw = house?.rotation || 0;
-  return {
-    forwardX: Math.sin(yaw),
-    forwardZ: Math.cos(yaw),
-    rightX: Math.cos(yaw),
-    rightZ: -Math.sin(yaw)
-  };
-};
-
-const clampStreetPropPosition = (x, z, padding = 80) => ({
-  x: Math.max(-HALF_WORLD_WIDTH + padding, Math.min(HALF_WORLD_WIDTH - padding, x)),
-  z: Math.max(-HALF_WORLD_DEPTH + padding, Math.min(HALF_WORLD_DEPTH - padding, z))
-});
-
-const getStreetPropThemePalette = (themeName) => {
-  if (themeName === 'city') {
-    return {
-      palette: {
-        street_metal: '#475569',
-        street_emissive: '#fef3c7',
-        street_panel: '#2563eb',
-        street_warning: '#f97316',
-        street_wood: '#8b5e34',
-        street_crate: '#6b4423',
-        street_tarp: '#334155',
-        street_glass: '#93c5fd',
-        street_wreck: '#7f1d1d'
-      },
-      emissive: {
-        street_emissive: 0.52,
-        street_glass: 0.1
-      }
-    };
-  }
-  if (themeName === 'militarybase') {
-    return {
-      palette: {
-        street_metal: '#4b5563',
-        street_emissive: '#fde68a',
-        street_panel: '#365314',
-        street_warning: '#d97706',
-        street_wood: '#5b3a1a',
-        street_crate: '#556b2f',
-        street_tarp: '#1f2937',
-        street_glass: '#7dd3fc',
-        street_wreck: '#4b5563'
-      },
-      emissive: {
-        street_emissive: 0.42,
-        street_glass: 0.08
-      }
-    };
-  }
-  return {
-    palette: {
-      street_metal: '#64748b',
-      street_emissive: '#fde68a',
-      street_panel: '#1d4ed8',
-      street_warning: '#f59e0b',
-      street_wood: '#7c4a22',
-      street_crate: '#8b5e34',
-      street_tarp: '#475569',
-      street_glass: '#93c5fd',
-      street_wreck: '#7f1d1d'
-    },
-    emissive: {
-      street_emissive: 0.46,
-      street_glass: 0.1
-    }
-  };
-};
-
-const pushStreetPropPlacement = (placements, house, themeName, asset, seed, variantIndex = 0) => {
-  const { forwardX, forwardZ, rightX, rightZ } = getHouseBasisVectors(house);
-  const footprint = 24 + (house.scale || 1) * 10 + (house.style === 'tower' ? 18 : 0);
-  const sideSign = pseudoRandomFromSeed(seed, 7 + variantIndex) > 0.5 ? 1 : -1;
-  let forwardDistance = footprint;
-  let lateralDistance = 0;
-  let rotationY = house.rotation || 0;
-  let scale = 1;
-
-  if (asset === 'lamp') {
-    forwardDistance = footprint + 12 + pseudoRandomFromSeed(seed, 11 + variantIndex) * 18;
-    lateralDistance = sideSign * (footprint * 0.7 + 10 + pseudoRandomFromSeed(seed, 13 + variantIndex) * 16);
-    rotationY = pseudoRandomFromSeed(seed, 17 + variantIndex) * Math.PI * 2;
-    scale = 0.92 + pseudoRandomFromSeed(seed, 19 + variantIndex) * 0.22;
-  } else if (asset === 'pole') {
-    forwardDistance = footprint + 18 + pseudoRandomFromSeed(seed, 23 + variantIndex) * 26;
-    lateralDistance = sideSign * (footprint + 14 + pseudoRandomFromSeed(seed, 29 + variantIndex) * 18);
-    rotationY = (house.rotation || 0) + (pseudoRandomFromSeed(seed, 31 + variantIndex) - 0.5) * 0.18;
-    scale = 0.95 + pseudoRandomFromSeed(seed, 37 + variantIndex) * 0.28;
-  } else if (asset === 'sign') {
-    forwardDistance = footprint + 8 + pseudoRandomFromSeed(seed, 41 + variantIndex) * 14;
-    lateralDistance = sideSign * (footprint * 0.55 + 4 + pseudoRandomFromSeed(seed, 43 + variantIndex) * 10);
-    rotationY = (house.rotation || 0) + (sideSign > 0 ? Math.PI / 2 : -Math.PI / 2);
-    scale = 0.88 + pseudoRandomFromSeed(seed, 47 + variantIndex) * 0.16;
-  } else if (asset === 'barrier') {
-    forwardDistance = footprint + 14 + pseudoRandomFromSeed(seed, 53 + variantIndex) * 16;
-    lateralDistance = sideSign * (6 + pseudoRandomFromSeed(seed, 59 + variantIndex) * 10);
-    rotationY = (house.rotation || 0) + Math.PI / 2 + (pseudoRandomFromSeed(seed, 61 + variantIndex) - 0.5) * 0.16;
-    scale = 0.92 + pseudoRandomFromSeed(seed, 67 + variantIndex) * 0.18;
-  } else if (asset === 'crate') {
-    forwardDistance = footprint * (themeName === 'militarybase' ? 0.18 : -0.08) + pseudoRandomFromSeed(seed, 71 + variantIndex) * 12;
-    lateralDistance = sideSign * (footprint * 0.72 + 5 + pseudoRandomFromSeed(seed, 73 + variantIndex) * 14);
-    rotationY = pseudoRandomFromSeed(seed, 79 + variantIndex) * Math.PI * 2;
-    scale = 0.86 + pseudoRandomFromSeed(seed, 83 + variantIndex) * 0.26;
-  } else if (asset === 'wreck') {
-    forwardDistance = footprint + 26 + pseudoRandomFromSeed(seed, 89 + variantIndex) * 26;
-    lateralDistance = sideSign * (footprint + 10 + pseudoRandomFromSeed(seed, 97 + variantIndex) * 22);
-    rotationY = (house.rotation || 0) + Math.PI / 2 + (pseudoRandomFromSeed(seed, 101 + variantIndex) - 0.5) * 0.7;
-    scale = 0.9 + pseudoRandomFromSeed(seed, 103 + variantIndex) * 0.32;
-  }
-
-  const worldX = house.x + forwardX * forwardDistance + rightX * lateralDistance;
-  const worldZ = house.z + forwardZ * forwardDistance + rightZ * lateralDistance;
-  const clamped = clampStreetPropPosition(worldX, worldZ);
-  placements.push({
-    key: `${house.id}-${asset}-${variantIndex}`,
-    asset,
-    x: clamped.x,
-    y: getTerrainHeight(clamped.x, clamped.z),
-    z: clamped.z,
-    rotationY,
-    scale
-  });
-};
-
-const createStreetPropPlacements = (houses, themeName = 'village') => {
-  if (!Array.isArray(houses) || !houses.length) return [];
-
-  const sortedHouses = [...houses].sort((a, b) => String(a.id).localeCompare(String(b.id)));
-  const placements = [];
-  const primaryPools = {
-    village: ['lamp', 'lamp', 'sign', 'crate', 'pole', 'barrier'],
-    city: ['lamp', 'lamp', 'pole', 'sign', 'barrier', 'wreck'],
-    militarybase: ['barrier', 'crate', 'crate', 'pole', 'lamp', 'wreck']
-  };
-  const secondaryChances = {
-    village: 0.26,
-    city: 0.34,
-    militarybase: 0.42
-  };
-  const secondaryPools = {
-    village: ['crate', 'sign', 'lamp'],
-    city: ['barrier', 'sign', 'wreck'],
-    militarybase: ['crate', 'barrier', 'pole']
-  };
-  const primaryPool = primaryPools[themeName] || primaryPools.village;
-  const secondaryPool = secondaryPools[themeName] || secondaryPools.village;
-  const secondaryChance = secondaryChances[themeName] ?? secondaryChances.village;
-
-  sortedHouses.forEach((house, houseIndex) => {
-    const seed = hashStableString(`${themeName}:${house.id}:${houseIndex}`);
-    const primaryAsset = primaryPool[Math.floor(pseudoRandomFromSeed(seed, 1) * primaryPool.length) % primaryPool.length];
-    pushStreetPropPlacement(placements, house, themeName, primaryAsset, seed, 0);
-
-    if (pseudoRandomFromSeed(seed, 2) < secondaryChance) {
-      const secondaryAsset = secondaryPool[Math.floor(pseudoRandomFromSeed(seed, 3) * secondaryPool.length) % secondaryPool.length];
-      if (secondaryAsset !== primaryAsset || themeName === 'militarybase') {
-        pushStreetPropPlacement(placements, house, themeName, secondaryAsset, seed, 1);
-      }
-    }
-  });
-
-  return placements;
-};
-
-const StaticStreetProps = memo(({ entitiesRef, themeConfig }) => {
-  const [assetReady, setAssetReady] = useState(Boolean(worldPropsAssetCache.scene));
-  const [assetFailed, setAssetFailed] = useState(Boolean(worldPropsAssetCache.error));
-  const [houseSnapshot, setHouseSnapshot] = useState([]);
-  const themeName = themeConfig?.name || 'village';
-
-  useEffect(() => {
-    let cancelled = false;
-    if (!assetReady && !assetFailed) {
-      loadWorldPropsAsset()
-        .then(() => {
-          if (!cancelled) setAssetReady(true);
-        })
-        .catch(() => {
-          if (!cancelled) setAssetFailed(true);
-        });
-    }
-    return () => {
-      cancelled = true;
-    };
-  }, [assetReady, assetFailed]);
-
-  useEffect(() => {
-    if (typeof window === 'undefined') return undefined;
-    const rafId = window.requestAnimationFrame(() => {
-      const nextSnapshot = (entitiesRef?.current || [])
-        .filter(entity => entity?.type === 'house' && !entity.dead)
-        .map((house) => ({
-          id: house.id,
-          x: house.x,
-          z: house.z,
-          rotation: house.rotation || 0,
-          scale: house.scale || 1,
-          scaleY: house.scaleY || 1,
-          style: house.style || 'gable'
-        }));
-      setHouseSnapshot(nextSnapshot);
-    });
-    return () => {
-      window.cancelAnimationFrame(rafId);
-    };
-  }, [entitiesRef, themeName]);
-
-  const placements = useMemo(
-    () => createStreetPropPlacements(houseSnapshot, themeName),
-    [houseSnapshot, themeName]
-  );
-
-  const paletteConfig = useMemo(
-    () => getStreetPropThemePalette(themeName),
-    [themeName]
-  );
-
-  const themedProps = useMemo(() => {
-    if (!assetReady || assetFailed || !worldPropsAssetCache.scene) return [];
-
-    return placements.map((placement) => {
-      const assetName = STREET_PROP_ASSET_NAMES[placement.asset];
-      if (!assetName) return null;
-      const clone = cloneNamedGlbGroup(worldPropsAssetCache.scene, assetName);
-      if (!clone) return null;
-      tintPropClone(clone, paletteConfig.palette, paletteConfig.emissive);
-      clone.traverse((node) => {
-        if (!node.isMesh) return;
-        node.castShadow = true;
-        node.receiveShadow = true;
-      });
-      return {
-        ...placement,
-        object: clone
-      };
-    }).filter(Boolean);
-  }, [assetReady, assetFailed, placements, paletteConfig]);
-
-  useEffect(() => () => {
-    themedProps.forEach((entry) => disposeClonedMaterials(entry.object));
-  }, [themedProps]);
-
-  if (!themedProps.length) return null;
-
-  return (
-    <group>
-      {themedProps.map((entry) => (
-        <group
-          key={entry.key}
-          position={[entry.x, entry.y, entry.z]}
-          rotation={[0, entry.rotationY, 0]}
-          scale={[entry.scale, entry.scale, entry.scale]}
-        >
-          <primitive object={entry.object} />
-        </group>
-      ))}
-    </group>
-  );
-});
-
 // Corpse - dead person/soldier remains on ground
 const EntityCorpse = memo(({ entityId, index, entitiesRef, entityLookupRef }) => {
   const p = getTrackedEntity({ entitiesRef, entityLookupRef, entityId, index });
@@ -5436,7 +5904,7 @@ const EntityKaijuCorpse = memo(({ entityId, index, entitiesRef, entityLookupRef 
   const tone = p.variant === 'octopus'
     ? '#581c87'
     : p.variant === 'spider'
-    ? '#111827'
+    ? '#3d4f65'
     : p.variant === 'beetle'
     ? '#78350f'
     : p.variant === 'wyrm'
@@ -5486,6 +5954,7 @@ const EntityScorch = memo(({ entityId, index, entitiesRef, entityLookupRef }) =>
   const heatRef = useRef();
   const smokeRefs = useRef([]);
   const flameRefs = useRef([]);
+  const frameSkip = useRef(0);
 
   const radius = initial.radius || 40;
   const smokeCount = Math.max(0, Math.min(10, initial.smokeCount ?? 6));
@@ -5569,11 +6038,18 @@ const EntityScorch = memo(({ entityId, index, entitiesRef, entityLookupRef }) =>
     }
 
     flameRefs.current.forEach((flame, i) => {
-      if (!flame || !flame.material) return;
+      if (!flame) { return; }
       const data = flameData[i];
       const active = flameFade > 0.02 && !!data;
       flame.visible = active;
-      if (!active) return;
+    });
+
+    frameSkip.current = (frameSkip.current + 1) % 2;
+    if (frameSkip.current === 0) {
+    flameRefs.current.forEach((flame, i) => {
+      if (!flame || !flame.material) return;
+      const data = flameData[i];
+      if (!data || flameFade <= 0.02) return;
       const flicker = 0.75 + Math.sin(state.clock.elapsedTime * 9 + data.phase) * 0.16 + Math.cos(state.clock.elapsedTime * 6.5 + i) * 0.08;
       flame.position.set(data.x, 2.4 + flicker * 1.6, data.z);
       flame.rotation.y = data.rotation + Math.sin(state.clock.elapsedTime * 1.2 + data.phase) * 0.24;
@@ -5597,6 +6073,7 @@ const EntityScorch = memo(({ entityId, index, entitiesRef, entityLookupRef }) =>
       smoke.scale.set(scale, scale * 1.24, scale);
       smoke.material.opacity = data.opacity * Math.max(smokeFade, flameFade * 0.65) * lifeFade * (1 - rise * 0.72);
     });
+    } // end frameSkip
   });
 
   return (
@@ -6459,7 +6936,7 @@ const EntityPlane = memo(({ entityId, index, entitiesRef, entityLookupRef }) => 
     [0, 1, 2, 3].forEach((i) => {
       const prop = modelNodesRef.current[`bomber_prop_${i}`];
       if (!prop) return;
-      prop.rotation.x += delta * (28 + i * 2);
+      prop.rotation.x = time * (52 + i * 4) + p.flightPhase * 0.6 + i * 0.35;
     });
   });
   return (
@@ -6580,7 +7057,7 @@ const EntityBomb = memo(({ entityId, index, entitiesRef, entityLookupRef }) => {
   );
 });
 
-const NUKE_CLOUD_GLB_PATH = '/fallout/nuke_cloud.glb';
+const NUKE_CLOUD_GLB_PATH = '/fallout/nuke_cloud.glb?v=20260404d';
 const NUKE_CLOUD_MAX_AGE = 210;
 const nukeCloudAssetCache = {
   scene: null,
@@ -6651,12 +7128,34 @@ const cloneNukeCloudScene = (scene) => {
   return clone;
 };
 
+// ─── Robust GLTFLoader helper ────────────────────────────────────────────────
+// Creates a GLTFLoader that forces TextureLoader (uses <img> elements) instead
+// of ImageBitmapLoader (uses fetch() which service workers can intercept on
+// blob: URLs).  This eliminates "Couldn't load texture blob:..." errors.
+const createRobustGLTFLoader = () => {
+  const loader = new GLTFLoader();
+  const origParse = loader.parse.bind(loader);
+  loader.parse = function (data, path, onLoad, onError) {
+    // GLTFParser constructor (called synchronously inside parse) checks
+    // createImageBitmap to choose between ImageBitmapLoader and TextureLoader.
+    // Hide createImageBitmap for the duration of the synchronous constructor,
+    // then restore it immediately.  The parser snapshots its textureLoader
+    // choice so all later async texture loads use TextureLoader (which loads
+    // via <img> elements and never goes through service worker fetch events).
+    const saved = typeof self !== 'undefined' ? self.createImageBitmap : undefined;
+    if (typeof self !== 'undefined') self.createImageBitmap = undefined;
+    origParse(data, path, onLoad, onError);
+    if (typeof self !== 'undefined') self.createImageBitmap = saved;
+  };
+  return loader;
+};
+
 const loadNukeCloudAsset = () => {
   if (typeof window === 'undefined') return Promise.resolve(null);
   if (nukeCloudAssetCache.scene) return Promise.resolve(nukeCloudAssetCache.scene);
   if (nukeCloudAssetCache.promise) return nukeCloudAssetCache.promise;
 
-  const loader = new GLTFLoader();
+  const loader = createRobustGLTFLoader();
   nukeCloudAssetCache.promise = loader.loadAsync(NUKE_CLOUD_GLB_PATH)
     .then((gltf) => {
       nukeCloudAssetCache.scene = gltf.scene;
@@ -6674,17 +7173,14 @@ const loadNukeCloudAsset = () => {
   return nukeCloudAssetCache.promise;
 };
 
-const WORLD_PROPS_GLB_PATH = '/fallout/world_props.glb';
+const WORLD_PROPS_GLB_PATH = '/fallout/world_props.glb?v=20260404b';
 const worldPropsAssetCache = {
   scene: null,
   promise: null,
   error: null
 };
 
-const globalShaderUniforms = {
-  time: { value: 0 },
-  pollution: { value: 0 }
-};
+const globalShaderUniforms = { time: { value: 0 } };
 
 const enhanceMaterialWithAliveShader = (material) => {
   if (!material) return material;
@@ -6693,9 +7189,27 @@ const enhanceMaterialWithAliveShader = (material) => {
   clone.depthWrite = true;
   clone.depthTest = true;
 
+  // ── CRITICAL: The customProgramCacheKey MUST encode which texture slots
+  // are active.  Three.js reuses compiled shader programs by this key.
+  // If a map-less material compiles first with the same key, the compiled
+  // program won't sample textures — and every later material sharing that
+  // key will also be textureless, even if it has a .map assigned.
+  clone.customProgramCacheKey = () => {
+    let key = 'alive-v3';
+    if (clone.map) key += '_map';
+    if (clone.normalMap) key += '_nrm';
+    if (clone.roughnessMap) key += '_rgh';
+    if (clone.metalnessMap) key += '_met';
+    if (clone.emissiveMap) key += '_ems';
+    if (clone.aoMap) key += '_ao';
+    if (clone.bumpMap) key += '_bmp';
+    if (clone.alphaMap) key += '_alp';
+    if (clone.transparent) key += '_t';
+    return key;
+  };
+
   clone.onBeforeCompile = (shader) => {
     shader.uniforms.globalTime = globalShaderUniforms.time;
-    shader.uniforms.globalPollution = globalShaderUniforms.pollution;
 
     // ── Vertex: expose world-space position and normal ───────────────────
     shader.vertexShader = shader.vertexShader.replace(
@@ -6711,63 +7225,109 @@ const enhanceMaterialWithAliveShader = (material) => {
        vWNorm = normalize(mat3(modelMatrix) * normal);`
     );
 
-    // ── Fragment: purely ADDITIVE enhancement — never darken the base ───
+    // ── Fragment: subtle realism pass that preserves the original PBR look ──
     shader.fragmentShader = shader.fragmentShader.replace(
       '#include <common>',
       `#include <common>
        uniform float globalTime;
-       uniform float globalPollution;
        varying vec3 vWPos;
-       varying vec3 vWNorm;
-
-       float aliveNoise(vec2 p) {
-         return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
-       }`
+       varying vec3 vWNorm;`
     );
 
     shader.fragmentShader = shader.fragmentShader.replace(
       '#include <dithering_fragment>',
       `#include <dithering_fragment>
 
-       // ── Preserve 100% of Three.js PBR output (textures, roughness, etc.) ──
+       // ── Preserve the original Three.js PBR output (textures, roughness, etc.)
        vec3 base = gl_FragColor.rgb;
        vec3 viewDir = normalize(cameraPosition - vWPos);
-       vec3 sunDir = normalize(vec3(0.55, 1.0, 0.4));
-       vec3 halfDir = normalize(sunDir + viewDir);
+       vec3 upDir = vec3(0.0, 1.0, 0.0);
+       vec3 sunDir = normalize(vec3(0.42, 0.9, 0.28));
 
        float cosTheta = max(dot(vWNorm, viewDir), 0.0);
-       float fresnel  = pow(1.0 - cosTheta, 4.0);
-       vec3 rimTint   = mix(vec3(0.58, 0.72, 0.95), vec3(1.0, 0.58, 0.26), globalPollution * 0.85);
-       vec3 rimAdd    = rimTint * fresnel * (0.18 + globalPollution * 0.08);
+       float fresnel = pow(1.0 - cosTheta, 5.0);
+       float upLight = clamp(dot(vWNorm, upDir) * 0.5 + 0.5, 0.0, 1.0);
+       float sunFacing = max(dot(vWNorm, sunDir), 0.0);
+       float backScatter = pow(max(dot(-viewDir, sunDir), 0.0), 2.0) * fresnel;
 
-       float hemiMix = clamp(vWNorm.y * 0.5 + 0.5, 0.0, 1.0);
-       vec3 skyTint  = mix(vec3(0.48, 0.58, 0.74), vec3(0.74, 0.42, 0.2), globalPollution);
-       vec3 groundTint = mix(vec3(0.16, 0.13, 0.1), vec3(0.18, 0.12, 0.08), globalPollution);
-       vec3 hemiAdd = mix(groundTint, skyTint, hemiMix) * 0.12;
+       vec3 halfDir = normalize(sunDir + viewDir);
+       float spec = pow(max(dot(vWNorm, halfDir), 0.0), 64.0);
 
-       float wrap = pow(max(dot(vWNorm, sunDir) * 0.5 + 0.5, 0.0), 1.6);
-       vec3 wrapAdd = vec3(1.0, 0.9, 0.76) * wrap * 0.06;
+       // Gentle ambient shaping so large forms read better without looking painted
+       vec3 skyFill = vec3(0.16, 0.22, 0.30) * pow(upLight, 1.35) * 0.14;
+       vec3 groundBounce = vec3(0.10, 0.07, 0.04) * pow(1.0 - upLight, 1.7) * 0.08;
+       vec3 sunTint = vec3(1.0, 0.96, 0.9) * sunFacing * 0.07;
+       vec3 rimTint = vec3(0.58, 0.68, 0.78) * fresnel * (0.045 + backScatter * 0.08);
+       vec3 specAdd = vec3(1.0, 0.98, 0.93) * spec * (0.16 + sunFacing * 0.12);
 
-       float spec = pow(max(dot(vWNorm, halfDir), 0.0), 72.0);
-       float micro = aliveNoise(vWPos.xz * 0.35 + globalTime * 0.025);
-       vec3 specAdd = vec3(1.0, 0.97, 0.88) * spec * (0.18 + micro * 0.16);
+       // Subtle world-space breakup to stop giant meshes from reading too smooth
+       float grainA = sin(vWPos.x * 0.12 + vWPos.z * 0.18 + globalTime * 0.05);
+       float grainB = sin(vWPos.y * 0.2 - vWPos.x * 0.11);
+       float grain = grainA * grainB * 0.5 + 0.5;
+       float luminance = dot(base, vec3(0.2126, 0.7152, 0.0722));
+       vec3 poreVariation = base * ((grain - 0.5) * (0.035 + (1.0 - luminance) * 0.045));
 
-       float heat = sin(globalTime * 1.4 + vWPos.x * 0.022 + vWPos.z * 0.019) * 0.5 + 0.5;
-       vec3 heatAdd = heat * mix(vec3(0.02, 0.025, 0.03), vec3(0.05, 0.03, 0.015), globalPollution) * 0.9;
+       vec3 finalColor = base + skyFill + groundBounce + sunTint + rimTint + specAdd + poreVariation;
 
-       float dist = length(cameraPosition - vWPos);
-       float haze = smoothstep(700.0, 2600.0, dist);
-       vec3 hazeTint = mix(vec3(0.72, 0.8, 0.9), vec3(0.78, 0.54, 0.36), globalPollution);
-
-       vec3 finalColor = base + rimAdd + hemiAdd + wrapAdd + specAdd + heatAdd;
-       finalColor = mix(finalColor, finalColor * 0.94 + hazeTint * 0.18, haze * 0.18);
-
-       finalColor = min(finalColor, vec3(1.9));
+       // Soft HDR clamp — keep highlights punchy without looking neon
+       finalColor = min(finalColor, vec3(1.55));
 
        gl_FragColor = vec4(finalColor, gl_FragColor.a);
       `
     );
   };
+  clone.needsUpdate = true;
+  return clone;
+};
+
+const cloneGlbMaterialForRender = (material, options = {}) => {
+  if (!material) return material;
+  const { applyAliveShaderToTextured = false } = options;
+
+  const hasTextureMap = Boolean(
+    material.map ||
+    material.normalMap ||
+    material.roughnessMap ||
+    material.metalnessMap ||
+    material.emissiveMap ||
+    material.aoMap ||
+    material.bumpMap ||
+    material.alphaMap
+  );
+
+  if (!hasTextureMap) {
+    return enhanceMaterialWithAliveShader(material);
+  }
+
+  const clone = material.clone();
+  clone.depthWrite = true;
+  clone.depthTest = true;
+
+  if (clone.map) {
+    clone.map.colorSpace = THREE.SRGBColorSpace;
+    clone.map.anisotropy = 8;
+    clone.map.generateMipmaps = true;
+    clone.map.minFilter = THREE.LinearMipmapLinearFilter;
+    clone.map.magFilter = THREE.LinearFilter;
+    clone.map.needsUpdate = true;
+  }
+  if (clone.emissiveMap) {
+    clone.emissiveMap.colorSpace = THREE.SRGBColorSpace;
+    clone.emissiveMap.anisotropy = 8;
+    clone.emissiveMap.needsUpdate = true;
+  }
+  if (clone.normalMap) clone.normalMap.needsUpdate = true;
+  if (clone.roughnessMap) clone.roughnessMap.needsUpdate = true;
+  if (clone.metalnessMap) clone.metalnessMap.needsUpdate = true;
+  if (clone.aoMap) clone.aoMap.needsUpdate = true;
+  if (clone.bumpMap) clone.bumpMap.needsUpdate = true;
+  if (clone.alphaMap) clone.alphaMap.needsUpdate = true;
+
+  if (applyAliveShaderToTextured) {
+    return enhanceMaterialWithAliveShader(clone);
+  }
+
+  clone.needsUpdate = true;
   return clone;
 };
 
@@ -6781,7 +7341,19 @@ const makeGeometryAlive = (object) => {
 // React component wrapper for standard materials to inject the alive shader
 const AliveMaterial = memo(({ color, roughness = 0.8, metalness = 0.2, emissive, emissiveIntensity, side = THREE.FrontSide, transparent = false, opacity = 1 }) => {
   const material = useMemo(() => {
-    const mat = new THREE.MeshStandardMaterial({ color, roughness, metalness, emissive, emissiveIntensity, side, transparent, opacity });
+    const materialConfig = {
+      color,
+      roughness,
+      metalness,
+      side,
+      transparent,
+      opacity
+    };
+
+    if (emissive !== undefined) materialConfig.emissive = emissive;
+    if (emissiveIntensity !== undefined) materialConfig.emissiveIntensity = emissiveIntensity;
+
+    const mat = new THREE.MeshStandardMaterial(materialConfig);
     return enhanceMaterialWithAliveShader(mat);
   }, [color, roughness, metalness, emissive, emissiveIntensity, side, transparent, opacity]);
 
@@ -6792,7 +7364,7 @@ const AliveMaterial = memo(({ color, roughness = 0.8, metalness = 0.2, emissive,
   return <primitive object={material} attach="material" />;
 });
 
-const cloneNamedGlbGroup = (scene, name) => {
+const cloneNamedGlbGroup = (scene, name, materialOptions = {}) => {
   const source = scene?.getObjectByName?.(name);
   if (!source) return null;
   const clone = source.clone(true);
@@ -6807,9 +7379,9 @@ const cloneNamedGlbGroup = (scene, name) => {
     object.frustumCulled = false;
     makeGeometryAlive(object);
     if (Array.isArray(object.material)) {
-      object.material = object.material.map(enhanceMaterialWithAliveShader);
+      object.material = object.material.map((material) => cloneGlbMaterialForRender(material, materialOptions));
     } else {
-      object.material = enhanceMaterialWithAliveShader(object.material);
+      object.material = cloneGlbMaterialForRender(object.material, materialOptions);
     }
   });
   clone.userData.namedNodes = namedNodes;
@@ -6908,9 +7480,9 @@ const cloneGlbSceneRoot = (scene) => {
     object.frustumCulled = false;
     makeGeometryAlive(object);
     if (Array.isArray(object.material)) {
-      object.material = object.material.map(enhanceMaterialWithAliveShader);
+      object.material = object.material.map(cloneGlbMaterialForRender);
     } else {
-      object.material = enhanceMaterialWithAliveShader(object.material);
+      object.material = cloneGlbMaterialForRender(object.material);
     }
   });
   clone.userData.namedNodes = namedNodes;
@@ -6960,7 +7532,7 @@ const loadWorldPropsAsset = () => {
   if (worldPropsAssetCache.scene) return Promise.resolve(worldPropsAssetCache.scene);
   if (worldPropsAssetCache.promise) return worldPropsAssetCache.promise;
 
-  const loader = new GLTFLoader();
+  const loader = createRobustGLTFLoader();
   worldPropsAssetCache.promise = loader.loadAsync(WORLD_PROPS_GLB_PATH)
     .then((gltf) => {
       worldPropsAssetCache.scene = gltf.scene;
@@ -6978,38 +7550,32 @@ const loadWorldPropsAsset = () => {
   return worldPropsAssetCache.promise;
 };
 
-const AIRSTRIKE_ASSETS_GLB_PATH = '/fallout/airstrike_assets.glb';
+const AIRSTRIKE_ASSETS_GLB_PATH = '/fallout/airstrike_assets.glb?v=20260403c';
 const airstrikeAssetCache = {
   scene: null,
   promise: null,
   error: null
 };
-const TANK_TEST_GLB_PATH = '/fallout/tank.glb';
-const tankTestAssetCache = {
-  scene: null,
-  promise: null,
-  error: null
-};
 
-const BASE_STRUCTURES_GLB_PATH = '/fallout/base_structures.glb';
+const BASE_STRUCTURES_GLB_PATH = '/fallout/base_structures.glb?v=20260404c';
 const baseStructuresAssetCache = {
   scene: null,
   promise: null,
   error: null
 };
-const COMMAND_EFFECTS_GLB_PATH = '/fallout/command_effects.glb';
+const COMMAND_EFFECTS_GLB_PATH = '/fallout/command_effects.glb?v=20260404a';
 const commandEffectsAssetCache = {
   scene: null,
   promise: null,
   error: null
 };
-const KAIJU_ASSETS_GLB_PATH = '/fallout/kaiju_assets.glb';
+const KAIJU_ASSETS_GLB_PATH = '/fallout/kaiju_assets.glb?v=20260404a';
 const kaijuAssetsAssetCache = {
   scene: null,
   promise: null,
   error: null
 };
-const HUMAN_UNITS_GLB_PATH = '/fallout/human_units.glb';
+const HUMAN_UNITS_GLB_PATH = '/fallout/human_units.glb?v=20260403c';
 const humanUnitsAssetCache = {
   scene: null,
   promise: null,
@@ -7047,7 +7613,7 @@ const loadAirstrikeAsset = () => {
   if (airstrikeAssetCache.scene) return Promise.resolve(airstrikeAssetCache.scene);
   if (airstrikeAssetCache.promise) return airstrikeAssetCache.promise;
 
-  const loader = new GLTFLoader();
+  const loader = createRobustGLTFLoader();
   airstrikeAssetCache.promise = loader.loadAsync(AIRSTRIKE_ASSETS_GLB_PATH)
     .then((gltf) => {
       airstrikeAssetCache.scene = gltf.scene;
@@ -7065,35 +7631,12 @@ const loadAirstrikeAsset = () => {
   return airstrikeAssetCache.promise;
 };
 
-const loadTankTestAsset = () => {
-  if (typeof window === 'undefined') return Promise.resolve(null);
-  if (tankTestAssetCache.scene) return Promise.resolve(tankTestAssetCache.scene);
-  if (tankTestAssetCache.promise) return tankTestAssetCache.promise;
-
-  const loader = new GLTFLoader();
-  tankTestAssetCache.promise = loader.loadAsync(TANK_TEST_GLB_PATH)
-    .then((gltf) => {
-      tankTestAssetCache.scene = gltf.scene;
-      tankTestAssetCache.error = null;
-      tankTestAssetCache.promise = null;
-      return gltf.scene;
-    })
-    .catch((error) => {
-      tankTestAssetCache.error = error;
-      tankTestAssetCache.promise = null;
-      console.error('Failed to load test tank GLB', error);
-      throw error;
-    });
-
-  return tankTestAssetCache.promise;
-};
-
 const loadBaseStructuresAsset = () => {
   if (typeof window === 'undefined') return Promise.resolve(null);
   if (baseStructuresAssetCache.scene) return Promise.resolve(baseStructuresAssetCache.scene);
   if (baseStructuresAssetCache.promise) return baseStructuresAssetCache.promise;
 
-  const loader = new GLTFLoader();
+  const loader = createRobustGLTFLoader();
   baseStructuresAssetCache.promise = loader.loadAsync(BASE_STRUCTURES_GLB_PATH)
     .then((gltf) => {
       baseStructuresAssetCache.scene = gltf.scene;
@@ -7117,7 +7660,7 @@ const loadCommandEffectsAsset = () => {
   if (commandEffectsAssetCache.promise) return commandEffectsAssetCache.promise;
   if (commandEffectsAssetCache.error) return Promise.resolve(null);
 
-  const loader = new GLTFLoader();
+  const loader = createRobustGLTFLoader();
   commandEffectsAssetCache.promise = loader.loadAsync(COMMAND_EFFECTS_GLB_PATH)
     .then((gltf) => {
       commandEffectsAssetCache.scene = gltf.scene;
@@ -7140,7 +7683,7 @@ const loadKaijuAssetsAsset = () => {
   if (kaijuAssetsAssetCache.scene) return Promise.resolve(kaijuAssetsAssetCache.scene);
   if (kaijuAssetsAssetCache.promise) return kaijuAssetsAssetCache.promise;
 
-  const loader = new GLTFLoader();
+  const loader = createRobustGLTFLoader();
   kaijuAssetsAssetCache.promise = loader.loadAsync(KAIJU_ASSETS_GLB_PATH)
     .then((gltf) => {
       kaijuAssetsAssetCache.scene = gltf.scene;
@@ -7163,7 +7706,7 @@ const loadHumanUnitsAsset = () => {
   if (humanUnitsAssetCache.scene) return Promise.resolve(humanUnitsAssetCache.scene);
   if (humanUnitsAssetCache.promise) return humanUnitsAssetCache.promise;
 
-  const loader = new GLTFLoader();
+  const loader = createRobustGLTFLoader();
   humanUnitsAssetCache.promise = loader.loadAsync(HUMAN_UNITS_GLB_PATH)
     .then((gltf) => {
       humanUnitsAssetCache.scene = gltf.scene;
@@ -7189,6 +7732,7 @@ const EntityMushroomCloud = memo(({ entityId, index, entitiesRef, entityLookupRe
   const fallbackFlashRef = useRef();
   const fallbackEmberRef = useRef();
   const lightRef = useRef();
+  const light2Ref = useRef();
   const cloudNodesRef = useRef({});
   const [assetReady, setAssetReady] = useState(Boolean(nukeCloudAssetCache.scene));
   const [assetFailed, setAssetFailed] = useState(Boolean(nukeCloudAssetCache.error));
@@ -7254,6 +7798,7 @@ const EntityMushroomCloud = memo(({ entityId, index, entitiesRef, entityLookupRe
     const blastFlash = Math.max(0, 1 - age / 16);
     const ringProgress = Math.min(1, age / 75);
     const emberGlow = Math.max(0, 1 - age / 44);
+    const fireCoreGlow = Math.max(0, 1 - age / 60);
     const time = state.clock.elapsedTime;
     const rootScale = (0.45 + Math.pow(progress, 0.85) * 4.6) * blastScale;
 
@@ -7261,50 +7806,199 @@ const EntityMushroomCloud = memo(({ entityId, index, entitiesRef, entityLookupRe
       groupRef.current.visible = true;
       groupRef.current.position.set(p.x, p.y || 0, p.z);
       groupRef.current.scale.setScalar(rootScale);
-      groupRef.current.rotation.y = Math.sin(time * 0.8 + blastScale * 0.7) * 0.035;
+      // Gentle swaying — asymmetric so it feels organic
+      groupRef.current.rotation.y = Math.sin(time * 0.6 + blastScale * 0.7) * 0.04
+        + Math.sin(time * 1.1) * 0.015;
     }
 
     const nodes = cloudNodesRef.current;
 
     if (!useFallback) {
-      const stem = nodes.nuke_stem;
+      // ── Multi-segment stem: each segment rises with staggered timing ──
+      for (let i = 0; i < 4; i++) {
+        const seg = nodes[`nuke_stem_${i}`];
+        if (!seg) continue;
+        const segProgress = Math.min(1, Math.max(0, (progress - i * 0.06) / 0.7));
+        applyBaseScale(seg, 0.5 + segProgress * 1.5, segProgress * (10 + i * 6));
+        // Each segment rotates slightly differently — turbulent pillar
+        seg.rotation.y = Math.sin(time * (0.8 + i * 0.3) + i * 1.2) * (0.04 + i * 0.02);
+        seg.rotation.x = Math.sin(time * (0.5 + i * 0.2) + i * 2.1) * 0.015;
+        setCloudOpacity(seg, fadeAlpha * (0.65 + i * 0.04));
+        // Pulse emissive intensity on stem segments
+        if (seg.material && seg.material.emissiveIntensity !== undefined) {
+          seg.material.emissiveIntensity = (0.08 + fireCoreGlow * 0.3) * (1 + Math.sin(time * 3 + i) * 0.3);
+        }
+      }
+
+      // ── Updraft smoke columns: spiral upward ──
+      for (let i = 0; i < 6; i++) {
+        const updraft = nodes[`nuke_updraft_${i}`];
+        if (!updraft) continue;
+        const uProgress = Math.min(1, Math.max(0, (progress - 0.08) / 0.65));
+        applyBaseScale(updraft, 0.3 + uProgress * 1.2, uProgress * (15 + i * 4));
+        // Spiral rotation around stem
+        updraft.rotation.y = time * (0.4 + i * 0.15) + i * (Math.PI / 3);
+        updraft.rotation.z = Math.sin(time * 1.2 + i * 0.9) * 0.06;
+        setCloudOpacity(updraft, fadeAlpha * uProgress * 0.3);
+      }
+
+      // ── Plume ──
       const plume = nodes.nuke_plume;
-      const cap = nodes.nuke_cap;
-      const ember = nodes.nuke_ember;
-      const ring = nodes.nuke_ring;
-      const flash = nodes.nuke_flash;
+      if (plume) {
+        applyBaseScale(plume, 0.72 + progress * 1.28, progress * 18);
+        plume.rotation.y = time * 0.22 + Math.sin(time * 0.7) * 0.1;
+        plume.rotation.x = Math.sin(time * 0.4) * 0.03;
+        setCloudOpacity(plume, fadeAlpha * 0.68);
+      }
 
-      applyBaseScale(stem, 0.6 + progress * 1.45, progress * 12);
-      setCloudOpacity(stem, fadeAlpha * 0.7);
+      // ── Cap — gentle wobble ──
+      const capNode = nodes.nuke_cap;
+      if (capNode) {
+        applyBaseScale(capNode, 0.76 + progress * 1.18, progress * 26);
+        capNode.rotation.y = -time * 0.14 + Math.sin(time * 0.9) * 0.06;
+        capNode.rotation.x = Math.sin(time * 0.35 + 1.5) * 0.025;
+        capNode.rotation.z = Math.sin(time * 0.42) * 0.02;
+        setCloudOpacity(capNode, fadeAlpha * 0.84);
+        // Pulsing emissive on cap
+        if (capNode.material && capNode.material.emissiveIntensity !== undefined) {
+          capNode.material.emissiveIntensity = 0.15 + fireCoreGlow * 0.2 + Math.sin(time * 2.5) * 0.06;
+        }
+      }
 
-      applyBaseScale(plume, 0.72 + progress * 1.28, progress * 18);
-      plume.rotation.y = time * 0.18;
-      setCloudOpacity(plume, fadeAlpha * 0.68);
-
-      applyBaseScale(cap, 0.76 + progress * 1.18, progress * 26);
-      cap.rotation.y = -time * 0.12;
-      setCloudOpacity(cap, fadeAlpha * 0.84);
-
+      // ── Lobes — per-lobe turbulent billowing ──
       Object.keys(nodes).forEach((name, idx) => {
         if (!name.startsWith('nuke_lobe_')) return;
         const lobe = nodes[name];
-        const wobble = Math.sin(time * 1.6 + idx) * 0.05;
-        applyBaseScale(lobe, 0.92 + progress * 0.72 + wobble, progress * (18 + idx * 2));
-        setCloudOpacity(lobe, fadeAlpha * (0.66 + idx * 0.04));
+        const lobeIdx = parseInt(name.replace('nuke_lobe_', ''), 10);
+        // Staggered growth + noise-like wobble
+        const lobePhase = lobeIdx * 0.73;
+        const lobeProg = Math.min(1, Math.max(0, (progress - lobeIdx * 0.025) / 0.8));
+        const billow = Math.sin(time * (1.4 + lobeIdx * 0.3) + lobePhase) * 0.08;
+        const billow2 = Math.sin(time * (0.9 + lobeIdx * 0.2) + lobePhase * 2.1) * 0.05;
+        applyBaseScale(lobe, 0.7 + lobeProg * 0.9 + billow, lobeProg * (18 + lobeIdx * 2.5));
+        // Each lobe independently rotates for rolling cloud look
+        lobe.rotation.y = Math.sin(time * (0.6 + lobeIdx * 0.18) + lobePhase) * 0.12;
+        lobe.rotation.x = Math.cos(time * (0.4 + lobeIdx * 0.14) + lobePhase * 1.3) * 0.08;
+        lobe.rotation.z = Math.sin(time * (0.5 + lobeIdx * 0.11) + lobePhase * 0.7) * 0.06 + billow2;
+        setCloudOpacity(lobe, fadeAlpha * (0.55 + lobeIdx * 0.04 + billow * 0.3));
       });
 
-      applyBaseScale(ember, 0.85 + emberGlow * 2.6, 0);
-      setCloudOpacity(ember, fadeAlpha * (0.28 + emberGlow * 0.56));
+      // ── Rolling smoke ring — rotates and pulses ──
+      const smokeRing = nodes.nuke_smoke_ring;
+      if (smokeRing) {
+        const srProg = Math.min(1, Math.max(0, (progress - 0.15) / 0.6));
+        applyBaseScale(smokeRing, 0.5 + srProg * 1.6, srProg * 8);
+        smokeRing.rotation.x = Math.PI / 2;
+        smokeRing.rotation.z = time * 0.35;
+        // Pulsing scale on the tube cross-section
+        const pulse = 1 + Math.sin(time * 2.8) * 0.12;
+        if (smokeRing.userData.baseScale) {
+          smokeRing.scale.y = smokeRing.userData.baseScale.y * (0.5 + srProg * 1.6) * pulse;
+        }
+        setCloudOpacity(smokeRing, fadeAlpha * srProg * 0.38);
+      }
 
-      applyBaseScale(ring, 0.48 + Math.pow(ringProgress, 0.58) * 11.5, 0);
-      ring.rotation.x = Math.PI / 2;
-      ring.position.y = 6 + Math.pow(ringProgress, 0.5) * 6;
-      setCloudOpacity(ring, fadeAlpha * (1 - ringProgress) * 0.42);
+      // ── Fire core — pulsing glow ──
+      const fireCore = nodes.nuke_fire_core;
+      if (fireCore) {
+        const corePulse = 1 + Math.sin(time * 5.5) * 0.25 + Math.sin(time * 8.2) * 0.12;
+        applyBaseScale(fireCore, (0.6 + fireCoreGlow * 2.4) * corePulse, 0);
+        setCloudOpacity(fireCore, fadeAlpha * fireCoreGlow * 0.7);
+        if (fireCore.material) {
+          fireCore.material.emissiveIntensity = fireCoreGlow * 2.5 * corePulse;
+        }
+      }
 
-      applyBaseScale(flash, 0.8 + blastFlash * 5.5, blastFlash * 10);
-      setCloudOpacity(flash, fadeAlpha * blastFlash * 0.75);
+      // ── Cap underside glow ──
+      const capGlow = nodes.nuke_cap_glow;
+      if (capGlow) {
+        const glowProg = Math.min(1, Math.max(0, (progress - 0.1) / 0.5));
+        applyBaseScale(capGlow, 0.4 + glowProg * 1.8, progress * 20);
+        capGlow.rotation.x = Math.PI / 2;
+        const glowPulse = 1 + Math.sin(time * 3.2 + 0.5) * 0.15;
+        setCloudOpacity(capGlow, fadeAlpha * fireCoreGlow * 0.5 * glowPulse);
+        if (capGlow.material) {
+          capGlow.material.emissiveIntensity = fireCoreGlow * 2.0 * glowPulse;
+        }
+      }
+
+      // ── Ember ──
+      const emberNode = nodes.nuke_ember;
+      if (emberNode) {
+        const emberPulse = 1 + Math.sin(time * 4.2) * 0.18;
+        applyBaseScale(emberNode, (0.85 + emberGlow * 2.6) * emberPulse, 0);
+        setCloudOpacity(emberNode, fadeAlpha * (0.28 + emberGlow * 0.56));
+        if (emberNode.material) {
+          emberNode.material.emissiveIntensity = emberGlow * 1.8 * emberPulse;
+        }
+      }
+
+      // ── 3 Shock rings — staggered expansion ──
+      for (let i = 0; i < 3; i++) {
+        const ring = nodes[`nuke_ring_${i}`];
+        if (!ring) continue;
+        const ringDelay = i * 0.08;
+        const rProg = Math.min(1, Math.max(0, (ringProgress - ringDelay) / (1 - ringDelay)));
+        const rScale = 0.48 + Math.pow(rProg, 0.55) * (10 + i * 3);
+        applyBaseScale(ring, rScale, 0);
+        ring.rotation.x = Math.PI / 2;
+        ring.position.y = (ring.userData.basePosition?.y || 6) + Math.pow(rProg, 0.5) * (5 + i * 2);
+        setCloudOpacity(ring, fadeAlpha * Math.max(0, 1 - rProg) * (0.45 - i * 0.08));
+      }
+
+      // ── Flash ──
+      const flashNode = nodes.nuke_flash;
+      if (flashNode) {
+        applyBaseScale(flashNode, 0.8 + blastFlash * 5.5, blastFlash * 10);
+        setCloudOpacity(flashNode, fadeAlpha * blastFlash * 0.75);
+        if (flashNode.material) {
+          flashNode.material.emissiveIntensity = blastFlash * 3.0;
+        }
+      }
+
+      // ── Ground dust skirt — expanding outward ──
+      const dustSkirt = nodes.nuke_dust_skirt;
+      if (dustSkirt) {
+        const dustProg = Math.min(1, Math.max(0, (progress - 0.02) / 0.5));
+        const dustExpand = 0.3 + Math.pow(dustProg, 0.6) * 4.5;
+        applyBaseScale(dustSkirt, dustExpand, 0);
+        dustSkirt.rotation.y = time * 0.08;
+        setCloudOpacity(dustSkirt, fadeAlpha * dustProg * 0.28 * Math.max(0, 1 - (progress - 0.3) / 0.7));
+      }
+
+      // ── Debris chunks — fly outward and tumble ──
+      for (let i = 0; i < 8; i++) {
+        const debris = nodes[`nuke_debris_${i}`];
+        if (!debris) continue;
+        const dProg = Math.min(1, Math.max(0, (progress - 0.01) / 0.4));
+        const angle = (i / 8) * Math.PI * 2 + i * 0.37;
+        const dist = (20 + (i % 3) * 10) * (1 + dProg * 3);
+        const height = (4 + (i % 4) * 8) * (1 + dProg * 1.5) * Math.max(0, 1 - dProg * 0.8);
+        debris.position.set(
+          Math.cos(angle + dProg * 0.3) * dist,
+          height,
+          Math.sin(angle + dProg * 0.3) * dist
+        );
+        // Tumbling rotation
+        debris.rotation.x = time * (2.5 + i * 0.8);
+        debris.rotation.z = time * (1.8 + i * 0.6);
+        applyBaseScale(debris, 0.8 + dProg * 0.5, 0);
+        setCloudOpacity(debris, fadeAlpha * Math.max(0, 1 - dProg * 1.3) * 0.8);
+      }
+
+      // ── Heat distortion column — subtle shimmer ──
+      const heatCol = nodes.nuke_heat_column;
+      if (heatCol) {
+        const heatProg = Math.min(1, progress / 0.6);
+        applyBaseScale(heatCol, 0.5 + heatProg * 1.2, heatProg * 12);
+        heatCol.rotation.y = time * 0.15;
+        // Shimmering opacity
+        const shimmer = 0.04 + Math.sin(time * 6) * 0.02 + Math.sin(time * 9.3) * 0.01;
+        setCloudOpacity(heatCol, fadeAlpha * fireCoreGlow * shimmer);
+      }
     }
 
+    // ── Fallback rendering (no GLB) ──
     if (fallbackStemRef.current) {
       fallbackStemRef.current.visible = true;
       fallbackStemRef.current.scale.set(0.9 + progress * 1.2, 0.6 + progress * 3.2, 0.9 + progress * 1.2);
@@ -7340,10 +8034,16 @@ const EntityMushroomCloud = memo(({ entityId, index, entitiesRef, entityLookupRe
       fallbackEmberRef.current.material.opacity = fadeAlpha * emberGlow * (cloudScene ? 0.3 : 0.54);
     }
 
+    // ── Two lights: one ground-level ember, one cap-level glow ──
     if (lightRef.current) {
       lightRef.current.position.y = (70 + progress * 180) * blastScale;
       lightRef.current.distance = 900 * blastScale;
       lightRef.current.intensity = fadeAlpha * Math.max(0, 42 * blastFlash + 12 * emberGlow);
+    }
+    if (light2Ref.current) {
+      light2Ref.current.position.y = 16 * blastScale;
+      light2Ref.current.distance = 600 * blastScale;
+      light2Ref.current.intensity = fadeAlpha * fireCoreGlow * (18 + Math.sin(time * 5) * 6);
     }
   });
 
@@ -7379,6 +8079,14 @@ const EntityMushroomCloud = memo(({ entityId, index, entitiesRef, entityLookupRe
         intensity={0}
         distance={900}
         decay={1.8}
+      />
+      <pointLight
+        ref={light2Ref}
+        position={[0, 16, 0]}
+        color="#ff5500"
+        intensity={0}
+        distance={600}
+        decay={2.0}
       />
     </group>
   );
@@ -7520,12 +8228,32 @@ const EntitySupportStrikeEffect = memo(({ entityId, index, entitiesRef, entityLo
 
   const trackedEffect = getTrackedEntity({ entitiesRef, entityLookupRef, entityId, index });
   const assetName = trackedEffect ? COMMAND_EFFECT_ASSET_NAMES[trackedEffect.kind] : null;
+
+  // Compute the clone without side effects in useMemo
   const effectScene = useMemo(() => {
     if (!assetReady || !commandEffectsAssetCache.scene || !assetName) return null;
-    const clone = cloneNamedGlbGroup(commandEffectsAssetCache.scene, assetName);
-    effectNodesRef.current = clone?.userData?.namedNodes || {};
-    return clone;
+    return cloneNamedGlbGroup(commandEffectsAssetCache.scene, assetName);
   }, [assetReady, assetName]);
+
+  // Sync effectNodesRef and reset node state each time the scene clone changes
+  useEffect(() => {
+    if (effectScene) {
+      const nodes = effectScene.userData?.namedNodes || {};
+      effectNodesRef.current = nodes;
+      // Ensure every node starts fully visible so useFrame controls opacity/scale from scratch
+      Object.values(nodes).forEach((node) => {
+        if (!node) return;
+        node.visible = true;
+        node.scale.set(1, 1, 1);
+        const mats = node.material
+          ? (Array.isArray(node.material) ? node.material : [node.material])
+          : [];
+        mats.forEach((m) => { if (m) { m.opacity = 1; m.transparent = true; } });
+      });
+    } else {
+      effectNodesRef.current = {};
+    }
+  }, [effectScene]);
 
   useEffect(() => {
     let cancelled = false;
@@ -7560,129 +8288,274 @@ const EntitySupportStrikeEffect = memo(({ entityId, index, entitiesRef, entityLo
     group.current.position.set(p.x, baseY + 0.6, p.z);
     group.current.visible = true;
 
+    // Lazy re-sync: if useEffect hasn't populated the nodes yet (first frame after mount),
+    // pull them directly from the attached effectScene so we never skip a frame.
+    if (effectScene && Object.keys(effectNodesRef.current).length === 0) {
+      effectNodesRef.current = effectScene.userData?.namedNodes || {};
+    }
+
+    // Sub-phase helper: maps overall [0,1] progress into a per-phase [0,1] value
+    const phaseP = (s, e) => THREE.MathUtils.clamp((progress - s) / Math.max(0.001, e - s), 0, 1);
+    const easOut = (t) => 1 - (1 - t) * (1 - t);
+    const easIn  = (t) => t * t;
+    const easPk  = (t) => Math.sin(t * Math.PI); // 0→peak→0
+
     if (p.kind === 'orbital_lance') {
-      const beam = effectNodesRef.current.support_orbital_lance_beam;
-      const core = effectNodesRef.current.support_orbital_lance_core;
+      // ── Phase timeline (7.5s total) ────────────────────────────────
+      //   0 → 0.18  DESCENT  – beam races down from orbit
+      //  0.18→ 0.44  IMPACT   – blinding flash, shock ring blasts
+      //  0.44→ 1.0   LINGER   – glow fades, rings slowly expand
+      const descP   = phaseP(0,    0.18);
+      const impactP = phaseP(0.18, 0.44);
+      const lingerP = phaseP(0.44, 1.0);
+
+      const beam      = effectNodesRef.current.support_orbital_lance_beam;
+      const core      = effectNodesRef.current.support_orbital_lance_core;
       const ringInner = effectNodesRef.current.support_orbital_lance_ring_inner;
       const ringOuter = effectNodesRef.current.support_orbital_lance_ring_outer;
-      const flareTop = effectNodesRef.current.support_orbital_lance_flare_top;
+      const flareTop  = effectNodesRef.current.support_orbital_lance_flare_top;
       const flareBase = effectNodesRef.current.support_orbital_lance_flare_base;
-      const impact = effectNodesRef.current.support_orbital_lance_impact;
-      const shock = effectNodesRef.current.support_orbital_lance_shock;
-      const beamPulse = 0.82 + Math.sin(time * 28) * 0.16;
-      if (beam) {
-        beam.scale.set(1 + beamPulse * 0.24, 0.42 + fade * 1.35, 1 + beamPulse * 0.24);
-        setCloudOpacity(beam, 0.28 + fade * 0.62);
-      }
-      if (core) {
-        core.scale.setScalar(1.05 + beamPulse * 1.45 + (1 - progress) * 0.55);
-        core.position.y = 14 + Math.sin(time * 16) * 1.8;
-        setCloudOpacity(core, 0.42 + fade * 0.58);
-      }
-      if (ringInner) {
-        ringInner.rotation.y += 0.06;
-        ringInner.scale.setScalar(1 + progress * 2.2);
-        setCloudOpacity(ringInner, 0.28 + fade * 0.46);
-      }
-      if (ringOuter) {
-        ringOuter.rotation.y -= 0.04;
-        ringOuter.scale.setScalar(0.9 + progress * 3.4);
-        setCloudOpacity(ringOuter, 0.22 + fade * 0.36);
-      }
+      const impactNode = effectNodesRef.current.support_orbital_lance_impact;
+      const shock      = effectNodesRef.current.support_orbital_lance_shock;
+      const beamPulse  = 0.82 + Math.sin(time * 28) * 0.16;
+
       if (flareTop) {
-        flareTop.position.y = 180 + Math.sin(time * 9) * 6;
-        flareTop.scale.setScalar(1.1 + beamPulse * 0.88);
-        setCloudOpacity(flareTop, 0.28 + fade * 0.48);
+        // Streaks down from altitude 280 to y=0 during descent, vanishes at impact
+        flareTop.position.y = 280 - easIn(descP) * 280;
+        const ftS = 1.2 + beamPulse * 0.8 + descP * 0.6;
+        flareTop.scale.setScalar(ftS);
+        const ftO = descP < 1 ? 0.5 + descP * 0.5
+                   : impactP < 1 ? Math.max(0, 1.0 - impactP * 2.0) : 0;
+        setCloudOpacity(flareTop, Math.max(0, ftO));
       }
+
+      if (beam) {
+        // Beam thickens and blazes at impact, then fades in linger
+        const bH  = descP < 1 ? easOut(descP) * 0.8
+                  : impactP < 1 ? 0.8 + easPk(impactP) * 1.4
+                  : Math.max(0, 1.4 - lingerP * 1.4);
+        const bW  = 0.9 + (impactP < 1 ? easPk(impactP) * 2.8 : 0) + beamPulse * 0.18;
+        const bOp = descP < 1 ? 0.25 + descP * 0.55
+                  : impactP < 1 ? 0.8 + easPk(impactP) * 0.2
+                  : Math.max(0, 0.7 - lingerP * 0.65);
+        beam.scale.set(bW, bH, bW);
+        setCloudOpacity(beam, Math.max(0, bOp));
+      }
+
+      if (core) {
+        const cS = descP < 1 ? 1.0 + descP * 0.5
+                 : impactP < 1 ? 1.5 + easOut(impactP) * 5.5 + beamPulse * 1.0
+                 : Math.max(0.8, 7.0 - lingerP * 5.8) + beamPulse * 0.5;
+        core.scale.setScalar(cS);
+        core.position.y = 10 + Math.sin(time * 14) * 1.5
+          + (impactP < 1 ? impactP * 10 : 10 + lingerP * 5);
+        const cOp = descP < 1 ? 0.25 + descP * 0.45
+                  : impactP < 1 ? 0.7 + easPk(impactP) * 0.3
+                  : Math.max(0, 0.85 - lingerP * 0.82);
+        setCloudOpacity(core, Math.max(0, cOp));
+      }
+
+      if (ringInner) {
+        ringInner.rotation.y += impactP < 1 ? 0.16 : 0.035;
+        const rS = impactP < 1 ? 0.8 + easOut(impactP) * 4.2 : 5.0 + lingerP * 2.0;
+        ringInner.scale.setScalar(rS);
+        const rOp = impactP < 1 ? easPk(impactP) * 0.78 : Math.max(0, 0.52 - lingerP * 0.52);
+        setCloudOpacity(ringInner, Math.max(0, rOp));
+      }
+
+      if (ringOuter) {
+        ringOuter.rotation.y -= impactP < 1 ? 0.10 : 0.022;
+        const rS = impactP < 1 ? 0.7 + easOut(impactP) * 6.5 : 7.2 + lingerP * 3.5;
+        ringOuter.scale.setScalar(rS);
+        const rOp = impactP < 1 ? easPk(impactP) * 0.56 : Math.max(0, 0.38 - lingerP * 0.38);
+        setCloudOpacity(ringOuter, Math.max(0, rOp));
+      }
+
       if (flareBase) {
-        flareBase.scale.setScalar(1.05 + Math.sin(time * 11) * 0.16 + (1 - progress) * 0.72);
-        setCloudOpacity(flareBase, 0.24 + fade * 0.38);
+        const fS = descP < 1 ? 0.5 + descP * 0.7
+                 : impactP < 1 ? 1.2 + easPk(impactP) * 4.0 + beamPulse * 0.4
+                 : Math.max(0.4, 4.5 - lingerP * 4.1);
+        flareBase.scale.setScalar(fS);
+        const fOp = descP < 1 ? 0.15 + descP * 0.3
+                  : impactP < 1 ? 0.45 + easPk(impactP) * 0.55
+                  : Math.max(0, 0.72 - lingerP * 0.68);
+        setCloudOpacity(flareBase, Math.max(0, fOp));
       }
-      if (impact) {
-        impact.scale.setScalar(0.9 + progress * 2.8);
-        setCloudOpacity(impact, Math.max(0, 0.44 - progress * 0.22));
+
+      if (impactNode) {
+        const iS = impactP < 1 ? 0.8 + easOut(impactP) * 5.5 : 6.3 + lingerP * 1.8;
+        impactNode.scale.setScalar(iS);
+        const iOp = impactP < 1 ? 0.65 - impactP * 0.15 : Math.max(0, 0.5 - lingerP * 0.5);
+        setCloudOpacity(impactNode, Math.max(0, iOp));
       }
+
       if (shock) {
-        shock.scale.setScalar(0.9 + progress * 4.6);
-        setCloudOpacity(shock, Math.max(0, 0.36 - progress * 0.18));
+        const sS = impactP < 1 ? 0.7 + easOut(impactP) * 9.5 : 10.2 + lingerP * 4.0;
+        shock.scale.setScalar(sS);
+        const sOp = impactP < 1 ? 0.55 - impactP * 0.28 : Math.max(0, 0.27 - lingerP * 0.27);
+        setCloudOpacity(shock, Math.max(0, sOp));
       }
       return;
     }
 
     if (p.kind === 'firestorm') {
-      const ring = effectNodesRef.current.support_firestorm_ring;
-      const core = effectNodesRef.current.support_firestorm_core;
+      // ── Phase timeline (10.0s total) ────────────────────────────────
+      //   0 → 0.10  IGNITE  – bright flash ignition points
+      //  0.10→ 0.40  BLOOM   – ring + flames explode outward
+      //  0.40→ 1.0   BURN    – rolling smoke, slow linger
+      const igniteP = phaseP(0,    0.10);
+      const bloomP  = phaseP(0.10, 0.40);
+      const burnP   = phaseP(0.40, 1.0);
+
+      const ring  = effectNodesRef.current.support_firestorm_ring;
+      const core  = effectNodesRef.current.support_firestorm_core;
       const shock = effectNodesRef.current.support_firestorm_shock;
       const plume = effectNodesRef.current.support_firestorm_plume;
+
       if (ring) {
-        ring.scale.setScalar(1 + progress * 4.9);
-        ring.rotation.y += 0.03;
-        setCloudOpacity(ring, Math.max(0, 0.54 - progress * 0.28));
+        const rS = igniteP < 1 ? 0.6 + igniteP * 0.9
+                 : bloomP  < 1 ? 1.5 + easOut(bloomP) * 8.5
+                 :               10.0 + burnP * 4.0;
+        ring.scale.setScalar(rS);
+        ring.rotation.y += igniteP < 1 ? 0.10 : bloomP < 1 ? 0.055 : 0.018;
+        const rOp = igniteP < 1 ? 0.3 + igniteP * 0.4
+                  : bloomP  < 1 ? 0.7 - easIn(bloomP) * 0.25
+                  :               Math.max(0, 0.45 - burnP * 0.45);
+        setCloudOpacity(ring, Math.max(0, rOp));
       }
+
       if (core) {
-        const pulse = 0.78 + Math.sin(time * 12) * 0.16;
-        core.scale.setScalar(1.25 + pulse * 0.82 + (1 - progress) * 1.2);
-        core.position.y = 12 + pulse * 6;
-        setCloudOpacity(core, 0.28 + fade * 0.58);
+        const pulse = 0.78 + Math.sin(time * 12) * 0.18;
+        const cS = igniteP < 1 ? 0.9 + easPk(igniteP) * 3.0 + pulse * 0.3
+                 : bloomP  < 1 ? 3.8 + easOut(bloomP) * 4.5 + pulse * 0.9
+                 :               Math.max(0.9, 8.3 - burnP * 7.2) + pulse * 0.5;
+        core.scale.setScalar(cS);
+        core.position.y = 10 + pulse * 9
+          + (bloomP < 1 ? bloomP * 14 : 14 + burnP * 10);
+        const cOp = igniteP < 1 ? 0.55 + igniteP * 0.4
+                  : bloomP  < 1 ? 0.95 - bloomP * 0.22
+                  :               Math.max(0, 0.73 - burnP * 0.70);
+        setCloudOpacity(core, Math.max(0, cOp));
       }
+
       if (shock) {
-        shock.scale.setScalar(0.9 + progress * 5.8);
-        setCloudOpacity(shock, Math.max(0, 0.42 - progress * 0.28));
+        const sS = bloomP < 1 ? 0.6 + easOut(bloomP) * 11.5 : 12.1 + burnP * 5.5;
+        shock.scale.setScalar(sS);
+        const sOp = bloomP < 1 ? easPk(bloomP) * 0.62 : Math.max(0, 0.30 - burnP * 0.30);
+        setCloudOpacity(shock, Math.max(0, sOp));
       }
+
       if (plume) {
-        plume.position.y = 22 + progress * 40;
-        plume.scale.set(1.15 + progress * 1.5, 0.8 + progress * 2.2, 1.15 + progress * 1.5);
-        setCloudOpacity(plume, 0.18 + fade * 0.34);
+        const pRise = bloomP < 1 ? bloomP * 35 : 35 + burnP * 65;
+        plume.position.y = 16 + pRise;
+        const pW = 0.9 + (bloomP < 1 ? bloomP * 1.5 : 1.5 + burnP * 3.5);
+        const pH = 0.5 + (bloomP < 1 ? bloomP * 2.5 : 2.5 + burnP * 4.5);
+        plume.scale.set(pW, pH, pW);
+        const pOp = bloomP < 1 ? 0.08 + bloomP * 0.42
+                  :               Math.max(0, 0.5 - burnP * 0.5);
+        setCloudOpacity(plume, Math.max(0, pOp));
       }
+
       for (let i = 0; i < 6; i++) {
         const flame = effectNodesRef.current[`support_firestorm_flame_${i}`];
         if (!flame) continue;
-        const pulse = 0.7 + Math.sin(time * (10 + i) + i) * 0.2;
-        flame.position.y = 12 + pulse * (10 + i * 0.7);
-        flame.scale.set(1.15 + pulse * 0.28, 1.05 + pulse * 0.72, 1.15 + pulse * 0.28);
-        setCloudOpacity(flame, 0.24 + fade * 0.56);
+        const fpulse = 0.7 + Math.sin(time * (10 + i) + i * 1.3) * 0.22;
+        const phFlame = igniteP < 1 ? igniteP : bloomP < 1 ? 1 : Math.max(0, 1 - burnP * 1.6);
+        flame.visible = phFlame > 0.01;
+        if (!flame.visible) continue;
+        const baseH = 7 + i * 3.8;
+        flame.position.y = baseH + fpulse * (7 + i * 1.0)
+          + (bloomP < 1 ? bloomP * 18 : 18 + burnP * 10);
+        const fW = 1.1 + fpulse * 0.35 + (bloomP < 1 ? bloomP * 0.55 : 0.55);
+        flame.scale.set(fW, 0.9 + fpulse * 0.85 + (bloomP < 1 ? bloomP * 0.55 : 0.55), fW);
+        setCloudOpacity(flame, Math.max(0, phFlame * (0.38 + fpulse * 0.32)));
       }
+
       for (let i = 0; i < 4; i++) {
         const smoke = effectNodesRef.current[`support_firestorm_smoke_${i}`];
         if (!smoke) continue;
-        const rise = ((p.age || 0) * (0.22 + i * 0.03)) % 1;
-        smoke.position.y = 20 + rise * 46;
-        smoke.scale.setScalar(1.1 + rise * 1.2);
-        setCloudOpacity(smoke, Math.max(0, 0.22 + fade * 0.34 - rise * 0.12));
+        const rise = ((p.age || 0) * (0.10 + i * 0.022)) % 1;
+        smoke.position.y = 22 + i * 14 + rise * 64;
+        smoke.scale.setScalar(1.6 + rise * 2.8 + i * 0.5);
+        const smkO = burnP < 0.04 ? burnP * 8
+                   : Math.max(0, 0.30 + (0.10 - rise * 0.08) - burnP * 0.28);
+        setCloudOpacity(smoke, Math.max(0, smkO));
       }
       return;
     }
 
     if (p.kind === 'kinetic_spear') {
-      const shaft = effectNodesRef.current.support_kinetic_spear_shaft;
-      const tip = effectNodesRef.current.support_kinetic_spear_tip;
-      const flare = effectNodesRef.current.support_kinetic_spear_flare;
-      const impact = effectNodesRef.current.support_kinetic_spear_impact;
-      const ring = effectNodesRef.current.support_kinetic_spear_ring;
-      const descent = Math.max(0, 1 - progress);
+      // ── Phase timeline (6.5s total) ────────────────────────────────
+      //   0 → 0.38  DESCENT – tungsten rod races from 400 units altitude
+      //  0.38→ 0.55  IMPACT  – brutal hit, ring erupts, shaft buries
+      //  0.55→ 1.0   CRATER  – glow fades, crater smoke lingers
+      const descentP = phaseP(0,    0.38);
+      const impactP  = phaseP(0.38, 0.55);
+      const craterP  = phaseP(0.55, 1.0);
+
+      const shaft   = effectNodesRef.current.support_kinetic_spear_shaft;
+      const tip     = effectNodesRef.current.support_kinetic_spear_tip;
+      const flare   = effectNodesRef.current.support_kinetic_spear_flare;
+      const impNode = effectNodesRef.current.support_kinetic_spear_impact;
+      const ring    = effectNodesRef.current.support_kinetic_spear_ring;
+
+      // Rod altitude: starts at 400, accelerates into ground (easIn = slow then fast)
+      const rodY = descentP < 1
+        ? 400 - easIn(descentP) * 395   // races to y=5 at end of descent
+        : impactP < 1
+          ? 5 - easOut(impactP) * 5     // final slam flush
+          : 0;
+
       if (shaft) {
-        shaft.position.y = 140 + descent * 220;
-        shaft.scale.set(1, 0.9 + fade * 1.15, 1);
-        setCloudOpacity(shaft, 0.16 + fade * 0.34);
+        shaft.position.y = rodY;
+        shaft.scale.set(1.0, 0.85 + (impactP < 1 ? easPk(impactP) * 0.5 : 0), 1.0);
+        const shOp = descentP < 0.05 ? descentP * 8
+                   : descentP < 1    ? 0.45 + (1 - descentP) * 0.35
+                   : impactP < 1     ? Math.max(0, 0.65 - impactP * 0.65)
+                   :                   0;
+        setCloudOpacity(shaft, Math.max(0, shOp));
       }
+
       if (tip) {
-        tip.position.y = 38 + descent * 252;
-        tip.rotation.y += 0.08;
-        tip.scale.setScalar(0.95 + fade * 0.18);
-        setCloudOpacity(tip, 0.42 + fade * 0.38);
+        tip.position.y = rodY + 7;
+        tip.rotation.y += descentP < 1 ? 0.22 : impactP < 1 ? 0.4 : 0.06;
+        const tS = descentP < 1 ? 1.0 + descentP * 0.6
+                 : impactP < 1  ? 1.6 + easPk(impactP) * 2.5
+                 :                0;
+        tip.scale.setScalar(Math.max(0, tS));
+        const tOp = descentP < 0.06 ? descentP * 10
+                  : descentP < 1    ? 0.62 + descentP * 0.38
+                  : impactP < 1     ? Math.max(0, 0.95 - impactP * 0.95)
+                  :                   0;
+        setCloudOpacity(tip, Math.max(0, tOp));
       }
+
       if (flare) {
-        flare.position.y = 18 + Math.sin(time * 18) * 3;
-        flare.scale.setScalar(0.8 + fade * 1.25);
-        setCloudOpacity(flare, 0.18 + fade * 0.48);
+        // Plasma trail visible during descent; explodes to huge flash at impact
+        const fY = descentP < 1 ? rodY + 18 : 6 + Math.sin(time * 18) * 3;
+        flare.position.y = fY;
+        const fS = descentP < 1 ? 0.7 + descentP * 1.4 + Math.sin(time * 22) * 0.12 * descentP
+                 : impactP < 1  ? 2.1 + easOut(impactP) * 7.0
+                 :                Math.max(0, 7.5 - craterP * 7.0);
+        flare.scale.setScalar(Math.max(0, fS));
+        const fOp = descentP < 1 ? 0.28 + descentP * 0.52
+                  : impactP < 1  ? 0.8 + easPk(impactP) * 0.2
+                  :                Math.max(0, 0.72 - craterP * 0.68);
+        setCloudOpacity(flare, Math.max(0, fOp));
       }
-      if (impact) {
-        impact.scale.setScalar(0.95 + progress * 3.4);
-        setCloudOpacity(impact, Math.max(0, 0.46 - progress * 0.24));
+
+      if (impNode) {
+        const iS = impactP < 1 ? 0.8 + easOut(impactP) * 6.5 : 7.3 + craterP * 2.5;
+        impNode.scale.setScalar(iS);
+        const iOp = impactP < 1 ? 0.72 - impactP * 0.18 : Math.max(0, 0.54 - craterP * 0.54);
+        setCloudOpacity(impNode, Math.max(0, iOp));
       }
+
       if (ring) {
-        ring.scale.setScalar(0.82 + progress * 4.8);
-        setCloudOpacity(ring, Math.max(0, 0.4 - progress * 0.2));
+        const rS = impactP < 1 ? 0.8 + easOut(impactP) * 9.5 : 10.3 + craterP * 4.5;
+        ring.scale.setScalar(rS);
+        const rOp = impactP < 1 ? 0.62 - impactP * 0.22 : Math.max(0, 0.40 - craterP * 0.40);
+        setCloudOpacity(ring, Math.max(0, rOp));
       }
       return;
     }
@@ -7695,47 +8568,101 @@ const EntitySupportStrikeEffect = memo(({ entityId, index, entitiesRef, entityLo
       {effectScene && <primitive object={effectScene} />}
       {trackedEffect.kind === 'orbital_lance' ? (
         <>
+          {/* Outer plasma sheath */}
           <mesh position={[0, 130, 0]}>
-            <cylinderGeometry args={[7, 10, 260, 16]} />
-            <meshBasicMaterial color="#67e8f9" transparent opacity={0.48} depthWrite={false} />
+            <cylinderGeometry args={[14, 20, 260, 20, 2, true]} />
+            <meshBasicMaterial color="#0ea5e9" transparent opacity={0.22} depthWrite={false} blending={THREE.AdditiveBlending} />
           </mesh>
-          <mesh position={[0, 9, 0]}>
-            <sphereGeometry args={[22, 10, 10]} />
-            <meshBasicMaterial color="#dbeafe" transparent opacity={0.42} blending={THREE.AdditiveBlending} depthWrite={false} />
+          {/* Inner beam core */}
+          <mesh position={[0, 130, 0]}>
+            <cylinderGeometry args={[3, 5, 265, 14]} />
+            <meshBasicMaterial color="#f0f9ff" transparent opacity={0.72} depthWrite={false} blending={THREE.AdditiveBlending} />
           </mesh>
-          <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 1.1, 0]}>
-            <ringGeometry args={[38, 66, 36]} />
-            <meshBasicMaterial color="#7dd3fc" transparent opacity={0.34} depthWrite={false} />
+          {/* Impact flash */}
+          <mesh position={[0, 10, 0]}>
+            <sphereGeometry args={[24, 14, 10]} />
+            <meshBasicMaterial color="#f0f9ff" transparent opacity={0.52} blending={THREE.AdditiveBlending} depthWrite={false} />
+          </mesh>
+          {/* Ground scorch */}
+          <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.2, 0]}>
+            <circleGeometry args={[52, 36]} />
+            <meshBasicMaterial color="#0c1a2e" transparent opacity={0.78} depthWrite={false} />
+          </mesh>
+          {/* Inner ring */}
+          <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 1, 0]}>
+            <ringGeometry args={[30, 48, 40]} />
+            <meshBasicMaterial color="#38bdf8" transparent opacity={0.48} depthWrite={false} blending={THREE.AdditiveBlending} />
+          </mesh>
+          {/* Outer ring */}
+          <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.5, 0]}>
+            <ringGeometry args={[60, 82, 48]} />
+            <meshBasicMaterial color="#7dd3fc" transparent opacity={0.28} depthWrite={false} blending={THREE.AdditiveBlending} />
           </mesh>
         </>
       ) : trackedEffect.kind === 'kinetic_spear' ? (
         <>
+          {/* Re-entry plasma sheath */}
           <mesh position={[0, 180, 0]}>
-            <cylinderGeometry args={[2.6, 3.2, 300, 10]} />
-            <meshBasicMaterial color="#e2e8f0" transparent opacity={0.28} depthWrite={false} />
+            <cylinderGeometry args={[10, 18, 300, 16, 2, true]} />
+            <meshBasicMaterial color="#f97316" transparent opacity={0.18} depthWrite={false} blending={THREE.AdditiveBlending} />
           </mesh>
-          <mesh position={[0, 20, 0]}>
-            <sphereGeometry args={[16, 12, 10]} />
-            <meshBasicMaterial color="#f8fafc" transparent opacity={0.44} blending={THREE.AdditiveBlending} depthWrite={false} />
+          {/* Rod body */}
+          <mesh position={[0, 178, 0]}>
+            <cylinderGeometry args={[2.6, 3.8, 295, 12]} />
+            <meshBasicMaterial color="#e2e8f0" transparent opacity={0.52} depthWrite={false} />
           </mesh>
-          <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 1.5, 0]}>
-            <ringGeometry args={[24, 42, 28]} />
-            <meshBasicMaterial color="#bae6fd" transparent opacity={0.38} depthWrite={false} />
+          {/* Nose flash */}
+          <mesh position={[0, 18, 0]}>
+            <sphereGeometry args={[20, 14, 10]} />
+            <meshBasicMaterial color="#fef9c3" transparent opacity={0.58} blending={THREE.AdditiveBlending} depthWrite={false} />
+          </mesh>
+          {/* Ground crater */}
+          <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.2, 0]}>
+            <circleGeometry args={[58, 38]} />
+            <meshBasicMaterial color="#0c0a09" transparent opacity={0.84} depthWrite={false} />
+          </mesh>
+          {/* Inner shockwave */}
+          <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 1, 0]}>
+            <ringGeometry args={[22, 38, 32]} />
+            <meshBasicMaterial color="#bae6fd" transparent opacity={0.42} depthWrite={false} blending={THREE.AdditiveBlending} />
+          </mesh>
+          {/* Outer shockwave */}
+          <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.5, 0]}>
+            <ringGeometry args={[52, 70, 44]} />
+            <meshBasicMaterial color="#e2e8f0" transparent opacity={0.28} depthWrite={false} blending={THREE.AdditiveBlending} />
           </mesh>
         </>
       ) : (
         <>
-          <mesh position={[0, 6, 0]}>
-            <sphereGeometry args={[18, 10, 10]} />
-            <meshBasicMaterial color="#fb923c" transparent opacity={0.42} blending={THREE.AdditiveBlending} depthWrite={false} />
+          {/* Central fireball */}
+          <mesh position={[0, 14, 0]}>
+            <sphereGeometry args={[26, 14, 10]} />
+            <meshBasicMaterial color="#fff7ed" transparent opacity={0.62} blending={THREE.AdditiveBlending} depthWrite={false} />
           </mesh>
-          <mesh rotation={[-Math.PI / 2, 0, 0]}>
-            <ringGeometry args={[40, 64, 30]} />
-            <meshBasicMaterial color="#f97316" transparent opacity={0.32} depthWrite={false} />
+          {/* Ground char */}
+          <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.15, 0]}>
+            <circleGeometry args={[92, 38]} />
+            <meshBasicMaterial color="#0c0502" transparent opacity={0.82} depthWrite={false} />
           </mesh>
-          <mesh position={[0, 24, 0]}>
-            <cylinderGeometry args={[10, 20, 56, 12]} />
-            <meshBasicMaterial color="#fdba74" transparent opacity={0.2} depthWrite={false} blending={THREE.AdditiveBlending} />
+          {/* Ember glow */}
+          <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.25, 0]}>
+            <circleGeometry args={[32, 28]} />
+            <meshBasicMaterial color="#dc2626" transparent opacity={0.58} depthWrite={false} blending={THREE.AdditiveBlending} />
+          </mesh>
+          {/* Fire ring */}
+          <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.5, 0]}>
+            <ringGeometry args={[36, 58, 34]} />
+            <meshBasicMaterial color="#f97316" transparent opacity={0.44} depthWrite={false} blending={THREE.AdditiveBlending} />
+          </mesh>
+          {/* Shockwave ring */}
+          <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 1, 0]}>
+            <ringGeometry args={[62, 82, 42]} />
+            <meshBasicMaterial color="#fb923c" transparent opacity={0.24} depthWrite={false} />
+          </mesh>
+          {/* Smoke plume */}
+          <mesh position={[0, 52, 0]}>
+            <cylinderGeometry args={[18, 48, 80, 14, 2, true]} />
+            <meshBasicMaterial color="#1c1917" transparent opacity={0.32} depthWrite={false} />
           </mesh>
         </>
       )}
@@ -8175,12 +9102,12 @@ const EntityFacility = memo(({ entityId, index, entitiesRef, entityLookupRef }) 
               {/* Main reactor building */}
               <mesh position={[0, 8, 0]}>
                 <boxGeometry args={[34, 16, 28]} />
-                <AliveMaterial color="#334155" roughness={0.8} metalness={0.3} />
+                <AliveMaterial color="#5a6a7e" roughness={0.8} metalness={0.3} />
               </mesh>
               {/* Sloped buttress front */}
               <mesh position={[0, 4, 18]} rotation={[-0.2, 0, 0]}>
                 <boxGeometry args={[30, 8, 12]} />
-                <AliveMaterial color="#1e293b" roughness={0.9} metalness={0.18} />
+                <AliveMaterial color="#4b5b70" roughness={0.88} metalness={0.18} />
               </mesh>
               {/* Reactor Core Dome */}
               <mesh position={[0, 16, -2]}>
@@ -8227,13 +9154,13 @@ const EntityFacility = memo(({ entityId, index, entitiesRef, entityLookupRef }) 
               {[[-11, 22, 0], [11, 22, 0]].map((roof, idx) => (
                 <mesh key={`factory-roof-${idx}`} position={roof} rotation={[0, 0, Math.PI / 4]}>
                   <cylinderGeometry args={[1, 14, 34, 4]} />
-                  <AliveMaterial color="#1e293b" roughness={0.7} metalness={0.28} />
+                  <AliveMaterial color="#526377" roughness={0.68} metalness={0.28} />
                 </mesh>
               ))}
               {/* Heavy front gate extension */}
               <mesh position={[0, 12, 18]}>
                 <boxGeometry args={[28, 14, 12]} />
-                <AliveMaterial color="#0f172a" roughness={0.56} metalness={0.56} />
+                <AliveMaterial color="#4a5a70" roughness={0.54} metalness={0.56} />
               </mesh>
               {/* Glowing assembly garage doors */}
               {[-8, 8].map((doorX, idx) => (
@@ -8246,7 +9173,7 @@ const EntityFacility = memo(({ entityId, index, entitiesRef, entityLookupRef }) 
               {[[-17, 20, -8], [17, 20, -8], [-17, 20, 8], [17, 20, 8]].map((stack, idx) => (
                 <mesh key={`factory-stack-${idx}`} position={stack}>
                   <cylinderGeometry args={[1.5, 2, 8, 16]} />
-                  <AliveMaterial color="#1f2937" roughness={0.72} metalness={0.34} />
+                  <AliveMaterial color="#526174" roughness={0.7} metalness={0.34} />
                 </mesh>
               ))}
               {/* Exterior tank tracks / construction crane rails */}
@@ -8311,21 +9238,21 @@ const EntityFacility = memo(({ entityId, index, entitiesRef, entityLookupRef }) 
               {/* Sci-Fi Science Dome */}
               <mesh position={[0, 12, 0]}>
                 <sphereGeometry args={[16, 32, 24, 0, Math.PI * 2, 0, Math.PI / 2]} />
-                <AliveMaterial color="#1e293b" roughness={0.5} metalness={0.6} />
+                <AliveMaterial color="#52647d" roughness={0.48} metalness={0.6} />
               </mesh>
               <mesh position={[0, 6, 0]}>
                 <cylinderGeometry args={[16, 18, 12, 32]} />
-                <AliveMaterial color="#0f172a" roughness={0.7} metalness={0.4} />
+                <AliveMaterial color="#485a72" roughness={0.66} metalness={0.4} />
               </mesh>
               {/* Attached data center wing */}
               <mesh position={[0, 8, 16]}>
                 <boxGeometry args={[26, 14, 12]} />
-                <AliveMaterial color="#1e293b" roughness={0.58} metalness={0.52} />
+                <AliveMaterial color="#56687d" roughness={0.56} metalness={0.52} />
               </mesh>
               {/* Sensor mast / Dish Base */}
               <mesh position={[0, 24, 0]}>
                 <cylinderGeometry args={[4, 6, 12, 16]} />
-                <AliveMaterial color="#334155" roughness={0.65} metalness={0.36} />
+                <AliveMaterial color="#5a6a7e" roughness={0.65} metalness={0.36} />
               </mesh>
               <mesh position={[0, 36, 0]}>
                 <cylinderGeometry args={[1, 2, 16, 12]} />
@@ -8359,7 +9286,7 @@ const EntityFacility = memo(({ entityId, index, entitiesRef, entityLookupRef }) 
               {/* Radar Command Tower */}
               <mesh position={[0, 9, 0]}>
                 <cylinderGeometry args={[10, 14, 18, 16]} />
-                <AliveMaterial color="#1f2937" roughness={0.8} metalness={0.28} />
+                <AliveMaterial color="#526274" roughness={0.78} metalness={0.28} />
               </mesh>
               {/* Angular support braces */}
               {[[-8, 17, -8], [8, 17, -8], [-8, 17, 8], [8, 17, 8]].map((brace, idx) => (
@@ -8371,7 +9298,7 @@ const EntityFacility = memo(({ entityId, index, entitiesRef, entityLookupRef }) 
               {/* Central Array Mast */}
               <mesh position={[0, 26, 0]}>
                 <cylinderGeometry args={[2, 4, 34, 12]} />
-                <AliveMaterial color="#334155" roughness={0.5} metalness={0.65} />
+                <AliveMaterial color="#5a6a7e" roughness={0.5} metalness={0.65} />
               </mesh>
               {/* Top Sensor bulb */}
               <mesh position={[0, 44, 0]}>
@@ -8400,30 +9327,30 @@ const EntityFacility = memo(({ entityId, index, entitiesRef, entityLookupRef }) 
               {/* Heavy armored bunker base */}
               <mesh position={[0, 8, 0]}>
                 <cylinderGeometry args={[13, 19, 16, 12]} />
-                <AliveMaterial color="#1f2937" roughness={0.86} metalness={0.24} />
+                <AliveMaterial color="#4c5f74" roughness={0.84} metalness={0.24} />
               </mesh>
               {/* Concrete foundation ring */}
               <mesh position={[0, 4, 0]}>
                 <cylinderGeometry args={[22, 24, 4, 20]} />
-                <AliveMaterial color="#111827" roughness={0.92} metalness={0.05} />
+                <AliveMaterial color="#67788d" roughness={0.9} metalness={0.05} />
               </mesh>
               {/* Turret pivot ring */}
               <mesh position={[0, 16, 0]}>
                 <cylinderGeometry args={[9, 11, 6, 16]} />
-                <AliveMaterial color="#334155" roughness={0.6} metalness={0.54} />
+                <AliveMaterial color="#5a6a7e" roughness={0.6} metalness={0.54} />
               </mesh>
               {/* Turret assembly */}
               <group ref={aaTurretRef} position={[0, 20, 0]}>
                 {/* Turret Head */}
                 <mesh>
                   <boxGeometry args={[14, 8, 12]} />
-                  <AliveMaterial color="#0f172a" roughness={0.56} metalness={0.65} />
+                  <AliveMaterial color="#4a5b71" roughness={0.54} metalness={0.65} />
                 </mesh>
                 {/* Barrel Housing */}
                 <group ref={aaBarrelRef} position={[0, 1, 6]}>
                   <mesh position={[0, 0, 2]}>
                     <boxGeometry args={[6, 3, 12]} />
-                    <AliveMaterial color="#1e293b" roughness={0.6} metalness={0.66} />
+                    <AliveMaterial color="#55667a" roughness={0.58} metalness={0.66} />
                   </mesh>
                   {/* Quad-Barrels */}
                   {[-2, 2].map(bx => (
@@ -8437,19 +9364,19 @@ const EntityFacility = memo(({ entityId, index, entitiesRef, entityLookupRef }) 
                   {/* Barrel vent holes / heat shields */}
                   <mesh position={[0, 0, 9]}>
                     <boxGeometry args={[5.5, 2.5, 4]} />
-                    <AliveMaterial color="#0b1324" roughness={0.8} metalness={0.9} />
+                    <AliveMaterial color="#3d4f65" roughness={0.8} metalness={0.9} />
                   </mesh>
                 </group>
                 {/* Radar targeting eye */}
                 <mesh position={[0, 2.5, -3]}>
                   <boxGeometry args={[4, 3, 3]} />
-                  <AliveMaterial color="#111827" emissive="#f43f5e" emissiveIntensity={1.2} />
+                  <AliveMaterial color="#5e7086" emissive="#f43f5e" emissiveIntensity={1.2} />
                 </mesh>
               </group>
               {/* Deep protective moat ring */}
               <mesh position={[0, 1.6, 0]}>
                 <cylinderGeometry args={[18, 18, 1.6, 24]} />
-                <AliveMaterial color="#0b1324" roughness={0.95} />
+                <AliveMaterial color="#4a5a6e" roughness={0.95} />
               </mesh>
             </group>
           )}
@@ -8471,14 +9398,14 @@ const EntityFacility = memo(({ entityId, index, entitiesRef, entityLookupRef }) 
           position={smokePos}
         >
           <sphereGeometry args={[3.2 + i * 0.7, 8, 8]} />
-          <meshBasicMaterial color={isDestroyed ? '#1f2937' : '#334155'} transparent opacity={0.2} />
+          <meshBasicMaterial color={isDestroyed ? '#4a5568' : '#64748b'} transparent opacity={0.2} />
         </mesh>
       ))}
       {isDestroyed && (
         <group>
           <mesh position={[0, 0.8, 0]} rotation={[-Math.PI / 2, 0, 0]}>
             <circleGeometry args={[26, 20]} />
-            <meshBasicMaterial color="#0f1720" transparent opacity={0.34} />
+            <meshBasicMaterial color="#3a4556" transparent opacity={0.34} />
           </mesh>
           <mesh position={[0, 0.95, 0]} rotation={[-Math.PI / 2, 0, 0]}>
             <circleGeometry args={[17, 18]} />
@@ -8672,7 +9599,7 @@ const EntityKaiju = ({ entityId, index, entitiesRef, entityLookupRef, frameSnaps
   const kaijuAssetName = initialKaiju ? KAIJU_STRUCTURE_ASSET_NAMES[initialKaiju.variant] : null;
   const kaijuScene = useMemo(() => {
     if (!assetReady || !kaijuAssetsAssetCache.scene || !kaijuAssetName) return null;
-    const clone = cloneNamedGlbGroup(kaijuAssetsAssetCache.scene, kaijuAssetName);
+    const clone = cloneNamedGlbGroup(kaijuAssetsAssetCache.scene, kaijuAssetName, { applyAliveShaderToTextured: true });
     clone?.traverse?.((node) => {
       if (node.position && !node.userData.basePosition) node.userData.basePosition = node.position.clone();
       if (node.rotation && !node.userData.baseRotation) node.userData.baseRotation = node.rotation.clone();
@@ -10200,11 +11127,9 @@ const DummyWarmup = memo(({ qualityProfile }) => {
     if (typeof window === 'undefined') return undefined;
     let rafA = 0;
     let rafB = 0;
-    loadNukeCloudAsset().catch(() => {});
     loadWorldPropsAsset().catch(() => {});
     loadAirstrikeAsset().catch(() => {});
     loadBaseStructuresAsset().catch(() => {});
-    loadCommandEffectsAsset().catch(() => {});
     loadKaijuAssetsAsset().catch(() => {});
     loadHumanUnitsAsset().catch(() => {});
     rafA = window.requestAnimationFrame(() => {
@@ -10876,7 +11801,7 @@ const VillageScene = ({ themeConfig, environmentVariant, setNukeCount, setGameSt
       bunker,
       {
         variant: 'apc',
-        scale: APC_BASE_ENTITY_SCALE,
+        scale: 1.12,
         speedMultiplier: APC_SPEED_MULTIPLIER,
         damageMultiplier: (economyRef.current.tankDamageMultiplier || 1) * APC_DAMAGE_MULTIPLIER,
         reloadMultiplier: (economyRef.current.tankReloadMultiplier || 1) * APC_RELOAD_MULTIPLIER
@@ -11314,7 +12239,7 @@ const VillageScene = ({ themeConfig, environmentVariant, setNukeCount, setGameSt
             y: getTerrainHeight(dir.x, dir.z),
             vx: dir.vx,
             vz: dir.vz,
-            scale: TANK_BASE_ENTITY_SCALE * 0.94,
+            scale: 1.2,
             state: 'driving',
             reloadTimer: Math.random() * 3.0, // Stagger initial firing so they don't fire at once
             hp: TANK_BASE_HP,
@@ -11604,8 +12529,14 @@ const VillageScene = ({ themeConfig, environmentVariant, setNukeCount, setGameSt
     });
     const cooldownMs = setSupportStrikeCooldown('orbital_lance');
     window._falloutStrikeCooldownRemaining = cooldownMs;
-    AudioManager.play('missile_launch', { volume: 0.16, duration: 0.22 });
-    AudioManager.play('bomb', { volume: 0.06, duration: 0.1 });
+    AudioManager.play('missile_launch', { volume: 0.14, duration: 0.18 });
+    const _olX = clampedTarget.x, _olZ = clampedTarget.z;
+    setTimeout(() => {
+      AudioManager.play('orbital_lance');
+      window.dispatchEvent(new CustomEvent('fallout-explosion', {
+        detail: { x: _olX, z: _olZ, intensity: 2.1, type: 'orbital_lance' }
+      }));
+    }, 1350);
     return true;
   };
 
@@ -11643,8 +12574,14 @@ const VillageScene = ({ themeConfig, environmentVariant, setNukeCount, setGameSt
 
     const cooldownMs = setSupportStrikeCooldown('firestorm');
     window._falloutStrikeCooldownRemaining = cooldownMs;
-    AudioManager.play('missile_launch', { volume: 0.12, duration: 0.18 });
-    AudioManager.play('bomb', { volume: 0.08, duration: 0.18 });
+    AudioManager.play('missile_launch', { volume: 0.14, duration: 0.18 });
+    const _fsX = clampedTarget.x, _fsZ = clampedTarget.z;
+    setTimeout(() => {
+      AudioManager.play('firestorm');
+      window.dispatchEvent(new CustomEvent('fallout-explosion', {
+        detail: { x: _fsX, z: _fsZ, intensity: 1.9, type: 'firestorm' }
+      }));
+    }, 900);
     return true;
   };
 
@@ -11717,9 +12654,13 @@ const VillageScene = ({ themeConfig, environmentVariant, setNukeCount, setGameSt
 
     const cooldownMs = setSupportStrikeCooldown('kinetic_spear');
     window._falloutStrikeCooldownRemaining = cooldownMs;
-    AudioManager.play('missile_launch', { volume: 0.14, duration: 0.16 });
-    AudioManager.play('bomb', { volume: 0.18, duration: 0.14 });
-    AudioManager.play('target_confirm', { volume: 0.18, duration: 0.2 });
+    AudioManager.play('missile_launch', { volume: 0.10, duration: 0.14 });
+    setTimeout(() => {
+      AudioManager.play('kinetic_spear');
+      window.dispatchEvent(new CustomEvent('fallout-explosion', {
+        detail: { x: impactX, z: impactZ, intensity: 2.6, type: 'kinetic_spear' }
+      }));
+    }, 2470);
     return true;
   };
 
@@ -12171,11 +13112,6 @@ const VillageScene = ({ themeConfig, environmentVariant, setNukeCount, setGameSt
 
     // Update global shader time uniform so all alive-shader animations run
     globalShaderUniforms.time.value = state.clock.elapsedTime;
-    globalShaderUniforms.pollution.value = THREE.MathUtils.lerp(
-      globalShaderUniforms.pollution.value,
-      pollution,
-      0.03
-    );
 
     const frameSnapshot = rebuildFrameSnapshot();
     
@@ -13711,7 +14647,7 @@ const VillageScene = ({ themeConfig, environmentVariant, setNukeCount, setGameSt
       <DummyWarmup qualityProfile={qualityProfile} />
       {/* PERFECT STATIC RENDER: Only runs once on mount! Everything moves natively via WebGL updates, saving 1500 React node reconciliations! */}
       {entitiesRef.current.map((p, idx) => {
-        if (p.type === 'person') return <EntityPerson key={p.id} index={idx} entitiesRef={entitiesRef} />;
+        if (p.type === 'person') return <EntityPerson key={p.id} index={idx} entitiesRef={entitiesRef} qualityProfile={qualityProfile} />;
         if (p.type === 'car') return <EntityCar key={p.id} index={idx} entitiesRef={entitiesRef} />;
         if (p.type === 'bird') return <EntityBird key={p.id} index={idx} entitiesRef={entitiesRef} />;
         if (p.type === 'house') return <EntityHouse key={p.id} index={idx} entitiesRef={entitiesRef} />;
@@ -13720,7 +14656,6 @@ const VillageScene = ({ themeConfig, environmentVariant, setNukeCount, setGameSt
         if (p.type === 'barricade') return <MemoEntityBarricade key={p.id} entityId={p.id} entitiesRef={entitiesRef} entityLookupRef={entityLookupRef} />;
         return null;
       })}
-      <StaticStreetProps entitiesRef={entitiesRef} themeConfig={themeConfig} />
       {/* RUGGED MOUNTAIN TERRAIN */}
       <MountainTerrain themeConfig={themeConfig} environmentVariant={environmentVariant} pollution={pollution} qualityProfile={qualityProfile} />
 
@@ -14830,6 +15765,64 @@ const FrameRateController = ({ fpsCap }) => {
 const NukeImpactOverlay = ({ blastFx }) => {
   if (!blastFx?.active) return null;
 
+  const type = blastFx.type || 'nuke';
+
+  // ── ORBITAL LANCE: precision electric-cyan beam impact ──
+  if (type === 'orbital_lance') {
+    const flashOpacity  = Math.max(0, 1 - blastFx.progress * 3.8) * 0.86 * blastFx.intensity;
+    const beamOpacity   = Math.max(0, 1 - Math.abs(blastFx.progress - 0.10) / 0.22) * 0.64 * blastFx.intensity;
+    const ringOpacity   = Math.max(0, 1 - blastFx.progress * 1.5) * 0.46 * blastFx.intensity;
+    const crackleOpacity = Math.max(0, 1 - blastFx.progress * 2.4) * 0.28 * blastFx.intensity;
+    const glareScale = lerpNumber(0.35, 3.0, Math.min(1, blastFx.progress * 2.8));
+    const ringScale  = lerpNumber(0.08, 3.6, Math.pow(Math.min(1, blastFx.progress * 1.4), 0.60));
+    return (
+      <div className="absolute inset-0 z-40 pointer-events-none overflow-hidden" style={{ animation: 'fallout-shake-light 0.42s ease-out' }}>
+        <div style={{ position: 'absolute', inset: 0, opacity: flashOpacity, background: 'radial-gradient(circle at center, rgba(224,242,254,0.98) 0%, rgba(56,189,248,0.72) 18%, rgba(14,165,233,0.28) 44%, rgba(0,0,0,0) 72%)', mixBlendMode: 'screen' }} />
+        <div style={{ position: 'absolute', left: '50%', top: '50%', width: '20vmax', height: '20vmax', transform: `translate(-50%, -50%) scale(${glareScale})`, opacity: beamOpacity, borderRadius: '999px', background: 'radial-gradient(circle, rgba(240,249,255,0.98) 0%, rgba(56,189,248,0.62) 30%, rgba(14,165,233,0.18) 56%, rgba(0,0,0,0) 74%)', filter: 'blur(10px)' }} />
+        <div style={{ position: 'absolute', left: '50%', top: '50%', width: '22vmax', height: '22vmax', transform: `translate(-50%, -50%) scale(${ringScale})`, opacity: ringOpacity, borderRadius: '999px', border: '1.5px solid rgba(125,211,252,0.92)', boxShadow: '0 0 32px rgba(56,189,248,0.5), inset 0 0 20px rgba(224,242,254,0.12)' }} />
+        <div style={{ position: 'absolute', inset: '-6%', opacity: crackleOpacity, background: 'radial-gradient(circle at 50% 50%, rgba(56,189,248,0.20) 0%, rgba(14,165,233,0.08) 24%, rgba(0,0,0,0) 46%)', filter: 'blur(9px)' }} />
+      </div>
+    );
+  }
+
+  // ── FIRESTORM: rolling orange-fire spread ──
+  if (type === 'firestorm') {
+    const flashOpacity = Math.max(0, 1 - blastFx.progress * 1.9) * 0.56 * blastFx.intensity;
+    const heatOpacity  = Math.max(0, 1 - Math.max(0, blastFx.progress - 0.05) / 0.85) * 0.52 * blastFx.intensity;
+    const glowOpacity  = Math.max(0, 1 - blastFx.progress * 1.0) * 0.38 * blastFx.intensity;
+    const dustOpacity  = Math.max(0, 1 - Math.max(0, blastFx.progress - 0.10) / 0.90) * 0.34 * blastFx.intensity;
+    const glareScale = lerpNumber(0.5, 3.4, Math.pow(Math.min(1, blastFx.progress * 1.3), 0.52));
+    const heatScale  = lerpNumber(0.9, 1.9, Math.min(1, blastFx.progress * 0.88));
+    return (
+      <div className="absolute inset-0 z-40 pointer-events-none overflow-hidden" style={{ animation: 'fallout-fire-shudder 0.55s ease-out' }}>
+        <div style={{ position: 'absolute', inset: 0, opacity: flashOpacity, background: 'radial-gradient(circle at center, rgba(255,237,168,0.96) 0%, rgba(249,115,22,0.74) 24%, rgba(220,38,38,0.22) 54%, rgba(0,0,0,0) 80%)', mixBlendMode: 'screen' }} />
+        <div style={{ position: 'absolute', left: '50%', top: '52%', width: '32vmax', height: '32vmax', transform: `translate(-50%, -50%) scale(${glareScale})`, opacity: heatOpacity, borderRadius: '999px', background: 'radial-gradient(circle, rgba(254,215,170,0.88) 0%, rgba(249,115,22,0.55) 34%, rgba(194,65,12,0.18) 60%, rgba(0,0,0,0) 76%)', filter: 'blur(20px)' }} />
+        <div style={{ position: 'absolute', inset: '-14%', opacity: glowOpacity, transform: `scale(${heatScale})`, background: 'radial-gradient(circle at 50% 58%, rgba(251,191,36,0.18) 0%, rgba(249,115,22,0.10) 20%, rgba(255,255,255,0) 40%)', filter: 'blur(14px)' }} />
+        <div style={{ position: 'absolute', inset: 0, opacity: dustOpacity, background: 'radial-gradient(circle at 50% 54%, rgba(120,53,15,0.06) 0%, rgba(120,53,15,0.24) 38%, rgba(0,0,0,0.48) 100%)', mixBlendMode: 'screen' }} />
+      </div>
+    );
+  }
+
+  // ── KINETIC SPEAR: white-silver hypervelocity impact with concentric rings ──
+  if (type === 'kinetic_spear') {
+    const flashOpacity = Math.max(0, 1 - blastFx.progress * 4.4) * 0.96 * blastFx.intensity;
+    const shockOpacity = Math.max(0, 1 - Math.abs(blastFx.progress - 0.12) / 0.20) * 0.54 * blastFx.intensity;
+    const ring1Opacity = Math.max(0, 1 - blastFx.progress * 1.7) * 0.50 * blastFx.intensity;
+    const ring2Opacity = Math.max(0, 1 - Math.max(0, blastFx.progress - 0.06) / 0.74) * 0.30 * blastFx.intensity;
+    const glareScale = lerpNumber(0.30, 2.8, Math.min(1, blastFx.progress * 3.4));
+    const ring1Scale = lerpNumber(0.12, 3.8, Math.pow(Math.min(1, blastFx.progress * 1.3), 0.56));
+    const ring2Scale = lerpNumber(0.08, 5.2, Math.pow(Math.min(1, blastFx.progress * 1.1), 0.50));
+    return (
+      <div className="absolute inset-0 z-40 pointer-events-none overflow-hidden" style={{ animation: 'fallout-seismic-shake 0.65s ease-out' }}>
+        <div style={{ position: 'absolute', inset: 0, opacity: flashOpacity, background: 'radial-gradient(circle at center, rgba(248,250,252,0.99) 0%, rgba(226,232,240,0.84) 16%, rgba(147,197,253,0.24) 38%, rgba(0,0,0,0) 66%)', mixBlendMode: 'screen' }} />
+        <div style={{ position: 'absolute', left: '50%', top: '50%', width: '22vmax', height: '22vmax', transform: `translate(-50%, -50%) scale(${glareScale})`, opacity: shockOpacity, borderRadius: '999px', background: 'radial-gradient(circle, rgba(248,250,252,0.96) 0%, rgba(186,230,253,0.55) 28%, rgba(56,189,248,0.12) 52%, rgba(0,0,0,0) 68%)', filter: 'blur(8px)' }} />
+        <div style={{ position: 'absolute', left: '50%', top: '50%', width: '18vmax', height: '18vmax', transform: `translate(-50%, -50%) scale(${ring1Scale})`, opacity: ring1Opacity, borderRadius: '999px', border: '2px solid rgba(226,232,240,0.95)', boxShadow: '0 0 26px rgba(186,230,253,0.55), inset 0 0 14px rgba(248,250,252,0.10)' }} />
+        <div style={{ position: 'absolute', left: '50%', top: '50%', width: '26vmax', height: '26vmax', transform: `translate(-50%, -50%) scale(${ring2Scale})`, opacity: ring2Opacity, borderRadius: '999px', border: '1px solid rgba(125,211,252,0.64)', boxShadow: '0 0 18px rgba(56,189,248,0.32)' }} />
+      </div>
+    );
+  }
+
+  // ── Default: NUKE (nuclear detonation) ──
   const flashOpacity = Math.max(0, 1 - blastFx.progress * 2.9) * 0.72 * blastFx.intensity;
   const haloOpacity = Math.max(0, 1 - Math.abs(blastFx.progress - 0.18) / 0.24) * 0.42 * blastFx.intensity;
   const ringOpacity = Math.max(0, 1 - blastFx.progress * 1.15) * 0.52 * blastFx.intensity;
@@ -14887,8 +15880,7 @@ const NukeImpactOverlay = ({ blastFx }) => {
           opacity: heatOpacity,
           transform: `scale(${heatScale})`,
           background: `radial-gradient(circle at ${offsetX} ${offsetY}, rgba(255,210,110,0.22) 0%, rgba(255,120,20,0.1) 14%, rgba(255,255,255,0) 34%),
-            radial-gradient(circle at ${offsetX} ${offsetY}, rgba(255,168,66,0.06) 12%, rgba(145,58,18,0.05) 36%, rgba(0,0,0,0) 68%),
-            linear-gradient(135deg, rgba(255,205,120,0.04) 0%, rgba(255,130,45,0.03) 38%, rgba(0,0,0,0) 72%)`,
+            repeating-linear-gradient(90deg, rgba(255,255,255,0.02) 0 3px, rgba(255,160,64,0.01) 3px 7px, rgba(0,0,0,0) 7px 12px)`,
           filter: 'blur(10px)'
         }}
       />
@@ -15292,7 +16284,7 @@ export default function FalloutPeople({ theme, isIdleMode }) {
   const [resolutionPreset, setResolutionPreset] = useState(getInitialResolutionPreset);
   const [fpsCap, setFpsCap] = useState(getInitialFpsCap);
   const [currentLevel, setCurrentLevel] = useState(1);
-  const [blastFx, setBlastFx] = useState({ active: false, progress: 0, intensity: 0, screenX: 50, screenY: 50 });
+  const [blastFx, setBlastFx] = useState({ active: false, progress: 0, intensity: 0, type: 'nuke', screenX: 50, screenY: 50 });
   const [stressLevel, setStressLevel] = useState('normal');
   const nukeIdRef = useRef(0);
   const progressBaseRef = useRef(DEFAULT_FALLOUT_PROGRESS);
@@ -15300,16 +16292,6 @@ export default function FalloutPeople({ theme, isIdleMode }) {
   const progressLoadedRef = useRef(false);
   const resultSavedRef = useRef(false);
   const lastProgressSignatureRef = useRef('');
-
-  useEffect(() => {
-    if (typeof document === 'undefined' || !isFallout) return undefined;
-    document.documentElement.classList.add('fallout-no-scanlines');
-    document.body.classList.add('fallout-no-scanlines');
-    return () => {
-      document.documentElement.classList.remove('fallout-no-scanlines');
-      document.body.classList.remove('fallout-no-scanlines');
-    };
-  }, [isFallout]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -15348,13 +16330,18 @@ export default function FalloutPeople({ theme, isIdleMode }) {
     const handleExplosion = (event) => {
       const detail = event?.detail || {};
       const intensity = Math.max(0.8, Math.min(1.4, (detail.intensity || 2.4) / 2.2));
+      const strikeType = detail.type || 'nuke';
       fxStart = performance.now();
-      fxDuration = 1150 + intensity * 260;
+      fxDuration = strikeType === 'firestorm'      ? 1600 + intensity * 280
+                 : strikeType === 'kinetic_spear'  ? 920  + intensity * 180
+                 : strikeType === 'orbital_lance'  ? 1050 + intensity * 200
+                 :                                   1150 + intensity * 260;
       setStressLevel('critical');
       setBlastFx({
         active: true,
         progress: 0,
         intensity,
+        type: strikeType,
         screenX: 50,
         screenY: 50
       });
@@ -15587,8 +16574,8 @@ export default function FalloutPeople({ theme, isIdleMode }) {
   
   // Ground: green → brown → warm dark gray
   const groundColor = new THREE.Color(activeTheme.groundColor)
-    .lerp(new THREE.Color(activeTheme.groundPolluted), Math.min(pollution * 2, 1))
-    .lerp(new THREE.Color('#1c1917'), Math.max(0, (pollution - 0.5) * 2))
+    .lerp(new THREE.Color(activeTheme.groundPolluted), Math.min(pollution * 1.35, 1))
+    .lerp(new THREE.Color('#4b3a2f'), Math.max(0, (pollution - 0.72) * 1.15))
     .getStyle();
   
   // Sun: yellow → blood red, stays above horizon
@@ -15600,13 +16587,15 @@ export default function FalloutPeople({ theme, isIdleMode }) {
   const sunSize = 800 * (1 + pollution * 0.5); // Reduced size for performance
   
   // Fog: slightly transparent so we can still see things
-  const fogColor = new THREE.Color(environmentVariant?.fog || bgColor).lerp(new THREE.Color(bgColor), 0.62);
-  const fogNear = 1200 - pollution * 600;
-  const fogFar = 3000 - pollution * 1000;
+  const fogColor = new THREE.Color(environmentVariant?.fog || bgColor).lerp(new THREE.Color(bgColor), 0.42);
+  const fogNear = 1450 - pollution * 380;
+  const fogFar = 3600 - pollution * 700;
   
   // Ambient Brightness (Keeps the scene well-lit even at max pollution)
-  const ambientIntensity = Math.max(1.75, 2.18 - pollution * 0.34);
-  const directionalIntensity = Math.max(1.18, 1.68 - pollution * 0.34);
+  const ambientIntensity = Math.max(2.15, 2.55 - pollution * 0.18);
+  const directionalIntensity = Math.max(1.45, 1.95 - pollution * 0.2);
+  const hemisphereIntensity = Math.max(0.7, 0.95 - pollution * 0.08);
+  const fillLightIntensity = Math.max(0.5, 0.78 - pollution * 0.08);
 
   return (
     <div className="fixed inset-0 z-[5] pointer-events-none" style={{ overflow: 'hidden' }}>
@@ -15615,8 +16604,8 @@ export default function FalloutPeople({ theme, isIdleMode }) {
         <div 
           className="absolute inset-0 z-10 pointer-events-none"
           style={{
-            background: `radial-gradient(circle, transparent 58%, rgba(0,0,0,${pollution * 0.24}) 100%)`,
-            backgroundColor: `rgba(255, 140, 40, ${pollution * 0.06})`
+            background: `radial-gradient(circle, transparent 64%, rgba(0,0,0,${pollution * 0.12}) 100%)`,
+            backgroundColor: `rgba(255, 140, 40, ${pollution * 0.035})`
           }}
         />
       )}
@@ -15641,9 +16630,9 @@ export default function FalloutPeople({ theme, isIdleMode }) {
          dpr={resolutionProfile.dpr}
          gl={{
            antialias: resolutionProfile.antialias,
-           powerPreference: resolutionProfile.dpr <= 0.5 ? 'low-power' : 'default',
+           powerPreference: resolutionProfile.dpr >= 1.25 ? 'high-performance' : 'low-power',
            toneMapping: THREE.ACESFilmicToneMapping,
-           toneMappingExposure: 1.2
+           toneMappingExposure: 1.6
          }}
          camera={{ position: [0, 400, 600], fov: 60, rotation: [-Math.PI / 8, 0, 0], far: 20000 }}
       >
@@ -15657,14 +16646,22 @@ export default function FalloutPeople({ theme, isIdleMode }) {
         {/* Ambient light - warm wasteland tones */}
         <ambientLight 
           intensity={ambientIntensity} 
-          color={pollution > 0.5 ? '#ff6b35' : environmentVariant?.ambient || (pollution > 0.2 ? '#ffa07a' : '#fff5e6')} 
+          color={pollution > 0.5 ? '#ffd2b0' : environmentVariant?.ambient || (pollution > 0.2 ? '#ffe0c7' : '#fff5e6')} 
+        />
+
+        <hemisphereLight
+          args={[
+            pollution > 0.45 ? '#cfe7ff' : '#e5f0ff',
+            pollution > 0.45 ? '#5b4638' : '#7a6350',
+            hemisphereIntensity
+          ]}
         />
         
         {/* Main sun - harsh directional with shadows */}
         <directionalLight 
           position={[200, 500, 200]} 
           intensity={directionalIntensity}
-          color={pollution > 0.3 ? '#ff8c42' : environmentVariant?.directional || '#fffaf0'}
+          color={pollution > 0.3 ? '#ffd0a6' : environmentVariant?.directional || '#fffaf0'}
           castShadow={resolutionProfile.shadows}
           shadow-mapSize-width={resolutionProfile.shadowMapSize || 256}
           shadow-mapSize-height={resolutionProfile.shadowMapSize || 256}
@@ -15680,8 +16677,8 @@ export default function FalloutPeople({ theme, isIdleMode }) {
         {resolutionProfile.detailMode !== 'minimal' && (
           <directionalLight 
             position={[-300, 200, -100]} 
-            intensity={directionalIntensity * 0.3}
-            color="#87ceeb"
+            intensity={fillLightIntensity}
+            color="#dbeafe"
           />
         )}
         
@@ -15700,8 +16697,8 @@ export default function FalloutPeople({ theme, isIdleMode }) {
         {resolutionProfile.detailMode === 'full' && (
           <directionalLight 
             position={[0, 300, -400]} 
-            intensity={0.2}
-            color={pollution > 0.3 ? '#ff4500' : '#ffd700'}
+            intensity={0.34}
+            color={pollution > 0.3 ? '#ffb36b' : '#ffe29a'}
           />
         )}
         
@@ -16249,6 +17246,7 @@ const FalloutAshParticle = ({ index, pollution }) => {
 };
 
 const MountainTerrain = memo(({ themeConfig, environmentVariant, pollution, qualityProfile }) => {
+  const terrainShaderDetail = qualityProfile?.detailMode || 'full';
   // Use useMemo for geometry so it doesn't rebuild every render
   const geometry = useMemo(() => {
     const segments = qualityProfile?.terrainSegments || 96;
@@ -16269,9 +17267,6 @@ const MountainTerrain = memo(({ themeConfig, environmentVariant, pollution, qual
     const terrainPatchCount = qualityProfile?.terrainPatchCount || 200;
     const terrainCrackCount = qualityProfile?.terrainCrackCount || 50;
     const terrainDebrisCount = qualityProfile?.terrainDebrisCount || 500;
-    const terrainSmearCount = Math.max(12, Math.floor(terrainPatchCount * 0.22));
-    const terrainRustCount = Math.max(20, Math.floor(terrainPatchCount * 0.35));
-    const isUrbanTerrain = Boolean(environmentVariant?.urbanScene || themeConfig?.name === 'city');
     const canvas = document.createElement('canvas');
     canvas.width = textureSize;
     canvas.height = textureSize;
@@ -16282,7 +17277,7 @@ const MountainTerrain = memo(({ themeConfig, environmentVariant, pollution, qual
     ctx.fillStyle = baseColor;
     ctx.fillRect(0, 0, textureSize, textureSize);
     
-    // Add grass/dirt variation patches
+    // Add broad grass/dirt variation patches
     for (let i = 0; i < terrainPatchCount; i++) {
         const x = Math.random() * textureSize;
         const y = Math.random() * textureSize;
@@ -16297,25 +17292,22 @@ const MountainTerrain = memo(({ themeConfig, environmentVariant, pollution, qual
         ctx.fill();
     }
 
-    // Add stretched erosion smears to break circular patch repetition
-    for (let i = 0; i < terrainSmearCount; i++) {
-      const x = Math.random() * textureSize;
-      const y = Math.random() * textureSize;
-      const rx = 28 + Math.random() * 120;
-      const ry = 10 + Math.random() * 34;
-      const rot = Math.random() * Math.PI;
-      ctx.save();
-      ctx.translate(x, y);
-      ctx.rotate(rot);
-      ctx.beginPath();
-      ctx.ellipse(0, 0, rx, ry, 0, 0, Math.PI * 2);
-      ctx.fillStyle = Math.random() > 0.55
-        ? (environmentVariant?.overlay || '#3b2210')
-        : (environmentVariant?.debrisA || '#6a5a45');
-      ctx.globalAlpha = 0.12 + Math.random() * 0.14;
-      ctx.fill();
-      ctx.restore();
-    }
+      // Add medium-scale streaking so the terrain reads like layered soil
+      for (let i = 0; i < terrainPatchCount * 0.75; i++) {
+        const x = Math.random() * textureSize;
+        const y = Math.random() * textureSize;
+        const len = 12 + Math.random() * 48;
+        const ang = Math.random() * Math.PI;
+        ctx.beginPath();
+        ctx.moveTo(x, y);
+        ctx.lineTo(x + Math.cos(ang) * len, y + Math.sin(ang) * len);
+        ctx.strokeStyle = Math.random() > 0.5
+          ? (environmentVariant?.debrisA || '#6a5a45')
+          : (environmentVariant?.debrisB || '#4d453b');
+        ctx.globalAlpha = 0.08;
+        ctx.lineWidth = 2 + Math.random() * 4;
+        ctx.stroke();
+      }
     
     // Add dirt/cracks pattern
     ctx.globalAlpha = 0.2;
@@ -16334,7 +17326,7 @@ const MountainTerrain = memo(({ themeConfig, environmentVariant, pollution, qual
         ctx.stroke();
     }
     
-    // Add small debris/stones
+    // Add medium stones / debris
     ctx.globalAlpha = 0.28;
     for (let i = 0; i < terrainDebrisCount; i++) {
         const x = Math.random() * textureSize;
@@ -16346,57 +17338,37 @@ const MountainTerrain = memo(({ themeConfig, environmentVariant, pollution, qual
         ctx.fillRect(x, y, size, size);
     }
 
-    // Add warm/cold mineral specks for more lively micro variation
-    ctx.globalAlpha = 0.14;
-    for (let i = 0; i < terrainRustCount; i++) {
-      const x = Math.random() * textureSize;
-      const y = Math.random() * textureSize;
-      const r = 1.4 + Math.random() * 3.8;
-      ctx.beginPath();
-      ctx.arc(x, y, r, 0, Math.PI * 2);
-      ctx.fillStyle = Math.random() > 0.5 ? '#7a5132' : '#4a5a48';
-      ctx.fill();
-    }
-
-    if (isUrbanTerrain) {
-      const roadBands = Math.max(4, Math.floor(textureSize / 180));
-      ctx.globalAlpha = 0.18;
-      for (let i = 0; i < roadBands; i++) {
-        const vertical = i % 2 === 0;
-        const laneWidth = textureSize * (0.05 + Math.random() * 0.038);
-        const center = (textureSize / (roadBands + 1)) * (i + 1) + (Math.random() - 0.5) * textureSize * 0.04;
-        ctx.fillStyle = Math.random() > 0.5 ? '#2a313a' : '#252b33';
-        if (vertical) {
-          ctx.fillRect(center - laneWidth * 0.5, 0, laneWidth, textureSize);
-        } else {
-          ctx.fillRect(0, center - laneWidth * 0.5, textureSize, laneWidth);
-        }
-      }
-
-      const slabCount = Math.max(26, Math.floor(terrainPatchCount * 0.4));
-      ctx.globalAlpha = 0.14;
-      for (let i = 0; i < slabCount; i++) {
+    // Add fine gravel/grain so close-up terrain does not read as flat paint
+    ctx.globalAlpha = 0.24;
+    for (let i = 0; i < terrainDebrisCount * 5; i++) {
         const x = Math.random() * textureSize;
         const y = Math.random() * textureSize;
-        const w = 18 + Math.random() * 90;
-        const h = 18 + Math.random() * 70;
-        const rot = (Math.random() - 0.5) * 0.3;
-        ctx.save();
-        ctx.translate(x, y);
-        ctx.rotate(rot);
-        ctx.fillStyle = Math.random() > 0.5 ? '#6b7280' : '#7c8593';
-        ctx.fillRect(-w * 0.5, -h * 0.5, w, h);
-        ctx.restore();
-      }
+        const size = 0.5 + Math.random() * 1.4;
+        const shade = Math.random() > 0.6
+          ? (environmentVariant?.crack || '#2a1f18')
+          : (environmentVariant?.debrisA || '#6a5a45');
+        ctx.fillStyle = shade;
+        ctx.fillRect(x, y, size, size);
+    }
+
+    // Add subtle highlight speckle for dusty mineral breakup
+    ctx.globalAlpha = 0.08;
+    for (let i = 0; i < terrainDebrisCount * 2.5; i++) {
+        const x = Math.random() * textureSize;
+        const y = Math.random() * textureSize;
+        const size = 0.5 + Math.random() * 1.2;
+        ctx.fillStyle = environmentVariant?.terrainTint || '#8a745d';
+        ctx.fillRect(x, y, size, size);
     }
     
     const texture = new THREE.CanvasTexture(canvas);
     texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
-    texture.repeat.set(isUrbanTerrain ? 3 : 8, isUrbanTerrain ? 3 : 8);
+    texture.repeat.set(14, 14);
     texture.generateMipmaps = true;
     texture.minFilter = THREE.LinearMipmapLinearFilter;
     texture.magFilter = THREE.LinearFilter;
     texture.anisotropy = qualityProfile?.terrainAnisotropy || 8;
+    texture.needsUpdate = true;
     texture.needsUpdate = true;
     return texture;
   }, [themeConfig, environmentVariant, qualityProfile]);
@@ -16410,29 +17382,29 @@ const MountainTerrain = memo(({ themeConfig, environmentVariant, pollution, qual
     }))
   ), [qualityProfile?.burnMarkCount]);
   const environmentAccents = useMemo(() => (
-    [...Array(8)].map((_, index) => {
-      const x = (Math.random() - 0.5) * WORLD_WIDTH * 1.2;
-      const z = (Math.random() - 0.5) * WORLD_DEPTH * 1.2;
-      const lift = 0.22 + index * 0.015;
-      return {
-        x,
-        z,
-        y: getTerrainHeight(x, z) + lift,
-        radius: 36 + Math.random() * 90,
-        stretch: 0.5 + Math.random() * 1.1,
-        rotation: Math.random() * Math.PI,
-        opacity: 0.08 + Math.random() * 0.12
-      };
-    })
+    [...Array(8)].map((_, index) => ({
+      x: (Math.random() - 0.5) * WORLD_WIDTH * 1.2,
+      z: (Math.random() - 0.5) * WORLD_DEPTH * 1.2,
+      radius: 36 + Math.random() * 90,
+      stretch: 0.5 + Math.random() * 1.1,
+      rotation: Math.random() * Math.PI,
+      opacity: 0.08 + Math.random() * 0.12,
+      lift: 0.18 + index * 0.01
+    }))
   ), [environmentVariant?.key]);
 
   const terrainMeshRef = useRef(null);
+  const terrainAnimationEnabled = terrainShaderDetail === 'full';
+  const terrainPuddlesEnabled = terrainShaderDetail !== 'minimal';
+  const terrainNoiseOctaves = terrainShaderDetail === 'full' ? 4 : terrainShaderDetail === 'lean' ? 3 : 2;
 
   // Animate terrain shader uniforms every frame
   useFrame((state) => {
     const mat = terrainMeshRef.current?.material;
     if (mat?.uniforms) {
-      mat.uniforms.uTime.value = state.clock.elapsedTime;
+      if (terrainAnimationEnabled) {
+        mat.uniforms.uTime.value = state.clock.elapsedTime;
+      }
       mat.uniforms.uPollution.value = THREE.MathUtils.lerp(
         mat.uniforms.uPollution.value,
         pollution,
@@ -16449,7 +17421,6 @@ const MountainTerrain = memo(({ themeConfig, environmentVariant, pollution, qual
     const accentColor   = new THREE.Color(environmentVariant?.accent        || '#a3e635');
     const overlayColor  = new THREE.Color(environmentVariant?.overlay       || '#3b2210');
     const crackColor    = new THREE.Color(environmentVariant?.crack         || '#1a1208');
-    const urbanFactor   = environmentVariant?.urbanScene || themeConfig?.name === 'city' ? 1 : 0;
 
     return new THREE.ShaderMaterial({
       uniforms: {
@@ -16463,7 +17434,6 @@ const MountainTerrain = memo(({ themeConfig, environmentVariant, pollution, qual
         uAccent:     { value: accentColor },
         uOverlay:    { value: overlayColor },
         uCrack:      { value: crackColor },
-        uUrban:      { value: urbanFactor },
       },
       vertexShader: `
         varying vec2  vUv;
@@ -16493,7 +17463,6 @@ const MountainTerrain = memo(({ themeConfig, environmentVariant, pollution, qual
         uniform vec3      uAccent;
         uniform vec3      uOverlay;
         uniform vec3      uCrack;
-        uniform float     uUrban;
 
         varying vec2  vUv;
         varying vec3  vWorldPos;
@@ -16517,7 +17486,7 @@ const MountainTerrain = memo(({ themeConfig, environmentVariant, pollution, qual
         float fbm(vec2 p) {
           float v = 0.0;
           float a = 0.5;
-          for (int i = 0; i < 4; i++) {
+          for (int i = 0; i < ${terrainNoiseOctaves}; i++) {
             v += a * noise(p);
             p *= 2.1;
             a *= 0.5;
@@ -16526,127 +17495,106 @@ const MountainTerrain = memo(({ themeConfig, environmentVariant, pollution, qual
         }
 
         void main() {
-          // ── Multi-scale texture blend to avoid tiled-looking terrain ──────
-          vec3 texFine = texture2D(uMap, vUv * 0.25).rgb;
-          vec3 texMacro = texture2D(uMap, vUv * 0.08 + vec2(0.17, 0.31)).rgb;
-          vec3 tex = mix(texMacro, texFine, 0.68);
+          // ── Base texture from canvas (patches/cracks/debris) ──────────────
+          vec3 tex = texture2D(uMap, vUv * 0.25).rgb;
+          vec3 texFine = texture2D(uMap, vUv * 0.85 + vec2(0.13, 0.07)).rgb;
+          vec3 texMacro = texture2D(uMap, vUv * 0.09 + vec2(0.41, 0.23)).rgb;
 
           // ── World-space FBM noise for large terrain variation ─────────────
           vec2 wUv   = vWorldPos.xz * 0.0018;
           float n1   = fbm(wUv + 0.5);
           float n2   = fbm(wUv * 2.3 + vec2(4.2, 1.7));
-          float n3   = fbm(wUv * 4.8 + vec2(-3.4, 2.1));
-          float micro = noise(vWorldPos.xz * 0.03 + vec2(uTime * 0.01));
-          float ridges = fbm(wUv * 6.2 + vec2(5.3, -8.1));
-          float urban = clamp(uUrban, 0.0, 1.0);
+          float n3   = fbm(wUv * 6.4 + vec2(2.1, 7.4));
 
           // ── Base color blend with terrain tint ───────────────────────────
           vec3 ground = mix(uBase, uTint, n1 * 0.7);
-          ground      = mix(ground, uPatchA, smoothstep(0.58, 0.82, n2) * 0.52);
-          ground      = mix(ground, uPatchB, smoothstep(0.66, 0.92, 1.0 - n1) * 0.46);
+          ground      = mix(ground, uPatchA, smoothstep(0.6, 0.8, n2) * 0.5);
+          ground      = mix(ground, uPatchB, smoothstep(0.7, 0.9, 1.0 - n1) * 0.4);
 
-          // Merge with texture detail
-          ground = mix(ground, tex * ground * 1.25, 0.58);
-          ground *= 0.92 + (n3 - 0.5) * 0.18 + (micro - 0.5) * 0.05;
+          // Merge with texture detail more aggressively so the terrain reads textured
+          float texLuma = dot(tex, vec3(0.299, 0.587, 0.114));
+          float texFineLuma = dot(texFine, vec3(0.299, 0.587, 0.114));
+          float texMacroLuma = dot(texMacro, vec3(0.299, 0.587, 0.114));
+          float texContrast = clamp((texLuma - 0.5) * 1.65 + 0.5, 0.0, 1.0);
+          float texFineContrast = clamp((texFineLuma - 0.5) * 2.1 + 0.5, 0.0, 1.0);
+          ground = mix(ground, ground * (0.72 + texContrast * 0.72), 0.46);
+          ground += (texFineContrast - 0.5) * 0.18;
+          ground = mix(ground, ground * (0.82 + texMacroLuma * 0.34), 0.24);
 
           // ── Height-based tinting: valleys darker, peaks lighter ──────────
           float hFactor = clamp((vHeight + 10.0) / 80.0, 0.0, 1.0);
-          ground = mix(ground * 0.58, ground * 1.22, hFactor);
-
-          // ── Noise-derived detail normal for richer lighting depth ─────────
-          float eps = 0.0025;
-          float hL = fbm((wUv + vec2(-eps, 0.0)) * 5.2 + vec2(2.0, 1.3));
-          float hR = fbm((wUv + vec2( eps, 0.0)) * 5.2 + vec2(2.0, 1.3));
-          float hD = fbm((wUv + vec2(0.0, -eps)) * 5.2 + vec2(2.0, 1.3));
-          float hU = fbm((wUv + vec2(0.0,  eps)) * 5.2 + vec2(2.0, 1.3));
-          vec3 detailNormal = normalize(vec3((hL - hR) * 2.1, 1.0, (hD - hU) * 2.1));
-          vec3 terrainNormal = normalize(mix(vWorldNormal, detailNormal, 0.3));
+          ground = mix(ground * 0.84, ground * 1.12, hFactor);
 
           // ── Slope-based rock tinting (normals pointing sideways = cliffs) ─
-          float slopeFactor = 1.0 - abs(terrainNormal.y);
-          vec3  rockColor   = mix(uBase * 0.46, vec3(0.41, 0.36, 0.31), 0.65);
-          ground = mix(ground, rockColor, smoothstep(0.3, 0.74, slopeFactor) * 0.68);
-          ground += smoothstep(0.62, 0.86, ridges) * (0.028 + hFactor * 0.018) * mix(uPatchA, uTint, 0.5);
+          float slopeFactor = 1.0 - abs(vWorldNormal.y);
+          vec3  rockColor   = mix(uBase * 0.78, vec3(0.50, 0.44, 0.40), 0.55);
+          ground = mix(ground, rockColor, smoothstep(0.35, 0.72, slopeFactor) * 0.38);
 
-          float dustMask = smoothstep(0.62, 0.96, terrainNormal.y) * (0.35 + n2 * 0.45);
-          vec3 dustColor = mix(vec3(0.34, 0.28, 0.18), vec3(0.43, 0.31, 0.2), uPollution * 0.4);
-          vec3 urbanDust = mix(vec3(0.32, 0.34, 0.38), vec3(0.42, 0.44, 0.48), 0.48 + uPollution * 0.26);
-          ground = mix(ground, mix(ground * 1.06, mix(dustColor, urbanDust, urban), 0.38 + urban * 0.16), dustMask * mix(0.18, 0.26, urban));
+          // Dry ridges + compacted dirt pockets for stronger terrain breakup
+          float compactMask = smoothstep(0.56, 0.74, n3) * clamp(1.0 - slopeFactor * 1.8, 0.0, 1.0);
+          vec3 compactColor = mix(uCrack * 1.2, uPatchB * 0.92, 0.45);
+          ground = mix(ground, compactColor, compactMask * 0.28);
 
-          // ── Organic grass breakup (noise-based, avoids visible striping) ──
+          float ridgeDust = smoothstep(0.52, 0.86, hFactor) * smoothstep(0.0, 0.45, 1.0 - slopeFactor);
+          ground += ridgeDust * (0.045 + texFineContrast * 0.035) * uTint;
+
+          // ── Grass lighting / terrain accents ──────────────────────────────
+          ${terrainAnimationEnabled ? `
           float grassMask = smoothstep(0.6, 1.0, n1) * clamp(1.0 - slopeFactor * 2.0, 0.0, 1.0);
-          grassMask *= (1.0 - urban * 0.92);
-          vec2 grassUv = vWorldPos.xz * 0.0048;
-          vec2 grassWarp = vec2(
-            fbm(grassUv * 1.3 + vec2(uTime * 0.018, -uTime * 0.013)),
-            fbm(grassUv * 1.1 + vec2(-uTime * 0.015, uTime * 0.017) + 7.3)
-          );
-          float grassDetail = fbm(grassUv + grassWarp * 0.9 + n2 * 0.6);
-          float grassHighlight = smoothstep(0.48, 0.8, grassDetail) * grassMask;
-          float turfVariation = smoothstep(0.28, 0.72, n3 + noise(vWorldPos.xz * 0.009) * 0.32);
-          ground = mix(ground, ground * mix(0.92, 1.08, grassDetail), grassMask * 0.14);
-          ground += mix(uPatchA, uAccent, 0.35) * grassHighlight * 0.045;
-          ground = mix(ground, mix(ground, uPatchB * 0.9, 0.22), turfVariation * grassMask * 0.16);
+          float wind = sin(uTime * 1.8 + vWorldPos.x * 0.12 + vWorldPos.z * 0.09)
+                     * cos(uTime * 1.2 + vWorldPos.z * 0.07) * 0.5 + 0.5;
+          ground += grassMask * wind * 0.07 * uAccent;
+          ` : `
+          float grassMask = smoothstep(0.62, 1.0, n1) * clamp(1.0 - slopeFactor * 2.3, 0.0, 1.0);
+          ground += grassMask * 0.035 * uAccent;
+          `}
 
-          // ── Flowing radiation puddles / wet patches ───────────────────────
+          // ── Radiation puddles / wet patches ───────────────────────────────
+          ${terrainPuddlesEnabled ? (terrainAnimationEnabled ? `
           float puddle = fbm(wUv * 3.0 + vec2(uTime * 0.04, uTime * 0.03));
           float pudMask = smoothstep(0.62, 0.72, puddle)
-                        * smoothstep(0.0, 0.15, hFactor)          // valleys only
-                        * clamp(1.0 - slopeFactor * 3.0, 0.0, 1.0); // flat only
+                        * smoothstep(0.0, 0.15, hFactor)
+                        * clamp(1.0 - slopeFactor * 3.0, 0.0, 1.0);
           vec3 radColor = mix(vec3(0.15, 0.38, 0.08), uAccent * 0.7, uPollution);
-          radColor = mix(radColor, vec3(0.19, 0.21, 0.24), urban * 0.8);
           float puddleShimmer = sin(uTime * 3.5 + vWorldPos.x * 0.3) * 0.5 + 0.5;
-          ground = mix(ground, radColor * (0.54 + puddleShimmer * 0.42), pudMask * (0.42 + uPollution * 0.22));
-
-          float crackMask = smoothstep(0.56, 0.82, tex.g + (1.0 - tex.r) * 0.35);
-          ground = mix(ground, uCrack * 0.9, crackMask * 0.18);
-          float asphaltMask = smoothstep(0.42, 0.8, tex.b + n2 * 0.32);
-          ground = mix(ground, mix(vec3(0.20, 0.22, 0.26), vec3(0.27, 0.30, 0.34), n1), asphaltMask * urban * 0.24);
-
-          float wornTrack = fbm(wUv * 1.7 + vec2(9.1, -2.4));
-          float wornMask = smoothstep(0.54, 0.67, wornTrack + n2 * 0.14) * clamp(1.0 - slopeFactor * 1.8, 0.0, 1.0);
-          vec3 wornColor = mix(uOverlay, uCrack, 0.42) * 1.08;
-          ground = mix(ground, wornColor, wornMask * 0.14);
-          float cavity = smoothstep(0.35, 0.95, 1.0 - terrainNormal.y) * (0.3 + n3 * 0.4);
-          ground *= 1.0 - cavity * 0.14;
+          ground = mix(ground, radColor * (0.6 + puddleShimmer * 0.4), pudMask * 0.55);
+          ` : `
+          float puddle = fbm(wUv * 2.4 + vec2(0.8, 1.3));
+          float pudMask = smoothstep(0.64, 0.73, puddle)
+                        * smoothstep(0.0, 0.16, hFactor)
+                        * clamp(1.0 - slopeFactor * 3.2, 0.0, 1.0);
+          vec3 radColor = mix(vec3(0.14, 0.34, 0.08), uAccent * 0.58, uPollution);
+          ground = mix(ground, radColor * 0.72, pudMask * 0.42);
+          `) : ''}
 
           // ── Pollution overlay (blackens the ground at high pollution) ─────
-          ground = mix(ground, uCrack * 0.42 + uOverlay * 0.58, uPollution * 0.38);
+          ground = mix(ground, uCrack * 0.24 + uOverlay * 0.76, uPollution * 0.22);
 
           // ── Sky/sun light (directional, world-space) ──────────────────────
-          vec3 viewDir = normalize(cameraPosition - vWorldPos);
           vec3  sunDir  = normalize(vec3(0.4, 1.0, 0.3));
-          vec3  halfDir = normalize(sunDir + viewDir);
-          float NdotL   = max(dot(terrainNormal, sunDir), 0.0);
-          float wrapLight = max(dot(terrainNormal, sunDir) * 0.5 + 0.5, 0.0);
-          vec3 skyTint = mix(vec3(0.48, 0.60, 0.72), vec3(0.66, 0.46, 0.30), uPollution);
-          vec3 bounceTint = mix(vec3(0.18, 0.16, 0.12), vec3(0.16, 0.11, 0.08), uPollution);
-          vec3 ambientLight = mix(bounceTint, skyTint, clamp(terrainNormal.y * 0.5 + 0.5, 0.0, 1.0));
-          vec3 sunLight = vec3(1.0, 0.95, 0.78) * (0.28 + NdotL * 0.95 + wrapLight * 0.12);
-          float puddleSpec = pow(max(dot(terrainNormal, halfDir), 0.0), 64.0) * pudMask * (0.18 + puddleShimmer * 0.12);
-          float sheen = pow(max(dot(terrainNormal, halfDir), 0.0), 20.0) * grassMask * 0.05;
-          float horizon = smoothstep(0.0, 0.45, 1.0 - abs(terrainNormal.y));
-          vec3 horizonTint = mix(vec3(0.08, 0.09, 0.1), vec3(0.16, 0.10, 0.06), uPollution);
+          float NdotL   = max(dot(vWorldNormal, sunDir), 0.0);
+          vec3  sunLight = vec3(1.0, 0.97, 0.84) * (0.78 + NdotL * 0.42);
+
+          // Micro surface relief from the detail texture for stronger readability
+          float detailShade = clamp(0.82 + (texFineContrast - 0.5) * 0.42 + (n3 - 0.5) * 0.18, 0.68, 1.22);
+          sunLight *= detailShade;
 
           // ── Horizon atmospheric tint (distant terrain slightly hazy) ──────
           float dist = length(vWorldPos.xz) / 1800.0;
-          float haze = smoothstep(0.35, 1.0, dist);
-          vec3 hazeColor = mix(vec3(0.58, 0.67, 0.56), vec3(0.68, 0.54, 0.44), uPollution);
+          float haze = smoothstep(0.4, 1.0, dist);
+          vec3  hazeColor = mix(vec3(0.68, 0.72, 0.58), vec3(0.72, 0.77, 0.84), uPollution);
 
           // ── Assemble final color ──────────────────────────────────────────
-          vec3 final = ground * (ambientLight * 0.82 + sunLight);
-          final += vec3(1.0, 0.96, 0.84) * puddleSpec;
-          final += uAccent * sheen * 0.35;
-          final = mix(final, final + horizonTint * 0.12, horizon * 0.22);
-          final = mix(final, hazeColor * mix(final, ground, 0.25), haze * (0.24 + uPollution * 0.18));
-          final = min(final, vec3(1.65));
+          vec3 final = ground * sunLight;
+          final = mix(final, hazeColor * ground * 1.08, haze * 0.22);
 
           gl_FragColor = vec4(final, 1.0);
         }
       `,
       side: THREE.FrontSide,
+      precision: terrainShaderDetail === 'minimal' ? 'mediump' : 'highp',
     });
-  }, [environmentVariant, terrainTexture, themeConfig?.name]);
+  }, [environmentVariant, pollution, terrainAnimationEnabled, terrainNoiseOctaves, terrainPuddlesEnabled, terrainShaderDetail, terrainTexture]);
 
   return (
     <group>
@@ -16686,7 +17634,7 @@ const MountainTerrain = memo(({ themeConfig, environmentVariant, pollution, qual
             <mesh
               key={`${environmentVariant.key}-accent-${i}`}
               rotation={[-Math.PI / 2, 0, accent.rotation]}
-              position={[accent.x, accent.y, accent.z]}
+              position={[accent.x, accent.lift, accent.z]}
               scale={[accent.stretch, 1, 1]}
             >
               <circleGeometry args={[accent.radius, 20]} />
@@ -16695,10 +17643,6 @@ const MountainTerrain = memo(({ themeConfig, environmentVariant, pollution, qual
                 roughness={1}
                 transparent
                 opacity={accent.opacity}
-                depthWrite={false}
-                polygonOffset
-                polygonOffsetFactor={-2}
-                polygonOffsetUnits={-3}
               />
             </mesh>
           ))}
@@ -16708,7 +17652,7 @@ const MountainTerrain = memo(({ themeConfig, environmentVariant, pollution, qual
       {/* Solid base below terrain to prevent holes */}
       <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -20, 0]}>
          <planeGeometry args={[WORLD_WIDTH * 4, WORLD_DEPTH * 4]} />
-         <meshBasicMaterial color="#000" />
+        <meshBasicMaterial color="#2a221c" />
       </mesh>
     </group>
   );

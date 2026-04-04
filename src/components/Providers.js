@@ -10,18 +10,27 @@ import '@/lib/i18n';
 
 export function Providers({ children }) {
   useEffect(() => {
-    if ('serviceWorker' in navigator) {
-      window.addEventListener('load', () => {
-        navigator.serviceWorker.register('/sw.js').then(
-          (registration) => {
-            console.log('SW registered: ', registration);
-          },
-          (registrationError) => {
-            console.log('SW registration failed: ', registrationError);
-          }
-        );
-      });
-    }
+    if (!('serviceWorker' in navigator)) return;
+    window.addEventListener('load', () => {
+      // In dev mode, unregister any existing service workers to prevent stale
+      // workers from intercepting blob: URLs (used by Three.js GLTFLoader).
+      if (process.env.NODE_ENV !== 'production') {
+        navigator.serviceWorker.getRegistrations().then((regs) => {
+          regs.forEach((r) => r.unregister());
+        });
+        return;
+      }
+      // In production, register with immediate update check
+      navigator.serviceWorker.register('/sw.js', { updateViaCache: 'none' }).then(
+        (registration) => {
+          registration.update(); // force check for new SW
+          console.log('SW registered: ', registration);
+        },
+        (registrationError) => {
+          console.log('SW registration failed: ', registrationError);
+        }
+      );
+    });
   }, []);
 
   return (

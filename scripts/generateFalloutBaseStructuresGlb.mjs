@@ -3,6 +3,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import * as THREE from 'three';
 import { GLTFExporter } from 'three/examples/jsm/exporters/GLTFExporter.js';
+import { installPolyfills, textures, autoMap } from './falloutTextureUtils.mjs';
 
 class NodeFileReader {
   constructor() {
@@ -47,6 +48,7 @@ class NodeFileReader {
 if (typeof globalThis.FileReader === 'undefined') {
   globalThis.FileReader = NodeFileReader;
 }
+installPolyfills();
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -65,18 +67,26 @@ const makeMaterial = ({
   metalness = 0.14,
   transparent = false,
   opacity = 1,
-  side
-}) => new THREE.MeshStandardMaterial({
-  color,
-  emissive,
-  emissiveIntensity,
-  roughness,
-  metalness,
-  transparent,
-  opacity,
-  depthWrite: !transparent,
-  ...(side !== undefined ? { side } : {})
-});
+  side,
+  map,
+}) => {
+  const m = new THREE.MeshStandardMaterial({
+    color,
+    emissive,
+    emissiveIntensity,
+    roughness,
+    metalness,
+    transparent,
+    opacity,
+    depthWrite: !transparent,
+    ...(side !== undefined ? { side } : {})
+  });
+  const tex = map !== undefined ? map
+    : (!transparent && opacity >= 0.95 && emissiveIntensity <= 0.4)
+      ? autoMap(color) : null;
+  if (tex) m.map = tex;
+  return m;
+};
 
 const addMesh = ({
   parent,
@@ -230,10 +240,10 @@ const buildVaultBunker = () => {
   const group = new THREE.Group();
   group.name = 'vault_bunker';
 
-  const concreteMat = makeMaterial({ color: '#8a8f98', roughness: 0.96, metalness: 0.08 });
-  const darkConcreteMat = makeMaterial({ color: '#5b616b', roughness: 0.98, metalness: 0.05 });
-  const steelMat = makeMaterial({ color: '#9ba6b2', roughness: 0.34, metalness: 0.78 });
-  const darkSteelMat = makeMaterial({ color: '#3a4755', roughness: 0.42, metalness: 0.72 });
+  const concreteMat = makeMaterial({ color: '#c6ced8', roughness: 0.88, metalness: 0.08 });
+  const darkConcreteMat = makeMaterial({ color: '#9ca9b8', roughness: 0.9, metalness: 0.05 });
+  const steelMat = makeMaterial({ color: '#d6dee6', roughness: 0.28, metalness: 0.78 });
+  const darkSteelMat = makeMaterial({ color: '#8494a8', roughness: 0.34, metalness: 0.72 });
   const amberLightMat = makeMaterial({ color: '#ffd08a', emissive: '#f59e0b', emissiveIntensity: 1.8, roughness: 0.22, metalness: 0.22 });
 
   const shell = new THREE.Group();
@@ -251,7 +261,7 @@ const buildVaultBunker = () => {
     parent: shell,
     name: 'bunker_mound',
     geometry: new THREE.CylinderGeometry(25, 34, 18, 10),
-    material: makeMaterial({ color: '#4c5c40', roughness: 1, metalness: 0.02 }),
+    material: makeMaterial({ color: '#8fa46f', roughness: 0.94, metalness: 0.02 }),
     position: [0, 7, -8],
     scale: [1.28, 0.72, 1.8]
   });
@@ -289,7 +299,7 @@ const buildVaultBunker = () => {
     parent: shell,
     name: 'bunker_apron',
     geometry: new THREE.BoxGeometry(28, 1.4, 28),
-    material: makeMaterial({ color: '#6b7280', roughness: 0.92, metalness: 0.08 }),
+    material: makeMaterial({ color: '#9aa3b0', roughness: 0.88, metalness: 0.08 }),
     position: [0, 0.8, 31]
   });
 
@@ -415,9 +425,9 @@ const buildPowerPlant = () => {
   const group = new THREE.Group();
   group.name = 'facility_powerplant';
 
-  const concreteMat = makeMaterial({ color: '#808893', roughness: 0.9, metalness: 0.08 });
-  const steelMat = makeMaterial({ color: '#64707d', roughness: 0.62, metalness: 0.42 });
-  const darkSteelMat = makeMaterial({ color: '#364152', roughness: 0.56, metalness: 0.58 });
+  const concreteMat = makeMaterial({ color: '#a0aab6', roughness: 0.88, metalness: 0.08 });
+  const steelMat = makeMaterial({ color: '#7c8b9a', roughness: 0.58, metalness: 0.42 });
+  const darkSteelMat = makeMaterial({ color: '#5b6b7d', roughness: 0.5, metalness: 0.58 });
   const copperGlowMat = makeMaterial({ color: '#ffd08a', emissive: '#f59e0b', emissiveIntensity: 1.4, roughness: 0.24, metalness: 0.24 });
 
   addMesh({
@@ -490,9 +500,9 @@ const buildWarFactory = () => {
   const group = new THREE.Group();
   group.name = 'facility_war_factory';
 
-  const concreteMat = makeMaterial({ color: '#707784', roughness: 0.92, metalness: 0.08 });
-  const steelMat = makeMaterial({ color: '#4b5563', roughness: 0.64, metalness: 0.48 });
-  const darkSteelMat = makeMaterial({ color: '#1f2937', roughness: 0.54, metalness: 0.6 });
+  const concreteMat = makeMaterial({ color: '#98a2b0', roughness: 0.9, metalness: 0.08 });
+  const steelMat = makeMaterial({ color: '#667385', roughness: 0.6, metalness: 0.48 });
+  const darkSteelMat = makeMaterial({ color: '#475569', roughness: 0.5, metalness: 0.6 });
 
   addMesh({
     parent: group,
@@ -647,9 +657,9 @@ const buildTechLab = () => {
   const group = new THREE.Group();
   group.name = 'facility_tech_lab';
 
-  const concreteMat = makeMaterial({ color: '#6b7280', roughness: 0.92, metalness: 0.06 });
-  const steelMat = makeMaterial({ color: '#475569', roughness: 0.56, metalness: 0.54 });
-  const darkSteelMat = makeMaterial({ color: '#0f172a', roughness: 0.48, metalness: 0.62 });
+  const concreteMat = makeMaterial({ color: '#8f99a8', roughness: 0.9, metalness: 0.06 });
+  const steelMat = makeMaterial({ color: '#64748b', roughness: 0.52, metalness: 0.54 });
+  const darkSteelMat = makeMaterial({ color: '#53657d', roughness: 0.44, metalness: 0.62 });
   const glowMat = makeMaterial({ color: '#67e8f9', emissive: '#22d3ee', emissiveIntensity: 1.6, roughness: 0.18, metalness: 0.52 });
 
   addMesh({
@@ -715,9 +725,9 @@ const buildRadarTower = () => {
   const group = new THREE.Group();
   group.name = 'facility_radar_tower';
 
-  const concreteMat = makeMaterial({ color: '#7c8592', roughness: 0.92, metalness: 0.06 });
-  const steelMat = makeMaterial({ color: '#a3afbd', roughness: 0.42, metalness: 0.68 });
-  const darkSteelMat = makeMaterial({ color: '#334155', roughness: 0.52, metalness: 0.62 });
+  const concreteMat = makeMaterial({ color: '#98a4b2', roughness: 0.9, metalness: 0.06 });
+  const steelMat = makeMaterial({ color: '#bac5d2', roughness: 0.4, metalness: 0.68 });
+  const darkSteelMat = makeMaterial({ color: '#5c6c80', roughness: 0.48, metalness: 0.62 });
   const glowMat = makeMaterial({ color: '#67e8f9', emissive: '#22d3ee', emissiveIntensity: 1.3, roughness: 0.2, metalness: 0.46 });
 
   addMesh({
@@ -784,9 +794,9 @@ const buildAASite = () => {
   const group = new THREE.Group();
   group.name = 'facility_aa_site';
 
-  const concreteMat = makeMaterial({ color: '#6b7280', roughness: 0.94, metalness: 0.08 });
-  const steelMat = makeMaterial({ color: '#475569', roughness: 0.48, metalness: 0.66 });
-  const darkSteelMat = makeMaterial({ color: '#111827', roughness: 0.58, metalness: 0.62 });
+  const concreteMat = makeMaterial({ color: '#8993a2', roughness: 0.92, metalness: 0.08 });
+  const steelMat = makeMaterial({ color: '#62748a', roughness: 0.46, metalness: 0.66 });
+  const darkSteelMat = makeMaterial({ color: '#4c5d73', roughness: 0.54, metalness: 0.62 });
   const screenMat = makeMaterial({ color: '#7dd3fc', emissive: '#22d3ee', emissiveIntensity: 1.1, roughness: 0.16, metalness: 0.46 });
 
   addMesh({

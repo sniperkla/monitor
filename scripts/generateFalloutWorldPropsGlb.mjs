@@ -3,6 +3,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import * as THREE from 'three';
 import { GLTFExporter } from 'three/examples/jsm/exporters/GLTFExporter.js';
+import { installPolyfills, textures, autoMap } from './falloutTextureUtils.mjs';
 
 class NodeFileReader {
   constructor() {
@@ -47,6 +48,7 @@ class NodeFileReader {
 if (typeof globalThis.FileReader === 'undefined') {
   globalThis.FileReader = NodeFileReader;
 }
+installPolyfills();
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -65,18 +67,26 @@ const makeMaterial = ({
   metalness = 0.08,
   transparent = false,
   opacity = 1,
-  side
-}) => new THREE.MeshStandardMaterial({
-  color,
-  emissive,
-  emissiveIntensity,
-  roughness,
-  metalness,
-  transparent,
-  opacity,
-  depthWrite: !transparent,
-  ...(side !== undefined ? { side } : {})
-});
+  side,
+  map,
+}) => {
+  const m = new THREE.MeshStandardMaterial({
+    color,
+    emissive,
+    emissiveIntensity,
+    roughness,
+    metalness,
+    transparent,
+    opacity,
+    depthWrite: !transparent,
+    ...(side !== undefined ? { side } : {})
+  });
+  const tex = map !== undefined ? map
+    : (!transparent && opacity >= 0.95 && emissiveIntensity <= 0.4)
+      ? autoMap(color) : null;
+  if (tex) m.map = tex;
+  return m;
+};
 
 const addMesh = ({
   parent,
@@ -414,7 +424,7 @@ const buildTowerHouse = () => {
     parent: group,
     name: 'house_door',
     geometry: new THREE.BoxGeometry(6.5, 11.4, 1),
-    material: makeMaterial({ color: '#334155', roughness: 0.66, metalness: 0.28 }),
+    material: makeMaterial({ color: '#5b6b80', roughness: 0.66, metalness: 0.28 }),
     position: [0, 7.6, 15.05]
   });
   addMesh({
@@ -439,9 +449,9 @@ const buildTowerHouse = () => {
       name: `house_window_front_${row}`,
       geometry: new THREE.BoxGeometry(20, 3.4, 0.7),
       material: makeMaterial({
-        color: '#334155',
-        emissive: '#334155',
-        emissiveIntensity: 0.18,
+        color: '#5f738a',
+        emissive: '#475569',
+        emissiveIntensity: 0.24,
         roughness: 0.16,
         metalness: 0.3
       }),
@@ -452,9 +462,9 @@ const buildTowerHouse = () => {
       name: `house_window_side_${row}`,
       geometry: new THREE.BoxGeometry(18, 3.2, 0.7),
       material: makeMaterial({
-        color: '#334155',
-        emissive: '#334155',
-        emissiveIntensity: 0.14,
+        color: '#5f738a',
+        emissive: '#475569',
+        emissiveIntensity: 0.2,
         roughness: 0.16,
         metalness: 0.3
       }),
@@ -467,21 +477,21 @@ const buildTowerHouse = () => {
     parent: group,
     name: 'house_roof_cap',
     geometry: new THREE.BoxGeometry(26, 4, 26),
-    material: makeMaterial({ color: '#64748b', roughness: 0.8 }),
+    material: makeMaterial({ color: '#8ea0b3', roughness: 0.76 }),
     position: [0, 42, 0]
   });
   addMesh({
     parent: group,
     name: 'house_roof_unit_left',
     geometry: new THREE.BoxGeometry(7, 4, 7),
-    material: makeMaterial({ color: '#64748b', roughness: 0.84 }),
+    material: makeMaterial({ color: '#8ea0b3', roughness: 0.8 }),
     position: [-6, 46, -4]
   });
   addMesh({
     parent: group,
     name: 'house_roof_unit_right',
     geometry: new THREE.BoxGeometry(7, 4, 7),
-    material: makeMaterial({ color: '#64748b', roughness: 0.84 }),
+    material: makeMaterial({ color: '#8ea0b3', roughness: 0.8 }),
     position: [6, 46, 4]
   });
   addMesh({
@@ -653,14 +663,14 @@ const buildBroadleafTree = () => {
     parent: group,
     name: 'tree_trunk',
     geometry: new THREE.CylinderGeometry(1.7, 2.8, 18, 8),
-    material: makeMaterial({ color: '#7c4a22', roughness: 0.96 }),
+    material: makeMaterial({ color: '#a66a3a', roughness: 0.92 }),
     position: [0, 9, 0]
   });
   addMesh({
     parent: group,
     name: 'tree_root',
     geometry: new THREE.CylinderGeometry(3.8, 5, 4.2, 8),
-    material: makeMaterial({ color: '#4b2e16', roughness: 1 }),
+    material: makeMaterial({ color: '#704626', roughness: 0.96 }),
     position: [0, 2.2, 0]
   });
   [
@@ -672,7 +682,7 @@ const buildBroadleafTree = () => {
       parent: group,
       name: index === 1 ? `tree_canopy_accent_${index}` : `tree_canopy_${index}`,
       geometry: new THREE.SphereGeometry(leaf[3], 12, 12),
-      material: makeMaterial({ color: index === 1 ? '#22c55e' : '#166534', roughness: 0.92 }),
+      material: makeMaterial({ color: index === 1 ? '#4ade80' : '#2f855a', roughness: 0.88 }),
       position: [leaf[0], leaf[1], leaf[2]]
     });
   });
@@ -686,7 +696,7 @@ const buildBroadleafTree = () => {
       parent: group,
       name: `tree_canopy_accent_cluster_${index}`,
       geometry: new THREE.SphereGeometry(leaf[3], 10, 10),
-      material: makeMaterial({ color: index % 2 === 0 ? '#2f855a' : '#22c55e', roughness: 0.9 }),
+      material: makeMaterial({ color: index % 2 === 0 ? '#52a071' : '#4ade80', roughness: 0.86 }),
       position: [leaf[0], leaf[1], leaf[2]]
     });
   });
@@ -700,7 +710,7 @@ const buildBroadleafTree = () => {
       parent: group,
       name: `tree_branch_${index}`,
       geometry: new THREE.CylinderGeometry(0.55, 0.85, 9, 6),
-      material: makeMaterial({ color: '#7c4a22', roughness: 0.96 }),
+      material: makeMaterial({ color: '#a66a3a', roughness: 0.92 }),
       position: [branch[0], branch[1], branch[2]],
       rotation: [0.2, 0, branch[3]]
     });
@@ -725,14 +735,14 @@ const buildPineTree = () => {
     parent: group,
     name: 'tree_trunk',
     geometry: new THREE.CylinderGeometry(1.7, 2.8, 18, 8),
-    material: makeMaterial({ color: '#7c4a22', roughness: 0.96 }),
+    material: makeMaterial({ color: '#a66a3a', roughness: 0.92 }),
     position: [0, 9, 0]
   });
   addMesh({
     parent: group,
     name: 'tree_root',
     geometry: new THREE.CylinderGeometry(3.8, 5, 4.2, 8),
-    material: makeMaterial({ color: '#4b2e16', roughness: 1 }),
+    material: makeMaterial({ color: '#704626', roughness: 0.96 }),
     position: [0, 2.2, 0]
   });
   [
@@ -744,7 +754,7 @@ const buildPineTree = () => {
       parent: group,
       name: index === 1 ? `tree_canopy_accent_${index}` : `tree_canopy_${index}`,
       geometry: new THREE.ConeGeometry(cone[0], cone[1], 7),
-      material: makeMaterial({ color: index === 1 ? '#4d7c0f' : '#166534', roughness: 0.9 }),
+      material: makeMaterial({ color: index === 1 ? '#84cc16' : '#2f855a', roughness: 0.86 }),
       position: [0, 18 + index * 6, 0]
     });
   });
@@ -758,7 +768,7 @@ const buildPineTree = () => {
       parent: group,
       name: `tree_canopy_layer_${index}`,
       geometry: new THREE.ConeGeometry(cone[0], 8.5, 8),
-      material: makeMaterial({ color: index % 2 === 0 ? '#14532d' : '#4d7c0f', roughness: 0.92 }),
+      material: makeMaterial({ color: index % 2 === 0 ? '#2f855a' : '#84cc16', roughness: 0.88 }),
       position: [0, cone[1], 0]
     });
   });
@@ -766,14 +776,14 @@ const buildPineTree = () => {
     parent: group,
     name: 'tree_canopy_accent_top',
     geometry: new THREE.ConeGeometry(4.5, 10, 6),
-    material: makeMaterial({ color: '#22c55e', roughness: 0.88 }),
+    material: makeMaterial({ color: '#4ade80', roughness: 0.84 }),
     position: [0, 36, 0]
   });
   addMesh({
     parent: group,
     name: 'tree_branch_stub_left',
     geometry: new THREE.CylinderGeometry(0.35, 0.55, 4.5, 6),
-    material: makeMaterial({ color: '#7c4a22', roughness: 0.96 }),
+    material: makeMaterial({ color: '#a66a3a', roughness: 0.92 }),
     position: [-2.8, 14.5, 0],
     rotation: [0.15, 0, -0.92]
   });
@@ -797,14 +807,14 @@ const buildBrokenBroadleafTree = () => {
     parent: group,
     name: 'tree_trunk',
     geometry: new THREE.CylinderGeometry(2.1, 2.7, 14, 8),
-    material: makeMaterial({ color: '#45210b', roughness: 1 }),
+    material: makeMaterial({ color: '#8a542b', roughness: 0.96 }),
     position: [0, 7, 0]
   });
   addMesh({
     parent: group,
     name: 'tree_fallen_trunk',
     geometry: new THREE.CylinderGeometry(1.5, 1.9, 20, 8),
-    material: makeMaterial({ color: '#5b2d0f', roughness: 0.98 }),
+    material: makeMaterial({ color: '#9b6236', roughness: 0.94 }),
     position: [8, 5, -6],
     rotation: [0.12, 0.15, -1.05]
   });
@@ -812,21 +822,21 @@ const buildBrokenBroadleafTree = () => {
     parent: group,
     name: 'tree_canopy_0',
     geometry: new THREE.SphereGeometry(6.5, 10, 10),
-    material: makeMaterial({ color: '#166534', roughness: 0.92 }),
+    material: makeMaterial({ color: '#2f855a', roughness: 0.86 }),
     position: [11, 7, -9]
   });
   addMesh({
     parent: group,
     name: 'tree_canopy_accent_0',
     geometry: new THREE.SphereGeometry(5, 10, 10),
-    material: makeMaterial({ color: '#22c55e', roughness: 0.9 }),
+    material: makeMaterial({ color: '#4ade80', roughness: 0.84 }),
     position: [15, 8, -12]
   });
   addMesh({
     parent: group,
     name: 'tree_splinter_0',
     geometry: new THREE.BoxGeometry(1, 7, 1),
-    material: makeMaterial({ color: '#7c4a22', roughness: 1 }),
+    material: makeMaterial({ color: '#a66a3a', roughness: 0.94 }),
     position: [1.4, 13.5, 0.6],
     rotation: [0.12, 0.18, 0.38]
   });
@@ -834,7 +844,7 @@ const buildBrokenBroadleafTree = () => {
     parent: group,
     name: 'tree_splinter_1',
     geometry: new THREE.BoxGeometry(0.8, 6, 0.8),
-    material: makeMaterial({ color: '#7c4a22', roughness: 1 }),
+    material: makeMaterial({ color: '#a66a3a', roughness: 0.94 }),
     position: [-1.6, 12.8, -0.8],
     rotation: [-0.1, -0.22, -0.34]
   });
@@ -850,14 +860,14 @@ const buildBrokenPineTree = () => {
     parent: group,
     name: 'tree_trunk',
     geometry: new THREE.CylinderGeometry(2.1, 2.7, 14, 8),
-    material: makeMaterial({ color: '#45210b', roughness: 1 }),
+    material: makeMaterial({ color: '#8a542b', roughness: 0.96 }),
     position: [0, 7, 0]
   });
   addMesh({
     parent: group,
     name: 'tree_fallen_trunk',
     geometry: new THREE.CylinderGeometry(1.5, 1.9, 20, 8),
-    material: makeMaterial({ color: '#5b2d0f', roughness: 0.98 }),
+    material: makeMaterial({ color: '#9b6236', roughness: 0.94 }),
     position: [8, 5, -6],
     rotation: [0.12, 0.15, -1.05]
   });
@@ -865,7 +875,7 @@ const buildBrokenPineTree = () => {
     parent: group,
     name: 'tree_canopy_0',
     geometry: new THREE.ConeGeometry(10, 18, 6),
-    material: makeMaterial({ color: '#166534', roughness: 0.92 }),
+    material: makeMaterial({ color: '#2f855a', roughness: 0.86 }),
     position: [14, 7, -10],
     rotation: [0.2, 0.5, -0.8]
   });
@@ -873,7 +883,7 @@ const buildBrokenPineTree = () => {
     parent: group,
     name: 'tree_splinter_0',
     geometry: new THREE.BoxGeometry(0.9, 7.5, 0.9),
-    material: makeMaterial({ color: '#7c4a22', roughness: 1 }),
+    material: makeMaterial({ color: '#a66a3a', roughness: 0.94 }),
     position: [1.2, 13.2, 0.5],
     rotation: [0.08, 0.15, 0.42]
   });

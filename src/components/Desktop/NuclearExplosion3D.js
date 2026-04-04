@@ -129,8 +129,12 @@ const FireballCore = ({ initialScale = 5 }) => {
     }
     
     if (coreRef.current) {
-      coreRef.current.material.color = coreColor;
-      coreRef.current.material.emissive = coreColor;
+      if (coreRef.current.material.color) {
+        coreRef.current.material.color.copy(coreColor);
+      }
+      if (coreRef.current.material.emissive) {
+        coreRef.current.material.emissive.copy(coreColor);
+      }
       coreRef.current.material.emissiveIntensity = temp * 2;
     }
     

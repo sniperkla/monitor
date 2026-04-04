@@ -1,4 +1,4 @@
-const CACHE_NAME = 'webtop-monitor-v3';
+const CACHE_NAME = 'webtop-monitor-v4';
 const ASSETS_TO_CACHE = [
   '/',
   '/manifest.json',
@@ -29,9 +29,15 @@ self.addEventListener('activate', (event) => {
 self.addEventListener('fetch', (event) => {
   // Only handle GET requests
   if (event.request.method !== 'GET') return;
-  
+
+  // Skip ALL non-HTTP(S) URLs first — blob:, data:, chrome-extension:, etc.
+  // Three.js GLTFLoader creates blob: object URLs for embedded GLB textures;
+  // Service workers must NEVER intercept these or the texture load will fail.
+  const url = event.request.url;
+  if (!url.startsWith('http://') && !url.startsWith('https://')) return;
+
   // Skip external requests (api calls, external images, fonts, socket.io)
-  if (!event.request.url.startsWith(self.location.origin)) {
+  if (!url.startsWith(self.location.origin)) {
     return;
   }
 

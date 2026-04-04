@@ -1558,3 +1558,40 @@ body {
   0% { transform: translateY(0) translateX(0); }
   100% { transform: translateY(110vh) translateX(-20vw); }
 }
+
+/* Strike screen-shake animations */
+@keyframes fallout-shake-light {
+  0%, 100% { transform: translate(0, 0) rotate(0deg); }
+  12%  { transform: translate(-2px, -2px) rotate(-0.15deg); }
+  25%  { transform: translate(2px, 1px)  rotate(0.12deg); }
+  38%  { transform: translate(-1px, 2px) rotate(0.15deg); }
+  52%  { transform: translate(2px, -1px) rotate(-0.10deg); }
+  66%  { transform: translate(-1px, 1px) rotate(0.08deg); }
+  80%  { transform: translate(1px, -1px) rotate(-0.05deg); }
+}
+
+@keyframes fallout-fire-shudder {
+  0%, 100% { transform: translate(0, 0) rotate(0deg); }
+  10%  { transform: translate(-3px, -2px) rotate(-0.22deg); }
+  22%  { transform: translate(3px, 2px)  rotate(0.18deg); }
+  34%  { transform: translate(-2px, 3px) rotate(0.22deg); }
+  46%  { transform: translate(3px, -2px) rotate(-0.16deg); }
+  58%  { transform: translate(-2px, 2px) rotate(0.12deg); }
+  70%  { transform: translate(2px, -1px) rotate(-0.10deg); }
+  82%  { transform: translate(-1px, 1px) rotate(0.06deg); }
+}
+
+@keyframes fallout-seismic-shake {
+  0%, 100% { transform: translate(0, 0) rotate(0deg); }
+  7%   { transform: translate(-5px, -4px) rotate(-0.45deg); }
+  15%  { transform: translate(5px, 5px)  rotate(0.38deg); }
+  23%  { transform: translate(-5px, 3px) rotate(0.45deg); }
+  31%  { transform: translate(6px, -3px) rotate(-0.38deg); }
+  39%  { transform: translate(-4px, 4px) rotate(0.22deg); }
+  47%  { transform: translate(5px, 2px)  rotate(-0.35deg); }
+  55%  { transform: translate(-3px, -4px) rotate(0.28deg); }
+  63%  { transform: translate(4px, 3px)  rotate(0deg); }
+  71%  { transform: translate(-3px, 1px) rotate(-0.18deg); }
+  80%  { transform: translate(2px, -2px) rotate(0.10deg); }
+  90%  { transform: translate(-1px, 1px) rotate(0deg); }
+}
