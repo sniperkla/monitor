@@ -1559,6 +1559,32 @@ body {
   100% { transform: translateY(110vh) translateX(-20vw); }
 }
 
+/* Pilot HUD animations */
+@keyframes fallout-hud-blink {
+  0%, 49% { opacity: 1; }
+  50%, 100% { opacity: 0; }
+}
+@keyframes fallout-hud-flash {
+  0%   { opacity: 0.18; }
+  30%  { opacity: 0.38; }
+  100% { opacity: 0; }
+}
+@keyframes fallout-hud-slide-in {
+  0%   { opacity: 0; transform: scale(1.04); filter: brightness(2.5); }
+  40%  { opacity: 1; filter: brightness(1.6); }
+  100% { opacity: 1; transform: scale(1); filter: brightness(1); }
+}
+@keyframes fallout-hud-slide-out {
+  0%   { opacity: 1; }
+  100% { opacity: 0; filter: brightness(2) blur(4px); }
+}
+@keyframes fallout-hud-scanline {
+  0%   { top: -2px; opacity: 0; }
+  5%   { opacity: 1; }
+  95%  { opacity: 1; }
+  100% { top: 100%; opacity: 0; }
+}
+
 /* Strike screen-shake animations */
 @keyframes fallout-shake-light {
   0%, 100% { transform: translate(0, 0) rotate(0deg); }

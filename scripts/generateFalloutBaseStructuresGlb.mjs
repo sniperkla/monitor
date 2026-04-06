@@ -3,7 +3,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import * as THREE from 'three';
 import { GLTFExporter } from 'three/examples/jsm/exporters/GLTFExporter.js';
-import { installPolyfills, textures, autoMap } from './falloutTextureUtils.mjs';
+import { installPolyfills, autoMap } from './falloutTextureUtils.mjs';
 
 class NodeFileReader {
   constructor() {
@@ -64,13 +64,13 @@ const makeMaterial = ({
   emissive = '#000000',
   emissiveIntensity = 0,
   roughness = 0.84,
-  metalness = 0.14,
+  metalness = 0.16,
   transparent = false,
   opacity = 1,
   side,
   map,
 }) => {
-  const m = new THREE.MeshStandardMaterial({
+  const material = new THREE.MeshStandardMaterial({
     color,
     emissive,
     emissiveIntensity,
@@ -81,11 +81,11 @@ const makeMaterial = ({
     depthWrite: !transparent,
     ...(side !== undefined ? { side } : {})
   });
-  const tex = map !== undefined ? map
-    : (!transparent && opacity >= 0.95 && emissiveIntensity <= 0.4)
-      ? autoMap(color) : null;
-  if (tex) m.map = tex;
-  return m;
+  const texture = map !== undefined
+    ? map
+    : (!transparent && opacity >= 0.95 && emissiveIntensity <= 0.42 ? autoMap(color) : null);
+  if (texture) material.map = texture;
+  return material;
 };
 
 const addMesh = ({
@@ -95,7 +95,7 @@ const addMesh = ({
   material,
   position = [0, 0, 0],
   rotation = [0, 0, 0],
-  scale = [1, 1, 1]
+  scale = [1, 1, 1],
 }) => {
   const mesh = new THREE.Mesh(geometry, material);
   mesh.name = name;
@@ -106,15 +106,65 @@ const addMesh = ({
   return mesh;
 };
 
-const addPipeRun = (parent, prefix, material, startX, y, z, count, spacing) => {
-  for (let i = 0; i < count; i++) {
+const addPipeRun = (parent, prefix, material, startX, y, z, count, spacing, rotation = [0, 0, Math.PI / 2]) => {
+  for (let index = 0; index < count; index += 1) {
     addMesh({
       parent,
-      name: `${prefix}_${i}`,
-      geometry: new THREE.CylinderGeometry(0.8, 0.8, 22, 8),
+      name: `${prefix}_${index}`,
+      geometry: new THREE.CylinderGeometry(0.74, 0.9, 24, 10),
       material,
-      position: [startX + i * spacing, y, z],
-      rotation: [0, 0, Math.PI / 2]
+      position: [startX + index * spacing, y, z],
+      rotation,
+    });
+  }
+};
+
+const addRadialBoxes = ({
+  parent,
+  prefix,
+  count,
+  radius,
+  geometry,
+  material,
+  y = 0,
+  rotationY = 0,
+  inward = false,
+}) => {
+  for (let index = 0; index < count; index += 1) {
+    const angle = rotationY + (index / count) * Math.PI * 2;
+    addMesh({
+      parent,
+      name: `${prefix}_${index}`,
+      geometry,
+      material,
+      position: [Math.cos(angle) * radius, y, Math.sin(angle) * radius],
+      rotation: [0, inward ? -angle : angle, 0],
+    });
+  }
+};
+
+const addTowerLegs = ({
+  parent,
+  prefix,
+  material,
+  radius = 10,
+  height = 36,
+  topInset = 3,
+  y = 0,
+}) => {
+  for (let index = 0; index < 4; index += 1) {
+    const angle = Math.PI / 4 + (index / 4) * Math.PI * 2;
+    const x = Math.cos(angle) * radius;
+    const z = Math.sin(angle) * radius;
+    const leanX = Math.cos(angle) * topInset;
+    const leanZ = Math.sin(angle) * topInset;
+    addMesh({
+      parent,
+      name: `${prefix}_${index}`,
+      geometry: new THREE.BoxGeometry(2.1, height, 2.1),
+      material,
+      position: [x - leanX * 0.45, y + height * 0.5, z - leanZ * 0.45],
+      rotation: [0, -angle, index % 2 === 0 ? -0.12 : 0.12],
     });
   }
 };
@@ -137,7 +187,7 @@ const tweakNode = (rootGroup, objectName, {
   position = null,
   rotation = null,
   scale = null,
-  visible
+  visible,
 } = {}) => {
   const node = rootGroup.getObjectByName(objectName);
   if (!node) return;
@@ -161,7 +211,7 @@ const tweakNode = (rootGroup, objectName, {
 
 const damageStructureMaterials = (group, {
   brightness = 0.52,
-  emberColor = '#421212'
+  emberColor = '#421212',
 } = {}) => {
   const ember = new THREE.Color(emberColor);
   group.traverse((node) => {
@@ -174,10 +224,10 @@ const damageStructureMaterials = (group, {
       }
       if (material.emissive) {
         material.emissive.copy(ember);
-        material.emissiveIntensity = Math.max((material.emissiveIntensity || 0) * 0.2, 0.08);
+        material.emissiveIntensity = Math.max((material.emissiveIntensity || 0) * 0.24, 0.08);
       }
-      material.roughness = Math.min(1, (material.roughness ?? 0.8) + 0.14);
-      material.metalness = Math.max(0, (material.metalness ?? 0.2) * 0.9);
+      material.roughness = Math.min(1, (material.roughness ?? 0.8) + 0.16);
+      material.metalness = Math.max(0, (material.metalness ?? 0.2) * 0.88);
     });
   });
 };
@@ -186,24 +236,24 @@ const addBrokenGround = (group, prefix, radiusX = 24, radiusZ = 20) => {
   addMesh({
     parent: group,
     name: `${prefix}_scorch_outer`,
-    geometry: new THREE.CylinderGeometry(1, 1.08, 0.28, 18),
-    material: makeMaterial({ color: '#151718', roughness: 1, metalness: 0.02 }),
-    position: [0, 0.2, 0],
-    scale: [radiusX, 1, radiusZ]
+    geometry: new THREE.CylinderGeometry(1, 1.08, 0.26, 18),
+    material: makeMaterial({ color: '#141617', roughness: 1, metalness: 0.02 }),
+    position: [0, 0.18, 0],
+    scale: [radiusX, 1, radiusZ],
   });
   addMesh({
     parent: group,
     name: `${prefix}_scorch_inner`,
-    geometry: new THREE.CylinderGeometry(1, 1.04, 0.22, 18),
-    material: makeMaterial({ color: '#2c120d', roughness: 1, metalness: 0.02 }),
-    position: [0, 0.34, 0],
-    scale: [radiusX * 0.68, 1, radiusZ * 0.64]
+    geometry: new THREE.CylinderGeometry(1, 1.04, 0.2, 18),
+    material: makeMaterial({ color: '#2b120c', roughness: 1, metalness: 0.02 }),
+    position: [0, 0.3, 0],
+    scale: [radiusX * 0.66, 1, radiusZ * 0.62],
   });
 };
 
 const addBrokenDebris = (group, prefix, items) => {
-  const concreteMat = makeMaterial({ color: '#343c45', roughness: 0.98, metalness: 0.06 });
-  const steelMat = makeMaterial({ color: '#3a414d', roughness: 0.82, metalness: 0.38 });
+  const concreteMat = makeMaterial({ color: '#323a43', roughness: 0.98, metalness: 0.06 });
+  const steelMat = makeMaterial({ color: '#404856', roughness: 0.8, metalness: 0.36 });
   items.forEach((item, index) => {
     addMesh({
       parent: group,
@@ -211,7 +261,8 @@ const addBrokenDebris = (group, prefix, items) => {
       geometry: item.geometry || new THREE.BoxGeometry(item.size?.[0] || 8, item.size?.[1] || 3, item.size?.[2] || 5),
       material: item.metal ? steelMat : concreteMat,
       position: item.position || [0, 2, 0],
-      rotation: item.rotation || [0, 0, 0]
+      rotation: item.rotation || [0, 0, 0],
+      scale: item.scale || [1, 1, 1],
     });
   });
 };
@@ -224,7 +275,7 @@ const createBrokenVariant = (source, {
   emberColor = '#421212',
   scorchRadius = [24, 20],
   tweaks = [],
-  debris = []
+  debris = [],
 }) => {
   const broken = cloneGroupWithUniqueMaterials(source, name);
   broken.position.set(rootOffset[0], rootOffset[1], rootOffset[2]);
@@ -240,11 +291,12 @@ const buildVaultBunker = () => {
   const group = new THREE.Group();
   group.name = 'vault_bunker';
 
-  const concreteMat = makeMaterial({ color: '#c6ced8', roughness: 0.88, metalness: 0.08 });
-  const darkConcreteMat = makeMaterial({ color: '#9ca9b8', roughness: 0.9, metalness: 0.05 });
-  const steelMat = makeMaterial({ color: '#d6dee6', roughness: 0.28, metalness: 0.78 });
-  const darkSteelMat = makeMaterial({ color: '#8494a8', roughness: 0.34, metalness: 0.72 });
-  const amberLightMat = makeMaterial({ color: '#ffd08a', emissive: '#f59e0b', emissiveIntensity: 1.8, roughness: 0.22, metalness: 0.22 });
+  const concreteMat = makeMaterial({ color: '#c9d0d7', roughness: 0.9, metalness: 0.08 });
+  const darkConcreteMat = makeMaterial({ color: '#95a1ae', roughness: 0.92, metalness: 0.05 });
+  const steelMat = makeMaterial({ color: '#dfe6ed', roughness: 0.28, metalness: 0.8 });
+  const darkSteelMat = makeMaterial({ color: '#738398', roughness: 0.34, metalness: 0.74 });
+  const earthMat = makeMaterial({ color: '#8fa36a', roughness: 0.96, metalness: 0.02 });
+  const amberLightMat = makeMaterial({ color: '#ffd29a', emissive: '#f59e0b', emissiveIntensity: 2, roughness: 0.22, metalness: 0.28 });
 
   const shell = new THREE.Group();
   shell.name = 'bunker_shell';
@@ -253,131 +305,168 @@ const buildVaultBunker = () => {
   addMesh({
     parent: shell,
     name: 'bunker_foundation',
-    geometry: new THREE.BoxGeometry(56, 5, 72),
+    geometry: new THREE.BoxGeometry(64, 4.4, 82),
     material: darkConcreteMat,
-    position: [0, 2.5, 6]
+    position: [0, 2.2, 6],
   });
   addMesh({
     parent: shell,
     name: 'bunker_mound',
-    geometry: new THREE.CylinderGeometry(25, 34, 18, 10),
-    material: makeMaterial({ color: '#8fa46f', roughness: 0.94, metalness: 0.02 }),
-    position: [0, 7, -8],
-    scale: [1.28, 0.72, 1.8]
+    geometry: new THREE.CylinderGeometry(24, 36, 18, 18),
+    material: earthMat,
+    position: [0, 8, -10],
+    scale: [1.32, 0.72, 2.04],
   });
   addMesh({
     parent: shell,
     name: 'bunker_hull',
-    geometry: new THREE.CylinderGeometry(18, 22, 48, 18, 1, false, 0, Math.PI),
+    geometry: new THREE.CylinderGeometry(18, 23, 56, 20, 1, false, 0, Math.PI),
     material: concreteMat,
-    position: [0, 18, -4],
+    position: [0, 18, -6],
     rotation: [Math.PI / 2, 0, 0],
-    scale: [1.18, 1, 1.2]
+    scale: [1.16, 1, 1.22],
   });
   addMesh({
     parent: shell,
     name: 'bunker_rear_buttress',
-    geometry: new THREE.BoxGeometry(38, 15, 18),
+    geometry: new THREE.BoxGeometry(42, 16, 18),
     material: concreteMat,
-    position: [0, 14, -24]
+    position: [0, 13, -28],
   });
   addMesh({
     parent: shell,
     name: 'bunker_front_block',
-    geometry: new THREE.BoxGeometry(34, 20, 20),
+    geometry: new THREE.BoxGeometry(38, 20, 22),
     material: concreteMat,
-    position: [0, 12, 23]
+    position: [0, 12, 24],
   });
   addMesh({
     parent: shell,
     name: 'bunker_roof_beam',
-    geometry: new THREE.BoxGeometry(30, 4, 14),
+    geometry: new THREE.BoxGeometry(34, 4, 15),
     material: darkConcreteMat,
-    position: [0, 23, 16]
+    position: [0, 24, 15],
   });
   addMesh({
     parent: shell,
     name: 'bunker_apron',
-    geometry: new THREE.BoxGeometry(28, 1.4, 28),
-    material: makeMaterial({ color: '#9aa3b0', roughness: 0.88, metalness: 0.08 }),
-    position: [0, 0.8, 31]
+    geometry: new THREE.BoxGeometry(34, 1.2, 36),
+    material: makeMaterial({ color: '#8f98a4', roughness: 0.9, metalness: 0.08 }),
+    position: [0, 0.7, 32],
   });
 
   [-1, 1].forEach((side, index) => {
     addMesh({
       parent: shell,
       name: `bunker_retaining_wall_${index}`,
-      geometry: new THREE.BoxGeometry(6, 16, 26),
+      geometry: new THREE.BoxGeometry(6, 17, 30),
       material: darkConcreteMat,
-      position: [side * 18, 9, 25],
-      rotation: [0, side * -0.18, 0]
+      position: [side * 21, 9, 27],
+      rotation: [0, side * -0.18, 0],
     });
     addMesh({
       parent: shell,
       name: `bunker_vent_stack_${index}`,
-      geometry: new THREE.CylinderGeometry(2, 2.6, 16, 10),
+      geometry: new THREE.CylinderGeometry(2.2, 2.8, 18, 12),
       material: steelMat,
-      position: [side * 12, 28, -10]
+      position: [side * 14, 30, -12],
     });
     addMesh({
       parent: shell,
       name: `bunker_vent_cap_${index}`,
-      geometry: new THREE.CylinderGeometry(3.6, 3.2, 2.8, 10),
+      geometry: new THREE.CylinderGeometry(4, 3.4, 3.2, 12),
       material: darkSteelMat,
-      position: [side * 12, 36, -10]
+      position: [side * 14, 40, -12],
+    });
+    addMesh({
+      parent: shell,
+      name: `bunker_flyout_${index}`,
+      geometry: new THREE.BoxGeometry(7, 4, 13),
+      material: darkSteelMat,
+      position: [side * 15.5, 20, 8],
+      rotation: [0.12, side * 0.28, 0],
     });
   });
 
+  for (let index = 0; index < 4; index += 1) {
+    addMesh({
+      parent: shell,
+      name: `bunker_rib_${index}`,
+      geometry: new THREE.TorusGeometry(15.8 + index * 0.35, 0.88, 10, 28, Math.PI),
+      material: darkSteelMat,
+      position: [0, 18 + index * 0.18, 4 - index * 6.4],
+      rotation: [0, 0, Math.PI],
+      scale: [1.06, 1, 1.1],
+    });
+  }
+
   const entry = new THREE.Group();
   entry.name = 'bunker_entry';
-  entry.position.set(0, 12, 34);
+  entry.position.set(0, 11.8, 35.5);
   group.add(entry);
 
   addMesh({
     parent: entry,
     name: 'bunker_entry_frame',
-    geometry: new THREE.CylinderGeometry(12, 12, 6, 28),
+    geometry: new THREE.CylinderGeometry(13, 13, 7.2, 32),
     material: darkSteelMat,
-    rotation: [Math.PI / 2, 0, 0]
+    rotation: [Math.PI / 2, 0, 0],
   });
   addMesh({
     parent: entry,
     name: 'bunker_entry_ring',
-    geometry: new THREE.TorusGeometry(11.8, 1.1, 10, 28),
+    geometry: new THREE.TorusGeometry(12.3, 1.3, 12, 32),
     material: steelMat,
-    rotation: [Math.PI / 2, 0, 0]
+    rotation: [Math.PI / 2, 0, 0],
+  });
+  addMesh({
+    parent: entry,
+    name: 'bunker_entry_shroud',
+    geometry: new THREE.CylinderGeometry(11.5, 12.5, 8.6, 28, 1, true),
+    material: makeMaterial({ color: '#64748b', roughness: 0.42, metalness: 0.62, side: THREE.DoubleSide }),
+    rotation: [Math.PI / 2, 0, 0],
+    position: [0, 0, -1.4],
   });
 
   const door = new THREE.Group();
   door.name = 'bunker_door';
-  door.position.set(0, 0, 2.4);
+  door.position.set(0, 0, 2.7);
   entry.add(door);
 
   addMesh({
     parent: door,
     name: 'bunker_door_disc',
-    geometry: new THREE.CylinderGeometry(10.4, 10.4, 2.8, 28),
+    geometry: new THREE.CylinderGeometry(10.7, 10.7, 3, 32),
     material: steelMat,
-    rotation: [Math.PI / 2, 0, 0]
+    rotation: [Math.PI / 2, 0, 0],
   });
   addMesh({
     parent: door,
     name: 'bunker_door_hub',
-    geometry: new THREE.CylinderGeometry(2.4, 2.4, 2.2, 18),
+    geometry: new THREE.CylinderGeometry(2.8, 2.8, 2.4, 20),
     material: darkSteelMat,
-    position: [0, 0, 1.2],
-    rotation: [Math.PI / 2, 0, 0]
+    position: [0, 0, 1.3],
+    rotation: [Math.PI / 2, 0, 0],
   });
-  for (let i = 0; i < 6; i++) {
+  for (let index = 0; index < 6; index += 1) {
     addMesh({
       parent: door,
-      name: `bunker_door_spoke_${i}`,
-      geometry: new THREE.BoxGeometry(13.5, 1.2, 1.3),
+      name: `bunker_door_spoke_${index}`,
+      geometry: new THREE.BoxGeometry(14.4, 1.35, 1.4),
       material: darkSteelMat,
-      position: [0, 0, 1.45],
-      rotation: [0, 0, (i * Math.PI) / 3]
+      position: [0, 0, 1.55],
+      rotation: [0, 0, (index * Math.PI) / 3],
     });
   }
+  [-1, 1].forEach((side, index) => {
+    addMesh({
+      parent: door,
+      name: `bunker_door_clamp_${index}`,
+      geometry: new THREE.BoxGeometry(2.2, 5.6, 1.8),
+      material: darkSteelMat,
+      position: [side * 7.9, 0, 1.4],
+    });
+  });
 
   [-1, 1].forEach((side, index) => {
     addMesh({
@@ -385,37 +474,37 @@ const buildVaultBunker = () => {
       name: `bunker_guardrail_post_${index}_a`,
       geometry: new THREE.BoxGeometry(1.2, 8, 1.2),
       material: steelMat,
-      position: [side * 10, -5, 6]
+      position: [side * 12, -5, 6],
     });
     addMesh({
       parent: entry,
       name: `bunker_guardrail_post_${index}_b`,
       geometry: new THREE.BoxGeometry(1.2, 8, 1.2),
       material: steelMat,
-      position: [side * 10, -5, 14]
+      position: [side * 12, -5, 16],
     });
     addMesh({
       parent: entry,
       name: `bunker_guardrail_bar_${index}`,
-      geometry: new THREE.BoxGeometry(1.1, 1.1, 10),
+      geometry: new THREE.BoxGeometry(1.1, 1.1, 12),
       material: steelMat,
-      position: [side * 10, -2.2, 10]
+      position: [side * 12, -2.2, 11],
     });
   });
 
   addMesh({
     parent: group,
     name: 'bunker_light_0',
-    geometry: new THREE.BoxGeometry(2.8, 2.6, 2.4),
+    geometry: new THREE.BoxGeometry(2.8, 2.4, 2.4),
     material: amberLightMat,
-    position: [-8, 22, 28]
+    position: [-8.8, 22.2, 28],
   });
   addMesh({
     parent: group,
     name: 'bunker_light_1',
-    geometry: new THREE.BoxGeometry(2.8, 2.6, 2.4),
+    geometry: new THREE.BoxGeometry(2.8, 2.4, 2.4),
     material: amberLightMat,
-    position: [8, 22, 28]
+    position: [8.8, 22.2, 28],
   });
 
   return group;
@@ -425,73 +514,89 @@ const buildPowerPlant = () => {
   const group = new THREE.Group();
   group.name = 'facility_powerplant';
 
-  const concreteMat = makeMaterial({ color: '#a0aab6', roughness: 0.88, metalness: 0.08 });
-  const steelMat = makeMaterial({ color: '#7c8b9a', roughness: 0.58, metalness: 0.42 });
-  const darkSteelMat = makeMaterial({ color: '#5b6b7d', roughness: 0.5, metalness: 0.58 });
-  const copperGlowMat = makeMaterial({ color: '#ffd08a', emissive: '#f59e0b', emissiveIntensity: 1.4, roughness: 0.24, metalness: 0.24 });
+  const concreteMat = makeMaterial({ color: '#9ba7b6', roughness: 0.9, metalness: 0.08 });
+  const steelMat = makeMaterial({ color: '#68778a', roughness: 0.56, metalness: 0.48 });
+  const darkSteelMat = makeMaterial({ color: '#4b5b70', roughness: 0.48, metalness: 0.62 });
+  const glowMat = makeMaterial({ color: '#fcd34d', emissive: '#f59e0b', emissiveIntensity: 1.7, roughness: 0.22, metalness: 0.24 });
 
   addMesh({
     parent: group,
     name: 'facility_powerplant_pad',
-    geometry: new THREE.BoxGeometry(58, 3, 64),
+    geometry: new THREE.BoxGeometry(72, 3.2, 76),
     material: concreteMat,
-    position: [0, 1.5, 0]
+    position: [0, 1.6, 0],
   });
   addMesh({
     parent: group,
     name: 'facility_powerplant_hall',
-    geometry: new THREE.BoxGeometry(42, 22, 30),
+    geometry: new THREE.BoxGeometry(36, 24, 34),
     material: steelMat,
-    position: [0, 14, 6]
+    position: [0, 15, 8],
   });
   addMesh({
     parent: group,
     name: 'facility_powerplant_roof',
-    geometry: new THREE.BoxGeometry(44, 3, 32),
+    geometry: new THREE.BoxGeometry(40, 4, 38),
     material: darkSteelMat,
-    position: [0, 26.5, 6]
+    position: [0, 29, 8],
   });
+  addMesh({
+    parent: group,
+    name: 'facility_powerplant_reactor_spine',
+    geometry: new THREE.CylinderGeometry(8, 11, 26, 16),
+    material: darkSteelMat,
+    position: [0, 18, -12],
+    rotation: [0, 0, Math.PI / 2],
+  });
+  addMesh({
+    parent: group,
+    name: 'facility_powerplant_reactor_core',
+    geometry: new THREE.TorusGeometry(8.6, 1.4, 14, 32),
+    material: glowMat,
+    position: [0, 18, -12],
+    rotation: [Math.PI / 2, 0, 0],
+  });
+
   [-1, 1].forEach((side, index) => {
     addMesh({
       parent: group,
       name: `facility_powerplant_cooler_${index}`,
-      geometry: new THREE.CylinderGeometry(7, 10, 26, 12),
+      geometry: new THREE.CylinderGeometry(7, 10.5, 30, 16),
       material: concreteMat,
-      position: [side * 15, 14, -17],
-      scale: [1.05, 1, 1.05]
+      position: [side * 18, 16, -22],
     });
     addMesh({
       parent: group,
       name: `facility_powerplant_stack_${index}`,
-      geometry: new THREE.CylinderGeometry(2.6, 3.2, 32, 10),
+      geometry: new THREE.CylinderGeometry(2.8, 3.4, 34, 12),
       material: darkSteelMat,
-      position: [side * 11, 33, 16]
+      position: [side * 14, 35, 20],
     });
     addMesh({
       parent: group,
       name: `facility_powerplant_stack_cap_${index}`,
-      geometry: new THREE.CylinderGeometry(3.6, 3.2, 2.8, 10),
+      geometry: new THREE.CylinderGeometry(4, 3.4, 3.4, 12),
       material: steelMat,
-      position: [side * 11, 50, 16]
+      position: [side * 14, 53.5, 20],
     });
-  });
-  [-1, 1].forEach((side, index) => {
     addMesh({
       parent: group,
       name: `facility_powerplant_transformer_${index}`,
-      geometry: new THREE.BoxGeometry(10, 8, 8),
+      geometry: new THREE.BoxGeometry(12, 9, 10),
       material: darkSteelMat,
-      position: [side * 20, 7, 22]
+      position: [side * 22, 7.5, 24],
     });
     addMesh({
       parent: group,
       name: `facility_powerplant_transformer_glow_${index}`,
-      geometry: new THREE.BoxGeometry(7, 1.2, 6),
-      material: copperGlowMat,
-      position: [side * 20, 11.5, 22]
+      geometry: new THREE.BoxGeometry(8.2, 1.2, 7.2),
+      material: glowMat,
+      position: [side * 22, 12.3, 24],
     });
   });
-  addPipeRun(group, 'facility_powerplant_pipe', steelMat, -18, 18, -5, 4, 12);
+
+  addPipeRun(group, 'facility_powerplant_pipe', steelMat, -24, 20, -2, 5, 12);
+  addPipeRun(group, 'facility_powerplant_pipe_upper', steelMat, -18, 24, 10, 4, 12);
 
   return group;
 };
@@ -500,80 +605,94 @@ const buildWarFactory = () => {
   const group = new THREE.Group();
   group.name = 'facility_war_factory';
 
-  const concreteMat = makeMaterial({ color: '#98a2b0', roughness: 0.9, metalness: 0.08 });
-  const steelMat = makeMaterial({ color: '#667385', roughness: 0.6, metalness: 0.48 });
-  const darkSteelMat = makeMaterial({ color: '#475569', roughness: 0.5, metalness: 0.6 });
+  const concreteMat = makeMaterial({ color: '#8f99a9', roughness: 0.92, metalness: 0.08 });
+  const steelMat = makeMaterial({ color: '#5f6c7f', roughness: 0.58, metalness: 0.52 });
+  const darkSteelMat = makeMaterial({ color: '#3f4d61', roughness: 0.48, metalness: 0.64 });
+  const hazardMat = makeMaterial({ color: '#f59e0b', emissive: '#b45309', emissiveIntensity: 0.6, roughness: 0.46, metalness: 0.22 });
 
   addMesh({
     parent: group,
     name: 'facility_war_factory_pad',
-    geometry: new THREE.BoxGeometry(66, 3, 58),
+    geometry: new THREE.BoxGeometry(78, 3.2, 64),
     material: concreteMat,
-    position: [0, 1.5, 0]
+    position: [0, 1.6, 0],
   });
   addMesh({
     parent: group,
     name: 'facility_war_factory_hangar',
-    geometry: new THREE.BoxGeometry(52, 24, 38),
+    geometry: new THREE.BoxGeometry(56, 24, 34),
     material: steelMat,
-    position: [0, 15, -2]
+    position: [0, 15, -2],
   });
   addMesh({
     parent: group,
     name: 'facility_war_factory_roof',
-    geometry: new THREE.BoxGeometry(54, 4, 40),
+    geometry: new THREE.BoxGeometry(60, 4, 38),
     material: darkSteelMat,
-    position: [0, 29, -2]
+    position: [0, 29, -2],
   });
+
+  for (let index = 0; index < 3; index += 1) {
+    addMesh({
+      parent: group,
+      name: `facility_war_factory_sawtooth_${index}`,
+      geometry: new THREE.BoxGeometry(16, 6, 8),
+      material: darkSteelMat,
+      position: [-18 + index * 18, 31.5, -2],
+      rotation: [0.3, 0, 0],
+    });
+  }
+
   addMesh({
     parent: group,
     name: 'facility_war_factory_bay_frame',
-    geometry: new THREE.BoxGeometry(28, 18, 3),
+    geometry: new THREE.BoxGeometry(32, 18, 3.4),
     material: darkSteelMat,
-    position: [0, 12, 18.5]
+    position: [0, 12, 18.8],
   });
   addMesh({
     parent: group,
     name: 'facility_war_factory_bay_door',
-    geometry: new THREE.BoxGeometry(22, 14, 2),
-    material: makeMaterial({ color: '#94a3b8', roughness: 0.46, metalness: 0.68 }),
-    position: [0, 11, 19.8]
+    geometry: new THREE.BoxGeometry(24, 14.5, 2.2),
+    material: makeMaterial({ color: '#b8c2cf', roughness: 0.38, metalness: 0.74 }),
+    position: [0, 11.4, 20.1],
   });
   addMesh({
     parent: group,
     name: 'facility_war_factory_annex',
-    geometry: new THREE.BoxGeometry(18, 14, 18),
+    geometry: new THREE.BoxGeometry(20, 14, 20),
     material: steelMat,
-    position: [-21, 10, -18]
+    position: [-24, 10, -18],
   });
   addMesh({
     parent: group,
     name: 'facility_war_factory_crane_beam',
-    geometry: new THREE.BoxGeometry(36, 2.2, 4),
+    geometry: new THREE.BoxGeometry(42, 2.4, 4.4),
     material: darkSteelMat,
-    position: [0, 24, -10]
+    position: [0, 25, -10],
   });
   addMesh({
     parent: group,
     name: 'facility_war_factory_crane_trolley',
-    geometry: new THREE.BoxGeometry(6, 4, 4),
-    material: makeMaterial({ color: '#b45309', roughness: 0.62, metalness: 0.24 }),
-    position: [-4, 21, -10]
+    geometry: new THREE.BoxGeometry(7, 4.5, 4.5),
+    material: hazardMat,
+    position: [-6, 22, -10],
   });
+
   [-1, 1].forEach((side, index) => {
     addMesh({
       parent: group,
       name: `facility_war_factory_exhaust_${index}`,
-      geometry: new THREE.BoxGeometry(5, 18, 5),
+      geometry: new THREE.BoxGeometry(6, 20, 6),
       material: darkSteelMat,
-      position: [side * 18, 34, -16]
+      position: [side * 20, 36, -18],
     });
     addMesh({
       parent: group,
       name: `facility_war_factory_track_${index}`,
-      geometry: new THREE.BoxGeometry(9, 2.8, 20),
+      geometry: new THREE.BoxGeometry(10, 2.8, 28),
       material: darkSteelMat,
-      position: [side * 17, 3.3, -14]
+      position: [side * 22, 3.4, -8],
     });
   });
 
@@ -584,70 +703,79 @@ const buildFieldHospital = () => {
   const group = new THREE.Group();
   group.name = 'facility_field_hospital';
 
-  const concreteMat = makeMaterial({ color: '#d8dee7', roughness: 0.88, metalness: 0.08 });
-  const roofMat = makeMaterial({ color: '#94a3b8', roughness: 0.68, metalness: 0.18 });
-  const tentMat = makeMaterial({ color: '#eef2f7', roughness: 0.96, metalness: 0.02 });
-  const redMat = makeMaterial({ color: '#dc2626', roughness: 0.48, metalness: 0.06 });
+  const padMat = makeMaterial({ color: '#b2bac4', roughness: 0.94, metalness: 0.04 });
+  const wallMat = makeMaterial({ color: '#e7edf4', roughness: 0.8, metalness: 0.08 });
+  const roofMat = makeMaterial({ color: '#94a3b8', roughness: 0.68, metalness: 0.16 });
+  const tentMat = makeMaterial({ color: '#f2f5f9', roughness: 0.96, metalness: 0.02 });
+  const redMat = makeMaterial({ color: '#dc2626', roughness: 0.42, metalness: 0.04 });
 
   addMesh({
     parent: group,
     name: 'facility_field_hospital_pad',
-    geometry: new THREE.BoxGeometry(60, 2.5, 58),
-    material: makeMaterial({ color: '#9ca3af', roughness: 0.94, metalness: 0.04 }),
-    position: [0, 1.25, 0]
+    geometry: new THREE.BoxGeometry(70, 2.6, 64),
+    material: padMat,
+    position: [0, 1.3, 0],
   });
   addMesh({
     parent: group,
     name: 'facility_field_hospital_core',
-    geometry: new THREE.BoxGeometry(30, 18, 26),
-    material: concreteMat,
-    position: [0, 12, -2]
+    geometry: new THREE.BoxGeometry(32, 20, 28),
+    material: wallMat,
+    position: [0, 12, -4],
   });
   addMesh({
     parent: group,
     name: 'facility_field_hospital_roof',
-    geometry: new THREE.BoxGeometry(32, 3, 28),
+    geometry: new THREE.BoxGeometry(36, 3.2, 32),
     material: roofMat,
-    position: [0, 22.5, -2]
+    position: [0, 23.6, -4],
   });
   addMesh({
     parent: group,
     name: 'facility_field_hospital_cross_h',
-    geometry: new THREE.BoxGeometry(8, 6, 2.4),
+    geometry: new THREE.BoxGeometry(8, 6, 2.6),
     material: redMat,
-    position: [0, 18, 12.6]
+    position: [0, 18, 11],
   });
   addMesh({
     parent: group,
     name: 'facility_field_hospital_cross_v',
-    geometry: new THREE.BoxGeometry(2.4, 10, 2.4),
+    geometry: new THREE.BoxGeometry(2.6, 11, 2.6),
     material: redMat,
-    position: [0, 18, 12.8]
-  });
-  [-1, 1].forEach((side, index) => {
-    addMesh({
-      parent: group,
-      name: `facility_field_hospital_tent_${index}`,
-      geometry: new THREE.BoxGeometry(16, 8, 18),
-      material: tentMat,
-      position: [side * 18, 6, -10],
-      rotation: [0, side * 0.08, 0]
-    });
-    addMesh({
-      parent: group,
-      name: `facility_field_hospital_tent_roof_${index}`,
-      geometry: new THREE.BoxGeometry(18, 2.2, 12),
-      material: roofMat,
-      position: [side * 18, 11, -10],
-      rotation: [0.26, 0, 0]
-    });
+    position: [0, 18, 11.1],
   });
   addMesh({
     parent: group,
     name: 'facility_field_hospital_triage',
-    geometry: new THREE.BoxGeometry(22, 10, 12),
-    material: concreteMat,
-    position: [0, 8, 16]
+    geometry: new THREE.BoxGeometry(24, 10, 14),
+    material: wallMat,
+    position: [0, 8, 18],
+  });
+  addMesh({
+    parent: group,
+    name: 'facility_field_hospital_canopy',
+    geometry: new THREE.BoxGeometry(28, 1.6, 16),
+    material: roofMat,
+    position: [0, 14, 18],
+  });
+
+  [-1, 1].forEach((side, index) => {
+    addMesh({
+      parent: group,
+      name: `facility_field_hospital_tent_${index}`,
+      geometry: new THREE.BoxGeometry(16, 8, 20),
+      material: tentMat,
+      position: [side * 20, 6, -12],
+      rotation: [0, side * 0.08, 0],
+    });
+    addMesh({
+      parent: group,
+      name: `facility_field_hospital_tent_roof_${index}`,
+      geometry: new THREE.BoxGeometry(18, 2.2, 14),
+      material: roofMat,
+      position: [side * 20, 11, -12],
+      rotation: [0.24, 0, 0],
+    });
   });
 
   return group;
@@ -657,65 +785,83 @@ const buildTechLab = () => {
   const group = new THREE.Group();
   group.name = 'facility_tech_lab';
 
-  const concreteMat = makeMaterial({ color: '#8f99a8', roughness: 0.9, metalness: 0.06 });
-  const steelMat = makeMaterial({ color: '#64748b', roughness: 0.52, metalness: 0.54 });
-  const darkSteelMat = makeMaterial({ color: '#53657d', roughness: 0.44, metalness: 0.62 });
-  const glowMat = makeMaterial({ color: '#67e8f9', emissive: '#22d3ee', emissiveIntensity: 1.6, roughness: 0.18, metalness: 0.52 });
+  const concreteMat = makeMaterial({ color: '#8f9bad', roughness: 0.9, metalness: 0.06 });
+  const steelMat = makeMaterial({ color: '#60728a', roughness: 0.5, metalness: 0.56 });
+  const darkSteelMat = makeMaterial({ color: '#43546a', roughness: 0.46, metalness: 0.66 });
+  const glowMat = makeMaterial({ color: '#7dd3fc', emissive: '#22d3ee', emissiveIntensity: 1.8, roughness: 0.18, metalness: 0.52 });
 
   addMesh({
     parent: group,
     name: 'facility_tech_lab_pad',
-    geometry: new THREE.BoxGeometry(54, 3, 54),
+    geometry: new THREE.CylinderGeometry(28, 31, 3, 18),
     material: concreteMat,
-    position: [0, 1.5, 0]
+    position: [0, 1.5, 0],
   });
   addMesh({
     parent: group,
     name: 'facility_tech_lab_core',
-    geometry: new THREE.CylinderGeometry(13, 15, 24, 16),
+    geometry: new THREE.CylinderGeometry(14, 17, 26, 8),
     material: steelMat,
-    position: [0, 14, 0]
+    position: [0, 15, 0],
+    rotation: [0, Math.PI / 8, 0],
   });
   addMesh({
     parent: group,
     name: 'facility_tech_lab_annex',
-    geometry: new THREE.BoxGeometry(26, 14, 16),
+    geometry: new THREE.BoxGeometry(30, 14, 18),
     material: darkSteelMat,
-    position: [0, 9, 17]
+    position: [0, 9, 19],
   });
   addMesh({
     parent: group,
     name: 'facility_tech_lab_tower',
-    geometry: new THREE.CylinderGeometry(4.5, 5.5, 26, 12),
+    geometry: new THREE.CylinderGeometry(5.2, 6.4, 28, 12),
     material: steelMat,
-    position: [0, 34, 0]
+    position: [0, 35, 0],
   });
   addMesh({
     parent: group,
     name: 'facility_tech_lab_sensor',
-    geometry: new THREE.SphereGeometry(3.2, 12, 12),
+    geometry: new THREE.OctahedronGeometry(3.8, 0),
     material: glowMat,
-    position: [0, 48, 0]
+    position: [0, 50, 0],
+  });
+  addRadialBoxes({
+    parent: group,
+    prefix: 'facility_tech_lab_fin',
+    count: 6,
+    radius: 14,
+    geometry: new THREE.BoxGeometry(6, 10, 1.2),
+    material: darkSteelMat,
+    y: 12,
+    inward: true,
   });
 
   const dish = new THREE.Group();
   dish.name = 'facility_tech_lab_dish';
-  dish.position.set(0, 40, 0);
+  dish.position.set(0, 41, 0);
   group.add(dish);
 
   addMesh({
     parent: dish,
     name: 'facility_tech_lab_dish_bowl',
-    geometry: new THREE.CylinderGeometry(0.6, 8.6, 4.4, 24, 1, true),
-    material: makeMaterial({ color: '#dbeafe', roughness: 0.24, metalness: 0.82, side: THREE.DoubleSide }),
-    rotation: [-Math.PI / 2.9, 0, 0]
+    geometry: new THREE.CylinderGeometry(0.8, 9.6, 4.4, 24, 1, true),
+    material: makeMaterial({ color: '#dbeafe', roughness: 0.22, metalness: 0.86, side: THREE.DoubleSide }),
+    rotation: [-Math.PI / 2.9, 0, 0],
   });
   addMesh({
     parent: dish,
     name: 'facility_tech_lab_dish_emitter',
-    geometry: new THREE.SphereGeometry(1.8, 10, 10),
+    geometry: new THREE.SphereGeometry(1.9, 12, 12),
     material: glowMat,
-    position: [0, 0, -3.2]
+    position: [0, 0.4, -3.6],
+  });
+  addMesh({
+    parent: dish,
+    name: 'facility_tech_lab_dish_ring',
+    geometry: new THREE.TorusGeometry(10.5, 0.36, 8, 28),
+    material: glowMat,
+    rotation: [Math.PI / 2, 0, 0],
   });
 
   return group;
@@ -725,66 +871,72 @@ const buildRadarTower = () => {
   const group = new THREE.Group();
   group.name = 'facility_radar_tower';
 
-  const concreteMat = makeMaterial({ color: '#98a4b2', roughness: 0.9, metalness: 0.06 });
-  const steelMat = makeMaterial({ color: '#bac5d2', roughness: 0.4, metalness: 0.68 });
-  const darkSteelMat = makeMaterial({ color: '#5c6c80', roughness: 0.48, metalness: 0.62 });
-  const glowMat = makeMaterial({ color: '#67e8f9', emissive: '#22d3ee', emissiveIntensity: 1.3, roughness: 0.2, metalness: 0.46 });
+  const concreteMat = makeMaterial({ color: '#97a3b0', roughness: 0.92, metalness: 0.06 });
+  const steelMat = makeMaterial({ color: '#c1cad5', roughness: 0.38, metalness: 0.72 });
+  const darkSteelMat = makeMaterial({ color: '#55657a', roughness: 0.48, metalness: 0.64 });
+  const glowMat = makeMaterial({ color: '#67e8f9', emissive: '#22d3ee', emissiveIntensity: 1.4, roughness: 0.2, metalness: 0.48 });
 
   addMesh({
     parent: group,
     name: 'facility_radar_tower_pad',
-    geometry: new THREE.CylinderGeometry(18, 21, 4, 14),
+    geometry: new THREE.CylinderGeometry(20, 24, 4, 16),
     material: concreteMat,
-    position: [0, 2, 0]
+    position: [0, 2, 0],
   });
   addMesh({
     parent: group,
     name: 'facility_radar_tower_core',
-    geometry: new THREE.CylinderGeometry(4, 5.4, 34, 10),
+    geometry: new THREE.CylinderGeometry(4.2, 6, 40, 12),
     material: darkSteelMat,
-    position: [0, 19, 0]
+    position: [0, 22, 0],
   });
-  for (let i = 0; i < 4; i++) {
-    const angle = (i / 4) * Math.PI * 2;
-    addMesh({
-      parent: group,
-      name: `facility_radar_tower_brace_${i}`,
-      geometry: new THREE.BoxGeometry(2, 36, 2),
-      material: steelMat,
-      position: [Math.cos(angle) * 8, 18, Math.sin(angle) * 8],
-      rotation: [0.08, 0, i < 2 ? -0.18 : 0.18]
-    });
-  }
+  addTowerLegs({
+    parent: group,
+    prefix: 'facility_radar_tower_brace',
+    material: steelMat,
+    radius: 10,
+    height: 32,
+    topInset: 3,
+    y: 4,
+  });
   addMesh({
     parent: group,
     name: 'facility_radar_tower_glow',
-    geometry: new THREE.SphereGeometry(4.2, 12, 12),
+    geometry: new THREE.SphereGeometry(4.4, 14, 14),
     material: glowMat,
-    position: [0, 48, 0]
+    position: [0, 50, 0],
   });
 
   const dish = new THREE.Group();
   dish.name = 'facility_radar_tower_dish';
-  dish.position.set(0, 39, 0);
+  dish.position.set(0, 40, 0);
   group.add(dish);
 
   addMesh({
     parent: dish,
     name: 'facility_radar_tower_frame',
-    geometry: new THREE.TorusGeometry(12, 1.1, 8, 28),
-    material: steelMat
+    geometry: new THREE.TorusGeometry(13, 1.1, 8, 30),
+    material: steelMat,
   });
   addMesh({
     parent: dish,
     name: 'facility_radar_tower_bar_h',
-    geometry: new THREE.BoxGeometry(22, 1.4, 1.4),
-    material: steelMat
+    geometry: new THREE.BoxGeometry(24, 1.5, 1.5),
+    material: steelMat,
   });
   addMesh({
     parent: dish,
     name: 'facility_radar_tower_bar_v',
-    geometry: new THREE.BoxGeometry(1.4, 22, 1.4),
-    material: steelMat
+    geometry: new THREE.BoxGeometry(1.5, 24, 1.5),
+    material: steelMat,
+  });
+  addMesh({
+    parent: dish,
+    name: 'facility_radar_tower_secondary_ring',
+    geometry: new THREE.TorusGeometry(7.5, 0.54, 6, 24),
+    material: glowMat,
+    position: [0, 5, 0],
+    rotation: [Math.PI / 2, 0, 0],
   });
 
   return group;
@@ -794,73 +946,83 @@ const buildAASite = () => {
   const group = new THREE.Group();
   group.name = 'facility_aa_site';
 
-  const concreteMat = makeMaterial({ color: '#8993a2', roughness: 0.92, metalness: 0.08 });
-  const steelMat = makeMaterial({ color: '#62748a', roughness: 0.46, metalness: 0.66 });
-  const darkSteelMat = makeMaterial({ color: '#4c5d73', roughness: 0.54, metalness: 0.62 });
-  const screenMat = makeMaterial({ color: '#7dd3fc', emissive: '#22d3ee', emissiveIntensity: 1.1, roughness: 0.16, metalness: 0.46 });
+  const concreteMat = makeMaterial({ color: '#8994a3', roughness: 0.94, metalness: 0.08 });
+  const steelMat = makeMaterial({ color: '#617389', roughness: 0.44, metalness: 0.68 });
+  const darkSteelMat = makeMaterial({ color: '#43556c', roughness: 0.5, metalness: 0.66 });
+  const screenMat = makeMaterial({ color: '#7dd3fc', emissive: '#22d3ee', emissiveIntensity: 1.2, roughness: 0.16, metalness: 0.48 });
 
   addMesh({
     parent: group,
     name: 'facility_aa_site_ring',
-    geometry: new THREE.CylinderGeometry(22, 24, 4, 18),
+    geometry: new THREE.CylinderGeometry(24, 27, 4, 18),
     material: concreteMat,
-    position: [0, 2, 0]
+    position: [0, 2, 0],
   });
   addMesh({
     parent: group,
     name: 'facility_aa_site_bunker',
-    geometry: new THREE.CylinderGeometry(14, 16, 14, 16),
+    geometry: new THREE.CylinderGeometry(13, 17, 16, 18),
     material: darkSteelMat,
-    position: [0, 11, 0]
+    position: [0, 11, 0],
   });
   addMesh({
     parent: group,
     name: 'facility_aa_site_platform',
-    geometry: new THREE.CylinderGeometry(11, 12, 5, 14),
+    geometry: new THREE.CylinderGeometry(12, 14, 6, 16),
     material: steelMat,
-    position: [0, 20, 0]
+    position: [0, 20, 0],
+  });
+  addRadialBoxes({
+    parent: group,
+    prefix: 'facility_aa_site_blade',
+    count: 6,
+    radius: 15.5,
+    geometry: new THREE.BoxGeometry(4, 3.2, 6),
+    material: darkSteelMat,
+    y: 6.5,
+    inward: true,
   });
 
   const turret = new THREE.Group();
   turret.name = 'facility_aa_site_turret';
-  turret.position.set(0, 23, 0);
+  turret.position.set(0, 23.2, 0);
   group.add(turret);
 
   addMesh({
     parent: turret,
     name: 'facility_aa_site_turret_body',
-    geometry: new THREE.BoxGeometry(16, 5, 12),
-    material: darkSteelMat
+    geometry: new THREE.BoxGeometry(18, 6, 13),
+    material: darkSteelMat,
   });
   addMesh({
     parent: turret,
     name: 'facility_aa_site_sensor',
-    geometry: new THREE.BoxGeometry(4.2, 2.4, 2.8),
+    geometry: new THREE.BoxGeometry(4.6, 2.6, 3.2),
     material: screenMat,
-    position: [0, 1.8, -3.2]
+    position: [0, 2, -3.8],
   });
 
   const barrel = new THREE.Group();
   barrel.name = 'facility_aa_site_barrel';
-  barrel.position.set(0, 0.9, 5.6);
+  barrel.position.set(0, 1, 6.4);
   turret.add(barrel);
 
   [-1, 1].forEach((side, index) => {
     addMesh({
       parent: barrel,
       name: `facility_aa_site_gun_${index}`,
-      geometry: new THREE.CylinderGeometry(0.68, 0.78, 12, 8),
+      geometry: new THREE.CylinderGeometry(0.72, 0.86, 14, 8),
       material: steelMat,
-      position: [side * 2.6, 0, 0],
-      rotation: [Math.PI / 2, 0, 0]
+      position: [side * 2.8, 0, 0],
+      rotation: [Math.PI / 2, 0, 0],
     });
   });
   addMesh({
     parent: barrel,
     name: 'facility_aa_site_gun_mount',
-    geometry: new THREE.BoxGeometry(6.5, 1.4, 4.8),
+    geometry: new THREE.BoxGeometry(7, 1.6, 5.4),
     material: darkSteelMat,
-    position: [0, 0, -2.2]
+    position: [0, 0, -2.4],
   });
 
   return group;
@@ -878,21 +1040,21 @@ const aaSite = buildAASite();
   vaultBunker,
   createBrokenVariant(vaultBunker, {
     name: 'vault_bunker_broken',
-    rootOffset: [0, -1.6, 0],
+    rootOffset: [0, -1.8, 0],
     rootRotation: [0.05, 0, -0.08],
-    scorchRadius: [26, 18],
+    scorchRadius: [28, 20],
     tweaks: [
-      { name: 'bunker_hull', position: [0, -2.4, -1.6], rotation: [-0.08, 0, 0] },
-      { name: 'bunker_front_block', position: [0, -1.8, 1.2], rotation: [0.04, 0.02, 0] },
-      { name: 'bunker_entry', position: [0, 0, -2.2], rotation: [0.02, 0, 0] },
-      { name: 'bunker_door', position: [-3.2, 0, 2.6], rotation: [0, -0.6, 0] },
+      { name: 'bunker_hull', position: [0, -2.4, -1.8], rotation: [-0.08, 0, 0] },
+      { name: 'bunker_front_block', position: [0, -2.2, 1.6], rotation: [0.04, 0.02, 0] },
+      { name: 'bunker_entry', position: [0, 0, -2.6], rotation: [0.02, 0, 0] },
+      { name: 'bunker_door', position: [-3.2, 0, 2.8], rotation: [0, -0.6, 0] },
       { name: 'bunker_light_0', visible: false },
       { name: 'bunker_light_1', visible: false }
     ],
     debris: [
-      { position: [-8, 2.4, 22], rotation: [0.24, 0.32, 0.18], size: [8, 3, 6] },
-      { position: [8, 2.8, 18], rotation: [0.14, -0.42, 0.28], size: [6, 4, 5], metal: true },
-      { position: [0, 2, 29], rotation: [0.12, 0.5, 0.36], size: [10, 2.6, 5] }
+      { position: [-9, 2.4, 24], rotation: [0.24, 0.32, 0.18], size: [8, 3, 6] },
+      { position: [8, 2.8, 18], rotation: [0.14, -0.42, 0.28], size: [7, 4, 5], metal: true },
+      { position: [0, 2, 31], rotation: [0.12, 0.5, 0.36], size: [11, 2.6, 5] }
     ]
   }),
   powerPlant,
@@ -900,7 +1062,7 @@ const aaSite = buildAASite();
     name: 'facility_powerplant_broken',
     rootOffset: [0, -1.1, 0],
     rootRotation: [0.02, 0, -0.05],
-    scorchRadius: [28, 24],
+    scorchRadius: [30, 26],
     tweaks: [
       { name: 'facility_powerplant_hall', position: [0, -1.2, 0], rotation: [0.02, 0.02, 0] },
       { name: 'facility_powerplant_stack_0', position: [-1, -2, 0], rotation: [0.02, 0, -0.12] },
@@ -919,13 +1081,13 @@ const aaSite = buildAASite();
     name: 'facility_war_factory_broken',
     rootOffset: [0, -1.2, 0],
     rootRotation: [0.03, 0, 0.04],
-    scorchRadius: [30, 26],
+    scorchRadius: [32, 28],
     tweaks: [
       { name: 'facility_war_factory_hangar', position: [0, -1.2, -1], rotation: [0.02, 0, 0] },
       { name: 'facility_war_factory_roof', position: [0, -2, 0], rotation: [0.03, 0, -0.05] },
       { name: 'facility_war_factory_bay_door', position: [0, -5, 1.6], rotation: [0.04, 0, 0.18] },
       { name: 'facility_war_factory_crane_beam', rotation: [0, 0, 0.08] },
-      { name: 'facility_war_factory_crane_trolley', position: [5, -2, 1], rotation: [0.08, 0.2, 0.26] }
+      { name: 'facility_war_factory_crane_trolley', position: [6, -2, 1], rotation: [0.08, 0.2, 0.26] }
     ],
     debris: [
       { position: [-12, 2.6, 15], rotation: [0.26, 0.16, 0.24], size: [12, 4, 5], metal: true },
@@ -936,9 +1098,9 @@ const aaSite = buildAASite();
   fieldHospital,
   createBrokenVariant(fieldHospital, {
     name: 'facility_field_hospital_broken',
-    rootOffset: [0, -0.9, 0],
+    rootOffset: [0, -1, 0],
     rootRotation: [0.02, 0, -0.03],
-    scorchRadius: [28, 24],
+    scorchRadius: [30, 26],
     tweaks: [
       { name: 'facility_field_hospital_core', position: [0, -1, -1], rotation: [0.02, 0, -0.05] },
       { name: 'facility_field_hospital_cross_h', position: [0, -2, -0.4], rotation: [0.3, 0, 0.22] },
@@ -957,7 +1119,7 @@ const aaSite = buildAASite();
     name: 'facility_tech_lab_broken',
     rootOffset: [0, -1.2, 0],
     rootRotation: [0.02, 0, 0.05],
-    scorchRadius: [26, 22],
+    scorchRadius: [28, 24],
     tweaks: [
       { name: 'facility_tech_lab_core', position: [0, -1.2, 0], rotation: [0, 0, 0.03] },
       { name: 'facility_tech_lab_tower', position: [0, -2.8, 0], rotation: [0, 0, 0.11] },
@@ -975,7 +1137,7 @@ const aaSite = buildAASite();
     name: 'facility_radar_tower_broken',
     rootOffset: [0, -0.9, 0],
     rootRotation: [0.03, 0, -0.04],
-    scorchRadius: [22, 20],
+    scorchRadius: [24, 22],
     tweaks: [
       { name: 'facility_radar_tower_core', position: [0, -1.8, 0], rotation: [0.02, 0, 0.1] },
       { name: 'facility_radar_tower_glow', visible: false },
@@ -992,7 +1154,7 @@ const aaSite = buildAASite();
     name: 'facility_aa_site_broken',
     rootOffset: [0, -1.1, 0],
     rootRotation: [0.02, 0, 0.04],
-    scorchRadius: [24, 20],
+    scorchRadius: [26, 22],
     tweaks: [
       { name: 'facility_aa_site_platform', position: [0, -1.2, 0] },
       { name: 'facility_aa_site_turret', position: [0, -2, 0], rotation: [-0.14, 0.56, 0.12] },

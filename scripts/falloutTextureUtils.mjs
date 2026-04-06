@@ -126,23 +126,111 @@ export function installPolyfills() {
       constructor(w, h) {
         this.width  = w;
         this.height = h;
-        this._pixels = null;
+        this._pixels = new Uint8ClampedArray(w * h * 4).fill(0);
         this._pw = w;
         this._ph = h;
       }
 
       getContext(/* type */) {
         const self = this;
-        return {
+        const parseColor = (value) => {
+          const normalized = String(value || '#000000').trim().toLowerCase();
+          if (normalized.startsWith('#')) {
+            const hex = normalized.slice(1);
+            if (hex.length === 3) {
+              return [
+                parseInt(hex[0] + hex[0], 16),
+                parseInt(hex[1] + hex[1], 16),
+                parseInt(hex[2] + hex[2], 16),
+                255,
+              ];
+            }
+            if (hex.length === 6) {
+              return [
+                parseInt(hex.slice(0, 2), 16),
+                parseInt(hex.slice(2, 4), 16),
+                parseInt(hex.slice(4, 6), 16),
+                255,
+              ];
+            }
+          }
+          return [0, 0, 0, 255];
+        };
+        const blit = (src, sw, sh, dx, dy, dw = sw, dh = sh) => {
+          if (!src || !sw || !sh || !dw || !dh) return;
+          const target = self._pixels;
+          for (let y = 0; y < dh; y++) {
+            for (let x = 0; x < dw; x++) {
+              const sx = Math.min(sw - 1, Math.max(0, Math.floor((x / dw) * sw)));
+              const sy = Math.min(sh - 1, Math.max(0, Math.floor((y / dh) * sh)));
+              const srcIndex = (sy * sw + sx) * 4;
+              const tx = dx + x;
+              const ty = dy + y;
+              if (tx < 0 || ty < 0 || tx >= self._pw || ty >= self._ph) continue;
+              const dstIndex = (ty * self._pw + tx) * 4;
+              target[dstIndex] = src[srcIndex];
+              target[dstIndex + 1] = src[srcIndex + 1];
+              target[dstIndex + 2] = src[srcIndex + 2];
+              target[dstIndex + 3] = src[srcIndex + 3];
+            }
+          }
+        };
+        const ctx = {
+          fillStyle: '#000000',
           translate() {},
           scale() {},
-          drawImage() {},
+          fillRect(x, y, w, h) {
+            const [r, g, b, a] = parseColor(ctx.fillStyle);
+            for (let iy = Math.max(0, y); iy < Math.min(self._ph, y + h); iy++) {
+              for (let ix = Math.max(0, x); ix < Math.min(self._pw, x + w); ix++) {
+                const di = (iy * self._pw + ix) * 4;
+                self._pixels[di] = r;
+                self._pixels[di + 1] = g;
+                self._pixels[di + 2] = b;
+                self._pixels[di + 3] = a;
+              }
+            }
+          },
+          clearRect(x, y, w, h) {
+            for (let iy = Math.max(0, y); iy < Math.min(self._ph, y + h); iy++) {
+              for (let ix = Math.max(0, x); ix < Math.min(self._pw, x + w); ix++) {
+                const di = (iy * self._pw + ix) * 4;
+                self._pixels[di] = 0;
+                self._pixels[di + 1] = 0;
+                self._pixels[di + 2] = 0;
+                self._pixels[di + 3] = 0;
+              }
+            }
+          },
+          drawImage(source, dx = 0, dy = 0, dw, dh) {
+            const srcPixels = source?.data || source?._pixels || source?.image?.data || null;
+            const sw = source?.width || source?.image?.width || source?._pw || 0;
+            const sh = source?.height || source?.image?.height || source?._ph || 0;
+            blit(srcPixels, sw, sh, dx, dy, dw ?? sw, dh ?? sh);
+          },
           putImageData(imgData, _dx, _dy) {
             self._pixels = imgData.data;
             self._pw = imgData.width;
             self._ph = imgData.height;
           },
+          getImageData(sx, sy, sw, sh) {
+            const data = new Uint8ClampedArray(sw * sh * 4);
+            for (let y = 0; y < sh; y++) {
+              for (let x = 0; x < sw; x++) {
+                const tx = sx + x;
+                const ty = sy + y;
+                const srcIndex = (ty * self._pw + tx) * 4;
+                const dstIndex = (y * sw + x) * 4;
+                data[dstIndex] = self._pixels[srcIndex] ?? 0;
+                data[dstIndex + 1] = self._pixels[srcIndex + 1] ?? 0;
+                data[dstIndex + 2] = self._pixels[srcIndex + 2] ?? 0;
+                data[dstIndex + 3] = self._pixels[srcIndex + 3] ?? 0;
+              }
+            }
+            return new ImageData(data, sw, sh);
+          },
         };
+        return ctx;
       }
 
       convertToBlob({ type = 'image/png' } = {}) {   // eslint-disable-line no-unused-vars

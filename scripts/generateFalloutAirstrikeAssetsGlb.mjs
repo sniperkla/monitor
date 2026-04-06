@@ -66,6 +66,11 @@ const makeMaterial = ({
   opacity = 1,
   side,
   map,
+  normalMap,
+  roughnessMap,
+  aoMap,
+  aoMapIntensity = 1,
+  normalScale,
 }) => {
   const m = new THREE.MeshStandardMaterial({
     color,
@@ -76,12 +81,20 @@ const makeMaterial = ({
     transparent,
     opacity,
     depthWrite: !transparent,
-    ...(side !== undefined ? { side } : {})
+    ...(side !== undefined ? { side } : {}),
+    ...(normalMap ? { normalMap } : {}),
+    ...(roughnessMap ? { roughnessMap } : {}),
+    ...(aoMap ? { aoMap, aoMapIntensity } : {}),
   });
   const tex = map !== undefined ? map
     : (!transparent && opacity >= 0.95 && emissiveIntensity <= 0.4)
       ? autoMap(color) : null;
   if (tex) m.map = tex;
+  if (normalScale) {
+    m.normalScale = Array.isArray(normalScale)
+      ? new THREE.Vector2(normalScale[0], normalScale[1])
+      : normalScale;
+  }
   return m;
 };
 
@@ -103,454 +116,415 @@ const addMesh = ({
   return mesh;
 };
 
+const cloneUvToUv2 = (geometry) => {
+  if (!geometry?.attributes?.uv || geometry.attributes.uv2) return geometry;
+  geometry.setAttribute('uv2', new THREE.BufferAttribute(geometry.attributes.uv.array.slice(), 2));
+  return geometry;
+};
+
+const cloneTexture = (texture, repeatX = 1, repeatY = 1) => {
+  if (!texture) return null;
+  const clone = texture.clone();
+  clone.needsUpdate = true;
+  clone.repeat.set(repeatX, repeatY);
+  return clone;
+};
+
+const makeDataTexture = (width, height, fillFn, { color = true } = {}) => {
+  const data = new Uint8Array(width * height * 4);
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const idx = (y * width + x) * 4;
+      const [r, g, b, a = 255] = fillFn(x, y, width, height);
+      data[idx] = Math.max(0, Math.min(255, Math.round(r)));
+      data[idx + 1] = Math.max(0, Math.min(255, Math.round(g)));
+      data[idx + 2] = Math.max(0, Math.min(255, Math.round(b)));
+      data[idx + 3] = Math.max(0, Math.min(255, Math.round(a)));
+    }
+  }
+  const texture = new THREE.DataTexture(data, width, height, THREE.RGBAFormat);
+  texture.needsUpdate = true;
+  texture.wrapS = THREE.RepeatWrapping;
+  texture.wrapT = THREE.RepeatWrapping;
+  texture.colorSpace = color ? THREE.SRGBColorSpace : THREE.NoColorSpace;
+  return texture;
+};
+
+const makeLatheAlongX = (profile, segments = 28) => {
+  const geometry = new THREE.LatheGeometry(
+    profile.map(([radius, x]) => new THREE.Vector2(radius, x)),
+    segments,
+  );
+  geometry.rotateZ(-Math.PI / 2);
+  geometry.computeVertexNormals();
+  return cloneUvToUv2(geometry);
+};
+
+const makeExtrudedPlanform = (points, thickness, offsetY = 0) => {
+  const shape = new THREE.Shape();
+  shape.moveTo(points[0][0], points[0][1]);
+  for (let index = 1; index < points.length; index++) {
+    shape.lineTo(points[index][0], points[index][1]);
+  }
+  shape.closePath();
+  const geometry = new THREE.ExtrudeGeometry(shape, {
+    depth: thickness,
+    bevelEnabled: false,
+    curveSegments: 10,
+  });
+  geometry.applyMatrix4(new THREE.Matrix4().set(
+    1, 0, 0, 0,
+    0, 0, 1, offsetY,
+    0, 1, 0, 0,
+    0, 0, 0, 1,
+  ));
+  geometry.computeVertexNormals();
+  return cloneUvToUv2(geometry);
+};
+
 const buildBomberPlane = () => {
   const group = new THREE.Group();
   group.name = 'bomber_plane';
 
-  // WW2 B-29 Superfortress style materials
-  const oliveMat    = makeMaterial({ color: '#7f8d68', roughness: 0.66, metalness: 0.18, emissive: '#7f8d68', emissiveIntensity: 0.06 });
-  const oliveDkMat  = makeMaterial({ color: '#667453', roughness: 0.74, metalness: 0.14 });
-  const alumMat     = makeMaterial({ color: '#9daaa2', roughness: 0.32, metalness: 0.66 });
-  const darkMat     = makeMaterial({ color: '#465247', roughness: 0.28, metalness: 0.58 });
-  const rubberMat   = makeMaterial({ color: '#788171', roughness: 0.56, metalness: 0.22 });
-  const glassMat    = makeMaterial({ color: '#a8ccd8', roughness: 0.06, metalness: 0.78, transparent: true, opacity: 0.54 });
-  const glowMat     = makeMaterial({ color: '#ffd166', emissive: '#ffd166', emissiveIntensity: 1.9, transparent: true, opacity: 0.44 });
+  const bomberPbr = (() => {
+    const width = 256;
+    const height = 256;
+    const base = makeDataTexture(width, height, (x, y) => {
+      const panelX = x % 48;
+      const panelY = y % 32;
+      const panelLine = panelX < 2 || panelY < 2;
+      const rivet = ((panelX === 6 || panelX === 42) && (panelY === 6 || panelY === 26)) ? 1 : 0;
+      const streak = Math.sin((x / width) * Math.PI * 32 + y * 0.05) * 4;
+      const grain = (Math.sin(x * 12.9898 + y * 78.233) * 43758.5453) % 1;
+      const noise = ((grain < 0 ? grain + 1 : grain) - 0.5) * 10;
+      const shade = 162 + streak + noise + (panelLine ? -24 : 0) + (rivet ? -34 : 0);
+      return [shade, shade + 7, shade + 14, 255];
+    });
+    const normal = makeDataTexture(width, height, (x, y) => {
+      const panelX = x % 48;
+      const panelY = y % 32;
+      const panelLine = panelX < 2 || panelY < 2;
+      const rivet = ((panelX === 6 || panelX === 42) && (panelY === 6 || panelY === 26)) ? 1 : 0;
+      const nx = panelX < 2 ? 166 : panelX > 45 ? 90 : 128;
+      const ny = panelY < 2 ? 166 : panelY > 29 ? 90 : 128;
+      const bump = rivet ? 154 : 128;
+      return [panelLine ? nx : bump, panelLine ? ny : bump, 255, 255];
+    }, { color: false });
+    const roughness = makeDataTexture(width, height, (x, y) => {
+      const panelX = x % 48;
+      const panelY = y % 32;
+      const panelLine = panelX < 2 || panelY < 2;
+      const value = panelLine ? 170 : 108 + ((x + y) % 9);
+      return [value, value, value, 255];
+    }, { color: false });
+    const ao = makeDataTexture(width, height, (x, y) => {
+      const panelX = x % 48;
+      const panelY = y % 32;
+      const edge = (panelX < 3 || panelX > 44 || panelY < 3 || panelY > 28) ? 180 : 236;
+      return [edge, edge, edge, 255];
+    }, { color: false });
+    [base, normal, roughness, ao].forEach((texture) => texture.repeat.set(3.2, 1.8));
+    return { base, normal, roughness, ao };
+  })();
 
-  // ── FUSELAGE – large oval pressurised tube (B-29 circular cross-section) ──
-  addMesh({
-    parent: group, name: 'bomber_fuselage',
-    geometry: new THREE.CylinderGeometry(12.5, 12.5, 255, 26),
-    material: oliveMat,
-    rotation: [0, 0, -Math.PI / 2],
-    scale: [1, 1, 1.18]
+  const darkPbr = (() => {
+    const base = textures.METAL_DARK.clone();
+    base.needsUpdate = true;
+    base.repeat.set(3, 3);
+    const normal = makeDataTexture(128, 128, (x, y) => {
+      const band = (x % 24) < 3 ? 145 : 128;
+      return [band, 128, 255, 255];
+    }, { color: false });
+    const roughness = makeDataTexture(128, 128, () => [132, 132, 132, 255], { color: false });
+    const ao = makeDataTexture(128, 128, (x, y) => {
+      const edge = (x % 24) < 2 || (y % 24) < 2 ? 190 : 235;
+      return [edge, edge, edge, 255];
+    }, { color: false });
+    [normal, roughness, ao].forEach((texture) => texture.repeat.set(3, 3));
+    return { base, normal, roughness, ao };
+  })();
+
+  const makeBomberMetalMaterial = ({
+    color = '#9ba8b6',
+    dark = false,
+    emissive = '#000000',
+    emissiveIntensity = 0,
+    transparent = false,
+    opacity = 1,
+    roughness = dark ? 0.56 : 0.42,
+    metalness = dark ? 0.74 : 0.78,
+    side,
+  } = {}) => {
+    const set = dark ? darkPbr : bomberPbr;
+    return makeMaterial({
+      color,
+      emissive,
+      emissiveIntensity,
+      roughness,
+      metalness,
+      transparent,
+      opacity,
+      side,
+      map: set.base,
+      normalMap: set.normal,
+      roughnessMap: set.roughness,
+      aoMap: set.ao,
+      aoMapIntensity: 0.72,
+      normalScale: dark ? [0.55, 0.55] : [0.7, 0.7],
+    });
+  };
+
+  const skinMat = makeBomberMetalMaterial({ color: '#97a6b4' });
+  const wingMat = makeBomberMetalMaterial({ color: '#9cabb8', side: THREE.DoubleSide });
+  const trimMat = makeBomberMetalMaterial({ color: '#6d7b89', dark: true });
+  const darkMat = makeBomberMetalMaterial({ color: '#2a313b', dark: true });
+  const glassMat = makeMaterial({
+    color: '#88b8c8',
+    roughness: 0.08,
+    metalness: 0.15,
+    transparent: true,
+    opacity: 0.42,
+    emissive: '#67a4be',
+    emissiveIntensity: 0.08,
   });
-  // Forward tapered section
-  addMesh({
-    parent: group, name: 'bomber_nose_section',
-    geometry: new THREE.CylinderGeometry(6.5, 12.5, 62, 22),
-    material: oliveMat,
-    position: [103, 0, 0],
-    rotation: [0, 0, -Math.PI / 2],
-    scale: [1, 1, 1.18]
+  const glowMat = makeMaterial({
+    color: '#88d5ff',
+    emissive: '#4fc3ff',
+    emissiveIntensity: 2.4,
+    transparent: true,
+    opacity: 0.58,
   });
-  // Aft tapered section leading to tail boom
+
+  const fuselageGeo = makeLatheAlongX([
+    [0.4, -143],
+    [1.7, -136],
+    [3.4, -128],
+    [5.6, -118],
+    [7.2, -104],
+    [9.0, -72],
+    [9.6, -18],
+    [9.9, 34],
+    [10.2, 66],
+    [9.2, 94],
+    [7.4, 114],
+    [4.1, 128],
+    [1.6, 137],
+    [0.5, 142],
+  ], 34);
+  addMesh({ parent: group, name: 'bomber_fuselage', geometry: fuselageGeo, material: skinMat });
+
   addMesh({
-    parent: group, name: 'bomber_tail_taper',
-    geometry: new THREE.CylinderGeometry(5.8, 12.5, 76, 20),
-    material: oliveMat,
-    position: [-113, 2, 0],
+    parent: group,
+    name: 'bomber_nose_radome',
+    geometry: cloneUvToUv2(new THREE.ConeGeometry(2.5, 20, 18)),
+    material: trimMat,
+    position: [149, -0.2, 0],
+    rotation: [0, 0, -Math.PI / 2],
+  });
+  addMesh({
+    parent: group,
+    name: 'bomber_tail_boat',
+    geometry: cloneUvToUv2(new THREE.CylinderGeometry(2.6, 3.7, 18, 14)),
+    material: trimMat,
+    position: [-145, -0.6, 0],
     rotation: [0, 0, Math.PI / 2],
-    scale: [1, 1, 1.18]
   });
-  // Fuselage panel rings (rivet-line detail)
-  [-80, -40, 0, 40, 80].forEach((x, i) => {
-    addMesh({
-      parent: group, name: `bomber_panel_ring_${i}`,
-      geometry: new THREE.TorusGeometry(12.8, 0.45, 8, 28),
-      material: oliveDkMat,
-      position: [x, 0, 0],
-      rotation: [0, Math.PI / 2, 0]
-    });
+  addMesh({
+    parent: group,
+    name: 'bomber_spine',
+    geometry: cloneUvToUv2(new THREE.CapsuleGeometry(1.8, 110, 4, 10)),
+    material: skinMat,
+    position: [-2, 9.6, 0],
+    rotation: [0, 0, Math.PI / 2],
+    scale: [1, 0.78, 0.6],
+  });
+  addMesh({
+    parent: group,
+    name: 'bomber_bomb_bay',
+    geometry: cloneUvToUv2(new THREE.BoxGeometry(76, 2.6, 20)),
+    material: trimMat,
+    position: [-4, -9.6, 0],
   });
 
-  // ── NOSE – stepped B-29 greenhouse (flat multi-panel nose) ──
+  const canopyGeo = cloneUvToUv2(new THREE.SphereGeometry(9.6, 20, 14));
   addMesh({
-    parent: group, name: 'bomber_nose_shell',
-    geometry: new THREE.SphereGeometry(15, 24, 18),
-    material: oliveMat,
-    position: [120, 0, 0],
-    scale: [1.35, 0.82, 0.82]
-  });
-  // Lower bombardier greenhouse dome
-  addMesh({
-    parent: group, name: 'bomber_greenhouse',
-    geometry: new THREE.SphereGeometry(11.5, 20, 14, 0, Math.PI * 2, 0, Math.PI * 0.56),
+    parent: group,
+    name: 'bomber_cockpit_canopy',
+    geometry: canopyGeo,
     material: glassMat,
-    position: [108, 4, 0],
-    rotation: [Math.PI, 0, Math.PI / 2],
-    scale: [1.85, 0.86, 0.86]
+    position: [84, 11.1, 0],
+    scale: [1.75, 0.54, 0.92],
   });
-  // Upper nose glass section
   addMesh({
-    parent: group, name: 'bomber_nose_glass',
-    geometry: new THREE.SphereGeometry(8.8, 16, 12, 0, Math.PI * 2, 0, Math.PI * 0.44),
+    parent: group,
+    name: 'bomber_cockpit_sill',
+    geometry: cloneUvToUv2(new THREE.BoxGeometry(30, 3.4, 18)),
+    material: skinMat,
+    position: [83, 7.2, 0],
+  });
+  addMesh({
+    parent: group,
+    name: 'bomber_nav_blister',
+    geometry: cloneUvToUv2(new THREE.SphereGeometry(4.7, 16, 12, 0, Math.PI * 2, Math.PI / 2, Math.PI / 2)),
     material: glassMat,
-    position: [124, 2, 0],
-    rotation: [Math.PI, 0, Math.PI / 2],
-    scale: [1.3, 0.82, 0.82]
+    position: [67, -7.5, 0],
+    scale: [1.3, 0.8, 1],
   });
-  // Nose tip
-  addMesh({
-    parent: group, name: 'bomber_nose_tip',
-    geometry: new THREE.SphereGeometry(5.2, 14, 10),
-    material: alumMat,
-    position: [136, 0, 0],
-    scale: [1.55, 0.65, 0.65]
-  });
-  // Nose frame strips
-  [-1, 1].forEach((s, i) => {
+
+  const makeWingGeometry = (side) => {
+    const root = 12 * side;
+    const tip = 178 * side;
+    const points = side > 0
+      ? [[46, root], [-12, 68], [-102, tip], [-132, tip], [-64, 36], [18, 10]]
+      : [[46, root], [18, -10], [-64, -36], [-132, tip], [-102, tip], [-12, -68]];
+    const geometry = makeExtrudedPlanform(points, 6.5, -3.2);
+    geometry.rotateX(side * -0.045);
+    geometry.rotateZ(side * -0.02);
+    return geometry;
+  };
+
+  addMesh({ parent: group, name: 'bomber_wing_right', geometry: makeWingGeometry(1), material: wingMat });
+  addMesh({ parent: group, name: 'bomber_wing_left', geometry: makeWingGeometry(-1), material: wingMat });
+
+  [-1, 1].forEach((side, index) => {
     addMesh({
-      parent: group, name: `bomber_nose_frame_${i}`,
-      geometry: new THREE.BoxGeometry(30, 1.4, 2.5),
-      material: alumMat,
-      position: [110, 9.5, s * 5],
-      rotation: [0, 0, 0.22]
+      parent: group,
+      name: `bomber_wing_root_fairing_${index}`,
+      geometry: cloneUvToUv2(new THREE.SphereGeometry(13, 18, 12)),
+      material: skinMat,
+      position: [2, -1.8, side * 20],
+      scale: [1.55, 0.38, 1.18],
+    });
+    addMesh({
+      parent: group,
+      name: `bomber_tip_pod_${index}`,
+      geometry: makeLatheAlongX([
+        [0.5, -11],
+        [2.0, -8],
+        [2.9, -1],
+        [2.9, 5],
+        [2.1, 10],
+        [0.6, 13],
+      ], 16),
+      material: trimMat,
+      position: [-109, -7.8, side * 182],
+      rotation: [0, 0, 0],
+      scale: [0.92, 0.92, 0.92],
     });
   });
 
-  // ── SPINE & BELLY ──
-  addMesh({
-    parent: group, name: 'bomber_spine',
-    geometry: new THREE.BoxGeometry(188, 5.2, 11),
-    material: oliveDkMat,
-    position: [-8, 13.8, 0]
-  });
-  addMesh({
-    parent: group, name: 'bomber_belly_bay',
-    geometry: new THREE.BoxGeometry(72, 3.8, 24),
-    material: darkMat,
-    position: [-5, -13, 0]
-  });
-  // Bomb-bay door panels (two halves)
-  [-1, 1].forEach((s, i) => {
-    addMesh({
-      parent: group, name: `bomber_bay_door_${i}`,
-      geometry: new THREE.BoxGeometry(72, 1.2, 11),
-      material: oliveDkMat,
-      position: [-5, -13.5, s * 6.2]
-    });
-  });
+  const finGeo = makeExtrudedPlanform([
+    [-84, 0],
+    [-138, 0],
+    [-124, 72],
+    [-92, 72],
+  ], 6, -3);
+  addMesh({ parent: group, name: 'bomber_vertical_fin', geometry: finGeo, material: wingMat });
 
-  // ── DORSAL TURRET (top amidships) ──
-  addMesh({
-    parent: group, name: 'bomber_dorsal_turret_base',
-    geometry: new THREE.SphereGeometry(6.8, 16, 12, 0, Math.PI * 2, 0, Math.PI / 2),
-    material: oliveMat,
-    position: [18, 13.8, 0]
-  });
-  addMesh({
-    parent: group, name: 'bomber_dorsal_turret_ring',
-    geometry: new THREE.TorusGeometry(6.4, 0.75, 8, 22),
-    material: alumMat,
-    position: [18, 13.8, 0],
-    rotation: [Math.PI / 2, 0, 0]
-  });
-  addMesh({
-    parent: group, name: 'bomber_dorsal_glass',
-    geometry: new THREE.SphereGeometry(5.9, 14, 10, 0, Math.PI * 2, 0, Math.PI / 2),
-    material: glassMat,
-    position: [18, 13.8, 0]
-  });
-  // Twin dorsal guns
-  [-1, 1].forEach((s, gi) => {
-    addMesh({
-      parent: group, name: gi === 0 ? 'bomber_dorsal_turret' : 'bomber_dorsal_gun_2',
-      geometry: new THREE.CylinderGeometry(0.68, 0.68, 15, 8),
-      material: darkMat,
-      position: [23, 19.8, s * 2.8],
-      rotation: [0, 0, 0.16]
-    });
-  });
+  const makeStabGeometry = (side) => {
+    const root = 10 * side;
+    const tip = 60 * side;
+    const points = side > 0
+      ? [[-88, root], [-116, 24], [-130, tip], [-100, tip], [-78, 18]]
+      : [[-88, root], [-78, -18], [-100, tip], [-130, tip], [-116, -24]];
+    const geometry = makeExtrudedPlanform(points, 3.8, -1.8);
+    geometry.rotateX(side * -0.03);
+    return geometry;
+  };
+  addMesh({ parent: group, name: 'bomber_stab_right', geometry: makeStabGeometry(1), material: wingMat });
+  addMesh({ parent: group, name: 'bomber_stab_left', geometry: makeStabGeometry(-1), material: wingMat });
 
-  // ── VENTRAL TURRET (belly gun blister) ──
-  addMesh({
-    parent: group, name: 'bomber_ventral_base',
-    geometry: new THREE.SphereGeometry(5.6, 14, 10, 0, Math.PI * 2, Math.PI / 2, Math.PI / 2),
-    material: oliveMat,
-    position: [-20, -12.5, 0]
-  });
-  addMesh({
-    parent: group, name: 'bomber_ventral_glass',
-    geometry: new THREE.SphereGeometry(4.8, 12, 8, 0, Math.PI * 2, Math.PI / 2, Math.PI / 2),
-    material: glassMat,
-    position: [-20, -12.5, 0]
-  });
-  [-1, 1].forEach((s, gi) => {
-    addMesh({
-      parent: group, name: `bomber_ventral_gun_${gi}`,
-      geometry: new THREE.CylinderGeometry(0.6, 0.6, 13, 8),
-      material: darkMat,
-      position: [-20, -18.5, s * 2.8],
-      rotation: [0, 0, Math.PI / 2]
-    });
-  });
-
-  // ── TAIL BOOM ──
-  addMesh({
-    parent: group, name: 'bomber_tail_boom',
-    geometry: new THREE.CylinderGeometry(5.6, 8.8, 52, 18),
-    material: oliveMat,
-    position: [-118, 2, 0],
-    rotation: [0, 0, Math.PI / 2]
-  });
-  addMesh({
-    parent: group, name: 'bomber_tail_cap',
-    geometry: new THREE.SphereGeometry(5.6, 14, 10),
-    material: oliveMat,
-    position: [-145, 2, 0],
-    scale: [1.1, 0.88, 0.88]
-  });
-
-  // ── VERTICAL TAIL FIN – large swept like B-29 ──
-  addMesh({
-    parent: group, name: 'bomber_vertical_tail',
-    geometry: new THREE.BoxGeometry(4.8, 66, 56),
-    material: oliveMat,
-    position: [-118, 27, 0],
-    rotation: [0, 0, 0.06]
-  });
-  // Leading-edge spar
-  addMesh({
-    parent: group, name: 'bomber_tail_fin_edge',
-    geometry: new THREE.CylinderGeometry(2.2, 2.2, 68, 10),
-    material: oliveDkMat,
-    position: [-103, 27, 0],
-    rotation: [Math.PI / 2, 0, 0.06]
-  });
-  addMesh({
-    parent: group, name: 'bomber_rudder',
-    geometry: new THREE.BoxGeometry(4.2, 50, 30),
-    material: rubberMat,
-    position: [-133, 27, 0],
-    rotation: [0, 0, 0.04]
-  });
-  addMesh({
-    parent: group, name: 'bomber_rudder_tab',
-    geometry: new THREE.BoxGeometry(2.4, 14, 6.5),
-    material: alumMat,
-    position: [-140, 22, 0]
-  });
-
-  // ── HORIZONTAL STABILISERS ──
-  [-1, 1].forEach((side) => {
-    addMesh({
-      parent: group, name: side < 0 ? 'bomber_tailplane_left' : 'bomber_tailplane_right',
-      geometry: new THREE.BoxGeometry(46, 3.6, 65),
-      material: oliveMat,
-      position: [-118, 6, side * 37],
-      rotation: [0, side * 0.07, side * -0.04]
-    });
-    addMesh({
-      parent: group, name: side < 0 ? 'bomber_elevator_left' : 'bomber_elevator_right',
-      geometry: new THREE.BoxGeometry(18, 2.8, 32),
-      material: rubberMat,
-      position: [-133, 6, side * 44]
-    });
-  });
-
-  // ── TAIL GUN POSITION ──
-  addMesh({
-    parent: group, name: 'bomber_tail_gun_mount',
-    geometry: new THREE.SphereGeometry(4.6, 12, 10),
-    material: oliveMat,
-    position: [-148, 3, 0]
-  });
-  addMesh({
-    parent: group, name: 'bomber_tail_gun_glass',
-    geometry: new THREE.SphereGeometry(4, 10, 8, 0, Math.PI, 0, Math.PI),
-    material: glassMat,
-    position: [-148, 3, 0],
-    rotation: [0, Math.PI / 2, 0]
-  });
-  [-1, 1].forEach((s, gi) => {
-    addMesh({
-      parent: group, name: `bomber_tail_gun_${gi}`,
-      geometry: new THREE.CylinderGeometry(0.6, 0.6, 17, 8),
-      material: darkMat,
-      position: [-158, 3, s * 2.6],
-      rotation: [0, 0, -Math.PI / 2]
-    });
-  });
-
-  // ── MAIN WINGS – high-aspect, slightly tapered, mild dihedral ──
-  addMesh({
-    parent: group, name: 'bomber_main_wing',
-    geometry: new THREE.BoxGeometry(114, 5.8, 278),
-    material: oliveMat,
-    position: [-6, 0, 0]
-  });
-  [-1, 1].forEach((side) => {
-    // Outer tapered panel
-    addMesh({
-      parent: group, name: side < 0 ? 'bomber_outer_wing_left' : 'bomber_outer_wing_right',
-      geometry: new THREE.BoxGeometry(102, 4.2, 112),
-      material: oliveDkMat,
-      position: [-20, 1, side * 157],
-      rotation: [0, side * 0.045, side * -0.048]
-    });
-    // Wingtip
-    addMesh({
-      parent: group, name: side < 0 ? 'bomber_wingtip_left' : 'bomber_wingtip_right',
-      geometry: new THREE.BoxGeometry(56, 2.4, 36),
-      material: oliveDkMat,
-      position: [-34, 2.5, side * 208],
-      rotation: [0, side * 0.09, side * -0.09]
-    });
-    // Aileron
-    addMesh({
-      parent: group, name: side < 0 ? 'bomber_aileron_left' : 'bomber_aileron_right',
-      geometry: new THREE.BoxGeometry(26, 2.2, 40),
-      material: rubberMat,
-      position: [-52, -0.2, side * 152]
-    });
-    // Inboard flap
-    addMesh({
-      parent: group, name: side < 0 ? 'bomber_flap_left' : 'bomber_flap_right',
-      geometry: new THREE.BoxGeometry(34, 2.2, 54),
-      material: oliveDkMat,
-      position: [8, -0.6, side * 98]
-    });
-    // Wing rib line
-    addMesh({
-      parent: group, name: side < 0 ? 'bomber_wing_rib_left' : 'bomber_wing_rib_right',
-      geometry: new THREE.BoxGeometry(112, 1.0, 2.6),
-      material: oliveDkMat,
-      position: [-6, 3, side * 96]
-    });
-  });
-
-  // ── 4 RADIAL ENGINES on wing (B-29: inboard + outboard pairs) ──
-  const enginePositions = [
-    [22, -10, -90],   // inboard left
-    [22, -10, -152],  // outboard left
-    [22, -10,  90],   // inboard right
-    [22, -10,  152]   // outboard right
+  const nacelleProfile = [
+    [3.5, -24],
+    [4.4, -18],
+    [5.0, -3],
+    [5.4, 12],
+    [4.9, 23],
+    [4.0, 28],
   ];
-  enginePositions.forEach((pos, index) => {
-    // Nacelle body – long streamlined
+  const pylonDefs = [
+    { z: -46, x: -6, label: 'inner_left' },
+    { z: -104, x: -26, label: 'outer_left' },
+    { z: 46, x: -6, label: 'inner_right' },
+    { z: 104, x: -26, label: 'outer_right' },
+  ];
+  pylonDefs.forEach(({ z, x, label }, pairIdx) => {
+    const pylonPoints = z > 0
+      ? [[x + 10, z - 5], [x - 4, z - 5], [x - 18, z + 5], [x + 4, z + 5]]
+      : [[x + 10, z + 5], [x - 4, z + 5], [x - 18, z - 5], [x + 4, z - 5]];
+    const pylonGeo = makeExtrudedPlanform(pylonPoints, 20, -22);
+    addMesh({ parent: group, name: `bomber_pylon_${label}`, geometry: pylonGeo, material: trimMat });
     addMesh({
-      parent: group, name: `bomber_engine_${index}`,
-      geometry: new THREE.CylinderGeometry(11, 9.5, 58, 22),
-      material: alumMat,
-      position: pos,
-      rotation: [0, 0, -Math.PI / 2]
-    });
-    // Nacelle rear cowling
-    addMesh({
-      parent: group, name: `bomber_nacelle_rear_${index}`,
-      geometry: new THREE.CylinderGeometry(8.2, 6.5, 24, 18),
-      material: oliveMat,
-      position: [pos[0] - 38, pos[1], pos[2]],
-      rotation: [0, 0, -Math.PI / 2]
-    });
-    // NACA cowl ring (front intake lip)
-    addMesh({
-      parent: group, name: `bomber_engine_cowl_${index}`,
-      geometry: new THREE.TorusGeometry(10.4, 2.4, 10, 24),
-      material: darkMat,
-      position: [pos[0] + 28, pos[1], pos[2]],
-      rotation: [0, Math.PI / 2, 0]
-    });
-    // Inner cowl ring
-    addMesh({
-      parent: group, name: `bomber_cowl_inner_${index}`,
-      geometry: new THREE.TorusGeometry(8.4, 1.3, 8, 22),
-      material: darkMat,
-      position: [pos[0] + 26, pos[1], pos[2]],
-      rotation: [0, Math.PI / 2, 0]
-    });
-    // 6-stack radial exhaust stubs (like B-29 turbosupercharger stacks)
-    for (let stack = 0; stack < 6; stack++) {
-      const angle = (stack / 6) * Math.PI * 2 + Math.PI / 12;
-      const er = 9.0;
-      addMesh({
-        parent: group, name: `bomber_exhaust_stack_${index}_${stack}`,
-        geometry: new THREE.CylinderGeometry(0.85, 0.95, 5.5, 7),
-        material: darkMat,
-        position: [pos[0] - 18, pos[1] + Math.sin(angle) * er, pos[2] + Math.cos(angle) * er],
-        rotation: [0, 0, -Math.PI / 2]
-      });
-    }
-    // Exhaust heat glow
-    addMesh({
-      parent: group, name: `bomber_exhaust_glow_${index}`,
-      geometry: new THREE.CylinderGeometry(5.8, 3.2, 13, 14),
-      material: glowMat,
-      position: [pos[0] - 34, pos[1], pos[2]],
-      rotation: [0, 0, -Math.PI / 2]
-    });
-    // Nacelle-to-wing fillet fairing
-    addMesh({
-      parent: group, name: `bomber_nacelle_fillet_${index}`,
-      geometry: new THREE.BoxGeometry(54, 3.8, 17),
-      material: oliveMat,
-      position: [pos[0] - 4, pos[1] + 8.5, pos[2]]
+      parent: group,
+      name: `bomber_cradle_${label}`,
+      geometry: cloneUvToUv2(new THREE.BoxGeometry(54, 4.5, 10)),
+      material: trimMat,
+      position: [x - 4, -22, z],
     });
 
-    // ── PROPELLER GROUP (rotation node) ──
+    [15, -15].forEach((xOffset, engineIndex) => {
+      const index = pairIdx * 2 + engineIndex;
+      const nacelleGeo = makeLatheAlongX(nacelleProfile, 22);
+      addMesh({
+        parent: group,
+        name: `bomber_nacelle_${index}`,
+        geometry: nacelleGeo,
+        material: darkMat,
+        position: [x + xOffset, -22, z],
+      });
+      addMesh({
+        parent: group,
+        name: `bomber_intake_${index}`,
+        geometry: cloneUvToUv2(new THREE.TorusGeometry(5.25, 0.75, 8, 18)),
+        material: trimMat,
+        position: [x + xOffset + 28, -22, z],
+        rotation: [0, Math.PI / 2, 0],
+      });
+      addMesh({
+        parent: group,
+        name: `bomber_nozzle_${index}`,
+        geometry: cloneUvToUv2(new THREE.CylinderGeometry(2.7, 3.7, 10, 14)),
+        material: trimMat,
+        position: [x + xOffset - 29, -22, z],
+        rotation: [0, 0, -Math.PI / 2],
+      });
+      if (engineIndex === 0) {
+        addMesh({
+          parent: group,
+          name: `bomber_exhaust_glow_${pairIdx}`,
+          geometry: cloneUvToUv2(new THREE.CylinderGeometry(2.8, 4.2, 18, 14)),
+          material: glowMat,
+          position: [x + xOffset - 40, -22, z],
+          rotation: [0, 0, -Math.PI / 2],
+        });
+      }
+    });
+  });
+
+  for (let index = 0; index < 4; index++) {
     const propGroup = new THREE.Group();
     propGroup.name = `bomber_prop_${index}`;
-    propGroup.position.set(pos[0] + 33, pos[1], pos[2]);
+    propGroup.position.set(0, -1000 - index, 0);
     group.add(propGroup);
+  }
 
-    // 4-blade Hamilton Standard style props
-    for (let blade = 0; blade < 4; blade++) {
-      const bAngle = blade * (Math.PI / 2);
-      addMesh({
-        parent: propGroup, name: `bomber_prop_blade_${index}_${blade}`,
-        geometry: new THREE.BoxGeometry(1.5, 38, 4.8),
-        material: darkMat,
-        position: [0, Math.cos(bAngle) * 13, Math.sin(bAngle) * 13],
-        rotation: [bAngle, 0, -0.09]
-      });
-      // Blade root bulge
-      addMesh({
-        parent: propGroup, name: `bomber_blade_root_${index}_${blade}`,
-        geometry: new THREE.SphereGeometry(2.6, 8, 8),
-        material: darkMat,
-        position: [0, Math.cos(bAngle) * 3.5, Math.sin(bAngle) * 3.5]
-      });
-    }
-    // Spinner cone
+  [-96, 96].forEach((z, index) => {
     addMesh({
-      parent: propGroup, name: `bomber_prop_hub_${index}`,
-      geometry: new THREE.ConeGeometry(4.4, 12, 16),
-      material: alumMat,
-      position: [5, 0, 0],
-      rotation: [0, 0, Math.PI / 2]
+      parent: group,
+      name: `bomber_insignia_${index}`,
+      geometry: cloneUvToUv2(new THREE.CircleGeometry(12.5, 24)),
+      material: makeMaterial({ color: '#274f9a', transparent: true, opacity: 0.82 }),
+      position: [-14, 3.5, z],
+      rotation: [-Math.PI / 2, 0, 0],
     });
-    // Spinner base disc
     addMesh({
-      parent: propGroup, name: `bomber_spinner_base_${index}`,
-      geometry: new THREE.CylinderGeometry(4.6, 4.6, 2.5, 16),
-      material: darkMat,
-      position: [-1, 0, 0],
-      rotation: [0, 0, Math.PI / 2]
+      parent: group,
+      name: `bomber_star_${index}`,
+      geometry: cloneUvToUv2(new THREE.CircleGeometry(5.8, 5)),
+      material: makeMaterial({ color: '#eef2f7', transparent: true, opacity: 0.9 }),
+      position: [-14, 3.7, z],
+      rotation: [-Math.PI / 2, 0, Math.PI / 10],
     });
-  });
-
-  // ── NATIONAL INSIGNIA – US star-and-bar on wings ──
-  addMesh({
-    parent: group, name: 'bomber_mark_left',
-    geometry: new THREE.CircleGeometry(15, 6),
-    material: makeMaterial({ color: '#1a4896', transparent: true, opacity: 0.88 }),
-    position: [2, 3.4, -108],
-    rotation: [-Math.PI / 2, 0, 0]
-  });
-  addMesh({
-    parent: group, name: 'bomber_mark_right',
-    geometry: new THREE.CircleGeometry(15, 6),
-    material: makeMaterial({ color: '#1a4896', transparent: true, opacity: 0.88 }),
-    position: [2, 3.4, 108],
-    rotation: [-Math.PI / 2, 0, 0]
-  });
-  // White star centres
-  [-108, 108].forEach((z, i) => {
-    addMesh({
-      parent: group, name: `bomber_mark_star_${i}`,
-      geometry: new THREE.CircleGeometry(7.5, 5),
-      material: makeMaterial({ color: '#f0f0f0', transparent: true, opacity: 0.9 }),
-      position: [2, 3.6, z],
-      rotation: [-Math.PI / 2, 0, Math.PI / 10]
-    });
-  });
-  // Fuselage ID band
-  addMesh({
-    parent: group, name: 'bomber_fuselage_stripe',
-    geometry: new THREE.CylinderGeometry(12.7, 12.7, 5.5, 26),
-    material: makeMaterial({ color: '#f0f0f0', transparent: true, opacity: 0.28 }),
-    position: [50, 0, 0],
-    rotation: [0, 0, Math.PI / 2]
   });
 
   return group;
@@ -560,10 +534,10 @@ const buildParachuteNuke = () => {
   const group = new THREE.Group();
   group.name = 'nuke_bomb';
 
-  const bombMat = makeMaterial({ color: '#4b5563', roughness: 0.28, metalness: 0.72 });
-  const trimMat = makeMaterial({ color: '#6b7280', roughness: 0.32, metalness: 0.66 });
-  const darkMat = makeMaterial({ color: '#111827', roughness: 0.24, metalness: 0.7 });
-  const stripeMat = makeMaterial({ color: '#facc15', roughness: 0.24, metalness: 0.08, emissive: '#f59e0b', emissiveIntensity: 0.22 });
+  const bombMat = makeMaterial({ color: '#596571', roughness: 0.26, metalness: 0.78, map: cloneTexture(textures.METAL_GREY, 2.2, 1.6) });
+  const trimMat = makeMaterial({ color: '#7b8794', roughness: 0.34, metalness: 0.68, map: cloneTexture(textures.RIVET_METAL, 2.6, 1.5) });
+  const darkMat = makeMaterial({ color: '#1a2029', roughness: 0.28, metalness: 0.72, map: cloneTexture(textures.METAL_DARK, 3, 2) });
+  const stripeMat = makeMaterial({ color: '#facc15', roughness: 0.36, metalness: 0.06, emissive: '#f59e0b', emissiveIntensity: 0.18 });
   const canopyMat = makeMaterial({ color: '#c1121f', roughness: 0.82, metalness: 0.06, side: THREE.DoubleSide });
   const canopyRingMat = makeMaterial({ color: '#fecaca', roughness: 0.7, metalness: 0.16 });
   const fabricGlowMat = makeMaterial({ color: '#ffd166', emissive: '#ffd166', emissiveIntensity: 0.65, transparent: true, opacity: 0.18 });
@@ -572,51 +546,67 @@ const buildParachuteNuke = () => {
   addMesh({
     parent: group,
     name: 'nuke_body',
-    geometry: new THREE.SphereGeometry(6.8, 20, 18),
+    geometry: makeLatheAlongX([
+      [0.4, -31], [2.8, -28], [5.5, -20], [7.2, -8], [7.4, 8], [5.4, 20], [2.4, 29], [0.3, 32],
+    ], 28),
     material: bombMat,
-    position: [0, 0, 0],
-    scale: [1, 1.08, 1]
+    rotation: [0, Math.PI / 2, 0],
   });
   addMesh({
     parent: group,
-    name: 'nuke_mid',
-    geometry: new THREE.CylinderGeometry(5.6, 6.9, 20, 18),
+    name: 'nuke_mid_band',
+    geometry: cloneUvToUv2(new THREE.CylinderGeometry(7.3, 7.3, 6, 24)),
     material: trimMat,
-    position: [0, -10.5, 0]
+    position: [2, 0, 0],
+    rotation: [0, 0, -Math.PI / 2],
   });
   addMesh({
     parent: group,
     name: 'nuke_tail',
-    geometry: new THREE.ConeGeometry(5.2, 13, 14),
+    geometry: cloneUvToUv2(new THREE.CylinderGeometry(4.2, 5.9, 18, 18)),
     material: darkMat,
-    position: [0, -24, 0]
+    position: [-24, 0, 0],
+    rotation: [0, 0, -Math.PI / 2],
+  });
+  addMesh({
+    parent: group,
+    name: 'nuke_tail_cap',
+    geometry: cloneUvToUv2(new THREE.ConeGeometry(3.4, 10, 14)),
+    material: darkMat,
+    position: [-38, 0, 0],
+    rotation: [0, 0, Math.PI / 2],
   });
   addMesh({
     parent: group,
     name: 'nuke_band',
-    geometry: new THREE.BoxGeometry(8.2, 12.2, 0.28),
+    geometry: cloneUvToUv2(new THREE.CylinderGeometry(7.5, 7.5, 2.2, 24)),
     material: stripeMat,
-    position: [0, -10.5, 5.7],
-    rotation: [Math.PI / 2, 0, 0]
+    position: [10, 0, 0],
+    rotation: [0, 0, -Math.PI / 2]
   });
-  [-4.5, 4.5].forEach((x, index) => {
+  [1, -1].forEach((side, index) => {
     addMesh({
       parent: group,
       name: `nuke_fin_${index}`,
-      geometry: new THREE.BoxGeometry(1.45, 8.5, 0.42),
+      geometry: makeExtrudedPlanform([
+        [-26, side * 2.2],
+        [-41, side * 9.2],
+        [-39, side * 14.8],
+        [-19, side * 5.6],
+      ], 0.9, -0.45),
       material: darkMat,
-      position: [x, -12.6, 0],
-      rotation: [0, 0, Math.PI / 4]
     });
-  });
-  [-4.5, 4.5].forEach((z, index) => {
     addMesh({
       parent: group,
       name: `nuke_fin_cross_${index}`,
-      geometry: new THREE.BoxGeometry(0.42, 8.5, 1.45),
+      geometry: makeExtrudedPlanform([
+        [-26, side * 2.2],
+        [-41, side * 9.2],
+        [-39, side * 14.8],
+        [-19, side * 5.6],
+      ], 0.9, -0.45),
       material: darkMat,
-      position: [0, -12.6, z],
-      rotation: [Math.PI / 4, 0, 0]
+      rotation: [Math.PI / 2, 0, 0],
     });
   });
 
@@ -625,12 +615,18 @@ const buildParachuteNuke = () => {
   chuteRoot.position.set(0, 34, 0);
   group.add(chuteRoot);
 
-  addMesh({
-    parent: chuteRoot,
-    name: 'nuke_canopy',
-    geometry: new THREE.SphereGeometry(24, 22, 14, 0, Math.PI * 2, 0, Math.PI / 2),
-    material: canopyMat
-  });
+  for (let segment = 0; segment < 8; segment++) {
+    const angle = (segment / 8) * Math.PI * 2;
+    addMesh({
+      parent: chuteRoot,
+      name: `nuke_canopy_panel_${segment}`,
+      geometry: cloneUvToUv2(new THREE.SphereGeometry(16, 10, 8, 0, Math.PI / 4, 0, Math.PI / 2)),
+      material: canopyMat,
+      position: [Math.cos(angle) * 5.2, 0, Math.sin(angle) * 5.2],
+      rotation: [0, -angle, 0],
+      scale: [1.6, 1.16, 1.08],
+    });
+  }
   addMesh({
     parent: chuteRoot,
     name: 'nuke_canopy_ring',
@@ -690,25 +686,27 @@ const buildStrikeJet = () => {
   const group = new THREE.Group();
   group.name = 'strike_jet';
 
-  const bodyMat = makeMaterial({ color: '#b0bdcb', roughness: 0.28, metalness: 0.7, emissive: '#b0bdcb', emissiveIntensity: 0.05 });
-  const trimMat = makeMaterial({ color: '#7c8a9a', roughness: 0.36, metalness: 0.56 });
-  const darkMat = makeMaterial({ color: '#46515e', roughness: 0.24, metalness: 0.64 });
+  const bodyMat = makeMaterial({ color: '#b0bdcb', roughness: 0.28, metalness: 0.7, emissive: '#b0bdcb', emissiveIntensity: 0.05, map: cloneTexture(textures.RIVET_METAL, 2.8, 1.8) });
+  const trimMat = makeMaterial({ color: '#7c8a9a', roughness: 0.36, metalness: 0.56, map: cloneTexture(textures.METAL_GREY, 3, 2) });
+  const darkMat = makeMaterial({ color: '#46515e', roughness: 0.24, metalness: 0.64, map: cloneTexture(textures.METAL_DARK, 3, 2) });
   const glassMat = makeMaterial({ color: '#8eb7d0', roughness: 0.06, metalness: 0.9, transparent: true, opacity: 0.52 });
   const glowMat = makeMaterial({ color: '#38bdf8', emissive: '#67e8f9', emissiveIntensity: 1.8, transparent: true, opacity: 0.42 });
 
   addMesh({
     parent: group,
     name: 'jet_fuselage',
-    geometry: new THREE.CylinderGeometry(4.6, 7.8, 126, 18),
+    geometry: makeLatheAlongX([
+      [0.25, -74], [2.8, -68], [6.8, -48], [8.2, -8], [7.2, 20], [5.6, 45], [2.1, 64], [0.2, 76],
+    ], 24),
     material: bodyMat,
-    rotation: [0, 0, -Math.PI / 2]
+    rotation: [0, Math.PI / 2, 0]
   });
   addMesh({
     parent: group,
     name: 'jet_nose',
-    geometry: new THREE.ConeGeometry(5.2, 30, 16),
+    geometry: cloneUvToUv2(new THREE.ConeGeometry(3.4, 22, 16)),
     material: trimMat,
-    position: [74, 0.5, 0],
+    position: [87, 0.5, 0],
     rotation: [0, 0, -Math.PI / 2]
   });
   addMesh({
@@ -722,50 +720,56 @@ const buildStrikeJet = () => {
   addMesh({
     parent: group,
     name: 'jet_spine',
-    geometry: new THREE.BoxGeometry(42, 5, 10),
+    geometry: cloneUvToUv2(new THREE.CapsuleGeometry(2.4, 36, 4, 8)),
     material: trimMat,
-    position: [-2, 7.4, 0]
+    position: [2, 7.4, 0],
+    rotation: [0, 0, Math.PI / 2],
+    scale: [1.1, 0.72, 0.8]
   });
   addMesh({
     parent: group,
     name: 'jet_main_wing',
-    geometry: new THREE.BoxGeometry(48, 2.4, 120),
+    geometry: makeExtrudedPlanform([
+      [24, 10], [-8, 44], [-60, 118], [-86, 118], [-44, 28], [8, 8],
+    ], 3.2, -1.6),
     material: bodyMat,
-    position: [-6, 0.4, 0],
-    rotation: [0, 0, -0.09]
+    position: [0, 0.4, 0]
   });
   [-1, 1].forEach((side) => {
     addMesh({
       parent: group,
       name: side < 0 ? 'jet_wingtip_left' : 'jet_wingtip_right',
-      geometry: new THREE.BoxGeometry(40, 1.8, 42),
+      geometry: makeExtrudedPlanform(side < 0
+        ? [[-36, -48], [-52, -78], [-63, -78], [-48, -42]]
+        : [[-36, 48], [-48, 42], [-63, 78], [-52, 78]], 2.2, -1.1),
       material: trimMat,
-      position: [-26, 0.2, side * 58],
-      rotation: [0, side * 0.08, side * -0.22]
+      position: [0, 0.2, 0]
     });
     addMesh({
       parent: group,
       name: side < 0 ? 'jet_tailplane_left' : 'jet_tailplane_right',
-      geometry: new THREE.BoxGeometry(20, 1.7, 34),
+      geometry: makeExtrudedPlanform(side < 0
+        ? [[-34, -8], [-48, -22], [-64, -34], [-50, -34]]
+        : [[-34, 8], [-50, 34], [-64, 34], [-48, 22]], 2.2, -0.9),
       material: trimMat,
-      position: [-46, 6, side * 22],
-      rotation: [0, side * 0.06, side * -0.06]
+      position: [0, 6, 0]
     });
     addMesh({
       parent: group,
       name: side < 0 ? 'jet_stabilizer_left' : 'jet_stabilizer_right',
-      geometry: new THREE.BoxGeometry(14, 18, 2.2),
+      geometry: makeExtrudedPlanform([
+        [-46, 0], [-62, 0], [-56, 24], [-48, 24],
+      ], 2.2, side * 5.6),
       material: trimMat,
-      position: [-50, 16, side * 7],
-      rotation: [0.12, 0, side * 0.24]
+      position: [0, 0, 0],
+      rotation: [0.08, 0, side * 0.18]
     });
     addMesh({
       parent: group,
       name: side < 0 ? 'jet_intake_left' : 'jet_intake_right',
-      geometry: new THREE.CylinderGeometry(3.4, 4.4, 16, 12),
+      geometry: makeLatheAlongX([[2.8, -10], [4.1, -6], [4.6, 4], [4.2, 10], [3.3, 14]], 18),
       material: darkMat,
-      position: [4, -1.6, side * 13.5],
-      rotation: [0, 0, -Math.PI / 2]
+      position: [6, -1.6, side * 13.5]
     });
     addMesh({
       parent: group,
@@ -779,7 +783,7 @@ const buildStrikeJet = () => {
   addMesh({
     parent: group,
     name: 'jet_engine_block',
-    geometry: new THREE.BoxGeometry(22, 7.5, 16),
+    geometry: cloneUvToUv2(new THREE.BoxGeometry(26, 8.2, 17)),
     material: darkMat,
     position: [-54, 0, 0]
   });
@@ -827,18 +831,27 @@ const buildGroundArmor = ({
   const group = new THREE.Group();
   group.name = name;
 
-  const hullMat = makeMaterial({ color: hullColor, roughness: 0.54, metalness: 0.34, emissive: hullColor, emissiveIntensity: 0.08 });
-  const turretMat = makeMaterial({ color: turretColor, roughness: 0.46, metalness: 0.4, emissive: turretColor, emissiveIntensity: 0.07 });
-  const trackMat = makeMaterial({ color: '#434c58', roughness: 0.72, metalness: 0.22 });
-  const trimMat = makeMaterial({ color: '#7b8794', roughness: 0.42, metalness: 0.46 });
+  const hullMat = makeMaterial({ color: hullColor, roughness: 0.54, metalness: 0.34, emissive: hullColor, emissiveIntensity: 0.08, map: cloneTexture(textures.CAMO, 2.6, 1.4) });
+  const turretMat = makeMaterial({ color: turretColor, roughness: 0.46, metalness: 0.4, emissive: turretColor, emissiveIntensity: 0.07, map: cloneTexture(textures.CAMO, 2.2, 1.4) });
+  const trackMat = makeMaterial({ color: '#434c58', roughness: 0.72, metalness: 0.22, map: cloneTexture(textures.METAL_DARK, 4, 1.5) });
+  const trimMat = makeMaterial({ color: '#7b8794', roughness: 0.42, metalness: 0.46, map: cloneTexture(textures.METAL_GREY, 2, 2) });
   const glowMat = makeMaterial({ color: accentColor, emissive: accentColor, emissiveIntensity: 1.45, transparent: true, opacity: 0.38 });
 
+  const hullGeo = makeExtrudedPlanform([
+    [-hullLength * 0.52, 4],
+    [-hullLength * 0.44, hullHeight * 0.96],
+    [hullLength * 0.18, hullHeight * 1.02],
+    [hullLength * 0.46, hullHeight * 0.68],
+    [hullLength * 0.54, 6],
+    [hullLength * 0.26, 0],
+    [-hullLength * 0.42, 0],
+  ], hullWidth, 2);
   addMesh({
     parent: group,
     name: 'vehicle_hull_base',
-    geometry: new THREE.BoxGeometry(hullLength, hullHeight, hullWidth),
+    geometry: hullGeo,
     material: hullMat,
-    position: [0, 9, 0]
+    position: [0, 5.5, 0]
   });
   addMesh({
     parent: group,
@@ -858,16 +871,18 @@ const buildGroundArmor = ({
   addMesh({
     parent: group,
     name: 'vehicle_track_left',
-    geometry: new THREE.BoxGeometry(hullLength * 1.05, 6, 5.8),
+    geometry: cloneUvToUv2(new THREE.CapsuleGeometry(3.1, hullLength * 0.9, 6, 14)),
     material: trackMat,
-    position: [0, 3.8, hullWidth * 0.45]
+    position: [0, 3.8, hullWidth * 0.45],
+    rotation: [0, 0, Math.PI / 2]
   });
   addMesh({
     parent: group,
     name: 'vehicle_track_right',
-    geometry: new THREE.BoxGeometry(hullLength * 1.05, 6, 5.8),
+    geometry: cloneUvToUv2(new THREE.CapsuleGeometry(3.1, hullLength * 0.9, 6, 14)),
     material: trackMat,
-    position: [0, 3.8, -hullWidth * 0.45]
+    position: [0, 3.8, -hullWidth * 0.45],
+    rotation: [0, 0, Math.PI / 2]
   });
   addMesh({
     parent: group,
@@ -910,10 +925,11 @@ const buildGroundArmor = ({
     parent: turretRoot,
     name: 'vehicle_turret_body',
     geometry: apc
-      ? new THREE.BoxGeometry(20, 7, 16)
-      : new THREE.CylinderGeometry(turretRadius, turretRadius * 1.08, 8, 18),
+      ? cloneUvToUv2(new THREE.BoxGeometry(22, 8, 17))
+      : makeLatheAlongX([[2.5, -11], [7.5, -7], [turretRadius, 0], [turretRadius * 0.86, 7], [5.4, 11]], 20),
     material: turretMat,
-    position: [0, 0, 0]
+    position: [0, 0, 0],
+    rotation: apc ? [0, 0, 0] : [0, Math.PI / 2, 0]
   });
   addMesh({
     parent: turretRoot,
@@ -959,11 +975,354 @@ const buildGroundArmor = ({
   return group;
 };
 
+const buildA10Warthog = () => {
+  const group = new THREE.Group();
+  group.name = 'a10_warthog';
+
+  // A-10 Thunderbolt II (Warthog) — distinctive ground-attack aircraft
+  // with straight wings, twin podded rear engines, twin tails, and GAU-8 nose cannon
+  const bodyMat    = makeMaterial({ color: '#5c6355', roughness: 0.52, metalness: 0.38, emissive: '#5c6355', emissiveIntensity: 0.05, map: cloneTexture(textures.OLIVE_METAL, 2.8, 1.6) });
+  const trimMat    = makeMaterial({ color: '#3e4739', roughness: 0.60, metalness: 0.30, map: cloneTexture(textures.CAMO, 2.4, 1.6) });
+  const darkMat    = makeMaterial({ color: '#1c201b', roughness: 0.22, metalness: 0.68, map: cloneTexture(textures.METAL_DARK, 3, 2) });
+  const alumMat    = makeMaterial({ color: '#8a9490', roughness: 0.28, metalness: 0.72, map: cloneTexture(textures.RIVET_METAL, 2.6, 1.5) });
+  const glassMat   = makeMaterial({ color: '#8ecad8', roughness: 0.05, metalness: 0.88, transparent: true, opacity: 0.50 });
+  const glowMat    = makeMaterial({ color: '#60a5fa', emissive: '#38bdf8', emissiveIntensity: 1.6, transparent: true, opacity: 0.36 });
+  const muzzleGlow = makeMaterial({ color: '#fbbf24', emissive: '#f59e0b', emissiveIntensity: 2.0, transparent: true, opacity: 0.0 });
+  const rubberMat  = makeMaterial({ color: '#4a5240', roughness: 0.64, metalness: 0.18 });
+
+  // ── FUSELAGE ──
+  addMesh({
+    parent: group, name: 'warthog_fuselage',
+    geometry: makeLatheAlongX([
+      [0.4, -84], [6.8, -76], [10.8, -56], [13.5, -18], [13.8, 18], [12.4, 46], [8.4, 72], [3.6, 90], [0.6, 98],
+    ], 28),
+    material: bodyMat,
+    position: [-2, 0, 0],
+    rotation: [0, Math.PI / 2, 0],
+    scale: [1, 0.86, 1.02]
+  });
+  addMesh({
+    parent: group, name: 'warthog_spine',
+    geometry: cloneUvToUv2(new THREE.CapsuleGeometry(3.4, 62, 4, 10)),
+    material: trimMat,
+    position: [6, 9.5, 0],
+    rotation: [0, 0, Math.PI / 2],
+    scale: [1, 0.76, 0.72]
+  });
+  addMesh({
+    parent: group, name: 'warthog_belly',
+    geometry: cloneUvToUv2(new THREE.CapsuleGeometry(2.2, 64, 4, 8)),
+    material: trimMat,
+    position: [-4, -9.4, 0],
+    rotation: [0, 0, Math.PI / 2],
+    scale: [1, 0.7, 0.72]
+  });
+  addMesh({
+    parent: group, name: 'warthog_nose_section',
+    geometry: makeLatheAlongX([[0.5, -24], [4, -18], [7.2, -6], [9.4, 10], [10.8, 22]], 20),
+    material: bodyMat,
+    position: [78, -1, 0],
+    rotation: [0, Math.PI / 2, 0],
+    scale: [1, 0.94, 0.96]
+  });
+  addMesh({
+    parent: group, name: 'warthog_tail_section',
+    geometry: makeLatheAlongX([[0.5, -22], [4.8, -16], [8.6, -4], [10.8, 18]], 18),
+    material: bodyMat,
+    position: [-70, 2, 0],
+    rotation: [0, Math.PI / 2, 0],
+    scale: [1, 0.88, 0.9]
+  });
+  addMesh({
+    parent: group, name: 'warthog_tail_cap',
+    geometry: new THREE.SphereGeometry(7, 12, 10),
+    material: trimMat,
+    position: [-79, 2, 0],
+    scale: [1.2, 0.82, 0.82]
+  });
+
+  // ── NOSE ── pointed, with the GAU-8 slightly offset left-below-center
+  addMesh({
+    parent: group, name: 'warthog_nose_tip',
+    geometry: new THREE.ConeGeometry(8.5, 22, 16),
+    material: trimMat,
+    position: [91, -1.5, -1.8],
+    rotation: [0, 0, -Math.PI / 2]
+  });
+  addMesh({
+    parent: group, name: 'warthog_nose_cone',
+    geometry: new THREE.SphereGeometry(8.5, 14, 10),
+    material: bodyMat,
+    position: [84, -1, -1.2],
+    scale: [1.15, 0.88, 0.88]
+  });
+
+  // ── GAU-8 AVENGER – 7-barrel Gatling rotary cannon cluster in the nose ──
+  // The barrel housing — large cylinder offset slightly left and below center
+  addMesh({
+    parent: group, name: 'warthog_gau8_housing',
+    geometry: new THREE.CylinderGeometry(5.2, 5.8, 28, 14),
+    material: darkMat,
+    position: [73, -5.5, -2.5],
+    rotation: [0, 0, -Math.PI / 2]
+  });
+  // GAU-8 barrel shroud
+  addMesh({
+    parent: group, name: 'warthog_gau8_shroud',
+    geometry: new THREE.CylinderGeometry(3.8, 4.8, 18, 12),
+    material: alumMat,
+    position: [88, -5.5, -2.5],
+    rotation: [0, 0, -Math.PI / 2]
+  });
+  // 7-barrel cluster (outer ring of 6 + 1 centre)
+  const barrelOffset = 2.5;
+  for (let b = 0; b < 6; b++) {
+    const ang = (b / 6) * Math.PI * 2;
+    addMesh({
+      parent: group, name: `warthog_barrel_${b}`,
+      geometry: new THREE.CylinderGeometry(0.65, 0.65, 22, 7),
+      material: darkMat,
+      position: [96, -5.5 + Math.sin(ang) * barrelOffset, -2.5 + Math.cos(ang) * barrelOffset],
+      rotation: [0, 0, -Math.PI / 2]
+    });
+  }
+  addMesh({
+    parent: group, name: 'warthog_barrel_centre',
+    geometry: new THREE.CylinderGeometry(0.7, 0.7, 22, 8),
+    material: alumMat,
+    position: [96, -5.5, -2.5],
+    rotation: [0, 0, -Math.PI / 2]
+  });
+  // Muzzle flash plane (invisible by default — set visible when firing)
+  addMesh({
+    parent: group, name: 'warthog_muzzle_glow',
+    geometry: new THREE.SphereGeometry(3.8, 10, 8),
+    material: muzzleGlow,
+    position: [108, -5.5, -2.5]
+  });
+
+  // ── COCKPIT – raised bubble canopy ──
+  addMesh({
+    parent: group, name: 'warthog_cockpit_base',
+    geometry: new THREE.BoxGeometry(26, 8, 14),
+    material: trimMat,
+    position: [44, 10, 0]
+  });
+  addMesh({
+    parent: group, name: 'warthog_canopy',
+    geometry: new THREE.SphereGeometry(9.5, 18, 12),
+    material: glassMat,
+    position: [42, 14, 0],
+    scale: [1.7, 0.72, 0.82]
+  });
+  // Canopy frame
+  addMesh({
+    parent: group, name: 'warthog_canopy_frame_front',
+    geometry: new THREE.BoxGeometry(1.2, 9, 15),
+    material: trimMat,
+    position: [49, 11, 0]
+  });
+  addMesh({
+    parent: group, name: 'warthog_canopy_frame_rear',
+    geometry: new THREE.BoxGeometry(1.2, 9, 15),
+    material: trimMat,
+    position: [34, 11, 0]
+  });
+
+  // ── MAIN WINGS – high-aspect, straight, unswept (A-10's most distinctive feature) ──
+  addMesh({
+    parent: group, name: 'warthog_wing_center',
+    geometry: makeExtrudedPlanform([
+      [26, 14], [-36, 30], [-64, 120], [-84, 120], [-52, 22], [18, 10],
+    ], 4.5, -2.25),
+    material: bodyMat,
+    position: [4, -1, 0]
+  });
+  [-1, 1].forEach((side) => {
+    addMesh({
+      parent: group, name: side < 0 ? 'warthog_outer_wing_left' : 'warthog_outer_wing_right',
+      geometry: makeExtrudedPlanform(side < 0
+        ? [[-8, -32], [-24, -86], [-50, -138], [-68, -138], [-44, -78]]
+        : [[-8, 32], [-44, 78], [-68, 138], [-50, 138], [-24, 86]], 3.8, -1.9),
+      material: trimMat,
+      position: [0, 0, 0]
+    });
+    addMesh({
+      parent: group, name: side < 0 ? 'warthog_wingtip_left' : 'warthog_wingtip_right',
+      geometry: makeExtrudedPlanform(side < 0
+        ? [[-46, -140], [-62, -156], [-72, -156], [-58, -138]]
+        : [[-46, 140], [-58, 138], [-72, 156], [-62, 156]], 2.6, -1.3),
+      material: trimMat,
+      position: [0, 0, 0]
+    });
+    // Aileron
+    addMesh({
+      parent: group, name: side < 0 ? 'warthog_aileron_left' : 'warthog_aileron_right',
+      geometry: new THREE.BoxGeometry(18, 2.2, 28),
+      material: rubberMat,
+      position: [-30, -2, side * 86]
+    });
+    // Flap
+    addMesh({
+      parent: group, name: side < 0 ? 'warthog_flap_left' : 'warthog_flap_right',
+      geometry: new THREE.BoxGeometry(20, 2.2, 36),
+      material: trimMat,
+      position: [2, -2.2, side * 60]
+    });
+    // Wing hardpoints / pylons (A-10 has 11 hardpoints — show 3 each side)
+    [-38, -62, -88].forEach((z, pi) => {
+      addMesh({
+        parent: group, name: `warthog_pylon_${side < 0 ? 'l' : 'r'}${pi}`,
+        geometry: new THREE.BoxGeometry(10, 3, 5),
+        material: darkMat,
+        position: [-8, -4, side * Math.abs(z)]
+      });
+    });
+  });
+
+  // ── TWIN TF34 TURBOFAN ENGINES – pod-mounted high on rear fuselage ──
+  [-1, 1].forEach((side) => {
+    const eZ = side * 20;
+    // Engine nacelle body
+    addMesh({
+      parent: group, name: side < 0 ? 'warthog_engine_left' : 'warthog_engine_right',
+      geometry: makeLatheAlongX([[0.8, -28], [8.4, -24], [10.3, -6], [10.8, 10], [9.6, 24], [7.4, 30]], 22),
+      material: alumMat,
+      position: [-26, 16, eZ],
+      rotation: [0, Math.PI / 2, 0]
+    });
+    // Front intake lip
+    addMesh({
+      parent: group, name: side < 0 ? 'warthog_intake_lip_left' : 'warthog_intake_lip_right',
+      geometry: new THREE.TorusGeometry(9.4, 2.2, 10, 20),
+      material: darkMat,
+      position: [-1, 16, eZ],
+      rotation: [0, Math.PI / 2, 0]
+    });
+    // Inner intake ring
+    addMesh({
+      parent: group, name: side < 0 ? 'warthog_intake_inner_left' : 'warthog_intake_inner_right',
+      geometry: new THREE.CylinderGeometry(7.5, 9.5, 8, 14),
+      material: darkMat,
+      position: [-4, 16, eZ],
+      rotation: [0, 0, -Math.PI / 2]
+    });
+    // Engine fan face disc
+    addMesh({
+      parent: group, name: side < 0 ? 'warthog_fan_face_left' : 'warthog_fan_face_right',
+      geometry: new THREE.CircleGeometry(7.2, 16),
+      material: darkMat,
+      position: [-2, 16, eZ],
+      rotation: [0, Math.PI / 2, 0]
+    });
+    // Nozzle
+    addMesh({
+      parent: group, name: side < 0 ? 'warthog_nozzle_left' : 'warthog_nozzle_right',
+      geometry: new THREE.CylinderGeometry(7, 9, 10, 14),
+      material: darkMat,
+      position: [-52, 16, eZ],
+      rotation: [0, 0, -Math.PI / 2]
+    });
+    // Exhaust glow (emissive)
+    addMesh({
+      parent: group, name: side < 0 ? 'warthog_exhaust_glow_left' : 'warthog_exhaust_glow_right',
+      geometry: new THREE.CylinderGeometry(5.5, 2.8, 14, 12),
+      material: glowMat,
+      position: [-58, 16, eZ],
+      rotation: [0, 0, -Math.PI / 2]
+    });
+    // Pylon from engine to fuselage
+    addMesh({
+      parent: group, name: side < 0 ? 'warthog_engine_pylon_left' : 'warthog_engine_pylon_right',
+      geometry: new THREE.BoxGeometry(44, 10, 5),
+      material: trimMat,
+      position: [-26, 8, eZ]
+    });
+  });
+
+  // ── EMPENNAGE – twin vertical stabilizers angled slightly outward ──
+  [-1, 1].forEach((side) => {
+    // Horizontal stabilizer
+    addMesh({
+      parent: group, name: side < 0 ? 'warthog_tailplane_left' : 'warthog_tailplane_right',
+      geometry: makeExtrudedPlanform(side < 0
+        ? [[-50, -12], [-66, -34], [-92, -58], [-74, -58], [-58, -22]]
+        : [[-50, 12], [-58, 22], [-74, 58], [-92, 58], [-66, 34]], 3.2, -1.6),
+      material: bodyMat,
+      position: [0, 4, 0]
+    });
+    // Elevator
+    addMesh({
+      parent: group, name: side < 0 ? 'warthog_elevator_left' : 'warthog_elevator_right',
+      geometry: new THREE.BoxGeometry(14, 2.4, 22),
+      material: rubberMat,
+      position: [-76, 4, side * 38]
+    });
+    // Vertical stabilizer fin (canted outward on real A-10)
+    addMesh({
+      parent: group, name: side < 0 ? 'warthog_vtail_left' : 'warthog_vtail_right',
+      geometry: makeExtrudedPlanform([
+        [-58, 0], [-86, 0], [-72, 46], [-60, 46],
+      ], 4, side * 22),
+      material: bodyMat,
+      position: [0, 0, 0],
+      rotation: [0, 0, side * 0.09]
+    });
+    // Rudder
+    addMesh({
+      parent: group, name: side < 0 ? 'warthog_rudder_left' : 'warthog_rudder_right',
+      geometry: new THREE.BoxGeometry(3.4, 34, 22),
+      material: rubberMat,
+      position: [-76, 26, side * 28],
+      rotation: [0, 0, side * 0.06]
+    });
+    // Fin leading edge spar
+    addMesh({
+      parent: group, name: side < 0 ? 'warthog_fin_edge_left' : 'warthog_fin_edge_right',
+      geometry: new THREE.CylinderGeometry(1.8, 1.8, 50, 8),
+      material: alumMat,
+      position: [-52, 26, side * 24],
+      rotation: [Math.PI / 2, 0, 0.08]
+    });
+  });
+
+  // ── NATIONAL MARKINGS – US Air Force roundel on wings ──
+  [-1, 1].forEach((side, i) => {
+    addMesh({
+      parent: group, name: `warthog_roundel_${i}`,
+      geometry: new THREE.CircleGeometry(11, 6),
+      material: makeMaterial({ color: '#1a4896', transparent: true, opacity: 0.82 }),
+      position: [2, 2.4, side * 72],
+      rotation: [-Math.PI / 2, 0, 0]
+    });
+    addMesh({
+      parent: group, name: `warthog_roundel_star_${i}`,
+      geometry: new THREE.CircleGeometry(5.5, 5),
+      material: makeMaterial({ color: '#f0f0f0', transparent: true, opacity: 0.88 }),
+      position: [2, 2.6, side * 72],
+      rotation: [-Math.PI / 2, 0, Math.PI / 10]
+    });
+  });
+
+  // ── SPEED BRAKE panels on rear fuselage ──
+  [-1, 1].forEach((side, i) => {
+    addMesh({
+      parent: group, name: `warthog_speed_brake_${i}`,
+      geometry: new THREE.BoxGeometry(18, 2, 6.5),
+      material: trimMat,
+      position: [-42, -10.5, side * 8]
+    });
+  });
+
+  return group;
+};
+
 const root = new THREE.Group();
 root.name = 'airstrike_assets_root';
 root.add(buildBomberPlane());
 root.add(buildParachuteNuke());
 root.add(buildStrikeJet());
+root.add(buildA10Warthog());
 root.add(buildGroundArmor({
   name: 'battle_tank',
   hullColor: '#768f5f',

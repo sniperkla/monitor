@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useRef, useMemo, memo } from 'react';
+import { useState, useEffect, useRef, useMemo, memo, useCallback } from 'react';
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import { OrbitControls } from '@react-three/drei';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
@@ -146,8 +146,11 @@ const LEVEL_CLEAR_BUNKER_REPAIR = 180;
 const MANUAL_STRIKE_COST = 95;
 const ORBITAL_LANCE_COST = 72;
 const FIRESTORM_COST = 64;
+const WARTHOG_COST = 110;
 const ORBITAL_LANCE_COOLDOWN_MS = 10500;
 const FIRESTORM_COOLDOWN_MS = 9200;
+const WARTHOG_COOLDOWN_MS = 22000;
+const WARTHOG_MODEL_SCALE = 0.82;
 const CIVILIAN_RESCUE_REWARD = 8;
 const KAIJU_KILL_REWARD = 110;
 const MINI_MONSTER_KILL_REWARD = 42;
@@ -493,6 +496,25 @@ const SUPPORT_STRIKE_OPTIONS = {
       beamColor: '#f8fafc',
       accentColor: '#7dd3fc'
     }
+  },
+  warthog_run: {
+    key: 'warthog_run',
+    label: 'A-10 Warthog',
+    icon: '🛩️',
+    cost: WARTHOG_COST,
+    cooldownMs: WARTHOG_COOLDOWN_MS,
+    requires: ['tech_lab'],
+    statusLabel: 'BRRT',
+    element: 'armor',
+    description: 'A-10 Warthog strafing run — GAU-8 Avenger saturates a single target with 30mm rounds.',
+    preview: {
+      outerRadius: 85,
+      middleRadius: 52,
+      coreRadius: 24,
+      ringColor: '#84cc16',
+      beamColor: '#a3e635',
+      accentColor: '#cbd5e1'
+    }
   }
 };
 const getBuildPlacementState = (buildings = DEFAULT_BUILDINGS, buildQueue = {}) => {
@@ -637,7 +659,7 @@ const KAIJU_VARIANT_POOLS = [
 ];
 const DYNAMIC_RENDER_TYPES = new Set([
   'plane', 'bomb', 'kaiju', 'mushroom', 'kaiju_attack', 'firebreath',
-  'bullet', 'shell', 'jet', 'missile', 'missile_impact', 'impact_puff',
+  'bullet', 'shell', 'jet', 'warthog', 'missile', 'missile_impact', 'impact_puff',
   'barricade', 'facility', 'soldier', 'tank', 'support_fx', 'kaiju_special_fx',
   'muzzle_flash', 'corpse', 'kaiju_corpse', 'scorch'
 ]);
@@ -1903,7 +1925,8 @@ const AudioManager = {
     jet_engine: 0.7, tank_engine: 0.7, gun: 0.12, scream: 0.8, kaiju_roar: 2.5,
     fire_breath: 1.5, missile_launch: 0.5, target_confirm: 0.15,
     target_blocked: 0.2, bomb_whistle: 1.2, kaiju_step: 0.5,
-    orbital_lance: 8.0, firestorm: 8.5, kinetic_spear: 5.0
+    orbital_lance: 8.0, firestorm: 8.5, kinetic_spear: 5.0, brrt: 4.5,
+    build_select: 0.3, build_place: 0.5, build_complete: 1.5, build_destroy: 0.8
   },
   init() {
     if (!this.ctx && typeof window !== 'undefined') {
@@ -1947,13 +1970,15 @@ const AudioManager = {
     const isExplosion = type === 'bomb' || type === 'nuke' || type === 'tank_fire' || type === 'missile_launch' || type === 'orbital_lance' || type === 'firestorm' || type === 'kinetic_spear';
     const isEngine = type === 'plane_engine' || type === 'plane_flyby' || type === 'jet_engine' || type === 'tank_engine';
     const isCreature = type === 'scream' || type === 'kaiju_roar' || type === 'kaiju_step' || type === 'fire_breath';
-    const isWeapon = type === 'gun' || type === 'bomb_whistle';
+    const isWeapon = type === 'gun' || type === 'bomb_whistle' || type === 'brrt';
+    const isBuilding = type === 'build_select' || type === 'build_place' || type === 'build_complete' || type === 'build_destroy';
 
     if (isUi) return { highpass: 120, lowpass: 3200, drive: 10, trim: 0.86, pan: 0.04 };
     if (isExplosion) return { highpass: 18, lowpass: 5800, drive: 36, trim: 0.98, pan: 0.08 };
     if (isEngine) return { highpass: 32, lowpass: 3600, drive: 22, trim: 0.92, pan: 0.12 };
     if (isCreature) return { highpass: 26, lowpass: 3000, drive: 28, trim: 0.95, pan: 0.08 };
     if (isWeapon) return { highpass: 40, lowpass: 4800, drive: 20, trim: 0.9, pan: 0.1 };
+    if (isBuilding) return { highpass: 35, lowpass: 4400, drive: 18, trim: 0.9, pan: 0.06 };
     return {
       highpass: options.highpass || 28,
       lowpass: options.lowpass || 5200,
@@ -3142,6 +3167,371 @@ const AudioManager = {
       scatter.connect(scatterBP).connect(scatterG).connect(destination);
       scatter.start(t + 0.02); scatter.stop(t + dur);
       scheduleRelease(dur);
+
+    } else if (type === 'brrt') {
+      // ══════════════════════════════════════════════════════════════
+      // GAU-8 AVENGER "BRRRT" — 30mm Gatling cannon burst
+      // The iconic A-10 sound: deep, fast, tearing mechanical rasp
+      // GAU-8 fires at ~65 rounds/sec — produces a 55-70Hz tonal character
+      // ══════════════════════════════════════════════════════════════
+      const dur = options.duration || 2.1;
+      const vol = options.volume || 1.0;
+
+      // ── Layer 1: Deep tonal rasp — the barrel-rotation fundamental ──
+      // At ~65 Hz cycling rate, creates the signature low groan
+      const rasper = ctx.createOscillator();
+      rasper.type = 'sawtooth';
+      rasper.frequency.setValueAtTime(62, t);
+      rasper.frequency.setValueAtTime(66, t + 0.08);
+      rasper.frequency.setValueAtTime(60, t + dur * 0.5);
+      rasper.frequency.exponentialRampToValueAtTime(42, t + dur);
+      const rasperG = ctx.createGain();
+      rasperG.gain.setValueAtTime(0.001, t);
+      rasperG.gain.linearRampToValueAtTime(vol * 0.34, t + 0.04);
+      rasperG.gain.setValueAtTime(vol * 0.30, t + dur * 0.6);
+      rasperG.gain.exponentialRampToValueAtTime(0.001, t + dur);
+      rasper.connect(rasperG).connect(destination);
+      rasper.start(t); rasper.stop(t + dur);
+
+      // ── Layer 2: Mechanical rattle — rapid brown-noise AM at barrel rate ──
+      const rattle = ctx.createBufferSource();
+      rattle.buffer = this.getBrownNoise(ctx, dur);
+      const rattleLP = ctx.createBiquadFilter();
+      rattleLP.type = 'lowpass';
+      rattleLP.frequency.setValueAtTime(420, t);
+      rattleLP.frequency.linearRampToValueAtTime(180, t + dur * 0.8);
+      rattleLP.frequency.exponentialRampToValueAtTime(50, t + dur);
+      const rattleHP = ctx.createBiquadFilter();
+      rattleHP.type = 'highpass';
+      rattleHP.frequency.value = 48;
+      // AM tremolo at 65 Hz to simulate discrete round firings
+      const tremoloOsc = ctx.createOscillator();
+      tremoloOsc.type = 'square';
+      tremoloOsc.frequency.setValueAtTime(65, t);
+      tremoloOsc.frequency.setValueAtTime(62, t + dur * 0.5);
+      const tremoloGain = ctx.createGain();
+      tremoloGain.gain.setValueAtTime(0.0, t);
+      tremoloGain.gain.linearRampToValueAtTime(0.3, t + 0.05);
+      tremoloGain.gain.setValueAtTime(0.25, t + dur * 0.6);
+      tremoloGain.gain.exponentialRampToValueAtTime(0.001, t + dur);
+      tremoloOsc.connect(tremoloGain).connect(rattleLP);
+      tremoloOsc.start(t); tremoloOsc.stop(t + dur);
+      const rattleG = ctx.createGain();
+      rattleG.gain.setValueAtTime(0.001, t);
+      rattleG.gain.linearRampToValueAtTime(vol * 0.42, t + 0.03);
+      rattleG.gain.setValueAtTime(vol * 0.38, t + dur * 0.55);
+      rattleG.gain.exponentialRampToValueAtTime(0.001, t + dur);
+      rattle.connect(rattleLP).connect(rattleHP).connect(rattleG).connect(destination);
+      rattle.start(t); rattle.stop(t + dur);
+
+      // ── Layer 3: High-frequency 30mm crack — white noise bursts ──
+      // Each round produces a sharp supersonic crack as it leaves the barrel
+      const snap = ctx.createBufferSource();
+      snap.buffer = this.getNoiseBuffer(ctx, dur);
+      const snapHP = ctx.createBiquadFilter();
+      snapHP.type = 'highpass';
+      snapHP.frequency.setValueAtTime(2800, t);
+      snapHP.frequency.linearRampToValueAtTime(1200, t + dur);
+      const snapG = ctx.createGain();
+      snapG.gain.setValueAtTime(0.001, t);
+      snapG.gain.linearRampToValueAtTime(vol * 0.18, t + 0.04);
+      snapG.gain.setValueAtTime(vol * 0.14, t + dur * 0.7);
+      snapG.gain.exponentialRampToValueAtTime(0.001, t + dur);
+      snap.connect(snapHP).connect(snapG).connect(destination);
+      snap.start(t); snap.stop(t + dur);
+
+      // ── Layer 4: Sub impact thud — the ground/airframe vibration ──
+      const subThud = ctx.createOscillator();
+      subThud.type = 'sine';
+      subThud.frequency.setValueAtTime(34, t);
+      subThud.frequency.exponentialRampToValueAtTime(18, t + dur);
+      const subTG = ctx.createGain();
+      subTG.gain.setValueAtTime(0.001, t);
+      subTG.gain.linearRampToValueAtTime(vol * 0.22, t + 0.06);
+      subTG.gain.setValueAtTime(vol * 0.18, t + dur * 0.5);
+      subTG.gain.exponentialRampToValueAtTime(0.001, t + dur);
+      subThud.connect(subTG).connect(destination);
+      subThud.start(t); subThud.stop(t + dur);
+
+      // ── ECHO LAYERS — the iconic "bwhhhhh" bounce off terrain ──
+      // In famous A-10 videos: gun stops → brief silence → deep rolling echo washes back
+      // Only the low-frequency energy survives long-distance travel; highs scatter away
+      const echoDelay  = dur + 0.44;   // first reflection (~75m from terrain)
+      const echoDelay2 = dur + 0.92;   // second reflection (farther terrain / hills)
+      const echoVol    = vol * 0.38;
+
+      // Echo 1: muffled brown-noise body — the deep "bwhhhhh" roll
+      const echo1 = ctx.createBufferSource();
+      echo1.buffer = this.getBrownNoise(ctx, 1.6);
+      const echo1LP = ctx.createBiquadFilter();
+      echo1LP.type = 'lowpass';
+      echo1LP.frequency.setValueAtTime(300, t + echoDelay);
+      echo1LP.frequency.exponentialRampToValueAtTime(36, t + echoDelay + 1.4);
+      const echo1G = ctx.createGain();
+      echo1G.gain.setValueAtTime(0.001, t + echoDelay);
+      echo1G.gain.linearRampToValueAtTime(echoVol, t + echoDelay + 0.05);
+      echo1G.gain.setValueAtTime(echoVol * 0.82, t + echoDelay + 0.5);
+      echo1G.gain.exponentialRampToValueAtTime(0.001, t + echoDelay + 1.6);
+      echo1.connect(echo1LP).connect(echo1G).connect(destination);
+      echo1.start(t + echoDelay); echo1.stop(t + echoDelay + 1.6);
+
+      // Echo 1 tonal rasp — the muffled pitch character of the cannon echoing back
+      const echoRasp = ctx.createOscillator();
+      echoRasp.type = 'sawtooth';
+      echoRasp.frequency.setValueAtTime(52, t + echoDelay);
+      echoRasp.frequency.exponentialRampToValueAtTime(26, t + echoDelay + 1.2);
+      const echoRaspLP = ctx.createBiquadFilter();
+      echoRaspLP.type = 'lowpass';
+      echoRaspLP.frequency.setValueAtTime(190, t + echoDelay);
+      echoRaspLP.frequency.exponentialRampToValueAtTime(42, t + echoDelay + 1.1);
+      const echoRaspG = ctx.createGain();
+      echoRaspG.gain.setValueAtTime(0.001, t + echoDelay);
+      echoRaspG.gain.linearRampToValueAtTime(echoVol * 0.50, t + echoDelay + 0.04);
+      echoRaspG.gain.setValueAtTime(echoVol * 0.38, t + echoDelay + 0.5);
+      echoRaspG.gain.exponentialRampToValueAtTime(0.001, t + echoDelay + 1.2);
+      echoRasp.connect(echoRaspLP).connect(echoRaspG).connect(destination);
+      echoRasp.start(t + echoDelay); echoRasp.stop(t + echoDelay + 1.2);
+
+      // Echo 2: distant second reflection — even more muffled, barely-audible rumble
+      const echo2 = ctx.createBufferSource();
+      echo2.buffer = this.getBrownNoise(ctx, 1.1);
+      const echo2LP = ctx.createBiquadFilter();
+      echo2LP.type = 'lowpass';
+      echo2LP.frequency.setValueAtTime(130, t + echoDelay2);
+      echo2LP.frequency.exponentialRampToValueAtTime(20, t + echoDelay2 + 0.9);
+      const echo2G = ctx.createGain();
+      echo2G.gain.setValueAtTime(0.001, t + echoDelay2);
+      echo2G.gain.linearRampToValueAtTime(echoVol * 0.20, t + echoDelay2 + 0.07);
+      echo2G.gain.exponentialRampToValueAtTime(0.001, t + echoDelay2 + 1.1);
+      echo2.connect(echo2LP).connect(echo2G).connect(destination);
+      echo2.start(t + echoDelay2); echo2.stop(t + echoDelay2 + 1.1);
+
+      scheduleRelease(dur + 2.1);  // hold slot until echoes fully decay
+
+    } else if (type === 'build_select') {
+      // ══════════════════════════════════════════════════════════════
+      // BUILD SELECT — player arms a building type in the HUD
+      // Crisp metallic tick + short sine ping: "ready to place"
+      // ══════════════════════════════════════════════════════════════
+      const dur = 0.28;
+      const vol = options.volume || 0.75;
+      // Layer 1: Crisp white-noise tick — blueprint click, high-mid bandpass
+      const tick = ctx.createBufferSource();
+      tick.buffer = this.getNoiseBuffer(ctx, 0.07);
+      const tickBP = ctx.createBiquadFilter();
+      tickBP.type = 'bandpass'; tickBP.frequency.value = 1900; tickBP.Q.value = 14;
+      const tickG = ctx.createGain();
+      tickG.gain.setValueAtTime(vol * 0.55, t);
+      tickG.gain.exponentialRampToValueAtTime(0.001, t + 0.07);
+      tick.connect(tickBP).connect(tickG).connect(destination);
+      tick.start(t); tick.stop(t + 0.07);
+      // Layer 2: Metallic sine ping — short ring that confirms "armed"
+      const ping = ctx.createOscillator(); ping.type = 'sine';
+      ping.frequency.setValueAtTime(1020, t);
+      ping.frequency.exponentialRampToValueAtTime(510, t + 0.18);
+      const pingG = ctx.createGain();
+      pingG.gain.setValueAtTime(0.001, t);
+      pingG.gain.linearRampToValueAtTime(vol * 0.28, t + 0.012);
+      pingG.gain.exponentialRampToValueAtTime(0.001, t + 0.18);
+      ping.connect(pingG).connect(destination);
+      ping.start(t); ping.stop(t + 0.18);
+      // Layer 3: Sub bass grounding click
+      const bass = ctx.createBufferSource();
+      bass.buffer = this.getBrownNoise(ctx, 0.05);
+      const bassLP = ctx.createBiquadFilter();
+      bassLP.type = 'lowpass'; bassLP.frequency.value = 280;
+      const bassG = ctx.createGain();
+      bassG.gain.setValueAtTime(vol * 0.30, t);
+      bassG.gain.exponentialRampToValueAtTime(0.001, t + 0.05);
+      bass.connect(bassLP).connect(bassG).connect(destination);
+      bass.start(t); bass.stop(t + 0.05);
+      scheduleRelease(dur);
+
+    } else if (type === 'build_place') {
+      // ══════════════════════════════════════════════════════════════
+      // BUILD PLACE — foundation dropped, construction begins
+      // Heavy thud + concrete impact + gravel scatter + metallic clank
+      // ══════════════════════════════════════════════════════════════
+      const dur = 0.85;
+      const vol = options.volume || 0.9;
+      // Layer 1: Earth thud — brown noise steep lowpass, subsidence
+      const earth = ctx.createBufferSource();
+      earth.buffer = this.getBrownNoise(ctx, 0.55);
+      const earthLP = ctx.createBiquadFilter();
+      earthLP.type = 'lowpass';
+      earthLP.frequency.setValueAtTime(130, t);
+      earthLP.frequency.exponentialRampToValueAtTime(28, t + 0.5);
+      const earthG = ctx.createGain();
+      earthG.gain.setValueAtTime(0.001, t);
+      earthG.gain.linearRampToValueAtTime(vol * 0.58, t + 0.018);
+      earthG.gain.setValueAtTime(vol * 0.52, t + 0.06);
+      earthG.gain.exponentialRampToValueAtTime(0.001, t + 0.55);
+      earth.connect(earthLP).connect(earthG).connect(destination);
+      earth.start(t); earth.stop(t + 0.55);
+      // Layer 2: Sub thump — sine 72→22Hz, chest-punch foundation drop
+      const sub = ctx.createOscillator(); sub.type = 'sine';
+      sub.frequency.setValueAtTime(72, t);
+      sub.frequency.exponentialRampToValueAtTime(22, t + 0.42);
+      const subG = ctx.createGain();
+      subG.gain.setValueAtTime(0.001, t);
+      subG.gain.linearRampToValueAtTime(vol * 0.42, t + 0.014);
+      subG.gain.exponentialRampToValueAtTime(0.001, t + 0.42);
+      sub.connect(subG).connect(destination);
+      sub.start(t); sub.stop(t + 0.42);
+      // Layer 3: Metallic clank — white noise HP narrow burst (beam drop)
+      const clank = ctx.createBufferSource();
+      clank.buffer = this.getNoiseBuffer(ctx, 0.13);
+      const clankHP = ctx.createBiquadFilter();
+      clankHP.type = 'highpass'; clankHP.frequency.value = 2400;
+      const clankLP = ctx.createBiquadFilter();
+      clankLP.type = 'lowpass'; clankLP.frequency.value = 5500;
+      const clankG = ctx.createGain();
+      clankG.gain.setValueAtTime(vol * 0.22, t + 0.01);
+      clankG.gain.exponentialRampToValueAtTime(0.001, t + 0.13);
+      clank.connect(clankHP).connect(clankLP).connect(clankG).connect(destination);
+      clank.start(t + 0.01); clank.stop(t + 0.13);
+      // Layer 4: Gravel scatter — pink noise bandpass settling
+      const gravel = ctx.createBufferSource();
+      gravel.buffer = this.getPinkNoise(ctx, 0.75);
+      const gravelBP = ctx.createBiquadFilter();
+      gravelBP.type = 'bandpass';
+      gravelBP.frequency.setValueAtTime(420, t + 0.05);
+      gravelBP.frequency.exponentialRampToValueAtTime(90, t + 0.75);
+      gravelBP.Q.value = 0.55;
+      const gravelG = ctx.createGain();
+      gravelG.gain.setValueAtTime(0.001, t);
+      gravelG.gain.linearRampToValueAtTime(vol * 0.18, t + 0.07);
+      gravelG.gain.exponentialRampToValueAtTime(0.001, t + 0.75);
+      gravel.connect(gravelBP).connect(gravelG).connect(destination);
+      gravel.start(t + 0.05); gravel.stop(t + 0.75);
+      scheduleRelease(dur);
+
+    } else if (type === 'build_complete') {
+      // ══════════════════════════════════════════════════════════════
+      // BUILD COMPLETE — construction finished, building online
+      // Two-tone chime (perfect fifth G5+D6) + deep resonance hum
+      // Satisfying but not cheesy — military/industrial tone
+      // ══════════════════════════════════════════════════════════════
+      const dur = 1.4;
+      const vol = options.volume || 0.82;
+      // Layer 1: Bell tone 1 — 784 Hz (G5), primary note
+      const bell1 = ctx.createOscillator(); bell1.type = 'sine';
+      bell1.frequency.value = 784;
+      const bell1G = ctx.createGain();
+      bell1G.gain.setValueAtTime(0.001, t);
+      bell1G.gain.linearRampToValueAtTime(vol * 0.38, t + 0.016);
+      bell1G.gain.setValueAtTime(vol * 0.30, t + 0.12);
+      bell1G.gain.exponentialRampToValueAtTime(0.001, t + 0.9);
+      bell1.connect(bell1G).connect(destination);
+      bell1.start(t); bell1.stop(t + 0.9);
+      // Layer 2: Bell tone 2 — 1176 Hz (D6, perfect fifth above), arrives 80ms later
+      const bell2 = ctx.createOscillator(); bell2.type = 'sine';
+      bell2.frequency.value = 1176;
+      const bell2G = ctx.createGain();
+      bell2G.gain.setValueAtTime(0.001, t + 0.08);
+      bell2G.gain.linearRampToValueAtTime(vol * 0.26, t + 0.1);
+      bell2G.gain.setValueAtTime(vol * 0.20, t + 0.22);
+      bell2G.gain.exponentialRampToValueAtTime(0.001, t + 0.85);
+      bell2.connect(bell2G).connect(destination);
+      bell2.start(t + 0.08); bell2.stop(t + 0.85);
+      // Layer 3: Sub harmonic resonance — 196 Hz (G3) under-hum, swells in
+      const resonance = ctx.createOscillator(); resonance.type = 'sine';
+      resonance.frequency.value = 196;
+      const resG = ctx.createGain();
+      resG.gain.setValueAtTime(0.001, t);
+      resG.gain.linearRampToValueAtTime(vol * 0.20, t + 0.28);
+      resG.gain.setValueAtTime(vol * 0.18, t + 0.6);
+      resG.gain.exponentialRampToValueAtTime(0.001, t + dur);
+      resonance.connect(resG).connect(destination);
+      resonance.start(t); resonance.stop(t + dur);
+      // Layer 4: Bright shimmer — white noise HP 4200Hz, instant burst to confirm
+      const shimmer = ctx.createBufferSource();
+      shimmer.buffer = this.getNoiseBuffer(ctx, 0.06);
+      const shimmerHP = ctx.createBiquadFilter();
+      shimmerHP.type = 'highpass'; shimmerHP.frequency.value = 4200;
+      const shimmerG = ctx.createGain();
+      shimmerG.gain.setValueAtTime(vol * 0.12, t);
+      shimmerG.gain.exponentialRampToValueAtTime(0.001, t + 0.06);
+      shimmer.connect(shimmerHP).connect(shimmerG).connect(destination);
+      shimmer.start(t); shimmer.stop(t + 0.06);
+      scheduleRelease(dur);
+
+    } else if (type === 'build_destroy') {
+      // ══════════════════════════════════════════════════════════════
+      // BUILD DESTROY — structural collapse, building destroyed
+      // Groan → heavy crash → concrete crumble → debris rain
+      // ══════════════════════════════════════════════════════════════
+      const dur = 2.0;
+      const vol = options.volume || 0.88;
+      // Layer 1: Structural groan — sawtooth 175→40→18Hz (bending steel beam)
+      const groan = ctx.createOscillator(); groan.type = 'sawtooth';
+      groan.frequency.setValueAtTime(175, t);
+      groan.frequency.exponentialRampToValueAtTime(40, t + 0.55);
+      groan.frequency.exponentialRampToValueAtTime(18, t + 1.0);
+      const groanLP = ctx.createBiquadFilter();
+      groanLP.type = 'lowpass'; groanLP.frequency.value = 380;
+      const groanG = ctx.createGain();
+      groanG.gain.setValueAtTime(0.001, t);
+      groanG.gain.linearRampToValueAtTime(vol * 0.32, t + 0.04);
+      groanG.gain.setValueAtTime(vol * 0.26, t + 0.35);
+      groanG.gain.exponentialRampToValueAtTime(0.001, t + 1.0);
+      groan.connect(groanLP).connect(groanG).connect(destination);
+      groan.start(t); groan.stop(t + 1.0);
+      // Layer 2: Collapse body — brown noise, heavy wall coming down
+      const collapse = ctx.createBufferSource();
+      collapse.buffer = this.getBrownNoise(ctx, dur);
+      const collapseLP = ctx.createBiquadFilter();
+      collapseLP.type = 'lowpass';
+      collapseLP.frequency.setValueAtTime(380, t);
+      collapseLP.frequency.exponentialRampToValueAtTime(18, t + dur * 0.8);
+      const collapseG = ctx.createGain();
+      collapseG.gain.setValueAtTime(0.001, t);
+      collapseG.gain.linearRampToValueAtTime(vol * 0.55, t + 0.03);
+      collapseG.gain.setValueAtTime(vol * 0.48, t + 0.3);
+      collapseG.gain.exponentialRampToValueAtTime(0.001, t + dur);
+      collapse.connect(collapseLP).connect(collapseG).connect(destination);
+      collapse.start(t); collapse.stop(t + dur);
+      // Layer 3: Concrete crumble — pink noise bandpass, mid-range rubble
+      const crumble = ctx.createBufferSource();
+      crumble.buffer = this.getPinkNoise(ctx, 1.3);
+      const crumbleBP = ctx.createBiquadFilter();
+      crumbleBP.type = 'bandpass';
+      crumbleBP.frequency.setValueAtTime(520, t + 0.05);
+      crumbleBP.frequency.exponentialRampToValueAtTime(95, t + 1.3);
+      crumbleBP.Q.value = 0.45;
+      const crumbleG = ctx.createGain();
+      crumbleG.gain.setValueAtTime(0.001, t);
+      crumbleG.gain.linearRampToValueAtTime(vol * 0.28, t + 0.1);
+      crumbleG.gain.setValueAtTime(vol * 0.22, t + 0.5);
+      crumbleG.gain.exponentialRampToValueAtTime(0.001, t + 1.3);
+      crumble.connect(crumbleBP).connect(crumbleG).connect(destination);
+      crumble.start(t + 0.05); crumble.stop(t + 1.3);
+      // Layer 4: Metal tear burst — white noise HP, sharp initial rip
+      const tear = ctx.createBufferSource();
+      tear.buffer = this.getNoiseBuffer(ctx, 0.18);
+      const tearHP = ctx.createBiquadFilter();
+      tearHP.type = 'highpass'; tearHP.frequency.value = 2600;
+      const tearG = ctx.createGain();
+      tearG.gain.setValueAtTime(vol * 0.20, t);
+      tearG.gain.exponentialRampToValueAtTime(0.001, t + 0.18);
+      tear.connect(tearHP).connect(tearG).connect(destination);
+      tear.start(t); tear.stop(t + 0.18);
+      // Layer 5: Debris rain — pink noise settling, dust and chips
+      const debris = ctx.createBufferSource();
+      debris.buffer = this.getPinkNoise(ctx, 1.5);
+      const debrisBP = ctx.createBiquadFilter();
+      debrisBP.type = 'bandpass';
+      debrisBP.frequency.setValueAtTime(1100, t + 0.4);
+      debrisBP.frequency.exponentialRampToValueAtTime(180, t + 1.9);
+      debrisBP.Q.value = 0.7;
+      const debrisG = ctx.createGain();
+      debrisG.gain.setValueAtTime(0.001, t);
+      debrisG.gain.linearRampToValueAtTime(vol * 0.14, t + 0.5);
+      debrisG.gain.exponentialRampToValueAtTime(0.001, t + 1.9);
+      debris.connect(debrisBP).connect(debrisG).connect(destination);
+      debris.start(t + 0.4); debris.stop(t + 1.9);
+      scheduleRelease(dur);
+
     } else {
       // Unknown type, release immediately — just remove from count
       this._activeCount = Math.max(0, this._activeCount - 1);
@@ -6867,6 +7257,147 @@ const EntityJet = ({ entityId, index, entitiesRef, entityLookupRef }) => {
   );
 };
 
+// ─────────────────────────────────────────────────────────────────────────────
+// A-10 WARTHOG — strafing run entity
+// Flies across the target, fires the GAU-8 Avenger cannon (BRRRT!)
+// ─────────────────────────────────────────────────────────────────────────────
+const EntityWarthog = ({ entityId, index, entitiesRef, entityLookupRef }) => {
+  const group = useRef();
+  const modelNodesRef = useRef({});
+  const [assetReady, setAssetReady] = useState(Boolean(airstrikeAssetCache.scene));
+  const [assetFailed, setAssetFailed] = useState(Boolean(airstrikeAssetCache.error));
+
+  const warthogScene = useMemo(() => {
+    if (!assetReady || !airstrikeAssetCache.scene) return null;
+    const clone = cloneNamedGlbGroup(airstrikeAssetCache.scene, 'a10_warthog');
+    if (!clone) return null;
+    clone.traverse((node) => {
+      if (node.position && !node.userData.basePosition) node.userData.basePosition = node.position.clone();
+      if (node.rotation && !node.userData.baseRotation) node.userData.baseRotation = node.rotation.clone();
+      if (node.scale && !node.userData.baseScale) node.userData.baseScale = node.scale.clone();
+    });
+    modelNodesRef.current = clone.userData?.namedNodes || {};
+    return clone;
+  }, [assetReady]);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!assetReady && !assetFailed) {
+      loadAirstrikeAsset()
+        .then(() => { if (!cancelled) setAssetReady(true); })
+        .catch(() => { if (!cancelled) setAssetFailed(true); });
+    }
+    return () => { cancelled = true; };
+  }, [assetReady, assetFailed]);
+
+  useEffect(() => () => disposeClonedMaterials(warthogScene), [warthogScene]);
+
+  useFrame((state, delta) => {
+    const p = getTrackedEntity({ entitiesRef, entityLookupRef, entityId, index });
+    if (!p || p.dead) {
+      if (group.current) group.current.visible = false;
+      return;
+    }
+    if (!group.current) return;
+
+    const time = state.clock.elapsedTime;
+    const speed = Math.hypot(p.vx || 0, p.vz || 0);
+    const targetYaw = -Math.atan2(p.vz || 0.001, p.vx || 0.001);
+    const prevYaw = p.renderYaw ?? targetYaw;
+    const yawDelta = wrapAngle(targetYaw - prevYaw);
+    const prevY = p.renderPrevY ?? (p.y || 0);
+    const vertSpeed = ((p.y || 0) - prevY) / Math.max(delta, 0.001);
+
+    p.renderPrevY = p.y || 0;
+    p.renderYaw = prevYaw + yawDelta * Math.min(1, delta * 5.0);
+    p.renderRoll = THREE.MathUtils.lerp(
+      p.renderRoll ?? 0,
+      THREE.MathUtils.clamp(yawDelta * 3.0, -0.55, 0.55),
+      Math.min(1, delta * 5.5)
+    );
+    p.renderPitch = THREE.MathUtils.lerp(
+      p.renderPitch ?? 0,
+      THREE.MathUtils.clamp(-vertSpeed * 0.005, -0.14, 0.14) + Math.cos(time * 1.6 + (p.flightAge || 0)) * 0.015,
+      Math.min(1, delta * 4.0)
+    );
+
+    group.current.position.set(p.x, p.y, p.z);
+    group.current.rotation.y = p.renderYaw;
+    group.current.rotation.x = p.renderPitch;
+    group.current.rotation.z = p.renderRoll;
+    group.current.visible = true;
+
+    // Exhaust glow pulsing on TF34 engines
+    ['warthog_exhaust_glow_left', 'warthog_exhaust_glow_right'].forEach((nodeName, i) => {
+      const glow = modelNodesRef.current[nodeName];
+      if (!glow) return;
+      setCloudOpacity(
+        glow,
+        0.22 + Math.sin(time * 16 + i * 2.1) * 0.06 + (speed > 8 ? 0.10 : 0)
+      );
+      if (glow.userData.baseScale) {
+        const pulse = 1 + Math.sin(time * 12 + i * 1.6) * 0.07;
+        glow.scale.set(
+          glow.userData.baseScale.x * pulse,
+          glow.userData.baseScale.y * (1 + (speed > 8 ? 0.15 : 0)),
+          glow.userData.baseScale.z * pulse
+        );
+      }
+    });
+
+    // Muzzle flash — smooth lerped pulse while firing, fully hidden when idle
+    const muzzle = modelNodesRef.current.warthog_muzzle_glow;
+    if (muzzle) {
+      const firing = p.fireStarted && !p.fireDone;
+      // Target brightness: slow 9 Hz oscillation while firing, 0 when idle
+      const targetFlash = firing ? (0.60 + Math.sin(time * 9.5) * 0.40) : 0;
+      // Lerp smoothly so there is no per-frame pop-in / pop-out
+      p._muzzleFlash = THREE.MathUtils.lerp(p._muzzleFlash ?? 0, targetFlash, Math.min(1, delta * 20));
+      if (p._muzzleFlash < 0.02) {
+        // Fully invisible — skip render entirely
+        muzzle.visible = false;
+      } else {
+        muzzle.visible = true;
+        setCloudOpacity(muzzle, Math.min(1, p._muzzleFlash));
+        if (muzzle.userData.baseScale) {
+          const flScale = 0.4 + p._muzzleFlash * (1.2 + Math.sin(time * 11) * 0.22);
+          muzzle.scale.set(
+            muzzle.userData.baseScale.x * flScale,
+            muzzle.userData.baseScale.y * flScale,
+            muzzle.userData.baseScale.z * flScale
+          );
+        }
+      }
+    }
+  });
+
+  return (
+    <group ref={group} scale={[WARTHOG_MODEL_SCALE, WARTHOG_MODEL_SCALE, WARTHOG_MODEL_SCALE]}>
+      {warthogScene ? (
+        <primitive object={warthogScene} />
+      ) : (
+        // Fallback geometry if GLB hasn't loaded
+        <>
+          <mesh rotation={[0, 0, -Math.PI / 2]}>
+            <boxGeometry args={[118, 20, 26]} />
+            <meshStandardMaterial color="#5c6355" metalness={0.38} roughness={0.52} />
+          </mesh>
+          <mesh position={[4, -1, 0]} rotation={[0, 0, -0.02]}>
+            <boxGeometry args={[52, 4.5, 110]} />
+            <meshStandardMaterial color="#3e4739" metalness={0.30} roughness={0.60} />
+          </mesh>
+          {[-1, 1].map((side) => (
+            <mesh key={`warthog-exhaust-fallback-${side}`} position={[-58, 16, side * 20]} rotation={[0, 0, -Math.PI / 2]}>
+              <cylinderGeometry args={[5.5, 2.8, 14, 12]} />
+              <meshBasicMaterial color="#38bdf8" />
+            </mesh>
+          ))}
+        </>
+      )}
+    </group>
+  );
+};
+
 const EntityPlane = memo(({ entityId, index, entitiesRef, entityLookupRef }) => {
   const group = useRef();
   const modelNodesRef = useRef({});
@@ -6944,20 +7475,131 @@ const EntityPlane = memo(({ entityId, index, entitiesRef, entityLookupRef }) => 
       {planeScene ? (
         <primitive object={planeScene} />
       ) : (
-        <>
-          <mesh rotation={[0, 0, -Math.PI / 2]}>
-            <cylinderGeometry args={[11.5, 14, 268, 18]} />
-            <meshStandardMaterial color="#8b949e" metalness={0.56} roughness={0.42} />
+        // ── B-52 Strategic Bomber — polygon + shader fallback ──
+        // Fuselage axis: X (nose+, tail-). Wings spread on Z. Y = up.
+        <group>
+          {/* ── Fuselage — tapered 10-sided tube ── */}
+          <mesh rotation={[0, 0, Math.PI / 2]}>
+            <cylinderGeometry args={[10, 12.5, 280, 10, 1]} />
+            <meshStandardMaterial color="#7a8491" metalness={0.72} roughness={0.28} />
           </mesh>
-          <mesh position={[-4, 5, 0]}>
-            <boxGeometry args={[138, 4.6, 354]} />
-            <meshStandardMaterial color="#8b949e" metalness={0.48} roughness={0.4} />
+          {/* Nose cone */}
+          <mesh position={[141, 0, 0]} rotation={[0, 0, Math.PI / 2]}>
+            <coneGeometry args={[10, 44, 10]} />
+            <meshStandardMaterial color="#9aa3ae" metalness={0.78} roughness={0.22} />
           </mesh>
-          <mesh position={[88, 12, 0]} scale={[1.6, 0.8, 0.9]}>
-            <sphereGeometry args={[11, 16, 12]} />
-            <meshStandardMaterial color="#bcd3df" transparent opacity={0.48} metalness={0.82} roughness={0.08} />
+          {/* Glazed nose bubble */}
+          <mesh position={[148, 2, 0]} scale={[1.8, 0.9, 1.0]}>
+            <sphereGeometry args={[7.5, 12, 10]} />
+            <meshStandardMaterial color="#c8dde8" transparent opacity={0.45} metalness={0.9} roughness={0.04} />
           </mesh>
-        </>
+          {/* Tail section — narrow taper */}
+          <mesh position={[-134, 4, 0]} rotation={[0, 0, Math.PI / 2]}>
+            <cylinderGeometry args={[7, 11, 40, 10, 1]} />
+            <meshStandardMaterial color="#6e7880" metalness={0.68} roughness={0.34} />
+          </mesh>
+
+          {/* ── Main swept wings — wide thin box, angled back ── */}
+          {/* Port wing */}
+          <mesh position={[-22, -3, -95]} rotation={[0, -0.22, -0.035]}>
+            <boxGeometry args={[60, 3.2, 192]} />
+            <meshStandardMaterial color="#7a8491" metalness={0.62} roughness={0.36} />
+          </mesh>
+          {/* Starboard wing */}
+          <mesh position={[-22, -3, 95]} rotation={[0, 0.22, -0.035]}>
+            <boxGeometry args={[60, 3.2, 192]} />
+            <meshStandardMaterial color="#7a8491" metalness={0.62} roughness={0.36} />
+          </mesh>
+          {/* Wing leading edge highlight */}
+          {[-1, 1].map(side => (
+            <mesh key={`wing-le-${side}`} position={[10, -2.8, side * 95]} rotation={[0, side * -0.22, 0]}>
+              <boxGeometry args={[8, 2.2, 192]} />
+              <meshStandardMaterial color="#9aa3ae" metalness={0.82} roughness={0.18} />
+            </mesh>
+          ))}
+
+          {/* ── Horizontal stabilizer (tail) ── */}
+          {[-1, 1].map(side => (
+            <mesh key={`stab-${side}`} position={[-128, 8, side * 54]} rotation={[0, side * -0.12, 0.04]}>
+              <boxGeometry args={[36, 2.2, 110]} />
+              <meshStandardMaterial color="#6e7880" metalness={0.64} roughness={0.38} />
+            </mesh>
+          ))}
+          {/* Vertical tail fin */}
+          <mesh position={[-108, 26, 0]} rotation={[0, 0, 0.08]}>
+            <boxGeometry args={[50, 52, 3.2]} />
+            <meshStandardMaterial color="#6e7880" metalness={0.66} roughness={0.36} />
+          </mesh>
+          {/* Tail fin tip */}
+          <mesh position={[-88, 52, 0]}>
+            <boxGeometry args={[22, 3, 3]} />
+            <meshStandardMaterial color="#9aa3ae" metalness={0.76} roughness={0.24} />
+          </mesh>
+
+          {/* ── 8 Engines in 4 paired nacelles under wings ── */}
+          {/* Engine pod positions: 4 per side, Z = ±30/±68/±105/±142 from centerline */}
+          {[
+            { z: -30,  x: -10 }, { z: -68,  x: -28 },
+            { z: -105, x: -46 }, { z: -142, x: -64 },
+            { z:  30,  x: -10 }, { z:  68,  x: -28 },
+            { z:  105, x: -46 }, { z:  142, x: -64 },
+          ].map(({ z, x }, i) => (
+            <group key={`eng-${i}`} position={[x, -20, z]}>
+              {/* Nacelle body */}
+              <mesh rotation={[0, 0, Math.PI / 2]}>
+                <cylinderGeometry args={[5.5, 6.2, 38, 9, 1]} />
+                <meshStandardMaterial color="#4a5260" metalness={0.76} roughness={0.28} />
+              </mesh>
+              {/* Engine inlet ring */}
+              <mesh position={[20, 0, 0]} rotation={[0, 0, Math.PI / 2]}>
+                <torusGeometry args={[5.8, 0.9, 8, 16]} />
+                <meshStandardMaterial color="#2e3540" metalness={0.88} roughness={0.14} />
+              </mesh>
+              {/* Pylon strut to wing */}
+              <mesh position={[0, 10, 0]}>
+                <boxGeometry args={[6, 20, 4]} />
+                <meshStandardMaterial color="#5a6270" metalness={0.68} roughness={0.34} />
+              </mesh>
+              {/* Exhaust glow */}
+              <mesh position={[-22, 0, 0]} rotation={[0, 0, Math.PI / 2]}>
+                <cylinderGeometry args={[4.2, 5.2, 6, 9]} />
+                <meshBasicMaterial color="#fbbf24" transparent opacity={0.55 + Math.sin(i * 1.3) * 0.12} />
+              </mesh>
+            </group>
+          ))}
+
+          {/* ── Bomb bay doors (slightly open) ── */}
+          {[-1, 1].map(side => (
+            <mesh key={`bay-${side}`} position={[-10, -13, side * 5.5]} rotation={[side * 0.18, 0, 0]}>
+              <boxGeometry args={[48, 1.2, 11]} />
+              <meshStandardMaterial color="#3a4250" metalness={0.55} roughness={0.48} />
+            </mesh>
+          ))}
+
+          {/* ── Contrail sources — ghostly white streaks from each engine tip ── */}
+          {[
+            -30, -68, -105, -142,
+             30,  68,  105,  142,
+          ].map((z, i) => {
+            const x = -10 - Math.abs(z) * 0.38;
+            return (
+              <mesh key={`contrail-${i}`} position={[x - 36, -20, z]} rotation={[0, 0, Math.PI / 2]}>
+                <cylinderGeometry args={[1.4, 3.8, 120 + i * 8, 6]} />
+                <meshBasicMaterial color="#e0edf5" transparent opacity={0.12 + i * 0.01} />
+              </mesh>
+            );
+          })}
+
+          {/* ── Wing-tip nav lights ── */}
+          <mesh position={[-56, -4, -188]}>
+            <sphereGeometry args={[2.8, 7, 6]} />
+            <meshBasicMaterial color="#ef4444" transparent opacity={0.9} />
+          </mesh>
+          <mesh position={[-56, -4,  188]}>
+            <sphereGeometry args={[2.8, 7, 6]} />
+            <meshBasicMaterial color="#86efac" transparent opacity={0.9} />
+          </mesh>
+        </group>
       )}
     </group>
   );
@@ -7057,7 +7699,7 @@ const EntityBomb = memo(({ entityId, index, entitiesRef, entityLookupRef }) => {
   );
 });
 
-const NUKE_CLOUD_GLB_PATH = '/fallout/nuke_cloud.glb?v=20260404d';
+const NUKE_CLOUD_GLB_PATH = '/fallout/nuke_cloud.glb?v=20260406a';
 const NUKE_CLOUD_MAX_AGE = 210;
 const nukeCloudAssetCache = {
   scene: null,
@@ -7557,13 +8199,13 @@ const airstrikeAssetCache = {
   error: null
 };
 
-const BASE_STRUCTURES_GLB_PATH = '/fallout/base_structures.glb?v=20260404c';
+const BASE_STRUCTURES_GLB_PATH = '/fallout/base_structures.glb?v=20260406a';
 const baseStructuresAssetCache = {
   scene: null,
   promise: null,
   error: null
 };
-const COMMAND_EFFECTS_GLB_PATH = '/fallout/command_effects.glb?v=20260404a';
+const COMMAND_EFFECTS_GLB_PATH = '/fallout/command_effects.glb?v=20260406a';
 const commandEffectsAssetCache = {
   scene: null,
   promise: null,
@@ -7575,7 +8217,7 @@ const kaijuAssetsAssetCache = {
   promise: null,
   error: null
 };
-const HUMAN_UNITS_GLB_PATH = '/fallout/human_units.glb?v=20260403c';
+const HUMAN_UNITS_GLB_PATH = '/fallout/human_units.glb?v=20260406a';
 const humanUnitsAssetCache = {
   scene: null,
   promise: null,
@@ -8220,47 +8862,46 @@ const EntityImpactPuff = memo(({ entityId, index, entitiesRef, entityLookupRef }
   );
 });
 
+// ─────────────────────────────────────────────────────────────────────────────
+// EntitySupportStrikeEffect — fully procedural, zero async dependencies.
+// All three effects (orbital_lance, firestorm, kinetic_spear) are driven
+// entirely by useFrame so they ALWAYS animate regardless of GLB load state.
+// ─────────────────────────────────────────────────────────────────────────────
 const EntitySupportStrikeEffect = memo(({ entityId, index, entitiesRef, entityLookupRef }) => {
   const group = useRef();
+  const r = useRef({}); // keyed mesh refs
   const effectNodesRef = useRef({});
   const [assetReady, setAssetReady] = useState(Boolean(commandEffectsAssetCache.scene));
   const [assetFailed, setAssetFailed] = useState(Boolean(commandEffectsAssetCache.error));
-
   const trackedEffect = getTrackedEntity({ entitiesRef, entityLookupRef, entityId, index });
-  const assetName = trackedEffect ? COMMAND_EFFECT_ASSET_NAMES[trackedEffect.kind] : null;
-
-  // Compute the clone without side effects in useMemo
+  const effectAssetName = trackedEffect ? COMMAND_EFFECT_ASSET_NAMES[trackedEffect.kind] : null;
   const effectScene = useMemo(() => {
-    if (!assetReady || !commandEffectsAssetCache.scene || !assetName) return null;
-    return cloneNamedGlbGroup(commandEffectsAssetCache.scene, assetName);
-  }, [assetReady, assetName]);
-
-  // Sync effectNodesRef and reset node state each time the scene clone changes
-  useEffect(() => {
-    if (effectScene) {
-      const nodes = effectScene.userData?.namedNodes || {};
-      effectNodesRef.current = nodes;
-      // Ensure every node starts fully visible so useFrame controls opacity/scale from scratch
-      Object.values(nodes).forEach((node) => {
-        if (!node) return;
-        node.visible = true;
-        node.scale.set(1, 1, 1);
-        const mats = node.material
-          ? (Array.isArray(node.material) ? node.material : [node.material])
-          : [];
-        mats.forEach((m) => { if (m) { m.opacity = 1; m.transparent = true; } });
-      });
-    } else {
+    if (!assetReady || !commandEffectsAssetCache.scene || !effectAssetName) {
       effectNodesRef.current = {};
+      return null;
     }
-  }, [effectScene]);
+    const clone = cloneNamedGlbGroup(commandEffectsAssetCache.scene, effectAssetName, { castShadow: false, receiveShadow: false });
+    clone?.traverse((object) => {
+      if (object.name) {
+        object.userData.basePosition = object.position.clone();
+        object.userData.baseScale = object.scale.clone();
+      }
+      if (!object.isMesh) return;
+      object.castShadow = false;
+      object.receiveShadow = false;
+      object.frustumCulled = false;
+    });
+    effectNodesRef.current = clone?.userData?.namedNodes || {};
+    return clone;
+  }, [assetReady, effectAssetName]);
 
   useEffect(() => {
     let cancelled = false;
     if (!assetReady && !assetFailed) {
       loadCommandEffectsAsset()
-        .then(() => {
-          if (!cancelled) setAssetReady(true);
+        .then((scene) => {
+          if (!cancelled && scene) setAssetReady(true);
+          if (!cancelled && !scene) setAssetFailed(true);
         })
         .catch(() => {
           if (!cancelled) setAssetFailed(true);
@@ -8271,404 +8912,460 @@ const EntitySupportStrikeEffect = memo(({ entityId, index, entitiesRef, entityLo
     };
   }, [assetReady, assetFailed]);
 
-  useEffect(() => () => disposeClonedMaterials(effectScene), [effectScene]);
+  useEffect(() => {
+    return () => {
+      if (effectScene) disposeClonedMaterials(effectScene);
+    };
+  }, [effectScene]);
 
   useFrame((state) => {
     const p = getTrackedEntity({ entitiesRef, entityLookupRef, entityId, index });
-    if (!p || p.dead) {
-      if (group.current) group.current.visible = false;
-      return;
-    }
+    if (!p || p.dead) { if (group.current) group.current.visible = false; return; }
     if (!group.current) return;
 
+    const t = state.clock.elapsedTime;
     const progress = THREE.MathUtils.clamp((p.age || 0) / Math.max(0.01, p.duration || 1), 0, 1);
-    const fade = Math.max(0, 1 - progress);
-    const time = state.clock.elapsedTime;
     const baseY = getTerrainHeight(p.x, p.z);
-    group.current.position.set(p.x, baseY + 0.6, p.z);
+    group.current.position.set(p.x, baseY, p.z);
     group.current.visible = true;
 
-    // Lazy re-sync: if useEffect hasn't populated the nodes yet (first frame after mount),
-    // pull them directly from the attached effectScene so we never skip a frame.
-    if (effectScene && Object.keys(effectNodesRef.current).length === 0) {
-      effectNodesRef.current = effectScene.userData?.namedNodes || {};
-    }
+    // ph(s,e) — maps overall progress into a sub-phase [0,1]
+    const ph  = (s, e) => THREE.MathUtils.clamp((progress - s) / (e - s + 0.0001), 0, 1);
+    const eo  = (v) => 1 - (1 - v) * (1 - v);   // ease-out quad
+    const ei  = (v) => v * v;                     // ease-in quad
+    const pk  = (v) => Math.sin(v * Math.PI);     // 0→peak→0
 
-    // Sub-phase helper: maps overall [0,1] progress into a per-phase [0,1] value
-    const phaseP = (s, e) => THREE.MathUtils.clamp((progress - s) / Math.max(0.001, e - s), 0, 1);
-    const easOut = (t) => 1 - (1 - t) * (1 - t);
-    const easIn  = (t) => t * t;
-    const easPk  = (t) => Math.sin(t * Math.PI); // 0→peak→0
+    // Set opacity on a keyed mesh ref
+    const op = (key, val) => {
+      const n = r.current[key]; if (!n) return;
+      (Array.isArray(n.material) ? n.material : [n.material])
+        .forEach(m => { if (m) m.opacity = Math.max(0, Math.min(1, val)); });
+    };
+    const nodes = effectNodesRef.current || {};
+    const opEffect = (name, val) => {
+      const node = nodes[name];
+      if (!node) return;
+      setCloudOpacity(node, Math.max(0, Math.min(1, val)));
+    };
+    const scaleEffect = (name, scaleMultiplier, yOffset = 0) => {
+      const node = nodes[name];
+      if (!node) return;
+      applyBaseScale(node, scaleMultiplier, yOffset);
+    };
 
+    // ── ORBITAL LANCE (7.5s) ─────────────────────────────────────────
     if (p.kind === 'orbital_lance') {
-      // ── Phase timeline (7.5s total) ────────────────────────────────
-      //   0 → 0.18  DESCENT  – beam races down from orbit
-      //  0.18→ 0.44  IMPACT   – blinding flash, shock ring blasts
-      //  0.44→ 1.0   LINGER   – glow fades, rings slowly expand
-      const descP   = phaseP(0,    0.18);
-      const impactP = phaseP(0.18, 0.44);
-      const lingerP = phaseP(0.44, 1.0);
+      const d = ph(0, 0.18), imp = ph(0.18, 0.44), lin = ph(0.44, 1);
+      const pulse = 0.85 + Math.sin(t * 26) * 0.13;
 
-      const beam      = effectNodesRef.current.support_orbital_lance_beam;
-      const core      = effectNodesRef.current.support_orbital_lance_core;
-      const ringInner = effectNodesRef.current.support_orbital_lance_ring_inner;
-      const ringOuter = effectNodesRef.current.support_orbital_lance_ring_outer;
-      const flareTop  = effectNodesRef.current.support_orbital_lance_flare_top;
-      const flareBase = effectNodesRef.current.support_orbital_lance_flare_base;
-      const impactNode = effectNodesRef.current.support_orbital_lance_impact;
-      const shock      = effectNodesRef.current.support_orbital_lance_shock;
-      const beamPulse  = 0.82 + Math.sin(time * 28) * 0.16;
+      // Outer plasma sheath — always full-height, animates in/out by opacity
+      op('beam',     d < 1 ? 0.06 + d * 0.16
+                   : imp < 1 ? 0.22 + pk(imp) * 0.42
+                   : Math.max(0, 0.52 - lin * 0.52));
 
-      if (flareTop) {
-        // Streaks down from altitude 280 to y=0 during descent, vanishes at impact
-        flareTop.position.y = 280 - easIn(descP) * 280;
-        const ftS = 1.2 + beamPulse * 0.8 + descP * 0.6;
-        flareTop.scale.setScalar(ftS);
-        const ftO = descP < 1 ? 0.5 + descP * 0.5
-                   : impactP < 1 ? Math.max(0, 1.0 - impactP * 2.0) : 0;
-        setCloudOpacity(flareTop, Math.max(0, ftO));
+      // Bright inner beam core — also pulses in width during impact
+      const bc = r.current.beamCore;
+      if (bc) {
+        const bw = (0.8 + pulse * 0.2) * (imp < 1 ? 1 + pk(imp) * 2.8 : 1);
+        bc.scale.set(bw, 1, bw);
+        op('beamCore', d < 1 ? d * 0.72
+                     : imp < 1 ? 0.72 + pk(imp) * 0.26
+                     : Math.max(0, 0.82 - lin * 0.82));
       }
 
-      if (beam) {
-        // Beam thickens and blazes at impact, then fades in linger
-        const bH  = descP < 1 ? easOut(descP) * 0.8
-                  : impactP < 1 ? 0.8 + easPk(impactP) * 1.4
-                  : Math.max(0, 1.4 - lingerP * 1.4);
-        const bW  = 0.9 + (impactP < 1 ? easPk(impactP) * 2.8 : 0) + beamPulse * 0.18;
-        const bOp = descP < 1 ? 0.25 + descP * 0.55
-                  : impactP < 1 ? 0.8 + easPk(impactP) * 0.2
-                  : Math.max(0, 0.7 - lingerP * 0.65);
-        beam.scale.set(bW, bH, bW);
-        setCloudOpacity(beam, Math.max(0, bOp));
+      // Impact flash sphere
+      const fl = r.current.flash;
+      if (fl) {
+        fl.scale.setScalar(imp < 1 ? 0.3 + eo(imp) * 5.5 : Math.max(0.1, 5.8 - lin * 5.6));
+        op('flash', imp < 1 ? pk(imp) * 0.94 : Math.max(0, 0.14 - lin * 0.14));
       }
 
-      if (core) {
-        const cS = descP < 1 ? 1.0 + descP * 0.5
-                 : impactP < 1 ? 1.5 + easOut(impactP) * 5.5 + beamPulse * 1.0
-                 : Math.max(0.8, 7.0 - lingerP * 5.8) + beamPulse * 0.5;
-        core.scale.setScalar(cS);
-        core.position.y = 10 + Math.sin(time * 14) * 1.5
-          + (impactP < 1 ? impactP * 10 : 10 + lingerP * 5);
-        const cOp = descP < 1 ? 0.25 + descP * 0.45
-                  : impactP < 1 ? 0.7 + easPk(impactP) * 0.3
-                  : Math.max(0, 0.85 - lingerP * 0.82);
-        setCloudOpacity(core, Math.max(0, cOp));
+      // Ground glow halo
+      const gl = r.current.glow;
+      if (gl) {
+        gl.scale.setScalar(imp < 1 ? 0.8 + eo(imp) * 7.2 : Math.max(0.5, 8.0 - lin * 7.2) + pulse * 0.18);
+        op('glow', imp < 1 ? 0.18 + pk(imp) * 0.34 : Math.max(0, 0.40 - lin * 0.40));
       }
 
-      if (ringInner) {
-        ringInner.rotation.y += impactP < 1 ? 0.16 : 0.035;
-        const rS = impactP < 1 ? 0.8 + easOut(impactP) * 4.2 : 5.0 + lingerP * 2.0;
-        ringInner.scale.setScalar(rS);
-        const rOp = impactP < 1 ? easPk(impactP) * 0.78 : Math.max(0, 0.52 - lingerP * 0.52);
-        setCloudOpacity(ringInner, Math.max(0, rOp));
+      // Ground scorch circle — expands radially (flat, so scale XY local = XZ world)
+      const sc = r.current.scorch;
+      if (sc) {
+        const s = imp < 1 ? eo(imp) : 1;
+        sc.scale.set(s, s, 1);
+        op('scorch', imp < 1 ? eo(imp) * 0.88 : Math.max(0, 0.88 - lin * 0.14));
       }
 
-      if (ringOuter) {
-        ringOuter.rotation.y -= impactP < 1 ? 0.10 : 0.022;
-        const rS = impactP < 1 ? 0.7 + easOut(impactP) * 6.5 : 7.2 + lingerP * 3.5;
-        ringOuter.scale.setScalar(rS);
-        const rOp = impactP < 1 ? easPk(impactP) * 0.56 : Math.max(0, 0.38 - lingerP * 0.38);
-        setCloudOpacity(ringOuter, Math.max(0, rOp));
+      // Inner ring
+      const ra = r.current.ringA;
+      if (ra) {
+        const s = imp < 1 ? 0.4 + eo(imp) * 4.5 : 4.9 + lin * 2.8;
+        ra.scale.set(s, s, 1);
+        ra.rotation.z += 0.06;
+        op('ringA', imp < 1 ? pk(imp) * 0.82 : Math.max(0, 0.44 - lin * 0.44));
       }
 
-      if (flareBase) {
-        const fS = descP < 1 ? 0.5 + descP * 0.7
-                 : impactP < 1 ? 1.2 + easPk(impactP) * 4.0 + beamPulse * 0.4
-                 : Math.max(0.4, 4.5 - lingerP * 4.1);
-        flareBase.scale.setScalar(fS);
-        const fOp = descP < 1 ? 0.15 + descP * 0.3
-                  : impactP < 1 ? 0.45 + easPk(impactP) * 0.55
-                  : Math.max(0, 0.72 - lingerP * 0.68);
-        setCloudOpacity(flareBase, Math.max(0, fOp));
+      // Outer ring
+      const rb = r.current.ringB;
+      if (rb) {
+        const s = imp < 1 ? 0.5 + eo(imp) * 8.0 : 8.5 + lin * 5.0;
+        rb.scale.set(s, s, 1);
+        op('ringB', imp < 1 ? pk(imp) * 0.54 : Math.max(0, 0.30 - lin * 0.30));
       }
 
-      if (impactNode) {
-        const iS = impactP < 1 ? 0.8 + easOut(impactP) * 5.5 : 6.3 + lingerP * 1.8;
-        impactNode.scale.setScalar(iS);
-        const iOp = impactP < 1 ? 0.65 - impactP * 0.15 : Math.max(0, 0.5 - lingerP * 0.5);
-        setCloudOpacity(impactNode, Math.max(0, iOp));
-      }
-
-      if (shock) {
-        const sS = impactP < 1 ? 0.7 + easOut(impactP) * 9.5 : 10.2 + lingerP * 4.0;
-        shock.scale.setScalar(sS);
-        const sOp = impactP < 1 ? 0.55 - impactP * 0.28 : Math.max(0, 0.27 - lingerP * 0.27);
-        setCloudOpacity(shock, Math.max(0, sOp));
-      }
-      return;
+      scaleEffect('support_orbital_lance_beam', 1 + pulse * 0.05);
+      opEffect('support_orbital_lance_beam', d < 1 ? 0.08 + d * 0.18 : imp < 1 ? 0.24 + pk(imp) * 0.34 : Math.max(0, 0.46 - lin * 0.46));
+      scaleEffect('support_orbital_lance_core', (0.9 + pulse * 0.1) * (imp < 1 ? 1 + pk(imp) * 0.85 : 1));
+      opEffect('support_orbital_lance_core', d < 1 ? d * 0.66 : imp < 1 ? 0.7 + pk(imp) * 0.2 : Math.max(0, 0.8 - lin * 0.8));
+      scaleEffect('support_orbital_lance_flare_base', imp < 1 ? 0.4 + eo(imp) * 4.6 : Math.max(0.1, 5.0 - lin * 4.8));
+      opEffect('support_orbital_lance_flare_base', imp < 1 ? pk(imp) * 0.88 : Math.max(0, 0.14 - lin * 0.14));
+      scaleEffect('support_orbital_lance_impact', 0.7 + eo(imp) * 2.8, imp < 1 ? eo(imp) * 5 : Math.max(0, 5 - lin * 5));
+      opEffect('support_orbital_lance_impact', imp < 1 ? 0.18 + pk(imp) * 0.36 : Math.max(0, 0.34 - lin * 0.34));
+      scaleEffect('support_orbital_lance_ring_inner', imp < 1 ? 0.5 + eo(imp) * 4.2 : 4.7 + lin * 2.7);
+      opEffect('support_orbital_lance_ring_inner', imp < 1 ? pk(imp) * 0.82 : Math.max(0, 0.4 - lin * 0.4));
+      scaleEffect('support_orbital_lance_ring_outer', imp < 1 ? 0.6 + eo(imp) * 7.0 : 7.6 + lin * 4.2);
+      opEffect('support_orbital_lance_ring_outer', imp < 1 ? pk(imp) * 0.46 : Math.max(0, 0.24 - lin * 0.24));
+      scaleEffect('support_orbital_lance_shock', imp < 1 ? 0.65 + eo(imp) * 5.0 : 5.8 + lin * 3.4);
+      opEffect('support_orbital_lance_shock', imp < 1 ? pk(imp) * 0.28 : Math.max(0, 0.18 - lin * 0.18));
+      scaleEffect('orbital_scorch', imp < 1 ? eo(imp) : 1);
+      opEffect('orbital_scorch', imp < 1 ? eo(imp) * 0.76 : Math.max(0, 0.76 - lin * 0.12));
+      scaleEffect('orbital_scorch_hot', imp < 1 ? 0.6 + eo(imp) * 1.4 : 2.0 + pulse * 0.1);
+      opEffect('orbital_scorch_hot', imp < 1 ? 0.24 + pk(imp) * 0.24 : Math.max(0, 0.3 - lin * 0.3));
+      opEffect('support_orbital_lance_flare_top', d < 1 ? d * 0.4 : Math.max(0, 0.4 - progress * 0.4));
     }
 
-    if (p.kind === 'firestorm') {
-      // ── Phase timeline (10.0s total) ────────────────────────────────
-      //   0 → 0.10  IGNITE  – bright flash ignition points
-      //  0.10→ 0.40  BLOOM   – ring + flames explode outward
-      //  0.40→ 1.0   BURN    – rolling smoke, slow linger
-      const igniteP = phaseP(0,    0.10);
-      const bloomP  = phaseP(0.10, 0.40);
-      const burnP   = phaseP(0.40, 1.0);
+    // ── FIRESTORM (10s) ──────────────────────────────────────────────
+    else if (p.kind === 'firestorm') {
+      const ig = ph(0, 0.10), bl = ph(0.10, 0.40), bu = ph(0.40, 1);
+      const pulse = 0.82 + Math.sin(t * 11) * 0.16;
 
-      const ring  = effectNodesRef.current.support_firestorm_ring;
-      const core  = effectNodesRef.current.support_firestorm_core;
-      const shock = effectNodesRef.current.support_firestorm_shock;
-      const plume = effectNodesRef.current.support_firestorm_plume;
-
-      if (ring) {
-        const rS = igniteP < 1 ? 0.6 + igniteP * 0.9
-                 : bloomP  < 1 ? 1.5 + easOut(bloomP) * 8.5
-                 :               10.0 + burnP * 4.0;
-        ring.scale.setScalar(rS);
-        ring.rotation.y += igniteP < 1 ? 0.10 : bloomP < 1 ? 0.055 : 0.018;
-        const rOp = igniteP < 1 ? 0.3 + igniteP * 0.4
-                  : bloomP  < 1 ? 0.7 - easIn(bloomP) * 0.25
-                  :               Math.max(0, 0.45 - burnP * 0.45);
-        setCloudOpacity(ring, Math.max(0, rOp));
+      // Initial white-orange ignition flash
+      const fln = r.current.flash;
+      if (fln) {
+        fln.scale.setScalar(ig < 1 ? 0.6 + eo(ig) * 3.6 : bl < 1 ? 4.2 - bl * 3.4 : 0.8);
+        op('flash', ig < 1 ? 0.32 + ig * 0.58 : bl < 1 ? Math.max(0, 0.9 - bl * 0.9) : 0);
       }
 
-      if (core) {
-        const pulse = 0.78 + Math.sin(time * 12) * 0.18;
-        const cS = igniteP < 1 ? 0.9 + easPk(igniteP) * 3.0 + pulse * 0.3
-                 : bloomP  < 1 ? 3.8 + easOut(bloomP) * 4.5 + pulse * 0.9
-                 :               Math.max(0.9, 8.3 - burnP * 7.2) + pulse * 0.5;
-        core.scale.setScalar(cS);
-        core.position.y = 10 + pulse * 9
-          + (bloomP < 1 ? bloomP * 14 : 14 + burnP * 10);
-        const cOp = igniteP < 1 ? 0.55 + igniteP * 0.4
-                  : bloomP  < 1 ? 0.95 - bloomP * 0.22
-                  :               Math.max(0, 0.73 - burnP * 0.70);
-        setCloudOpacity(core, Math.max(0, cOp));
+      // Central fireball — rises and expands
+      const fb = r.current.fireball;
+      if (fb) {
+        fb.scale.setScalar(ig < 1 ? 0.5 + eo(ig) * 2.5
+                          : bl < 1 ? 3.0 + eo(bl) * 4.8 + pulse * 0.28
+                          : Math.max(0.2, 7.8 - bu * 7.4) + pulse * 0.22);
+        fb.position.y = 8 + pulse * 5 + (bl < 1 ? bl * 18 : 18 + bu * 12);
+        op('fireball', ig < 1 ? 0.28 + ig * 0.62 : bl < 1 ? 0.9 - bl * 0.22 : Math.max(0, 0.68 - bu * 0.66));
       }
 
-      if (shock) {
-        const sS = bloomP < 1 ? 0.6 + easOut(bloomP) * 11.5 : 12.1 + burnP * 5.5;
-        shock.scale.setScalar(sS);
-        const sOp = bloomP < 1 ? easPk(bloomP) * 0.62 : Math.max(0, 0.30 - burnP * 0.30);
-        setCloudOpacity(shock, Math.max(0, sOp));
+      // Ground ember glow — flat circle
+      const em = r.current.ember;
+      if (em) {
+        const s = ig < 1 ? ig : bl < 1 ? 1 + bl * 0.42 : Math.max(0.1, 1.42 - bu * 0.38);
+        em.scale.set(s, s, 1);
+        op('ember', ig < 1 ? ig * 0.72 : bl < 1 ? 0.72 - bl * 0.16 : Math.max(0, 0.56 - bu * 0.46));
       }
 
-      if (plume) {
-        const pRise = bloomP < 1 ? bloomP * 35 : 35 + burnP * 65;
-        plume.position.y = 16 + pRise;
-        const pW = 0.9 + (bloomP < 1 ? bloomP * 1.5 : 1.5 + burnP * 3.5);
-        const pH = 0.5 + (bloomP < 1 ? bloomP * 2.5 : 2.5 + burnP * 4.5);
-        plume.scale.set(pW, pH, pW);
-        const pOp = bloomP < 1 ? 0.08 + bloomP * 0.42
-                  :               Math.max(0, 0.5 - burnP * 0.5);
-        setCloudOpacity(plume, Math.max(0, pOp));
+      // Ground char — flat circle, expands
+      const gc = r.current.char;
+      if (gc) {
+        const s = bl < 1 ? eo(bl) : 1;
+        gc.scale.set(s, s, 1);
+        op('char', bl < 1 ? eo(bl) * 0.84 : Math.max(0, 0.84 - bu * 0.16));
       }
 
-      for (let i = 0; i < 6; i++) {
-        const flame = effectNodesRef.current[`support_firestorm_flame_${i}`];
+      // Fire ring
+      const ra = r.current.ringA;
+      if (ra) {
+        const s = ig < 1 ? 0.4 + ig * 0.9 : bl < 1 ? 1.3 + eo(bl) * 9.5 : 10.8 + bu * 5.0;
+        ra.scale.set(s, s, 1);
+        ra.rotation.z += 0.04;
+        op('ringA', ig < 1 ? 0.18 + ig * 0.42 : bl < 1 ? 0.6 - bl * 0.22 : Math.max(0, 0.38 - bu * 0.38));
+      }
+
+      // Shockwave ring — blasts out faster
+      const rb = r.current.ringB;
+      if (rb) {
+        const s = bl < 1 ? 0.6 + eo(bl) * 13.0 : 13.6 + bu * 6.0;
+        rb.scale.set(s, s, 1);
+        op('ringB', bl < 1 ? pk(bl) * 0.58 : Math.max(0, 0.30 - bu * 0.30));
+      }
+
+      // Smoke plume — rises and widens
+      const sm = r.current.smoke;
+      if (sm) {
+        sm.position.y = 20 + (bl < 1 ? bl * 40 : 40 + bu * 72);
+        const sw = 0.5 + (bl < 1 ? bl * 1.8 : 1.8 + bu * 3.8);
+        const sh = 0.3 + (bl < 1 ? bl * 2.2 : 2.2 + bu * 5.5);
+        sm.scale.set(sw, sh, sw);
+        op('smoke', bl < 1 ? bl * 0.28 : Math.max(0, 0.32 - bu * 0.30));
+      }
+
+      scaleEffect('support_firestorm_core', ig < 1 ? 0.5 + eo(ig) * 2.4 : bl < 1 ? 2.9 + eo(bl) * 3.8 + pulse * 0.2 : Math.max(0.2, 6.9 - bu * 6.5) + pulse * 0.18, bl < 1 ? bl * 18 : 18 + bu * 12);
+      opEffect('support_firestorm_core', ig < 1 ? 0.28 + ig * 0.62 : bl < 1 ? 0.9 - bl * 0.22 : Math.max(0, 0.68 - bu * 0.66));
+      scaleEffect('support_firestorm_ring', ig < 1 ? 0.5 + ig * 0.9 : bl < 1 ? 1.4 + eo(bl) * 9.2 : 10.6 + bu * 4.8);
+      opEffect('support_firestorm_ring', ig < 1 ? 0.22 + ig * 0.36 : bl < 1 ? 0.58 - bl * 0.2 : Math.max(0, 0.36 - bu * 0.36));
+      scaleEffect('support_firestorm_shock', bl < 1 ? 0.6 + eo(bl) * 12.4 : 13.0 + bu * 5.6);
+      opEffect('support_firestorm_shock', bl < 1 ? pk(bl) * 0.44 : Math.max(0, 0.22 - bu * 0.22));
+      scaleEffect('support_firestorm_plume', 0.6 + (bl < 1 ? bl * 1.7 : 1.7 + bu * 3.4), bl < 1 ? bl * 40 : 40 + bu * 72);
+      opEffect('support_firestorm_plume', bl < 1 ? bl * 0.24 : Math.max(0, 0.28 - bu * 0.26));
+      scaleEffect('firestorm_char_field', bl < 1 ? eo(bl) : 1);
+      opEffect('firestorm_char_field', bl < 1 ? eo(bl) * 0.78 : Math.max(0, 0.78 - bu * 0.14));
+      scaleEffect('firestorm_ember_field', ig < 1 ? ig : bl < 1 ? 1 + bl * 0.36 : Math.max(0.2, 1.36 - bu * 0.34));
+      opEffect('firestorm_ember_field', ig < 1 ? ig * 0.64 : bl < 1 ? 0.64 - bl * 0.12 : Math.max(0, 0.5 - bu * 0.42));
+      scaleEffect('firestorm_ground_roll', ig < 1 ? 0.4 + ig * 0.9 : bl < 1 ? 1.4 + bl * 2.0 : Math.max(0.6, 3.4 - bu * 1.8), 3 + pulse * 2);
+      opEffect('firestorm_ground_roll', ig < 1 ? 0.18 + ig * 0.22 : Math.max(0, 0.4 - bu * 0.36));
+      for (let i = 0; i < 6; i += 1) {
+        const flameName = `support_firestorm_flame_${i}`;
+        const flame = nodes[flameName];
         if (!flame) continue;
-        const fpulse = 0.7 + Math.sin(time * (10 + i) + i * 1.3) * 0.22;
-        const phFlame = igniteP < 1 ? igniteP : bloomP < 1 ? 1 : Math.max(0, 1 - burnP * 1.6);
-        flame.visible = phFlame > 0.01;
-        if (!flame.visible) continue;
-        const baseH = 7 + i * 3.8;
-        flame.position.y = baseH + fpulse * (7 + i * 1.0)
-          + (bloomP < 1 ? bloomP * 18 : 18 + burnP * 10);
-        const fW = 1.1 + fpulse * 0.35 + (bloomP < 1 ? bloomP * 0.55 : 0.55);
-        flame.scale.set(fW, 0.9 + fpulse * 0.85 + (bloomP < 1 ? bloomP * 0.55 : 0.55), fW);
-        setCloudOpacity(flame, Math.max(0, phFlame * (0.38 + fpulse * 0.32)));
+        const flicker = 0.86 + Math.sin(t * (7 + i) + i * 0.7) * 0.18;
+        applyBaseScale(flame, (ig < 1 ? 0.4 + ig : 1.3 + (1 - bu * 0.5)) * flicker, bl < 1 ? bl * (12 + i * 1.8) : 12 + i * 1.8 + bu * 8);
+        setCloudOpacity(flame, ig < 1 ? ig * 0.44 : bl < 1 ? 0.56 + Math.sin(t * (8 + i)) * 0.08 : Math.max(0, 0.46 - bu * 0.42));
       }
-
-      for (let i = 0; i < 4; i++) {
-        const smoke = effectNodesRef.current[`support_firestorm_smoke_${i}`];
+      for (let i = 0; i < 4; i += 1) {
+        const smokeName = `support_firestorm_smoke_${i}`;
+        const smoke = nodes[smokeName];
         if (!smoke) continue;
-        const rise = ((p.age || 0) * (0.10 + i * 0.022)) % 1;
-        smoke.position.y = 22 + i * 14 + rise * 64;
-        smoke.scale.setScalar(1.6 + rise * 2.8 + i * 0.5);
-        const smkO = burnP < 0.04 ? burnP * 8
-                   : Math.max(0, 0.30 + (0.10 - rise * 0.08) - burnP * 0.28);
-        setCloudOpacity(smoke, Math.max(0, smkO));
+        const drift = bl < 1 ? bl * (18 + i * 8) : 18 + i * 8 + bu * (40 + i * 16);
+        applyBaseScale(smoke, 0.8 + (bl < 1 ? bl * 0.8 : 0.8 + bu * 1.6), drift);
+        smoke.position.x = smoke.userData.basePosition.x + Math.sin(t * (0.7 + i * 0.2)) * (3 + i * 1.5);
+        smoke.position.z = smoke.userData.basePosition.z + Math.cos(t * (0.6 + i * 0.18)) * (2.4 + i);
+        setCloudOpacity(smoke, bl < 1 ? 0.12 + bl * 0.16 : Math.max(0, 0.28 - bu * 0.24));
       }
-      return;
     }
 
-    if (p.kind === 'kinetic_spear') {
-      // ── Phase timeline (6.5s total) ────────────────────────────────
-      //   0 → 0.38  DESCENT – tungsten rod races from 400 units altitude
-      //  0.38→ 0.55  IMPACT  – brutal hit, ring erupts, shaft buries
-      //  0.55→ 1.0   CRATER  – glow fades, crater smoke lingers
-      const descentP = phaseP(0,    0.38);
-      const impactP  = phaseP(0.38, 0.55);
-      const craterP  = phaseP(0.55, 1.0);
+    // ── KINETIC SPEAR (6.5s) ─────────────────────────────────────────
+    else if (p.kind === 'kinetic_spear') {
+      const de = ph(0, 0.38), im = ph(0.38, 0.55), cr = ph(0.55, 1);
+      const pulse = 0.88 + Math.sin(t * 22) * 0.10;
+      const rodH = 300;
 
-      const shaft   = effectNodesRef.current.support_kinetic_spear_shaft;
-      const tip     = effectNodesRef.current.support_kinetic_spear_tip;
-      const flare   = effectNodesRef.current.support_kinetic_spear_flare;
-      const impNode = effectNodesRef.current.support_kinetic_spear_impact;
-      const ring    = effectNodesRef.current.support_kinetic_spear_ring;
+      // Rod tip descends from y=400 → y=0; center is 150 above tip
+      const tipY = de < 1 ? 400 - ei(de) * 395
+                 : im < 1 ? 5 - eo(im) * 5
+                 : 0;
 
-      // Rod altitude: starts at 400, accelerates into ground (easIn = slow then fast)
-      const rodY = descentP < 1
-        ? 400 - easIn(descentP) * 395   // races to y=5 at end of descent
-        : impactP < 1
-          ? 5 - easOut(impactP) * 5     // final slam flush
-          : 0;
-
-      if (shaft) {
-        shaft.position.y = rodY;
-        shaft.scale.set(1.0, 0.85 + (impactP < 1 ? easPk(impactP) * 0.5 : 0), 1.0);
-        const shOp = descentP < 0.05 ? descentP * 8
-                   : descentP < 1    ? 0.45 + (1 - descentP) * 0.35
-                   : impactP < 1     ? Math.max(0, 0.65 - impactP * 0.65)
-                   :                   0;
-        setCloudOpacity(shaft, Math.max(0, shOp));
+      // Plasma entry sheath around rod
+      const sh = r.current.sheath;
+      if (sh) {
+        sh.position.y = tipY + rodH * 0.5;
+        sh.visible = de < 1 || im < 0.65;
+        const sw = 1.8 + pulse * 0.18;
+        sh.scale.set(sw, 1, sw);
+        op('sheath', de < 0.05 ? de * 7
+                   : de < 1    ? 0.14 + de * 0.10
+                   : im < 1    ? Math.max(0, 0.22 - im * 0.22)
+                   : 0);
       }
 
-      if (tip) {
-        tip.position.y = rodY + 7;
-        tip.rotation.y += descentP < 1 ? 0.22 : impactP < 1 ? 0.4 : 0.06;
-        const tS = descentP < 1 ? 1.0 + descentP * 0.6
-                 : impactP < 1  ? 1.6 + easPk(impactP) * 2.5
-                 :                0;
-        tip.scale.setScalar(Math.max(0, tS));
-        const tOp = descentP < 0.06 ? descentP * 10
-                  : descentP < 1    ? 0.62 + descentP * 0.38
-                  : impactP < 1     ? Math.max(0, 0.95 - impactP * 0.95)
-                  :                   0;
-        setCloudOpacity(tip, Math.max(0, tOp));
+      // Tungsten rod body
+      const rod = r.current.rod;
+      if (rod) {
+        rod.position.y = tipY + rodH * 0.5;
+        rod.visible = de < 1 || im < 0.85;
+        op('rod', de < 0.05 ? de * 14
+                : de < 1    ? 0.58 - de * 0.14
+                : im < 1    ? Math.max(0, 0.72 - im * 0.72)
+                : 0);
       }
 
-      if (flare) {
-        // Plasma trail visible during descent; explodes to huge flash at impact
-        const fY = descentP < 1 ? rodY + 18 : 6 + Math.sin(time * 18) * 3;
-        flare.position.y = fY;
-        const fS = descentP < 1 ? 0.7 + descentP * 1.4 + Math.sin(time * 22) * 0.12 * descentP
-                 : impactP < 1  ? 2.1 + easOut(impactP) * 7.0
-                 :                Math.max(0, 7.5 - craterP * 7.0);
-        flare.scale.setScalar(Math.max(0, fS));
-        const fOp = descentP < 1 ? 0.28 + descentP * 0.52
-                  : impactP < 1  ? 0.8 + easPk(impactP) * 0.2
-                  :                Math.max(0, 0.72 - craterP * 0.68);
-        setCloudOpacity(flare, Math.max(0, fOp));
+      // Glowing nose tip
+      const ns = r.current.nose;
+      if (ns) {
+        ns.position.y = tipY + 2;
+        ns.visible = de > 0.01 || im < 0.55;
+        ns.scale.setScalar(1 + de * 0.5 + pulse * 0.14);
+        op('nose', de < 0.05 ? de * 14
+                 : de < 1    ? 0.58 + de * 0.32
+                 : im < 1    ? Math.max(0, 0.9 - im * 0.9)
+                 : 0);
       }
 
-      if (impNode) {
-        const iS = impactP < 1 ? 0.8 + easOut(impactP) * 6.5 : 7.3 + craterP * 2.5;
-        impNode.scale.setScalar(iS);
-        const iOp = impactP < 1 ? 0.72 - impactP * 0.18 : Math.max(0, 0.54 - craterP * 0.54);
-        setCloudOpacity(impNode, Math.max(0, iOp));
+      // Impact flash
+      const fl = r.current.flash;
+      if (fl) {
+        fl.scale.setScalar(im < 1 ? 0.4 + eo(im) * 8.5 : Math.max(0.1, 8.9 - cr * 8.7));
+        op('flash', im < 1 ? pk(im) * 0.98 : Math.max(0, 0.20 - cr * 0.20));
       }
 
-      if (ring) {
-        const rS = impactP < 1 ? 0.8 + easOut(impactP) * 9.5 : 10.3 + craterP * 4.5;
-        ring.scale.setScalar(rS);
-        const rOp = impactP < 1 ? 0.62 - impactP * 0.22 : Math.max(0, 0.40 - craterP * 0.40);
-        setCloudOpacity(ring, Math.max(0, rOp));
+      // Crater scorch — flat circle expands
+      const cs = r.current.scorch;
+      if (cs) {
+        const s = im < 1 ? eo(im) : 1;
+        cs.scale.set(s, s, 1);
+        op('scorch', im < 1 ? eo(im) * 0.92 : Math.max(0, 0.92 - cr * 0.14));
       }
-      return;
+
+      // Inner shockwave ring
+      const ra = r.current.ringA;
+      if (ra) {
+        const s = im < 1 ? 0.5 + eo(im) * 10.0 : 10.5 + cr * 5.5;
+        ra.scale.set(s, s, 1);
+        op('ringA', im < 1 ? pk(im) * 0.74 : Math.max(0, 0.44 - cr * 0.44));
+      }
+
+      // Outer shockwave ring
+      const rb = r.current.ringB;
+      if (rb) {
+        const s = im < 1 ? 0.6 + eo(im) * 13.5 : 14.1 + cr * 7.5;
+        rb.scale.set(s, s, 1);
+        op('ringB', im < 1 ? pk(im) * 0.50 : Math.max(0, 0.28 - cr * 0.28));
+      }
+
+      const rodScale = 1 + pulse * 0.06;
+      scaleEffect('kinetic_plasma_sheath', 1.5 + pulse * 0.16, tipY - 153 + rodH * 0.5);
+      opEffect('kinetic_plasma_sheath', de < 0.05 ? de * 6 : de < 1 ? 0.12 + de * 0.1 : im < 1 ? Math.max(0, 0.2 - im * 0.2) : 0);
+      scaleEffect('support_kinetic_spear_shaft', rodScale, tipY - 150 + rodH * 0.5);
+      opEffect('support_kinetic_spear_shaft', de < 0.05 ? de * 14 : de < 1 ? 0.56 - de * 0.14 : im < 1 ? Math.max(0, 0.7 - im * 0.7) : 0);
+      scaleEffect('support_kinetic_spear_tip', 1 + de * 0.44 + pulse * 0.1, tipY - 6);
+      opEffect('support_kinetic_spear_tip', de < 0.05 ? de * 14 : de < 1 ? 0.6 + de * 0.28 : im < 1 ? Math.max(0, 0.84 - im * 0.84) : 0);
+      scaleEffect('support_kinetic_spear_flare', im < 1 ? 0.4 + eo(im) * 8.0 : Math.max(0.1, 8.4 - cr * 8.2));
+      opEffect('support_kinetic_spear_flare', im < 1 ? pk(im) * 0.9 : Math.max(0, 0.18 - cr * 0.18));
+      scaleEffect('support_kinetic_spear_impact', 0.7 + eo(im) * 3.0, im < 1 ? eo(im) * 5 : Math.max(0, 5 - cr * 5));
+      opEffect('support_kinetic_spear_impact', im < 1 ? 0.16 + pk(im) * 0.28 : Math.max(0, 0.24 - cr * 0.24));
+      scaleEffect('support_kinetic_spear_ring', im < 1 ? 0.5 + eo(im) * 9.6 : 10.1 + cr * 5.2);
+      opEffect('support_kinetic_spear_ring', im < 1 ? pk(im) * 0.7 : Math.max(0, 0.4 - cr * 0.4));
+      scaleEffect('kinetic_ring_outer', im < 1 ? 0.6 + eo(im) * 13.0 : 13.6 + cr * 7.0);
+      opEffect('kinetic_ring_outer', im < 1 ? pk(im) * 0.34 : Math.max(0, 0.16 - cr * 0.16));
+      scaleEffect('kinetic_crater', im < 1 ? eo(im) : 1);
+      opEffect('kinetic_crater', im < 1 ? eo(im) * 0.84 : Math.max(0, 0.84 - cr * 0.14));
+      opEffect('kinetic_crater_hot', im < 1 ? pk(im) * 0.8 : Math.max(0, 0.34 - cr * 0.3));
+      scaleEffect('kinetic_crater_hot', im < 1 ? 0.6 + eo(im) * 1.6 : 2.2);
+      scaleEffect('kinetic_heat_wake', 1.1 + pulse * 0.08, tipY - 72 + 68);
+      opEffect('kinetic_heat_wake', de < 1 ? 0.16 + de * 0.12 : Math.max(0, 0.16 - im * 0.16));
     }
   });
 
   if (!trackedEffect) return null;
 
+  const rf = (key) => (node) => { r.current[key] = node; };
+  const kind = trackedEffect.kind;
+  const useFallback = !effectScene;
+
   return (
     <group ref={group} visible={false}>
-      {effectScene && <primitive object={effectScene} />}
-      {trackedEffect.kind === 'orbital_lance' ? (
-        <>
-          {/* Outer plasma sheath */}
-          <mesh position={[0, 130, 0]}>
-            <cylinderGeometry args={[14, 20, 260, 20, 2, true]} />
-            <meshBasicMaterial color="#0ea5e9" transparent opacity={0.22} depthWrite={false} blending={THREE.AdditiveBlending} />
-          </mesh>
-          {/* Inner beam core */}
-          <mesh position={[0, 130, 0]}>
-            <cylinderGeometry args={[3, 5, 265, 14]} />
-            <meshBasicMaterial color="#f0f9ff" transparent opacity={0.72} depthWrite={false} blending={THREE.AdditiveBlending} />
-          </mesh>
-          {/* Impact flash */}
-          <mesh position={[0, 10, 0]}>
-            <sphereGeometry args={[24, 14, 10]} />
-            <meshBasicMaterial color="#f0f9ff" transparent opacity={0.52} blending={THREE.AdditiveBlending} depthWrite={false} />
-          </mesh>
-          {/* Ground scorch */}
-          <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.2, 0]}>
-            <circleGeometry args={[52, 36]} />
-            <meshBasicMaterial color="#0c1a2e" transparent opacity={0.78} depthWrite={false} />
-          </mesh>
-          {/* Inner ring */}
-          <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 1, 0]}>
-            <ringGeometry args={[30, 48, 40]} />
-            <meshBasicMaterial color="#38bdf8" transparent opacity={0.48} depthWrite={false} blending={THREE.AdditiveBlending} />
-          </mesh>
-          {/* Outer ring */}
-          <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.5, 0]}>
-            <ringGeometry args={[60, 82, 48]} />
-            <meshBasicMaterial color="#7dd3fc" transparent opacity={0.28} depthWrite={false} blending={THREE.AdditiveBlending} />
-          </mesh>
-        </>
-      ) : trackedEffect.kind === 'kinetic_spear' ? (
-        <>
-          {/* Re-entry plasma sheath */}
-          <mesh position={[0, 180, 0]}>
-            <cylinderGeometry args={[10, 18, 300, 16, 2, true]} />
-            <meshBasicMaterial color="#f97316" transparent opacity={0.18} depthWrite={false} blending={THREE.AdditiveBlending} />
-          </mesh>
-          {/* Rod body */}
-          <mesh position={[0, 178, 0]}>
-            <cylinderGeometry args={[2.6, 3.8, 295, 12]} />
-            <meshBasicMaterial color="#e2e8f0" transparent opacity={0.52} depthWrite={false} />
-          </mesh>
-          {/* Nose flash */}
-          <mesh position={[0, 18, 0]}>
-            <sphereGeometry args={[20, 14, 10]} />
-            <meshBasicMaterial color="#fef9c3" transparent opacity={0.58} blending={THREE.AdditiveBlending} depthWrite={false} />
-          </mesh>
-          {/* Ground crater */}
-          <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.2, 0]}>
-            <circleGeometry args={[58, 38]} />
-            <meshBasicMaterial color="#0c0a09" transparent opacity={0.84} depthWrite={false} />
-          </mesh>
-          {/* Inner shockwave */}
-          <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 1, 0]}>
-            <ringGeometry args={[22, 38, 32]} />
-            <meshBasicMaterial color="#bae6fd" transparent opacity={0.42} depthWrite={false} blending={THREE.AdditiveBlending} />
-          </mesh>
-          {/* Outer shockwave */}
-          <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.5, 0]}>
-            <ringGeometry args={[52, 70, 44]} />
-            <meshBasicMaterial color="#e2e8f0" transparent opacity={0.28} depthWrite={false} blending={THREE.AdditiveBlending} />
-          </mesh>
-        </>
-      ) : (
-        <>
-          {/* Central fireball */}
-          <mesh position={[0, 14, 0]}>
-            <sphereGeometry args={[26, 14, 10]} />
-            <meshBasicMaterial color="#fff7ed" transparent opacity={0.62} blending={THREE.AdditiveBlending} depthWrite={false} />
-          </mesh>
-          {/* Ground char */}
-          <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.15, 0]}>
-            <circleGeometry args={[92, 38]} />
-            <meshBasicMaterial color="#0c0502" transparent opacity={0.82} depthWrite={false} />
-          </mesh>
-          {/* Ember glow */}
-          <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.25, 0]}>
-            <circleGeometry args={[32, 28]} />
-            <meshBasicMaterial color="#dc2626" transparent opacity={0.58} depthWrite={false} blending={THREE.AdditiveBlending} />
-          </mesh>
-          {/* Fire ring */}
-          <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.5, 0]}>
-            <ringGeometry args={[36, 58, 34]} />
-            <meshBasicMaterial color="#f97316" transparent opacity={0.44} depthWrite={false} blending={THREE.AdditiveBlending} />
-          </mesh>
-          {/* Shockwave ring */}
-          <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 1, 0]}>
-            <ringGeometry args={[62, 82, 42]} />
-            <meshBasicMaterial color="#fb923c" transparent opacity={0.24} depthWrite={false} />
-          </mesh>
-          {/* Smoke plume */}
-          <mesh position={[0, 52, 0]}>
-            <cylinderGeometry args={[18, 48, 80, 14, 2, true]} />
-            <meshBasicMaterial color="#1c1917" transparent opacity={0.32} depthWrite={false} />
-          </mesh>
-        </>
-      )}
+      {effectScene ? <primitive object={effectScene} /> : null}
+
+      {/* ── ORBITAL LANCE ── electric-blue hypervelocity beam from orbit */}
+      {useFallback && kind === 'orbital_lance' && (<>
+        {/* Outer plasma sheath — full height column */}
+        <mesh ref={rf('beam')} position={[0, 140, 0]}>
+          <cylinderGeometry args={[16, 24, 280, 18, 1, true]} />
+          <meshBasicMaterial color="#0ea5e9" transparent opacity={0} depthWrite={false} side={THREE.DoubleSide} blending={THREE.AdditiveBlending} />
+        </mesh>
+        {/* Inner beam core */}
+        <mesh ref={rf('beamCore')} position={[0, 142, 0]}>
+          <cylinderGeometry args={[3.5, 5.5, 285, 12]} />
+          <meshBasicMaterial color="#f0f9ff" transparent opacity={0} depthWrite={false} blending={THREE.AdditiveBlending} />
+        </mesh>
+        {/* Impact flash sphere */}
+        <mesh ref={rf('flash')} position={[0, 14, 0]}>
+          <sphereGeometry args={[18, 14, 10]} />
+          <meshBasicMaterial color="#e0f2fe" transparent opacity={0} depthWrite={false} blending={THREE.AdditiveBlending} />
+        </mesh>
+        {/* Ground glow halo */}
+        <mesh ref={rf('glow')} position={[0, 8, 0]}>
+          <sphereGeometry args={[22, 10, 8]} />
+          <meshBasicMaterial color="#38bdf8" transparent opacity={0} depthWrite={false} blending={THREE.AdditiveBlending} />
+        </mesh>
+        {/* Ground scorch */}
+        <mesh ref={rf('scorch')} rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.3, 0]}>
+          <circleGeometry args={[52, 36]} />
+          <meshBasicMaterial color="#0c1a2e" transparent opacity={0} depthWrite={false} />
+        </mesh>
+        {/* Inner ring */}
+        <mesh ref={rf('ringA')} rotation={[-Math.PI / 2, 0, 0]} position={[0, 1.2, 0]}>
+          <ringGeometry args={[0.85, 1, 44]} />
+          <meshBasicMaterial color="#38bdf8" transparent opacity={0} depthWrite={false} blending={THREE.AdditiveBlending} />
+        </mesh>
+        {/* Outer ring */}
+        <mesh ref={rf('ringB')} rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.6, 0]}>
+          <ringGeometry args={[0.88, 1, 48]} />
+          <meshBasicMaterial color="#7dd3fc" transparent opacity={0} depthWrite={false} blending={THREE.AdditiveBlending} />
+        </mesh>
+      </>)}
+
+      {/* ── FIRESTORM ── rolling napalm / incendiary area-denial */}
+      {useFallback && kind === 'firestorm' && (<>
+        {/* Initial ignition flash */}
+        <mesh ref={rf('flash')} position={[0, 10, 0]}>
+          <sphereGeometry args={[22, 14, 10]} />
+          <meshBasicMaterial color="#fef3c7" transparent opacity={0} depthWrite={false} blending={THREE.AdditiveBlending} />
+        </mesh>
+        {/* Fireball core — rises as it expands */}
+        <mesh ref={rf('fireball')} position={[0, 14, 0]}>
+          <sphereGeometry args={[24, 14, 10]} />
+          <meshBasicMaterial color="#fed7aa" transparent opacity={0} depthWrite={false} blending={THREE.AdditiveBlending} />
+        </mesh>
+        {/* Ground ember glow */}
+        <mesh ref={rf('ember')} rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.3, 0]}>
+          <circleGeometry args={[36, 28]} />
+          <meshBasicMaterial color="#dc2626" transparent opacity={0} depthWrite={false} blending={THREE.AdditiveBlending} />
+        </mesh>
+        {/* Ground char */}
+        <mesh ref={rf('char')} rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.15, 0]}>
+          <circleGeometry args={[92, 38]} />
+          <meshBasicMaterial color="#0c0502" transparent opacity={0} depthWrite={false} />
+        </mesh>
+        {/* Fire ring */}
+        <mesh ref={rf('ringA')} rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.6, 0]}>
+          <ringGeometry args={[0.86, 1, 38]} />
+          <meshBasicMaterial color="#f97316" transparent opacity={0} depthWrite={false} blending={THREE.AdditiveBlending} />
+        </mesh>
+        {/* Shockwave ring */}
+        <mesh ref={rf('ringB')} rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.4, 0]}>
+          <ringGeometry args={[0.90, 1, 44]} />
+          <meshBasicMaterial color="#fb923c" transparent opacity={0} depthWrite={false} blending={THREE.AdditiveBlending} />
+        </mesh>
+        {/* Smoke plume — position.y driven by useFrame */}
+        <mesh ref={rf('smoke')} position={[0, 55, 0]}>
+          <cylinderGeometry args={[20, 52, 80, 14, 1, true]} />
+          <meshBasicMaterial color="#1c1917" transparent opacity={0} depthWrite={false} side={THREE.DoubleSide} />
+        </mesh>
+      </>)}
+
+      {/* ── KINETIC SPEAR ── tungsten rod from orbit, hypervelocity impact */}
+      {useFallback && kind === 'kinetic_spear' && (<>
+        {/* Plasma entry sheath — position.y driven by useFrame */}
+        <mesh ref={rf('sheath')} position={[0, 330, 0]}>
+          <cylinderGeometry args={[10, 18, 300, 14, 1, true]} />
+          <meshBasicMaterial color="#f97316" transparent opacity={0} depthWrite={false} side={THREE.DoubleSide} blending={THREE.AdditiveBlending} />
+        </mesh>
+        {/* Tungsten rod body */}
+        <mesh ref={rf('rod')} position={[0, 330, 0]}>
+          <cylinderGeometry args={[2.8, 4.0, 300, 10]} />
+          <meshBasicMaterial color="#f1f5f9" transparent opacity={0} depthWrite={false} />
+        </mesh>
+        {/* Glowing nose tip */}
+        <mesh ref={rf('nose')} position={[0, 400, 0]}>
+          <sphereGeometry args={[12, 12, 8]} />
+          <meshBasicMaterial color="#fef9c3" transparent opacity={0} depthWrite={false} blending={THREE.AdditiveBlending} />
+        </mesh>
+        {/* Impact flash */}
+        <mesh ref={rf('flash')} position={[0, 14, 0]}>
+          <sphereGeometry args={[20, 14, 10]} />
+          <meshBasicMaterial color="#f8fafc" transparent opacity={0} depthWrite={false} blending={THREE.AdditiveBlending} />
+        </mesh>
+        {/* Crater scorch */}
+        <mesh ref={rf('scorch')} rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.2, 0]}>
+          <circleGeometry args={[62, 38]} />
+          <meshBasicMaterial color="#0c0a09" transparent opacity={0} depthWrite={false} />
+        </mesh>
+        {/* Inner shockwave ring */}
+        <mesh ref={rf('ringA')} rotation={[-Math.PI / 2, 0, 0]} position={[0, 1.4, 0]}>
+          <ringGeometry args={[0.82, 1, 40]} />
+          <meshBasicMaterial color="#bae6fd" transparent opacity={0} depthWrite={false} blending={THREE.AdditiveBlending} />
+        </mesh>
+        {/* Outer shockwave ring */}
+        <mesh ref={rf('ringB')} rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.6, 0]}>
+          <ringGeometry args={[0.88, 1, 48]} />
+          <meshBasicMaterial color="#e2e8f0" transparent opacity={0} depthWrite={false} blending={THREE.AdditiveBlending} />
+        </mesh>
+      </>)}
+
     </group>
   );
 });
+
+
 
 const EntityBunker = memo(({ entityId, index, entitiesRef, entityLookupRef }) => {
   const group = useRef();
@@ -8738,7 +9435,9 @@ const EntityBunker = memo(({ entityId, index, entitiesRef, entityLookupRef }) =>
     // Sync bunker to terrain height
     if (group.current) {
        p.y = getTerrainHeight(p.x, p.z);
-       group.current.position.set(p.x, (p.y || 0) + recentHit * 0.4 - (isDestroyed ? 1.4 : 0), p.z);
+       // Sink 1 unit into terrain so the foundation base clears the terrain surface
+       // (prevents z-fighting / black-square artefact at the pad base)
+       group.current.position.set(p.x, (p.y || 0) + recentHit * 0.4 - (isDestroyed ? 2.4 : 1.0), p.z);
        group.current.rotation.z = (isDestroyed ? -0.085 : 0) + shake * 0.005;
        group.current.rotation.x = (isDestroyed ? 0.06 : 0) + recentHit * 0.012;
        group.current.visible = true;
@@ -9034,7 +9733,9 @@ const EntityFacility = memo(({ entityId, index, entitiesRef, entityLookupRef }) 
     const animatedBarrel = structureNodes.facility_aa_site_barrel || aaBarrelRef.current;
     if (group.current) {
       current.y = getTerrainHeight(current.x, current.z);
-      group.current.position.set(current.x, current.y - (destroyed ? 1.1 : 0), current.z);
+      // Sink 2 units into terrain so the concrete pad bottom clears the terrain surface
+      // (prevents z-fighting / black-square artefacts at the pad base)
+      group.current.position.set(current.x, current.y - (destroyed ? 3.1 : 2.0), current.z);
       group.current.rotation.y = current.rotation || 0;
       group.current.rotation.z = destroyed ? -0.055 : 0;
       group.current.rotation.x = destroyed ? 0.028 : 0;
@@ -9981,7 +10682,7 @@ const EntityKaiju = ({ entityId, index, entitiesRef, entityLookupRef, frameSnaps
                 AudioManager.play('bomb', { volume: 0.08, duration: 0.18 });
              } else if (primaryTarget.type === 'facility') {
                 primaryTarget.hp -= p.variant === 'spicie_bird' ? BUNKER_KAIJU_DAMAGE * 1.35 : BUNKER_KAIJU_DAMAGE;
-                if (primaryTarget.hp <= 0) markStructureBroken(primaryTarget);
+                if (primaryTarget.hp <= 0) { markStructureBroken(primaryTarget); AudioManager.play('build_destroy'); }
                 AudioManager.play('kaiju_roar', { volume: 0.08, duration: 0.2 });
              }
           }
@@ -10045,6 +10746,7 @@ const EntityKaiju = ({ entityId, index, entitiesRef, entityLookupRef, frameSnaps
              if (structureTarget.hp <= 0) {
                if (structureTarget.type === 'facility' || structureTarget.type === 'bunker') {
                  markStructureBroken(structureTarget);
+                 if (structureTarget.type === 'facility') AudioManager.play('build_destroy');
                } else {
                  structureTarget.dead = true;
                }
@@ -11055,6 +11757,7 @@ const MemoEntityBullet = memo(EntityBullet);
 const MemoEntityShell = memo(EntityShell);
 const MemoEntityMuzzleFlash = memo(EntityMuzzleFlash);
 const MemoEntityJet = memo(EntityJet);
+const MemoEntityWarthog = memo(EntityWarthog);
 const MemoEntityMissile = memo(EntityMissile);
 const MemoEntityMissileImpact = memo(EntityMissileImpact);
 const MemoEntityImpactPuff = memo(EntityImpactPuff);
@@ -11097,6 +11800,7 @@ const DynamicEntitySync = memo(({ entitiesRef, entityLookupRef, frameSnapshotRef
         if (p.type === 'bullet') return <MemoEntityBullet key={p.id} entityId={p.id} entitiesRef={entitiesRef} entityLookupRef={entityLookupRef} />;
         if (p.type === 'shell') return <MemoEntityShell key={p.id} entityId={p.id} entitiesRef={entitiesRef} entityLookupRef={entityLookupRef} />;
         if (p.type === 'jet') return <MemoEntityJet key={p.id} entityId={p.id} entitiesRef={entitiesRef} entityLookupRef={entityLookupRef} />;
+        if (p.type === 'warthog') return <MemoEntityWarthog key={p.id} entityId={p.id} entitiesRef={entitiesRef} entityLookupRef={entityLookupRef} />;
         if (p.type === 'missile') return <MemoEntityMissile key={p.id} entityId={p.id} entitiesRef={entitiesRef} entityLookupRef={entityLookupRef} />;
         if (p.type === 'missile_impact') return <MemoEntityMissileImpact key={p.id} entityId={p.id} entitiesRef={entitiesRef} entityLookupRef={entityLookupRef} />;
         if (p.type === 'impact_puff') return <MemoEntityImpactPuff key={p.id} entityId={p.id} entitiesRef={entitiesRef} entityLookupRef={entityLookupRef} />;
@@ -11132,6 +11836,7 @@ const DummyWarmup = memo(({ qualityProfile }) => {
     loadBaseStructuresAsset().catch(() => {});
     loadKaijuAssetsAsset().catch(() => {});
     loadHumanUnitsAsset().catch(() => {});
+    loadCommandEffectsAsset().catch(() => {}); // Pre-warm orbital lance / firestorm / kinetic spear GLB
     rafA = window.requestAnimationFrame(() => {
       rafB = window.requestAnimationFrame(() => setEnabled(false));
     });
@@ -11848,6 +12553,7 @@ const VillageScene = ({ themeConfig, environmentVariant, setNukeCount, setGameSt
     entitiesRef.current.push(facility);
     window._falloutLastBuildTarget = placement.target;
     window._falloutBuildPlacementTarget = placement.target;
+    AudioManager.play('build_place');
     queueDeployFeedback(true);
     return true;
   };
@@ -12536,6 +13242,9 @@ const VillageScene = ({ themeConfig, environmentVariant, setNukeCount, setGameSt
       window.dispatchEvent(new CustomEvent('fallout-explosion', {
         detail: { x: _olX, z: _olZ, intensity: 2.1, type: 'orbital_lance' }
       }));
+      if (typeof window._falloutAddCrater === 'function') {
+        window._falloutAddCrater({ type: 'orbital_lance', x: _olX, z: _olZ, radius: 70, depth: 40 });
+      }
     }, 1350);
     return true;
   };
@@ -12660,7 +13369,50 @@ const VillageScene = ({ themeConfig, environmentVariant, setNukeCount, setGameSt
       window.dispatchEvent(new CustomEvent('fallout-explosion', {
         detail: { x: impactX, z: impactZ, intensity: 2.6, type: 'kinetic_spear' }
       }));
+      if (typeof window._falloutAddCrater === 'function') {
+        window._falloutAddCrater({ type: 'kinetic_spear', x: impactX, z: impactZ, radius: 52, depth: 28 });
+      }
     }, 2470);
+    return true;
+  };
+
+  const launchWarthogRun = (target) => {
+    const cast = beginSupportStrikeCast('warthog_run', target);
+    if (!cast) return false;
+    const { clampedTarget } = cast;
+    const focusedKaiju = getFocusedKaijuStrikeTarget(clampedTarget, 360);
+    const targetX = focusedKaiju ? focusedKaiju.x : clampedTarget.x;
+    const targetZ = focusedKaiju ? focusedKaiju.z : clampedTarget.z;
+
+    // Spawn the A-10 from a random edge, flying perpendicular across the target
+    const fromLeft = Math.random() > 0.5;
+    const lateralOffset = (Math.random() - 0.5) * 25; // tight offset so bullets actually hit the target
+    const warthog = {
+      id: `warthog-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      type: 'warthog',
+      x: fromLeft ? -WORLD_WIDTH / 2 - 440 : WORLD_WIDTH / 2 + 440,
+      y: 130 + Math.random() * 20,  // low attack pass so you can clearly see the plane
+      z: targetZ + lateralOffset,
+      vx: fromLeft ? 8 : -8,        // slower so the player can appreciate the flyby
+      vz: 0,
+      targetX,
+      targetZ,
+      targetKaijuId: focusedKaiju?.id || null,
+      fireStarted: false,
+      fireDone: false,
+      bulletsFired: 0,
+      bulletMax: 30,                 // ~3+ seconds of GAU-8 fire
+      fireTimer: 0,
+      fireInterval: 0.09,            // 30 rounds over ~2.7 s
+      flightAge: 0,
+      dead: false
+    };
+
+    entitiesRef.current.push(warthog);
+    const cooldownMs = setSupportStrikeCooldown('warthog_run');
+    window._falloutStrikeCooldownRemaining = cooldownMs;
+    AudioManager.play('plane_engine', { volume: 0.18, duration: 0.9 });
+    AudioManager.play('plane_flyby', { volume: 0.10, duration: 1.2 });
     return true;
   };
 
@@ -12670,6 +13422,7 @@ const VillageScene = ({ themeConfig, environmentVariant, setNukeCount, setGameSt
     if (abilityKey === 'orbital_lance') return launchOrbitalLance(target);
     if (abilityKey === 'firestorm') return launchFirestormStrike(target);
     if (abilityKey === 'kinetic_spear') return launchKineticSpear(target);
+    if (abilityKey === 'warthog_run') return launchWarthogRun(target);
     return false;
   };
 
@@ -12862,7 +13615,7 @@ const VillageScene = ({ themeConfig, environmentVariant, setNukeCount, setGameSt
         return;
       }
       const nextPending = targetingRef.current.pendingBuild === buildingKey ? null : buildingKey;
-      if (nextPending) setPendingBuild(nextPending);
+      if (nextPending) { setPendingBuild(nextPending); AudioManager.play('build_select'); }
       else clearPendingBuild();
     };
     const handleUpgradePurchase = (event) => {
@@ -12921,6 +13674,16 @@ const VillageScene = ({ themeConfig, environmentVariant, setNukeCount, setGameSt
     window.addEventListener('fallout-select-control-group', handleControlGroupSelection);
     window.addEventListener('fallout-clear-production-building', handleClearProductionSelection);
     window.addEventListener('fallout-facility-action', handleFacilityInteraction);
+
+    // Pilot HUD: player aimed and clicked PICKLE — map screen coords to world and fire
+    const handlePilotRelease = (event) => {
+      const { clientX, clientY } = event.detail || {};
+      if (clientX == null || clientY == null) return;
+      const target = getPointerStrikeTargetFromClient(clientX, clientY);
+      if (target) deployManualStrike(target);
+    };
+    window.addEventListener('fallout-pilot-release', handlePilotRelease);
+
     return () => {
       window.removeEventListener('fallout-select-deploy', handleDeploySelection);
       window.removeEventListener('fallout-deploy-unit', handleDeployRequest);
@@ -12932,6 +13695,7 @@ const VillageScene = ({ themeConfig, environmentVariant, setNukeCount, setGameSt
       window.removeEventListener('fallout-select-control-group', handleControlGroupSelection);
       window.removeEventListener('fallout-clear-production-building', handleClearProductionSelection);
       window.removeEventListener('fallout-facility-action', handleFacilityInteraction);
+      window.removeEventListener('fallout-pilot-release', handlePilotRelease);
     };
   }, [themeConfig]);
 
@@ -12996,6 +13760,15 @@ const VillageScene = ({ themeConfig, environmentVariant, setNukeCount, setGameSt
     }));
 
     AudioManager.play('nuke');
+    // Crater — real terrain deformation at the blast site
+    if (typeof window._falloutAddCrater === 'function') {
+      window._falloutAddCrater({
+        type: 'nuke',
+        x: blastX, z: blastZ,
+        radius: bomb.isManual ? 285 : 205,
+        depth:  bomb.isManual ? 60  : 44
+      });
+    }
 
     spawnNukeAftermathFires(entitiesRef.current, blastX, blastZ, !!bomb.isManual);
 
@@ -13073,6 +13846,7 @@ const VillageScene = ({ themeConfig, environmentVariant, setNukeCount, setGameSt
           else if (other.type !== 'kaiju') other.dead = true;
           else markKaijuDefeated(other);
           if (other.type === 'bunker') AudioManager.play('bomb');
+          if (other.type === 'facility') AudioManager.play('build_destroy');
         }
       } else if (other.type === 'house') {
         if (dist < structureDamageRadius) {
@@ -13180,7 +13954,13 @@ const VillageScene = ({ themeConfig, environmentVariant, setNukeCount, setGameSt
       ? { x: bestDeployBunker.x, z: bestDeployBunker.z }
       : null;
     window._falloutBuildPlacementTarget = isBuildMode ? (buildPlacement.target || placementTarget) : null;
-    window._falloutBuildFallbackTarget = isBuildMode ? (buildPlacement.target || placementTarget) : null;
+    // Keep the last known fallback position when in build OR strike-arm mode so the targeting ring
+    // doesn't disappear when the mouse is temporarily over the HUD overlay buttons.
+    window._falloutBuildFallbackTarget = isBuildMode
+      ? (buildPlacement.target || placementTarget)
+      : isStrikeMode
+      ? (placementTarget || window._falloutBuildFallbackTarget)
+      : null;
     window._falloutStrikeReady = isStrikeMode && hasPointerTarget && !targetingRef.current.isStrikeInProgress && cooldownRemaining <= 0 && !isDeployMode && !isBuildMode && !deployDragRef.current.active && !buildDragRef.current.active;
     window._falloutStrikeCooldownRemaining = cooldownRemaining;
     
@@ -13238,6 +14018,12 @@ const VillageScene = ({ themeConfig, environmentVariant, setNukeCount, setGameSt
       camera.position.copy(bombCamRef.current.smoothedPosition);
       camera.lookAt(bombCamRef.current.smoothedLookAt);
       originalCamPos.current.copy(camera.position);
+      // Expose bomb telemetry for BombCamHUD overlay
+      window._falloutBombCamAlt = activeBombCamBomb.y;
+      window._falloutBombCamVelocity = Math.hypot(activeBombCamBomb.vx || 0, activeBombCamBomb.vy || 0, activeBombCamBomb.vz || 0);
+      window._falloutBombCamTargetX = bombTargetX;
+      window._falloutBombCamTargetZ = bombTargetZ;
+      window._falloutBombCamTargetAlt = targetTerrain;
     }
     // === CINEMATIC CUTSCENE INTRO ===
     else if (cutsceneTimer.current > 0) {
@@ -13292,15 +14078,27 @@ const VillageScene = ({ themeConfig, environmentVariant, setNukeCount, setGameSt
            moveOffset.current.z += rightZ * moveSpeed;
         }
 
-        // Orbital camera position using spherical coordinates
-        const pitch = cameraRotation.current.pitch;
-        const radius = 1200 / zoomLevel.current;
-        
-        camera.position.x = moveOffset.current.x + Math.sin(yaw) * Math.cos(pitch) * radius;
-        camera.position.y = Math.sin(pitch) * radius;
-        camera.position.z = moveOffset.current.z + Math.cos(yaw) * Math.cos(pitch) * radius;
-        
-        camera.lookAt(moveOffset.current.x, 0, moveOffset.current.z);
+        if (window._falloutManualStrikeArmed) {
+          // ── NUKE TARGETING: lock to straight-down bird's-eye view ──
+          // WASD panning still works (moveOffset updated above).
+          // Camera snaps overhead, looking directly down at the target area.
+          const birdEyeY = 1100;
+          const lerpSpeed = 0.07;
+          camera.position.x += (moveOffset.current.x - camera.position.x) * lerpSpeed;
+          camera.position.z += (moveOffset.current.z - camera.position.z) * lerpSpeed;
+          camera.position.y += (birdEyeY - camera.position.y) * lerpSpeed;
+          camera.lookAt(moveOffset.current.x, 0, moveOffset.current.z);
+        } else {
+          // Orbital camera position using spherical coordinates
+          const pitch = cameraRotation.current.pitch;
+          const radius = 1200 / zoomLevel.current;
+          
+          camera.position.x = moveOffset.current.x + Math.sin(yaw) * Math.cos(pitch) * radius;
+          camera.position.y = Math.sin(pitch) * radius;
+          camera.position.z = moveOffset.current.z + Math.cos(yaw) * Math.cos(pitch) * radius;
+          
+          camera.lookAt(moveOffset.current.x, 0, moveOffset.current.z);
+        }
         
         // Keep originalCamPos synced for shockwave shakes
         originalCamPos.current.copy(camera.position);
@@ -13718,6 +14516,7 @@ const VillageScene = ({ themeConfig, environmentVariant, setNukeCount, setGameSt
             economyRef.current.buildQueue[p.kind] = false;
           }
           markStructureBroken(p);
+          AudioManager.play('build_destroy');
           return;
         }
         if (p.constructing) {
@@ -13743,7 +14542,7 @@ const VillageScene = ({ themeConfig, environmentVariant, setNukeCount, setGameSt
               }
             }
             economyRef.current.buildQueue[p.kind] = false;
-            AudioManager.play('target_confirm', { volume: 0.1, duration: 0.16 });
+            AudioManager.play('build_complete');
           } else {
             return;
           }
@@ -14334,6 +15133,180 @@ const VillageScene = ({ themeConfig, environmentVariant, setNukeCount, setGameSt
          // Safety despawn
          if (!p.fired && p.flightAge > 30) p.dead = true;
       }
+      else if (p.type === 'warthog') {
+         // ─────────────────────────────────────────────────────────────────
+         // A-10 WARTHOG STRAFING RUN
+         // Flies straight across the target zone at low altitude, fires the
+         // GAU-8 Avenger cannon when in range, then exits the map.
+         // ─────────────────────────────────────────────────────────────────
+         p.flightAge = (p.flightAge || 0) + delta;
+
+         // Constant forward flight
+         p.x += (p.vx || 0) * ds;
+         p.z += (p.vz || 0) * ds;
+
+         // Low attack pass — close enough to clearly see the plane
+         const targetAlt = 128 + Math.sin(p.flightAge * 1.1) * 5;
+         p.y = THREE.MathUtils.lerp(p.y, targetAlt, Math.min(1, delta * 1.2));
+
+         const distToTargetX = Math.abs(p.x - p.targetX);
+
+         // Trigger firing and BRRT sound when in range (start early for full strafing run)
+         if (!p.fireStarted && !p.fireDone && distToTargetX < 900) {
+            p.fireStarted = true;
+            AudioManager.play('brrt', { volume: 0.92, duration: 2.8 });
+         }
+
+         // Fire strafing rounds while in range
+         if (p.fireStarted && !p.fireDone) {
+            p.fireTimer = (p.fireTimer || 0) + delta;
+            while (p.fireTimer >= p.fireInterval && p.bulletsFired < p.bulletMax) {
+               p.fireTimer -= p.fireInterval;
+               p.bulletsFired++;
+
+               // Each round impacts near the target with strafing spread
+               const spread = 42;
+               const impactX = p.targetX + (Math.random() - 0.5) * spread;
+               const impactZ = p.targetZ + (p.bulletsFired - p.bulletMax * 0.5) * 5.5 * (p.vx > 0 ? 1 : -1) + (Math.random() - 0.5) * 18;
+               const impactY = getTerrainHeight(impactX, impactZ) + 2;
+
+               // Spawn a visible tracer bullet
+               entitiesRef.current.push({
+                  id: `warthog-round-${Date.now()}-${p.bulletsFired}`,
+                  type: 'bullet',
+                  x: p.x + (p.vx > 0 ? 62 : -62) * WARTHOG_MODEL_SCALE,
+                  y: p.y - 3 * WARTHOG_MODEL_SCALE,
+                  z: p.z - 1.4 * WARTHOG_MODEL_SCALE,
+                  targetX: impactX,
+                  targetY: impactY,
+                  targetZ: impactZ,
+                  age: 0,
+                  dead: false
+               });
+
+               // Damage kaijus in splash radius + stagger nearby enemies (GAU-8 concussion)
+               const splash = 28;
+               const damageBase = 36 * (getFacilityStrikeDamageMultiplier ? getFacilityStrikeDamageMultiplier() : 1);
+               frameSnapshot.aliveKaijus.forEach((k) => {
+                  const kd = Math.hypot((k.x || 0) - impactX, (k.z || 0) - impactZ);
+                  if (kd < splash + 52) {
+                     const dmg = damageBase * Math.max(0.25, 1 - kd / (splash + 52));
+                     applyKaijuElementalDamage(k, dmg, 'warthog_run');
+                     if (k.hp <= 0) markKaijuDefeated(k);
+                  }
+                  // Gimmick: shockwave from 30mm rounds staggers kaijus within 90 units
+                  if (kd < 90) {
+                     k.staggered = true;
+                     k.staggerTimer = Math.max(k.staggerTimer || 0, 20 + Math.random() * 18);
+                  }
+               });
+
+               // Ground impact effects — GAU-8 Avenger 30mm cannon impact
+               // Every round: bright explosion flash at impact (white flash → orange fireball → smoke)
+               entitiesRef.current.push({
+                  id: `gau8-impact-${Date.now()}-${p.bulletsFired}`,
+                  type: 'missile_impact',
+                  x: impactX, y: impactY, z: impactZ,
+                  dead: false
+               });
+               // Dirt / debris cloud rising out of the crater
+               pushImpactPuffEntity(entitiesRef.current, impactX, impactZ, impactY + 6);
+               // Every other round: secondary offset burst (spall, secondary detonation)
+               if (p.bulletsFired % 2 === 0) {
+                  entitiesRef.current.push({
+                     id: `gau8-burst-${Date.now()}-${p.bulletsFired}`,
+                     type: 'missile_impact',
+                     x: impactX + (Math.random() - 0.5) * 22,
+                     y: impactY + 2,
+                     z: impactZ + (Math.random() - 0.5) * 22,
+                     dead: false
+                  });
+               }
+               // Scorch / crater mark every 3rd round — large burning crater
+               if (p.bulletsFired % 3 === 0) {
+                  pushScorchEntity(entitiesRef.current, impactX, impactZ, 18 + Math.random() * 14, {
+                     kind: 'gau8_crater', temporary: true, ttl: 6 + Math.random() * 5,
+                     baseColor: '#1a0e04', ringColor: '#3d1f06', coreColor: '#e07010', heatColor: '#f09030',
+                     baseOpacity: 0.82, coreOpacity: 0.48, heatOpacity: 0.22,
+                     smokeCount: 2, flameCount: 2, firePulseSpeed: 7.0, smokeDrift: 4.2,
+                     burnRadius: 40, damagePerSecond: 0, affectsFlying: false
+                  });
+               }
+               // Every 5th round: heavy-hit cluster — 3 rapid successive blasts in tight spread
+               if (p.bulletsFired % 5 === 0) {
+                  for (let b = 0; b < 3; b++) {
+                     entitiesRef.current.push({
+                        id: `gau8-cluster-${Date.now()}-${p.bulletsFired}-${b}`,
+                        type: 'missile_impact',
+                        x: impactX + (Math.random() - 0.5) * 34,
+                        y: impactY + b * 3,
+                        z: impactZ + (Math.random() - 0.5) * 34,
+                        dead: false
+                     });
+                  }
+               }
+            }
+
+            if (p.bulletsFired >= p.bulletMax) {
+               p.fireDone = true;
+               // Throttle up and climb away
+               p.vx *= 1.12;
+               p.y += 14 * ds;
+               // Leave burning scorch streak along the whole strafing path
+               for (let streak = 0; streak < 8; streak++) {
+                  const sx = p.targetX + (streak - 3.5) * 28 * (p.vx > 0 ? -1 : 1);
+                  const sz = p.targetZ + (Math.random() - 0.5) * 44;
+                  pushScorchEntity(entitiesRef.current, sx, sz, 18 + Math.random() * 16, {
+                     kind: 'gau8_streak', temporary: true, ttl: 8 + Math.random() * 6,
+                     baseColor: '#120a04', ringColor: '#2a1206', coreColor: '#b05812', heatColor: '#d07828',
+                     baseOpacity: 0.72, coreOpacity: 0.34, heatOpacity: 0.14,
+                     smokeCount: 3, flameCount: 2, smokeDrift: 3.2, burnRadius: 38
+                  });
+               }
+               // Finale: extra explosion bursts scattered across the strafing path
+               for (let finale = 0; finale < 4; finale++) {
+                  entitiesRef.current.push({
+                     id: `gau8-finale-${Date.now()}-${finale}`,
+                     type: 'missile_impact',
+                     x: p.targetX + (Math.random() - 0.5) * 90,
+                     y: getTerrainHeight(p.targetX, p.targetZ) + 2,
+                     z: p.targetZ + (Math.random() - 0.5) * 90,
+                     dead: false
+                  });
+               }
+               // Screen shake — the whole earth shook from the strafing run
+               window.dispatchEvent(new CustomEvent('fallout-explosion', {
+                  detail: { intensity: 1.1, type: 'kinetic_spear', x: p.targetX, z: p.targetZ }
+               }));
+               // Deep thud resonance as the strafing run ends
+               AudioManager.play('bomb', { volume: 0.28, duration: 0.6 });
+               // Strafing craters — 3 shallow bowls spaced along the firing line
+               if (typeof window._falloutAddCrater === 'function') {
+                  for (let cr = 0; cr < 3; cr++) {
+                     window._falloutAddCrater({
+                        type: 'warthog',
+                        x: p.targetX + (Math.random() - 0.5) * 38,
+                        z: p.targetZ + (cr - 1) * 54 * (p.vx > 0 ? 1 : -1) + (Math.random() - 0.5) * 18,
+                        radius: 28 + Math.random() * 14,
+                        depth:  10 + Math.random() * 5
+                     });
+                  }
+               }
+            }
+         }
+
+         // Engine sound loop
+         p.engineSoundTimer = (p.engineSoundTimer || 0) + ds;
+         if (p.engineSoundTimer > 72) {
+            AudioManager.play('jet_engine', { volume: 0.09, duration: 0.38 });
+            p.engineSoundTimer = 0;
+         }
+
+         // Despawn after exiting map
+         if (p.fireDone && (Math.abs(p.x) > 4800 || Math.abs(p.z) > 4800)) p.dead = true;
+         // Safety despawn — extended for long approach distances
+         if (!p.fireDone && p.flightAge > 45) p.dead = true;
+      }
       else if (p.type === 'missile') {
          const dx = p.targetX - p.x;
          const dy = p.targetY - p.y;
@@ -14716,6 +15689,7 @@ const GameHUD = () => {
   const [showTechMap, setShowTechMap] = useState(false);
   const [showBunkerDetails, setShowBunkerDetails] = useState(false);
   const [showSupportPanel, setShowSupportPanel] = useState(false);
+  const [leftPanelCollapsed, setLeftPanelCollapsed] = useState(false);
   const [commandFeedback, setCommandFeedback] = useState(null);
   const feedbackTimerRef = useRef(null);
 
@@ -14956,9 +15930,10 @@ const GameHUD = () => {
         </div>
       )}
       <div
-        className="fallout-ui-area absolute top-3 left-3 z-30 pointer-events-auto select-none"
-        style={{ fontFamily: "'Courier New', monospace", width: 'min(92vw, 390px)', maxHeight: 'calc(100vh - 24px)', overflowY: 'auto', paddingRight: '4px' }}
+        className="fallout-ui-area absolute top-3 left-3 z-30 select-none"
+        style={{ display: 'flex', alignItems: 'stretch', pointerEvents: 'none', transform: leftPanelCollapsed ? 'translateX(calc(-100% + 28px))' : 'translateX(0)', transition: 'transform 0.28s cubic-bezier(0.4,0,0.2,1)' }}
       >
+        <div style={{ fontFamily: "'Courier New', monospace", width: 'min(92vw, 390px)', maxHeight: 'calc(100vh - 24px)', overflowY: 'auto', paddingRight: '4px', pointerEvents: 'auto' }}>
         <div style={{ ...card, padding: '10px 12px' }}>
         <div style={{ display: 'grid', gridTemplateColumns: 'auto auto auto', alignItems: 'center', gap: '10px', fontSize: '12px', color: '#e2e8f0' }}>
           <span style={{ fontWeight: 700, color: '#f8fafc' }}>💰 {stats.credits}</span>
@@ -15462,6 +16437,32 @@ const GameHUD = () => {
           )}
         </div>
         </div>
+        </div>
+        <button
+          onClick={() => setLeftPanelCollapsed(v => !v)}
+          style={{
+            flexShrink: 0,
+            pointerEvents: 'auto',
+            alignSelf: 'center',
+            width: '22px',
+            padding: '20px 0',
+            borderRadius: '0 8px 8px 0',
+            border: '1px solid rgba(34,197,94,0.4)',
+            borderLeft: 'none',
+            background: 'rgba(3,7,18,0.90)',
+            color: '#4ade80',
+            fontSize: '9px',
+            cursor: 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            writingMode: 'vertical-rl',
+            letterSpacing: '0.14em',
+            textTransform: 'uppercase'
+          }}
+        >
+          {leftPanelCollapsed ? '▶' : '◀'}
+        </button>
       </div>
 
       {selectedProductionBuilding && (
@@ -15760,6 +16761,667 @@ const FrameRateController = ({ fpsCap }) => {
   }, [fpsCap, invalidate, setFrameloop]);
 
   return null;
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// BOMB CAM HUD — infrared/FLIR seeker overlay shown while the guided nuke is
+// falling. Appears over the bomb-follow camera so the player can actually see
+// what is happening, with targeting reticle, altitude, and impact countdown.
+// ─────────────────────────────────────────────────────────────────────────────
+const BombCamHUD = () => {
+  const [phase, setPhase] = useState('entering'); // 'entering' | 'active' | 'exiting' | 'hidden'
+  const phaseRef = useRef('entering');
+  const [hudData, setHudData] = useState({ alt: 300, velocity: 45, targetX: 0, targetZ: 0, impactIn: 8, agl: 300 });
+  const [blinkOn, setBlinkOn] = useState(true);
+  const [imminent, setImminent] = useState(false);
+  const rafRef = useRef(null);
+  const exitTimerRef = useRef(null);
+
+  const setPhaseSync = useCallback((p) => {
+    phaseRef.current = p;
+    setPhase(p);
+  }, []);
+
+  // Animate HUD readouts with RAF, update state at ~10fps to save CPU
+  useEffect(() => {
+    let lastUpdate = 0;
+    const animate = (t) => {
+      if (t - lastUpdate > 100) {
+        lastUpdate = t;
+        const alt = window._falloutBombCamAlt ?? 300;
+        const velocity = window._falloutBombCamVelocity ?? 45;
+        const targetX = window._falloutBombCamTargetX ?? 0;
+        const targetZ = window._falloutBombCamTargetZ ?? 0;
+        const targetAlt = window._falloutBombCamTargetAlt ?? 0;
+        const agl = Math.max(0, alt - targetAlt);
+        // Estimate time-to-impact from AGL and current fall speed
+        const fallSpeed = Math.max(4, Math.abs(window._falloutBombCamVelocity ?? 4));
+        const impactSec = Math.max(0, agl / Math.max(4, fallSpeed));
+        const isImminent = agl < 80 || impactSec < 3.5;
+        setHudData({
+          alt: Math.round(alt),
+          velocity: Math.round(velocity),
+          targetX: Math.round(targetX),
+          targetZ: Math.round(targetZ),
+          impactIn: impactSec.toFixed(1),
+          agl: Math.round(agl),
+        });
+        setImminent(isImminent);
+      }
+      rafRef.current = requestAnimationFrame(animate);
+    };
+    rafRef.current = requestAnimationFrame(animate);
+    return () => cancelAnimationFrame(rafRef.current);
+  }, []);
+
+  // Blink ticker for IMPACT IMMINENT alert
+  useEffect(() => {
+    const id = setInterval(() => setBlinkOn(b => !b), 420);
+    return () => clearInterval(id);
+  }, []);
+
+  // Poll to handle entry / exit transitions
+  useEffect(() => {
+    const id = setInterval(() => {
+      const active = !!window._falloutBombCamActive;
+      const cur = phaseRef.current;
+      if (active && cur === 'entering') {
+        setPhaseSync('active');
+      } else if (!active && (cur === 'active' || cur === 'entering')) {
+        clearTimeout(exitTimerRef.current);
+        setPhaseSync('exiting');
+        exitTimerRef.current = setTimeout(() => setPhaseSync('hidden'), 420);
+      }
+    }, 100);
+    return () => { clearInterval(id); clearTimeout(exitTimerRef.current); };
+  }, [setPhaseSync]);
+
+  if (phase === 'hidden') return null;
+
+  const exiting = phase === 'exiting';
+
+  const hudStyle = {
+    position: 'absolute', inset: 0, zIndex: 44,
+    background: 'rgba(4,2,0,0.28)',
+    fontFamily: "'Courier New', Courier, monospace",
+    color: 'rgba(255,185,55,0.95)',
+    overflow: 'hidden',
+    userSelect: 'none',
+    pointerEvents: 'none',
+    animation: exiting
+      ? 'fallout-hud-slide-out 0.38s ease-in forwards'
+      : 'fallout-hud-slide-in 0.42s ease-out forwards',
+  };
+
+  const amber = { textShadow: '0 0 7px rgba(255,150,15,0.65)' };
+
+  const boxLabel = {
+    display: 'inline-block',
+    border: '1.5px solid rgba(255,185,55,0.75)',
+    padding: '0 6px',
+    minWidth: '5.2em',
+    textAlign: 'center',
+    background: 'rgba(18,8,0,0.62)',
+    letterSpacing: '0.04em',
+    fontSize: '1.1vw',
+    lineHeight: '1.65',
+  };
+
+  return (
+    <div style={hudStyle}>
+
+      {/* ── CRT scanlines ── */}
+      <div style={{
+        position: 'absolute', inset: 0, pointerEvents: 'none', zIndex: 12,
+        background: 'repeating-linear-gradient(0deg, transparent, transparent 3px, rgba(0,0,0,0.06) 3px, rgba(0,0,0,0.06) 4px)',
+      }} />
+
+      {/* ── Thermal vignette ── */}
+      <div style={{
+        position: 'absolute', inset: 0, pointerEvents: 'none', zIndex: 11,
+        background: 'radial-gradient(ellipse at center, transparent 32%, rgba(0,3,8,0.70) 100%)',
+      }} />
+
+      {/* ── Subtle center warm glow ── */}
+      <div style={{
+        position: 'absolute', inset: 0, pointerEvents: 'none', zIndex: 10,
+        background: 'radial-gradient(ellipse at 50% 52%, rgba(255,130,0,0.05) 0%, transparent 55%)',
+      }} />
+
+      {/* ── Moving scan line ── */}
+      <div style={{
+        position: 'absolute', left: 0, right: 0, height: '2px', pointerEvents: 'none', zIndex: 9,
+        background: 'linear-gradient(90deg, transparent, rgba(255,160,20,0.18), transparent)',
+        animation: 'fallout-hud-scanline 4s linear infinite',
+      }} />
+
+      {/* ── TOP-CENTER: mode label ── */}
+      <div style={{
+        position: 'absolute', top: '4.5%', left: '50%', transform: 'translateX(-50%)',
+        textAlign: 'center', pointerEvents: 'none', zIndex: 20, ...amber,
+      }}>
+        <div style={{ fontSize: '1.0vw', letterSpacing: '0.35em', opacity: 0.85 }}>IR SEEKER</div>
+        <div style={{ fontSize: '0.72vw', letterSpacing: '0.22em', opacity: 0.5, marginTop: '2px' }}>GUIDED MUNITION ☢</div>
+      </div>
+
+      {/* ── TOP-LEFT: altitude readouts ── */}
+      <div style={{
+        position: 'absolute', top: '5%', left: '6%',
+        fontSize: '1.0vw', lineHeight: '1.9', pointerEvents: 'none', ...amber,
+      }}>
+        <div style={{ fontSize: '0.72vw', opacity: 0.52, letterSpacing: '0.22em' }}>ALTITUDE</div>
+        <div style={boxLabel}>{hudData.alt} M</div>
+        <div style={{ marginTop: '7px', fontSize: '0.72vw', opacity: 0.52, letterSpacing: '0.22em' }}>AGL</div>
+        <div style={boxLabel}>{hudData.agl} M</div>
+        {/* Dotted scale bar */}
+        <div style={{
+          position: 'absolute', right: '-6px', top: '0', bottom: '0', width: '2px',
+          background: 'repeating-linear-gradient(180deg, rgba(255,185,55,0.5) 0 3px, transparent 3px 7px)',
+        }} />
+      </div>
+
+      {/* ── TOP-RIGHT: velocity & target coords ── */}
+      <div style={{
+        position: 'absolute', top: '5%', right: '6%',
+        fontSize: '1.0vw', lineHeight: '1.9', pointerEvents: 'none', textAlign: 'right', ...amber,
+      }}>
+        <div style={{ fontSize: '0.72vw', opacity: 0.52, letterSpacing: '0.22em' }}>VELOCITY</div>
+        <div style={boxLabel}>{hudData.velocity} M/S</div>
+        <div style={{ marginTop: '7px', fontSize: '0.72vw', opacity: 0.52, letterSpacing: '0.22em' }}>TARGET COORD</div>
+        <div style={{ ...boxLabel, fontSize: '0.88vw' }}>{hudData.targetX} / {hudData.targetZ}</div>
+        {/* Dotted scale bar */}
+        <div style={{
+          position: 'absolute', left: '-6px', top: '0', bottom: '0', width: '2px',
+          background: 'repeating-linear-gradient(180deg, rgba(255,185,55,0.5) 0 3px, transparent 3px 7px)',
+        }} />
+      </div>
+
+      {/* ── CENTER: IR targeting reticle ── */}
+      <div style={{
+        position: 'absolute', top: '50%', left: '50%',
+        transform: 'translate(-50%, -50%)',
+        pointerEvents: 'none', zIndex: 20,
+        width: 0, height: 0,
+      }}>
+        {/* Outer targeting box */}
+        <div style={{
+          position: 'absolute',
+          width: '7.8vw', height: '7.8vw',
+          transform: 'translate(-50%, -50%)',
+          border: `2px solid rgba(255,185,55,${imminent ? 0.98 : 0.80})`,
+          boxShadow: `0 0 ${imminent ? '28px' : '14px'} rgba(255,130,0,${imminent ? 0.65 : 0.32})`,
+        }}>
+          {/* L-shape corner accents */}
+          {[
+            { top: -2, left: -2, borderTop: '2px solid', borderLeft: '2px solid' },
+            { top: -2, right: -2, borderTop: '2px solid', borderRight: '2px solid' },
+            { bottom: -2, left: -2, borderBottom: '2px solid', borderLeft: '2px solid' },
+            { bottom: -2, right: -2, borderBottom: '2px solid', borderRight: '2px solid' },
+          ].map((s, i) => (
+            <div key={i} style={{
+              position: 'absolute', width: '20%', height: '20%',
+              borderColor: 'rgba(255,215,95,0.95)', ...s,
+            }} />
+          ))}
+        </div>
+        {/* Inner dashed ring */}
+        <div style={{
+          position: 'absolute',
+          width: '4.8vw', height: '4.8vw',
+          transform: 'translate(-50%, -50%)',
+          border: '1px dashed rgba(255,185,55,0.32)',
+          borderRadius: '50%',
+        }} />
+        {/* Center diamond */}
+        <div style={{
+          position: 'absolute',
+          width: '10px', height: '10px',
+          transform: 'translate(-50%, -50%) rotate(45deg)',
+          border: '1.5px solid rgba(255,215,80,0.95)',
+          boxShadow: '0 0 9px rgba(255,150,0,0.8)',
+        }} />
+        {/* Crosshair stubs */}
+        {[
+          { top: '50%', left: '-3.0vw', width: '1.7vw', height: '1.5px', transform: 'translateY(-50%)' },
+          { top: '50%', right: '-3.0vw', width: '1.7vw', height: '1.5px', transform: 'translateY(-50%)' },
+          { left: '50%', top: '-3.0vw', width: '1.5px', height: '1.7vw', transform: 'translateX(-50%)' },
+          { left: '50%', bottom: '-3.0vw', width: '1.5px', height: '1.7vw', transform: 'translateX(-50%)' },
+        ].map((s, i) => (
+          <div key={i} style={{ position: 'absolute', background: 'rgba(255,185,55,0.72)', ...s }} />
+        ))}
+        {/* Range label beneath reticle */}
+        <div style={{
+          position: 'absolute', bottom: '-5.5vw', left: '50%', transform: 'translateX(-50%)',
+          fontSize: '0.78vw', whiteSpace: 'nowrap', opacity: 0.72, ...amber,
+        }}>
+          {hudData.agl} M AGL
+        </div>
+      </div>
+
+      {/* ── BOTTOM-CENTER: impact countdown ── */}
+      <div style={{
+        position: 'absolute', bottom: '9.5%', left: '50%', transform: 'translateX(-50%)',
+        textAlign: 'center', pointerEvents: 'none', zIndex: 20, ...amber,
+      }}>
+        {imminent ? (
+          <div style={{
+            fontSize: '1.3vw', letterSpacing: '0.28em', fontWeight: 'bold',
+            color: 'rgba(255,75,55,0.98)',
+            textShadow: '0 0 14px rgba(255,50,10,0.85)',
+            opacity: blinkOn ? 1 : 0.15,
+          }}>
+            ▼  IMPACT IMMINENT  ▼
+          </div>
+        ) : (
+          <div style={{ fontSize: '1.1vw', letterSpacing: '0.22em', opacity: 0.9 }}>
+            IMPACT IN&nbsp;&nbsp;<span style={boxLabel}>{hudData.impactIn} S</span>
+          </div>
+        )}
+      </div>
+
+      {/* ── BOTTOM-LEFT: system status ── */}
+      <div style={{
+        position: 'absolute', bottom: '8%', left: '6%',
+        fontSize: '0.88vw', lineHeight: '2.0', pointerEvents: 'none', ...amber, opacity: 0.65,
+      }}>
+        <div>GUIDE MODE</div>
+        <div>NUKE ☢</div>
+        <div>GPS LOCK</div>
+      </div>
+
+      {/* ── BOTTOM-RIGHT: weapon status ── */}
+      <div style={{
+        position: 'absolute', bottom: '8%', right: '6%',
+        fontSize: '0.88vw', lineHeight: '2.0', pointerEvents: 'none', textAlign: 'right', ...amber, opacity: 0.65,
+      }}>
+        <div>SEEKER ON</div>
+        <div>FINS ARMED</div>
+        <div>WPN HOT</div>
+      </div>
+
+    </div>
+  );
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PILOT HUD — shown when the Nuke is armed so the player can aim and pickle
+// the bomb themselves like a real weapons officer.
+// ─────────────────────────────────────────────────────────────────────────────
+const NukePilotHUD = () => {
+  // 'hidden' | 'active' | 'exiting'
+  // phaseRef mirrors phase so interval/timeout closures always read the current value
+  // without requiring re-registration of intervals (which caused the one-shot bug).
+  const [phase, setPhase] = useState('hidden');
+  const phaseRef = useRef('hidden');
+  const [blinkOn, setBlinkOn] = useState(true);
+  const [hudVals, setHudVals] = useState({ speed: 465, alt: 4430, heading: 25, range: 2200, aoa: 1.7 });
+  const [mousePos, setMousePos] = useState({ x: 50, y: 50 }); // percent
+  const timeRef = useRef(0);
+  const rafRef = useRef(null);
+  const exitTimerRef = useRef(null);
+
+  const setPhaseSync = useCallback((p) => {
+    phaseRef.current = p;
+    setPhase(p);
+  }, []);
+
+  const doExit = useCallback(() => {
+    if (phaseRef.current === 'hidden' || phaseRef.current === 'exiting') return;
+    clearTimeout(exitTimerRef.current);
+    setPhaseSync('exiting');
+    exitTimerRef.current = setTimeout(() => setPhaseSync('hidden'), 380);
+  }, [setPhaseSync]);
+
+  // Animate HUD readouts with RAF, update state at ~10fps to save CPU
+  useEffect(() => {
+    if (phase === 'hidden') return;
+    let lastUpdate = 0;
+    const animate = (t) => {
+      timeRef.current = t * 0.001;
+      if (t - lastUpdate > 100) {
+        lastUpdate = t;
+        const s = timeRef.current;
+        setHudVals({
+          speed:   465 + Math.sin(s * 0.7) * 4,
+          alt:     4430 + Math.sin(s * 0.5) * 14,
+          heading: 25 + Math.sin(s * 0.3) * 2,
+          range:   Math.max(600, 2200 - s * 12 + Math.sin(s * 0.4) * 80),
+          aoa:     1.7 + Math.sin(s * 0.9) * 0.08,
+        });
+      }
+      rafRef.current = requestAnimationFrame(animate);
+    };
+    rafRef.current = requestAnimationFrame(animate);
+    return () => cancelAnimationFrame(rafRef.current);
+  }, [phase === 'hidden']);
+
+  // Blink ticker for PICKLE indicator
+  useEffect(() => {
+    if (phase === 'hidden') return;
+    const id = setInterval(() => setBlinkOn(b => !b), 480);
+    return () => clearInterval(id);
+  }, [phase === 'hidden']);
+
+  // Poll window._falloutManualStrikeArmed — registered ONCE, uses phaseRef for fresh reads
+  useEffect(() => {
+    const id = setInterval(() => {
+      const armed = !!window._falloutManualStrikeArmed;
+      const cur = phaseRef.current;
+      if (armed && cur === 'hidden') {
+        // Nuke armed — show HUD
+        clearTimeout(exitTimerRef.current);
+        setPhaseSync('active');
+      } else if (!armed && (cur === 'active')) {
+        // Armed cleared externally (e.g. cancelled) — exit
+        doExit();
+      }
+    }, 80);
+    return () => { clearInterval(id); clearTimeout(exitTimerRef.current); };
+  }, [setPhaseSync, doExit]);
+
+  const handleMouseMove = useCallback((e) => {
+    setMousePos({
+      x: (e.clientX / window.innerWidth) * 100,
+      y: (e.clientY / window.innerHeight) * 100,
+    });
+  }, []);
+
+  const handlePickle = useCallback((e) => {
+    if (phaseRef.current !== 'active') return;
+    e.stopPropagation();
+    doExit();
+    // Dispatch to VillageScene for world-coord mapping & strike launch
+    window.dispatchEvent(new CustomEvent('fallout-pilot-release', {
+      detail: { clientX: e.clientX, clientY: e.clientY }
+    }));
+  }, [doExit]);
+
+  if (phase === 'hidden') return null;
+
+  const exiting = phase === 'exiting';
+  const { speed, alt, heading, range, aoa } = hudVals;
+  const pitch = Math.sin(timeRef.current * 0.6) * 1.5;
+  const bank  = Math.sin(timeRef.current * 0.4) * 2.5;
+
+  const hudStyle = {
+    position: 'absolute', inset: 0, zIndex: 45,
+    background: `radial-gradient(ellipse 38vw 30vw at ${mousePos.x}% ${mousePos.y}%, rgba(0,8,2,0.00) 0%, rgba(0,8,2,0.18) 45%, rgba(0,6,2,0.52) 100%)`,
+    backdropFilter: 'brightness(1.15) saturate(0.28) hue-rotate(88deg)',
+    cursor: 'crosshair',
+    fontFamily: "'Courier New', Courier, monospace",
+    color: 'rgba(188,255,188,0.92)',
+    overflow: 'hidden',
+    userSelect: 'none',
+    animation: exiting ? 'fallout-hud-slide-out 0.35s ease-in forwards' : 'fallout-hud-slide-in 0.4s ease-out forwards',
+  };
+  const phosphor = { textShadow: '0 0 6px rgba(0,255,80,0.6)' };
+  const boxLabel = {
+    display: 'inline-block',
+    border: '1.5px solid rgba(188,255,188,0.85)',
+    padding: '0 5px',
+    minWidth: '4.5em',
+    textAlign: 'center',
+    background: 'rgba(0,18,4,0.55)',
+    letterSpacing: '0.04em',
+    fontSize: '1.25vw',
+    lineHeight: '1.5',
+  };
+
+  return (
+    <div style={hudStyle} onMouseMove={handleMouseMove} onClick={handlePickle}>
+
+      {/* ── CRT scan-lines ── */}
+      <div style={{
+        position: 'absolute', inset: 0, pointerEvents: 'none', zIndex: 12,
+        background: 'repeating-linear-gradient(0deg, transparent, transparent 3px, rgba(0,0,0,0.07) 3px, rgba(0,0,0,0.07) 4px)',
+      }} />
+      {/* Phosphor vignette */}
+      <div style={{
+        position: 'absolute', inset: 0, pointerEvents: 'none', zIndex: 11,
+        background: 'radial-gradient(ellipse at center, transparent 52%, rgba(0,8,2,0.38) 100%)',
+      }} />
+      {/* ── Scene illuminate at cursor — reveals the target underneath ── */}
+      <div style={{
+        position: 'absolute', inset: 0, pointerEvents: 'none', zIndex: 13,
+        background: `radial-gradient(ellipse 28vw 22vw at ${mousePos.x}% ${mousePos.y}%, rgba(180,255,160,0.22) 0%, rgba(80,220,80,0.08) 55%, transparent 100%)`,
+        mixBlendMode: 'screen',
+      }} />
+
+      {/* ── HEADING TAPE (top center) ── */}
+      <div style={{ position: 'absolute', top: '5.5%', left: '50%', transform: 'translateX(-50%)', textAlign: 'center', pointerEvents: 'none', ...phosphor }}>
+        <div style={{ display: 'flex', gap: '2.2vw', alignItems: 'flex-end', justifyContent: 'center', fontSize: '1.1vw' }}>
+          {[-2,-1,0,1,2].map(offset => {
+            const h = Math.round(heading + offset * 5);
+            const disp = ((h % 36) + 36) % 36;
+            return (
+              <span key={offset} style={{ opacity: offset === 0 ? 1 : 0.45 - Math.abs(offset)*0.05 }}>
+                {String(disp).padStart(2,'0')}
+              </span>
+            );
+          })}
+        </div>
+        <div style={{ textAlign: 'center', fontSize: '0.9vw', marginTop: '1px', opacity: 0.7 }}>▼</div>
+      </div>
+
+      {/* ── TOP-LEFT LABELS ── */}
+      <div style={{ position: 'absolute', top: '4%', left: '5%', fontSize: '1.0vw', lineHeight: '1.7', pointerEvents: 'none', ...phosphor }}>
+        <div style={{ opacity: 0.75 }}>CCIP</div>
+        <div style={{ opacity: 0.6, fontSize: '0.85vw' }}>NUKE ☢</div>
+      </div>
+      {/* "TERY" label like the reference image */}
+      <div style={{ position: 'absolute', top: '3%', right: '5%', fontSize: '0.9vw', opacity: 0.5, pointerEvents: 'none', ...phosphor }}>
+        WPNS SYS
+      </div>
+
+      {/* ── MAIN HUD CIRCLE ── */}
+      <div style={{
+        position: 'absolute', top: '50%', left: '50%',
+        width: '60vmin', height: '60vmin',
+        transform: 'translate(-50%, -50%)',
+        border: '1px solid rgba(188,255,188,0.45)',
+        borderRadius: '50%',
+        pointerEvents: 'none',
+        boxShadow: '0 0 40px rgba(0,255,80,0.06), inset 0 0 30px rgba(0,255,80,0.03)',
+      }} />
+      {/* Inner tick ring */}
+      {Array.from({ length: 36 }, (_, i) => {
+        const angle = (i / 36) * 360;
+        const isMajor = i % 9 === 0;
+        const len = isMajor ? '3%' : '1.5%';
+        const r = 30; // vmin radius
+        const rad = (angle - 90) * Math.PI / 180;
+        const x = 50 + r * Math.cos(rad);
+        const y = 50 + r * Math.sin(rad);
+        return (
+          <div key={i} style={{
+            position: 'absolute',
+            left: `${x}%`, top: `${y}%`,
+            width: isMajor ? '0.8%' : '0.4%', height: isMajor ? '1.5%' : '0.8%',
+            background: `rgba(188,255,188,${isMajor ? 0.5 : 0.22})`,
+            transform: `translate(-50%,-50%) rotate(${angle}deg)`,
+            pointerEvents: 'none',
+          }} />
+        );
+      })}
+
+      {/* ── PITCH LADDER ── */}
+      <div style={{
+        position: 'absolute', top: '50%', left: '50%',
+        transform: `translate(-50%, -50%) rotate(${bank}deg)`,
+        width: '100%', height: '100%', pointerEvents: 'none',
+      }}>
+        {[-20, -10, 0, 10, 20].map(deg => {
+          const yOff = (deg - pitch) * 0.95; // vw offset per degree
+          const isZero = deg === 0;
+          const w = isZero ? '26vw' : '14vw';
+          const op = 1 - Math.abs(deg) * 0.022;
+          return (
+            <div key={deg} style={{
+              position: 'absolute', left: '50%', top: '50%',
+              transform: `translate(-50%, calc(-50% + ${yOff}vw))`,
+              width: w, height: '1.5px',
+              background: `rgba(188,255,188,${op * 0.75})`,
+              display: 'flex', alignItems: 'center',
+            }}>
+              {!isZero && (
+                <>
+                  <span style={{ position: 'absolute', left: '-2.4vw', fontSize: '0.85vw', opacity: 0.6, ...phosphor }}>{Math.abs(deg)}</span>
+                  <span style={{ position: 'absolute', right: '-2.4vw', fontSize: '0.85vw', opacity: 0.6, ...phosphor }}>{Math.abs(deg)}</span>
+                </>
+              )}
+            </div>
+          );
+        })}
+        {/* Aircraft reference symbol */}
+        <div style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%,-50%)' }}>
+          {/* Wings */}
+          <div style={{ position: 'absolute', top: '-1px', left: '-3.2vw', width: '2.2vw', height: '2px', background: 'rgba(188,255,188,0.9)' }} />
+          <div style={{ position: 'absolute', top: '-1px', right: '-3.2vw', width: '2.2vw', height: '2px', background: 'rgba(188,255,188,0.9)' }} />
+          {/* Center dot */}
+          <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: 'rgba(188,255,188,0.9)', transform: 'translate(-50%,-50%)', position: 'absolute' }} />
+        </div>
+      </div>
+
+      {/* ── SPEED TAPE (left) ── */}
+      <div style={{
+        position: 'absolute', left: '7.5%', top: '50%', transform: 'translateY(-50%)',
+        textAlign: 'right', fontSize: '1.0vw', lineHeight: '2.3', pointerEvents: 'none', ...phosphor,
+      }}>
+        {[50,45,40,35].map(v => <div key={v} style={{ opacity: 0.5 }}>{v}─</div>)}
+        <div style={{ ...boxLabel, marginBottom: '4px' }}>{Math.round(speed)}</div>
+        <div style={{ opacity: 0.45, fontSize: '0.9vw', marginTop: '3px' }}>C</div>
+        <div style={{ marginTop: '6px', opacity: 0.55, fontSize: '0.85vw' }}>SIM<br/>{aoa.toFixed(2)}</div>
+        {/* Dotted scale bar */}
+        <div style={{
+          position: 'absolute', right: '-6px', top: '0', bottom: '0', width: '2px',
+          background: 'repeating-linear-gradient(180deg, rgba(188,255,188,0.55) 0 3px, transparent 3px 7px)',
+        }} />
+      </div>
+
+      {/* ── ALTITUDE TAPE (right) ── */}
+      <div style={{
+        position: 'absolute', right: '7.5%', top: '50%', transform: 'translateY(-50%)',
+        textAlign: 'left', fontSize: '1.0vw', lineHeight: '2.3', pointerEvents: 'none', ...phosphor,
+      }}>
+        {['05.0','04.5','04.0'].map(v => <div key={v} style={{ opacity: 0.5, paddingLeft: '4px' }}>─{v}</div>)}
+        <div style={{ ...boxLabel, marginBottom: '4px' }}>{Math.round(alt).toLocaleString()}</div>
+        {/* Dotted scale bar */}
+        <div style={{
+          position: 'absolute', left: '-6px', top: '0', bottom: '0', width: '2px',
+          background: 'repeating-linear-gradient(180deg, rgba(188,255,188,0.55) 0 3px, transparent 3px 7px)',
+        }} />
+      </div>
+
+      {/* ── INFO BLOCK bottom-left ── */}
+      <div style={{
+        position: 'absolute', bottom: '11%', left: '7.5%',
+        fontSize: '1.0vw', lineHeight: '1.9', pointerEvents: 'none', ...phosphor,
+      }}>
+        <div>ARM</div>
+        <div>0.76</div>
+        <div style={{ marginTop: '3px' }}>4.6</div>
+        <div>CCIP</div>
+        <div>α {aoa.toFixed(1)}</div>
+      </div>
+
+      {/* ── INFO BLOCK bottom-right ── */}
+      <div style={{
+        position: 'absolute', bottom: '11%', right: '7.5%',
+        fontSize: '1.0vw', lineHeight: '1.9', pointerEvents: 'none', textAlign: 'right', ...phosphor,
+      }}>
+        <div>R <span style={boxLabel}>{Math.round(range).toLocaleString()}</span></div>
+        <div>AL 1000</div>
+        <div>F 050</div>
+        <div>{new Date().toLocaleDateString('en-US',{year:'2-digit',month:'2-digit',day:'2-digit'}).replace(/\//g,'')}</div>
+        <div>001&gt;010</div>
+        <div>SYS1 GPS1</div>
+      </div>
+
+      {/* ── CCIP PIPPER (mouse-tracking targeting circle) ── */}
+      <div style={{
+        position: 'absolute',
+        left: `${mousePos.x}%`, top: `${mousePos.y}%`,
+        transform: 'translate(-50%, -50%)',
+        pointerEvents: 'none', zIndex: 20,
+      }}>
+        {/* Wide outer scan ring */}
+        <div style={{
+          position: 'absolute', top: '50%', left: '50%',
+          width: '11vw', height: '11vw',
+          transform: 'translate(-50%, -50%)',
+          border: '1px solid rgba(188,255,188,0.25)',
+          borderRadius: '50%',
+          boxShadow: '0 0 28px rgba(0,255,80,0.12)',
+        }} />
+        {/* Mid targeting ring */}
+        <div style={{
+          position: 'absolute', top: '50%', left: '50%',
+          width: '6.2vw', height: '6.2vw',
+          transform: 'translate(-50%, -50%)',
+          border: '1px dashed rgba(188,255,188,0.35)',
+          borderRadius: '50%',
+        }} />
+        {/* Main targeting circle */}
+        <div style={{
+          position: 'absolute', top: '50%', left: '50%',
+          width: '4.2vw', height: '4.2vw',
+          transform: 'translate(-50%, -50%)',
+          border: '2.5px solid rgba(210,255,210,0.98)',
+          borderRadius: '50%',
+          boxShadow: '0 0 28px rgba(0,255,80,0.80), 0 0 10px rgba(0,255,80,0.5) inset',
+        }} />
+        {/* Center dot */}
+        <div style={{
+          position: 'absolute', top: '50%', left: '50%',
+          width: '8px', height: '8px',
+          background: 'rgba(220,255,220,0.98)',
+          borderRadius: '50%',
+          transform: 'translate(-50%,-50%)',
+          boxShadow: '0 0 12px rgba(0,255,80,0.95)',
+        }} />
+        {/* Crosshair ticks — longer for visibility */}
+        {[
+          { style: { top:'50%', left:'-1.6vw', width:'1.0vw', height:'2px', transform:'translateY(-50%)' }},
+          { style: { top:'50%', right:'-1.6vw', width:'1.0vw', height:'2px', transform:'translateY(-50%)' }},
+          { style: { left:'50%', top:'-1.6vw', width:'2px', height:'1.0vw', transform:'translateX(-50%)' }},
+          { style: { left:'50%', bottom:'-1.6vw', width:'2px', height:'1.0vw', transform:'translateX(-50%)' }},
+        ].map((t,i) => (
+          <div key={i} style={{ position:'absolute', background:'rgba(210,255,210,0.92)', boxShadow:'0 0 4px rgba(0,255,80,0.5)', ...t.style }} />
+        ))}
+        {/* Range readout near pipper */}
+        <div style={{
+          position: 'absolute', bottom: '-2.2vw', left: '50%', transform: 'translateX(-50%)',
+          fontSize: '0.85vw', whiteSpace: 'nowrap', opacity: 0.92, ...phosphor,
+          background: 'rgba(0,14,2,0.55)', padding: '0 4px',
+        }}>
+          {Math.round(range).toLocaleString()} FT
+        </div>
+      </div>
+
+      {/* ── PICKLE / FIRE indicator (blinking) ── */}
+      <div style={{
+        position: 'absolute', bottom: '5.5%', left: '50%',
+        transform: 'translateX(-50%)',
+        fontSize: '1.05vw', textAlign: 'center',
+        opacity: blinkOn ? 1 : 0,
+        ...phosphor,
+        pointerEvents: 'none',
+        letterSpacing: '0.22em',
+        fontWeight: 'bold',
+      }}>
+        ▲  CLICK TO PICKLE  ▲
+      </div>
+
+      {/* Diamond aircraft symbol bottom-center (like the real HUD) */}
+      <div style={{
+        position: 'absolute', bottom: '9%', left: '50%',
+        transform: 'translateX(-50%) rotate(45deg)',
+        width: '10px', height: '10px',
+        border: '1.5px solid rgba(188,255,188,0.8)',
+        pointerEvents: 'none', ...phosphor,
+      }} />
+    </div>
+  );
 };
 
 const NukeImpactOverlay = ({ blastFx }) => {
@@ -16286,6 +17948,7 @@ export default function FalloutPeople({ theme, isIdleMode }) {
   const [currentLevel, setCurrentLevel] = useState(1);
   const [blastFx, setBlastFx] = useState({ active: false, progress: 0, intensity: 0, type: 'nuke', screenX: 50, screenY: 50 });
   const [stressLevel, setStressLevel] = useState('normal');
+  const [bombCamActive, setBombCamActive] = useState(false);
   const nukeIdRef = useRef(0);
   const progressBaseRef = useRef(DEFAULT_FALLOUT_PROGRESS);
   const runProgressRef = useRef({ maxLevel: 1, kaijuKills: 0, nukesUsed: 0 });
@@ -16302,6 +17965,14 @@ export default function FalloutPeople({ theme, isIdleMode }) {
     if (typeof window === 'undefined') return;
     window.localStorage.setItem('fallout-fps-cap', fpsCap);
   }, [fpsCap]);
+
+  useEffect(() => {
+    if (!isFallout) return undefined;
+    const id = setInterval(() => {
+      setBombCamActive(!!window._falloutBombCamActive);
+    }, 300);
+    return () => clearInterval(id);
+  }, [isFallout]);
 
   useEffect(() => {
     if (typeof window === 'undefined' || !isFallout) return undefined;
@@ -16620,6 +18291,8 @@ export default function FalloutPeople({ theme, isIdleMode }) {
         />
       )}
       <NukeImpactOverlay blastFx={blastFx} />
+      <NukePilotHUD />
+      {bombCamActive && <BombCamHUD />}
       
       <Canvas
          key={`fallout-canvas-${resolutionPreset}`}
@@ -16854,7 +18527,7 @@ const TargetIndicator = () => {
         : pendingBuild
         ? (buildPlacementTarget || buildDragTarget || target || buildFallbackTarget)
         : armedSupportKey
-        ? target
+        ? (target || buildFallbackTarget)  // use last known position when mouse is over UI not canvas
         : null;
 
       if (focusTarget) {
@@ -17096,74 +18769,6 @@ const TargetIndicator = () => {
                   ))}
                </group>
             </group>
-            <group ref={buildGhost} visible={false} position={[0, 8, 0]}>
-               <mesh ref={buildGhostCore} position={[0, 1.4, 0]}>
-                  <cylinderGeometry args={[68, 68, 2.4, 32]} />
-                  <meshBasicMaterial color="#34d399" transparent opacity={0.28} depthWrite={false} toneMapped={false} />
-               </mesh>
-               <group ref={buildPowerGhost} visible={false}>
-                 <mesh position={[0, 14, 0]}>
-                   <boxGeometry args={[58, 28, 48]} />
-                   <meshBasicMaterial color="#6ee7b7" transparent opacity={0.24} depthWrite={false} toneMapped={false} />
-                 </mesh>
-                 {[[-14, 36, -8], [14, 36, -8]].map((p, i) => (
-                   <mesh key={`build-power-stack-${i}`} position={p}>
-                     <cylinderGeometry args={[4, 4, 30, 12]} />
-                     <meshBasicMaterial color="#a7f3d0" transparent opacity={0.22} depthWrite={false} toneMapped={false} />
-                   </mesh>
-                 ))}
-               </group>
-               <group ref={buildFactoryGhost} visible={false}>
-                 <mesh position={[0, 18, 0]}>
-                   <boxGeometry args={[74, 36, 56]} />
-                   <meshBasicMaterial color="#6ee7b7" transparent opacity={0.24} depthWrite={false} toneMapped={false} />
-                 </mesh>
-                 <mesh position={[0, 34, -12]}>
-                   <boxGeometry args={[48, 10, 22]} />
-                   <meshBasicMaterial color="#a7f3d0" transparent opacity={0.2} depthWrite={false} toneMapped={false} />
-                 </mesh>
-               </group>
-               <group ref={buildAAGhost} visible={false}>
-                 <mesh position={[0, 11, 0]}>
-                   <cylinderGeometry args={[30, 34, 20, 16]} />
-                   <meshBasicMaterial color="#6ee7b7" transparent opacity={0.24} depthWrite={false} toneMapped={false} />
-                 </mesh>
-                 <mesh position={[0, 27, 0]}>
-                   <boxGeometry args={[28, 8, 20]} />
-                   <meshBasicMaterial color="#a7f3d0" transparent opacity={0.2} depthWrite={false} toneMapped={false} />
-                 </mesh>
-               </group>
-               <group ref={buildHospitalGhost} visible={false}>
-                 <mesh position={[0, 14, 0]}>
-                   <boxGeometry args={[58, 28, 52]} />
-                   <meshBasicMaterial color="#6ee7b7" transparent opacity={0.24} depthWrite={false} toneMapped={false} />
-                 </mesh>
-                 <mesh position={[0, 28, 18]}>
-                   <boxGeometry args={[14, 14, 4]} />
-                   <meshBasicMaterial color="#a7f3d0" transparent opacity={0.2} depthWrite={false} toneMapped={false} />
-                 </mesh>
-               </group>
-               <group ref={buildTechGhost} visible={false}>
-                 <mesh position={[0, 16, 0]}>
-                   <cylinderGeometry args={[26, 30, 32, 16]} />
-                   <meshBasicMaterial color="#6ee7b7" transparent opacity={0.24} depthWrite={false} toneMapped={false} />
-                 </mesh>
-                 <mesh position={[0, 38, 0]}>
-                   <cylinderGeometry args={[14, 16, 12, 16]} />
-                   <meshBasicMaterial color="#a7f3d0" transparent opacity={0.2} depthWrite={false} toneMapped={false} />
-                 </mesh>
-               </group>
-               <group ref={buildRadarGhost} visible={false}>
-                 <mesh position={[0, 11, 0]}>
-                   <cylinderGeometry args={[22, 28, 20, 16]} />
-                   <meshBasicMaterial color="#6ee7b7" transparent opacity={0.24} depthWrite={false} toneMapped={false} />
-                 </mesh>
-                 <mesh position={[0, 36, 0]}>
-                   <cylinderGeometry args={[3.8, 3.8, 38, 12]} />
-                   <meshBasicMaterial color="#a7f3d0" transparent opacity={0.2} depthWrite={false} toneMapped={false} />
-                 </mesh>
-               </group>
-            </group>
             <group ref={deployPath} visible={false}>
                <mesh position={[0, 2, 0]}>
                   <boxGeometry args={[8, 2, 40]} />
@@ -17196,6 +18801,75 @@ const TargetIndicator = () => {
                <planeGeometry args={[150, 2]} />
                <meshBasicMaterial color="#ef4444" transparent opacity={0.28} side={THREE.DoubleSide} depthWrite={false} depthTest={false} toneMapped={false} />
             </mesh>
+         </group>
+         {/* Building placement ghost — must be OUTSIDE the flat-rotation group so it renders upright */}
+         <group ref={buildGhost} visible={false} position={[0, -8, 0]}>
+            <mesh ref={buildGhostCore} position={[0, 1.4, 0]}>
+               <cylinderGeometry args={[68, 68, 2.4, 32]} />
+               <meshBasicMaterial color="#34d399" transparent opacity={0.28} depthWrite={false} depthTest={false} toneMapped={false} />
+            </mesh>
+            <group ref={buildPowerGhost} visible={false}>
+              <mesh position={[0, 14, 0]}>
+                <boxGeometry args={[58, 28, 48]} />
+                <meshBasicMaterial color="#6ee7b7" transparent opacity={0.24} depthWrite={false} depthTest={false} toneMapped={false} />
+              </mesh>
+              {[[-14, 36, -8], [14, 36, -8]].map((p, i) => (
+                <mesh key={`build-power-stack-${i}`} position={p}>
+                  <cylinderGeometry args={[4, 4, 30, 12]} />
+                  <meshBasicMaterial color="#a7f3d0" transparent opacity={0.22} depthWrite={false} depthTest={false} toneMapped={false} />
+                </mesh>
+              ))}
+            </group>
+            <group ref={buildFactoryGhost} visible={false}>
+              <mesh position={[0, 18, 0]}>
+                <boxGeometry args={[74, 36, 56]} />
+                <meshBasicMaterial color="#6ee7b7" transparent opacity={0.24} depthWrite={false} depthTest={false} toneMapped={false} />
+              </mesh>
+              <mesh position={[0, 34, -12]}>
+                <boxGeometry args={[48, 10, 22]} />
+                <meshBasicMaterial color="#a7f3d0" transparent opacity={0.2} depthWrite={false} depthTest={false} toneMapped={false} />
+              </mesh>
+            </group>
+            <group ref={buildAAGhost} visible={false}>
+              <mesh position={[0, 11, 0]}>
+                <cylinderGeometry args={[30, 34, 20, 16]} />
+                <meshBasicMaterial color="#6ee7b7" transparent opacity={0.24} depthWrite={false} depthTest={false} toneMapped={false} />
+              </mesh>
+              <mesh position={[0, 27, 0]}>
+                <boxGeometry args={[28, 8, 20]} />
+                <meshBasicMaterial color="#a7f3d0" transparent opacity={0.2} depthWrite={false} depthTest={false} toneMapped={false} />
+              </mesh>
+            </group>
+            <group ref={buildHospitalGhost} visible={false}>
+              <mesh position={[0, 14, 0]}>
+                <boxGeometry args={[58, 28, 52]} />
+                <meshBasicMaterial color="#6ee7b7" transparent opacity={0.24} depthWrite={false} depthTest={false} toneMapped={false} />
+              </mesh>
+              <mesh position={[0, 28, 18]}>
+                <boxGeometry args={[14, 14, 4]} />
+                <meshBasicMaterial color="#a7f3d0" transparent opacity={0.2} depthWrite={false} depthTest={false} toneMapped={false} />
+              </mesh>
+            </group>
+            <group ref={buildTechGhost} visible={false}>
+              <mesh position={[0, 16, 0]}>
+                <cylinderGeometry args={[26, 30, 32, 16]} />
+                <meshBasicMaterial color="#6ee7b7" transparent opacity={0.24} depthWrite={false} depthTest={false} toneMapped={false} />
+              </mesh>
+              <mesh position={[0, 38, 0]}>
+                <cylinderGeometry args={[14, 16, 12, 16]} />
+                <meshBasicMaterial color="#a7f3d0" transparent opacity={0.2} depthWrite={false} depthTest={false} toneMapped={false} />
+              </mesh>
+            </group>
+            <group ref={buildRadarGhost} visible={false}>
+              <mesh position={[0, 11, 0]}>
+                <cylinderGeometry args={[22, 28, 20, 16]} />
+                <meshBasicMaterial color="#6ee7b7" transparent opacity={0.24} depthWrite={false} depthTest={false} toneMapped={false} />
+              </mesh>
+              <mesh position={[0, 36, 0]}>
+                <cylinderGeometry args={[3.8, 3.8, 38, 12]} />
+                <meshBasicMaterial color="#a7f3d0" transparent opacity={0.2} depthWrite={false} depthTest={false} toneMapped={false} />
+              </mesh>
+            </group>
          </group>
          <mesh ref={beamRef} position={[0, 500, 0]}>
             <cylinderGeometry args={[2, 2, 1000]} />
@@ -17243,6 +18917,15 @@ const FalloutAshParticle = ({ index, pollution }) => {
       <meshBasicMaterial color={shade} transparent opacity={0.3 + pollution * 0.3} />
     </mesh>
   );
+};
+
+// Per-weapon crater surface styles (floor = scorched center, mid = charred annulus, rim = ejecta, debris = fragments)
+const TERRAIN_CRATER_STYLES = {
+  nuke:          { floor: '#080403', mid: '#2a180a', rim: '#8a6844', debris: '#a07848' },
+  orbital_lance: { floor: '#020408', mid: '#081828', rim: '#1c4868', debris: '#286888' },
+  kinetic_spear: { floor: '#040508', mid: '#0c1822', rim: '#2c485e', debris: '#3c6070' },
+  warthog:       { floor: '#100804', mid: '#301c0c', rim: '#7a5030', debris: '#9a6840' },
+  default:       { floor: '#0a0806', mid: '#201408', rim: '#6a5038', debris: '#8a6848' },
 };
 
 const MountainTerrain = memo(({ themeConfig, environmentVariant, pollution, qualityProfile }) => {
@@ -17397,6 +19080,55 @@ const MountainTerrain = memo(({ themeConfig, environmentVariant, pollution, qual
   const terrainAnimationEnabled = terrainShaderDetail === 'full';
   const terrainPuddlesEnabled = terrainShaderDetail !== 'minimal';
   const terrainNoiseOctaves = terrainShaderDetail === 'full' ? 4 : terrainShaderDetail === 'lean' ? 3 : 2;
+
+  // ── Dynamic terrain deformation (craters) ─────────────────────────────────
+  const [craters, setCraters] = useState([]);
+  const appliedCraterIdsRef = useRef(new Set());
+
+  // Expose a global API so the game loop can push craters without prop drilling
+  useEffect(() => {
+    window._falloutAddCrater = (crater) => {
+      const id = crater.id || `crater-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+      setCraters(prev => [...prev, { ...crater, id }]);
+    };
+    return () => { delete window._falloutAddCrater; };
+  }, []);
+
+  // Deform terrain geometry vertices to create real 3-D bowl craters
+  useEffect(() => {
+    if (!terrainMeshRef.current?.geometry || craters.length === 0) return;
+    const geom = terrainMeshRef.current.geometry;
+    // Reset tracking when geometry is rebuilt (segments change)
+    if (appliedCraterIdsRef.current._geomUUID !== geom.uuid) {
+      appliedCraterIdsRef.current.clear();
+      appliedCraterIdsRef.current._geomUUID = geom.uuid;
+    }
+    const pos = geom.attributes.position;
+    let anyNew = false;
+    craters.forEach(crater => {
+      if (appliedCraterIdsRef.current.has(crater.id)) return;
+      appliedCraterIdsRef.current.add(crater.id);
+      const r = crater.radius;
+      const d = crater.depth;
+      for (let i = 0; i < pos.count; i++) {
+        // PlaneGeometry: local X = world X, local Y = -world Z (after -π/2 X-rotation)
+        const vX = pos.getX(i);
+        const vZ = -pos.getY(i);
+        const dist = Math.hypot(vX - crater.x, vZ - crater.z);
+        if (dist >= r) continue;
+        const t = dist / r;
+        // Smooth bowl: maximum depth at center, slight upthrow at rim (0.76–1.0)
+        const bowl = Math.pow(1.0 - t * t, 2);
+        const rim  = t > 0.76 ? Math.pow((t - 0.76) / 0.24, 1.6) * 0.26 : 0;
+        pos.setZ(i, pos.getZ(i) - d * bowl + d * rim);
+      }
+      anyNew = true;
+    });
+    if (anyNew) {
+      pos.needsUpdate = true;
+      geom.computeVertexNormals();
+    }
+  }, [craters, geometry]);
 
   // Animate terrain shader uniforms every frame
   useFrame((state) => {
@@ -17648,6 +19380,52 @@ const MountainTerrain = memo(({ themeConfig, environmentVariant, pollution, qual
           ))}
         </group>
       )}
+
+      {/* Crater decals — dark scorch, charred ring, raised ejecta rim, and debris fragments */}
+      {craters.map(crater => {
+        const groundY   = getTerrainHeight(crater.x, crater.z);
+        const floorY    = groundY - crater.depth * 0.80 + 1.5;
+        const rimY      = groundY + 2.4;
+        const style     = TERRAIN_CRATER_STYLES[crater.type] || TERRAIN_CRATER_STYLES.default;
+        const fragCount = Math.min(14, Math.max(5, Math.floor(crater.radius / 18)));
+        return (
+          <group key={crater.id}>
+            {/* Scorched inner floor */}
+            <mesh rotation={[-Math.PI/2, 0, 0]} position={[crater.x, floorY, crater.z]} renderOrder={6}>
+              <circleGeometry args={[crater.radius * 0.62, 30]} />
+              <meshBasicMaterial color={style.floor} transparent opacity={0.96} depthWrite={false} polygonOffset polygonOffsetFactor={-2} polygonOffsetUnits={-4} />
+            </mesh>
+            {/* Mid charred annulus */}
+            <mesh rotation={[-Math.PI/2, 0, 0]} position={[crater.x, floorY + 0.6, crater.z]} renderOrder={5}>
+              <ringGeometry args={[crater.radius * 0.52, crater.radius * 0.90, 28]} />
+              <meshBasicMaterial color={style.mid} transparent opacity={0.76} depthWrite={false} polygonOffset polygonOffsetFactor={-2} polygonOffsetUnits={-4} />
+            </mesh>
+            {/* Raised ejecta rim ring */}
+            <mesh rotation={[-Math.PI/2, 0, 0]} position={[crater.x, rimY, crater.z]} renderOrder={7}>
+              <ringGeometry args={[crater.radius * 0.82, crater.radius * 1.12, 26]} />
+              <meshBasicMaterial color={style.rim} transparent opacity={0.80} depthWrite={false} polygonOffset polygonOffsetFactor={-2} polygonOffsetUnits={-4} />
+            </mesh>
+            {/* Broken rock / debris fragments scattered around the rim */}
+            {Array.from({ length: fragCount }).map((_, fi) => {
+              const seed  = ((crater.id?.charCodeAt?.(8) || fi * 17) + fi * 31) % 100;
+              const angle = (fi / fragCount) * Math.PI * 2 + seed * 0.063;
+              const fr    = crater.radius * (0.88 + (seed % 6) * 0.034);
+              const fw    = crater.radius * 0.038 + (seed % 4) * crater.radius * 0.015;
+              return (
+                <mesh
+                  key={fi}
+                  rotation={[-Math.PI/2, angle * 0.55, 0]}
+                  position={[crater.x + Math.cos(angle) * fr, rimY + 0.9, crater.z + Math.sin(angle) * fr]}
+                  renderOrder={8}
+                >
+                  <planeGeometry args={[fw * 3.2, fw * 1.8]} />
+                  <meshBasicMaterial color={style.debris} transparent opacity={0.80} depthWrite={false} polygonOffset polygonOffsetFactor={-2} polygonOffsetUnits={-4} />
+                </mesh>
+              );
+            })}
+          </group>
+        );
+      })}
 
       {/* Solid base below terrain to prevent holes */}
       <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -20, 0]}>
