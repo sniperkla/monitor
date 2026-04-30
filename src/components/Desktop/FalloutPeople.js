@@ -13,9 +13,13 @@ const WORLD_WIDTH = 2500;
 const WORLD_DEPTH = 1800;
 const HALF_WORLD_WIDTH = WORLD_WIDTH / 2;
 const HALF_WORLD_DEPTH = WORLD_DEPTH / 2;
+const TERRAIN_HEIGHTMAP_RESOLUTION = 384;
+const TERRAIN_HEIGHTMAP_WIDTH = WORLD_WIDTH * 4;
+const TERRAIN_HEIGHTMAP_DEPTH = WORLD_DEPTH * 4;
+const SNAPSHOT_REBUILD_INTERVAL_FRAMES = 3;
 
 // Procedural Height Function for consistent terrain across components
-const getTerrainHeight = (x, z) => {
+const computeTerrainHeight = (x, z) => {
   // Far distant mountains — huge scale, slow amplitude
   const mountains = (Math.sin(x * 0.001) + Math.cos(z * 0.001)) * 120;
   // Local hills — smaller scale, medium amplitude
@@ -28,6 +32,103 @@ const getTerrainHeight = (x, z) => {
   const factor = Math.min(1, Math.pow(distFromCenter / 1200, 2.5));
   
   return (mountains + hills + detail) * factor - 10;
+};
+
+let terrainHeightMapCache = null;
+
+const buildTerrainHeightMap = () => {
+  const resolution = TERRAIN_HEIGHTMAP_RESOLUTION;
+  const data = new Float32Array(resolution * resolution);
+  const minX = -TERRAIN_HEIGHTMAP_WIDTH / 2;
+  const minZ = -TERRAIN_HEIGHTMAP_DEPTH / 2;
+  const maxX = TERRAIN_HEIGHTMAP_WIDTH / 2;
+  const maxZ = TERRAIN_HEIGHTMAP_DEPTH / 2;
+
+  for (let iz = 0; iz < resolution; iz++) {
+    const z = minZ + (iz / (resolution - 1)) * (maxZ - minZ);
+    for (let ix = 0; ix < resolution; ix++) {
+      const x = minX + (ix / (resolution - 1)) * (maxX - minX);
+      data[iz * resolution + ix] = computeTerrainHeight(x, z);
+    }
+  }
+
+  terrainHeightMapCache = {
+    data,
+    resolution,
+    minX,
+    minZ,
+    maxX,
+    maxZ,
+    width: maxX - minX,
+    depth: maxZ - minZ
+  };
+
+  return terrainHeightMapCache;
+};
+
+const getTerrainHeightMap = () => terrainHeightMapCache || buildTerrainHeightMap();
+
+const getTerrainHeight = (x, z) => {
+  const heightMap = getTerrainHeightMap();
+  const normalizedX = THREE.MathUtils.clamp((x - heightMap.minX) / heightMap.width, 0, 1);
+  const normalizedZ = THREE.MathUtils.clamp((z - heightMap.minZ) / heightMap.depth, 0, 1);
+  const scaledX = normalizedX * (heightMap.resolution - 1);
+  const scaledZ = normalizedZ * (heightMap.resolution - 1);
+  const x0 = Math.floor(scaledX);
+  const z0 = Math.floor(scaledZ);
+  const x1 = Math.min(heightMap.resolution - 1, x0 + 1);
+  const z1 = Math.min(heightMap.resolution - 1, z0 + 1);
+  const tx = scaledX - x0;
+  const tz = scaledZ - z0;
+
+  const i00 = z0 * heightMap.resolution + x0;
+  const i10 = z0 * heightMap.resolution + x1;
+  const i01 = z1 * heightMap.resolution + x0;
+  const i11 = z1 * heightMap.resolution + x1;
+
+  const h00 = heightMap.data[i00];
+  const h10 = heightMap.data[i10];
+  const h01 = heightMap.data[i01];
+  const h11 = heightMap.data[i11];
+
+  const hx0 = lerpNumber(h00, h10, tx);
+  const hx1 = lerpNumber(h01, h11, tx);
+  return lerpNumber(hx0, hx1, tz);
+};
+
+const centralSceneFrameSubscribers = new Set();
+
+const subscribeToCentralSceneFrame = (callback) => {
+  if (typeof callback !== 'function') return () => {};
+  centralSceneFrameSubscribers.add(callback);
+  return () => {
+    centralSceneFrameSubscribers.delete(callback);
+  };
+};
+
+const emitCentralSceneFrame = (state, delta) => {
+  centralSceneFrameSubscribers.forEach((callback) => {
+    callback(state, delta);
+  });
+};
+
+const resetCentralSceneFrameSubscribers = () => {
+  centralSceneFrameSubscribers.clear();
+};
+
+const useCentralSceneFrame = (callback) => {
+  const callbackRef = useRef(callback);
+
+  useEffect(() => {
+    callbackRef.current = callback;
+  }, [callback]);
+
+  useEffect(() => {
+    const unsubscribe = subscribeToCentralSceneFrame((state, delta) => {
+      callbackRef.current?.(state, delta);
+    });
+    return unsubscribe;
+  }, []);
 };
 
 const clampStrikeTarget = ({ x, z }) => ({
@@ -103,7 +204,7 @@ const APC_VISUAL_SCALE_MULTIPLIER = 1.14;
 const SOLDIER_MODEL_SCALE = 0.9;
 const SOLDIER_MOVE_SPEED_MULTIPLIER = 0.78;
 const TANK_MOVE_SPEED_MULTIPLIER = 0.82;
-const PLANE_BOMB_BAY_OFFSET = { x: -10, y: -13, z: 0 };
+const PLANE_BOMB_BAY_OFFSET = { x: -14, y: -14.5, z: 0 };
 const BOMB_DROP_GRAVITY = 2.5;
 const BOMB_RENDER_SCALE = 3.2;
 const BOMB_PARACHUTE_DEPLOY_DELAY = 0.08;
@@ -118,7 +219,9 @@ const BOMB_CAM_CAMERA_LERP = 0.18;
 const BOMB_CAM_LOOK_LERP = 0.22;
 const BOMB_CAM_LOOK_AHEAD = 160;
 const BOMB_CAM_CAMERA_HEIGHT = 8;
-const BOMB_CAM_CAMERA_FORWARD_OFFSET = 10;
+const BOMB_CAM_CHASE_DISTANCE = 26;
+const BOMB_CAM_RELEASE_SIDE_OFFSET = 22;
+const BOMB_CAM_RELEASE_HEIGHT_BOOST = 18;
 const PLANE_BASE_ALTITUDE = 350;
 const PLANE_ALTITUDE_VARIANCE = 80;
 const PLANE_START_DISTANCE = WORLD_WIDTH * 1.5;
@@ -394,15 +497,16 @@ const FACILITY_BUILD_DURATION = 5.8;
 const FACILITY_BUILD_MIN_DISTANCE = 30;
 const FACILITY_BUILD_MAX_DISTANCE = 920;
 const FACILITY_BUILD_MIN_SPACING = 54;
-const NUKE_AFTERFIRE_PATCH_COUNT = 4;
-const NUKE_AFTERFIRE_PATCH_TTL = 11;
-const NUKE_AFTERFIRE_CORE_LIFETIME = 14;
+const NUKE_AFTERFIRE_PATCH_COUNT = 3;
+const NUKE_AFTERFIRE_PATCH_TTL = 9;
+const NUKE_AFTERFIRE_CORE_LIFETIME = 12;
 const ORBITAL_LANCE_DURATION = 7.5;
 const FIRESTORM_EFFECT_DURATION = 10.0;
 const FIRESTORM_PATCH_TTL = 9.5;
 const KINETIC_SPEAR_COST = 125;
 const KINETIC_SPEAR_COOLDOWN_MS = 18000;
 const KINETIC_SPEAR_DURATION = 6.5;
+const WARTHOG_RUN_EFFECT_DURATION = 4.4;
 const ELEMENT_ADVANTAGE_DAMAGE_MULTIPLIER = 1.55;
 const ELEMENT_RESIST_DAMAGE_MULTIPLIER = 0.74;
 const ELEMENT_META = {
@@ -634,10 +738,43 @@ const SOLDIER_LOADOUTS = [
 ];
 const KAIJU_VARIANT_CONFIG = {
   godzilla: { displayName: 'godzilla', hpMult: 1.12, scaleMin: 4.2, scaleMax: 6.3, moveMult: 0.84, attackMult: 0.9, element: 'reactor', weakAgainst: 'radiation', resistAgainst: 'fire' },
+  burning_godzilla: {
+    displayName: 'burning godzilla',
+    hpMult: 1.2,
+    scaleMin: 4.4,
+    scaleMax: 6.5,
+    moveMult: 0.8,
+    attackMult: 0.98,
+    element: 'fire',
+    weakAgainst: 'ion',
+    resistAgainst: 'fire',
+    specialFxKind: 'meltdown',
+    telegraphColor: '#fb7185',
+    labelColor: '#fb923c',
+    hpFillColor: '#f97316',
+    hpBackColor: '#431407',
+    hpGlowColor: '#fde68a'
+  },
+  mecha_godzilla: {
+    displayName: 'mecha godzilla',
+    hpMult: 1.16,
+    scaleMin: 4.3,
+    scaleMax: 6.2,
+    moveMult: 0.78,
+    attackMult: 1.02,
+    element: 'ion',
+    weakAgainst: 'fire',
+    resistAgainst: 'radiation',
+    specialFxKind: 'lightning',
+    telegraphColor: '#67e8f9',
+    labelColor: '#93c5fd',
+    hpFillColor: '#38bdf8',
+    hpBackColor: '#082f49',
+    hpGlowColor: '#e0f2fe'
+  },
   octopus: { displayName: 'octopus', hpMult: 0.96, scaleMin: 3.9, scaleMax: 5.8, moveMult: 0.8, attackMult: 0.86, element: 'tide', weakAgainst: 'ion', resistAgainst: 'fire' },
   spider: { displayName: 'spider', hpMult: 0.92, scaleMin: 3.7, scaleMax: 5.9, moveMult: 0.88, attackMult: 0.9, element: 'bio', weakAgainst: 'fire', resistAgainst: 'radiation' },
   beetle: { displayName: 'titan beetle', hpMult: 1.08, scaleMin: 4.1, scaleMax: 6.1, moveMult: 0.82, attackMult: 0.92, element: 'armor', weakAgainst: 'ion', resistAgainst: 'fire' },
-  wyrm: { displayName: 'ash wyrm', hpMult: 1.02, scaleMin: 4.4, scaleMax: 6.4, moveMult: 0.8, attackMult: 0.9, element: 'ash', weakAgainst: 'radiation', resistAgainst: 'fire' },
   spicie_bird: {
     displayName: 'spicie bird',
     hpMult: 0.88,
@@ -654,8 +791,8 @@ const KAIJU_VARIANT_CONFIG = {
 };
 const KAIJU_VARIANT_POOLS = [
   ['godzilla', 'octopus', 'spider'],
-  ['godzilla', 'octopus', 'spider', 'beetle'],
-  ['godzilla', 'octopus', 'spider', 'beetle', 'wyrm', 'spicie_bird']
+  ['godzilla', 'burning_godzilla', 'octopus', 'spider', 'beetle'],
+  ['godzilla', 'burning_godzilla', 'mecha_godzilla', 'octopus', 'spider', 'beetle', 'spicie_bird']
 ];
 const DYNAMIC_RENDER_TYPES = new Set([
   'plane', 'bomb', 'kaiju', 'mushroom', 'kaiju_attack', 'firebreath',
@@ -681,6 +818,10 @@ const getPlaneBombSpawnPosition = (plane) => {
 
 const createBombFromPlane = (plane) => {
   const spawn = getPlaneBombSpawnPosition(plane);
+  const travelLength = Math.hypot(plane.vx || 0, plane.vz || 0) || 1;
+  const forwardX = (plane.vx || 0) / travelLength;
+  const forwardZ = (plane.vz || 0) / travelLength;
+  const releaseKick = 14;
 
   return {
     id: `bomb-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
@@ -688,10 +829,10 @@ const createBombFromPlane = (plane) => {
     x: spawn.x,
     y: spawn.y,
     z: spawn.z,
-    vx: (plane.vx || 0) * 0.45,
-    vy: -8,
-    vz: (plane.vz || 0) * 0.45,
-    grav: 0.18,
+    vx: (plane.vx || 0) * 0.56 + forwardX * releaseKick,
+    vy: -15,
+    vz: (plane.vz || 0) * 0.56 + forwardZ * releaseKick,
+    grav: 0.26,
     targetX: plane.dropX,
     targetZ: plane.dropZ,
     age: 0,
@@ -703,12 +844,71 @@ const createBombFromPlane = (plane) => {
     swaySeed: Math.random() * Math.PI * 2,
     chuteInflation: 0,
     swayAmount: 0,
+    descentMode: 'release',
     impactDelay: BOMB_IMPACT_DELAY,
     impactPending: false,
     isManual: !!plane.isManual,
     controlStrength: plane.isManual ? BOMB_CAM_STEER_SPEED : 0,
+    releasePitch: 0.78 + Math.random() * 0.24,
+    releaseRoll: (Math.random() < 0.5 ? -1 : 1) * (0.4 + Math.random() * 0.26),
+    releaseYawDrift: (Math.random() - 0.5) * 0.18,
     dead: false
   };
+};
+
+const getBombTargetPoint = (bomb) => ({
+  x: bomb?.targetX ?? bomb?.x ?? 0,
+  z: bomb?.targetZ ?? bomb?.z ?? 0
+});
+
+const getBombTargetMetrics = (bomb) => {
+  const target = getBombTargetPoint(bomb);
+  const dx = target.x - (bomb?.x ?? 0);
+  const dz = target.z - (bomb?.z ?? 0);
+  const distXZ = Math.hypot(dx, dz);
+  return {
+    targetX: target.x,
+    targetZ: target.z,
+    dx,
+    dz,
+    distXZ,
+    dirX: distXZ > 0.001 ? dx / distXZ : 0,
+    dirZ: distXZ > 0.001 ? dz / distXZ : 0
+  };
+};
+
+const updateBombReleaseMotion = (bomb, delta, bombDs) => {
+  bomb.descentMode = 'release';
+  bomb.vy -= (bomb.grav || BOMB_DROP_GRAVITY) * bombDs;
+  bomb.chuteInflation = THREE.MathUtils.lerp(bomb.chuteInflation ?? 0, 0, Math.min(1, delta * 6));
+  bomb.swayAmount = THREE.MathUtils.lerp(bomb.swayAmount ?? 0, 0.14, Math.min(1, delta * 4.2));
+};
+
+const updateBombGuidedMotion = (bomb, metrics, targetY, delta, bombDs) => {
+  bomb.descentMode = 'guided';
+  const glideSpeed = bomb.glideSpeed || BOMB_PARACHUTE_GLIDE_SPEED;
+  const baseFallSpeed = bomb.fallSpeed || BOMB_PARACHUTE_FALL_SPEED;
+  const altitudeAboveTarget = Math.max(0, (bomb.y ?? targetY) - targetY);
+  const distanceFactor = THREE.MathUtils.clamp(metrics.distXZ / 240, 0, 1);
+  const altitudeFactor = THREE.MathUtils.clamp(altitudeAboveTarget / 280, 0, 1);
+  const desiredSpeed = Math.min(
+    glideSpeed,
+    0.9 + metrics.distXZ * 0.034 + altitudeFactor * 1.25
+  );
+  const steerLerp = Math.min(1, 0.16 * bombDs);
+  const desiredVx = metrics.dirX * desiredSpeed;
+  const desiredVz = metrics.dirZ * desiredSpeed;
+  const desiredFallSpeed = baseFallSpeed * (0.9 + altitudeFactor * 0.55 + distanceFactor * 0.12);
+
+  bomb.vx = THREE.MathUtils.lerp(bomb.vx || 0, desiredVx, steerLerp);
+  bomb.vz = THREE.MathUtils.lerp(bomb.vz || 0, desiredVz, steerLerp);
+  bomb.vy = THREE.MathUtils.lerp(bomb.vy || 0, -desiredFallSpeed, Math.min(1, 0.2 * bombDs));
+  bomb.chuteInflation = THREE.MathUtils.lerp(bomb.chuteInflation ?? 0, 1, Math.min(1, delta * 4.5));
+  bomb.swayAmount = THREE.MathUtils.lerp(
+    bomb.swayAmount ?? 0,
+    0.2 + distanceFactor * 0.28,
+    Math.min(1, delta * 2.8)
+  );
 };
 
 const debugAirstrikeLog = (...args) => {
@@ -721,11 +921,13 @@ const getKaijuVariantPoolForLevel = (level) => (
   KAIJU_VARIANT_POOLS[Math.min(KAIJU_VARIANT_POOLS.length - 1, Math.max(0, level - 1))]
 );
 
+const MAX_KAIJU_DEPLOY_PER_WAVE = 4;
+
 const getWaveKaijuCount = (level, maxKaijus) => {
   const guaranteed = 1 + Math.floor((level - 1) / 2);
   const surgeChance = Math.min(0.55, 0.1 + level * 0.08);
   const surge = Math.random() < surgeChance ? 1 : 0;
-  return Math.max(1, Math.min(maxKaijus, guaranteed + surge));
+  return Math.max(1, Math.min(maxKaijus, MAX_KAIJU_DEPLOY_PER_WAVE, guaranteed + surge));
 };
 
 const getKaijuDisplayName = (variant) => (
@@ -769,6 +971,8 @@ const getKaijuElementalProfile = (kaijuOrVariant) => {
 };
 
 const getKaijuSpecialEffectKind = (variant) => {
+  const tuning = getKaijuVariantTuning(variant);
+  if (tuning?.specialFxKind) return tuning.specialFxKind;
   if (variant === 'octopus') return 'ink';
   if (variant === 'spider') return 'web';
   if (variant === 'beetle' || variant === 'spicie_bird') return 'lightning';
@@ -776,16 +980,27 @@ const getKaijuSpecialEffectKind = (variant) => {
   return 'reactor';
 };
 
-const getKaijuTelegraphColor = (kind = 'reactor') => {
+const getKaijuTelegraphColor = (kind = 'reactor', variant = null) => {
+  const tuning = variant ? getKaijuVariantTuning(variant) : null;
   if (kind === 'ink') return '#7c3aed';
   if (kind === 'web') return '#dbeafe';
   if (kind === 'lightning') return '#67e8f9';
   if (kind === 'smash') return '#fb923c';
   if (kind === 'ash') return '#84cc16';
+  if (kind === 'meltdown') return '#fb7185';
+  if ((kind === 'fire' || kind === 'reactor') && tuning?.telegraphColor) return tuning.telegraphColor;
   return '#f59e0b';
 };
 
 const getKaijuSpecialFxPalette = (kind = 'reactor') => {
+  if (kind === 'meltdown') {
+    return {
+      primary: '#f97316',
+      secondary: '#fb7185',
+      core: '#fff7ed',
+      smoke: '#431407'
+    };
+  }
   if (kind === 'ink') {
     return {
       primary: '#8b5cf6',
@@ -823,6 +1038,20 @@ const getKaijuSpecialFxPalette = (kind = 'reactor') => {
     secondary: '#facc15',
     core: '#fff7ed',
     smoke: '#4a1d0d'
+  };
+};
+
+const getKaijuVisualTheme = (kaijuOrVariant) => {
+  const variant = typeof kaijuOrVariant === 'string' ? kaijuOrVariant : kaijuOrVariant?.variant;
+  const tuning = getKaijuVariantTuning(variant);
+  const specialEffectKind = getKaijuSpecialEffectKind(variant);
+  const palette = getKaijuSpecialFxPalette(specialEffectKind);
+  return {
+    labelColor: tuning.labelColor || palette.primary,
+    hpFillColor: tuning.hpFillColor || palette.primary,
+    hpBackColor: tuning.hpBackColor || palette.smoke,
+    hpGlowColor: tuning.hpGlowColor || palette.core,
+    telegraphColor: tuning.telegraphColor || getKaijuTelegraphColor(specialEffectKind, variant)
   };
 };
 
@@ -1206,34 +1435,27 @@ const getTrackedEntity = ({ entitiesRef, entityLookupRef, entityId, index }) => 
   return index === undefined ? undefined : entitiesRef.current[index];
 };
 
-const getDynamicEntitySignature = (entities) => {
-  let hash = 2166136261;
-  let count = 0;
-
+const collectDynamicRenderableIds = (entities, target = []) => {
+  target.length = 0;
   entities.forEach((entity) => {
-    if (!DYNAMIC_RENDER_TYPES.has(entity.type)) return;
-    count++;
-    const type = entity.type || '';
-    const id = entity.id || '';
-    hash ^= entity.dead ? 1 : 0;
-    hash = Math.imul(hash, 16777619);
-    for (let i = 0; i < type.length; i++) {
-      hash ^= type.charCodeAt(i);
-      hash = Math.imul(hash, 16777619);
-    }
-    hash ^= 58;
-    hash = Math.imul(hash, 16777619);
-    for (let i = 0; i < id.length; i++) {
-      hash ^= id.charCodeAt(i);
-      hash = Math.imul(hash, 16777619);
-    }
+    if (!entity || entity.dead || !DYNAMIC_RENDER_TYPES.has(entity.type)) return;
+    target.push(entity.id);
   });
+  return target;
+};
 
-  return `${count}:${hash >>> 0}`;
+const areEntityIdListsEqual = (left, right) => {
+  if (left === right) return true;
+  if (!left || !right || left.length !== right.length) return false;
+  for (let index = 0; index < left.length; index++) {
+    if (left[index] !== right[index]) return false;
+  }
+  return true;
 };
 
 const createFrameEntitySnapshot = () => ({
   ready: false,
+  lastBuiltFrame: -1,
   allKaijus: [],
   aliveKaijus: [],
   groundKaijus: [],
@@ -1249,7 +1471,9 @@ const createFrameEntitySnapshot = () => ({
   liveEngineers: [],
   livePersons: [],
   repairTargets: [],
-  collateralTargets: []
+  collateralTargets: [],
+  dynamicRenderableIds: [],
+  dynamicRenderVersion: 0
 });
 
 const createPlaneStrikeEntity = ({
@@ -1280,6 +1504,8 @@ const createPlaneStrikeEntity = ({
     minDistToTarget: Infinity,
     prevDist: Infinity,
     attackRunArmed: false,
+    flybySoundPlayed: false,
+    closeFlybySoundPlayed: false,
     isManual
   };
 };
@@ -1338,24 +1564,61 @@ const pushScorchEntity = (entities, x, z, radius = 60, options = {}) => {
   });
 };
 
+const pushGroundScarEntity = (entities, x, z, radius = 60, options = {}) => {
+  const ttl = options.ttl ?? 42;
+  entities.push({
+    id: `scorch-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    type: 'scorch',
+    kind: options.kind || 'ground_scar',
+    x,
+    z,
+    radius,
+    stretchX: options.stretchX ?? 1,
+    stretchZ: options.stretchZ ?? 1,
+    rotation: options.rotation ?? 0,
+    age: 0,
+    dead: false,
+    ttl,
+    smokeCount: 0,
+    flameCount: 0,
+    burnLife: options.burnLife ?? Math.max(4, ttl * 0.12),
+    coreLife: options.coreLife ?? Math.max(5, Math.min(16, ttl * 0.2)),
+    smokeLife: options.smokeLife ?? 0.1,
+    coolDuration: options.coolDuration ?? Math.max(8, Math.min(18, ttl * 0.28)),
+    baseColor: options.baseColor || '#090605',
+    ringColor: options.ringColor || '#24140c',
+    coreColor: options.coreColor || '#4a2a16',
+    heatColor: options.heatColor || '#000000',
+    hotBaseColor: options.hotBaseColor || '#2a1108',
+    hotRingColor: options.hotRingColor || '#7a2f16',
+    hotCoreColor: options.hotCoreColor || '#ff8a3d',
+    hotHeatColor: options.hotHeatColor || '#ffb35c',
+    baseOpacity: options.baseOpacity ?? 0.74,
+    ringOpacity: options.ringOpacity ?? 0.62,
+    coreOpacity: options.coreOpacity ?? 0.12,
+    heatOpacity: options.heatOpacity ?? 0,
+    ...options
+  });
+};
+
 const spawnNukeAftermathFires = (entities, x, z, isManual = true) => {
   const coreRadius = isManual ? 112 : 92;
-  const patchCount = isManual ? NUKE_AFTERFIRE_PATCH_COUNT + 1 : NUKE_AFTERFIRE_PATCH_COUNT;
+  const patchCount = isManual ? NUKE_AFTERFIRE_PATCH_COUNT : Math.max(2, NUKE_AFTERFIRE_PATCH_COUNT - 1);
   const patchMinRadius = coreRadius * 0.78;
   const patchMaxRadius = isManual ? 240 : 190;
 
   pushScorchEntity(entities, x, z, coreRadius, {
     kind: 'nuke_core',
     temporary: true,
-    ttl: isManual ? NUKE_AFTERFIRE_CORE_LIFETIME : 12,
+    ttl: isManual ? NUKE_AFTERFIRE_CORE_LIFETIME : 10,
     baseOpacity: 0.94,
     coreOpacity: 0.56,
     heatOpacity: 0.24,
     burnRadius: isManual ? 230 : 185,
-    burnLife: isManual ? NUKE_AFTERFIRE_CORE_LIFETIME : 18,
-    smokeCount: isManual ? 5 : 4,
-    flameCount: isManual ? 4 : 3,
-    smokeDrift: isManual ? 8 : 6,
+    burnLife: isManual ? NUKE_AFTERFIRE_CORE_LIFETIME : 14,
+    smokeCount: isManual ? 3 : 2,
+    flameCount: isManual ? 2 : 1,
+    smokeDrift: isManual ? 6 : 4.5,
     firePulseSpeed: 4.6
   });
 
@@ -1366,19 +1629,19 @@ const spawnNukeAftermathFires = (entities, x, z, isManual = true) => {
       x: x + Math.cos(angle) * distance,
       z: z + Math.sin(angle) * distance
     });
-    const patchRadius = 18 + Math.random() * (isManual ? 24 : 18);
+    const patchRadius = 16 + Math.random() * (isManual ? 18 : 14);
     pushScorchEntity(entities, patch.x, patch.z, patchRadius, {
       kind: 'nuke_fire_patch',
       temporary: true,
-      ttl: (isManual ? NUKE_AFTERFIRE_PATCH_TTL : 13) + Math.random() * 5,
+      ttl: (isManual ? NUKE_AFTERFIRE_PATCH_TTL : 11) + Math.random() * 3,
       baseOpacity: 0.76,
       coreOpacity: 0.42,
       heatOpacity: 0.18,
       burnRadius: patchRadius * 3.1,
-      burnLife: (isManual ? NUKE_AFTERFIRE_PATCH_TTL : 13) + Math.random() * 2,
-      smokeCount: 1 + Math.floor(Math.random() * 2),
-      flameCount: 1 + Math.floor(Math.random() * 2),
-      smokeDrift: 5 + Math.random() * 3,
+      burnLife: (isManual ? NUKE_AFTERFIRE_PATCH_TTL : 11) + Math.random() * 1.5,
+      smokeCount: 1,
+      flameCount: Math.random() > 0.4 ? 1 : 0,
+      smokeDrift: 4 + Math.random() * 2,
       firePulseSpeed: 5.4 + Math.random() * 1.8
     });
   }
@@ -1617,7 +1880,13 @@ const ENVIRONMENT_VARIANTS = [
     fog: '#8f7157',
     ambient: '#ffe5c7',
     directional: '#ffd2a8',
-    accent: '#f97316'
+    accent: '#f97316',
+    dustiness: 0.96,
+    rockiness: 0.7,
+    moisture: 0.12,
+    accentStrength: 0.22,
+    hazeStrength: 0.34,
+    erosionStrength: 0.78
   },
   {
     key: 'toxic_bloom',
@@ -1633,7 +1902,13 @@ const ENVIRONMENT_VARIANTS = [
     fog: '#6d8f4a',
     ambient: '#f0ffe6',
     directional: '#d9f99d',
-    accent: '#a3e635'
+    accent: '#a3e635',
+    dustiness: 0.38,
+    rockiness: 0.32,
+    moisture: 0.9,
+    accentStrength: 0.5,
+    hazeStrength: 0.2,
+    erosionStrength: 0.36
   },
   {
     key: 'ember_storm',
@@ -1649,7 +1924,13 @@ const ENVIRONMENT_VARIANTS = [
     fog: '#a46442',
     ambient: '#ffe7d1',
     directional: '#fdba74',
-    accent: '#fb7185'
+    accent: '#fb7185',
+    dustiness: 0.82,
+    rockiness: 0.56,
+    moisture: 0.2,
+    accentStrength: 0.34,
+    hazeStrength: 0.3,
+    erosionStrength: 0.64
   },
   {
     key: 'dead_zone',
@@ -1665,7 +1946,13 @@ const ENVIRONMENT_VARIANTS = [
     fog: '#7a8696',
     ambient: '#e2e8f0',
     directional: '#cbd5e1',
-    accent: '#93c5fd'
+    accent: '#93c5fd',
+    dustiness: 0.34,
+    rockiness: 0.88,
+    moisture: 0.42,
+    accentStrength: 0.18,
+    hazeStrength: 0.42,
+    erosionStrength: 0.7
   }
 ];
 
@@ -1678,7 +1965,7 @@ const pickRandomEnvironmentVariant = (previousKey = null) => {
 const RESOLUTION_PRESETS = {
   performance: {
     label: '8-Bit',
-    dpr: 0.35,
+    dpr: 0.3,
     note: 'Fastest',
     pixelated: true,
     antialias: false,
@@ -1692,6 +1979,8 @@ const RESOLUTION_PRESETS = {
     kaijuMax: 2,
     enableSunGlow: false,
     enableRadiationLight: false,
+    enableSecondaryFillLight: false,
+    enableRimLight: false,
     ashParticles: 3,
     terrainSegments: 64,
     terrainTextureSize: 384,
@@ -1713,37 +2002,39 @@ const RESOLUTION_PRESETS = {
   },
   balanced: {
     label: '75%',
-    dpr: 0.75,
-    note: 'Recommended',
+    dpr: 0.5,
+    note: 'Cooler default',
     pixelated: false,
-    antialias: true,
-    shadows: true,
-    shadowMapSize: 384,
-    civilianDensity: 0.65,
-    militaryDensity: 0.8,
-    structureDensity: 0.7,
-    treeDensity: 0.75,
-    birdDensity: 0.5,
+    antialias: false,
+    shadows: false,
+    shadowMapSize: 0,
+    civilianDensity: 0.45,
+    militaryDensity: 0.64,
+    structureDensity: 0.58,
+    treeDensity: 0.58,
+    birdDensity: 0.35,
     kaijuMax: 3,
     enableSunGlow: true,
-    enableRadiationLight: true,
-    ashParticles: 5,
-    terrainSegments: 72,
-    terrainTextureSize: 640,
-    terrainPatchCount: 120,
-    terrainCrackCount: 28,
-    terrainDebrisCount: 240,
-    terrainAnisotropy: 4,
-    burnMarkCount: 5,
+    enableRadiationLight: false,
+    enableSecondaryFillLight: true,
+    enableRimLight: false,
+    ashParticles: 3,
+    terrainSegments: 56,
+    terrainTextureSize: 448,
+    terrainPatchCount: 84,
+    terrainCrackCount: 20,
+    terrainDebrisCount: 168,
+    terrainAnisotropy: 1,
+    burnMarkCount: 3,
     mushroom: {
-      stemCount: 5,
+      stemCount: 4,
       capCount: 3,
-      debrisCount: 12,
-      ashCount: 6,
-      sparkCount: 12,
-      shockRingCount: 5,
-      plumeStride: 2,
-      particleStride: 3
+      debrisCount: 9,
+      ashCount: 4,
+      sparkCount: 8,
+      shockRingCount: 4,
+      plumeStride: 3,
+      particleStride: 4
     }
   },
   high: {
@@ -1762,6 +2053,8 @@ const RESOLUTION_PRESETS = {
     kaijuMax: 3,
     enableSunGlow: true,
     enableRadiationLight: true,
+    enableSecondaryFillLight: true,
+    enableRimLight: true,
     ashParticles: 6,
     terrainSegments: 88,
     terrainTextureSize: 896,
@@ -1797,6 +2090,8 @@ const RESOLUTION_PRESETS = {
     kaijuMax: 3,
     enableSunGlow: true,
     enableRadiationLight: true,
+    enableSecondaryFillLight: true,
+    enableRimLight: true,
     ashParticles: 8,
     terrainSegments: 96,
     terrainTextureSize: 1024,
@@ -1817,11 +2112,45 @@ const RESOLUTION_PRESETS = {
     }
   }
 };
-const DEFAULT_RESOLUTION_PRESET = 'balanced';
+const DEFAULT_RESOLUTION_PRESET = 'performance';
+const THERMAL_SAFETY_STORAGE_KEY = 'fallout-thermal-safety-v1';
+const isLikelyRetinaMac = () => {
+  if (typeof window === 'undefined' || typeof navigator === 'undefined') return false;
+  const platform = navigator.platform || '';
+  const userAgent = navigator.userAgent || '';
+  const isMac = /Mac/i.test(platform) || /Macintosh|Mac OS X/i.test(userAgent);
+  return isMac && (window.devicePixelRatio || 1) >= 2;
+};
+const prefersCoolDefaults = () => {
+  if (typeof window === 'undefined' || typeof navigator === 'undefined') return false;
+  const memory = navigator.deviceMemory ?? 8;
+  const cores = navigator.hardwareConcurrency ?? 8;
+  const dpr = window.devicePixelRatio || 1;
+  const prefersReducedMotion = typeof window.matchMedia === 'function'
+    ? window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    : false;
+  return prefersReducedMotion || isLikelyRetinaMac() || memory <= 8 || cores <= 8 || dpr >= 2.25;
+};
+const applyThermalSafetyMigration = () => {
+  if (typeof window === 'undefined') return false;
+  if (!prefersCoolDefaults()) return false;
+  if (window.localStorage.getItem(THERMAL_SAFETY_STORAGE_KEY) === '1') return false;
+  window.localStorage.setItem('fallout-resolution-preset', 'performance');
+  window.localStorage.setItem('fallout-fps-cap', '30');
+  window.localStorage.setItem(THERMAL_SAFETY_STORAGE_KEY, '1');
+  return true;
+};
 const getInitialResolutionPreset = () => {
   if (typeof window === 'undefined') return DEFAULT_RESOLUTION_PRESET;
+  if (applyThermalSafetyMigration()) return 'performance';
   const saved = window.localStorage.getItem('fallout-resolution-preset');
-  return saved && RESOLUTION_PRESETS[saved] ? saved : DEFAULT_RESOLUTION_PRESET;
+  if (saved && RESOLUTION_PRESETS[saved]) {
+    if (!prefersCoolDefaults()) return saved;
+    if (saved === 'ultra' || saved === 'high') return 'balanced';
+    return saved;
+  }
+  if (prefersCoolDefaults()) return 'performance';
+  return DEFAULT_RESOLUTION_PRESET;
 };
 const getResolutionProfile = (preset) => RESOLUTION_PRESETS[preset] || RESOLUTION_PRESETS[DEFAULT_RESOLUTION_PRESET];
 const FPS_CAP_OPTIONS = {
@@ -1844,25 +2173,39 @@ const FPS_CAP_OPTIONS = {
 const DEFAULT_FPS_CAP = '30';
 const getInitialFpsCap = () => {
   if (typeof window === 'undefined') return DEFAULT_FPS_CAP;
+  if (applyThermalSafetyMigration()) return '30';
   const saved = window.localStorage.getItem('fallout-fps-cap');
-  return saved && FPS_CAP_OPTIONS[saved] ? saved : DEFAULT_FPS_CAP;
+  if (saved && FPS_CAP_OPTIONS[saved]) {
+    if (prefersCoolDefaults() && saved === 'unlimited') return '30';
+    return saved;
+  }
+  return DEFAULT_FPS_CAP;
 };
 const getAdaptiveQualityProfile = (baseProfile, stressLevel = 'normal') => {
   if (!baseProfile) return baseProfile;
   if (stressLevel === 'normal') {
+    const leanDefault = (baseProfile.dpr || 0.65) <= 0.5;
     return {
       ...baseProfile,
-      detailMode: 'full',
-      cityRowsMax: 5,
-      treeSmokeStride: 1
+      detailMode: leanDefault ? 'lean' : 'full',
+      cityRowsMax: leanDefault ? 4 : 5,
+      treeSmokeStride: leanDefault ? 2 : 1,
+      enableSecondaryFillLight: baseProfile.enableSecondaryFillLight !== false,
+      enableRimLight: !!baseProfile.enableRimLight
     };
   }
 
   if (stressLevel === 'high') {
     return {
       ...baseProfile,
+      dpr: Math.max(0.5, Math.min(baseProfile.dpr || 0.75, (baseProfile.dpr || 0.75) * 0.82)),
       shadows: false,
       shadowMapSize: 0,
+      civilianDensity: Math.max(0.24, (baseProfile.civilianDensity || 0.6) * 0.78),
+      militaryDensity: Math.max(0.4, (baseProfile.militaryDensity || 0.75) * 0.84),
+      structureDensity: Math.max(0.5, (baseProfile.structureDensity || 0.7) * 0.88),
+      treeDensity: Math.max(0.4, (baseProfile.treeDensity || 0.7) * 0.8),
+      birdDensity: Math.max(0.1, (baseProfile.birdDensity || 0.4) * 0.6),
       enableSunGlow: false,
       enableRadiationLight: false,
       ashParticles: Math.max(0, Math.floor((baseProfile.ashParticles || 0) * 0.5)),
@@ -1878,6 +2221,8 @@ const getAdaptiveQualityProfile = (baseProfile, stressLevel = 'normal') => {
         plumeStride: Math.max(3, (baseProfile.mushroom?.plumeStride || 2) + 1),
         particleStride: Math.max(4, (baseProfile.mushroom?.particleStride || 3) + 1)
       },
+      enableSecondaryFillLight: false,
+      enableRimLight: false,
       detailMode: 'lean',
       cityRowsMax: 3,
       treeSmokeStride: 2
@@ -1886,8 +2231,14 @@ const getAdaptiveQualityProfile = (baseProfile, stressLevel = 'normal') => {
 
   return {
     ...baseProfile,
+    dpr: Math.max(0.42, Math.min(baseProfile.dpr || 0.65, (baseProfile.dpr || 0.65) * 0.68)),
     shadows: false,
     shadowMapSize: 0,
+    civilianDensity: Math.max(0.18, (baseProfile.civilianDensity || 0.5) * 0.58),
+    militaryDensity: Math.max(0.3, (baseProfile.militaryDensity || 0.7) * 0.68),
+    structureDensity: Math.max(0.4, (baseProfile.structureDensity || 0.6) * 0.76),
+    treeDensity: Math.max(0.25, (baseProfile.treeDensity || 0.6) * 0.55),
+    birdDensity: Math.max(0.05, (baseProfile.birdDensity || 0.25) * 0.4),
     enableSunGlow: false,
     enableRadiationLight: false,
     ashParticles: 0,
@@ -1903,10 +2254,25 @@ const getAdaptiveQualityProfile = (baseProfile, stressLevel = 'normal') => {
       plumeStride: Math.max(4, (baseProfile.mushroom?.plumeStride || 3) + 1),
       particleStride: Math.max(5, (baseProfile.mushroom?.particleStride || 4) + 1)
     },
-    detailMode: 'minimal',
-    cityRowsMax: 2,
-    treeSmokeStride: 3
+      enableSecondaryFillLight: false,
+      enableRimLight: false,
+      detailMode: 'minimal',
+      cityRowsMax: 2,
+      treeSmokeStride: 3
   };
+};
+
+const shouldUseLightweightNukeEffects = () => {
+  if (typeof window === 'undefined') return false;
+  const perfMode = window._falloutPerfMode;
+  const preset = window._falloutResolutionPreset;
+  const detailMode = window._falloutDetailMode;
+  return (
+    preset === 'performance' ||
+    perfMode === 'high' ||
+    perfMode === 'critical' ||
+    detailMode === 'minimal'
+  );
 };
 
 const AudioManager = {
@@ -2233,6 +2599,61 @@ const AudioManager = {
       scheduleRelease(dur);
 
     } else if (type === 'nuke') {
+      const lightweightNuke = options.lightweight || shouldUseLightweightNukeEffects();
+      if (lightweightNuke) {
+        const dur = 2.8;
+
+        const crack = ctx.createBufferSource();
+        crack.buffer = this.getNoiseBuffer(ctx, 0.08);
+        const crackHP = ctx.createBiquadFilter();
+        crackHP.type = 'highpass'; crackHP.frequency.value = 2200;
+        const crackG = ctx.createGain();
+        crackG.gain.setValueAtTime(0.28, t);
+        crackG.gain.exponentialRampToValueAtTime(0.001, t + 0.08);
+        crack.connect(crackHP).connect(crackG).connect(destination);
+        crack.start(t); crack.stop(t + 0.08);
+
+        const body = ctx.createBufferSource();
+        body.buffer = this.getBrownNoise(ctx, 1.8);
+        const bodyLP = ctx.createBiquadFilter();
+        bodyLP.type = 'lowpass';
+        bodyLP.frequency.setValueAtTime(240, t);
+        bodyLP.frequency.exponentialRampToValueAtTime(36, t + 1.8);
+        const bodyG = ctx.createGain();
+        bodyG.gain.setValueAtTime(0.001, t);
+        bodyG.gain.linearRampToValueAtTime(0.34, t + 0.04);
+        bodyG.gain.exponentialRampToValueAtTime(0.001, t + 1.8);
+        body.connect(bodyLP).connect(bodyG).connect(destination);
+        body.start(t + 0.02); body.stop(t + 1.8);
+
+        const roar = ctx.createBufferSource();
+        roar.buffer = this.getPinkNoise(ctx, dur);
+        const roarBP = ctx.createBiquadFilter();
+        roarBP.type = 'bandpass';
+        roarBP.frequency.setValueAtTime(140, t);
+        roarBP.frequency.exponentialRampToValueAtTime(60, t + dur);
+        roarBP.Q.value = 0.42;
+        const roarG = ctx.createGain();
+        roarG.gain.setValueAtTime(0.001, t);
+        roarG.gain.linearRampToValueAtTime(0.18, t + 0.3);
+        roarG.gain.exponentialRampToValueAtTime(0.001, t + dur);
+        roar.connect(roarBP).connect(roarG).connect(destination);
+        roar.start(t + 0.1); roar.stop(t + dur);
+
+        const sub = ctx.createOscillator(); sub.type = 'sine';
+        sub.frequency.setValueAtTime(24, t);
+        sub.frequency.exponentialRampToValueAtTime(8, t + 2.1);
+        const subG = ctx.createGain();
+        subG.gain.setValueAtTime(0.001, t);
+        subG.gain.linearRampToValueAtTime(0.26, t + 0.05);
+        subG.gain.exponentialRampToValueAtTime(0.001, t + 2.1);
+        sub.connect(subG).connect(destination);
+        sub.start(t); sub.stop(t + 2.1);
+
+        scheduleRelease(dur);
+        return;
+      }
+
       // ══════════════════════════════════════════════════════════════
       // NUCLEAR DETONATION — cinematic 10-layer, 6-second soundscape
       // Phase 1: Flash/EMP  Phase 2: Shockwave  Phase 3: Fireball
@@ -3902,7 +4323,7 @@ const EntityPerson = memo(({ entityId, entityLookupRef, index, entitiesRef, qual
   
   // (Optimized: Cloth and hair physics are procedurally simulated via simple Math.sin for performance)
   
-  useFrame((state, delta) => {
+  useCentralSceneFrame((state, delta) => {
     const p = getTrackedEntity({ entitiesRef, entityLookupRef, entityId, index });
     if (!p || p.dead) { 
       if (group.current) group.current.visible = false; 
@@ -4831,7 +5252,7 @@ const EntityCar = memo(({ index, entitiesRef }) => {
   const wreckTilt = useRef((Math.random() - 0.5) * 0.35);
   const frameSkip = useRef(0);
   
-  useFrame((state) => {
+  useCentralSceneFrame((state) => {
     const p = entitiesRef.current[index];
     if (!p || p.dead) { if (group.current) group.current.visible = false; return; }
     if (!group.current) return;
@@ -4911,10 +5332,18 @@ const EntityCar = memo(({ index, entitiesRef }) => {
 const EntityTank = memo(({ entityId, entityLookupRef, index, entitiesRef, frameSnapshotRef }) => {
   const group = useRef();
   const modelNodesRef = useRef({});
+  const fallbackTurretRootRef = useRef();
+  const fallbackBarrelRef = useRef();
+  const fallbackShroudRef = useRef();
+  const fallbackMuzzleGlowRef = useRef();
+  const fallbackSensorGlowRef = useRef();
   const fireAnim = useRef(0);
   const soundCooldown = useRef(0);
   const selectionFlashRef = useRef();
   const selectionBeamRef = useRef();
+  const chassisGlowRef = useRef();
+  const engineGlowRefs = useRef([]);
+  const exhaustTrailRefs = useRef([]);
   const smokeMeshes = useRef([]);
   const smokeOffsetsRef = useRef(
     Array.from({ length: 4 }, (_, smokeIndex) => ({
@@ -4947,7 +5376,7 @@ const EntityTank = memo(({ entityId, entityLookupRef, index, entitiesRef, frameS
     const sourceScene = airstrikeAssetCache.scene;
     if (!assetReady || !sourceScene || !tankAssetName) return null;
     materialStatesRef.current = [];
-    const clone = cloneNamedGlbGroup(sourceScene, tankAssetName);
+    const clone = cloneNamedGlbGroup(sourceScene, tankAssetName, { aliveShaderMix: ALIVE_SHADER_VEHICLE_MIX });
     if (!clone) return null;
     clone.traverse((node) => {
       if (node.position && !node.userData.basePosition) node.userData.basePosition = node.position.clone();
@@ -4979,7 +5408,7 @@ const EntityTank = memo(({ entityId, entityLookupRef, index, entitiesRef, frameS
 
   useEffect(() => () => disposeClonedMaterials(tankScene), [tankScene]);
 
-  useFrame((state, delta) => {
+  useCentralSceneFrame((state, delta) => {
     const p = getTrackedEntity({ entitiesRef, entityLookupRef, entityId, index });
     if (!p || p.dead) {
       if (group.current) group.current.visible = false;
@@ -4992,11 +5421,11 @@ const EntityTank = memo(({ entityId, entityLookupRef, index, entitiesRef, frameS
     const armorVisualMultiplier = p.variant === 'apc' ? APC_VISUAL_SCALE_MULTIPLIER : TANK_VISUAL_SCALE_MULTIPLIER;
     const armorScale = GROUND_ARMOR_MODEL_SCALE * (p.scale || 1) * armorVisualMultiplier;
     const isBroken = p.state === 'broken';
-    const turretRoot = modelNodesRef.current.vehicle_turret_root;
-    const barrelNode = modelNodesRef.current.vehicle_barrel;
-    const shroudNode = modelNodesRef.current.vehicle_barrel_shroud;
-    const muzzleGlow = modelNodesRef.current.vehicle_muzzle_glow;
-    const sensorGlow = modelNodesRef.current.vehicle_sensor_glow;
+    const turretRoot = fallbackTurretRootRef.current || modelNodesRef.current.vehicle_turret_root;
+    const barrelNode = fallbackBarrelRef.current || modelNodesRef.current.vehicle_barrel;
+    const shroudNode = fallbackShroudRef.current || modelNodesRef.current.vehicle_barrel_shroud;
+    const muzzleGlow = fallbackMuzzleGlowRef.current || modelNodesRef.current.vehicle_muzzle_glow;
+    const sensorGlow = fallbackSensorGlowRef.current || modelNodesRef.current.vehicle_sensor_glow;
     const groundKaijus = frameSnapshotRef?.current?.ready
       ? frameSnapshotRef.current.groundKaijus
       : entitiesRef.current.filter((entity) => (
@@ -5231,13 +5660,15 @@ const EntityTank = memo(({ entityId, entityLookupRef, index, entitiesRef, frameS
       turretRoot.rotation.x = isBroken ? 0.07 : 0;
     }
     [barrelNode, shroudNode, muzzleGlow].forEach((node, nodeIndex) => {
-      if (!node?.userData?.basePosition) return;
+      if (!node) return;
+      if (!node.userData.basePosition) node.userData.basePosition = node.position.clone();
       node.position.copy(node.userData.basePosition);
       node.position.x -= fireAnim.current * (nodeIndex === 0 ? TANK_MODEL_RECOIL_DISTANCE : TANK_MODEL_RECOIL_DISTANCE * 0.72);
     });
     if (muzzleGlow) {
       setCloudOpacity(muzzleGlow, isBroken ? 0.06 : 0.08 + fireAnim.current * 0.5);
       const pulse = 1 + fireAnim.current * 0.6;
+      if (!muzzleGlow.userData.baseScale) muzzleGlow.userData.baseScale = muzzleGlow.scale.clone();
       if (muzzleGlow.userData.baseScale) {
         muzzleGlow.scale.set(
           muzzleGlow.userData.baseScale.x * pulse,
@@ -5283,6 +5714,43 @@ const EntityTank = memo(({ entityId, entityLookupRef, index, entitiesRef, frameS
       if (mesh.material) mesh.material.opacity = Math.max(0, 0.42 - loop * 0.1);
     });
 
+    if (chassisGlowRef.current?.material) {
+      chassisGlowRef.current.visible = !isBroken || p.selected;
+      chassisGlowRef.current.scale.set(
+        1 + Math.min(0.18, speed * 0.025),
+        1,
+        1 + Math.min(0.24, speed * 0.035)
+      );
+      chassisGlowRef.current.material.opacity = isBroken
+        ? 0.12
+        : (p.selected ? 0.34 : 0.12) + Math.min(0.14, speed * 0.02) + fireAnim.current * 0.08;
+      chassisGlowRef.current.material.color.set(p.variant === 'apc' ? '#67e8f9' : '#a3e635');
+    }
+
+    engineGlowRefs.current.forEach((mesh, glowIndex) => {
+      if (!mesh?.material) return;
+      const glowPulse = 0.78 + Math.sin(time * 8 + glowIndex * 0.9) * 0.16;
+      mesh.visible = true;
+      mesh.scale.setScalar((isBroken ? 0.9 : 1) + glowPulse * (speed > 0.2 ? 0.3 : 0.16));
+      mesh.material.opacity = isBroken
+        ? 0.16 + glowPulse * 0.08
+        : 0.12 + glowPulse * 0.08 + Math.min(0.2, speed * 0.03);
+    });
+
+    exhaustTrailRefs.current.forEach((mesh, trailIndex) => {
+      if (!mesh?.material) return;
+      const active = isBroken || speed > 0.18;
+      mesh.visible = active;
+      if (!active) return;
+      const drift = (time * (0.9 + trailIndex * 0.18) + trailIndex * 0.45) % 2.2;
+      mesh.position.y = 8 + drift * (isBroken ? 3.8 : 2.6);
+      mesh.position.z = (trailIndex % 2 === 0 ? -13 : -15) - drift * 4.8;
+      mesh.position.x = (trailIndex % 2 === 0 ? -7 : 7) + Math.sin(time * 1.8 + trailIndex) * 0.8;
+      const puffScale = 1 + drift * 0.42 + (isBroken ? 0.5 : 0.14);
+      mesh.scale.set(puffScale, puffScale * 1.2, puffScale);
+      mesh.material.opacity = Math.max(0, (isBroken ? 0.22 : 0.12) - drift * 0.05);
+    });
+
     if (!isBroken && speed > 0.28 && soundCooldown.current <= 0) {
       AudioManager.play('tank_engine', {
         volume: p.variant === 'apc' ? 0.034 + speed * 0.004 : 0.04 + speed * 0.004,
@@ -5317,6 +5785,207 @@ const EntityTank = memo(({ entityId, entityLookupRef, index, entitiesRef, frameS
     registerArmorMaterial(material);
   };
 
+  const primaryArmor = p.variant === 'apc' ? '#5b6f86' : '#687654';
+  const secondaryArmor = p.variant === 'apc' ? '#44566f' : '#566245';
+  const darkArmor = p.variant === 'apc' ? '#232d3c' : '#313928';
+  const trimArmor = p.variant === 'apc' ? '#8ea1b7' : '#909a74';
+  const glowColor = p.variant === 'apc' ? '#67e8f9' : '#a3e635';
+  const tankVisual = tankScene ? (
+    <group position={[0, 0, 0]} rotation={[0, 0, 0]}>
+      <primitive object={tankScene} />
+    </group>
+  ) : (
+    <group position={[0, 0, 0]} rotation={[0, 0, 0]}>
+      <mesh position={[-2, 3.1, 0]}>
+        <boxGeometry args={[60, 5.4, 32]} />
+        <meshStandardMaterial ref={registerFallbackMaterial} color={darkArmor} roughness={0.9} metalness={0.14} />
+      </mesh>
+      <mesh position={[10, 7.7, 0]} rotation={[0, 0, -0.18]}>
+        <boxGeometry args={[24, 5.8, 30]} />
+        <meshStandardMaterial ref={registerFallbackMaterial} color={secondaryArmor} roughness={0.66} metalness={0.3} />
+      </mesh>
+      <mesh position={[-11, 8.1, 0]}>
+        <boxGeometry args={[31, 7.5, 28]} />
+        <meshStandardMaterial ref={registerFallbackMaterial} color={secondaryArmor} roughness={0.7} metalness={0.28} />
+      </mesh>
+      <mesh position={[-21, 8.4, 0]} rotation={[0, 0, 0.08]}>
+        <boxGeometry args={[12, 7, 26]} />
+        <meshStandardMaterial ref={registerFallbackMaterial} color={primaryArmor} roughness={0.64} metalness={0.32} />
+      </mesh>
+      <mesh position={[-15, 11.2, 0]}>
+        <boxGeometry args={[16, 2.2, 18]} />
+        <meshStandardMaterial ref={registerFallbackMaterial} color={trimArmor} roughness={0.48} metalness={0.42} />
+      </mesh>
+      {[-11, 7, 26, 44].map((stripeX, idx) => (
+        <mesh key={`tank-skirt-${idx}`} position={[stripeX - 22, 6.8, 14.6]}>
+          <boxGeometry args={[11, 4.6, 1.8]} />
+          <meshStandardMaterial ref={registerFallbackMaterial} color={darkArmor} roughness={0.84} metalness={0.18} />
+        </mesh>
+      ))}
+      {[-11, 7, 26, 44].map((stripeX, idx) => (
+        <mesh key={`tank-skirt-right-${idx}`} position={[stripeX - 22, 6.8, -14.6]}>
+          <boxGeometry args={[11, 4.6, 1.8]} />
+          <meshStandardMaterial ref={registerFallbackMaterial} color={darkArmor} roughness={0.84} metalness={0.18} />
+        </mesh>
+      ))}
+      {[14.4, -14.4].map((trackZ, sideIndex) => (
+        <group key={`tank-track-${sideIndex}`} position={[0, 0, trackZ]}>
+          <mesh position={[0, 6.1, 0]}>
+            <boxGeometry args={[52, 3.8, 4]} />
+            <meshStandardMaterial ref={registerFallbackMaterial} color="#171c22" roughness={0.88} metalness={0.16} />
+          </mesh>
+          <mesh position={[0, 2.2, 0]}>
+            <boxGeometry args={[52, 4.2, 4.4]} />
+            <meshStandardMaterial ref={registerFallbackMaterial} color="#14181d" roughness={0.92} metalness={0.1} />
+          </mesh>
+          {[-22, -11, 0, 11, 22].map((wheelX, wheelIndex) => (
+            <mesh key={`tank-wheel-${sideIndex}-${wheelIndex}`} position={[wheelX, 2.6, 0]} rotation={[Math.PI / 2, 0, 0]}>
+              <cylinderGeometry args={[4.2, 4.2, 3.5, 18]} />
+              <meshStandardMaterial ref={registerFallbackMaterial} color={wheelIndex % 2 === 0 ? '#4b5563' : '#6b7280'} roughness={0.62} metalness={0.46} />
+            </mesh>
+          ))}
+          {[-27.5, 27.5].map((endX, endIndex) => (
+            <mesh key={`tank-wheel-end-${sideIndex}-${endIndex}`} position={[endX, 4.3, 0]} rotation={[Math.PI / 2, 0, 0]}>
+              <cylinderGeometry args={[5.3, 5.3, 4, 20]} />
+              <meshStandardMaterial ref={registerFallbackMaterial} color={endIndex === 0 ? '#6b7280' : '#4b5563'} roughness={0.54} metalness={0.5} />
+            </mesh>
+          ))}
+        </group>
+      ))}
+      <mesh position={[8, 12.4, 0]}>
+        <boxGeometry args={[31, 2.2, 26]} />
+        <meshStandardMaterial ref={registerFallbackMaterial} color={trimArmor} roughness={0.52} metalness={0.36} />
+      </mesh>
+      {p.variant === 'apc' ? (
+        <>
+          <mesh position={[-2, 17.2, 0]}>
+            <boxGeometry args={[34, 12, 23]} />
+            <meshStandardMaterial ref={registerFallbackMaterial} color={primaryArmor} roughness={0.6} metalness={0.34} />
+          </mesh>
+          <mesh position={[11, 18.3, 0]} rotation={[0, 0, -0.14]}>
+            <boxGeometry args={[12, 7, 20]} />
+            <meshStandardMaterial ref={registerFallbackMaterial} color={secondaryArmor} roughness={0.56} metalness={0.38} />
+          </mesh>
+          <mesh position={[-9, 21.4, 0]}>
+            <boxGeometry args={[12, 2.2, 14]} />
+            <meshStandardMaterial ref={registerFallbackMaterial} color={trimArmor} roughness={0.5} metalness={0.4} />
+          </mesh>
+          <group ref={fallbackTurretRootRef} position={[13.5, 20.2, 0]}>
+            <mesh>
+              <boxGeometry args={[10, 5.4, 12]} />
+              <meshStandardMaterial ref={registerFallbackMaterial} color={secondaryArmor} roughness={0.5} metalness={0.46} />
+            </mesh>
+            <mesh position={[4.5, 0.6, 0]} rotation={[0, 0, -0.12]}>
+              <boxGeometry args={[7, 3.4, 10]} />
+              <meshStandardMaterial ref={registerFallbackMaterial} color={primaryArmor} roughness={0.46} metalness={0.5} />
+            </mesh>
+            <mesh position={[-2.4, 3.2, 0]}>
+              <cylinderGeometry args={[2.4, 2.8, 2.3, 16]} />
+              <meshStandardMaterial ref={registerFallbackMaterial} color={trimArmor} roughness={0.38} metalness={0.58} />
+            </mesh>
+            <mesh ref={fallbackSensorGlowRef} position={[3.2, 2.2, 0]}>
+              <boxGeometry args={[2.5, 1.4, 3.8]} />
+              <meshBasicMaterial color="#67e8f9" transparent opacity={0.18} depthWrite={false} blending={THREE.AdditiveBlending} toneMapped={false} />
+            </mesh>
+            <mesh ref={fallbackShroudRef} position={[10.2, 0.4, 0]} rotation={[0, 0, -Math.PI / 2]}>
+              <cylinderGeometry args={[1.35, 1.6, 12, 16]} />
+              <meshStandardMaterial ref={registerFallbackMaterial} color="#212933" roughness={0.42} metalness={0.54} />
+            </mesh>
+            <mesh ref={fallbackBarrelRef} position={[17.6, 0.4, 0]} rotation={[0, 0, -Math.PI / 2]}>
+              <cylinderGeometry args={[0.68, 0.76, 15, 14]} />
+              <meshStandardMaterial ref={registerFallbackMaterial} color="#0f1720" roughness={0.34} metalness={0.78} />
+            </mesh>
+            <mesh ref={fallbackMuzzleGlowRef} position={[25.5, 0.4, 0]}>
+              <sphereGeometry args={[1.4, 10, 10]} />
+              <meshBasicMaterial color="#f59e0b" transparent opacity={0.1} depthWrite={false} blending={THREE.AdditiveBlending} toneMapped={false} />
+            </mesh>
+          </group>
+        </>
+      ) : (
+        <>
+          <mesh position={[-1, 17.4, 0]}>
+            <boxGeometry args={[19, 7.2, 22]} />
+            <meshStandardMaterial ref={registerFallbackMaterial} color={secondaryArmor} roughness={0.5} metalness={0.44} />
+          </mesh>
+          <mesh position={[6.5, 18.2, 0]} rotation={[0, 0, -0.16]}>
+            <boxGeometry args={[13, 5.4, 21]} />
+            <meshStandardMaterial ref={registerFallbackMaterial} color={primaryArmor} roughness={0.46} metalness={0.48} />
+          </mesh>
+          <mesh position={[-10.2, 17.9, 0]} rotation={[0, 0, 0.08]}>
+            <boxGeometry args={[10.5, 5.4, 17]} />
+            <meshStandardMaterial ref={registerFallbackMaterial} color={primaryArmor} roughness={0.52} metalness={0.42} />
+          </mesh>
+          <mesh position={[-7.5, 20.8, 0]}>
+            <boxGeometry args={[8, 1.8, 11]} />
+            <meshStandardMaterial ref={registerFallbackMaterial} color={trimArmor} roughness={0.4} metalness={0.62} />
+          </mesh>
+          <mesh position={[-16.2, 17.1, 0]}>
+            <boxGeometry args={[7, 4.2, 14]} />
+            <meshStandardMaterial ref={registerFallbackMaterial} color={trimArmor} roughness={0.58} metalness={0.32} />
+          </mesh>
+          {[-4.5, 4.5].map((cheekZ, idx) => (
+            <mesh key={`tank-cheek-${idx}`} position={[9.5, 16.8, cheekZ]} rotation={[0, cheekZ > 0 ? 0.22 : -0.22, -0.2]}>
+              <boxGeometry args={[8.5, 4.4, 7.8]} />
+              <meshStandardMaterial ref={registerFallbackMaterial} color={primaryArmor} roughness={0.5} metalness={0.46} />
+            </mesh>
+          ))}
+          <group ref={fallbackTurretRootRef} position={[3.8, 18.2, 0]}>
+            <mesh position={[-1.2, -1.5, 0]}>
+              <cylinderGeometry args={[7.4, 8.4, 2.2, 20]} />
+              <meshStandardMaterial ref={registerFallbackMaterial} color={trimArmor} roughness={0.48} metalness={0.44} />
+            </mesh>
+            <mesh>
+              <boxGeometry args={[18, 7, 20]} />
+              <meshStandardMaterial ref={registerFallbackMaterial} color={secondaryArmor} roughness={0.44} metalness={0.54} />
+            </mesh>
+            <mesh position={[7.2, 0.8, 0]} rotation={[0, 0, -0.14]}>
+              <boxGeometry args={[11, 4.8, 18]} />
+              <meshStandardMaterial ref={registerFallbackMaterial} color={primaryArmor} roughness={0.42} metalness={0.58} />
+            </mesh>
+            <mesh position={[-7.8, 1.2, 0]}>
+              <boxGeometry args={[8, 4.2, 16]} />
+              <meshStandardMaterial ref={registerFallbackMaterial} color={primaryArmor} roughness={0.52} metalness={0.48} />
+            </mesh>
+            <mesh position={[-6.5, 4.2, 0]}>
+              <boxGeometry args={[6.2, 1.4, 8]} />
+              <meshStandardMaterial ref={registerFallbackMaterial} color={trimArmor} roughness={0.34} metalness={0.64} />
+            </mesh>
+            <mesh position={[-2.8, 4.2, 0]}>
+              <cylinderGeometry args={[2.1, 2.5, 2.4, 16]} />
+              <meshStandardMaterial ref={registerFallbackMaterial} color={trimArmor} roughness={0.34} metalness={0.68} />
+            </mesh>
+            <mesh ref={fallbackSensorGlowRef} position={[6.8, 2.3, 0]}>
+              <boxGeometry args={[2.8, 1.6, 4.4]} />
+              <meshBasicMaterial color="#fde047" transparent opacity={0.18} depthWrite={false} blending={THREE.AdditiveBlending} toneMapped={false} />
+            </mesh>
+            <mesh ref={fallbackShroudRef} position={[15.8, 0.8, 0]} rotation={[0, 0, -Math.PI / 2]}>
+              <cylinderGeometry args={[1.7, 2.1, 16, 16]} />
+              <meshStandardMaterial ref={registerFallbackMaterial} color="#1f2933" roughness={0.36} metalness={0.72} />
+            </mesh>
+            <mesh ref={fallbackBarrelRef} position={[27.8, 0.8, 0]} rotation={[0, 0, -Math.PI / 2]}>
+              <cylinderGeometry args={[0.82, 0.94, 24, 16]} />
+              <meshStandardMaterial ref={registerFallbackMaterial} color="#0f1720" roughness={0.26} metalness={0.84} />
+            </mesh>
+            <mesh position={[39.5, 0.8, 0]} rotation={[0, 0, -Math.PI / 2]}>
+              <cylinderGeometry args={[1.16, 1.16, 3.8, 14]} />
+              <meshStandardMaterial ref={registerFallbackMaterial} color="#cbd5e1" roughness={0.18} metalness={0.9} />
+            </mesh>
+            <mesh ref={fallbackMuzzleGlowRef} position={[41.8, 0.8, 0]}>
+              <sphereGeometry args={[1.5, 10, 10]} />
+              <meshBasicMaterial color="#fbbf24" transparent opacity={0.1} depthWrite={false} blending={THREE.AdditiveBlending} toneMapped={false} />
+            </mesh>
+          </group>
+        </>
+      )}
+      {[-17, -4, 9].map((rackX, idx) => (
+        <mesh key={`tank-stowage-${idx}`} position={[rackX, 13.8, 0]}>
+          <boxGeometry args={[5.5, 3.2, 15]} />
+          <meshStandardMaterial ref={registerFallbackMaterial} color={idx === 1 ? '#5b4630' : '#6b7280'} roughness={0.86} metalness={idx === 1 ? 0.06 : 0.18} />
+        </mesh>
+      ))}
+    </group>
+  );
+
   return (
     <group ref={group} position={[p.x, p.y || 0, p.z]} scale={[(GROUND_ARMOR_MODEL_SCALE * (p.scale || 1)) * (p.variant === 'apc' ? APC_VISUAL_SCALE_MULTIPLIER : TANK_VISUAL_SCALE_MULTIPLIER), (GROUND_ARMOR_MODEL_SCALE * (p.scale || 1)) * (p.variant === 'apc' ? APC_VISUAL_SCALE_MULTIPLIER : TANK_VISUAL_SCALE_MULTIPLIER), (GROUND_ARMOR_MODEL_SCALE * (p.scale || 1)) * (p.variant === 'apc' ? APC_VISUAL_SCALE_MULTIPLIER : TANK_VISUAL_SCALE_MULTIPLIER)]}>
       {p.selected && (
@@ -5339,46 +6008,28 @@ const EntityTank = memo(({ entityId, entityLookupRef, index, entitiesRef, frameS
         <cylinderGeometry args={[12, 18, 24, 16]} />
         <meshBasicMaterial color="#86efac" transparent opacity={0} depthWrite={false} blending={THREE.AdditiveBlending} toneMapped={false} />
       </mesh>
-      {tankScene ? (
-        <group position={[0, 0, 0]} rotation={[0, 0, 0]}>
-          <primitive object={tankScene} />
-        </group>
-      ) : (
-        <>
-          <mesh position={[0, 9, 0]}>
-            <boxGeometry args={[50, 14, 28]} />
-            <meshStandardMaterial ref={registerFallbackMaterial} color={p.variant === 'apc' ? '#2f4f7f' : '#4b5d3a'} roughness={0.62} metalness={0.32} />
-          </mesh>
-          <mesh position={[8, 15.5, 0]} rotation={[0, 0, -0.2]}>
-            <boxGeometry args={[20, 6.2, 24]} />
-            <meshStandardMaterial ref={registerFallbackMaterial} color="#475569" roughness={0.5} metalness={0.42} />
-          </mesh>
-          <mesh position={[0, 3.8, 12]}>
-            <boxGeometry args={[52, 6, 5.8]} />
-            <meshStandardMaterial ref={registerFallbackMaterial} color="#161b22" roughness={0.84} metalness={0.18} />
-          </mesh>
-          <mesh position={[0, 3.8, -12]}>
-            <boxGeometry args={[52, 6, 5.8]} />
-            <meshStandardMaterial ref={registerFallbackMaterial} color="#161b22" roughness={0.84} metalness={0.18} />
-          </mesh>
-          <group position={[p.variant === 'apc' ? 4 : 2, p.variant === 'apc' ? 17 : 19, 0]}>
-            <mesh>
-              {p.variant === 'apc' ? <boxGeometry args={[20, 7, 16]} /> : <cylinderGeometry args={[9.5, 10.2, 8, 18]} />}
-              <meshStandardMaterial ref={registerFallbackMaterial} color={p.variant === 'apc' ? '#26436b' : '#3f5332'} roughness={0.54} metalness={0.38} />
-            </mesh>
-            <mesh position={[p.variant === 'apc' ? 17 : 24, 0.6, 0]} rotation={[0, 0, -Math.PI / 2]}>
-              <cylinderGeometry args={[p.variant === 'apc' ? 1.2 : 1.5, p.variant === 'apc' ? 1.4 : 1.8, p.variant === 'apc' ? 18 : 28, 12]} />
-              <meshStandardMaterial ref={registerFallbackMaterial} color="#161b22" roughness={0.42} metalness={0.48} />
-            </mesh>
-          </group>
-          {p.variant === 'apc' ? (
-            <mesh position={[-6, 18, 0]}>
-              <boxGeometry args={[24, 11, 20]} />
-              <meshStandardMaterial ref={registerFallbackMaterial} color="#26436b" roughness={0.54} metalness={0.38} />
-            </mesh>
-          ) : null}
-        </>
-      )}
+      <mesh ref={chassisGlowRef} rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.35, 0]} renderOrder={4}>
+        <ringGeometry args={[21, 28, 36]} />
+        <meshBasicMaterial color={glowColor} transparent opacity={0.16} depthWrite={false} blending={THREE.AdditiveBlending} toneMapped={false} />
+      </mesh>
+      {tankVisual}
+      {[[-8, 10, -13], [8, 10, -13]].map((pos, idx) => (
+        <mesh key={`tank-engine-glow-${idx}`} ref={(el) => { engineGlowRefs.current[idx] = el; }} position={pos} renderOrder={5}>
+          <sphereGeometry args={[2.6, 10, 10]} />
+          <meshBasicMaterial color={p.variant === 'apc' ? '#22d3ee' : '#f59e0b'} transparent opacity={0.12} depthWrite={false} blending={THREE.AdditiveBlending} toneMapped={false} />
+        </mesh>
+      ))}
+      {Array.from({ length: 4 }).map((_, trailIndex) => (
+        <mesh
+          key={`tank-exhaust-trail-${trailIndex}`}
+          visible={false}
+          ref={(el) => { exhaustTrailRefs.current[trailIndex] = el; }}
+          position={[trailIndex % 2 === 0 ? -7 : 7, 8 + trailIndex * 0.7, trailIndex % 2 === 0 ? -13 : -15]}
+        >
+          <sphereGeometry args={[1.8 + trailIndex * 0.2, 8, 8]} />
+          <meshBasicMaterial color={p.state === 'broken' ? '#3f3f46' : '#94a3b8'} transparent opacity={0.12} depthWrite={false} />
+        </mesh>
+      ))}
       {smokeOffsetsRef.current.map((offset, smokeIndex) => (
         <mesh
           key={`tank-smoke-${smokeIndex}`}
@@ -5428,7 +6079,7 @@ const EntitySoldierGLB = memo(({ entityId, entityLookupRef, index, entitiesRef }
 
   const soldierScene = useMemo(() => {
     if (!assetReady || !humanUnitsAssetCache.scene) return null;
-    return cloneNamedGlbGroup(humanUnitsAssetCache.scene, assetName);
+    return cloneNamedGlbGroup(humanUnitsAssetCache.scene, assetName, { aliveShaderMix: ALIVE_SHADER_INFANTRY_MIX });
   }, [assetReady, assetName]);
 
   useEffect(() => {
@@ -5457,7 +6108,7 @@ const EntitySoldierGLB = memo(({ entityId, entityLookupRef, index, entitiesRef }
     };
   }, [soldierScene]);
 
-  useFrame((state, delta) => {
+  useCentralSceneFrame((state, delta) => {
     const current = getTrackedEntity({ entitiesRef, entityLookupRef, entityId, index });
     if (!current || current.dead) {
       if (group.current) group.current.visible = false;
@@ -5749,29 +6400,29 @@ const EntitySoldierGLB = memo(({ entityId, entityLookupRef, index, entitiesRef }
             {/* Torso */}
             <mesh position={[0, 4, 0]}>
               <boxGeometry args={[6, 8, 4]} />
-              <AliveMaterial color={p.weaponType === 'engineer' ? '#0f766e' : '#4b5563'} roughness={0.86} metalness={0.08} />
+              <AliveMaterial color={p.weaponType === 'engineer' ? '#0f766e' : '#4b5563'} roughness={0.86} metalness={0.08} aliveShaderMix={ALIVE_SHADER_INFANTRY_MIX} />
             </mesh>
             {/* Backpack / Gear */}
             <mesh position={[0, 4, -3]}>
               <boxGeometry args={[5, 6, 3]} />
-              <AliveMaterial color="#374151" roughness={0.9} />
+              <AliveMaterial color="#374151" roughness={0.9} aliveShaderMix={ALIVE_SHADER_INFANTRY_MIX} />
             </mesh>
             {/* Head */}
             <mesh position={[0, 9.5, 0]}>
               <sphereGeometry args={[2.5, 12, 12]} />
-              <AliveMaterial color="#c68642" roughness={0.72} />
+              <AliveMaterial color="#c68642" roughness={0.72} aliveShaderMix={ALIVE_SHADER_INFANTRY_MIX} />
             </mesh>
             {/* Combat Helmet */}
             <mesh position={[0, 10.2, 0]} rotation={[0.1, 0, 0]}>
               <cylinderGeometry args={[2.8, 2.8, 2.5, 12]} />
-              <AliveMaterial color="#374151" roughness={0.78} metalness={0.18} />
+              <AliveMaterial color="#374151" roughness={0.78} metalness={0.18} aliveShaderMix={ALIVE_SHADER_INFANTRY_MIX} />
             </mesh>
 
             {/* Left Arm (Pivot from shoulder) */}
             <group ref={armLRef} position={[-4, 7, 0]}>
               <mesh position={[0, -3.5, 0]}>
                 <boxGeometry args={[2, 7, 2.5]} />
-                <AliveMaterial color="#4b5563" />
+                <AliveMaterial color="#4b5563" aliveShaderMix={ALIVE_SHADER_INFANTRY_MIX} />
               </mesh>
             </group>
             
@@ -5779,12 +6430,12 @@ const EntitySoldierGLB = memo(({ entityId, entityLookupRef, index, entitiesRef }
             <group ref={armRRef} position={[4, 7, 0]}>
               <mesh position={[0, -3.5, 0]}>
                 <boxGeometry args={[2, 7, 2.5]} />
-                <AliveMaterial color="#4b5563" />
+                <AliveMaterial color="#4b5563" aliveShaderMix={ALIVE_SHADER_INFANTRY_MIX} />
               </mesh>
               {/* Fallback Weapon attached to Right Arm */}
               <mesh position={[0, -5, 4]}>
                 <boxGeometry args={[1, 1, 8]} />
-                <AliveMaterial color="#111827" roughness={0.5} />
+                <AliveMaterial color="#111827" roughness={0.5} aliveShaderMix={ALIVE_SHADER_INFANTRY_MIX} />
               </mesh>
             </group>
 
@@ -5792,7 +6443,7 @@ const EntitySoldierGLB = memo(({ entityId, entityLookupRef, index, entitiesRef }
             <group ref={legLRef} position={[-1.6, 0, 0]}>
               <mesh position={[0, -4.5, 0]}>
                 <boxGeometry args={[2.4, 9, 2.4]} />
-                <AliveMaterial color={p.weaponType === 'engineer' ? '#115e59' : '#1f2937'} />
+                <AliveMaterial color={p.weaponType === 'engineer' ? '#115e59' : '#1f2937'} aliveShaderMix={ALIVE_SHADER_INFANTRY_MIX} />
               </mesh>
             </group>
             
@@ -5800,7 +6451,7 @@ const EntitySoldierGLB = memo(({ entityId, entityLookupRef, index, entitiesRef }
             <group ref={legRRef} position={[1.6, 0, 0]}>
               <mesh position={[0, -4.5, 0]}>
                 <boxGeometry args={[2.4, 9, 2.4]} />
-                <AliveMaterial color={p.weaponType === 'engineer' ? '#115e59' : '#1f2937'} />
+                <AliveMaterial color={p.weaponType === 'engineer' ? '#115e59' : '#1f2937'} aliveShaderMix={ALIVE_SHADER_INFANTRY_MIX} />
               </mesh>
             </group>
           </group>
@@ -5837,7 +6488,7 @@ const EntitySoldierGLB = memo(({ entityId, entityLookupRef, index, entitiesRef }
 const EntityBird = memo(({ index, entitiesRef }) => {
   const group = useRef();
   
-  useFrame((state) => {
+  useCentralSceneFrame((state) => {
     const p = entitiesRef.current[index];
     if (!p || p.dead) { if (group.current) group.current.visible = false; return; }
     if (!group.current) return;
@@ -5873,7 +6524,11 @@ const EntityHouse = memo(({ index, entitiesRef }) => {
 
   const intactModel = useMemo(() => {
     if (!assetReady || !worldPropsAssetCache.scene || !entity) return null;
-    const clone = cloneNamedGlbGroup(worldPropsAssetCache.scene, isTower ? 'house_tower' : 'house_residential');
+    const clone = cloneNamedGlbGroup(worldPropsAssetCache.scene, isTower ? 'house_tower' : 'house_residential', {
+      castShadow: false,
+      receiveShadow: false,
+      textureAnisotropy: 2
+    });
     tintPropClone(
       clone,
       {
@@ -5902,7 +6557,11 @@ const EntityHouse = memo(({ index, entitiesRef }) => {
 
   const brokenModel = useMemo(() => {
     if (!assetReady || !worldPropsAssetCache.scene || !entity) return null;
-    const clone = cloneNamedGlbGroup(worldPropsAssetCache.scene, 'house_broken');
+    const clone = cloneNamedGlbGroup(worldPropsAssetCache.scene, 'house_broken', {
+      castShadow: false,
+      receiveShadow: false,
+      textureAnisotropy: 2
+    });
     tintPropClone(clone, {
       house_wreck_base: '#3b2213',
       house_wreck_roof: entity.roofColor || '#8b4513',
@@ -5914,7 +6573,11 @@ const EntityHouse = memo(({ index, entitiesRef }) => {
 
   const ruinedModel = useMemo(() => {
     if (!assetReady || !worldPropsAssetCache.scene || !entity) return null;
-    const clone = cloneNamedGlbGroup(worldPropsAssetCache.scene, 'house_ruined');
+    const clone = cloneNamedGlbGroup(worldPropsAssetCache.scene, 'house_ruined', {
+      castShadow: false,
+      receiveShadow: false,
+      textureAnisotropy: 2
+    });
     tintPropClone(clone, {
       house_wreck_base: '#24140b',
       house_wreck_roof: entity.roofColor || '#8b4513',
@@ -5944,7 +6607,7 @@ const EntityHouse = memo(({ index, entitiesRef }) => {
   useEffect(() => () => disposeClonedMaterials(brokenModel), [brokenModel]);
   useEffect(() => () => disposeClonedMaterials(ruinedModel), [ruinedModel]);
 
-  useFrame((state, delta) => {
+  useCentralSceneFrame((state, delta) => {
     const p = entitiesRef.current[index];
     if (!p || p.dead) {
       if (group.current) group.current.visible = false;
@@ -6126,7 +6789,11 @@ const EntityTree = memo(({ index, entitiesRef }) => {
 
   const intactModel = useMemo(() => {
     if (!assetReady || !worldPropsAssetCache.scene || !entity) return null;
-    const clone = cloneNamedGlbGroup(worldPropsAssetCache.scene, isPine ? 'tree_pine' : 'tree_broadleaf');
+    const clone = cloneNamedGlbGroup(worldPropsAssetCache.scene, isPine ? 'tree_pine' : 'tree_broadleaf', {
+      castShadow: false,
+      receiveShadow: false,
+      textureAnisotropy: 2
+    });
     tintPropClone(clone, {
       tree_trunk: entity.trunkColor || '#a66a3a',
       tree_root: '#704626',
@@ -6142,7 +6809,11 @@ const EntityTree = memo(({ index, entitiesRef }) => {
 
   const brokenModel = useMemo(() => {
     if (!assetReady || !worldPropsAssetCache.scene || !entity) return null;
-    const clone = cloneNamedGlbGroup(worldPropsAssetCache.scene, isPine ? 'tree_broken_pine' : 'tree_broken_broadleaf');
+    const clone = cloneNamedGlbGroup(worldPropsAssetCache.scene, isPine ? 'tree_broken_pine' : 'tree_broken_broadleaf', {
+      castShadow: false,
+      receiveShadow: false,
+      textureAnisotropy: 2
+    });
     tintPropClone(clone, {
       tree_trunk: entity.trunkColor || '#8a542b',
       tree_fallen_trunk: entity.trunkColor || '#9b6236',
@@ -6175,7 +6846,7 @@ const EntityTree = memo(({ index, entitiesRef }) => {
   useEffect(() => () => disposeClonedMaterials(intactModel), [intactModel]);
   useEffect(() => () => disposeClonedMaterials(brokenModel), [brokenModel]);
 
-  useFrame(() => {
+  useCentralSceneFrame(() => {
     const p = entitiesRef.current[index];
     if (!p || p.dead) {
       if (intact.current) intact.current.visible = false;
@@ -6340,6 +7011,8 @@ const EntityScorch = memo(({ entityId, index, entitiesRef, entityLookupRef }) =>
   if (!initial || initial.dead) return null;
 
   const group = useRef();
+  const baseRef = useRef();
+  const ringRef = useRef();
   const emberRef = useRef();
   const heatRef = useRef();
   const smokeRefs = useRef([]);
@@ -6347,8 +7020,18 @@ const EntityScorch = memo(({ entityId, index, entitiesRef, entityLookupRef }) =>
   const frameSkip = useRef(0);
 
   const radius = initial.radius || 40;
-  const smokeCount = Math.max(0, Math.min(10, initial.smokeCount ?? 6));
-  const flameCount = Math.max(0, Math.min(10, initial.flameCount ?? 0));
+  const smokeCount = Math.max(0, Math.min(initial.kind === 'nuke_core' ? 4 : initial.kind === 'nuke_fire_patch' ? 2 : 10, initial.smokeCount ?? 6));
+  const flameCount = Math.max(0, Math.min(initial.kind === 'nuke_core' ? 3 : initial.kind === 'nuke_fire_patch' ? 1 : 10, initial.flameCount ?? 0));
+  const scorchColors = useMemo(() => ({
+    baseCool: new THREE.Color(initial.baseColor || '#0b0703'),
+    ringCool: new THREE.Color(initial.ringColor || '#1c1209'),
+    coreCool: new THREE.Color(initial.coreColor || '#ff4d00'),
+    heatCool: new THREE.Color(initial.heatColor || '#ff7b00'),
+    baseHot: new THREE.Color(initial.hotBaseColor || initial.baseColor || '#0b0703'),
+    ringHot: new THREE.Color(initial.hotRingColor || initial.ringColor || '#1c1209'),
+    coreHot: new THREE.Color(initial.hotCoreColor || initial.coreColor || '#ff4d00'),
+    heatHot: new THREE.Color(initial.hotHeatColor || initial.heatColor || '#ff7b00')
+  }), [initial.baseColor, initial.ringColor, initial.coreColor, initial.heatColor, initial.hotBaseColor, initial.hotRingColor, initial.hotCoreColor, initial.hotHeatColor]);
 
   const smokeData = useMemo(() => (
     [...Array(smokeCount)].map((_, i) => {
@@ -6382,7 +7065,7 @@ const EntityScorch = memo(({ entityId, index, entitiesRef, entityLookupRef }) =>
     })
   ), [flameCount, radius]);
 
-  useFrame((state, delta) => {
+  useCentralSceneFrame((state, delta) => {
     const p = getTrackedEntity({ entitiesRef, entityLookupRef, entityId, index });
     if (!p || p.dead) {
       if (group.current) group.current.visible = false;
@@ -6403,6 +7086,7 @@ const EntityScorch = memo(({ entityId, index, entitiesRef, entityLookupRef }) =>
     const smokeFade = Math.max(0, 1 - p.age / smokeLife);
     const coreLife = Math.max(0.1, p.coreLife || p.burnLife || (p.kind === 'nuke_core' ? NUKE_AFTERFIRE_CORE_LIFETIME : 8));
     const coreFade = Math.max(0, 1 - p.age / coreLife);
+    const coolingProgress = THREE.MathUtils.clamp(p.age / Math.max(0.1, p.coolDuration || Math.min(p.ttl || 12, 12)), 0, 1);
     if (!p.ttl && coreFade <= 0.01 && smokeFade <= 0.01 && flameFade <= 0.01) {
       p.dead = true;
       if (group.current) group.current.visible = false;
@@ -6414,13 +7098,26 @@ const EntityScorch = memo(({ entityId, index, entitiesRef, entityLookupRef }) =>
     if (group.current) {
       group.current.visible = true;
       group.current.position.set(p.x, baseHeight + 0.5, p.z);
+      group.current.rotation.set(0, p.rotation || 0, 0);
+      group.current.scale.set(p.stretchX || 1, 1, p.stretchZ || 1);
+    }
+
+    if (baseRef.current?.material) {
+      baseRef.current.material.color.lerpColors(scorchColors.baseHot, scorchColors.baseCool, coolingProgress);
+      baseRef.current.material.opacity = (p.baseOpacity ?? 0.9) * lifeFade;
+    }
+    if (ringRef.current?.material) {
+      ringRef.current.material.color.lerpColors(scorchColors.ringHot, scorchColors.ringCool, coolingProgress);
+      ringRef.current.material.opacity = (p.ringOpacity ?? 0.88) * lifeFade * (0.92 + coreFade * 0.08);
     }
 
     if (emberRef.current?.material) {
-      emberRef.current.material.opacity = (p.coreOpacity ?? 0.5) * Math.max(coreFade, flameFade * 0.92) * lifeFade * pulse;
+      emberRef.current.material.color.lerpColors(scorchColors.coreHot, scorchColors.coreCool, Math.min(1, coolingProgress * 1.1));
+      emberRef.current.material.opacity = (p.coreOpacity ?? 0.5) * (0.6 + (1 - coolingProgress) * 0.55) * Math.max(coreFade, flameFade * 0.92) * lifeFade * pulse;
     }
     if (heatRef.current?.material) {
-      heatRef.current.material.opacity = (p.heatOpacity ?? 0.12) * Math.max(flameFade, smokeFade * 0.55) * lifeFade * pulse;
+      heatRef.current.material.color.lerpColors(scorchColors.heatHot, scorchColors.heatCool, Math.min(1, coolingProgress * 1.2));
+      heatRef.current.material.opacity = (p.heatOpacity ?? 0.12) * (1 - coolingProgress) * Math.max(flameFade, smokeFade * 0.55) * lifeFade * pulse;
     }
     if (heatRef.current) {
       heatRef.current.scale.setScalar(1 + Math.sin(state.clock.elapsedTime * 2.6 + radius * 0.02) * 0.03);
@@ -6434,7 +7131,8 @@ const EntityScorch = memo(({ entityId, index, entitiesRef, entityLookupRef }) =>
       flame.visible = active;
     });
 
-    frameSkip.current = (frameSkip.current + 1) % 2;
+    const updateModulo = p.kind === 'nuke_fire_patch' ? 3 : p.kind === 'nuke_core' ? 2 : 2;
+    frameSkip.current = (frameSkip.current + 1) % updateModulo;
     if (frameSkip.current === 0) {
     flameRefs.current.forEach((flame, i) => {
       if (!flame || !flame.material) return;
@@ -6467,8 +7165,13 @@ const EntityScorch = memo(({ entityId, index, entitiesRef, entityLookupRef }) =>
   });
 
   return (
-    <group ref={group} position={[initial.x, getTerrainHeight(initial.x, initial.z) + 0.5, initial.z]}>
-      <mesh rotation={[-Math.PI / 2, 0, 0]}>
+    <group
+      ref={group}
+      position={[initial.x, getTerrainHeight(initial.x, initial.z) + 0.5, initial.z]}
+      rotation={[0, initial.rotation || 0, 0]}
+      scale={[initial.stretchX || 1, 1, initial.stretchZ || 1]}
+    >
+      <mesh ref={baseRef} rotation={[-Math.PI / 2, 0, 0]}>
         <circleGeometry args={[radius, 18]} />
         <meshBasicMaterial
           color={initial.baseColor || '#0b0703'}
@@ -6480,12 +7183,12 @@ const EntityScorch = memo(({ entityId, index, entitiesRef, entityLookupRef }) =>
         />
       </mesh>
 
-      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.08, 0]}>
+      <mesh ref={ringRef} rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.08, 0]}>
         <ringGeometry args={[radius * 0.82, radius, 24]} />
         <meshBasicMaterial
           color={initial.ringColor || '#1c1209'}
           transparent
-          opacity={0.88}
+          opacity={initial.ringOpacity ?? 0.88}
           polygonOffset
           polygonOffsetFactor={-1}
           polygonOffsetUnits={-4}
@@ -6561,7 +7264,7 @@ const EntityKaijuAttack = ({ entityId, index, entitiesRef, entityLookupRef }) =>
   const attackType = useRef('fireball');
   const started = useRef(false);
 
-  useFrame((state, delta) => {
+  useCentralSceneFrame((state, delta) => {
     const p = getTrackedEntity({ entitiesRef, entityLookupRef, entityId, index });
     if (!p || p.dead) {
       if (group.current) group.current.visible = false;
@@ -6861,7 +7564,7 @@ const EntityFireBreath = ({ entityId, index, entitiesRef, entityLookupRef }) => 
   const age = useRef(0);
   const pos = useRef(null);
 
-  useFrame((state, delta) => {
+  useCentralSceneFrame((state, delta) => {
     const p = getTrackedEntity({ entitiesRef, entityLookupRef, entityId, index });
     if (!p || p.dead) { if (group.current) group.current.visible = false; return; }
     
@@ -6958,7 +7661,7 @@ const EntityBullet = ({ entityId, index, entitiesRef, entityLookupRef }) => {
   const pos = useRef(null);
   const targetPos = useRef(null);
 
-  useFrame((state, delta) => {
+  useCentralSceneFrame((state, delta) => {
     const p = getTrackedEntity({ entitiesRef, entityLookupRef, entityId, index });
     if (!p || p.dead) { if (group.current) group.current.visible = false; return; }
     
@@ -7014,7 +7717,7 @@ const EntityShell = ({ entityId, index, entitiesRef, entityLookupRef }) => {
   const pos = useRef(null);
   const targetPos = useRef(null);
 
-  useFrame((state, delta) => {
+  useCentralSceneFrame((state, delta) => {
     const p = getTrackedEntity({ entitiesRef, entityLookupRef, entityId, index });
     if (!p || p.dead) { if (group.current) group.current.visible = false; return; }
     
@@ -7075,7 +7778,7 @@ const EntityMuzzleFlash = ({ entityId, index, entitiesRef, entityLookupRef }) =>
   const age = useRef(0);
   const pos = useRef(null);
 
-  useFrame((state, delta) => {
+  useCentralSceneFrame((state, delta) => {
     const p = getTrackedEntity({ entitiesRef, entityLookupRef, entityId, index });
     if (!p || p.dead) { if (group.current) group.current.visible = false; return; }
     
@@ -7131,7 +7834,7 @@ const EntityJet = ({ entityId, index, entitiesRef, entityLookupRef }) => {
 
   const jetScene = useMemo(() => {
     if (!assetReady || !airstrikeAssetCache.scene) return null;
-    const clone = cloneNamedGlbGroup(airstrikeAssetCache.scene, 'strike_jet');
+    const clone = cloneNamedGlbGroup(airstrikeAssetCache.scene, 'strike_jet', { aliveShaderMix: ALIVE_SHADER_AIRCRAFT_MIX });
     if (!clone) return null;
     clone.traverse((node) => {
       if (node.position && !node.userData.basePosition) node.userData.basePosition = node.position.clone();
@@ -7160,7 +7863,7 @@ const EntityJet = ({ entityId, index, entitiesRef, entityLookupRef }) => {
 
   useEffect(() => () => disposeClonedMaterials(jetScene), [jetScene]);
 
-  useFrame((state, delta) => {
+  useCentralSceneFrame((state, delta) => {
     const p = getTrackedEntity({ entitiesRef, entityLookupRef, entityId, index });
     if (!p || p.dead) {
       if (group.current) group.current.visible = false;
@@ -7269,7 +7972,7 @@ const EntityWarthog = ({ entityId, index, entitiesRef, entityLookupRef }) => {
 
   const warthogScene = useMemo(() => {
     if (!assetReady || !airstrikeAssetCache.scene) return null;
-    const clone = cloneNamedGlbGroup(airstrikeAssetCache.scene, 'a10_warthog');
+    const clone = cloneNamedGlbGroup(airstrikeAssetCache.scene, 'a10_warthog', { aliveShaderMix: ALIVE_SHADER_AIRCRAFT_MIX });
     if (!clone) return null;
     clone.traverse((node) => {
       if (node.position && !node.userData.basePosition) node.userData.basePosition = node.position.clone();
@@ -7292,7 +7995,7 @@ const EntityWarthog = ({ entityId, index, entitiesRef, entityLookupRef }) => {
 
   useEffect(() => () => disposeClonedMaterials(warthogScene), [warthogScene]);
 
-  useFrame((state, delta) => {
+  useCentralSceneFrame((state, delta) => {
     const p = getTrackedEntity({ entitiesRef, entityLookupRef, entityId, index });
     if (!p || p.dead) {
       if (group.current) group.current.visible = false;
@@ -7401,12 +8104,13 @@ const EntityWarthog = ({ entityId, index, entitiesRef, entityLookupRef }) => {
 const EntityPlane = memo(({ entityId, index, entitiesRef, entityLookupRef }) => {
   const group = useRef();
   const modelNodesRef = useRef({});
+  const contrailRefs = useRef([]);
   const [assetReady, setAssetReady] = useState(Boolean(airstrikeAssetCache.scene));
   const [assetFailed, setAssetFailed] = useState(Boolean(airstrikeAssetCache.error));
 
   const planeScene = useMemo(() => {
     if (!assetReady || !airstrikeAssetCache.scene) return null;
-    const clone = cloneNamedGlbGroup(airstrikeAssetCache.scene, 'bomber_plane');
+    const clone = cloneNamedGlbGroup(airstrikeAssetCache.scene, 'bomber_plane', { aliveShaderMix: ALIVE_SHADER_AIRCRAFT_MIX });
     modelNodesRef.current = clone?.userData?.namedNodes || {};
     return clone;
   }, [assetReady]);
@@ -7429,16 +8133,28 @@ const EntityPlane = memo(({ entityId, index, entitiesRef, entityLookupRef }) => 
 
   useEffect(() => () => disposeClonedMaterials(planeScene), [planeScene]);
 
-  useFrame((state, delta) => {
+  useCentralSceneFrame((state, delta) => {
     const p = getTrackedEntity({ entitiesRef, entityLookupRef, entityId, index });
     if (!p || p.dead) { if (group.current) group.current.visible = false; return; }
     if (!group.current) return;
     if (p.flightPhase === undefined) p.flightPhase = Math.random() * Math.PI * 2;
+    if (p.releaseVisualTimer === undefined) p.releaseVisualTimer = p.dropped ? 0 : -1;
+    if (p.dropped) {
+      if (p.releaseVisualTimer < 0) p.releaseVisualTimer = 0;
+      p.releaseVisualTimer += delta;
+    } else {
+      p.releaseVisualTimer = -1;
+    }
 
     const time = state.clock.elapsedTime;
     const targetYaw = -Math.atan2(p.vz || 0, p.vx || 0.001);
     const prevYaw = p.renderYaw ?? targetYaw;
     const yawDelta = Math.atan2(Math.sin(targetYaw - prevYaw), Math.cos(targetYaw - prevYaw));
+    const hasTarget = Number.isFinite(p.dropX) && Number.isFinite(p.dropZ);
+    const targetDistance = hasTarget ? Math.hypot((p.dropX || 0) - (p.x || 0), (p.dropZ || 0) - (p.z || 0)) : Infinity;
+    const approachDoor = hasTarget && !p.dropped ? THREE.MathUtils.clamp(1 - targetDistance / 210, 0, 1) : 0;
+    const releaseDoor = p.dropped ? Math.max(0, 1 - (p.releaseVisualTimer || 0) / 0.8) : 0;
+    const bayDoorOpen = Math.max(approachDoor, releaseDoor);
 
     p.renderYaw = prevYaw + yawDelta * Math.min(1, delta * 3.5);
     p.renderRoll = THREE.MathUtils.lerp(
@@ -7461,13 +8177,34 @@ const EntityPlane = memo(({ entityId, index, entitiesRef, entityLookupRef }) => 
     [0, 1, 2, 3].forEach((i) => {
       const glow = modelNodesRef.current[`bomber_exhaust_glow_${i}`];
       if (glow) {
-        setCloudOpacity(glow, 0.26 + Math.sin(time * 22 + i * 1.7 + p.flightPhase) * 0.08);
+        setCloudOpacity(
+          glow,
+          0.26 + bayDoorOpen * 0.16 + Math.sin(time * 22 + i * 1.7 + p.flightPhase) * (0.08 + bayDoorOpen * 0.04)
+        );
       }
     });
     [0, 1, 2, 3].forEach((i) => {
       const prop = modelNodesRef.current[`bomber_prop_${i}`];
       if (!prop) return;
       prop.rotation.x = time * (52 + i * 4) + p.flightPhase * 0.6 + i * 0.35;
+    });
+    const bayDoorLeft = modelNodesRef.current.bomber_bay_door_left;
+    const bayDoorRight = modelNodesRef.current.bomber_bay_door_right;
+    if (bayDoorLeft) bayDoorLeft.rotation.z = -0.82 * bayDoorOpen;
+    if (bayDoorRight) bayDoorRight.rotation.z = 0.82 * bayDoorOpen;
+    [0, 1, 2].forEach((i) => {
+      const rack = modelNodesRef.current[`bomber_rotary_rack_${i}`];
+      if (!rack) return;
+      rack.rotation.x = bayDoorOpen * (0.08 + i * 0.02) + Math.sin(time * 2.6 + i * 0.7 + p.flightPhase) * bayDoorOpen * 0.04;
+    });
+    const speed = Math.hypot(p.vx || 0, p.vz || 0);
+    const contrailIntensity = Math.max(0, Math.min(1, (speed - 3.6) / 2.6)) * (0.45 + bayDoorOpen * 0.55);
+    contrailRefs.current.forEach((mesh, index) => {
+      if (!mesh?.material) return;
+      const pulse = 0.88 + Math.sin(time * 3.2 + index * 0.9 + p.flightPhase) * 0.08;
+      mesh.material.opacity = 0.04 + contrailIntensity * 0.12 * pulse;
+      mesh.scale.set(1 + contrailIntensity * 0.3, 1, 1 + contrailIntensity * 0.2);
+      mesh.visible = contrailIntensity > 0.02;
     });
   });
   return (
@@ -7481,58 +8218,105 @@ const EntityPlane = memo(({ entityId, index, entitiesRef, entityLookupRef }) => 
           {/* ── Fuselage — tapered 10-sided tube ── */}
           <mesh rotation={[0, 0, Math.PI / 2]}>
             <cylinderGeometry args={[10, 12.5, 280, 10, 1]} />
-            <meshStandardMaterial color="#7a8491" metalness={0.72} roughness={0.28} />
+            <meshStandardMaterial color="#7d8791" metalness={0.68} roughness={0.34} />
           </mesh>
-          {/* Nose cone */}
-          <mesh position={[141, 0, 0]} rotation={[0, 0, Math.PI / 2]}>
-            <coneGeometry args={[10, 44, 10]} />
-            <meshStandardMaterial color="#9aa3ae" metalness={0.78} roughness={0.22} />
+          <mesh position={[6, 0.2, 0]} rotation={[0, 0, Math.PI / 2]}>
+            <cylinderGeometry args={[10.15, 12.65, 281.5, 10, 1]} />
+            <meshBasicMaterial color="#cbd5e1" transparent opacity={0.045} depthWrite={false} toneMapped={false} />
           </mesh>
-          {/* Glazed nose bubble */}
-          <mesh position={[148, 2, 0]} scale={[1.8, 0.9, 1.0]}>
-            <sphereGeometry args={[7.5, 12, 10]} />
-            <meshStandardMaterial color="#c8dde8" transparent opacity={0.45} metalness={0.9} roughness={0.04} />
+          {/* Nose radome and cockpit deck */}
+          <mesh position={[128, -0.4, 0]} rotation={[0, 0, Math.PI / 2]}>
+            <cylinderGeometry args={[3.4, 8.2, 40, 12, 1]} />
+            <meshStandardMaterial color="#97a2ad" metalness={0.7} roughness={0.28} />
           </mesh>
-          {/* Tail section — narrow taper */}
-          <mesh position={[-134, 4, 0]} rotation={[0, 0, Math.PI / 2]}>
-            <cylinderGeometry args={[7, 11, 40, 10, 1]} />
-            <meshStandardMaterial color="#6e7880" metalness={0.68} roughness={0.34} />
+          <mesh position={[112, 4.8, 0]} rotation={[0, 0, -0.14]}>
+            <boxGeometry args={[28, 4.2, 12]} />
+            <meshStandardMaterial color="#76818c" metalness={0.66} roughness={0.34} />
+          </mesh>
+          <mesh position={[98, 10.2, 0]} scale={[2.35, 0.44, 0.82]}>
+            <sphereGeometry args={[8.6, 14, 12]} />
+            <meshStandardMaterial color="#9db8c7" transparent opacity={0.36} metalness={0.42} roughness={0.14} emissive="#577488" emissiveIntensity={0.04} />
+          </mesh>
+          <mesh position={[96, 6.7, 0]}>
+            <boxGeometry args={[42, 3.2, 14]} />
+            <meshStandardMaterial color="#7b8690" metalness={0.62} roughness={0.36} />
+          </mesh>
+          <mesh position={[107.5, 8.9, 0]} rotation={[0, 0, -0.16]}>
+            <boxGeometry args={[26, 1.2, 8.6]} />
+            <meshStandardMaterial color="#505964" metalness={0.3} roughness={0.68} />
+          </mesh>
+          <mesh position={[113, 8.8, 0]} rotation={[0, 0, -0.22]}>
+            <boxGeometry args={[2.2, 7, 12.5]} />
+            <meshStandardMaterial color="#69737d" metalness={0.66} roughness={0.28} />
+          </mesh>
+          <mesh position={[98, 9.6, 0]} rotation={[0, 0, -0.1]}>
+            <boxGeometry args={[1.8, 6.4, 12]} />
+            <meshStandardMaterial color="#69737d" metalness={0.66} roughness={0.28} />
+          </mesh>
+          {[-1, 1].map(side => (
+            <mesh key={`nose-cheek-${side}`} position={[102, 3.8, side * 7]} scale={[1.75, 0.34, 0.48]}>
+              <sphereGeometry args={[6.4, 10, 8]} />
+              <meshStandardMaterial color="#737e88" metalness={0.58} roughness={0.38} />
+            </mesh>
+          ))}
+          {/* Tail section — raised aft deck and tapered tail cone */}
+          <mesh position={[-126, 5.5, 0]} rotation={[0, 0, Math.PI / 2]}>
+            <cylinderGeometry args={[6.6, 10.2, 54, 12, 1]} />
+            <meshStandardMaterial color="#6d7780" metalness={0.62} roughness={0.38} />
+          </mesh>
+          <mesh position={[-104, 14.5, 0]} rotation={[0, 0, -0.12]}>
+            <boxGeometry args={[34, 8, 12]} />
+            <meshStandardMaterial color="#76808b" metalness={0.62} roughness={0.36} />
+          </mesh>
+          <mesh position={[-145, 0.4, 0]} rotation={[0, 0, Math.PI / 2]}>
+            <coneGeometry args={[4.8, 18, 12]} />
+            <meshStandardMaterial color="#59626e" metalness={0.74} roughness={0.24} />
           </mesh>
 
           {/* ── Main swept wings — wide thin box, angled back ── */}
           {/* Port wing */}
           <mesh position={[-22, -3, -95]} rotation={[0, -0.22, -0.035]}>
             <boxGeometry args={[60, 3.2, 192]} />
-            <meshStandardMaterial color="#7a8491" metalness={0.62} roughness={0.36} />
+            <meshStandardMaterial color="#808b96" metalness={0.56} roughness={0.42} />
           </mesh>
           {/* Starboard wing */}
           <mesh position={[-22, -3, 95]} rotation={[0, 0.22, -0.035]}>
             <boxGeometry args={[60, 3.2, 192]} />
-            <meshStandardMaterial color="#7a8491" metalness={0.62} roughness={0.36} />
+            <meshStandardMaterial color="#808b96" metalness={0.56} roughness={0.42} />
           </mesh>
           {/* Wing leading edge highlight */}
           {[-1, 1].map(side => (
             <mesh key={`wing-le-${side}`} position={[10, -2.8, side * 95]} rotation={[0, side * -0.22, 0]}>
               <boxGeometry args={[8, 2.2, 192]} />
-              <meshStandardMaterial color="#9aa3ae" metalness={0.82} roughness={0.18} />
+              <meshStandardMaterial color="#a2acb5" metalness={0.74} roughness={0.22} />
             </mesh>
           ))}
 
           {/* ── Horizontal stabilizer (tail) ── */}
           {[-1, 1].map(side => (
-            <mesh key={`stab-${side}`} position={[-128, 8, side * 54]} rotation={[0, side * -0.12, 0.04]}>
-              <boxGeometry args={[36, 2.2, 110]} />
+            <mesh key={`stab-${side}`} position={[-122, 11.5, side * 42]} rotation={[0, side * -0.2, 0.05]}>
+              <boxGeometry args={[48, 2.4, 84]} />
               <meshStandardMaterial color="#6e7880" metalness={0.64} roughness={0.38} />
             </mesh>
           ))}
+          {[-1, 1].map(side => (
+            <mesh key={`stab-root-${side}`} position={[-104, 10.2, side * 18]} rotation={[0, 0, side * -0.12]}>
+              <boxGeometry args={[22, 3.4, 10]} />
+              <meshStandardMaterial color="#7a8491" metalness={0.68} roughness={0.34} />
+            </mesh>
+          ))}
           {/* Vertical tail fin */}
-          <mesh position={[-108, 26, 0]} rotation={[0, 0, 0.08]}>
-            <boxGeometry args={[50, 52, 3.2]} />
+          <mesh position={[-117, 39, 0]} rotation={[0, 0, 0.2]}>
+            <boxGeometry args={[20, 82, 5.2]} />
             <meshStandardMaterial color="#6e7880" metalness={0.66} roughness={0.36} />
           </mesh>
+          <mesh position={[-107, 24, 0]} rotation={[0, 0, 0.18]}>
+            <boxGeometry args={[24, 26, 7]} />
+            <meshStandardMaterial color="#7a8491" metalness={0.66} roughness={0.34} />
+          </mesh>
           {/* Tail fin tip */}
-          <mesh position={[-88, 52, 0]}>
-            <boxGeometry args={[22, 3, 3]} />
+          <mesh position={[-118, 79, 0]} rotation={[0, 0, -0.12]}>
+            <boxGeometry args={[12, 3, 6]} />
             <meshStandardMaterial color="#9aa3ae" metalness={0.76} roughness={0.24} />
           </mesh>
 
@@ -7601,6 +8385,17 @@ const EntityPlane = memo(({ entityId, index, entitiesRef, entityLookupRef }) => 
           </mesh>
         </group>
       )}
+      {[-104, -46, 46, 104].map((z, index) => (
+        <mesh
+          key={`bomber-dynamic-contrail-${index}`}
+          ref={(node) => { contrailRefs.current[index] = node; }}
+          position={[-126, -21, z]}
+          rotation={[0, 0, Math.PI / 2]}
+        >
+          <cylinderGeometry args={[2.2, 6.8, 176, 8]} />
+          <meshBasicMaterial color="#e0f2fe" transparent opacity={0.04} depthWrite={false} blending={THREE.AdditiveBlending} toneMapped={false} />
+        </mesh>
+      ))}
     </group>
   );
 });
@@ -7609,12 +8404,15 @@ const EntityPlane = memo(({ entityId, index, entitiesRef, entityLookupRef }) => 
 const EntityBomb = memo(({ entityId, index, entitiesRef, entityLookupRef }) => {
   const group = useRef();
   const modelNodesRef = useRef({});
+  const releaseFlashRef = useRef();
+  const releaseCoreRef = useRef();
+  const releaseTrailRefs = useRef([]);
   const [assetReady, setAssetReady] = useState(Boolean(airstrikeAssetCache.scene));
   const [assetFailed, setAssetFailed] = useState(Boolean(airstrikeAssetCache.error));
 
   const bombScene = useMemo(() => {
     if (!assetReady || !airstrikeAssetCache.scene) return null;
-    const clone = cloneNamedGlbGroup(airstrikeAssetCache.scene, 'nuke_bomb');
+    const clone = cloneNamedGlbGroup(airstrikeAssetCache.scene, 'nuke_bomb', { aliveShaderMix: ALIVE_SHADER_BOMB_MIX });
     modelNodesRef.current = clone?.userData?.namedNodes || {};
     return clone;
   }, [assetReady]);
@@ -7637,7 +8435,7 @@ const EntityBomb = memo(({ entityId, index, entitiesRef, entityLookupRef }) => {
 
   useEffect(() => () => disposeClonedMaterials(bombScene), [bombScene]);
   
-  useFrame((state, delta) => {
+  useCentralSceneFrame((state, delta) => {
     const p = getTrackedEntity({ entitiesRef, entityLookupRef, entityId, index });
     if (!p || p.dead) { 
       if (group.current) group.current.visible = false; 
@@ -7651,28 +8449,65 @@ const EntityBomb = memo(({ entityId, index, entitiesRef, entityLookupRef }) => {
     const heading = Math.atan2(p.vx || 0.001, p.vz || 0.001);
     const impactRock = p.impactPending ? Math.sin((p.impactTimer || 0) * 30) * 0.04 : 0;
     const isBombCamView = !!(p.isManual && window._falloutBombCamActive && window._falloutBombCamBombId === p.id);
+    const releaseWindow = Math.max(0.16, (p.deployDelay || BOMB_PARACHUTE_DEPLOY_DELAY) * 1.6);
+    const releaseProgress = THREE.MathUtils.clamp((p.age || 0) / releaseWindow, 0, 1);
+    const releaseEase = 1 - releaseProgress;
+    const releasePitch = (p.releasePitch || 0.84) * releaseEase;
+    const releaseRoll = (p.releaseRoll || 0.44) * releaseEase;
+    const releaseYawDrift = (p.releaseYawDrift || 0) * releaseEase;
+    const releasePulse = Math.pow(releaseEase, 1.35);
+    const canopySway = Math.sin(time * 1.35 + (p.swaySeed || 0)) * sway;
+    const canopyBob = Math.cos(time * 2.1 + (p.swaySeed || 0)) * sway;
+    const suspendedPitch = inflation * 0.12 + canopyBob * 0.03;
+    const suspendedRoll = canopySway * 0.08;
 
     group.current.position.set(p.x, p.y || 400, p.z);
-    group.current.rotation.y = heading;
-    group.current.rotation.x = Math.sin(time * 1.4 + (p.swaySeed || 0)) * sway * 0.06 + impactRock;
-    group.current.rotation.z = Math.cos(time * 1.8 + (p.swaySeed || 0)) * sway * 0.1;
-    group.current.visible = !isBombCamView;
+    group.current.rotation.y = heading + releaseYawDrift;
+    group.current.rotation.x = releasePitch + suspendedPitch + impactRock;
+    group.current.rotation.z = releaseRoll + suspendedRoll;
+    group.current.visible = true;
 
     const parachute = modelNodesRef.current.nuke_parachute;
     const cordsRoot = modelNodesRef.current.nuke_cords_root;
     const glow = modelNodesRef.current.nuke_status_glow;
+    const body = modelNodesRef.current.nuke_body;
     if (parachute) {
-      parachute.visible = !isBombCamView && inflation > 0.02;
-      parachute.scale.set(0.35 + inflation * 0.65, 0.2 + inflation * 0.8, 0.35 + inflation * 0.65);
-      parachute.rotation.z = Math.sin(time * 1.5 + (p.swaySeed || 0)) * sway * 0.05;
+      parachute.visible = inflation > 0.02;
+      parachute.position.y = 24 + inflation * 18 + canopyBob * 1.8;
+      parachute.scale.set(0.42 + inflation * 0.58, 0.14 + inflation * 0.92, 0.42 + inflation * 0.58);
+      parachute.rotation.x = canopyBob * 0.02;
+      parachute.rotation.z = canopySway * 0.05;
     }
     if (cordsRoot) {
-      cordsRoot.visible = !isBombCamView && inflation > 0.02;
-      cordsRoot.scale.set(1, 0.3 + inflation * 0.7, 1);
+      cordsRoot.visible = inflation > 0.02;
+      cordsRoot.position.y = inflation * 4;
+      cordsRoot.scale.set(0.92 + inflation * 0.08, 0.2 + inflation * 0.8, 0.92 + inflation * 0.08);
+      cordsRoot.rotation.z = canopySway * 0.03;
     }
     if (glow) {
-      setCloudOpacity(glow, isBombCamView ? 0 : 0.2 + Math.sin(time * 8 + (p.swaySeed || 0)) * 0.08);
+      setCloudOpacity(glow, isBombCamView ? 0 : 0.22 + releaseEase * 0.1 + Math.sin(time * 8 + (p.swaySeed || 0)) * 0.08);
     }
+    if (body) {
+      body.rotation.x = Math.sin(time * 14 + (p.swaySeed || 0)) * releaseEase * 0.05 - inflation * 0.05;
+      body.rotation.z = -canopySway * 0.02;
+    }
+    if (releaseFlashRef.current?.material) {
+      releaseFlashRef.current.material.opacity = releasePulse * 0.34;
+      releaseFlashRef.current.scale.setScalar(0.85 + releasePulse * 1.4);
+      releaseFlashRef.current.visible = releasePulse > 0.02;
+    }
+    if (releaseCoreRef.current?.material) {
+      releaseCoreRef.current.material.opacity = releasePulse * 0.78;
+      releaseCoreRef.current.scale.setScalar(0.8 + releasePulse * 0.75);
+      releaseCoreRef.current.visible = releasePulse > 0.02;
+    }
+    releaseTrailRefs.current.forEach((mesh, index) => {
+      if (!mesh?.material) return;
+      const trailFactor = releasePulse * (1 - index * 0.18);
+      mesh.material.opacity = Math.max(0, trailFactor * 0.2);
+      mesh.scale.set(1 + trailFactor * 0.38, 1, 1 + trailFactor * 0.2);
+      mesh.visible = trailFactor > 0.02;
+    });
   });
   
   return (
@@ -7695,11 +8530,30 @@ const EntityBomb = memo(({ entityId, index, entitiesRef, entityLookupRef }) => {
            </mesh>
          </>
        )}
+       <mesh ref={releaseFlashRef} position={[-28, 0, 0]} rotation={[0, 0, Math.PI / 2]}>
+         <cylinderGeometry args={[3.8, 9.6, 16, 14]} />
+         <meshBasicMaterial color="#f59e0b" transparent opacity={0} depthWrite={false} blending={THREE.AdditiveBlending} toneMapped={false} />
+       </mesh>
+       <mesh ref={releaseCoreRef} position={[-31.5, 0, 0]}>
+         <sphereGeometry args={[3.6, 12, 12]} />
+         <meshBasicMaterial color="#fff7d6" transparent opacity={0} depthWrite={false} blending={THREE.AdditiveBlending} toneMapped={false} />
+       </mesh>
+       {[0, 1, 2].map((index) => (
+         <mesh
+           key={`bomb-release-trail-${index}`}
+           ref={(node) => { releaseTrailRefs.current[index] = node; }}
+           position={[-38 - index * 10, 0, 0]}
+           rotation={[0, 0, Math.PI / 2]}
+         >
+           <cylinderGeometry args={[2.8 - index * 0.45, 6.4 - index * 0.8, 18 + index * 10, 10]} />
+           <meshBasicMaterial color={index === 0 ? "#fde68a" : "#dbeafe"} transparent opacity={0} depthWrite={false} blending={THREE.AdditiveBlending} toneMapped={false} />
+         </mesh>
+       ))}
     </group>
   );
 });
 
-const NUKE_CLOUD_GLB_PATH = '/fallout/nuke_cloud.glb?v=20260406a';
+const NUKE_CLOUD_GLB_PATH = '/fallout/nuke_cloud.glb?v=20260428b';
 const NUKE_CLOUD_MAX_AGE = 210;
 const nukeCloudAssetCache = {
   scene: null,
@@ -7710,8 +8564,10 @@ const nukeCloudAssetCache = {
 const cloneCloudMaterial = (material) => {
   if (!material) return material;
   const cloned = material.clone();
-  cloned.transparent = true;
-  cloned.depthWrite = false;
+  if (cloned.transparent || cloned.opacity < 0.999) {
+    cloned.transparent = true;
+    cloned.depthWrite = false;
+  }
   return cloned;
 };
 
@@ -7750,16 +8606,27 @@ const applyBaseScale = (mesh, scaleMultiplier, yOffset = 0) => {
 const cloneNukeCloudScene = (scene) => {
   const clone = scene.clone(true);
   const namedNodes = {};
+  const buckets = {
+    stems: [],
+    updrafts: [],
+    lobes: [],
+    rings: [],
+    debris: [],
+  };
   clone.traverse((object) => {
     if (object.name) {
       namedNodes[object.name] = object;
       object.userData.basePosition = object.position.clone();
       object.userData.baseScale = object.scale.clone();
+      if (object.name.startsWith('nuke_stem_')) buckets.stems.push(object);
+      else if (object.name.startsWith('nuke_updraft_')) buckets.updrafts.push(object);
+      else if (object.name.startsWith('nuke_lobe_')) buckets.lobes.push(object);
+      else if (object.name.startsWith('nuke_ring_')) buckets.rings.push(object);
+      else if (object.name.startsWith('nuke_debris_')) buckets.debris.push(object);
     }
     if (!object.isMesh) return;
     object.castShadow = false;
     object.receiveShadow = false;
-    object.frustumCulled = false;
     if (Array.isArray(object.material)) {
       object.material = object.material.map(cloneCloudMaterial);
     } else {
@@ -7767,6 +8634,7 @@ const cloneNukeCloudScene = (scene) => {
     }
   });
   clone.userData.namedNodes = namedNodes;
+  clone.userData.nodeBuckets = buckets;
   return clone;
 };
 
@@ -7823,9 +8691,15 @@ const worldPropsAssetCache = {
 };
 
 const globalShaderUniforms = { time: { value: 0 } };
+const ALIVE_SHADER_DEFAULT_MIX = 0.58;
+const ALIVE_SHADER_AIRCRAFT_MIX = 0.42;
+const ALIVE_SHADER_BOMB_MIX = 0.28;
+const ALIVE_SHADER_VEHICLE_MIX = 0.34;
+const ALIVE_SHADER_INFANTRY_MIX = 0.16;
 
-const enhanceMaterialWithAliveShader = (material) => {
+const enhanceMaterialWithAliveShader = (material, options = {}) => {
   if (!material) return material;
+  const aliveShaderMix = THREE.MathUtils.clamp(options.aliveShaderMix ?? ALIVE_SHADER_DEFAULT_MIX, 0, 1);
   const clone = material.clone();
   // Keep all original material settings — only add shader effects on top
   clone.depthWrite = true;
@@ -7837,7 +8711,7 @@ const enhanceMaterialWithAliveShader = (material) => {
   // program won't sample textures — and every later material sharing that
   // key will also be textureless, even if it has a .map assigned.
   clone.customProgramCacheKey = () => {
-    let key = 'alive-v3';
+    let key = `alive-v4_${aliveShaderMix.toFixed(2)}`;
     if (clone.map) key += '_map';
     if (clone.normalMap) key += '_nrm';
     if (clone.roughnessMap) key += '_rgh';
@@ -7864,7 +8738,7 @@ const enhanceMaterialWithAliveShader = (material) => {
       '#include <worldpos_vertex>',
       `#include <worldpos_vertex>
        vWPos  = (modelMatrix * vec4(transformed, 1.0)).xyz;
-       vWNorm = normalize(mat3(modelMatrix) * normal);`
+       vWNorm = normalize(inverseTransformDirection(transformedNormal, viewMatrix));`
     );
 
     // ── Fragment: subtle realism pass that preserves the original PBR look ──
@@ -7896,23 +8770,24 @@ const enhanceMaterialWithAliveShader = (material) => {
        float spec = pow(max(dot(vWNorm, halfDir), 0.0), 64.0);
 
        // Gentle ambient shaping so large forms read better without looking painted
-       vec3 skyFill = vec3(0.16, 0.22, 0.30) * pow(upLight, 1.35) * 0.14;
-       vec3 groundBounce = vec3(0.10, 0.07, 0.04) * pow(1.0 - upLight, 1.7) * 0.08;
-       vec3 sunTint = vec3(1.0, 0.96, 0.9) * sunFacing * 0.07;
-       vec3 rimTint = vec3(0.58, 0.68, 0.78) * fresnel * (0.045 + backScatter * 0.08);
-       vec3 specAdd = vec3(1.0, 0.98, 0.93) * spec * (0.16 + sunFacing * 0.12);
+       vec3 skyFill = vec3(0.14, 0.18, 0.24) * pow(upLight, 1.2) * 0.08;
+       vec3 groundBounce = vec3(0.08, 0.06, 0.035) * pow(1.0 - upLight, 1.45) * 0.04;
+       vec3 sunTint = vec3(1.0, 0.97, 0.92) * sunFacing * 0.045;
+       vec3 rimTint = vec3(0.56, 0.64, 0.72) * fresnel * (0.022 + backScatter * 0.045);
+       vec3 specAdd = vec3(1.0, 0.99, 0.95) * spec * (0.08 + sunFacing * 0.08);
 
        // Subtle world-space breakup to stop giant meshes from reading too smooth
        float grainA = sin(vWPos.x * 0.12 + vWPos.z * 0.18 + globalTime * 0.05);
        float grainB = sin(vWPos.y * 0.2 - vWPos.x * 0.11);
        float grain = grainA * grainB * 0.5 + 0.5;
        float luminance = dot(base, vec3(0.2126, 0.7152, 0.0722));
-       vec3 poreVariation = base * ((grain - 0.5) * (0.035 + (1.0 - luminance) * 0.045));
+       vec3 poreVariation = base * ((grain - 0.5) * (0.018 + (1.0 - luminance) * 0.02));
 
        vec3 finalColor = base + skyFill + groundBounce + sunTint + rimTint + specAdd + poreVariation;
 
        // Soft HDR clamp — keep highlights punchy without looking neon
-       finalColor = min(finalColor, vec3(1.55));
+      finalColor = mix(base, finalColor, ${aliveShaderMix.toFixed(2)});
+       finalColor = min(finalColor, vec3(1.35));
 
        gl_FragColor = vec4(finalColor, gl_FragColor.a);
       `
@@ -7924,7 +8799,11 @@ const enhanceMaterialWithAliveShader = (material) => {
 
 const cloneGlbMaterialForRender = (material, options = {}) => {
   if (!material) return material;
-  const { applyAliveShaderToTextured = false } = options;
+  const {
+    applyAliveShaderToTextured = false,
+    textureAnisotropy = 4,
+    aliveShaderMix = ALIVE_SHADER_DEFAULT_MIX
+  } = options;
 
   const hasTextureMap = Boolean(
     material.map ||
@@ -7938,7 +8817,7 @@ const cloneGlbMaterialForRender = (material, options = {}) => {
   );
 
   if (!hasTextureMap) {
-    return enhanceMaterialWithAliveShader(material);
+    return enhanceMaterialWithAliveShader(material, { aliveShaderMix });
   }
 
   const clone = material.clone();
@@ -7947,7 +8826,7 @@ const cloneGlbMaterialForRender = (material, options = {}) => {
 
   if (clone.map) {
     clone.map.colorSpace = THREE.SRGBColorSpace;
-    clone.map.anisotropy = 8;
+    clone.map.anisotropy = textureAnisotropy;
     clone.map.generateMipmaps = true;
     clone.map.minFilter = THREE.LinearMipmapLinearFilter;
     clone.map.magFilter = THREE.LinearFilter;
@@ -7955,7 +8834,7 @@ const cloneGlbMaterialForRender = (material, options = {}) => {
   }
   if (clone.emissiveMap) {
     clone.emissiveMap.colorSpace = THREE.SRGBColorSpace;
-    clone.emissiveMap.anisotropy = 8;
+    clone.emissiveMap.anisotropy = textureAnisotropy;
     clone.emissiveMap.needsUpdate = true;
   }
   if (clone.normalMap) clone.normalMap.needsUpdate = true;
@@ -7966,7 +8845,7 @@ const cloneGlbMaterialForRender = (material, options = {}) => {
   if (clone.alphaMap) clone.alphaMap.needsUpdate = true;
 
   if (applyAliveShaderToTextured) {
-    return enhanceMaterialWithAliveShader(clone);
+    return enhanceMaterialWithAliveShader(clone, { aliveShaderMix });
   }
 
   clone.needsUpdate = true;
@@ -7981,7 +8860,7 @@ const makeGeometryAlive = (object) => {
 };
 
 // React component wrapper for standard materials to inject the alive shader
-const AliveMaterial = memo(({ color, roughness = 0.8, metalness = 0.2, emissive, emissiveIntensity, side = THREE.FrontSide, transparent = false, opacity = 1 }) => {
+const AliveMaterial = memo(({ color, roughness = 0.8, metalness = 0.2, emissive, emissiveIntensity, side = THREE.FrontSide, transparent = false, opacity = 1, aliveShaderMix = ALIVE_SHADER_DEFAULT_MIX }) => {
   const material = useMemo(() => {
     const materialConfig = {
       color,
@@ -7996,8 +8875,8 @@ const AliveMaterial = memo(({ color, roughness = 0.8, metalness = 0.2, emissive,
     if (emissiveIntensity !== undefined) materialConfig.emissiveIntensity = emissiveIntensity;
 
     const mat = new THREE.MeshStandardMaterial(materialConfig);
-    return enhanceMaterialWithAliveShader(mat);
-  }, [color, roughness, metalness, emissive, emissiveIntensity, side, transparent, opacity]);
+    return enhanceMaterialWithAliveShader(mat, { aliveShaderMix });
+  }, [color, roughness, metalness, emissive, emissiveIntensity, side, transparent, opacity, aliveShaderMix]);
 
   useEffect(() => {
     return () => material?.dispose?.();
@@ -8011,14 +8890,17 @@ const cloneNamedGlbGroup = (scene, name, materialOptions = {}) => {
   if (!source) return null;
   const clone = source.clone(true);
   const namedNodes = {};
+  const castShadow = materialOptions.castShadow ?? true;
+  const receiveShadow = materialOptions.receiveShadow ?? true;
+  const disableFrustumCulling = materialOptions.disableFrustumCulling ?? false;
   clone.traverse((object) => {
     if (object.name) {
       namedNodes[object.name] = object;
     }
     if (!object.isMesh) return;
-    object.castShadow = true;
-    object.receiveShadow = true;
-    object.frustumCulled = false;
+    object.castShadow = castShadow;
+    object.receiveShadow = receiveShadow;
+    object.frustumCulled = !disableFrustumCulling;
     makeGeometryAlive(object);
     if (Array.isArray(object.material)) {
       object.material = object.material.map((material) => cloneGlbMaterialForRender(material, materialOptions));
@@ -8119,7 +9001,7 @@ const cloneGlbSceneRoot = (scene) => {
     meshCount += 1;
     object.castShadow = true;
     object.receiveShadow = true;
-    object.frustumCulled = false;
+    object.frustumCulled = true;
     makeGeometryAlive(object);
     if (Array.isArray(object.material)) {
       object.material = object.material.map(cloneGlbMaterialForRender);
@@ -8192,7 +9074,7 @@ const loadWorldPropsAsset = () => {
   return worldPropsAssetCache.promise;
 };
 
-const AIRSTRIKE_ASSETS_GLB_PATH = '/fallout/airstrike_assets.glb?v=20260403c';
+const AIRSTRIKE_ASSETS_GLB_PATH = '/fallout/airstrike_assets.glb?v=20260429b';
 const airstrikeAssetCache = {
   scene: null,
   promise: null,
@@ -8211,7 +9093,7 @@ const commandEffectsAssetCache = {
   promise: null,
   error: null
 };
-const KAIJU_ASSETS_GLB_PATH = '/fallout/kaiju_assets.glb?v=20260404a';
+const KAIJU_ASSETS_GLB_PATH = '/fallout/kaiju_assets.glb?v=20260429b';
 const kaijuAssetsAssetCache = {
   scene: null,
   promise: null,
@@ -8243,6 +9125,8 @@ const COMMAND_EFFECT_ASSET_NAMES = {
 };
 const KAIJU_STRUCTURE_ASSET_NAMES = {
   godzilla: 'kaiju_godzilla',
+  burning_godzilla: 'kaiju_burning_godzilla',
+  mecha_godzilla: 'kaiju_mecha_godzilla',
   octopus: 'kaiju_octopus',
   spider: 'kaiju_spider',
   beetle: 'kaiju_beetle',
@@ -8374,8 +9258,9 @@ const EntityMushroomCloud = memo(({ entityId, index, entitiesRef, entityLookupRe
   const fallbackFlashRef = useRef();
   const fallbackEmberRef = useRef();
   const lightRef = useRef();
-  const light2Ref = useRef();
   const cloudNodesRef = useRef({});
+  const cloudBucketsRef = useRef({ stems: [], updrafts: [], lobes: [], rings: [], debris: [] });
+  const frameSkipRef = useRef(0);
   const [assetReady, setAssetReady] = useState(Boolean(nukeCloudAssetCache.scene));
   const [assetFailed, setAssetFailed] = useState(Boolean(nukeCloudAssetCache.error));
 
@@ -8383,6 +9268,7 @@ const EntityMushroomCloud = memo(({ entityId, index, entitiesRef, entityLookupRe
     if (!assetReady || !nukeCloudAssetCache.scene) return null;
     const clone = cloneNukeCloudScene(nukeCloudAssetCache.scene);
     cloudNodesRef.current = clone.userData.namedNodes || {};
+    cloudBucketsRef.current = clone.userData.nodeBuckets || { stems: [], updrafts: [], lobes: [], rings: [], debris: [] };
     return clone;
   }, [assetReady]);
   const useFallback = !cloudScene;
@@ -8417,7 +9303,7 @@ const EntityMushroomCloud = memo(({ entityId, index, entitiesRef, entityLookupRe
     };
   }, [cloudScene]);
 
-  useFrame((state, delta) => {
+  useCentralSceneFrame((state, delta) => {
     const p = getTrackedEntity({ entitiesRef, entityLookupRef, entityId, index });
     if (!p || p.dead) {
       if (groupRef.current) groupRef.current.visible = false;
@@ -8427,8 +9313,9 @@ const EntityMushroomCloud = memo(({ entityId, index, entitiesRef, entityLookupRe
     const dt = Math.min(delta, 0.05);
     const age = (p.age || 0) + dt * 60;
     p.age = age;
+    const lowPower = !!p.lowPower;
 
-    if (age > NUKE_CLOUD_MAX_AGE) {
+    if (age > (lowPower ? 150 : NUKE_CLOUD_MAX_AGE)) {
       p.dead = true;
       if (groupRef.current) groupRef.current.visible = false;
       return;
@@ -8444,6 +9331,14 @@ const EntityMushroomCloud = memo(({ entityId, index, entitiesRef, entityLookupRe
     const time = state.clock.elapsedTime;
     const rootScale = (0.45 + Math.pow(progress, 0.85) * 4.6) * blastScale;
 
+    if (lowPower) {
+      frameSkipRef.current = (frameSkipRef.current + 1) % 2;
+      if (frameSkipRef.current !== 0) {
+        if (lightRef.current) lightRef.current.intensity = 0;
+        return;
+      }
+    }
+
     if (groupRef.current) {
       groupRef.current.visible = true;
       groupRef.current.position.set(p.x, p.y || 0, p.z);
@@ -8454,12 +9349,12 @@ const EntityMushroomCloud = memo(({ entityId, index, entitiesRef, entityLookupRe
     }
 
     const nodes = cloudNodesRef.current;
+    const buckets = cloudBucketsRef.current;
 
     if (!useFallback) {
       // ── Multi-segment stem: each segment rises with staggered timing ──
-      for (let i = 0; i < 4; i++) {
-        const seg = nodes[`nuke_stem_${i}`];
-        if (!seg) continue;
+      buckets.stems.forEach((seg, i) => {
+        if (!seg) return;
         const segProgress = Math.min(1, Math.max(0, (progress - i * 0.06) / 0.7));
         applyBaseScale(seg, 0.5 + segProgress * 1.5, segProgress * (10 + i * 6));
         // Each segment rotates slightly differently — turbulent pillar
@@ -8468,21 +9363,20 @@ const EntityMushroomCloud = memo(({ entityId, index, entitiesRef, entityLookupRe
         setCloudOpacity(seg, fadeAlpha * (0.65 + i * 0.04));
         // Pulse emissive intensity on stem segments
         if (seg.material && seg.material.emissiveIntensity !== undefined) {
-          seg.material.emissiveIntensity = (0.08 + fireCoreGlow * 0.3) * (1 + Math.sin(time * 3 + i) * 0.3);
+          seg.material.emissiveIntensity = (0.06 + fireCoreGlow * 0.18) * (1 + Math.sin(time * 3 + i) * 0.2);
         }
-      }
+      });
 
       // ── Updraft smoke columns: spiral upward ──
-      for (let i = 0; i < 6; i++) {
-        const updraft = nodes[`nuke_updraft_${i}`];
-        if (!updraft) continue;
+      buckets.updrafts.forEach((updraft, i) => {
+        if (!updraft) return;
         const uProgress = Math.min(1, Math.max(0, (progress - 0.08) / 0.65));
         applyBaseScale(updraft, 0.3 + uProgress * 1.2, uProgress * (15 + i * 4));
         // Spiral rotation around stem
         updraft.rotation.y = time * (0.4 + i * 0.15) + i * (Math.PI / 3);
         updraft.rotation.z = Math.sin(time * 1.2 + i * 0.9) * 0.06;
-        setCloudOpacity(updraft, fadeAlpha * uProgress * 0.3);
-      }
+        setCloudOpacity(updraft, fadeAlpha * uProgress * 0.22);
+      });
 
       // ── Plume ──
       const plume = nodes.nuke_plume;
@@ -8508,10 +9402,7 @@ const EntityMushroomCloud = memo(({ entityId, index, entitiesRef, entityLookupRe
       }
 
       // ── Lobes — per-lobe turbulent billowing ──
-      Object.keys(nodes).forEach((name, idx) => {
-        if (!name.startsWith('nuke_lobe_')) return;
-        const lobe = nodes[name];
-        const lobeIdx = parseInt(name.replace('nuke_lobe_', ''), 10);
+      buckets.lobes.forEach((lobe, lobeIdx) => {
         // Staggered growth + noise-like wobble
         const lobePhase = lobeIdx * 0.73;
         const lobeProg = Math.min(1, Math.max(0, (progress - lobeIdx * 0.025) / 0.8));
@@ -8522,7 +9413,7 @@ const EntityMushroomCloud = memo(({ entityId, index, entitiesRef, entityLookupRe
         lobe.rotation.y = Math.sin(time * (0.6 + lobeIdx * 0.18) + lobePhase) * 0.12;
         lobe.rotation.x = Math.cos(time * (0.4 + lobeIdx * 0.14) + lobePhase * 1.3) * 0.08;
         lobe.rotation.z = Math.sin(time * (0.5 + lobeIdx * 0.11) + lobePhase * 0.7) * 0.06 + billow2;
-        setCloudOpacity(lobe, fadeAlpha * (0.55 + lobeIdx * 0.04 + billow * 0.3));
+        setCloudOpacity(lobe, fadeAlpha * (0.44 + lobeIdx * 0.03 + billow * 0.2));
       });
 
       // ── Rolling smoke ring — rotates and pulses ──
@@ -8552,18 +9443,6 @@ const EntityMushroomCloud = memo(({ entityId, index, entitiesRef, entityLookupRe
       }
 
       // ── Cap underside glow ──
-      const capGlow = nodes.nuke_cap_glow;
-      if (capGlow) {
-        const glowProg = Math.min(1, Math.max(0, (progress - 0.1) / 0.5));
-        applyBaseScale(capGlow, 0.4 + glowProg * 1.8, progress * 20);
-        capGlow.rotation.x = Math.PI / 2;
-        const glowPulse = 1 + Math.sin(time * 3.2 + 0.5) * 0.15;
-        setCloudOpacity(capGlow, fadeAlpha * fireCoreGlow * 0.5 * glowPulse);
-        if (capGlow.material) {
-          capGlow.material.emissiveIntensity = fireCoreGlow * 2.0 * glowPulse;
-        }
-      }
-
       // ── Ember ──
       const emberNode = nodes.nuke_ember;
       if (emberNode) {
@@ -8575,18 +9454,17 @@ const EntityMushroomCloud = memo(({ entityId, index, entitiesRef, entityLookupRe
         }
       }
 
-      // ── 3 Shock rings — staggered expansion ──
-      for (let i = 0; i < 3; i++) {
-        const ring = nodes[`nuke_ring_${i}`];
-        if (!ring) continue;
+      // ── Shock rings — staggered expansion ──
+      buckets.rings.forEach((ring, i) => {
+        if (!ring) return;
         const ringDelay = i * 0.08;
         const rProg = Math.min(1, Math.max(0, (ringProgress - ringDelay) / (1 - ringDelay)));
         const rScale = 0.48 + Math.pow(rProg, 0.55) * (10 + i * 3);
         applyBaseScale(ring, rScale, 0);
         ring.rotation.x = Math.PI / 2;
         ring.position.y = (ring.userData.basePosition?.y || 6) + Math.pow(rProg, 0.5) * (5 + i * 2);
-        setCloudOpacity(ring, fadeAlpha * Math.max(0, 1 - rProg) * (0.45 - i * 0.08));
-      }
+        setCloudOpacity(ring, fadeAlpha * Math.max(0, 1 - rProg) * (0.34 - i * 0.08));
+      });
 
       // ── Flash ──
       const flashNode = nodes.nuke_flash;
@@ -8609,11 +9487,10 @@ const EntityMushroomCloud = memo(({ entityId, index, entitiesRef, entityLookupRe
       }
 
       // ── Debris chunks — fly outward and tumble ──
-      for (let i = 0; i < 8; i++) {
-        const debris = nodes[`nuke_debris_${i}`];
-        if (!debris) continue;
+      buckets.debris.forEach((debris, i) => {
+        if (!debris) return;
         const dProg = Math.min(1, Math.max(0, (progress - 0.01) / 0.4));
-        const angle = (i / 8) * Math.PI * 2 + i * 0.37;
+        const angle = (i / Math.max(1, buckets.debris.length)) * Math.PI * 2 + i * 0.37;
         const dist = (20 + (i % 3) * 10) * (1 + dProg * 3);
         const height = (4 + (i % 4) * 8) * (1 + dProg * 1.5) * Math.max(0, 1 - dProg * 0.8);
         debris.position.set(
@@ -8625,8 +9502,8 @@ const EntityMushroomCloud = memo(({ entityId, index, entitiesRef, entityLookupRe
         debris.rotation.x = time * (2.5 + i * 0.8);
         debris.rotation.z = time * (1.8 + i * 0.6);
         applyBaseScale(debris, 0.8 + dProg * 0.5, 0);
-        setCloudOpacity(debris, fadeAlpha * Math.max(0, 1 - dProg * 1.3) * 0.8);
-      }
+        setCloudOpacity(debris, fadeAlpha * Math.max(0, 1 - dProg * 1.3) * 0.65);
+      });
 
       // ── Heat distortion column — subtle shimmer ──
       const heatCol = nodes.nuke_heat_column;
@@ -8678,14 +9555,13 @@ const EntityMushroomCloud = memo(({ entityId, index, entitiesRef, entityLookupRe
 
     // ── Two lights: one ground-level ember, one cap-level glow ──
     if (lightRef.current) {
-      lightRef.current.position.y = (70 + progress * 180) * blastScale;
-      lightRef.current.distance = 900 * blastScale;
-      lightRef.current.intensity = fadeAlpha * Math.max(0, 42 * blastFlash + 12 * emberGlow);
-    }
-    if (light2Ref.current) {
-      light2Ref.current.position.y = 16 * blastScale;
-      light2Ref.current.distance = 600 * blastScale;
-      light2Ref.current.intensity = fadeAlpha * fireCoreGlow * (18 + Math.sin(time * 5) * 6);
+      if (lowPower) {
+        lightRef.current.intensity = 0;
+        return;
+      }
+      lightRef.current.position.y = (48 + progress * 156) * blastScale;
+      lightRef.current.distance = 640 * blastScale;
+      lightRef.current.intensity = fadeAlpha * Math.max(0, 20 * blastFlash + 8 * emberGlow + 4 * fireCoreGlow);
     }
   });
 
@@ -8716,18 +9592,10 @@ const EntityMushroomCloud = memo(({ entityId, index, entitiesRef, entityLookupRe
 
       <pointLight
         ref={lightRef}
-        position={[0, 160, 0]}
+        position={[0, 120, 0]}
         color="#ff7a18"
         intensity={0}
-        distance={900}
-        decay={1.8}
-      />
-      <pointLight
-        ref={light2Ref}
-        position={[0, 16, 0]}
-        color="#ff5500"
-        intensity={0}
-        distance={600}
+        distance={640}
         decay={2.0}
       />
     </group>
@@ -8736,7 +9604,7 @@ const EntityMushroomCloud = memo(({ entityId, index, entitiesRef, entityLookupRe
 
 const EntityMissile = ({ entityId, index, entitiesRef, entityLookupRef }) => {
   const group = useRef();
-  useFrame((state) => {
+  useCentralSceneFrame((state) => {
     const p = getTrackedEntity({ entitiesRef, entityLookupRef, entityId, index });
     if (!p || p.dead) { if (group.current) group.current.visible = false; return; }
     group.current.position.set(p.x, p.y, p.z);
@@ -8763,7 +9631,7 @@ const EntityMissileImpact = ({ entityId, index, entitiesRef, entityLookupRef }) 
   const age = useRef(0);
   const pos = useRef(null);
 
-  useFrame((state, delta) => {
+  useCentralSceneFrame((state, delta) => {
     const p = getTrackedEntity({ entitiesRef, entityLookupRef, entityId, index });
     if (!p || p.dead) { if (group.current) group.current.visible = false; return; }
     
@@ -8817,7 +9685,7 @@ const EntityImpactPuff = memo(({ entityId, index, entitiesRef, entityLookupRef }
   const ringRef = useRef();
   const smokeRef = useRef();
 
-  useFrame((state, delta) => {
+  useCentralSceneFrame((state, delta) => {
     const p = getTrackedEntity({ entitiesRef, entityLookupRef, entityId, index });
     if (!p || p.dead) { if (group.current) group.current.visible = false; return; }
 
@@ -8865,12 +9733,13 @@ const EntityImpactPuff = memo(({ entityId, index, entitiesRef, entityLookupRef }
 // ─────────────────────────────────────────────────────────────────────────────
 // EntitySupportStrikeEffect — fully procedural, zero async dependencies.
 // All three effects (orbital_lance, firestorm, kinetic_spear) are driven
-// entirely by useFrame so they ALWAYS animate regardless of GLB load state.
+// entirely by the central scene frame dispatcher so they ALWAYS animate regardless of GLB load state.
 // ─────────────────────────────────────────────────────────────────────────────
 const EntitySupportStrikeEffect = memo(({ entityId, index, entitiesRef, entityLookupRef }) => {
   const group = useRef();
   const r = useRef({}); // keyed mesh refs
   const effectNodesRef = useRef({});
+  const effectBucketsRef = useRef({ firestormFlames: [], firestormSmoke: [] });
   const [assetReady, setAssetReady] = useState(Boolean(commandEffectsAssetCache.scene));
   const [assetFailed, setAssetFailed] = useState(Boolean(commandEffectsAssetCache.error));
   const trackedEffect = getTrackedEntity({ entitiesRef, entityLookupRef, entityId, index });
@@ -8878,20 +9747,24 @@ const EntitySupportStrikeEffect = memo(({ entityId, index, entitiesRef, entityLo
   const effectScene = useMemo(() => {
     if (!assetReady || !commandEffectsAssetCache.scene || !effectAssetName) {
       effectNodesRef.current = {};
+      effectBucketsRef.current = { firestormFlames: [], firestormSmoke: [] };
       return null;
     }
     const clone = cloneNamedGlbGroup(commandEffectsAssetCache.scene, effectAssetName, { castShadow: false, receiveShadow: false });
+    const effectBuckets = { firestormFlames: [], firestormSmoke: [] };
     clone?.traverse((object) => {
       if (object.name) {
         object.userData.basePosition = object.position.clone();
         object.userData.baseScale = object.scale.clone();
+        if (object.name.startsWith('support_firestorm_flame_')) effectBuckets.firestormFlames.push(object);
+        else if (object.name.startsWith('support_firestorm_smoke_')) effectBuckets.firestormSmoke.push(object);
       }
       if (!object.isMesh) return;
       object.castShadow = false;
       object.receiveShadow = false;
-      object.frustumCulled = false;
     });
     effectNodesRef.current = clone?.userData?.namedNodes || {};
+    effectBucketsRef.current = effectBuckets;
     return clone;
   }, [assetReady, effectAssetName]);
 
@@ -8918,7 +9791,7 @@ const EntitySupportStrikeEffect = memo(({ entityId, index, entitiesRef, entityLo
     };
   }, [effectScene]);
 
-  useFrame((state) => {
+  useCentralSceneFrame((state) => {
     const p = getTrackedEntity({ entitiesRef, entityLookupRef, entityId, index });
     if (!p || p.dead) { if (group.current) group.current.visible = false; return; }
     if (!group.current) return;
@@ -8942,6 +9815,7 @@ const EntitySupportStrikeEffect = memo(({ entityId, index, entitiesRef, entityLo
         .forEach(m => { if (m) m.opacity = Math.max(0, Math.min(1, val)); });
     };
     const nodes = effectNodesRef.current || {};
+    const effectBuckets = effectBucketsRef.current || { firestormFlames: [], firestormSmoke: [] };
     const opEffect = (name, val) => {
       const node = nodes[name];
       if (!node) return;
@@ -9112,24 +9986,20 @@ const EntitySupportStrikeEffect = memo(({ entityId, index, entitiesRef, entityLo
       opEffect('firestorm_ember_field', ig < 1 ? ig * 0.64 : bl < 1 ? 0.64 - bl * 0.12 : Math.max(0, 0.5 - bu * 0.42));
       scaleEffect('firestorm_ground_roll', ig < 1 ? 0.4 + ig * 0.9 : bl < 1 ? 1.4 + bl * 2.0 : Math.max(0.6, 3.4 - bu * 1.8), 3 + pulse * 2);
       opEffect('firestorm_ground_roll', ig < 1 ? 0.18 + ig * 0.22 : Math.max(0, 0.4 - bu * 0.36));
-      for (let i = 0; i < 6; i += 1) {
-        const flameName = `support_firestorm_flame_${i}`;
-        const flame = nodes[flameName];
-        if (!flame) continue;
+      effectBuckets.firestormFlames.forEach((flame, i) => {
+        if (!flame) return;
         const flicker = 0.86 + Math.sin(t * (7 + i) + i * 0.7) * 0.18;
         applyBaseScale(flame, (ig < 1 ? 0.4 + ig : 1.3 + (1 - bu * 0.5)) * flicker, bl < 1 ? bl * (12 + i * 1.8) : 12 + i * 1.8 + bu * 8);
-        setCloudOpacity(flame, ig < 1 ? ig * 0.44 : bl < 1 ? 0.56 + Math.sin(t * (8 + i)) * 0.08 : Math.max(0, 0.46 - bu * 0.42));
-      }
-      for (let i = 0; i < 4; i += 1) {
-        const smokeName = `support_firestorm_smoke_${i}`;
-        const smoke = nodes[smokeName];
-        if (!smoke) continue;
+        setCloudOpacity(flame, ig < 1 ? ig * 0.4 : bl < 1 ? 0.5 + Math.sin(t * (8 + i)) * 0.06 : Math.max(0, 0.4 - bu * 0.38));
+      });
+      effectBuckets.firestormSmoke.forEach((smoke, i) => {
+        if (!smoke) return;
         const drift = bl < 1 ? bl * (18 + i * 8) : 18 + i * 8 + bu * (40 + i * 16);
         applyBaseScale(smoke, 0.8 + (bl < 1 ? bl * 0.8 : 0.8 + bu * 1.6), drift);
         smoke.position.x = smoke.userData.basePosition.x + Math.sin(t * (0.7 + i * 0.2)) * (3 + i * 1.5);
         smoke.position.z = smoke.userData.basePosition.z + Math.cos(t * (0.6 + i * 0.18)) * (2.4 + i);
-        setCloudOpacity(smoke, bl < 1 ? 0.12 + bl * 0.16 : Math.max(0, 0.28 - bu * 0.24));
-      }
+        setCloudOpacity(smoke, bl < 1 ? 0.1 + bl * 0.14 : Math.max(0, 0.22 - bu * 0.2));
+      });
     }
 
     // ── KINETIC SPEAR (6.5s) ─────────────────────────────────────────
@@ -9231,6 +10101,45 @@ const EntitySupportStrikeEffect = memo(({ entityId, index, entitiesRef, entityLo
       scaleEffect('kinetic_crater_hot', im < 1 ? 0.6 + eo(im) * 1.6 : 2.2);
       scaleEffect('kinetic_heat_wake', 1.1 + pulse * 0.08, tipY - 72 + 68);
       opEffect('kinetic_heat_wake', de < 1 ? 0.16 + de * 0.12 : Math.max(0, 0.16 - im * 0.16));
+    }
+
+    else if (p.kind === 'warthog_run') {
+      const ap = ph(0, 0.26), run = ph(0.26, 0.78), fade = ph(0.78, 1);
+      const pulse = 0.86 + Math.sin(t * 18) * 0.12;
+
+      const lane = r.current.lane;
+      if (lane) {
+        lane.scale.set(1 + ap * 0.18, 1, 0.8 + run * 0.55);
+        op('lane', ap < 1 ? 0.08 + ap * 0.16 : Math.max(0, 0.24 - fade * 0.24));
+      }
+
+      const crosshair = r.current.crosshair;
+      if (crosshair) {
+        const cScale = ap < 1 ? 0.7 + ap * 0.42 : 1.12 + Math.sin(t * 6.5) * 0.04;
+        crosshair.scale.setScalar(cScale);
+        crosshair.rotation.z += 0.015;
+        op('crosshair', ap < 1 ? 0.18 + ap * 0.46 : Math.max(0, 0.64 - fade * 0.6));
+      }
+
+      const sweepA = r.current.sweepA;
+      if (sweepA) {
+        sweepA.position.z = 118 - run * 236;
+        sweepA.scale.set(1 + pulse * 0.08, 1 + pulse * 0.12, 1 + pulse * 0.08);
+        op('sweepA', ap < 1 ? ap * 0.26 : run < 1 ? 0.22 + Math.sin(t * 20) * 0.05 : Math.max(0, 0.16 - fade * 0.16));
+      }
+
+      const sweepB = r.current.sweepB;
+      if (sweepB) {
+        sweepB.position.z = 80 - run * 236;
+        sweepB.scale.set(1 + pulse * 0.06, 1 + pulse * 0.1, 1 + pulse * 0.06);
+        op('sweepB', ap < 1 ? ap * 0.18 : run < 1 ? 0.18 + Math.sin(t * 18 + 0.7) * 0.04 : Math.max(0, 0.12 - fade * 0.12));
+      }
+
+      const impactGlow = r.current.impactGlow;
+      if (impactGlow) {
+        impactGlow.scale.setScalar(1.1 + run * 0.4 + pulse * 0.08);
+        op('impactGlow', ap < 1 ? ap * 0.16 : run < 1 ? 0.2 + Math.sin(t * 12) * 0.04 : Math.max(0, 0.18 - fade * 0.18));
+      }
     }
   });
 
@@ -9361,6 +10270,29 @@ const EntitySupportStrikeEffect = memo(({ entityId, index, entitiesRef, entityLo
         </mesh>
       </>)}
 
+      {useFallback && kind === 'warthog_run' && (<>
+        <mesh ref={rf('lane')} rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.32, 0]}>
+          <planeGeometry args={[56, 236]} />
+          <meshBasicMaterial color="#84cc16" transparent opacity={0} depthWrite={false} blending={THREE.AdditiveBlending} toneMapped={false} />
+        </mesh>
+        <mesh ref={rf('crosshair')} rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.6, 0]}>
+          <ringGeometry args={[9, 11.5, 28]} />
+          <meshBasicMaterial color="#d9f99d" transparent opacity={0} depthWrite={false} blending={THREE.AdditiveBlending} toneMapped={false} />
+        </mesh>
+        <mesh ref={rf('impactGlow')} rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.4, 0]}>
+          <circleGeometry args={[18, 24]} />
+          <meshBasicMaterial color="#fef9c3" transparent opacity={0} depthWrite={false} blending={THREE.AdditiveBlending} toneMapped={false} />
+        </mesh>
+        <mesh ref={rf('sweepA')} position={[0, 8, 104]}>
+          <sphereGeometry args={[7.5, 10, 10]} />
+          <meshBasicMaterial color="#fef08a" transparent opacity={0} depthWrite={false} blending={THREE.AdditiveBlending} toneMapped={false} />
+        </mesh>
+        <mesh ref={rf('sweepB')} position={[0, 5.5, 72]}>
+          <sphereGeometry args={[5.2, 10, 10]} />
+          <meshBasicMaterial color="#facc15" transparent opacity={0} depthWrite={false} blending={THREE.AdditiveBlending} toneMapped={false} />
+        </mesh>
+      </>)}
+
     </group>
   );
 });
@@ -9412,7 +10344,7 @@ const EntityBunker = memo(({ entityId, index, entitiesRef, entityLookupRef }) =>
     };
   }, [bunkerScene]);
 
-  useFrame((state) => {
+  useCentralSceneFrame((state) => {
     if (hpBar.current) hpBar.current.lookAt(camera.position);
     
     const p = getTrackedEntity({ entitiesRef, entityLookupRef, entityId, index });
@@ -9676,6 +10608,9 @@ const EntityFacility = memo(({ entityId, index, entitiesRef, entityLookupRef }) 
   const aaTurretRef = useRef();
   const aaBarrelRef = useRef();
   const scaffoldRef = useRef();
+  const groundHaloRef = useRef();
+  const scanRingRef = useRef();
+  const crownGlowRef = useRef();
   const smokeRefs = useRef([]);
   const structureNodesRef = useRef({});
   const [assetReady, setAssetReady] = useState(Boolean(baseStructuresAssetCache.scene));
@@ -9718,7 +10653,7 @@ const EntityFacility = memo(({ entityId, index, entitiesRef, entityLookupRef }) 
     };
   }, [facilityScene]);
 
-  useFrame((state) => {
+  useCentralSceneFrame((state) => {
     const current = getTrackedEntity({ entitiesRef, entityLookupRef, entityId, index });
     if (!current || (current.dead && !isBrokenStructure(current))) {
       if (group.current) group.current.visible = false;
@@ -9761,6 +10696,50 @@ const EntityFacility = memo(({ entityId, index, entitiesRef, entityLookupRef }) 
     if (scaffoldRef.current && current.constructing && !destroyed) {
       scaffoldRef.current.rotation.y += 0.01;
     }
+    const buildProgress = THREE.MathUtils.clamp(current.buildProgress ?? 1, 0, 1);
+    const constructionLift = current.constructing ? (1 - buildProgress) * 14 : 0;
+    const abilityPulse = Math.max(0, ((current.abilityPulseUntil || 0) - Date.now()) / 900);
+    const activeAbility = (current.abilityActiveUntil || 0) > Date.now() && !destroyed;
+    const facilityAccent = current.kind === 'powerplant'
+      ? '#f59e0b'
+      : current.kind === 'war_factory'
+      ? '#f97316'
+      : current.kind === 'field_hospital'
+      ? '#ef4444'
+      : current.kind === 'tech_lab'
+      ? '#38bdf8'
+      : current.kind === 'radar_tower'
+      ? '#22d3ee'
+      : '#f43f5e';
+    if (groundHaloRef.current?.material) {
+      const haloPulse = 0.76 + Math.sin(state.clock.elapsedTime * 2.8) * 0.12;
+      groundHaloRef.current.visible = !destroyed;
+      groundHaloRef.current.scale.setScalar((activeAbility ? 1.08 : 0.92) + haloPulse * 0.08 + abilityPulse * 0.12);
+      groundHaloRef.current.material.color.set(facilityAccent);
+      groundHaloRef.current.material.opacity = current.constructing
+        ? 0.16 + buildProgress * 0.18
+        : 0.08 + abilityPulse * 0.22 + (activeAbility ? 0.12 : 0);
+    }
+    if (scanRingRef.current?.material) {
+      const ringScale = activeAbility ? 1 + ((state.clock.elapsedTime * 0.42) % 1.2) : 0.92 + abilityPulse * 0.2;
+      scanRingRef.current.visible = activeAbility || abilityPulse > 0.05 || current.constructing;
+      scanRingRef.current.scale.setScalar(ringScale);
+      scanRingRef.current.material.color.set(facilityAccent);
+      scanRingRef.current.material.opacity = activeAbility
+        ? 0.18
+        : current.constructing
+        ? 0.14 + buildProgress * 0.18
+        : abilityPulse * 0.24;
+    }
+    if (crownGlowRef.current?.material) {
+      crownGlowRef.current.visible = !destroyed;
+      crownGlowRef.current.position.y = 28 + Math.sin(state.clock.elapsedTime * 2.4) * 1.5 + constructionLift * 0.2;
+      crownGlowRef.current.scale.setScalar(0.92 + (activeAbility ? 0.18 : 0.06) + Math.sin(state.clock.elapsedTime * 4) * 0.03);
+      crownGlowRef.current.material.color.set(facilityAccent);
+      crownGlowRef.current.material.opacity = current.constructing
+        ? 0.12 + buildProgress * 0.1
+        : 0.1 + (activeAbility ? 0.14 : 0.04) + abilityPulse * 0.08;
+    }
     smokeRefs.current.forEach((smoke, i) => {
       if (!smoke || !smoke.material) return;
       const active = destroyed || (!current.constructing && hpRatio < 0.64);
@@ -9793,6 +10772,18 @@ const EntityFacility = memo(({ entityId, index, entitiesRef, entityLookupRef }) 
 
   return (
     <group ref={group} position={[p.x, p.y, p.z]} scale={[visualScale, visualScale, visualScale]}>
+      <mesh ref={groundHaloRef} rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.28, 0]} renderOrder={3}>
+        <ringGeometry args={[20, 28, 32]} />
+        <meshBasicMaterial color="#38bdf8" transparent opacity={0.08} depthWrite={false} blending={THREE.AdditiveBlending} toneMapped={false} />
+      </mesh>
+      <mesh ref={scanRingRef} rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.5, 0]} renderOrder={4}>
+        <ringGeometry args={[0.92, 1, 48]} />
+        <meshBasicMaterial color="#38bdf8" transparent opacity={0.12} depthWrite={false} blending={THREE.AdditiveBlending} toneMapped={false} />
+      </mesh>
+      <mesh ref={crownGlowRef} position={[0, 28, 0]} renderOrder={4}>
+        <sphereGeometry args={[4.2, 12, 12]} />
+        <meshBasicMaterial color="#38bdf8" transparent opacity={0.12} depthWrite={false} blending={THREE.AdditiveBlending} toneMapped={false} />
+      </mesh>
       <group position={[0, constructionLift, 0]} scale={[constructionScale, constructionScale, constructionScale]}>
       {facilityScene ? (
         <primitive object={facilityScene} />
@@ -9831,6 +10822,10 @@ const EntityFacility = memo(({ entityId, index, entitiesRef, entityLookupRef }) 
                   <mesh position={[0, 12.1, 0]} rotation={[Math.PI / 2, 0, 0]}>
                     <ringGeometry args={[1.5, 2.5, 16]} />
                     <AliveMaterial color="#fcd34d" emissive="#f59e0b" emissiveIntensity={1.5} roughness={0.2} />
+                  </mesh>
+                  <mesh position={[0, 18, 0]}>
+                    <sphereGeometry args={[3.2, 8, 8]} />
+                    <meshBasicMaterial color="#fbbf24" transparent opacity={0.12} depthWrite={false} blending={THREE.AdditiveBlending} toneMapped={false} />
                   </mesh>
                 </group>
               ))}
@@ -9877,6 +10872,10 @@ const EntityFacility = memo(({ entityId, index, entitiesRef, entityLookupRef }) 
                   <AliveMaterial color="#526174" roughness={0.7} metalness={0.34} />
                 </mesh>
               ))}
+              <mesh position={[0, 17, -18]}>
+                <boxGeometry args={[18, 6, 5]} />
+                <AliveMaterial color="#111827" roughness={0.5} metalness={0.52} />
+              </mesh>
               {/* Exterior tank tracks / construction crane rails */}
               {[[-24, 2, 0], [24, 2, 0]].map((track, idx) => (
                 <mesh key={`factory-track-${idx}`} position={track}>
@@ -9925,6 +10924,10 @@ const EntityFacility = memo(({ entityId, index, entitiesRef, entityLookupRef }) 
                   <AliveMaterial color="#fca5a5" emissive="#ef4444" emissiveIntensity={1.5} roughness={0.2} />
                 </mesh>
               </group>
+              <mesh position={[0, 22, 8]}>
+                <sphereGeometry args={[4.4, 12, 12]} />
+                <meshBasicMaterial color="#fca5a5" transparent opacity={0.14} depthWrite={false} blending={THREE.AdditiveBlending} toneMapped={false} />
+              </mesh>
               {/* Quarantine triage tents */}
               {[[-18, 6, -12], [18, 6, -12]].map((tent, idx) => (
                 <mesh key={`med-tent-${idx}`} position={tent} rotation={[0, idx === 0 ? -0.18 : 0.18, 0]}>
@@ -9975,6 +10978,10 @@ const EntityFacility = memo(({ entityId, index, entitiesRef, entityLookupRef }) 
                   <AliveMaterial color="#38bdf8" emissive="#0284c7" emissiveIntensity={1.5} />
                 </mesh>
               </group>
+              <mesh position={[0, 31, 0]}>
+                <sphereGeometry args={[5.2, 10, 10]} />
+                <meshBasicMaterial color="#38bdf8" transparent opacity={0.1} depthWrite={false} blending={THREE.AdditiveBlending} toneMapped={false} />
+              </mesh>
               {/* Sub-surface coolant ring */}
               <mesh position={[0, 2, 0]} rotation={[Math.PI / 2, 0, 0]}>
                 <torusGeometry args={[17, 1, 16, 32]} />
@@ -10021,6 +11028,10 @@ const EntityFacility = memo(({ entityId, index, entitiesRef, entityLookupRef }) 
                   <AliveMaterial color="#e2e8f0" roughness={0.2} metalness={0.9} />
                 </mesh>
               </group>
+              <mesh position={[0, 32, 0]} rotation={[Math.PI / 2, 0, 0]}>
+                <ringGeometry args={[13, 14.2, 36]} />
+                <meshBasicMaterial color="#22d3ee" transparent opacity={0.18} depthWrite={false} blending={THREE.AdditiveBlending} toneMapped={false} />
+              </mesh>
             </group>
           )}
           {isAA && (
@@ -10074,6 +11085,10 @@ const EntityFacility = memo(({ entityId, index, entitiesRef, entityLookupRef }) 
                   <AliveMaterial color="#5e7086" emissive="#f43f5e" emissiveIntensity={1.2} />
                 </mesh>
               </group>
+              <mesh position={[0, 20, 0]} rotation={[Math.PI / 2, 0, 0]}>
+                <ringGeometry args={[12, 14, 28]} />
+                <meshBasicMaterial color="#fb7185" transparent opacity={0.14} depthWrite={false} blending={THREE.AdditiveBlending} toneMapped={false} />
+              </mesh>
               {/* Deep protective moat ring */}
               <mesh position={[0, 1.6, 0]}>
                 <cylinderGeometry args={[18, 18, 1.6, 24]} />
@@ -10162,7 +11177,7 @@ const EntityBarricade = memo(({ entityId, index, entitiesRef, entityLookupRef })
   const hpBar = useRef();
   const { camera } = useThree();
 
-  useFrame(() => {
+  useCentralSceneFrame(() => {
     if (hpBar.current) hpBar.current.lookAt(camera.position);
     const p = getTrackedEntity({ entitiesRef, entityLookupRef, entityId, index });
     if (!p || p.dead) {
@@ -10389,7 +11404,7 @@ const EntityKaiju = ({ entityId, index, entitiesRef, entityLookupRef, frameSnaps
     };
   }, [kaijuScene, spiderLegConfigs]);
 
-  useFrame((state, delta) => {
+  useCentralSceneFrame((state, delta) => {
     // Force render update
     
     const p = getTrackedEntity({ entitiesRef, entityLookupRef, entityId, index });
@@ -10633,6 +11648,10 @@ const EntityKaiju = ({ entityId, index, entitiesRef, entityLookupRef, frameSnaps
                : p.variant === 'spicie_bird'
                ? 'lightning'
                : p.variant === 'beetle'
+               ? 'lightning'
+               : p.variant === 'burning_godzilla'
+               ? 'meltdown'
+               : p.variant === 'mecha_godzilla'
                ? 'lightning'
                : 'fire';
              const attackId = `attack-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -11135,17 +12154,7 @@ const EntityKaiju = ({ entityId, index, entitiesRef, entityLookupRef, frameSnaps
     }
 
     const specialColor = effectMeta.color || '#cbd5e1';
-    const attackColor = p.attackTelegraphKind === 'ink'
-      ? '#7c3aed'
-      : p.attackTelegraphKind === 'web'
-      ? '#dbeafe'
-      : p.attackTelegraphKind === 'lightning'
-      ? '#67e8f9'
-      : p.attackTelegraphKind === 'smash'
-      ? '#fb923c'
-      : specialEffectKind === 'ash'
-      ? '#84cc16'
-      : '#f59e0b';
+    const attackColor = getKaijuTelegraphColor(p.attackTelegraphKind || specialEffectKind, p.variant);
     if (specialAuraOuterRef.current?.material && specialAuraInnerRef.current?.material && specialAuraCoreRef.current?.material) {
       const auraVisible = specialIntensity > 0.01;
       const outerScale = 1 + specialChargeProgress * 1.4 + specialPulseProgress * 0.5;
@@ -11194,6 +12203,7 @@ const EntityKaiju = ({ entityId, index, entitiesRef, entityLookupRef, frameSnaps
   const p = getTrackedEntity({ entitiesRef, entityLookupRef, entityId, index });
   if (!p || p.dead) return null;
   const hpPercent = Math.max(0, p.hp / p.maxHp);
+  const kaijuTheme = getKaijuVisualTheme(p);
   const damageStage = hpPercent <= 0.2 ? 3 : hpPercent <= 0.45 ? 2 : hpPercent <= 0.7 ? 1 : 0;
   const isWounded = damageStage >= 1;
   const isHeavyWounded = damageStage >= 2;
@@ -11738,13 +12748,21 @@ const EntityKaiju = ({ entityId, index, entitiesRef, entityLookupRef, frameSnaps
 
       {/* HP Bar Overlay floating directly above head, adjusting for height */}
       <group ref={hpBar} position={[0, Math.max(40, 600 / (p.scale || 10)), 0]}>
-         <mesh position={[0, 0, -0.1]}>
-            <planeGeometry args={[20, 2]} />
-            <meshBasicMaterial color="#7f1d1d" />
+        <mesh position={[0, 0, -0.16]}>
+          <planeGeometry args={[21.8, 3]} />
+          <meshBasicMaterial color={kaijuTheme.labelColor} transparent opacity={0.22} />
+        </mesh>
+        <mesh position={[0, 0, -0.1]}>
+          <planeGeometry args={[20, 2]} />
+          <meshBasicMaterial color={kaijuTheme.hpBackColor} />
          </mesh>
          <mesh position={[10 * (hpPercent - 1), 0, 0]}>
             <planeGeometry args={[20 * hpPercent, 2]} />
-            <meshBasicMaterial color="#22c55e" />
+          <meshBasicMaterial color={kaijuTheme.hpFillColor} />
+        </mesh>
+        <mesh position={[0, 1.35, -0.08]}>
+          <planeGeometry args={[20, 0.32]} />
+          <meshBasicMaterial color={kaijuTheme.hpGlowColor} transparent opacity={0.8} />
          </mesh>
       </group>
     </group>
@@ -11771,24 +12789,31 @@ const MemoEntityKaiju = memo(EntityKaiju);
 const MemoEntityKaijuCorpse = memo(EntityKaijuCorpse);
 
 const DynamicEntitySync = memo(({ entitiesRef, entityLookupRef, frameSnapshotRef, setGameState, qualityProfile }) => {
-  const [, setForceRender] = useState(0);
-  const lastSignature = useRef('');
+  const [renderedIds, setRenderedIds] = useState(() => collectDynamicRenderableIds(entitiesRef.current, []));
+  const lastVersion = useRef(-1);
   const syncAccumulator = useRef(0);
   
-  useFrame((_, delta) => {
+  useCentralSceneFrame((_, delta) => {
      syncAccumulator.current += delta;
      if (syncAccumulator.current < 0.12) return;
      syncAccumulator.current = 0;
-     const signature = getDynamicEntitySignature(entitiesRef.current);
-     if (signature !== lastSignature.current) {
-        lastSignature.current = signature;
-        setForceRender(n => n + 1);
+     const snapshot = frameSnapshotRef.current;
+     const nextVersion = snapshot.dynamicRenderVersion;
+     if (nextVersion !== lastVersion.current) {
+        lastVersion.current = nextVersion;
+        setRenderedIds((previous) => (
+          areEntityIdListsEqual(previous, snapshot.dynamicRenderableIds)
+            ? previous
+            : [...snapshot.dynamicRenderableIds]
+        ));
      }
   });
 
   return (
     <>
-      {entitiesRef.current.map((p) => {
+      {renderedIds.map((id) => {
+        const p = entityLookupRef.current.get(id) || entitiesRef.current.find((entity) => entity.id === id);
+        if (!p || p.dead) return null;
         // ONLY return dynamic entities out of the main array
         if (p.type === 'plane') return <MemoEntityPlane key={p.id} entityId={p.id} entitiesRef={entitiesRef} entityLookupRef={entityLookupRef} />;
         if (p.type === 'bomb') return <MemoEntityBomb key={p.id} entityId={p.id} entitiesRef={entitiesRef} entityLookupRef={entityLookupRef} />;
@@ -11878,6 +12903,10 @@ const VillageScene = ({ themeConfig, environmentVariant, setNukeCount, setGameSt
     pendingDeploy: null,
     pendingBuild: null
   });
+  const lastBroadcastSupportArmStateRef = useRef({
+    armedSupportKey: null,
+    manualStrikeArmed: false
+  });
   const waveRef = useRef({
     level: 1,
     totalLevels: TOTAL_KAIJU_LEVELS,
@@ -11925,6 +12954,8 @@ const VillageScene = ({ themeConfig, environmentVariant, setNukeCount, setGameSt
   const currentSectorNameRef = useRef(formatSectorName(themeConfig?.name || 'village'));
   const nextSectorNameRef = useRef(pickRandomSectorName(themeConfig?.name || 'village'));
   const frameSnapshotRef = useRef(createFrameEntitySnapshot());
+
+  useEffect(() => () => resetCentralSceneFrameSubscribers(), []);
 
   const getAliveBunkers = () => (
     frameSnapshotRef.current.ready
@@ -12047,8 +13078,10 @@ const VillageScene = ({ themeConfig, environmentVariant, setNukeCount, setGameSt
   };
   const rebuildFrameSnapshot = () => {
     const snapshot = frameSnapshotRef.current;
+    const nextDynamicRenderableIds = [];
     entityLookupRef.current.clear();
     snapshot.ready = true;
+    snapshot.lastBuiltFrame = frameCount.current;
     snapshot.allKaijus.length = 0;
     snapshot.aliveKaijus.length = 0;
     snapshot.groundKaijus.length = 0;
@@ -12069,6 +13102,10 @@ const VillageScene = ({ themeConfig, environmentVariant, setNukeCount, setGameSt
     entitiesRef.current.forEach((entity) => {
       if (!entity) return;
       entityLookupRef.current.set(entity.id, entity);
+
+      if (!entity.dead && DYNAMIC_RENDER_TYPES.has(entity.type)) {
+        nextDynamicRenderableIds.push(entity.id);
+      }
 
       if (!entity.dead && entity.type !== 'kaiju' && entity.type !== 'scorch' && entity.type !== 'bomb' && entity.type !== 'bunker') {
         snapshot.collateralTargets.push(entity);
@@ -12133,6 +13170,12 @@ const VillageScene = ({ themeConfig, environmentVariant, setNukeCount, setGameSt
       }
     });
 
+    if (!areEntityIdListsEqual(snapshot.dynamicRenderableIds, nextDynamicRenderableIds)) {
+      snapshot.dynamicRenderableIds.length = 0;
+      snapshot.dynamicRenderableIds.push(...nextDynamicRenderableIds);
+      snapshot.dynamicRenderVersion += 1;
+    }
+
     if (selectedUnitIdsRef.current.size) {
       let changed = false;
       selectedUnitIdsRef.current.forEach((id) => {
@@ -12151,6 +13194,21 @@ const VillageScene = ({ themeConfig, environmentVariant, setNukeCount, setGameSt
       } else {
         syncSelectedProductionBuildingMeta();
       }
+    }
+
+    return snapshot;
+  };
+  const getFrameSnapshot = () => {
+    const snapshot = frameSnapshotRef.current;
+    const needsRebuild = (
+      !snapshot.ready
+      || lastEntityCountRef.current !== entitiesRef.current.length
+      || frameCount.current - snapshot.lastBuiltFrame >= SNAPSHOT_REBUILD_INTERVAL_FRAMES
+    );
+
+    if (needsRebuild) {
+      lastEntityCountRef.current = entitiesRef.current.length;
+      return rebuildFrameSnapshot();
     }
 
     return snapshot;
@@ -12317,19 +13375,30 @@ const VillageScene = ({ themeConfig, environmentVariant, setNukeCount, setGameSt
     window._falloutBombCamBombId = null;
   };
   const activateBombCam = (bomb) => {
-    if (!bomb?.isManual) return;
+    if (!bomb?.isManual || shouldUseLightweightNukeEffects()) return;
     bombCamRef.current.active = true;
     bombCamRef.current.bombId = bomb.id;
     bombCamRef.current.smoothedPosition.set(bomb.x, bomb.y || 0, bomb.z);
     bombCamRef.current.smoothedLookAt.set(bomb.x, bomb.y || 0, bomb.z - 40);
     window._falloutBombCamActive = true;
     window._falloutBombCamBombId = bomb.id;
+    AudioManager.play('plane_flyby', { volume: 0.1, duration: 1.35 });
   };
-  const getBestDeployBunker = () => {
-    const aliveBunkers = getAliveBunkers();
-    if (!aliveBunkers.length) return null;
-    return [...aliveBunkers].sort((a, b) => b.hp - a.hp)[0];
+  const selectBestDeployBunker = (bunkers) => {
+    if (!Array.isArray(bunkers) || bunkers.length === 0) return null;
+    let best = null;
+    let bestHp = -Infinity;
+    bunkers.forEach((bunker) => {
+      if (!bunker || bunker.dead || isBrokenStructure(bunker)) return;
+      const hp = bunker.hp ?? 0;
+      if (!best || hp > bestHp) {
+        best = bunker;
+        bestHp = hp;
+      }
+    });
+    return best;
   };
+  const getBestDeployBunker = () => selectBestDeployBunker(getAliveBunkers());
   const getDeployUnlocks = () => getDeployUnlockState(economyRef.current.buildings);
   const isDeployUnlocked = (unitType) => !!getDeployUnlocks()[unitType];
   const getLiveFacilityBuildState = () => {
@@ -12386,13 +13455,16 @@ const VillageScene = ({ themeConfig, environmentVariant, setNukeCount, setGameSt
     }
     return base;
   };
-  const validateBuildingPlacement = (target, { snap = true } = {}) => {
+  const validateBuildingPlacementWithBunker = (target, bunker, { snap = true } = {}) => {
     if (!target) return { ok: false };
-    const bunker = getBestDeployBunker();
     if (!bunker) return { ok: false };
     const direct = validateBuildingPlacementCandidate(target, bunker);
     if (direct.ok || !snap) return direct;
     return findNearestValidBuildingPlacement(direct.target || target, bunker);
+  };
+  const validateBuildingPlacement = (target, { snap = true } = {}) => {
+    if (!target) return { ok: false };
+    return validateBuildingPlacementWithBunker(target, getBestDeployBunker(), { snap });
   };
   const canPurchaseBuilding = (buildingKey) => {
     const option = BUILD_OPTIONS[buildingKey];
@@ -12692,21 +13764,45 @@ const VillageScene = ({ themeConfig, environmentVariant, setNukeCount, setGameSt
     }
     return cooldownMs;
   };
+  const getActiveSupportStrikeKey = () => (
+    targetingRef.current.armedSupportKey || (targetingRef.current.manualStrikeArmed ? 'nuke' : null)
+  );
+  const syncSupportArmWindowState = (nextArmedSupportKey = targetingRef.current.armedSupportKey || (targetingRef.current.manualStrikeArmed ? 'nuke' : null)) => {
+    const manualStrikeArmed = nextArmedSupportKey === 'nuke';
+    const supportPreview = nextArmedSupportKey ? getSupportStrikePreview(nextArmedSupportKey) : null;
+    window._falloutManualStrikeArmed = manualStrikeArmed;
+    window._falloutArmedSupportKey = nextArmedSupportKey;
+    window._falloutSupportPreview = supportPreview;
+
+    const previousState = lastBroadcastSupportArmStateRef.current;
+    if (
+      previousState.armedSupportKey !== nextArmedSupportKey
+      || previousState.manualStrikeArmed !== manualStrikeArmed
+    ) {
+      lastBroadcastSupportArmStateRef.current = {
+        armedSupportKey: nextArmedSupportKey,
+        manualStrikeArmed
+      };
+      window.dispatchEvent(new CustomEvent('fallout-support-arm-state', {
+        detail: {
+          armedSupportKey: nextArmedSupportKey,
+          manualStrikeArmed,
+          supportPreview
+        }
+      }));
+    }
+  };
   const clearPendingStrikeArm = () => {
     targetingRef.current.manualStrikeArmed = false;
     targetingRef.current.armedSupportKey = null;
-    window._falloutManualStrikeArmed = false;
-    window._falloutArmedSupportKey = null;
-    window._falloutSupportPreview = null;
+    syncSupportArmWindowState(null);
   };
   const setPendingStrikeArm = (abilityKey = 'nuke') => {
     targetingRef.current.manualStrikeArmed = abilityKey === 'nuke';
     targetingRef.current.armedSupportKey = abilityKey;
     targetingRef.current.pendingDeploy = null;
     targetingRef.current.pendingBuild = null;
-    window._falloutManualStrikeArmed = abilityKey === 'nuke';
-    window._falloutArmedSupportKey = abilityKey;
-    window._falloutSupportPreview = getSupportStrikePreview(abilityKey);
+    syncSupportArmWindowState(abilityKey);
     window._falloutPendingDeploy = null;
     window._falloutPendingBuild = null;
     window._falloutTargetConfirmedFlash = false;
@@ -12756,8 +13852,15 @@ const VillageScene = ({ themeConfig, environmentVariant, setNukeCount, setGameSt
     clearBuildDrag();
   };
   const spawnKaijuWave = (level, targetEntities = entitiesRef.current) => {
-    const maxKaijus = Math.max(1, qualityProfile?.kaijuMax ?? 3);
-    const numKaijus = getWaveKaijuCount(level, maxKaijus);
+    const currentActiveKaijus = targetEntities.filter((entity) => entity?.type === 'kaiju' && !isKaijuDefeated(entity)).length;
+    const availableSlots = Math.max(0, MAX_KAIJU_DEPLOY_PER_WAVE - currentActiveKaijus);
+    if (availableSlots <= 0) {
+      waveRef.current.level = level;
+      return;
+    }
+
+    const maxKaijus = Math.max(1, Math.min(availableSlots, qualityProfile?.kaijuMax ?? 3));
+    const numKaijus = Math.min(getWaveKaijuCount(level, maxKaijus), availableSlots);
     const variants = getKaijuVariantPoolForLevel(level);
     const kaijuPositions = [];
     const minKaijuSeparation = 360;
@@ -12815,7 +13918,8 @@ const VillageScene = ({ themeConfig, environmentVariant, setNukeCount, setGameSt
       });
     }
 
-    const miniCount = Math.min(5, Math.max(0, level - 1 + (Math.random() < 0.55 ? 1 : 0)));
+    const remainingWaveSlots = Math.max(0, availableSlots - numKaijus);
+    const miniCount = Math.min(remainingWaveSlots, Math.max(0, level - 1 + (Math.random() < 0.55 ? 1 : 0)));
     for (let i = 0; i < miniCount; i++) {
       const variant = variants[Math.floor(Math.random() * variants.length)];
       const variantConfig = KAIJU_VARIANT_CONFIG[variant] || KAIJU_VARIANT_CONFIG.godzilla;
@@ -13002,9 +14106,11 @@ const VillageScene = ({ themeConfig, environmentVariant, setNukeCount, setGameSt
     window._falloutConfirmedTarget = null;
     window._falloutStrikeCooldownRemaining = 0;
     window._falloutManualStrikeInFlight = false;
-    window._falloutManualStrikeArmed = false;
-    window._falloutArmedSupportKey = null;
-    window._falloutSupportPreview = null;
+    lastBroadcastSupportArmStateRef.current = {
+      armedSupportKey: null,
+      manualStrikeArmed: false
+    };
+    syncSupportArmWindowState(null);
     window._falloutBombCamActive = false;
     window._falloutBombCamBombId = null;
     window._falloutDeployCosts = DEPLOY_OPTIONS;
@@ -13118,6 +14224,21 @@ const VillageScene = ({ themeConfig, environmentVariant, setNukeCount, setGameSt
   const spawnFirestormPatch = (x, z, radius = 56) => {
     const patch = clampStrikeTarget({ x, z });
     const supportDamageMultiplier = getFacilityStrikeDamageMultiplier();
+    pushGroundScarEntity(entitiesRef.current, patch.x, patch.z, radius * 0.96, {
+      kind: 'firestorm_scar',
+      ttl: 34 + Math.random() * 10,
+      stretchX: 1.65 + Math.random() * 0.35,
+      stretchZ: 0.68 + Math.random() * 0.18,
+      rotation: Math.random() * Math.PI,
+      burnLife: 5.5,
+      coreLife: 7.5,
+      baseColor: '#120907',
+      ringColor: '#34170d',
+      coreColor: '#5c2410',
+      baseOpacity: 0.68,
+      ringOpacity: 0.54,
+      coreOpacity: 0.08
+    });
     pushScorchEntity(entitiesRef.current, patch.x, patch.z, radius, {
       kind: 'firestorm_patch',
       temporary: true,
@@ -13242,6 +14363,21 @@ const VillageScene = ({ themeConfig, environmentVariant, setNukeCount, setGameSt
       window.dispatchEvent(new CustomEvent('fallout-explosion', {
         detail: { x: _olX, z: _olZ, intensity: 2.1, type: 'orbital_lance' }
       }));
+      pushGroundScarEntity(entitiesRef.current, _olX, _olZ, 76, {
+        kind: 'orbital_lance_scar',
+        ttl: 58,
+        stretchX: 1.08,
+        stretchZ: 1.08,
+        rotation: 0,
+        burnLife: 6,
+        coreLife: 9,
+        baseColor: '#04070d',
+        ringColor: '#16324a',
+        coreColor: '#31556b',
+        baseOpacity: 0.78,
+        ringOpacity: 0.62,
+        coreOpacity: 0.14
+      });
       if (typeof window._falloutAddCrater === 'function') {
         window._falloutAddCrater({ type: 'orbital_lance', x: _olX, z: _olZ, radius: 70, depth: 40 });
       }
@@ -13369,6 +14505,21 @@ const VillageScene = ({ themeConfig, environmentVariant, setNukeCount, setGameSt
       window.dispatchEvent(new CustomEvent('fallout-explosion', {
         detail: { x: impactX, z: impactZ, intensity: 2.6, type: 'kinetic_spear' }
       }));
+      pushGroundScarEntity(entitiesRef.current, impactX, impactZ, 62, {
+        kind: 'kinetic_spear_scar',
+        ttl: 64,
+        stretchX: 0.82,
+        stretchZ: 1.58,
+        rotation: Math.random() * Math.PI,
+        burnLife: 7,
+        coreLife: 10,
+        baseColor: '#06080c',
+        ringColor: '#334355',
+        coreColor: '#6f879e',
+        baseOpacity: 0.76,
+        ringOpacity: 0.6,
+        coreOpacity: 0.12
+      });
       if (typeof window._falloutAddCrater === 'function') {
         window._falloutAddCrater({ type: 'kinetic_spear', x: impactX, z: impactZ, radius: 52, depth: 28 });
       }
@@ -13408,6 +14559,18 @@ const VillageScene = ({ themeConfig, environmentVariant, setNukeCount, setGameSt
       dead: false
     };
 
+    entitiesRef.current.push({
+      id: `support-warthog-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      type: 'support_fx',
+      kind: 'warthog_run',
+      x: targetX,
+      y: getTerrainHeight(targetX, targetZ),
+      z: targetZ,
+      age: 0,
+      duration: WARTHOG_RUN_EFFECT_DURATION,
+      isManual: true,
+      dead: false
+    });
     entitiesRef.current.push(warthog);
     const cooldownMs = setSupportStrikeCooldown('warthog_run');
     window._falloutStrikeCooldownRemaining = cooldownMs;
@@ -13736,6 +14899,7 @@ const VillageScene = ({ themeConfig, environmentVariant, setNukeCount, setGameSt
   const detonateBomb = (bomb, impactX = bomb.x, impactZ = bomb.z) => {
     if (!bomb || bomb.detonated) return;
     const supportDamageMultiplier = getFacilityStrikeDamageMultiplier();
+    const lightweightNuke = !!bomb.isManual && shouldUseLightweightNukeEffects();
 
     const blastX = impactX;
     const blastZ = impactZ;
@@ -13759,18 +14923,35 @@ const VillageScene = ({ themeConfig, environmentVariant, setNukeCount, setGameSt
       }
     }));
 
-    AudioManager.play('nuke');
+    AudioManager.play('nuke', { lightweight: lightweightNuke });
     // Crater — real terrain deformation at the blast site
     if (typeof window._falloutAddCrater === 'function') {
       window._falloutAddCrater({
         type: 'nuke',
         x: blastX, z: blastZ,
-        radius: bomb.isManual ? 285 : 205,
-        depth:  bomb.isManual ? 60  : 44
+        radius: bomb.isManual ? (lightweightNuke ? 180 : 285) : 205,
+        depth:  bomb.isManual ? (lightweightNuke ? 34 : 60)  : 44,
+        deform: !lightweightNuke,
+        lightweight: lightweightNuke
       });
     }
 
-    spawnNukeAftermathFires(entitiesRef.current, blastX, blastZ, !!bomb.isManual);
+    spawnNukeAftermathFires(entitiesRef.current, blastX, blastZ, !!bomb.isManual && !lightweightNuke);
+    pushGroundScarEntity(entitiesRef.current, blastX, blastZ, bomb.isManual ? (lightweightNuke ? 165 : 248) : 178, {
+      kind: 'bomb_blast_scar',
+      ttl: bomb.isManual ? (lightweightNuke ? 72 : 96) : 62,
+      stretchX: bomb.isManual ? 1.16 : 1.08,
+      stretchZ: bomb.isManual ? 1.08 : 1.02,
+      rotation: Math.random() * Math.PI,
+      burnLife: bomb.isManual ? 10 : 7,
+      coreLife: bomb.isManual ? 14 : 9,
+      baseColor: '#070404',
+      ringColor: bomb.isManual ? '#3b2412' : '#2a180d',
+      coreColor: bomb.isManual ? '#6a3318' : '#4d2613',
+      baseOpacity: bomb.isManual ? 0.84 : 0.76,
+      ringOpacity: bomb.isManual ? 0.66 : 0.58,
+      coreOpacity: bomb.isManual ? 0.16 : 0.1
+    });
 
     entitiesRef.current.push({
       id: `mushroom-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
@@ -13779,12 +14960,15 @@ const VillageScene = ({ themeConfig, environmentVariant, setNukeCount, setGameSt
       y: blastY,
       z: blastZ,
       age: 0,
-      scale: bomb.isManual ? NUKE_MUSHROOM_BASE_SCALE * 1.4 : NUKE_MUSHROOM_BASE_SCALE * 1.2,
+      scale: bomb.isManual ? (lightweightNuke ? NUKE_MUSHROOM_BASE_SCALE * 1.15 : NUKE_MUSHROOM_BASE_SCALE * 1.4) : NUKE_MUSHROOM_BASE_SCALE * 1.2,
+      lowPower: lightweightNuke,
       dead: false
     });
     pushImpactPuffEntity(entitiesRef.current, blastX, blastZ, blastY + 6);
-    pushImpactPuffEntity(entitiesRef.current, blastX + 18, blastZ - 14, blastY + 4);
-    pushImpactPuffEntity(entitiesRef.current, blastX - 16, blastZ + 10, blastY + 5);
+    if (!lightweightNuke) {
+      pushImpactPuffEntity(entitiesRef.current, blastX + 18, blastZ - 14, blastY + 4);
+      pushImpactPuffEntity(entitiesRef.current, blastX - 16, blastZ + 10, blastY + 5);
+    }
 
     debugAirstrikeLog(`Bomb ${bomb.id}: detonated at (${blastX.toFixed(0)}, ${blastZ.toFixed(0)})`);
     setNukeCount(n => n + 1);
@@ -13880,6 +15064,8 @@ const VillageScene = ({ themeConfig, environmentVariant, setNukeCount, setGameSt
   const cutsceneTimer = useRef(5);
   const frameCount = useRef(0);
   const lastEntityCountRef = useRef(0);
+  const placementValidationCacheRef = useRef({ key: '', result: { ok: false } });
+  const lastMainLoopArmSyncRef = useRef('__unset__');
 
   useFrame((state, delta) => {
     if (!themeConfig || !mounted) return;
@@ -13887,7 +15073,11 @@ const VillageScene = ({ themeConfig, environmentVariant, setNukeCount, setGameSt
     // Update global shader time uniform so all alive-shader animations run
     globalShaderUniforms.time.value = state.clock.elapsedTime;
 
-    const frameSnapshot = rebuildFrameSnapshot();
+    frameCount.current++;
+    const nowMs = Date.now();
+
+    const frameSnapshot = getFrameSnapshot();
+    const bestDeployBunker = selectBestDeployBunker(frameSnapshot.aliveBunkers);
     
     // === GLOBAL STRIKE PROGRESSION STATUS ===
     // Check if the current manual strike has cleared
@@ -13916,7 +15106,6 @@ const VillageScene = ({ themeConfig, environmentVariant, setNukeCount, setGameSt
       window._falloutBombCamActive = false;
       window._falloutBombCamBombId = null;
     }
-    const bestDeployBunker = getBestDeployBunker();
     if (targetingRef.current.pendingBuild && !window._falloutMouseTarget && bestDeployBunker) {
       window._falloutMouseTarget = clampStrikeTarget({
         x: bestDeployBunker.x + 150,
@@ -13928,15 +15117,23 @@ const VillageScene = ({ themeConfig, environmentVariant, setNukeCount, setGameSt
     const isBuildMode = !!targetingRef.current.pendingBuild;
     const isStrikeMode = !!armedSupportKey;
     const placementTarget = window._falloutMouseTarget || window._falloutBuildFallbackTarget || null;
-    const buildPlacement = isBuildMode && placementTarget
-      ? validateBuildingPlacement(placementTarget, { snap: true })
-      : { ok: false };
+    let buildPlacement = { ok: false };
+    if (isBuildMode && placementTarget && bestDeployBunker) {
+      const cacheKey = `${frameSnapshot.lastBuiltFrame ?? frameCount.current}|${bestDeployBunker.id || 'none'}|${placementTarget.x.toFixed(1)}|${placementTarget.z.toFixed(1)}`;
+      if (placementValidationCacheRef.current.key === cacheKey) {
+        buildPlacement = placementValidationCacheRef.current.result;
+      } else {
+        buildPlacement = validateBuildingPlacementWithBunker(placementTarget, bestDeployBunker, { snap: true });
+        placementValidationCacheRef.current = { key: cacheKey, result: buildPlacement };
+      }
+    }
     const deployUnlocks = getDeployUnlocks();
     window._falloutTargetProgress = !isDeployMode && !isBuildMode && isStrikeMode && hasPointerTarget ? 1 : 0;
     window._falloutManualStrikeInFlight = targetingRef.current.isStrikeInProgress || activeManualStrike;
-    window._falloutManualStrikeArmed = armedSupportKey === 'nuke';
-    window._falloutArmedSupportKey = armedSupportKey;
-    window._falloutSupportPreview = armedSupportKey ? getSupportStrikePreview(armedSupportKey) : null;
+    if (lastMainLoopArmSyncRef.current !== armedSupportKey) {
+      lastMainLoopArmSyncRef.current = armedSupportKey;
+      syncSupportArmWindowState(armedSupportKey);
+    }
     window._falloutPendingDeploy = targetingRef.current.pendingDeploy;
     window._falloutPendingBuild = targetingRef.current.pendingBuild;
     window._falloutDeployDragActive = !!deployDragRef.current.active;
@@ -13947,9 +15144,9 @@ const VillageScene = ({ themeConfig, environmentVariant, setNukeCount, setGameSt
     window._falloutDeployUnlocks = deployUnlocks;
     window._falloutBuildOptions = BUILD_OPTIONS;
     window._falloutUpgradeOptions = UPGRADE_OPTIONS;
-    window._falloutBuildState = { ...economyRef.current.buildings };
-    window._falloutBuildQueue = { ...economyRef.current.buildQueue };
-    window._falloutUpgradeState = { ...economyRef.current.upgrades };
+    window._falloutBuildState = economyRef.current.buildings;
+    window._falloutBuildQueue = economyRef.current.buildQueue;
+    window._falloutUpgradeState = economyRef.current.upgrades;
     window._falloutDeployAnchor = bestDeployBunker
       ? { x: bestDeployBunker.x, z: bestDeployBunker.z }
       : null;
@@ -13964,14 +15161,13 @@ const VillageScene = ({ themeConfig, environmentVariant, setNukeCount, setGameSt
     window._falloutStrikeReady = isStrikeMode && hasPointerTarget && !targetingRef.current.isStrikeInProgress && cooldownRemaining <= 0 && !isDeployMode && !isBuildMode && !deployDragRef.current.active && !buildDragRef.current.active;
     window._falloutStrikeCooldownRemaining = cooldownRemaining;
     
-    frameCount.current++;
-    
     // === AUTONOMOUS CINEMATIC AIRSTRIKES ===
     // Drops bombs organically so no clicking is required!
     if (AUTO_AIRSTRIKES_ENABLED && frameCount.current % 240 === 0) {
       const kaijus = frameSnapshot.aliveKaijus;
       if (kaijus.length > 0 && Math.random() < 0.6) {
           const target = kaijus[Math.floor(Math.random() * kaijus.length)];
+            const recentHit = Math.max(0, 1 - ((nowMs - (p.lastDamagedAt || 0)) / 420));
           const dropX = target.x + (Math.random() - 0.5) * 150;
           const dropZ = target.z + (Math.random() - 0.5) * 150;
           entitiesRef.current.push(createPlaneStrikeEntity({
@@ -14002,15 +15198,33 @@ const VillageScene = ({ themeConfig, environmentVariant, setNukeCount, setGameSt
       }
       toTarget.normalize();
 
+      const lateral = new THREE.Vector3(-toTarget.z, 0, toTarget.x);
+      if (lateral.lengthSq() < 0.001) lateral.set(1, 0, 0);
+      lateral.normalize();
+      const bombAge = activeBombCamBomb.age || 0;
+      const releaseWindow = Math.max(0.18, (activeBombCamBomb.deployDelay || BOMB_PARACHUTE_DEPLOY_DELAY) * 2.2);
+      const releaseStage = THREE.MathUtils.clamp(1 - bombAge / releaseWindow, 0, 1);
+      const chuteBlend = activeBombCamBomb.parachuteOpen ? THREE.MathUtils.clamp(activeBombCamBomb.chuteInflation ?? 0.75, 0, 1) : 0;
+      const chaseDistance = THREE.MathUtils.lerp(BOMB_CAM_CHASE_DISTANCE, 18, chuteBlend);
+      const sideOffset = BOMB_CAM_RELEASE_SIDE_OFFSET * releaseStage;
+      const heightOffset = BOMB_CAM_CAMERA_HEIGHT + THREE.MathUtils.lerp(BOMB_CAM_RELEASE_HEIGHT_BOOST, 4, chuteBlend);
+      const speedMagnitude = Math.hypot(activeBombCamBomb.vx || 0, activeBombCamBomb.vy || 0, activeBombCamBomb.vz || 0);
+      const cameraJitter = releaseStage * Math.min(2.4, speedMagnitude * 0.025);
+      const swayTime = frameCount.current * 0.06 + (activeBombCamBomb.swaySeed || 0);
+
       const desiredCamPos = new THREE.Vector3(
-        activeBombCamBomb.x + toTarget.x * BOMB_CAM_CAMERA_FORWARD_OFFSET,
-        activeBombCamBomb.y + BOMB_CAM_CAMERA_HEIGHT,
-        activeBombCamBomb.z + toTarget.z * BOMB_CAM_CAMERA_FORWARD_OFFSET
+        activeBombCamBomb.x - toTarget.x * chaseDistance + lateral.x * sideOffset,
+        activeBombCamBomb.y + heightOffset + Math.sin(swayTime * 1.4) * cameraJitter,
+        activeBombCamBomb.z - toTarget.z * chaseDistance + lateral.z * sideOffset
       );
       const desiredLookAt = new THREE.Vector3(
-        activeBombCamBomb.x + toTarget.x * BOMB_CAM_LOOK_AHEAD,
-        Math.max(targetTerrain + 10, activeBombCamBomb.y + toTarget.y * (BOMB_CAM_LOOK_AHEAD * 0.45)),
-        activeBombCamBomb.z + toTarget.z * BOMB_CAM_LOOK_AHEAD
+        activeBombCamBomb.x + toTarget.x * (BOMB_CAM_LOOK_AHEAD + releaseStage * 26),
+        Math.max(targetTerrain + 12, activeBombCamBomb.y + toTarget.y * (BOMB_CAM_LOOK_AHEAD * 0.42) - releaseStage * 8 + chuteBlend * 6),
+        activeBombCamBomb.z + toTarget.z * (BOMB_CAM_LOOK_AHEAD + releaseStage * 26)
+      );
+      desiredLookAt.lerp(
+        new THREE.Vector3(bombTargetX, targetTerrain + 4, bombTargetZ),
+        0.24 + chuteBlend * 0.3
       );
 
       bombCamRef.current.smoothedPosition.lerp(desiredCamPos, Math.min(1, BOMB_CAM_CAMERA_LERP * ds));
@@ -14322,7 +15536,7 @@ const VillageScene = ({ themeConfig, environmentVariant, setNukeCount, setGameSt
          // Play engine sound periodically
          p.engineSoundTimer = (p.engineSoundTimer || 0) + 1;
          if (p.engineSoundTimer > 60) { // Every ~1 second at 60fps
-            AudioManager.play('plane_engine', { volume: 0.11, duration: 0.72 });
+          AudioManager.play('plane_engine', { volume: p.attackRunArmed ? 0.13 : 0.11, duration: p.attackRunArmed ? 0.84 : 0.72 });
             p.engineSoundTimer = 0;
          }
          
@@ -14365,6 +15579,10 @@ const VillageScene = ({ themeConfig, environmentVariant, setNukeCount, setGameSt
             p.flybySoundPlayed = true;
             AudioManager.play('plane_flyby', { volume: 0.12, duration: 1.8 });
          }
+        if (!p.closeFlybySoundPlayed && p.attackRunArmed && distToTarget < Math.max(340, releaseDistance * 0.9)) {
+          p.closeFlybySoundPlayed = true;
+          AudioManager.play('plane_flyby', { volume: 0.17, duration: 2.1 });
+        }
          
          // DEBUG: Log plane state
          if (frameCount.current % 60 === 0) {
@@ -14419,27 +15637,23 @@ const VillageScene = ({ themeConfig, environmentVariant, setNukeCount, setGameSt
 
          if (!p.parachuteOpen && p.age >= (p.deployDelay || BOMB_PARACHUTE_DEPLOY_DELAY)) {
             p.parachuteOpen = true;
+            p.descentMode = 'guided';
             if (!p.whistlePlayed) {
               p.whistlePlayed = true;
               AudioManager.play('bomb_whistle');
             }
          }
 
-         const dx = (p.targetX ?? p.x) - p.x;
-         const dz = (p.targetZ ?? p.z) - p.z;
-         const distXZ = Math.sqrt(dx * dx + dz * dz);
-         const targetY = getTerrainHeight(p.targetX ?? p.x, p.targetZ ?? p.z);
-         const terrainY = getTerrainHeight(p.x, p.z);
-         const swayPhase = (p.age || 0) * BOMB_PARACHUTE_SWAY_SPEED + (p.swaySeed || 0);
          const isControlledBomb = p.isManual && bombCamRef.current.active && bombCamRef.current.bombId === p.id;
 
          if (p.parachuteOpen) {
+            let metrics = getBombTargetMetrics(p);
             if (isControlledBomb) {
               const forwardInput = (keys.current['KeyW'] || keys.current['ArrowUp'] ? 1 : 0) - (keys.current['KeyS'] || keys.current['ArrowDown'] ? 1 : 0);
               const strafeInput = (keys.current['KeyD'] || keys.current['ArrowRight'] ? 1 : 0) - (keys.current['KeyA'] || keys.current['ArrowLeft'] ? 1 : 0);
               if (forwardInput !== 0 || strafeInput !== 0) {
-                const baseDirX = distXZ > 0.001 ? (dx / distXZ) : Math.sign(p.vx || 1);
-                const baseDirZ = distXZ > 0.001 ? (dz / distXZ) : Math.sign(p.vz || -1);
+                const baseDirX = metrics.distXZ > 0.001 ? metrics.dirX : Math.sign(p.vx || 1);
+                const baseDirZ = metrics.distXZ > 0.001 ? metrics.dirZ : Math.sign(p.vz || -1);
                 const lateralX = -baseDirZ;
                 const lateralZ = baseDirX;
                 const steerVectorX = baseDirX * forwardInput + lateralX * strafeInput;
@@ -14454,41 +15668,28 @@ const VillageScene = ({ themeConfig, environmentVariant, setNukeCount, setGameSt
                 targetingRef.current.confirmedTarget = nextTarget;
                 window._falloutConfirmedTarget = nextTarget;
               }
+                metrics = getBombTargetMetrics(p);
             }
-
-            const glideSpeed = p.glideSpeed || BOMB_PARACHUTE_GLIDE_SPEED;
-            const desiredSpeed = Math.min(glideSpeed, Math.max(1.2, distXZ * 0.06));
-            const dirX = distXZ > 0.001 ? (dx / distXZ) : 0;
-            const dirZ = distXZ > 0.001 ? (dz / distXZ) : 0;
-            const lateralX = -dirZ;
-            const lateralZ = dirX;
-            const swayOffset = Math.sin(swayPhase) * Math.min(BOMB_PARACHUTE_SWAY_AMOUNT, Math.max(0.2, distXZ * 0.01));
-            const desiredVx = dirX * desiredSpeed + lateralX * swayOffset;
-            const desiredVz = dirZ * desiredSpeed + lateralZ * swayOffset;
-            const steerLerp = Math.min(1, 0.12 * bombDs);
-
-            p.vx = THREE.MathUtils.lerp(p.vx || 0, desiredVx, steerLerp);
-            p.vz = THREE.MathUtils.lerp(p.vz || 0, desiredVz, steerLerp);
-            p.vy = THREE.MathUtils.lerp(
-              p.vy || 0,
-              -(p.fallSpeed || BOMB_PARACHUTE_FALL_SPEED) - Math.abs(Math.cos(swayPhase)) * 0.25,
-              Math.min(1, 0.16 * bombDs)
-            );
-            p.chuteInflation = THREE.MathUtils.lerp(p.chuteInflation ?? 0, 1, Math.min(1, delta * 4.5));
-            p.swayAmount = THREE.MathUtils.lerp(p.swayAmount ?? 0, 1, Math.min(1, delta * 2.8));
+              const targetY = getTerrainHeight(metrics.targetX, metrics.targetZ);
+              updateBombGuidedMotion(p, metrics, targetY, delta, bombDs);
          } else {
-            p.vy -= (p.grav || BOMB_DROP_GRAVITY) * bombDs;
-            p.chuteInflation = THREE.MathUtils.lerp(p.chuteInflation ?? 0, 0, Math.min(1, delta * 6));
-            p.swayAmount = THREE.MathUtils.lerp(p.swayAmount ?? 0, 0.2, Math.min(1, delta * 4));
+              updateBombReleaseMotion(p, delta, bombDs);
          }
 
          p.x += (p.vx || 0) * bombDs;
          p.y += (p.vy || 0) * bombDs;
          p.z += (p.vz || 0) * bombDs;
 
-         if (p.parachuteOpen && distXZ < (p.targetProximity || BOMB_TARGET_PROXIMITY)) {
-            p.x = p.targetX;
-            p.z = p.targetZ;
+            const postMetrics = getBombTargetMetrics(p);
+            const targetY = getTerrainHeight(postMetrics.targetX, postMetrics.targetZ);
+            const terrainY = getTerrainHeight(p.x, p.z);
+
+            if (p.parachuteOpen && postMetrics.distXZ < (p.targetProximity || BOMB_TARGET_PROXIMITY) * 0.9) {
+              const settleLerp = Math.min(1, delta * 5.5);
+              p.x = THREE.MathUtils.lerp(p.x, postMetrics.targetX, settleLerp);
+              p.z = THREE.MathUtils.lerp(p.z, postMetrics.targetZ, settleLerp);
+              p.vx = THREE.MathUtils.lerp(p.vx || 0, 0, settleLerp * 0.85);
+              p.vz = THREE.MathUtils.lerp(p.vz || 0, 0, settleLerp * 0.85);
          }
          
          // DEBUG: Log bomb state
@@ -14496,15 +15697,17 @@ const VillageScene = ({ themeConfig, environmentVariant, setNukeCount, setGameSt
             debugAirstrikeLog(`Bomb ${p.id}: pos=(${p.x.toFixed(0)},${p.y.toFixed(0)},${p.z.toFixed(0)}), target=(${(p.targetX ?? p.x).toFixed(0)},${(p.targetZ ?? p.z).toFixed(0)}), chute=${p.parachuteOpen}`);
          }
 
-         const nearTarget = distXZ <= (p.targetProximity || BOMB_TARGET_PROXIMITY);
-         const reachedTargetAltitude = p.y <= targetY + 4;
-         const hitTerrain = p.y <= terrainY + 2;
+            const nearTarget = postMetrics.distXZ <= (p.targetProximity || BOMB_TARGET_PROXIMITY);
+            const reachedTargetAltitude = p.y <= targetY + Math.max(3.2, Math.abs(p.vy || 0) * 0.3);
+            const hitTerrain = p.y <= terrainY + 1.5;
          const forceDetonate = p.age > 25 || p.y < -200;
 
-         if (!p.detonated && ((nearTarget && reachedTargetAltitude) || hitTerrain)) {
-            startBombImpact(p, p.targetX ?? p.x, p.targetZ ?? p.z);
+            if (!p.detonated && nearTarget && reachedTargetAltitude) {
+              startBombImpact(p, postMetrics.targetX, postMetrics.targetZ);
+            } else if (!p.detonated && hitTerrain) {
+              startBombImpact(p, p.x, p.z);
          } else if (!p.detonated && forceDetonate) {
-            startBombImpact(p, p.targetX ?? p.x, p.targetZ ?? p.z);
+              startBombImpact(p, postMetrics.targetX, postMetrics.targetZ);
          }
       }
       else if (p.type === 'facility') {
@@ -15231,6 +16434,21 @@ const VillageScene = ({ themeConfig, environmentVariant, setNukeCount, setGameSt
                      smokeCount: 2, flameCount: 2, firePulseSpeed: 7.0, smokeDrift: 4.2,
                      burnRadius: 40, damagePerSecond: 0, affectsFlying: false
                   });
+                pushGroundScarEntity(entitiesRef.current, impactX, impactZ, 20 + Math.random() * 12, {
+                  kind: 'gau8_ground_scar',
+                  ttl: 26 + Math.random() * 10,
+                  stretchX: 1.28 + Math.random() * 0.22,
+                  stretchZ: 0.72 + Math.random() * 0.12,
+                  rotation: Math.atan2(p.vz || 0, p.vx || 1),
+                  burnLife: 4,
+                  coreLife: 5.5,
+                  baseColor: '#100803',
+                  ringColor: '#2c1407',
+                  coreColor: '#4a1e0b',
+                  baseOpacity: 0.66,
+                  ringOpacity: 0.48,
+                  coreOpacity: 0.05
+                });
                }
                // Every 5th round: heavy-hit cluster — 3 rapid successive blasts in tight spread
                if (p.bulletsFired % 5 === 0) {
@@ -15261,6 +16479,21 @@ const VillageScene = ({ themeConfig, environmentVariant, setNukeCount, setGameSt
                      baseColor: '#120a04', ringColor: '#2a1206', coreColor: '#b05812', heatColor: '#d07828',
                      baseOpacity: 0.72, coreOpacity: 0.34, heatOpacity: 0.14,
                      smokeCount: 3, flameCount: 2, smokeDrift: 3.2, burnRadius: 38
+                  });
+                  pushGroundScarEntity(entitiesRef.current, sx, sz, 20 + Math.random() * 14, {
+                    kind: 'gau8_streak_scar',
+                    ttl: 30 + Math.random() * 12,
+                    stretchX: 2.1 + Math.random() * 0.45,
+                    stretchZ: 0.56 + Math.random() * 0.12,
+                    rotation: Math.atan2(p.vz || 0, p.vx || 1),
+                    burnLife: 4.5,
+                    coreLife: 6,
+                    baseColor: '#0d0704',
+                    ringColor: '#241109',
+                    coreColor: '#3f1c10',
+                    baseOpacity: 0.64,
+                    ringOpacity: 0.46,
+                    coreOpacity: 0.04
                   });
                }
                // Finale: extra explosion bursts scattered across the strafing path
@@ -15343,6 +16576,8 @@ const VillageScene = ({ themeConfig, environmentVariant, setNukeCount, setGameSt
          p.prevDist = dist;
       }
     });
+
+    emitCentralSceneFrame(state, delta);
   });
 
   const deployManualStrike = (target) => {
@@ -15357,6 +16592,7 @@ const VillageScene = ({ themeConfig, environmentVariant, setNukeCount, setGameSt
       }));
       return;
     }
+    const activeSupportKey = getActiveSupportStrikeKey();
     const pendingBuild = targetingRef.current.pendingBuild;
     if (pendingBuild) {
       window.dispatchEvent(new CustomEvent('fallout-purchase-building', {
@@ -15367,8 +16603,8 @@ const VillageScene = ({ themeConfig, environmentVariant, setNukeCount, setGameSt
       }));
       return;
     }
-    if (targetingRef.current.armedSupportKey) {
-      launchSupportStrike(targetingRef.current.armedSupportKey, target);
+    if (activeSupportKey) {
+      launchSupportStrike(activeSupportKey, target);
     }
   };
   const getPointerStrikeTargetFromClient = (clientX, clientY) => {
@@ -15388,7 +16624,7 @@ const VillageScene = ({ themeConfig, environmentVariant, setNukeCount, setGameSt
   const syncPointerPreviewTarget = (nextTarget) => {
     if (!nextTarget) return;
     window._falloutMouseTarget = nextTarget;
-    if (targetingRef.current.pendingBuild || targetingRef.current.pendingDeploy || targetingRef.current.armedSupportKey) {
+    if (targetingRef.current.pendingBuild || targetingRef.current.pendingDeploy || getActiveSupportStrikeKey()) {
       window._falloutBuildFallbackTarget = nextTarget;
     }
     if (targetingRef.current.pendingDeploy && deployDragRef.current.active) {
@@ -15444,9 +16680,10 @@ const VillageScene = ({ themeConfig, environmentVariant, setNukeCount, setGameSt
     );
 
     const handleCanvasPointerDown = (event) => {
+      const activeSupportKey = getActiveSupportStrikeKey();
       if (event.button === 2) {
         const selectedUnits = getSelectedUnits();
-        if (!selectedUnits.length || targetingRef.current.pendingDeploy || targetingRef.current.pendingBuild || targetingRef.current.armedSupportKey) return;
+        if (!selectedUnits.length || targetingRef.current.pendingDeploy || targetingRef.current.pendingBuild || activeSupportKey) return;
         const commandTarget = resolveCommandTarget(event.clientX, event.clientY);
         if (!commandTarget) return;
         event.preventDefault();
@@ -15480,7 +16717,7 @@ const VillageScene = ({ themeConfig, environmentVariant, setNukeCount, setGameSt
         window._falloutDeployDragActive = true;
         return;
       }
-      if (targetingRef.current.pendingBuild || targetingRef.current.armedSupportKey) return;
+      if (targetingRef.current.pendingBuild || activeSupportKey) return;
       selectionRef.current.active = true;
       selectionRef.current.moved = false;
       selectionRef.current.startClientX = event.clientX;
@@ -15491,9 +16728,10 @@ const VillageScene = ({ themeConfig, environmentVariant, setNukeCount, setGameSt
     };
 
     const handleCanvasPointerMove = (event) => {
+      const activeSupportKey = getActiveSupportStrikeKey();
       const nextTarget = getPointerStrikeTargetFromClient(event.clientX, event.clientY);
       if (nextTarget) syncPointerPreviewTarget(nextTarget);
-      if (selectionRef.current.active && !targetingRef.current.pendingDeploy && !targetingRef.current.pendingBuild && !targetingRef.current.armedSupportKey) {
+      if (selectionRef.current.active && !targetingRef.current.pendingDeploy && !targetingRef.current.pendingBuild && !activeSupportKey) {
         selectionRef.current.endClientX = event.clientX;
         selectionRef.current.endClientY = event.clientY;
         const dragDist = Math.hypot(
@@ -15507,6 +16745,7 @@ const VillageScene = ({ themeConfig, environmentVariant, setNukeCount, setGameSt
 
     const handleCanvasPointerUp = (event) => {
       if (event.button !== 0) return;
+      const activeSupportKey = getActiveSupportStrikeKey();
       const nextTarget = resolveActionTarget(event.clientX, event.clientY);
       if (targetingRef.current.pendingDeploy && deployDragRef.current.active) {
         if (nextTarget) deployManualStrike(nextTarget);
@@ -15517,7 +16756,7 @@ const VillageScene = ({ themeConfig, environmentVariant, setNukeCount, setGameSt
         if (nextTarget) deployManualStrike(nextTarget);
         return;
       }
-      if (targetingRef.current.armedSupportKey && nextTarget) {
+      if (activeSupportKey && nextTarget) {
         deployManualStrike(nextTarget);
         return;
       }
@@ -15583,7 +16822,7 @@ const VillageScene = ({ themeConfig, environmentVariant, setNukeCount, setGameSt
     };
 
     const handleCanvasPointerLeave = () => {
-      if (!targetingRef.current.pendingDeploy && !targetingRef.current.pendingBuild && !targetingRef.current.armedSupportKey) {
+      if (!targetingRef.current.pendingDeploy && !targetingRef.current.pendingBuild && !getActiveSupportStrikeKey()) {
         window._falloutMouseTarget = null;
       }
       if (!deployDragRef.current.active) clearDeployDrag();
@@ -15678,6 +16917,10 @@ const GameHUD = () => {
       remainingKaijus: 0
     }
   });
+  const [liveSupportArmState, setLiveSupportArmState] = useState({
+    armedSupportKey: null,
+    manualStrikeArmed: false
+  });
   const [targetLock, setTargetLock] = useState(0);
   const [lockStatus, setLockStatus] = useState('TRACKING');
   const [cooldownMs, setCooldownMs] = useState(0);
@@ -15707,10 +16950,31 @@ const GameHUD = () => {
   }, []);
   
   useEffect(() => {
+    const syncLiveSupportArmState = (detail = null) => {
+      setLiveSupportArmState({
+        armedSupportKey: detail?.armedSupportKey ?? window._falloutArmedSupportKey ?? null,
+        manualStrikeArmed: detail?.manualStrikeArmed ?? !!window._falloutManualStrikeArmed
+      });
+    };
+    syncLiveSupportArmState();
+    const handleSupportArmState = (event) => {
+      syncLiveSupportArmState(event?.detail || null);
+    };
+    window.addEventListener('fallout-support-arm-state', handleSupportArmState);
+    return () => {
+      window.removeEventListener('fallout-support-arm-state', handleSupportArmState);
+    };
+  }, []);
+
+  useEffect(() => {
     const interval = setInterval(() => {
       if (window._falloutGameStats) {
         setStats({ ...window._falloutGameStats });
       }
+      setLiveSupportArmState({
+        armedSupportKey: window._falloutArmedSupportKey || null,
+        manualStrikeArmed: !!window._falloutManualStrikeArmed
+      });
       setTargetLock(window._falloutTargetProgress || 0);
       setCooldownMs(window._falloutStrikeCooldownRemaining || 0);
       const nextPendingDeploy = window._falloutPendingDeploy || null;
@@ -15759,7 +17023,7 @@ const GameHUD = () => {
   const pendingDeployOption = pendingDeploy ? (stats.deployCosts || DEPLOY_OPTIONS)[pendingDeploy] : null;
   const pendingBuildOption = pendingBuild ? (stats.buildOptions || BUILD_OPTIONS)[pendingBuild] : null;
   const supportOptions = stats.supportOptions || SUPPORT_STRIKE_OPTIONS;
-  const armedSupportKey = stats.armedSupportKey || (stats.nukeArmed ? 'nuke' : null);
+  const armedSupportKey = liveSupportArmState.armedSupportKey || stats.armedSupportKey || ((liveSupportArmState.manualStrikeArmed || stats.nukeArmed) ? 'nuke' : null);
   const supportCooldowns = stats.supportCooldowns || { nuke: 0, ...createDefaultSupportCooldownMap() };
   const supportCanArm = stats.supportCanArm || createDefaultSupportCanArmMap();
   const activeSupportOption = armedSupportKey ? supportOptions[armedSupportKey] : null;
@@ -15888,6 +17152,11 @@ const GameHUD = () => {
     scrollbarWidth: 'thin'
   };
   const supportButtonStyle = (active, disabled, optionKey) => ({
+    boxShadow: active
+      ? (optionKey === 'orbital_lance' ? '0 0 22px rgba(56,189,248,0.28)' : optionKey === 'firestorm' ? '0 0 22px rgba(249,115,22,0.24)' : optionKey === 'kinetic_spear' ? '0 0 22px rgba(226,232,240,0.24)' : optionKey === 'warthog_run' ? '0 0 22px rgba(132,204,22,0.24)' : '0 0 22px rgba(248,113,113,0.24)')
+      : disabled
+      ? 'none'
+      : '0 10px 24px rgba(2,8,23,0.14)',
     borderRadius: '12px',
     border: active ? '1px solid rgba(248,113,113,0.9)' : `1px solid ${optionKey === 'orbital_lance' ? 'rgba(56,189,248,0.38)' : optionKey === 'firestorm' ? 'rgba(249,115,22,0.34)' : optionKey === 'kinetic_spear' ? 'rgba(226,232,240,0.34)' : 'rgba(249,115,22,0.3)'}`,
     background: active
@@ -16020,6 +17289,14 @@ const GameHUD = () => {
                   textAlign: 'left'
                 }}
               >
+                <div
+                  style={{
+                    width: '100%',
+                    height: '2px',
+                    borderRadius: '999px',
+                    background: option.key === 'orbital_lance' ? 'linear-gradient(90deg, rgba(56,189,248,0.1), rgba(103,232,249,0.95), rgba(56,189,248,0.1))' : option.key === 'firestorm' ? 'linear-gradient(90deg, rgba(249,115,22,0.1), rgba(251,146,60,0.95), rgba(249,115,22,0.1))' : option.key === 'kinetic_spear' ? 'linear-gradient(90deg, rgba(226,232,240,0.08), rgba(248,250,252,0.92), rgba(125,211,252,0.2))' : option.key === 'warthog_run' ? 'linear-gradient(90deg, rgba(132,204,22,0.08), rgba(190,242,100,0.95), rgba(203,213,225,0.2))' : 'linear-gradient(90deg, rgba(239,68,68,0.08), rgba(248,113,113,0.95), rgba(251,146,60,0.2))'
+                  }}
+                />
                 <div style={{ width: '100%', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '8px' }}>
                   <div style={{ minWidth: 0 }}>
                     <div style={{ fontSize: '10px', letterSpacing: '0.06em', textTransform: 'uppercase', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
@@ -16034,9 +17311,14 @@ const GameHUD = () => {
                   </span>
                 </div>
                 {showSupportPanel && (
-                  <div style={{ fontSize: '7px', color: '#94a3b8', letterSpacing: '0.12em', textTransform: 'uppercase' }}>
-                    {strongTargets > 0 ? `+${strongTargets} weak` : resistantTargets > 0 ? `${resistantTargets} resist` : 'ready'}
-                  </div>
+                  <>
+                    <div style={{ fontSize: '7px', color: '#94a3b8', letterSpacing: '0.12em', textTransform: 'uppercase' }}>
+                      {strongTargets > 0 ? `+${strongTargets} weak` : resistantTargets > 0 ? `${resistantTargets} resist` : 'ready'}
+                    </div>
+                    <div style={{ fontSize: '7px', color: '#cbd5e1', lineHeight: 1.35, opacity: 0.9 }}>
+                      {option.description}
+                    </div>
+                  </>
                 )}
               </button>
             );
@@ -16405,12 +17687,13 @@ const GameHUD = () => {
                   const elementMeta = getElementMeta(k.element);
                   const weakMeta = getElementMeta(k.weakAgainst);
                   const resistMeta = k.resistAgainst ? getElementMeta(k.resistAgainst) : null;
+                  const kaijuTheme = getKaijuVisualTheme(k);
                   const recentElementHit = k.lastElementHitAt && Date.now() - k.lastElementHitAt < 1800;
                   return (
                     <>
-                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '10px', color: '#fca5a5' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '10px', color: kaijuTheme.labelColor, borderLeft: `2px solid ${kaijuTheme.labelColor}`, paddingLeft: '6px', textShadow: `0 0 10px ${kaijuTheme.hpBackColor}` }}>
                   <span>👹 {k.displayName || getKaijuDisplayName(k.variant)}</span>
-                  <span>{`${Math.round(Math.max(0, k.hp))}/${k.maxHp}`}</span>
+                  <span style={{ color: kaijuTheme.hpGlowColor }}>{`${Math.round(Math.max(0, k.hp))}/${k.maxHp}`}</span>
                 </div>
                 <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', marginTop: '3px', fontSize: '8px', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
                   <span style={{ color: elementMeta.color }}>Type {elementMeta.shortLabel}</span>
@@ -16419,12 +17702,13 @@ const GameHUD = () => {
                   {recentElementHit && k.lastElementState === 'advantage' && <span style={{ color: '#86efac' }}>Bonus Hit</span>}
                   {recentElementHit && k.lastElementState === 'resist' && <span style={{ color: '#fca5a5' }}>Resisted</span>}
                 </div>
-                <div style={{ height: '4px', background: '#450a0a', borderRadius: '3px', overflow: 'hidden', marginTop: '2px' }}>
+                <div style={{ height: '4px', background: kaijuTheme.hpBackColor, borderRadius: '3px', overflow: 'hidden', marginTop: '2px', boxShadow: `0 0 10px ${kaijuTheme.hpBackColor}` }}>
                   <div
                     style={{
                       width: `${Math.max(0, (Math.max(0, k.hp) / k.maxHp) * 100)}%`,
                       height: '100%',
-                      background: '#ef4444'
+                      background: kaijuTheme.hpFillColor,
+                      boxShadow: `0 0 12px ${kaijuTheme.hpGlowColor}`
                     }}
                   />
                 </div>
@@ -16743,19 +18027,41 @@ const FrameRateController = ({ fpsCap }) => {
 
   useEffect(() => {
     const option = FPS_CAP_OPTIONS[fpsCap] || FPS_CAP_OPTIONS[DEFAULT_FPS_CAP];
-    if (!option || option.frameMs <= 0) {
-      setFrameloop('always');
-      return undefined;
+    const syncFrameloop = () => {
+      if (typeof document !== 'undefined' && document.hidden) {
+        setFrameloop('never');
+        return;
+      }
+      if (!option || option.frameMs <= 0) {
+        setFrameloop('always');
+        invalidate();
+        return;
+      }
+      setFrameloop('demand');
+      invalidate();
+    };
+
+    syncFrameloop();
+    const interval = option && option.frameMs > 0
+      ? window.setInterval(() => {
+          if (typeof document !== 'undefined' && document.hidden) return;
+          invalidate();
+        }, Math.max(16, Math.round(option.frameMs)))
+      : null;
+
+    const handleVisibilityChange = () => {
+      syncFrameloop();
+    };
+
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', handleVisibilityChange);
     }
 
-    setFrameloop('demand');
-    invalidate();
-    const interval = window.setInterval(() => {
-      invalidate();
-    }, Math.max(16, Math.round(option.frameMs)));
-
     return () => {
-      window.clearInterval(interval);
+      if (interval) window.clearInterval(interval);
+      if (typeof document !== 'undefined') {
+        document.removeEventListener('visibilitychange', handleVisibilityChange);
+      }
       setFrameloop('always');
     };
   }, [fpsCap, invalidate, setFrameloop]);
@@ -17611,7 +18917,7 @@ const GroupSelectionIndicator = ({ entitiesRef }) => {
   const targetRingRef = useRef();
   const targetDotRef = useRef();
 
-  useFrame((state) => {
+  useCentralSceneFrame((state) => {
     if (!groupRef.current) return;
     const selectedIds = new Set(window._falloutSelectedUnitIds || []);
     const selectedUnits = entitiesRef.current.filter((entity) => (
@@ -17751,7 +19057,7 @@ const ProductionBuildingIndicator = ({ entitiesRef }) => {
   const ringRef = useRef();
   const pulseRef = useRef();
 
-  useFrame((state) => {
+  useCentralSceneFrame((state) => {
     const selectedBuilding = window._falloutSelectedProductionBuilding;
     const entity = selectedBuilding?.id
       ? entitiesRef.current.find((item) => item.id === selectedBuilding.id && item.type === 'facility' && !item.dead && !item.constructing && !isBrokenStructure(item))
@@ -17803,7 +19109,7 @@ const AttackTargetIndicator = ({ entitiesRef }) => {
   const topRingRef = useRef();
   const beamRef = useRef();
 
-  useFrame((state) => {
+  useCentralSceneFrame((state) => {
     if (!groupRef.current) return;
 
     const selectedIds = new Set(window._falloutSelectedUnitIds || []);
@@ -17892,7 +19198,7 @@ const AttackTargetIndicator = ({ entitiesRef }) => {
 const UnitCommandMarkers = () => {
   const markerRefs = useRef([]);
 
-  useFrame((state) => {
+  useCentralSceneFrame((state) => {
     const markers = (window._falloutUnitCommandMarkers || []).filter((marker) => Date.now() - (marker.at || 0) < 2200);
     if (typeof window !== 'undefined') {
       window._falloutUnitCommandMarkers = markers;
@@ -18212,21 +19518,37 @@ export default function FalloutPeople({ theme, isIdleMode }) {
     () => getAdaptiveQualityProfile(baseResolutionProfile, stressLevel),
     [baseResolutionProfile, stressLevel]
   );
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return undefined;
+    window._falloutResolutionPreset = resolutionPreset;
+    window._falloutDetailMode = resolutionProfile?.detailMode || 'full';
+    window._falloutPerfMode = stressLevel;
+    return () => {
+      delete window._falloutResolutionPreset;
+      delete window._falloutDetailMode;
+      delete window._falloutPerfMode;
+    };
+  }, [resolutionPreset, resolutionProfile?.detailMode, stressLevel]);
+
   // Progressive Apocalypse Scale (0 = peaceful, 1 = total nuclear winter)
   // Takes 10 massive bombs to completely blot out the sun!
   const pollution = Math.min(nukeCount * 0.1, 1);
 
   useEffect(() => {
     if (!isFallout) return undefined;
+    const thermalLimited = prefersCoolDefaults();
     const interval = setInterval(() => {
       const stats = window._falloutGameStats || {};
       const activeKaijus = Array.isArray(stats.kaijus) ? stats.kaijus.filter(k => !k.dead).length : 0;
       const battlefieldUnits = (stats.soldiers || 0) + (stats.tanks || 0) + (stats.jets || 0);
-      const totalDynamicLoad = activeKaijus * 12 + battlefieldUnits;
-      const pollutionLoad = pollution > 0.55 ? 10 : pollution > 0.3 ? 4 : 0;
-      const blastLoad = blastFx.active ? 12 : 0;
+      const totalDynamicLoad = activeKaijus * (thermalLimited ? 14 : 12) + battlefieldUnits;
+      const pollutionLoad = pollution > 0.45 ? 12 : pollution > 0.2 ? 6 : 0;
+      const blastLoad = blastFx.active ? (thermalLimited ? 16 : 12) : 0;
       const totalLoad = totalDynamicLoad + pollutionLoad + blastLoad;
-      const nextStress = totalLoad >= 54 ? 'critical' : totalLoad >= 30 ? 'high' : 'normal';
+      const criticalThreshold = thermalLimited ? 34 : 42;
+      const highThreshold = thermalLimited ? 16 : 22;
+      const nextStress = totalLoad >= criticalThreshold ? 'critical' : totalLoad >= highThreshold ? 'high' : 'normal';
       setStressLevel(prev => (prev === nextStress ? prev : nextStress));
       if (typeof window !== 'undefined') window._falloutPerfMode = nextStress;
     }, 1000);
@@ -18303,7 +19625,7 @@ export default function FalloutPeople({ theme, isIdleMode }) {
          dpr={resolutionProfile.dpr}
          gl={{
            antialias: resolutionProfile.antialias,
-           powerPreference: resolutionProfile.dpr >= 1.25 ? 'high-performance' : 'low-power',
+           powerPreference: 'low-power',
            toneMapping: THREE.ACESFilmicToneMapping,
            toneMappingExposure: 1.6
          }}
@@ -18347,7 +19669,7 @@ export default function FalloutPeople({ theme, isIdleMode }) {
         />
         
         {/* Secondary fill light - softer, cooler */}
-        {resolutionProfile.detailMode !== 'minimal' && (
+        {resolutionProfile.enableSecondaryFillLight !== false && (
           <directionalLight 
             position={[-300, 200, -100]} 
             intensity={fillLightIntensity}
@@ -18367,7 +19689,7 @@ export default function FalloutPeople({ theme, isIdleMode }) {
         )}
         
         {/* Rim light for character definition */}
-        {resolutionProfile.detailMode === 'full' && (
+        {resolutionProfile.enableRimLight && (
           <directionalLight 
             position={[0, 300, -400]} 
             intensity={0.34}
@@ -18497,7 +19819,7 @@ const TargetIndicator = () => {
    const buildTechGhost = useRef();
    const buildRadarGhost = useRef();
    
-   useFrame((state) => {
+  useCentralSceneFrame((state) => {
       if (!group.current) return;
       
       const target = window._falloutMouseTarget;
@@ -18890,7 +20212,7 @@ const FalloutAshParticle = ({ index, pollution }) => {
   const size = useRef(2 + Math.random() * 4);
   const frameSkip = useRef(index % 2);
   
-  useFrame((state) => {
+  useCentralSceneFrame((state) => {
     if (!ref.current) return;
     frameSkip.current = (frameSkip.current + 1) % 2;
     if (frameSkip.current !== 0) return;
@@ -18954,10 +20276,23 @@ const MountainTerrain = memo(({ themeConfig, environmentVariant, pollution, qual
     canvas.width = textureSize;
     canvas.height = textureSize;
     const ctx = canvas.getContext('2d');
+    const dustiness = environmentVariant?.dustiness ?? 0.5;
+    const rockiness = environmentVariant?.rockiness ?? 0.5;
+    const moisture = environmentVariant?.moisture ?? 0.3;
+    const accentStrength = environmentVariant?.accentStrength ?? 0.25;
+    const erosionStrength = environmentVariant?.erosionStrength ?? 0.5;
     
     // Base terrain color logic - brighten the default wasteland look
     const baseColor = environmentVariant?.terrainBase || (themeConfig?.biome === 'wasteland' ? '#4a3d2e' : '#2d4c1e');
     ctx.fillStyle = baseColor;
+    ctx.fillRect(0, 0, textureSize, textureSize);
+
+    const macroWash = ctx.createLinearGradient(0, 0, textureSize, textureSize);
+    macroWash.addColorStop(0, environmentVariant?.terrainTint || '#8a745d');
+    macroWash.addColorStop(0.45, baseColor);
+    macroWash.addColorStop(1, environmentVariant?.patchB || '#4d453b');
+    ctx.globalAlpha = 0.08 + dustiness * 0.12 + moisture * 0.04;
+    ctx.fillStyle = macroWash;
     ctx.fillRect(0, 0, textureSize, textureSize);
     
     // Add broad grass/dirt variation patches
@@ -18971,8 +20306,26 @@ const MountainTerrain = memo(({ themeConfig, environmentVariant, pollution, qual
         ctx.beginPath();
         ctx.arc(x, y, r, 0, Math.PI * 2);
         ctx.fillStyle = shade;
-        ctx.globalAlpha = 0.38;
+        ctx.globalAlpha = 0.2 + rockiness * 0.14 + moisture * 0.08;
         ctx.fill();
+    }
+
+    // Add elongated erosion bands so large ground areas read as layered terrain instead of flat paint
+      for (let i = 0; i < terrainPatchCount * (0.2 + erosionStrength * 0.42); i++) {
+      const x = Math.random() * textureSize;
+      const y = Math.random() * textureSize;
+      const len = 30 + Math.random() * 110;
+      const width = 8 + Math.random() * 22;
+      const ang = (Math.random() - 0.5) * Math.PI;
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.rotate(ang);
+      ctx.globalAlpha = 0.03 + erosionStrength * 0.08 + Math.random() * (0.03 + dustiness * 0.04);
+      ctx.fillStyle = Math.random() > 0.5
+        ? (environmentVariant?.terrainTint || '#8a745d')
+        : (environmentVariant?.patchA || '#5c6d31');
+      ctx.fillRect(-len * 0.5, -width * 0.5, len, width);
+      ctx.restore();
     }
 
       // Add medium-scale streaking so the terrain reads like layered soil
@@ -18987,10 +20340,26 @@ const MountainTerrain = memo(({ themeConfig, environmentVariant, pollution, qual
         ctx.strokeStyle = Math.random() > 0.5
           ? (environmentVariant?.debrisA || '#6a5a45')
           : (environmentVariant?.debrisB || '#4d453b');
-        ctx.globalAlpha = 0.08;
+        ctx.globalAlpha = 0.03 + dustiness * 0.05 + rockiness * 0.03;
         ctx.lineWidth = 2 + Math.random() * 4;
         ctx.stroke();
       }
+
+    // Add soft mineral bloom / dust pooling zones for broader tonal breakup
+    for (let i = 0; i < terrainPatchCount * (0.16 + moisture * 0.32 + accentStrength * 0.12); i++) {
+      const x = Math.random() * textureSize;
+      const y = Math.random() * textureSize;
+      const r = 18 + Math.random() * 60;
+      const grad = ctx.createRadialGradient(x, y, 0, x, y, r);
+      grad.addColorStop(0, environmentVariant?.terrainTint || '#8a745d');
+      grad.addColorStop(0.55, environmentVariant?.debrisA || '#6a5a45');
+      grad.addColorStop(1, 'rgba(0,0,0,0)');
+      ctx.globalAlpha = 0.02 + moisture * 0.06 + accentStrength * 0.04 + Math.random() * 0.03;
+      ctx.fillStyle = grad;
+      ctx.beginPath();
+      ctx.arc(x, y, r, 0, Math.PI * 2);
+      ctx.fill();
+    }
     
     // Add dirt/cracks pattern
     ctx.globalAlpha = 0.2;
@@ -19108,6 +20477,7 @@ const MountainTerrain = memo(({ themeConfig, environmentVariant, pollution, qual
     craters.forEach(crater => {
       if (appliedCraterIdsRef.current.has(crater.id)) return;
       appliedCraterIdsRef.current.add(crater.id);
+      if (crater.deform === false) return;
       const r = crater.radius;
       const d = crater.depth;
       for (let i = 0; i < pos.count; i++) {
@@ -19131,7 +20501,7 @@ const MountainTerrain = memo(({ themeConfig, environmentVariant, pollution, qual
   }, [craters, geometry]);
 
   // Animate terrain shader uniforms every frame
-  useFrame((state) => {
+  useCentralSceneFrame((state) => {
     const mat = terrainMeshRef.current?.material;
     if (mat?.uniforms) {
       if (terrainAnimationEnabled) {
@@ -19153,6 +20523,15 @@ const MountainTerrain = memo(({ themeConfig, environmentVariant, pollution, qual
     const accentColor   = new THREE.Color(environmentVariant?.accent        || '#a3e635');
     const overlayColor  = new THREE.Color(environmentVariant?.overlay       || '#3b2210');
     const crackColor    = new THREE.Color(environmentVariant?.crack         || '#1a1208');
+    const fogColor      = new THREE.Color(environmentVariant?.fog           || '#7b6f61');
+    const ambientColor  = new THREE.Color(environmentVariant?.ambient       || '#f2eadf');
+    const sunColor      = new THREE.Color(environmentVariant?.directional   || '#ffe1b3');
+    const dustiness     = environmentVariant?.dustiness ?? 0.5;
+    const rockiness     = environmentVariant?.rockiness ?? 0.5;
+    const moisture      = environmentVariant?.moisture ?? 0.3;
+    const accentStrength = environmentVariant?.accentStrength ?? 0.25;
+    const hazeStrength   = environmentVariant?.hazeStrength ?? 0.25;
+    const erosionStrength = environmentVariant?.erosionStrength ?? 0.5;
 
     return new THREE.ShaderMaterial({
       uniforms: {
@@ -19166,6 +20545,15 @@ const MountainTerrain = memo(({ themeConfig, environmentVariant, pollution, qual
         uAccent:     { value: accentColor },
         uOverlay:    { value: overlayColor },
         uCrack:      { value: crackColor },
+        uFog:        { value: fogColor },
+        uAmbient:    { value: ambientColor },
+        uSun:        { value: sunColor },
+        uDustiness:  { value: dustiness },
+        uRockiness:  { value: rockiness },
+        uMoisture:   { value: moisture },
+        uAccentStrength: { value: accentStrength },
+        uHazeStrength: { value: hazeStrength },
+        uErosionStrength: { value: erosionStrength },
       },
       vertexShader: `
         varying vec2  vUv;
@@ -19195,6 +20583,15 @@ const MountainTerrain = memo(({ themeConfig, environmentVariant, pollution, qual
         uniform vec3      uAccent;
         uniform vec3      uOverlay;
         uniform vec3      uCrack;
+        uniform vec3      uFog;
+        uniform vec3      uAmbient;
+        uniform vec3      uSun;
+        uniform float     uDustiness;
+        uniform float     uRockiness;
+        uniform float     uMoisture;
+        uniform float     uAccentStrength;
+        uniform float     uHazeStrength;
+        uniform float     uErosionStrength;
 
         varying vec2  vUv;
         varying vec3  vWorldPos;
@@ -19227,6 +20624,20 @@ const MountainTerrain = memo(({ themeConfig, environmentVariant, pollution, qual
         }
 
         void main() {
+          float cameraDistance = length(cameraPosition.xz - vWorldPos.xz);
+          if (cameraDistance > 1400.0) {
+            vec3 sunDir = normalize(vec3(0.4, 1.0, 0.3));
+            float NdotL = max(dot(vWorldNormal, sunDir), 0.0);
+            float ambientWrap = clamp(vWorldNormal.y * 0.5 + 0.5, 0.0, 1.0);
+            float heightBlend = clamp((vHeight + 20.0) / 120.0, 0.0, 1.0);
+            vec3 farGround = mix(uBase, uTint, heightBlend * 0.38 + ambientWrap * 0.12);
+            vec3 farLight = uAmbient * (0.4 + ambientWrap * 0.2) + uSun * (0.24 + NdotL * 0.28);
+            vec3 hazeColor = mix(uFog, uAmbient, 0.24 + uMoisture * 0.12);
+            float haze = smoothstep(1400.0, 3200.0, cameraDistance);
+            gl_FragColor = vec4(mix(farGround * farLight, hazeColor * (0.72 + farGround * 0.28), haze), 1.0);
+            return;
+          }
+
           // ── Base texture from canvas (patches/cracks/debris) ──────────────
           vec3 tex = texture2D(uMap, vUv * 0.25).rgb;
           vec3 texFine = texture2D(uMap, vUv * 0.85 + vec2(0.13, 0.07)).rgb;
@@ -19260,25 +20671,34 @@ const MountainTerrain = memo(({ themeConfig, environmentVariant, pollution, qual
           // ── Slope-based rock tinting (normals pointing sideways = cliffs) ─
           float slopeFactor = 1.0 - abs(vWorldNormal.y);
           vec3  rockColor   = mix(uBase * 0.78, vec3(0.50, 0.44, 0.40), 0.55);
-          ground = mix(ground, rockColor, smoothstep(0.35, 0.72, slopeFactor) * 0.38);
+          ground = mix(ground, rockColor, smoothstep(0.28, 0.78, slopeFactor) * (0.18 + uRockiness * 0.34));
+
+          float erosionMask = smoothstep(0.52, 0.82, texMacroLuma + n2 * 0.35) * smoothstep(0.05, 0.48, slopeFactor);
+          ground = mix(ground, mix(uPatchB, uCrack, 0.36 + uDustiness * 0.18), erosionMask * (0.1 + uErosionStrength * 0.24));
+
+          float cavityMask = smoothstep(0.48, 0.86, (1.0 - texContrast) * 0.7 + (1.0 - hFactor) * 0.42 + slopeFactor * 0.22);
+          ground *= 1.0 - cavityMask * (0.06 + uRockiness * 0.08 + uErosionStrength * 0.04);
 
           // Dry ridges + compacted dirt pockets for stronger terrain breakup
           float compactMask = smoothstep(0.56, 0.74, n3) * clamp(1.0 - slopeFactor * 1.8, 0.0, 1.0);
           vec3 compactColor = mix(uCrack * 1.2, uPatchB * 0.92, 0.45);
-          ground = mix(ground, compactColor, compactMask * 0.28);
+          ground = mix(ground, compactColor, compactMask * (0.1 + uDustiness * 0.16 + uRockiness * 0.08));
 
           float ridgeDust = smoothstep(0.52, 0.86, hFactor) * smoothstep(0.0, 0.45, 1.0 - slopeFactor);
-          ground += ridgeDust * (0.045 + texFineContrast * 0.035) * uTint;
+          ground += ridgeDust * (0.02 + uDustiness * 0.04 + texFineContrast * (0.015 + uDustiness * 0.02)) * uTint;
+
+          float dustBloom = smoothstep(0.35, 0.92, texMacroLuma) * smoothstep(0.04, 0.3, 1.0 - slopeFactor);
+          ground = mix(ground, ground + mix(uAmbient, uAccent, uMoisture * 0.35) * (0.03 + uMoisture * 0.05 + uDustiness * 0.03), dustBloom * (0.08 + uDustiness * 0.1 + uMoisture * 0.05));
 
           // ── Grass lighting / terrain accents ──────────────────────────────
           ${terrainAnimationEnabled ? `
           float grassMask = smoothstep(0.6, 1.0, n1) * clamp(1.0 - slopeFactor * 2.0, 0.0, 1.0);
           float wind = sin(uTime * 1.8 + vWorldPos.x * 0.12 + vWorldPos.z * 0.09)
                      * cos(uTime * 1.2 + vWorldPos.z * 0.07) * 0.5 + 0.5;
-          ground += grassMask * wind * 0.07 * uAccent;
+          ground += grassMask * wind * (0.018 + uAccentStrength * 0.075) * uAccent;
           ` : `
           float grassMask = smoothstep(0.62, 1.0, n1) * clamp(1.0 - slopeFactor * 2.3, 0.0, 1.0);
-          ground += grassMask * 0.035 * uAccent;
+          ground += grassMask * (0.01 + uAccentStrength * 0.045) * uAccent;
           `}
 
           // ── Radiation puddles / wet patches ───────────────────────────────
@@ -19289,14 +20709,14 @@ const MountainTerrain = memo(({ themeConfig, environmentVariant, pollution, qual
                         * clamp(1.0 - slopeFactor * 3.0, 0.0, 1.0);
           vec3 radColor = mix(vec3(0.15, 0.38, 0.08), uAccent * 0.7, uPollution);
           float puddleShimmer = sin(uTime * 3.5 + vWorldPos.x * 0.3) * 0.5 + 0.5;
-          ground = mix(ground, radColor * (0.6 + puddleShimmer * 0.4), pudMask * 0.55);
+          ground = mix(ground, radColor * (0.45 + puddleShimmer * (0.2 + uMoisture * 0.35)), pudMask * (0.12 + uMoisture * 0.5));
           ` : `
           float puddle = fbm(wUv * 2.4 + vec2(0.8, 1.3));
           float pudMask = smoothstep(0.64, 0.73, puddle)
                         * smoothstep(0.0, 0.16, hFactor)
                         * clamp(1.0 - slopeFactor * 3.2, 0.0, 1.0);
           vec3 radColor = mix(vec3(0.14, 0.34, 0.08), uAccent * 0.58, uPollution);
-          ground = mix(ground, radColor * 0.72, pudMask * 0.42);
+          ground = mix(ground, radColor * (0.48 + uMoisture * 0.28), pudMask * (0.08 + uMoisture * 0.4));
           `) : ''}
 
           // ── Pollution overlay (blackens the ground at high pollution) ─────
@@ -19305,20 +20725,57 @@ const MountainTerrain = memo(({ themeConfig, environmentVariant, pollution, qual
           // ── Sky/sun light (directional, world-space) ──────────────────────
           vec3  sunDir  = normalize(vec3(0.4, 1.0, 0.3));
           float NdotL   = max(dot(vWorldNormal, sunDir), 0.0);
-          vec3  sunLight = vec3(1.0, 0.97, 0.84) * (0.78 + NdotL * 0.42);
+          float ambientWrap = clamp(vWorldNormal.y * 0.5 + 0.5, 0.0, 1.0);
+          vec3  sunLight = uSun * (0.54 + NdotL * 0.46);
+          vec3  ambientLight = uAmbient * (0.32 + ambientWrap * 0.24);
 
           // Micro surface relief from the detail texture for stronger readability
           float detailShade = clamp(0.82 + (texFineContrast - 0.5) * 0.42 + (n3 - 0.5) * 0.18, 0.68, 1.22);
           sunLight *= detailShade;
+          ambientLight *= clamp(0.92 + (texMacroLuma - 0.5) * 0.24, 0.78, 1.12);
+
+          float skyExposure = clamp(1.0 - slopeFactor * (1.1 + uRockiness * 0.4), 0.0, 1.0);
+          vec3 skyFill = mix(uFog, uAmbient, 0.55) * (0.05 + skyExposure * 0.08 + uHazeStrength * 0.04);
+          ambientLight += skyFill;
+
+          ${terrainShaderDetail !== 'minimal' ? `
+          float backLight = clamp(dot(vWorldNormal, normalize(vec3(-0.35, 0.7, -0.28))), 0.0, 1.0);
+          vec3 rimFill = mix(uFog, uSun, 0.22) * backLight * (0.025 + slopeFactor * 0.08 + uHazeStrength * 0.04);
+          ambientLight += rimFill;
+
+          float microSpec = NdotL * NdotL;
+          microSpec *= microSpec;
+          microSpec *= smoothstep(0.58, 0.92, texFineContrast + texMacroLuma * 0.2);
+          microSpec *= clamp(1.0 - slopeFactor * 2.4, 0.0, 1.0);
+          microSpec *= 0.03 + uMoisture * 0.12;
+          sunLight += uSun * microSpec;
+
+          float coolShadow = clamp((1.0 - NdotL) * (0.35 + slopeFactor * 0.45), 0.0, 1.0);
+          ground = mix(ground, mix(ground * 0.92, uFog * 0.85, 0.18), coolShadow * (0.05 + uRockiness * 0.05));
+          ` : ''}
 
           // ── Horizon atmospheric tint (distant terrain slightly hazy) ──────
           float dist = length(vWorldPos.xz) / 1800.0;
           float haze = smoothstep(0.4, 1.0, dist);
-          vec3  hazeColor = mix(vec3(0.68, 0.72, 0.58), vec3(0.72, 0.77, 0.84), uPollution);
+          vec3  hazeColor = mix(uFog, mix(uFog, uAmbient, 0.42), 1.0 - uPollution * 0.45);
+          float lowAltitudeMask = (1.0 - smoothstep(0.16, 0.52, hFactor)) * smoothstep(0.16, 0.88, dist);
+          float ridgeMask = smoothstep(0.52, 1.0, dist) * smoothstep(0.26, 0.82, hFactor + slopeFactor * 0.18);
+          vec3 aerialTint = mix(hazeColor, mix(uAmbient, uSun, 0.18), 0.28 + uMoisture * 0.18);
+
+          ${terrainShaderDetail !== 'minimal' ? `
+          float hazeLayer = smoothstep(0.1, 0.95, dist + n2 * 0.12 - n1 * 0.08);
+          float stratifiedMist = lowAltitudeMask * (0.4 + n3 * 0.35) * (0.45 + uHazeStrength * 0.55);
+          ground = mix(ground, mix(ground, aerialTint, 0.22), stratifiedMist * 0.35);
+          haze = max(haze, hazeLayer * (0.16 + uHazeStrength * 0.14));
+          ` : `
+          ground = mix(ground, mix(ground, aerialTint, 0.14), lowAltitudeMask * (0.08 + uHazeStrength * 0.1));
+          `}
 
           // ── Assemble final color ──────────────────────────────────────────
-          vec3 final = ground * sunLight;
-          final = mix(final, hazeColor * ground * 1.08, haze * 0.22);
+          vec3 final = ground * (sunLight + ambientLight);
+          final = mix(final, mix(hazeColor, aerialTint, ridgeMask * 0.45) * ground * (1.01 + uMoisture * 0.1), haze * (0.08 + uHazeStrength * 0.24));
+          final = mix(final, aerialTint * (0.62 + ground * 0.38), lowAltitudeMask * (0.05 + uHazeStrength * 0.12));
+          final = mix(final, mix(aerialTint, hazeColor, 0.7) * (0.7 + ground * 0.3), ridgeMask * (0.04 + uHazeStrength * 0.1));
 
           gl_FragColor = vec4(final, 1.0);
         }
@@ -19387,23 +20844,29 @@ const MountainTerrain = memo(({ themeConfig, environmentVariant, pollution, qual
         const floorY    = groundY - crater.depth * 0.80 + 1.5;
         const rimY      = groundY + 2.4;
         const style     = TERRAIN_CRATER_STYLES[crater.type] || TERRAIN_CRATER_STYLES.default;
-        const fragCount = Math.min(14, Math.max(5, Math.floor(crater.radius / 18)));
+        const lowCost   = !!crater.lightweight;
+        const fragCount = lowCost
+          ? Math.min(6, Math.max(3, Math.floor(crater.radius / 34)))
+          : Math.min(14, Math.max(5, Math.floor(crater.radius / 18)));
+        const floorSegments = lowCost ? 16 : 30;
+        const midSegments = lowCost ? 14 : 28;
+        const rimSegments = lowCost ? 14 : 26;
         return (
           <group key={crater.id}>
             {/* Scorched inner floor */}
             <mesh rotation={[-Math.PI/2, 0, 0]} position={[crater.x, floorY, crater.z]} renderOrder={6}>
-              <circleGeometry args={[crater.radius * 0.62, 30]} />
-              <meshBasicMaterial color={style.floor} transparent opacity={0.96} depthWrite={false} polygonOffset polygonOffsetFactor={-2} polygonOffsetUnits={-4} />
+              <circleGeometry args={[crater.radius * (lowCost ? 0.6 : 0.62), floorSegments]} />
+              <meshBasicMaterial color={style.floor} transparent opacity={lowCost ? 0.9 : 0.96} depthWrite={false} polygonOffset polygonOffsetFactor={-2} polygonOffsetUnits={-4} />
             </mesh>
             {/* Mid charred annulus */}
             <mesh rotation={[-Math.PI/2, 0, 0]} position={[crater.x, floorY + 0.6, crater.z]} renderOrder={5}>
-              <ringGeometry args={[crater.radius * 0.52, crater.radius * 0.90, 28]} />
-              <meshBasicMaterial color={style.mid} transparent opacity={0.76} depthWrite={false} polygonOffset polygonOffsetFactor={-2} polygonOffsetUnits={-4} />
+              <ringGeometry args={[crater.radius * 0.52, crater.radius * (lowCost ? 0.84 : 0.90), midSegments]} />
+              <meshBasicMaterial color={style.mid} transparent opacity={lowCost ? 0.68 : 0.76} depthWrite={false} polygonOffset polygonOffsetFactor={-2} polygonOffsetUnits={-4} />
             </mesh>
             {/* Raised ejecta rim ring */}
             <mesh rotation={[-Math.PI/2, 0, 0]} position={[crater.x, rimY, crater.z]} renderOrder={7}>
-              <ringGeometry args={[crater.radius * 0.82, crater.radius * 1.12, 26]} />
-              <meshBasicMaterial color={style.rim} transparent opacity={0.80} depthWrite={false} polygonOffset polygonOffsetFactor={-2} polygonOffsetUnits={-4} />
+              <ringGeometry args={[crater.radius * (lowCost ? 0.8 : 0.82), crater.radius * (lowCost ? 1.04 : 1.12), rimSegments]} />
+              <meshBasicMaterial color={style.rim} transparent opacity={lowCost ? 0.72 : 0.80} depthWrite={false} polygonOffset polygonOffsetFactor={-2} polygonOffsetUnits={-4} />
             </mesh>
             {/* Broken rock / debris fragments scattered around the rim */}
             {Array.from({ length: fragCount }).map((_, fi) => {

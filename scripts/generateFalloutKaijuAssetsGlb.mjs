@@ -3,52 +3,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import * as THREE from 'three';
 import { GLTFExporter } from 'three/examples/jsm/exporters/GLTFExporter.js';
-import { installPolyfills, textures } from './falloutTextureUtils.mjs';
-
-class NodeFileReader {
-  constructor() {
-    this.result = null;
-    this.error = null;
-    this.onloadend = null;
-    this.onerror = null;
-  }
-
-  #finish(callback) {
-    setTimeout(() => {
-      if (callback) callback({ target: this });
-    }, 0);
-  }
-
-  readAsArrayBuffer(blob) {
-    blob.arrayBuffer()
-      .then((result) => {
-        this.result = result;
-        this.#finish(this.onloadend);
-      })
-      .catch((error) => {
-        this.error = error;
-        this.#finish(this.onerror);
-      });
-  }
-
-  readAsDataURL(blob) {
-    blob.arrayBuffer()
-      .then((result) => {
-        const base64 = Buffer.from(result).toString('base64');
-        this.result = `data:${blob.type || 'application/octet-stream'};base64,${base64}`;
-        this.#finish(this.onloadend);
-      })
-      .catch((error) => {
-        this.error = error;
-        this.#finish(this.onerror);
-      });
-  }
-}
-
-if (typeof globalThis.FileReader === 'undefined') {
-  globalThis.FileReader = NodeFileReader;
-}
-installPolyfills();
+import { textures } from './falloutTextureUtils.mjs';
+import { addMesh, makeMaterial as baseMakeMaterial } from './generateUtils.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -85,7 +41,7 @@ const makeMaterial = ({
   mapRotation = 0,
   mapOffset = [0, 0],
 }) => {
-  const m = new THREE.MeshStandardMaterial({
+  const m = baseMakeMaterial({
     color,
     emissive,
     emissiveIntensity,
@@ -93,7 +49,6 @@ const makeMaterial = ({
     metalness,
     transparent,
     opacity,
-    depthWrite: !transparent,
     ...(side !== undefined ? { side } : {})
   });
   if (map !== undefined) {
@@ -102,41 +57,23 @@ const makeMaterial = ({
   return m;
 };
 
-// ── High-poly geometry wrappers — enforce smooth minimum segment counts ──
-// These are drop-in replacements that clamp segment parameters to a floor
-// so every curved surface renders smooth instead of faceted / LEGO-like.
+// ── Lower-cost geometry wrappers — cap segment counts for web render budgets ──
+const capSegments = (value, fallback, max) => Math.min(value ?? fallback, max);
+
 const hpSphere = (r, ws, hs, ...rest) =>
-  new THREE.SphereGeometry(r, Math.max(ws || 32, 32), Math.max(hs || 24, 24), ...rest);
+  new THREE.SphereGeometry(r, capSegments(ws, 12, 14), capSegments(hs, 10, 12), ...rest);
 
 const hpCapsule = (r, len, capSeg, radSeg) =>
-  new THREE.CapsuleGeometry(r, len, Math.max(capSeg || 16, 16), Math.max(radSeg || 32, 32));
+  new THREE.CapsuleGeometry(r, len, capSegments(capSeg, 4, 6), capSegments(radSeg, 6, 8));
 
 const hpCylinder = (rTop, rBot, h, radSeg, ...rest) =>
-  new THREE.CylinderGeometry(rTop, rBot, h, Math.max(radSeg || 32, 24), ...rest);
+  new THREE.CylinderGeometry(rTop, rBot, h, capSegments(radSeg, 8, 10), ...rest);
 
 const hpCone = (r, h, radSeg, ...rest) =>
-  new THREE.ConeGeometry(r, h, Math.max(radSeg || 16, 12), ...rest);
+  new THREE.ConeGeometry(r, h, capSegments(radSeg, 6, 8), ...rest);
 
 const hpTorus = (r, tube, radSeg, tubSeg, ...rest) =>
-  new THREE.TorusGeometry(r, tube, Math.max(radSeg || 20, 16), Math.max(tubSeg || 48, 36), ...rest);
-
-const addMesh = ({
-  parent,
-  name,
-  geometry,
-  material,
-  position = [0, 0, 0],
-  rotation = [0, 0, 0],
-  scale = [1, 1, 1]
-}) => {
-  const mesh = new THREE.Mesh(geometry, material);
-  mesh.name = name;
-  mesh.position.set(position[0], position[1], position[2]);
-  mesh.rotation.set(rotation[0], rotation[1], rotation[2]);
-  mesh.scale.set(scale[0], scale[1], scale[2]);
-  parent.add(mesh);
-  return mesh;
-};
+  new THREE.TorusGeometry(r, tube, capSegments(radSeg, 6, 8), capSegments(tubSeg, 18, 20), ...rest);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // GODZILLA — thick organic build, layered hide, heavy limbs, no gap joints
@@ -183,6 +120,10 @@ const buildGodzilla = () => {
     addMesh({ parent: head, name: `kaiju_godzilla_eye_socket_${i}`, geometry: hpSphere(3.2, 10, 8), material: shellDarkMat, position: [x, y - 0.4, z - 1.0], scale: [1, 0.64, 0.68] });
   });
   addMesh({ parent: head, name: 'kaiju_godzilla_neck', geometry: hpCapsule(8.8, 15, 8, 12), material: shellMat, position: [0, -9.5, -5], rotation: [0.26, 0, 0], scale: [1.0, 1.0, 0.84] });
+  [-1, 1].forEach((side, index) => {
+    addMesh({ parent: head, name: `kaiju_godzilla_crown_horn_${index}`, geometry: hpCone(2.1, 10.5, 5), material: plateMat, position: [side * 5.8, 8.4, 3.8], rotation: [-0.36, 0, side * 0.3], scale: [0.82, 1.0, 0.72] });
+  });
+  addMesh({ parent: head, name: 'kaiju_godzilla_nose_horn', geometry: hpCone(1.1, 6.4, 5), material: boneMat, position: [0, 4.6, 14.6], rotation: [-0.52, 0, 0], scale: [0.8, 1.0, 0.72] });
 
   const jaw = new THREE.Group();
   jaw.name = 'kaiju_godzilla_jaw';
@@ -237,8 +178,76 @@ const buildGodzilla = () => {
       addMesh({ parent: group, name: `kaiju_godzilla_spine_sub_${i}_${side < 0 ? 0 : 1}`, geometry: hpCone(w * 0.45, h * 0.58, 5), material: spineGlowMat(i + 1), position: [side * (w + 1.0), 49 - i * 4.8, -6 - i * 4.4], rotation: [-0.28, side * 0.22, side * 0.34], scale: [0.8, 1.0, 1.2] });
     });
   }
+  [-1, 1].forEach((side, index) => {
+    addMesh({ parent: group, name: `kaiju_godzilla_shoulder_blade_${index}`, geometry: hpCone(3.0, 16, 5), material: plateMat, position: [side * 16.8, 46.5, 1.2], rotation: [-0.18, 0, side * 0.72], scale: [0.7, 1.0, 1.5] });
+  });
+  for (let i = 0; i < 4; i++) {
+    addMesh({ parent: group, name: `kaiju_godzilla_tail_blade_${i}`, geometry: hpCone(1.6 - i * 0.18, 8.5 - i * 0.6, 5), material: spineGlowMat(i + 2), position: [0, 10 - i * 1.2, -58 - i * 18], rotation: [-0.18, 0, i % 2 === 0 ? 0.12 : -0.12], scale: [0.8, 1.0, 1.8] });
+  }
 
   return group;
+};
+
+const cloneMaterial = (material) => {
+  if (Array.isArray(material)) return material.map((entry) => cloneMaterial(entry));
+  return material?.clone?.() || material;
+};
+
+const tintGodzillaVariant = (sourceGroup, {
+  groupName,
+  baseColor,
+  darkColor,
+  plateColor,
+  seamColor,
+  seamEmissive,
+  seamIntensity,
+  eyeColor,
+  eyeEmissive,
+  eyeIntensity,
+  mawColor,
+  boneColor,
+  spinePrimary,
+  spineSecondary,
+  scale = [1, 1, 1]
+}) => {
+  const variant = sourceGroup.clone(true);
+  variant.name = groupName;
+  variant.scale.set(scale[0], scale[1], scale[2]);
+
+  variant.traverse((node) => {
+    if (!node.isMesh) return;
+    node.material = cloneMaterial(node.material);
+    const mats = Array.isArray(node.material) ? node.material : [node.material];
+    mats.forEach((material) => {
+      if (!material) return;
+      const name = node.name || '';
+      if (name.includes('chest_seam')) {
+        material.color?.set?.(seamColor);
+        material.emissive?.set?.(seamEmissive);
+        material.emissiveIntensity = seamIntensity;
+      } else if (name.includes('eye_')) {
+        material.color?.set?.(eyeColor);
+        material.emissive?.set?.(eyeEmissive);
+        material.emissiveIntensity = eyeIntensity;
+      } else if (name.includes('jaw_maw')) {
+        material.color?.set?.(mawColor);
+      } else if (name.includes('tooth_') || name.includes('claw_') || name.includes('toe_') || name.includes('nose_horn')) {
+        material.color?.set?.(boneColor);
+      } else if (name.includes('spine_') || name.includes('tail_blade_')) {
+        const isEven = Number.parseInt(name.match(/(\d+)/)?.[0] || '0', 10) % 2 === 0;
+        material.color?.set?.('#08130f');
+        material.emissive?.set?.(isEven ? spinePrimary : spineSecondary);
+        material.emissiveIntensity = material.emissiveIntensity != null ? material.emissiveIntensity * 1.15 : 1.4;
+      } else if (name.includes('plate') || name.includes('pec_') || name.includes('shoulder_blade') || name.includes('elbow_') || name.includes('knee_')) {
+        material.color?.set?.(plateColor);
+      } else if (name.includes('shell') || name.includes('pelvis') || name.includes('torso') || name.includes('tail_') || name.includes('head') || name.includes('neck') || name.includes('arm_') || name.includes('leg_') || name.includes('skull') || name.includes('snout')) {
+        const useDark = name.includes('shell') || name.includes('pelvis') || name.includes('skull') || name.includes('jaw_') || name.includes('tail_0') || name.includes('tail_1') || name.includes('shin_') || name.includes('foot_');
+        material.color?.set?.(useDark ? darkColor : baseColor);
+      }
+    });
+  });
+
+  return variant;
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -273,6 +282,21 @@ const buildOctopus = () => {
       position: [Math.cos(angle) * 8.2, 2.8, Math.sin(angle) * 8.2],
       rotation: [0.85, -angle, Math.sin(angle) * 0.18],
       scale: [0.85, 1.0, 1.3],
+    });
+  }
+  for (let i = 0; i < 3; i++) {
+    addMesh({ parent: mantle, name: `kaiju_octopus_core_spire_${i}`, geometry: hpCone(2.4 - i * 0.35, 9.5 - i * 1.2, 5), material: glowMat, position: [0, 10.5 + i * 4.2, 0], rotation: [0, 0, i % 2 === 0 ? 0.18 : -0.18], scale: [1.0, 1.0, 1.8 - i * 0.2] });
+  }
+  for (let i = 0; i < 8; i++) {
+    const angle = (i / 8) * Math.PI * 2;
+    addMesh({
+      parent: group,
+      name: `kaiju_octopus_halo_blade_${i}`,
+      geometry: hpCone(1.2, 8.8, 5),
+      material: petalMat,
+      position: [Math.cos(angle) * 15.5, 18.8, Math.sin(angle) * 15.5],
+      rotation: [Math.PI / 2, -angle, 0],
+      scale: [0.42, 1.0, 1.8]
     });
   }
 
@@ -360,6 +384,9 @@ const buildSpider = () => {
   addMesh({ parent: thorax, name: 'kaiju_spider_thorax_core', geometry: hpSphere(10.2, 22, 16), material: shellMat, scale: [1.08, 0.7, 1.22] });
   addMesh({ parent: thorax, name: 'kaiju_spider_thorax_plate', geometry: hpCone(7.4, 16, 6), material: plateMat, position: [0, 3, 1], rotation: [-0.65, 0, 0], scale: [1.35, 0.75, 1.0] });
   addMesh({ parent: thorax, name: 'kaiju_spider_pedicel', geometry: hpCapsule(2.6, 8, 4, 8), material: shellMat, position: [0, -0.2, -10.8], rotation: [Math.PI / 2, 0, 0], scale: [0.7, 0.7, 0.9] });
+  [-1, 1].forEach((side, index) => {
+    addMesh({ parent: thorax, name: `kaiju_spider_thorax_blade_${index}`, geometry: hpCone(2.2, 12.5, 5), material: plateMat, position: [side * 6.5, 5.2, 3.4], rotation: [-0.18, 0, side * 0.72], scale: [0.52, 1.0, 1.6] });
+  });
 
   const head = new THREE.Group();
   head.name = 'kaiju_spider_head';
@@ -370,6 +397,7 @@ const buildSpider = () => {
   [[-3.0, 1.6, 5.2], [3.0, 1.6, 5.2], [-4.2, 0.1, 4.4], [4.2, 0.1, 4.4], [-1.5, -1.2, 5.4], [1.5, -1.2, 5.4]].forEach(([x, y, z], index) => {
     addMesh({ parent: head, name: `kaiju_spider_eye_${index}`, geometry: hpSphere(index < 2 ? 0.9 : 0.7, 8, 8), material: eyeMat, position: [x, y, z] });
   });
+  addMesh({ parent: head, name: 'kaiju_spider_face_crown', geometry: hpCone(2.0, 10.5, 5), material: glowMat, position: [0, 4.4, 4.8], rotation: [-0.42, 0, 0], scale: [0.7, 1.0, 1.2] });
   [-1, 1].forEach((side, pi) => {
     const pedipalp = new THREE.Group();
     pedipalp.name = `kaiju_spider_pedipalp_${pi}`;
@@ -446,6 +474,7 @@ const buildSpicieBird = () => {
     addMesh({ parent: head, name: `kaiju_bird_eye_${i}`, geometry: hpSphere(1.25, 12, 10), material: eyeMat, position: [x, y, z], scale: [0.62, 1.0, 0.8] });
   });
   addMesh({ parent: head, name: 'kaiju_bird_neck', geometry: hpCapsule(4.2, 12, 6, 12), material: skinMat, position: [0, -10, -6], rotation: [0.32, 0, 0], scale: [0.76, 1.0, 0.7] });
+  addMesh({ parent: head, name: 'kaiju_bird_crest', geometry: hpCone(2.4, 11, 6), material: arcMat, position: [0, 7.2, -1.5], rotation: [0.08, 0, 0], scale: [0.56, 1.0, 1.6] });
 
   const leftWing = new THREE.Group();
   leftWing.name = 'kaiju_bird_left_wing';
@@ -456,6 +485,7 @@ const buildSpicieBird = () => {
   for (let vane = 0; vane < 5; vane++) {
     addMesh({ parent: leftWing, name: `kaiju_bird_left_vane_${vane}`, geometry: hpCone(1.4 - vane * 0.16, 9 - vane * 0.7, 5), material: edgeMat, position: [-12 - vane * 6.2, -2.2 + vane * 0.35, 3 - vane * 0.8], rotation: [0.14, 0, -0.9 + vane * 0.06], scale: [0.34, 1, 1.5] });
   }
+  addMesh({ parent: leftWing, name: 'kaiju_bird_left_arc_blade', geometry: hpCone(2.2, 18, 5), material: arcMat, position: [-36, -3, 4], rotation: [0.08, 0, -1.02], scale: [0.28, 1.0, 2.4] });
 
   const rightWing = new THREE.Group();
   rightWing.name = 'kaiju_bird_right_wing';
@@ -466,6 +496,7 @@ const buildSpicieBird = () => {
   for (let vane = 0; vane < 5; vane++) {
     addMesh({ parent: rightWing, name: `kaiju_bird_right_vane_${vane}`, geometry: hpCone(1.4 - vane * 0.16, 9 - vane * 0.7, 5), material: edgeMat, position: [12 + vane * 6.2, -2.2 + vane * 0.35, 3 - vane * 0.8], rotation: [0.14, 0, 0.9 - vane * 0.06], scale: [0.34, 1, 1.5] });
   }
+  addMesh({ parent: rightWing, name: 'kaiju_bird_right_arc_blade', geometry: hpCone(2.2, 18, 5), material: arcMat, position: [36, -3, 4], rotation: [0.08, 0, 1.02], scale: [0.28, 1.0, 2.4] });
 
   const tail = new THREE.Group();
   tail.name = 'kaiju_bird_tail';
@@ -473,6 +504,9 @@ const buildSpicieBird = () => {
   birdRoot.add(tail);
   addMesh({ parent: tail, name: 'kaiju_bird_tail_base', geometry: hpSphere(5.5, 14, 12), material: skinMat, scale: [1.0, 0.48, 1.24] });
   addMesh({ parent: tail, name: 'kaiju_bird_tail_fin', geometry: hpCone(6.2, 18, 6), material: edgeMat, rotation: [Math.PI / 2.4, 0, 0], scale: [1.0, 0.4, 1.45] });
+  [-1, 1].forEach((side, index) => {
+    addMesh({ parent: tail, name: `kaiju_bird_tail_streamer_${index}`, geometry: hpCone(1.2, 14, 5), material: arcMat, position: [side * 3.2, -0.4, -8], rotation: [Math.PI / 2.5, 0, side * 0.18], scale: [0.32, 1.0, 2.4] });
+  });
 
   [-1, 1].forEach((side, li) => {
     addMesh({ parent: birdRoot, name: `kaiju_bird_leg_upper_${li}`,
@@ -510,6 +544,9 @@ const buildBeetle = () => {
 
   addMesh({ parent: group, name: 'kaiju_beetle_collar', geometry: hpSphere(10.6, 18, 14), material: shellMid, position: [0, 23, 17], scale: [1.18, 0.64, 0.92] });
   addMesh({ parent: group, name: 'kaiju_beetle_collar_horn', geometry: hpCone(2.6, 13, 6), material: shellDark, position: [0, 28.5, 24], rotation: [-0.3, 0, 0] });
+  [-1, 1].forEach((side, index) => {
+    addMesh({ parent: group, name: `kaiju_beetle_elytra_tower_${index}`, geometry: hpCone(2.2, 14, 5), material: shellMid, position: [side * 6.2, 35, -4], rotation: [-0.08, 0, side * 0.22], scale: [0.6, 1.0, 1.6] });
+  });
 
   const jaw = new THREE.Group();
   jaw.name = 'kaiju_beetle_jaw';
@@ -520,6 +557,7 @@ const buildBeetle = () => {
     addMesh({ parent: jaw, name: `kaiju_beetle_eye_${index}`, geometry: hpSphere(2.0, 12, 10), material: eyeMat, position: [x, y, z] });
   });
   addMesh({ parent: jaw, name: 'kaiju_beetle_horn', geometry: hpCone(3.2, 16, 8), material: shellDark, position: [0, 5.8, 8.2], rotation: [-0.48, 0, 0] });
+  addMesh({ parent: jaw, name: 'kaiju_beetle_ram_plate', geometry: hpCone(5.4, 14.5, 6), material: amberMat, position: [0, -0.4, 10.2], rotation: [-0.86, 0, 0], scale: [1.1, 0.72, 0.82] });
   [-1, 1].forEach((side, mi) => {
     addMesh({ parent: jaw, name: `kaiju_beetle_mandible_${mi}`, geometry: hpCapsule(1.6, 10, 6, 8), material: amberMat, position: [side * 6.2, -1.8, 8.6], rotation: [0.28, side * 0.14, side * -0.42] });
     for (let t = 0; t < 3; t++) {
@@ -558,6 +596,7 @@ const buildWyrm = () => {
   const deepGlow  = makeMaterial({ color: '#04150a', emissive: '#22c55e', emissiveIntensity: 1.7, roughness: 0.12, metalness: 0.18 });
   const boneMat   = makeMaterial({ color: '#ecfeff', roughness: 0.16, metalness: 0.08 });
   const mawMat    = makeMaterial({ color: '#2f0808', roughness: 0.88, metalness: 0.04, map: textures.ORGANIC_SKIN, mapRepeat: [3.2, 3.2] });
+  const eyeMat    = makeMaterial({ color: '#d1fae5', emissive: '#4ade80', emissiveIntensity: 1.3 });
 
   for (let i = 0; i < 8; i++) {
     const r = 12.8 - i * 0.74;
@@ -576,9 +615,12 @@ const buildWyrm = () => {
   addMesh({ parent: head, name: 'kaiju_wyrm_skull', geometry: hpSphere(9.4, 20, 16), material: scaleDark, scale: [1.0, 0.7, 1.44] });
   addMesh({ parent: head, name: 'kaiju_wyrm_snout', geometry: hpCone(5.4, 16, 6), material: scaleMat, position: [0, -1.2, 12], rotation: [-Math.PI / 2, 0, 0], scale: [1.0, 1.0, 1.3] });
   [[-4.2, 3.2, 9.5], [4.2, 3.2, 9.5]].forEach(([x, y, z], i) => {
-    addMesh({ parent: head, name: `kaiju_wyrm_eye_${i}`, geometry: hpSphere(1.7, 12, 10), material: makeMaterial({ color: '#d1fae5', emissive: '#4ade80', emissiveIntensity: 1.3 }), position: [x, y, z] });
+    addMesh({ parent: head, name: `kaiju_wyrm_eye_${i}`, geometry: hpSphere(1.7, 12, 10), material: eyeMat, position: [x, y, z] });
   });
   addMesh({ parent: head, name: 'kaiju_wyrm_crest', geometry: hpCapsule(2.4, 15, 6, 12), material: deepGlow, position: [0, 8.5, 3], scale: [0.9, 1.0, 2.4] });
+  [-1, 1].forEach((side, index) => {
+    addMesh({ parent: head, name: `kaiju_wyrm_head_fin_${index}`, geometry: hpCone(2.2, 12.8, 5), material: glowMat, position: [side * 5.8, 5.2, 4.0], rotation: [-0.12, 0, side * 0.82], scale: [0.46, 1.0, 1.9] });
+  });
 
   const jaw = new THREE.Group();
   jaw.name = 'kaiju_wyrm_jaw';
@@ -591,18 +633,58 @@ const buildWyrm = () => {
     addMesh({ parent: jaw, name: `kaiju_wyrm_tooth_${fi}`, geometry: hpCone(0.62, 3.9, 5), material: boneMat, position: [side * 1.5, 0.4, 10.0], rotation: [Math.PI / 2, 0, 0] });
   });
   addMesh({ parent: jaw, name: 'kaiju_wyrm_tongue', geometry: hpCapsule(0.8, 7, 4, 8), material: deepGlow, position: [0, -1, 8.5], rotation: [Math.PI / 2, 0, 0], scale: [1, 1, 0.42] });
+  for (let i = 0; i < 5; i++) {
+    addMesh({ parent: group, name: `kaiju_wyrm_side_fin_${i}`, geometry: hpCone(1.6 - i * 0.14, 10 - i * 0.5, 5), material: i % 2 === 0 ? glowMat : deepGlow, position: [8.8 + i * 0.8, 16 - i * 0.3, -(i * 18.5) - 2], rotation: [0.12, 0, 1.02], scale: [0.34, 1.0, 2.0] });
+    addMesh({ parent: group, name: `kaiju_wyrm_side_fin_mirror_${i}`, geometry: hpCone(1.6 - i * 0.14, 10 - i * 0.5, 5), material: i % 2 === 0 ? glowMat : deepGlow, position: [-8.8 - i * 0.8, 16 - i * 0.3, -(i * 18.5) - 2], rotation: [0.12, 0, -1.02], scale: [0.34, 1.0, 2.0] });
+  }
 
   return group;
 };
 
-[
-  buildGodzilla(),
+[(() => {
+  const godzilla = buildGodzilla();
+  const burningGodzilla = tintGodzillaVariant(godzilla, {
+    groupName: 'kaiju_burning_godzilla',
+    baseColor: '#3a2621',
+    darkColor: '#1b0d0a',
+    plateColor: '#6a3423',
+    seamColor: '#29140f',
+    seamEmissive: '#ff6b2c',
+    seamIntensity: 2.35,
+    eyeColor: '#fde68a',
+    eyeEmissive: '#fb923c',
+    eyeIntensity: 3.8,
+    mawColor: '#5a1711',
+    boneColor: '#f5d0c5',
+    spinePrimary: '#ff7a18',
+    spineSecondary: '#ffb347',
+    scale: [1.03, 1.0, 1.03]
+  });
+  const mechaGodzilla = tintGodzillaVariant(godzilla, {
+    groupName: 'kaiju_mecha_godzilla',
+    baseColor: '#5b6776',
+    darkColor: '#2b3440',
+    plateColor: '#8ea0b5',
+    seamColor: '#132433',
+    seamEmissive: '#38bdf8',
+    seamIntensity: 2.0,
+    eyeColor: '#dbeafe',
+    eyeEmissive: '#7dd3fc',
+    eyeIntensity: 3.4,
+    mawColor: '#3b0f18',
+    boneColor: '#d1d5db',
+    spinePrimary: '#67e8f9',
+    spineSecondary: '#93c5fd',
+    scale: [1.01, 1.0, 1.0]
+  });
+  return [godzilla, burningGodzilla, mechaGodzilla];
+})(),
   buildOctopus(),
   buildSpider(),
   buildSpicieBird(),
   buildBeetle(),
   buildWyrm()
-].forEach((group) => root.add(group));
+].flat().forEach((group) => root.add(group));
 
 const scene = new THREE.Scene();
 scene.add(root);

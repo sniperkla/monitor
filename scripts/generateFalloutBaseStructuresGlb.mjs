@@ -3,52 +3,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import * as THREE from 'three';
 import { GLTFExporter } from 'three/examples/jsm/exporters/GLTFExporter.js';
-import { installPolyfills, autoMap } from './falloutTextureUtils.mjs';
-
-class NodeFileReader {
-  constructor() {
-    this.result = null;
-    this.error = null;
-    this.onloadend = null;
-    this.onerror = null;
-  }
-
-  #finish(callback) {
-    setTimeout(() => {
-      if (callback) callback({ target: this });
-    }, 0);
-  }
-
-  readAsArrayBuffer(blob) {
-    blob.arrayBuffer()
-      .then((result) => {
-        this.result = result;
-        this.#finish(this.onloadend);
-      })
-      .catch((error) => {
-        this.error = error;
-        this.#finish(this.onerror);
-      });
-  }
-
-  readAsDataURL(blob) {
-    blob.arrayBuffer()
-      .then((result) => {
-        const base64 = Buffer.from(result).toString('base64');
-        this.result = `data:${blob.type || 'application/octet-stream'};base64,${base64}`;
-        this.#finish(this.onloadend);
-      })
-      .catch((error) => {
-        this.error = error;
-        this.#finish(this.onerror);
-      });
-  }
-}
-
-if (typeof globalThis.FileReader === 'undefined') {
-  globalThis.FileReader = NodeFileReader;
-}
-installPolyfills();
+import { addMesh, makeMaterial, mergeMeshGroupByMaterial } from './generateUtils.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -59,59 +14,18 @@ const outPath = path.join(outDir, 'base_structures.glb');
 const root = new THREE.Group();
 root.name = 'base_structures_root';
 
-const makeMaterial = ({
-  color,
-  emissive = '#000000',
-  emissiveIntensity = 0,
-  roughness = 0.84,
-  metalness = 0.16,
-  transparent = false,
-  opacity = 1,
-  side,
-  map,
-}) => {
-  const material = new THREE.MeshStandardMaterial({
-    color,
-    emissive,
-    emissiveIntensity,
-    roughness,
-    metalness,
-    transparent,
-    opacity,
-    depthWrite: !transparent,
-    ...(side !== undefined ? { side } : {})
-  });
-  const texture = map !== undefined
-    ? map
-    : (!transparent && opacity >= 0.95 && emissiveIntensity <= 0.42 ? autoMap(color) : null);
-  if (texture) material.map = texture;
-  return material;
-};
-
-const addMesh = ({
-  parent,
-  name,
-  geometry,
-  material,
-  position = [0, 0, 0],
-  rotation = [0, 0, 0],
-  scale = [1, 1, 1],
-}) => {
-  const mesh = new THREE.Mesh(geometry, material);
-  mesh.name = name;
-  mesh.position.set(position[0], position[1], position[2]);
-  mesh.rotation.set(rotation[0], rotation[1], rotation[2]);
-  mesh.scale.set(scale[0], scale[1], scale[2]);
-  parent.add(mesh);
-  return mesh;
-};
+const makeStructureMaterial = ({ roughness = 0.84, metalness = 0.16, ...options }) => makeMaterial({
+  roughness,
+  metalness,
+  ...options,
+});
 
 const addPipeRun = (parent, prefix, material, startX, y, z, count, spacing, rotation = [0, 0, Math.PI / 2]) => {
   for (let index = 0; index < count; index += 1) {
     addMesh({
       parent,
       name: `${prefix}_${index}`,
-      geometry: new THREE.CylinderGeometry(0.74, 0.9, 24, 10),
+      geometry: new THREE.CylinderGeometry(0.74, 0.9, 24, 8),
       material,
       position: [startX + index * spacing, y, z],
       rotation,
@@ -172,12 +86,18 @@ const addTowerLegs = ({
 const cloneGroupWithUniqueMaterials = (source, name) => {
   const clone = source.clone(true);
   clone.name = name;
+  const materialCache = new WeakMap();
   clone.traverse((node) => {
     if (!node.isMesh) return;
     if (Array.isArray(node.material)) {
-      node.material = node.material.map((material) => material.clone());
+      node.material = node.material.map((material) => {
+        if (!material) return material;
+        if (!materialCache.has(material)) materialCache.set(material, material.clone());
+        return materialCache.get(material);
+      });
     } else if (node.material) {
-      node.material = node.material.clone();
+      if (!materialCache.has(node.material)) materialCache.set(node.material, node.material.clone());
+      node.material = materialCache.get(node.material);
     }
   });
   return clone;
@@ -236,7 +156,7 @@ const addBrokenGround = (group, prefix, radiusX = 24, radiusZ = 20) => {
   addMesh({
     parent: group,
     name: `${prefix}_scorch_outer`,
-    geometry: new THREE.CylinderGeometry(1, 1.08, 0.26, 18),
+    geometry: new THREE.CylinderGeometry(1, 1.08, 0.26, 12),
     material: makeMaterial({ color: '#141617', roughness: 1, metalness: 0.02 }),
     position: [0, 0.18, 0],
     scale: [radiusX, 1, radiusZ],
@@ -244,7 +164,7 @@ const addBrokenGround = (group, prefix, radiusX = 24, radiusZ = 20) => {
   addMesh({
     parent: group,
     name: `${prefix}_scorch_inner`,
-    geometry: new THREE.CylinderGeometry(1, 1.04, 0.2, 18),
+    geometry: new THREE.CylinderGeometry(1, 1.04, 0.2, 12),
     material: makeMaterial({ color: '#2b120c', roughness: 1, metalness: 0.02 }),
     position: [0, 0.3, 0],
     scale: [radiusX * 0.66, 1, radiusZ * 0.62],
@@ -312,7 +232,7 @@ const buildVaultBunker = () => {
   addMesh({
     parent: shell,
     name: 'bunker_mound',
-    geometry: new THREE.CylinderGeometry(24, 36, 18, 18),
+    geometry: new THREE.CylinderGeometry(24, 36, 18, 12),
     material: earthMat,
     position: [0, 8, -10],
     scale: [1.32, 0.72, 2.04],
@@ -320,7 +240,7 @@ const buildVaultBunker = () => {
   addMesh({
     parent: shell,
     name: 'bunker_hull',
-    geometry: new THREE.CylinderGeometry(18, 23, 56, 20, 1, false, 0, Math.PI),
+    geometry: new THREE.CylinderGeometry(18, 23, 56, 12, 1, false, 0, Math.PI),
     material: concreteMat,
     position: [0, 18, -6],
     rotation: [Math.PI / 2, 0, 0],
@@ -367,14 +287,14 @@ const buildVaultBunker = () => {
     addMesh({
       parent: shell,
       name: `bunker_vent_stack_${index}`,
-      geometry: new THREE.CylinderGeometry(2.2, 2.8, 18, 12),
+      geometry: new THREE.CylinderGeometry(2.2, 2.8, 18, 10),
       material: steelMat,
       position: [side * 14, 30, -12],
     });
     addMesh({
       parent: shell,
       name: `bunker_vent_cap_${index}`,
-      geometry: new THREE.CylinderGeometry(4, 3.4, 3.2, 12),
+      geometry: new THREE.CylinderGeometry(4, 3.4, 3.2, 10),
       material: darkSteelMat,
       position: [side * 14, 40, -12],
     });
@@ -392,7 +312,7 @@ const buildVaultBunker = () => {
     addMesh({
       parent: shell,
       name: `bunker_rib_${index}`,
-      geometry: new THREE.TorusGeometry(15.8 + index * 0.35, 0.88, 10, 28, Math.PI),
+      geometry: new THREE.TorusGeometry(15.8 + index * 0.35, 0.88, 8, 16, Math.PI),
       material: darkSteelMat,
       position: [0, 18 + index * 0.18, 4 - index * 6.4],
       rotation: [0, 0, Math.PI],
@@ -408,21 +328,21 @@ const buildVaultBunker = () => {
   addMesh({
     parent: entry,
     name: 'bunker_entry_frame',
-    geometry: new THREE.CylinderGeometry(13, 13, 7.2, 32),
+    geometry: new THREE.CylinderGeometry(13, 13, 7.2, 16),
     material: darkSteelMat,
     rotation: [Math.PI / 2, 0, 0],
   });
   addMesh({
     parent: entry,
     name: 'bunker_entry_ring',
-    geometry: new THREE.TorusGeometry(12.3, 1.3, 12, 32),
+    geometry: new THREE.TorusGeometry(12.3, 1.3, 8, 16),
     material: steelMat,
     rotation: [Math.PI / 2, 0, 0],
   });
   addMesh({
     parent: entry,
     name: 'bunker_entry_shroud',
-    geometry: new THREE.CylinderGeometry(11.5, 12.5, 8.6, 28, 1, true),
+    geometry: new THREE.CylinderGeometry(11.5, 12.5, 8.6, 14, 1, true),
     material: makeMaterial({ color: '#64748b', roughness: 0.42, metalness: 0.62, side: THREE.DoubleSide }),
     rotation: [Math.PI / 2, 0, 0],
     position: [0, 0, -1.4],
@@ -436,14 +356,14 @@ const buildVaultBunker = () => {
   addMesh({
     parent: door,
     name: 'bunker_door_disc',
-    geometry: new THREE.CylinderGeometry(10.7, 10.7, 3, 32),
+    geometry: new THREE.CylinderGeometry(10.7, 10.7, 3, 16),
     material: steelMat,
     rotation: [Math.PI / 2, 0, 0],
   });
   addMesh({
     parent: door,
     name: 'bunker_door_hub',
-    geometry: new THREE.CylinderGeometry(2.8, 2.8, 2.4, 20),
+    geometry: new THREE.CylinderGeometry(2.8, 2.8, 2.4, 10),
     material: darkSteelMat,
     position: [0, 0, 1.3],
     rotation: [Math.PI / 2, 0, 0],
@@ -507,6 +427,12 @@ const buildVaultBunker = () => {
     position: [8.8, 22.2, 28],
   });
 
+  mergeMeshGroupByMaterial({
+    parent: shell,
+    name: 'bunker_shell_merged',
+    meshes: shell.children.filter((node) => node.isMesh),
+  });
+
   return group;
 };
 
@@ -518,85 +444,92 @@ const buildPowerPlant = () => {
   const steelMat = makeMaterial({ color: '#68778a', roughness: 0.56, metalness: 0.48 });
   const darkSteelMat = makeMaterial({ color: '#4b5b70', roughness: 0.48, metalness: 0.62 });
   const glowMat = makeMaterial({ color: '#fcd34d', emissive: '#f59e0b', emissiveIntensity: 1.7, roughness: 0.22, metalness: 0.24 });
+  const staticMeshes = [];
 
-  addMesh({
+  staticMeshes.push(addMesh({
     parent: group,
     name: 'facility_powerplant_pad',
     geometry: new THREE.BoxGeometry(72, 3.2, 76),
     material: concreteMat,
     position: [0, 1.6, 0],
-  });
-  addMesh({
+  }));
+  staticMeshes.push(addMesh({
     parent: group,
     name: 'facility_powerplant_hall',
     geometry: new THREE.BoxGeometry(36, 24, 34),
     material: steelMat,
     position: [0, 15, 8],
-  });
-  addMesh({
+  }));
+  staticMeshes.push(addMesh({
     parent: group,
     name: 'facility_powerplant_roof',
     geometry: new THREE.BoxGeometry(40, 4, 38),
     material: darkSteelMat,
     position: [0, 29, 8],
-  });
-  addMesh({
+  }));
+  staticMeshes.push(addMesh({
     parent: group,
     name: 'facility_powerplant_reactor_spine',
-    geometry: new THREE.CylinderGeometry(8, 11, 26, 16),
+    geometry: new THREE.CylinderGeometry(8, 11, 26, 10),
     material: darkSteelMat,
     position: [0, 18, -12],
     rotation: [0, 0, Math.PI / 2],
-  });
-  addMesh({
+  }));
+  staticMeshes.push(addMesh({
     parent: group,
     name: 'facility_powerplant_reactor_core',
-    geometry: new THREE.TorusGeometry(8.6, 1.4, 14, 32),
+    geometry: new THREE.TorusGeometry(8.6, 1.4, 10, 16),
     material: glowMat,
     position: [0, 18, -12],
     rotation: [Math.PI / 2, 0, 0],
-  });
+  }));
 
   [-1, 1].forEach((side, index) => {
-    addMesh({
+    staticMeshes.push(addMesh({
       parent: group,
       name: `facility_powerplant_cooler_${index}`,
-      geometry: new THREE.CylinderGeometry(7, 10.5, 30, 16),
+      geometry: new THREE.CylinderGeometry(7, 10.5, 30, 10),
       material: concreteMat,
       position: [side * 18, 16, -22],
-    });
-    addMesh({
+    }));
+    staticMeshes.push(addMesh({
       parent: group,
       name: `facility_powerplant_stack_${index}`,
-      geometry: new THREE.CylinderGeometry(2.8, 3.4, 34, 12),
+      geometry: new THREE.CylinderGeometry(2.8, 3.4, 34, 10),
       material: darkSteelMat,
       position: [side * 14, 35, 20],
-    });
-    addMesh({
+    }));
+    staticMeshes.push(addMesh({
       parent: group,
       name: `facility_powerplant_stack_cap_${index}`,
-      geometry: new THREE.CylinderGeometry(4, 3.4, 3.4, 12),
+      geometry: new THREE.CylinderGeometry(4, 3.4, 3.4, 10),
       material: steelMat,
       position: [side * 14, 53.5, 20],
-    });
-    addMesh({
+    }));
+    staticMeshes.push(addMesh({
       parent: group,
       name: `facility_powerplant_transformer_${index}`,
       geometry: new THREE.BoxGeometry(12, 9, 10),
       material: darkSteelMat,
       position: [side * 22, 7.5, 24],
-    });
-    addMesh({
+    }));
+    staticMeshes.push(addMesh({
       parent: group,
       name: `facility_powerplant_transformer_glow_${index}`,
       geometry: new THREE.BoxGeometry(8.2, 1.2, 7.2),
       material: glowMat,
       position: [side * 22, 12.3, 24],
-    });
+    }));
   });
 
   addPipeRun(group, 'facility_powerplant_pipe', steelMat, -24, 20, -2, 5, 12);
   addPipeRun(group, 'facility_powerplant_pipe_upper', steelMat, -18, 24, 10, 4, 12);
+
+  mergeMeshGroupByMaterial({
+    parent: group,
+    name: 'facility_powerplant_static_merged',
+    meshes: staticMeshes,
+  });
 
   return group;
 };

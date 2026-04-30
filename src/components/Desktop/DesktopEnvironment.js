@@ -94,6 +94,9 @@ export default function DesktopEnvironment() {
     // Keep the global impact effects (flash/shake/overlays) on 'fallout-explosion' event 
     // triggered by hovering icons, but DO NOT enter full screen screensaver mode.
     const triggerImpactEffects = (e) => {
+      if (window._falloutGameStats) {
+        return;
+      }
       // Global Impact Effects
       setIsExplodingFlash(true);
       setIsShaking(true);

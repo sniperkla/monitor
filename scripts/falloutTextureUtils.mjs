@@ -635,13 +635,22 @@ export const textures = buildTextures();
 // ═══════════════════════════════════════════════════════════════════════════════
 // 8.  autoMap(hexColor) – heuristic texture selection by colour
 // ═══════════════════════════════════════════════════════════════════════════════
-const _hslCache = {};
+const _hslCache = new Map();
+const _autoMapCache = new Map();
+
+function normalizeColorKey(colorValue) {
+  if (!colorValue) return '';
+  const color = colorValue instanceof THREE.Color ? colorValue : new THREE.Color(colorValue);
+  return `#${color.getHexString()}`;
+}
+
 function getHSL(colorStr) {
-  if (_hslCache[colorStr]) return _hslCache[colorStr];
-  const c = new THREE.Color(colorStr);
+  const key = normalizeColorKey(colorStr);
+  if (_hslCache.has(key)) return _hslCache.get(key);
+  const c = new THREE.Color(key);
   const hsl = { h: 0, s: 0, l: 0 };
   c.getHSL(hsl);
-  _hslCache[colorStr] = hsl;
+  _hslCache.set(key, hsl);
   return hsl;
 }
 
@@ -651,38 +660,49 @@ function getHSL(colorStr) {
  */
 export function autoMap(colorStr) {
   if (!colorStr) return null;
-  const { h, s, l } = getHSL(String(colorStr));
+  const key = normalizeColorKey(colorStr);
+  if (_autoMapCache.has(key)) return _autoMapCache.get(key);
+
+  const { h, s, l } = getHSL(key);
+  let texture = null;
 
   // Very light (near-white highlights, glass)  →  no texture
-  if (l > 0.80) return null;
+  if (l > 0.80) {
+    _autoMapCache.set(key, null);
+    return null;
+  }
 
   // Near black  →  subtle dark metal grain
-  if (l < 0.08) return textures.METAL_DARK;
+  if (l < 0.08) texture = textures.METAL_DARK;
 
   // Near-achromatic (grey/silver)  →  metal
-  if (s < 0.10) {
-    return l < 0.34 ? textures.METAL_DARK : textures.METAL_GREY;
+  if (!texture && s < 0.10) {
+    texture = l < 0.34 ? textures.METAL_DARK : textures.METAL_GREY;
   }
 
   // Blue-grey (cool military metals — gun bluing, hardware, vehicle armor)
-  if (h > 0.52 && h < 0.72 && s < 0.40) {
-    return l < 0.32 ? textures.METAL_DARK : textures.METAL_GREY;
+  if (!texture && h > 0.52 && h < 0.72 && s < 0.40) {
+    texture = l < 0.32 ? textures.METAL_DARK : textures.METAL_GREY;
   }
 
   // Pure blue / cyan (laser effects, screens, plasma)  →  no texture
-  if (h > 0.52 && h < 0.72) return null;
+  if (!texture && h > 0.52 && h < 0.72) {
+    _autoMapCache.set(key, null);
+    return null;
+  }
 
   // Olive / forest / khaki green  →  military camo
-  if (h > 0.18 && h < 0.42 && s > 0.08) return textures.CAMO;
+  if (!texture && h > 0.18 && h < 0.42 && s > 0.08) texture = textures.CAMO;
 
   // Warm saturated brown (wood grain range, medium lightness)
-  if (h > 0.05 && h < 0.15 && s > 0.18 && s < 0.60 && l > 0.26 && l < 0.60) return textures.WOOD;
+  if (!texture && h > 0.05 && h < 0.15 && s > 0.18 && s < 0.60 && l > 0.26 && l < 0.60) texture = textures.WOOD;
 
   // Earth brown / tan / desert sand  →  camo (BDU earth tones)
-  if (h > 0.03 && h < 0.20 && l < 0.56) return textures.CAMO;
+  if (!texture && h > 0.03 && h < 0.20 && l < 0.56) texture = textures.CAMO;
 
   // Very dark warm tones (near-black leather / rubber)  →  gear
-  if (h < 0.06 && l < 0.28) return textures.GEAR;
+  if (!texture && h < 0.06 && l < 0.28) texture = textures.GEAR;
 
-  return null;
+  _autoMapCache.set(key, texture);
+  return texture;
 }

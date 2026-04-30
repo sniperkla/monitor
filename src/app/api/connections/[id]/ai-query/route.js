@@ -7,6 +7,164 @@ import AiHistory from '@/models/AiHistory';
 import { checkRateLimit } from '@/lib/serverGuard';
 import { checkAndTrackAiUsage } from '@/utils/aiLimiter';
 
+const stripAiQueryEnvelope = (text = '') => {
+  const raw = String(text || '');
+  const tagMatch = raw.match(/<query>([\s\S]*?)<\/query>/i);
+  const content = tagMatch ? tagMatch[1] : raw;
+  return content
+    .replace(/<thought>[\s\S]*?<\/thought>/gi, '')
+    .replace(/<repeat>[\s\S]*?<\/repeat>/gi, '')
+    .replace(/```(?:json|sql)?/gi, '')
+    .replace(/```/g, '')
+    .trim();
+};
+
+const escapeRegExp = (value = '') => String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const escapeSqlString = (value = '') => String(value).replace(/'/g, "''");
+
+const sqlQueryLooksUsable = (query = '') => {
+  const trimmed = String(query || '').trim();
+  if (!trimmed) return false;
+  return /^(SELECT|SHOW|DESCRIBE|DESC|EXPLAIN|WITH|DELETE|UPDATE|INSERT|DROP|ALTER|TRUNCATE|CREATE)\b/i.test(trimmed)
+    || /^WHERE\b/i.test(trimmed)
+    || /^[A-Za-z_`\"][A-Za-z0-9_`\".]*\s*(=|<>|!=|>=|<=|>|<|LIKE|IN|IS)\b/i.test(trimmed);
+};
+
+const buildSqlHeuristicQuery = ({ prompt, sampleData, schemaName }) => {
+  const sourcePrompt = String(prompt || '').trim();
+  if (!sourcePrompt) return '';
+  const firstRow = sampleData?.[0] && typeof sampleData[0] === 'object' ? sampleData[0] : {};
+  const columns = Object.keys(firstRow).sort((a, b) => b.length - a.length);
+  if (!columns.length) return '';
+
+  for (const column of columns) {
+    const escapedColumn = escapeRegExp(column);
+    const containsPattern = "\\b" + escapedColumn + "\\b[\\s\\w]*?(?:contains?|contain|like|includes?|include)\\s+[\"']?([^\"'.,!?\\n]+)[\"']?";
+    const containsMatch = sourcePrompt.match(new RegExp(containsPattern, 'i'));
+    if (containsMatch?.[1]) {
+      return `${column} LIKE '%${escapeSqlString(containsMatch[1].trim())}%'`;
+    }
+
+    const equalsPattern = "\\b" + escapedColumn + "\\b[\\s\\w]*?(?:=|is|equals?)\\s+[\"']?([^\"'.,!?\\n]+)[\"']?";
+    const equalsMatch = sourcePrompt.match(new RegExp(equalsPattern, 'i'));
+    if (equalsMatch?.[1]) {
+      const rawValue = equalsMatch[1].trim();
+      const sampleValue = firstRow[column];
+      if (typeof sampleValue === 'number' && /^-?\d+(?:\.\d+)?$/.test(rawValue)) {
+        return `${column} = ${rawValue}`;
+      }
+      return `${column} = '${escapeSqlString(rawValue)}'`;
+    }
+  }
+
+  const textColumn = columns.find((column) => typeof firstRow[column] === 'string');
+  const genericContainsMatch = sourcePrompt.match(/(?:contains?|contain|like|includes?|include)\s+["'\`]?(.*?)["'\`]?(?:$|\?|!|\.)/i);
+  if (textColumn && genericContainsMatch?.[1]?.trim()) {
+    return `${textColumn} LIKE '%${escapeSqlString(genericContainsMatch[1].trim())}%'`;
+  }
+
+  return '';
+};
+
+const buildSchemaContext = (schemaName, sampleData) => {
+  const firstRow = sampleData?.[0] && typeof sampleData[0] === 'object' ? sampleData[0] : {};
+  const columns = Object.keys(firstRow);
+  return {
+    columns,
+    summary: `Table: ${schemaName || 'unknown'}\nColumns: ${columns.join(', ') || '(none)'}\nSample Row: ${JSON.stringify(firstRow).slice(0, 1200)}`
+  };
+};
+
+const buildSqlRepairPrompt = ({ prompt, schemaName, sampleData, previousAnswer }) => {
+  const schemaContext = buildSchemaContext(schemaName, sampleData);
+  return `The previous SQL generation was empty or unusable, or interpreted semantic concepts too literally.
+
+Original user request: ${prompt}
+${schemaContext.summary}
+Previous AI answer: ${previousAnswer || '(empty)'}
+
+Return ONLY one of the following inside <query>:</query>
+- a FULL SQL SELECT/SHOW/DESCRIBE/EXPLAIN statement when the user asks for a report, semantic inference, aggregation, another table, or specific output columns
+- a WHERE clause only when the request is a simple current-table filter
+- a FULL SQL action statement for delete/update/insert/create/alter/drop
+
+You must infer semantic intent. Example: "weak passwords" DOES NOT mean text LIKE '%weak%'. It means password length < 8, password IN ('123456', '0101', 'password', 'aabb1234'), or password equals username.`;
+};
+
+const requestChatCompletion = async ({ modelName, messages, aiConfig, apiKey, prefs }) => {
+  if (modelName === 'manual') {
+    const manualEndpoint = prefs?.aiEndpoint || 'https://api.openai.com/v1/chat/completions';
+    const manualApiKey = prefs?.aiApiKey;
+    const customModel = prefs?.aiCustomModel || 'gpt-3.5-turbo';
+    if (!manualApiKey) throw new Error('Manual AI service: Missing API Key in settings');
+
+    const response = await fetch(manualEndpoint, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${manualApiKey}`,
+        'Content-Type': 'application/json',
+        'HTTP-Referer': 'https://zeroclaw.local',
+        'X-Title': 'ZeroClaw Monitor'
+      },
+      body: JSON.stringify({
+        messages,
+        model: customModel,
+        temperature: aiConfig.temperature !== undefined ? aiConfig.temperature : 0.1,
+        max_tokens: aiConfig.max_completion_tokens || 8000,
+        max_completion_tokens: aiConfig.max_completion_tokens || 8000,
+        top_p: aiConfig.top_p || 1
+      }),
+    });
+
+    if (!response.ok) {
+      const errBody = await response.text().catch(() => '');
+      throw new Error(`Manual AI service error (${response.status}): ${errBody.slice(0, 200)}`);
+    }
+
+    const resData = await response.json();
+    console.log('[OpenRouter Raw Response]:', JSON.stringify(resData));
+    
+    if (resData.error) {
+       throw new Error(resData.error.message || JSON.stringify(resData.error));
+    }
+    
+    return {
+      content: resData.choices?.[0]?.message?.content || '',
+      usedModel: customModel
+    };
+  }
+
+  const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      messages,
+      model: modelName,
+      temperature: aiConfig.temperature !== undefined ? aiConfig.temperature : 0.1,
+      max_tokens: Math.min(aiConfig.max_completion_tokens || 8000, 8000),
+      max_completion_tokens: Math.min(aiConfig.max_completion_tokens || 8000, 8000),
+      top_p: aiConfig.top_p || 1
+    }),
+  });
+
+  if (!response.ok) {
+    const errBody = await response.text().catch(() => '');
+    throw new Error(`AI service error (${response.status}): ${errBody.slice(0, 200)}`);
+  }
+
+  const resData = await response.json();
+  if (resData.error) {
+     throw new Error(resData.error.message || JSON.stringify(resData.error));
+  }
+  return {
+    content: resData.choices?.[0]?.message?.content || '',
+    usedModel: modelName
+  };
+};
+
 export async function POST(request, { params }) {
   try {
     const session = await getServerSession(authOptions);
@@ -77,13 +235,18 @@ export async function POST(request, { params }) {
       apiKeys.push(process.env.GROQ_API_KEY);
     }
 
+    if (prefs?.groqApiKey && model !== 'manual') {
+      // Prioritize the user's custom GROQ API key from their preferences if provided
+      apiKeys = [prefs.groqApiKey, ...apiKeys.filter(k => k !== prefs.groqApiKey)];
+    }
+
     if (apiKeys.length === 0 && model !== 'manual') { // Only check if not manual
       return NextResponse.json({ success: false, error: 'AI service not configured (Missing API Key)' }, { status: 500 });
     }
 
     const systemPrompt = `You are a Database Expert translating natural language to queries.
 CTX: Vendor: ${provider}, Schema: ${schemaName}
-Sample Data: ${JSON.stringify(sampleData?.[0] || {}).slice(0, 1000)}
+  Sample Data: ${JSON.stringify(sampleData?.[0] || {}).slice(0, 1000)}
 
 STEPS:
 1. Identify intent: READ, ACTION (delete/update), MOCK.
@@ -95,8 +258,10 @@ RULES:
  - READ (find): Return JSON filter object: {"name": "x"}
  - ACTION: Return executable action obj: {"action":"updateOne","collection":"${schemaName}","filter":{},"update":{"$set":{}}}
 2. SQL (MySQL/PostgreSQL):
- - READ: Return WHERE clause ONLY (e.g. name = 'x' AND status = 1). DO NOT output JSON {"name":"x"}!
- - ACTION: Return FULL SQL statement (DELETE FROM..., UPDATE..., INSERT...).
+ - READ simple filtering on the current table: Return WHERE clause ONLY (e.g. name = 'x' AND status = 1). DO NOT output JSON {"name":"x"}!
+ - READ full-query intents: If the user asks for SHOW, DESCRIBE, DESC, EXPLAIN, joins, aggregates, grouping, ordering, limits, other tables, or explicitly asks for a full SELECT, return the FULL SQL statement.
+ - For semantic requests, infer logic from the schema and sample data. Example: if the user asks for weak passwords, DO NOT just search for the literal string "weak". Instead, write logic checking password length (< 8), common bad passwords (IN ('123456', 'password')), or where password = username.
+ - ACTION: Return FULL SQL statement (DELETE FROM..., UPDATE..., INSERT..., CREATE..., ALTER..., DROP...).
 3. MOCK DATA: For N>5 rows, output 1 sample row & use <repeat>N</repeat> tag!
  - SQL Dates (createdAt, etc): Use NULL or omit. Don't mock datetime strings.
  - SQL JSON columns: Use valid stringified JSON (e.g. '["tag1"]').`;
@@ -149,52 +314,26 @@ RULES:
     }
 
     let actualUsedModel = mainModel;
+    let successfulApiKey = null;
 
     for (const currentModel of modelsToTry) {
         if (currentModel === 'manual') {
-            const manualEndpoint = prefs?.aiEndpoint || 'https://api.openai.com/v1/chat/completions';
-            const manualApiKey = prefs?.aiApiKey;
-            const customModel = prefs?.aiCustomModel || 'gpt-3.5-turbo';
-
-            if (!manualApiKey) {
-                lastError = new Error('Manual AI service: Missing API Key in settings');
-                break;
-            }
-
             try {
-                const response = await fetch(manualEndpoint, {
-                    method: 'POST',
-                    headers: {
-                        'Authorization': `Bearer ${manualApiKey}`,
-                        'Content-Type': 'application/json',
-                        'HTTP-Referer': 'https://zeroclaw.local',
-                        'X-Title': 'ZeroClaw Monitor'
-                    },
-                    body: JSON.stringify({
-                        messages: [
-                            { role: 'system', content: systemPrompt },
-                            ...historyMessages,
-                            { role: 'user', content: prompt }
-                        ],
-                        model: customModel,
-                        temperature: aiConfig.temperature || 0,
-                        max_completion_tokens: aiConfig.max_completion_tokens || 8000,
-                        top_p: aiConfig.top_p || 1
-                    }),
-                });
-
-                if (response.ok) {
-                    const resData = await response.json();
-                    answer = resData.choices[0]?.message?.content || '';
-                    successfulIndex = 999;
-                    actualUsedModel = customModel;
-                    break;
-                } else if (response.status === 429) {
-                    lastError = new Error('Manual AI service: Rate limit hit.');
-                } else {
-                    const errBody = await response.text().catch(() => '');
-                    lastError = new Error(`Manual AI service error (${response.status}): ${errBody.slice(0, 200)}`);
-                }
+              const result = await requestChatCompletion({
+                modelName: 'manual',
+                messages: [
+                { role: 'system', content: systemPrompt },
+                ...historyMessages,
+                { role: 'user', content: prompt }
+                ],
+                aiConfig,
+                prefs
+              });
+              answer = result.content;
+              successfulIndex = 999;
+              actualUsedModel = result.usedModel;
+              successfulApiKey = null;
+              break;
             } catch (err) {
                 lastError = err;
             }
@@ -206,37 +345,22 @@ RULES:
             const apiKey = apiKeys[tryIndex];
 
             try {
-                const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-                    method: 'POST',
-                    headers: {
-                        'Authorization': `Bearer ${apiKey}`,
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify({
-                        messages: [
-                            { role: 'system', content: systemPrompt },
-                            ...historyMessages,
-                            { role: 'user', content: prompt }
-                        ],
-                        model: currentModel,
-                        temperature: aiConfig.temperature || 0,
-                        max_completion_tokens: Math.min(aiConfig.max_completion_tokens || 8000, 8000), // Some groq models strict on this
-                        top_p: aiConfig.top_p || 1
-                    }),
-                });
-
-                if (response.ok) {
-                    const resData = await response.json();
-                    answer = resData.choices[0]?.message?.content || '';
-                    successfulIndex = tryIndex;
-                    actualUsedModel = currentModel;
-                    break;
-                } else if (response.status === 429) {
-                    console.warn(`Query: Rate limit hit on key index ${tryIndex}. Rotating...`);
-                } else {
-                    const errBody = await response.text().catch(() => '');
-                     throw new Error(`AI service error (${response.status}): ${errBody.slice(0, 200)}`);
-                }
+              const result = await requestChatCompletion({
+                modelName: currentModel,
+                messages: [
+                { role: 'system', content: systemPrompt },
+                ...historyMessages,
+                { role: 'user', content: prompt }
+                ],
+                aiConfig,
+                apiKey,
+                prefs
+              });
+              answer = result.content;
+              successfulIndex = tryIndex;
+              actualUsedModel = result.usedModel;
+              successfulApiKey = apiKey;
+              break;
             } catch (err) {
                 lastError = err;
                 continue;
@@ -254,9 +378,46 @@ RULES:
              ).catch(err => console.error('Failed to update query key index:', err));
         }
         
+        let finalAnswer = answer || '';
+        if (provider !== 'mongodb') {
+          let cleanedQuery = stripAiQueryEnvelope(finalAnswer);
+          if (!sqlQueryLooksUsable(cleanedQuery)) {
+            try {
+              const repairResult = await requestChatCompletion({
+                modelName: mainModel === 'manual' ? 'manual' : actualUsedModel,
+                messages: [
+                  { role: 'system', content: systemPrompt },
+                  { role: 'user', content: buildSqlRepairPrompt({ prompt, schemaName, sampleData, previousAnswer: finalAnswer }) }
+                ],
+                aiConfig,
+                apiKey: successfulApiKey,
+                prefs
+              });
+              if (repairResult?.content) {
+                finalAnswer = repairResult.content;
+                cleanedQuery = stripAiQueryEnvelope(finalAnswer);
+              }
+            } catch (repairError) {
+              console.warn('AI SQL repair pass failed:', repairError.message);
+            }
+
+            if (!sqlQueryLooksUsable(cleanedQuery)) {
+              const heuristicQuery = buildSqlHeuristicQuery({ prompt, sampleData, schemaName });
+              if (heuristicQuery) {
+                finalAnswer = `<thought>Heuristic SQL fallback from user intent.</thought><query>${heuristicQuery}</query>`;
+              }
+            }
+          }
+        }
+
+        // Force an error if AI completely failed to generate any SQL (returns empty string)
+        if (!finalAnswer || finalAnswer.trim() === '') {
+           return NextResponse.json({ success: false, error: 'The AI model generated an empty response. Please check your prompt or API token.' }, { status: 400 });
+        }
+
         let usageInfo = null;
         if (session) {
-          usageInfo = await checkAndTrackAiUsage(session.user.email, prompt, answer);
+          usageInfo = await checkAndTrackAiUsage(session.user.email, prompt, finalAnswer);
 
           // PERSIST HISTORY
           try {
@@ -269,14 +430,14 @@ RULES:
               context: { connectionId: id, provider, schemaName },
               messages: [
                 { role: 'user', content: prompt || '(no prompt)', timestamp: new Date() },
-                { role: 'assistant', content: answer || '(no response)', metadata: { usedModel: actualUsedModel }, timestamp: new Date() }
+                { role: 'assistant', content: finalAnswer || '(no response)', metadata: { usedModel: actualUsedModel }, timestamp: new Date() }
               ]
             });
           } catch (dbErr) {
             console.error('Failed to save DB AI history:', dbErr);
           }
         }
-        return NextResponse.json({ success: true, query: answer, usage: usageInfo, usedModel: actualUsedModel });
+        return NextResponse.json({ success: true, query: finalAnswer, usage: usageInfo, usedModel: actualUsedModel });
     }
 
     return NextResponse.json({ success: false, error: lastError?.message || 'AI Rate limit exceeded on all keys.' }, { status: 429 });

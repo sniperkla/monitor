@@ -16,6 +16,18 @@
 			"isBackground": true,
 			"problemMatcher": [],
 			"group": "build"
+		},
+		{
+			"label": "OCR price image",
+			"type": "shell",
+			"command": "swift",
+			"args": [
+				"scripts/ocr_image.swift",
+				"public/price.jpg",
+				">",
+				"/tmp/price_ocr.txt"
+			],
+			"isBackground": false
 		}
 	]
 }

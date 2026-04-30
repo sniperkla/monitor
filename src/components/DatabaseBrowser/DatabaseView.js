@@ -474,40 +474,6 @@ export default function DatabaseView({ connection, onClose }) {
     fetchData(selectedSchema, '');
   };
   
-  const handleRandomDataPreset = () => {
-    if (data.length === 0) {
-        addNotification({ title: 'Fetch Data First', message: 'Need some data to generate a smart preset', type: 'info' });
-        return;
-    }
-    
-    // Pick a random row
-    const randomRow = data[Math.floor(Math.random() * data.length)];
-    
-    // Pick keys that are usually filterable (not IDs, not objects, not empty)
-    const filterableKeys = Object.keys(randomRow).filter(k => {
-        const val = randomRow[k];
-        return k !== '_id' && k !== 'id' && k !== '__v' &&
-               val !== null && 
-               typeof val !== 'object' && 
-               String(val).trim() !== '';
-    });
-
-    if (filterableKeys.length === 0) {
-        addNotification({ title: 'No Simple Fields', message: 'Could not find filterable fields in this record', type: 'info' });
-        return;
-    }
-
-    const randomKey = filterableKeys[Math.floor(Math.random() * filterableKeys.length)];
-    const value = randomRow[randomKey];
-
-    if (connection.dbProvider === 'mongodb') {
-      setFilterQuery(JSON.stringify({ [randomKey]: value }));
-    } else {
-      setFilterQuery(`${randomKey} = ${typeof value === 'string' ? `'${value}'` : value}`);
-    }
-    
-    addNotification({ title: 'Smart Preset', message: `Filtering by ${randomKey}`, type: 'success' });
-  };
 
   const removeHistoryItem = (e, item) => {
     e.stopPropagation();
@@ -1593,16 +1559,9 @@ export default function DatabaseView({ connection, onClose }) {
              {showQueryBar && (
                  <div className="bg-[var(--bg-tertiary)]/30 border-b border-[var(--border-color)] p-4 flex flex-col gap-4 animate-in slide-in-from-top-2 duration-200">
                     <div className="flex items-center gap-3">
-                        <div className="flex flex-col gap-1 shrink-0 w-32">
-                           <div className="flex items-center gap-2 text-[10px] font-bold text-indigo-400 uppercase tracking-widest">
-                              <Search size={14} /> {connection.dbProvider === 'mongodb' ? t('database.query.filterJson') : t('database.query.whereClause')}
-                           </div>
-                           <button 
-                             onClick={handleRandomDataPreset}
-                             className="flex items-center justify-center gap-1.5 px-2 py-1 bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-400 rounded-md text-[9px] font-bold transition-all border border-indigo-500/20"
-                           >
-                              <Sparkles size={10} /> {t('database.query.smartPreset')}
-                           </button>
+                        <div className="flex items-center gap-2 text-[10px] font-bold text-indigo-400 uppercase tracking-widest shrink-0 bg-indigo-500/10 px-3 py-2 rounded-xl border border-indigo-500/20 max-w-[150px] sm:max-w-[200px]">
+                           <Search size={14} className="shrink-0" /> 
+                           <span className="truncate">{connection.dbProvider === 'mongodb' ? t('database.query.filterJson') : t('database.query.whereClause')}</span>
                         </div>
                         <div className="flex-1 relative">
                             <input 
@@ -1681,9 +1640,9 @@ export default function DatabaseView({ connection, onClose }) {
                                     className={`w-full bg-[var(--bg-primary)] border border-purple-500/30 rounded-xl py-2 pl-4 pr-12 text-xs focus:outline-none focus:border-purple-500 focus:ring-1 focus:ring-purple-500/20 text-[var(--text-primary)] placeholder:text-purple-400/40 dark:placeholder:text-purple-300/30 shadow-inner transition-all ${pendingAction ? 'opacity-50 cursor-not-allowed' : ''}`}
                                 />
                                 {usedAiModel && (
-                                   <div className="absolute top-full left-0 mt-1 flex items-center gap-1.5 px-2 animate-in fade-in slide-in-from-top-1 duration-500 z-10">
-                                      <span className="text-[9px] font-bold text-amber-500/80 uppercase tracking-tighter">⚡ Used:</span>
-                                      <span className="text-[9px] font-medium text-amber-500/60 bg-amber-500/5 px-1.5 py-0.5 rounded border border-amber-500/20 shadow-sm">
+                                   <div className="absolute top-full left-0 mt-1 flex items-center justify-start gap-1.5 px-3 z-10 w-full overflow-hidden pointer-events-none">
+                                      <span className="text-[9px] font-bold text-amber-500/80 uppercase tracking-tighter shrink-0 bg-black/40 px-1.5 py-0.5 rounded shadow-sm backdrop-blur-md border border-amber-500/20 shadow-amber-500/10">⚡ Used:</span>
+                                      <span className="text-[9px] font-medium text-amber-500 bg-amber-500/10 px-2 py-0.5 rounded border border-amber-500/30 shadow-sm backdrop-blur-md shadow-amber-500/10 truncate font-mono max-w-[200px] pointer-events-auto" title={usedAiModel}>
                                          {usedAiModel.split('/').pop().replace(/-/g, ' ')}
                                       </span>
                                    </div>
@@ -1943,8 +1902,8 @@ export default function DatabaseView({ connection, onClose }) {
                                <tr 
                                   key={row._id || row.id || i} 
                                   className={`transition-colors group ${
-                                    pendingAction?.type === 'DELETE' ? 'bg-red-500/5 hover:bg-red-500/10' :
-                                    pendingAction?.type === 'UPDATE' ? 'bg-amber-500/5 hover:bg-amber-500/10' :
+                                    pendingAction?.type === 'DELETE' ? 'bg-red-500/20 shadow-[inset_0_0_0_1px_rgba(239,68,68,0.5)]' :
+                                    pendingAction?.type === 'UPDATE' ? 'bg-amber-500/10 shadow-[inset_0_0_0_1px_rgba(245,158,11,0.3)]' :
                                     'hover:bg-[var(--bg-primary)]/[0.03]'
                                   }`}
                                 >

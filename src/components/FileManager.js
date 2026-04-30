@@ -2417,9 +2417,9 @@ export default function FileManager({
                                         </button>
                                      </div>
                                   </div>
-                                  <input type="text" placeholder="Endpoint URL" value={sshAiPrefs.aiEndpoint || ''} onChange={(e) => setSshAiPrefs({ aiEndpoint: e.target.value })} className="w-full bg-black/40 border border-white/10 rounded px-2 py-1 text-[10px] outline-none focus:border-indigo-500/50" />
-                                  <input type="password" placeholder="API Key" value={sshAiPrefs.aiApiKey || ''} onChange={(e) => setSshAiPrefs({ aiApiKey: e.target.value })} className="w-full bg-black/40 border border-white/10 rounded px-2 py-1 text-[10px] outline-none focus:border-indigo-500/50" />
-                                  <input type="text" placeholder="Model Name" value={sshAiPrefs.aiCustomModel || ''} onChange={(e) => setSshAiPrefs({ aiCustomModel: e.target.value })} className="w-full bg-black/40 border border-white/10 rounded px-2 py-1 text-[10px] outline-none focus:border-indigo-500/50" />
+                                  <input type="text" placeholder="Endpoint URL" value={sshAiPrefs.aiEndpoint || ''} onChange={(e) => setSshAiPrefs({ ...sshAiPrefs, aiEndpoint: e.target.value })} className="w-full bg-black/40 border border-white/10 rounded px-2 py-1 text-[10px] outline-none focus:border-indigo-500/50" />
+                                  <input type="password" placeholder="API Key" value={sshAiPrefs.aiApiKey || ''} onChange={(e) => setSshAiPrefs({ ...sshAiPrefs, aiApiKey: e.target.value })} className="w-full bg-black/40 border border-white/10 rounded px-2 py-1 text-[10px] outline-none focus:border-indigo-500/50" />
+                                  <input type="text" placeholder="Model Name" value={sshAiPrefs.aiCustomModel || ''} onChange={(e) => setSshAiPrefs({ ...sshAiPrefs, aiCustomModel: e.target.value })} className="w-full bg-black/40 border border-white/10 rounded px-2 py-1 text-[10px] outline-none focus:border-indigo-500/50" />
                                </div>
                             )}
                           </div>
