@@ -543,7 +543,7 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
     });
 
       socket.on('ssh:connect', async (data) => {
-      let { connectionId, connection: connectionData, cols, rows, dockerContainerId, dockerMode } = data;
+      let { connectionId, connection: connectionData, cols, rows, dockerContainerId, dockerMode, useShell = true, preferProvidedConnection = false } = data;
 
       // Extract docker info from connectionId if missing but prefixed
       if (connectionId && typeof connectionId === 'string' && connectionId.startsWith('docker-')) {
@@ -564,8 +564,31 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
         // Helper: check if a string is a valid 24-char MongoDB ObjectId
         const isValidObjectId = (id) => /^[0-9a-fA-F]{24}$/.test(id);
         
+        const providedHasAuthMaterial = !!(
+          connectionData?.password ||
+          connectionData?.privateKey ||
+          connectionData?.agent ||
+          connectionData?.tryKeyboard
+        );
+        const isProvidedLocalConnection = !!(
+          (typeof connectionId === 'string' && connectionId.startsWith('local-')) ||
+          connectionData?.storage === 'localstorage' ||
+          connectionData?.storage === 'manual'
+        );
+        const shouldSkipConnectionLookup =
+          preferProvidedConnection &&
+          !!connectionData &&
+          (isProvidedLocalConnection || providedHasAuthMaterial);
+
+        if (shouldSkipConnectionLookup) {
+          connection = connectionData;
+          console.log(`⚡ Using provided connectionData for ${connection?.host || connectionId} (skipping DB lookup)`);
+        } else if (preferProvidedConnection && connectionData && !isProvidedLocalConnection) {
+          console.log(`🔎 Provided connectionData for ${connectionData?.host || connectionId} is missing auth material; falling back to DB lookup`);
+        }
+
         // Handle DB Connections
-        if (connectionId && !connectionId.startsWith('local-')) {
+        if (!connection && connectionId && !connectionId.startsWith('local-')) {
           if (CurrentConnectionModel) {
             try {
               // For MongoDB: only look up if connectionId looks like a real ObjectId
@@ -641,7 +664,7 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
         // For MongoDB: connectionId must be a valid ObjectId (skip for PostgreSQL integer IDs)
         // For PostgreSQL/MySQL: the SQL Session model handles integer IDs natively
         let session = null;
-        if (connectionId && !connectionId.startsWith('local-') && CurrentSessionModel) {
+        if (!shouldSkipConnectionLookup && connectionId && !connectionId.startsWith('local-') && CurrentSessionModel) {
           // Only use Mongoose session model for valid MongoDB ObjectIds
           const isMgoSession = repo.type === 'mongodb' && isValidObjectId(connectionId);
           const isSqlSession = (repo.type === 'mysql' || repo.type === 'postgres') && /^\d+$/.test(String(connectionId));
@@ -708,9 +731,35 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
           };
           // ───────────────────────────────────────────────────────────────────
           
-          const emitSftpError = (err, prefix = '') => {
+          const isRecoverableSftpError = (err) => {
+            const message = String(typeof err === 'string' ? err : (err?.message || '')).toLowerCase();
+            return /channel .*closed|connection .*closed|connection lost|broken pipe|eof|no response from server|not connected|socket closed/.test(message);
+          };
+
+          const invalidateSftpSession = (reason = '') => {
+            const sessionData = activeSessions.get(socket.id);
+            if (!sessionData?.sftp) return;
+            try {
+              if (typeof sessionData.sftp.end === 'function') sessionData.sftp.end();
+            } catch (closeErr) {
+              console.warn(`⚠️ [${socket.id}] Failed closing stale SFTP session: ${closeErr.message}`);
+            }
+            sessionData.sftp = null;
+            if (reason) {
+              console.warn(`🔁 [${socket.id}] Reset cached SFTP session: ${reason}`);
+            }
+          };
+
+          const emitSftpError = (err, prefix = '', options = {}) => {
             const message = typeof err === 'string' ? err : (err?.message || 'Unknown SFTP error');
-            socket.emit('sftp:error', { message: prefix ? `${prefix}: ${message}` : message });
+            const shouldResetSftp = options.resetSftp || isRecoverableSftpError(err);
+            if (shouldResetSftp) {
+              invalidateSftpSession(prefix || message);
+            }
+            socket.emit('sftp:error', {
+              message: prefix ? `${prefix}: ${message}` : message,
+              ...(options.recoverable ? { recoverable: true } : {}),
+            });
           };
 
           const getSftp = (cb) => {
@@ -721,11 +770,39 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
             if (sessionData && sessionData.sftp) {
               return cb(null, sessionData.sftp);
             }
-            sshClient.sftp((err, sftp) => {
-              if (err) return cb(err);
-              if (sessionData) sessionData.sftp = sftp;
-              cb(null, sftp);
+            if (sessionData?.sftpPending) {
+              sessionData.sftpPending
+                .then((sftp) => cb(null, sftp))
+                .catch((err) => cb(err));
+              return;
+            }
+
+            const pending = new Promise((resolve, reject) => {
+              sshClient.sftp((err, sftp) => {
+                if (err) return reject(err);
+                resolve(sftp);
+              });
             });
+
+            if (sessionData) sessionData.sftpPending = pending;
+
+            pending
+              .then((sftp) => {
+                const latestSession = activeSessions.get(socket.id);
+                if (latestSession) {
+                  latestSession.sftp = sftp;
+                  latestSession.sftpPending = null;
+                }
+                cb(null, sftp);
+              })
+              .catch((err) => {
+                const latestSession = activeSessions.get(socket.id);
+                if (latestSession) {
+                  latestSession.sftp = null;
+                  latestSession.sftpPending = null;
+                }
+                cb(err);
+              });
           };
 
           // Setup basic session context immediately so subsequent handlers (like sftp:list) 
@@ -736,11 +813,16 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
             connectionId, 
             dbUri,
             dockerContainerId,
+            sftp: null,
+            sftpPending: null,
             activeTransfers: new Set(),
+            recentUploads: new Map(),
             lastActivityAt: Date.now(),
             lastIdleLogAt: 0,
             idleInterval: null,
           });
+
+          ensureIdleWatcher();
 
           if (dockerContainerId) {
               const baseExecForDocker = sshClient.exec.bind(sshClient);
@@ -777,54 +859,63 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
               };
           }
           
-          // Request a PTY shell
-          sshClient.shell({ term: 'xterm-256color', cols: cols || 120, rows: rows || 30 }, (err, stream) => {
-            if (err) {
-              socket.emit('ssh:error', { message: err?.message || String(err) || 'Failed to open shell' });
-              return;
-            }
+          if (useShell) {
+            // Request a PTY shell when the caller needs an interactive terminal.
+            sshClient.shell({ term: 'xterm-256color', cols: cols || 120, rows: rows || 30 }, (err, stream) => {
+              if (err) {
+                socket.emit('ssh:error', { message: err?.message || String(err) || 'Failed to open shell' });
+                return;
+              }
 
-            // Update session with existing stream
-            const sessionData = activeSessions.get(socket.id);
-            if (sessionData) {
-              sessionData.stream = stream;
-            }
+              // Update session with existing stream
+              const sessionData = activeSessions.get(socket.id);
+              if (sessionData) {
+                sessionData.stream = stream;
+              }
 
-            ensureIdleWatcher();
+              // Forward SSH output to client
+              stream.on('data', (data) => {
+                touchActivity();
+                socket.emit('ssh:data', data.toString('utf-8'));
+              });
 
-            // Forward SSH output to client
-            stream.on('data', (data) => {
-              touchActivity();
-              socket.emit('ssh:data', data.toString('utf-8'));
+              stream.stderr.on('data', (data) => {
+                touchActivity();
+                socket.emit('ssh:data', data.toString('utf-8'));
+              });
+
+              stream.on('close', () => {
+                console.log(`[CLOSED] SSH stream closed for socket ${socket.id}`);
+                socket.emit('ssh:closed');
+                // Don't cleanup everything immediately if we want to keep SFTP alive
+                // But we usually want to close both.
+              });
+
+              // Forward client input to SSH
+              socket.on('ssh:input', (inputData) => {
+                touchActivity();
+                if (stream.writable) {
+                  stream.write(inputData);
+                }
+              });
+
+              // Handle terminal resize
+              socket.on('ssh:resize', ({ cols, rows }) => {
+                if (stream) {
+                  stream.setWindow(rows, cols, 0, 0);
+                }
+              });
             });
-
-            stream.stderr.on('data', (data) => {
-              touchActivity();
-              socket.emit('ssh:data', data.toString('utf-8'));
-            });
-
-            stream.on('close', () => {
-              console.log(`[CLOSED] SSH stream closed for socket ${socket.id}`);
-              socket.emit('ssh:closed');
-              // Don't cleanup everything immediately if we want to keep SFTP alive
-              // But we usually want to close both.
-            });
-
-            // Forward client input to SSH
-            socket.on('ssh:input', (inputData) => {
-              touchActivity();
-              if (stream.writable) {
-                stream.write(inputData);
+          } else if (!dockerContainerId) {
+            // Prewarm SFTP for file-only sessions so the first directory listing can reuse it.
+            getSftp((err) => {
+              if (err) {
+                console.warn(`⚠️ [${socket.id}] SFTP prewarm failed: ${err.message}`);
+              } else {
+                console.log(`⚡ [${socket.id}] SFTP prewarmed for file-only session`);
               }
             });
-
-            // Handle terminal resize
-            socket.on('ssh:resize', ({ cols, rows }) => {
-              if (stream) {
-                stream.setWindow(rows, cols, 0, 0);
-              }
-            });
-          });
+          }
 
           // Register SFTP handlers immediately when ready
           socket.on('sftp:list', (path = '.') => {
@@ -2020,12 +2111,31 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
           });
 
           // Extract Archive (Zip/Tar)
-          socket.on('sftp:extract', ({ path: archivePath, type }) => {
+          socket.on('sftp:extract', ({ path: archivePath, type, cleanupArchive = false }) => {
             console.log(`📦 [${socket.id}] SFTP EXTRACT: ${archivePath} (${type})`);
             if (!sshClient || sshClient._state === 'closed') return emitSftpError('SSH Connection Closed', 'Extract');
 
             const targetDir = path.posix.dirname(archivePath);
             const filename = path.posix.basename(archivePath);
+            const sessionData = activeSessions.get(socket.id);
+            const recentUploadMeta = sessionData?.recentUploads?.get(archivePath);
+            const uploadedMomentsAgo = !!(recentUploadMeta && (Date.now() - recentUploadMeta.uploadedAt) < 2 * 60 * 1000);
+            const shouldCleanupArchive = cleanupArchive || uploadedMomentsAgo;
+            const removeArchive = () => {
+              if (!shouldCleanupArchive) return;
+              getSftp((sftpErr, sftp) => {
+                if (!sftpErr && sftp) {
+                  sftp.unlink(archivePath, () => {
+                    sshClient.exec(`rm -f "${archivePath}"`, () => {});
+                  });
+                  return;
+                }
+                sshClient.exec(`rm -f "${archivePath}"`, () => {});
+              });
+              if (sessionData?.recentUploads) {
+                sessionData.recentUploads.delete(archivePath);
+              }
+            };
 
             // Step 1: Detect availability of unzip vs python fallback
             // Step 1: Detect availability of unzip vs python fallback vs tar
@@ -2105,8 +2215,7 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
                       stream.stderr.on('data', (d) => extractError += d.toString());
 
                       stream.on('close', (code) => {
-                        // Cleanup archive
-                        sshClient.exec(`rm "${archivePath}"`, () => {});
+                        removeArchive();
                         
                         if (code === 0) {
                           socket.emit('sftp:progress', { action: 'extract', filename, progress: 100 });
@@ -2134,15 +2243,26 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
             const { checkRateLimit, getConcurrencyLimiter, checkMemory } = require('./src/lib/serverGuard');
             
             // 1. Memory Guard
-            const mem = checkMemory(300); // Need at least 300MB free
+            const mem = checkMemory(128); // Allow file uploads with lower free-RAM headroom
             if (!mem.safe) {
-               return socket.emit('sftp:error', { message: 'Server is under high load. Please try again later.' });
+              console.warn(`🛡️ [${socket.id}] Upload blocked by memory guard: RSS=${mem.rssMB ?? 'n/a'}MB, SysFree=${mem.sysFreeMB ?? 'n/a'}MB`);
+              return socket.emit('sftp:error', { 
+                message: `Upload blocked by memory guard. Free RAM: ${mem.sysFreeMB ?? 'n/a'}MB, RSS: ${mem.rssMB ?? 'n/a'}MB.`,
+                guard: 'memory',
+                details: mem,
+              });
             }
 
             // 2. Concurrency Guard (Global fair-share)
-            const limiter = getConcurrencyLimiter('file_transfer', 10); // Max 10 active transfers global
+            const limiter = getConcurrencyLimiter('file_transfer', 20); // Max 20 active transfers global
             if (!limiter.allowed) {
-               return socket.emit('sftp:error', { message: 'Server transfer capacity reached. Please wait for other transfers to finish.' });
+              console.warn(`🛡️ [${socket.id}] Upload blocked by transfer capacity: ${limiter.current}/${limiter.max}`);
+              return socket.emit('sftp:error', { 
+                message: `Transfer capacity reached (${limiter.current}/${limiter.max} active). Please wait for another transfer to finish.`,
+                guard: 'concurrency',
+                current: limiter.current,
+                max: limiter.max,
+              });
             }
 
             // 3. Per-User Rate Limit
@@ -2150,6 +2270,7 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
             if (!rate.allowed) {
                return socket.emit('sftp:error', { 
                  message: `Upload rate limit exceeded. Please wait ${Math.ceil(rate.resetIn / 1000)}s.`,
+                 guard: 'rate-limit',
                  resetIn: rate.resetIn
                });
             }
@@ -2178,10 +2299,31 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
 
                   const setupHandlers = (wStream) => {
                     let bytesReceivedInSession = 0;
+                    let settled = false;
+
+                    const finalize = (onFinish) => {
+                      if (settled) return;
+                      settled = true;
+                      socket.off(`sftp:upload_chunk:${filename}`, chunkHandler);
+                      socket.off(`sftp:upload_done:${filename}`, doneHandler);
+                      cleanup();
+                      onFinish?.();
+                    };
+
+                    const failTransfer = (err, prefix) => {
+                      finalize(() => {
+                        try {
+                          if (typeof wStream.destroy === 'function') wStream.destroy();
+                          else if (wStream.writable) wStream.end();
+                        } catch (_) {}
+                        emitSftpError(err, prefix, { resetSftp: !useFallback, recoverable: !useFallback });
+                      });
+                    };
+
                     const chunkHandler = (chunk) => {
-                      // Note: for exec streams, this is direct write to stdin
+                      if (settled) return;
                       wStream.write(chunk, (err) => {
-                         if (err) return emitSftpError(err, 'Stream Write Error');
+                         if (err) return failTransfer(err, 'Stream Write Error');
                          bytesReceivedInSession += chunk.length;
                          const totalTransferred = actualOffset + bytesReceivedInSession;
                          socket.emit(`sftp:upload_ack:${filename}`, { 
@@ -2192,23 +2334,34 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
                       });
                     };
 
+                    const doneHandler = () => {
+                      if (settled) return;
+                      if (wStream.writable) wStream.end();
+                    };
+
                     socket.on(`sftp:upload_chunk:${filename}`, chunkHandler);
+                    socket.once(`sftp:upload_done:${filename}`, doneHandler);
                     socket.emit('sftp:can_upload', { filename, offset: actualOffset }); 
 
-                    socket.once(`sftp:upload_done:${filename}`, () => {
-                      if (wStream.writable) wStream.end();
-                      socket.off(`sftp:upload_chunk:${filename}`, chunkHandler);
-                    });
-
                     wStream.on('close', () => {
-                      cleanup();
-                      socket.emit('sftp:action_success', { action: 'upload', path: destPath });
+                      finalize(() => {
+                        if (sessionData?.recentUploads) {
+                          sessionData.recentUploads.set(destPath, {
+                            uploadedAt: Date.now(),
+                            size,
+                            filename,
+                          });
+                          if (sessionData.recentUploads.size > 50) {
+                            const oldestKey = sessionData.recentUploads.keys().next().value;
+                            if (oldestKey) sessionData.recentUploads.delete(oldestKey);
+                          }
+                        }
+                        socket.emit('sftp:action_success', { action: 'upload', path: destPath });
+                      });
                     });
 
                     wStream.on('error', (err) => {
-                      cleanup();
-                      emitSftpError(err, 'Upload failed');
-                      socket.off(`sftp:upload_chunk:${filename}`, chunkHandler);
+                      failTransfer(err, 'Upload failed');
                     });
                   };
 
@@ -2250,18 +2403,23 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
              const { checkRateLimit, getConcurrencyLimiter, checkMemory } = require('./src/lib/serverGuard');
              
              // 1. Memory & Concurrency Guards
-             const mem = checkMemory(300);
-             if (!mem.safe) return socket.emit('sftp:error', { message: 'Server busy' });
+             const mem = checkMemory(128);
+             if (!mem.safe) {
+              console.warn(`🛡️ [${socket.id}] Download blocked by memory guard: RSS=${mem.rssMB ?? 'n/a'}MB, SysFree=${mem.sysFreeMB ?? 'n/a'}MB`);
+              return socket.emit('sftp:error', { message: `Download blocked by memory guard. Free RAM: ${mem.sysFreeMB ?? 'n/a'}MB, RSS: ${mem.rssMB ?? 'n/a'}MB.`, guard: 'memory', details: mem });
+             }
 
-             const limiter = getConcurrencyLimiter('file_transfer', 10);
+             const limiter = getConcurrencyLimiter('file_transfer', 20);
              if (!limiter.allowed) {
-                return socket.emit('sftp:error', { message: 'Server transfer capacity reached' });
+               console.warn(`🛡️ [${socket.id}] Download blocked by transfer capacity: ${limiter.current}/${limiter.max}`);
+               return socket.emit('sftp:error', { message: `Transfer capacity reached (${limiter.current}/${limiter.max} active).`, guard: 'concurrency', current: limiter.current, max: limiter.max });
              }
 
              const rate = checkRateLimit(`sftp_download:${socket.id}`, 30);
              if (!rate.allowed) {
                 return socket.emit('sftp:error', { 
                   message: `Download rate limit exceeded. Please wait ${Math.ceil(rate.resetIn / 1000)}s.`,
+                  guard: 'rate-limit',
                   resetIn: rate.resetIn
                 });
              }
@@ -2300,7 +2458,7 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
                  
                  rStream.on('error', (err) => {
                    cleanup();
-                   emitSftpError(err, 'Download failed');
+                   emitSftpError(err, 'Download failed', { resetSftp: !!sftp, recoverable: !!sftp });
                  });
                };
 
@@ -2320,6 +2478,16 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
                
                if (sftp && !sessionData.dockerContainerId) {
                  sftp.stat(filePath, (err, stats) => {
+                   if (err && isRecoverableSftpError(err)) {
+                     invalidateSftpSession('Download stat failed on stale SFTP channel');
+                     return getSftp((retryErr, freshSftp) => {
+                       if (retryErr) return emitSftpError(retryErr, 'Download SFTP Retry Init', { resetSftp: true, recoverable: true });
+                       freshSftp.stat(filePath, (retryStatErr, retryStats) => {
+                         if (retryStatErr) return emitSftpError(retryStatErr, 'Download Stat', { resetSftp: true, recoverable: true });
+                         startDownload(freshSftp, retryStats);
+                       });
+                     });
+                   }
                    if (err) return emitSftpError(err, 'Download Stat');
                    startDownload(sftp, stats);
                  });
@@ -2346,12 +2514,18 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
           // Uses `tar czf -` via exec and streams chunks immediately — no in-memory buffering.
           socket.on('sftp:download_folder', ({ folderPath, paths: multiPaths }) => {
              const { checkRateLimit, getConcurrencyLimiter, checkMemory } = require('./src/lib/serverGuard');
-             const mem = checkMemory(300);
-             if (!mem.safe) return socket.emit('sftp:error', { message: 'Server busy' });
-             const limiter = getConcurrencyLimiter('file_transfer', 10);
-             if (!limiter.allowed) return socket.emit('sftp:error', { message: 'Server transfer capacity reached' });
+             const mem = checkMemory(128);
+             if (!mem.safe) {
+               console.warn(`🛡️ [${socket.id}] Folder download blocked by memory guard: RSS=${mem.rssMB ?? 'n/a'}MB, SysFree=${mem.sysFreeMB ?? 'n/a'}MB`);
+               return socket.emit('sftp:error', { message: `Archive download blocked by memory guard. Free RAM: ${mem.sysFreeMB ?? 'n/a'}MB, RSS: ${mem.rssMB ?? 'n/a'}MB.`, guard: 'memory', details: mem });
+             }
+             const limiter = getConcurrencyLimiter('file_transfer', 20);
+             if (!limiter.allowed) {
+               console.warn(`🛡️ [${socket.id}] Folder download blocked by transfer capacity: ${limiter.current}/${limiter.max}`);
+               return socket.emit('sftp:error', { message: `Transfer capacity reached (${limiter.current}/${limiter.max} active).`, guard: 'concurrency', current: limiter.current, max: limiter.max });
+             }
              const rate = checkRateLimit(`sftp_download:${socket.id}`, 30);
-             if (!rate.allowed) return socket.emit('sftp:error', { message: `Download rate limit exceeded. Please wait ${Math.ceil(rate.resetIn / 1000)}s.`, resetIn: rate.resetIn });
+             if (!rate.allowed) return socket.emit('sftp:error', { message: `Download rate limit exceeded. Please wait ${Math.ceil(rate.resetIn / 1000)}s.`, guard: 'rate-limit', resetIn: rate.resetIn });
              const sessionData = activeSessions.get(socket.id);
              if (!sessionData) return;
 

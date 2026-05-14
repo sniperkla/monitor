@@ -489,11 +489,19 @@ export async function POST(req) {
       return s;
     };
 
-    // Keep history to 15 turns — enough context for long tasks
-    const safeHistory = Array.isArray(history) ? history.slice(-15) : [];
+    // Keep history to 5 turns — enough context for short tasks while saving tokens
+    const safeHistory = Array.isArray(history) ? history.slice(-5) : [];
     const historyMessages = safeHistory.flatMap(h => {
       const msgs = [];
-      if (h.role === 'user' && h.content) msgs.push({ role: 'user', content: String(h.content).slice(0, 200) });
+      if (h.role === 'user' && h.content) {
+        const text = String(h.content);
+        const autoMatch = text.match(/- Last command:\s*(.*?)\n- Output:\n([\s\S]*?)(?=\n⚡|\n\[!]|\nStep|$)/i);
+        if (autoMatch) {
+          msgs.push({ role: 'user', content: `Previous Result:\nCMD: ${autoMatch[1]}\nOUTPUT:\n${autoMatch[2].trim().slice(-300)}` });
+        } else {
+          msgs.push({ role: 'user', content: text.slice(0, 200) });
+        }
+      }
       if (h.role === 'assistant' && h.content) {
         // For assistant messages, only keep the command/diff tag to save tokens
         const cmdMatch = String(h.content).match(/<command>([\s\S]*?)<\/command>/i);
@@ -514,8 +522,8 @@ export async function POST(req) {
     const packLastCmd = typeof safePack?.lastCommand === 'string' ? safePack.lastCommand.slice(0, 150) : '';
     const packRecentCmds = Array.isArray(safePack?.recentCommands) ? safePack.recentCommands.slice(-3) : [];
     const packLastError = safePack?.lastError && typeof safePack.lastError === 'object' ? safePack.lastError : null;
-    // Use 12k chars of terminal tail — enough to see full files
-    const packTail = typeof safePack?.terminalTail === 'string' ? safePack.terminalTail.slice(-12000) : safeContext;
+    // Use 1k chars of terminal tail — keep context strict to save tokens
+    const packTail = typeof safePack?.terminalTail === 'string' ? safePack.terminalTail.slice(-1000) : typeof safeContext === 'string' ? safeContext.slice(-1000) : '';
 
     const structuredContext = safePack
       ? `CTX:
@@ -562,23 +570,28 @@ ${memoryDoc.notes?.length ? `NOTES:\n${memoryDoc.notes.slice(0, 3).map(n => `- $
 
     // ── AGENTIC CORE LOGIC (shared between modes) ────────────────────────────
     // Build a dynamic skills discovery block for the prompt
-    let availableSkillNames = allSkills.map(s => s.name).slice(0, 15).join(', ') || 'none';
-    if (allSkills.length > 15) availableSkillNames += ', ...';
+    let availableSkillNames = allSkills.map(s => s.name).slice(0, 5).join(', ') || 'none';
+    if (allSkills.length > 5) availableSkillNames += ', ...';
     const agentCoreBlock = `You are a Self-Healing AI DevOps Agent. Think→Act→Observe loop. NEVER give up until goal is VERIFIED.
 SKILLS: (${availableSkillNames}) — If a loaded skill matches, follow it EXACTLY. No improvising.
 
 EVERY RESPONSE:
-<thought>State/Skill/Plan/Verify-method</thought>
+<thought>Analyze the terminal output provided. Is there an error? If so, what is the fix?</thought>
 <command>ONE shell command</command> OR <diff>unified diff</diff>
 <explain>1 sentence</explain><danger>false</danger><done>false</done>
 
 RULES:
+• You are responsible for detecting errors (e.g., "GLIBC", "Permission denied", "Not found"). 
+• If you see an error, output the fix in <command>. Do NOT output the error message itself as a command.
+• If you see interactive prompts (e.g., "[y/n]", "Press Enter", "Password:"), output the answer in the <command> tag immediately.
+  Example: If you see "[y/n]", output: <command>y</command>
+• If you get stuck in a secondary prompt due to an unclosed quote or syntax error (e.g. ">" prompt), output "<command>\\x03</command>" to send Ctrl+C and exit it before trying again.
+• Verify the goal is met by reading the output. Only set <done>true</done> when you see evidence (e.g., "Active: active", version string, file content).
+• Do not trust "Success" messages without terminal evidence.
 • ONE command per turn. NEVER chain dependent commands.
-• Errors: 1=sudo 2=find file 3=lsof port 4=install tool 5=fix syntax 6=journalctl first 7=systemctl status
 • Anti-loop: NEVER repeat same failing command >2 times.
 • GLIBC error: build from source, NEVER upgrade glibc.
-• done=true ONLY after VERIFIED (curl/status/version check). NEVER in same turn as command.
-• Backup configs: cp FILE FILE.bak.\$(date +%s)
+• Backup configs: cp FILE FILE.bak.$(date +%s)
 • journalctl/systemctl: always --no-pager
 • danger=true: rm -rf, disk format, user deletion.
 • Docker: ALL steps INSIDE container. No sudo inside container. Use docker exec for verify.
@@ -594,6 +607,7 @@ VERIFY BEFORE done=true:
 • File edit: grep CHANGED FILE
 • Existence alone is NOT enough — functional check required.
 • All prompt constraints must be met.
+• When you output <done>true</done>, DO NOT provide ANY <command> or <diff>. You MUST stop doing work immediately.
 `;
 
 

@@ -2,12 +2,13 @@
 
 import { useState, useEffect, useRef } from 'react';
 import { useOS } from '@/context/OSContext';
-import { Terminal, Settings, LayoutGrid, Monitor, Wifi, Volume2, Search, Power, User, X, StickyNote, Book, Layers, Columns, StickyNote as NoteIcon, BookOpen, FolderClosed, Cpu, Clock, ChevronLeft, ChevronRight, Grid3x3, Keyboard } from 'lucide-react';
+import { Terminal, Settings, LayoutGrid, Monitor, Wifi, Volume2, Search, Power, User, X, StickyNote, Book, Layers, Columns, StickyNote as NoteIcon, BookOpen, FolderClosed, Cpu, Clock, ChevronLeft, ChevronRight, Grid3x3, Keyboard, Server } from 'lucide-react';
 import { createPortal } from 'react-dom';
 import SSHApp from '@/apps/SSHApp';
 import SettingsApp from '@/apps/SettingsApp';
 import NotepadApp from '@/apps/NotepadApp';
 import WikiApp from '@/apps/WikiApp';
+import DockerApp from '@/apps/DockerApp';
 import { AnimatePresence, motion } from 'framer-motion';
 import { useSession, signOut } from 'next-auth/react';
 import { useTranslation } from 'react-i18next';
@@ -141,6 +142,7 @@ export default function Taskbar() {
     { id: 'ssh-manager', title: t('apps.sshManager'), icon: Monitor, component: <SSHApp />, initialWidth: 1200, initialHeight: 800 },
     { id: 'settings', title: t('apps.settings'), icon: Settings, component: <SettingsApp />, initialWidth: 800, initialHeight: 600 },
     { id: 'wiki', title: t('apps.resourceHub'), icon: Book, component: <WikiApp />, initialWidth: 1100, initialHeight: 700 },
+    { id: 'docker-app', title: t('apps.docker'), icon: Server, component: <DockerApp />, initialWidth: 1000, initialHeight: 700 },
     { id: 'notepad', title: t('apps.notepad'), icon: StickyNote, component: <NotepadApp />, initialWidth: 800, initialHeight: 600 },
     { id: 'terminal', title: t('apps.terminal'), icon: Terminal, component: <TerminalApp />, initialWidth: 900, initialHeight: 600 },
   ];

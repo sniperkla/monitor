@@ -64,6 +64,27 @@ const NODE_BIN = process.execPath;
 const PLATFORM = os.platform();
 const SVC_ID   = 'com.ssh-monitor.relay';
 const SVC_NAME = 'SSH Monitor Local Relay';
+const INSTALL_DIR = PLATFORM === 'win32'
+  ? path.join(process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming'), 'SSH Monitor Relay')
+  : path.join(os.homedir(), '.ssh-monitor-relay');
+const INSTALLED_SCRIPT = path.join(INSTALL_DIR, 'local-relay.js');
+
+function ensureInstalledScript() {
+  try {
+    fs.mkdirSync(INSTALL_DIR, { recursive: true });
+    if (path.resolve(SCRIPT) !== path.resolve(INSTALLED_SCRIPT)) {
+      fs.copyFileSync(SCRIPT, INSTALLED_SCRIPT);
+      if (PLATFORM !== 'win32') {
+        try { fs.chmodSync(INSTALLED_SCRIPT, 0o755); } catch {}
+      }
+      console.log('  ✅ Installed relay runtime to', INSTALLED_SCRIPT);
+    }
+    return INSTALLED_SCRIPT;
+  } catch (e) {
+    console.error('  Failed to install relay runtime:', e.message);
+    process.exit(1);
+  }
+}
 
 // -- --install --
 if (args.install) {
@@ -73,10 +94,11 @@ if (args.install) {
   }
   saveConfig({ server: SERVER, token: TOKEN, host: HOST, port: PORT });
   console.log('  ✅ Config saved to', CONFIG_PATH);
+  const serviceScript = ensureInstalledScript();
   const cmdArgs = ['--server', SERVER, '--token', TOKEN, '--host', HOST, '--port', String(PORT)];
-  if      (PLATFORM === 'darwin') installMacOS(cmdArgs);
-  else if (PLATFORM === 'linux')  installLinux(cmdArgs);
-  else if (PLATFORM === 'win32')  installWindows(cmdArgs);
+  if      (PLATFORM === 'darwin') installMacOS(serviceScript, cmdArgs);
+  else if (PLATFORM === 'linux')  installLinux(serviceScript, cmdArgs);
+  else if (PLATFORM === 'win32')  installWindows(serviceScript, cmdArgs);
   else { console.error('Auto-install not supported on ' + PLATFORM); process.exit(1); }
   process.exit(0);
 }
@@ -246,13 +268,13 @@ connect();
 // ==========================================================================
 // macOS - LaunchAgent (~/Library/LaunchAgents/)
 // ==========================================================================
-function installMacOS(cmdArgs) {
+function installMacOS(serviceScript, cmdArgs) {
   const plistDir  = path.join(os.homedir(), 'Library', 'LaunchAgents');
   const plistPath = path.join(plistDir, SVC_ID + '.plist');
   const logFile   = path.join(os.homedir(), 'Library', 'Logs', 'ssh-monitor-relay.log');
   fs.mkdirSync(plistDir, { recursive: true });
   const LT = String.fromCharCode(60), GT = String.fromCharCode(62);
-  const argTags = [NODE_BIN, SCRIPT].concat(cmdArgs)
+  const argTags = [NODE_BIN, serviceScript].concat(cmdArgs)
     .map(function(a) { return '    ' + LT + 'string' + GT + xmlEscape(a) + LT + '/string' + GT; }).join('\n');
   const xml = [
     LT + '?xml version="1.0" encoding="UTF-8"?' + GT,
@@ -275,7 +297,7 @@ function installMacOS(cmdArgs) {
   if (r.status === 0) {
     console.log('\n  Installed as macOS LaunchAgent (auto-starts at login)');
     console.log('  Logs:   tail -f "' + logFile + '"');
-    console.log('  Remove: node "' + SCRIPT + '" --uninstall\n');
+    console.log('  Remove: node "' + serviceScript + '" --uninstall\n');
   } else {
     console.error('  launchctl load failed.');
   }
@@ -292,13 +314,13 @@ function uninstallMacOS() {
 // ==========================================================================
 // Linux - systemd user service (~/.config/systemd/user/)
 // ==========================================================================
-function installLinux(cmdArgs) {
+function installLinux(serviceScript, cmdArgs) {
   const unitDir  = path.join(os.homedir(), '.config', 'systemd', 'user');
   const unitPath = path.join(unitDir, SVC_ID + '.service');
   const logDir   = path.join(os.homedir(), '.local', 'share', 'ssh-monitor');
   fs.mkdirSync(unitDir, { recursive: true });
   fs.mkdirSync(logDir,  { recursive: true });
-  const execStart = [NODE_BIN, SCRIPT].concat(cmdArgs).map(shellQuote).join(' ');
+  const execStart = [NODE_BIN, serviceScript].concat(cmdArgs).map(shellQuote).join(' ');
   const logFile   = path.join(logDir, 'relay.log');
   const unit = [
     '[Unit]', 'Description=' + SVC_NAME, 'After=network.target', '',
@@ -315,7 +337,7 @@ function installLinux(cmdArgs) {
   if (ok) {
     console.log('\n  Installed as systemd user service (auto-starts at login)');
     console.log('  Logs:   journalctl --user -u ' + SVC_ID + ' -f');
-    console.log('  Remove: node "' + SCRIPT + '" --uninstall\n');
+    console.log('  Remove: node "' + serviceScript + '" --uninstall\n');
   } else {
     console.error('  systemctl failed. Try: export XDG_RUNTIME_DIR=/run/user/$(id -u)');
   }
@@ -333,9 +355,9 @@ function uninstallLinux() {
 // ==========================================================================
 // Windows - Task Scheduler
 // ==========================================================================
-function installWindows(cmdArgs) {
+function installWindows(serviceScript, cmdArgs) {
   const allArgs = cmdArgs.map(function(a) { return a.indexOf(' ') !== -1 ? '"' + a + '"' : a; }).join(' ');
-  const action  = '"' + NODE_BIN + '" "' + SCRIPT + '" ' + allArgs;
+  const action  = '"' + NODE_BIN + '" "' + serviceScript + '" ' + allArgs;
   const r = spawnSync('schtasks',
     ['/Create', '/F', '/TN', SVC_NAME, '/SC', 'ONLOGON', '/RL', 'HIGHEST', '/TR', action],
     { stdio: 'inherit', shell: true });
@@ -343,7 +365,7 @@ function installWindows(cmdArgs) {
     spawnSync('schtasks', ['/Run', '/TN', SVC_NAME], { stdio: 'ignore', shell: true });
     console.log('\n  Installed as Windows Scheduled Task (auto-starts at login)');
     console.log('  Stop:   schtasks /End /TN "' + SVC_NAME + '"');
-    console.log('  Remove: node "' + SCRIPT + '" --uninstall\n');
+    console.log('  Remove: node "' + serviceScript + '" --uninstall\n');
   } else {
     console.error('  schtasks failed. Try running as Administrator.');
   }

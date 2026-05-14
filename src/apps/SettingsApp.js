@@ -158,14 +158,32 @@ export default function SettingsApp({ initialTab }) {
     } catch {}
   };
 
+  const quotePosixArg = (value) => `'${String(value).replace(/'/g, `'\\''`)}'`;
+  const quoteWindowsArg = (value) => `"${String(value).replace(/"/g, '""')}"`;
+
+  const getRelayCommand = (mode, os = detectedOS) => {
+    if (mode === 'uninstall') {
+      return 'node local-relay.js --uninstall';
+    }
+
+    if (os === 'windows') {
+      return `node local-relay.js --install --server ${quoteWindowsArg(window.location.origin)} --token ${quoteWindowsArg(relayToken)}`;
+    }
+
+    return `node local-relay.js --install --server ${quotePosixArg(window.location.origin)} --token ${quotePosixArg(relayToken)}`;
+  };
+
+  const getRelayScriptFilename = (mode, os = detectedOS) => {
+    if (os === 'windows') return mode === 'install' ? 'relay-install.bat' : 'relay-uninstall.bat';
+    if (os === 'macos') return mode === 'install' ? 'relay-install.command' : 'relay-uninstall.command';
+    return mode === 'install' ? 'relay-install.sh' : 'relay-uninstall.sh';
+  };
+
   // Generate & download a platform-specific install/uninstall script
   const downloadInstallerScript = (mode) => {
     const server = window.location.origin;
     const scriptUrl = `${server}/local-relay.js`;
-    const installArgs = `--install --server ${server} --token ${relayToken}`;
-    const installCmd  = `node local-relay.js ${installArgs}`;
-    const uninstallCmd = `node local-relay.js --uninstall`;
-    const cmd = mode === 'install' ? installCmd : uninstallCmd;
+    const cmd = getRelayCommand(mode);
 
     let content, filename;
     if (detectedOS === 'windows') {
@@ -181,7 +199,7 @@ export default function SettingsApp({ initialTab }) {
         'echo Done! Press any key to close...',
         'pause > nul',
       ].join('\r\n');
-      filename = mode === 'install' ? 'relay-install.bat' : 'relay-uninstall.bat';
+      filename = getRelayScriptFilename(mode, 'windows');
     } else {
       const lines = [
         '#!/bin/bash',
@@ -194,7 +212,7 @@ export default function SettingsApp({ initialTab }) {
         'echo ""',
         'echo "Done!"',
       ];
-      filename = mode === 'install' ? 'relay-install.sh' : 'relay-uninstall.sh';
+      filename = getRelayScriptFilename(mode, detectedOS);
       content = lines.join('\n');
     }
 
@@ -203,6 +221,9 @@ export default function SettingsApp({ initialTab }) {
     const a    = document.createElement('a');
     a.href = url; a.download = filename; a.click();
     URL.revokeObjectURL(url);
+    if (mode === 'install') {
+      setRelayWaiting(true);
+    }
     addNotification({ 
       title: t('settings_ui.relay.toasts.downloaded'), 
       message: t('settings_ui.relay.toasts.downloadMsg', { filename, mode: mode === 'install' ? t('settings_ui.relay.install').toLowerCase() : t('settings_ui.relay.uninstall').toLowerCase() }), 
@@ -211,13 +232,14 @@ export default function SettingsApp({ initialTab }) {
   };
 
   // Self-contained one-liner for macOS/Linux (curl download + node run in one paste)
-  const getMacOneLiner = (mode) => {
+  const getRelayOneLiner = (mode) => {
     const server = window.location.origin;
     const scriptUrl = `${server}/local-relay.js`;
+    const targetPath = '~/Downloads/local-relay.js';
     if (mode === 'uninstall') {
-      return `curl -fsSL "${scriptUrl}" -o /tmp/local-relay.js && node /tmp/local-relay.js --uninstall`;
+      return `curl -fsSL "${scriptUrl}" -o ${targetPath} && node ${targetPath} --uninstall`;
     }
-    return `curl -fsSL "${scriptUrl}" -o /tmp/local-relay.js && node /tmp/local-relay.js --install --server ${server} --token ${relayToken}`;
+    return `curl -fsSL "${scriptUrl}" -o ${targetPath} && node ${targetPath} --install --server ${quotePosixArg(server)} --token ${quotePosixArg(relayToken)}`;
   };
 
   const setVaultPreset = (uri) => {
@@ -1142,11 +1164,11 @@ export default function SettingsApp({ initialTab }) {
                                 </summary>
                                 <div className="relative mt-2">
                                   <code className="block p-3 pr-10 bg-[var(--bg-tertiary)] rounded-xl text-[10px] font-mono text-amber-300 break-all leading-relaxed">
-                                    {getMacOneLiner('install')}
+                                    {detectedOS === 'windows' ? getRelayCommand('install', 'windows') : getRelayOneLiner('install')}
                                   </code>
                                   <button
                                     onClick={() => {
-                                      navigator.clipboard.writeText(getMacOneLiner('install'));
+                                      navigator.clipboard.writeText(detectedOS === 'windows' ? getRelayCommand('install', 'windows') : getRelayOneLiner('install'));
                                       addNotification({ title: t('settings_ui.relay.toasts.copied'), message: t('settings_ui.relay.toasts.copyMsg'), type: 'success' });
                                     }}
                                     className="absolute right-2 top-2 p-1.5 hover:bg-white/10 rounded-lg transition-colors"
@@ -1759,11 +1781,11 @@ export default function SettingsApp({ initialTab }) {
                     <>
                       <div className="relative">
                         <code className="block p-3 pr-10 bg-[var(--bg-tertiary)] rounded-xl text-[10px] font-mono text-amber-300 break-all leading-relaxed">
-                          {getMacOneLiner('install')}
+                          {getRelayOneLiner('install')}
                         </code>
                         <button
                           onClick={() => {
-                            navigator.clipboard.writeText(getMacOneLiner('install'));
+                            navigator.clipboard.writeText(getRelayOneLiner('install'));
                             setRelayWaiting(true);
                             addNotification({ title: t('settings_ui.relay.toasts.copied'), message: t('settings_ui.relay.toasts.copyMsg'), type: 'success' });
                           }}
@@ -1775,7 +1797,7 @@ export default function SettingsApp({ initialTab }) {
 
                       <button
                         onClick={() => {
-                          navigator.clipboard.writeText(getMacOneLiner('install'));
+                          navigator.clipboard.writeText(getRelayOneLiner('install'));
                           setRelayWaiting(true);
                           addNotification({ title: t('settings_ui.relay.toasts.copied'), message: t('settings_ui.relay.toasts.openPasteInstall'), type: 'success' });
                         }}
@@ -1872,7 +1894,7 @@ export default function SettingsApp({ initialTab }) {
                   {detectedOS === 'macos' ? (
                     <button
                       onClick={() => {
-                        navigator.clipboard.writeText(getMacOneLiner('uninstall'));
+                        navigator.clipboard.writeText(getRelayOneLiner('uninstall'));
                         addNotification({ title: t('settings_ui.relay.toasts.copied'), message: t('settings_ui.relay.toasts.pasteUninstall'), type: 'info' });
                       }}
                       className="w-full flex items-center gap-3 px-4 py-3 bg-red-500/10 hover:bg-red-500/20 border border-red-500/20 active:scale-[0.98] rounded-xl text-red-400 font-bold text-[12px] transition-all"

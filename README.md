@@ -46,6 +46,73 @@ A modern, web-based SSH terminal and server monitoring dashboard built with Next
 
     Navigate to [http://localhost:3000](http://localhost:3000).
 
+## Docker Deployment
+
+This project includes a production-ready Docker setup for the custom `server.js` runtime.
+
+### Files
+
+- `Dockerfile` — multi-stage production image
+- `.dockerignore` — smaller, cleaner build context
+- `docker-compose.yml` — app + MongoDB deployment config
+- `deploy/nginx/monitor.eaqdragon.com.conf` — nginx reverse proxy for the domain
+
+### Server Setup
+
+1. Copy the project to your server.
+2. Create or upload your `.env` file.
+3. Build and start the containers:
+
+```bash
+docker compose up -d --build
+```
+
+This setup starts:
+
+- `monitor` on `127.0.0.1:3000`
+- `mongo` with database `monitor`
+
+MongoDB credentials used by the app:
+
+- Database: `monitor`
+- Username: `monitor`
+- Password: `AaBb1234!`
+
+### Updating on Server
+
+After pushing new code to the server:
+
+```bash
+docker compose up -d --build
+```
+
+### Notes
+
+- The app listens on port `3000` inside the container.
+- `docker-compose.yml` maps `127.0.0.1:3000:3000` so nginx can proxy it safely.
+- `.env` is injected at runtime via `env_file`, so secrets are not baked into the image.
+- `db-config.json` is bind-mounted to `/app/db-config.json` so Settings changes survive container restarts.
+- MongoDB data is stored in the Docker volume `mongo_data`.
+
+### Nginx
+
+An nginx config for `monitor.eaqdragon.com` is included at `deploy/nginx/monitor.eaqdragon.com.conf`.
+
+Typical server steps:
+
+```bash
+sudo cp deploy/nginx/monitor.eaqdragon.com.conf /etc/nginx/sites-available/monitor.eaqdragon.com
+sudo ln -s /etc/nginx/sites-available/monitor.eaqdragon.com /etc/nginx/sites-enabled/monitor.eaqdragon.com
+sudo nginx -t
+sudo systemctl reload nginx
+```
+
+If you use SSL with Certbot, run it after nginx is live:
+
+```bash
+sudo certbot --nginx -d monitor.eaqdragon.com
+```
+
 ## Usage
 
 1.  Click **"Add Server"** (or "New Connection") to add a new SSH host.

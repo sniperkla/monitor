@@ -879,6 +879,7 @@ const resources = {
         sshManager: "SSH Manager",
         resourceHub: "Resource Hub",
         notepad: "Secret Notepad",
+        docker: "Docker",
       },
       database: {
         naming: {
@@ -1535,6 +1536,7 @@ const resources = {
         sshManager: "ตัวจัดการ SSH",
         resourceHub: "ศูนย์รวมความรู้",
         notepad: "สมุดโน้ตลับ",
+        docker: "Docker",
       },
       database: {
         naming: {
@@ -2998,6 +3000,7 @@ const resources = {
         sshManager: "SSH 管理器",
         resourceHub: "资源中心",
         notepad: "加密记事本",
+        docker: "Docker",
       },
       database: {
         naming: {

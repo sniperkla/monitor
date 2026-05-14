@@ -220,6 +220,7 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
   const [isLoading, setIsLoading] = useState(false);
   const [isSearching, setIsSearching] = useState(false);
   const [isDockerInstalled, setIsDockerInstalled] = useState(true);
+  const [isDockerRunning, setIsDockerRunning] = useState(true);
   const [expandedContainer, setExpandedContainer] = useState(null);
   const [containerFilter, setContainerFilter] = useState('all'); // all, running, stopped
   
@@ -372,6 +373,7 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
 
       if (action === 'info') {
         setIsDockerInstalled(true);
+        setIsDockerRunning(true);
         emitDockerLs();
       } else if (action === 'list') {
         try {
@@ -379,10 +381,16 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
           const parsed = lines.map(line => {
             const data = JSON.parse(line);
             const labels = data.Labels || '';
-            const stackMatch = labels.match(/com\.docker\.compose\.project=([^,]+)/);
+            let stackName = null;
+            if (typeof labels === 'string') {
+              const stackMatch = labels.match(/com\.docker\.compose\.project=([^,]+)/);
+              stackName = stackMatch ? stackMatch[1] : null;
+            } else if (typeof labels === 'object') {
+              stackName = labels['com.docker.compose.project'] || null;
+            }
             
             return {
-              id: data.ID,
+              id: data.ID || data.Id || (Array.isArray(data.Names) ? data.Names[0] : data.Names),
               name: data.Names,
               image: data.Image,
               status: data.Status,
@@ -391,7 +399,7 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
               size: data.Size,
               createdAt: data.CreatedAt,
               networks: data.Networks,
-              stack: stackMatch ? stackMatch[1] : null,
+              stack: stackName,
               mounts: data.Mounts
             };
           });
@@ -638,7 +646,10 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
 
       if (err.includes('command not found') || err.includes('not found')) {
         setIsDockerInstalled(false);
+      } else if (err.includes('Cannot connect to the Docker daemon') || err.includes('docker daemon is not running')) {
+        setIsDockerRunning(false);
       } else {
+        // Prevent duplicate toasts if we already showed it recently
         addNotification({ title: 'Docker Error', message: err, type: 'error' });
       }
     });
@@ -1101,6 +1112,12 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
                     <h2 className="text-xl font-bold mb-2">Docker Not Installed</h2>
                     <p className="text-sm text-[var(--text-muted)]">Docker was not found on this server</p>
                 </div>
+            ) : !isDockerRunning ? (
+                <div className="text-center py-20">
+                    <AlertTriangle size={48} className="text-amber-500 mx-auto mb-4" />
+                    <h2 className="text-xl font-bold mb-2">Docker Daemon Not Running</h2>
+                    <p className="text-sm text-[var(--text-muted)]">Cannot connect to unix:///var/run/docker.sock</p>
+                </div>
             ) : (
                 <>
                     {/* ── CONTAINERS TAB ── */}
@@ -1167,12 +1184,12 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
                             ) : (
                               <div className="grid grid-cols-1 xl:grid-cols-2 gap-3">
                                 <AnimatePresence mode="popLayout">
-                                  {filteredContainers.map(c => {
+                                  {filteredContainers.map((c, i) => {
                                     const isExpanded = expandedContainer === c.id;
                                     const isPending = pendingActions[c.id];
                                     return (
                                       <motion.div 
-                                        key={c.id} 
+                                        key={c.id || `container-${i}`} 
                                         layout
                                         initial={{ opacity: 0, scale: 0.9, y: 10 }}
                                         animate={{ opacity: 1, scale: 1, y: 0 }}
@@ -1212,7 +1229,7 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
                                                 <p className="text-[10px] font-mono text-[var(--text-muted)] truncate">{c.image}</p>
                                                 {c.ports && (
                                                   <p className="text-[9px] font-mono text-sky-400/70 flex items-center gap-1 mt-0.5 truncate">
-                                                    <ExternalLink size={8} /> {c.ports}
+                                                    <ExternalLink size={8} className="shrink-0" /> <span className="truncate">{typeof c.ports === 'string' ? c.ports : Array.isArray(c.ports) ? c.ports.map(p => typeof p === 'object' ? `${p.host_port ? p.host_port + '->' : ''}${p.container_port}${p.protocol ? '/'+p.protocol : ''}` : p).join(', ') : JSON.stringify(c.ports)}</span>
                                                   </p>
                                                 )}
                                             </div>
@@ -1502,10 +1519,12 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
                               <div className="grid grid-cols-1 xl:grid-cols-2 gap-3">
                                   {images.map((img, idx) => {
                                       const fullTag = `${img.Repository}:${img.Tag}`;
-                                      const users = containers.filter(c => c.image === fullTag || c.image === img.ID || c.image.includes(img.Repository));
+                                      const imgIdDisplay = img.ID || img.Id || '';
+                                      const users = containers.filter(c => c.image === fullTag || c.image === imgIdDisplay || c.image.includes(img.Repository));
                                       const isNone = img.Repository === '<none>';
+                                      const imgId = img.ID || img.Id || `img-${idx}`;
                                       return (
-                                          <div key={img.ID + idx} className="p-4 rounded-2xl border border-[var(--border-color)] bg-[var(--bg-card)] hover:border-emerald-500/20 transition-all group">
+                                          <div key={imgId} className="p-4 rounded-2xl border border-[var(--border-color)] bg-[var(--bg-card)] hover:border-emerald-500/20 transition-all group">
                                               <div className="flex justify-between items-start mb-3">
                                                   <div className="flex items-center gap-3 min-w-0">
                                                       <div className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 ${
@@ -1518,7 +1537,7 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
                                                             {isNone ? '(untagged)' : img.Repository}
                                                           </h3>
                                                           <p className="text-[10px] text-[var(--text-muted)]">
-                                                            {isNone ? img.ID.substring(0, 20) : `Tag: ${img.Tag}`}
+                                                            {isNone ? imgIdDisplay.substring(0, 20) : `Tag: ${img.Tag}`}
                                                           </p>
                                                       </div>
                                                   </div>
@@ -1535,8 +1554,8 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
                                               {users.length > 0 && (
                                                 <div className="mb-3">
                                                     <div className="flex flex-wrap gap-1">
-                                                        {users.map(u => (
-                                                          <span key={u.id} className="px-1.5 py-0.5 text-[9px] bg-sky-500/10 text-sky-400 rounded-md border border-sky-500/10">{u.name}</span>
+                                                        {users.map((u, uIdx) => (
+                                                          <span key={u.id || `user-c-${uIdx}`} className="px-1.5 py-0.5 text-[9px] bg-sky-500/10 text-sky-400 rounded-md border border-sky-500/10">{u.name}</span>
                                                         ))}
                                                     </div>
                                                 </div>
@@ -1544,13 +1563,13 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
 
                                               <div className="flex items-center gap-1.5">
                                                 <button 
-                                                  onClick={() => handleOpenCreateModal(!isNone ? fullTag : img.ID, true)} 
+                                                  onClick={() => handleOpenCreateModal(!isNone ? fullTag : imgIdDisplay, true)}
                                                   className="flex-1 py-1.5 rounded-lg bg-emerald-500/10 text-emerald-400 text-[10px] font-bold hover:bg-emerald-500/15 transition-all flex items-center justify-center gap-1"
                                                 >
                                                   <Play size={9} /> RUN
                                                 </button>
                                                 <button 
-                                                  onClick={() => handleDeleteImage(img.ID, isNone ? img.ID.substring(0,12) : fullTag)}
+                                                  onClick={() => handleDeleteImage(imgIdDisplay, isNone ? imgIdDisplay.substring(0,12) : fullTag)}
                                                   disabled={users.length > 0}
                                                   className="py-1.5 px-2.5 rounded-lg border border-rose-500/20 text-rose-500 hover:bg-rose-500/10 transition-all disabled:opacity-20 disabled:cursor-not-allowed"
                                                   title={users.length > 0 ? 'Image is in use' : 'Remove image'}
@@ -1659,14 +1678,14 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
                                     const vName = (vol.Name || '').toLowerCase().trim();
                                     if (!vName) return null;
                                     const associated = containers.filter(c => {
-                                      const mounts = (c.detailedMounts || c.mounts || '').toLowerCase();
+                                      const mounts = String(c.detailedMounts || c.mounts || '').toLowerCase();
                                       return mounts.includes(vName);
                                     });
                                     if (associated.length === 0) return null;
                                     return (
                                       <div className="flex flex-wrap gap-1 mt-3 pl-[50px] relative z-10">
-                                        {associated.map(c => (
-                                          <span key={c.id} className="px-1.5 py-0.5 bg-violet-500/10 text-violet-400 border border-violet-500/10 rounded-md text-[9px] font-bold">
+                                        {associated.map((c, idx) => (
+                                          <span key={c.id || `asc-c-${idx}`} className="px-1.5 py-0.5 bg-violet-500/10 text-violet-400 border border-violet-500/10 rounded-md text-[9px] font-bold">
                                             {c.name}
                                           </span>
                                         ))}

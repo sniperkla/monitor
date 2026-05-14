@@ -640,7 +640,7 @@ logstash:
     // Start Auto Mode with the generated goal
     setAutoGoal(goalText);
     setAiMode('auto');
-    setAutoStepsRemaining(20);
+    setAutoStepsRemaining(MAX_AUTO_STEPS);
     setAutoMode(true);
     setAiOpen(true);
     setAiHasOpenedOnce(true);
@@ -1173,6 +1173,7 @@ logstash:
       fontFamily: settings.fontFamily || preset.fontFamily || "'JetBrains Mono', monospace",
       fontWeight: settings.fontWeight || preset.fontWeight || 'normal',
       letterSpacing: settings.letterSpacing || preset.letterSpacing || 0,
+      macOptionClickForcesSelection: true,
       theme: {
         ...(preset.theme || {}),
         ...(settings.theme || {}),
@@ -1355,6 +1356,10 @@ logstash:
       setPatchModalOpen(false);
       setPatchModalDiff('');
       setPatchModalAutoApplied(false);
+        setManualAiLoading(false);
+        setAutoAiLoading(false);
+        commandRunningRef.current = false;
+        apiRetryCountRef.current = 0;
       setLastPatchBackup(null);
       setTmuxInitialized(false);
       // Close AI panel and related panels when SSH disconnects
@@ -1467,7 +1472,13 @@ logstash:
     });
 
     term.onData((data) => {
-      if (socket.connected && !autoModeRef.current) {
+      if (socket.connected) {
+        // Handle Ctrl+C to stop auto mode manually if needed
+        if (data === '\x03' && autoModeRef.current) {
+          setAutoMode(false);
+          // Allow it to pass through to interrupt the command
+        }
+
         // Hide scroll hint on any key input to the terminal (typing, ctrl+c, etc)
         // Arrows/Escape sequences continue to allow scrolling without hiding instantly if the user is in scroll mode.
         const isMouseOrArrow = data.startsWith('\x1b[');
@@ -2242,6 +2253,10 @@ logstash:
   const openPatchModal = (diffText) => {
     setPatchModalDiff(diffText || '');
     setPatchModalAutoApplied(false);
+        setManualAiLoading(false);
+        setAutoAiLoading(false);
+        commandRunningRef.current = false;
+        apiRetryCountRef.current = 0;
     setPatchFileCollapsed({}); // reset so all files start expanded
     setPatchModalOpen(true);
   };
@@ -3050,6 +3065,9 @@ logstash:
     if (/^In\s*\[\d*\]:\s*$/.test(last)) return false; // IPython/Jupyter In [n]:
     if (/^\(Pdb\+?\)\s*$/.test(last)) return false;    // Python debugger (Pdb)
 
+    // Continuation prompt (like unclosed quotes > )
+    if (/^>\s*$/.test(last)) return true;
+
     // Common standard prompts: $, #, %, > and rich zsh themes: ❯, ➜, ➔, ➤
     if (/[$#%>❯➜➔➤]\s*$/.test(last)) return true;
     // Brackets/paths style: [user@server ~]# or (base) user@host ~/path $
@@ -3519,6 +3537,19 @@ logstash:
 
     let snap = String(snapshotOverride ?? getOutputContext() ?? '');
     if (!snap || looksLikeShellPrompt(snap)) return null;
+
+    // Detect hanging unclosed quote prompt (>) which means command syntax is broken
+    const recentLines = snap.split('\n').filter(l => l.trim().length > 0).slice(-3);
+    const lastLine = (recentLines[recentLines.length - 1] || '').trim();
+    if (/^>\s*$/.test(lastLine)) {
+        console.warn('🛡️ Active Command Syntax Error / Trapped in quote. Send cancel (Ctrl+C).');
+        socketRef.current.emit('ssh:input', '\x03'); // Ctrl+C
+        await new Promise(r => setTimeout(r, 600));
+        snap = getOutputContext();
+        setLastResultSnapshot(snap);
+        setLastResultAt(Date.now());
+        return snap;
+    }
 
     const editorType = looksLikeEditorOrPager(snap);
     const lastCmd = String(commandOverride ?? lastExecutedCommand ?? '').trim();
@@ -5119,6 +5150,7 @@ If you cannot produce a patch, explain why and set <done>true</done>.`
     // ─────────────────────────────────────────────────────────────────────────
 
     autoRunningRef.current = true;
+    setAiLoading(true);
     try {
       // Build rich failure context from recent command history
       const recentHistory = autoRecentCommandsRef.current.slice(-5).join(' → ');
@@ -5163,6 +5195,12 @@ If you cannot produce a patch, explain why and set <done>true</done>.`
       const rootContainerRule = isRootContainer
         ? `\n- CRITICAL: You are running as ROOT inside a container. Do NOT use 'sudo' (it is not installed and will cause 'command not found' errors). Just run commands directly (e.g. 'apt update', not 'sudo apt update'). Also IGNORE host OS package manager rules—you are in a container. Use apt/yum directly.`
         : '';
+
+      const isAptNotFound = /apt(-get)?:\s*command not found/i.test(snap);
+      const isYumNotFound = /yum:\s*command not found/i.test(snap);
+      let packageManagerRule = '';
+      if (isAptNotFound) packageManagerRule = '\n- CRITICAL: \'apt\'/\'apt-get\' not found! This is NOT Debian/Ubuntu. Use \'yum\', \'dnf\', or \'apk\'. Run \'cat /etc/os-release\' to verify your OS version.';
+      else if (isYumNotFound) packageManagerRule = '\n- CRITICAL: \'yum\' not found! This is NOT CentOS/Amazon Linux. Use \'apt-get\' or \'apk\'. Run \'cat /etc/os-release\' to verify your OS version.';
 
       const effectivePreferSudo = sshAiPrefs?.preferSudo && !isRootContainer;
 
@@ -5227,7 +5265,7 @@ If you cannot produce a patch, explain why and set <done>true</done>.`
           completionHint = `\n[WARNING] COMPLETION_VETOED: Evidence looked positive but deep scan found critical error: "${deepErrForHint.label}". Do NOT set <done>true</done>. Fix this error first.`;
           console.warn('[AI Agent] Suppressed completion hint due to deep scan error:', deepErrForHint.label);
         } else {
-          completionHint = `\n[ACTION] TERMINAL_EVIDENCE_POSITIVE: Goal satisfied (Reason: ${completionEvidence.reason}). Set <done>true</done> now.`;
+          completionHint = `\n🏆 CRITICAL: SUCCESS CONFIRMED (Reason: ${completionEvidence.reason}). The goal has been achieved. You MUST stop now. Do NOT overthink or run further commands. Set <done>true</done> and provide a <explain> summary IMMEDIATELY.`;
         }
       }
 
@@ -5332,7 +5370,7 @@ Do NOT read the file again. ACT NOW.`
       // If the AI has run zero commands yet, it should explore before executing.
       const isFirstStep = !lastExecutedCommand || String(lastExecutedCommand).trim() === '';
       const scoutFirstRule = (isExecutionGoal && isFirstStep)
-        ? `\n🔍 SCOUT FIRST (Step 1): Before running ANY execution command, you MUST verify prerequisites:\n- Run \`ls\` or \`ls -la\` to see the folder structure\n- If deploying a Node app, check \`cat package.json | head -20\` to find the start script\n- Check if \`node_modules\` exists (if not, run npm install first)\n- Identify the correct working directory and entry point BEFORE running pm2/npm/docker\n- Do NOT run pm2 start until you have confirmed the app structure is ready\n`
+        ? `\n🔍 SCOUT FIRST (Step 1): Before running ANY execution command, you MUST verify prerequisites:\n- Verify OS package manager (run \`cat /etc/os-release\` or \`uname -a\`)\n- Run \`ls\` or \`ls -la\` to see the folder structure\n- If deploying a Node app, check \`cat package.json | head -20\` to find the start script\n- Check if \`node_modules\` exists (if not, run npm install first)\n- Identify the correct working directory and entry point BEFORE running pm2/npm/docker\n- Do NOT run pm2 start until you have confirmed the app structure is ready\n`
         : '';
 
       // === Failure reasoning: structured exit vs retry decision ===
@@ -5377,7 +5415,7 @@ Strategy: Try \`cargo build --release\` locally on the server, or if using Rust,
 
       const autoPrompt = `[AUTO] Goal: ${goal}
 State:
-- Status: ${terminalStatus}${runningNote}${osNote}${macOsRule}${amazonLinuxRule}${rootContainerRule}${completionHint}${lowStepsWarn}${versionMismatchHint}
+- Status: ${terminalStatus}${runningNote}${osNote}${macOsRule}${amazonLinuxRule}${rootContainerRule}${packageManagerRule}${completionHint}${lowStepsWarn}${versionMismatchHint}
 - Sudo: ${effectivePreferSudo ? 'on' : 'off'} | Cmd: ${lastExecutedCommand || '(first step)'} | Err: ${err ? err.label : 'none'}${failureNote}
 - Recent: ${recentHistory || 'none'}${skillsBlock}
 - Output:
@@ -5671,6 +5709,10 @@ ${isExecutionGoal ? '⚡ EXECUTION: run commands directly.\n' : ''}${scoutFirstR
 
           setPatchModalDiff(d);
           setPatchModalAutoApplied(false);
+        setManualAiLoading(false);
+        setAutoAiLoading(false);
+        commandRunningRef.current = false;
+        apiRetryCountRef.current = 0;
           setPatchModalOpen(true);
           setAiError('Auto Mode paused: AI returned a malformed diff patch. Please review/copy the patch, then Resume.');
           setAutoMode(false);
@@ -5720,6 +5762,10 @@ ${isExecutionGoal ? '⚡ EXECUTION: run commands directly.\n' : ''}${scoutFirstR
 
         if (!sshAiPrefs?.autoApplyPatch) {
           setPatchModalAutoApplied(false);
+        setManualAiLoading(false);
+        setAutoAiLoading(false);
+        commandRunningRef.current = false;
+        apiRetryCountRef.current = 0;
           setAiError('Auto Mode paused: patch requires review. Click Apply Patch, then Resume.');
           setAutoMode(false);
           setAiOpen(true);
@@ -6152,15 +6198,21 @@ If this is a deployment task, switch task mode to 'deploy' instead of 'code'.`
           }
         }
 
-        // === Command cycle detector (A→B→A→B pattern) ===
-        // Lowered threshold from 6 to 4 commands — catches cycles faster.
-        // Now also catches read-only command cycles (previously excluded).
+        // === Command cycle detector (Generic repetion) ===
         if (recentCmds.length >= 4) {
+          const counts = {};
+          let isCircling = false;
+          for (const c of recentCmds) {
+            counts[c] = (counts[c] || 0) + 1;
+            if (counts[c] >= 3 && String(c).trim() !== 'y') {
+               isCircling = true;
+            }
+          }
           const a = recentCmds[recentCmds.length - 1];
           const b = recentCmds[recentCmds.length - 2];
           const c = recentCmds[recentCmds.length - 3];
           const d = recentCmds[recentCmds.length - 4];
-          if (a === c && b === d && a !== b) {
+          if (isCircling || (a === c && b === d && a !== b)) {
             const _cycleSkillQuery = skillQueryFromGoal(goal, recentOutputLower);
             console.log('[AI Agent] Command cycle detected — searching SkillsMP for:', _cycleSkillQuery);
             setAiError(`Auto Mode paused: AI is cycling commands (${a} ↔ ${b}). Searching SkillsMP for "${_cycleSkillQuery}" skills to break the loop...`);
@@ -6225,6 +6277,7 @@ If this is a deployment task, switch task mode to 'deploy' instead of 'code'.`
       apiRetryCountRef.current = 0;
     } finally {
       autoRunningRef.current = false;
+      setAiLoading(false);
     }
   };
 
@@ -6462,6 +6515,10 @@ If this is a deployment task, switch task mode to 'deploy' instead of 'code'.`
                 setPatchModalOpen(false);
                 setPatchModalDiff('');
                 setPatchModalAutoApplied(false);
+        setManualAiLoading(false);
+        setAutoAiLoading(false);
+        commandRunningRef.current = false;
+        apiRetryCountRef.current = 0;
                 setLastPatchBackup(null);
                 onClose?.();
               }}
@@ -7145,6 +7202,10 @@ If this is a deployment task, switch task mode to 'deploy' instead of 'code'.`
                                         setPatchModalDiff(msg.diff);
                                         setPatchModalOpen(true);
                                         setPatchModalAutoApplied(false);
+        setManualAiLoading(false);
+        setAutoAiLoading(false);
+        commandRunningRef.current = false;
+        apiRetryCountRef.current = 0;
                                       }} className="flex-1 flex items-center justify-center gap-1 py-1.5 rounded bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-400 text-[10px] transition font-bold">
                                         <FileIconAi size={10} /> Review / Apply Patch
                                       </button>
@@ -7155,6 +7216,10 @@ If this is a deployment task, switch task mode to 'deploy' instead of 'code'.`
                                       setPatchModalDiff(msg.diff);
                                       setPatchModalOpen(true);
                                       setPatchModalAutoApplied(false);
+        setManualAiLoading(false);
+        setAutoAiLoading(false);
+        commandRunningRef.current = false;
+        apiRetryCountRef.current = 0;
                                    }} className="flex-[0.5] flex items-center justify-center gap-1 py-1.5 rounded bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-400 text-[10px] transition font-bold">
                                       <FileIconAi size={10} /> Patch
                                     </button>
@@ -7258,6 +7323,10 @@ If this is a deployment task, switch task mode to 'deploy' instead of 'code'.`
                                     setLastPatchBackup(null);
                                     setLastPatchResultData(null);
                                     setPatchModalAutoApplied(false);
+        setManualAiLoading(false);
+        setAutoAiLoading(false);
+        commandRunningRef.current = false;
+        apiRetryCountRef.current = 0;
                                   }} disabled={!isLoggedIn} className="flex-1 flex items-center justify-center gap-1 py-2 rounded bg-red-600/70 hover:bg-red-600 text-white text-xs transition border border-red-500/20 disabled:opacity-40 disabled:cursor-not-allowed">
                                     ↩ Rollback All
                                   </button>
@@ -7406,7 +7475,7 @@ If this is a deployment task, switch task mode to 'deploy' instead of 'code'.`
                           <div className="flex items-center gap-1.5 opacity-80">
                             <Sparkles size={12} className="text-[var(--accent-indigo)]" />
                             <span className="text-[10px] font-bold uppercase tracking-wider text-[var(--accent-indigo)]">
-                              {aiAnswer.raw.includes('AUTO_FIX_REQUEST') ? t('ai.autoFix') : 'Zeroclaw AI'}
+                              {aiAnswer.raw?.includes('AUTO_FIX_REQUEST') ? t('ai.autoFix') : 'Zeroclaw AI'}
                             </span>
                           </div>
                           {aiAnswer.usedModel && (
@@ -7655,6 +7724,17 @@ If this is a deployment task, switch task mode to 'deploy' instead of 'code'.`
                           Latest: {bgTaskLogs[bgTaskLogs.length - 1]}
                        </div>
                     )}
+                  </div>
+                )}
+
+                {/* Generic Loading State */}
+                {(!aiAnswer || !aiAnswer.plan) && (aiLoading || autoRunningRef.current) && !aiDone && (
+                  <div className="relative rounded-xl border border-[var(--accent-indigo)]/20 bg-[var(--accent-indigo)]/5 p-5 flex items-center justify-center">
+                    <div className="absolute -inset-[1px] rounded-xl bg-gradient-to-r from-indigo-500/20 via-purple-500/20 to-indigo-500/20 animate-pulse-slow -z-10 opacity-70" />
+                    <div className="flex items-center gap-3">
+                      <Loader2 size={16} className="animate-spin text-[var(--accent-indigo)]" />
+                      <span className="text-xs font-bold uppercase tracking-widest text-[var(--accent-indigo)] opacity-80 animate-pulse">{t('ai.thinking') || 'Thinking...'}</span>
+                    </div>
                   </div>
                 )}
 
@@ -8247,7 +8327,7 @@ If this is a deployment task, switch task mode to 'deploy' instead of 'code'.`
                            </button>
                          )}
                         
-                        {autoMode && autoCountdown === 0 && (
+                        {autoMode && autoCountdown === 0 && !autoRunningRef.current && !aiLoading && (
                           <button 
                             onClick={() => {
                                // Reset stall memory for force-step too

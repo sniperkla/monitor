@@ -1,0 +1,33 @@
+services:
+  monitor:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: monitor:latest
+    container_name: monitor
+    restart: unless-stopped
+    depends_on:
+      - mongo
+    ports:
+      - "127.0.0.1:3000:3000"
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+    volumes:
+      - ./db-config.json:/app/db-config.json
+
+  mongo:
+    image: mongo:7
+    container_name: monitor-mongo
+    restart: unless-stopped
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: monitor
+      MONGO_INITDB_ROOT_PASSWORD: AaBb1234!
+      MONGO_INITDB_DATABASE: monitor
+    volumes:
+      - mongo_data:/data/db
+
+volumes:
+  mongo_data:

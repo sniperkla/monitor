@@ -92,6 +92,22 @@ const _fmSocketPool = typeof window !== 'undefined'
   ? (window.__fmSocketPool || (window.__fmSocketPool = new Map()))
   : new Map();
 
+if (typeof window !== 'undefined' && !window.__fmSocketPoolUnloadBound) {
+  window.__fmSocketPoolUnloadBound = true;
+  window.addEventListener('pagehide', () => {
+    _fmSocketPool.forEach((entry, pooledConnectionId) => {
+      clearTimeout(entry?.cleanupTimer);
+      try {
+        entry?.socket?.emit?.('ssh:disconnect');
+        entry?.socket?.disconnect?.();
+      } catch (err) {
+        console.warn('Failed to dispose pooled FileManager socket:', err);
+      }
+    });
+    _fmSocketPool.clear();
+  });
+}
+
 const SFTP_REUSE_EVENTS = [
   'heartbeat:pong', 'sftp:list', 'sftp:file_content', 'sftp:action_success',
   'sftp:progress', 'sftp:download_start', 'sftp:download_chunk', 'sftp:download_done',
@@ -134,8 +150,13 @@ export default function FileManager({
   const pathPreviewDebounceRef = useRef(null);
   const [latency, setLatency] = useState(null);
   const [reconnectNonce, setReconnectNonce] = useState(0);
+  const reconnectAttemptsRef = useRef(0);
+  const MAX_RECONNECT_ATTEMPTS = 3;
+  const [reconnectAlert, setReconnectAlert] = useState(null);
   const socketRef = useRef(null);
   const dbUriRef = useRef(appState.dbConfig?.uri || '');
+  const pendingTransferResumeRef = useRef(null);
+  const reconnectNoticeAtRef = useRef(0);
 
   // Context Menu State
   const [contextMenu, setContextMenu] = useState({ visible: false, x: 0, y: 0, file: null });
@@ -158,6 +179,8 @@ export default function FileManager({
   const [transferCountdown, setTransferCountdown] = useState(0);
   const lastDownloadRef = useRef(null); // { file, offset }
   const transferRef = useRef(null); // Keep a ref of transfer for loop cancellation
+  const reconnectTimerRef = useRef(null);
+  const emptyRetryPathRef = useRef('');
   const deleteBatchRef = useRef({ count: 0, total: 0, toastId: null });
   
   // AI State
@@ -186,6 +209,8 @@ export default function FileManager({
   const downloadBufferRef = useRef({});
   
   const [uploadQueue, setUploadQueue] = useState([]); // Array of { file, path, offset }
+  const uploadQueueRef = useRef([]);
+  useEffect(() => { uploadQueueRef.current = uploadQueue; }, [uploadQueue]);
   
   useEffect(() => { 
     currentPathRef.current = currentPath; 
@@ -209,6 +234,99 @@ export default function FileManager({
   const statusRef = useRef(status);
   useEffect(() => { statusRef.current = status; }, [status]);
 
+  const requestReconnect = useCallback((message = 'Connection lost. Reconnecting...', options = {}) => {
+    const { preserveTransfer = false, notificationMessage } = options;
+    if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
+    setStatus('error');
+    setError(message);
+    setLoading(false);
+    setReconnectAlert({
+      message: notificationMessage || message,
+      preserveTransfer,
+      attempts: reconnectAttemptsRef.current + 1,
+    });
+
+    if (preserveTransfer && transferRef.current) {
+      const interruptedTransfer = {
+        ...transferRef.current,
+        waiting: true,
+        reconnecting: true,
+      };
+      setTransfer(interruptedTransfer);
+      transferRef.current = interruptedTransfer;
+
+      if (interruptedTransfer.action === 'download' && lastDownloadRef.current) {
+        pendingTransferResumeRef.current = {
+          type: 'download',
+          file: lastDownloadRef.current.file,
+          offset: lastDownloadRef.current.offset || 0,
+        };
+      } else if (interruptedTransfer.action === 'upload' || uploadQueueRef.current.length > 0) {
+        pendingTransferResumeRef.current = {
+          type: 'upload',
+        };
+      }
+    } else {
+      setTransfer(null);
+      transferRef.current = null;
+      pendingTransferResumeRef.current = null;
+    }
+
+    const now = Date.now();
+    if (notificationMessage && now - reconnectNoticeAtRef.current > 1500) {
+      reconnectNoticeAtRef.current = now;
+      addNotification({
+        title: 'Reconnecting',
+        message: notificationMessage,
+        type: 'warning',
+      });
+    }
+
+    reconnectAttemptsRef.current += 1;
+    if (reconnectAttemptsRef.current > MAX_RECONNECT_ATTEMPTS) {
+      setReconnectAlert({
+        message: preserveTransfer
+          ? 'Reconnect paused after several tries. Your transfer state is preserved — use Retry Connection to continue safely.'
+          : 'Reconnect paused after several tries. Use Retry Connection to try again.',
+        preserveTransfer,
+        attempts: reconnectAttemptsRef.current,
+        exhausted: true,
+      });
+      return;
+    }
+    const backoffMs = Math.min(800 * reconnectAttemptsRef.current, 5000);
+    reconnectTimerRef.current = setTimeout(() => {
+      setReconnectNonce((n) => n + 1);
+    }, backoffMs);
+  }, [addNotification]);
+
+  useEffect(() => {
+    return () => {
+      if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
+    };
+  }, []);
+
+  const ensureSocketReady = useCallback((actionLabel = 'complete this action') => {
+    if (socketRef.current?.connected && statusRef.current === 'ready') {
+      return true;
+    }
+
+    addNotification({
+      title: 'Reconnecting',
+      message: `File manager is reconnecting. Please wait a moment, then ${actionLabel}.`,
+      type: 'warning'
+    });
+    requestReconnect('Connection expired after idle time. Reconnecting...');
+    return false;
+  }, [addNotification, requestReconnect]);
+
+  const isTransferChannelError = useCallback((errOrMessage) => {
+    const rawMessage = typeof errOrMessage === 'string'
+      ? errOrMessage
+      : errOrMessage?.message || '';
+    return /connection .*closed|channel .*closed|socket .*disconnected|broken pipe|not connected|no response from server|eof|handshake timeout|acknowledg(e)?ment timeout|upload completion timeout/i.test(rawMessage);
+  }, []);
+
   useEffect(() => {
     const newUri = appState.dbConfig?.uri || '';
     const prevUri = dbUriRef.current;
@@ -223,10 +341,16 @@ export default function FileManager({
 
   useEffect(() => {
     const poolEntry = _fmSocketPool.get(connectionId);
-    const isReused = !!(poolEntry?.socket?.connected);
+    const isReused = !!(
+      poolEntry?.socket?.connected &&
+      poolEntry?.status === 'ready'
+    );
 
     let newSocket;
     let timeout = null;
+    let reuseInitTimeout = null;
+    let pendingRefreshPath = null;
+    let reusedSocket = false;
 
     setError(null);
 
@@ -235,21 +359,21 @@ export default function FileManager({
       clearTimeout(poolEntry.cleanupTimer);
       newSocket = poolEntry.socket;
       _fmSocketPool.delete(connectionId);
+      reusedSocket = true;
 
       // Restore state instantly from pool snapshot, prioritizing initialPath if not default
       const savedPath = (initialPath && initialPath !== '.') ? initialPath : (poolEntry.currentPath || '.');
+      const pooledFiles = poolEntry.files || [];
       setCurrentPath(savedPath);
       currentPathRef.current = savedPath;
-      setFiles(poolEntry.files || []);
-      filesRef.current = poolEntry.files || [];
-      setStatus('ready');
-      setLoading(false);
+      setFiles(pooledFiles);
+      filesRef.current = pooledFiles;
+      setStatus(pooledFiles.length > 0 ? 'ready' : 'ssh_connecting');
+      setLoading(true);
 
       // Remove stale handlers from previous mount before re-registering
       SFTP_REUSE_EVENTS.forEach(ev => newSocket.removeAllListeners(ev));
-
-      // Refresh the file list silently
-      newSocket.emit('sftp:list', savedPath);
+      pendingRefreshPath = savedPath;
 
       console.log('♻️ FileManager: reusing socket for', connectionId, '— no reconnect');
     } else {
@@ -278,20 +402,81 @@ export default function FileManager({
       newSocket.on('connect', () => {
         console.log('🔌 Socket connected, sending ssh:connect');
         setStatus('ssh_connecting');
-        newSocket.emit('ssh:connect', { connectionId, connection: connectionRef.current });
+        const shouldPreferProvidedConnection =
+          !!connectionRef.current && connectionRef.current.storage !== 'db';
+        newSocket.emit('ssh:connect', {
+          connectionId,
+          connection: shouldPreferProvidedConnection ? connectionRef.current : undefined,
+          useShell: false,
+          preferProvidedConnection: shouldPreferProvidedConnection,
+        });
       });
 
       newSocket.on('ssh:connected', () => {
         console.log('✅ SSH connected, listing files at:', currentPathRef.current);
+        reconnectAttemptsRef.current = 0;
+        setReconnectAlert(null);
         setStatus('ready');
         newSocket.emit('sftp:list', currentPathRef.current);
         appDispatch({ type: 'UPDATE_CONNECTION', payload: { _id: connectionId, status: 'online' } });
+
+        const pendingResume = pendingTransferResumeRef.current;
+        if (pendingResume?.type === 'upload' && uploadQueueRef.current.length > 0) {
+          addNotification({
+            title: 'Connection restored',
+            message: `${uploadQueueRef.current.length} queued upload${uploadQueueRef.current.length === 1 ? '' : 's'} can continue now.`,
+            type: 'info',
+          });
+        }
       });
     }
 
     newSocket.on('heartbeat:pong', (sentTimestamp) => {
       const now = Date.now();
       setLatency(now - sentTimestamp);
+    });
+
+    newSocket.on('ssh:closed', () => {
+      appDispatch({ type: 'UPDATE_CONNECTION', payload: { _id: connectionId, status: 'offline' } });
+      requestReconnect('SSH session closed after idle time. Reconnecting...', {
+        preserveTransfer: !!transferRef.current,
+        notificationMessage: transferRef.current?.action === 'download'
+          ? 'SSH disconnected while downloading. Reconnecting and resuming from the last received byte.'
+          : transferRef.current?.action === 'upload' || uploadQueueRef.current.length > 0
+            ? 'SSH disconnected while uploading. Reconnecting and keeping your upload queue.'
+            : 'SSH session closed. Reconnecting now.',
+      });
+    });
+
+    newSocket.on('disconnect', (reason) => {
+      if (reason === 'io client disconnect') return;
+      appDispatch({ type: 'UPDATE_CONNECTION', payload: { _id: connectionId, status: 'offline' } });
+      requestReconnect(reason === 'io server disconnect'
+        ? 'Session expired after idle time. Reconnecting...'
+        : 'Socket disconnected. Reconnecting...', {
+        preserveTransfer: !!transferRef.current,
+        notificationMessage: transferRef.current?.action === 'download'
+          ? 'Connection dropped during download. Reconnecting and resuming automatically.'
+          : transferRef.current?.action === 'upload' || uploadQueueRef.current.length > 0
+            ? 'Connection dropped during upload. Reconnecting and keeping the upload queue.'
+            : 'Connection dropped. Reconnecting now.',
+      });
+    });
+
+    newSocket.on('connect_error', (err) => {
+      const msg = err?.message || 'Unable to reconnect';
+      setStatus('error');
+      setError(msg);
+      setLoading(false);
+      setReconnectAlert({
+        message: transferRef.current?.action === 'download'
+          ? 'Reconnect attempt failed while resuming your download. We will keep trying automatically.'
+          : transferRef.current?.action === 'upload' || uploadQueueRef.current.length > 0
+            ? 'Reconnect attempt failed while your upload queue is paused. We will keep trying automatically.'
+            : msg,
+        preserveTransfer: !!transferRef.current,
+        attempts: reconnectAttemptsRef.current,
+      });
     });
 
     newSocket.on('sftp:list', (data) => {
@@ -318,7 +503,28 @@ export default function FileManager({
       setLoading(false);
       setStatus('ready');
       clearTimeout(timeout);
+      clearTimeout(reuseInitTimeout);
     });
+
+    if (pendingRefreshPath) {
+      newSocket.emit('sftp:list', pendingRefreshPath);
+      if (reusedSocket) {
+        reuseInitTimeout = setTimeout(() => {
+          if (filesRef.current.length > 0 || !socketRef.current?.connected) return;
+          console.warn('⚠️ Reused FileManager socket did not refresh file list in time. Reconnecting fresh session.');
+          try {
+            newSocket.emit('ssh:disconnect');
+            newSocket.disconnect();
+          } catch (err) {
+            console.warn('Failed to dispose stale reused socket:', err);
+          }
+          setStatus('connecting');
+          setLoading(true);
+          setError('Previous session expired. Reconnecting...');
+          setReconnectNonce((n) => n + 1);
+        }, 3500);
+      }
+    }
 
     newSocket.on('sftp:file_content', ({ path, content }) => {
        setEditor(prev => ({ ...prev, content, visible: true, saving: false }));
@@ -375,26 +581,64 @@ export default function FileManager({
       });
     });
 
-    newSocket.on('sftp:download_start', ({ filename, size }) => {
-       if (!downloadBufferRef.current[filename]) {
-         downloadBufferRef.current[filename] = { buffer: [], toastId: null };
-       } else {
-         downloadBufferRef.current[filename].buffer = [];
-       }
-       setTransfer({ filename, progress: 0, action: 'download' });
+    newSocket.on('sftp:download_start', ({ filename, size, offset = 0 }) => {
+       const existing = downloadBufferRef.current[filename];
+       const resumeOffset = Math.max(offset || 0, existing?.bytesReceived || 0);
+       downloadBufferRef.current[filename] = {
+         buffer: resumeOffset > 0 && existing?.buffer?.length ? existing.buffer : [],
+         toastId: existing?.toastId || null,
+         bytesReceived: resumeOffset,
+         size,
+       };
+       const nextTransfer = {
+         filename,
+         progress: size > 0 ? Math.round((resumeOffset / size) * 100) : 0,
+         action: 'download',
+         waiting: false,
+         reconnecting: false,
+         bytes: resumeOffset,
+       };
+       setTransfer(nextTransfer);
+       transferRef.current = nextTransfer;
     });
 
     newSocket.on('sftp:download_chunk', ({ filename, chunk, progress, offset }) => {
        if (downloadBufferRef.current[filename]) {
          downloadBufferRef.current[filename].buffer.push(chunk);
+         downloadBufferRef.current[filename].bytesReceived = offset;
        }
-       setTransfer({ filename, progress, action: 'download', waiting: false, bytes: offset });
+       const nextTransfer = { filename, progress, action: 'download', waiting: false, reconnecting: false, bytes: offset };
+       setTransfer(nextTransfer);
+       transferRef.current = nextTransfer;
        if (lastDownloadRef.current) lastDownloadRef.current.offset = offset;
     });
 
     newSocket.on('sftp:download_done', ({ filename }) => {
        const dlMeta = downloadBufferRef.current[filename];
        if (!dlMeta) return;
+       if (dlMeta.size > 0 && (dlMeta.bytesReceived || 0) < dlMeta.size) {
+         const partialBytes = dlMeta.bytesReceived || 0;
+         const nextTransfer = {
+           filename,
+           progress: Math.round((partialBytes / dlMeta.size) * 100),
+           action: 'download',
+           waiting: true,
+           reconnecting: true,
+           bytes: partialBytes,
+         };
+         setTransfer(nextTransfer);
+         transferRef.current = nextTransfer;
+         pendingTransferResumeRef.current = {
+           type: 'download',
+           file: lastDownloadRef.current?.file,
+           offset: partialBytes,
+         };
+         requestReconnect('Download interrupted before completion. Reconnecting...', {
+           preserveTransfer: true,
+           notificationMessage: `${filename} stopped before the full file arrived. Reconnecting and resuming from byte ${partialBytes}.`,
+         });
+         return;
+       }
        const blob = new Blob(dlMeta.buffer);
        const url = window.URL.createObjectURL(blob);
        const a = document.createElement('a');
@@ -409,6 +653,10 @@ export default function FileManager({
        delete downloadBufferRef.current[filename];
        
        setTransfer(null);
+       transferRef.current = null;
+       pendingTransferResumeRef.current = null;
+       lastDownloadRef.current = null;
+       setReconnectAlert(null);
        if (toastRef.current === dlMeta?.toastId) {
          toastRef.current = null;
        }
@@ -438,9 +686,46 @@ export default function FileManager({
          return;
       }
 
+      // Handle Memory / Concurrency guard — keep transfer alive and auto-retry
+      if (err?.guard === 'memory' || err?.guard === 'concurrency') {
+        const retryMsg = err.guard === 'memory'
+          ? `Low RAM (${err.details?.sysFreeMB ?? '?'} MB free) — retrying in 5s…`
+          : `Transfer slots full (${err.current ?? '?'}/${err.max ?? '?'} active) — retrying in 5s…`;
+        console.warn(`⏳ Guard retry (${err.guard}):`, retryMsg);
+        setTransfer(prev => prev ? { ...prev, waiting: true, guardError: err.guard } : null);
+        addNotification({ title: 'Server busy — will retry', message: retryMsg, type: 'warning' });
+        return; // upload loop handles the actual retry via waitForUploadHandshake
+      }
+
+      if (transferRef.current && (err?.recoverable || isTransferChannelError(err))) {
+        requestReconnect('Transfer channel interrupted. Reconnecting...', {
+          preserveTransfer: true,
+          notificationMessage: transferRef.current?.action === 'download'
+            ? 'Transfer interrupted. Reconnecting and resuming the download from the last received byte.'
+            : 'Transfer interrupted. Reconnecting SSH and keeping your upload queue.',
+        });
+        return;
+      }
+
       setTransfer(null);
       console.error('❌ SFTP Error:', err);
       addNotification({ title: t('files.status.errorTitle'), message: msg || t('files.status.errorTitle'), type: 'error' });
+
+      if (reusedSocket && /ssh connection closed|not connected|channel .*closed|connection .*closed|socket .*disconnected/i.test(msg)) {
+        clearTimeout(reuseInitTimeout);
+        console.warn('⚠️ Reused socket lost its SSH/SFTP backend. Starting a fresh session.');
+        try {
+          newSocket.emit('ssh:disconnect');
+          newSocket.disconnect();
+        } catch (disconnectErr) {
+          console.warn('Failed closing stale reused socket after SFTP error:', disconnectErr);
+        }
+        setStatus('connecting');
+        setLoading(true);
+        setError('Previous session expired. Reconnecting...');
+        setReconnectNonce((n) => n + 1);
+        return;
+      }
       
       const targetPath = currentPathRef.current || '.';
       newSocket.emit('sftp:list', targetPath);
@@ -483,10 +768,17 @@ export default function FileManager({
 
     newSocket.on('ssh:idle_timeout', () => {
       setStatus('error');
-      setError('Idle timeout: 2m');
+      setError('Session idle timeout. Reconnecting...');
       setLoading(false);
       appDispatch({ type: 'UPDATE_CONNECTION', payload: { _id: connectionId, status: 'offline' } });
-      addNotification({ title: 'Disconnected', message: 'Idle timeout: 2m', type: 'warning' });
+      requestReconnect('Session idle timeout. Reconnecting...', {
+        preserveTransfer: !!transferRef.current,
+        notificationMessage: transferRef.current?.action === 'download'
+          ? 'Session timed out during download. Reconnecting and resuming automatically.'
+          : transferRef.current?.action === 'upload' || uploadQueueRef.current.length > 0
+            ? 'Session timed out during upload. Reconnecting and keeping the upload queue.'
+            : 'Session timed out after being idle. Reconnecting now.',
+      });
     });
 
     socketRef.current = newSocket;
@@ -494,6 +786,7 @@ export default function FileManager({
 
     return () => {
       clearTimeout(timeout);
+      clearTimeout(reuseInitTimeout);
       // Save socket to pool with TTL instead of disconnecting immediately.
       // If the same connectionId remounts within POOL_TTL ms (e.g. after Split),
       // it will reuse the socket seamlessly without reconnecting.
@@ -513,7 +806,7 @@ export default function FileManager({
         }, POOL_TTL),
       });
     };
-  }, [connectionId, reconnectNonce]); // Removed 'connection' from dependencies to prevent loop
+  }, [connectionId, reconnectNonce, isTransferChannelError, requestReconnect]); // Removed 'connection' from dependencies to prevent loop
 
   // --- Auto-Refresh Logic ---
   
@@ -611,6 +904,27 @@ export default function FileManager({
       socket.emit('sftp:list', path || '.');
     }
   };
+
+  useEffect(() => {
+    if (loading || status !== 'ready' || isSearchMode || !socket) return;
+    if (files.length > 0) {
+      emptyRetryPathRef.current = '';
+      return;
+    }
+
+    const retryPath = currentPathRef.current || '.';
+    if (emptyRetryPathRef.current === retryPath) return;
+
+    const timer = setTimeout(() => {
+      if (statusRef.current === 'ready' && socketRef.current?.connected && filesRef.current.length === 0) {
+        emptyRetryPathRef.current = retryPath;
+        console.log('🔄 Empty list safeguard — retrying directory listing for', retryPath);
+        refreshFiles(retryPath);
+      }
+    }, 1200);
+
+    return () => clearTimeout(timer);
+  }, [files.length, isSearchMode, loading, socket, status]);
 
   const handleFolderClick = (name) => {
     const newPath = currentPath === '.' ? name : `${currentPath}/${name}`;
@@ -824,6 +1138,7 @@ export default function FileManager({
   const handleFileUpload = async (e, specificFile = null, resumeOffset = 0, overridePath = null) => {
     const file = specificFile || e?.target?.files[0];
     if (!file || !socket) return;
+    if (!ensureSocketReady('retry the upload')) return;
 
     const baseTarget = overridePath !== null ? overridePath : currentPath;
     const path = baseTarget === '.' ? file.name : `${baseTarget}/${file.name}`;
@@ -838,24 +1153,101 @@ export default function FileManager({
     const transferObj = { filename: file.name, progress: 0, action: 'upload', waiting: false };
     setTransfer(transferObj);
     transferRef.current = transferObj;
-    
-    // Request start
-    socket.emit('sftp:upload', { filename: file.name, path, size: file.size, offset: resumeOffset });
 
-    // Wait for server handshake
-    const startData = await new Promise(resolve => {
+    const waitForUploadHandshake = (expectedOffset) => new Promise(resolve => {
+      const timeoutId = setTimeout(() => {
+        socket.off('sftp:can_upload', handler);
+        socket.off('sftp:error', guardErrHandler);
+        resolve({ offset: expectedOffset, error: 'Handshake timeout' });
+      }, 8000);
+
       const handler = (data) => {
-        if (data.filename === file.name) {
-          socket.off('sftp:can_upload', handler);
-          resolve(data);
-        }
+        if (data.filename !== file.name) return;
+        clearTimeout(timeoutId);
+        socket.off('sftp:can_upload', handler);
+        socket.off('sftp:error', guardErrHandler);
+        resolve(data);
       };
+
+      // Intercept guard errors immediately so we don't wait the full 8s timeout
+      const guardErrHandler = (err) => {
+        if (err?.guard !== 'memory' && err?.guard !== 'concurrency') return;
+        clearTimeout(timeoutId);
+        socket.off('sftp:can_upload', handler);
+        socket.off('sftp:error', guardErrHandler);
+        resolve({ guardBlocked: true, guardType: err.guard, retryAfter: 5000 });
+      };
+
       socket.on('sftp:can_upload', handler);
-      setTimeout(() => { socket.off('sftp:can_upload', handler); resolve({ offset: resumeOffset, error: 'Handshake timeout' }); }, 8000);
+      socket.on('sftp:error', guardErrHandler);
     });
 
-    if (startData.error) {
+    const waitForUploadCompletion = () => new Promise((resolve, reject) => {
+      const timeoutId = setTimeout(() => {
+        socket.off('sftp:action_success', successHandler);
+        socket.off('sftp:error', errorHandler);
+        reject(new Error('Upload completion timeout'));
+      }, 20000);
+
+      const cleanup = () => {
+        clearTimeout(timeoutId);
+        socket.off('sftp:action_success', successHandler);
+        socket.off('sftp:error', errorHandler);
+      };
+
+      const successHandler = (data) => {
+        if (data?.action !== 'upload' || data?.path !== path) return;
+        cleanup();
+        resolve(data);
+      };
+
+      const errorHandler = (err) => {
+        cleanup();
+        reject(new Error(err?.message || 'Upload failed'));
+      };
+
+      socket.on('sftp:action_success', successHandler);
+      socket.on('sftp:error', errorHandler);
+    });
+    
+    // Request start — auto-retry if server is temporarily out of resources (memory / concurrency guard)
+    let startData;
+    let guardAttempts = 0;
+    const MAX_GUARD_RETRIES = 8;
+    do {
+      socket.emit('sftp:upload', { filename: file.name, path, size: file.size, offset: resumeOffset });
+      startData = await waitForUploadHandshake(resumeOffset);
+
+      if (startData.guardBlocked) {
+        guardAttempts++;
+        if (guardAttempts >= MAX_GUARD_RETRIES) {
+          console.warn(`🚫 Upload aborted after ${MAX_GUARD_RETRIES} guard retries`);
+          setTransfer(null);
+          transferRef.current = null;
+          setUploadQueue(prev => prev.filter(item => item.path !== path));
+          addNotification({
+            title: t('files.status.errorTitle'),
+            message: 'Server still busy after several retries. Please try again in a moment.',
+            type: 'error',
+          });
+          return;
+        }
+        console.log(`⏳ Guard blocked (${startData.guardType}) — waiting ${startData.retryAfter}ms before retry ${guardAttempts}/${MAX_GUARD_RETRIES}`);
+        setTransfer(prev => prev ? { ...prev, waiting: true, guardError: startData.guardType } : null);
+        await new Promise(r => setTimeout(r, startData.retryAfter || 5000));
+        setTransfer(prev => prev ? { ...prev, waiting: false, guardError: null } : null);
+      }
+    } while (startData.guardBlocked);
+
+     if (startData.error) {
        setTransfer(prev => ({ ...prev, waiting: true, error: true }));
+       if (isTransferChannelError(startData.error)) {
+        requestReconnect('Upload channel stalled. Reconnecting...', {
+          preserveTransfer: true,
+          notificationMessage: 'Upload stalled. Reconnecting and keeping the upload queue for retry.',
+        });
+        return { interrupted: true, path };
+       }
        return;
     }
 
@@ -879,7 +1271,7 @@ export default function FileManager({
               });
               // After waiting, we need to RE-START the upload session from current offset
               socket.emit('sftp:upload', { filename: file.name, path, size: file.size, offset });
-              await new Promise(r => socket.once('sftp:can_upload', r));
+                await waitForUploadHandshake(offset);
               setTransfer(prev => ({ ...prev, waiting: false, countdown: 0 }));
           }
 
@@ -887,18 +1279,33 @@ export default function FileManager({
           const buffer = await chunk.arrayBuffer();
           
           // Send chunk and wait for ACK (Ensures server keeps up and allows pausing)
-          const ack = new Promise((resolve, reject) => {
+           const ack = new Promise((resolve, reject) => {
+             const timeoutId = setTimeout(() => {
+               socket.off(`sftp:upload_ack:${file.name}`, handler);
+               socket.off('sftp:error', errHandler);
+               reject(new Error('Upload acknowledgment timeout'));
+             }, 15000);
+
              const handler = (data) => {
+               clearTimeout(timeoutId);
                 socket.off(`sftp:upload_ack:${file.name}`, handler);
                 socket.off('sftp:error', errHandler);
                 resolve(data);
              };
              const errHandler = (err) => {
-                if (err.resetIn) { // Just a rate limit, don't reject the whole transfer
+                if (err.resetIn) { // Rate limit — keep transfer alive
+                 clearTimeout(timeoutId);
                    socket.off(`sftp:upload_ack:${file.name}`, handler);
                    socket.off('sftp:error', errHandler);
                    resolve({ rateLimited: true });
+                } else if (err?.guard === 'memory' || err?.guard === 'concurrency') {
+                   // Guard block mid-transfer — pause and re-open upload session
+                 clearTimeout(timeoutId);
+                   socket.off(`sftp:upload_ack:${file.name}`, handler);
+                   socket.off('sftp:error', errHandler);
+                   resolve({ guardBlocked: err.guard, retryAfter: 5000 });
                 } else {
+                 clearTimeout(timeoutId);
                    socket.off(`sftp:upload_ack:${file.name}`, handler);
                    socket.off('sftp:error', errHandler);
                    reject(err);
@@ -911,9 +1318,25 @@ export default function FileManager({
           socket.emit(`sftp:upload_chunk:${file.name}`, buffer);
           
           const ackResult = await ack;
-          if (ackResult.rateLimited) {
-             // Loop will pick up transferCountdown logic on next iteration
-             continue; 
+          if (ackResult.rateLimited && !ackResult.guardBlocked) {
+             // Rate limit — loop will pick up transferCountdown logic on next iteration
+             continue;
+          }
+          if (ackResult.guardBlocked) {
+             // Memory / concurrency guard mid-transfer — wait then re-open the upload session
+             const waitMs = ackResult.retryAfter || 5000;
+             console.log(`⏳ Guard blocked mid-transfer (${ackResult.guardBlocked}) — waiting ${waitMs}ms, offset=${offset}`);
+             setTransfer(prev => prev ? { ...prev, waiting: true, guardError: ackResult.guardBlocked } : null);
+             await new Promise(r => setTimeout(r, waitMs));
+             // Re-open upload session from where we left off
+             socket.emit('sftp:upload', { filename: file.name, path, size: file.size, offset });
+             const resumeData = await waitForUploadHandshake(offset);
+             if (resumeData.guardBlocked) {
+               // Still blocked — treat as a hard error after mid-transfer retry
+               throw new Error(`Server still busy (${resumeData.guardType}) after retry. Upload paused — please retry manually.`);
+             }
+             setTransfer(prev => prev ? { ...prev, waiting: false, guardError: null } : null);
+             continue;
           }
 
           offset += chunkSize;
@@ -929,19 +1352,36 @@ export default function FileManager({
         }
 
         socket.emit(`sftp:upload_done:${file.name}`);
+        await waitForUploadCompletion();
         // Remove from queue on completion
         setUploadQueue(prev => prev.filter(item => item.path !== path));
+        transferRef.current = null;
         if (e) e.target.value = null; // Reset input if it was from event
+        return { path };
     } catch (err) {
         console.error("Upload Loop Error:", err);
+        if (isTransferChannelError(err)) {
+          requestReconnect('Upload interrupted. Reconnecting SSH...', {
+            preserveTransfer: true,
+            notificationMessage: `${file.name} paused while SSH reconnects. Your upload queue is kept for retry.`,
+          });
+          return { interrupted: true, path };
+        }
         setTransfer(null);
+        transferRef.current = null;
+        throw err;
     }
   };
 
   const handleDownload = (file, offset = 0) => {
-     if (!socket) return;
+      if (!socket) return;
+      if (!ensureSocketReady('retry the download')) return;
      const path = file.absPath || (currentPath === '.' ? file.filename : `${currentPath}/${file.filename}`);
      lastDownloadRef.current = { file, offset };
+      const existingDownload = downloadBufferRef.current[file.filename];
+      if (existingDownload?.toastId) {
+       removeNotification(existingDownload.toastId);
+      }
      
      const tId = addNotification({ 
         title: offset > 0 ? t('files.status.resuming') : t('files.status.download'), 
@@ -951,13 +1391,43 @@ export default function FileManager({
      });
      
      // Initialize download buffer state
-     downloadBufferRef.current[file.filename] = { buffer: [], toastId: tId };
+     downloadBufferRef.current[file.filename] = {
+        buffer: offset > 0 && existingDownload?.buffer?.length ? existingDownload.buffer : [],
+        toastId: tId,
+        bytesReceived: offset > 0 ? Math.max(existingDownload?.bytesReceived || 0, offset) : 0,
+     };
 
      socket.emit('sftp:download', { filePath: path, offset });
   };
 
+  useEffect(() => {
+    if (status !== 'ready' || !socket) return;
+
+    const pendingResume = pendingTransferResumeRef.current;
+    if (!pendingResume) return;
+
+    if (pendingResume.type === 'download' && pendingResume.file) {
+      pendingTransferResumeRef.current = null;
+      addNotification({
+        title: 'Connection restored',
+        message: `Resuming download of ${pendingResume.file.filename}...`,
+        type: 'info',
+      });
+      const resumeOffset = pendingResume.offset || lastDownloadRef.current?.offset || 0;
+      const timer = setTimeout(() => {
+        handleDownload(pendingResume.file, resumeOffset);
+      }, 200);
+      return () => clearTimeout(timer);
+    }
+
+    if (pendingResume.type === 'upload') {
+      pendingTransferResumeRef.current = null;
+    }
+  }, [status, socket]);
+
   const handleDownloadFolder = (file) => {
     if (!socket) return;
+    if (!ensureSocketReady('retry the folder download')) return;
     const folderPath = file.absPath || (currentPath === '.' ? file.filename : `${currentPath}/${file.filename}`);
     const dlName = file.filename + '.tar.gz';
     
@@ -1095,18 +1565,22 @@ export default function FileManager({
         });
 
         const blob = new Blob([gzData], { type: 'application/gzip' });
-        const archiveFile = new File([blob], `${entry.name}.tar.gz`, { type: 'application/gzip' });
+        const tempArchiveName = `.__ssh_monitor_upload_${Date.now()}_${Math.random().toString(36).slice(2, 8)}.tar.gz`;
+        const archiveFile = new File([blob], tempArchiveName, { type: 'application/gzip' });
         
         console.log(`✅ TAR.GZ creation complete: ${archiveFile.size} bytes`);
         
         // Proceed to the actual upload
-        await handleFileUpload(null, archiveFile, 0, path);
+        const uploadResult = await handleFileUpload(null, archiveFile, 0, path);
+        if (!uploadResult?.path || uploadResult?.interrupted) {
+          throw new Error('Archive upload paused while reconnecting. Please retry after the SSH session is ready.');
+        }
         
         // Once upload loop is done, trigger extraction
-        const archivePath = path === '.' ? archiveFile.name : `${path}/${archiveFile.name}`;
+        const archivePath = uploadResult.path;
         console.log(`🚀 Upload finished, triggering extraction: ${archivePath}`);
-        socket.emit('sftp:extract', { path: archivePath, type: 'tar' });
-        addNotification({ title: 'Upload Complete', message: 'Starting extraction (TAR.GZ)...', type: 'info' });
+        socket.emit('sftp:extract', { path: archivePath, type: 'tar', cleanupArchive: true });
+        addNotification({ title: 'Upload Complete', message: `Starting extraction for ${entry.name}...`, type: 'info' });
       } catch (err) {
         console.error('❌ Compression failed:', err);
         addNotification({ title: 'Compression Error', message: err.message, type: 'error' });
@@ -1366,6 +1840,7 @@ export default function FileManager({
 
   const handlePaste = () => {
     if (!clipboard || !socket) return;
+    if (!ensureSocketReady('paste again')) return;
     const destPath = currentPath === '.' ? clipboard.file.filename : `${currentPath}/${clipboard.file.filename}`;
     
     // Prevent pasting into same path with same name unless it's a copy
@@ -1502,9 +1977,13 @@ export default function FileManager({
                    {transfer.waiting && (
                       <button 
                         onClick={() => {
+                           if (transfer.action === 'download' && lastDownloadRef.current) {
+                             handleDownload(lastDownloadRef.current.file, lastDownloadRef.current.offset || 0);
+                             return;
+                           }
                            const queueItem = uploadQueue.find(qi => (qi.file?.name || qi.filename) === transfer.filename);
-                           if (queueItem) {
-                             if (queueItem.file) handleFileUpload(null, queueItem.file, queueItem.offset);
+                           if (queueItem?.file) {
+                             handleFileUpload(null, queueItem.file, queueItem.offset);
                            }
                         }}
                         className="text-blue-400 hover:underline flex items-center gap-1"
@@ -2163,6 +2642,29 @@ export default function FileManager({
         onDragLeave={handleDragLeave}
         onDrop={handleDrop}
       >
+        {reconnectAlert && (
+          <div className={`mx-3 mb-3 flex items-center justify-between gap-3 rounded-xl border px-3 py-2 text-xs ${reconnectAlert.exhausted ? 'border-rose-500/40 bg-rose-500/10 text-rose-200' : 'border-amber-500/30 bg-amber-500/10 text-amber-100'}`}>
+            <div className="flex items-start gap-2 min-w-0">
+              <AlertTriangle size={14} className="mt-0.5 shrink-0" />
+              <div className="min-w-0">
+                <div className="font-semibold">{reconnectAlert.exhausted ? 'Reconnect paused' : 'Reconnecting session'}</div>
+                <div className="text-[11px] opacity-90 break-words">{reconnectAlert.message}</div>
+              </div>
+            </div>
+            <button
+              onClick={() => {
+                reconnectAttemptsRef.current = 0;
+                setReconnectAlert(null);
+                setStatus('connecting');
+                setLoading(true);
+                setReconnectNonce((n) => n + 1);
+              }}
+              className="shrink-0 rounded-lg bg-white/10 px-2.5 py-1 font-medium hover:bg-white/15 transition-colors"
+            >
+              Retry now
+            </button>
+          </div>
+        )}
         {isDragging && (
           <div className="absolute inset-0 z-50 flex items-center justify-center pointer-events-none">
             <div className="bg-blue-600/20 border-2 border-dashed border-blue-500 rounded-3xl p-12 flex flex-col items-center gap-4 backdrop-blur-md">
@@ -2192,6 +2694,8 @@ export default function FileManager({
             <p className="text-sm text-[var(--text-muted)] max-w-md">{error}</p>
             <button 
               onClick={() => {
+                reconnectAttemptsRef.current = 0;
+                setReconnectAlert(null);
                 setStatus('connecting');
                 setLoading(true);
                 setReconnectNonce((n) => n + 1);
@@ -2213,6 +2717,29 @@ export default function FileManager({
             </div>
           </div>
         ) : (
+          filteredFiles.length === 0 ? (
+            <div className="h-full flex flex-col items-center justify-center gap-4 text-center p-8">
+              <div className="w-16 h-16 bg-[var(--bg-tertiary)] rounded-full flex items-center justify-center mb-2">
+                <Folder size={30} className="text-[var(--text-muted)]" />
+              </div>
+              <div>
+                <h3 className="text-lg font-bold text-[var(--text-primary)]">
+                  {isSearchMode ? (t('files.status.noMatches') || 'No matches found') : (t('files.status.emptyFolder') || 'No files found')}
+                </h3>
+                <p className="text-sm text-[var(--text-muted)] max-w-md mt-1">
+                  {isSearchMode
+                    ? (t('files.status.tryDifferentSearch') || 'Try a different search term.')
+                    : (t('files.status.emptyFolderHint') || 'This folder may be empty, or the listing may still be catching up.')}
+                </p>
+              </div>
+              <button
+                onClick={() => refreshFiles(currentPathRef.current)}
+                className="px-4 py-2 bg-blue-600 hover:bg-blue-500 rounded-lg text-sm font-medium transition-colors inline-flex items-center gap-2"
+              >
+                <RefreshCw size={14} /> {t('files.toolbar.refresh') || t('common.refresh') || 'Refresh'}
+              </button>
+            </div>
+          ) : (
           <div className={viewMode === 'grid' 
             ? "grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4"
             : "flex flex-col gap-1"
@@ -2327,6 +2854,7 @@ export default function FileManager({
               );
             })}
           </div>
+          )
         )}
       </div>
 

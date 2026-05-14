@@ -1,9 +1,27 @@
-const CACHE_NAME = 'webtop-monitor-v4';
+const CACHE_NAME = 'webtop-monitor-v5';
 const ASSETS_TO_CACHE = [
   '/',
   '/manifest.json',
   '/icon.svg',
 ];
+
+const shouldHandleRequest = (request) => {
+  if (request.method !== 'GET') return false;
+
+  const url = new URL(request.url);
+  if (url.origin !== self.location.origin) return false;
+
+  if (
+    url.pathname.startsWith('/api/') ||
+    url.pathname.startsWith('/_next/') ||
+    url.pathname.startsWith('/socket.io') ||
+    url.pathname === '/api/socket'
+  ) {
+    return false;
+  }
+
+  return ASSETS_TO_CACHE.includes(url.pathname);
+};
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
@@ -27,25 +45,12 @@ self.addEventListener('activate', (event) => {
 });
 
 self.addEventListener('fetch', (event) => {
-  // Only handle GET requests
-  if (event.request.method !== 'GET') return;
+  if (!shouldHandleRequest(event.request)) return;
 
-  // Skip ALL non-HTTP(S) URLs first — blob:, data:, chrome-extension:, etc.
-  // Three.js GLTFLoader creates blob: object URLs for embedded GLB textures;
-  // Service workers must NEVER intercept these or the texture load will fail.
-  const url = event.request.url;
-  if (!url.startsWith('http://') && !url.startsWith('https://')) return;
-
-  // Skip external requests (api calls, external images, fonts, socket.io)
-  if (!url.startsWith(self.location.origin)) {
-    return;
-  }
-
-  // Network First Strategy for everything else - ensure latest version on push
+  // Network-first only for a tiny offline shell; never cache app bundles, APIs, or socket traffic.
   event.respondWith(
     fetch(event.request)
       .then((networkResponse) => {
-        // Cache new version
         return caches.open(CACHE_NAME).then((cache) => {
           cache.put(event.request, networkResponse.clone());
           return networkResponse;
