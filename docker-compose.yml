@@ -9,7 +9,7 @@ services:
     depends_on:
       - mongo
     ports:
-      - "127.0.0.1:3000:3000"
+      - "3030:3000"
     env_file:
       - .env
     environment:
@@ -26,6 +26,8 @@ services:
       MONGO_INITDB_ROOT_USERNAME: monitor
       MONGO_INITDB_ROOT_PASSWORD: AaBb1234!
       MONGO_INITDB_DATABASE: monitor
+    ports:
+      - "127.0.0.1:27020:27017"
     volumes:
       - mongo_data:/data/db
 

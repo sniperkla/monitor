@@ -69,7 +69,9 @@ docker compose up -d --build
 
 This setup starts:
 
-- `monitor` on `127.0.0.1:3000`
+- `nginx` on `80`
+- `monitor` on `127.0.0.1:3010`
+- `mongo` on `127.0.0.1:27018` for host access
 - `mongo` with database `monitor`
 
 MongoDB credentials used by the app:
@@ -89,16 +91,20 @@ docker compose up -d --build
 ### Notes
 
 - The app listens on port `3000` inside the container.
-- `docker-compose.yml` maps `127.0.0.1:3000:3000` so nginx can proxy it safely.
+- `nginx` listens on port `80` in Docker and proxies requests to `monitor:3000` over the Docker network.
+- `docker-compose.yml` maps `127.0.0.1:3010:3000` so nginx can proxy it safely without using host port `3000`.
 - `.env` is injected at runtime via `env_file`, so secrets are not baked into the image.
 - `db-config.json` is bind-mounted to `/app/db-config.json` so Settings changes survive container restarts.
 - MongoDB data is stored in the Docker volume `mongo_data`.
+- MongoDB still listens on `27017` inside Docker, but is exposed as `127.0.0.1:27018` on the host to avoid host port conflicts.
 
 ### Nginx
 
-An nginx config for `monitor.eaqdragon.com` is included at `deploy/nginx/monitor.eaqdragon.com.conf`.
+For Docker Compose deployments, nginx runs as a container using `deploy/nginx/docker/default.conf`.
 
-Typical server steps:
+If you prefer host-level nginx instead, a host config is included at `deploy/nginx/monitor.eaqdragon.com.conf`.
+
+Typical host-level nginx server steps:
 
 ```bash
 sudo cp deploy/nginx/monitor.eaqdragon.com.conf /etc/nginx/sites-available/monitor.eaqdragon.com
