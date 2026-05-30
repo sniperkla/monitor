@@ -22,7 +22,7 @@ services:
     container_name: monitor-mongo
     restart: unless-stopped
     ports:
-      - "27019:27017"
+      - "27021:27017"
 
     environment:
       MONGO_INITDB_ROOT_USERNAME: monitor

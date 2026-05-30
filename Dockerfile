@@ -7,15 +7,17 @@ RUN npm ci
 FROM node:20-bookworm-slim AS builder
 WORKDIR /app
 ENV NODE_ENV=production
+ENV ENCRYPTION_KEY=placeholder_build_key
 
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
+RUN if [ ! -f db-config.json ]; then echo '{}' > db-config.json; fi
 RUN npm run build
 
 FROM node:20-bookworm-slim AS runner
 WORKDIR /app
 ENV NODE_ENV=production
-ENV PORT=3000
+ENV PORT=3030
 ENV NODE_OPTIONS=--dns-result-order=ipv4first
 
 COPY package.json package-lock.json ./
@@ -34,6 +36,6 @@ COPY --from=builder /app/db-config.json ./db-config.json
 COPY --from=builder /app/skills ./skills
 COPY --from=builder /app/skills-lock.json ./skills-lock.json
 
-EXPOSE 3000
+EXPOSE 3030
 
 CMD ["npm", "run", "start"]
