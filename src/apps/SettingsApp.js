@@ -5,7 +5,8 @@ import {
   Palette, Image as ImageIcon, Monitor, Layout, Bell, Shield, Info, 
   Database, CheckCircle, AlertCircle, RefreshCw, Zap, Wifi, WifiOff, 
   Loader, Trash2, Lock, Unlock, Key, Mail, Code, Volume2, Sun, Moon, Cpu,
-  Search, Terminal, Network, Download, Copy, X, CheckCheck, Sparkles
+  Search, Terminal, Network, Download, Copy, X, CheckCheck, Sparkles,
+  GitBranch
 } from 'lucide-react';
 import { useOS } from '@/context/OSContext';
 import { useApp } from '@/context/AppContext';
@@ -34,7 +35,7 @@ export default function SettingsApp({ initialTab }) {
   const { data: session } = useSession();
   const { t, i18n } = useTranslation();
   const { state: osState, setWallpaper, setGlassmorphism, setIconSize, setIconStyle, setBrightness, setUiScale, setNotifications, setLanguage, setTheme, setTaskbarPosition, setWindowLayout, addCustomWallpaper, removeCustomWallpaper, saveSettings, addNotification, showConfirm, setKeyboardShortcuts, setTerminalSettings } = useOS();
-  const { state: appState, dispatch } = useApp();
+  const { state: appState, dispatch, apiFetch } = useApp();
   const { vaultStatus, decryptedUri, lockVault, clearVault, setupVault, showVault } = useVault();
   const { glassmorphism, brightness, uiScale, notifications } = osState;
 
@@ -65,6 +66,260 @@ export default function SettingsApp({ initialTab }) {
   // Detect PWA (standalone) mode
   const isPWA = useMemo(() =>
     typeof window !== 'undefined' && window.matchMedia('(display-mode: standalone)').matches, []);
+
+  // Deployment configuration state
+  const [deployConfig, setDeployConfig] = useState({
+    id: 'default',
+    name: 'Default Project',
+    enabled: false,
+    branch: 'main',
+    secret: '',
+    targetType: 'local',
+    connectionId: '',
+    deployCommand: '',
+    projectPath: '.',
+    status: 'idle',
+    lastDeployLog: '',
+    lastDeployAt: null,
+    aiProfile: null,
+    aiLogs: [],
+    githubConnected: false,
+    githubUser: ''
+  });
+  const [deployProjects, setDeployProjects] = useState([]);
+  const [selectedProjectId, setSelectedProjectId] = useState('default');
+  const [connections, setConnections] = useState([]);
+  const [deployLoading, setDeployLoading] = useState(false);
+  const [deploySaving, setDeploySaving] = useState(false);
+  const [deployTriggering, setDeployTriggering] = useState(false);
+  const [copySuccess, setCopySuccess] = useState(false);
+  const [aiAnalyzing, setAiAnalyzing] = useState(false);
+
+  // Fetch deployment configurations and connections
+  useEffect(() => {
+    if (activeTab === 'deployment') {
+      const fetchDeployData = async () => {
+        setDeployLoading(true);
+        try {
+          const configRes = await apiFetch(`/api/deploy/config?project=${selectedProjectId}`);
+          const configData = await configRes.json();
+          if (configData.success && configData.config) {
+            setDeployConfig(prev => ({
+              ...prev,
+              ...configData.config,
+              projectPath: configData.config.projectPath || '.',
+              aiProfile: configData.config.aiProfile || null,
+              aiLogs: configData.config.aiLogs || [],
+              githubConnected: configData.config.githubConnected || false,
+              githubUser: configData.config.githubUser || ''
+            }));
+          }
+
+          const listRes = await apiFetch('/api/deploy/config');
+          const listData = await listRes.json();
+          if (listData.success && listData.projects) {
+            setDeployProjects(listData.projects);
+          }
+
+          const connRes = await apiFetch('/api/connections');
+          const connData = await connRes.json();
+          if (connData.success && connData.data) {
+            const sshConns = connData.data.filter(c => c.type === 'ssh');
+            setConnections(sshConns);
+          }
+        } catch (err) {
+          console.error('Failed to load deployment data:', err);
+        }
+        setDeployLoading(false);
+      };
+      fetchDeployData();
+    }
+  }, [activeTab, selectedProjectId, apiFetch]);
+
+  // Real-time polling when deployment is running
+  useEffect(() => {
+    if (deployConfig.status !== 'running') return;
+    
+    const interval = setInterval(async () => {
+      try {
+        const configRes = await apiFetch(`/api/deploy/config?project=${selectedProjectId}`);
+        const configData = await configRes.json();
+        if (configData.success && configData.config) {
+          setDeployConfig(configData.config);
+          if (configData.config.status !== 'running') {
+            clearInterval(interval);
+            addNotification({
+              title: `Deploy ${configData.config.status === 'success' ? 'Success' : 'Failed'}`,
+              message: `Your "${configData.config.name}" deployment has finished with status: ${configData.config.status}`,
+              type: configData.config.status === 'success' ? 'success' : 'error'
+            });
+          }
+        }
+      } catch (err) {
+        console.error('Polling deployment status failed:', err);
+      }
+    }, 2000);
+
+    return () => clearInterval(interval);
+  }, [deployConfig.status, selectedProjectId, apiFetch]);
+
+  const handleSaveDeployConfig = async () => {
+    setDeploySaving(true);
+    try {
+      const res = await apiFetch('/api/deploy/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(deployConfig)
+      });
+      const data = await res.json();
+      if (data.success && data.config) {
+        setDeployConfig(data.config);
+        addNotification({ title: 'Success', message: 'Deployment settings saved successfully', type: 'success' });
+        
+        // Refresh project list names
+        const listRes = await apiFetch('/api/deploy/config');
+        const listData = await listRes.json();
+        if (listData.success && listData.projects) {
+          setDeployProjects(listData.projects);
+        }
+      } else {
+        addNotification({ title: 'Error', message: data.error || 'Failed to save deployment settings', type: 'error' });
+      }
+    } catch (err) {
+      addNotification({ title: 'Error', message: 'Failed to communicate with deploy settings API', type: 'error' });
+    }
+    setDeploySaving(false);
+  };
+
+  const handleTriggerDeploy = async () => {
+    setDeployTriggering(true);
+    try {
+      const res = await apiFetch(`/api/deploy/webhook?project=${selectedProjectId}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ manual: true })
+      });
+      const data = await res.json();
+      if (data.success) {
+        addNotification({ title: 'Deployment Triggered', message: 'Deployment started in the background.', type: 'info' });
+        setDeployConfig(prev => ({ ...prev, status: 'running', lastDeployLog: 'Deploying...' }));
+      } else {
+        addNotification({ title: 'Error', message: data.error || 'Failed to trigger deployment', type: 'error' });
+      }
+    } catch (err) {
+      addNotification({ title: 'Error', message: 'Failed to communicate with deployment trigger API', type: 'error' });
+    }
+    setDeployTriggering(false);
+  };
+
+  const handleCopyWebhookUrl = () => {
+    if (typeof window === 'undefined') return;
+    const url = `${window.location.origin}/api/deploy/webhook?project=${selectedProjectId}`;
+    navigator.clipboard.writeText(url);
+    setCopySuccess(true);
+    setTimeout(() => setCopySuccess(false), 2000);
+    addNotification({ title: 'Copied!', message: 'Webhook URL copied to clipboard', type: 'success' });
+  };
+
+  const handleCreateProject = async () => {
+    const name = prompt('Enter a name for your new deployment project:');
+    if (!name || !name.trim()) return;
+    const id = name.trim().toLowerCase().replace(/[^a-z0-9]/g, '-');
+    if (deployProjects.find(p => p.id === id)) {
+      alert('A project with that ID already exists.');
+      return;
+    }
+
+    setDeploySaving(true);
+    try {
+      const newProj = {
+        id,
+        name: name.trim(),
+        enabled: false,
+        branch: 'main',
+        secret: '',
+        targetType: 'local',
+        connectionId: '',
+        deployCommand: '# Enter your deployment shell script here\n',
+        projectPath: '.',
+        status: 'idle',
+        lastDeployLog: '',
+        lastDeployAt: null,
+        githubConnected: false,
+        githubUser: ''
+      };
+
+      const res = await apiFetch('/api/deploy/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(newProj)
+      });
+      const data = await res.json();
+      if (data.success) {
+        addNotification({ title: 'Project Created', message: `Project "${name}" was created successfully.`, type: 'success' });
+        setSelectedProjectId(id);
+      }
+    } catch (err) {
+      addNotification({ title: 'Error', message: 'Failed to create deployment project.', type: 'error' });
+    }
+    setDeploySaving(false);
+  };
+
+  const handleDeleteProject = async () => {
+    if (selectedProjectId === 'default') {
+      alert('The default project cannot be deleted.');
+      return;
+    }
+    if (!confirm(`Are you sure you want to delete project "${deployConfig.name}"?`)) return;
+
+    setDeploySaving(true);
+    try {
+      const res = await apiFetch(`/api/deploy/config?project=${selectedProjectId}`, {
+        method: 'DELETE'
+      });
+      const data = await res.json();
+      if (data.success) {
+        addNotification({ title: 'Project Deleted', message: 'Deployment project deleted successfully.', type: 'info' });
+        setSelectedProjectId('default');
+      }
+    } catch (err) {
+      addNotification({ title: 'Error', message: 'Failed to delete project.', type: 'error' });
+    }
+    setDeploySaving(false);
+  };
+
+  const handleAiAnalyze = async () => {
+    if (deployConfig.targetType === 'ssh' && !deployConfig.connectionId) {
+      addNotification({ title: 'Validation Error', message: 'Please select an SSH Connection first.', type: 'error' });
+      return;
+    }
+    setAiAnalyzing(true);
+    try {
+      const res = await apiFetch(`/api/deploy/ai-analyze?project=${selectedProjectId}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          targetType: deployConfig.targetType,
+          connectionId: deployConfig.connectionId,
+          projectPath: deployConfig.projectPath
+        })
+      });
+      const data = await res.json();
+      if (data.success) {
+        setDeployConfig(prev => ({
+          ...prev,
+          aiProfile: data.aiProfile,
+          aiLogs: data.aiLogs
+        }));
+        addNotification({ title: 'AI Analysis Complete', message: `Detected ${data.aiProfile.projectType} project structure.`, type: 'success' });
+      } else {
+        addNotification({ title: 'AI Analysis Failed', message: data.error || 'Failed to analyze project.', type: 'error' });
+      }
+    } catch (err) {
+      addNotification({ title: 'Error', message: 'Failed to communicate with AI analysis endpoint.', type: 'error' });
+    }
+    setAiAnalyzing(false);
+  };
 
   // Auto-detect user's OS from browser (for relay install hint)
   const detectedOS = useMemo(() => {
@@ -414,6 +669,7 @@ export default function SettingsApp({ initialTab }) {
             { id: 'terminal', label: t('settings_ui.terminal.title') || 'Terminal', icon: Terminal, color: 'text-emerald-400', desc: t('settings_ui.terminal.desc') },
 
             { id: 'database', label: t('settings.databaseTitle'), icon: Database, color: 'text-purple-400', desc: t('settings.databaseDesc'), requireLogin: true },
+            { id: 'deployment', label: t('settings.deploymentTitle') || 'Auto Deploy', icon: GitBranch, color: 'text-orange-400', desc: 'Configure webhook-triggered auto deployments' },
             { id: 'display', label: t('settings_ui.display.title'), icon: Monitor, color: 'text-blue-400', desc: t('settings_ui.display.desc') },
             { id: 'notifications', label: t('settings_ui.notifications.title'), icon: Bell, color: 'text-amber-400', desc: t('settings_ui.notifications.desc') },
             { id: 'privacy', label: t('settings_ui.privacy.title'), icon: Shield, color: 'text-emerald-400', desc: t('settings_ui.privacy.desc') },
@@ -1485,6 +1741,381 @@ export default function SettingsApp({ initialTab }) {
               </div>
             </div>
             <p className="mt-8 text-[10px] text-gray-600 italic">{t('settings_ui.about.quote')}</p>
+          </div>
+        )}
+
+        {activeTab === 'deployment' && (
+          <div className="max-w-3xl animate-in fade-in slide-in-from-bottom-2 duration-300">
+            {/* Top Toolbar / Dashboard Selector */}
+            <div className="p-4 mb-6 rounded-2xl bg-slate-900/40 border border-[var(--border-color)] flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+              <div className="flex items-center gap-3">
+                <label className="text-xs font-bold text-[var(--text-secondary)] uppercase tracking-wider">Select Project:</label>
+                <select
+                  value={selectedProjectId}
+                  onChange={(e) => setSelectedProjectId(e.target.value)}
+                  className="bg-[var(--bg-primary)] border border-[var(--border-color)] rounded-xl px-3 py-1.5 text-xs text-[var(--text-primary)] font-bold focus:outline-none focus:border-indigo-500 max-w-[200px]"
+                >
+                  {deployProjects.map(p => (
+                    <option key={p.id} value={p.id}>{p.name} ({p.id})</option>
+                  ))}
+                </select>
+                
+                <button
+                  type="button"
+                  onClick={handleCreateProject}
+                  className="px-3 py-1.5 bg-indigo-600/10 hover:bg-indigo-600/20 text-indigo-400 rounded-xl text-xs font-bold transition-all border border-indigo-500/20 flex items-center gap-1 cursor-pointer"
+                >
+                  ＋ Add Project
+                </button>
+                {selectedProjectId !== 'default' && (
+                  <button
+                    type="button"
+                    onClick={handleDeleteProject}
+                    className="px-3 py-1.5 bg-red-500/10 hover:bg-red-500/20 text-red-400 rounded-xl text-xs font-bold transition-all border border-red-500/20 cursor-pointer"
+                  >
+                    Delete Project
+                  </button>
+                )}
+              </div>
+              
+              <div className="flex items-center gap-2">
+                <label className="text-xs font-bold text-[var(--text-secondary)] uppercase tracking-wider">Rename Project:</label>
+                <input
+                  type="text"
+                  value={deployConfig.name || ''}
+                  onChange={(e) => setDeployConfig(p => ({ ...p, name: e.target.value }))}
+                  placeholder="Project Name"
+                  className="bg-[var(--bg-primary)] border border-[var(--border-color)] rounded-xl px-3 py-1.5 text-xs text-[var(--text-primary)] font-bold focus:outline-none focus:border-indigo-500 w-[180px]"
+                />
+              </div>
+            </div>
+
+            <div className="flex items-center justify-between mb-2">
+              <div>
+                <h1 className="text-2xl font-bold text-[var(--text-primary)] flex items-center gap-2">
+                  Auto Deployment: <span className="text-indigo-400">{deployConfig.name || selectedProjectId}</span>
+                </h1>
+                <p className="text-[var(--text-secondary)] text-sm">Configure automated git-triggered deployments via webhooks.</p>
+              </div>
+              <div className="flex gap-2">
+                <button
+                  onClick={handleSaveDeployConfig}
+                  disabled={deploySaving || deployLoading}
+                  className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white rounded-xl text-xs font-bold transition-all shadow-lg flex items-center gap-1.5 cursor-pointer"
+                >
+                  {deploySaving ? <Loader size={12} className="animate-spin" /> : <CheckCircle size={12} />}
+                  Save Settings
+                </button>
+                <button
+                  onClick={handleTriggerDeploy}
+                  disabled={deployTriggering || deployLoading || deployConfig.status === 'running'}
+                  className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white rounded-xl text-xs font-bold transition-all shadow-lg flex items-center gap-1.5 cursor-pointer"
+                >
+                  {deployTriggering ? <Loader size={12} className="animate-spin" /> : <RefreshCw size={12} />}
+                  Deploy Now
+                </button>
+              </div>
+            </div>
+
+            {deployLoading ? (
+              <div className="py-20 flex flex-col items-center justify-center gap-3">
+                <Loader className="animate-spin text-indigo-500" size={32} />
+                <p className="text-xs text-[var(--text-muted)] font-medium">Loading deployment configuration...</p>
+              </div>
+            ) : (
+              <div className="space-y-6 mt-6">
+                {/* Status Panel */}
+                <div className="p-5 rounded-2xl bg-[var(--bg-card)] border border-[var(--border-color)] shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                  <div className="flex items-start gap-4">
+                    <div className={`p-3 rounded-xl ${
+                      deployConfig.status === 'running' 
+                        ? 'bg-amber-500/10 text-amber-500 animate-pulse'
+                        : deployConfig.status === 'success'
+                        ? 'bg-emerald-500/10 text-emerald-500'
+                        : deployConfig.status === 'failed'
+                        ? 'bg-red-500/10 text-red-500'
+                        : 'bg-slate-500/10 text-[var(--text-muted)]'
+                    }`}>
+                      <GitBranch size={24} />
+                    </div>
+                    <div>
+                      <h4 className="text-sm font-bold text-[var(--text-primary)]">Deployment Status</h4>
+                      <p className="text-xs text-[var(--text-secondary)] mt-0.5">
+                        {deployConfig.status === 'running' && 'Deployment script is running in the background...'}
+                        {deployConfig.status === 'success' && 'Latest deployment finished successfully.'}
+                        {deployConfig.status === 'failed' && 'Latest deployment execution failed.'}
+                        {deployConfig.status === 'idle' && 'No deployment has run yet.'}
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex flex-col items-end gap-1 shrink-0">
+                    <span className={`px-3 py-1 rounded-full text-[10px] font-extrabold uppercase border ${
+                      deployConfig.status === 'running'
+                        ? 'bg-amber-500/10 text-amber-500 border-amber-500/20'
+                        : deployConfig.status === 'success'
+                        ? 'bg-emerald-500/10 text-emerald-500 border-emerald-500/20'
+                        : deployConfig.status === 'failed'
+                        ? 'bg-red-500/10 text-red-500 border-red-500/20'
+                        : 'bg-[var(--bg-tertiary)] text-[var(--text-muted)] border-[var(--border-color)]'
+                    }`}>
+                      {deployConfig.status}
+                    </span>
+                    {deployConfig.lastDeployAt && (
+                      <span className="text-[10px] text-[var(--text-muted)] mt-1">
+                        Last Run: {new Date(deployConfig.lastDeployAt).toLocaleString()}
+                      </span>
+                    )}
+                  </div>
+                </div>
+
+                {/* Configuration form */}
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                  {/* Left block - settings inputs */}
+                  <div className="md:col-span-2 space-y-6">
+                    {/* General Settings */}
+                    <div className="p-6 rounded-2xl bg-[var(--bg-card)] border border-[var(--border-color)] shadow-sm space-y-4">
+                      <h3 className="text-sm font-bold text-[var(--text-primary)] flex items-center gap-2 border-b border-[var(--border-color)] pb-3">
+                        <Shield size={16} className="text-indigo-400" />
+                        Trigger Configuration
+                      </h3>
+
+                      <div className="flex items-center justify-between py-2 border-b border-[var(--border-color)] pb-4">
+                        <div>
+                          <span className="block text-sm font-medium text-[var(--text-primary)]">Enable Auto-Deploy</span>
+                          <span className="text-[10px] text-[var(--text-muted)]">Automatically run deployment script when GitHub pushes arrive</span>
+                        </div>
+                        <button
+                          onClick={() => {
+                            setDeployConfig(p => ({ ...p, enabled: !p.enabled }));
+                          }}
+                          className={`w-10 h-6 rounded-full p-1 transition-colors cursor-pointer ${deployConfig.enabled ? 'bg-indigo-500' : 'bg-slate-300 dark:bg-slate-700'}`}
+                        >
+                          <div className={`w-4 h-4 bg-white rounded-full shadow-lg transition-transform ${deployConfig.enabled ? 'translate-x-4' : 'translate-x-0'}`} />
+                        </button>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-4">
+                        <div>
+                          <label className="block text-[11px] font-bold text-[var(--text-secondary)] uppercase tracking-wider mb-2">Branch to watch</label>
+                          <input
+                            type="text"
+                            value={deployConfig.branch}
+                            onChange={(e) => setDeployConfig(p => ({ ...p, branch: e.target.value }))}
+                            placeholder="main"
+                            className="w-full bg-[var(--bg-primary)] border border-[var(--border-color)] rounded-xl px-3 py-2 text-xs text-[var(--text-primary)] focus:outline-none focus:border-indigo-500 transition-all"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[11px] font-bold text-[var(--text-secondary)] uppercase tracking-wider mb-2">Webhook Secret (Optional)</label>
+                          <input
+                            type="password"
+                            value={deployConfig.secret}
+                            onChange={(e) => setDeployConfig(p => ({ ...p, secret: e.target.value }))}
+                            placeholder="••••••••••••••"
+                            className="w-full bg-[var(--bg-primary)] border border-[var(--border-color)] rounded-xl px-3 py-2 text-xs text-[var(--text-primary)] focus:outline-none focus:border-indigo-500 transition-all"
+                          />
+                        </div>
+                      </div>
+
+                      <div className="space-y-1">
+                        <label className="block text-[11px] font-bold text-[var(--text-secondary)] uppercase tracking-wider">Webhook URL</label>
+                        <div className="flex gap-2">
+                          <input
+                            type="text"
+                            readOnly
+                            value={typeof window !== 'undefined' ? `${window.location.origin}/api/deploy/webhook` : ''}
+                            className="flex-1 bg-[var(--bg-primary)] border border-[var(--border-color)] rounded-xl px-3 py-2 text-xs text-[var(--text-muted)] select-all focus:outline-none"
+                          />
+                          <button
+                            onClick={handleCopyWebhookUrl}
+                            className="px-3 bg-[var(--bg-tertiary)] hover:bg-[var(--bg-card-hover)] border border-[var(--border-color)] rounded-xl text-xs text-[var(--text-primary)] transition-all flex items-center justify-center cursor-pointer"
+                          >
+                            {copySuccess ? <CheckCheck size={14} className="text-emerald-500" /> : <Copy size={14} />}
+                          </button>
+                        </div>
+                        <span className="block text-[9px] text-[var(--text-muted)] mt-1">Configure this URL as a Webhook in GitHub repo settings with "application/json" content type.</span>
+                      </div>
+                    </div>
+
+                    {/* Script editor */}
+                    <div className="p-6 rounded-2xl bg-[var(--bg-card)] border border-[var(--border-color)] shadow-sm space-y-4">
+                      <h3 className="text-sm font-bold text-[var(--text-primary)] flex items-center gap-2 border-b border-[var(--border-color)] pb-3">
+                        <Code size={16} className="text-indigo-400" />
+                        Deployment Command
+                      </h3>
+                      <div className="space-y-2">
+                        <textarea
+                          rows={6}
+                          value={deployConfig.deployCommand}
+                          onChange={(e) => setDeployConfig(p => ({ ...p, deployCommand: e.target.value }))}
+                          placeholder="# Enter shell script to run on deploy event"
+                          className="w-full bg-slate-950 border border-[var(--border-color)] rounded-xl p-4 text-xs font-mono text-emerald-400 focus:outline-none focus:border-indigo-500/50 shadow-inner"
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Right block - targets */}
+                  <div className="space-y-6">
+                    <div className="p-6 rounded-2xl bg-[var(--bg-card)] border border-[var(--border-color)] shadow-sm space-y-4">
+                      <h3 className="text-sm font-bold text-[var(--text-primary)] flex items-center gap-2 border-b border-[var(--border-color)] pb-3">
+                        <Network size={16} className="text-indigo-400" />
+                        Deployment Target
+                      </h3>
+
+                      <div className="space-y-3">
+                        <div>
+                          <label className="block text-[11px] font-bold text-[var(--text-secondary)] uppercase tracking-wider mb-2">Target Type</label>
+                          <select
+                            value={deployConfig.targetType}
+                            onChange={(e) => setDeployConfig(p => ({ ...p, targetType: e.target.value }))}
+                            className="w-full bg-[var(--bg-primary)] border border-[var(--border-color)] rounded-xl px-3 py-2 text-xs text-[var(--text-primary)] focus:outline-none focus:border-indigo-500"
+                          >
+                            <option value="local">Local Host</option>
+                            <option value="ssh">Remote SSH Server</option>
+                          </select>
+                        </div>
+
+                        {deployConfig.targetType === 'ssh' && (
+                          <div className="animate-in fade-in duration-200">
+                            <label className="block text-[11px] font-bold text-[var(--text-secondary)] uppercase tracking-wider mb-2">SSH Connection</label>
+                            {connections.length === 0 ? (
+                              <div className="p-3 bg-amber-500/5 border border-amber-500/10 rounded-xl text-center">
+                                <span className="block text-[10px] text-amber-500">No SSH connections found.</span>
+                                <span className="block text-[9px] text-[var(--text-muted)] mt-1">Please create an SSH connection in the main panel first.</span>
+                              </div>
+                            ) : (
+                              <select
+                                value={deployConfig.connectionId}
+                                onChange={(e) => setDeployConfig(p => ({ ...p, connectionId: e.target.value }))}
+                                className="w-full bg-[var(--bg-primary)] border border-[var(--border-color)] rounded-xl px-3 py-2 text-xs text-[var(--text-primary)] focus:outline-none focus:border-indigo-500"
+                              >
+                                <option value="">-- Select SSH Connection --</option>
+                                {connections.map(c => (
+                                  <option key={c._id} value={c._id}>{c.name} ({c.host})</option>
+                                ))}
+                              </select>
+                            )}
+                          </div>
+                        )}
+
+                        <div>
+                          <label className="block text-[11px] font-bold text-[var(--text-secondary)] uppercase tracking-wider mb-2">Project Root Path</label>
+                          <input
+                            type="text"
+                            value={deployConfig.projectPath}
+                            onChange={(e) => setDeployConfig(p => ({ ...p, projectPath: e.target.value }))}
+                            placeholder="/var/www/my-app"
+                            className="w-full bg-[var(--bg-primary)] border border-[var(--border-color)] rounded-xl px-3 py-2 text-xs text-[var(--text-primary)] focus:outline-none focus:border-indigo-500 transition-all"
+                          />
+                          <span className="block text-[9px] text-[var(--text-muted)] mt-1">Relative or absolute path to the directory containing project files.</span>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* AI Configuration Assistant */}
+                    <div className="p-6 rounded-2xl bg-[var(--bg-card)] border border-[var(--border-color)] shadow-sm space-y-4">
+                      <h3 className="text-sm font-bold text-[var(--text-primary)] flex items-center gap-2 border-b border-[var(--border-color)] pb-3">
+                        <Sparkles size={16} className="text-indigo-400 animate-pulse" />
+                        AI Deploy Assistant
+                      </h3>
+
+                      <p className="text-[10px] text-[var(--text-secondary)] leading-relaxed">
+                        Let AI scan the target project directory, auto-detect language/framework types (Docker, pure Node, Python, etc.), and generate a tailored production script.
+                      </p>
+
+                      <button
+                        type="button"
+                        onClick={handleAiAnalyze}
+                        disabled={aiAnalyzing || deployLoading}
+                        className="w-full py-2.5 bg-gradient-to-r from-indigo-500 to-violet-600 hover:from-indigo-600 hover:to-violet-700 disabled:opacity-50 text-white rounded-xl text-xs font-bold transition-all shadow-md flex items-center justify-center gap-2 cursor-pointer"
+                      >
+                        {aiAnalyzing ? <Loader size={12} className="animate-spin" /> : <Sparkles size={12} />}
+                        {aiAnalyzing ? 'Scanning & Analyzing...' : 'Analyze with AI'}
+                      </button>
+
+                      {deployConfig.aiProfile && (
+                        <div className="p-4 rounded-xl bg-slate-900/60 border border-[var(--border-color)] space-y-3 animate-in fade-in duration-200">
+                          <div className="flex items-center justify-between border-b border-slate-800 pb-2">
+                            <span className="text-[10px] uppercase font-extrabold tracking-wider text-indigo-400">AI Recommendation</span>
+                            <span className="px-2 py-0.5 rounded bg-indigo-500/10 text-indigo-300 text-[9px] font-bold">
+                              {deployConfig.aiProfile.projectType}
+                            </span>
+                          </div>
+
+                          {deployConfig.aiProfile.technologies && deployConfig.aiProfile.technologies.length > 0 && (
+                            <div className="flex flex-wrap gap-1">
+                              {deployConfig.aiProfile.technologies.map(t => (
+                                <span key={t} className="px-1.5 py-0.5 rounded bg-slate-800 border border-slate-700 text-[9px] text-slate-300 font-medium">
+                                  {t}
+                                </span>
+                              ))}
+                            </div>
+                          )}
+
+                          <p className="text-[10px] text-slate-400 leading-normal italic">
+                            "{deployConfig.aiProfile.summary}"
+                          </p>
+
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setDeployConfig(p => ({ ...p, deployCommand: p.aiProfile.deployCommand }));
+                              addNotification({ title: 'Recommended Applied', message: 'Deployment command set to AI suggestion.', type: 'info' });
+                            }}
+                            className="w-full py-1.5 bg-slate-800 hover:bg-slate-750 border border-slate-700 hover:border-slate-600 text-slate-200 rounded-lg text-[10px] font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer"
+                          >
+                            <Code size={11} />
+                            Apply AI Command
+                          </button>
+                        </div>
+                      )}
+
+                      {/* AI History Logs */}
+                      {deployConfig.aiLogs && deployConfig.aiLogs.length > 0 && (
+                        <div className="border-t border-[var(--border-color)] pt-3 space-y-2">
+                          <label className="block text-[10px] font-bold text-[var(--text-secondary)] uppercase tracking-wider">AI History Logs</label>
+                          <div className="max-h-36 overflow-y-auto custom-scrollbar space-y-1.5 pr-1">
+                            {deployConfig.aiLogs.map((log, idx) => (
+                              <div key={idx} className="p-2 rounded bg-slate-900/30 border border-slate-900/50 hover:border-slate-800 flex flex-col gap-1 transition-all">
+                                <div className="flex items-center justify-between">
+                                  <span className="text-[9px] font-bold text-slate-300">{log.projectType}</span>
+                                  <span className="text-[8px] text-[var(--text-muted)]">
+                                    {log.analyzedAt ? new Date(log.analyzedAt).toLocaleDateString() : 'Unknown date'}
+                                  </span>
+                                </div>
+                                <p className="text-[9px] text-[var(--text-muted)] line-clamp-1 italic">"{log.summary}"</p>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Log Terminal console */}
+                {deployConfig.lastDeployLog && (
+                  <div className="p-6 rounded-2xl bg-[var(--bg-card)] border border-[var(--border-color)] shadow-sm space-y-4">
+                    <h3 className="text-sm font-bold text-[var(--text-primary)] flex items-center justify-between border-b border-[var(--border-color)] pb-3">
+                      <span className="flex items-center gap-2">
+                        <Terminal size={16} className="text-emerald-400 animate-pulse" />
+                        Deployment Console Output
+                      </span>
+                      <button
+                        onClick={() => setDeployConfig(p => ({ ...p, lastDeployLog: '' }))}
+                        className="text-[10px] text-[var(--text-muted)] hover:text-red-400 transition-colors cursor-pointer"
+                      >
+                        Clear Console
+                      </button>
+                    </h3>
+                    <div className="bg-slate-950 border border-slate-900 rounded-xl p-4 shadow-inner max-h-96 overflow-y-auto custom-scrollbar font-mono text-[11px] leading-relaxed text-slate-300 whitespace-pre-wrap select-text">
+                      {deployConfig.lastDeployLog}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         )}
         {activeTab === 'terminal' && (

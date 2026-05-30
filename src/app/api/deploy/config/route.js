@@ -1,0 +1,153 @@
+import { NextResponse } from 'next/server';
+import { getServerSession } from 'next-auth/next';
+import { authOptions } from '@/lib/auth';
+import connectDB from '@/lib/mongodb';
+import SystemSetting from '@/models/SystemSetting';
+
+const defaultConfig = {
+  id: 'default',
+  name: 'Default Project',
+  enabled: false,
+  branch: 'main',
+  secret: '',
+  targetType: 'local',
+  connectionId: '',
+  deployCommand: '# Enter your deployment shell script here\n# e.g., git pull && npm run build\n',
+  projectPath: '.',
+  status: 'idle',
+  lastDeployLog: '',
+  lastDeployAt: null,
+  aiProfile: null,
+  aiLogs: [],
+  githubConnected: false,
+  githubUser: ''
+};
+
+// GET /api/deploy/config?project=id
+// If ?project is not specified or set to "list", returns the list of all deployment projects.
+export async function GET(request) {
+  try {
+    const session = await getServerSession(authOptions);
+    if (!session) {
+      return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
+    }
+
+    const { searchParams } = new URL(request.url);
+    const projectId = searchParams.get('project');
+
+    await connectDB(null, true);
+    
+    // Find all settings keys that start with auto_deploy_config
+    const allSettings = await SystemSetting.find({
+      key: { $regex: '^auto_deploy_config' }
+    });
+
+    // Parse all projects
+    let projects = [];
+    allSettings.forEach(s => {
+      // Compatibility with old auto_deploy_config
+      if (s.key === 'auto_deploy_config') {
+        projects.push({ ...defaultConfig, ...s.value, id: 'default', name: s.value.name || 'Default Project' });
+      } else {
+        const id = s.key.replace('auto_deploy_config_', '');
+        projects.push({ ...defaultConfig, ...s.value, id });
+      }
+    });
+
+    // Ensure we have at least one project
+    if (projects.length === 0) {
+      projects.push(defaultConfig);
+    }
+
+    // If requesting a specific project
+    if (projectId && projectId !== 'list') {
+      const proj = projects.find(p => p.id === projectId);
+      return NextResponse.json({
+        success: true,
+        config: proj || { ...defaultConfig, id: projectId, name: `Project ${projectId}` }
+      });
+    }
+
+    return NextResponse.json({
+      success: true,
+      projects
+    });
+  } catch (error) {
+    console.error('[deploy/config] GET error:', error.message);
+    return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+  }
+}
+
+// POST /api/deploy/config
+export async function POST(request) {
+  try {
+    const session = await getServerSession(authOptions);
+    if (!session) {
+      return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
+    }
+
+    const body = await request.json();
+    const projectId = body.id || 'default';
+    const dbKey = projectId === 'default' ? 'auto_deploy_config' : `auto_deploy_config_${projectId}`;
+
+    await connectDB(null, true);
+
+    const existing = await SystemSetting.findOne({ key: dbKey });
+    const existingValue = existing?.value || {};
+
+    const updatedValue = {
+      id: projectId,
+      name: body.name || existingValue.name || `Project ${projectId}`,
+      enabled: typeof body.enabled === 'boolean' ? body.enabled : existingValue.enabled || false,
+      branch: body.branch || existingValue.branch || 'main',
+      secret: body.secret !== undefined ? body.secret : existingValue.secret || '',
+      targetType: body.targetType || existingValue.targetType || 'local',
+      connectionId: body.connectionId !== undefined ? body.connectionId : existingValue.connectionId || '',
+      deployCommand: body.deployCommand !== undefined ? body.deployCommand : existingValue.deployCommand || '',
+      projectPath: body.projectPath !== undefined ? body.projectPath : existingValue.projectPath || '.',
+      status: body.status || existingValue.status || 'idle',
+      lastDeployLog: body.lastDeployLog !== undefined ? body.lastDeployLog : existingValue.lastDeployLog || '',
+      lastDeployAt: body.lastDeployAt !== undefined ? body.lastDeployAt : existingValue.lastDeployAt || null,
+      aiProfile: body.aiProfile !== undefined ? body.aiProfile : existingValue.aiProfile || null,
+      aiLogs: body.aiLogs !== undefined ? body.aiLogs : existingValue.aiLogs || [],
+      githubConnected: body.githubConnected !== undefined ? body.githubConnected : existingValue.githubConnected || false,
+      githubUser: body.githubUser !== undefined ? body.githubUser : existingValue.githubUser || ''
+    };
+
+    await SystemSetting.findOneAndUpdate(
+      { key: dbKey },
+      { $set: { value: updatedValue } },
+      { upsert: true, runValidators: false }
+    );
+
+    return NextResponse.json({ success: true, config: updatedValue });
+  } catch (error) {
+    console.error('[deploy/config] POST error:', error.message);
+    return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+  }
+}
+
+// DELETE /api/deploy/config?project=id
+export async function DELETE(request) {
+  try {
+    const session = await getServerSession(authOptions);
+    if (!session) {
+      return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
+    }
+
+    const { searchParams } = new URL(request.url);
+    const projectId = searchParams.get('project');
+
+    if (!projectId || projectId === 'default') {
+      return NextResponse.json({ success: false, error: 'Cannot delete the default project configuration' }, { status: 400 });
+    }
+
+    await connectDB(null, true);
+    await SystemSetting.deleteOne({ key: `auto_deploy_config_${projectId}` });
+
+    return NextResponse.json({ success: true, message: 'Project deployment config deleted' });
+  } catch (error) {
+    console.error('[deploy/config] DELETE error:', error.message);
+    return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+  }
+}

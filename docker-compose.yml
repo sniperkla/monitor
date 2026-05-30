@@ -7,29 +7,36 @@ services:
     container_name: monitor
     restart: unless-stopped
     depends_on:
-      - mongo
-    ports:
-      - "3030:3000"
+      - monitor-mongo
     env_file:
       - .env
     environment:
       NODE_ENV: production
-      PORT: 3000
-    volumes:
-      - ./db-config.json:/app/db-config.json
+      PORT: 3030 # <--- FIXED: Changed from 3000 to 3030 to match your Nginx default.conf!
+      MONGO_URI: mongodb://monitor:AaBb1234!@monitor-mongo:27017/monitor?authSource=admin
+    networks:
+      - proxy-net
 
-  mongo:
+  monitor-mongo:
     image: mongo:7
     container_name: monitor-mongo
     restart: unless-stopped
+    ports:
+      - "27019:27017"
+
     environment:
       MONGO_INITDB_ROOT_USERNAME: monitor
       MONGO_INITDB_ROOT_PASSWORD: AaBb1234!
       MONGO_INITDB_DATABASE: monitor
-    ports:
-      - "127.0.0.1:27020:27017"
     volumes:
       - mongo_data:/data/db
+    networks:
+      - proxy-net
+    # No ports exposed to the host machine to avoid "port already in use" crashes.
 
 volumes:
   mongo_data:
+
+networks:
+  proxy-net:
+    external: true
