@@ -177,6 +177,8 @@ export default function FileManager({
   const [transfer, setTransfer] = useState(null); // { filename, progress, action, waiting, countdown }
   const [isDragging, setIsDragging] = useState(false);
   const [transferCountdown, setTransferCountdown] = useState(0);
+  const transferCountdownRef = useRef(0);
+  useEffect(() => { transferCountdownRef.current = transferCountdown; }, [transferCountdown]);
   const lastDownloadRef = useRef(null); // { file, offset }
   const transferRef = useRef(null); // Keep a ref of transfer for loop cancellation
   const reconnectTimerRef = useRef(null);
@@ -1260,10 +1262,10 @@ export default function FileManager({
           if (!transferRef.current) break;
 
           // If we are rate limited, wait for the countdown
-          if (transferCountdown > 0) {
+          if (transferCountdownRef.current > 0) {
               await new Promise(r => {
                   const check = setInterval(() => {
-                      if (transferCountdown === 0) {
+                      if (transferCountdownRef.current === 0) {
                           clearInterval(check);
                           r();
                       }
@@ -1271,7 +1273,7 @@ export default function FileManager({
               });
               // After waiting, we need to RE-START the upload session from current offset
               socket.emit('sftp:upload', { filename: file.name, path, size: file.size, offset });
-                await waitForUploadHandshake(offset);
+              await waitForUploadHandshake(offset);
               setTransfer(prev => ({ ...prev, waiting: false, countdown: 0 }));
           }
 
