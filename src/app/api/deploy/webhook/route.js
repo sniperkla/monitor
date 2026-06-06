@@ -185,6 +185,8 @@ export async function POST(request) {
     const projectId = searchParams.get('project') || 'default';
     const dbKey = projectId === 'default' ? 'auto_deploy_config' : `auto_deploy_config_${projectId}`;
 
+    console.log(`[webhook] Received POST request for project: ${projectId}`);
+
     // 1. Check for manual trigger (requires dashboard session)
     const session = await getServerSession(authOptions);
     const isManual = !!session;
@@ -194,8 +196,22 @@ export async function POST(request) {
     const setting = await SystemSetting.findOne({ key: dbKey });
     const config = setting?.value;
 
+    console.log(`[webhook] Config found:`, config ? {
+      enabled: config.enabled,
+      branch: config.branch,
+      targetType: config.targetType,
+      hasDeployCommand: !!config.deployCommand?.trim(),
+      commandPreview: config.deployCommand?.substring(0, 50)
+    } : 'NO CONFIG');
+
     if (!config || (!config.enabled && !isManual)) {
+      console.log(`[webhook] Deployment skipped - config missing or disabled`);
       return NextResponse.json({ success: false, error: `Auto-deployment for project "${projectId}" is disabled or not configured` }, { status: 400 });
+    }
+
+    if (!config.deployCommand?.trim()) {
+      console.log(`[webhook] ❌ No deployment command set!`);
+      return NextResponse.json({ success: false, error: 'Deployment command is not configured' }, { status: 400 });
     }
 
     const bodyText = await request.text();
@@ -204,12 +220,14 @@ export async function POST(request) {
     if (!isManual) {
       const githubEvent = request.headers.get('x-github-event');
       if (githubEvent === 'ping') {
+        console.log(`[webhook] Received GitHub ping`);
         return NextResponse.json({ success: true, message: 'GitHub Ping received successfully' });
       }
 
       if (config.secret) {
         const signatureHeader = request.headers.get('x-hub-signature-256');
         if (!signatureHeader || !verifySignature(bodyText, config.secret, signatureHeader)) {
+          console.log(`[webhook] Signature verification failed`);
           return NextResponse.json({ success: false, error: 'Invalid signature verification' }, { status: 401 });
         }
       }
@@ -219,7 +237,9 @@ export async function POST(request) {
         const payload = JSON.parse(bodyText);
         if (payload.ref) {
           const expectedRef = `refs/heads/${config.branch}`;
+          console.log(`[webhook] Push ref: ${payload.ref}, expected: ${expectedRef}`);
           if (payload.ref !== expectedRef) {
+            console.log(`[webhook] Branch mismatch - skipping deployment`);
             return NextResponse.json({ 
               success: true, 
               message: `Ref ${payload.ref} does not match watched branch refs/heads/${config.branch}. Skipping deployment.` 
@@ -227,11 +247,12 @@ export async function POST(request) {
           }
         }
       } catch (e) {
-        // Suppress parsing errors if not push event JSON
+        console.log(`[webhook] Warning: Could not parse payload:`, e.message);
       }
     }
 
     // 4. Trigger the deployment in the background
+    console.log(`[webhook] ✅ Triggering deployment for project: ${projectId}`);
     runDeployment(config).catch(err => {
       console.error('Unhandled background deployment error:', err.message);
     });
