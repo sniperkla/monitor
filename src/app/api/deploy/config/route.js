@@ -98,6 +98,44 @@ export async function POST(request) {
     const projectId = body.id || 'default';
     const dbKey = projectId === 'default' ? 'auto_deploy_config' : `auto_deploy_config_${projectId}`;
 
+    const targetType = body.targetType || 'local';
+    const normalizedConnectionId = typeof body.connectionId === 'string'
+      ? body.connectionId.trim()
+      : '';
+
+    let sshConnectionData = null;
+
+    // IMPORTANT: Look up SSH connections BEFORE connecting to main DB
+    // This ensures we can access relay/user database connections
+    if (targetType === 'ssh' && normalizedConnectionId && body.connectionId) {
+      try {
+        console.log(`[deploy/config] Looking up SSH connection from user database: ${normalizedConnectionId}`);
+        const userDb = await connectDB(null, true);
+        const userRepo = new ConnectionRepository(userDb);
+        await userRepo.init();
+        const connection = await userRepo.findById(normalizedConnectionId);
+        
+        if (connection) {
+          sshConnectionData = {
+            id: connection._id || connection.id,
+            host: connection.host,
+            port: connection.port || 22,
+            username: connection.username || 'root',
+            authType: connection.authType,
+            password: connection.password || '',
+            privateKey: connection.privateKey || '',
+            passphrase: connection.passphrase || ''
+          };
+          console.log(`[deploy/config] ✅ Found SSH connection in user database: ${normalizedConnectionId}`);
+        } else {
+          console.log(`[deploy/config] ⚠️ SSH connection not found in user database: ${normalizedConnectionId}`);
+        }
+      } catch (err) {
+        console.log(`[deploy/config] ⚠️ Failed to lookup SSH connection from user DB: ${err.message}`);
+      }
+    }
+
+    // NOW connect to main database for saving deployment config
     await connectDB(process.env.MONGODB_URI, true);
 
     // Check for duplicate project name (if provided)
@@ -121,59 +159,12 @@ export async function POST(request) {
     const existing = await SystemSetting.findOne({ key: dbKey });
     const existingValue = existing?.value || {};
 
-    const targetType = body.targetType || existingValue.targetType || 'local';
-    const normalizedConnectionId = typeof body.connectionId === 'string'
-      ? body.connectionId.trim()
-      : String(existingValue.connectionId || '').trim();
+    // Determine final values for this save
+    const finalTargetType = body.targetType !== undefined ? body.targetType : (existingValue.targetType || 'local');
+    const finalConnectionId = body.connectionId !== undefined ? (typeof body.connectionId === 'string' ? body.connectionId.trim() : '') : String(existingValue.connectionId || '').trim();
 
-    let sshConnectionData = existingValue.sshConnectionData || null;
-
-    if (targetType === 'ssh' && normalizedConnectionId && body.connectionId) {
-      // Try to fetch and cache SSH connection details from user/main database
-      let foundConnection = null;
-      
-      // Try user database first (with relay if available)
-      try {
-        const userDb = await connectDB(null, true);
-        const userRepo = new ConnectionRepository(userDb);
-        await userRepo.init();
-        foundConnection = await userRepo.findById(normalizedConnectionId);
-        console.log(`[deploy/config] Found SSH connection in user database: ${normalizedConnectionId}`);
-      } catch (userErr) {
-        console.log(`[deploy/config] User database lookup failed: ${userErr.message}`);
-      }
-      
-      // Fall back to main database if not found in user DB
-      if (!foundConnection) {
-        try {
-          const mainDb = await connectDB(process.env.MONGODB_URI, true);
-          const mainRepo = new ConnectionRepository(mainDb);
-          await mainRepo.init();
-          foundConnection = await mainRepo.findById(normalizedConnectionId);
-          console.log(`[deploy/config] Found SSH connection in main database: ${normalizedConnectionId}`);
-        } catch (mainErr) {
-          console.log(`[deploy/config] Main database lookup failed: ${mainErr.message}`);
-        }
-      }
-      
-      if (foundConnection) {
-        // Store encrypted connection data in config for webhook use
-        sshConnectionData = {
-          id: foundConnection._id || foundConnection.id,
-          host: foundConnection.host,
-          port: foundConnection.port || 22,
-          username: foundConnection.username || 'root',
-          authType: foundConnection.authType,
-          password: foundConnection.password || '', // Already encrypted if exists
-          privateKey: foundConnection.privateKey || '', // Already encrypted if exists
-          passphrase: foundConnection.passphrase || '' // Already encrypted if exists
-        };
-        console.log(`[deploy/config] Cached SSH connection data for ID: ${normalizedConnectionId}`);
-      } else {
-        // Don't fail - just warn and let webhook validate at execution time
-        console.warn(`[deploy/config] Warning: SSH connection ${normalizedConnectionId} not found in any database. Will attempt to re-lookup at deployment time.`);
-      }
-    }
+    // Use cached connection data if available, otherwise use existing data
+    const finalSshConnectionData = sshConnectionData || existingValue.sshConnectionData || null;
 
     const updatedValue = {
       id: projectId,
@@ -181,8 +172,8 @@ export async function POST(request) {
       enabled: typeof body.enabled === 'boolean' ? body.enabled : existingValue.enabled || false,
       branch: body.branch || existingValue.branch || 'main',
       secret: body.secret !== undefined ? body.secret : existingValue.secret || '',
-      targetType: body.targetType || existingValue.targetType || 'local',
-      connectionId: targetType === 'ssh' ? normalizedConnectionId : '',
+      targetType: finalTargetType,
+      connectionId: finalTargetType === 'ssh' ? finalConnectionId : '',
       deployCommand: body.deployCommand !== undefined ? body.deployCommand : existingValue.deployCommand || '',
       projectPath: body.projectPath !== undefined ? body.projectPath : existingValue.projectPath || '.',
       status: body.status || existingValue.status || 'idle',
@@ -200,7 +191,7 @@ export async function POST(request) {
       githubUser: body.githubUser !== undefined ? body.githubUser : existingValue.githubUser || '',
       githubRepo: body.githubRepo !== undefined ? body.githubRepo : existingValue.githubRepo || '',
       githubToken: body.githubToken !== undefined && body.githubToken ? encrypt(body.githubToken) : existingValue.githubToken || '',
-      sshConnectionData: sshConnectionData
+      sshConnectionData: finalSshConnectionData
     };
 
     await SystemSetting.findOneAndUpdate(
