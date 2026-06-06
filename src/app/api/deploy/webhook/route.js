@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "@/lib/auth";
 import crypto from 'crypto';
-import { spawn, exec } from 'child_process';
+import { spawn } from 'child_process';
 import { Client } from 'ssh2';
 import connectDB from '@/lib/mongodb';
 import SystemSetting from "@/models/SystemSetting";
@@ -25,15 +25,6 @@ function verifySignature(bodyText, secret, signatureHeader) {
   } catch (e) {
     return false;
   }
-}
-
-// Get the appropriate shell command for the platform
-function getShellCommand() {
-  if (process.platform === 'win32') {
-    return { shell: 'cmd.exe', arg: '/c' };
-  }
-  // For macOS, Linux, etc.
-  return { shell: 'bash', arg: '-c' };
 }
 
 // Background deployment execution
@@ -89,11 +80,13 @@ async function runDeployment(config) {
     // === LOCAL HOST DEPLOYMENT ===
     const cwdPath = resolvedPath.startsWith('/') ? resolvedPath : `${process.cwd()}/${resolvedPath}`;
 
-    // Get platform-appropriate shell
-    const { shell, arg } = getShellCommand();
-
-    // Use spawn with detected shell to stream output and avoid exec buffer hangs
-    const childProcess = spawn(shell, [arg, config.deployCommand], { cwd: cwdPath, stdio: 'pipe' });
+    // Use spawn with shell: true to handle shell detection and execution
+    // This automatically uses /bin/sh on Unix and cmd.exe on Windows
+    const childProcess = spawn(config.deployCommand, {
+      cwd: cwdPath,
+      shell: true,
+      stdio: ['ignore', 'pipe', 'pipe']
+    });
 
     // Register running process so it can be cancelled
     try {
