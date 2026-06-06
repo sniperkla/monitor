@@ -110,6 +110,10 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
     lastDeployAt: null,
     aiProfile: null,
     aiLogs: [],
+    aiModel: 'auto',
+    aiCustomModel: '',
+    aiEndpoint: '',
+    aiApiKey: '',
     githubConnected: false,
     githubUser: ''
   });
@@ -121,6 +125,7 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
   const [deployTriggering, setDeployTriggering] = useState(false);
   const [copySuccess, setCopySuccess] = useState(false);
   const [aiAnalyzing, setAiAnalyzing] = useState(false);
+  const [deploymentTab, setDeploymentTab] = useState('configuration');
   const [branches, setBranches] = useState([]);
   const [loadingBranches, setLoadingBranches] = useState(false);
   const [repoInput, setRepoInput] = useState('');
@@ -351,7 +356,11 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
         lastDeployLog: '',
         lastDeployAt: null,
         githubConnected: false,
-        githubUser: ''
+        githubUser: '',
+        aiModel: 'auto',
+        aiCustomModel: '',
+        aiEndpoint: '',
+        aiApiKey: ''
       };
 
       const res = await apiFetch('/api/deploy/config', {
@@ -1933,8 +1942,29 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
               </div>
             ) : (
               <div className="space-y-6 mt-6">
-                {/* Status Panel */}
-                <div className="p-5 rounded-2xl bg-[var(--bg-card)] border border-[var(--border-color)] shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+                  <div className="inline-flex rounded-2xl border border-[var(--border-color)] bg-[var(--bg-card)] p-1">
+                    <button
+                      type="button"
+                      onClick={() => setDeploymentTab('configuration')}
+                      className={`rounded-xl px-4 py-2 text-xs font-bold transition ${deploymentTab === 'configuration' ? 'bg-indigo-600 text-white' : 'text-[var(--text-secondary)] hover:bg-slate-700/50'}`}
+                    >
+                      Configuration
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setDeploymentTab('logs')}
+                      className={`rounded-xl px-4 py-2 text-xs font-bold transition ${deploymentTab === 'logs' ? 'bg-indigo-600 text-white' : 'text-[var(--text-secondary)] hover:bg-slate-700/50'}`}
+                    >
+                      Logs
+                    </button>
+                  </div>
+                  <p className="text-[10px] text-[var(--text-muted)]">Toggle between deployment settings and console logs for easier access.</p>
+                </div>
+                {deploymentTab === 'configuration' ? (
+                  <>
+                    {/* Status Panel */}
+                    <div className="p-5 rounded-2xl bg-[var(--bg-card)] border border-[var(--border-color)] shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                   <div className="flex items-start gap-4">
                     <div className={`p-3 rounded-xl ${
                       deployConfig.status === 'running' 
@@ -2234,6 +2264,84 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
                         Let AI scan the target project directory, auto-detect language/framework types (Docker, pure Node, Python, etc.), and generate a tailored production script.
                       </p>
 
+                      <div className="space-y-4">
+                        <div>
+                          <label className="block text-[11px] font-bold text-[var(--text-secondary)] uppercase tracking-wider mb-2">AI Model</label>
+                          <select
+                            value={deployConfig.aiModel}
+                            onChange={(e) => setDeployConfig(p => ({ ...p, aiModel: e.target.value }))}
+                            className="w-full bg-[var(--bg-primary)] border border-[var(--border-color)] rounded-xl px-3 py-2 text-xs text-[var(--text-primary)] focus:outline-none focus:border-indigo-500"
+                          >
+                            <option value="auto">Auto</option>
+                            <option value="gpt-3.5-turbo">gpt-3.5-turbo</option>
+                            <option value="gpt-4">gpt-4</option>
+                            <option value="manual">Custom Endpoint</option>
+                          </select>
+                          <p className="mt-1 text-[10px] text-[var(--text-muted)]">Choose a model or use a custom endpoint for your deployment analysis.</p>
+                        </div>
+
+                        {deployConfig.aiModel === 'manual' && (
+                          <div className="space-y-4 rounded-2xl bg-slate-950/30 border border-[var(--border-color)] p-4">
+                            <div>
+                              <div className="flex flex-wrap gap-2 mb-3">
+                                <button
+                                  type="button"
+                                  onClick={() => setDeployConfig(p => ({ ...p, aiEndpoint: 'https://openrouter.ai/api/v1/chat/completions', aiCustomModel: 'anthropic/claude-3.5-sonnet' }))}
+                                  className="text-[9px] px-2 py-1.5 rounded-lg bg-indigo-500/20 text-indigo-400 hover:bg-indigo-500/30 border border-indigo-500/30 transition-all"
+                                >
+                                  🌐 OpenRouter
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setDeployConfig(p => ({ ...p, aiEndpoint: 'https://api.openai.com/v1/chat/completions', aiCustomModel: 'gpt-4o' }))}
+                                  className="text-[9px] px-2 py-1.5 rounded-lg bg-emerald-500/20 text-emerald-400 hover:bg-emerald-500/30 border border-emerald-500/30 transition-all"
+                                >
+                                  🟢 OpenAI
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setDeployConfig(p => ({ ...p, aiEndpoint: 'http://localhost:11434/v1/chat/completions', aiCustomModel: 'llama3.2' }))}
+                                  className="text-[9px] px-2 py-1.5 rounded-lg bg-amber-500/20 text-amber-400 hover:bg-amber-500/30 border border-amber-500/30 transition-all"
+                                >
+                                  🦙 Ollama
+                                </button>
+                              </div>
+
+                              <div>
+                                <label className="block text-[11px] font-bold text-[var(--text-secondary)] uppercase tracking-wider mb-2">Custom Endpoint URL</label>
+                                <input
+                                  type="text"
+                                  value={deployConfig.aiEndpoint}
+                                  onChange={(e) => setDeployConfig(p => ({ ...p, aiEndpoint: e.target.value }))}
+                                  placeholder="https://api.your-ai-provider.com/v1/chat/completions"
+                                  className="w-full bg-[var(--bg-primary)] border border-[var(--border-color)] rounded-xl px-3 py-2 text-xs text-[var(--text-primary)] focus:outline-none focus:border-indigo-500"
+                                />
+                              </div>
+                              <div>
+                                <label className="block text-[11px] font-bold text-[var(--text-secondary)] uppercase tracking-wider mb-2">API Key</label>
+                                <input
+                                  type="password"
+                                  value={deployConfig.aiApiKey}
+                                  onChange={(e) => setDeployConfig(p => ({ ...p, aiApiKey: e.target.value }))}
+                                  placeholder="Enter API Key"
+                                  className="w-full bg-[var(--bg-primary)] border border-[var(--border-color)] rounded-xl px-3 py-2 text-xs text-[var(--text-primary)] focus:outline-none focus:border-indigo-500"
+                                />
+                              </div>
+                              <div>
+                                <label className="block text-[11px] font-bold text-[var(--text-secondary)] uppercase tracking-wider mb-2">Custom Model Name</label>
+                                <input
+                                  type="text"
+                                  value={deployConfig.aiCustomModel}
+                                  onChange={(e) => setDeployConfig(p => ({ ...p, aiCustomModel: e.target.value }))}
+                                  placeholder="e.g. gpt-4o-mini"
+                                  className="w-full bg-[var(--bg-primary)] border border-[var(--border-color)] rounded-xl px-3 py-2 text-xs text-[var(--text-primary)] focus:outline-none focus:border-indigo-500"
+                                />
+                              </div>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+
                       <button
                         type="button"
                         onClick={handleAiAnalyze}
@@ -2303,9 +2411,10 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
                     </div>
                   </div>
                 </div>
+              </>
+            ) : null}
 
-                {/* Deployment Status & Log */}
-                {(deployConfig.lastDeployAt || deployConfig.lastDeployLog) && (
+            {deploymentTab === 'logs' ? (
                   <div className="space-y-4">
                     <div className={`p-4 rounded-2xl border flex items-center justify-between ${deployConfig.lastDeployLog?.includes('Error') || deployConfig.lastDeployLog?.includes('error') ? 'bg-red-500/5 border-red-500/20' : 'bg-emerald-500/5 border-emerald-500/20'}`}>
                       <div className="flex items-center gap-3">
@@ -2315,7 +2424,7 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
                             {deployConfig.lastDeployLog?.includes('Error') || deployConfig.lastDeployLog?.includes('error') ? 'Last Deployment Failed' : 'Last Deployment Succeeded'}
                           </p>
                           <p className="text-[10px] text-[var(--text-muted)] mt-0.5">
-                            {deployConfig.lastDeployAt ? new Date(deployConfig.lastDeployAt).toLocaleString() : 'Unknown'}
+                            {deployConfig.lastDeployAt ? new Date(deployConfig.lastDeployAt).toLocaleString() : 'No recent deployment run yet'}
                           </p>
                         </div>
                       </div>
@@ -2324,27 +2433,51 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
                       </span>
                     </div>
 
-                    {deployConfig.lastDeployLog && (
+                    {deployConfig.lastDeployLog ? (
                       <div className="p-6 rounded-2xl bg-[var(--bg-card)] border border-[var(--border-color)] shadow-sm space-y-4">
-                        <h3 className="text-sm font-bold text-[var(--text-primary)] flex items-center justify-between border-b border-[var(--border-color)] pb-3">
-                          <span className="flex items-center gap-2">
+                        <div className="flex items-center justify-between gap-3">
+                          <div className="flex items-center gap-2 text-sm font-bold text-[var(--text-primary)]">
                             <Terminal size={16} className="text-emerald-400 animate-pulse" />
-                            Deployment Console Output
-                          </span>
+                            <span>Deployment Console Output</span>
+                          </div>
                           <button
                             onClick={() => setDeployConfig(p => ({ ...p, lastDeployLog: '' }))}
                             className="text-[10px] text-[var(--text-muted)] hover:text-red-400 transition-colors cursor-pointer"
                           >
                             Clear Console
                           </button>
-                        </h3>
-                        <div className="bg-slate-950 border border-slate-900 rounded-xl p-4 shadow-inner max-h-96 overflow-y-auto custom-scrollbar font-mono text-[11px] leading-relaxed text-slate-300 whitespace-pre-wrap select-text">
+                        </div>
+                        <div className="bg-slate-950 border border-slate-900 rounded-xl p-4 shadow-inner max-h-[420px] overflow-y-auto custom-scrollbar font-mono text-[11px] leading-relaxed text-slate-300 whitespace-pre-wrap select-text">
                           {deployConfig.lastDeployLog}
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="p-6 rounded-2xl bg-[var(--bg-card)] border border-[var(--border-color)] text-[var(--text-secondary)]">
+                        No deployment console output is available yet. Run a deployment to see logs here.
+                      </div>
+                    )}
+
+                    {deployConfig.aiLogs && deployConfig.aiLogs.length > 0 && (
+                      <div className="p-6 rounded-2xl bg-[var(--bg-card)] border border-[var(--border-color)] shadow-sm space-y-4">
+                        <div className="flex items-center gap-2 text-sm font-bold text-[var(--text-primary)]">
+                          <Sparkles size={16} className="text-indigo-400" />
+                          <span>AI History Logs</span>
+                        </div>
+                        <div className="space-y-2 max-h-72 overflow-y-auto custom-scrollbar pr-1">
+                          {deployConfig.aiLogs.map((log, idx) => (
+                            <div key={idx} className="p-3 rounded-2xl bg-slate-950/70 border border-slate-900 hover:border-slate-700 transition-all">
+                              <div className="flex items-center justify-between gap-2 text-[10px] uppercase tracking-widest text-[var(--text-secondary)]">
+                                <span>{log.projectType || 'AI Analysis'}</span>
+                                <span>{log.analyzedAt ? new Date(log.analyzedAt).toLocaleString() : 'Unknown'}</span>
+                              </div>
+                              <p className="mt-2 text-[11px] text-[var(--text-muted)] italic">&quot;{log.summary || 'No summary available.'}&quot;</p>
+                            </div>
+                          ))}
                         </div>
                       </div>
                     )}
                   </div>
-                )}
+                ) : null}
               </div>
             )}
           </div>

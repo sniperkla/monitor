@@ -109,6 +109,8 @@ export async function POST(request) {
     await connectDB(null, true);
     const keysSetting = await SystemSetting.findOne({ key: 'ai_api_keys' });
     const configSetting = await SystemSetting.findOne({ key: 'ai_config' });
+    const projectSetting = await SystemSetting.findOne({ key: dbKey });
+    const projectAiPrefs = projectSetting?.value || {};
 
     let apiKey = process.env.GROQ_API_KEY || '';
     if (keysSetting?.value?.keys && Array.isArray(keysSetting.value.keys) && keysSetting.value.keys.length > 0) {
@@ -117,11 +119,21 @@ export async function POST(request) {
     }
 
     if (!apiKey) {
-      return NextResponse.json({ success: false, error: 'AI Service (Groq API Key) is not configured in settings or environment.' }, { status: 400 });
+      return NextResponse.json({ success: false, error: 'AI Service API Key is not configured. Enter a custom API key or ensure your global Groq key is set.' }, { status: 400 });
+    }
+
+    let aiEndpoint = 'https://api.groq.com/openai/v1/chat/completions';
+    let modelName = configSetting?.value?.model || FALLBACK_MODEL;
+    if (projectAiPrefs.aiModel === 'manual') {
+      aiEndpoint = projectAiPrefs.aiEndpoint || 'https://api.openai.com/v1/chat/completions';
+      modelName = projectAiPrefs.aiCustomModel || 'gpt-3.5-turbo';
+      apiKey = projectAiPrefs.aiApiKey || apiKey;
+    } else if (projectAiPrefs.aiModel && projectAiPrefs.aiModel !== 'auto') {
+      modelName = projectAiPrefs.aiModel;
     }
 
     const aiConfig = {
-      model: configSetting?.value?.model || FALLBACK_MODEL,
+      model: modelName,
       temperature: 0.1,
       max_tokens: 2048,
       ...configSetting?.value
@@ -146,7 +158,7 @@ You MUST respond with a valid JSON object ONLY. Do not wrap the JSON in markdown
     // Query Groq API
     let parsedResult = null;
     try {
-      const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+      const response = await fetch(aiEndpoint, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

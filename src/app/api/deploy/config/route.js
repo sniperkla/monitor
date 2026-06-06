@@ -20,6 +20,10 @@ const defaultConfig = {
   lastDeployAt: null,
   aiProfile: null,
   aiLogs: [],
+  aiModel: 'auto',
+  aiCustomModel: '',
+  aiEndpoint: '',
+  aiApiKey: '',
   githubConnected: false,
   githubUser: ''
 };
@@ -129,6 +133,10 @@ export async function POST(request) {
       lastDeployAt: body.lastDeployAt !== undefined ? body.lastDeployAt : existingValue.lastDeployAt || null,
       aiProfile: body.aiProfile !== undefined ? body.aiProfile : existingValue.aiProfile || null,
       aiLogs: body.aiLogs !== undefined ? body.aiLogs : existingValue.aiLogs || [],
+      aiModel: body.aiModel !== undefined ? body.aiModel : existingValue.aiModel || 'auto',
+      aiCustomModel: body.aiCustomModel !== undefined ? body.aiCustomModel : existingValue.aiCustomModel || '',
+      aiEndpoint: body.aiEndpoint !== undefined ? body.aiEndpoint : existingValue.aiEndpoint || '',
+      aiApiKey: body.aiApiKey !== undefined ? body.aiApiKey : existingValue.aiApiKey || '',
       githubConnected: body.githubConnected !== undefined ? body.githubConnected : existingValue.githubConnected || false,
       githubUser: body.githubUser !== undefined ? body.githubUser : existingValue.githubUser || '',
       githubRepo: body.githubRepo !== undefined ? body.githubRepo : existingValue.githubRepo || '',
