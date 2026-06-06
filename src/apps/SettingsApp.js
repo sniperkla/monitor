@@ -2288,11 +2288,6 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
                             <label className="block text-[11px] font-bold text-[var(--text-secondary)] uppercase tracking-wider mb-2">SSH Connection</label>
                             {selectedConnectionMissing && (
                               <div className="p-3 bg-rose-500/10 border border-rose-500/20 rounded-xl text-sm text-rose-100 mb-3">
-                                Selected SSH connection is no longer available. Please choose an active SSH connection from the list.
-                              </div>
-                            )}
-                            {selectedConnectionMissing && (
-                              <div className="p-3 bg-rose-500/10 border border-rose-500/20 rounded-xl text-sm text-rose-100 mb-3">
                                 The selected SSH connection ID <span className="font-mono">{deployConfig.connectionId}</span> is not available in the server-side connection list.
                                 GitHub webhook deployments require a connection that exists in the database-backed connection store.
                                 Please select a valid SSH connection before saving.

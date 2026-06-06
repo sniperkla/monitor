@@ -146,7 +146,7 @@ export async function POST(request) {
       branch: body.branch || existingValue.branch || 'main',
       secret: body.secret !== undefined ? body.secret : existingValue.secret || '',
       targetType: body.targetType || existingValue.targetType || 'local',
-      connectionId: normalizedConnectionId,
+      connectionId: targetType === 'ssh' ? normalizedConnectionId : '',
       deployCommand: body.deployCommand !== undefined ? body.deployCommand : existingValue.deployCommand || '',
       projectPath: body.projectPath !== undefined ? body.projectPath : existingValue.projectPath || '.',
       status: body.status || existingValue.status || 'idle',
