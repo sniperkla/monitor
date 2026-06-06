@@ -80,8 +80,8 @@ async function runDeployment(config) {
     // === LOCAL HOST DEPLOYMENT ===
     const cwdPath = resolvedPath.startsWith('/') ? resolvedPath : `${process.cwd()}/${resolvedPath}`;
 
-    // Use spawn with shell to stream output and avoid exec buffer hangs
-    const childProcess = spawn(config.deployCommand, { cwd: cwdPath, shell: true });
+    // Use spawn with explicit shell to stream output and avoid exec buffer hangs
+    const childProcess = spawn('/bin/sh', ['-c', config.deployCommand], { cwd: cwdPath });
 
     // Register running process so it can be cancelled
     try {
