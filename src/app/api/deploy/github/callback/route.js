@@ -1,7 +1,6 @@
 import { NextResponse } from 'next/server';
 import connectDB from '@/lib/mongodb';
 import SystemSetting from '@/models/SystemSetting';
-import fetch from 'node-fetch';
 import { encrypt } from '@/utils/encryption';
 
 // GET /api/deploy/github/callback?code=...&state=...
