@@ -142,37 +142,58 @@ async function runDeployment(config) {
   } else if (config.targetType === 'ssh') {
     // === REMOTE SSH DEPLOYMENT ===
     try {
-      const db = await connectDB(process.env.MONGODB_URI, true);
-      const repo = new ConnectionRepository(db);
-      await repo.init();
-      
       const connectionId = String(config.connectionId || '').trim();
       if (!connectionId) {
         throw new Error('SSH target is configured but no connection ID was provided. Please select a valid SSH connection in deployment settings.');
       }
 
-      const connection = await repo.findById(connectionId);
-      if (!connection) {
-        const detail = repo.isSql
-          ? 'This may be a stale or incompatible SSH connection ID for the configured database backend.'
-          : 'Please verify the selected SSH connection still exists.';
-        throw new Error(`SSH connection with ID ${connectionId} not found in database. ${detail}`);
+      let sshConnData = config.sshConnectionData;
+      
+      // If connection data wasn't cached, try to fetch it fresh from main database
+      if (!sshConnData || !sshConnData.host) {
+        console.log(`[deploy] SSH connection data not cached, attempting fresh lookup for ID: ${connectionId}`);
+        try {
+          const db = await connectDB(process.env.MONGODB_URI, true);
+          const repo = new ConnectionRepository(db);
+          await repo.init();
+          const connection = await repo.findById(connectionId);
+          if (connection) {
+            sshConnData = {
+              host: connection.host,
+              port: connection.port || 22,
+              username: connection.username || 'root',
+              authType: connection.authType,
+              password: connection.password || '',
+              privateKey: connection.privateKey || '',
+              passphrase: connection.passphrase || ''
+            };
+            console.log(`[deploy] Successfully fetched SSH connection from main database`);
+          } else {
+            throw new Error('Connection not found in main database');
+          }
+        } catch (lookupErr) {
+          throw new Error(`Failed to fetch SSH connection ${connectionId}: ${lookupErr.message}`);
+        }
       }
 
-      // Build SSH connection config
+      if (!sshConnData || !sshConnData.host) {
+        throw new Error(`SSH connection data incomplete or missing for ID ${connectionId}`);
+      }
+
+      // Build SSH connection config from stored data
       const sshConfig = {
-        host: connection.host,
-        port: connection.port || 22,
-        username: connection.username || 'root',
+        host: sshConnData.host,
+        port: sshConnData.port || 22,
+        username: sshConnData.username || 'root',
         readyTimeout: 20000,
       };
 
-      if (connection.authType === 'password') {
-        sshConfig.password = decrypt(connection.password);
-      } else if (connection.authType === 'privateKey') {
-        sshConfig.privateKey = decrypt(connection.privateKey);
-        if (connection.passphrase) {
-          sshConfig.passphrase = decrypt(connection.passphrase);
+      if (sshConnData.authType === 'password') {
+        sshConfig.password = decrypt(sshConnData.password);
+      } else if (sshConnData.authType === 'privateKey') {
+        sshConfig.privateKey = decrypt(sshConnData.privateKey);
+        if (sshConnData.passphrase) {
+          sshConfig.passphrase = decrypt(sshConnData.passphrase);
         }
       }
 

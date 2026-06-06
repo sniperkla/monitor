@@ -126,16 +126,52 @@ export async function POST(request) {
       ? body.connectionId.trim()
       : String(existingValue.connectionId || '').trim();
 
-    if (targetType === 'ssh' && normalizedConnectionId) {
-      const db = await connectDB(process.env.MONGODB_URI, true);
-      const repo = new ConnectionRepository(db);
-      await repo.init();
-      const connection = await repo.findById(normalizedConnectionId);
-      if (!connection) {
-        return NextResponse.json({
-          success: false,
-          error: `SSH connection with ID ${normalizedConnectionId} was not found. Please select a valid SSH connection.`
-        }, { status: 400 });
+    let sshConnectionData = existingValue.sshConnectionData || null;
+
+    if (targetType === 'ssh' && normalizedConnectionId && body.connectionId) {
+      // Try to fetch and cache SSH connection details from user/main database
+      let foundConnection = null;
+      
+      // Try user database first (with relay if available)
+      try {
+        const userDb = await connectDB(null, true);
+        const userRepo = new ConnectionRepository(userDb);
+        await userRepo.init();
+        foundConnection = await userRepo.findById(normalizedConnectionId);
+        console.log(`[deploy/config] Found SSH connection in user database: ${normalizedConnectionId}`);
+      } catch (userErr) {
+        console.log(`[deploy/config] User database lookup failed: ${userErr.message}`);
+      }
+      
+      // Fall back to main database if not found in user DB
+      if (!foundConnection) {
+        try {
+          const mainDb = await connectDB(process.env.MONGODB_URI, true);
+          const mainRepo = new ConnectionRepository(mainDb);
+          await mainRepo.init();
+          foundConnection = await mainRepo.findById(normalizedConnectionId);
+          console.log(`[deploy/config] Found SSH connection in main database: ${normalizedConnectionId}`);
+        } catch (mainErr) {
+          console.log(`[deploy/config] Main database lookup failed: ${mainErr.message}`);
+        }
+      }
+      
+      if (foundConnection) {
+        // Store encrypted connection data in config for webhook use
+        sshConnectionData = {
+          id: foundConnection._id || foundConnection.id,
+          host: foundConnection.host,
+          port: foundConnection.port || 22,
+          username: foundConnection.username || 'root',
+          authType: foundConnection.authType,
+          password: foundConnection.password || '', // Already encrypted if exists
+          privateKey: foundConnection.privateKey || '', // Already encrypted if exists
+          passphrase: foundConnection.passphrase || '' // Already encrypted if exists
+        };
+        console.log(`[deploy/config] Cached SSH connection data for ID: ${normalizedConnectionId}`);
+      } else {
+        // Don't fail - just warn and let webhook validate at execution time
+        console.warn(`[deploy/config] Warning: SSH connection ${normalizedConnectionId} not found in any database. Will attempt to re-lookup at deployment time.`);
       }
     }
 
@@ -163,7 +199,8 @@ export async function POST(request) {
       githubConnected: body.githubConnected !== undefined ? body.githubConnected : existingValue.githubConnected || false,
       githubUser: body.githubUser !== undefined ? body.githubUser : existingValue.githubUser || '',
       githubRepo: body.githubRepo !== undefined ? body.githubRepo : existingValue.githubRepo || '',
-      githubToken: body.githubToken !== undefined && body.githubToken ? encrypt(body.githubToken) : existingValue.githubToken || ''
+      githubToken: body.githubToken !== undefined && body.githubToken ? encrypt(body.githubToken) : existingValue.githubToken || '',
+      sshConnectionData: sshConnectionData
     };
 
     await SystemSetting.findOneAndUpdate(
