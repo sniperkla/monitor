@@ -2275,24 +2275,45 @@ export default function SettingsApp({ initialTab }) {
                   </div>
                 </div>
 
-                {/* Log Terminal console */}
-                {deployConfig.lastDeployLog && (
-                  <div className="p-6 rounded-2xl bg-[var(--bg-card)] border border-[var(--border-color)] shadow-sm space-y-4">
-                    <h3 className="text-sm font-bold text-[var(--text-primary)] flex items-center justify-between border-b border-[var(--border-color)] pb-3">
-                      <span className="flex items-center gap-2">
-                        <Terminal size={16} className="text-emerald-400 animate-pulse" />
-                        Deployment Console Output
+                {/* Deployment Status & Log */}
+                {(deployConfig.lastDeployAt || deployConfig.lastDeployLog) && (
+                  <div className="space-y-4">
+                    <div className={`p-4 rounded-2xl border flex items-center justify-between ${deployConfig.lastDeployLog?.includes('Error') || deployConfig.lastDeployLog?.includes('error') ? 'bg-red-500/5 border-red-500/20' : 'bg-emerald-500/5 border-emerald-500/20'}`}>
+                      <div className="flex items-center gap-3">
+                        <div className={`w-3 h-3 rounded-full ${deployConfig.lastDeployLog?.includes('Error') || deployConfig.lastDeployLog?.includes('error') ? 'bg-red-400 animate-pulse' : 'bg-emerald-400'}`} />
+                        <div>
+                          <p className={`text-sm font-bold ${deployConfig.lastDeployLog?.includes('Error') || deployConfig.lastDeployLog?.includes('error') ? 'text-red-300' : 'text-emerald-300'}`}>
+                            {deployConfig.lastDeployLog?.includes('Error') || deployConfig.lastDeployLog?.includes('error') ? 'Last Deployment Failed' : 'Last Deployment Succeeded'}
+                          </p>
+                          <p className="text-[10px] text-[var(--text-muted)] mt-0.5">
+                            {deployConfig.lastDeployAt ? new Date(deployConfig.lastDeployAt).toLocaleString() : 'Unknown'}
+                          </p>
+                        </div>
+                      </div>
+                      <span className={`text-xs font-bold px-3 py-1 rounded-lg ${deployConfig.lastDeployLog?.includes('Error') || deployConfig.lastDeployLog?.includes('error') ? 'bg-red-500/20 text-red-300' : 'bg-emerald-500/20 text-emerald-300'}`}>
+                        {deployConfig.status === 'running' ? 'Running...' : deployConfig.lastDeployLog?.includes('Error') || deployConfig.lastDeployLog?.includes('error') ? 'Failed' : 'Complete'}
                       </span>
-                      <button
-                        onClick={() => setDeployConfig(p => ({ ...p, lastDeployLog: '' }))}
-                        className="text-[10px] text-[var(--text-muted)] hover:text-red-400 transition-colors cursor-pointer"
-                      >
-                        Clear Console
-                      </button>
-                    </h3>
-                    <div className="bg-slate-950 border border-slate-900 rounded-xl p-4 shadow-inner max-h-96 overflow-y-auto custom-scrollbar font-mono text-[11px] leading-relaxed text-slate-300 whitespace-pre-wrap select-text">
-                      {deployConfig.lastDeployLog}
                     </div>
+
+                    {deployConfig.lastDeployLog && (
+                      <div className="p-6 rounded-2xl bg-[var(--bg-card)] border border-[var(--border-color)] shadow-sm space-y-4">
+                        <h3 className="text-sm font-bold text-[var(--text-primary)] flex items-center justify-between border-b border-[var(--border-color)] pb-3">
+                          <span className="flex items-center gap-2">
+                            <Terminal size={16} className="text-emerald-400 animate-pulse" />
+                            Deployment Console Output
+                          </span>
+                          <button
+                            onClick={() => setDeployConfig(p => ({ ...p, lastDeployLog: '' }))}
+                            className="text-[10px] text-[var(--text-muted)] hover:text-red-400 transition-colors cursor-pointer"
+                          >
+                            Clear Console
+                          </button>
+                        </h3>
+                        <div className="bg-slate-950 border border-slate-900 rounded-xl p-4 shadow-inner max-h-96 overflow-y-auto custom-scrollbar font-mono text-[11px] leading-relaxed text-slate-300 whitespace-pre-wrap select-text">
+                          {deployConfig.lastDeployLog}
+                        </div>
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
