@@ -45,7 +45,7 @@ export async function POST(request) {
         return NextResponse.json({ success: false, error: 'Connection ID is required for SSH target' }, { status: 400 });
       }
 
-      const db = await connectDB();
+      const db = await connectDB(process.env.MONGODB_URI, true);
       const repo = new ConnectionRepository(db);
       await repo.init();
 
@@ -111,7 +111,7 @@ export async function POST(request) {
     }
 
     // Load AI configurations
-    await connectDB(null, true);
+    await connectDB(process.env.MONGODB_URI, true);
     const keysSetting = await SystemSetting.findOne({ key: 'ai_api_keys' });
     const configSetting = await SystemSetting.findOne({ key: 'ai_config' });
     const projectSetting = await SystemSetting.findOne({ key: dbKey });

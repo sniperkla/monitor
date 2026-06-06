@@ -28,7 +28,7 @@ export async function broadcastDeploymentStatus(projectId = 'default') {
   const dbKey = projectId === 'default' ? 'auto_deploy_config' : `auto_deploy_config_${projectId}`;
 
   try {
-    await connectDB(null, true);
+    await connectDB(process.env.MONGODB_URI, true);
     const setting = await SystemSetting.findOne({ key: dbKey });
     const config = setting?.value;
 

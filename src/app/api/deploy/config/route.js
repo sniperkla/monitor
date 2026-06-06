@@ -43,7 +43,7 @@ export async function GET(request) {
     const { searchParams } = new URL(request.url);
     const projectId = searchParams.get('project');
 
-    await connectDB(null, true);
+    await connectDB(process.env.MONGODB_URI, true);
     
     // Find all settings keys that start with auto_deploy_config
     const allSettings = await SystemSetting.find({
@@ -98,7 +98,7 @@ export async function POST(request) {
     const projectId = body.id || 'default';
     const dbKey = projectId === 'default' ? 'auto_deploy_config' : `auto_deploy_config_${projectId}`;
 
-    await connectDB(null, true);
+    await connectDB(process.env.MONGODB_URI, true);
 
     // Check for duplicate project name (if provided)
     if (body.name && body.name.trim()) {
@@ -127,7 +127,7 @@ export async function POST(request) {
       : String(existingValue.connectionId || '').trim();
 
     if (targetType === 'ssh' && normalizedConnectionId) {
-      const db = await connectDB(null, true);
+      const db = await connectDB(process.env.MONGODB_URI, true);
       const repo = new ConnectionRepository(db);
       await repo.init();
       const connection = await repo.findById(normalizedConnectionId);

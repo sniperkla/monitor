@@ -45,7 +45,7 @@ async function runDeployment(config) {
   // Helper to update status in DB
   const updateStatus = async (status, finalLog, extra = {}) => {
     try {
-      await connectDB(null, true);
+      await connectDB(process.env.MONGODB_URI, true);
       const updateFields = {
         'value.status': status,
         'value.lastDeployLog': finalLog,
@@ -249,7 +249,7 @@ export async function POST(request) {
     const isManual = !!session;
 
     // 2. Fetch the deployment config
-    await connectDB(null, true);
+    await connectDB(process.env.MONGODB_URI, true);
     const setting = await SystemSetting.findOne({ key: dbKey });
     const config = setting?.value;
 
@@ -278,7 +278,7 @@ export async function POST(request) {
         return NextResponse.json({ success: false, error: 'SSH deployment is configured but no SSH connection is selected. Please update deployment settings.' }, { status: 400 });
       }
 
-      const db = await connectDB(null, true);
+      const db = await connectDB(process.env.MONGODB_URI, true);
       const repo = new ConnectionRepository(db);
       await repo.init();
       const connection = await repo.findById(connectionId);
