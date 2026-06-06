@@ -8,9 +8,10 @@ import SSHApp from '@/apps/SSHApp';
 import SettingsApp from '@/apps/SettingsApp';
 import { Terminal, Settings, FolderClosed, Monitor, RefreshCw, Plus, 
   Image as ImageIcon, Layout, Grid, List, AlignLeft, SortAsc, Server,
-  ChevronRight, Type, Calendar, HardDrive, Palette, MonitorCog, Globe, Maximize, Minimize, Database, Check, MonitorPlay, Bomb
+  ChevronRight, Type, Calendar, HardDrive, Palette, MonitorCog, Globe, Maximize, Minimize, Database, Check, MonitorPlay, Bomb, GitBranch
 } from 'lucide-react';
 import NotificationCenter from '@/components/Desktop/NotificationCenter';
+import AutoDeployApp from '@/apps/AutoDeployApp';
 import { useState, useEffect, useRef, cloneElement, isValidElement } from 'react';
 import ConnectionModal from '@/components/ConnectionModal';
 import DesktopModal from '@/components/Desktop/DesktopModal';
@@ -314,6 +315,7 @@ export default function DesktopEnvironment() {
     { id: 'terminal', title: t('apps.terminal'), icon: Terminal, component: <TerminalApp onEditConnection={handleEditConnection} />, type: 'app', initialWidth: 1100, initialHeight: 700 },
     { id: 'files', title: t('apps.files'), icon: FolderClosed, component: <FilesApp onEditConnection={handleEditConnection} />, type: 'app', initialWidth: 900, initialHeight: 600 },
     { id: 'docker', title: 'Docker', icon: Server, component: <DockerApp />, type: 'app', initialWidth: 1000, initialHeight: 700 },
+    { id: 'auto-deploy', title: 'Auto Deploy', icon: GitBranch, component: <AutoDeployApp />, type: 'app', initialWidth: 1100, initialHeight: 760 },
     { id: 'tmux', title: t('apps.tmux'), icon: MonitorPlay, component: <TmuxApp />, type: 'app', initialWidth: 1000, initialHeight: 650 },
     { id: 'settings', title: t('apps.settings'), icon: Settings, component: <SettingsApp />, type: 'app', initialWidth: 700, initialHeight: 500 },
   ];

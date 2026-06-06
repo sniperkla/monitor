@@ -51,8 +51,8 @@ function normalizeGitHubRepo(value) {
   return trimmed;
 }
 
-export default function SettingsApp({ initialTab }) {
-  const [activeTab, setActiveTab] = useState(initialTab || 'appearance');
+export default function SettingsApp({ initialTab, deploymentOnly = false }) {
+  const [activeTab, setActiveTab] = useState(initialTab || (deploymentOnly ? 'deployment' : 'appearance'));
   const { data: session } = useSession();
   const { t, i18n } = useTranslation();
   const { state: osState, setWallpaper, setGlassmorphism, setIconSize, setIconStyle, setBrightness, setUiScale, setNotifications, setLanguage, setTheme, setTaskbarPosition, setWindowLayout, addCustomWallpaper, removeCustomWallpaper, saveSettings, addNotification, showConfirm, setKeyboardShortcuts, setTerminalSettings } = useOS();
@@ -75,6 +75,12 @@ export default function SettingsApp({ initialTab }) {
   const [showCustomInput, setShowCustomInput] = useState(false);
   const [customUrlInput, setCustomUrlInput] = useState('');
   const [isSidebarOpen, setIsSidebarOpen] = useState(false); // For mobile/small window view
+
+  useEffect(() => {
+    if (deploymentOnly) {
+      setActiveTab('deployment');
+    }
+  }, [deploymentOnly]);
 
   // Local Relay Agent state
   const [relayToken, setRelayToken] = useState(null);
@@ -689,10 +695,11 @@ export default function SettingsApp({ initialTab }) {
   return (
     <div className="flex h-full w-full bg-transparent text-[var(--text-primary)] border-[var(--border-color)] overflow-hidden relative">
       {/* Sidebar - responsive behavior */}
-      <div className={`
-        ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'}
-        fixed md:relative z-20 md:z-0 w-52 border-r border-[var(--border-color)] p-4 flex flex-col shrink-0 h-full overflow-y-auto custom-scrollbar transition-transform duration-300 bg-transparent
-      `}>
+      {!deploymentOnly && (
+        <div className={`
+          ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'}
+          fixed md:relative z-20 md:z-0 w-52 border-r border-[var(--border-color)] p-4 flex flex-col shrink-0 h-full overflow-y-auto custom-scrollbar transition-transform duration-300 bg-transparent
+        `}>
         {/* User Profile Section */}
         <div className="mb-8 px-2">
           {session ? (
@@ -768,7 +775,6 @@ export default function SettingsApp({ initialTab }) {
             { id: 'terminal', label: t('settings_ui.terminal.title') || 'Terminal', icon: Terminal, color: 'text-emerald-400', desc: t('settings_ui.terminal.desc') },
 
             { id: 'database', label: t('settings.databaseTitle'), icon: Database, color: 'text-purple-400', desc: t('settings.databaseDesc'), requireLogin: true },
-            { id: 'deployment', label: t('settings.deploymentTitle') || 'Auto Deploy', icon: GitBranch, color: 'text-orange-400', desc: 'Configure webhook-triggered auto deployments' },
             { id: 'display', label: t('settings_ui.display.title'), icon: Monitor, color: 'text-blue-400', desc: t('settings_ui.display.desc') },
             { id: 'notifications', label: t('settings_ui.notifications.title'), icon: Bell, color: 'text-amber-400', desc: t('settings_ui.notifications.desc') },
             { id: 'privacy', label: t('settings_ui.privacy.title'), icon: Shield, color: 'text-emerald-400', desc: t('settings_ui.privacy.desc') },
@@ -804,9 +810,10 @@ export default function SettingsApp({ initialTab }) {
           })}
         </div>
       </div>
+      )}
       
       {/* Overlay to close sidebar on mobile */}
-      {isSidebarOpen && (
+      {!deploymentOnly && isSidebarOpen && (
         <div 
           className="fixed inset-0 bg-black/50 z-10 md:hidden" 
           onClick={() => setIsSidebarOpen(false)} 
@@ -816,17 +823,19 @@ export default function SettingsApp({ initialTab }) {
       {/* Content */}
       <div className="flex-1 overflow-y-auto h-full p-4 md:p-8 pb-28 custom-scrollbar">
         {/* Mobile Header */}
-        <div className="flex items-center gap-3 mb-6 md:hidden">
-          <button 
-            onClick={() => setIsSidebarOpen(true)}
-            className="p-2 rounded-lg bg-[var(--bg-tertiary)] border border-[var(--border-color)]"
-          >
-            <Layout size={18} />
-          </button>
-          <h2 className="text-lg font-bold truncate">
-            {activeTab.charAt(0).toUpperCase() + activeTab.slice(1)}
-          </h2>
-        </div>
+        {!deploymentOnly && (
+          <div className="flex items-center gap-3 mb-6 md:hidden">
+            <button 
+              onClick={() => setIsSidebarOpen(true)}
+              className="p-2 rounded-lg bg-[var(--bg-tertiary)] border border-[var(--border-color)]"
+            >
+              <Layout size={18} />
+            </button>
+            <h2 className="text-lg font-bold truncate">
+              {activeTab.charAt(0).toUpperCase() + activeTab.slice(1)}
+            </h2>
+          </div>
+        )}
 
         {activeTab === 'appearance' && (
           <div className="max-w-2xl animate-in fade-in slide-in-from-bottom-2 duration-300">

@@ -1,7 +1,8 @@
-import { Terminal, Settings, Monitor, Database, Folder, AlertCircle, StickyNote, Book, MonitorPlay, Server, FileText } from 'lucide-react';
+import { Terminal, Settings, Monitor, Database, Folder, AlertCircle, StickyNote, Book, MonitorPlay, Server, FileText, GitBranch } from 'lucide-react';
 
 import TerminalApp from '@/apps/TerminalApp';
 import SettingsApp from '@/apps/SettingsApp';
+import AutoDeployApp from '@/apps/AutoDeployApp';
 import SSHApp from '@/apps/SSHApp';
 import FilesApp from '@/apps/FilesApp';
 import NotepadApp from '@/apps/NotepadApp';
@@ -52,6 +53,11 @@ export const AppRegistry = {
     component: SettingsApp,
     icon: Settings,
     defaultTitle: 'Settings'
+  },
+  'auto-deploy': {
+    component: AutoDeployApp,
+    icon: GitBranch,
+    defaultTitle: 'Auto Deploy'
   },
   'ssh-manager': {
     component: SSHApp,

@@ -5,7 +5,7 @@ import { createPortal } from 'react-dom';
 import {
   Search, Terminal, Settings, Monitor, StickyNote, Book, Folder,
   ArrowRight, Command, CornerDownLeft, ChevronUp, ChevronDown,
-  Hash, FileText, Server, Globe, Database, Shield, Layers, X
+  Hash, FileText, Server, Globe, Database, Shield, Layers, X, GitBranch
 } from 'lucide-react';
 import { useOS } from '@/context/OSContext';
 import { useApp } from '@/context/AppContext';
@@ -13,6 +13,7 @@ import { useTranslation } from 'react-i18next';
 import MacOSModalWindow from '@/components/MacOSModalWindow';
 
 import SSHApp from '@/apps/SSHApp';
+import AutoDeployApp from '@/apps/AutoDeployApp';
 import SettingsApp from '@/apps/SettingsApp';
 import NotepadApp from '@/apps/NotepadApp';
 import WikiApp from '@/apps/WikiApp';
@@ -21,8 +22,8 @@ import TerminalApp from '@/apps/TerminalApp';
 
 const SYSTEM_APPS = [
   { id: 'ssh-manager', titleKey: 'ssh.manager', fallback: 'SSH Manager', icon: Monitor, component: <SSHApp />, category: 'app', initialWidth: 1200, initialHeight: 800 },
+  { id: 'auto-deploy', titleKey: null, fallback: 'Auto Deploy', icon: GitBranch, component: <AutoDeployApp />, category: 'app', initialWidth: 1100, initialHeight: 760 },
   { id: 'settings', titleKey: 'common.settings', fallback: 'Settings', icon: Settings, component: <SettingsApp />, category: 'app', initialWidth: 800, initialHeight: 600 },
-  { id: 'wiki', titleKey: null, fallback: 'Resource Hub', icon: Book, component: <WikiApp />, category: 'app', initialWidth: 1100, initialHeight: 750 },
   { id: 'notepad', titleKey: null, fallback: 'Notepad', icon: StickyNote, component: <NotepadApp />, category: 'app', initialWidth: 800, initialHeight: 600 },
   { id: 'files-app', titleKey: null, fallback: 'Files', icon: Folder, component: <FilesApp />, category: 'app', initialWidth: 1000, initialHeight: 650 },
   { id: 'terminal', titleKey: 'terminal.title', fallback: 'Terminal', icon: Terminal, component: <TerminalApp />, category: 'app', initialWidth: 900, initialHeight: 600 },
