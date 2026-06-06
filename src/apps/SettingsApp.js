@@ -415,7 +415,11 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
         body: JSON.stringify({
           targetType: deployConfig.targetType,
           connectionId: deployConfig.connectionId,
-          projectPath: deployConfig.projectPath
+          projectPath: deployConfig.projectPath,
+          aiModel: deployConfig.aiModel,
+          aiCustomModel: deployConfig.aiCustomModel,
+          aiEndpoint: deployConfig.aiEndpoint,
+          aiApiKey: deployConfig.aiApiKey
         })
       });
       const data = await res.json();

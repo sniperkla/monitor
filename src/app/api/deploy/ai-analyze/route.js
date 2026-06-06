@@ -22,7 +22,7 @@ export async function POST(request) {
     const projectId = searchParams.get('project') || 'default';
     const dbKey = projectId === 'default' ? 'auto_deploy_config' : `auto_deploy_config_${projectId}`;
 
-    const { targetType, connectionId, projectPath } = await request.json();
+    const { targetType, connectionId, projectPath, aiModel, aiCustomModel, aiEndpoint: aiEndpointBody, aiApiKey: aiApiKeyBody } = await request.json();
 
     if (!targetType) {
       return NextResponse.json({ success: false, error: 'Target type is required' }, { status: 400 });
@@ -118,18 +118,23 @@ export async function POST(request) {
       apiKey = keysSetting.value.keys[idx] || keysSetting.value.keys[0];
     }
 
-    if (!apiKey) {
-      return NextResponse.json({ success: false, error: 'AI Service API Key is not configured. Enter a custom API key or ensure your global Groq key is set.' }, { status: 400 });
-    }
-
     let aiEndpoint = 'https://api.groq.com/openai/v1/chat/completions';
     let modelName = configSetting?.value?.model || FALLBACK_MODEL;
-    if (projectAiPrefs.aiModel === 'manual') {
-      aiEndpoint = projectAiPrefs.aiEndpoint || 'https://api.openai.com/v1/chat/completions';
-      modelName = projectAiPrefs.aiCustomModel || 'gpt-3.5-turbo';
-      apiKey = projectAiPrefs.aiApiKey || apiKey;
-    } else if (projectAiPrefs.aiModel && projectAiPrefs.aiModel !== 'auto') {
-      modelName = projectAiPrefs.aiModel;
+    const effectiveAiModel = aiModel || projectAiPrefs.aiModel;
+    const effectiveAiCustomModel = aiCustomModel || projectAiPrefs.aiCustomModel;
+    const effectiveAiEndpoint = aiEndpointBody || projectAiPrefs.aiEndpoint;
+    const effectiveAiApiKey = aiApiKeyBody || projectAiPrefs.aiApiKey;
+
+    if (effectiveAiModel === 'manual') {
+      aiEndpoint = effectiveAiEndpoint || 'https://api.openai.com/v1/chat/completions';
+      modelName = effectiveAiCustomModel || 'gpt-3.5-turbo';
+      apiKey = effectiveAiApiKey || apiKey;
+    } else if (effectiveAiModel && effectiveAiModel !== 'auto') {
+      modelName = effectiveAiModel;
+    }
+
+    if (!apiKey) {
+      return NextResponse.json({ success: false, error: 'AI Service API Key is not configured. Enter a custom API key or ensure your global Groq key is set.' }, { status: 400 });
     }
 
     const aiConfig = {
