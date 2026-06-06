@@ -30,6 +30,27 @@ const PRESETS = [
   { label: 'Local (localhost)', uri: 'mongodb://localhost:27017/ssh-monitor' },
 ];
 
+function normalizeGitHubRepo(value) {
+  if (!value) return '';
+  const raw = value.trim();
+  try {
+    if (/^https?:\/\//i.test(raw)) {
+      const parsed = new URL(raw);
+      if (parsed.hostname.toLowerCase().includes('github.com')) {
+        const path = parsed.pathname.replace(/^\/+|\/+$/g, '');
+        const parts = path.split('/').filter(Boolean);
+        if (parts.length >= 2) {
+          return `${parts[0]}/${parts[1]}`;
+        }
+      }
+    }
+  } catch (err) {
+    // if URL parsing fails, fall back to plain text
+  }
+  const trimmed = raw.replace(/^\/+|\/+$/g, '');
+  return trimmed;
+}
+
 export default function SettingsApp({ initialTab }) {
   const [activeTab, setActiveTab] = useState(initialTab || 'appearance');
   const { data: session } = useSession();
@@ -1988,14 +2009,21 @@ export default function SettingsApp({ initialTab }) {
                               type="text"
                               value={repoInput}
                               onChange={(e) => setRepoInput(e.target.value)}
+                              onBlur={() => {
+                                const normalized = normalizeGitHubRepo(repoInput);
+                                if (normalized !== repoInput) {
+                                  setRepoInput(normalized);
+                                }
+                              }}
                               placeholder="owner/repo"
                               className="w-full bg-[var(--bg-primary)] border border-[var(--border-color)] rounded-xl px-3 py-2 text-xs text-[var(--text-primary)] focus:outline-none focus:border-indigo-500"
                             />
                             <button
                               onClick={async () => {
-                                const repoValue = repoInput || deployConfig.githubRepo;
-                                if (!repoValue) {
-                                  addNotification({ title: 'Branches', message: 'Enter a repository or save one first.', type: 'error' });
+                                const rawRepo = repoInput || deployConfig.githubRepo;
+                                const repoValue = normalizeGitHubRepo(rawRepo);
+                                if (!repoValue || repoValue.split('/').length < 2) {
+                                  addNotification({ title: 'Branches', message: 'Enter a valid repository in owner/repo format or GitHub URL.', type: 'error' });
                                   return;
                                 }
                                 try {

@@ -5,6 +5,26 @@ import connectDB from '@/lib/mongodb';
 import SystemSetting from '@/models/SystemSetting';
 import { decrypt } from '@/utils/encryption';
 
+function normalizeRepoParam(value) {
+  if (!value) return '';
+  const raw = value.trim();
+  try {
+    if (/^https?:\/\//i.test(raw)) {
+      const parsed = new URL(raw);
+      if (parsed.hostname.toLowerCase().includes('github.com')) {
+        const path = parsed.pathname.replace(/^\/+|\/+$/g, '');
+        const parts = path.split('/').filter(Boolean);
+        if (parts.length >= 2) {
+          return `${parts[0]}/${parts[1]}`;
+        }
+      }
+    }
+  } catch (err) {
+    // fall back to plain text
+  }
+  return raw.replace(/^\/+|\/+$/g, '');
+}
+
 // GET /api/deploy/github/branches?repo=owner/repo&project=projectId
 export async function GET(request) {
   try {
@@ -14,8 +34,9 @@ export async function GET(request) {
     }
 
     const url = new URL(request.url);
-    const repo = url.searchParams.get('repo');
+    let repo = url.searchParams.get('repo');
     const project = url.searchParams.get('project');
+    repo = normalizeRepoParam(repo);
 
     await connectDB(null, true);
 
