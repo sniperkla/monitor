@@ -140,9 +140,17 @@ async function runDeployment(config) {
       const repo = new ConnectionRepository(db);
       await repo.init();
       
-      const connection = await repo.findById(config.connectionId);
+      const connectionId = String(config.connectionId || '').trim();
+      if (!connectionId) {
+        throw new Error('SSH target is configured but no connection ID was provided. Please select a valid SSH connection in deployment settings.');
+      }
+
+      const connection = await repo.findById(connectionId);
       if (!connection) {
-        throw new Error(`SSH connection with ID ${config.connectionId} not found in database.`);
+        const detail = repo.isSql
+          ? 'This may be a stale or incompatible SSH connection ID for the configured database backend.'
+          : 'Please verify the selected SSH connection still exists.';
+        throw new Error(`SSH connection with ID ${connectionId} not found in database. ${detail}`);
       }
 
       // Build SSH connection config

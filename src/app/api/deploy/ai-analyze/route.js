@@ -49,9 +49,14 @@ export async function POST(request) {
       const repo = new ConnectionRepository(db);
       await repo.init();
 
-      const connection = await repo.findById(connectionId);
+      const normalizedId = String(connectionId || '').trim();
+      if (!normalizedId) {
+        return NextResponse.json({ success: false, error: 'SSH connection ID is required for remote analysis.' }, { status: 400 });
+      }
+
+      const connection = await repo.findById(normalizedId);
       if (!connection) {
-        return NextResponse.json({ success: false, error: `SSH connection with ID ${connectionId} not found.` }, { status: 400 });
+        return NextResponse.json({ success: false, error: `SSH connection with ID ${normalizedId} not found.` }, { status: 400 });
       }
 
       // Build SSH connection config

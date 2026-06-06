@@ -8,7 +8,7 @@ import {
   AlertCircle, Edit, FileText, X, Save, AlertTriangle, 
   Copy, Scissors, Clipboard, Wifi, AtSign, Replace, Columns, Rows,
   Sparkles, Brain, Clock, Settings2, Languages, CornerDownLeft, 
-  MessagesSquare, BrainCircuit, ShieldAlert
+  MessagesSquare, BrainCircuit, ShieldAlert, Terminal
 } from 'lucide-react';
 import io from 'socket.io-client';
 import * as fflate from 'fflate';
@@ -1880,6 +1880,21 @@ export default function FileManager({
     setContextMenu({ ...contextMenu, visible: false });
   };
 
+  const handleOpenTerminalHere = (targetPath = null) => {
+    if (!connection) return;
+    const path = targetPath || currentPath || '.';
+    const safePath = String(path).replace(/"/g, '\\"');
+    const initialCommand = `cd "${safePath}"\r`;
+    window.dispatchEvent(new CustomEvent('open-terminal', {
+      detail: {
+        connection,
+        initialCommand,
+        title: `${connectionName || 'Terminal'}: ${path}`,
+      },
+    }));
+    setContextMenu({ ...contextMenu, visible: false });
+  };
+
   const handleRename = () => {
     if (!contextMenu.file || !socket) return;
     const originalName = contextMenu.file.filename;
@@ -2555,6 +2570,17 @@ export default function FileManager({
                 <Download size={14} />
                 {contextMenu.file?.longname.startsWith('d') ? 'Download as .tar.gz' : t('files.context.download')}
               </button>
+              {contextMenu.file?.longname.startsWith('d') && (
+                <button
+                  onClick={() => {
+                    const path = contextMenu.file.absPath || (currentPath === '.' ? contextMenu.file.filename : `${currentPath}/${contextMenu.file.filename}`);
+                    handleOpenTerminalHere(path);
+                  }}
+                  className="w-full text-left px-3 py-2 text-sm hover:bg-[var(--glow-indigo)] text-[var(--text-primary)] hover:text-[var(--accent-indigo)] flex items-center gap-2 transition-colors"
+                >
+                  <Terminal size={14} className="text-indigo-400" /> {t('files.context.openTerminal') || 'Open Terminal Here'}
+                </button>
+              )}
                <button 
                 onClick={handleRename}
                 className="w-full text-left px-3 py-2 text-sm hover:bg-[var(--glow-indigo)] text-[var(--text-primary)] hover:text-[var(--accent-indigo)] flex items-center gap-2 transition-colors"
@@ -2624,6 +2650,12 @@ export default function FileManager({
                 <FolderPlus size={14} /> {t('files.context.newFolder')}
               </button>
               <div className="h-px bg-[var(--border-color)] my-1" />
+              <button 
+                onClick={() => { handleOpenTerminalHere(); }}
+                className="w-full text-left px-3 py-2 text-sm hover:bg-[var(--glow-indigo)] text-[var(--text-primary)] hover:text-[var(--accent-indigo)] flex items-center gap-2 transition-colors"
+              >
+                <Terminal size={14} className="text-indigo-400" /> {t('files.context.openTerminal') || 'Open Terminal Here'}
+              </button>
               <button 
                 onClick={() => { refreshFiles(); setContextMenu({ ...contextMenu, visible: false }); }}
                 className="w-full text-left px-3 py-2 text-sm hover:bg-[var(--border-color)] text-[var(--text-primary)] flex items-center gap-2 transition-colors"

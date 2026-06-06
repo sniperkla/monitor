@@ -135,18 +135,21 @@ export class ConnectionRepository {
   }
 
   async findById(id) {
+    const normalizedId = String(id ?? '').trim();
+    if (!normalizedId) return null;
+
     if (this.isSql) {
-      // PostgreSQL uses integer serial IDs — skip lookup if id is a MongoDB ObjectId
-      if (this.isPostgres && !/^\d+$/.test(String(id))) return null;
+      // PostgreSQL uses integer serial IDs — skip lookup if id is not a valid numeric ID.
+      if (this.isPostgres && !/^\d+$/.test(normalizedId)) return null;
       const query = this.isPostgres ? 'SELECT * FROM connections WHERE id = $1' : 'SELECT * FROM connections WHERE id = ?';
-      const res = await this.db.query(query, [id]);
+      const res = await this.db.query(query, [normalizedId]);
       const rows = this.isPostgres ? res.rows : res[0];
       if (rows.length === 0) return null;
       return this._mapSqlRow(rows[0]);
     } else {
       const model = getConnectionModel(this.db);
       try {
-        return await model.findById(id);
+        return await model.findById(normalizedId);
       } catch (err) {
         if (err.name === 'CastError') return null;
         throw err;
