@@ -247,6 +247,23 @@ async function getDynamicConnection(uri, tunnelConfig = null) {
   return conn;
 }
 
+function rewriteLocalhostUriThroughRelay(uri) {
+  if (!uri || !/^(mongodb(?:\+srv)?:\/\/)/.test(uri)) return uri;
+  if (!/localhost|127\.0\.0\.1/.test(uri)) return uri;
+  if (!global.__activeRelays?.size) return uri;
+
+  const relay = Array.from(global.__activeRelays.values())[0];
+  if (!relay?.localPort) return uri;
+
+  const portMatch = uri.match(/:(\d+)(?:\/|$)/);
+  if (portMatch) {
+    relay.targetHost = '127.0.0.1';
+    relay.targetPort = Number(portMatch[1]);
+  }
+
+  return uri.replace(/(localhost|127\.0\.0\.1):\d+/, `127.0.0.1:${relay.localPort}`);
+}
+
 /**
  * Main entry point for database connections.
  * @param {string} uri - Optional URI to connect to.
@@ -254,13 +271,14 @@ async function getDynamicConnection(uri, tunnelConfig = null) {
  */
 async function connectDB(uri = null, isCenter = false) {
   const targetUri = uri || (await getUriFromRequest());
+  const effectiveUri = rewriteLocalhostUriThroughRelay(targetUri);
 
   // Non-MongoDB URIs must always go through the dynamic connection path
-  const isNonMongo = targetUri && !targetUri.startsWith('mongodb://') && !targetUri.startsWith('mongodb+srv://');
+  const isNonMongo = effectiveUri && !effectiveUri.startsWith('mongodb://') && !effectiveUri.startsWith('mongodb+srv://');
 
   // If this is the center DB (User storage), use the default connection
-  if (!isNonMongo && (isCenter || targetUri === process.env.MONGODB_URI)) {
-    return connectCenter(targetUri);
+  if (!isNonMongo && (isCenter || effectiveUri === process.env.MONGODB_URI || targetUri === process.env.MONGODB_URI)) {
+    return connectCenter(effectiveUri);
   }
 
   // When URI came from request headers, also check for SSH tunnel config.
@@ -268,7 +286,7 @@ async function connectDB(uri = null, isCenter = false) {
   const tunnelConfig = uri ? null : await getTunnelFromRequest();
 
   // Otherwise, use a separate pool connection for tenant isolation
-  return getDynamicConnection(targetUri, tunnelConfig);
+  return getDynamicConnection(effectiveUri, tunnelConfig);
 }
 
 export default connectDB;
