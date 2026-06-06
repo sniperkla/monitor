@@ -2194,6 +2194,7 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
                               />
                             )}
                             <p className="mt-2 text-[10px] text-[var(--text-muted)]">Load branches first to select from the repository automatically.</p>
+                            <p className="mt-1 text-[10px] text-[var(--text-muted)]">Leave branch blank to trigger on any branch, or enter the exact branch name to target one branch.</p>
                           </div>
                         </div>
 

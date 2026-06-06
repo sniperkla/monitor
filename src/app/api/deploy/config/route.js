@@ -9,7 +9,7 @@ const defaultConfig = {
   id: 'default',
   name: 'Default Project',
   enabled: false,
-  branch: 'main',
+  branch: '',
   secret: '',
   targetType: 'local',
   connectionId: '',

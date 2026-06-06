@@ -315,13 +315,16 @@ export async function POST(request) {
       try {
         const payload = JSON.parse(bodyText);
         if (payload.ref) {
-          const expectedRef = `refs/heads/${config.branch}`;
-          console.log(`[webhook] Push ref: ${payload.ref}, expected: ${expectedRef}`);
-          if (payload.ref !== expectedRef) {
+          const rawBranch = String(config.branch || '').trim();
+          const expectedRef = rawBranch
+            ? (rawBranch.startsWith('refs/heads/') ? rawBranch : `refs/heads/${rawBranch}`)
+            : null;
+          console.log(`[webhook] Push ref: ${payload.ref}${expectedRef ? `, expected: ${expectedRef}` : ', no branch filter configured'}`);
+          if (expectedRef && payload.ref !== expectedRef) {
             console.log(`[webhook] Branch mismatch - skipping deployment`);
             return NextResponse.json({ 
               success: true, 
-              message: `Ref ${payload.ref} does not match watched branch refs/heads/${config.branch}. Skipping deployment.` 
+              message: `Ref ${payload.ref} does not match watched branch ${expectedRef}. Skipping deployment.` 
             });
           }
         }
