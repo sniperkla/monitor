@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth/next';
 import { authOptions } from '@/lib/auth';
 import connectDB from '@/lib/mongodb';
+import { encrypt } from '@/utils/encryption';
 import SystemSetting from '@/models/SystemSetting';
 
 const defaultConfig = {
@@ -129,7 +130,9 @@ export async function POST(request) {
       aiProfile: body.aiProfile !== undefined ? body.aiProfile : existingValue.aiProfile || null,
       aiLogs: body.aiLogs !== undefined ? body.aiLogs : existingValue.aiLogs || [],
       githubConnected: body.githubConnected !== undefined ? body.githubConnected : existingValue.githubConnected || false,
-      githubUser: body.githubUser !== undefined ? body.githubUser : existingValue.githubUser || ''
+      githubUser: body.githubUser !== undefined ? body.githubUser : existingValue.githubUser || '',
+      githubRepo: body.githubRepo !== undefined ? body.githubRepo : existingValue.githubRepo || '',
+      githubToken: body.githubToken !== undefined && body.githubToken ? encrypt(body.githubToken) : existingValue.githubToken || ''
     };
 
     await SystemSetting.findOneAndUpdate(

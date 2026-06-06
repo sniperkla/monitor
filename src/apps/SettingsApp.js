@@ -94,6 +94,9 @@ export default function SettingsApp({ initialTab }) {
   const [deployTriggering, setDeployTriggering] = useState(false);
   const [copySuccess, setCopySuccess] = useState(false);
   const [aiAnalyzing, setAiAnalyzing] = useState(false);
+  const [branches, setBranches] = useState([]);
+  const [loadingBranches, setLoadingBranches] = useState(false);
+  const [repoInput, setRepoInput] = useState('');
 
   // Fetch deployment configurations and connections
   useEffect(() => {
@@ -111,8 +114,11 @@ export default function SettingsApp({ initialTab }) {
               aiProfile: configData.config.aiProfile || null,
               aiLogs: configData.config.aiLogs || [],
               githubConnected: configData.config.githubConnected || false,
-              githubUser: configData.config.githubUser || ''
+              githubUser: configData.config.githubUser || '',
+              // load saved repo into repo input
+              githubRepo: configData.config.githubRepo || ''
             }));
+            setRepoInput(configData.config.githubRepo || '');
           }
 
           const listRes = await apiFetch('/api/deploy/config');
@@ -219,6 +225,58 @@ export default function SettingsApp({ initialTab }) {
     setCopySuccess(true);
     setTimeout(() => setCopySuccess(false), 2000);
     addNotification({ title: 'Copied!', message: 'Webhook URL copied to clipboard', type: 'success' });
+  };
+
+  const handleConnectGitHub = async () => {
+    // Open OAuth connect in a new window
+    const connectUrl = `/api/deploy/github/connect?project=${encodeURIComponent(selectedProjectId)}`;
+    const win = window.open(connectUrl, '_blank');
+    if (!win) {
+      addNotification({ title: 'Error', message: 'Popup blocked. Please allow popups for this site.', type: 'error' });
+      return;
+    }
+
+    // Poll for connection status (once every 2s for 30s)
+    let attempts = 0;
+    const interval = setInterval(async () => {
+      attempts += 1;
+      try {
+        const res = await apiFetch(`/api/deploy/config?project=${selectedProjectId}`);
+        const data = await res.json();
+        if (data.success && data.config && data.config.githubConnected) {
+          setDeployConfig(prev => ({ ...prev, githubConnected: true, githubUser: data.config.githubUser || '' }));
+          addNotification({ title: 'GitHub Connected', message: `Connected as ${data.config.githubUser}`, type: 'success' });
+          clearInterval(interval);
+          if (win && !win.closed) win.close();
+        }
+      } catch (e) {
+        // ignore
+      }
+      if (attempts > 15) {
+        clearInterval(interval);
+      }
+    }, 2000);
+  };
+
+  const handleDisconnectGitHub = async () => {
+    if (!confirm('Disconnect GitHub for this project? This will remove stored tokens.')) return;
+    try {
+      const res = await apiFetch(`/api/deploy/github/disconnect?project=${selectedProjectId}`, { method: 'POST' });
+      const data = await res.json();
+      if (data.success) {
+        setDeployConfig(prev => ({ ...prev, githubConnected: false, githubUser: '' }));
+        addNotification({ title: 'GitHub Disconnected', message: 'GitHub connection removed for this project', type: 'success' });
+        // refresh project list
+        const listRes = await apiFetch('/api/deploy/config');
+        const listData = await listRes.json();
+        if (listData.success && listData.projects) setDeployProjects(listData.projects);
+      } else {
+        addNotification({ title: 'Error', message: data.error || 'Failed to disconnect', type: 'error' });
+      }
+    } catch (err) {
+      console.error('Disconnect failed:', err);
+      addNotification({ title: 'Error', message: 'Failed to disconnect GitHub', type: 'error' });
+    }
   };
 
   const handleCreateProject = async () => {
@@ -1898,13 +1956,59 @@ export default function SettingsApp({ initialTab }) {
                       <div className="grid grid-cols-2 gap-4">
                         <div>
                           <label className="block text-[11px] font-bold text-[var(--text-secondary)] uppercase tracking-wider mb-2">Branch to watch</label>
-                          <input
-                            type="text"
-                            value={deployConfig.branch}
-                            onChange={(e) => setDeployConfig(p => ({ ...p, branch: e.target.value }))}
-                            placeholder="main"
-                            className="w-full bg-[var(--bg-primary)] border border-[var(--border-color)] rounded-xl px-3 py-2 text-xs text-[var(--text-primary)] focus:outline-none focus:border-indigo-500 transition-all"
-                          />
+                              {branches && branches.length > 0 ? (
+                                <select
+                                  value={deployConfig.branch}
+                                  onChange={(e) => setDeployConfig(p => ({ ...p, branch: e.target.value }))}
+                                  className="w-full bg-[var(--bg-primary)] border border-[var(--border-color)] rounded-xl px-3 py-2 text-xs text-[var(--text-primary)] focus:outline-none focus:border-indigo-500 transition-all"
+                                >
+                                  {branches.map(b => <option key={b} value={b}>{b}</option>)}
+                                </select>
+                              ) : (
+                                <input
+                                  type="text"
+                                  value={deployConfig.branch}
+                                  onChange={(e) => setDeployConfig(p => ({ ...p, branch: e.target.value }))}
+                                  placeholder="main"
+                                  className="w-full bg-[var(--bg-primary)] border border-[var(--border-color)] rounded-xl px-3 py-2 text-xs text-[var(--text-primary)] focus:outline-none focus:border-indigo-500 transition-all"
+                                />
+                              )}
+                              <div className="mt-2 flex items-center gap-2">
+                                <input
+                                  type="text"
+                                  value={repoInput}
+                                  onChange={(e) => setRepoInput(e.target.value)}
+                                  placeholder="owner/repo (optional)"
+                                  className="flex-1 bg-[var(--bg-primary)] border border-[var(--border-color)] rounded-xl px-3 py-1.5 text-xs text-[var(--text-primary)] focus:outline-none"
+                                />
+                                <button
+                                  onClick={async () => {
+                                    try {
+                                      setLoadingBranches(true);
+                                      setBranches([]);
+                                      const param = repoInput ? `repo=${encodeURIComponent(repoInput)}` : `project=${encodeURIComponent(selectedProjectId)}`;
+                                      const res = await apiFetch(`/api/deploy/github/branches?${param}`);
+                                      const data = await res.json();
+                                      if (data.success) {
+                                        setBranches(data.branches || []);
+                                        if ((data.branches || []).length > 0) {
+                                          setDeployConfig(p => ({ ...p, branch: data.branches[0] }));
+                                        }
+                                      } else {
+                                        addNotification({ title: 'Branches', message: data.error || 'Failed to load branches', type: 'error' });
+                                      }
+                                    } catch (err) {
+                                      console.error('Failed to load branches:', err);
+                                      addNotification({ title: 'Branches', message: 'Failed to load branches', type: 'error' });
+                                    } finally {
+                                      setLoadingBranches(false);
+                                    }
+                                  }}
+                                  className="px-3 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-bold"
+                                >
+                                  {loadingBranches ? 'Loading...' : 'Load'}
+                                </button>
+                              </div>
                         </div>
                         <div>
                           <label className="block text-[11px] font-bold text-[var(--text-secondary)] uppercase tracking-wider mb-2">Webhook Secret (Optional)</label>
@@ -1933,6 +2037,20 @@ export default function SettingsApp({ initialTab }) {
                           >
                             {copySuccess ? <CheckCheck size={14} className="text-emerald-500" /> : <Copy size={14} />}
                           </button>
+                          <button
+                            onClick={handleConnectGitHub}
+                            className="px-3 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-bold"
+                          >
+                            {deployConfig.githubConnected ? 'Re-connect GitHub' : 'Connect GitHub'}
+                          </button>
+                          {deployConfig.githubConnected && (
+                            <button
+                              onClick={handleDisconnectGitHub}
+                              className="px-3 bg-red-600 hover:bg-red-500 text-white rounded-xl text-xs font-bold"
+                            >
+                              Disconnect
+                            </button>
+                          )}
                         </div>
                         <span className="block text-[9px] text-[var(--text-muted)] mt-1">Use this unique URL for the project ID "{selectedProjectId}" in GitHub repo settings with "application/json" content type.</span>
                       </div>
