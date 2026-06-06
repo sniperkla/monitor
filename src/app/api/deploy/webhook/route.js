@@ -82,7 +82,7 @@ async function runDeployment(config) {
 
     // Use spawn with shell: true to handle shell detection and execution
     // This automatically uses /bin/sh on Unix and cmd.exe on Windows
-    const childProcess = spawn(config.deployCommand, {
+    const childProcess = spawn(config.deployCommand, [], {
       cwd: cwdPath,
       shell: true,
       stdio: ['ignore', 'pipe', 'pipe']
