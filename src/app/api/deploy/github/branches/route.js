@@ -3,6 +3,7 @@ import { getServerSession } from 'next-auth/next';
 import { authOptions } from '@/lib/auth';
 import connectDB from '@/lib/mongodb';
 import SystemSetting from '@/models/SystemSetting';
+import { decrypt } from '@/utils/encryption';
 
 // GET /api/deploy/github/branches?repo=owner/repo&project=projectId
 export async function GET(request) {
@@ -26,7 +27,14 @@ export async function GET(request) {
       const setting = await SystemSetting.findOne({ key: dbKey });
       const cfg = setting?.value || {};
       if (!resolvedRepo && cfg.githubRepo) resolvedRepo = cfg.githubRepo;
-      if (cfg.githubToken) token = cfg.githubToken;
+      if (cfg.githubToken) {
+        try {
+          token = decrypt(cfg.githubToken);
+        } catch (err) {
+          console.warn('[deploy/github/branches] failed to decrypt githubToken', err.message);
+          token = null;
+        }
+      }
     }
 
     // Allow passing token via header for convenience

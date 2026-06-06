@@ -1953,64 +1953,112 @@ export default function SettingsApp({ initialTab }) {
                         </button>
                       </div>
 
-                      <div className="grid grid-cols-2 gap-4">
-                        <div>
-                          <label className="block text-[11px] font-bold text-[var(--text-secondary)] uppercase tracking-wider mb-2">Branch to watch</label>
-                              {branches && branches.length > 0 ? (
-                                <select
-                                  value={deployConfig.branch}
-                                  onChange={(e) => setDeployConfig(p => ({ ...p, branch: e.target.value }))}
-                                  className="w-full bg-[var(--bg-primary)] border border-[var(--border-color)] rounded-xl px-3 py-2 text-xs text-[var(--text-primary)] focus:outline-none focus:border-indigo-500 transition-all"
-                                >
-                                  {branches.map(b => <option key={b} value={b}>{b}</option>)}
-                                </select>
-                              ) : (
-                                <input
-                                  type="text"
-                                  value={deployConfig.branch}
-                                  onChange={(e) => setDeployConfig(p => ({ ...p, branch: e.target.value }))}
-                                  placeholder="main"
-                                  className="w-full bg-[var(--bg-primary)] border border-[var(--border-color)] rounded-xl px-3 py-2 text-xs text-[var(--text-primary)] focus:outline-none focus:border-indigo-500 transition-all"
-                                />
-                              )}
-                              <div className="mt-2 flex items-center gap-2">
-                                <input
-                                  type="text"
-                                  value={repoInput}
-                                  onChange={(e) => setRepoInput(e.target.value)}
-                                  placeholder="owner/repo (optional)"
-                                  className="flex-1 bg-[var(--bg-primary)] border border-[var(--border-color)] rounded-xl px-3 py-1.5 text-xs text-[var(--text-primary)] focus:outline-none"
-                                />
+                      <div className="space-y-4">
+                        <div className="rounded-2xl bg-slate-950/30 border border-[var(--border-color)] p-4">
+                          <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+                            <div>
+                              <p className="text-[11px] font-bold uppercase tracking-wider text-[var(--text-secondary)]">GitHub Connection</p>
+                              <p className="mt-1 text-sm text-[var(--text-primary)]">
+                                {deployConfig.githubConnected ? `Connected as ${deployConfig.githubUser || 'GitHub user'}` : 'Not connected'}
+                              </p>
+                            </div>
+                            <div className="flex flex-wrap gap-2">
+                              <button
+                                onClick={handleConnectGitHub}
+                                className="px-3 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-bold"
+                              >
+                                {deployConfig.githubConnected ? 'Reconnect' : 'Connect'}
+                              </button>
+                              {deployConfig.githubConnected && (
                                 <button
-                                  onClick={async () => {
-                                    try {
-                                      setLoadingBranches(true);
-                                      setBranches([]);
-                                      const param = repoInput ? `repo=${encodeURIComponent(repoInput)}` : `project=${encodeURIComponent(selectedProjectId)}`;
-                                      const res = await apiFetch(`/api/deploy/github/branches?${param}`);
-                                      const data = await res.json();
-                                      if (data.success) {
-                                        setBranches(data.branches || []);
-                                        if ((data.branches || []).length > 0) {
-                                          setDeployConfig(p => ({ ...p, branch: data.branches[0] }));
-                                        }
-                                      } else {
-                                        addNotification({ title: 'Branches', message: data.error || 'Failed to load branches', type: 'error' });
-                                      }
-                                    } catch (err) {
-                                      console.error('Failed to load branches:', err);
-                                      addNotification({ title: 'Branches', message: 'Failed to load branches', type: 'error' });
-                                    } finally {
-                                      setLoadingBranches(false);
-                                    }
-                                  }}
-                                  className="px-3 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-bold"
+                                  onClick={handleDisconnectGitHub}
+                                  className="px-3 py-2 bg-red-600 hover:bg-red-500 text-white rounded-xl text-xs font-bold"
                                 >
-                                  {loadingBranches ? 'Loading...' : 'Load'}
+                                  Disconnect
                                 </button>
-                              </div>
+                              )}
+                            </div>
+                          </div>
                         </div>
-                        <div>
+
+                        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                          <div className="rounded-2xl bg-slate-950/30 border border-[var(--border-color)] p-4">
+                            <label className="block text-[11px] font-bold text-[var(--text-secondary)] uppercase tracking-wider mb-2">GitHub repository</label>
+                            <input
+                              type="text"
+                              value={repoInput}
+                              onChange={(e) => setRepoInput(e.target.value)}
+                              placeholder="owner/repo"
+                              className="w-full bg-[var(--bg-primary)] border border-[var(--border-color)] rounded-xl px-3 py-2 text-xs text-[var(--text-primary)] focus:outline-none focus:border-indigo-500"
+                            />
+                            <button
+                              onClick={async () => {
+                                const repoValue = repoInput || deployConfig.githubRepo;
+                                if (!repoValue) {
+                                  addNotification({ title: 'Branches', message: 'Enter a repository or save one first.', type: 'error' });
+                                  return;
+                                }
+                                try {
+                                  setLoadingBranches(true);
+                                  setBranches([]);
+                                  const param = `repo=${encodeURIComponent(repoValue)}`;
+                                  const res = await apiFetch(`/api/deploy/github/branches?${param}`);
+                                  const data = await res.json();
+                                  if (data.success) {
+                                    setBranches(data.branches || []);
+                                    if ((data.branches || []).length > 0) {
+                                      setDeployConfig(p => ({ ...p, branch: data.branches[0], githubRepo: repoValue }));
+                                      setRepoInput(repoValue);
+                                    }
+                                  } else {
+                                    addNotification({ title: 'Branches', message: data.error || 'Failed to load branches', type: 'error' });
+                                  }
+                                } catch (err) {
+                                  console.error('Failed to load branches:', err);
+                                  addNotification({ title: 'Branches', message: 'Failed to load branches', type: 'error' });
+                                } finally {
+                                  setLoadingBranches(false);
+                                }
+                              }}
+                              disabled={!repoInput && !deployConfig.githubRepo}
+                              className={`mt-3 w-full px-3 py-2 rounded-xl text-xs font-bold text-white transition-all ${!repoInput && !deployConfig.githubRepo ? 'bg-slate-600 cursor-not-allowed' : 'bg-indigo-600 hover:bg-indigo-500'}`}
+                            >
+                              {loadingBranches ? 'Loading branches...' : 'Load branches'}
+                            </button>
+                            <p className="mt-2 text-[10px] text-[var(--text-muted)]">
+                              {repoInput || deployConfig.githubRepo
+                                ? `Loading branches for ${repoInput || deployConfig.githubRepo}.`
+                                : 'Enter an owner/repo or use the saved repository before loading branches.'}
+                            </p>
+                            <p className="text-[10px] text-[var(--text-muted)]">
+                              Public repos can load without GitHub auth; private repos require connection.
+                            </p>
+                          </div>
+
+                          <div className="rounded-2xl bg-slate-950/30 border border-[var(--border-color)] p-4">
+                            <label className="block text-[11px] font-bold text-[var(--text-secondary)] uppercase tracking-wider mb-2">Branch to watch</label>
+                            {branches && branches.length > 0 ? (
+                              <select
+                                value={deployConfig.branch}
+                                onChange={(e) => setDeployConfig(p => ({ ...p, branch: e.target.value }))}
+                                className="w-full bg-[var(--bg-primary)] border border-[var(--border-color)] rounded-xl px-3 py-2 text-xs text-[var(--text-primary)] focus:outline-none focus:border-indigo-500 transition-all"
+                              >
+                                {branches.map(b => <option key={b} value={b}>{b}</option>)}
+                              </select>
+                            ) : (
+                              <input
+                                type="text"
+                                value={deployConfig.branch}
+                                onChange={(e) => setDeployConfig(p => ({ ...p, branch: e.target.value }))}
+                                placeholder="main"
+                                className="w-full bg-[var(--bg-primary)] border border-[var(--border-color)] rounded-xl px-3 py-2 text-xs text-[var(--text-primary)] focus:outline-none focus:border-indigo-500 transition-all"
+                              />
+                            )}
+                            <p className="mt-2 text-[10px] text-[var(--text-muted)]">Load branches first to select from the repository automatically.</p>
+                          </div>
+                        </div>
+
+                        <div className="rounded-2xl bg-slate-950/30 border border-[var(--border-color)] p-4">
                           <label className="block text-[11px] font-bold text-[var(--text-secondary)] uppercase tracking-wider mb-2">Webhook Secret (Optional)</label>
                           <input
                             type="password"
@@ -2020,39 +2068,25 @@ export default function SettingsApp({ initialTab }) {
                             className="w-full bg-[var(--bg-primary)] border border-[var(--border-color)] rounded-xl px-3 py-2 text-xs text-[var(--text-primary)] focus:outline-none focus:border-indigo-500 transition-all"
                           />
                         </div>
-                      </div>
 
-                      <div className="space-y-1">
-                        <label className="block text-[11px] font-bold text-[var(--text-secondary)] uppercase tracking-wider">Webhook URL</label>
-                        <div className="flex gap-2">
-                          <input
-                            type="text"
-                            readOnly
-                            value={typeof window !== 'undefined' ? `${window.location.origin}/api/deploy/webhook?project=${selectedProjectId}` : ''}
-                            className="flex-1 bg-[var(--bg-primary)] border border-[var(--border-color)] rounded-xl px-3 py-2 text-xs text-[var(--text-muted)] select-all focus:outline-none"
-                          />
-                          <button
-                            onClick={handleCopyWebhookUrl}
-                            className="px-3 bg-[var(--bg-tertiary)] hover:bg-[var(--bg-card-hover)] border border-[var(--border-color)] rounded-xl text-xs text-[var(--text-primary)] transition-all flex items-center justify-center cursor-pointer"
-                          >
-                            {copySuccess ? <CheckCheck size={14} className="text-emerald-500" /> : <Copy size={14} />}
-                          </button>
-                          <button
-                            onClick={handleConnectGitHub}
-                            className="px-3 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-bold"
-                          >
-                            {deployConfig.githubConnected ? 'Re-connect GitHub' : 'Connect GitHub'}
-                          </button>
-                          {deployConfig.githubConnected && (
+                        <div className="space-y-1">
+                          <label className="block text-[11px] font-bold text-[var(--text-secondary)] uppercase tracking-wider">Webhook URL</label>
+                          <div className="flex flex-col gap-2 sm:flex-row">
+                            <input
+                              type="text"
+                              readOnly
+                              value={typeof window !== 'undefined' ? `${window.location.origin}/api/deploy/webhook?project=${selectedProjectId}` : ''}
+                              className="flex-1 bg-[var(--bg-primary)] border border-[var(--border-color)] rounded-xl px-3 py-2 text-xs text-[var(--text-muted)] select-all focus:outline-none"
+                            />
                             <button
-                              onClick={handleDisconnectGitHub}
-                              className="px-3 bg-red-600 hover:bg-red-500 text-white rounded-xl text-xs font-bold"
+                              onClick={handleCopyWebhookUrl}
+                              className="px-3 py-2 bg-[var(--bg-tertiary)] hover:bg-[var(--bg-card-hover)] border border-[var(--border-color)] rounded-xl text-xs text-[var(--text-primary)] transition-all flex items-center justify-center"
                             >
-                              Disconnect
+                              {copySuccess ? <CheckCheck size={14} className="text-emerald-500" /> : <Copy size={14} />}
                             </button>
-                          )}
+                          </div>
+                          <span className="block text-[9px] text-[var(--text-muted)] mt-1">Use this unique URL for the project ID &quot;{selectedProjectId}&quot; in GitHub repo settings with &quot;application/json&quot; content type.</span>
                         </div>
-                        <span className="block text-[9px] text-[var(--text-muted)] mt-1">Use this unique URL for the project ID "{selectedProjectId}" in GitHub repo settings with "application/json" content type.</span>
                       </div>
                     </div>
 
@@ -2173,7 +2207,7 @@ export default function SettingsApp({ initialTab }) {
                           )}
 
                           <p className="text-[10px] text-slate-400 leading-normal italic">
-                            "{deployConfig.aiProfile.summary}"
+                            &quot;{deployConfig.aiProfile.summary}&quot;
                           </p>
 
                           <button
@@ -2203,7 +2237,7 @@ export default function SettingsApp({ initialTab }) {
                                     {log.analyzedAt ? new Date(log.analyzedAt).toLocaleDateString() : 'Unknown date'}
                                   </span>
                                 </div>
-                                <p className="text-[9px] text-[var(--text-muted)] line-clamp-1 italic">"{log.summary}"</p>
+                                <p className="text-[9px] text-[var(--text-muted)] line-clamp-1 italic">&quot;{log.summary}&quot;</p>
                               </div>
                             ))}
                           </div>
