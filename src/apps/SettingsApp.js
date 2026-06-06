@@ -220,6 +220,29 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
     };
   }, [activeTab, selectedProjectId, addNotification]);
 
+  useEffect(() => {
+    if (activeTab !== 'deployment') return;
+
+    const interval = setInterval(async () => {
+      try {
+        const res = await apiFetch(`/api/deploy/config?project=${selectedProjectId}`);
+        const data = await res.json();
+        if (data.success && data.config) {
+          setDeployConfig(prev => ({
+            ...prev,
+            status: data.config.status,
+            lastDeployLog: data.config.lastDeployLog,
+            lastDeployAt: data.config.lastDeployAt
+          }));
+        }
+      } catch (err) {
+        console.error('[SSE Poll] Failed to refresh deployment status:', err);
+      }
+    }, 10000);
+
+    return () => clearInterval(interval);
+  }, [activeTab, selectedProjectId, apiFetch]);
+
   const handleSaveDeployConfig = async () => {
     setDeploySaving(true);
     try {
