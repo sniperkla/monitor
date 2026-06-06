@@ -23,6 +23,7 @@ const resources = {
         online: "Online",
         offline: "Offline",
         servers: "servers",
+        to: "to",
         user: "user",
         type: "Connection Type",
         disconnected: "Disconnected",
@@ -740,6 +741,7 @@ const resources = {
           newFolder: "New Folder",
           refresh: "Refresh",
           getInfo: "Get Info",
+          rename: "Rename",
           currentFolder: "Current Folder",
         },
         modals: {
@@ -817,6 +819,9 @@ const resources = {
           deleting: "Deleting",
           copied: "Copied",
           cut: "Cut",
+          copying: "Copying",
+          moving: "Moving",
+          pasting: "Pasting",
         },
         errors: {
           cannotEditDir: "Cannot edit directory",
@@ -1111,6 +1116,7 @@ const resources = {
         online: "ออนไลน์",
         offline: "ออฟไลน์",
         servers: "เซิร์ฟเวอร์",
+        to: "ไปยัง",
         user: "ผู้ใช้",
         type: "ประเภทการเชื่อมต่อ",
         disconnected: "ตัดการเชื่อมต่อ",
@@ -1998,6 +2004,7 @@ const resources = {
           newFolder: "สร้างโฟลเดอร์ใหม่",
           refresh: "รีเฟรช",
           getInfo: "Get Info",
+          rename: "เปลี่ยนชื่อ",
           currentFolder: "โฟลเดอร์ปัจจุบัน",
         },
         modals: {
@@ -2076,6 +2083,9 @@ const resources = {
           deleting: "กำลังลบ",
           copied: "คัดลอกแล้ว",
           cut: "ตัดแล้ว",
+          copying: "กำลังคัดลอก",
+          moving: "กำลังย้าย",
+          pasting: "กำลังวาง",
         },
         errors: {
           cannotEditDir: "Cannot edit directory",
@@ -2857,6 +2867,7 @@ const resources = {
           newFolder: "新建文件夹",
           refresh: "刷新",
           getInfo: "获取信息",
+          rename: "重命名",
           currentFolder: "当前文件夹",
         },
         modals: {

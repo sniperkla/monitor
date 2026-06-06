@@ -8,6 +8,6 @@ export const config = {
     "/api/admin/:path*",
     "/api/user/:path*",
     "/api/wiki/:path*",
-    "/((?!api/auth|api/health|api/settings/database|_next/static|_next/image|favicon.ico).*)"
+    "/((?!api/auth|api/health|api/settings/database|api/deploy/webhook|_next/static|_next/image|favicon.ico).*)"
   ],
 };

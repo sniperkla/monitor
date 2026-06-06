@@ -1756,7 +1756,7 @@ export default function SettingsApp({ initialTab }) {
                   className="bg-[var(--bg-primary)] border border-[var(--border-color)] rounded-xl px-3 py-1.5 text-xs text-[var(--text-primary)] font-bold focus:outline-none focus:border-indigo-500 max-w-[200px]"
                 >
                   {deployProjects.map(p => (
-                    <option key={p.id} value={p.id}>{p.name} ({p.id})</option>
+                    <option key={p.id} value={p.id}>{p.id}{p.name ? ` - ${p.name}` : ''}</option>
                   ))}
                 </select>
                 
@@ -1779,12 +1779,12 @@ export default function SettingsApp({ initialTab }) {
               </div>
               
               <div className="flex items-center gap-2">
-                <label className="text-xs font-bold text-[var(--text-secondary)] uppercase tracking-wider">Rename Project:</label>
+                <label className="text-xs font-bold text-[var(--text-secondary)] uppercase tracking-wider">Alias:</label>
                 <input
                   type="text"
                   value={deployConfig.name || ''}
                   onChange={(e) => setDeployConfig(p => ({ ...p, name: e.target.value }))}
-                  placeholder="Project Name"
+                  placeholder="Optional display name"
                   className="bg-[var(--bg-primary)] border border-[var(--border-color)] rounded-xl px-3 py-1.5 text-xs text-[var(--text-primary)] font-bold focus:outline-none focus:border-indigo-500 w-[180px]"
                 />
               </div>
@@ -1793,7 +1793,8 @@ export default function SettingsApp({ initialTab }) {
             <div className="flex items-center justify-between mb-2">
               <div>
                 <h1 className="text-2xl font-bold text-[var(--text-primary)] flex items-center gap-2">
-                  Auto Deployment: <span className="text-indigo-400">{deployConfig.name || selectedProjectId}</span>
+                  Auto Deployment: <span className="text-indigo-400">{selectedProjectId}</span>
+                  {deployConfig.name && <span className="text-sm text-[var(--text-secondary)]">(Alias: {deployConfig.name})</span>}
                 </h1>
                 <p className="text-[var(--text-secondary)] text-sm">Configure automated git-triggered deployments via webhooks.</p>
               </div>
@@ -1923,7 +1924,7 @@ export default function SettingsApp({ initialTab }) {
                           <input
                             type="text"
                             readOnly
-                            value={typeof window !== 'undefined' ? `${window.location.origin}/api/deploy/webhook` : ''}
+                            value={typeof window !== 'undefined' ? `${window.location.origin}/api/deploy/webhook?project=${selectedProjectId}` : ''}
                             className="flex-1 bg-[var(--bg-primary)] border border-[var(--border-color)] rounded-xl px-3 py-2 text-xs text-[var(--text-muted)] select-all focus:outline-none"
                           />
                           <button
@@ -1933,7 +1934,7 @@ export default function SettingsApp({ initialTab }) {
                             {copySuccess ? <CheckCheck size={14} className="text-emerald-500" /> : <Copy size={14} />}
                           </button>
                         </div>
-                        <span className="block text-[9px] text-[var(--text-muted)] mt-1">Configure this URL as a Webhook in GitHub repo settings with "application/json" content type.</span>
+                        <span className="block text-[9px] text-[var(--text-muted)] mt-1">Use this unique URL for the project ID "{selectedProjectId}" in GitHub repo settings with "application/json" content type.</span>
                       </div>
                     </div>
 

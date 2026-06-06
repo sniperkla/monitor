@@ -19,6 +19,8 @@ import { useTranslation } from 'react-i18next';
 import MacOSModalWindow from '@/components/MacOSModalWindow';
 
 import { useApp } from '@/context/AppContext';
+import { useVault } from '@/context/VaultContext';
+
 
 /**
  * Minimal TAR packager for browser usage
@@ -129,7 +131,9 @@ export default function FileManager({
   }, [apiFetch]);
 
   const { state: osState, addNotification, removeNotification, updateNotification, showConfirm, showPrompt } = useOS();
+  const { vaultStatus } = useVault();
   const { clipboard } = appState;
+
   const setClipboard = (payload) => appDispatch({ type: 'SET_CLIPBOARD', payload });
   const [currentPath, setCurrentPath] = useState(initialPath);
   const [pathInput, setPathInput] = useState(initialPath);
@@ -342,6 +346,8 @@ export default function FileManager({
   }, [appState.dbConfig?.uri]);
 
   useEffect(() => {
+    if (vaultStatus === 'loading') return;
+
     const poolEntry = _fmSocketPool.get(connectionId);
     const isReused = !!(
       poolEntry?.socket?.connected &&
@@ -789,6 +795,17 @@ export default function FileManager({
     return () => {
       clearTimeout(timeout);
       clearTimeout(reuseInitTimeout);
+
+      if (!newSocket) return;
+
+      if (statusRef.current !== 'ready') {
+        console.log('🔌 Cleaning up unready socket for', connectionId);
+        newSocket.removeAllListeners();
+        newSocket.emit('ssh:disconnect');
+        newSocket.disconnect();
+        return;
+      }
+
       // Save socket to pool with TTL instead of disconnecting immediately.
       // If the same connectionId remounts within POOL_TTL ms (e.g. after Split),
       // it will reuse the socket seamlessly without reconnecting.
@@ -808,7 +825,7 @@ export default function FileManager({
         }, POOL_TTL),
       });
     };
-  }, [connectionId, reconnectNonce, isTransferChannelError, requestReconnect]); // Removed 'connection' from dependencies to prevent loop
+  }, [connectionId, reconnectNonce, isTransferChannelError, requestReconnect, vaultStatus]); // Removed 'connection' from dependencies to prevent loop
 
   // --- Auto-Refresh Logic ---
   
@@ -1156,38 +1173,42 @@ export default function FileManager({
     setTransfer(transferObj);
     transferRef.current = transferObj;
 
+    let activeHandshakeCleanup = null;
     const waitForUploadHandshake = (expectedOffset) => new Promise(resolve => {
       const timeoutId = setTimeout(() => {
-        socket.off('sftp:can_upload', handler);
-        socket.off('sftp:error', guardErrHandler);
+        cleanup();
         resolve({ offset: expectedOffset, error: 'Handshake timeout' });
       }, 8000);
 
       const handler = (data) => {
         if (data.filename !== file.name) return;
-        clearTimeout(timeoutId);
-        socket.off('sftp:can_upload', handler);
-        socket.off('sftp:error', guardErrHandler);
+        cleanup();
         resolve(data);
       };
 
       // Intercept guard errors immediately so we don't wait the full 8s timeout
       const guardErrHandler = (err) => {
         if (err?.guard !== 'memory' && err?.guard !== 'concurrency') return;
-        clearTimeout(timeoutId);
-        socket.off('sftp:can_upload', handler);
-        socket.off('sftp:error', guardErrHandler);
+        cleanup();
         resolve({ guardBlocked: true, guardType: err.guard, retryAfter: 5000 });
       };
 
+      const cleanup = () => {
+        clearTimeout(timeoutId);
+        socket.off('sftp:can_upload', handler);
+        socket.off('sftp:error', guardErrHandler);
+        activeHandshakeCleanup = null;
+      };
+
+      activeHandshakeCleanup = cleanup;
       socket.on('sftp:can_upload', handler);
       socket.on('sftp:error', guardErrHandler);
     });
 
+    let activeCompletionCleanup = null;
     const waitForUploadCompletion = () => new Promise((resolve, reject) => {
       const timeoutId = setTimeout(() => {
-        socket.off('sftp:action_success', successHandler);
-        socket.off('sftp:error', errorHandler);
+        cleanup();
         reject(new Error('Upload completion timeout'));
       }, 20000);
 
@@ -1195,6 +1216,7 @@ export default function FileManager({
         clearTimeout(timeoutId);
         socket.off('sftp:action_success', successHandler);
         socket.off('sftp:error', errorHandler);
+        activeCompletionCleanup = null;
       };
 
       const successHandler = (data) => {
@@ -1208,160 +1230,196 @@ export default function FileManager({
         reject(new Error(err?.message || 'Upload failed'));
       };
 
+      activeCompletionCleanup = cleanup;
       socket.on('sftp:action_success', successHandler);
       socket.on('sftp:error', errorHandler);
     });
     
-    // Request start — auto-retry if server is temporarily out of resources (memory / concurrency guard)
-    let startData;
-    let guardAttempts = 0;
-    const MAX_GUARD_RETRIES = 8;
-    do {
-      socket.emit('sftp:upload', { filename: file.name, path, size: file.size, offset: resumeOffset });
-      startData = await waitForUploadHandshake(resumeOffset);
-
-      if (startData.guardBlocked) {
-        guardAttempts++;
-        if (guardAttempts >= MAX_GUARD_RETRIES) {
-          console.warn(`🚫 Upload aborted after ${MAX_GUARD_RETRIES} guard retries`);
-          setTransfer(null);
-          transferRef.current = null;
-          setUploadQueue(prev => prev.filter(item => item.path !== path));
-          addNotification({
-            title: t('files.status.errorTitle'),
-            message: 'Server still busy after several retries. Please try again in a moment.',
-            type: 'error',
-          });
-          return;
-        }
-        console.log(`⏳ Guard blocked (${startData.guardType}) — waiting ${startData.retryAfter}ms before retry ${guardAttempts}/${MAX_GUARD_RETRIES}`);
-        setTransfer(prev => prev ? { ...prev, waiting: true, guardError: startData.guardType } : null);
-        await new Promise(r => setTimeout(r, startData.retryAfter || 5000));
-        setTransfer(prev => prev ? { ...prev, waiting: false, guardError: null } : null);
-      }
-    } while (startData.guardBlocked);
-
-     if (startData.error) {
-       setTransfer(prev => ({ ...prev, waiting: true, error: true }));
-       if (isTransferChannelError(startData.error)) {
-        requestReconnect('Upload channel stalled. Reconnecting...', {
-          preserveTransfer: true,
-          notificationMessage: 'Upload stalled. Reconnecting and keeping the upload queue for retry.',
-        });
-        return { interrupted: true, path };
-       }
-       return;
-    }
-
-    const chunkSize = 128 * 1024; // 128KB chunks
-    let offset = startData.offset || resumeOffset;
+    let activeAckCleanup = null;
 
     try {
-        while (offset < file.size) {
-          // If transfer was closed/cancelled, stop the loop
-          if (!transferRef.current) break;
+      // Request start — auto-retry if server is temporarily out of resources (memory / concurrency guard)
+      let startData;
+      let guardAttempts = 0;
+      const MAX_GUARD_RETRIES = 8;
+      do {
+        if (transferRef.current !== transferObj) return;
+        socket.emit('sftp:upload', { filename: file.name, path, size: file.size, offset: resumeOffset });
+        startData = await waitForUploadHandshake(resumeOffset);
+        if (transferRef.current !== transferObj) return;
 
-          // If we are rate limited, wait for the countdown
-          if (transferCountdownRef.current > 0) {
-              await new Promise(r => {
-                  const check = setInterval(() => {
-                      if (transferCountdownRef.current === 0) {
-                          clearInterval(check);
-                          r();
-                      }
-                  }, 500);
-              });
-              // After waiting, we need to RE-START the upload session from current offset
-              socket.emit('sftp:upload', { filename: file.name, path, size: file.size, offset });
-              await waitForUploadHandshake(offset);
-              setTransfer(prev => ({ ...prev, waiting: false, countdown: 0 }));
+        if (startData.guardBlocked) {
+          guardAttempts++;
+          if (guardAttempts >= MAX_GUARD_RETRIES) {
+            console.warn(`🚫 Upload aborted after ${MAX_GUARD_RETRIES} guard retries`);
+            setTransfer(null);
+            transferRef.current = null;
+            setUploadQueue(prev => prev.filter(item => item.path !== path));
+            addNotification({
+              title: t('files.status.errorTitle'),
+              message: 'Server still busy after several retries. Please try again in a moment.',
+              type: 'error',
+            });
+            return;
           }
+          console.log(`⏳ Guard blocked (${startData.guardType}) — waiting ${startData.retryAfter}ms before retry ${guardAttempts}/${MAX_GUARD_RETRIES}`);
+          setTransfer(prev => prev ? { ...prev, waiting: true, guardError: startData.guardType } : null);
+          await new Promise(r => setTimeout(r, startData.retryAfter || 5000));
+          if (transferRef.current !== transferObj) return;
+          setTransfer(prev => prev ? { ...prev, waiting: false, guardError: null } : null);
+        }
+      } while (startData.guardBlocked);
 
-          const chunk = file.slice(offset, offset + chunkSize);
-          const buffer = await chunk.arrayBuffer();
-          
-          // Send chunk and wait for ACK (Ensures server keeps up and allows pausing)
-           const ack = new Promise((resolve, reject) => {
-             const timeoutId = setTimeout(() => {
-               socket.off(`sftp:upload_ack:${file.name}`, handler);
-               socket.off('sftp:error', errHandler);
-               reject(new Error('Upload acknowledgment timeout'));
-             }, 15000);
-
-             const handler = (data) => {
-               clearTimeout(timeoutId);
-                socket.off(`sftp:upload_ack:${file.name}`, handler);
-                socket.off('sftp:error', errHandler);
-                resolve(data);
-             };
-             const errHandler = (err) => {
-                if (err.resetIn) { // Rate limit — keep transfer alive
-                 clearTimeout(timeoutId);
-                   socket.off(`sftp:upload_ack:${file.name}`, handler);
-                   socket.off('sftp:error', errHandler);
-                   resolve({ rateLimited: true });
-                } else if (err?.guard === 'memory' || err?.guard === 'concurrency') {
-                   // Guard block mid-transfer — pause and re-open upload session
-                 clearTimeout(timeoutId);
-                   socket.off(`sftp:upload_ack:${file.name}`, handler);
-                   socket.off('sftp:error', errHandler);
-                   resolve({ guardBlocked: err.guard, retryAfter: 5000 });
-                } else {
-                 clearTimeout(timeoutId);
-                   socket.off(`sftp:upload_ack:${file.name}`, handler);
-                   socket.off('sftp:error', errHandler);
-                   reject(err);
-                }
-             };
-             socket.on(`sftp:upload_ack:${file.name}`, handler);
-             socket.on('sftp:error', errHandler);
+      if (startData.error) {
+        setTransfer(prev => ({ ...prev, waiting: true, error: true }));
+        if (isTransferChannelError(startData.error)) {
+          requestReconnect('Upload channel stalled. Reconnecting...', {
+            preserveTransfer: true,
+            notificationMessage: 'Upload stalled. Reconnecting and keeping the upload queue for retry.',
           });
+          return { interrupted: true, path };
+        }
+        return;
+      }
 
-          socket.emit(`sftp:upload_chunk:${file.name}`, buffer);
-          
-          const ackResult = await ack;
-          if (ackResult.rateLimited && !ackResult.guardBlocked) {
-             // Rate limit — loop will pick up transferCountdown logic on next iteration
-             continue;
+      const chunkSize = 128 * 1024; // 128KB chunks
+      let offset = startData.offset || resumeOffset;
+
+      while (offset < file.size) {
+        // If transfer was closed/cancelled, stop the loop
+        if (transferRef.current !== transferObj) break;
+
+        // If we are rate limited, wait for the countdown
+        if (transferCountdownRef.current > 0) {
+          await new Promise(r => {
+            const check = setInterval(() => {
+              if (transferRef.current !== transferObj) {
+                clearInterval(check);
+                r();
+              } else if (transferCountdownRef.current === 0) {
+                clearInterval(check);
+                r();
+              }
+            }, 500);
+          });
+          if (transferRef.current !== transferObj) break;
+          // After waiting, we need to RE-START the upload session from current offset
+          socket.emit('sftp:upload', { filename: file.name, path, size: file.size, offset });
+          const resumeStartData = await waitForUploadHandshake(offset);
+          if (transferRef.current !== transferObj) break;
+
+          if (resumeStartData.error) {
+            console.error("Handshake after rate limit countdown failed:", resumeStartData.error);
+            setTransfer(prev => prev ? { ...prev, waiting: true, error: true } : null);
+            if (isTransferChannelError(resumeStartData.error)) {
+              requestReconnect('Upload channel stalled. Reconnecting...', {
+                preserveTransfer: true,
+                notificationMessage: 'Upload stalled. Reconnecting and keeping the upload queue for retry.',
+              });
+              return { interrupted: true, path };
+            }
+            return;
           }
-          if (ackResult.guardBlocked) {
-             // Memory / concurrency guard mid-transfer — wait then re-open the upload session
-             const waitMs = ackResult.retryAfter || 5000;
-             console.log(`⏳ Guard blocked mid-transfer (${ackResult.guardBlocked}) — waiting ${waitMs}ms, offset=${offset}`);
-             setTransfer(prev => prev ? { ...prev, waiting: true, guardError: ackResult.guardBlocked } : null);
-             await new Promise(r => setTimeout(r, waitMs));
-             // Re-open upload session from where we left off
-             socket.emit('sftp:upload', { filename: file.name, path, size: file.size, offset });
-             const resumeData = await waitForUploadHandshake(offset);
-             if (resumeData.guardBlocked) {
-               // Still blocked — treat as a hard error after mid-transfer retry
-               throw new Error(`Server still busy (${resumeData.guardType}) after retry. Upload paused — please retry manually.`);
-             }
-             setTransfer(prev => prev ? { ...prev, waiting: false, guardError: null } : null);
-             continue;
-          }
-
-          offset += chunkSize;
-          
-          // Update queue offset for persistence
-          setUploadQueue(prev => prev.map(item => item.path === path ? { ...item, offset } : item));
-
-          setTransfer(prev => ({ 
-            ...prev, 
-            progress: Math.round((offset / file.size) * 100),
-            waiting: false
-          }));
+          setTransfer(prev => ({ ...prev, waiting: false, countdown: 0 }));
         }
 
+        if (transferRef.current !== transferObj) break;
+
+        const chunk = file.slice(offset, offset + chunkSize);
+        const buffer = await chunk.arrayBuffer();
+        
+        if (transferRef.current !== transferObj) break;
+
+        // Send chunk and wait for ACK (Ensures server keeps up and allows pausing)
+        const ack = new Promise((resolve, reject) => {
+          const timeoutId = setTimeout(() => {
+            cleanup();
+            reject(new Error('Upload acknowledgment timeout'));
+          }, 15000);
+
+          const handler = (data) => {
+            cleanup();
+            resolve(data);
+          };
+          const errHandler = (err) => {
+            if (err.resetIn) { // Rate limit — keep transfer alive
+              cleanup();
+              resolve({ rateLimited: true });
+            } else if (err?.guard === 'memory' || err?.guard === 'concurrency') {
+              // Guard block mid-transfer — pause and re-open upload session
+              cleanup();
+              resolve({ guardBlocked: err.guard, retryAfter: 5000 });
+            } else {
+              cleanup();
+              reject(err);
+            }
+          };
+          const cleanup = () => {
+            clearTimeout(timeoutId);
+            socket.off(`sftp:upload_ack:${file.name}`, handler);
+            socket.off('sftp:error', errHandler);
+            activeAckCleanup = null;
+          };
+          activeAckCleanup = cleanup;
+          socket.on(`sftp:upload_ack:${file.name}`, handler);
+          socket.on('sftp:error', errHandler);
+        });
+
+        socket.emit(`sftp:upload_chunk:${file.name}`, buffer);
+        
+        const ackResult = await ack;
+        if (transferRef.current !== transferObj) break;
+
+        if (ackResult.rateLimited && !ackResult.guardBlocked) {
+          // Rate limit — loop will pick up transferCountdown logic on next iteration
+          continue;
+        }
+        if (ackResult.guardBlocked) {
+          // Memory / concurrency guard mid-transfer — wait then re-open the upload session
+          const waitMs = ackResult.retryAfter || 5000;
+          console.log(`⏳ Guard blocked mid-transfer (${ackResult.guardBlocked}) — waiting ${waitMs}ms, offset=${offset}`);
+          setTransfer(prev => prev ? { ...prev, waiting: true, guardError: ackResult.guardBlocked } : null);
+          await new Promise(r => setTimeout(r, waitMs));
+          if (transferRef.current !== transferObj) break;
+          // Re-open upload session from where we left off
+          socket.emit('sftp:upload', { filename: file.name, path, size: file.size, offset });
+          const resumeData = await waitForUploadHandshake(offset);
+          if (transferRef.current !== transferObj) break;
+          if (resumeData.guardBlocked) {
+            // Still blocked — treat as a hard error after mid-transfer retry
+            throw new Error(`Server still busy (${resumeData.guardType}) after retry. Upload paused — please retry manually.`);
+          }
+          setTransfer(prev => prev ? { ...prev, waiting: false, guardError: null } : null);
+          continue;
+        }
+
+        offset += chunkSize;
+        
+        // Update queue offset for persistence
+        setUploadQueue(prev => prev.map(item => item.path === path ? { ...item, offset } : item));
+
+        setTransfer(prev => ({ 
+          ...prev, 
+          progress: Math.round((offset / file.size) * 100),
+          waiting: false
+        }));
+      }
+
+      if (transferRef.current === transferObj) {
         socket.emit(`sftp:upload_done:${file.name}`);
         await waitForUploadCompletion();
-        // Remove from queue on completion
-        setUploadQueue(prev => prev.filter(item => item.path !== path));
-        transferRef.current = null;
-        if (e) e.target.value = null; // Reset input if it was from event
-        return { path };
+        if (transferRef.current === transferObj) {
+          // Remove from queue on completion
+          setUploadQueue(prev => prev.filter(item => item.path !== path));
+          setTransfer(null);
+          transferRef.current = null;
+          if (e) e.target.value = null; // Reset input if it was from event
+          return { path };
+        }
+      }
     } catch (err) {
-        console.error("Upload Loop Error:", err);
+      console.error("Upload Loop Error:", err);
+      if (transferRef.current === transferObj) {
         if (isTransferChannelError(err)) {
           requestReconnect('Upload interrupted. Reconnecting SSH...', {
             preserveTransfer: true,
@@ -1372,6 +1430,11 @@ export default function FileManager({
         setTransfer(null);
         transferRef.current = null;
         throw err;
+      }
+    } finally {
+      if (activeHandshakeCleanup) activeHandshakeCleanup();
+      if (activeAckCleanup) activeAckCleanup();
+      if (activeCompletionCleanup) activeCompletionCleanup();
     }
   };
 
@@ -1612,6 +1675,15 @@ export default function FileManager({
             ? dragData.filename 
             : `${currentPath}/${dragData.filename}`;
           
+          const transferObj = {
+            filename: dragData.filename,
+            progress: 0,
+            action: 'copy',
+            waiting: false
+          };
+          setTransfer(transferObj);
+          transferRef.current = transferObj;
+
           toastRef.current = addNotification({ title: t('files.status.upload'), message: `${t('files.status.uploadingTo')} ${dragData.filename}...`, type: 'loading', duration: 0 });
           socket.emit('sftp:cross_server_transfer', {
             srcConnId: dragData.connectionId,
@@ -1626,6 +1698,15 @@ export default function FileManager({
             ? dragData.filename 
             : `${currentPath}/${dragData.filename}`;
           if (dragData.filePath !== destPath) {
+            const transferObj = {
+              filename: dragData.filename,
+              progress: 0,
+              action: 'copy',
+              waiting: false
+            };
+            setTransfer(transferObj);
+            transferRef.current = transferObj;
+
             socket.emit('sftp:copy', { src: dragData.filePath, dest: destPath });
             toastRef.current = addNotification({ title: t('files.context.copy'), message: `${t('files.context.copy')} ${dragData.filename}...`, type: 'loading', duration: 0 });
           }
@@ -1671,8 +1752,14 @@ export default function FileManager({
         return;
       }
 
-      const items = e.clipboardData.items;
-      if (!items) return;
+      const items = e.clipboardData?.items;
+      if (!items) {
+        if (clipboard) {
+          e.preventDefault();
+          handlePaste();
+        }
+        return;
+      }
 
       // First check for files (including folders in some browsers)
       let foundFiles = false;
@@ -1699,6 +1786,7 @@ export default function FileManager({
       }
       
       if (foundFiles) {
+        e.preventDefault();
         addNotification({ 
           title: t('files.toasts.uploadStarted') || 'Upload Started', 
           message: t('files.toasts.uploadingFiles') || 'Uploading files to current folder...', 
@@ -1712,12 +1800,15 @@ export default function FileManager({
         for (const file of filesToUpload) {
           await handleFileUpload(null, file);
         }
+      } else if (clipboard) {
+        e.preventDefault();
+        handlePaste();
       }
     };
 
     window.addEventListener('paste', handleSystemPaste);
     return () => window.removeEventListener('paste', handleSystemPaste);
-  }, [currentPath, socket]);
+  }, [currentPath, socket, clipboard, handlePaste]);
 
    const handleCreate = () => {
     if (!createModal.name || !socket) return;
@@ -1789,6 +1880,34 @@ export default function FileManager({
     setContextMenu({ ...contextMenu, visible: false });
   };
 
+  const handleRename = () => {
+    if (!contextMenu.file || !socket) return;
+    const originalName = contextMenu.file.filename;
+    
+    showPrompt(
+      t('files.modals.rename.prompt') || `Enter new name for '${originalName}':`,
+      (newName) => {
+        if (!newName || newName.trim() === '' || newName === originalName) return;
+        
+        const srcPath = currentPath === '.' ? originalName : `${currentPath}/${originalName}`;
+        const destPath = currentPath === '.' ? newName.trim() : `${currentPath}/${newName.trim()}`;
+        
+        toastRef.current = addNotification({ 
+          title: t('files.status.renaming') || 'Renaming', 
+          message: `Renaming ${originalName} to ${newName.trim()}...`, 
+          type: 'loading', 
+          duration: 0 
+        });
+        
+        socket.emit('sftp:move', { src: srcPath, dest: destPath, overwrite: false });
+        setContextMenu({ ...contextMenu, visible: false });
+      },
+      originalName,
+      t('files.modals.rename.title') || 'Rename'
+    );
+    setContextMenu({ ...contextMenu, visible: false });
+  };
+
   const handleCreatePrompt = (type) => {
     showPrompt(
       type === 'folder' ? t('files.modals.create.titleFolder') : t('files.modals.create.titleFile'),
@@ -1840,7 +1959,7 @@ export default function FileManager({
     setContextMenu({ ...contextMenu, visible: false });
   };
 
-  const handlePaste = () => {
+  function handlePaste() {
     if (!clipboard || !socket) return;
     if (!ensureSocketReady('paste again')) return;
     const destPath = currentPath === '.' ? clipboard.file.filename : `${currentPath}/${clipboard.file.filename}`;
@@ -1850,6 +1969,15 @@ export default function FileManager({
     if (clipboard.sourcePath === destPath && clipboard.connectionId === connectionId && clipboard.action === 'copy') {
        finalDest = destPath + '_copy';
     }
+
+    const transferObj = {
+      filename: clipboard.file.filename,
+      progress: 0,
+      action: clipboard.action === 'cut' ? 'move' : 'copy',
+      waiting: false
+    };
+    setTransfer(transferObj);
+    transferRef.current = transferObj;
 
     // Check if Cross-Server Transfer
     if (clipboard.connectionId !== connectionId) {
@@ -1873,6 +2001,72 @@ export default function FileManager({
     toastRef.current = addNotification({ title: t('files.context.paste'), message: `${t('files.context.paste')} ${t('common.to')} ${currentPath}...`, type: 'loading', duration: 0 });
   };
 
+  // --- Keyboard Shortcuts for Copy, Cut, Paste ---
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      // Ignore if focus is in an input, textarea, contenteditable, ace editor, or terminal
+      if (
+        document.activeElement.tagName === 'INPUT' ||
+        document.activeElement.tagName === 'TEXTAREA' ||
+        document.activeElement.isContentEditable ||
+        document.activeElement.closest('.ace_editor') ||
+        document.activeElement.closest('.editor-container') ||
+        document.activeElement.closest('.xterm')
+      ) {
+        return;
+      }
+
+      const isModKey = e.ctrlKey || e.metaKey;
+
+      if (isModKey && (e.key === 'c' || e.key === 'C')) {
+        const targetFilename = lastSelectedFile || Array.from(selectedFiles)[0];
+        if (targetFilename) {
+          const targetFile = files.find(f => f.filename === targetFilename);
+          if (targetFile) {
+            e.preventDefault();
+            const path = currentPath === '.' ? targetFile.filename : `${currentPath}/${targetFile.filename}`;
+            setClipboard({
+              file: targetFile,
+              action: 'copy',
+              sourcePath: path,
+              connectionId: connectionId
+            });
+            addNotification({
+              title: t('common.success'),
+              message: `${t('files.actions.copied')} ${targetFile.filename}`,
+              type: 'success'
+            });
+          }
+        }
+      } else if (isModKey && (e.key === 'x' || e.key === 'X')) {
+        const targetFilename = lastSelectedFile || Array.from(selectedFiles)[0];
+        if (targetFilename) {
+          const targetFile = files.find(f => f.filename === targetFilename);
+          if (targetFile) {
+            e.preventDefault();
+            const path = currentPath === '.' ? targetFile.filename : `${currentPath}/${targetFile.filename}`;
+            setClipboard({
+              file: targetFile,
+              action: 'cut',
+              sourcePath: path,
+              connectionId: connectionId
+            });
+            addNotification({
+              title: t('common.success'),
+              message: `${t('files.actions.cut')} ${targetFile.filename}`,
+              type: 'success'
+            });
+          }
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [selectedFiles, lastSelectedFile, files, currentPath, clipboard, connectionId, handlePaste, t]);
+
   // In search mode show global results; otherwise filter current-dir listing
   const filteredFiles = isSearchMode
     ? searchResults.map(r => ({
@@ -1892,6 +2086,17 @@ export default function FileManager({
            if (!aIsDir && bIsDir) return 1;
            return a.filename.localeCompare(b.filename);
         });
+
+  const getActionLabel = () => {
+    if (!transfer) return '';
+    const key = `files.status.${transfer.action}`;
+    const val = t(key);
+    if (val && val !== key) return val;
+    const actionKey = `files.actions.${transfer.action === 'copy' ? 'copying' : transfer.action === 'move' ? 'moving' : transfer.action}`;
+    const actionVal = t(actionKey);
+    if (actionVal && actionVal !== actionKey) return actionVal;
+    return transfer.action;
+  };
 
   return (
     <div className="flex flex-col h-full bg-[var(--bg-primary)] text-[var(--text-primary)] relative overflow-hidden group/filemanager">
@@ -1937,7 +2142,7 @@ export default function FileManager({
                     ) : transfer.waiting ? (
                         <span className="text-[var(--accent-amber)] font-bold">{t('files.status.rateLimited')}. {t('files.status.retryIn', { seconds: transferCountdown || '...' })}</span>
                     ) : (
-                        <span className="capitalize">{t(`files.status.${transfer.action}`)} {t('files.status.inProgress') || 'in progress...'}</span>
+                        <span className="capitalize">{getActionLabel()} {t('files.status.inProgress') || 'in progress...'}</span>
                     )}
                   </p>
                 </div>
@@ -1985,6 +2190,7 @@ export default function FileManager({
                            }
                            const queueItem = uploadQueue.find(qi => (qi.file?.name || qi.filename) === transfer.filename);
                            if (queueItem?.file) {
+                             setTransferCountdown(0);
                              handleFileUpload(null, queueItem.file, queueItem.offset);
                            }
                         }}
@@ -2348,6 +2554,12 @@ export default function FileManager({
               >
                 <Download size={14} />
                 {contextMenu.file?.longname.startsWith('d') ? 'Download as .tar.gz' : t('files.context.download')}
+              </button>
+               <button 
+                onClick={handleRename}
+                className="w-full text-left px-3 py-2 text-sm hover:bg-[var(--glow-indigo)] text-[var(--text-primary)] hover:text-[var(--accent-indigo)] flex items-center gap-2 transition-colors"
+              >
+                <Replace size={14} className="text-indigo-400" /> {t('files.context.rename') || 'Rename'}
               </button>
               <button 
                 onClick={() => { handleDelete(); setContextMenu({ ...contextMenu, visible: false }); }}

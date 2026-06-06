@@ -41,6 +41,8 @@ const port = parseInt(process.env.PORT, 10) || 3000;
 const app = next({ dev, hostname, port, dir: __dirname });
 const handle = app.getRequestHandler();
 
+const shellQuote = (value) => `'${String(value).replace(/'/g, `'\\''`)}'`;
+
 // MongoDB connection — Priority: db-config.json > .env > default
 let MONGODB_URI = null;
 try {
@@ -1841,34 +1843,51 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
           });
 
           // Copy File/Directory
-          socket.on('sftp:copy', ({ src, dest }) => {
+          socket.on('sftp:copy', ({ src, dest, overwrite = false }) => {
             console.log(`📋 [${socket.id}] SFTP COPY: ${src} -> ${dest}`);
             getSftp((err, sftp) => {
               if (err) return emitSftpError(err, 'SFTP Init');
               
               sftp.stat(src, (err, stats) => {
                 if (err) return emitSftpError(err, 'Stat failed');
+                if (src === dest) return emitSftpError('Source and destination are the same path', 'Copy failed');
 
-                if (stats.isDirectory()) {
-                  // For directories, use tar for speed and to avoid rate limits by streaming
-                  const srcDir = path.posix.dirname(src);
+                const copyToDestination = () => {
+                  if (stats.isDirectory()) {
                   const srcBase = path.posix.basename(src);
-                  const destDir = path.posix.dirname(dest);
+                  const destBase = path.posix.basename(dest);
                   
                   socket.emit('sftp:progress', { action: 'copy', filename: srcBase, progress: 10 });
+
+                  if (!destBase || dest === '/' || dest.startsWith(`${src}/`)) {
+                    return emitSftpError('Cannot copy a folder into itself', 'Copy failed');
+                  }
                   
-                  // Wrap in a subshell to ensure proper directory nesting - use 'z' for compression
-                  const cmd = `tar czf - -C "${srcDir}" "${srcBase}" | tar xzf - -C "${destDir}"`;
+                  // Copy the directory contents into the requested destination so "foo" -> "foo_copy"
+                  // creates foo_copy instead of re-creating foo inside the destination parent.
+                  const cmd = [
+                    `rm -rf ${shellQuote(dest)}`,
+                    `mkdir -p ${shellQuote(dest)}`,
+                    `tar czf - -C ${shellQuote(src)} . | tar xzf - -C ${shellQuote(dest)}`,
+                  ].join(' && ');
                   console.log(`📦 Running optimized tar copy: ${cmd}`);
                   
                   sshClient.exec(cmd, (err, stream) => {
                     if (err) return emitSftpError(err, 'Copy Init');
                     socket.emit('sftp:progress', { action: 'copy', filename: srcBase, progress: 50 });
+                    
+                    let stdout = '';
+                    let stderr = '';
+                    stream.on('data', (d) => { stdout += d.toString(); });
+                    stream.stderr.on('data', (d) => { stderr += d.toString(); });
+                    
                     stream.on('close', (code) => {
                       if (code === 0) {
                         socket.emit('sftp:progress', { action: 'copy', filename: srcBase, progress: 100 });
                         socket.emit('sftp:action_success', { action: 'copy', path: dest });
-                      } else emitSftpError(`Exit code ${code}`, 'Copy failed');
+                      } else {
+                        emitSftpError(stderr || `Exit code ${code}`, 'Copy failed');
+                      }
                     });
                   });
                 } else {
@@ -1890,43 +1909,70 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
                   wStream.on('close', () => socket.emit('sftp:action_success', { action: 'copy', path: dest }));
                   rStream.on('error', (err) => emitSftpError(err, 'Read Source'));
                   wStream.on('error', (err) => emitSftpError(err, 'Write Dest'));
-                }
+                  }
+                };
+
+                sftp.stat(dest, (destErr) => {
+                  if (!destErr && !overwrite) {
+                    return emitSftpError('Destination already exists. Confirm replace to continue.', 'Copy failed');
+                  }
+                  copyToDestination();
+                });
               });
             });
           });
 
           // Move File/Directory
-          socket.on('sftp:move', ({ src, dest }) => {
+          socket.on('sftp:move', ({ src, dest, overwrite = false }) => {
             console.log(`🚚 [${socket.id}] SFTP MOVE: ${src} -> ${dest}`);
             getSftp((err, sftp) => {
               if (err) return emitSftpError(err, 'SFTP Init');
               
               socket.emit('sftp:progress', { action: 'move', filename: path.posix.basename(src), progress: 30 });
-              
-              sftp.rename(src, dest, (err) => {
-                if (!err) {
-                  socket.emit('sftp:progress', { action: 'move', filename: path.posix.basename(src), progress: 100 });
-                  return socket.emit('sftp:action_success', { action: 'move', path: dest });
-                }
-                
-                // Fallback mv
-                sshClient.exec(`mv "${src}" "${dest}"`, (err, stream) => {
+
+              const moveWithShell = () => {
+                const cmd = overwrite
+                  ? `rm -rf ${shellQuote(dest)} && mv ${shellQuote(src)} ${shellQuote(dest)}`
+                  : `mv ${shellQuote(src)} ${shellQuote(dest)}`;
+                sshClient.exec(cmd, (err, stream) => {
                   if (err) return emitSftpError(err, 'Move failed');
                   socket.emit('sftp:progress', { action: 'move', filename: path.posix.basename(src), progress: 60 });
+                  
+                  let stdout = '';
+                  let stderr = '';
+                  stream.on('data', (d) => { stdout += d.toString(); });
+                  stream.stderr.on('data', (d) => { stderr += d.toString(); });
+                  
                   stream.on('close', (code) => {
                     if (code === 0) {
                       socket.emit('sftp:progress', { action: 'move', filename: path.posix.basename(src), progress: 100 });
                       socket.emit('sftp:action_success', { action: 'move', path: dest });
+                    } else {
+                      emitSftpError(stderr || `Exit code ${code}`, 'Move failed');
                     }
-                    else emitSftpError(`Exit code ${code}`, 'Move failed');
                   });
+                });
+              };
+              
+              sftp.stat(dest, (destErr) => {
+                if (!destErr && !overwrite) {
+                  return emitSftpError('Destination already exists. Confirm replace to continue.', 'Move failed');
+                }
+                if (overwrite) return moveWithShell();
+
+                sftp.rename(src, dest, (err) => {
+                  if (!err) {
+                    socket.emit('sftp:progress', { action: 'move', filename: path.posix.basename(src), progress: 100 });
+                    return socket.emit('sftp:action_success', { action: 'move', path: dest });
+                  }
+                  moveWithShell();
                 });
               });
             });
           });
 
           // Cross-Server File Transfer
-          socket.on('sftp:cross_server_transfer', ({ srcConnId, srcPath, destPath, action }) => {
+          socket.on('sftp:cross_server_transfer', ({ srcConnId, srcPath, destPath, action, overwrite = false }) => {
             console.log(`🌐 [${socket.id}] CROSS-SERVER: ${srcConnId}:${srcPath} -> CurrentServer:${destPath}`);
             
             // Improved lookup to handle Docker-prefixed IDs
@@ -1976,6 +2022,20 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
                 const destSftp = await ensureSftp(destSession);
                 const isDestDocker = !!destSession.dockerContainerId;
 
+                const destExists = await new Promise((resolve) => {
+                  if (destSftp) {
+                    destSftp.stat(destPath, (err) => resolve(!err));
+                    return;
+                  }
+                  sshClient.exec(`[ -e ${shellQuote(destPath)} ]`, (err, stream) => {
+                    if (err) return resolve(false);
+                    stream.on('close', (code) => resolve(code === 0));
+                  });
+                });
+                if (destExists && !overwrite) {
+                  throw new Error('Destination already exists. Confirm replace to continue.');
+                }
+
                 // Use a helper to check if source is directory even if SFTP is weird
                 const checkSourceDir = () => {
                    return new Promise((resolve) => {
@@ -1995,9 +2055,7 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
                 // For Docker EITHER at source or destination, or for folders, 
                 // we use the tar pipe method. It's the most reliable for streaming.
                 if (isDir || srcSession.dockerContainerId || destSession.dockerContainerId) {
-                    const srcDir = path.posix.dirname(srcPath);
                     const srcBase = path.posix.basename(srcPath);
-                    const destDir = path.posix.dirname(destPath);
                     
                     console.log(`📂 [${socket.id}] Folder Transfer Start: ${srcPath} -> ${destPath}`);
 
@@ -2011,8 +2069,12 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
                       }
                     });
 
-                    const cmdSrc = `tar czf - -C "${srcDir}" "${srcBase}"`;
-                    const cmdDest = `tar xzf - -C "${destDir}"`;
+                    const cmdSrc = `tar czf - -C ${shellQuote(srcPath)} .`;
+                    const cmdDest = [
+                      `rm -rf ${shellQuote(destPath)}`,
+                      `mkdir -p ${shellQuote(destPath)}`,
+                      `tar xzf - -C ${shellQuote(destPath)}`,
+                    ].join(' && ');
                     
                     srcSession.sshClient.exec(cmdSrc, (err, srcStream) => {
                       if (err) return finish(err);

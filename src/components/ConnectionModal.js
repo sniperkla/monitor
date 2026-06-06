@@ -39,6 +39,7 @@ export default function ConnectionModal({ onClose, editConnection = null }) {
   const [isVerifying, setIsVerifying] = useState(false);
   const [revealTarget, setRevealTarget] = useState(null); // 'password' | 'privateKey' | 'passphrase'
   const [revealedSecrets, setRevealedSecrets] = useState({}); // { password: '...', ... }
+  const [isReplacingKey, setIsReplacingKey] = useState(false); // Track if user wants to replace existing key
   
   // OS Detection for helpful hints
   const detectedOS = useMemo(() => {
@@ -72,7 +73,7 @@ export default function ConnectionModal({ onClose, editConnection = null }) {
     database: editConnection?.database || '',
     authType: editConnection?.authType || 'password',
     privateKey: '',
-    keyFileName: editConnection?.keyFileName || '',
+    keyFileName: editConnection?.keyFileName || (editConnection?.privateKey ? 'Saved Private Key' : ''),
     passphrase: '',
     tags: editConnection?.tags?.join(', ') || '',
     color: editConnection?.color || (editConnection?.type === 'database' ? '#10b981' : '#6366f1'),
@@ -362,7 +363,7 @@ export default function ConnectionModal({ onClose, editConnection = null }) {
 
     // Validate: privateKey auth needs a key (either newly entered or already stored in DB)
     if (form.type === 'ssh' && form.authType === 'privateKey' && !form.privateKey) {
-      const hasStoredKey = editConnection?.storage === 'db' && editConnection?.privateKey;
+      const hasStoredKey = !!editConnection?.privateKey;
       if (!hasStoredKey) {
         addNotification({ title: 'Missing Private Key', message: 'Please upload or paste your private key before saving.', type: 'error' });
         setIsSubmitting(false);
@@ -852,7 +853,7 @@ export default function ConnectionModal({ onClose, editConnection = null }) {
                   />
                   {form.dbProvider === 'postgres' && detectedOS === 'macos' && (
                     <p className="text-[9px] text-amber-500 font-medium mt-1">
-                      ✨ On Mac, your username might be <code className="bg-amber-500/10 px-1 rounded text-amber-600">katanyoo</code> instead of "postgres"
+                      ✨ On Mac, your username might be <code className="bg-amber-500/10 px-1 rounded text-amber-600">katanyoo</code> instead of <code className="bg-amber-500/10 px-1 rounded text-amber-600">postgres</code>
                     </p>
                   )}
                 </div>
@@ -969,53 +970,105 @@ export default function ConnectionModal({ onClose, editConnection = null }) {
                       <label className="flex items-center gap-2 text-sm font-medium mb-2" style={{ color: 'var(--text-secondary)' }}>
                         <FileKey size={14} /> {t('ssh.modal.form.keyFile')}
                       </label>
-                      <div
-                        className={`upload-area ${dragOver ? 'dragover' : ''}`}
-                        onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
-                        onDragLeave={() => setDragOver(false)}
-                        onDrop={handleDrop}
-                        onClick={() => fileInputRef.current?.click()}
-                      >
-                        <input
-                          ref={fileInputRef}
-                          type="file"
-                          className="hidden"
-                          onChange={(e) => handleFileUpload(e.target.files[0])}
-                        />
-                        {form.keyFileName || revealedSecrets.keyFileName ? (
-                          <div className="flex flex-col items-center">
-                            <span className="text-xs text-[var(--accent-indigo)] font-medium truncate max-w-full px-2">
-                               {form.keyFileName || editConnection?.keyFileName || 'Saved Private Key'}
-                            </span>
-                            {revealedSecrets.privateKey && (
+                      {/* Show saved key indicator when editing and not replacing */}
+                      {editConnection && editConnection.authType === 'privateKey' && (editConnection.privateKey || editConnection.keyFileName) && !isReplacingKey && !form.privateKey ? (
+                        <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-4">
+                          <div className="flex items-center gap-3">
+                            <div className="w-10 h-10 rounded-xl bg-emerald-500/10 flex items-center justify-center shrink-0">
+                              <FileKey size={18} className="text-emerald-400" />
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <p className="text-xs font-bold text-emerald-400 truncate">
+                                {form.keyFileName || editConnection.keyFileName || 'Saved Private Key'}
+                              </p>
+                              <p className="text-[9px] text-[var(--text-muted)] mt-0.5">Private key is saved • no re-upload needed</p>
+                            </div>
+                            <div className="flex items-center gap-1.5 shrink-0">
+                              {!revealedSecrets.privateKey && (
+                                <button
+                                  type="button"
+                                  className="text-[9px] font-bold text-indigo-400 hover:text-indigo-300 transition-colors flex items-center gap-1 bg-indigo-500/10 px-2 py-1.5 rounded-lg border border-indigo-500/20"
+                                  onClick={() => handleRevealClick('privateKey')}
+                                >
+                                  <Lock size={10} /> Reveal
+                                </button>
+                              )}
+                              {revealedSecrets.privateKey && (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    navigator.clipboard.writeText(revealedSecrets.privateKey);
+                                    addNotification({ title: 'Copied', message: 'Private key copied to clipboard', type: 'info' });
+                                  }}
+                                  className="text-[9px] font-bold text-emerald-400 hover:text-emerald-300 transition-colors bg-emerald-500/10 px-2 py-1.5 rounded-lg border border-emerald-500/20"
+                                >
+                                  Copy
+                                </button>
+                              )}
                               <button
                                 type="button"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  navigator.clipboard.writeText(revealedSecrets.privateKey);
-                                  addNotification({ title: 'Copied', message: 'Private key copied to clipboard', type: 'info' });
-                                }}
-                                className="mt-2 text-[9px] font-bold text-emerald-400 hover:text-emerald-300 transition-colors bg-emerald-500/10 px-2 py-1 rounded border border-emerald-500/20"
+                                className="text-[9px] font-bold text-amber-400 hover:text-amber-300 transition-colors flex items-center gap-1 bg-amber-500/10 px-2 py-1.5 rounded-lg border border-amber-500/20"
+                                onClick={() => setIsReplacingKey(true)}
                               >
-                                Copy Key
+                                <Upload size={10} /> Replace
                               </button>
-                            )}
+                            </div>
                           </div>
-                        ) : (
-                          <div className="flex flex-col items-center gap-2">
-                            <span className="text-[10px] text-[var(--text-muted)] lowercase text-center px-4">{t('ssh.modal.placeholders.dropKey')}</span>
-                            {editConnection && editConnection.authType === 'privateKey' && !revealedSecrets.privateKey && (
-                              <button
-                                type="button"
-                                className="text-[9px] font-bold text-indigo-400 hover:text-indigo-300 transition-colors flex items-center gap-1.5"
-                                onClick={(e) => { e.stopPropagation(); handleRevealClick('privateKey'); }}
-                              >
-                                <Lock size={10} /> Reveal Saved Key
-                              </button>
-                            )}
-                          </div>
-                        )}
-                      </div>
+                        </div>
+                      ) : (
+                        <div
+                          className={`upload-area ${dragOver ? 'dragover' : ''}`}
+                          onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
+                          onDragLeave={() => setDragOver(false)}
+                          onDrop={handleDrop}
+                          onClick={() => fileInputRef.current?.click()}
+                        >
+                          <input
+                            ref={fileInputRef}
+                            type="file"
+                            className="hidden"
+                            onChange={(e) => handleFileUpload(e.target.files[0])}
+                          />
+                          {form.keyFileName && form.privateKey ? (
+                            <div className="flex flex-col items-center">
+                              <span className="text-xs text-[var(--accent-indigo)] font-medium truncate max-w-full px-2">
+                                 {form.keyFileName}
+                              </span>
+                              <span className="text-[9px] text-emerald-400 mt-1">✓ Key loaded</span>
+                              {isReplacingKey && (
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setIsReplacingKey(false);
+                                    setForm(prev => ({ ...prev, privateKey: '', keyFileName: editConnection?.keyFileName || '' }));
+                                  }}
+                                  className="mt-2 text-[9px] font-bold text-[var(--text-muted)] hover:text-[var(--text-primary)] transition-colors"
+                                >
+                                  ← Cancel replace, keep saved key
+                                </button>
+                              )}
+                            </div>
+                          ) : (
+                            <div className="flex flex-col items-center gap-2">
+                              <Upload size={16} className="text-[var(--text-muted)] opacity-50" />
+                              <span className="text-[10px] text-[var(--text-muted)] lowercase text-center px-4">{t('ssh.modal.placeholders.dropKey')}</span>
+                              {isReplacingKey && (
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setIsReplacingKey(false);
+                                  }}
+                                  className="text-[9px] font-bold text-[var(--text-muted)] hover:text-[var(--text-primary)] transition-colors"
+                                >
+                                  ← Cancel, keep saved key
+                                </button>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      )}
                     </div>
                     <div className="relative">
                       <input

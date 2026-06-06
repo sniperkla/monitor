@@ -92,6 +92,24 @@ export async function POST(request) {
 
     await connectDB(null, true);
 
+    // Check for duplicate project name (if provided)
+    if (body.name && body.name.trim()) {
+      const allSettings = await SystemSetting.find({
+        key: { $regex: '^auto_deploy_config' }
+      });
+      
+      const duplicateProject = allSettings.find(s => 
+        s.value?.name === body.name.trim() && s.key !== dbKey
+      );
+      
+      if (duplicateProject) {
+        return NextResponse.json({ 
+          success: false, 
+          error: `Project name "${body.name}" already exists. Please use a unique name or leave it empty.` 
+        }, { status: 400 });
+      }
+    }
+
     const existing = await SystemSetting.findOne({ key: dbKey });
     const existingValue = existing?.value || {};
 

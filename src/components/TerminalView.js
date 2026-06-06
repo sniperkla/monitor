@@ -9,6 +9,8 @@ import { useTranslation } from 'react-i18next';
 import { useSession } from 'next-auth/react';
 import { useOS } from '@/context/OSContext';
 import { useApp } from '@/context/AppContext';
+import { useVault } from '@/context/VaultContext';
+
 import { i18n } from '@/lib/i18n';
 import {
   Loader2, AlertCircle, CheckCircle2, XCircle, X, Minus, Maximize2, Wifi,
@@ -206,6 +208,8 @@ const DYNAMIC_BLOCKER_RECOVERY = {
 export default function TerminalView({ connectionId, connectionName, host, color, onClose, connection, isStandalone, initialCommand }) {
   const { state: appState, dispatch, apiFetch } = useApp();
   const { state: osState, setSshAiHistory, setSshAiPrefs } = useOS();
+  const { vaultStatus } = useVault();
+
   const { data: session } = useSession();
   const isLoggedIn = !!session?.user?.email;
   const { t, i18n } = useTranslation();
@@ -315,17 +319,7 @@ export default function TerminalView({ connectionId, connectionName, host, color
     try {
       fitAddonRef.current.fit();
       const { cols, rows } = termInstanceRef.current;
-      const prev = lastDimsRef.current;
-
-      // Only sync if dimensions actually changed
-      if (cols !== prev.cols || rows !== prev.rows) {
-        lastDimsRef.current = { cols, rows };
-        if (socketRef.current?.connected) {
-          // ssh:resize triggers SIGWINCH on the server which tells apps (nano/vim/htop)
-          // to redraw themselves automatically — no need to send CTRL-L
-          socketRef.current.emit('ssh:resize', { cols, rows });
-        }
-      }
+      lastDimsRef.current = { cols, rows };
     } catch (e) {
       console.warn('Terminal fit failed:', e);
     }
@@ -1143,6 +1137,8 @@ logstash:
   };
 
   const initTerminal = useCallback(async () => {
+    if (vaultStatus === 'loading') return;
+
     // Dynamic imports for xterm (client-side only)
     if (!Terminal) {
       const xtermModule = await import('@xterm/xterm');
@@ -1515,16 +1511,7 @@ logstash:
       }
     });
     
-    const handleResize = () => performFit();
-    window.addEventListener('resize', handleResize);
 
-    const observer = new ResizeObserver(() => {
-      // Small delay helps flexbox layouts finish settling
-      setTimeout(performFit, 0);
-      setTimeout(performFit, 50);
-    });
-
-    if (terminalRef.current) observer.observe(terminalRef.current);
 
     let clickStartPos = null;
 
@@ -1599,10 +1586,8 @@ logstash:
     window.addEventListener('keydown', handleKeyDown, { passive: true, capture: true });
 
     return () => {
-      window.removeEventListener('resize', handleResize);
       window.removeEventListener('keydown', handleKeyDown, { capture: true });
       window.removeEventListener('mouseup', handleMouseUp, { capture: true });
-      observer.disconnect();
       if (termEl) {
         termEl.removeEventListener('wheel', handleWheel, { capture: true });
         termEl.removeEventListener('mousedown', handleMouseDown, { capture: true });
@@ -1610,7 +1595,7 @@ logstash:
       }
       window.__isShowingScrollHint = false;
     };
-  }, [connectionId, appState.dbConfig?.uri, updateConnectionStatus, performFit]);
+  }, [connectionId, appState.dbConfig?.uri, updateConnectionStatus, performFit, vaultStatus]);
 
   // Handle Dynamic Theme Updates for XTerm
   useEffect(() => {
