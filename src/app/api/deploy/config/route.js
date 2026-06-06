@@ -4,6 +4,7 @@ import { authOptions } from '@/lib/auth';
 import connectDB from '@/lib/mongodb';
 import { encrypt } from '@/utils/encryption';
 import SystemSetting from '@/models/SystemSetting';
+import { ConnectionRepository } from '@/lib/repositories/ConnectionRepository';
 
 const defaultConfig = {
   id: 'default',
@@ -120,6 +121,24 @@ export async function POST(request) {
     const existing = await SystemSetting.findOne({ key: dbKey });
     const existingValue = existing?.value || {};
 
+    const targetType = body.targetType || existingValue.targetType || 'local';
+    const normalizedConnectionId = typeof body.connectionId === 'string'
+      ? body.connectionId.trim()
+      : String(existingValue.connectionId || '').trim();
+
+    if (targetType === 'ssh' && normalizedConnectionId) {
+      const db = await connectDB(null, true);
+      const repo = new ConnectionRepository(db);
+      await repo.init();
+      const connection = await repo.findById(normalizedConnectionId);
+      if (!connection) {
+        return NextResponse.json({
+          success: false,
+          error: `SSH connection with ID ${normalizedConnectionId} was not found. Please select a valid SSH connection.`
+        }, { status: 400 });
+      }
+    }
+
     const updatedValue = {
       id: projectId,
       name: body.name || existingValue.name || `Project ${projectId}`,
@@ -127,7 +146,7 @@ export async function POST(request) {
       branch: body.branch || existingValue.branch || 'main',
       secret: body.secret !== undefined ? body.secret : existingValue.secret || '',
       targetType: body.targetType || existingValue.targetType || 'local',
-      connectionId: body.connectionId !== undefined ? body.connectionId : existingValue.connectionId || '',
+      connectionId: normalizedConnectionId,
       deployCommand: body.deployCommand !== undefined ? body.deployCommand : existingValue.deployCommand || '',
       projectPath: body.projectPath !== undefined ? body.projectPath : existingValue.projectPath || '.',
       status: body.status || existingValue.status || 'idle',

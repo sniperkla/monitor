@@ -271,6 +271,23 @@ export async function POST(request) {
       return NextResponse.json({ success: false, error: 'Deployment command is not configured' }, { status: 400 });
     }
 
+    if (config.targetType === 'ssh') {
+      const connectionId = String(config.connectionId || '').trim();
+      if (!connectionId) {
+        console.log(`[webhook] ❌ SSH target configured but no connection selected`);
+        return NextResponse.json({ success: false, error: 'SSH deployment is configured but no SSH connection is selected. Please update deployment settings.' }, { status: 400 });
+      }
+
+      const db = await connectDB(null, true);
+      const repo = new ConnectionRepository(db);
+      await repo.init();
+      const connection = await repo.findById(connectionId);
+      if (!connection) {
+        console.log(`[webhook] ❌ SSH connection ID ${connectionId} not found`);
+        return NextResponse.json({ success: false, error: `SSH connection with ID ${connectionId} configured for project "${projectId}" does not exist. Please select a valid SSH connection.` }, { status: 400 });
+      }
+    }
+
     // Prevent concurrent deployments for the same project.
     // If status is running but there is no active in-memory process, reset the stale state.
     if (config.status === 'running') {

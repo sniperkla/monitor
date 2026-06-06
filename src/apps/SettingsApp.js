@@ -121,6 +121,11 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
   const [selectedProjectId, setSelectedProjectId] = useState('default');
   const [connections, setConnections] = useState([]);
   const [deployLoading, setDeployLoading] = useState(false);
+
+  const selectedConnection = deployConfig.targetType === 'ssh' && deployConfig.connectionId
+    ? connections.find(c => c._id === deployConfig.connectionId)
+    : null;
+  const selectedConnectionMissing = deployConfig.targetType === 'ssh' && deployConfig.connectionId && !selectedConnection;
   const [deploySaving, setDeploySaving] = useState(false);
   const [deployTriggering, setDeployTriggering] = useState(false);
   const [copySuccess, setCopySuccess] = useState(false);
@@ -2272,6 +2277,11 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
                         {deployConfig.targetType === 'ssh' && (
                           <div className="animate-in fade-in duration-200">
                             <label className="block text-[11px] font-bold text-[var(--text-secondary)] uppercase tracking-wider mb-2">SSH Connection</label>
+                            {selectedConnectionMissing && (
+                              <div className="p-3 bg-rose-500/10 border border-rose-500/20 rounded-xl text-sm text-rose-100 mb-3">
+                                Selected SSH connection is no longer available. Please choose an active SSH connection from the list.
+                              </div>
+                            )}
                             {connections.length === 0 ? (
                               <div className="p-3 bg-amber-500/5 border border-amber-500/10 rounded-xl text-center">
                                 <span className="block text-[10px] text-amber-500">No SSH connections found.</span>
