@@ -165,12 +165,32 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
             setDeployProjects(listData.projects);
           }
 
-          const connRes = await apiFetch('/api/connections');
-          const connData = await connRes.json();
-          if (connData.success && connData.data) {
-            const sshConns = connData.data.filter(c => c.type === 'ssh');
-            setConnections(sshConns);
+          // Try to fetch SSH connections through the relay endpoint first (works with vault)
+          // Falls back to general connections endpoint if relay endpoint fails
+          let sshConns = [];
+          try {
+            const sshRes = await apiFetch('/api/deploy/ssh-connections');
+            const sshData = await sshRes.json();
+            if (sshData.success && sshData.connections) {
+              sshConns = sshData.connections;
+            } else if (sshData.relayRequired) {
+              // Relay is required but not connected - try fallback
+              console.warn('SSH connections via relay not available, falling back to server DB');
+              throw new Error('Relay not available');
+            }
+          } catch (relayErr) {
+            // Fallback to regular connections endpoint
+            try {
+              const connRes = await apiFetch('/api/connections');
+              const connData = await connRes.json();
+              if (connData.success && connData.data) {
+                sshConns = connData.data.filter(c => c.type === 'ssh');
+              }
+            } catch (e) {
+              console.error('Failed to load SSH connections:', e);
+            }
           }
+          setConnections(sshConns);
         } catch (err) {
           console.error('Failed to load deployment data:', err);
         }
