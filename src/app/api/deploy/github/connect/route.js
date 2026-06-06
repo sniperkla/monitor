@@ -16,7 +16,7 @@ export async function GET(request) {
 
     const state = crypto.randomBytes(16).toString('hex');
 
-    await connectDB(null, true);
+    await connectDB(process.env.MONGODB_URI, true);
     // Save temporary state mapping
     await SystemSetting.findOneAndUpdate(
       { key: `auto_deploy_oauth_state_${state}` },

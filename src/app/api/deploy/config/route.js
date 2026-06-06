@@ -194,7 +194,7 @@ export async function DELETE(request) {
       return NextResponse.json({ success: false, error: 'Cannot delete the default project configuration' }, { status: 400 });
     }
 
-    await connectDB(null, true);
+    await connectDB(process.env.MONGODB_URI, true);
     await SystemSetting.deleteOne({ key: `auto_deploy_config_${projectId}` });
 
     return NextResponse.json({ success: true, message: 'Project deployment config deleted' });

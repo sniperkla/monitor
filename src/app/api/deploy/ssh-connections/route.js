@@ -22,8 +22,8 @@ export async function GET(request) {
     let relayHint = null;
 
     try {
-      // Try to connect to the user's database (may use relay if localhost)
-      db = await connectDB();
+      // Always connect to the main server database for SSH connections
+      db = await connectDB(process.env.MONGODB_URI, true);
     } catch (dbErr) {
       // If relay is required, inform the client
       if (dbErr.message?.includes('Local Relay Agent')) {

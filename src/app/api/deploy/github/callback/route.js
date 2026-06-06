@@ -12,7 +12,7 @@ export async function GET(request) {
 
     if (!code || !state) return NextResponse.json({ success: false, error: 'Missing code or state' }, { status: 400 });
 
-    await connectDB(null, true);
+    await connectDB(process.env.MONGODB_URI, true);
     const stateKey = `auto_deploy_oauth_state_${state}`;
     const stateRecord = await SystemSetting.findOne({ key: stateKey });
     if (!stateRecord) return NextResponse.json({ success: false, error: 'Invalid state' }, { status: 400 });

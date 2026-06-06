@@ -38,7 +38,7 @@ export async function GET(request) {
     const project = url.searchParams.get('project');
     repo = normalizeRepoParam(repo);
 
-    await connectDB(null, true);
+    await connectDB(process.env.MONGODB_URI, true);
 
     let token = null;
     let resolvedRepo = repo;
