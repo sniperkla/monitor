@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { 
   Palette, Image as ImageIcon, Monitor, Layout, Bell, Shield, Info, 
   Database, CheckCircle, AlertCircle, RefreshCw, Zap, Wifi, WifiOff, 
@@ -118,6 +118,7 @@ export default function SettingsApp({ initialTab }) {
   const [branches, setBranches] = useState([]);
   const [loadingBranches, setLoadingBranches] = useState(false);
   const [repoInput, setRepoInput] = useState('');
+  const prevDeployStatusRef = useRef(null);
 
   // Fetch deployment configurations and connections
   useEffect(() => {
@@ -163,32 +164,50 @@ export default function SettingsApp({ initialTab }) {
     }
   }, [activeTab, selectedProjectId, apiFetch]);
 
-  // Real-time polling when deployment is running
+  // Real-time Server-Sent Events for deployment status
   useEffect(() => {
-    if (deployConfig.status !== 'running') return;
-    
-    const interval = setInterval(async () => {
-      try {
-        const configRes = await apiFetch(`/api/deploy/config?project=${selectedProjectId}`);
-        const configData = await configRes.json();
-        if (configData.success && configData.config) {
-          setDeployConfig(configData.config);
-          if (configData.config.status !== 'running') {
-            clearInterval(interval);
-            addNotification({
-              title: `Deploy ${configData.config.status === 'success' ? 'Success' : 'Failed'}`,
-              message: `Your "${configData.config.name}" deployment has finished with status: ${configData.config.status}`,
-              type: configData.config.status === 'success' ? 'success' : 'error'
-            });
-          }
-        }
-      } catch (err) {
-        console.error('Polling deployment status failed:', err);
-      }
-    }, 2000);
+    if (activeTab !== 'deployment') return;
 
-    return () => clearInterval(interval);
-  }, [deployConfig.status, selectedProjectId, apiFetch]);
+    const eventSource = new EventSource(`/api/deploy/sse?project=${selectedProjectId}`);
+    console.log(`[SSE] Connected for project: ${selectedProjectId}`);
+
+    eventSource.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        console.log('[SSE] Received:', data);
+        
+        // Show notification when deployment finishes (transitions from running to success/failed)
+        if (prevDeployStatusRef.current === 'running' && data.status !== 'running') {
+          addNotification({
+            title: `Deploy ${data.status === 'success' ? 'Succeeded' : 'Failed'}`,
+            message: `Deployment finished with status: ${data.status}`,
+            type: data.status === 'success' ? 'success' : 'error'
+          });
+        }
+
+        prevDeployStatusRef.current = data.status;
+        
+        setDeployConfig(prev => ({
+          ...prev,
+          status: data.status,
+          lastDeployLog: data.lastDeployLog,
+          lastDeployAt: data.lastDeployAt
+        }));
+      } catch (err) {
+        console.error('[SSE] Failed to parse message:', err);
+      }
+    };
+
+    eventSource.onerror = (error) => {
+      console.error('[SSE] Connection error:', error);
+      eventSource.close();
+    };
+
+    return () => {
+      console.log(`[SSE] Disconnected for project: ${selectedProjectId}`);
+      eventSource.close();
+    };
+  }, [activeTab, selectedProjectId, addNotification]);
 
   const handleSaveDeployConfig = async () => {
     setDeploySaving(true);
@@ -228,8 +247,9 @@ export default function SettingsApp({ initialTab }) {
       });
       const data = await res.json();
       if (data.success) {
-        addNotification({ title: 'Deployment Triggered', message: 'Deployment started in the background.', type: 'info' });
+        addNotification({ title: 'Deployment Triggered', message: 'Deployment started. Status updates will appear in real-time.', type: 'info' });
         setDeployConfig(prev => ({ ...prev, status: 'running', lastDeployLog: 'Deploying...' }));
+        // SSE will handle real-time updates automatically
       } else {
         addNotification({ title: 'Error', message: data.error || 'Failed to trigger deployment', type: 'error' });
       }

@@ -8,6 +8,7 @@ import connectDB from '@/lib/mongodb';
 import SystemSetting from "@/models/SystemSetting";
 import { ConnectionRepository } from '@/lib/repositories/ConnectionRepository';
 import { decrypt } from '@/utils/encryption';
+import { broadcastDeploymentStatus } from '@/app/api/deploy/sse/route';
 
 // Verify GitHub webhook signature using HMAC-SHA256
 function verifySignature(bodyText, secret, signatureHeader) {
@@ -52,6 +53,8 @@ async function runDeployment(config) {
           } 
         }
       );
+      // Broadcast update to all SSE clients
+      await broadcastDeploymentStatus(projectId);
     } catch (dbErr) {
       console.error('Failed to update deploy status in DB:', dbErr.message);
     }
