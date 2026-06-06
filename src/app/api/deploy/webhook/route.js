@@ -2,13 +2,14 @@ import { NextResponse } from 'next/server';
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "@/lib/auth";
 import crypto from 'crypto';
-import { exec } from 'child_process';
+import { spawn } from 'child_process';
 import { Client } from 'ssh2';
 import connectDB from '@/lib/mongodb';
 import SystemSetting from "@/models/SystemSetting";
 import { ConnectionRepository } from '@/lib/repositories/ConnectionRepository';
 import { decrypt } from '@/utils/encryption';
 import { broadcastDeploymentStatus } from '@/app/api/deploy/sse/route';
+import { setRunning, clearRunning, getRunning } from '@/lib/deployProcesses';
 
 // Verify GitHub webhook signature using HMAC-SHA256
 function verifySignature(bodyText, secret, signatureHeader) {
@@ -39,19 +40,28 @@ async function runDeployment(config) {
   }
   logOutput += `--------------------------------------------------\n\n`;
 
+  const runId = crypto.randomUUID();
+
   // Helper to update status in DB
-  const updateStatus = async (status, finalLog) => {
+  const updateStatus = async (status, finalLog, extra = {}) => {
     try {
       await connectDB(null, true);
+      const updateFields = {
+        'value.status': status,
+        'value.lastDeployLog': finalLog,
+        'value.lastDeployAt': startedAt,
+        'value.cancelRequested': extra.cancelRequested === true ? true : false
+      };
+
+      if (status === 'running') {
+        updateFields['value.deployRunId'] = runId;
+      } else {
+        updateFields['value.deployRunId'] = null;
+      }
+
       await SystemSetting.findOneAndUpdate(
         { key: dbKey },
-        { 
-          $set: { 
-            'value.status': status,
-            'value.lastDeployLog': finalLog,
-            'value.lastDeployAt': startedAt
-          } 
-        }
+        { $set: updateFields }
       );
       // Broadcast update to all SSE clients
       await broadcastDeploymentStatus(projectId);
@@ -65,36 +75,64 @@ async function runDeployment(config) {
 
   const resolvedPath = config.projectPath?.trim() || '.';
 
+
   if (config.targetType === 'local') {
     // === LOCAL HOST DEPLOYMENT ===
     const cwdPath = resolvedPath.startsWith('/') ? resolvedPath : `${process.cwd()}/${resolvedPath}`;
-    const childProcess = exec(config.deployCommand, { cwd: cwdPath });
-    
+
+    // Use spawn with shell to stream output and avoid exec buffer hangs
+    const childProcess = spawn(config.deployCommand, { cwd: cwdPath, shell: true });
+
+    // Register running process so it can be cancelled
+    try {
+      setRunning(projectId, { type: 'local', proc: childProcess });
+    } catch (e) {
+      console.warn('[deploy] Failed to register running process:', e.message);
+    }
+
+    // Watchdog to avoid indefinitely hanging processes (default 10 minutes)
+    const timeoutMs = (config.timeoutSeconds || 600) * 1000;
+    const watchdog = setTimeout(() => {
+      const now = new Date();
+      logOutput += `\n[Timeout] Deployment exceeded ${timeoutMs / 1000} seconds and will be terminated.\n`;
+      updateStatus('failed', logOutput).catch(() => {});
+      try {
+        childProcess.kill('SIGTERM');
+      } catch (e) {
+        // ignore
+      }
+    }, timeoutMs);
+
     childProcess.stdout.on('data', (data) => {
       logOutput += data.toString();
-      updateStatus('running', logOutput); // Stream logs
+      updateStatus('running', logOutput).catch(() => {}); // Stream logs
     });
 
     childProcess.stderr.on('data', (data) => {
       logOutput += data.toString();
-      updateStatus('running', logOutput); // Stream logs
+      updateStatus('running', logOutput).catch(() => {}); // Stream logs
     });
 
     childProcess.on('close', (code) => {
+      clearTimeout(watchdog);
       const finishedAt = new Date();
       logOutput += `\n--------------------------------------------------\n`;
       logOutput += `[${finishedAt.toISOString()}] Process exited with code: ${code}\n`;
       const status = code === 0 ? 'success' : 'failed';
-      updateStatus(status, logOutput);
+      try { clearRunning(projectId); } catch (e) {}
+      updateStatus(status, logOutput).catch(() => {});
     });
 
     childProcess.on('error', (err) => {
+      clearTimeout(watchdog);
       const finishedAt = new Date();
       logOutput += `\n--------------------------------------------------\n`;
       logOutput += `[${finishedAt.toISOString()}] ❌ Process execution error: ${err.message}\n`;
-      updateStatus('failed', logOutput);
+      try { clearRunning(projectId); } catch (e) {}
+      updateStatus('failed', logOutput).catch(() => {});
     });
 
+    
   } else if (config.targetType === 'ssh') {
     // === REMOTE SSH DEPLOYMENT ===
     try {
@@ -128,6 +166,12 @@ async function runDeployment(config) {
       await updateStatus('running', logOutput);
 
       const conn = new Client();
+      // Register SSH connection so it can be cancelled
+      try {
+        setRunning(projectId, { type: 'ssh', conn });
+      } catch (e) {
+        console.warn('[deploy] Failed to register SSH connection:', e.message);
+      }
       
       conn.on('ready', () => {
         logOutput += `[SSH] Connected successfully. Executing deployment script inside "${resolvedPath}"...\n\n`;
@@ -159,6 +203,7 @@ async function runDeployment(config) {
             logOutput += `\n--------------------------------------------------\n`;
             logOutput += `[${finishedAt.toISOString()}] [SSH] Execution finished. Exit code: ${code}\n`;
             const status = code === 0 ? 'success' : 'failed';
+            try { clearRunning(projectId); } catch (e) {}
             updateStatus(status, logOutput);
             conn.end();
           });
@@ -167,6 +212,7 @@ async function runDeployment(config) {
 
       conn.on('error', (err) => {
         logOutput += `\n[SSH Error] Connection error: ${err.message}\n`;
+        try { clearRunning(projectId); } catch (e) {}
         updateStatus('failed', logOutput);
       });
 
@@ -215,6 +261,28 @@ export async function POST(request) {
     if (!config.deployCommand?.trim()) {
       console.log(`[webhook] ❌ No deployment command set!`);
       return NextResponse.json({ success: false, error: 'Deployment command is not configured' }, { status: 400 });
+    }
+
+    // Prevent concurrent deployments for the same project.
+    // If status is running but there is no active in-memory process, reset the stale state.
+    if (config.status === 'running') {
+      const activeProcess = getRunning(projectId);
+      if (!activeProcess) {
+        console.log(`[webhook] Stale running state detected for project: ${projectId}. Resetting status and allowing new deployment.`);
+        await SystemSetting.findOneAndUpdate(
+          { key: dbKey },
+          {
+            $set: {
+              'value.status': 'idle',
+              'value.deployRunId': null,
+              'value.cancelRequested': false
+            }
+          }
+        );
+      } else {
+        console.log(`[webhook] Deployment already running for project: ${projectId} - rejecting new trigger`);
+        return NextResponse.json({ success: false, error: 'A deployment is already running for this project' }, { status: 409 });
+      }
     }
 
     const bodyText = await request.text();

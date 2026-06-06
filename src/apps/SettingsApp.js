@@ -270,6 +270,22 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
     setDeployTriggering(false);
   };
 
+  const handleCancelDeploy = async () => {
+    if (!confirm('Are you sure you want to cancel the running deployment?')) return;
+    try {
+      const res = await apiFetch(`/api/deploy/cancel?project=${selectedProjectId}`, { method: 'POST' });
+      const data = await res.json();
+      if (data.success) {
+        addNotification({ title: 'Cancelled', message: 'Cancellation requested.', type: 'info' });
+        setDeployConfig(prev => ({ ...prev, status: 'failed', lastDeployLog: prev.lastDeployLog + '\n[User] Cancellation requested.' }));
+      } else {
+        addNotification({ title: 'Error', message: data.error || 'Failed to cancel deployment', type: 'error' });
+      }
+    } catch (err) {
+      addNotification({ title: 'Error', message: 'Failed to communicate with cancel API', type: 'error' });
+    }
+  };
+
   const handleCopyWebhookUrl = () => {
     if (typeof window === 'undefined') return;
     const url = `${window.location.origin}/api/deploy/webhook?project=${selectedProjectId}`;
@@ -1936,6 +1952,15 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
                   {deployTriggering ? <Loader size={12} className="animate-spin" /> : <RefreshCw size={12} />}
                   Deploy Now
                 </button>
+                {deployConfig.status === 'running' && (
+                  <button
+                    onClick={handleCancelDeploy}
+                    disabled={deployLoading}
+                    className="px-4 py-2 bg-rose-600 hover:bg-rose-700 disabled:opacity-50 text-white rounded-xl text-xs font-bold transition-all shadow-lg flex items-center gap-1.5 cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                )}
               </div>
             </div>
 
