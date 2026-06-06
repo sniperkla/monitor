@@ -82,7 +82,8 @@ async function runDeployment(config) {
 
     // Use spawn with shell: true to handle shell detection and execution
     // This automatically uses /bin/sh on Unix and cmd.exe on Windows
-    const childProcess = spawn(config.deployCommand, [], {
+    // Note: With shell: true, the entire command string (including args) goes in the first param
+    const childProcess = spawn(config.deployCommand, {
       cwd: cwdPath,
       shell: true,
       stdio: ['ignore', 'pipe', 'pipe']
@@ -141,7 +142,7 @@ async function runDeployment(config) {
   } else if (config.targetType === 'ssh') {
     // === REMOTE SSH DEPLOYMENT ===
     try {
-      const db = await connectDB();
+      const db = await connectDB(process.env.MONGODB_URI, true);
       const repo = new ConnectionRepository(db);
       await repo.init();
       
