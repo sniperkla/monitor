@@ -45,7 +45,7 @@ export async function POST(request) {
         return NextResponse.json({ success: false, error: 'Connection ID is required for SSH target' }, { status: 400 });
       }
 
-      const db = await connectDB(process.env.MONGODB_URI, true);
+      const db = await connectDB();
       const repo = new ConnectionRepository(db);
       await repo.init();
 

@@ -23,7 +23,7 @@ export async function GET(request) {
 
     try {
       // Connect using user's database (relay if available, otherwise main DB)
-      db = await connectDB(null, true);
+      db = await connectDB();
     } catch (dbErr) {
       // If relay is required, inform the client
       if (dbErr.message?.includes('Local Relay Agent')) {
