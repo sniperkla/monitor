@@ -2082,7 +2082,7 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
                                 const rawRepo = repoInput || deployConfig.githubRepo;
                                 const repoValue = normalizeGitHubRepo(rawRepo);
                                 if (!repoValue || repoValue.split('/').length < 2) {
-                                  addNotification({ title: 'Branches', message: 'Enter a valid repository in owner/repo format or GitHub URL.', type: 'error' });
+                                  addNotification({ title: t('deploy.branchesNotifTitle', 'Branches'), message: t('deploy.branchInvalidRepo', 'Enter a valid repository in owner/repo format or GitHub URL.'), type: 'error' });
                                   return;
                                 }
                                 try {
@@ -2098,11 +2098,11 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
                                       setRepoInput(repoValue);
                                     }
                                   } else {
-                                    addNotification({ title: 'Branches', message: data.error || 'Failed to load branches', type: 'error' });
+                                    addNotification({ title: t('deploy.branchesNotifTitle', 'Branches'), message: data.error || t('deploy.branchLoadFailed', 'Failed to load branches'), type: 'error' });
                                   }
                                 } catch (err) {
                                   console.error('Failed to load branches:', err);
-                                  addNotification({ title: 'Branches', message: 'Failed to load branches', type: 'error' });
+                                  addNotification({ title: t('deploy.branchesNotifTitle', 'Branches'), message: t('deploy.branchLoadFailed', 'Failed to load branches'), type: 'error' });
                                 } finally {
                                   setLoadingBranches(false);
                                 }
@@ -2110,20 +2110,20 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
                               disabled={!repoInput && !deployConfig.githubRepo}
                               className={`mt-3 w-full px-3 py-2 rounded-xl text-xs font-bold text-white transition-all ${!repoInput && !deployConfig.githubRepo ? 'bg-slate-600 cursor-not-allowed' : 'bg-indigo-600 hover:bg-indigo-500'}`}
                             >
-                              {loadingBranches ? 'Loading branches...' : 'Load branches'}
+                              {loadingBranches ? t('deploy.branchLoading', 'Loading branches...') : t('deploy.branchLoadBtn', 'Load branches')}
                             </button>
                             <p className="mt-2 text-[10px] text-[var(--text-muted)]">
                               {repoInput || deployConfig.githubRepo
-                                ? `Loading branches for ${repoInput || deployConfig.githubRepo}.`
-                                : 'Enter an owner/repo or use the saved repository before loading branches.'}
+                                ? t('deploy.branchLoadingFor', 'Loading branches for {{repo}}.', { repo: repoInput || deployConfig.githubRepo })
+                                : t('deploy.branchEnterFirst', 'Enter an owner/repo or use the saved repository before loading branches.')}
                             </p>
                             <p className="text-[10px] text-[var(--text-muted)]">
-                              Public repos can load without GitHub auth; private repos require connection.
+                              {t('deploy.branchPublicHint', 'Public repos can load without GitHub auth; private repos require connection.')}
                             </p>
                           </div>
 
                           <div className="rounded-2xl bg-slate-950/30 border border-[var(--border-color)] p-4">
-                            <label className="block text-[11px] font-bold text-[var(--text-secondary)] uppercase tracking-wider mb-2">Branch to watch</label>
+                            <label className="block text-[11px] font-bold text-[var(--text-secondary)] uppercase tracking-wider mb-2">{t('deploy.branchToWatch', 'Branch to watch')}</label>
                             {branches && branches.length > 0 ? (
                               <select
                                 value={deployConfig.branch}
@@ -2141,13 +2141,13 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
                                 className="w-full bg-[var(--bg-primary)] border border-[var(--border-color)] rounded-xl px-3 py-2 text-xs text-[var(--text-primary)] focus:outline-none focus:border-indigo-500 transition-all"
                               />
                             )}
-                            <p className="mt-2 text-[10px] text-[var(--text-muted)]">Load branches first to select from the repository automatically.</p>
-                            <p className="mt-1 text-[10px] text-[var(--text-muted)]">Leave branch blank to trigger on any branch, or enter the exact branch name to target one branch.</p>
+                            <p className="mt-2 text-[10px] text-[var(--text-muted)]">{t('deploy.branchLoadHint', 'Load branches first to select from the repository automatically.')}</p>
+                            <p className="mt-1 text-[10px] text-[var(--text-muted)]">{t('deploy.branchAnyHint', 'Leave branch blank to trigger on any branch, or enter the exact branch name to target one branch.')}</p>
                           </div>
                         </div>
 
                         <div className="rounded-2xl bg-slate-950/30 border border-[var(--border-color)] p-4">
-                          <label className="block text-[11px] font-bold text-[var(--text-secondary)] uppercase tracking-wider mb-2">Webhook Secret (Optional)</label>
+                          <label className="block text-[11px] font-bold text-[var(--text-secondary)] uppercase tracking-wider mb-2">{t('deploy.webhookSecret', 'Webhook Secret (Optional)')}</label>
                           <input
                             type="password"
                             value={deployConfig.secret}
@@ -2158,7 +2158,7 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
                         </div>
 
                         <div className="space-y-1">
-                          <label className="block text-[11px] font-bold text-[var(--text-secondary)] uppercase tracking-wider">Webhook URL</label>
+                          <label className="block text-[11px] font-bold text-[var(--text-secondary)] uppercase tracking-wider">{t('deploy.webhookUrl', 'Webhook URL')}</label>
                           <div className="flex flex-col gap-2 sm:flex-row">
                             <input
                               type="text"
@@ -2173,7 +2173,7 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
                               {copySuccess ? <CheckCheck size={14} className="text-emerald-500" /> : <Copy size={14} />}
                             </button>
                           </div>
-                          <span className="block text-[9px] text-[var(--text-muted)] mt-1">Use this unique Webhook URL for the project &quot;{selectedProjectId}&quot; in GitHub repository Webhook settings. Make sure Payload format is application/json.</span>
+                          <span className="block text-[9px] text-[var(--text-muted)] mt-1">{t('deploy.webhookUrlHint', 'Use this unique Webhook URL for the project "{{project}}" in GitHub repository Webhook settings. Make sure Payload format is application/json.', { project: selectedProjectId })}</span>
                         </div>
                       </div>
                     </div>
@@ -2182,14 +2182,14 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
                     <div className="p-6 rounded-2xl bg-[var(--bg-card)] border border-[var(--border-color)] shadow-sm space-y-4">
                       <h3 className="text-sm font-bold text-[var(--text-primary)] flex items-center gap-2 border-b border-[var(--border-color)] pb-3">
                         <Code size={16} className="text-indigo-400" />
-                        Deployment Command
+                        {t('deploy.deploymentCommand', 'Deployment Command')}
                       </h3>
                       <div className="space-y-2">
                         <textarea
                           rows={6}
                           value={deployConfig.deployCommand}
                           onChange={(e) => setDeployConfig(p => ({ ...p, deployCommand: e.target.value }))}
-                          placeholder="# Enter shell script to run on deploy event"
+                          placeholder={t('deploy.deployCommandPlaceholder', '# Enter shell script to run on deploy event')}
                           className="w-full bg-slate-950 border border-[var(--border-color)] rounded-xl p-4 text-xs font-mono text-emerald-400 focus:outline-none focus:border-indigo-500/50 shadow-inner"
                         />
                       </div>
@@ -2201,35 +2201,34 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
                     <div className="p-6 rounded-2xl bg-[var(--bg-card)] border border-[var(--border-color)] shadow-sm space-y-4">
                       <h3 className="text-sm font-bold text-[var(--text-primary)] flex items-center gap-2 border-b border-[var(--border-color)] pb-3">
                         <Network size={16} className="text-indigo-400" />
-                        Deployment Target
+                        {t('deploy.deploymentTarget', 'Deployment Target')}
                       </h3>
 
                       <div className="space-y-3">
                         <div>
-                          <label className="block text-[11px] font-bold text-[var(--text-secondary)] uppercase tracking-wider mb-2">Target Type</label>
+                          <label className="block text-[11px] font-bold text-[var(--text-secondary)] uppercase tracking-wider mb-2">{t('deploy.targetType', 'Target Type')}</label>
                           <select
                             value={deployConfig.targetType}
                             onChange={(e) => setDeployConfig(p => ({ ...p, targetType: e.target.value }))}
                             className="w-full bg-[var(--bg-primary)] border border-[var(--border-color)] rounded-xl px-3 py-2 text-xs text-[var(--text-primary)] focus:outline-none focus:border-indigo-500"
                           >
-                            <option value="local">Local Host</option>
-                            <option value="ssh">Remote SSH Server</option>
+                            <option value="local">{t('deploy.targetLocal', 'Local Host')}</option>
+                            <option value="ssh">{t('deploy.targetSsh', 'Remote SSH Server')}</option>
                           </select>
                         </div>
 
                         {deployConfig.targetType === 'ssh' && (
                           <div className="animate-in fade-in duration-200">
-                            <label className="block text-[11px] font-bold text-[var(--text-secondary)] uppercase tracking-wider mb-2">SSH Connection</label>
+                            <label className="block text-[11px] font-bold text-[var(--text-secondary)] uppercase tracking-wider mb-2">{t('deploy.sshConnection', 'SSH Connection')}</label>
                             {selectedConnectionMissing && (
                               <div className="p-3 bg-rose-500/10 border border-rose-500/20 rounded-xl text-sm text-rose-100 mb-3">
-                                The selected SSH connection ID <span className="font-mono">{deployConfig.connectionId}</span> is not available.
-                                Auto-deployments require a database-backed connection.
+                                {t('deploy.sshConnectionMissing', 'The selected SSH connection ID is not available. Auto-deployments require a database-backed connection.')} <span className="font-mono">{deployConfig.connectionId}</span>
                               </div>
                             )}
                             {connections.length === 0 ? (
                               <div className="p-3 bg-amber-500/5 border border-amber-500/10 rounded-xl text-center">
-                                <span className="block text-[10px] text-amber-500">No SSH connections found.</span>
-                                <span className="block text-[9px] text-[var(--text-muted)] mt-1">Please create an SSH connection in the main panel first.</span>
+                                <span className="block text-[10px] text-amber-500">{t('deploy.sshNoConnections', 'No SSH connections found.')}</span>
+                                <span className="block text-[9px] text-[var(--text-muted)] mt-1">{t('deploy.sshNoConnectionsHint', 'Please create an SSH connection in the main panel first.')}</span>
                               </div>
                             ) : (
                               <select
@@ -2237,7 +2236,7 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
                                 onChange={(e) => setDeployConfig(p => ({ ...p, connectionId: e.target.value }))}
                                 className="w-full bg-[var(--bg-primary)] border border-[var(--border-color)] rounded-xl px-3 py-2 text-xs text-[var(--text-primary)] focus:outline-none focus:border-indigo-500"
                               >
-                                <option value="">-- Select SSH Connection --</option>
+                                <option value="">{t('deploy.sshSelectPlaceholder', '-- Select SSH Connection --')}</option>
                                 {connections.map(c => (
                                   <option key={c._id} value={c._id}>{c.name} ({c.host})</option>
                                 ))}
@@ -2247,7 +2246,7 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
                         )}
 
                         <div>
-                          <label className="block text-[11px] font-bold text-[var(--text-secondary)] uppercase tracking-wider mb-2">Project Root Path</label>
+                          <label className="block text-[11px] font-bold text-[var(--text-secondary)] uppercase tracking-wider mb-2">{t('deploy.projectRootPath', 'Project Root Path')}</label>
                           <input
                             type="text"
                             value={deployConfig.projectPath}
@@ -2255,7 +2254,7 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
                             placeholder="/var/www/my-app"
                             className="w-full bg-[var(--bg-primary)] border border-[var(--border-color)] rounded-xl px-3 py-2 text-xs text-[var(--text-primary)] focus:outline-none focus:border-indigo-500 transition-all"
                           />
-                          <span className="block text-[9px] text-[var(--text-muted)] mt-1">Relative or absolute path containing deployment files.</span>
+                          <span className="block text-[9px] text-[var(--text-muted)] mt-1">{t('deploy.projectRootPathHint', 'Relative or absolute path containing deployment files.')}</span>
                         </div>
                       </div>
                     </div>
@@ -2364,7 +2363,7 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
                               </div>
 
                               <div>
-                                <label className="block text-[11px] font-bold text-[var(--text-secondary)] uppercase tracking-wider mb-2">Custom Endpoint URL</label>
+                                <label className="block text-[11px] font-bold text-[var(--text-secondary)] uppercase tracking-wider mb-2">{t('deploy.aiCustomEndpointUrl', 'Custom Endpoint URL')}</label>
                                 <input
                                   type="text"
                                   value={deployConfig.aiEndpoint}
@@ -2374,17 +2373,17 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
                                 />
                               </div>
                               <div>
-                                <label className="block text-[11px] font-bold text-[var(--text-secondary)] uppercase tracking-wider mb-2">API Key</label>
+                                <label className="block text-[11px] font-bold text-[var(--text-secondary)] uppercase tracking-wider mb-2">{t('deploy.aiApiKey', 'API Key')}</label>
                                 <input
                                   type="password"
                                   value={deployConfig.aiApiKey}
                                   onChange={(e) => setDeployConfig(p => ({ ...p, aiApiKey: e.target.value }))}
-                                  placeholder="Enter API Key"
+                                  placeholder={t('deploy.aiApiKeyPlaceholder', 'Enter API Key')}
                                   className="w-full bg-[var(--bg-primary)] border border-[var(--border-color)] rounded-xl px-3 py-2 text-xs text-[var(--text-primary)] focus:outline-none focus:border-indigo-500"
                                 />
                               </div>
                               <div>
-                                <label className="block text-[11px] font-bold text-[var(--text-secondary)] uppercase tracking-wider mb-2">Custom Model Name</label>
+                                <label className="block text-[11px] font-bold text-[var(--text-secondary)] uppercase tracking-wider mb-2">{t('deploy.aiCustomModelName', 'Custom Model Name')}</label>
                                 <input
                                   type="text"
                                   value={deployConfig.aiCustomModel}
@@ -2405,13 +2404,13 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
                         className="w-full py-2.5 bg-gradient-to-r from-indigo-500 to-violet-600 hover:from-indigo-600 hover:to-violet-700 disabled:opacity-50 text-white rounded-xl text-xs font-bold transition-all shadow-md flex items-center justify-center gap-2 cursor-pointer"
                       >
                         {aiAnalyzing ? <Loader size={12} className="animate-spin" /> : <Sparkles size={12} />}
-                        {aiAnalyzing ? 'Scanning & Analyzing...' : 'Analyze with AI'}
+                        {aiAnalyzing ? t('deploy.aiAnalyzing', 'Scanning & Analyzing...') : t('deploy.aiAnalyzeBtn', 'Analyze with AI')}
                       </button>
 
                       {deployConfig.aiProfile && (
                         <div className="p-4 rounded-xl bg-slate-900/60 border border-[var(--border-color)] space-y-3 animate-in fade-in duration-200">
                           <div className="flex items-center justify-between border-b border-slate-800 pb-2">
-                            <span className="text-[10px] uppercase font-extrabold tracking-wider text-indigo-400">AI Recommendation</span>
+                            <span className="text-[10px] uppercase font-extrabold tracking-wider text-indigo-400">{t('deploy.aiRecommendation', 'AI Recommendation')}</span>
                             <span className="px-2 py-0.5 rounded bg-indigo-500/10 text-indigo-300 text-[9px] font-bold">
                               {deployConfig.aiProfile.projectType}
                             </span>
@@ -2435,12 +2434,12 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
                             type="button"
                             onClick={() => {
                               setDeployConfig(p => ({ ...p, deployCommand: p.aiProfile.deployCommand }));
-                              addNotification({ title: 'Recommended Applied', message: 'Deployment command set to AI suggestion.', type: 'info' });
+                              addNotification({ title: t('deploy.aiRecommendedApplied', 'Recommended Applied'), message: t('deploy.aiRecommendedAppliedMsg', 'Deployment command set to AI suggestion.'), type: 'info' });
                             }}
                             className="w-full py-1.5 bg-slate-800 hover:bg-slate-750 border border-slate-700 hover:border-slate-600 text-slate-200 rounded-lg text-[10px] font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer"
                           >
                             <Code size={11} />
-                            Apply AI Command
+                            {t('deploy.aiApplyCommand', 'Apply AI Command')}
                           </button>
                         </div>
                       )}
@@ -2448,7 +2447,7 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
                       {/* AI History Logs */}
                       {deployConfig.aiLogs && deployConfig.aiLogs.length > 0 && (
                         <div className="border-t border-[var(--border-color)] pt-3 space-y-2">
-                          <label className="block text-[10px] font-bold text-[var(--text-secondary)] uppercase tracking-wider">AI History Logs</label>
+                          <label className="block text-[10px] font-bold text-[var(--text-secondary)] uppercase tracking-wider">{t('deploy.aiHistoryLogs', 'AI History Logs')}</label>
                           <div className="max-h-36 overflow-y-auto custom-scrollbar space-y-1.5 pr-1">
                             {deployConfig.aiLogs.map((log, idx) => (
                               <div key={idx} className="p-2 rounded bg-slate-900/30 border border-slate-900/50 hover:border-slate-800 flex flex-col gap-1 transition-all">
@@ -2477,15 +2476,15 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
                     <div className={`w-3 h-3 rounded-full ${isDeployFailed ? 'bg-red-400 animate-pulse' : 'bg-emerald-400'}`} />
                     <div>
                       <p className={`text-sm font-bold ${isDeployFailed ? 'text-red-300' : 'text-emerald-300'}`}>
-                        {isDeployFailed ? 'Last Deployment Failed' : 'Last Deployment Succeeded'}
+                        {isDeployFailed ? t('deploy.logsLastFailed', 'Last Deployment Failed') : t('deploy.logsLastSucceeded', 'Last Deployment Succeeded')}
                       </p>
                       <p className="text-[10px] text-[var(--text-muted)] mt-0.5">
-                        {deployConfig.lastDeployAt ? new Date(deployConfig.lastDeployAt).toLocaleString() : 'No recent deployment run yet'}
+                        {deployConfig.lastDeployAt ? new Date(deployConfig.lastDeployAt).toLocaleString() : t('deploy.logsNoRecentRun', 'No recent deployment run yet')}
                       </p>
                     </div>
                   </div>
                   <span className={`text-xs font-bold px-3 py-1 rounded-lg ${isDeployFailed ? 'bg-red-500/20 text-red-300' : 'bg-emerald-500/20 text-emerald-300'}`}>
-                    {deployConfig.status === 'running' ? 'Running...' : isDeployFailed ? 'Failed' : 'Complete'}
+                    {deployConfig.status === 'running' ? t('deploy.logsStatusRunning', 'Running...') : isDeployFailed ? t('deploy.logsStatusFailed', 'Failed') : t('deploy.logsStatusComplete', 'Complete')}
                   </span>
                 </div>
 
@@ -2494,13 +2493,13 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
                     <div className="flex items-center justify-between gap-3">
                       <div className="flex items-center gap-2 text-sm font-bold text-[var(--text-primary)]">
                         <Terminal size={16} className="text-emerald-400 animate-pulse" />
-                        <span>Deployment Console Output</span>
+                        <span>{t('deploy.logsConsoleTitle', 'Deployment Console Output')}</span>
                       </div>
                       <button
                         onClick={() => setDeployConfig(p => ({ ...p, lastDeployLog: '' }))}
                         className="text-[10px] text-[var(--text-muted)] hover:text-red-400 transition-colors cursor-pointer"
                       >
-                        Clear Console
+                        {t('deploy.logsClearConsole', 'Clear Console')}
                       </button>
                     </div>
                     <div className="bg-slate-950 border border-slate-900 rounded-xl p-4 shadow-inner max-h-[420px] overflow-y-auto custom-scrollbar font-mono text-[11px] leading-relaxed text-slate-300 whitespace-pre-wrap select-text">
@@ -2509,7 +2508,7 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
                   </div>
                 ) : (
                   <div className="p-6 rounded-2xl bg-[var(--bg-card)] border border-[var(--border-color)] text-[var(--text-secondary)]">
-                    No deployment console output is available yet. Run a deployment to see logs here.
+                    {t('deploy.logsEmpty', 'No deployment console output is available yet. Run a deployment to see logs here.')}
                   </div>
                 )}
 
@@ -2517,7 +2516,7 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
                   <div className="p-6 rounded-2xl bg-[var(--bg-card)] border border-[var(--border-color)] shadow-sm space-y-4">
                     <div className="flex items-center gap-2 text-sm font-bold text-[var(--text-primary)]">
                       <Sparkles size={16} className="text-indigo-400" />
-                      <span>AI History Logs</span>
+                      <span>{t('deploy.aiHistoryLogs', 'AI History Logs')}</span>
                     </div>
                     <div className="space-y-2 max-h-72 overflow-y-auto custom-scrollbar pr-1">
                       {deployConfig.aiLogs.map((log, idx) => (

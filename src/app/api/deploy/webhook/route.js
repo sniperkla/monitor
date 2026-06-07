@@ -181,7 +181,7 @@ async function runDeployment(config) {
       `  printf '%s' '${escapedInner}' > "$DEPLOY_SCRIPT"`,
       '  chmod +x "$DEPLOY_SCRIPT"',
       '',
-      `  tmux new-session -d -s "${sessionName}" "bash \'$DEPLOY_SCRIPT\' 2>&1 | tee \'${logFile}\'; echo \\$? > \'${codeFile}\'; rm -f \'$DEPLOY_SCRIPT\'"`,
+      `  tmux new-session -d -s "${sessionName}" "bash \\'$DEPLOY_SCRIPT\\' 2>&1 | tee \\'${logFile}\\'; echo \\$? > \\'${codeFile}\\'; rm -f \\'$DEPLOY_SCRIPT\\'"`,
       '',
       `  tail -f "${logFile}" &`,
       '  TAIL_PID=$!',
@@ -305,6 +305,8 @@ async function runDeployment(config) {
         port: sshConnData.port || 22,
         username: sshConnData.username || 'root',
         readyTimeout: 20000,
+        keepaliveInterval: 10000,
+        keepaliveCountMax: 6,
       };
 
       if (sshConnData.authType === 'password') {
@@ -364,85 +366,196 @@ async function runDeployment(config) {
       }
       
       conn.on('ready', () => {
-        logOutput += `[SSH] Connected successfully. Executing deployment script inside "${resolvedPath}"...\n\n`;
+        logOutput += `[SSH] Connected successfully. Preparing deployment scripts...\n`;
         updateStatus('running', logOutput);
 
-        // Build the inner deploy script content as a JS string (no shell escaping needed)
-        // We write it to a temp file via printf on the remote host using \n-escaped lines.
-        // The outer wrapper script is built the same way and piped to bash -s via stdin.
-        const innerScript = `#!/bin/bash\nset -o pipefail\ncd "${resolvedPath}"\n${config.deployCommand}\n`;
-
-        // Escape the innerScript for safe embedding in a printf argument
-        const escapedInner = innerScript
-          .replace(/\\/g, '\\\\')
-          .replace(/'/g, "'\\''")
-          .replace(/\n/g, '\\n');
-
-        const script = [
-          '#!/bin/bash',
-          `cd "${resolvedPath}" || { echo "[deploy] ERROR: cannot cd to ${resolvedPath}"; exit 1; }`,
-          '',
-          '# Check if tmux is available',
-          'if command -v tmux >/dev/null 2>&1; then',
-          `  rm -f "${logFile}" "${codeFile}" && touch "${logFile}"`,
-          `  tmux kill-session -t "${sessionName}" 2>/dev/null || true`,
-          '',
-          '  # Write the deploy script to a temp file to avoid escaping issues',
-          `  DEPLOY_SCRIPT=$(mktemp /tmp/deploy_script_XXXXXX.sh)`,
-          `  printf '%s' '${escapedInner}' > "$DEPLOY_SCRIPT"`,
-          `  chmod +x "$DEPLOY_SCRIPT"`,
-          '',
-          `  tmux new-session -d -s "${sessionName}" "bash \'$DEPLOY_SCRIPT\' 2>&1 | tee \'${logFile}\'; echo \\$? > \'${codeFile}\'; rm -f \'$DEPLOY_SCRIPT\'"`,
-          '',
-          '  # Stream logs while tmux session is alive',
-          `  tail -f "${logFile}" &`,
-          '  TAIL_PID=$!',
-          `  while tmux has-session -t "${sessionName}" 2>/dev/null; do`,
-          '    sleep 1',
-          '  done',
-          '  sleep 2',
-          '  kill $TAIL_PID 2>/dev/null; wait $TAIL_PID 2>/dev/null',
-          '',
-          `  EXIT_CODE=$(cat "${codeFile}" 2>/dev/null | tr -d '[:space:]' | head -c 5)`,
-          `  rm -f "${logFile}" "${codeFile}"`,
-          '  exit ${EXIT_CODE:-0}',
-          'else',
-          '  # tmux not available — run directly in subshell',
-          `  ( cd "${resolvedPath}" && ${config.deployCommand} )`,
-          'fi',
-        ].join('\n');
-
-        conn.exec('bash -s', (err, stream) => {
+        conn.sftp((err, sftp) => {
           if (err) {
-            logOutput += `[SSH Error] Failed to execute script: ${err.message}\n`;
+            logOutput += `[SSH Error] SFTP initialization failed: ${err.message}\n`;
             updateStatus('failed', logOutput);
             conn.end();
             return;
           }
 
-          // Write the script to stdin then close it so bash reads it
-          stream.write(script);
-          stream.end();
+          const remoteDeployPath = `/tmp/deploy_run_${projectId}.sh`;
+          const remoteWatcherPath = `/tmp/deploy_watch_${projectId}.sh`;
+          const logFile = `/tmp/deploy_${projectId}.log`;
+          const codeFile = `/tmp/deploy_${projectId}.code`;
+          const sessionName = `deploy_${projectId}`;
 
-          stream.on('data', (data) => {
-            logOutput += data.toString();
-            updateStatus('running', logOutput);
-          });
+          // ── Script 1: The actual deploy script ──────────────────────────
+          const deployScript = [
+            '#!/bin/bash',
+            'set -o pipefail',
+            `cd "${resolvedPath}" || { echo "[deploy] ERROR: Cannot cd to ${resolvedPath}"; exit 1; }`,
+            config.deployCommand
+          ].join('\n') + '\n';
 
-          stream.stderr.on('data', (data) => {
-            logOutput += data.toString();
-            updateStatus('running', logOutput);
-          });
+          // ── Script 2: Server-side watcher ────────────────────────────────
+          // KEY FIX: Instead of Node.js calling conn.exec() 3x per second
+          // (which exhausts SSH2's ~10 concurrent channel limit and causes
+          // the status to get stuck at "running"), this script runs on the
+          // remote server and streams ALL output back through ONE SSH channel.
+          const watcherScript = [
+            '#!/bin/bash',
+            `SESSION="${sessionName}"`,
+            `LOG="${logFile}"`,
+            `CODE="${codeFile}"`,
+            `SCRIPT="${remoteDeployPath}"`,
+            '',
+            '# Kill any stale session',
+            'tmux kill-session -t "$SESSION" 2>/dev/null || true',
+            'rm -f "$LOG" "$CODE"',
+            'touch "$LOG"',
+            '',
+            'if ! command -v tmux >/dev/null 2>&1; then',
+            '  # tmux not available: run directly and stream output',
+            '  bash "$SCRIPT"',
+            '  echo $? > "$CODE"',
+            '  EXIT_CODE=$(cat "$CODE" 2>/dev/null | tr -d "[:space:]" | head -c 5)',
+            '  echo ""',
+            '  echo "---DEPLOY_EXIT:${EXIT_CODE:-0}---"',
+            '  rm -f "$SCRIPT" "$CODE"',
+            '  exit ${EXIT_CODE:-0}',
+            'fi',
+            '',
+            '# Launch deploy script in a detached tmux session',
+            'chmod +x "$SCRIPT"',
+            'tmux new-session -d -s "$SESSION" "bash \\"$SCRIPT\\" >\\"$LOG\\" 2>&1; echo \\$? >\\"$CODE\\""',
+            '',
+            '# Stream log output back to Node.js through this SINGLE SSH channel.',
+            '# The while loop runs server-side — no SSH channel spam from Node.js.',
+            'LAST_POS=0',
+            'while tmux has-session -t "$SESSION" 2>/dev/null; do',
+            '  if [ -f "$LOG" ]; then',
+            '    CURR=$(wc -c < "$LOG" 2>/dev/null || echo 0)',
+            '    if [ "$CURR" -gt "$LAST_POS" ]; then',
+            '      dd if="$LOG" bs=1 skip="$LAST_POS" count=$((CURR - LAST_POS)) 2>/dev/null',
+            '      LAST_POS=$CURR',
+            '    fi',
+            '  fi',
+            '  sleep 1',
+            'done',
+            '',
+            '# Session ended — flush any remaining bytes',
+            'sleep 1',
+            'if [ -f "$LOG" ]; then',
+            '  CURR=$(wc -c < "$LOG" 2>/dev/null || echo 0)',
+            '  if [ "$CURR" -gt "$LAST_POS" ]; then',
+            '    dd if="$LOG" bs=1 skip="$LAST_POS" count=$((CURR - LAST_POS)) 2>/dev/null',
+            '  fi',
+            'fi',
+            '',
+            '# Emit exit-code marker so Node.js knows the final status',
+            'EXIT_CODE=$(cat "$CODE" 2>/dev/null | tr -d "[:space:]" | head -c 5)',
+            'echo ""',
+            'echo "---DEPLOY_EXIT:${EXIT_CODE:-0}---"',
+            '',
+            '# Cleanup temp files',
+            'rm -f "$LOG" "$CODE" "$SCRIPT" "$0"',
+          ].join('\n') + '\n';
 
-          stream.on('close', (code, signal) => {
-            const finishedAt = new Date();
-            logOutput += `\n--------------------------------------------------\n`;
-            logOutput += `[${finishedAt.toISOString()}] [SSH] Execution finished. Exit code: ${code}\n`;
-            const status = code === 0 ? 'success' : 'failed';
-            try { clearRunning(projectId); } catch (e) {}
-            updateStatus(status, logOutput);
+          // ── Write deploy script via SFTP ─────────────────────────────────
+          const writeDeploy = sftp.createWriteStream(remoteDeployPath);
+          writeDeploy.on('error', (e) => {
+            logOutput += `[SSH Error] Failed to write deploy script: ${e.message}\n`;
+            updateStatus('failed', logOutput);
             conn.end();
           });
+
+          writeDeploy.on('finish', () => {
+            // ── Write watcher script via SFTP ─────────────────────────────
+            const writeWatcher = sftp.createWriteStream(remoteWatcherPath);
+            writeWatcher.on('error', (e) => {
+              logOutput += `[SSH Error] Failed to write watcher script: ${e.message}\n`;
+              updateStatus('failed', logOutput);
+              conn.end();
+            });
+
+            writeWatcher.on('finish', () => {
+              logOutput += `[SSH] Scripts uploaded. Launching deployment...\n\n`;
+              updateStatus('running', logOutput);
+
+              // ── ONE single conn.exec for the entire deployment ────────────
+              // The watcher script streams output back through this channel.
+              // No more conn.exec() inside setInterval!
+              conn.exec(`bash "${remoteWatcherPath}"`, (execErr, stream) => {
+                if (execErr) {
+                  logOutput += `[SSH Error] Execution failed: ${execErr.message}\n`;
+                  updateStatus('failed', logOutput);
+                  conn.end();
+                  return;
+                }
+
+                // Watchdog timeout
+                const timeoutMs = (config.timeoutSeconds || 600) * 1000;
+                const watchdog = setTimeout(() => {
+                  logOutput += `\n[Timeout] Deployment exceeded ${timeoutMs / 1000}s. Terminating...\n`;
+                  updateStatus('failed', logOutput).catch(() => {});
+                  stream.destroy();
+                  conn.end();
+                  try { clearRunning(projectId); } catch (e) {}
+                }, timeoutMs);
+
+                let exitCodeDetected = null;
+                let stdoutBuf = '';
+
+                stream.on('data', (data) => {
+                  stdoutBuf += data.toString();
+
+                  // Split on newlines; keep last incomplete line in buffer
+                  const lines = stdoutBuf.split('\n');
+                  stdoutBuf = lines.pop();
+
+                  for (const line of lines) {
+                    const m = line.match(/^---DEPLOY_EXIT:(\d+)---$/);
+                    if (m) {
+                      exitCodeDetected = parseInt(m[1], 10);
+                    } else {
+                      logOutput += line + '\n';
+                    }
+                  }
+
+                  updateStatus('running', logOutput).catch(() => {});
+                });
+
+                stream.stderr.on('data', (data) => {
+                  logOutput += data.toString();
+                  updateStatus('running', logOutput).catch(() => {});
+                });
+
+                stream.on('close', (code) => {
+                  clearTimeout(watchdog);
+
+                  // Flush remaining buffer
+                  if (stdoutBuf) {
+                    const m = stdoutBuf.match(/^---DEPLOY_EXIT:(\d+)---$/);
+                    if (m) {
+                      exitCodeDetected = parseInt(m[1], 10);
+                    } else if (stdoutBuf.trim()) {
+                      logOutput += stdoutBuf;
+                    }
+                  }
+
+                  const finalCode = exitCodeDetected !== null ? exitCodeDetected : (code || 0);
+                  const finishedAt = new Date();
+                  logOutput += `\n--------------------------------------------------\n`;
+                  logOutput += `[${finishedAt.toISOString()}] [SSH] Execution finished. Exit code: ${finalCode}\n`;
+                  const status = finalCode === 0 ? 'success' : 'failed';
+
+                  try { clearRunning(projectId); } catch (e) {}
+                  updateStatus(status, logOutput).catch(() => {});
+                  conn.end();
+                });
+              });
+            });
+
+            writeWatcher.write(watcherScript);
+            writeWatcher.end();
+          });
+
+          writeDeploy.write(deployScript);
+          writeDeploy.end();
         });
       });
 
