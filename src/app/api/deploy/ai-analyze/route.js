@@ -153,9 +153,20 @@ export async function POST(request) {
 1. The project type (e.g., Node.js / React, Python / Django, Docker, Java / Spring Boot, Go, PHP, etc.)
 2. Key technologies, dependencies, and frameworks used
 3. An optimized shell/bash deployment script/command suitable for a production build & run (e.g., git pull && npm run build && pm2 restart app). Include steps like downloading dependencies, running builds, restarting processes/services, or running Docker containers. Include comments explaining key steps. Crucially, always write bash/shell commands safely (e.g. start bash scripts with '#!/bin/bash\nset -e\n' or chain sequential commands with '&&') to ensure that if any intermediate command fails (like a build), the script immediately stops and returns a non-zero exit status to fail the deployment.
-   IMPORTANT FOR DOCKER PROJECTS: If the project uses Docker (docker compose, docker-compose, or Dockerfile), you MUST always append the following cleanup step at the END of the deploy command, AFTER all containers are running, to prevent disk from filling up with dangling/unused images:
-   docker image prune -f
-   This removes dangling images only (images with no tag and not used by any container) and is safe to run after every deploy.
+   IMPORTANT FOR DOCKER PROJECTS: If the project uses Docker (docker compose, docker-compose, or Dockerfile), follow these rules strictly:
+   a) Use 'docker compose' (not 'docker-compose') unless a docker-compose binary is detected.
+   b) After 'docker compose up -d', ALWAYS add a verification step using this exact pattern to wait for containers to stabilize before checking status:
+      sleep 3
+      if docker compose ps | grep -E "Up|running|healthy"; then
+        echo "Deployment successful: containers are running"
+      else
+        echo "Deployment failed: containers did not start correctly. Showing logs:"
+        docker compose logs --tail=50
+        exit 1
+      fi
+   c) Do NOT use 'docker ps | grep <name>' for verification because it is fragile. Always use 'docker compose ps' instead.
+   d) After successful verification, append the following cleanup step to prevent disk from filling up with dangling images:
+      docker image prune -f
 4. A concise summary of why you recommended this configuration.
 
 You MUST respond with a valid JSON object ONLY. Do not wrap the JSON in markdown formatting blocks or include any extra text. The JSON format must be EXACTLY:
