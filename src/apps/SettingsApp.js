@@ -1855,7 +1855,7 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
             {/* Top Toolbar / Dashboard Selector */}
             <div className="p-4 mb-6 rounded-2xl bg-slate-900/40 border border-[var(--border-color)] flex flex-col sm:flex-row sm:items-center justify-between gap-4">
               <div className="flex items-center gap-3">
-                <label className="text-xs font-bold text-[var(--text-secondary)] uppercase tracking-wider">Select Project:</label>
+                <label className="text-xs font-bold text-[var(--text-secondary)] uppercase tracking-wider">{t('deploy.selectProject', 'Select Project:')}</label>
                 <select
                   value={selectedProjectId}
                   onChange={(e) => setSelectedProjectId(e.target.value)}
@@ -1871,7 +1871,7 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
                   onClick={handleCreateProject}
                   className="px-3 py-1.5 bg-indigo-600/10 hover:bg-indigo-600/20 text-indigo-400 rounded-xl text-xs font-bold transition-all border border-indigo-500/20 flex items-center gap-1 cursor-pointer"
                 >
-                  ＋ Add Project
+                  {t('deploy.addProject', '＋ Add Project')}
                 </button>
                 {selectedProjectId !== 'default' && (
                   <button
@@ -1879,18 +1879,18 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
                     onClick={handleDeleteProject}
                     className="px-3 py-1.5 bg-red-500/10 hover:bg-red-500/20 text-red-400 rounded-xl text-xs font-bold transition-all border border-red-500/20 cursor-pointer"
                   >
-                    Delete Project
+                    {t('deploy.deleteProject', 'Delete Project')}
                   </button>
                 )}
               </div>
               
               <div className="flex items-center gap-2">
-                <label className="text-xs font-bold text-[var(--text-secondary)] uppercase tracking-wider">Alias:</label>
+                <label className="text-xs font-bold text-[var(--text-secondary)] uppercase tracking-wider">{t('deploy.alias', 'Alias:')}</label>
                 <input
                   type="text"
                   value={deployConfig.name || ''}
                   onChange={(e) => setDeployConfig(p => ({ ...p, name: e.target.value }))}
-                  placeholder="Optional display name"
+                  placeholder={t('deploy.placeholderAlias', 'Optional display name')}
                   className="bg-[var(--bg-primary)] border border-[var(--border-color)] rounded-xl px-3 py-1.5 text-xs text-[var(--text-primary)] font-bold focus:outline-none focus:border-indigo-500 w-[180px]"
                 />
               </div>
@@ -1899,10 +1899,10 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
             <div className="flex items-center justify-between mb-2">
               <div>
                 <h1 className="text-2xl font-bold text-[var(--text-primary)] flex items-center gap-2">
-                  Auto Deployment: <span className="text-indigo-400">{selectedProjectId}</span>
-                  {deployConfig.name && <span className="text-sm text-[var(--text-secondary)]">(Alias: {deployConfig.name})</span>}
+                  {t('deploy.title', 'Auto Deployment')}: <span className="text-indigo-400">{selectedProjectId}</span>
+                  {deployConfig.name && <span className="text-sm text-[var(--text-secondary)]">({t('deploy.alias', 'Alias:')} {deployConfig.name})</span>}
                 </h1>
-                <p className="text-[var(--text-secondary)] text-sm">Configure automated git-triggered deployments via webhooks.</p>
+                <p className="text-[var(--text-secondary)] text-sm">{t('deploy.subtitle', 'Configure automated git-triggered deployments via webhooks.')}</p>
               </div>
               <div className="flex gap-2">
                 <button
@@ -1911,7 +1911,7 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
                   className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white rounded-xl text-xs font-bold transition-all shadow-lg flex items-center gap-1.5 cursor-pointer"
                 >
                   {deploySaving ? <Loader size={12} className="animate-spin" /> : <CheckCircle size={12} />}
-                  Save Settings
+                  {t('deploy.saveSettings', 'Save Settings')}
                 </button>
                 <button
                   onClick={handleTriggerDeploy}
@@ -1919,7 +1919,7 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
                   className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white rounded-xl text-xs font-bold transition-all shadow-lg flex items-center gap-1.5 cursor-pointer"
                 >
                   {deployTriggering ? <Loader size={12} className="animate-spin" /> : <RefreshCw size={12} />}
-                  Deploy Now
+                  {t('deploy.deployNow', 'Deploy Now')}
                 </button>
                 {deployConfig.status === 'running' && (
                   <button
@@ -1927,7 +1927,7 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
                     disabled={deployLoading}
                     className="px-4 py-2 bg-rose-600 hover:bg-rose-700 disabled:opacity-50 text-white rounded-xl text-xs font-bold transition-all shadow-lg flex items-center gap-1.5 cursor-pointer"
                   >
-                    Cancel
+                    {t('deploy.cancel', 'Cancel')}
                   </button>
                 )}
               </div>
@@ -1936,7 +1936,7 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
             {deployLoading ? (
               <div className="py-20 flex flex-col items-center justify-center gap-3">
                 <Loader className="animate-spin text-indigo-500" size={32} />
-                <p className="text-xs text-[var(--text-muted)] font-medium">Loading deployment configuration...</p>
+                <p className="text-xs text-[var(--text-muted)] font-medium">{t('deploy.loadingConfig', 'Loading deployment configuration...')}</p>
               </div>
             ) : (
               <div className="space-y-6 mt-6">
@@ -1947,17 +1947,17 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
                       onClick={() => setDeploymentTab('configuration')}
                       className={`rounded-xl px-4 py-2 text-xs font-bold transition ${deploymentTab === 'configuration' ? 'bg-indigo-600 text-white' : 'text-[var(--text-secondary)] hover:bg-slate-700/50'}`}
                     >
-                      Configuration
+                      {t('deploy.tabConfiguration', 'Configuration')}
                     </button>
                     <button
                       type="button"
                       onClick={() => setDeploymentTab('logs')}
                       className={`rounded-xl px-4 py-2 text-xs font-bold transition ${deploymentTab === 'logs' ? 'bg-indigo-600 text-white' : 'text-[var(--text-secondary)] hover:bg-slate-700/50'}`}
                     >
-                      Logs
+                      {t('deploy.tabLogs', 'Logs')}
                     </button>
                   </div>
-                  <p className="text-[10px] text-[var(--text-muted)]">Toggle between deployment settings and console logs for easier access.</p>
+                  <p className="text-[10px] text-[var(--text-muted)]">{t('deploy.toggleLogHint', 'Toggle between deployment settings and console logs for easier access.')}</p>
                 </div>
                 {deploymentTab === 'configuration' ? (
                   <>
@@ -1976,12 +1976,12 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
                       <GitBranch size={24} />
                     </div>
                     <div>
-                      <h4 className="text-sm font-bold text-[var(--text-primary)]">Deployment Status</h4>
+                      <h4 className="text-sm font-bold text-[var(--text-primary)]">{t('deploy.statusTitle', 'Deployment Status')}</h4>
                       <p className="text-xs text-[var(--text-secondary)] mt-0.5">
-                        {deployConfig.status === 'running' && 'Deployment script is running in the background...'}
-                        {deployConfig.status === 'success' && 'Latest deployment finished successfully.'}
-                        {deployConfig.status === 'failed' && 'Latest deployment execution failed.'}
-                        {deployConfig.status === 'idle' && 'No deployment has run yet.'}
+                        {deployConfig.status === 'running' && t('deploy.statusRunningDesc', 'Deployment script is running in the background...')}
+                        {deployConfig.status === 'success' && t('deploy.statusSuccessDesc', 'Latest deployment finished successfully.')}
+                        {deployConfig.status === 'failed' && t('deploy.statusFailedDesc', 'Latest deployment execution failed.')}
+                        {deployConfig.status === 'idle' && t('deploy.statusIdleDesc', 'No deployment has run yet.')}
                       </p>
                     </div>
                   </div>
@@ -1999,7 +1999,7 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
                     </span>
                     {deployConfig.lastDeployAt && (
                       <span className="text-[10px] text-[var(--text-muted)] mt-1">
-                        Last Run: {new Date(deployConfig.lastDeployAt).toLocaleString()}
+                        {t('deploy.lastRun', 'Last Run: ')}{new Date(deployConfig.lastDeployAt).toLocaleString()}
                       </span>
                     )}
                   </div>
@@ -2013,13 +2013,13 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
                     <div className="p-6 rounded-2xl bg-[var(--bg-card)] border border-[var(--border-color)] shadow-sm space-y-4">
                       <h3 className="text-sm font-bold text-[var(--text-primary)] flex items-center gap-2 border-b border-[var(--border-color)] pb-3">
                         <Shield size={16} className="text-indigo-400" />
-                        Trigger Configuration
+                        {t('deploy.triggerConfig', 'Trigger Configuration')}
                       </h3>
 
                       <div className="flex items-center justify-between py-2 border-b border-[var(--border-color)] pb-4">
                         <div>
-                          <span className="block text-sm font-medium text-[var(--text-primary)]">Enable Auto-Deploy</span>
-                          <span className="text-[10px] text-[var(--text-muted)]">Automatically run deployment script when GitHub pushes arrive</span>
+                          <span className="block text-sm font-medium text-[var(--text-primary)]">{t('deploy.enableAutoDeploy', 'Enable Auto-Deploy')}</span>
+                          <span className="text-[10px] text-[var(--text-muted)]">{t('deploy.enableAutoDeployDesc', 'Automatically run deployment script when GitHub pushes arrive')}</span>
                         </div>
                         <button
                           onClick={() => {
@@ -2035,9 +2035,11 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
                         <div className="rounded-2xl bg-slate-950/30 border border-[var(--border-color)] p-4">
                           <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
                             <div>
-                              <p className="text-[11px] font-bold uppercase tracking-wider text-[var(--text-secondary)]">GitHub Connection</p>
+                              <p className="text-[11px] font-bold uppercase tracking-wider text-[var(--text-secondary)]">{t('deploy.githubConnection', 'GitHub Connection')}</p>
                               <p className="mt-1 text-sm text-[var(--text-primary)]">
-                                {deployConfig.githubConnected ? `Connected as ${deployConfig.githubUser || 'GitHub user'}` : 'Not connected'}
+                                {deployConfig.githubConnected 
+                                  ? t('deploy.githubConnectedAs', 'Connected as {{user}}', { user: deployConfig.githubUser || 'GitHub user' }) 
+                                  : t('deploy.githubNotConnected', 'Not connected')}
                               </p>
                             </div>
                             <div className="flex flex-wrap gap-2">
@@ -2045,14 +2047,14 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
                                 onClick={handleConnectGitHub}
                                 className="px-3 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-bold"
                               >
-                                {deployConfig.githubConnected ? 'Reconnect' : 'Connect'}
+                                {deployConfig.githubConnected ? t('deploy.githubReconnect', 'Reconnect') : t('deploy.githubConnect', 'Connect')}
                               </button>
                               {deployConfig.githubConnected && (
                                 <button
                                   onClick={handleDisconnectGitHub}
                                   className="px-3 py-2 bg-red-600 hover:bg-red-500 text-white rounded-xl text-xs font-bold"
                                 >
-                                  Disconnect
+                                  {t('deploy.githubDisconnect', 'Disconnect')}
                                 </button>
                               )}
                             </div>
@@ -2061,7 +2063,7 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
 
                         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
                           <div className="rounded-2xl bg-slate-950/30 border border-[var(--border-color)] p-4">
-                            <label className="block text-[11px] font-bold text-[var(--text-secondary)] uppercase tracking-wider mb-2">GitHub repository</label>
+                            <label className="block text-[11px] font-bold text-[var(--text-secondary)] uppercase tracking-wider mb-2">{t('deploy.githubRepoLabel', 'GitHub repository')}</label>
                             <input
                               type="text"
                               value={repoInput}
@@ -2072,7 +2074,7 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
                                   setRepoInput(normalized);
                                 }
                               }}
-                              placeholder="owner/repo"
+                              placeholder={t('deploy.githubRepoPlaceholder', 'owner/repo')}
                               className="w-full bg-[var(--bg-primary)] border border-[var(--border-color)] rounded-xl px-3 py-2 text-xs text-[var(--text-primary)] focus:outline-none focus:border-indigo-500"
                             />
                             <button
@@ -2171,7 +2173,7 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
                               {copySuccess ? <CheckCheck size={14} className="text-emerald-500" /> : <Copy size={14} />}
                             </button>
                           </div>
-                          <span className="block text-[9px] text-[var(--text-muted)] mt-1">Use this unique URL for the project ID &quot;{selectedProjectId}&quot; in GitHub repo settings with &quot;application/json&quot; content type.</span>
+                          <span className="block text-[9px] text-[var(--text-muted)] mt-1">Use this unique Webhook URL for the project &quot;{selectedProjectId}&quot; in GitHub repository Webhook settings. Make sure Payload format is application/json.</span>
                         </div>
                       </div>
                     </div>
@@ -2220,9 +2222,8 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
                             <label className="block text-[11px] font-bold text-[var(--text-secondary)] uppercase tracking-wider mb-2">SSH Connection</label>
                             {selectedConnectionMissing && (
                               <div className="p-3 bg-rose-500/10 border border-rose-500/20 rounded-xl text-sm text-rose-100 mb-3">
-                                The selected SSH connection ID <span className="font-mono">{deployConfig.connectionId}</span> is not available in the server-side connection list.
-                                GitHub webhook deployments require a connection that exists in the database-backed connection store.
-                                Please select a valid SSH connection before saving.
+                                The selected SSH connection ID <span className="font-mono">{deployConfig.connectionId}</span> is not available.
+                                Auto-deployments require a database-backed connection.
                               </div>
                             )}
                             {connections.length === 0 ? (
@@ -2254,7 +2255,7 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
                             placeholder="/var/www/my-app"
                             className="w-full bg-[var(--bg-primary)] border border-[var(--border-color)] rounded-xl px-3 py-2 text-xs text-[var(--text-primary)] focus:outline-none focus:border-indigo-500 transition-all"
                           />
-                          <span className="block text-[9px] text-[var(--text-muted)] mt-1">Relative or absolute path to the directory containing project files.</span>
+                          <span className="block text-[9px] text-[var(--text-muted)] mt-1">Relative or absolute path containing deployment files.</span>
                         </div>
                       </div>
                     </div>
@@ -2263,13 +2264,13 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
                     <div className="p-6 rounded-2xl bg-[var(--bg-card)] border border-[var(--border-color)] shadow-sm space-y-4">
                       <h3 className="text-sm font-bold text-[var(--text-primary)] flex items-center gap-2 border-b border-[var(--border-color)] pb-3">
                         <Send size={16} className="text-sky-400" />
-                        Telegram Notification
+                        {t('deploy.telegramTitle', 'Telegram Notification')}
                       </h3>
 
                       <div className="flex items-center justify-between py-1">
                         <div>
-                          <span className="block text-xs font-semibold text-[var(--text-primary)]">Enable Telegram Alerts</span>
-                          <span className="text-[9px] text-[var(--text-muted)]">Send start, success, and fail alerts to a Telegram chat</span>
+                          <span className="block text-xs font-semibold text-[var(--text-primary)]">{t('deploy.telegramEnable', 'Enable Telegram Alerts')}</span>
+                          <span className="text-[9px] text-[var(--text-muted)]">{t('deploy.telegramEnableDesc', 'Send start, success, and fail alerts to a Telegram chat')}</span>
                         </div>
                         <button
                           type="button"
@@ -2285,7 +2286,7 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
                       {deployConfig.telegramNotification && (
                         <div className="space-y-3 pt-2 border-t border-[var(--border-color)]/60 animate-in fade-in duration-200">
                           <div>
-                            <label className="block text-[10px] font-bold text-[var(--text-secondary)] uppercase tracking-wider mb-1">Telegram Bot Token</label>
+                            <label className="block text-[10px] font-bold text-[var(--text-secondary)] uppercase tracking-wider mb-1">{t('deploy.telegramBotToken', 'Telegram Bot Token')}</label>
                             <input
                               type="password"
                               value={deployConfig.telegramBotToken || ''}
@@ -2295,7 +2296,7 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
                             />
                           </div>
                           <div>
-                            <label className="block text-[10px] font-bold text-[var(--text-secondary)] uppercase tracking-wider mb-1">Telegram Chat ID</label>
+                            <label className="block text-[10px] font-bold text-[var(--text-secondary)] uppercase tracking-wider mb-1">{t('deploy.telegramChatId', 'Telegram Chat ID')}</label>
                             <input
                               type="text"
                               value={deployConfig.telegramChatId || ''}
@@ -2312,27 +2313,27 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
                     <div className="p-6 rounded-2xl bg-[var(--bg-card)] border border-[var(--border-color)] shadow-sm space-y-4">
                       <h3 className="text-sm font-bold text-[var(--text-primary)] flex items-center gap-2 border-b border-[var(--border-color)] pb-3">
                         <Sparkles size={16} className="text-indigo-400 animate-pulse" />
-                        AI Deploy Assistant
+                        {t('deploy.aiAssistantTitle', 'AI Deploy Assistant')}
                       </h3>
 
                       <p className="text-[10px] text-[var(--text-secondary)] leading-relaxed">
-                        Let AI scan the target project directory, auto-detect language/framework types (Docker, pure Node, Python, etc.), and generate a tailored production script.
+                        {t('deploy.aiAssistantDesc', 'Let AI scan the target project directory, auto-detect language/framework types (Docker, pure Node, Python, etc.), and generate a tailored production script.')}
                       </p>
 
                       <div className="space-y-4">
                         <div>
-                          <label className="block text-[11px] font-bold text-[var(--text-secondary)] uppercase tracking-wider mb-2">AI Model</label>
+                          <label className="block text-[11px] font-bold text-[var(--text-secondary)] uppercase tracking-wider mb-2">{t('deploy.aiModel', 'AI Model')}</label>
                           <select
                             value={deployConfig.aiModel}
                             onChange={(e) => setDeployConfig(p => ({ ...p, aiModel: e.target.value }))}
                             className="w-full bg-[var(--bg-primary)] border border-[var(--border-color)] rounded-xl px-3 py-2 text-xs text-[var(--text-primary)] focus:outline-none focus:border-indigo-500"
                           >
-                            <option value="auto">Auto</option>
+                            <option value="auto">{t('deploy.aiModelAuto', 'Auto')}</option>
                             <option value="gpt-3.5-turbo">gpt-3.5-turbo</option>
                             <option value="gpt-4">gpt-4</option>
-                            <option value="manual">Custom Endpoint</option>
+                            <option value="manual">{t('deploy.aiModelCustom', 'Custom Endpoint')}</option>
                           </select>
-                          <p className="mt-1 text-[10px] text-[var(--text-muted)]">Choose a model or use a custom endpoint for your deployment analysis.</p>
+                          <p className="mt-1 text-[10px] text-[var(--text-muted)]">{t('deploy.aiModelDesc', 'Choose a model or use a custom endpoint for your deployment analysis.')}</p>
                         </div>
 
                         {deployConfig.aiModel === 'manual' && (
