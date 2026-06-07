@@ -6,7 +6,7 @@ import {
   Database, CheckCircle, AlertCircle, RefreshCw, Zap, Wifi, WifiOff, 
   Loader, Trash2, Lock, Unlock, Key, Mail, Code, Volume2, Sun, Moon, Cpu,
   Search, Terminal, Network, Download, Copy, X, CheckCheck, Sparkles,
-  GitBranch, ChevronDown, Settings
+  GitBranch, ChevronDown, Settings, Send
 } from 'lucide-react';
 import { useOS } from '@/context/OSContext';
 import { useApp } from '@/context/AppContext';
@@ -117,7 +117,10 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
     aiEndpoint: '',
     aiApiKey: '',
     githubConnected: false,
-    githubUser: ''
+    githubUser: '',
+    telegramNotification: false,
+    telegramBotToken: '',
+    telegramChatId: ''
   });
   const [deployProjects, setDeployProjects] = useState([]);
   const [selectedProjectId, setSelectedProjectId] = useState('default');
@@ -2254,6 +2257,55 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
                           <span className="block text-[9px] text-[var(--text-muted)] mt-1">Relative or absolute path to the directory containing project files.</span>
                         </div>
                       </div>
+                    </div>
+
+                    {/* Telegram Notifications */}
+                    <div className="p-6 rounded-2xl bg-[var(--bg-card)] border border-[var(--border-color)] shadow-sm space-y-4">
+                      <h3 className="text-sm font-bold text-[var(--text-primary)] flex items-center gap-2 border-b border-[var(--border-color)] pb-3">
+                        <Send size={16} className="text-sky-400" />
+                        Telegram Notification
+                      </h3>
+
+                      <div className="flex items-center justify-between py-1">
+                        <div>
+                          <span className="block text-xs font-semibold text-[var(--text-primary)]">Enable Telegram Alerts</span>
+                          <span className="text-[9px] text-[var(--text-muted)]">Send start, success, and fail alerts to a Telegram chat</span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setDeployConfig(p => ({ ...p, telegramNotification: !p.telegramNotification }));
+                          }}
+                          className={`w-9 h-5 rounded-full p-0.5 transition-colors cursor-pointer ${deployConfig.telegramNotification ? 'bg-indigo-500' : 'bg-slate-300 dark:bg-slate-700'}`}
+                        >
+                          <div className={`w-4 h-4 bg-white rounded-full shadow transition-transform ${deployConfig.telegramNotification ? 'translate-x-4' : 'translate-x-0'}`} />
+                        </button>
+                      </div>
+
+                      {deployConfig.telegramNotification && (
+                        <div className="space-y-3 pt-2 border-t border-[var(--border-color)]/60 animate-in fade-in duration-200">
+                          <div>
+                            <label className="block text-[10px] font-bold text-[var(--text-secondary)] uppercase tracking-wider mb-1">Telegram Bot Token</label>
+                            <input
+                              type="password"
+                              value={deployConfig.telegramBotToken || ''}
+                              onChange={(e) => setDeployConfig(p => ({ ...p, telegramBotToken: e.target.value }))}
+                              placeholder="e.g. 123456789:ABCdefGhI..."
+                              className="w-full bg-[var(--bg-primary)] border border-[var(--border-color)] rounded-xl px-3 py-2 text-xs text-[var(--text-primary)] focus:outline-none focus:border-indigo-500"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-[10px] font-bold text-[var(--text-secondary)] uppercase tracking-wider mb-1">Telegram Chat ID</label>
+                            <input
+                              type="text"
+                              value={deployConfig.telegramChatId || ''}
+                              onChange={(e) => setDeployConfig(p => ({ ...p, telegramChatId: e.target.value }))}
+                              placeholder="e.g. -100123456789 or 987654321"
+                              className="w-full bg-[var(--bg-primary)] border border-[var(--border-color)] rounded-xl px-3 py-2 text-xs text-[var(--text-primary)] focus:outline-none focus:border-indigo-500"
+                            />
+                          </div>
+                        </div>
+                      )}
                     </div>
 
                     {/* AI Configuration Assistant */}

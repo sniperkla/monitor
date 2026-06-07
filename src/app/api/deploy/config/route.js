@@ -28,7 +28,10 @@ const defaultConfig = {
   aiEndpoint: '',
   aiApiKey: '',
   githubConnected: false,
-  githubUser: ''
+  githubUser: '',
+  telegramNotification: false,
+  telegramBotToken: '',
+  telegramChatId: ''
 };
 
 // GET /api/deploy/config?project=id
@@ -191,6 +194,9 @@ export async function POST(request) {
       githubUser: body.githubUser !== undefined ? body.githubUser : existingValue.githubUser || '',
       githubRepo: body.githubRepo !== undefined ? body.githubRepo : existingValue.githubRepo || '',
       githubToken: body.githubToken !== undefined && body.githubToken ? encrypt(body.githubToken) : existingValue.githubToken || '',
+      telegramNotification: typeof body.telegramNotification === 'boolean' ? body.telegramNotification : existingValue.telegramNotification || false,
+      telegramBotToken: body.telegramBotToken !== undefined ? body.telegramBotToken : existingValue.telegramBotToken || '',
+      telegramChatId: body.telegramChatId !== undefined ? body.telegramChatId : existingValue.telegramChatId || '',
       sshConnectionData: finalSshConnectionData
     };
 

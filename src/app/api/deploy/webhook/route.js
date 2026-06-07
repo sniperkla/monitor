@@ -51,11 +51,53 @@ async function updateDeployStatus(projectId, status, logText, cancelRequested = 
   }
 }
 
+async function sendTelegramNotification(config, status) {
+  if (!config.telegramNotification || !config.telegramBotToken || !config.telegramChatId) {
+    return;
+  }
+  
+  let text = '';
+  const projectName = config.name || config.id || 'Default Project';
+  const target = config.targetType === 'ssh' ? 'Remote SSH' : 'Local Host';
+  
+  if (status === 'running') {
+    text = `🚀 <b>Deployment Started</b>\n<b>Project:</b> ${projectName}\n<b>Target:</b> ${target}`;
+  } else if (status === 'success') {
+    text = `✅ <b>Deployment Succeeded</b>\n<b>Project:</b> ${projectName}\n<b>Target:</b> ${target}`;
+  } else if (status === 'failed') {
+    text = `❌ <b>Deployment Failed</b>\n<b>Project:</b> ${projectName}\n<b>Target:</b> ${target}`;
+  } else {
+    return;
+  }
+
+  try {
+    const url = `https://api.telegram.org/bot${config.telegramBotToken}/sendMessage`;
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        chat_id: config.telegramChatId,
+        text: text,
+        parse_mode: 'HTML'
+      })
+    });
+    if (!response.ok) {
+      const errText = await response.text();
+      console.error(`[Telegram] Error response: ${errText}`);
+    }
+  } catch (err) {
+    console.error(`[Telegram] Failed to send notification:`, err.message);
+  }
+}
+
 // Background deployment execution
 async function runDeployment(config) {
   const startedAt = new Date();
   const projectId = config.id || 'default';
   const dbKey = projectId === 'default' ? 'auto_deploy_config' : `auto_deploy_config_${projectId}`;
+  let lastNotifiedStatus = null;
 
   let logOutput = `[${startedAt.toISOString()}] 🚀 Deployment started in the background for project "${config.name || projectId}"...\n`;
   logOutput += `Target: ${config.targetType.toUpperCase()}\n`;
@@ -89,6 +131,14 @@ async function runDeployment(config) {
       );
       // Broadcast update to all SSE clients
       await broadcastDeploymentStatus(projectId);
+
+      // Send Telegram notification on state change
+      if (status !== lastNotifiedStatus && (status === 'running' || status === 'success' || status === 'failed')) {
+        lastNotifiedStatus = status;
+        sendTelegramNotification(config, status).catch(err => {
+          console.error('[Telegram] error:', err.message);
+        });
+      }
     } catch (dbErr) {
       console.error('Failed to update deploy status in DB:', dbErr.message);
     }

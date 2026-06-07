@@ -6719,7 +6719,7 @@ If this is a deployment task, switch task mode to 'deploy' instead of 'code'.`
             minHeight={280}
             dragHandleClassName="ai-panel-drag-handle"
             cancel="button,input,textarea,select,option,label"
-            style={{ position: 'fixed', zIndex: 9999 }}
+            style={{ position: 'fixed', zIndex: 250000 }}
           >
             <div className={`w-full h-full rounded-2xl border border-[var(--border-color)] bg-[var(--bg-secondary)]/95 backdrop-blur-2xl shadow-2xl overflow-hidden flex flex-col relative transition-all duration-700 ${aiLoading || autoRunningRef.current ? 'ai-glow-thinking' : aiDone ? 'ai-glow-accomplished' : ''}`}>
               {/* Header */}
@@ -7223,7 +7223,7 @@ If this is a deployment task, switch task mode to 'deploy' instead of 'code'.`
                 {patchModalOpen && (
                   (typeof document !== 'undefined'
                     ? createPortal(
-                        <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/60 p-4" onMouseDown={(e) => {
+                        <div className="fixed inset-0 z-[250000] flex items-center justify-center bg-black/60 p-4" onMouseDown={(e) => {
                           if (e.target === e.currentTarget) {
                             setPatchModalOpen(false);
                           }
@@ -7235,7 +7235,7 @@ If this is a deployment task, switch task mode to 'deploy' instead of 'code'.`
                             minHeight={320}
                             dragHandleClassName="patch-modal-drag-handle"
                             cancel="button,input,textarea,select,option,label,pre"
-                            className="z-[10000]"
+                            className="z-[250001]"
                             style={{ position: 'relative' }}
                           >
                             <div className="w-full h-full rounded-xl border border-[var(--border-color)] bg-[var(--bg-secondary)] shadow-2xl overflow-hidden flex flex-col">
