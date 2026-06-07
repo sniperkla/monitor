@@ -4,6 +4,8 @@ import mysql from "mysql2/promise";
 import { createRequire } from 'module';
 import { getToken } from 'next-auth/jwt';
 import { createSSHTunnel, rewriteUriForTunnel, parseUriHostPort } from './sshTunnel.js';
+import fs from 'fs';
+import path from 'path';
 
 const require = createRequire(import.meta.url);
 const { Pool: PgPool } = require('pg');
@@ -21,6 +23,17 @@ if (!cached) {
 
 const connectionPool = new Map();
 
+export function getCenterUri() {
+  try {
+    const p = path.join(process.cwd(), 'db-config.json');
+    if (fs.existsSync(p)) {
+      const c = JSON.parse(fs.readFileSync(p, 'utf-8'));
+      if (c.uri) return c.uri;
+    }
+  } catch (e) {}
+  return process.env.MONGODB_URI;
+}
+
 /**
  * Extracts Database URI from headers (Private Browser Mode)
  */
@@ -33,7 +46,7 @@ export async function getUriFromRequest() {
       return clientUri;
     }
   } catch (e) {}
-  return process.env.MONGODB_URI;
+  return getCenterUri();
 }
 
 /**
@@ -110,8 +123,8 @@ async function connectCenter(uri) {
     const opts = {
       bufferCommands: false,
     };
-    // Use the URI from env as the definitive center DB if possible
-    const centerUri = process.env.MONGODB_URI || uri;
+    // Use the URI from env or config file as the definitive center DB if possible
+    const centerUri = getCenterUri() || uri;
     cached.promise = mongoose.connect(centerUri, opts).then((mongoose) => {
       return mongoose;
     });
@@ -276,8 +289,9 @@ async function connectDB(uri = null, isCenter = false) {
   // Non-MongoDB URIs must always go through the dynamic connection path
   const isNonMongo = effectiveUri && !effectiveUri.startsWith('mongodb://') && !effectiveUri.startsWith('mongodb+srv://');
 
+  const centerUri = getCenterUri();
   // If this is the center DB (User storage), use the default connection
-  if (!isNonMongo && (isCenter || effectiveUri === process.env.MONGODB_URI || targetUri === process.env.MONGODB_URI)) {
+  if (!isNonMongo && (isCenter || effectiveUri === centerUri || targetUri === centerUri || effectiveUri === process.env.MONGODB_URI || targetUri === process.env.MONGODB_URI)) {
     return connectCenter(effectiveUri);
   }
 
