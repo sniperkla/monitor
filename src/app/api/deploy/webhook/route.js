@@ -153,11 +153,38 @@ async function runDeployment(config) {
   if (config.targetType === 'local') {
     // === LOCAL HOST DEPLOYMENT ===
     const cwdPath = resolvedPath.startsWith('/') ? resolvedPath : `${process.cwd()}/${resolvedPath}`;
+    const escapedCommand = config.deployCommand.replace(/'/g, "'\\''");
+    const localCommand = `
+if command -v tmux >/dev/null 2>&1; then
+  logFile="/tmp/deploy_${projectId}.log"
+  sessionName="deploy_${projectId}"
+  rm -f "$logFile" "$logFile.code" && touch "$logFile"
+  tmux kill-session -t "$sessionName" 2>/dev/null
+  tmux new-session -d -s "$sessionName" -c "${cwdPath}" "sh -c '( (${escapedCommand}) ; echo \\$? > \\"$logFile.code\\" ) 2>&1 | tee \\"$logFile\\"' "
+  
+  tail -f "$logFile" &
+  TAIL_PID=$!
+  
+  while tmux has-session -t "$sessionName" 2>/dev/null; do
+    sleep 1
+  done
+  
+  sleep 1.5
+  kill $TAIL_PID 2>/dev/null
+  wait $TAIL_PID 2>/dev/null
+  
+  EXIT_CODE=\$(cat "$logFile.code" 2>/dev/null || echo 0)
+  rm -f "$logFile" "$logFile.code"
+  exit \$EXIT_CODE
+else
+  (${config.deployCommand})
+fi
+`;
 
     // Use spawn with shell: true to handle shell detection and execution
     // This automatically uses /bin/sh on Unix and cmd.exe on Windows
     // Note: With shell: true, the entire command string (including args) goes in the first param
-    const childProcess = spawn(config.deployCommand, {
+    const childProcess = spawn(localCommand, {
       cwd: cwdPath,
       shell: true,
       stdio: ['ignore', 'pipe', 'pipe']
@@ -286,8 +313,34 @@ async function runDeployment(config) {
         logOutput += `[SSH] Connected successfully. Executing deployment script inside "${resolvedPath}"...\n\n`;
         updateStatus('running', logOutput);
 
-        // Chain directory change with deployment script
-        const fullSshCommand = `cd ${resolvedPath} && (${config.deployCommand})`;
+        // Wrap SSH command in a tmux session if tmux is available
+        const escapedCommand = config.deployCommand.replace(/'/g, "'\\''");
+        const fullSshCommand = `
+if command -v tmux >/dev/null 2>&1; then
+  logFile="/tmp/deploy_${projectId}.log"
+  sessionName="deploy_${projectId}"
+  rm -f "$logFile" "$logFile.code" && touch "$logFile"
+  tmux kill-session -t "$sessionName" 2>/dev/null
+  tmux new-session -d -s "$sessionName" -c "${resolvedPath}" "sh -c '( (${escapedCommand}) ; echo \\$? > \\"$logFile.code\\" ) 2>&1 | tee \\"$logFile\\"' "
+  
+  tail -f "$logFile" &
+  TAIL_PID=$!
+  
+  while tmux has-session -t "$sessionName" 2>/dev/null; do
+    sleep 1
+  done
+  
+  sleep 1.5
+  kill $TAIL_PID 2>/dev/null
+  wait $TAIL_PID 2>/dev/null
+  
+  EXIT_CODE=\$(cat "$logFile.code" 2>/dev/null || echo 0)
+  rm -f "$logFile" "$logFile.code"
+  exit \$EXIT_CODE
+else
+  cd ${resolvedPath} && (${config.deployCommand})
+fi
+`;
 
         conn.exec(fullSshCommand, (err, stream) => {
           if (err) {
