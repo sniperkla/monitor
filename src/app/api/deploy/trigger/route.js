@@ -72,7 +72,9 @@ async function handleTrigger(request) {
 
     // 4. Trigger in background
     console.log(`[trigger] ✅ Launching deployment in background for project: ${projectId}`);
-    runDeployment(config).catch(err => {
+    runDeployment(config, {
+      triggerSource: 'Direct Trigger URL (curl/script)'
+    }).catch(err => {
       console.error('[trigger] Unhandled background deployment error:', err.message);
     });
 

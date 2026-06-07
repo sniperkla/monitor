@@ -51,7 +51,15 @@ async function updateDeployStatus(projectId, status, logText, cancelRequested = 
   }
 }
 
-async function sendTelegramNotification(config, status) {
+function escapeHtml(text) {
+  if (!text) return '';
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
+async function sendTelegramNotification(config, status, extra = {}) {
   if (!config.telegramNotification || !config.telegramBotToken || !config.telegramChatId) {
     return;
   }
@@ -61,13 +69,38 @@ async function sendTelegramNotification(config, status) {
   const target = config.targetType === 'ssh' ? 'Remote SSH' : 'Local Host';
   
   if (status === 'running') {
-    text = `🚀 <b>Deployment Started</b>\n<b>Project:</b> ${projectName}\n<b>Target:</b> ${target}`;
+    text = `🚀 <b>Deployment Started</b>\n\n`;
   } else if (status === 'success') {
-    text = `✅ <b>Deployment Succeeded</b>\n<b>Project:</b> ${projectName}\n<b>Target:</b> ${target}`;
+    text = `✅ <b>Deployment Succeeded</b>\n\n`;
   } else if (status === 'failed') {
-    text = `❌ <b>Deployment Failed</b>\n<b>Project:</b> ${projectName}\n<b>Target:</b> ${target}`;
+    text = `❌ <b>Deployment Failed</b>\n\n`;
   } else {
     return;
+  }
+
+  text += `<b>Project:</b> ${projectName}\n`;
+  text += `<b>Target:</b> ${target}\n`;
+
+  if (extra.gitInfo) {
+    const { branch, commitMsg, author, commitId } = extra.gitInfo;
+    if (branch) text += `<b>Branch:</b> <code>${branch}</code>\n`;
+    if (author) text += `<b>Pusher:</b> ${author}\n`;
+    if (commitMsg) text += `<b>Commit:</b> <i>${escapeHtml(commitMsg.trim())}</i>\n`;
+    if (commitId) text += `<b>Commit ID:</b> <code>${commitId.substring(0, 7)}</code>\n`;
+  } else if (extra.triggerSource) {
+    text += `<b>Source:</b> ${extra.triggerSource}\n`;
+  }
+
+  if (extra.duration !== undefined && extra.duration !== null) {
+    text += `<b>Duration:</b> ${extra.duration}s\n`;
+  }
+
+  if ((status === 'success' || status === 'failed') && extra.logText) {
+    const lines = extra.logText.split('\n').filter(line => line.trim().length > 0);
+    const lastLines = lines.slice(-8).join('\n');
+    if (lastLines) {
+      text += `\n<b>Last Logs:</b>\n<pre>${escapeHtml(lastLines)}</pre>`;
+    }
   }
 
   try {
@@ -93,7 +126,7 @@ async function sendTelegramNotification(config, status) {
 }
 
 // Background deployment execution
-export async function runDeployment(config) {
+export async function runDeployment(config, runMeta = {}) {
   const startedAt = new Date();
   const projectId = config.id || 'default';
   const dbKey = projectId === 'default' ? 'auto_deploy_config' : `auto_deploy_config_${projectId}`;
@@ -103,6 +136,13 @@ export async function runDeployment(config) {
   logOutput += `Target: ${config.targetType.toUpperCase()}\n`;
   if (config.targetType === 'ssh') {
     logOutput += `SSH Connection ID: ${config.connectionId}\n`;
+  }
+  if (runMeta.gitInfo) {
+    const g = runMeta.gitInfo;
+    if (g.branch)    logOutput += `Branch: ${g.branch}\n`;
+    if (g.author)    logOutput += `Pusher: ${g.author}\n`;
+    if (g.commitMsg) logOutput += `Commit: ${g.commitMsg.trim()}\n`;
+    if (g.commitId)  logOutput += `Commit ID: ${g.commitId.substring(0, 7)}\n`;
   }
   logOutput += `--------------------------------------------------\n\n`;
 
@@ -135,12 +175,51 @@ export async function runDeployment(config) {
       // Send Telegram notification on state change
       if (status !== lastNotifiedStatus && (status === 'running' || status === 'success' || status === 'failed')) {
         lastNotifiedStatus = status;
-        sendTelegramNotification(config, status).catch(err => {
+        const duration = status !== 'running' ? Math.round((Date.now() - startedAt.getTime()) / 1000) : undefined;
+        sendTelegramNotification(config, status, {
+          gitInfo: runMeta.gitInfo || null,
+          triggerSource: runMeta.triggerSource || null,
+          duration,
+          logText: status !== 'running' ? finalLog : undefined
+        }).catch(err => {
           console.error('[Telegram] error:', err.message);
         });
       }
     } catch (dbErr) {
       console.error('Failed to update deploy status in DB:', dbErr.message);
+    }
+  };
+
+  // Throttle updates to DB/SSE to avoid spamming/freezing the process on rapid stdout
+  let pendingUpdate = null;
+  let lastUpdateTime = 0;
+
+  const throttledUpdateStatus = async (status, finalLog, extra = {}) => {
+    if (status !== 'running') {
+      if (pendingUpdate) {
+        clearTimeout(pendingUpdate);
+        pendingUpdate = null;
+      }
+      await updateStatus(status, finalLog, extra);
+      return;
+    }
+
+    const now = Date.now();
+    if (now - lastUpdateTime > 1500) {
+      if (pendingUpdate) {
+        clearTimeout(pendingUpdate);
+        pendingUpdate = null;
+      }
+      lastUpdateTime = now;
+      await updateStatus(status, finalLog, extra);
+    } else {
+      if (!pendingUpdate) {
+        pendingUpdate = setTimeout(async () => {
+          pendingUpdate = null;
+          lastUpdateTime = Date.now();
+          await updateStatus('running', logOutput, extra);
+        }, 1500);
+      }
     }
   };
 
@@ -196,12 +275,12 @@ export async function runDeployment(config) {
 
     childProcess.stdout.on('data', (data) => {
       logOutput += data.toString();
-      updateStatus('running', logOutput).catch(() => {}); // Stream logs
+      throttledUpdateStatus('running', logOutput).catch(() => {}); // Stream logs
     });
 
     childProcess.stderr.on('data', (data) => {
       logOutput += data.toString();
-      updateStatus('running', logOutput).catch(() => {}); // Stream logs
+      throttledUpdateStatus('running', logOutput).catch(() => {}); // Stream logs
     });
 
     childProcess.on('close', (code) => {
@@ -406,12 +485,12 @@ export async function runDeployment(config) {
                     }
                   }
 
-                  updateStatus('running', logOutput).catch(() => {});
+                  throttledUpdateStatus('running', logOutput).catch(() => {});
                 });
 
                 stream.stderr.on('data', (data) => {
                   logOutput += data.toString();
-                  updateStatus('running', logOutput).catch(() => {});
+                  throttledUpdateStatus('running', logOutput).catch(() => {});
                 });
 
                 stream.on('close', (code) => {
@@ -595,7 +674,27 @@ export async function POST(request) {
 
     // 4. Trigger the deployment in the background
     console.log(`[webhook] ✅ Triggering deployment for project: ${projectId}`);
-    runDeployment(config).catch(err => {
+
+    // Parse GitHub push payload for rich Telegram notifications
+    let gitInfo = null;
+    if (!isManual && bodyText) {
+      try {
+        const payload = JSON.parse(bodyText);
+        const latestCommit = payload.commits?.[0];
+        const rawRef = payload.ref || '';
+        gitInfo = {
+          branch: rawRef.replace('refs/heads/', '') || null,
+          commitMsg: latestCommit?.message || null,
+          commitId: latestCommit?.id || null,
+          author: payload.pusher?.name || latestCommit?.author?.name || null,
+        };
+      } catch (e) { /* ignore parse errors */ }
+    }
+
+    runDeployment(config, {
+      gitInfo,
+      triggerSource: isManual ? 'Manual (Dashboard)' : 'GitHub Webhook'
+    }).catch(err => {
       console.error('Unhandled background deployment error:', err.message);
     });
 

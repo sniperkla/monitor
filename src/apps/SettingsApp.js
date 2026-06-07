@@ -135,6 +135,7 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
   const [deploySaving, setDeploySaving] = useState(false);
   const [deployTriggering, setDeployTriggering] = useState(false);
   const [copySuccess, setCopySuccess] = useState(false);
+  const [directCopySuccess, setDirectCopySuccess] = useState(false);
   const [aiAnalyzing, setAiAnalyzing] = useState(false);
   const [deploymentTab, setDeploymentTab] = useState('configuration');
   const [branches, setBranches] = useState([]);
@@ -356,6 +357,15 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
     setCopySuccess(true);
     setTimeout(() => setCopySuccess(false), 2000);
     addNotification({ title: 'Copied!', message: 'Webhook URL copied to clipboard', type: 'success' });
+  };
+
+  const handleCopyDirectTriggerUrl = () => {
+    if (typeof window === 'undefined') return;
+    const url = `${window.location.origin}/api/deploy/trigger?project=${selectedProjectId}${deployConfig.secret ? `&token=${deployConfig.secret}` : ''}`;
+    navigator.clipboard.writeText(url);
+    setDirectCopySuccess(true);
+    setTimeout(() => setDirectCopySuccess(false), 2000);
+    addNotification({ title: 'Copied!', message: 'Direct Trigger URL copied to clipboard', type: 'success' });
   };
 
   const handleConnectGitHub = async () => {
@@ -2175,6 +2185,25 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
                           </div>
                           <span className="block text-[9px] text-[var(--text-muted)] mt-1">{t('deploy.webhookUrlHint', 'Use this unique Webhook URL for the project "{{project}}" in GitHub repository Webhook settings. Make sure Payload format is application/json.', { project: selectedProjectId })}</span>
                         </div>
+
+                        <div className="space-y-1 pt-2">
+                          <label className="block text-[11px] font-bold text-[var(--text-secondary)] uppercase tracking-wider">{t('deploy.directTriggerUrl', 'Direct Trigger URL')}</label>
+                          <div className="flex flex-col gap-2 sm:flex-row">
+                            <input
+                              type="text"
+                              readOnly
+                              value={typeof window !== 'undefined' ? `${window.location.origin}/api/deploy/trigger?project=${selectedProjectId}${deployConfig.secret ? `&token=${deployConfig.secret}` : ''}` : ''}
+                              className="flex-1 bg-[var(--bg-primary)] border border-[var(--border-color)] rounded-xl px-3 py-2 text-xs text-[var(--text-muted)] select-all focus:outline-none"
+                            />
+                            <button
+                              onClick={handleCopyDirectTriggerUrl}
+                              className="px-3 py-2 bg-[var(--bg-tertiary)] hover:bg-[var(--bg-card-hover)] border border-[var(--border-color)] rounded-xl text-xs text-[var(--text-primary)] transition-all flex items-center justify-center"
+                            >
+                              {directCopySuccess ? <CheckCheck size={14} className="text-emerald-500" /> : <Copy size={14} />}
+                            </button>
+                          </div>
+                          <span className="block text-[9px] text-[var(--text-muted)] mt-1">{t('deploy.directTriggerUrlHint', 'Use this URL to trigger deployment directly via HTTP (e.g. from curl or custom scripts) without a browser. The secret token is automatically appended if configured.')}</span>
+                        </div>
                       </div>
                     </div>
 
@@ -2192,6 +2221,29 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
                           placeholder={t('deploy.deployCommandPlaceholder', '# Enter shell script to run on deploy event')}
                           className="w-full bg-slate-950 border border-[var(--border-color)] rounded-xl p-4 text-xs font-mono text-emerald-400 focus:outline-none focus:border-indigo-500/50 shadow-inner"
                         />
+                        {/* Docker prune helper */}
+                        <div className="flex items-center justify-between">
+                          <span className="text-[9px] text-[var(--text-muted)]">
+                            {t('deploy.dockerPruneHint', 'Recommended for Docker projects: prevents disk from filling with old images.')}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const pruneCmd = '\n\n# Clean up dangling Docker images to free disk space\ndocker image prune -f';
+                              const current = deployConfig.deployCommand || '';
+                              if (!current.includes('docker image prune')) {
+                                setDeployConfig(p => ({ ...p, deployCommand: current + pruneCmd }));
+                                addNotification({ title: '🐳 Prune Added', message: 'docker image prune -f appended to deploy command.', type: 'success' });
+                              } else {
+                                addNotification({ title: 'Already Added', message: 'docker image prune is already in the deploy command.', type: 'info' });
+                              }
+                            }}
+                            className="shrink-0 ml-3 px-2.5 py-1 bg-blue-500/10 hover:bg-blue-500/20 border border-blue-500/30 hover:border-blue-400/50 text-blue-300 rounded-lg text-[10px] font-bold transition-all flex items-center gap-1.5 cursor-pointer"
+                          >
+                            <Trash2 size={11} />
+                            {t('deploy.addDockerPrune', '+ Docker Prune')}
+                          </button>
+                        </div>
                       </div>
                     </div>
                   </div>

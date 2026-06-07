@@ -153,6 +153,9 @@ export async function POST(request) {
 1. The project type (e.g., Node.js / React, Python / Django, Docker, Java / Spring Boot, Go, PHP, etc.)
 2. Key technologies, dependencies, and frameworks used
 3. An optimized shell/bash deployment script/command suitable for a production build & run (e.g., git pull && npm run build && pm2 restart app). Include steps like downloading dependencies, running builds, restarting processes/services, or running Docker containers. Include comments explaining key steps. Crucially, always write bash/shell commands safely (e.g. start bash scripts with '#!/bin/bash\nset -e\n' or chain sequential commands with '&&') to ensure that if any intermediate command fails (like a build), the script immediately stops and returns a non-zero exit status to fail the deployment.
+   IMPORTANT FOR DOCKER PROJECTS: If the project uses Docker (docker compose, docker-compose, or Dockerfile), you MUST always append the following cleanup step at the END of the deploy command, AFTER all containers are running, to prevent disk from filling up with dangling/unused images:
+   docker image prune -f
+   This removes dangling images only (images with no tag and not used by any container) and is safe to run after every deploy.
 4. A concise summary of why you recommended this configuration.
 
 You MUST respond with a valid JSON object ONLY. Do not wrap the JSON in markdown formatting blocks or include any extra text. The JSON format must be EXACTLY:
