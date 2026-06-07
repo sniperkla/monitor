@@ -131,6 +131,7 @@ export async function runDeployment(config, runMeta = {}) {
   const projectId = config.id || 'default';
   const dbKey = projectId === 'default' ? 'auto_deploy_config' : `auto_deploy_config_${projectId}`;
   let lastNotifiedStatus = null;
+  let isFinished = false;
 
   let logOutput = `[${startedAt.toISOString()}] 🚀 Deployment started in the background for project "${config.name || projectId}"...\n`;
   logOutput += `Target: ${config.targetType.toUpperCase()}\n`;
@@ -150,6 +151,10 @@ export async function runDeployment(config, runMeta = {}) {
 
   // Helper to update status in DB
   const updateStatus = async (status, finalLog, extra = {}) => {
+    if (isFinished && status === 'running') return;
+    if (status === 'success' || status === 'failed') {
+      isFinished = true;
+    }
     try {
       await connectDB(process.env.MONGODB_URI, true);
       const updateFields = {
