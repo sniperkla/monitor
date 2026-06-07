@@ -33,7 +33,7 @@ export async function POST(request) {
 
     if (targetType === 'local') {
       // Local Host listing
-      const cmd = `cd ${resolvedPath} && ls -la && cat package.json 2>/dev/null && cat docker-compose.yml 2>/dev/null && cat Dockerfile 2>/dev/null && cat requirements.txt 2>/dev/null && cat pyproject.toml 2>/dev/null && cat pom.xml 2>/dev/null && cat build.gradle 2>/dev/null`;
+      const cmd = `cd ${resolvedPath} && ls -la && cat package.json 2>/dev/null && cat docker-compose.yml 2>/dev/null && cat Dockerfile 2>/dev/null && cat requirements.txt 2>/dev/null && cat pyproject.toml 2>/dev/null && cat pom.xml 2>/dev/null && cat build.gradle 2>/dev/null && echo "=== DOCKER COMPOSE VERSION ===" && (docker compose version 2>/dev/null || docker-compose --version 2>/dev/null)`;
       filesListing = await new Promise((resolve) => {
         exec(cmd, (error, stdout, stderr) => {
           resolve(stdout || stderr || 'No files found or unable to scan.');
@@ -79,7 +79,7 @@ export async function POST(request) {
       filesListing = await new Promise((resolve, reject) => {
         const conn = new Client();
         conn.on('ready', () => {
-          const sshCmd = `cd ${resolvedPath} && ls -la && cat package.json 2>/dev/null && cat docker-compose.yml 2>/dev/null && cat Dockerfile 2>/dev/null && cat requirements.txt 2>/dev/null && cat pyproject.toml 2>/dev/null && cat pom.xml 2>/dev/null && cat build.gradle 2>/dev/null`;
+          const sshCmd = `cd ${resolvedPath} && ls -la && cat package.json 2>/dev/null && cat docker-compose.yml 2>/dev/null && cat Dockerfile 2>/dev/null && cat requirements.txt 2>/dev/null && cat pyproject.toml 2>/dev/null && cat pom.xml 2>/dev/null && cat build.gradle 2>/dev/null && echo "=== DOCKER COMPOSE VERSION ===" && (docker compose version 2>/dev/null || docker-compose --version 2>/dev/null)`;
           conn.exec(sshCmd, (err, stream) => {
             if (err) {
               conn.end();
