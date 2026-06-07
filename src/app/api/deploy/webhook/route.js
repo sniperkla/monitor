@@ -93,7 +93,7 @@ async function sendTelegramNotification(config, status) {
 }
 
 // Background deployment execution
-async function runDeployment(config) {
+export async function runDeployment(config) {
   const startedAt = new Date();
   const projectId = config.id || 'default';
   const dbKey = projectId === 'default' ? 'auto_deploy_config' : `auto_deploy_config_${projectId}`;
