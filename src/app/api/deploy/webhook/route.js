@@ -153,42 +153,60 @@ async function runDeployment(config) {
   if (config.targetType === 'local') {
     // === LOCAL HOST DEPLOYMENT ===
     const cwdPath = resolvedPath.startsWith('/') ? resolvedPath : `${process.cwd()}/${resolvedPath}`;
-    const escapedCommand = config.deployCommand.replace(/'/g, "'\\''");
-    const localCommand = `
-if command -v tmux >/dev/null 2>&1; then
-  logFile="/tmp/deploy_${projectId}.log"
-  sessionName="deploy_${projectId}"
-  rm -f "$logFile" "$logFile.code" && touch "$logFile"
-  tmux kill-session -t "$sessionName" 2>/dev/null
-  tmux new-session -d -s "$sessionName" -c "${cwdPath}" "sh -c '( (${escapedCommand}) ; echo \\$? > \\"$logFile.code\\" ) 2>&1 | tee \\"$logFile\\"' "
-  
-  tail -f "$logFile" &
-  TAIL_PID=$!
-  
-  while tmux has-session -t "$sessionName" 2>/dev/null; do
-    sleep 1
-  done
-  
-  sleep 1.5
-  kill $TAIL_PID 2>/dev/null
-  wait $TAIL_PID 2>/dev/null
-  
-  EXIT_CODE=\$(cat "$logFile.code" 2>/dev/null || echo 0)
-  rm -f "$logFile" "$logFile.code"
-  exit \$EXIT_CODE
-else
-  (${config.deployCommand})
-fi
-`;
+    const sessionName = `deploy_${projectId}`;
+    const logFile = `/tmp/deploy_${projectId}.log`;
+    const codeFile = `/tmp/deploy_${projectId}.code`;
 
-    // Use spawn with shell: true to handle shell detection and execution
-    // This automatically uses /bin/sh on Unix and cmd.exe on Windows
-    // Note: With shell: true, the entire command string (including args) goes in the first param
-    const childProcess = spawn(localCommand, {
+    // Build the inner deploy script content as a JS string (no shell escaping needed)
+    // We write it to a temp file via printf on the remote host using \n-escaped lines.
+    // The outer wrapper script is built the same way and piped to bash -s via stdin.
+    const innerScript = `#!/bin/bash\nset -o pipefail\ncd "${cwdPath}"\n${config.deployCommand}\n`;
+
+    // Escape the innerScript for safe embedding in a printf argument
+    const escapedInner = innerScript
+      .replace(/\\/g, '\\\\')
+      .replace(/'/g, "'\\''")
+      .replace(/\n/g, '\\n');
+
+    const script = [
+      '#!/bin/bash',
+      `cd "${cwdPath}" || { echo "[deploy] ERROR: cannot cd to ${cwdPath}"; exit 1; }`,
+      '',
+      'if command -v tmux >/dev/null 2>&1; then',
+      `  rm -f "${logFile}" "${codeFile}" && touch "${logFile}"`,
+      `  tmux kill-session -t "${sessionName}" 2>/dev/null || true`,
+      '',
+      '  # Write deploy script to a temp file via printf (no heredoc escaping issues)',
+      '  DEPLOY_SCRIPT=$(mktemp /tmp/deploy_script_XXXXXX.sh)',
+      `  printf '%s' '${escapedInner}' > "$DEPLOY_SCRIPT"`,
+      '  chmod +x "$DEPLOY_SCRIPT"',
+      '',
+      `  tmux new-session -d -s "${sessionName}" "bash \'$DEPLOY_SCRIPT\' 2>&1 | tee \'${logFile}\'; echo \\$? > \'${codeFile}\'; rm -f \'$DEPLOY_SCRIPT\'"`,
+      '',
+      `  tail -f "${logFile}" &`,
+      '  TAIL_PID=$!',
+      `  while tmux has-session -t "${sessionName}" 2>/dev/null; do`,
+      '    sleep 1',
+      '  done',
+      '  sleep 2',
+      '  kill $TAIL_PID 2>/dev/null; wait $TAIL_PID 2>/dev/null',
+      '',
+      `  EXIT_CODE=$(cat "${codeFile}" 2>/dev/null | tr -d '[:space:]' | head -c 5)`,
+      `  rm -f "${logFile}" "${codeFile}"`,
+      '  exit ${EXIT_CODE:-0}',
+      'else',
+      '  # tmux not available — run directly in subshell',
+      `  ( cd "${cwdPath}" && ${config.deployCommand} )`,
+      'fi',
+    ].join('\n');
+
+    // Spawn bash reading script from stdin — avoids shell escaping issues
+    const childProcess = spawn('bash', ['-s'], {
       cwd: cwdPath,
-      shell: true,
-      stdio: ['ignore', 'pipe', 'pipe']
+      stdio: ['pipe', 'pipe', 'pipe']
     });
+    childProcess.stdin.write(script);
+    childProcess.stdin.end();
 
     // Register running process so it can be cancelled
     try {
@@ -298,6 +316,42 @@ fi
         }
       }
 
+      // Check if target requires routing through the Local Relay Agent
+      const isLocalhostSsh = /^(localhost|127\.0\.0\.1)$/.test(sshConfig.host);
+      if (isLocalhostSsh) {
+        logOutput += `[Relay] SSH target "${sshConfig.host}" detected as localhost. Auto-detecting Local Relay Agent...\n`;
+        await updateStatus('running', logOutput);
+
+        let relay = null;
+        const startTime = Date.now();
+        const timeoutMs = 30000; // Wait up to 30 seconds
+
+        while (Date.now() - startTime < timeoutMs) {
+          const activeRelays = global.__activeRelays;
+          if (activeRelays && activeRelays.size > 0) {
+            // Pick first active relay (or matching connection owner if available)
+            relay = Array.from(activeRelays.values())[0];
+            break;
+          }
+          logOutput += `[Relay] Local Relay Agent not active. Retrying detection in 2 seconds...\n`;
+          await updateStatus('running', logOutput);
+          await new Promise(resolve => setTimeout(resolve, 2000));
+        }
+
+        if (!relay) {
+          throw new Error('Local Relay Agent is not connected. Please start local-relay.js on your target machine to enable deployment to localhost.');
+        }
+
+        logOutput += `[Relay] Active Local Relay Agent found on local port ${relay.localPort}. Routing SSH traffic: ${sshConfig.host}:${sshConfig.port} -> 127.0.0.1:${relay.localPort}\n`;
+        await updateStatus('running', logOutput);
+
+        // Rewrite the target to point to the relay's local TCP proxy port
+        relay.targetHost = sshConfig.host;
+        relay.targetPort = sshConfig.port;
+        sshConfig.host = '127.0.0.1';
+        sshConfig.port = relay.localPort;
+      }
+
       logOutput += `[SSH] Connecting to ${sshConfig.username}@${sshConfig.host}:${sshConfig.port}...\n`;
       await updateStatus('running', logOutput);
 
@@ -313,42 +367,62 @@ fi
         logOutput += `[SSH] Connected successfully. Executing deployment script inside "${resolvedPath}"...\n\n`;
         updateStatus('running', logOutput);
 
-        // Wrap SSH command in a tmux session if tmux is available
-        const escapedCommand = config.deployCommand.replace(/'/g, "'\\''");
-        const fullSshCommand = `
-if command -v tmux >/dev/null 2>&1; then
-  logFile="/tmp/deploy_${projectId}.log"
-  sessionName="deploy_${projectId}"
-  rm -f "$logFile" "$logFile.code" && touch "$logFile"
-  tmux kill-session -t "$sessionName" 2>/dev/null
-  tmux new-session -d -s "$sessionName" -c "${resolvedPath}" "sh -c '( (${escapedCommand}) ; echo \\$? > \\"$logFile.code\\" ) 2>&1 | tee \\"$logFile\\"' "
-  
-  tail -f "$logFile" &
-  TAIL_PID=$!
-  
-  while tmux has-session -t "$sessionName" 2>/dev/null; do
-    sleep 1
-  done
-  
-  sleep 1.5
-  kill $TAIL_PID 2>/dev/null
-  wait $TAIL_PID 2>/dev/null
-  
-  EXIT_CODE=\$(cat "$logFile.code" 2>/dev/null || echo 0)
-  rm -f "$logFile" "$logFile.code"
-  exit \$EXIT_CODE
-else
-  cd ${resolvedPath} && (${config.deployCommand})
-fi
-`;
+        // Build the inner deploy script content as a JS string (no shell escaping needed)
+        // We write it to a temp file via printf on the remote host using \n-escaped lines.
+        // The outer wrapper script is built the same way and piped to bash -s via stdin.
+        const innerScript = `#!/bin/bash\nset -o pipefail\ncd "${resolvedPath}"\n${config.deployCommand}\n`;
 
-        conn.exec(fullSshCommand, (err, stream) => {
+        // Escape the innerScript for safe embedding in a printf argument
+        const escapedInner = innerScript
+          .replace(/\\/g, '\\\\')
+          .replace(/'/g, "'\\''")
+          .replace(/\n/g, '\\n');
+
+        const script = [
+          '#!/bin/bash',
+          `cd "${resolvedPath}" || { echo "[deploy] ERROR: cannot cd to ${resolvedPath}"; exit 1; }`,
+          '',
+          '# Check if tmux is available',
+          'if command -v tmux >/dev/null 2>&1; then',
+          `  rm -f "${logFile}" "${codeFile}" && touch "${logFile}"`,
+          `  tmux kill-session -t "${sessionName}" 2>/dev/null || true`,
+          '',
+          '  # Write the deploy script to a temp file to avoid escaping issues',
+          `  DEPLOY_SCRIPT=$(mktemp /tmp/deploy_script_XXXXXX.sh)`,
+          `  printf '%s' '${escapedInner}' > "$DEPLOY_SCRIPT"`,
+          `  chmod +x "$DEPLOY_SCRIPT"`,
+          '',
+          `  tmux new-session -d -s "${sessionName}" "bash \'$DEPLOY_SCRIPT\' 2>&1 | tee \'${logFile}\'; echo \\$? > \'${codeFile}\'; rm -f \'$DEPLOY_SCRIPT\'"`,
+          '',
+          '  # Stream logs while tmux session is alive',
+          `  tail -f "${logFile}" &`,
+          '  TAIL_PID=$!',
+          `  while tmux has-session -t "${sessionName}" 2>/dev/null; do`,
+          '    sleep 1',
+          '  done',
+          '  sleep 2',
+          '  kill $TAIL_PID 2>/dev/null; wait $TAIL_PID 2>/dev/null',
+          '',
+          `  EXIT_CODE=$(cat "${codeFile}" 2>/dev/null | tr -d '[:space:]' | head -c 5)`,
+          `  rm -f "${logFile}" "${codeFile}"`,
+          '  exit ${EXIT_CODE:-0}',
+          'else',
+          '  # tmux not available — run directly in subshell',
+          `  ( cd "${resolvedPath}" && ${config.deployCommand} )`,
+          'fi',
+        ].join('\n');
+
+        conn.exec('bash -s', (err, stream) => {
           if (err) {
             logOutput += `[SSH Error] Failed to execute script: ${err.message}\n`;
             updateStatus('failed', logOutput);
             conn.end();
             return;
           }
+
+          // Write the script to stdin then close it so bash reads it
+          stream.write(script);
+          stream.end();
 
           stream.on('data', (data) => {
             logOutput += data.toString();
