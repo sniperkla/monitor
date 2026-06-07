@@ -6,7 +6,7 @@ A modern, web-based SSH terminal and server monitoring dashboard built with Next
 
 - 🖥️ **Web-based SSH Terminal**: Full-featured xterm.js terminal with resizing and real-time WebSocket communication.
 - 📊 **Dashboard**: Visual overview of your server status (Online/Offline).
-- 🔑 **Key Management**: Support for private key (.pem, .ppk) and password authentication.
+- 🔑 **Key Management**: Support for private key (.pem, .ppk) and passwor authentication.
 - 🎨 **Modern UI**: Premium dark theme with glassmorphism effects.
 - 🏷️ **Organization**: Tag, color code, and search your connections.
 - 📁 **File Upload**: Drag-and-drop private keys securely.
@@ -136,4 +136,5 @@ sudo certbot --nginx -d monitor.eaqdragon.com
 ## License
 
 MIT
+
 # monitor
