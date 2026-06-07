@@ -27,6 +27,30 @@ function verifySignature(bodyText, secret, signatureHeader) {
   }
 }
 
+// Helper to update status in DB (outside runDeployment scope)
+async function updateDeployStatus(projectId, status, logText, cancelRequested = false) {
+  try {
+    const dbKey = projectId === 'default' ? 'auto_deploy_config' : `auto_deploy_config_${projectId}`;
+    await connectDB(process.env.MONGODB_URI, true);
+    
+    const updateFields = {
+      'value.status': status,
+      'value.lastDeployLog': logText,
+      'value.lastDeployAt': new Date(),
+      'value.cancelRequested': cancelRequested,
+      'value.deployRunId': null
+    };
+
+    await SystemSetting.findOneAndUpdate(
+      { key: dbKey },
+      { $set: updateFields }
+    );
+    await broadcastDeploymentStatus(projectId);
+  } catch (err) {
+    console.error('Failed to update deploy status in DB:', err.message);
+  }
+}
+
 // Background deployment execution
 async function runDeployment(config) {
   const startedAt = new Date();
@@ -305,13 +329,17 @@ export async function POST(request) {
         return NextResponse.json({ success: false, error: 'SSH deployment is configured but no SSH connection is selected. Please update deployment settings.' }, { status: 400 });
       }
 
-      const db = await connectDB(process.env.MONGODB_URI, true);
-      const repo = new ConnectionRepository(db);
-      await repo.init();
-      const connection = await repo.findById(connectionId);
-      if (!connection) {
-        console.log(`[webhook] ❌ SSH connection ID ${connectionId} not found`);
-        return NextResponse.json({ success: false, error: `SSH connection with ID ${connectionId} configured for project "${projectId}" does not exist. Please select a valid SSH connection.` }, { status: 400 });
+      const hasCachedConnection = config.sshConnectionData && config.sshConnectionData.host;
+      if (!hasCachedConnection) {
+        console.log(`[webhook] SSH connection data not cached in project config, verifying in DB...`);
+        const db = await connectDB(isManual ? null : process.env.MONGODB_URI, !isManual);
+        const repo = new ConnectionRepository(db);
+        await repo.init();
+        const connection = await repo.findById(connectionId);
+        if (!connection) {
+          console.log(`[webhook] ❌ SSH connection ID ${connectionId} not found`);
+          return NextResponse.json({ success: false, error: `SSH connection with ID ${connectionId} configured for project "${projectId}" does not exist. Please select a valid SSH connection.` }, { status: 400 });
+        }
       }
     }
 
@@ -351,6 +379,11 @@ export async function POST(request) {
         const signatureHeader = request.headers.get('x-hub-signature-256');
         if (!signatureHeader || !verifySignature(bodyText, config.secret, signatureHeader)) {
           console.log(`[webhook] Signature verification failed`);
+          await updateDeployStatus(
+            projectId,
+            'failed',
+            `[Webhook Error] Signature verification failed. Please check that the Secret configured on GitHub matches the Secret in the Auto Deploy settings.`
+          );
           return NextResponse.json({ success: false, error: 'Invalid signature verification' }, { status: 401 });
         }
       }
@@ -366,6 +399,11 @@ export async function POST(request) {
           console.log(`[webhook] Push ref: ${payload.ref}${expectedRef ? `, expected: ${expectedRef}` : ', no branch filter configured'}`);
           if (expectedRef && payload.ref !== expectedRef) {
             console.log(`[webhook] Branch mismatch - skipping deployment`);
+            await updateDeployStatus(
+              projectId,
+              'idle',
+              `[Webhook Skipped] Received GitHub push event for ref "${payload.ref}" but watched branch is configured as "${rawBranch}". Skipping deployment.`
+            );
             return NextResponse.json({ 
               success: true, 
               message: `Ref ${payload.ref} does not match watched branch ${expectedRef}. Skipping deployment.` 
@@ -374,6 +412,11 @@ export async function POST(request) {
         }
       } catch (e) {
         console.log(`[webhook] Warning: Could not parse payload:`, e.message);
+        await updateDeployStatus(
+          projectId,
+          'failed',
+          `[Webhook Error] Failed to parse payload from GitHub request: ${e.message}`
+        );
       }
     }
 
