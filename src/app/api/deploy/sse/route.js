@@ -50,7 +50,11 @@ export async function GET(request) {
         if (idx > -1) {
           clients.splice(idx, 1);
         }
-        controller.close();
+        try {
+          controller.close();
+        } catch (e) {
+          // Ignore if already closed/aborted
+        }
         console.log(`[deploymentSSE] Client disconnected: ${clientId}`);
       });
     }

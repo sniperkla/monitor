@@ -177,8 +177,8 @@ async function getDynamicConnection(uri, tunnelConfig = null) {
 
   if (connectionPool.has(cacheKey)) {
     const cachedConn = connectionPool.get(cacheKey);
-    // For Mongoose connections
-    if (cachedConn.readyState && cachedConn.readyState === 1) return cachedConn;
+    // For Mongoose connections (connected or connecting)
+    if (cachedConn.readyState && (cachedConn.readyState === 1 || cachedConn.readyState === 2)) return cachedConn;
     // For MySQL pools (simple check)
     if (cachedConn.pool && !cachedConn._closing) return cachedConn;
     connectionPool.delete(cacheKey);
