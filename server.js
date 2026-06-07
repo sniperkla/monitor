@@ -863,7 +863,15 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
           
           if (useShell) {
             // Request a PTY shell when the caller needs an interactive terminal.
-            sshClient.shell({ term: 'xterm-256color', cols: cols || 120, rows: rows || 30 }, (err, stream) => {
+            sshClient.shell({
+              term: 'xterm-256color',
+              cols: cols || 120,
+              rows: rows || 30,
+              modes: {
+                VERASE: 127,
+                3: 127
+              }
+            }, (err, stream) => {
               if (err) {
                 socket.emit('ssh:error', { message: err?.message || String(err) || 'Failed to open shell' });
                 return;
