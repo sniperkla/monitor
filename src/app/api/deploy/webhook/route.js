@@ -354,14 +354,14 @@ async function runDeployment(config) {
           ].join('\n') + '\n';
 
           // ── Write deploy script via SFTP ─────────────────────────────────
-          const writeDeploy = sftp.createWriteStream(remoteDeployPath);
-          writeDeploy.on('error', (e) => {
-            logOutput += `[SSH Error] Failed to write deploy script: ${e.message}\n`;
-            updateStatus('failed', logOutput);
-            conn.end();
-          });
+          sftp.writeFile(remoteDeployPath, deployScript, (writeErr) => {
+            if (writeErr) {
+              logOutput += `[SSH Error] Failed to write deploy script: ${writeErr.message}\n`;
+              updateStatus('failed', logOutput);
+              conn.end();
+              return;
+            }
 
-          writeDeploy.on('finish', () => {
             logOutput += `[SSH] Script uploaded. Launching deployment synchronously...\n\n`;
             updateStatus('running', logOutput);
 
@@ -439,9 +439,6 @@ async function runDeployment(config) {
                 });
               });
           });
-
-          writeDeploy.write(deployScript);
-          writeDeploy.end();
         });
       });
 
