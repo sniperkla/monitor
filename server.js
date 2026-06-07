@@ -1186,6 +1186,9 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
                  cmdSuffix = `${dockerSudo}docker exec ${containerId} sh -c "${checks}; echo 'NONE'"`;
              } else if (action === 'prune-volumes') {
                  cmdSuffix = `volume prune -f`;
+             } else if (action === 'prune-images') {
+                 const pruneAll = args && (args[0] === true || args[0] === 'all');
+                 cmdSuffix = `image prune ${pruneAll ? '-a ' : ''}-f`;
              } else if (action === 'rm-volumes' && args.length > 0) {
                  const volumeIds = args.map(id => String(id).replace(/[^a-zA-Z0-9._/:-]/g, '')).filter(Boolean);
                  if (volumeIds.length === 0) return socket.emit('docker:error', 'No valid volume IDs');

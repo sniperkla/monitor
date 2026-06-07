@@ -195,6 +195,7 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
   const [createModal, setCreateModal] = useState({ isOpen: false, image: '', name: '', ports: '', env: '', volumes: '', isManual: true });
   const [configEditor, setConfigEditor] = useState({ isOpen: false, file: '', content: '', containerId: '', containerName: '' });
   const [pruneVolumesModal, setPruneVolumesModal] = useState({ isOpen: false, confirmText: '' });
+  const [pruneImagesModal, setPruneImagesModal] = useState({ isOpen: false, pruneAll: false, confirmText: '' });
   const [selectedVolumes, setSelectedVolumes] = useState([]);
 
   const [pendingActions, setPendingActions] = useState({}); // { id: actionName }
@@ -630,6 +631,10 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
           setIsLoading(false);
           addNotification({ title: 'Volumes Pruned', message: 'Unused volumes have been successfully deleted.', type: 'success' });
           socketRef.current.emit('docker:command', { action: 'volumes' });
+        } else if (action === 'prune-images') {
+          setIsLoading(false);
+          addNotification({ title: 'Images Pruned', message: 'Unused Docker images have been successfully deleted.', type: 'success' });
+          socketRef.current.emit('docker:command', { action: 'images' });
         } else if (action === 'rm-volumes') {
           setIsLoading(false);
           addNotification({ title: 'Volumes Deleted', message: 'Selected volumes were deleted successfully.', type: 'success' });
@@ -1318,15 +1323,26 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
                     {activeTab === 'images' && (
                         <div className="flex flex-col gap-5">
                             {/* Stats row */}
-                            <div className="flex gap-3 flex-wrap">
-                                <StatCard icon={Layers} label="Local Images" value={images.length} color="emerald" />
-                                <StatCard 
-                                  icon={Package} 
-                                  label="Unused" 
-                                  value={images.filter(img => !containers.some(c => c.image.includes(img.Repository))).length} 
-                                  color="rose" 
-                                />
-                                <StatCard icon={Download} label="Pulling" value={Object.keys(pullingTasks).length} color="sky" />
+                            <div className="flex gap-3 flex-wrap items-center justify-between">
+                                <div className="flex gap-3 flex-wrap flex-1">
+                                    <StatCard icon={Layers} label="Local Images" value={images.length} color="emerald" />
+                                    <StatCard 
+                                      icon={Package} 
+                                      label="Unused" 
+                                      value={images.filter(img => !containers.some(c => c.image.includes(img.Repository))).length} 
+                                      color="rose" 
+                                    />
+                                    <StatCard icon={Download} label="Pulling" value={Object.keys(pullingTasks).length} color="sky" />
+                                </div>
+                                <div className="flex gap-2">
+                                    <button 
+                                      onClick={() => setPruneImagesModal({ isOpen: true, pruneAll: false, confirmText: '' })}
+                                      className="px-4 py-2 bg-rose-500/10 text-rose-500 hover:bg-rose-500 hover:text-white rounded-xl text-xs font-bold transition-all flex items-center gap-2 border border-rose-500/20"
+                                    >
+                                      <Trash2 size={14} />
+                                      Prune Images
+                                    </button>
+                                </div>
                             </div>
 
                             {/* Search */}
@@ -1939,6 +1955,71 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
                     setIsLoading(true);
                     socketRef.current.emit('docker:command', { action: 'prune-volumes' });
                     setPruneVolumesModal({ isOpen: false, confirmText: '' });
+                  }}
+                  className="px-4 py-2 rounded-lg text-sm font-bold bg-rose-500 text-white hover:bg-rose-600 transition-all disabled:opacity-50"
+               >Prune</button>
+              </div>
+            </div>
+          </MacOSModalWindow>
+        )}
+
+        {pruneImagesModal.isOpen && (
+          <MacOSModalWindow
+            isOpen
+            title="Prune Images"
+            icon={AlertTriangle}
+            onClose={() => setPruneImagesModal({ isOpen: false, pruneAll: false, confirmText: '' })}
+            zIndexClassName="z-[9999]"
+            defaultWidth={400}
+            defaultHeight={280}
+            maxWidthClassName="max-w-[400px]"
+            closeOnOverlayClick
+          >
+            <div className="p-5 flex flex-col h-full bg-transparent">
+              <div className="text-[13px] leading-relaxed text-[var(--text-primary)] mb-4">
+                This will delete unused Docker images from the host system.
+                <div className="mt-3 flex items-center gap-2 bg-white/5 p-2.5 rounded-xl border border-white/5">
+                  <input
+                    type="checkbox"
+                    id="prune-all-checkbox"
+                    checked={pruneImagesModal.pruneAll}
+                    onChange={(e) => setPruneImagesModal(prev => ({ ...prev, pruneAll: e.target.checked }))}
+                    className="accent-rose-500 rounded"
+                  />
+                  <label htmlFor="prune-all-checkbox" className="text-xs text-[var(--text-muted)] cursor-pointer select-none">
+                    Remove all unused images (not just dangling ones)
+                  </label>
+                </div>
+                <div className="mt-3">
+                  To confirm, type <strong className="text-rose-400">delete</strong> below:
+                </div>
+              </div>
+              <input 
+                autoFocus
+                type="text"
+                placeholder="delete"
+                className="w-full bg-black/30 border border-white/10 rounded-xl px-4 py-2.5 text-sm outline-none font-mono text-[var(--text-primary)] focus:border-rose-500/50 transition-colors"
+                value={pruneImagesModal.confirmText}
+                onChange={(e) => setPruneImagesModal(prev => ({ ...prev, confirmText: e.target.value }))}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && pruneImagesModal.confirmText === 'delete') {
+                    setIsLoading(true);
+                    socketRef.current.emit('docker:command', { action: 'prune-images', args: [pruneImagesModal.pruneAll] });
+                    setPruneImagesModal({ isOpen: false, pruneAll: false, confirmText: '' });
+                  }
+                }}
+              />
+              <div className="mt-auto flex justify-end gap-2 pt-4 border-t border-white/5">
+                <button 
+                  onClick={() => setPruneImagesModal({ isOpen: false, pruneAll: false, confirmText: '' })}
+                  className="px-4 py-2 rounded-lg text-sm font-bold text-[var(--text-muted)] hover:bg-white/5 transition-all"
+                >Cancel</button>
+                <button 
+                  disabled={pruneImagesModal.confirmText !== 'delete'}
+                  onClick={() => {
+                    setIsLoading(true);
+                    socketRef.current.emit('docker:command', { action: 'prune-images', args: [pruneImagesModal.pruneAll] });
+                    setPruneImagesModal({ isOpen: false, pruneAll: false, confirmText: '' });
                   }}
                   className="px-4 py-2 rounded-lg text-sm font-bold bg-rose-500 text-white hover:bg-rose-600 transition-all disabled:opacity-50"
                >Prune</button>
