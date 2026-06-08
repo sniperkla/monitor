@@ -2277,7 +2277,29 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
                                 {t('deploy.sshConnectionMissing', 'The selected SSH connection ID is not available. Auto-deployments require a database-backed connection.')} <span className="font-mono">{deployConfig.connectionId}</span>
                               </div>
                             )}
-                            {connections.length === 0 ? (
+                            {vaultStatus === 'locked' ? (
+                              <div className="p-4 bg-amber-500/5 border border-amber-500/15 rounded-xl text-center space-y-2">
+                                <span className="block text-[11px] text-amber-500 font-medium">{t('vault.lockedHint', 'Your database vault is locked.')}</span>
+                                <button
+                                  type="button"
+                                  onClick={showVault}
+                                  className="w-full px-3 py-1.5 text-xs bg-amber-500 hover:bg-amber-600 rounded-lg text-white font-bold transition-colors"
+                                >
+                                  {t('settings_ui.db.unlockNow', 'Unlock Now')}
+                                </button>
+                              </div>
+                            ) : vaultStatus === 'setup' ? (
+                              <div className="p-4 bg-indigo-500/5 border border-indigo-500/15 rounded-xl text-center space-y-2">
+                                <span className="block text-[11px] text-indigo-500 font-medium">{t('vault.setupHint', 'Database vault is not configured.')}</span>
+                                <button
+                                  type="button"
+                                  onClick={showVault}
+                                  className="w-full px-3 py-1.5 text-xs bg-indigo-500 hover:bg-indigo-600 rounded-lg text-white font-bold transition-colors"
+                                >
+                                  {t('settings_ui.db.setupNow', 'Set Up Now')}
+                                </button>
+                              </div>
+                            ) : connections.length === 0 ? (
                               <div className="p-3 bg-amber-500/5 border border-amber-500/10 rounded-xl text-center">
                                 <span className="block text-[10px] text-amber-500">{t('deploy.sshNoConnections', 'No SSH connections found.')}</span>
                                 <span className="block text-[9px] text-[var(--text-muted)] mt-1">{t('deploy.sshNoConnectionsHint', 'Please create an SSH connection in the main panel first.')}</span>
@@ -2411,13 +2433,6 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
                                   className="text-[9px] px-2 py-1.5 rounded-lg bg-amber-500/20 text-amber-400 hover:bg-amber-500/30 border border-amber-500/30 transition-all"
                                 >
                                   🦙 Ollama
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => setDeployConfig(p => ({ ...p, aiEndpoint: 'https://integrate.api.nvidia.com/v1/chat/completions', aiCustomModel: 'deepseek-ai/deepseek-v4-flash' }))}
-                                  className="text-[9px] px-2 py-1.5 rounded-lg bg-green-500/20 text-green-400 hover:bg-green-500/30 border border-green-500/30 transition-all"
-                                >
-                                  🟢 NVIDIA NIM
                                 </button>
                               </div>
 
