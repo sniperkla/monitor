@@ -205,7 +205,7 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
       };
       fetchDeployData();
     }
-  }, [activeTab, selectedProjectId, apiFetch, relayConnected]);
+  }, [activeTab, selectedProjectId, apiFetch, relayConnected, vaultStatus, decryptedUri]);
 
   // Real-time Server-Sent Events for deployment status
   useEffect(() => {

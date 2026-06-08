@@ -446,6 +446,12 @@ export default function FileManager({
 
     newSocket.on('ssh:closed', () => {
       appDispatch({ type: 'UPDATE_CONNECTION', payload: { _id: connectionId, status: 'offline' } });
+      // Clean up any pending delete operations
+      if (deleteBatchRef.current.toastId) {
+        removeNotification(deleteBatchRef.current.toastId);
+        deleteBatchRef.current = { count: 0, total: 0, toastId: null };
+        addNotification({ title: t('files.status.error'), message: t('files.errors.deleteDisconnect', 'Deletion interrupted — connection lost. Please refresh and verify.'), type: 'error' });
+      }
       requestReconnect('SSH session closed after idle time. Reconnecting...', {
         preserveTransfer: !!transferRef.current,
         notificationMessage: transferRef.current?.action === 'download'
@@ -459,6 +465,12 @@ export default function FileManager({
     newSocket.on('disconnect', (reason) => {
       if (reason === 'io client disconnect') return;
       appDispatch({ type: 'UPDATE_CONNECTION', payload: { _id: connectionId, status: 'offline' } });
+      // Clean up any pending delete operations
+      if (deleteBatchRef.current.toastId) {
+        removeNotification(deleteBatchRef.current.toastId);
+        deleteBatchRef.current = { count: 0, total: 0, toastId: null };
+        addNotification({ title: t('files.status.error'), message: t('files.errors.deleteDisconnect', 'Deletion interrupted — connection lost. Please refresh and verify.'), type: 'error' });
+      }
       requestReconnect(reason === 'io server disconnect'
         ? 'Session expired after idle time. Reconnecting...'
         : 'Socket disconnected. Reconnecting...', {
@@ -1669,14 +1681,17 @@ export default function FileManager({
     if (sshFileData) {
       try {
         const dragData = JSON.parse(sshFileData);
+        const dragItems = dragData.files || [{
+          filename: dragData.filename,
+          filePath: dragData.filePath,
+          isDir: dragData.isDir,
+          size: dragData.size
+        }];
+
         // Only do cross-server transfer if from a different connection
         if (dragData.connectionId !== connectionId) {
-          const destPath = currentPath === '.' 
-            ? dragData.filename 
-            : `${currentPath}/${dragData.filename}`;
-          
           const transferObj = {
-            filename: dragData.filename,
+            filename: dragItems.length > 1 ? `${dragItems.length} items` : dragItems[0].filename,
             progress: 0,
             action: 'copy',
             waiting: false
@@ -1684,32 +1699,51 @@ export default function FileManager({
           setTransfer(transferObj);
           transferRef.current = transferObj;
 
-          toastRef.current = addNotification({ title: t('files.status.upload'), message: `${t('files.status.uploadingTo')} ${dragData.filename}...`, type: 'loading', duration: 0 });
-          socket.emit('sftp:cross_server_transfer', {
-            srcConnId: dragData.connectionId,
-            srcPath: dragData.filePath,
-            destPath: destPath,
-            action: 'copy'
+          toastRef.current = addNotification({ 
+            title: t('files.status.upload'), 
+            message: `${t('files.status.uploadingTo')} ${dragItems.length > 1 ? `${dragItems.length} items` : dragItems[0].filename}...`, 
+            type: 'loading', 
+            duration: 0 
+          });
+
+          dragItems.forEach(item => {
+            const destPath = currentPath === '.' 
+              ? item.filename 
+              : `${currentPath}/${item.filename}`;
+            socket.emit('sftp:cross_server_transfer', {
+              srcConnId: dragData.connectionId,
+              srcPath: item.filePath,
+              destPath: destPath,
+              action: 'copy'
+            });
           });
           return;
         } else {
           // Same server - do a regular copy
-          const destPath = currentPath === '.' 
-            ? dragData.filename 
-            : `${currentPath}/${dragData.filename}`;
-          if (dragData.filePath !== destPath) {
-            const transferObj = {
-              filename: dragData.filename,
-              progress: 0,
-              action: 'copy',
-              waiting: false
-            };
-            setTransfer(transferObj);
-            transferRef.current = transferObj;
+          const transferObj = {
+            filename: dragItems.length > 1 ? `${dragItems.length} items` : dragItems[0].filename,
+            progress: 0,
+            action: 'copy',
+            waiting: false
+          };
+          setTransfer(transferObj);
+          transferRef.current = transferObj;
 
-            socket.emit('sftp:copy', { src: dragData.filePath, dest: destPath });
-            toastRef.current = addNotification({ title: t('files.context.copy'), message: `${t('files.context.copy')} ${dragData.filename}...`, type: 'loading', duration: 0 });
-          }
+          toastRef.current = addNotification({ 
+            title: t('files.context.copy'), 
+            message: `${t('files.context.copy')} ${dragItems.length > 1 ? `${dragItems.length} items` : dragItems[0].filename}...`, 
+            type: 'loading', 
+            duration: 0 
+          });
+
+          dragItems.forEach(item => {
+            const destPath = currentPath === '.' 
+              ? item.filename 
+              : `${currentPath}/${item.filename}`;
+            if (item.filePath !== destPath) {
+              socket.emit('sftp:copy', { src: item.filePath, dest: destPath });
+            }
+          });
           return;
         }
       } catch (err) {
@@ -1826,6 +1860,9 @@ export default function FileManager({
   const handleDelete = () => {
     if ((!contextMenu.file && selectedFiles.size === 0) || !socket) return;
     
+    // Pre-flight: ensure connection is alive before attempting delete
+    if (!ensureSocketReady('delete files')) return;
+    
     const fileTarget = contextMenu.file ? contextMenu.file.filename : null;
     let targets = Array.from(selectedFiles);
     if (fileTarget && !selectedFiles.has(fileTarget)) {
@@ -1837,6 +1874,13 @@ export default function FileManager({
     showConfirm(
       targets.length > 1 ? `${t('files.modals.delete.confirm')} ${targets.length} items?` : `${t('files.modals.delete.confirm')} '${targets[0]}'?`,
       () => {
+        // Double-check socket is still connected right before emitting
+        if (!socketRef.current?.connected || statusRef.current !== 'ready') {
+          addNotification({ title: t('files.status.error'), message: t('files.errors.deleteDisconnect', 'Connection lost before deletion could start. Please reconnect and try again.'), type: 'error' });
+          requestReconnect('Connection lost. Reconnecting...');
+          return;
+        }
+        
         const toastId = addNotification({ 
           title: t('files.modals.delete.delete'), 
           message: `${t('files.actions.deleting')}: ${truncateName(targets[0], 15)}${targets.length > 1 ? ` (+${targets.length - 1})` : ''} (0/${targets.length})`, 
@@ -1850,11 +1894,22 @@ export default function FileManager({
           toastId: toastId
         };
         
-        // Safety timeout to clear toast if server vanishes
+        // Safety timeout — if the server goes silent, notify the user instead of silently clearing
         setTimeout(() => {
            if (deleteBatchRef.current.toastId === toastId) {
               removeNotification(toastId);
-              deleteBatchRef.current.toastId = null;
+              deleteBatchRef.current = { count: 0, total: 0, toastId: null };
+              addNotification({ 
+                title: t('files.status.error'), 
+                message: t('files.errors.deleteTimeout', 'Deletion timed out — the server may be unreachable. Please refresh the file list to verify.'), 
+                type: 'error',
+                duration: 8000
+              });
+              // Refresh file list so UI reflects actual server state
+              const targetPath = currentPathRef.current || '.';
+              if (socketRef.current?.connected) {
+                socketRef.current.emit('sftp:list', targetPath);
+              }
            }
         }, 15000);
 
@@ -1962,31 +2017,52 @@ export default function FileManager({
   };
 
   const handleCopy = (action = 'copy') => {
-    if (!contextMenu.file) return;
-    const path = currentPath === '.' ? contextMenu.file.filename : `${currentPath}/${contextMenu.file.filename}`;
-    setClipboard({ 
-      file: contextMenu.file, 
-      action, 
-      sourcePath: path,
-      connectionId: connectionId // Store source connection
+    const fileTarget = contextMenu.file;
+    let targets = [];
+    if (fileTarget && !selectedFiles.has(fileTarget.filename)) {
+      targets = [fileTarget];
+    } else {
+      targets = Array.from(selectedFiles).map(name => files.find(f => f.filename === name)).filter(Boolean);
+    }
+    
+    if (targets.length === 0 && fileTarget) {
+      targets = [fileTarget];
+    }
+    
+    if (targets.length === 0) return;
+    
+    const items = targets.map(t => {
+      const path = currentPath === '.' ? t.filename : `${currentPath}/${t.filename}`;
+      return { file: t, sourcePath: path };
     });
-    addNotification({ title: t('common.success'), message: `${action === 'copy' ? t('files.actions.copied') : t('files.actions.cut')} ${contextMenu.file.filename}`, type: 'success' });
+    
+    setClipboard({ 
+      file: items[0].file, 
+      sourcePath: items[0].sourcePath,
+      files: items,
+      action, 
+      connectionId: connectionId
+    });
+    
+    addNotification({ 
+      title: t('common.success'), 
+      message: `${action === 'copy' ? t('files.actions.copied') : t('files.actions.cut')} ${items.length > 1 ? `${items.length} items` : items[0].file.filename}`, 
+      type: 'success' 
+    });
     setContextMenu({ ...contextMenu, visible: false });
   };
 
   function handlePaste() {
     if (!clipboard || !socket) return;
     if (!ensureSocketReady('paste again')) return;
-    const destPath = currentPath === '.' ? clipboard.file.filename : `${currentPath}/${clipboard.file.filename}`;
     
-    // Prevent pasting into same path with same name unless it's a copy
-    let finalDest = destPath;
-    if (clipboard.sourcePath === destPath && clipboard.connectionId === connectionId && clipboard.action === 'copy') {
-       finalDest = destPath + '_copy';
-    }
-
+    const items = clipboard.files || [{
+      file: clipboard.file,
+      sourcePath: clipboard.sourcePath
+    }];
+    
     const transferObj = {
-      filename: clipboard.file.filename,
+      filename: items.length > 1 ? `${items.length} items` : items[0].file.filename,
       progress: 0,
       action: clipboard.action === 'cut' ? 'move' : 'copy',
       waiting: false
@@ -1996,25 +2072,51 @@ export default function FileManager({
 
     // Check if Cross-Server Transfer
     if (clipboard.connectionId !== connectionId) {
-      toastRef.current = addNotification({ title: t('files.status.upload'), message: `${t('files.actions.loading', { action: t('files.status.upload') })}...`, type: 'loading', duration: 0 });
-      socket.emit('sftp:cross_server_transfer', {
-        srcConnId: clipboard.connectionId,
-        srcPath: clipboard.sourcePath,
-        destPath: finalDest,
-        action: clipboard.action
+      toastRef.current = addNotification({ 
+        title: t('files.status.upload'), 
+        message: `${t('files.actions.loading', { action: t('files.status.upload') })} ${items.length > 1 ? `${items.length} items` : items[0].file.filename}...`, 
+        type: 'loading', 
+        duration: 0 
       });
+
+      items.forEach(item => {
+        const destPath = currentPath === '.' ? item.file.filename : `${currentPath}/${item.file.filename}`;
+        socket.emit('sftp:cross_server_transfer', {
+          srcConnId: clipboard.connectionId,
+          srcPath: item.sourcePath,
+          destPath: destPath,
+          action: clipboard.action
+        });
+      });
+
       if (clipboard.action === 'cut') setClipboard(null);
       return;
     }
 
-    if (clipboard.action === 'copy') {
-      socket.emit('sftp:copy', { src: clipboard.sourcePath, dest: finalDest });
-    } else {
-      socket.emit('sftp:move', { src: clipboard.sourcePath, dest: finalDest });
+    items.forEach(item => {
+      const destPath = currentPath === '.' ? item.file.filename : `${currentPath}/${item.file.filename}`;
+      let finalDest = destPath;
+      if (item.sourcePath === destPath && clipboard.connectionId === connectionId && clipboard.action === 'copy') {
+         finalDest = destPath + '_copy';
+      }
+
+      if (clipboard.action === 'copy') {
+        socket.emit('sftp:copy', { src: item.sourcePath, dest: finalDest });
+      } else {
+        socket.emit('sftp:move', { src: item.sourcePath, dest: finalDest });
+      }
+    });
+
+    if (clipboard.action === 'cut') {
       setClipboard(null); // Clear after move
     }
-    toastRef.current = addNotification({ title: t('files.context.paste'), message: `${t('files.context.paste')} ${t('common.to')} ${currentPath}...`, type: 'loading', duration: 0 });
-  };
+    toastRef.current = addNotification({ 
+      title: t('files.context.paste'), 
+      message: `${t('files.context.paste')} ${items.length > 1 ? `${items.length} items` : items[0].file.filename} ${t('common.to')} ${currentPath}...`, 
+      type: 'loading', 
+      duration: 0 
+    });
+  }
 
   // --- Keyboard Shortcuts for Copy, Cut, Paste ---
   useEffect(() => {
@@ -2034,44 +2136,46 @@ export default function FileManager({
       const isModKey = e.ctrlKey || e.metaKey;
 
       if (isModKey && (e.key === 'c' || e.key === 'C')) {
-        const targetFilename = lastSelectedFile || Array.from(selectedFiles)[0];
-        if (targetFilename) {
-          const targetFile = files.find(f => f.filename === targetFilename);
-          if (targetFile) {
-            e.preventDefault();
-            const path = currentPath === '.' ? targetFile.filename : `${currentPath}/${targetFile.filename}`;
-            setClipboard({
-              file: targetFile,
-              action: 'copy',
-              sourcePath: path,
-              connectionId: connectionId
-            });
-            addNotification({
-              title: t('common.success'),
-              message: `${t('files.actions.copied')} ${targetFile.filename}`,
-              type: 'success'
-            });
-          }
+        const targets = Array.from(selectedFiles).map(name => files.find(f => f.filename === name)).filter(Boolean);
+        if (targets.length > 0) {
+          e.preventDefault();
+          const items = targets.map(t => {
+            const path = currentPath === '.' ? t.filename : `${currentPath}/${t.filename}`;
+            return { file: t, sourcePath: path };
+          });
+          setClipboard({
+            file: items[0].file,
+            sourcePath: items[0].sourcePath,
+            files: items,
+            action: 'copy',
+            connectionId: connectionId
+          });
+          addNotification({
+            title: t('common.success'),
+            message: `${t('files.actions.copied')} ${items.length > 1 ? `${items.length} items` : items[0].file.filename}`,
+            type: 'success'
+          });
         }
       } else if (isModKey && (e.key === 'x' || e.key === 'X')) {
-        const targetFilename = lastSelectedFile || Array.from(selectedFiles)[0];
-        if (targetFilename) {
-          const targetFile = files.find(f => f.filename === targetFilename);
-          if (targetFile) {
-            e.preventDefault();
-            const path = currentPath === '.' ? targetFile.filename : `${currentPath}/${targetFile.filename}`;
-            setClipboard({
-              file: targetFile,
-              action: 'cut',
-              sourcePath: path,
-              connectionId: connectionId
-            });
-            addNotification({
-              title: t('common.success'),
-              message: `${t('files.actions.cut')} ${targetFile.filename}`,
-              type: 'success'
-            });
-          }
+        const targets = Array.from(selectedFiles).map(name => files.find(f => f.filename === name)).filter(Boolean);
+        if (targets.length > 0) {
+          e.preventDefault();
+          const items = targets.map(t => {
+            const path = currentPath === '.' ? t.filename : `${currentPath}/${t.filename}`;
+            return { file: t, sourcePath: path };
+          });
+          setClipboard({
+            file: items[0].file,
+            sourcePath: items[0].sourcePath,
+            files: items,
+            action: 'cut',
+            connectionId: connectionId
+          });
+          addNotification({
+            title: t('common.success'),
+            message: `${t('files.actions.cut')} ${items.length > 1 ? `${items.length} items` : items[0].file.filename}`,
+            type: 'success'
+          });
         }
       }
     };
@@ -2834,7 +2938,7 @@ export default function FileManager({
             <button 
               onClick={handlePaste}
               className="px-3 py-1.5 bg-blue-600/20 text-blue-400 hover:bg-blue-600/30 rounded-lg text-xs font-bold flex items-center gap-2 transition-all border border-blue-500/30 shadow-lg shadow-blue-500/10"
-              title={`${t('files.context.paste')} ${clipboard.file.filename}`}
+              title={`${t('files.context.paste')} ${clipboard.files && clipboard.files.length > 1 ? `${clipboard.files.length} items` : clipboard.file.filename}`}
             >
               <Clipboard size={14} /> {t('files.context.paste')}
             </button>
@@ -3030,12 +3134,27 @@ export default function FileManager({
                     }
                   }}
                   onDragStart={(e) => {
-                    const filePath = currentPath === '.' ? file.filename : `${currentPath}/${file.filename}`;
+                    const isSelected = selectedFiles.has(file.filename);
+                    const filesToDrag = isSelected ? Array.from(selectedFiles) : [file.filename];
+
+                    const dragItems = filesToDrag.map(name => {
+                      const f = files.find(x => x.filename === name);
+                      const filePath = currentPath === '.' ? name : `${currentPath}/${name}`;
+                      return {
+                        filename: name,
+                        filePath,
+                        isDir: f ? f.longname.startsWith('d') : false,
+                        size: f?.attrs?.size || 0
+                      };
+                    });
+
                     const dragData = JSON.stringify({
-                      filename: file.filename,
-                      filePath,
+                      files: dragItems,
                       connectionId,
                       connectionName,
+                      // For backward compatibility:
+                      filename: file.filename,
+                      filePath: currentPath === '.' ? file.filename : `${currentPath}/${file.filename}`,
                       isDir: isDir,
                       size: file.attrs?.size || 0,
                     });
@@ -3044,7 +3163,9 @@ export default function FileManager({
                     // Visual drag image
                     const ghost = document.createElement('div');
                     ghost.style.cssText = 'position:fixed;top:-100px;left:-100px;z-index:99999;background:var(--bg-secondary);color:var(--text-primary);padding:6px 14px;border-radius:8px;font-size:12px;border:1px solid var(--border-color);pointer-events:none;display:flex;align-items:center;gap:6px;';
-                    ghost.innerHTML = `${isDir ? '📁' : '📄'} ${file.filename}`;
+                    ghost.innerHTML = filesToDrag.length > 1
+                      ? `🗂️ ${filesToDrag.length} items`
+                      : `${isDir ? '📁' : '📄'} ${file.filename}`;
                     document.body.appendChild(ghost);
                     e.dataTransfer.setDragImage(ghost, 0, 0);
                     setTimeout(() => document.body.removeChild(ghost), 0);

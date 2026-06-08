@@ -12,3 +12,8 @@ export function getRunning(projectId) {
 export function clearRunning(projectId) {
   runningMap.delete(projectId);
 }
+
+/** Returns a copy of all currently registered running deployments. Used by graceful shutdown. */
+export function getAllRunning() {
+  return new Map(runningMap);
+}

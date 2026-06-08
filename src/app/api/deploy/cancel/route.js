@@ -40,7 +40,14 @@ export async function POST(request) {
 
     try {
       if (running.type === 'local' && running.proc) {
-        try { running.proc.kill('SIGTERM'); } catch (e) { try { running.proc.kill('SIGKILL'); } catch (e2) {} }
+        try {
+          // Terminate the entire process group (negative PID)
+          process.kill(-running.proc.pid, 'SIGTERM');
+        } catch (e) {
+          try { running.proc.kill('SIGTERM'); } catch (err) {
+            try { running.proc.kill('SIGKILL'); } catch (err2) {}
+          }
+        }
       } else if (running.type === 'ssh' && running.conn) {
         try { running.conn.end(); } catch (e) { console.warn('[deploy/cancel] Failed to end SSH connection:', e.message); }
       }

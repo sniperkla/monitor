@@ -3062,4 +3062,51 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
     console.log(`\x1b[36m║\x1b[0m   \x1b[37m💾 Database: \x1b[33m${MONGODB_URI}\x1b[0m              \x1b[36m║\x1b[0m`);
     console.log(`\x1b[36m╚════════════════════════════════════════════════════════════════╝\x1b[0m\n`);
   });
+
+  // ── Graceful shutdown ─────────────────────────────────────────────────────
+  // When the server is stopped (SIGTERM from Docker/PM2 or SIGINT from Ctrl+C),
+  // mark any in-flight deployments as 'interrupted' in the database so they
+  // don't stay stuck at 'running' forever after a restart.
+  async function gracefulShutdown(signal) {
+    console.log(`\n[server] ${signal} received — cleaning up running deployments...`);
+    try {
+      // Dynamically import to avoid circular deps with API routes
+      const { getAllRunning } = await import('./src/lib/deployProcesses.js');
+      const runningEntries = getAllRunning();
+      if (runningEntries.size > 0) {
+        // Ensure mongoose is connected before writing
+        if (mongoose.connection.readyState !== 1) {
+          await mongoose.connect(MONGODB_URI, { serverSelectionTimeoutMS: 4000 });
+        }
+        const SystemSetting = mongoose.model('SystemSetting');
+        const now = new Date();
+        const updates = [];
+        for (const [projectId] of runningEntries) {
+          const dbKey = projectId === 'default' ? 'auto_deploy_config' : `auto_deploy_config_${projectId}`;
+          updates.push(
+            SystemSetting.findOneAndUpdate(
+              { key: dbKey },
+              {
+                $set: {
+                  'value.status': 'failed',
+                  'value.deployRunId': null,
+                  'value.cancelRequested': false,
+                  'value.lastDeployLog': `[${now.toISOString()}] ⚠️ Deployment interrupted — server was restarted during deployment.\nThis usually happens when your deploy command rebuilds and restarts the server itself.\nPlease check the server to confirm whether the deployment succeeded.`
+                }
+              }
+            ).catch(e => console.error(`[shutdown] Failed to update project "${projectId}":`, e.message))
+          );
+        }
+        await Promise.allSettled(updates);
+        console.log(`[server] Marked ${runningEntries.size} deployment(s) as interrupted.`);
+      }
+    } catch (e) {
+      console.error('[server] Graceful shutdown error:', e.message);
+    }
+    process.exit(0);
+  }
+
+  process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+  process.on('SIGINT',  () => gracefulShutdown('SIGINT'));
 });
+

@@ -27,6 +27,19 @@ function verifySignature(bodyText, secret, signatureHeader) {
   }
 }
 
+// Restrict log output to prevent database bloat, event-loop blocking, and network delay.
+// Keeps the last N characters of log text.
+function limitLogOutput(logText, maxChars = 150000) {
+  if (!logText) return '';
+  if (logText.length <= maxChars) return logText;
+  
+  const truncated = logText.slice(-maxChars);
+  const firstNewline = truncated.indexOf('\n');
+  const cleanTruncated = firstNewline !== -1 ? truncated.slice(firstNewline + 1) : truncated;
+  
+  return `[... previous logs truncated for size ...]\n` + cleanTruncated;
+}
+
 // Helper to update status in DB (outside runDeployment scope)
 async function updateDeployStatus(projectId, status, logText, cancelRequested = false) {
   try {
@@ -150,48 +163,60 @@ export async function runDeployment(config, runMeta = {}) {
   const runId = crypto.randomUUID();
 
   // Helper to update status in DB
+  // Terminal statuses (success/failed) are retried up to 3 times with 2s backoff
+  // to handle transient DB errors when the deployment command restarts the server.
   const updateStatus = async (status, finalLog, extra = {}) => {
     if (isFinished && status === 'running') return;
     if (status === 'success' || status === 'failed') {
       isFinished = true;
     }
-    try {
-      await connectDB(process.env.MONGODB_URI, true);
-      const updateFields = {
-        'value.status': status,
-        'value.lastDeployLog': finalLog,
-        'value.lastDeployAt': startedAt,
-        'value.cancelRequested': extra.cancelRequested === true ? true : false
-      };
+    const cleanLog = limitLogOutput(finalLog);
+    const isTerminal = status === 'success' || status === 'failed';
+    const maxAttempts = isTerminal ? 3 : 1;
 
-      if (status === 'running') {
-        updateFields['value.deployRunId'] = runId;
-      } else {
-        updateFields['value.deployRunId'] = null;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        await connectDB(process.env.MONGODB_URI, true);
+        const updateFields = {
+          'value.status': status,
+          'value.lastDeployLog': cleanLog,
+          'value.lastDeployAt': startedAt,
+          'value.cancelRequested': extra.cancelRequested === true ? true : false
+        };
+
+        if (status === 'running') {
+          updateFields['value.deployRunId'] = runId;
+        } else {
+          updateFields['value.deployRunId'] = null;
+        }
+
+        await SystemSetting.findOneAndUpdate(
+          { key: dbKey },
+          { $set: updateFields }
+        );
+        // Broadcast update to all SSE clients
+        await broadcastDeploymentStatus(projectId);
+
+        // Send Telegram notification on state change
+        if (status !== lastNotifiedStatus && (status === 'running' || status === 'success' || status === 'failed')) {
+          lastNotifiedStatus = status;
+          const duration = status !== 'running' ? Math.round((Date.now() - startedAt.getTime()) / 1000) : undefined;
+          sendTelegramNotification(config, status, {
+            gitInfo: runMeta.gitInfo || null,
+            triggerSource: runMeta.triggerSource || null,
+            duration,
+            logText: status !== 'running' ? cleanLog : undefined
+          }).catch(err => {
+            console.error('[Telegram] error:', err.message);
+          });
+        }
+        break; // success — exit retry loop
+      } catch (dbErr) {
+        console.error(`Failed to update deploy status in DB (attempt ${attempt}/${maxAttempts}):`, dbErr.message);
+        if (attempt < maxAttempts) {
+          await new Promise(r => setTimeout(r, 2000 * attempt)); // 2s, 4s backoff
+        }
       }
-
-      await SystemSetting.findOneAndUpdate(
-        { key: dbKey },
-        { $set: updateFields }
-      );
-      // Broadcast update to all SSE clients
-      await broadcastDeploymentStatus(projectId);
-
-      // Send Telegram notification on state change
-      if (status !== lastNotifiedStatus && (status === 'running' || status === 'success' || status === 'failed')) {
-        lastNotifiedStatus = status;
-        const duration = status !== 'running' ? Math.round((Date.now() - startedAt.getTime()) / 1000) : undefined;
-        sendTelegramNotification(config, status, {
-          gitInfo: runMeta.gitInfo || null,
-          triggerSource: runMeta.triggerSource || null,
-          duration,
-          logText: status !== 'running' ? finalLog : undefined
-        }).catch(err => {
-          console.error('[Telegram] error:', err.message);
-        });
-      }
-    } catch (dbErr) {
-      console.error('Failed to update deploy status in DB:', dbErr.message);
     }
   };
 
@@ -200,12 +225,13 @@ export async function runDeployment(config, runMeta = {}) {
   let lastUpdateTime = 0;
 
   const throttledUpdateStatus = async (status, finalLog, extra = {}) => {
+    const cleanLog = limitLogOutput(finalLog);
     if (status !== 'running') {
       if (pendingUpdate) {
         clearTimeout(pendingUpdate);
         pendingUpdate = null;
       }
-      await updateStatus(status, finalLog, extra);
+      await updateStatus(status, cleanLog, extra);
       return;
     }
 
@@ -216,7 +242,7 @@ export async function runDeployment(config, runMeta = {}) {
         pendingUpdate = null;
       }
       lastUpdateTime = now;
-      await updateStatus(status, finalLog, extra);
+      await updateStatus(status, cleanLog, extra);
     } else {
       if (!pendingUpdate) {
         pendingUpdate = setTimeout(async () => {
@@ -241,19 +267,20 @@ export async function runDeployment(config, runMeta = {}) {
     const logFile = `/tmp/deploy_${projectId}.log`;
     const codeFile = `/tmp/deploy_${projectId}.code`;
 
-
-
     const script = [
       '#!/bin/bash',
+      'set -e',
       'set -o pipefail',
       `cd "${cwdPath}" || { echo "[deploy] ERROR: cannot cd to ${cwdPath}"; exit 1; }`,
       config.deployCommand
     ].join('\n');
 
     // Spawn bash reading script from stdin — avoids shell escaping issues
+    // Using detached: true to run inside a separate process group for group termination
     const childProcess = spawn('bash', ['-s'], {
       cwd: cwdPath,
-      stdio: ['pipe', 'pipe', 'pipe']
+      stdio: ['pipe', 'pipe', 'pipe'],
+      detached: true
     });
     childProcess.stdin.write(script);
     childProcess.stdin.end();
@@ -270,21 +297,25 @@ export async function runDeployment(config, runMeta = {}) {
     const watchdog = setTimeout(() => {
       const now = new Date();
       logOutput += `\n[Timeout] Deployment exceeded ${timeoutMs / 1000} seconds and will be terminated.\n`;
+      logOutput = limitLogOutput(logOutput);
       updateStatus('failed', logOutput).catch(() => {});
       try {
-        childProcess.kill('SIGTERM');
+        // Kill the whole process group
+        process.kill(-childProcess.pid, 'SIGTERM');
       } catch (e) {
-        // ignore
+        try { childProcess.kill('SIGTERM'); } catch (err) {}
       }
     }, timeoutMs);
 
     childProcess.stdout.on('data', (data) => {
       logOutput += data.toString();
+      logOutput = limitLogOutput(logOutput);
       throttledUpdateStatus('running', logOutput).catch(() => {}); // Stream logs
     });
 
     childProcess.stderr.on('data', (data) => {
       logOutput += data.toString();
+      logOutput = limitLogOutput(logOutput);
       throttledUpdateStatus('running', logOutput).catch(() => {}); // Stream logs
     });
 
@@ -293,6 +324,7 @@ export async function runDeployment(config, runMeta = {}) {
       const finishedAt = new Date();
       logOutput += `\n--------------------------------------------------\n`;
       logOutput += `[${finishedAt.toISOString()}] Process exited with code: ${code}\n`;
+      logOutput = limitLogOutput(logOutput);
       const status = code === 0 ? 'success' : 'failed';
       try { clearRunning(projectId); } catch (e) {}
       updateStatus(status, logOutput).catch(() => {});
@@ -303,6 +335,7 @@ export async function runDeployment(config, runMeta = {}) {
       const finishedAt = new Date();
       logOutput += `\n--------------------------------------------------\n`;
       logOutput += `[${finishedAt.toISOString()}] ❌ Process execution error: ${err.message}\n`;
+      logOutput = limitLogOutput(logOutput);
       try { clearRunning(projectId); } catch (e) {}
       updateStatus('failed', logOutput).catch(() => {});
     });
@@ -415,6 +448,19 @@ export async function runDeployment(config, runMeta = {}) {
         console.warn('[deploy] Failed to register SSH connection:', e.message);
       }
       
+      // ── SSH connection lost (server restart / network drop) ───────────────
+      // This fires when the TCP connection closes without a clean stream.close().
+      // Typical cause: the deploy command restarts the server itself (docker-compose up).
+      conn.on('close', () => {
+        if (!isFinished) {
+          try { clearRunning(projectId); } catch (e) {}
+          logOutput += `\n[SSH] Connection closed by remote host — server may have restarted.\n`;
+          logOutput += `⚠️ If your deploy command restarts the server, the deployment likely succeeded.\n`;
+          logOutput += `   Please verify the server is running correctly.\n`;
+          updateStatus('failed', logOutput).catch(() => {});
+        }
+      });
+
       conn.on('ready', () => {
         logOutput += `[SSH] Connected successfully. Preparing deployment scripts...\n`;
         updateStatus('running', logOutput);
@@ -422,6 +468,7 @@ export async function runDeployment(config, runMeta = {}) {
         conn.sftp((err, sftp) => {
           if (err) {
             logOutput += `[SSH Error] SFTP initialization failed: ${err.message}\n`;
+            try { clearRunning(projectId); } catch (e) {}
             updateStatus('failed', logOutput);
             conn.end();
             return;
@@ -432,21 +479,25 @@ export async function runDeployment(config, runMeta = {}) {
           // ── The actual deploy script ──────────────────────────
           const deployScript = [
             '#!/bin/bash',
+            'set -e',
             'set -o pipefail',
             `cd "${resolvedPath}" || { echo "[deploy] ERROR: Cannot cd to ${resolvedPath}"; exit 1; }`,
             config.deployCommand
           ].join('\n') + '\n';
 
           // ── Write deploy script via SFTP ─────────────────────────────────
-          sftp.writeFile(remoteDeployPath, deployScript, (writeErr) => {
+            sftp.writeFile(remoteDeployPath, deployScript, (writeErr) => {
             if (writeErr) {
               logOutput += `[SSH Error] Failed to write deploy script: ${writeErr.message}\n`;
-              updateStatus('failed', logOutput);
+              logOutput = limitLogOutput(logOutput);
+              try { clearRunning(projectId); } catch (e) {}
+              updateStatus('failed', logOutput).catch(() => {});
               conn.end();
               return;
             }
 
             logOutput += `[SSH] Script uploaded. Launching deployment synchronously...\n\n`;
+            logOutput = limitLogOutput(logOutput);
             updateStatus('running', logOutput);
 
             // Execute the script directly and stream output back.
@@ -456,6 +507,8 @@ export async function runDeployment(config, runMeta = {}) {
             conn.exec(command, (execErr, stream) => {
                 if (execErr) {
                   logOutput += `[SSH Error] Execution failed: ${execErr.message}\n`;
+                  logOutput = limitLogOutput(logOutput);
+                  try { clearRunning(projectId); } catch (e) {}
                   updateStatus('failed', logOutput);
                   conn.end();
                   return;
@@ -465,6 +518,7 @@ export async function runDeployment(config, runMeta = {}) {
                 const timeoutMs = (config.timeoutSeconds || 600) * 1000;
                 const watchdog = setTimeout(() => {
                   logOutput += `\n[Timeout] Deployment exceeded ${timeoutMs / 1000}s. Terminating...\n`;
+                  logOutput = limitLogOutput(logOutput);
                   updateStatus('failed', logOutput).catch(() => {});
                   stream.destroy();
                   conn.end();
@@ -490,11 +544,13 @@ export async function runDeployment(config, runMeta = {}) {
                     }
                   }
 
+                  logOutput = limitLogOutput(logOutput);
                   throttledUpdateStatus('running', logOutput).catch(() => {});
                 });
 
                 stream.stderr.on('data', (data) => {
                   logOutput += data.toString();
+                  logOutput = limitLogOutput(logOutput);
                   throttledUpdateStatus('running', logOutput).catch(() => {});
                 });
 
@@ -515,6 +571,7 @@ export async function runDeployment(config, runMeta = {}) {
                   const finishedAt = new Date();
                   logOutput += `\n--------------------------------------------------\n`;
                   logOutput += `[${finishedAt.toISOString()}] [SSH] Execution finished. Exit code: ${finalCode}\n`;
+                  logOutput = limitLogOutput(logOutput);
                   const status = finalCode === 0 ? 'success' : 'failed';
 
                   try { clearRunning(projectId); } catch (e) {}
@@ -602,10 +659,20 @@ export async function POST(request) {
 
     // Prevent concurrent deployments for the same project.
     // If status is running but there is no active in-memory process, reset the stale state.
+    // Also treat as stale if the deployment has been running longer than its configured timeout
+    // (handles cases where the server restarted mid-deployment and the SIGTERM handler couldn't write).
     if (config.status === 'running') {
       const activeProcess = getRunning(projectId);
-      if (!activeProcess) {
-        console.log(`[webhook] Stale running state detected for project: ${projectId}. Resetting status and allowing new deployment.`);
+      const timeoutMs = ((config.timeoutSeconds || 600) + 120) * 1000; // timeout + 2 min buffer
+      const deployedAt = config.lastDeployAt ? new Date(config.lastDeployAt).getTime() : 0;
+      const isStaleByTime = deployedAt > 0 && (Date.now() - deployedAt) > timeoutMs;
+
+      if (!activeProcess || isStaleByTime) {
+        if (isStaleByTime) {
+          console.log(`[webhook] Deployment for "${projectId}" has been running for >${timeoutMs/1000}s — treating as stale and resetting.`);
+        } else {
+          console.log(`[webhook] Stale running state detected for project: ${projectId}. Resetting status and allowing new deployment.`);
+        }
         await SystemSetting.findOneAndUpdate(
           { key: dbKey },
           {
