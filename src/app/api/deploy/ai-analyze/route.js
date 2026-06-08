@@ -179,25 +179,44 @@ You MUST respond with a valid JSON object ONLY. Do not wrap the JSON in markdown
 
     const userPrompt = `Here is the scanned directory listing and config files content for the project path "${resolvedPath}":\n\n${filesListing}`;
 
-    // Query Groq API
+    // Query AI API
     let parsedResult = null;
     try {
-      const response = await fetch(aiEndpoint, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${apiKey}`
-        },
-        body: JSON.stringify({
-          model: aiConfig.model,
-          temperature: aiConfig.temperature,
-          messages: [
-            { role: 'system', content: systemPrompt },
-            { role: 'user', content: userPrompt }
-          ],
-          ...(aiEndpoint.includes('nvidia') ? {} : { response_format: { type: 'json_object' } })
-        })
-      });
+      const isNvidia = aiEndpoint.includes('nvidia');
+      
+      // NVIDIA NIM thinking models need chat_template_kwargs and longer timeouts
+      const requestBody = {
+        model: aiConfig.model,
+        temperature: isNvidia ? 0.6 : aiConfig.temperature,
+        max_tokens: isNvidia ? 8192 : 2048,
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userPrompt }
+        ],
+        ...(isNvidia
+          ? { chat_template_kwargs: { thinking: true, reasoning_effort: 'low' } }
+          : { response_format: { type: 'json_object' } })
+      };
+
+      // Use AbortController for timeout (120s for thinking models, 60s for others)
+      const timeoutMs = isNvidia ? 120000 : 60000;
+      const controller = new AbortController();
+      const timeoutTimer = setTimeout(() => controller.abort(), timeoutMs);
+
+      let response;
+      try {
+        response = await fetch(aiEndpoint, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${apiKey}`
+          },
+          body: JSON.stringify(requestBody),
+          signal: controller.signal
+        });
+      } finally {
+        clearTimeout(timeoutTimer);
+      }
  
       if (!response.ok) {
         const errorText = await response.text();
@@ -205,18 +224,30 @@ You MUST respond with a valid JSON object ONLY. Do not wrap the JSON in markdown
       }
  
       const resJson = await response.json();
-      const content = resJson.choices?.[0]?.message?.content;
       
-      let cleanedContent = (content || '').trim();
+      // For thinking models (NVIDIA), content may be in reasoning_content first,
+      // then actual JSON in content. Use content field directly.
+      const content = resJson.choices?.[0]?.message?.content 
+        || resJson.choices?.[0]?.message?.reasoning_content 
+        || '';
+      
+      let cleanedContent = content.trim();
+      // Strip markdown code fences if present
       if (cleanedContent.startsWith('```')) {
         cleanedContent = cleanedContent.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
       }
-      parsedResult = JSON.parse(cleanedContent);
+      // Extract first JSON object if there's extra text around it
+      const jsonMatch = cleanedContent.match(/\{[\s\S]*\}/);
+      if (!jsonMatch) throw new Error('AI response did not contain valid JSON');
+      parsedResult = JSON.parse(jsonMatch[0]);
     } catch (aiErr) {
       console.error('AI Call failed:', aiErr.message);
+      const isTimeout = aiErr.name === 'AbortError';
       return NextResponse.json({ 
         success: false, 
-        error: `AI analysis failed: ${aiErr.message}. Make sure your API key and Endpoint are correct.` 
+        error: isTimeout
+          ? 'AI request timed out. NVIDIA NIM thinking models can take up to 2 minutes — try again or use reasoning_effort: low.'
+          : `AI analysis failed: ${aiErr.message}. Make sure your API key and Endpoint are correct.`
       }, { status: 500 });
     }
 
