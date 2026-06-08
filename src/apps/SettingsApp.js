@@ -273,7 +273,7 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
     }, 10000);
 
     return () => clearInterval(interval);
-  }, [activeTab, selectedProjectId, apiFetch]);
+  }, [activeTab, selectedProjectId, apiFetch, vaultStatus, decryptedUri]);
 
   const handleSaveDeployConfig = async () => {
     if (deployConfig.targetType === 'ssh' && selectedConnectionMissing) {
@@ -2411,6 +2411,13 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
                                   className="text-[9px] px-2 py-1.5 rounded-lg bg-amber-500/20 text-amber-400 hover:bg-amber-500/30 border border-amber-500/30 transition-all"
                                 >
                                   🦙 Ollama
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setDeployConfig(p => ({ ...p, aiEndpoint: 'https://integrate.api.nvidia.com/v1/chat/completions', aiCustomModel: 'deepseek-ai/deepseek-v4-flash' }))}
+                                  className="text-[9px] px-2 py-1.5 rounded-lg bg-green-500/20 text-green-400 hover:bg-green-500/30 border border-green-500/30 transition-all"
+                                >
+                                  🟢 NVIDIA NIM
                                 </button>
                               </div>
 

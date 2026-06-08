@@ -195,23 +195,28 @@ You MUST respond with a valid JSON object ONLY. Do not wrap the JSON in markdown
             { role: 'system', content: systemPrompt },
             { role: 'user', content: userPrompt }
           ],
-          response_format: { type: 'json_object' }
+          ...(aiEndpoint.includes('nvidia') ? {} : { response_format: { type: 'json_object' } })
         })
       });
-
+ 
       if (!response.ok) {
         const errorText = await response.text();
-        throw new Error(`Groq API returned ${response.status}: ${errorText}`);
+        throw new Error(`AI API returned ${response.status}: ${errorText}`);
       }
-
+ 
       const resJson = await response.json();
       const content = resJson.choices?.[0]?.message?.content;
-      parsedResult = JSON.parse(content);
+      
+      let cleanedContent = (content || '').trim();
+      if (cleanedContent.startsWith('```')) {
+        cleanedContent = cleanedContent.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
+      }
+      parsedResult = JSON.parse(cleanedContent);
     } catch (aiErr) {
-      console.error('Groq AI Call failed:', aiErr.message);
+      console.error('AI Call failed:', aiErr.message);
       return NextResponse.json({ 
         success: false, 
-        error: `AI analysis failed: ${aiErr.message}. Make sure your Groq API key is valid.` 
+        error: `AI analysis failed: ${aiErr.message}. Make sure your API key and Endpoint are correct.` 
       }, { status: 500 });
     }
 
