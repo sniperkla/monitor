@@ -790,15 +790,15 @@ export default function DesktopIcon({ id, title, icon: Icon, component, defaultP
         {/* Advanced SVG Displacement Filter for Hyper-Realistic Volumetric Smoke */}
         <svg width="0" height="0" className="absolute pointer-events-none">
           <defs>
-            <filter id={`mushroom-smoke-filter-${id}`} x="-50%" y="-50%" width="200%" height="200%">
-              {/* Generate chaotic, bubbling fractal noise */}
-              <feTurbulence type="fractalNoise" baseFrequency="0.03" numOctaves="2" result="noise" />
-              {/* Lower displacement scale (15) for much faster rendering */}
-              <feDisplacementMap in="SourceGraphic" in2="noise" scale="15" xChannelSelector="R" yChannelSelector="G" result="displaced" />
-              {/* Soften the edges and boost the thick center alpha to simulate heavy soot/smoke */}
-              <feGaussianBlur in="displaced" stdDeviation="4" result="blur" />
+            <filter id={`mushroom-smoke-filter-${id}`} x="-150%" y="-150%" width="400%" height="400%">
+              {/* Generate high-fidelity fractal noise for organic billows */}
+              <feTurbulence type="fractalNoise" baseFrequency="0.015" numOctaves="4" result="noise" />
+              {/* Volumetric displacement */}
+              <feDisplacementMap in="SourceGraphic" in2="noise" scale="40" xChannelSelector="R" yChannelSelector="G" result="displaced" />
+              {/* Soften edges for smoke plume realism */}
+              <feGaussianBlur in="displaced" stdDeviation="5" result="blur" />
               <feComponentTransfer in="blur">
-                <feFuncA type="linear" slope="2" />
+                <feFuncA type="linear" slope="1.8" />
               </feComponentTransfer>
             </filter>
           </defs>
@@ -812,27 +812,87 @@ export default function DesktopIcon({ id, title, icon: Icon, component, defaultP
             transform: 'translateZ(0)', // Force GPU acceleration
           }}
         >
-          {/* Massive Central Stem */}
-          <div
-            className="absolute pointer-events-none"
-            style={{
-              left: '50%', top: '50%',
-              width: 50,
-              background: 'linear-gradient(to top, #ff2200, #ffaa00)',
-              borderRadius: '20px',
-              animation: 'fallout-giant-mushroom-stem 10s linear forwards',
-            }}
-          />
-          
-          {/* Main Huge Cap (Uses complex layered box-shadows to generate dense volume inside the SVG filter) */}
+          {/* Base Dust Collar (Rolling cloud of dust at the foot of the stem) */}
           <div
             className="absolute pointer-events-none rounded-full"
             style={{
               left: '50%', top: '50%',
-              width: 160, height: 100, // Massive base size
-              background: 'radial-gradient(circle, #ffffff 0%, #ff4400 50%, rgba(50,0,0,0.8) 80%, transparent 100%)',
-              boxShadow: 'inset 0 10px 40px #ffaa00, 0 -20px 50px #ff2200, -30px -10px 40px #ff6600, 30px -10px 40px #ff6600, 0 -40px 80px rgba(255, 50, 0, 0.4)',
-              animation: 'fallout-giant-mushroom-cap 10s linear forwards',
+              background: 'radial-gradient(ellipse, rgba(80, 60, 50, 0.75) 0%, rgba(40, 30, 25, 0.4) 60%, transparent 80%)',
+              boxShadow: '0 0 35px rgba(80, 60, 50, 0.5), inset 0 0 20px rgba(0, 0, 0, 0.6)',
+              animation: 'fallout-nuke-dust-collar 10s cubic-bezier(0.1, 0.8, 0.2, 1) forwards',
+            }}
+          />
+
+          {/* Outer Dark Smoke Column (Stem Plume) */}
+          <div
+            className="absolute pointer-events-none"
+            style={{
+              left: '50%', top: '50%',
+              width: 70,
+              background: 'linear-gradient(to top, rgba(30, 20, 20, 0.95), rgba(50, 40, 40, 0.75) 50%, rgba(200, 80, 20, 0.2))',
+              borderRadius: '30px',
+              animation: 'fallout-giant-mushroom-stem 10s cubic-bezier(0.1, 0.8, 0.2, 1) forwards',
+            }}
+          />
+
+          {/* Inner Fiery Pillar (Incandescent core of the stem) */}
+          <div
+            className="absolute pointer-events-none"
+            style={{
+              left: '50%', top: '50%',
+              width: 25,
+              background: 'linear-gradient(to top, #ffffff, #ffcc00 20%, #ff4400 60%, transparent)',
+              boxShadow: '0 0 30px #ff3300, 0 0 10px #ffaa00',
+              borderRadius: '15px',
+              animation: 'fallout-giant-mushroom-stem 10s cubic-bezier(0.1, 0.8, 0.2, 1) forwards',
+              opacity: 0.9,
+            }}
+          />
+
+          {/* Volumetric Billowing Cap - Core Explosion (Inner Fireball) */}
+          <div
+            className="absolute pointer-events-none rounded-full"
+            style={{
+              left: '50%', top: '50%',
+              width: 140, height: 100,
+              background: 'radial-gradient(circle, #ffffff 0%, #ffcc00 30%, #ff2200 65%, rgba(25, 5, 0, 0.95) 85%, transparent 100%)',
+              boxShadow: 'inset 0 10px 45px rgba(255, 255, 255, 0.8), 0 0 80px rgba(255, 68, 0, 0.8)',
+              animation: 'fallout-giant-mushroom-cap-core 10s cubic-bezier(0.1, 0.8, 0.2, 1) forwards',
+            }}
+          />
+
+          {/* Volumetric Billowing Cap - Left Lobe (Dark turbulent soot) */}
+          <div
+            className="absolute pointer-events-none rounded-full"
+            style={{
+              left: '50%', top: '50%',
+              width: 150, height: 110,
+              background: 'radial-gradient(circle at 40% 40%, rgba(255, 100, 0, 0.5) 0%, rgba(50, 40, 40, 0.95) 50%, rgba(20, 15, 15, 0.98) 80%, transparent 100%)',
+              boxShadow: '0 -15px 40px rgba(255, 68, 0, 0.2), inset 10px 10px 30px rgba(0,0,0,0.8)',
+              animation: 'fallout-giant-mushroom-cap-left 10s cubic-bezier(0.1, 0.8, 0.2, 1) forwards',
+            }}
+          />
+
+          {/* Volumetric Billowing Cap - Right Lobe (Dark turbulent soot) */}
+          <div
+            className="absolute pointer-events-none rounded-full"
+            style={{
+              left: '50%', top: '50%',
+              width: 150, height: 110,
+              background: 'radial-gradient(circle at 60% 40%, rgba(255, 100, 0, 0.5) 0%, rgba(50, 40, 40, 0.95) 50%, rgba(20, 15, 15, 0.98) 80%, transparent 100%)',
+              boxShadow: '0 -15px 40px rgba(255, 68, 0, 0.2), inset -10px 10px 30px rgba(0,0,0,0.8)',
+              animation: 'fallout-giant-mushroom-cap-right 10s cubic-bezier(0.1, 0.8, 0.2, 1) forwards',
+            }}
+          />
+
+          {/* Vapor Condensation Ring (Expanding moisture ring) */}
+          <div
+            className="absolute pointer-events-none rounded-full"
+            style={{
+              left: '50%', top: '50%',
+              border: '3px solid rgba(255, 255, 255, 0.45)',
+              boxShadow: '0 0 15px rgba(255, 255, 255, 0.3), inset 0 0 15px rgba(255, 255, 255, 0.3)',
+              animation: 'fallout-nuke-condensation-ring 10s cubic-bezier(0.1, 0.8, 0.2, 1) forwards',
             }}
           />
         </div>

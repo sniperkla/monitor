@@ -53,6 +53,7 @@ export async function GET(request) {
       lastConnected: conn.lastConnected,
       status: conn.status,
       isFavorite: conn.isFavorite,
+      authSource: conn.authSource || null,
       notes: conn.notes,
       createdAt: conn.createdAt,
       updatedAt: conn.updatedAt,

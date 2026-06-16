@@ -313,17 +313,52 @@ export default function TerminalView({ connectionId, connectionName, host, color
   // ── Terminal Synchronization & Redraw ──
   const resizeTimerRef = useRef(null);
   const lastDimsRef = useRef({ cols: 0, rows: 0 });
+  const lastSyncedDimsRef = useRef({ cols: 0, rows: 0 });
 
-  const performFit = useCallback(() => {
-    if (!fitAddonRef.current || !terminalRef.current || !termInstanceRef.current) return;
+  const isTerminalVisible = useCallback(() => {
+    const el = terminalRef.current;
+    if (!el || el.offsetParent === null) return false;
+    const rect = el.getBoundingClientRect();
+    return rect.width > 2 && rect.height > 2;
+  }, []);
+
+  const syncTerminalDimensions = useCallback((options = {}) => {
+    const { force = false, refresh = true } = options;
+    const fitAddon = fitAddonRef.current;
+    const term = termInstanceRef.current;
+    const socket = socketRef.current;
+    if (!fitAddon || !term || !terminalRef.current) return false;
+    if (!isTerminalVisible()) return false;
+
     try {
-      fitAddonRef.current.fit();
-      const { cols, rows } = termInstanceRef.current;
-      lastDimsRef.current = { cols, rows };
+      fitAddon.fit();
     } catch (e) {
       console.warn('Terminal fit failed:', e);
+      return false;
     }
-  }, []);
+
+    const { cols, rows } = term;
+    lastDimsRef.current = { cols, rows };
+
+    const prev = lastSyncedDimsRef.current;
+    if (force || prev.cols !== cols || prev.rows !== rows) {
+      lastSyncedDimsRef.current = { cols, rows };
+      if (socket?.connected) {
+        socket.emit('ssh:resize', { cols, rows });
+      }
+    }
+
+    if (refresh) {
+      try {
+        term.refresh(0, term.rows - 1);
+      } catch (e) {}
+    }
+
+    return true;
+  }, [isTerminalVisible]);
+
+  // Backward-compatible alias used in a few places
+  const performFit = syncTerminalDimensions;
   const setAiStreaming = (val) => aiMode === 'manual' ? setManualAiStreaming(val) : setAutoAiStreaming(val);
 
   const aiAnswerCollapsed = aiMode === 'manual' ? manualAiAnswerCollapsed : autoAiAnswerCollapsed;
@@ -1039,7 +1074,7 @@ logstash:
     let resizeTimer = null;
     const resizeObserver = new ResizeObserver(() => {
       clearTimeout(resizeTimer);
-      resizeTimer = setTimeout(performFit, 30);
+      resizeTimer = setTimeout(() => syncTerminalDimensions({ refresh: true }), 30);
     });
     resizeObserver.observe(terminalRef.current);
 
@@ -1049,23 +1084,67 @@ logstash:
       clearTimeout(resizeTimer);
       resizeObserver.disconnect();
     };
-  }, [status, performFit]);
+  }, [status, syncTerminalDimensions]);
 
   // Refresh terminal when switching back to the terminal view tab
   // (fixes garbled / corrupted text after the container was hidden)
   useEffect(() => {
     const handleViewActivated = () => {
-      if (!fitAddonRef.current || !termInstanceRef.current) return;
       requestAnimationFrame(() => {
-        try {
-          fitAddonRef.current.fit();
-          termInstanceRef.current.refresh(0, termInstanceRef.current.rows - 1);
-        } catch (e) {}
+        syncTerminalDimensions({ force: true, refresh: true });
+        setTimeout(() => syncTerminalDimensions({ force: true, refresh: true }), 100);
+      });
+    };
+    const handlePaneActivated = () => {
+      requestAnimationFrame(() => {
+        syncTerminalDimensions({ force: true, refresh: true });
       });
     };
     window.addEventListener('terminal:view-activated', handleViewActivated);
-    return () => window.removeEventListener('terminal:view-activated', handleViewActivated);
-  }, []);
+    window.addEventListener('terminal:pane-activated', handlePaneActivated);
+    return () => {
+      window.removeEventListener('terminal:view-activated', handleViewActivated);
+      window.removeEventListener('terminal:pane-activated', handlePaneActivated);
+    };
+  }, [syncTerminalDimensions]);
+
+  // Re-sync when the terminal container becomes visible (tab switch, pane focus, browser return)
+  useEffect(() => {
+    if (!terminalRef.current || status !== 'connected') return;
+
+    const syncIfVisible = () => {
+      if (!isTerminalVisible()) return;
+      requestAnimationFrame(() => {
+        syncTerminalDimensions({ force: true, refresh: true });
+      });
+    };
+
+    const intersectionObserver = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          if (entry.isIntersecting && entry.intersectionRatio > 0) {
+            syncIfVisible();
+          }
+        }
+      },
+      { threshold: [0, 0.1, 0.5] }
+    );
+    intersectionObserver.observe(terminalRef.current);
+
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') syncIfVisible();
+    };
+    const handleWindowFocus = () => syncIfVisible();
+
+    document.addEventListener('visibilitychange', handleVisibility);
+    window.addEventListener('focus', handleWindowFocus);
+
+    return () => {
+      intersectionObserver.disconnect();
+      document.removeEventListener('visibilitychange', handleVisibility);
+      window.removeEventListener('focus', handleWindowFocus);
+    };
+  }, [status, isTerminalVisible, syncTerminalDimensions]);
 
   // Resize observer to scale AI panel position
   useEffect(() => {
@@ -1259,12 +1338,7 @@ logstash:
       
       // Secondary dimension sync to ensure precision after handshake
       setTimeout(() => {
-        try {
-          fitAddon.fit();
-          if (socket.connected) {
-             socket.emit('ssh:resize', { cols: term.cols, rows: term.rows });
-          }
-        } catch (e) {}
+        syncTerminalDimensions({ force: true, refresh: true });
       }, 100);
 
       // Detect if initialCommand is a Docker exec (already provides its own shell)
@@ -1506,6 +1580,7 @@ logstash:
     });
 
     term.onResize(({ cols, rows }) => {
+      lastSyncedDimsRef.current = { cols, rows };
       if (socket.connected) {
         socket.emit('ssh:resize', { cols, rows });
       }
@@ -1595,7 +1670,7 @@ logstash:
       }
       window.__isShowingScrollHint = false;
     };
-  }, [connectionId, appState.dbConfig?.uri, updateConnectionStatus, performFit, vaultStatus]);
+  }, [connectionId, appState.dbConfig?.uri, updateConnectionStatus, syncTerminalDimensions, vaultStatus]);
 
   // Handle Dynamic Theme Updates for XTerm
   useEffect(() => {
@@ -1623,10 +1698,7 @@ logstash:
 
     // Force redraw and re-measure after fonts are ready
     const triggerRefresh = () => {
-      try { 
-        fitAddonRef.current?.fit(); 
-        termInstanceRef.current?.refresh(0, termInstanceRef.current.rows - 1);
-      } catch (e) {}
+      syncTerminalDimensions({ force: true, refresh: true });
     };
 
     if (document.fonts) {
@@ -1635,7 +1707,7 @@ logstash:
     
     setTimeout(triggerRefresh, 200);
     setTimeout(triggerRefresh, 1000); // Heavy fallback for lazy loading
-  }, [osState?.terminalSettings, t]);
+  }, [osState?.terminalSettings, t, syncTerminalDimensions]);
 
   const redactSecrets = (text) => {
     let t = String(text || '');
@@ -6447,14 +6519,10 @@ If this is a deployment task, switch task mode to 'deploy' instead of 'code'.`
     if (status !== 'connected') return;
     
     const timeout = setTimeout(() => {
-      if (fitAddonRef.current && terminalRef.current?.offsetParent) {
-        try {
-          fitAddonRef.current.fit();
-        } catch (e) {}
-      }
+      syncTerminalDimensions({ force: true, refresh: true });
     }, 200);
     return () => clearTimeout(timeout);
-  }, [status]); // Only re-fit on status changes or mount
+  }, [status, syncTerminalDimensions]); // Only re-fit on status changes or mount
 
   // Heartbeat loop for latency monitoring
   useEffect(() => {

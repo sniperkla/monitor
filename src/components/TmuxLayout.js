@@ -981,7 +981,14 @@ const TerminalBridge = React.memo(({ term, target, hiddenRoom, onClose }) => {
          finalTarget.appendChild(node);
        }
     }
-  }, [target, hiddenRoom]);
+    if (target && node) {
+      requestAnimationFrame(() => {
+        window.dispatchEvent(new CustomEvent('terminal:pane-activated', {
+          detail: { paneId: term.paneId },
+        }));
+      });
+    }
+  }, [target, hiddenRoom, term.paneId]);
 
   // 2. React Safety: On unmount, return terminal to React-controlled wrapper
   // This prevents the "Failed to execute 'removeChild' on 'Node'" error

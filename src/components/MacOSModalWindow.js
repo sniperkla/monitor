@@ -400,7 +400,7 @@ export default function MacOSModalWindow({
                       enableMaximize={enableMaximize}
                     />
                   )}
-                  <div className={`${contentClassName} overflow-y-auto custom-scrollbar flex-1 min-h-0 pointer-events-auto`}>
+                  <div className={`${contentClassName} overflow-y-auto custom-scrollbar flex-1 min-h-0 pointer-events-auto select-text`}>
                     {children}
                   </div>
                 </div>
@@ -437,7 +437,7 @@ export default function MacOSModalWindow({
                     enableMaximize={enableMaximize}
                   />
                 )}
-                <div className={`${contentClassName} overflow-y-auto custom-scrollbar flex-1 min-h-0 pointer-events-auto`}>
+                 <div className={`${contentClassName} overflow-y-auto custom-scrollbar flex-1 min-h-0 pointer-events-auto select-text`}>
                   {children}
                 </div>
               </div>

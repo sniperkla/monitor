@@ -97,6 +97,21 @@ export default function DatabaseBrowser({ initialConnection, initialConnectionId
 
   const dbConnections = state.connections.filter(c => c.type === 'database');
 
+  const resolveBrowserConnection = (browser) => {
+    const fromList = connections.find(c => c._id === browser.connectionId);
+    const base = browser.connection || fromList;
+    if (!base) return fromList || null;
+    if (!fromList) return base;
+    return {
+      ...fromList,
+      ...base,
+      password: base.password || fromList.password,
+      privateKey: base.privateKey || fromList.privateKey,
+      passphrase: base.passphrase || fromList.passphrase,
+      authSource: base.authSource || fromList.authSource,
+    };
+  };
+
   // For standalone: show loading until the standalone browser is registered
   const standaloneBrowser = (isStandalone && connToUse)
     ? standaloneDatabaseBrowsers.find(b => b.connectionId === connToUse._id)
@@ -241,7 +256,7 @@ export default function DatabaseBrowser({ initialConnection, initialConnectionId
     return (
       <div className="h-full flex flex-col bg-[var(--bg-primary)] rounded-3xl border border-[var(--border-color)] overflow-hidden">
         <DatabaseView
-          connection={standaloneBrowser.connection}
+          connection={resolveBrowserConnection(standaloneBrowser)}
           onClose={() => handleCloseTab(standaloneBrowser.id)}
           onEditConnection={onEditConnection}
         />
@@ -304,7 +319,7 @@ export default function DatabaseBrowser({ initialConnection, initialConnectionId
                 style={{ display: activeTab === browser.id ? 'block' : 'none' }}
               >
                 <DatabaseView
-                  connection={browser.connection}
+                  connection={resolveBrowserConnection(browser)}
                   onClose={() => handleCloseTab(browser.id)}
                   onEditConnection={onEditConnection}
                 />

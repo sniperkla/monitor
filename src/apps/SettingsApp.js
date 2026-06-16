@@ -6,7 +6,7 @@ import {
   Database, CheckCircle, AlertCircle, RefreshCw, Zap, Wifi, WifiOff, 
   Loader, Trash2, Lock, Unlock, Key, Mail, Code, Volume2, Sun, Moon, Cpu,
   Search, Terminal, Network, Download, Copy, X, CheckCheck, Sparkles,
-  GitBranch, ChevronDown, Settings, Send
+  GitBranch, ChevronDown, Settings, Send, Music
 } from 'lucide-react';
 import { useOS } from '@/context/OSContext';
 import { useApp } from '@/context/AppContext';
@@ -1142,13 +1142,12 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
                   <Palette size={16} className="text-[var(--accent-indigo)]" />
                   {t('settings_ui.appearance.theme')}
                 </h3>
-                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                   {[
-                    { id: 'light', label: t('settings_ui.appearance.themes.light'), icon: Sun },
                     { id: 'dark', label: t('settings_ui.appearance.themes.dark'), icon: Moon },
                     { id: 'retro', label: t('settings_ui.appearance.themes.retro'), icon: Cpu },
                     { id: 'cyberpunk', label: t('settings_ui.appearance.themes.cyberpunk') || 'Cyberpunk', icon: Zap },
-                    { id: 'auto', label: t('settings_ui.appearance.themes.auto'), icon: Monitor },
+                    { id: 'synthwave', label: 'Synthwave', icon: Music },
                   ].map(theme => (
                     <button
                       key={theme.id}

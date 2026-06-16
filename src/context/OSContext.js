@@ -773,7 +773,7 @@ export function OSProvider({ children }) {
       customWallpapers: s.customWallpapers || [],
       taskbarPosition: s.taskbarPosition || 'bottom',
       windowLayout: s.windowLayout || 'mac',
-      theme: s.theme || 'dark',
+      theme: (s.theme === 'light' || s.theme === 'auto') ? 'dark' : (['dark', 'retro', 'cyberpunk', 'synthwave'].includes(s.theme) ? s.theme : 'dark'),
       exportNaming: s.exportNaming || {
         prefix: '',
         suffix: '',
@@ -1246,7 +1246,7 @@ export function OSProvider({ children }) {
       const html = document.documentElement;
       const theme = state.theme || 'dark';
       
-      html.classList.remove('light', 'dark', 'retro', 'cyberpunk');
+      html.classList.remove('light', 'dark', 'retro', 'cyberpunk', 'synthwave');
       
       if (theme === 'auto') {
         const isDark = window.matchMedia('(prefers-color-scheme: dark)').matches;

@@ -5,6 +5,7 @@ import { ConnectionRepository } from '@/lib/repositories/ConnectionRepository';
 import { decrypt } from '@/utils/encryption';
 import { getPooledConnection } from '@/lib/dbPool';
 import { checkRateLimit } from '@/lib/serverGuard';
+import { attachRequestUserId, isRelayConnectionError } from '@/lib/requestUser';
 
 // POST test connection
 export async function POST(request, { params }) {
@@ -40,12 +41,7 @@ export async function POST(request, { params }) {
 
     let result;
     if (connection.type === 'database') {
-      // Attach userId so dbPool can route localhost connections via relay
-      try {
-        const { getToken } = await import('next-auth/jwt');
-        const token = await getToken({ req: request, secret: process.env.NEXTAUTH_SECRET });
-        if (token?.sub) connection = { ...connection, _userId: token.sub };
-      } catch (_) {}
+      connection = await attachRequestUserId(request, connection);
       result = await testDatabaseConnection(connection);
     } else {
       // Prepare SSH config
@@ -114,7 +110,7 @@ async function testDatabaseConnection(conn) {
     }
     return { success: false, error: `Provider ${provider} not supported for testing yet` };
   } catch (err) {
-    return { success: false, error: err.message };
+    return { success: false, error: err.message, relayRequired: isRelayConnectionError(err.message) };
   }
 }
 

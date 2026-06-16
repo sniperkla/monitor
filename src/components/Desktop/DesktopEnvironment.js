@@ -8,7 +8,7 @@ import SSHApp from '@/apps/SSHApp';
 import SettingsApp from '@/apps/SettingsApp';
 import { Terminal, Settings, FolderClosed, Monitor, RefreshCw, Plus, 
   Image as ImageIcon, Layout, Grid, List, AlignLeft, SortAsc, Server,
-  ChevronRight, Type, Calendar, HardDrive, Palette, MonitorCog, Globe, Maximize, Minimize, Database, Check, MonitorPlay, Bomb, GitBranch
+  ChevronRight, Type, Calendar, HardDrive, Palette, MonitorCog, Globe, Maximize, Minimize, Database, Check, MonitorPlay, Bomb, GitBranch, CloudSync, Rocket
 } from 'lucide-react';
 import NotificationCenter from '@/components/Desktop/NotificationCenter';
 import AutoDeployApp from '@/apps/AutoDeployApp';
@@ -32,6 +32,10 @@ import FalloutPeople from './FalloutPeople';
 import NuclearExplosion from './NuclearExplosion';
 
 const DatabaseBrowser = dynamic(() => import('@/components/DatabaseBrowser'), {
+  ssr: false,
+});
+
+const MongoBackupApp = dynamic(() => import('@/apps/MongoBackupApp'), {
   ssr: false,
 });
 
@@ -291,18 +295,51 @@ export default function DesktopEnvironment() {
     const updates = {};
     let hasUpdates = false;
     
-    DESKTOP_ICONS.forEach((icon, idx) => {
-      // If position is missing in state, register default
-      if (!osState.iconPositions[icon.id]) {
-        updates[icon.id] = { x: 20, y: 20 + idx * 110 };
+    const GRID_X = 100;
+    const GRID_Y = 110;
+    const PADDING = 20;
+    const taskbarHeight = 56;
+    const taskbarPos = osState.taskbarPosition || 'bottom';
+    
+    let startX = PADDING;
+    let startY = PADDING;
+    if (taskbarPos === 'top') startY += taskbarHeight;
+    if (taskbarPos === 'left') startX += taskbarHeight;
+
+    const maxHeight = typeof window !== 'undefined' 
+      ? window.innerHeight - (taskbarPos === 'bottom' ? taskbarHeight + PADDING : PADDING)
+      : 600;
+      
+    let currentX = startX;
+    let currentY = startY;
+
+    DESKTOP_ICONS.forEach((icon) => {
+      const pos = osState.iconPositions[icon.id];
+      const isOutOfBounds = pos && typeof window !== 'undefined' && (
+        pos.y + 96 > window.innerHeight || 
+        pos.x + 96 > window.innerWidth ||
+        pos.y < 0 ||
+        pos.x < 0
+      );
+
+      // If position is missing in state or out of bounds, register default
+      if (!pos || isOutOfBounds) {
+        updates[icon.id] = { x: currentX, y: currentY };
         hasUpdates = true;
+      }
+      
+      // Advance coordinates to prevent overlapping
+      currentY += GRID_Y;
+      if (currentY + GRID_Y > maxHeight) {
+        currentY = startY;
+        currentX += GRID_X;
       }
     });
 
     if (hasUpdates) {
       updateMultipleIconPositions(updates);
     }
-  }, [mounted]);
+  }, [mounted, osState.iconPositions]);
 
   const handleEditConnection = (conn) => {
     setEditConnection(conn);
@@ -315,8 +352,9 @@ export default function DesktopEnvironment() {
     { id: 'terminal', title: t('apps.terminal'), icon: Terminal, component: <TerminalApp onEditConnection={handleEditConnection} />, type: 'app', initialWidth: 1100, initialHeight: 700 },
     { id: 'files', title: t('apps.files'), icon: FolderClosed, component: <FilesApp onEditConnection={handleEditConnection} />, type: 'app', initialWidth: 900, initialHeight: 600 },
     { id: 'docker', title: 'Docker', icon: Server, component: <DockerApp />, type: 'app', initialWidth: 1000, initialHeight: 700 },
-    { id: 'auto-deploy', title: 'Auto Deploy', icon: GitBranch, component: <AutoDeployApp />, type: 'app', initialWidth: 1100, initialHeight: 760 },
+    { id: 'auto-deploy', title: 'Auto Deploy', icon: Rocket, component: <AutoDeployApp />, type: 'app', initialWidth: 1100, initialHeight: 760 },
     { id: 'tmux', title: t('apps.tmux'), icon: MonitorPlay, component: <TmuxApp />, type: 'app', initialWidth: 1000, initialHeight: 650 },
+    { id: 'mongo-backup', title: 'Mongo Sync', icon: CloudSync, component: <MongoBackupApp />, type: 'app', initialWidth: 1050, initialHeight: 680 },
     { id: 'settings', title: t('apps.settings'), icon: Settings, component: <SettingsApp />, type: 'app', initialWidth: 700, initialHeight: 500 },
   ];
 

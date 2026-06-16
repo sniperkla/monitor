@@ -4,7 +4,7 @@ import mysql from 'mysql2/promise';
 import { createRequire } from 'module';
 import { checkRateLimit } from '@/lib/serverGuard';
 import { getActiveRelayInfo } from '@/lib/mongodb';
-import { rewriteUriForTunnel } from '@/lib/sshTunnel';
+import { rewriteUriForTunnel, normalizeRelayDatabaseUri } from '@/lib/sshTunnel';
 
 const require = createRequire(import.meta.url);
 const { Client } = require('pg');
@@ -47,13 +47,16 @@ export async function POST(request) {
     }
 
     // Rewrite localhost URIs through Local Relay Agent if one is active
-    let effectiveUri = uri;
-    const isLocalhost = /localhost|127\.0\.0\.1/.test(uri);
+    const normalizedUri = normalizeRelayDatabaseUri(uri);
+    let effectiveUri = normalizedUri;
+    let usedRelay = false;
+    const isLocalhost = /localhost|127\.0\.0\.1/.test(normalizedUri);
     if (isLocalhost) {
-      const relayInfo = await getActiveRelayInfo(uri);
+      const relayInfo = await getActiveRelayInfo(normalizedUri);
       if (relayInfo) {
-        effectiveUri = rewriteUriForTunnel(uri, relayInfo.port);
-        console.log(`🔗 [test-uri] Relay active: ${uri} → ${effectiveUri}`);
+        effectiveUri = rewriteUriForTunnel(normalizedUri, relayInfo.port);
+        usedRelay = true;
+        console.log(`🔗 [test-uri] Relay active: ${normalizedUri} → ${effectiveUri}`);
       } else if (process.env.NODE_ENV !== 'development') {
         return NextResponse.json({
           success: false,
@@ -65,7 +68,7 @@ export async function POST(request) {
 
     // Test connection based on protocol
     if (effectiveUri.startsWith('mongodb://') || effectiveUri.startsWith('mongodb+srv://')) {
-      return await testMongoConnection(effectiveUri);
+      return await testMongoConnection(effectiveUri, usedRelay);
     } else if (effectiveUri.startsWith('mysql://')) {
       return await testMySQLConnection(effectiveUri);
     } else if (effectiveUri.startsWith('postgres://') || effectiveUri.startsWith('postgresql://')) {
@@ -86,13 +89,14 @@ export async function POST(request) {
   }
 }
 
-async function testMongoConnection(uri) {
+async function testMongoConnection(uri, usedRelay = false) {
   let conn = null;
   try {
     conn = await mongoose.createConnection(uri, {
       serverSelectionTimeoutMS: 10000,
       socketTimeoutMS: 10000,
       connectTimeoutMS: 10000,
+      ...(usedRelay ? { directConnection: true } : {}),
     }).asPromise();
 
     // Try to get server info

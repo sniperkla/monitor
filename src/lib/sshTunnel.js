@@ -136,3 +136,97 @@ export function parseUriHostPort(uri) {
   } catch {}
   return { remoteHost, remotePort };
 }
+
+export function isLocalHost(host) {
+  return /^(localhost|127\.0\.0\.1)$/i.test(String(host || '').trim());
+}
+
+/**
+ * Find an active Local Relay for the given user.
+ * Falls back to the only active relay when userId is unknown (single-user setups).
+ */
+export function findActiveRelay(userId) {
+  if (!global.__activeRelays?.size) return null;
+
+  if (userId && global.__activeRelays.has(userId)) {
+    return { relay: global.__activeRelays.get(userId), userId };
+  }
+
+  if (global.__activeRelays.size === 1) {
+    const [uid, relay] = global.__activeRelays.entries().next().value;
+    return { relay, userId: uid };
+  }
+
+  return null;
+}
+
+/**
+ * Set the relay agent's remote target. Never treat the relay proxy port as the DB port.
+ */
+export function applyRelayTarget(relay, host, port) {
+  const parsedPort = parseInt(port, 10) || 27017;
+  if (parsedPort === relay.localPort) {
+    relay.targetHost = relay.targetHost || '127.0.0.1';
+    if (!relay.targetPort || relay.targetPort === relay.localPort) {
+      relay.targetPort = 27017;
+    }
+    return;
+  }
+  relay.targetHost = host || '127.0.0.1';
+  relay.targetPort = parsedPort;
+}
+
+/**
+ * If a URI was saved with a relay proxy port (e.g. :54309), restore the real DB port.
+ */
+export function normalizeRelayDatabaseUri(uri) {
+  if (!uri || !/localhost|127\.0\.0\.1/.test(uri)) return uri;
+  if (!global.__activeRelays?.size) return uri;
+
+  try {
+    const url = new URL(uri);
+    const uriPort = parseInt(url.port, 10);
+    if (!uriPort) return uri;
+
+    for (const relay of global.__activeRelays.values()) {
+      if (uriPort === relay.localPort) {
+        const restoredPort =
+          relay.targetPort && relay.targetPort !== relay.localPort
+            ? relay.targetPort
+            : 27017;
+        url.port = String(restoredPort);
+        console.log(
+          `🔧 [Relay] Normalized URI port ${uriPort} → ${restoredPort} (relay proxy port)`
+        );
+        return url.toString();
+      }
+    }
+  } catch {}
+
+  return uri;
+}
+
+/**
+ * Route a localhost DB host/port through the user's relay agent when available.
+ */
+export function resolveLocalhostViaRelay(host, port, userId) {
+  if (!isLocalHost(host)) return { host, port, usedRelay: false };
+
+  const found = findActiveRelay(userId);
+  if (!found?.relay?.localPort) {
+    if (process.env.NODE_ENV === 'development') {
+      console.warn('⚠️ [Relay] No active relay — using server localhost (development only)');
+      return { host, port, usedRelay: false };
+    }
+    throw new Error(
+      'Local Relay Agent is not connected. Install and start local-relay.js on your machine, then retry.'
+    );
+  }
+
+  applyRelayTarget(found.relay, host, port);
+  console.log(
+    `🔗 Relay: routing ${found.relay.targetHost}:${found.relay.targetPort} → 127.0.0.1:${found.relay.localPort}` +
+    (userId ? ` (user ${userId})` : ' (single active relay)')
+  );
+  return { host: '127.0.0.1', port: found.relay.localPort, usedRelay: true };
+}

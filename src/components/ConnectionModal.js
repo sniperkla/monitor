@@ -71,6 +71,7 @@ export default function ConnectionModal({ onClose, editConnection = null }) {
     username: editConnection?.username || '',
     password: '',
     database: editConnection?.database || '',
+    authSource: editConnection?.authSource || '',
     authType: editConnection?.authType || 'password',
     privateKey: '',
     keyFileName: editConnection?.keyFileName || (editConnection?.privateKey ? 'Saved Private Key' : ''),
@@ -222,6 +223,13 @@ export default function ConnectionModal({ onClose, editConnection = null }) {
           if (url.pathname && url.pathname.length > 1) {
             newForm.database = url.pathname.substring(1).split('?')[0];
           }
+
+          if (url.search) {
+            const params = new URLSearchParams(url.search);
+            if (params.get('authSource')) {
+              newForm.authSource = params.get('authSource');
+            }
+          }
           
           return newForm;
         });
@@ -276,8 +284,10 @@ export default function ConnectionModal({ onClose, editConnection = null }) {
         });
       } else {
         addNotification({ 
-          title: t('ssh.status.error') || t('common.error'), 
-          message: data.error || t('ssh.toasts.testFail'), 
+          title: data.relayRequired ? 'Relay Required' : (t('ssh.status.error') || t('common.error')), 
+          message: data.relayRequired
+            ? `${data.error || 'Local Relay Agent is not connected.'} Open Settings → Local Relay to install and start it.`
+            : (data.error || t('ssh.toasts.testFail')), 
           type: 'error' 
         });
       }
@@ -379,6 +389,7 @@ export default function ConnectionModal({ onClose, editConnection = null }) {
       port: parseInt(form.port) || 0,
       username: form.username,
       database: form.database || null,
+      authSource: form.authSource || null,
       authType: form.authType,
       keyFileName: form.keyFileName || null,
       tags: form.tags.split(',').map(t => t.trim()).filter(Boolean),

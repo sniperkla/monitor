@@ -40,6 +40,9 @@ export class ConnectionRepository {
       try {
         await this.db.query('ALTER TABLE connections ADD COLUMN isSrv BOOLEAN DEFAULT FALSE');
       } catch (e) {}
+      try {
+        await this.db.query('ALTER TABLE connections ADD COLUMN authSource VARCHAR(255)');
+      } catch (e) {}
       
       // Migration: Add SSH tunnel columns if missing
       const tunnelCols = [
@@ -92,6 +95,9 @@ export class ConnectionRepository {
           updatedAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
       `);
+      try {
+        await this.db.query('ALTER TABLE connections ADD COLUMN authSource VARCHAR(255)');
+      } catch (e) {}
     }
   }
 
@@ -108,6 +114,7 @@ export class ConnectionRepository {
       tags: (typeof r.tags === 'string' ? JSON.parse(r.tags) : r.tags) || [],
       isFavorite: !!(r.isfavorite !== undefined ? r.isfavorite : r.isFavorite),
       isSrv: !!(r.issrv !== undefined ? r.issrv : r.isSrv),
+      authSource: r.authsource || r.authSource || null,
       sshTunnel: !!(r.sshtunnel !== undefined ? r.sshtunnel : r.sshTunnel),
       sshTunnelHost: r.sshtunnelhost || r.sshTunnelHost || null,
       sshTunnelPort: r.sshtunnelport || r.sshTunnelPort || 22,

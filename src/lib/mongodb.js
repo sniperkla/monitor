@@ -3,7 +3,14 @@ import { headers } from "next/headers";
 import mysql from "mysql2/promise";
 import { createRequire } from 'module';
 import { getToken } from 'next-auth/jwt';
-import { createSSHTunnel, rewriteUriForTunnel, parseUriHostPort } from './sshTunnel.js';
+import {
+  createSSHTunnel,
+  rewriteUriForTunnel,
+  parseUriHostPort,
+  findActiveRelay,
+  applyRelayTarget,
+  normalizeRelayDatabaseUri,
+} from './sshTunnel.js';
 import fs from 'fs';
 import path from 'path';
 
@@ -74,6 +81,8 @@ export async function getActiveRelayInfo(uri) {
   if (!/localhost|127\.0\.0\.1/.test(uri)) return null;
 
   try {
+    uri = normalizeRelayDatabaseUri(uri);
+
     const h = await headers();
     const cookie = h.get('cookie') || '';
     const cookies = Object.fromEntries(
@@ -86,18 +95,14 @@ export async function getActiveRelayInfo(uri) {
       req: { headers: { cookie }, cookies },
       secret: process.env.NEXTAUTH_SECRET,
     });
-    const relayKey = token.sub;
-    if (!relayKey) return null;
 
-    const relay = global.__activeRelays.get(relayKey);
-    if (!relay) return null;
+    const found = findActiveRelay(token?.sub);
+    if (!found?.relay) return null;
 
-    // Update relay target so the TCP proxy knows what to forward to
     const { remoteHost, remotePort } = parseUriHostPort(uri);
-    relay.targetHost = remoteHost;
-    relay.targetPort = remotePort;
+    applyRelayTarget(found.relay, remoteHost, remotePort);
 
-    return { port: relay.localPort, userId: token.sub };
+    return { port: found.relay.localPort, userId: found.userId };
   } catch {
     return null;
   }
@@ -153,8 +158,26 @@ async function connectCenter(uri) {
  * @param {string} uri           Database URI
  * @param {object|null} tunnelConfig  SSH tunnel config from x-vault-tunnel header
  */
+export async function flushRelayDynamicConnections(reason = 'relay disconnect') {
+  let flushed = 0;
+  for (const [key, conn] of connectionPool.entries()) {
+    if (!key.startsWith('relay:')) continue;
+    try {
+      if (conn.readyState) await conn.close();
+      else if (conn.pool) await conn.pool.end();
+    } catch (_) {}
+    connectionPool.delete(key);
+    flushed++;
+  }
+  if (flushed > 0) {
+    console.log(`🧹 [mongodb] Flushed ${flushed} relay-backed connection(s) (${reason})`);
+  }
+}
+
 async function getDynamicConnection(uri, tunnelConfig = null) {
   if (!uri) throw new Error("Database URI is missing.");
+
+  uri = normalizeRelayDatabaseUri(uri);
 
   let connectUri = uri;
   let cachePrefix = '';
@@ -167,7 +190,7 @@ async function getDynamicConnection(uri, tunnelConfig = null) {
     if (relayInfo) {
       connectUri = rewriteUriForTunnel(uri, relayInfo.port);
       cachePrefix = `relay:${relayInfo.userId}:`;
-      console.log(`🔗 [Local Relay] ${uri} → 127.0.0.1:${relayInfo.port}`);
+      console.log(`🔗 [Local Relay] ${uri} → ${connectUri}`);
     } else if (isLocalhost) {
       // Localhost URI but no relay active.
       // In development the server itself is on localhost, so direct access is fine.
@@ -251,7 +274,8 @@ async function getDynamicConnection(uri, tunnelConfig = null) {
   const useTunnel = tunnelConfig?.enabled || cachePrefix.startsWith('relay:');
   const opts = {
     bufferCommands: false,
-    serverSelectionTimeoutMS: 5000,
+    serverSelectionTimeoutMS: useTunnel ? 15000 : 5000,
+    connectTimeoutMS: useTunnel ? 15000 : 10000,
     // directConnection required when going through a local proxy/tunnel
     ...(useTunnel ? { directConnection: true } : {}),
   };
@@ -260,39 +284,22 @@ async function getDynamicConnection(uri, tunnelConfig = null) {
   return conn;
 }
 
-function rewriteLocalhostUriThroughRelay(uri) {
-  if (!uri || !/^(mongodb(?:\+srv)?:\/\/)/.test(uri)) return uri;
-  if (!/localhost|127\.0\.0\.1/.test(uri)) return uri;
-  if (!global.__activeRelays?.size) return uri;
-
-  const relay = Array.from(global.__activeRelays.values())[0];
-  if (!relay?.localPort) return uri;
-
-  const portMatch = uri.match(/:(\d+)(?:\/|$)/);
-  if (portMatch) {
-    relay.targetHost = '127.0.0.1';
-    relay.targetPort = Number(portMatch[1]);
-  }
-
-  return uri.replace(/(localhost|127\.0\.0\.1):\d+/, `127.0.0.1:${relay.localPort}`);
-}
-
 /**
  * Main entry point for database connections.
  * @param {string} uri - Optional URI to connect to.
- * @param {boolean} isCenter - If true, connects to the global default instance.
+ * @param {boolean} isCenter - If true, connects to the default instance.
  */
 async function connectDB(uri = null, isCenter = false) {
   const targetUri = uri || (await getUriFromRequest());
-  const effectiveUri = rewriteLocalhostUriThroughRelay(targetUri);
+  const normalizedUri = normalizeRelayDatabaseUri(targetUri);
 
   // Non-MongoDB URIs must always go through the dynamic connection path
-  const isNonMongo = effectiveUri && !effectiveUri.startsWith('mongodb://') && !effectiveUri.startsWith('mongodb+srv://');
+  const isNonMongo = normalizedUri && !normalizedUri.startsWith('mongodb://') && !normalizedUri.startsWith('mongodb+srv://');
 
   const centerUri = getCenterUri();
   // If this is the center DB (User storage), use the default connection
-  if (!isNonMongo && (isCenter || effectiveUri === centerUri || targetUri === centerUri || effectiveUri === process.env.MONGODB_URI || targetUri === process.env.MONGODB_URI)) {
-    return connectCenter(effectiveUri);
+  if (!isNonMongo && (isCenter || normalizedUri === centerUri || targetUri === centerUri || normalizedUri === process.env.MONGODB_URI || targetUri === process.env.MONGODB_URI)) {
+    return connectCenter(normalizedUri);
   }
 
   // When URI came from request headers, also check for SSH tunnel config.
@@ -300,7 +307,7 @@ async function connectDB(uri = null, isCenter = false) {
   const tunnelConfig = uri ? null : await getTunnelFromRequest();
 
   // Otherwise, use a separate pool connection for tenant isolation
-  return getDynamicConnection(effectiveUri, tunnelConfig);
+  return getDynamicConnection(normalizedUri, tunnelConfig);
 }
 
 export default connectDB;

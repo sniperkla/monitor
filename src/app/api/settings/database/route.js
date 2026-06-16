@@ -6,7 +6,7 @@ import fs from 'fs';
 import path from 'path';
 import { migrateConnections } from './migrate/migrator';
 import { getActiveRelayInfo } from '@/lib/mongodb';
-import { rewriteUriForTunnel } from '@/lib/sshTunnel';
+import { rewriteUriForTunnel, normalizeRelayDatabaseUri } from '@/lib/sshTunnel';
 
 const CONFIG_PATH = path.join(process.cwd(), 'db-config.json');
 
@@ -97,13 +97,16 @@ export async function POST(request) {
     }
 
     // Rewrite localhost URIs through Local Relay Agent if one is active
-    let effectiveUri = uri;
-    const isLocalhost = /localhost|127\.0\.0\.1/.test(uri);
+    const normalizedUri = normalizeRelayDatabaseUri(uri);
+    let effectiveUri = normalizedUri;
+    let usedRelay = false;
+    const isLocalhost = /localhost|127\.0\.0\.1/.test(normalizedUri);
     if (isLocalhost) {
-      const relayInfo = await getActiveRelayInfo(uri);
+      const relayInfo = await getActiveRelayInfo(normalizedUri);
       if (relayInfo) {
-        effectiveUri = rewriteUriForTunnel(uri, relayInfo.port);
-        console.log(`🔗 [settings/database] Relay active: ${uri} → ${effectiveUri}`);
+        effectiveUri = rewriteUriForTunnel(normalizedUri, relayInfo.port);
+        usedRelay = true;
+        console.log(`🔗 [settings/database] Relay active: ${normalizedUri} → ${effectiveUri}`);
       } else if (process.env.NODE_ENV !== 'development') {
         // No relay active — save the URI without a live-connect test so user can connect relay later
         console.warn('⚠️ [settings/database] Localhost URI with no active relay — saving without live-connect test');
@@ -121,7 +124,9 @@ export async function POST(request) {
       try {
         await mongoose.connect(effectiveUri, { 
           bufferCommands: false,
-          serverSelectionTimeoutMS: 5000,
+          serverSelectionTimeoutMS: usedRelay ? 15000 : 5000,
+          connectTimeoutMS: usedRelay ? 15000 : 10000,
+          ...(usedRelay ? { directConnection: true } : {}),
         });
         console.log('✅ Live-connected to new MongoDB');
       } catch (connectErr) {

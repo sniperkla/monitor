@@ -137,23 +137,66 @@ function getLatestCenterUri() {
 // Multi-tenant Model Pool
 const modelsPool = new Map();
 
+function applyRelayTarget(relay, host, port) {
+  const parsedPort = parseInt(port, 10) || 27017;
+  if (parsedPort === relay.localPort) {
+    relay.targetHost = relay.targetHost || '127.0.0.1';
+    if (!relay.targetPort || relay.targetPort === relay.localPort) {
+      relay.targetPort = 27017;
+    }
+    return;
+  }
+  relay.targetHost = host || '127.0.0.1';
+  relay.targetPort = parsedPort;
+}
+
+function normalizeRelayDatabaseUri(uri) {
+  if (!uri || !/localhost|127\.0\.0\.1/.test(uri)) return uri;
+  if (!global.__activeRelays?.size) return uri;
+  try {
+    const url = new URL(uri);
+    const uriPort = parseInt(url.port, 10);
+    if (!uriPort) return uri;
+    for (const relay of global.__activeRelays.values()) {
+      if (uriPort === relay.localPort) {
+        const restoredPort =
+          relay.targetPort && relay.targetPort !== relay.localPort
+            ? relay.targetPort
+            : 27017;
+        url.port = String(restoredPort);
+        return url.toString();
+      }
+    }
+  } catch {}
+  return uri;
+}
+
 /**
  * Rewrite a localhost URI through the user's active Local Relay Agent.
  * If no relay is active for this user, returns the URI unchanged.
  */
 function rewriteUriViaRelay(uri, userId) {
   if (!uri || !/localhost|127\.0\.0\.1/.test(uri)) return uri;
-  if (!userId || !global.__activeRelays?.size) return uri;
-  const relay = global.__activeRelays.get(userId);
-  if (!relay?.localPort) return uri;
-  // Extract original target port from URI and update relay target
-  const portMatch = uri.match(/:(\d+)\//);
-  if (portMatch) {
-    relay.targetHost = '127.0.0.1';
-    relay.targetPort = parseInt(portMatch[1]);
+  if (!global.__activeRelays?.size) return uri;
+
+  uri = normalizeRelayDatabaseUri(uri);
+
+  let relay = userId ? global.__activeRelays.get(userId) : null;
+  if (!relay && global.__activeRelays.size === 1) {
+    relay = global.__activeRelays.values().next().value;
   }
-  // Rewrite host:port → 127.0.0.1:{relay.localPort}
-  return uri.replace(/(localhost|127\.0\.0\.1):\d+/, `127.0.0.1:${relay.localPort}`);
+  if (!relay?.localPort) return uri;
+
+  try {
+    const url = new URL(uri);
+    const uriPort = parseInt(url.port, 10) || 27017;
+    applyRelayTarget(relay, url.hostname, uriPort);
+    url.hostname = '127.0.0.1';
+    url.port = String(relay.localPort);
+    return url.toString();
+  } catch {
+    return uri;
+  }
 }
 
 async function getModels(uri, userId) {
@@ -393,6 +436,14 @@ async function getModels(uri, userId) {
 app.prepare().then(async () => {
   await connectMongo();
 
+  // Start background sync scheduler
+  try {
+    const mongoSyncScheduler = require('./scripts/mongoSyncScheduler');
+    mongoSyncScheduler.start();
+  } catch (err) {
+    console.error('❌ Failed to start Mongo Sync Scheduler:', err.message);
+  }
+
   const compress = compression();
   const server = createServer((req, res) => {
     // Apply compression
@@ -542,6 +593,14 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
     socket.on('heartbeat:ping', (timestamp) => {
       touchActivity();
       socket.emit('heartbeat:pong', timestamp);
+    });
+
+    // Lightweight SSH session health probe (used by FileManager before transfers)
+    socket.on('ssh:ping', () => {
+      const sessionData = activeSessions.get(socket.id);
+      const sshClient = sessionData?.sshClient;
+      const ok = !!(sshClient && sshClient._state !== 'closed');
+      socket.emit('ssh:pong', { ok });
     });
 
       socket.on('ssh:connect', async (data) => {
@@ -911,8 +970,11 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
 
               // Handle terminal resize
               socket.on('ssh:resize', ({ cols, rows }) => {
-                if (stream) {
+                if (!stream || !cols || !rows) return;
+                try {
                   stream.setWindow(rows, cols, 0, 0);
+                } catch (err) {
+                  console.warn(`⚠️ [${socket.id}] ssh:resize failed: ${err.message}`);
                 }
               });
             });
@@ -1377,6 +1439,34 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
               };
             }).filter(f => f !== null);
           }
+
+          // Get real disk size for a file or directory (used by Get Info panel)
+          socket.on('sftp:getSize', ({ path: targetPath }) => {
+            console.log(`📏 [${socket.id}] SFTP GET SIZE: ${targetPath}`);
+            if (!sshClient || sshClient._state === 'closed') {
+              return socket.emit('sftp:sizeResult', { path: targetPath, error: 'SSH not connected' });
+            }
+            // du -sb gives actual bytes used (follows symlinks for files)
+            // Fallback to stat size for plain files if du is unavailable
+            const cmd = `du -sb ${shellQuote(targetPath)} 2>/dev/null | cut -f1`;
+            sshClient.exec(cmd, (err, stream) => {
+              if (err) {
+                return socket.emit('sftp:sizeResult', { path: targetPath, error: err.message });
+              }
+              let output = '';
+              let stderr = '';
+              stream.on('data', (d) => { output += d.toString(); });
+              stream.stderr.on('data', (d) => { stderr += d.toString(); });
+              stream.on('close', (code) => {
+                const parsed = parseInt(output.trim(), 10);
+                if (code === 0 && !isNaN(parsed)) {
+                  socket.emit('sftp:sizeResult', { path: targetPath, size: parsed });
+                } else {
+                  socket.emit('sftp:sizeResult', { path: targetPath, error: stderr || 'Could not read size' });
+                }
+              });
+            });
+          });
 
           socket.on('sftp:mkdir', (path) => {
             console.log(`📂 [${socket.id}] SFTP MKDIR: ${path}`);
@@ -2312,6 +2402,17 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
           // Upload File (Client -> Server) - Resumable with Offset
           socket.on('sftp:upload', ({ filename, path: destPath, size, offset = 0 }) => {
             console.log(`📤 [${socket.id}] SFTP UPLOAD START: ${filename} (Size: ${size}, Offset: ${offset})`);
+
+            const sessionData = activeSessions.get(socket.id);
+            if (!sessionData) {
+              return socket.emit('sftp:error', {
+                message: 'SSH session not ready. Please wait for connection or reconnect.',
+                recoverable: true,
+              });
+            }
+            if (!sessionData.sshClient || sessionData.sshClient._state === 'closed') {
+              return emitSftpError('SSH Connection Closed', 'Upload failed', { recoverable: true, resetSftp: true });
+            }
             
             const { checkRateLimit, getConcurrencyLimiter, checkMemory } = require('./src/lib/serverGuard');
             
@@ -2348,13 +2449,12 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
                });
             }
 
-            const sessionData = activeSessions.get(socket.id);
-            if (!sessionData) return;
-
             getSftp((err, sftp) => {
                // For Docker mode, getSftp returns null (managed by ensureSftp/getSftp logic); 
                // If it's a real error and not Docker, then we stop.
-               if (err && !sessionData.dockerContainerId) return emitSftpError(err, 'Upload SFTP Init');
+               if (err && !sessionData.dockerContainerId) {
+                 return emitSftpError(err, 'Upload SFTP Init', { recoverable: true, resetSftp: true });
+               }
                
                const transferId = `up_${Date.now()}`;
                const startUpload = (actualOffset) => {
@@ -2373,12 +2473,23 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
                   const setupHandlers = (wStream) => {
                     let bytesReceivedInSession = 0;
                     let settled = false;
+                    let inactivityTimer = null;
+
+                    const armInactivityTimer = () => {
+                      clearTimeout(inactivityTimer);
+                      inactivityTimer = setTimeout(() => {
+                        if (settled) return;
+                        failTransfer(new Error('Upload stalled: no data received from client'), 'Upload stalled');
+                      }, 60000);
+                    };
 
                     const finalize = (onFinish) => {
                       if (settled) return;
                       settled = true;
+                      clearTimeout(inactivityTimer);
                       socket.off(`sftp:upload_chunk:${filename}`, chunkHandler);
                       socket.off(`sftp:upload_done:${filename}`, doneHandler);
+                      socket.off(`sftp:upload_abort:${filename}`, abortHandler);
                       cleanup();
                       onFinish?.();
                     };
@@ -2395,6 +2506,7 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
 
                     const chunkHandler = (chunk) => {
                       if (settled) return;
+                      armInactivityTimer();
                       wStream.write(chunk, (err) => {
                          if (err) return failTransfer(err, 'Stream Write Error');
                          bytesReceivedInSession += chunk.length;
@@ -2412,9 +2524,34 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
                       if (wStream.writable) wStream.end();
                     };
 
+                    const abortHandler = () => {
+                      if (settled) return;
+                      finalize(() => {
+                        try {
+                          if (typeof wStream.destroy === 'function') wStream.destroy();
+                          else if (wStream.writable) wStream.end();
+                        } catch (_) {}
+                        console.warn(`🗑️ [${socket.id}] SFTP UPLOAD ABORTED: Deleting partial file: ${destPath}`);
+                        getSftp((sftpErr, sftp) => {
+                          if (!sftpErr && sftp) {
+                            sftp.unlink(destPath, () => {
+                              sshClient.exec(`rm -f "${destPath}"`, () => {});
+                            });
+                            return;
+                          }
+                          sshClient.exec(`rm -f "${destPath}"`, () => {});
+                        });
+                      });
+                    };
+
+                    socket.removeAllListeners(`sftp:upload_chunk:${filename}`);
+                    socket.removeAllListeners(`sftp:upload_done:${filename}`);
+                    socket.removeAllListeners(`sftp:upload_abort:${filename}`);
                     socket.on(`sftp:upload_chunk:${filename}`, chunkHandler);
                     socket.once(`sftp:upload_done:${filename}`, doneHandler);
-                    socket.emit('sftp:can_upload', { filename, offset: actualOffset }); 
+                    socket.once(`sftp:upload_abort:${filename}`, abortHandler);
+                    socket.emit('sftp:can_upload', { filename, offset: actualOffset });
+                    armInactivityTimer();
 
                     wStream.on('close', () => {
                       finalize(() => {
@@ -2472,6 +2609,17 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
           // Download File (Server -> Client) - Resumable with Offset
           socket.on('sftp:download', ({ filePath, offset = 0 }) => {
              console.log(`📥 [${socket.id}] SFTP DOWNLOAD: ${filePath} (Offset: ${offset})`);
+
+             const sessionData = activeSessions.get(socket.id);
+             if (!sessionData) {
+               return socket.emit('sftp:error', {
+                 message: 'SSH session not ready. Please wait for connection or reconnect.',
+                 recoverable: true,
+               });
+             }
+             if (!sessionData.sshClient || sessionData.sshClient._state === 'closed') {
+               return emitSftpError('SSH Connection Closed', 'Download failed', { recoverable: true, resetSftp: true });
+             }
              
              const { checkRateLimit, getConcurrencyLimiter, checkMemory } = require('./src/lib/serverGuard');
              
@@ -2496,9 +2644,6 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
                   resetIn: rate.resetIn
                 });
              }
-
-             const sessionData = activeSessions.get(socket.id);
-             if (!sessionData) return;
 
              const startDownload = (sftp, stats) => {
                const transferId = `down_${Date.now()}`;
@@ -3000,6 +3145,17 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
 
         netServer.listen(0, '127.0.0.1', () => {
           const localPort = netServer.address().port;
+          const prev = global.__activeRelays.get(userId);
+          if (prev?.netServer && prev.netServer !== netServer) {
+            try { prev.netServer.close(); } catch (_) {}
+          }
+          try {
+            const { flushRelayPooledConnections } = require('./src/lib/dbPool');
+            flushRelayPooledConnections('relay reconnected with new local port').catch(() => {});
+            import('./src/lib/mongodb.js').then(({ flushRelayDynamicConnections }) => {
+              flushRelayDynamicConnections('relay reconnected with new local port');
+            }).catch(() => {});
+          } catch (_) {}
           global.__activeRelays.set(userId, { localPort, netServer, targetHost: 'localhost', targetPort: 27017 });
           ws.send(JSON.stringify({ type: 'ready', localPort }));
           console.log(`🔗 [Relay] Connected: user ${userId} → :${localPort}`);
@@ -3043,6 +3199,13 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
           const current = global.__activeRelays.get(userId);
           if (current && current.netServer === netServer) {
             global.__activeRelays.delete(userId);
+            try {
+              const { flushRelayPooledConnections } = require('./src/lib/dbPool');
+              flushRelayPooledConnections('relay websocket closed').catch(() => {});
+              import('./src/lib/mongodb.js').then(({ flushRelayDynamicConnections }) => {
+                flushRelayDynamicConnections('relay websocket closed');
+              }).catch(() => {});
+            } catch (_) {}
           }
           tcpSockets.forEach(s => s.destroy());
           console.log(`🔗 [Relay] Disconnected: user ${userId}`);

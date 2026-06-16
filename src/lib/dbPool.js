@@ -19,6 +19,7 @@ import mysql from 'mysql2/promise';
 import { Client as PgClient } from 'pg';
 import { Client as SshClient } from 'ssh2';
 import { decrypt } from '@/utils/encryption';
+import { resolveLocalhostViaRelay } from '@/lib/sshTunnel';
 
 // Global pool (survives hot reloads in dev)
 const globalPool = global.__dbPool || (global.__dbPool = new Map());
@@ -28,55 +29,65 @@ const tunnelPool = global.__tunnelPool || (global.__tunnelPool = new Map());
 const POOL_TTL_MS = 5 * 60 * 1000; // 5 minutes idle timeout
 const MAX_POOL_SIZE = 20; // Max concurrent different connections
 
-/**
- * If the target host is localhost/127.0.0.1 and the requesting user has an
- * active Local Relay Agent connected, rewrite the connection to go through
- * the relay's local TCP proxy port instead of the server's own localhost.
- * Returns the rewritten { host, port } or the original values unchanged.
- */
 async function resolveRelayForLocalhost(host, port, userId) {
-  const isLocal = /^(localhost|127\.0\.0\.1)$/.test(host);
-  if (!isLocal || !userId || !global.__activeRelays?.size) {
-    if (isLocal && userId && !global.__activeRelays?.size) {
-      // IF we are running the server locally on localhost, we don't NEED a relay to access the server's own loopback.
-      // This allows developers/local users to connect to their own DB without installing the relay.
-      const isRelayIgnored = process.env.NODE_ENV === 'development' || 
-                            (typeof window !== 'undefined' && window.location.hostname === 'localhost') ||
-                            (process.env.HOSTNAME === 'localhost' || process.env.HOSTNAME === '127.0.0.1');
-
-      if (!isRelayIgnored) {
-        throw new Error(
-          'Local Relay Agent is not connected. ' +
-          'Run local-relay.js on your machine to access localhost databases.'
-        );
-      }
-    }
-    return { host, port };
-  }
-
-  const relay = global.__activeRelays.get(userId);
-  if (!relay) {
-    throw new Error(
-      'Local Relay Agent is not connected. ' +
-      'Run local-relay.js on your machine to access localhost databases.'
-    );
-  }
-
-  // Tell the relay's TCP proxy what to forward to
-  relay.targetHost = host;
-  relay.targetPort = parseInt(port) || 27017; // port is always pre-set to provider default before this call
-
-  console.log(`🔗 Relay: routing ${host}:${relay.targetPort} → 127.0.0.1:${relay.localPort} (user ${userId})`);
-  return { host: '127.0.0.1', port: relay.localPort };
+  return resolveLocalhostViaRelay(host, port, userId);
 }
 
 /**
  * Generate a unique cache key for a connection config.
  * We use host:port:database:username as the key (NOT password for security).
  */
-function getCacheKey(conn) {
+function getCacheKey(conn, connectHost, connectPort) {
   const provider = conn.dbProvider || 'mongodb';
-  return `${provider}://${conn.username || ''}@${conn.host}:${conn.port || 'default'}/${conn.database || ''}`;
+  const host = connectHost || conn.host;
+  const port = connectPort || conn.port || 'default';
+  const authPart = conn.authSource ? `?authSource=${conn.authSource}` : '';
+  const userPart = conn._userId ? `#${conn._userId}` : '';
+  return `${provider}://${conn.username || ''}@${host}:${port}/${conn.database || ''}${authPart}${userPart}`;
+}
+
+/**
+ * Resolve the actual TCP endpoint (SSH tunnel or relay) before connecting.
+ */
+async function resolveConnectEndpoint(conn) {
+  const provider = conn.dbProvider || 'mongodb';
+  const defaultPort = provider === 'postgres' ? 5432 : provider === 'mysql' ? 3306 : 27017;
+  let connectHost = conn.host;
+  let connectPort = conn.port || defaultPort;
+  let tunnelKey = null;
+  let usedRelay = false;
+
+  if (conn.sshTunnel) {
+    const tunnel = await createSSHTunnel(conn);
+    connectHost = '127.0.0.1';
+    connectPort = tunnel.port;
+    tunnelKey = tunnel.tunnelKey;
+  } else {
+    const resolved = await resolveRelayForLocalhost(connectHost, connectPort, conn._userId);
+    connectHost = resolved.host;
+    connectPort = resolved.port;
+    usedRelay = resolved.usedRelay;
+  }
+
+  return { connectHost, connectPort, tunnelKey, usedRelay };
+}
+
+async function validatePooledEntry(entry) {
+  const { provider, db } = entry;
+  if (provider === 'mongodb') {
+    if (db.readyState !== 1) return false;
+    await db.db.admin().ping();
+    return true;
+  }
+  if (provider === 'mysql') {
+    await db.ping();
+    return true;
+  }
+  if (provider === 'postgres') {
+    await db.query('SELECT 1');
+    return true;
+  }
+  return false;
 }
 
 /**
@@ -188,11 +199,23 @@ export function buildMongoUri(conn, password) {
   const isSrv = conn.isSrv || (conn.host && conn.host.includes('.mongodb.net'));
   const protocol = isSrv ? 'mongodb+srv' : 'mongodb';
   const portPart = (isSrv || !conn.port || (conn.port === 27017 && isSrv)) ? '' : `:${conn.port}`;
-  
+
+  let base;
   if (conn.username && password) {
-    return `${protocol}://${conn.username}:${encodeURIComponent(password)}@${conn.host}${portPart}/${conn.database || ''}`;
+    base = `${protocol}://${conn.username}:${encodeURIComponent(password)}@${conn.host}${portPart}/${conn.database || ''}`;
+  } else {
+    base = `${protocol}://${conn.host}${portPart}/${conn.database || ''}`;
   }
-  return `${protocol}://${conn.host}${portPart}/${conn.database || ''}`;
+
+  const params = new URLSearchParams();
+  if (conn.authSource) params.set('authSource', conn.authSource);
+  if (conn.dbOptions && typeof conn.dbOptions === 'object') {
+    for (const [key, value] of Object.entries(conn.dbOptions)) {
+      if (value != null && value !== '') params.set(key, String(value));
+    }
+  }
+  const query = params.toString();
+  return query ? `${base}?${query}` : base;
 }
 
 /**
@@ -204,34 +227,25 @@ export function buildMongoUri(conn, password) {
  *   - For MySQL: a mysql2 connection instance (use db.query(...))
  */
 export async function getPooledConnection(conn) {
-  const key = getCacheKey(conn);
   const provider = conn.dbProvider || 'mongodb';
   const password = decrypt(conn.password);
 
-  // Check if we have a cached connection
+  const { connectHost, connectPort, tunnelKey, usedRelay } = await resolveConnectEndpoint(conn);
+  const key = getCacheKey(conn, connectHost, connectPort);
+
+  // Check if we have a cached connection (key includes relay/tunnel port)
   if (globalPool.has(key)) {
     const cached = globalPool.get(key);
 
-    // Validate connection is still alive
     try {
-      if (provider === 'mongodb' && cached.db.readyState === 1) {
-        cached.lastUsed = Date.now();
-        return cached;
-      } else if (provider === 'mysql') {
-        // Quick ping to check if alive
-        await cached.db.ping();
-        cached.lastUsed = Date.now();
-        return cached;
-      } else if (provider === 'postgres') {
-        // Quick query to check if alive
-        await cached.db.query('SELECT 1');
+      if (await validatePooledEntry(cached)) {
         cached.lastUsed = Date.now();
         return cached;
       }
     } catch (e) {
-      // Connection is dead, remove it
-      console.log(`♻️ Pool: Stale connection removed for ${key}`);
+      console.log(`♻️ Pool: Stale connection removed for ${key}: ${e.message}`);
       try { await cached.db.close?.() || await cached.db.end?.(); } catch (_) {}
+      if (cached.tunnelKey) await closeSSHTunnel(cached.tunnelKey);
       globalPool.delete(key);
     }
   }
@@ -256,39 +270,18 @@ export async function getPooledConnection(conn) {
 
   // Create new connection
   let db;
-  let tunnelKey = null;
-  let connectHost = conn.host;
-
-  // Set provider-specific default ports before relay resolution
-  const defaultPort = provider === 'postgres' ? 5432 : provider === 'mysql' ? 3306 : 27017;
-  let connectPort = conn.port || defaultPort;
-
-  // 1. Open SSH tunnel if requested
-  if (conn.sshTunnel) {
-    try {
-      const tunnel = await createSSHTunnel(conn);
-      connectHost = '127.0.0.1';
-      connectPort = tunnel.port;
-      tunnelKey = tunnel.tunnelKey;
-    } catch (err) {
-      throw new Error(`SSH Tunnel failed: ${err.message}`);
-    }
-  } else {
-    // 2. Otherwise, auto-route localhost connections through the relay agent if one is active
-    const resolved = await resolveRelayForLocalhost(connectHost, connectPort, conn._userId);
-    connectHost = resolved.host;
-    connectPort = resolved.port;
-  }
 
   if (provider === 'mongodb') {
     const tunnelConn = { ...conn, host: connectHost, port: connectPort, isSrv: false };
     const uri = buildMongoUri(tunnelConn, password);
     db = await mongoose.createConnection(uri, {
-      serverSelectionTimeoutMS: 10000,
-      maxPoolSize: 5,
-      minPoolSize: 1,
-      maxIdleTimeMS: 60000,
+      serverSelectionTimeoutMS: 15000,
+      connectTimeoutMS: 15000,
+      maxPoolSize: usedRelay ? 2 : 5,
+      minPoolSize: 0,
+      maxIdleTimeMS: usedRelay ? 30000 : 60000,
       directConnection: true,
+      appName: 'ssh-monitor',
     }).asPromise();
   } else if (provider === 'mysql') {
     db = await mysql.createConnection({
@@ -312,11 +305,41 @@ export async function getPooledConnection(conn) {
     throw new Error(`Provider ${provider} not supported`);
   }
 
-  const entry = { db, provider, key, tunnelKey, lastUsed: Date.now() };
+  const entry = {
+    db,
+    provider,
+    key,
+    tunnelKey,
+    usedRelay,
+    relayPort: usedRelay ? connectPort : null,
+    lastUsed: Date.now(),
+  };
   globalPool.set(key, entry);
 
-  console.log(`🔗 Pool: New connection created for ${key}${tunnelKey ? ' (via SSH tunnel)' : ''} (pool size: ${globalPool.size})`);
+  const via = tunnelKey ? 'SSH tunnel' : usedRelay ? `relay :${connectPort}` : 'direct';
+  console.log(`🔗 Pool: New connection created for ${key} (via ${via}, pool size: ${globalPool.size})`);
   return entry;
+}
+
+/**
+ * Drop pooled DB connections when the Local Relay reconnects or disconnects.
+ * Stale mongoose pools keep talking to old relay ports (e.g. 127.0.0.1:55004) and fail with "connection closed".
+ */
+export async function flushRelayPooledConnections(reason = 'relay disconnect') {
+  let flushed = 0;
+  for (const [key, entry] of globalPool.entries()) {
+    if (!entry.usedRelay) continue;
+    try {
+      if (entry.provider === 'mongodb') await entry.db.close();
+      else if (entry.provider === 'mysql' || entry.provider === 'postgres') await entry.db.end();
+    } catch (_) {}
+    if (entry.tunnelKey) await closeSSHTunnel(entry.tunnelKey);
+    globalPool.delete(key);
+    flushed++;
+  }
+  if (flushed > 0) {
+    console.log(`🧹 Pool: Flushed ${flushed} relay-backed connection(s) (${reason})`);
+  }
 }
 
 /**

@@ -90,6 +90,8 @@ function createTar(files) {
 // Keyed by connectionId. On unmount we keep the socket alive for POOL_TTL ms;
 // if the same connectionId remounts within that time, we reuse it seamlessly.
 const POOL_TTL = 6000;
+const HEALTH_CHECK_TTL_MS = 8000;
+const SSH_PING_TIMEOUT_MS = 5000;
 const _fmSocketPool = typeof window !== 'undefined'
   ? (window.__fmSocketPool || (window.__fmSocketPool = new Map()))
   : new Map();
@@ -111,7 +113,7 @@ if (typeof window !== 'undefined' && !window.__fmSocketPoolUnloadBound) {
 }
 
 const SFTP_REUSE_EVENTS = [
-  'heartbeat:pong', 'sftp:list', 'sftp:file_content', 'sftp:action_success',
+  'heartbeat:pong', 'ssh:pong', 'sftp:list', 'sftp:file_content', 'sftp:action_success',
   'sftp:progress', 'sftp:download_start', 'sftp:download_chunk', 'sftp:download_done',
   'sftp:error', 'ssh:error', 'ssh:idle_timeout',
 ];
@@ -146,6 +148,7 @@ export default function FileManager({
   const [error, setError] = useState(null);
   const [socket, setSocket] = useState(null);
   const [viewMode, setViewMode] = useState('grid');
+  const [deletingFiles, setDeletingFiles] = useState(new Set());
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState([]); // global search results
   const [searchLoading, setSearchLoading] = useState(false);
@@ -155,9 +158,12 @@ export default function FileManager({
   const [latency, setLatency] = useState(null);
   const [reconnectNonce, setReconnectNonce] = useState(0);
   const reconnectAttemptsRef = useRef(0);
-  const MAX_RECONNECT_ATTEMPTS = 3;
+  const MAX_RECONNECT_ATTEMPTS = 10;
   const [reconnectAlert, setReconnectAlert] = useState(null);
   const socketRef = useRef(null);
+  const lastHealthOkRef = useRef(false);
+  const lastHealthCheckAtRef = useRef(0);
+  const healthCheckPromiseRef = useRef(null);
   const dbUriRef = useRef(appState.dbConfig?.uri || '');
   const pendingTransferResumeRef = useRef(null);
   const reconnectNoticeAtRef = useRef(0);
@@ -169,7 +175,7 @@ export default function FileManager({
   
   // Editor State
   const [editor, setEditor] = useState({ visible: false, file: null, content: '', saving: false });
-  const [infoModal, setInfoModal] = useState({ visible: false, file: null });
+  const [infoModal, setInfoModal] = useState({ visible: false, file: null, sizeLoading: false, realSize: null });
   const editorTextareaRef = useRef(null);
   const [mentionState, setMentionState] = useState({ active: false, query: '', results: [], selectedIndex: 0, triggerPos: 0 });
 
@@ -188,6 +194,8 @@ export default function FileManager({
   const reconnectTimerRef = useRef(null);
   const emptyRetryPathRef = useRef('');
   const deleteBatchRef = useRef({ count: 0, total: 0, toastId: null });
+  const lastDeleteToastRef = useRef(0); // Per-instance debounce for delete success toast
+  const refreshTimeoutRef = useRef(null); // Per-instance refresh debounce (avoids split-pane collision on window._refreshTimeout)
   
   // AI State
   const [aiOpen, setAiOpen] = useState(false);
@@ -217,6 +225,7 @@ export default function FileManager({
   const [uploadQueue, setUploadQueue] = useState([]); // Array of { file, path, offset }
   const uploadQueueRef = useRef([]);
   useEffect(() => { uploadQueueRef.current = uploadQueue; }, [uploadQueue]);
+  const handleFileUploadRef = useRef(null);
   
   useEffect(() => { 
     currentPathRef.current = currentPath; 
@@ -313,7 +322,7 @@ export default function FileManager({
   }, []);
 
   const ensureSocketReady = useCallback((actionLabel = 'complete this action') => {
-    if (socketRef.current?.connected && statusRef.current === 'ready') {
+    if (socketRef.current?.connected && statusRef.current === 'ready' && lastHealthOkRef.current) {
       return true;
     }
 
@@ -322,9 +331,91 @@ export default function FileManager({
       message: `File manager is reconnecting. Please wait a moment, then ${actionLabel}.`,
       type: 'warning'
     });
-    requestReconnect('Connection expired after idle time. Reconnecting...');
+    requestReconnect('Connection expired after idle time. Reconnecting...', {
+      preserveTransfer: !!transferRef.current || uploadQueueRef.current.length > 0,
+    });
     return false;
   }, [addNotification, requestReconnect]);
+
+  const pingConnection = useCallback(() => {
+    const sock = socketRef.current;
+    if (!sock?.connected) {
+      lastHealthOkRef.current = false;
+      return Promise.resolve(false);
+    }
+
+    if (healthCheckPromiseRef.current) return healthCheckPromiseRef.current;
+
+    healthCheckPromiseRef.current = new Promise((resolve) => {
+      const timeoutId = setTimeout(() => {
+        cleanup();
+        lastHealthOkRef.current = false;
+        resolve(false);
+      }, SSH_PING_TIMEOUT_MS);
+
+      const handler = (data) => {
+        cleanup();
+        const ok = !!data?.ok;
+        lastHealthOkRef.current = ok;
+        lastHealthCheckAtRef.current = Date.now();
+        resolve(ok);
+      };
+
+      const cleanup = () => {
+        clearTimeout(timeoutId);
+        sock.off('ssh:pong', handler);
+        healthCheckPromiseRef.current = null;
+      };
+
+      sock.once('ssh:pong', handler);
+      sock.emit('ssh:ping');
+    });
+
+    return healthCheckPromiseRef.current;
+  }, []);
+
+  const ensureSocketReadyAsync = useCallback(async (actionLabel = 'complete this action') => {
+    const sock = socketRef.current;
+    if (!sock?.connected || statusRef.current !== 'ready') {
+      addNotification({
+        title: 'Reconnecting',
+        message: `File manager is reconnecting. Please wait a moment, then ${actionLabel}.`,
+        type: 'warning',
+      });
+      requestReconnect('Connection is not ready. Reconnecting...', {
+        preserveTransfer: !!transferRef.current || uploadQueueRef.current.length > 0,
+      });
+      return false;
+    }
+
+    const cacheFresh = Date.now() - lastHealthCheckAtRef.current < HEALTH_CHECK_TTL_MS;
+    if (cacheFresh && lastHealthOkRef.current) return true;
+
+    const ok = await pingConnection();
+    if (!ok) {
+      requestReconnect('SSH session is no longer active. Reconnecting...', {
+        preserveTransfer: !!transferRef.current || uploadQueueRef.current.length > 0,
+        notificationMessage: 'Your SSH session expired while you were away. Reconnecting before continuing.',
+      });
+      return false;
+    }
+    return true;
+  }, [addNotification, pingConnection, requestReconnect]);
+
+  const resumePendingUploads = useCallback(() => {
+    const queue = uploadQueueRef.current;
+    if (!queue.length) return;
+    if (transferRef.current?.action === 'upload') return;
+
+    const next = queue[0];
+    if (!next?.file) return;
+
+    pendingTransferResumeRef.current = null;
+    setTimeout(() => {
+      if (statusRef.current !== 'ready' || !socketRef.current?.connected) return;
+      handleFileUploadRef.current?.(null, next.file, next.offset || 0, null, next.displayName);
+    }, 250);
+  }, []);
 
   const isTransferChannelError = useCallback((errOrMessage) => {
     const rawMessage = typeof errOrMessage === 'string'
@@ -396,6 +487,8 @@ export default function FileManager({
       newSocket = io({
         path: '/api/socket',
         transports: ['websocket'],
+        reconnection: false,
+        timeout: 20000,
         query: { dbUri: currentDbUri }
       });
 
@@ -410,6 +503,7 @@ export default function FileManager({
       newSocket.on('connect', () => {
         console.log('🔌 Socket connected, sending ssh:connect');
         setStatus('ssh_connecting');
+        lastHealthOkRef.current = false;
         const shouldPreferProvidedConnection =
           !!connectionRef.current && connectionRef.current.storage !== 'db';
         newSocket.emit('ssh:connect', {
@@ -424,6 +518,8 @@ export default function FileManager({
         console.log('✅ SSH connected, listing files at:', currentPathRef.current);
         reconnectAttemptsRef.current = 0;
         setReconnectAlert(null);
+        lastHealthOkRef.current = true;
+        lastHealthCheckAtRef.current = Date.now();
         setStatus('ready');
         newSocket.emit('sftp:list', currentPathRef.current);
         appDispatch({ type: 'UPDATE_CONNECTION', payload: { _id: connectionId, status: 'online' } });
@@ -435,8 +531,53 @@ export default function FileManager({
             message: `${uploadQueueRef.current.length} queued upload${uploadQueueRef.current.length === 1 ? '' : 's'} can continue now.`,
             type: 'info',
           });
+          resumePendingUploads();
+        } else if (pendingResume?.type === 'download' && pendingResume.file) {
+          addNotification({
+            title: 'Connection restored',
+            message: `Resuming download of ${pendingResume.file.filename}...`,
+            type: 'info',
+          });
         }
       });
+    }
+
+    if (reusedSocket) {
+      const pooledPingTimeout = setTimeout(() => {
+        if (statusRef.current === 'ready' && filesRef.current.length > 0) return;
+        console.warn('⚠️ Pooled socket SSH health check timed out. Reconnecting fresh session.');
+        try {
+          newSocket.emit('ssh:disconnect');
+          newSocket.disconnect();
+        } catch (err) {
+          console.warn('Failed to dispose stale pooled socket:', err);
+        }
+        setStatus('connecting');
+        setLoading(true);
+        setError('Previous session expired. Reconnecting...');
+        setReconnectNonce((n) => n + 1);
+      }, SSH_PING_TIMEOUT_MS + 500);
+
+      newSocket.once('ssh:pong', (data) => {
+        clearTimeout(pooledPingTimeout);
+        if (data?.ok) {
+          lastHealthOkRef.current = true;
+          lastHealthCheckAtRef.current = Date.now();
+          return;
+        }
+        console.warn('⚠️ Pooled socket lost its SSH backend. Starting a fresh session.');
+        try {
+          newSocket.emit('ssh:disconnect');
+          newSocket.disconnect();
+        } catch (err) {
+          console.warn('Failed to dispose stale pooled socket after failed ping:', err);
+        }
+        setStatus('connecting');
+        setLoading(true);
+        setError('Previous session expired. Reconnecting...');
+        setReconnectNonce((n) => n + 1);
+      });
+      newSocket.emit('ssh:ping');
     }
 
     newSocket.on('heartbeat:pong', (sentTimestamp) => {
@@ -452,6 +593,7 @@ export default function FileManager({
         deleteBatchRef.current = { count: 0, total: 0, toastId: null };
         addNotification({ title: t('files.status.error'), message: t('files.errors.deleteDisconnect', 'Deletion interrupted — connection lost. Please refresh and verify.'), type: 'error' });
       }
+      setDeletingFiles(new Set());
       requestReconnect('SSH session closed after idle time. Reconnecting...', {
         preserveTransfer: !!transferRef.current,
         notificationMessage: transferRef.current?.action === 'download'
@@ -471,6 +613,7 @@ export default function FileManager({
         deleteBatchRef.current = { count: 0, total: 0, toastId: null };
         addNotification({ title: t('files.status.error'), message: t('files.errors.deleteDisconnect', 'Deletion interrupted — connection lost. Please refresh and verify.'), type: 'error' });
       }
+      setDeletingFiles(new Set());
       requestReconnect(reason === 'io server disconnect'
         ? 'Session expired after idle time. Reconnecting...'
         : 'Socket disconnected. Reconnecting...', {
@@ -553,6 +696,15 @@ export default function FileManager({
 
     newSocket.on('sftp:action_success', ({ action, path }) => {
        if (action === 'delete') {
+          const deletedFilename = path ? path.split('/').pop() : '';
+          if (deletedFilename) {
+            setFiles(prev => prev.filter(f => f.filename !== deletedFilename));
+            setDeletingFiles(prev => {
+              const next = new Set(prev);
+              next.delete(deletedFilename);
+              return next;
+            });
+          }
           deleteBatchRef.current.count++;
           // Update progress message
           if (deleteBatchRef.current.toastId) {
@@ -564,10 +716,25 @@ export default function FileManager({
              });
           }
           // Clear toast only when batch is done
-          if (deleteBatchRef.current.count >= deleteBatchRef.current.total && deleteBatchRef.current.toastId) {
+          const batchDone = deleteBatchRef.current.count >= deleteBatchRef.current.total;
+          if (batchDone && deleteBatchRef.current.toastId) {
             removeNotification(deleteBatchRef.current.toastId);
             deleteBatchRef.current.toastId = null;
           }
+          // Show success toast once per batch (debounced per-instance)
+          if (batchDone) {
+            if (!lastDeleteToastRef.current || Date.now() - lastDeleteToastRef.current > 2000) {
+              addNotification({ title: 'Success', message: t('files.actions.success', { action }), type: 'success' });
+              lastDeleteToastRef.current = Date.now();
+            }
+            // Only refresh list once the whole batch finishes, not on every individual delete
+            if (refreshTimeoutRef.current) clearTimeout(refreshTimeoutRef.current);
+            refreshTimeoutRef.current = setTimeout(() => {
+              const targetPath = currentPathRef.current || '.';
+              newSocket.emit('sftp:list', targetPath);
+            }, 300);
+          }
+          return; // Early return — skip the generic handling below
        } else if (toastRef.current) {
          removeNotification(toastRef.current);
          toastRef.current = null;
@@ -576,22 +743,26 @@ export default function FileManager({
        if (action === 'write') {
           addNotification({ title: 'Success', message: t('files.actions.success', { action }), type: 'success' });
           setEditor(prev => ({ ...prev, saving: false, visible: false }));
-       } else if (action === 'delete') {
-          if (!window._lastDeleteToast || Date.now() - window._lastDeleteToast > 2000) {
-            addNotification({ title: 'Success', message: t('files.actions.success', { action }), type: 'success' });
-            window._lastDeleteToast = Date.now();
-          }
        } else {
           addNotification({ title: 'Success', message: t('files.actions.success', { action }), type: 'success' });
        }
        
-       setTransfer(null);
+       // Don't clear transfer for 'upload' of the hidden temp archive — extraction is still in progress
+       // (the extract success event will clear it). For all other actions, clear immediately.
+       const isHiddenArchive = action === 'upload' && typeof path === 'string' && path.includes('.__ssh_monitor_upload_');
+       if (!isHiddenArchive) {
+         setTransfer(null);
+       }
        
-       if (window._refreshTimeout) clearTimeout(window._refreshTimeout);
-       window._refreshTimeout = setTimeout(() => {
-         const targetPath = currentPathRef.current || '.';
-         newSocket.emit('sftp:list', targetPath);
-       }, 300);
+       // Skip list refresh for hidden archive uploads — extracting hasn't finished yet;
+       // the 'extract' action_success will trigger the definitive refresh.
+       if (!isHiddenArchive) {
+         if (refreshTimeoutRef.current) clearTimeout(refreshTimeoutRef.current);
+         refreshTimeoutRef.current = setTimeout(() => {
+           const targetPath = currentPathRef.current || '.';
+           newSocket.emit('sftp:list', targetPath);
+         }, 300);
+       }
     });
 
     newSocket.on('sftp:progress', (data) => {
@@ -683,13 +854,38 @@ export default function FileManager({
        addNotification({ title: t('files.toasts.downloadComplete'), message: `${t('files.context.download')} ${filename}`, type: 'success' });
     });
 
+     newSocket.on('sftp:sizeResult', ({ path: targetPath, size, error }) => {
+        setInfoModal(prev => {
+          if (!prev.visible || !prev.file) return prev;
+          const currentFileDir = currentPathRef.current === '.' ? prev.file.filename : `${currentPathRef.current}/${prev.file.filename}`;
+          // Ensure the result is actually for the currently open file info
+          if (currentFileDir === targetPath) {
+            return {
+              ...prev,
+              sizeLoading: false,
+              realSize: error ? null : size
+            };
+          }
+          return prev;
+        });
+     });
+
     newSocket.on('sftp:error', (err) => {
       const msg = err?.message || (typeof err === 'string' ? err : JSON.stringify(err));
       
       // Clear batch deletion toast on error too
       if (deleteBatchRef.current.toastId) {
         removeNotification(deleteBatchRef.current.toastId);
-        deleteBatchRef.current.toastId = null;
+        deleteBatchRef.current = { count: 0, total: 0, toastId: null };
+        setDeletingFiles(new Set());
+        // Trigger a list refresh to reconcile optimistic UI deletion with the actual server state
+        if (refreshTimeoutRef.current) clearTimeout(refreshTimeoutRef.current);
+        refreshTimeoutRef.current = setTimeout(() => {
+          const targetPath = currentPathRef.current || '.';
+          if (newSocket.connected) {
+            newSocket.emit('sftp:list', targetPath);
+          }
+        }, 300);
       }
       
       if (toastRef.current) {
@@ -837,7 +1033,7 @@ export default function FileManager({
         }, POOL_TTL),
       });
     };
-  }, [connectionId, reconnectNonce, isTransferChannelError, requestReconnect, vaultStatus]); // Removed 'connection' from dependencies to prevent loop
+  }, [connectionId, reconnectNonce, isTransferChannelError, requestReconnect, vaultStatus, resumePendingUploads, addNotification, t]); // Removed 'connection' from dependencies to prevent loop
 
   // --- Auto-Refresh Logic ---
   
@@ -889,18 +1085,37 @@ export default function FileManager({
     return () => clearInterval(timer);
   }, [transferCountdown]);
 
-  // 2. Refresh on Window Focus (When user clicks back into the tab)
+  // 2. Refresh on Window Focus / tab visibility (When user clicks back into the tab)
   useEffect(() => {
-    const handleFocus = () => {
-      if (status === 'ready' && socket) {
+    const verifyAfterReturn = () => {
+      if (statusRef.current !== 'ready' || !socketRef.current?.connected) return;
+      lastHealthOkRef.current = false;
+      pingConnection().then((ok) => {
+        if (!ok && statusRef.current === 'ready') {
+          requestReconnect('Connection became stale while inactive. Reconnecting...', {
+            preserveTransfer: !!transferRef.current || uploadQueueRef.current.length > 0,
+            notificationMessage: 'Your SSH session expired while you were away. Reconnecting now.',
+          });
+          return;
+        }
         console.log('🔄 Regained focus, refreshing file list...');
         refreshFiles();
-      }
+      });
+    };
+
+    const handleFocus = () => verifyAfterReturn();
+
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') verifyAfterReturn();
     };
     
     window.addEventListener('focus', handleFocus);
-    return () => window.removeEventListener('focus', handleFocus);
-  }, [status, socket]);
+    document.addEventListener('visibilitychange', handleVisibility);
+    return () => {
+      window.removeEventListener('focus', handleFocus);
+      document.removeEventListener('visibilitychange', handleVisibility);
+    };
+  }, [pingConnection, requestReconnect]);
 
   // Global search: listen for results from server
   useEffect(() => {
@@ -1166,10 +1381,13 @@ export default function FileManager({
     });
   };
 
-  const handleFileUpload = async (e, specificFile = null, resumeOffset = 0, overridePath = null) => {
+  const handleFileUpload = async (e, specificFile = null, resumeOffset = 0, overridePath = null, displayName = null) => {
     const file = specificFile || e?.target?.files[0];
-    if (!file || !socket) return;
-    if (!ensureSocketReady('retry the upload')) return;
+    if (!file) return;
+
+    const socket = socketRef.current;
+    if (!socket) return;
+    if (!(await ensureSocketReadyAsync('retry the upload'))) return;
 
     const baseTarget = overridePath !== null ? overridePath : currentPath;
     const path = baseTarget === '.' ? file.name : `${baseTarget}/${file.name}`;
@@ -1177,11 +1395,18 @@ export default function FileManager({
     // Add to queue if not already there (for manual retry support)
     setUploadQueue(prev => {
       const exists = prev.find(item => item.path === path);
-      if (exists) return prev.map(item => item.path === path ? { file, path, offset: resumeOffset } : item);
-      return [...prev, { file, path, offset: resumeOffset }];
+      if (exists) return prev.map(item => item.path === path ? { file, path, offset: resumeOffset, displayName } : item);
+      return [...prev, { file, path, offset: resumeOffset, displayName }];
     });
 
-    const transferObj = { filename: file.name, progress: 0, action: 'upload', waiting: false };
+    const transferObj = { 
+      filename: displayName || file.name, 
+      realFilename: file.name, 
+      path, 
+      progress: 0, 
+      action: 'upload', 
+      waiting: false 
+    };
     setTransfer(transferObj);
     transferRef.current = transferObj;
 
@@ -1190,7 +1415,7 @@ export default function FileManager({
       const timeoutId = setTimeout(() => {
         cleanup();
         resolve({ offset: expectedOffset, error: 'Handshake timeout' });
-      }, 8000);
+      }, 12000);
 
       const handler = (data) => {
         if (data.filename !== file.name) return;
@@ -1198,11 +1423,22 @@ export default function FileManager({
         resolve(data);
       };
 
-      // Intercept guard errors immediately so we don't wait the full 8s timeout
+      // Intercept guard / rate limit / recoverable errors immediately so we don't wait the full timeout
       const guardErrHandler = (err) => {
-        if (err?.guard !== 'memory' && err?.guard !== 'concurrency') return;
-        cleanup();
-        resolve({ guardBlocked: true, guardType: err.guard, retryAfter: 5000 });
+        if (err?.guard === 'memory' || err?.guard === 'concurrency') {
+          cleanup();
+          resolve({ guardBlocked: true, guardType: err.guard, retryAfter: 5000 });
+          return;
+        }
+        if (err?.guard === 'rate-limit' || err?.resetIn) {
+          cleanup();
+          resolve({ rateLimited: true, resetIn: err.resetIn || 5000 });
+          return;
+        }
+        if (err?.recoverable || isTransferChannelError(err)) {
+          cleanup();
+          resolve({ error: err?.message || 'Transfer channel error', recoverable: true });
+        }
       };
 
       const cleanup = () => {
@@ -1279,18 +1515,45 @@ export default function FileManager({
           await new Promise(r => setTimeout(r, startData.retryAfter || 5000));
           if (transferRef.current !== transferObj) return;
           setTransfer(prev => prev ? { ...prev, waiting: false, guardError: null } : null);
+        } else if (startData.rateLimited) {
+          const waitMs = startData.resetIn || 5000;
+          const seconds = Math.ceil(waitMs / 1000);
+          console.log(`⏳ Rate limited on handshake — waiting ${waitMs}ms before retry`);
+          setTransfer(prev => prev ? { ...prev, waiting: true, countdown: seconds } : null);
+          setTransferCountdown(seconds);
+          
+          await new Promise(r => {
+            const check = setInterval(() => {
+              if (transferRef.current !== transferObj) {
+                clearInterval(check);
+                r();
+              } else if (transferCountdownRef.current === 0) {
+                clearInterval(check);
+                r();
+              }
+            }, 500);
+          });
+          if (transferRef.current !== transferObj) return;
+          setTransfer(prev => prev ? { ...prev, waiting: false, countdown: 0 } : null);
         }
-      } while (startData.guardBlocked);
+      } while (startData.guardBlocked || startData.rateLimited);
 
       if (startData.error) {
         setTransfer(prev => ({ ...prev, waiting: true, error: true }));
-        if (isTransferChannelError(startData.error)) {
+        if (startData.recoverable || isTransferChannelError(startData.error)) {
           requestReconnect('Upload channel stalled. Reconnecting...', {
             preserveTransfer: true,
             notificationMessage: 'Upload stalled. Reconnecting and keeping the upload queue for retry.',
           });
           return { interrupted: true, path };
         }
+        setTransfer(null);
+        transferRef.current = null;
+        addNotification({
+          title: t('files.status.errorTitle'),
+          message: startData.error,
+          type: 'error',
+        });
         return;
       }
 
@@ -1332,6 +1595,13 @@ export default function FileManager({
             }
             return;
           }
+          if (resumeStartData.rateLimited) {
+            const waitMs = resumeStartData.resetIn || 5000;
+            const seconds = Math.ceil(waitMs / 1000);
+            setTransfer(prev => prev ? { ...prev, waiting: true, countdown: seconds } : null);
+            setTransferCountdown(seconds);
+            continue;
+          }
           setTransfer(prev => ({ ...prev, waiting: false, countdown: 0 }));
         }
 
@@ -1356,7 +1626,7 @@ export default function FileManager({
           const errHandler = (err) => {
             if (err.resetIn) { // Rate limit — keep transfer alive
               cleanup();
-              resolve({ rateLimited: true });
+              resolve({ rateLimited: true, resetIn: err.resetIn });
             } else if (err?.guard === 'memory' || err?.guard === 'concurrency') {
               // Guard block mid-transfer — pause and re-open upload session
               cleanup();
@@ -1383,7 +1653,42 @@ export default function FileManager({
         if (transferRef.current !== transferObj) break;
 
         if (ackResult.rateLimited && !ackResult.guardBlocked) {
-          // Rate limit — loop will pick up transferCountdown logic on next iteration
+          const waitMs = ackResult.resetIn || 5000;
+          const seconds = Math.ceil(waitMs / 1000);
+          console.log(`⏳ Rate limited mid-transfer — waiting ${waitMs}ms before retry`);
+          setTransfer(prev => prev ? { ...prev, waiting: true, countdown: seconds } : null);
+          setTransferCountdown(seconds);
+          
+          await new Promise(r => {
+            const check = setInterval(() => {
+              if (transferRef.current !== transferObj) {
+                clearInterval(check);
+                r();
+              } else if (transferCountdownRef.current === 0) {
+                clearInterval(check);
+                r();
+              }
+            }, 500);
+          });
+          if (transferRef.current !== transferObj) break;
+          setTransfer(prev => prev ? { ...prev, waiting: false, countdown: 0 } : null);
+          
+          // Re-open upload session from current offset
+          socket.emit('sftp:upload', { filename: file.name, path, size: file.size, offset });
+          const resumeData = await waitForUploadHandshake(offset);
+          if (transferRef.current !== transferObj) break;
+          if (resumeData.error) {
+            console.error("Handshake after mid-transfer rate limit failed:", resumeData.error);
+            setTransfer(null);
+            transferRef.current = null;
+            return;
+          }
+          if (resumeData.rateLimited) {
+            const resumeWaitMs = resumeData.resetIn || 5000;
+            const resumeSeconds = Math.ceil(resumeWaitMs / 1000);
+            setTransfer(prev => prev ? { ...prev, waiting: true, countdown: resumeSeconds } : null);
+            setTransferCountdown(resumeSeconds);
+          }
           continue;
         }
         if (ackResult.guardBlocked) {
@@ -1405,7 +1710,9 @@ export default function FileManager({
           continue;
         }
 
-        offset += chunkSize;
+        offset = typeof ackResult.totalTransferred === 'number'
+          ? ackResult.totalTransferred
+          : offset + chunk.size;
         
         // Update queue offset for persistence
         setUploadQueue(prev => prev.map(item => item.path === path ? { ...item, offset } : item));
@@ -1450,9 +1757,10 @@ export default function FileManager({
     }
   };
 
-  const handleDownload = (file, offset = 0) => {
+  const handleDownload = async (file, offset = 0) => {
+      const socket = socketRef.current;
       if (!socket) return;
-      if (!ensureSocketReady('retry the download')) return;
+      if (!(await ensureSocketReadyAsync('retry the download'))) return;
      const path = file.absPath || (currentPath === '.' ? file.filename : `${currentPath}/${file.filename}`);
      lastDownloadRef.current = { file, offset };
       const existingDownload = downloadBufferRef.current[file.filename];
@@ -1498,13 +1806,19 @@ export default function FileManager({
     }
 
     if (pendingResume.type === 'upload') {
-      pendingTransferResumeRef.current = null;
+      resumePendingUploads();
+      return;
     }
-  }, [status, socket]);
+  }, [status, socket, resumePendingUploads, addNotification]);
 
-  const handleDownloadFolder = (file) => {
+  useEffect(() => {
+    handleFileUploadRef.current = handleFileUpload;
+  });
+
+  const handleDownloadFolder = async (file) => {
+    const socket = socketRef.current;
     if (!socket) return;
-    if (!ensureSocketReady('retry the folder download')) return;
+    if (!(await ensureSocketReadyAsync('retry the folder download'))) return;
     const folderPath = file.absPath || (currentPath === '.' ? file.filename : `${currentPath}/${file.filename}`);
     const dlName = file.filename + '.tar.gz';
     
@@ -1520,7 +1834,11 @@ export default function FileManager({
     socket.emit('sftp:download_folder', { folderPath });
   };
 
-  const handleDownloadSelected = () => {
+  const handleDownloadSelected = async () => {
+    const socket = socketRef.current;
+    if (!socket) return;
+    if (!(await ensureSocketReadyAsync('retry the download'))) return;
+
     const selected = filteredFiles.filter(f => selectedFiles.has(f.filename));
     if (selected.length === 0) return;
     if (selected.length === 1) {
@@ -1648,8 +1966,16 @@ export default function FileManager({
         console.log(`✅ TAR.GZ creation complete: ${archiveFile.size} bytes`);
         
         // Proceed to the actual upload
-        const uploadResult = await handleFileUpload(null, archiveFile, 0, path);
+        const uploadResult = await handleFileUpload(null, archiveFile, 0, path, entry.name);
         if (!uploadResult?.path || uploadResult?.interrupted) {
+          // Upload was interrupted — the partial archive may already exist on the server.
+          // Attempt a best-effort cleanup so it doesn't linger as a corrupt .tar.gz junk file.
+          const partialArchivePath = uploadResult?.path || (path === '.' ? tempArchiveName : `${path}/${tempArchiveName}`);
+          const cleanupSocket = socketRef.current;
+          if (cleanupSocket?.connected) {
+            console.warn(`🗑️ Cleaning up partial archive after interrupted upload: ${partialArchivePath}`);
+            cleanupSocket.emit('sftp:delete', partialArchivePath);
+          }
           throw new Error('Archive upload paused while reconnecting. Please retry after the SSH session is ready.');
         }
         
@@ -1662,6 +1988,13 @@ export default function FileManager({
         console.error('❌ Compression failed:', err);
         addNotification({ title: 'Compression Error', message: err.message, type: 'error' });
         setTransfer(null);
+        // Refresh file list so any partially uploaded archive is reflected accurately
+        if (refreshTimeoutRef.current) clearTimeout(refreshTimeoutRef.current);
+        refreshTimeoutRef.current = setTimeout(() => {
+          if (socketRef.current?.connected) {
+            socketRef.current.emit('sftp:list', currentPathRef.current || '.');
+          }
+        }, 800);
       }
     }
   };
@@ -1899,6 +2232,7 @@ export default function FileManager({
            if (deleteBatchRef.current.toastId === toastId) {
               removeNotification(toastId);
               deleteBatchRef.current = { count: 0, total: 0, toastId: null };
+              setDeletingFiles(new Set());
               addNotification({ 
                 title: t('files.status.error'), 
                 message: t('files.errors.deleteTimeout', 'Deletion timed out — the server may be unreachable. Please refresh the file list to verify.'), 
@@ -1914,7 +2248,7 @@ export default function FileManager({
         }, 15000);
 
         const targetSet = new Set(targets);
-        setFiles(prev => prev.filter(f => !targetSet.has(f.filename)));
+        setDeletingFiles(prev => new Set([...prev, ...targetSet]));
         
         targets.forEach(filename => {
            const path = currentPath === '.' ? filename : `${currentPath}/${filename}`;
@@ -1931,8 +2265,14 @@ export default function FileManager({
 
   const handleInfo = () => {
     if (!contextMenu.file) return;
-    setInfoModal({ visible: true, file: contextMenu.file });
+    const isDir = contextMenu.file.longname?.startsWith('d');
+    const filePath = currentPath === '.' ? contextMenu.file.filename : `${currentPath}/${contextMenu.file.filename}`;
+    setInfoModal({ visible: true, file: contextMenu.file, sizeLoading: isDir, realSize: null });
     setContextMenu({ ...contextMenu, visible: false });
+    // Always fetch real size via du -sb (works for both files and folders)
+    if (socket) {
+      socket.emit('sftp:getSize', { path: filePath });
+    }
   };
 
   const handleOpenTerminalHere = (targetPath = null) => {
@@ -2258,6 +2598,8 @@ export default function FileManager({
                   <p className="text-xs text-[var(--text-muted)]">
                     {transfer.status ? (
                         <span className="text-blue-400 font-medium">{transfer.status}</span>
+                    ) : transfer.reconnecting ? (
+                        <span className="text-[var(--accent-amber)] font-bold">{t('files.status.reconnecting') || 'Reconnecting...'}</span>
                     ) : transfer.waiting ? (
                         <span className="text-[var(--accent-amber)] font-bold">{t('files.status.rateLimited')}. {t('files.status.retryIn', { seconds: transferCountdown || '...' })}</span>
                     ) : (
@@ -2267,9 +2609,15 @@ export default function FileManager({
                 </div>
                 <button 
                   onClick={() => {
+                    const filenameToAbort = transfer.realFilename || transfer.filename;
                     setTransfer(null);
                     transferRef.current = null;
-                    if (socket) socket.emit(`sftp:upload_done:${transfer.filename}`); // Force end on server
+                    if (socket) {
+                      socket.emit(`sftp:upload_abort:${filenameToAbort}`);
+                    }
+                    if (transfer.path) {
+                      setUploadQueue(prev => prev.filter(item => item.path !== transfer.path));
+                    }
                   }}
                   className="p-2 hover:bg-[var(--bg-tertiary)] rounded-full transition-colors text-[var(--text-muted)] hover:text-rose-500"
                 >
@@ -2804,7 +3152,18 @@ export default function FileManager({
                </div>
                <div className="flex justify-between items-center border-b border-[var(--border-color)] pb-2">
                   <span className="text-[10px] font-bold text-[var(--text-muted)] uppercase">{t('files.info.size')}</span>
-                 <p className="text-xs font-medium font-mono">{formatSize(infoModal.file?.attrs?.size)}</p>
+                 <p className="text-xs font-medium font-mono flex items-center gap-1.5">
+                    {infoModal.sizeLoading ? (
+                      <span className="flex items-center gap-1 text-[var(--text-muted)]">
+                        <svg className="animate-spin" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3">
+                          <path d="M21 12a9 9 0 1 1-6.219-8.56"/>
+                        </svg>
+                        Calculating...
+                      </span>
+                    ) : (
+                      formatSize(infoModal.realSize ?? infoModal.file?.attrs?.size)
+                    )}
+                 </p>
                </div>
                <div className="flex justify-between items-center border-b border-[var(--border-color)] pb-2">
                   <span className="text-[10px] font-bold text-[var(--text-muted)] uppercase">{t('files.info.modified')}</span>
@@ -3182,18 +3541,23 @@ export default function FileManager({
                     handleContextMenu(e, file);
                   }}
                   className={viewMode === 'grid'
-                    ? `group flex flex-col items-center p-3 rounded-xl border transition-all ${file._searchResult ? 'cursor-pointer' : 'cursor-grab active:cursor-grabbing'} ${selectedFiles.has(file.filename) ? 'bg-blue-600/20 border-blue-500 shadow-md shadow-blue-500/10' : 'hover:bg-[var(--border-color)] border-transparent hover:border-[var(--border-hover)]'}`
-                    : `flex items-center gap-3 p-2 rounded-lg group transition-all ${file._searchResult ? 'cursor-pointer' : 'cursor-grab active:cursor-grabbing'} ${selectedFiles.has(file.filename) ? 'bg-blue-600/20 border border-blue-500 shadow-inner' : 'hover:bg-[var(--border-color)] border border-transparent'}`
+                    ? `group flex flex-col items-center p-3 rounded-xl border transition-all ${file._searchResult ? 'cursor-pointer' : 'cursor-grab active:cursor-grabbing'} ${deletingFiles.has(file.filename) ? 'opacity-50 pointer-events-none' : ''} ${selectedFiles.has(file.filename) ? 'bg-blue-600/20 border-blue-500 shadow-md shadow-blue-500/10' : 'hover:bg-[var(--border-color)] border-transparent hover:border-[var(--border-hover)]'}`
+                    : `flex items-center gap-3 p-2 rounded-lg group transition-all ${file._searchResult ? 'cursor-pointer' : 'cursor-grab active:cursor-grabbing'} ${deletingFiles.has(file.filename) ? 'opacity-50 pointer-events-none' : ''} ${selectedFiles.has(file.filename) ? 'bg-blue-600/20 border border-blue-500 shadow-inner' : 'hover:bg-[var(--border-color)] border border-transparent'}`
                   }
                 >
                   <div className={viewMode === 'grid'
                     ? "w-16 h-16 flex items-center justify-center mb-2 relative"
-                    : "w-8 h-8 flex items-center justify-center"
+                    : "w-8 h-8 flex items-center justify-center relative"
                   }>
                     {isDir ? (
                       <Folder className="text-blue-400 drop-shadow-lg" size={viewMode === 'grid' ? 48 : 20} />
                     ) : (
                       <FileIcon className="text-[var(--text-muted)]" size={viewMode === 'grid' ? 48 : 20} />
+                    )}
+                    {deletingFiles.has(file.filename) && (
+                      <div className="absolute inset-0 flex items-center justify-center">
+                        <RefreshCw size={viewMode === 'grid' ? 20 : 14} className="animate-spin text-amber-400 drop-shadow-lg" />
+                      </div>
                     )}
                   </div>
                   <div className={viewMode === 'grid' ? "text-center" : "flex-1 flex items-center justify-between"}>

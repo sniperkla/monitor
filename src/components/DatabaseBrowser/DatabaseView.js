@@ -46,6 +46,8 @@ export default function DatabaseView({ connection, onClose }) {
   const [localAiPrefs, setLocalAiPrefs] = useState({ aiEndpoint: '', aiApiKey: '', aiCustomModel: '' });
   const [connectRetryCount, setConnectRetryCount] = useState(0);
   const connectRetryTimerRef = useRef(null);
+  const [relayRequired, setRelayRequired] = useState(false);
+  const [relayConnected, setRelayConnected] = useState(false);
   const socketRef = useRef(null);
   
   // Modal State
@@ -204,6 +206,18 @@ export default function DatabaseView({ connection, onClose }) {
   }, [connection?._id]);
 
   useEffect(() => {
+    const isLocal = /^(localhost|127\.0\.0\.1)$/i.test(connection?.host || '');
+    if (!isLocal) {
+      setRelayConnected(false);
+      return;
+    }
+    fetch('/api/relay/token')
+      .then(r => r.json())
+      .then(d => { if (d.success) setRelayConnected(!!d.connected); })
+      .catch(() => setRelayConnected(false));
+  }, [connection?.host]);
+
+  useEffect(() => {
     // Check for interrupted exports ONCE on mount
     if (!connection?._id) return;
     const savedQueue = localStorage.getItem(`ssh_monitor_export_resume_${connection._id}`);
@@ -290,6 +304,7 @@ export default function DatabaseView({ connection, onClose }) {
     if (!connection?._id || isSubmitting) return; 
     setLoading(true);
     setError(null);
+    setRelayRequired(false);
     if (connectRetryTimerRef.current) clearTimeout(connectRetryTimerRef.current);
 
     try {
@@ -332,7 +347,8 @@ export default function DatabaseView({ connection, onClose }) {
       } else {
         const errMsg = resData.error || t('database.notifications.fetchFail');
         setError(errMsg);
-        scheduleConnectRetry();
+        setRelayRequired(!!resData.relayRequired);
+        scheduleConnectRetry(!!resData.relayRequired);
       }
     } catch (err) {
       setError(err.message);
@@ -342,7 +358,8 @@ export default function DatabaseView({ connection, onClose }) {
     }
   };
 
-  const scheduleConnectRetry = () => {
+  const scheduleConnectRetry = (needsRelay = false) => {
+    if (needsRelay && !relayConnected) return;
     // Max 10 retries, exponential backoff starting at 2s, 4s, 8s... max 30s
     if (connectRetryCount >= 10) return;
     
@@ -1230,9 +1247,28 @@ export default function DatabaseView({ connection, onClose }) {
                  <Activity size={32} className="text-red-400" />
               </div>
                <h3 className="text-lg font-bold mb-2 text-red-400">{t('database.errors.connectionError')}</h3>
-              <p className="text-sm text-[var(--text-muted)] max-w-md mx-auto mb-8 font-mono bg-black/20 p-4 rounded-xl border border-red-500/10">
+              <p className="text-sm text-[var(--text-muted)] max-w-md mx-auto mb-4 font-mono bg-black/20 p-4 rounded-xl border border-red-500/10">
                  {error}
               </p>
+              {relayRequired && (
+                <div className="max-w-md mx-auto mb-6 rounded-xl border border-amber-500/30 bg-amber-500/10 p-4 text-left text-xs text-amber-100/90 space-y-2">
+                  <p className="font-bold text-amber-300">Localhost database via Relay</p>
+                  <p>
+                    This connection targets <span className="font-mono">{connection?.host}:{connection?.port}</span> on your machine.
+                    The server cannot reach your local database directly — the Local Relay Agent must be running.
+                  </p>
+                  <p>
+                    Status: {relayConnected
+                      ? <span className="text-emerald-400 font-bold">Relay connected</span>
+                      : <span className="text-red-400 font-bold">Relay not connected</span>}
+                  </p>
+                  {!relayConnected && (
+                    <p className="text-[var(--text-muted)]">
+                      Go to Settings → Local Relay, install <span className="font-mono">local-relay.js</span>, then retry.
+                    </p>
+                  )}
+                </div>
+              )}
                 <button 
                   onClick={() => { setConnectRetryCount(0); fetchSchema(); }}
                   className="px-6 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold transition-all shadow-lg shadow-indigo-500/20 mb-4"

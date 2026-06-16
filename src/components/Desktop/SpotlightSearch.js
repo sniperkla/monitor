@@ -5,12 +5,13 @@ import { createPortal } from 'react-dom';
 import {
   Search, Terminal, Settings, Monitor, StickyNote, Book, Folder,
   ArrowRight, Command, CornerDownLeft, ChevronUp, ChevronDown,
-  Hash, FileText, Server, Globe, Database, Shield, Layers, X, GitBranch
+  Hash, FileText, Server, Globe, Database, Shield, Layers, X, GitBranch, CloudSync, Rocket
 } from 'lucide-react';
 import { useOS } from '@/context/OSContext';
 import { useApp } from '@/context/AppContext';
 import { useTranslation } from 'react-i18next';
 import MacOSModalWindow from '@/components/MacOSModalWindow';
+import dynamic from 'next/dynamic';
 
 import SSHApp from '@/apps/SSHApp';
 import AutoDeployApp from '@/apps/AutoDeployApp';
@@ -20,9 +21,14 @@ import WikiApp from '@/apps/WikiApp';
 import FilesApp from '@/apps/FilesApp';
 import TerminalApp from '@/apps/TerminalApp';
 
+const MongoBackupApp = dynamic(() => import('@/apps/MongoBackupApp'), {
+  ssr: false,
+});
+
 const SYSTEM_APPS = [
   { id: 'ssh-manager', titleKey: 'ssh.manager', fallback: 'SSH Manager', icon: Monitor, component: <SSHApp />, category: 'app', initialWidth: 1200, initialHeight: 800 },
-  { id: 'auto-deploy', titleKey: null, fallback: 'Auto Deploy', icon: GitBranch, component: <AutoDeployApp />, category: 'app', initialWidth: 1100, initialHeight: 760 },
+  { id: 'auto-deploy', titleKey: null, fallback: 'Auto Deploy', icon: Rocket, component: <AutoDeployApp />, category: 'app', initialWidth: 1100, initialHeight: 760 },
+  { id: 'mongo-backup', titleKey: null, fallback: 'Mongo Sync', icon: CloudSync, component: <MongoBackupApp />, category: 'app', initialWidth: 1050, initialHeight: 680 },
   { id: 'settings', titleKey: 'common.settings', fallback: 'Settings', icon: Settings, component: <SettingsApp />, category: 'app', initialWidth: 800, initialHeight: 600 },
   { id: 'notepad', titleKey: null, fallback: 'Notepad', icon: StickyNote, component: <NotepadApp />, category: 'app', initialWidth: 800, initialHeight: 600 },
   { id: 'files-app', titleKey: null, fallback: 'Files', icon: Folder, component: <FilesApp />, category: 'app', initialWidth: 1000, initialHeight: 650 },

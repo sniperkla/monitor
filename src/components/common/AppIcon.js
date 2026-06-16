@@ -1,5 +1,5 @@
 import React from 'react';
-import { Terminal, Settings, Monitor, Database, Folder, MonitorPlay, Server, FileText, Globe, StickyNote, Book, BookOpen, Shield, Radio, Radiation, Cpu, HardDrive, Wrench, Archive } from 'lucide-react';
+import { Terminal, Settings, Monitor, Database, Folder, MonitorPlay, Server, FileText, Globe, StickyNote, Book, BookOpen, Shield, Radio, Radiation, Cpu, HardDrive, Wrench, Archive, CloudSync, Rocket } from 'lucide-react';
 
 const AppIcon = ({ id, size = 32, className = "", theme = "dark", iconStyle = "glass", isDesktop = false }) => {
   const iconId = id?.split('-')[0] || id;
@@ -7,6 +7,7 @@ const AppIcon = ({ id, size = 32, className = "", theme = "dark", iconStyle = "g
   const isRetro = theme === 'retro' || theme === 'fallout';
   const isFallout = theme === 'fallout';
   const isCyberpunk = theme === 'cyberpunk';
+  const isSynthwave = theme === 'synthwave';
   const isLight = theme === 'light';
 
   // Base styles shared across icons
@@ -42,6 +43,8 @@ const AppIcon = ({ id, size = 32, className = "", theme = "dark", iconStyle = "g
           wiki:      { primary: '#118ab2', glow: 'rgba(17,138,178,0.3)', accent: '#1ca3d1' },
           notepad:   { primary: '#fca311', glow: 'rgba(252,163,17,0.35)', accent: '#fdb544' },
           'docker-logs': { primary: '#e63946', glow: 'rgba(230,57,70,0.3)', accent: '#eb636e' },
+          mongo:     { primary: '#10b981', glow: 'rgba(16,185,129,0.35)', accent: '#34d399' },
+          auto:      { primary: '#ff5500', glow: 'rgba(255,85,0,0.35)', accent: '#ff7733' },
         };
         const pal = falloutPalette[iconId] || falloutPalette.terminal;
 
@@ -97,7 +100,24 @@ const AppIcon = ({ id, size = 32, className = "", theme = "dark", iconStyle = "g
               return <div className="absolute top-0 right-[10px] w-[5px] h-[10px] pointer-events-none" style={{ backgroundColor: `${pal.primary}50`, borderRadius: '0 0 2px 2px' }} />;
             case 'notepad':
               // Tiny pencil line
-              return <div className="absolute bottom-[8px] left-[8px] w-[12px] h-[1.5px] pointer-events-none" style={{ backgroundColor: `${pal.primary}50`, transform: 'rotate(-30deg)' }} />;
+              return <div className="absolute bottom-[8px] left-[8px] w-[12px] h-[1.5px] pointer-events-none" style={{ backgroundColor: pal.primary, transform: 'rotate(-30deg)' }} />;
+            case 'mongo':
+              // Sync rotation indicators (two small green dots circling)
+              return (
+                <div className="absolute inset-0 pointer-events-none animate-[spin_4s_linear_infinite]">
+                  <div className="absolute w-[4px] h-[4px] rounded-full top-[15%] left-1/2 -translate-x-1/2" style={{ backgroundColor: pal.primary, boxShadow: `0 0 5px ${pal.glow}` }} />
+                  <div className="absolute w-[4px] h-[4px] rounded-full bottom-[15%] left-1/2 -translate-x-1/2" style={{ backgroundColor: pal.primary, boxShadow: `0 0 5px ${pal.glow}` }} />
+                </div>
+              );
+            case 'auto':
+              // Blinking launch alert indicator
+              return (
+                <div className="absolute bottom-[6px] left-[10px] right-[10px] h-[4px] flex justify-between pointer-events-none">
+                  <div className="w-[3px] h-[3px] rounded-full animate-ping" style={{ backgroundColor: '#ff2200', animationDuration: '0.8s' }} />
+                  <div className="w-[3px] h-[3px] rounded-full animate-ping" style={{ backgroundColor: '#ffaa00', animationDuration: '1.2s', animationDelay: '0.2s' }} />
+                  <div className="w-[3px] h-[3px] rounded-full animate-ping" style={{ backgroundColor: '#ff2200', animationDuration: '0.8s', animationDelay: '0.4s' }} />
+                </div>
+              );
             default:
               return null;
           }
@@ -156,6 +176,8 @@ const AppIcon = ({ id, size = 32, className = "", theme = "dark", iconStyle = "g
           wiki:      { primary: '#00bfff', secondary: '#ff69b4', glow: 'rgba(0,191,255,0.25)' },
           notepad:   { primary: '#ff8c00', secondary: '#da70d6', glow: 'rgba(255,140,0,0.3)' },
           'docker-logs': { primary: '#ff1493', secondary: '#00ffff', glow: 'rgba(255,20,147,0.3)' },
+          mongo:     { primary: '#00ff66', secondary: '#ffd700', glow: 'rgba(0,255,102,0.3)' },
+          auto:      { primary: '#ff0055', secondary: '#00ffff', glow: 'rgba(255,0,85,0.3)' },
         };
         const cp = cpPalette[iconId] || cpPalette.terminal;
         const cpClip = 'polygon(0 12%, 12% 0, 100% 0, 100% 88%, 88% 100%, 0 100%)';
@@ -228,6 +250,24 @@ const AppIcon = ({ id, size = 32, className = "", theme = "dark", iconStyle = "g
               return (
                 <div className="absolute pointer-events-none animate-pulse" style={{ top: '30%', left: '10%', width: '25%', height: '2px', backgroundColor: `${cp.secondary}25`, animationDuration: '3s' }} />
               );
+            case 'mongo':
+              // Circular sync rotating arcs
+              return (
+                <div className="absolute inset-0 flex items-center justify-center pointer-events-none animate-[spin_10s_linear_infinite]">
+                  <svg width="70%" height="70%" viewBox="0 0 40 40">
+                    <circle cx="20" cy="20" r="14" fill="none" stroke={cp.primary} strokeWidth="1" strokeDasharray="8 8" opacity="0.4" />
+                  </svg>
+                </div>
+              );
+            case 'auto':
+              // Upward pipeline chevron flow
+              return (
+                <div className="absolute bottom-[10%] left-1/2 -translate-x-1/2 flex flex-col gap-[2px] pointer-events-none">
+                  <div className="w-[8px] h-[2px] rounded-full animate-bounce" style={{ backgroundColor: cp.primary, animationDuration: '0.8s' }} />
+                  <div className="w-[8px] h-[2px] rounded-full animate-bounce" style={{ backgroundColor: cp.secondary, animationDuration: '0.8s', animationDelay: '0.2s' }} />
+                  <div className="w-[8px] h-[2px] rounded-full animate-bounce" style={{ backgroundColor: cp.primary, animationDuration: '0.8s', animationDelay: '0.4s' }} />
+                </div>
+              );
             default:
               return null;
           }
@@ -274,6 +314,116 @@ const AppIcon = ({ id, size = 32, className = "", theme = "dark", iconStyle = "g
         );
     }
 
+    // ========== SYNTHWAVE THEME ==========
+    if (isSynthwave) {
+        const swPalette = {
+          terminal:  { primary: '#ff2d96', secondary: '#0affcd', glow: 'rgba(255,45,150,0.35)' },
+          ssh:       { primary: '#bf5fff', secondary: '#ff2d96', glow: 'rgba(191,95,255,0.3)' },
+          docker:    { primary: '#0affcd', secondary: '#ffb800', glow: 'rgba(10,255,205,0.3)' },
+          files:     { primary: '#ffb800', secondary: '#ff2d96', glow: 'rgba(255,184,0,0.3)' },
+          tmux:      { primary: '#ff2d96', secondary: '#bf5fff', glow: 'rgba(255,45,150,0.3)' },
+          settings:  { primary: '#bf5fff', secondary: '#0affcd', glow: 'rgba(191,95,255,0.3)' },
+          wiki:      { primary: '#0affcd', secondary: '#ff2d96', glow: 'rgba(10,255,205,0.3)' },
+          notepad:   { primary: '#ffb800', secondary: '#bf5fff', glow: 'rgba(255,184,0,0.3)' },
+          'docker-logs': { primary: '#ff2d96', secondary: '#0affcd', glow: 'rgba(255,45,150,0.3)' },
+          mongo:     { primary: '#0affcd', secondary: '#bf5fff', glow: 'rgba(10,255,205,0.3)' },
+          auto:      { primary: '#ff2d96', secondary: '#ffb800', glow: 'rgba(255,45,150,0.35)' },
+        };
+        const sw = swPalette[iconId] || swPalette.terminal;
+
+        // Per-app unique gimmick for Synthwave
+        const swGimmick = () => {
+          switch (iconId) {
+            case 'terminal':
+              // VHS tape rewind lines
+              return (
+                <div className="absolute inset-0 pointer-events-none overflow-hidden">
+                  {[20, 40, 60, 80].map((y, i) => (
+                    <div key={i} className="absolute h-[1px] animate-pulse" style={{ top: `${y}%`, left: 0, width: `${50 + i * 12}%`, background: `linear-gradient(90deg, transparent, ${sw.primary}${40 + i * 10})`, animationDelay: `${i * 0.3}s` }} />
+                  ))}
+                </div>
+              );
+            case 'ssh':
+              // Expanding concentric diamonds
+              return (
+                <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                  {[0.35, 0.55, 0.75].map((scale, i) => (
+                    <div key={i} className="absolute border animate-ping" style={{ width: `${scale * 100}%`, height: `${scale * 100}%`, borderColor: `${i % 2 === 0 ? sw.primary : sw.secondary}${20 - i * 5}`, transform: 'rotate(45deg)', animationDuration: `${1.8 + i * 0.5}s`, animationDelay: `${i * 0.3}s` }} />
+                  ))}
+                </div>
+              );
+            case 'docker':
+              // Horizontal neon stripe bars
+              return (
+                <div className="absolute inset-0 flex flex-col justify-evenly pointer-events-none px-[15%]">
+                  {[0.4, 0.7, 1.0].map((op, i) => (
+                    <div key={i} className="h-[2px] rounded-full" style={{ background: `linear-gradient(90deg, ${sw.secondary}${Math.floor(op * 60)}, ${sw.primary}${Math.floor(op * 80)}, ${sw.secondary}${Math.floor(op * 60)})` }} />
+                  ))}
+                </div>
+              );
+            case 'settings':
+              // Spinning hue-shifting arc rings
+              return (
+                <div className="absolute inset-0 flex items-center justify-center pointer-events-none animate-[spin_5s_linear_infinite]">
+                  <svg width="80%" height="80%" viewBox="0 0 40 40">
+                    <circle cx="20" cy="20" r="16" fill="none" stroke={sw.primary} strokeWidth="0.8" strokeDasharray="5 18" opacity="0.35" />
+                    <circle cx="20" cy="20" r="12" fill="none" stroke={sw.secondary} strokeWidth="0.6" strokeDasharray="3 22" opacity="0.25" />
+                  </svg>
+                </div>
+              );
+            case 'mongo':
+              // Orbiting teal dot
+              return (
+                <div className="absolute inset-0 pointer-events-none animate-[spin_3s_linear_infinite]">
+                  <div className="absolute w-[5px] h-[5px] rounded-full top-[10%] left-1/2 -translate-x-1/2" style={{ backgroundColor: sw.primary, boxShadow: `0 0 8px ${sw.glow}` }} />
+                  <div className="absolute w-[3px] h-[3px] rounded-full bottom-[10%] left-1/2 -translate-x-1/2" style={{ backgroundColor: sw.secondary, boxShadow: `0 0 5px rgba(10,255,205,0.5)` }} />
+                </div>
+              );
+            case 'auto':
+              // Staggered upward chevrons
+              return (
+                <div className="absolute inset-x-0 bottom-[8%] flex flex-col items-center gap-[2px] pointer-events-none">
+                  {[0,1,2].map(i => (
+                    <div key={i} className="animate-bounce" style={{ animationDuration: '0.9s', animationDelay: `${i * 0.15}s` }}>
+                      <svg width="12" height="6" viewBox="0 0 12 6"><polyline points="1,5 6,1 11,5" fill="none" stroke={i % 2 === 0 ? sw.primary : sw.secondary} strokeWidth="1.5" strokeLinecap="round" /></svg>
+                    </div>
+                  ))}
+                </div>
+              );
+            default:
+              return null;
+          }
+        };
+
+        return (
+            <div
+              className={`${baseContainer}`}
+              style={{
+                background: `linear-gradient(160deg, #0d0015 0%, #1a003a 50%, #0d0015 100%)`,
+                boxShadow: `0 0 18px ${sw.glow}, inset 0 0 30px rgba(0,0,0,0.7)`,
+                borderRadius: '4px',
+              }}
+            >
+                {/* Top neon bar */}
+                <div className="absolute top-0 left-0 right-0 h-[2px] animate-pulse" style={{ background: `linear-gradient(90deg, transparent, ${sw.primary}, ${sw.secondary}, ${sw.primary}, transparent)` }} />
+                {/* Bottom neon bar */}
+                <div className="absolute bottom-0 left-0 right-0 h-[2px] animate-pulse" style={{ background: `linear-gradient(90deg, transparent, ${sw.secondary}, ${sw.primary}, ${sw.secondary}, transparent)`, animationDelay: '0.5s' }} />
+                {/* Left vert strip */}
+                <div className="absolute top-[10%] left-0 w-[2px]" style={{ height: '40%', background: `linear-gradient(180deg, transparent, ${sw.primary}90, transparent)` }} />
+                {/* Right vert strip */}
+                <div className="absolute bottom-[10%] right-0 w-[2px]" style={{ height: '40%', background: `linear-gradient(0deg, transparent, ${sw.secondary}90, transparent)` }} />
+                {/* Scanlines */}
+                <div className="absolute inset-0 opacity-[0.05] pointer-events-none bg-[linear-gradient(rgba(0,0,0,0)_50%,rgba(255,45,150,0.2)_50%)] bg-[length:100%_4px]" />
+                {/* Per-app gimmick */}
+                {swGimmick()}
+                {/* Icon with synthwave neon glow */}
+                <div className="relative z-10 flex items-center justify-center" style={{ filter: `drop-shadow(0 0 6px ${sw.glow}) drop-shadow(0 0 2px ${sw.primary}60)` }}>
+                  {content}
+                </div>
+            </div>
+        );
+    }
+
     // ========== DEFAULT THEMES ==========
     return (
         <div className={`${baseContainer} rounded-2xl`} style={styles}>
@@ -304,6 +454,8 @@ const AppIcon = ({ id, size = 32, className = "", theme = "dark", iconStyle = "g
       wiki:      '#00bfff',
       notepad:   '#ff8c00',
       'docker-logs': '#ff1493',
+      mongo:     '#00ff66',
+      auto:      '#ff0055',
     };
     if (isCyberpunk) color = cyberpunkColors[iconId] || '#00ffff';
 
@@ -318,14 +470,32 @@ const AppIcon = ({ id, size = 32, className = "", theme = "dark", iconStyle = "g
       wiki:      '#118ab2',
       notepad:   '#fca311',
       'docker-logs': '#e63946',
+      mongo:     '#10b981',
+      auto:      '#ff5500',
     };
     if (isRetro) color = falloutColors[iconId] || '#18e12c';
+
+    // Synthwave: hot pink / teal duotone per icon
+    const synthwaveColors = {
+      terminal:  '#ff2d96',
+      ssh:       '#bf5fff',
+      docker:    '#0affcd',
+      files:     '#ffb800',
+      tmux:      '#ff2d96',
+      settings:  '#bf5fff',
+      wiki:      '#0affcd',
+      notepad:   '#ffb800',
+      'docker-logs': '#ff2d96',
+      mongo:     '#0affcd',
+      auto:      '#ff2d96',
+    };
+    if (isSynthwave) color = synthwaveColors[iconId] || '#ff2d96';
 
     const renderRaw = () => {
         const rawStyle = { color, filter: dropShadow };
         switch (iconId) {
             case 'terminal':
-                return <IconComponent size={iconSize} className={(isRetro || isCyberpunk) ? '' : (isLight && !isDesktop ? 'text-slate-700' : 'text-emerald-400')} style={{ color: (isRetro || isCyberpunk) ? color : undefined, filter: dropShadow }} strokeWidth={2.5} />;
+                return <IconComponent size={iconSize} className={(isRetro || isCyberpunk || isSynthwave) ? '' : (isLight && !isDesktop ? 'text-slate-700' : 'text-emerald-400')} style={{ color: (isRetro || isCyberpunk || isSynthwave) ? color : undefined, filter: dropShadow }} strokeWidth={2.5} />;
             case 'ssh':
             case 'ssh-manager':
                 return <IconComponent size={iconSize} style={rawStyle} strokeWidth={2.5} />;
@@ -358,9 +528,13 @@ const AppIcon = ({ id, size = 32, className = "", theme = "dark", iconStyle = "g
                 }
                 return <IconComponent size={iconSize} style={rawStyle} strokeWidth={2} />;
             case 'wiki':
-                return <IconComponent size={iconSize} className={(isRetro || isCyberpunk) ? '' : 'text-blue-400'} style={{ color: (isRetro || isCyberpunk) ? color : undefined, filter: dropShadow }} strokeWidth={2} />;
+                return <IconComponent size={iconSize} className={(isRetro || isCyberpunk || isSynthwave) ? '' : 'text-blue-400'} style={{ color: (isRetro || isCyberpunk || isSynthwave) ? color : undefined, filter: dropShadow }} strokeWidth={2} />;
             case 'notepad':
-                return <IconComponent size={iconSize} className={(isRetro || isCyberpunk) ? '' : 'text-orange-400'} style={{ color: (isRetro || isCyberpunk) ? color : undefined, filter: dropShadow }} strokeWidth={2} />;
+                return <IconComponent size={iconSize} className={(isRetro || isCyberpunk || isSynthwave) ? '' : 'text-orange-400'} style={{ color: (isRetro || isCyberpunk || isSynthwave) ? color : undefined, filter: dropShadow }} strokeWidth={2} />;
+            case 'mongo':
+                return <IconComponent size={iconSize} className={(isRetro || isCyberpunk || isSynthwave) ? '' : 'text-emerald-400'} style={{ color: (isRetro || isCyberpunk || isSynthwave) ? color : undefined, filter: dropShadow }} strokeWidth={2} />;
+            case 'auto':
+                return <IconComponent size={iconSize} className={(isRetro || isCyberpunk || isSynthwave) ? '' : 'text-orange-500'} style={{ color: (isRetro || isCyberpunk || isSynthwave) ? color : undefined, filter: dropShadow }} strokeWidth={2} />;
             default:
                 return <IconComponent size={iconSize} style={{ color }} />;
         }
@@ -376,6 +550,8 @@ const AppIcon = ({ id, size = 32, className = "", theme = "dark", iconStyle = "g
         'docker-logs': isLight ? '#ffe4e6' : '#e11d48',
         wiki: isLight ? '#f0f9ff' : '#0369a1',
         notepad: isLight ? '#fff7ed' : '#c2410c',
+        mongo: isLight ? '#d1fae5' : '#065f46',
+        auto: isLight ? '#ffedd5' : '#7c2d12',
     };
 
     return wrapIcon(renderRaw(), bgMap[iconId] || '#334155', color);
@@ -383,16 +559,18 @@ const AppIcon = ({ id, size = 32, className = "", theme = "dark", iconStyle = "g
 
   const IconComp = {
     terminal: Terminal,
-    ssh: (isRetro || isCyberpunk) ? Radio : Monitor,
-    'ssh-manager': (isRetro || isCyberpunk) ? Radio : Monitor,
-    docker: isRetro ? HardDrive : (isCyberpunk ? Database : Server),
+    ssh: (isRetro || isCyberpunk || isSynthwave) ? Radio : Monitor,
+    'ssh-manager': (isRetro || isCyberpunk || isSynthwave) ? Radio : Monitor,
+    docker: isRetro ? HardDrive : ((isCyberpunk || isSynthwave) ? Database : Server),
     files: isRetro ? Archive : Folder,
     'files-app': isRetro ? Archive : Folder,
-    tmux: (isRetro || isCyberpunk) ? Cpu : MonitorPlay,
-    settings: (isRetro || isCyberpunk) ? Wrench : Settings,
+    tmux: (isRetro || isCyberpunk || isSynthwave) ? Cpu : MonitorPlay,
+    settings: (isRetro || isCyberpunk || isSynthwave) ? Wrench : Settings,
     'docker-logs': FileText,
     wiki: BookOpen,
     notepad: FileText,
+    mongo: CloudSync,
+    auto: Rocket,
   }[iconId] || Globe;
 
   return (

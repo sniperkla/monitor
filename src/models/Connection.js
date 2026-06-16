@@ -19,6 +19,8 @@ const ConnectionSchema = new mongoose.Schema({
   status: { type: String, enum: ['online', 'offline', 'testing', 'unknown'], default: 'unknown' },
   isFavorite: { type: Boolean, default: false },
   isSrv: { type: Boolean, default: false }, // For mongodb+srv
+  authSource: { type: String, default: null }, // MongoDB auth database
+  dbOptions: { type: mongoose.Schema.Types.Mixed, default: null }, // Extra URI query params
   notes: { type: String, default: '' },
   info: { type: String, default: null },
   // SSH Tunnel (for reaching local/private DBs through an SSH jump)
