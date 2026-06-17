@@ -1,8 +1,7 @@
 'use client';
 
-import { useRef, useMemo } from 'react';
+import { useRef } from 'react';
 import { useFrame } from '@react-three/fiber';
-import * as THREE from 'three';
 import { useToonMaterial } from '../shaders/ToonMaterial';
 
 export default function Character({ position = [0, 0, 0], color = 0xffcc99 }) {

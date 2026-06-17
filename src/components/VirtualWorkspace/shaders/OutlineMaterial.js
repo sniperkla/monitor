@@ -3,7 +3,6 @@
 import { shaderMaterial } from '@react-three/drei';
 import { extend } from '@react-three/fiber';
 import * as THREE from 'three';
-import { useMemo } from 'react';
 
 const OutlineShaderMaterial = shaderMaterial(
   {
@@ -31,17 +30,5 @@ const OutlineShaderMaterial = shaderMaterial(
 );
 
 extend({ OutlineShaderMaterial });
-
-export function useOutlineMaterial({ color = 0x000000, thickness = 0.05 } = {}) {
-  const material = useMemo(() => {
-    return new OutlineShaderMaterial({
-      uOutlineColor: new THREE.Color(color),
-      uOutlineThickness: thickness,
-      side: THREE.BackSide,
-    });
-  }, [color, thickness]);
-  
-  return material;
-}
 
 export default OutlineShaderMaterial;

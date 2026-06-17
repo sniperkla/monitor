@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useRef, useCallback } from 'react';
+import { useState, useRef, useCallback, useEffect } from 'react';
 import { Canvas, useThree } from '@react-three/fiber';
 import { OrbitControls } from '@react-three/drei';
 import { X, Download, Monitor, Sun, Moon, Sunset } from 'lucide-react';
@@ -37,7 +37,9 @@ function Scene({ envPreset, timeOfDay, onSceneRef }) {
   const { scene } = useThree();
   const workspace = useWorkspaceState();
 
-  onSceneRef(scene);
+  useEffect(() => {
+    onSceneRef(scene);
+  }, [scene, onSceneRef]);
 
   const firstSSH = workspace.sshConnections[0];
   const firstDB = workspace.dbConnections[0];

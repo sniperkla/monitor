@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import dynamic from 'next/dynamic';
 import { Box } from 'lucide-react';
 
@@ -15,6 +15,12 @@ export default function WorkspaceToggle() {
   const toggle = useCallback(() => {
     setIsOpen(prev => !prev);
   }, []);
+
+  useEffect(() => {
+    const handleToggle = () => toggle();
+    window.addEventListener('toggle-virtual-workspace', handleToggle);
+    return () => window.removeEventListener('toggle-virtual-workspace', handleToggle);
+  }, [toggle]);
 
   return (
     <>

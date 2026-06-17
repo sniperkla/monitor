@@ -1,8 +1,6 @@
 'use client';
 
 import { useRef } from 'react';
-import { useFrame } from '@react-three/fiber';
-import * as THREE from 'three';
 import { useToonMaterial } from '../shaders/ToonMaterial';
 
 export default function Desk({ position = [0, 0, 0], color = 0x8B6914 }) {
