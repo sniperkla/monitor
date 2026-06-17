@@ -30,6 +30,7 @@ import DockerApp from '@/apps/DockerApp';
 import dynamic from 'next/dynamic';
 import FalloutPeople from './FalloutPeople';
 import NuclearExplosion from './NuclearExplosion';
+import WorkspaceToggle from '@/components/VirtualWorkspace/WorkspaceToggle';
 
 const DatabaseBrowser = dynamic(() => import('@/components/DatabaseBrowser'), {
   ssr: false,
@@ -61,6 +62,7 @@ export default function DesktopEnvironment() {
   const [isFalloutIdleMode, setIsFalloutIdleMode] = useState(false);
   const [isExplodingFlash, setIsExplodingFlash] = useState(false);
   const [isShaking, setIsShaking] = useState(false);
+  const [nukeExplosion, setNukeExplosion] = useState(null); // { x, y, id }
   const preFalloutPositionsRef = useRef(null);
   const idleTimerRef = useRef(null);
   
@@ -102,13 +104,42 @@ export default function DesktopEnvironment() {
       if (window._falloutGameStats) {
         return;
       }
+      const detail = e.detail || {};
+      const impactX = detail.x || window.innerWidth / 2;
+      const impactY = detail.y || window.innerHeight / 2;
+
+      // Spawn 3D mushroom cloud at impact point
+      setNukeExplosion({ x: impactX, y: impactY, id: `nuke-${Date.now()}` });
+
       // Global Impact Effects
       setIsExplodingFlash(true);
       setIsShaking(true);
       setTimeout(() => setIsExplodingFlash(false), 1500);
       setTimeout(() => setIsShaking(false), 1200);
 
-      // Removed 2D CSS explosion popup logic per user request
+      // Remove any existing overlays before creating new ones
+      document.querySelectorAll('.fallout-nuke-postprocess').forEach(el => el.remove());
+      document.querySelectorAll('.fallout-crt-damage').forEach(el => el.remove());
+
+      // Screen-wide post-processing: chromatic aberration + heat distortion + radiation vignette
+      const nukeOverlay = document.createElement('div');
+      nukeOverlay.className = 'fallout-nuke-postprocess';
+      nukeOverlay.style.cssText = `
+        position: fixed; inset: 0; z-index: 999997; pointer-events: none;
+        animation: nuke-chromatic-aberration 2s ease-out forwards,
+                   nuke-heat-distortion 3s ease-out forwards,
+                   nuke-radiation-vignette 8s ease-out forwards;
+        box-shadow: inset -6px 0 30px rgba(255,0,0,0.4), inset 6px 0 30px rgba(0,100,255,0.4);
+        mix-blend-mode: screen;
+      `;
+      document.body.appendChild(nukeOverlay);
+      setTimeout(() => nukeOverlay.remove(), 8500);
+
+      // CRT damage overlay
+      const crtDamage = document.createElement('div');
+      crtDamage.className = 'fallout-crt-damage';
+      document.body.appendChild(crtDamage);
+      setTimeout(() => crtDamage.remove(), 4000);
     };
     window.addEventListener('fallout-explosion', triggerImpactEffects);
 
@@ -248,6 +279,12 @@ export default function DesktopEnvironment() {
             if (!win.isMinimized) toggleMinimize(win.id);
           });
         }
+      }
+
+      // Virtual Workspace shortcut
+      if (e.ctrlKey && e.shiftKey && e.key === '3') {
+        e.preventDefault();
+        window.dispatchEvent(new CustomEvent('toggle-virtual-workspace'));
       }
 
       // Escape to close preview window
@@ -751,7 +788,12 @@ export default function DesktopEnvironment() {
         fontFamily: "'Inter', sans-serif",
         transition: 'background-image 0.5s ease, filter 0.3s ease',
         filter: `brightness(${osState.brightness}%)`,
-        zoom: osState.uiScale ? `${osState.uiScale}%` : '100%',
+        ...(osState.uiScale && osState.uiScale !== 100 ? {
+          transform: `scale(${osState.uiScale / 100})`,
+          transformOrigin: '0 0',
+          width: `${10000 / osState.uiScale}vw`,
+          height: `${10000 / osState.uiScale}vh`,
+        } : {}),
         padding: 0
       }}>
       
@@ -1149,13 +1191,24 @@ export default function DesktopEnvironment() {
          </div>
       )}
 
-      {/* Global Visual Explosions Layer (Flash Only) */}
+      {/* Global Visual Explosions Layer */}
       <div className="fixed inset-0 pointer-events-none z-[10000]">
          <AnimatePresence>
             {isExplodingFlash && <motion.div initial={{ opacity: 1 }} exit={{ opacity: 0 }} className="fallout-fullscreen-flash" />}
-            {/* Removed 2D CSS Explosion popup component */}
+            {nukeExplosion && (
+              <NuclearExplosion
+                key={nukeExplosion.id}
+                x={nukeExplosion.x}
+                y={nukeExplosion.y}
+                id={nukeExplosion.id}
+                onComplete={() => setNukeExplosion(null)}
+              />
+            )}
          </AnimatePresence>
       </div>
+
+      {/* Virtual Workspace Toggle */}
+      <WorkspaceToggle />
     </div>
   );
 }
