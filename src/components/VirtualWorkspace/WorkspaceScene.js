@@ -58,7 +58,7 @@ function Scene({ envPreset, timeOfDay, onSceneRef }) {
 
       <Desk position={[0, 0, 0]} />
       <Chair position={[0, 0, 0.6]} />
-      <Character position={[0, 0, 0.5]} />
+      <Character position={[0, 0, 0.5]} isTyping={workspace.sshCount > 0} />
       <Keyboard position={[0, 0.79, 0.15]} />
       <Mouse position={[0.35, 0.79, 0.15]} />
       <CoffeeMug position={[-0.7, 0.79, 0.25]} />

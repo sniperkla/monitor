@@ -1,6 +1,7 @@
 'use client';
 
-import { useMemo } from 'react';
+import { useMemo, useRef } from 'react';
+import { useFrame } from '@react-three/fiber';
 import { Sky } from '@react-three/drei';
 import * as THREE from 'three';
 
@@ -78,11 +79,14 @@ function RoomWalls({ wallColor, floorColor, ceilingColor }) {
 
 function OfficeRoom() {
   return (
-    <RoomWalls
-      wallColor={0xe8e0d4}
-      floorColor={0x8b7355}
-      ceilingColor={0xf5f0e8}
-    />
+    <>
+      <RoomWalls
+        wallColor={0xe8e0d4}
+        floorColor={0x8b7355}
+        ceilingColor={0xf5f0e8}
+      />
+      <DustParticles />
+    </>
   );
 }
 
@@ -165,6 +169,9 @@ function SpaceStation() {
           <planeGeometry args={[0.15, depth * 0.6]} />
         </mesh>
       ))}
+
+      {/* Stars visible through windows */}
+      <SpaceStars />
     </group>
   );
 }
@@ -244,13 +251,8 @@ function GamingRoom({ accentColor }) {
         </group>
       ))}
 
-      {/* Accent point light */}
-      <pointLight
-        color={accentColor}
-        intensity={1.5}
-        distance={8}
-        position={[0, 0.3, 0]}
-      />
+      {/* Accent point light with RGB cycling */}
+      <RGBLightCycle baseColor={accentColor} />
     </group>
   );
 }
@@ -274,6 +276,154 @@ function OutdoorEnvironment({ timeOfDay }) {
         <planeGeometry args={[100, 100]} />
         <meshStandardMaterial color={0x558833} roughness={1} />
       </mesh>
+
+      {/* Fireflies at night */}
+      {timeOfDay === 'night' && <Fireflies />}
+    </group>
+  );
+}
+
+function DustParticles() {
+  const particlesRef = useRef();
+  const count = 50;
+
+  const positions = useMemo(() => {
+    const pos = new Float32Array(count * 3);
+    for (let i = 0; i < count; i++) {
+      const t = i / count;
+      // Use sine-based pseudo-random distribution
+      pos[i * 3] = (Math.sin(i * 12.9898) * 0.5 + 0.5 - 0.5) * 6;
+      pos[i * 3 + 1] = (Math.sin(i * 78.233) * 0.5 + 0.5) * 4 + 0.5;
+      pos[i * 3 + 2] = (Math.sin(i * 43.5453) * 0.5 + 0.5 - 0.5) * 6;
+    }
+    return pos;
+  }, []);
+
+  useFrame((state) => {
+    if (!particlesRef.current) return;
+    const pos = particlesRef.current.geometry.attributes.position;
+    const t = state.clock.elapsedTime;
+    for (let i = 0; i < count; i++) {
+      pos.array[i * 3 + 1] += Math.sin(t * 0.5 + i) * 0.001;
+      pos.array[i * 3] += Math.cos(t * 0.3 + i * 0.5) * 0.0005;
+      if (pos.array[i * 3 + 1] > 4.5) pos.array[i * 3 + 1] = 0.5;
+    }
+    pos.needsUpdate = true;
+  });
+
+  return (
+    <points ref={particlesRef}>
+      <bufferGeometry>
+        <bufferAttribute
+          attach="attributes-position"
+          count={count}
+          array={positions}
+          itemSize={3}
+        />
+      </bufferGeometry>
+      <pointsMaterial size={0.03} color={0xffffff} transparent opacity={0.4} sizeAttenuation />
+    </points>
+  );
+}
+
+function SpaceStars() {
+  const starsRef = useRef();
+  const count = 100;
+
+  const positions = useMemo(() => {
+    const pos = new Float32Array(count * 3);
+    for (let i = 0; i < count; i++) {
+      pos[i * 3] = (Math.sin(i * 12.9898) * 0.5 + 0.5 - 0.5) * 10;
+      pos[i * 3 + 1] = (Math.sin(i * 78.233) * 0.5 + 0.5) * 4 + 1;
+      pos[i * 3 + 2] = -4.5 + (Math.sin(i * 43.5453) * 0.5 + 0.5) * 0.5;
+    }
+    return pos;
+  }, []);
+
+  useFrame((state) => {
+    if (!starsRef.current) return;
+    const t = state.clock.elapsedTime;
+    starsRef.current.material.opacity = 0.5 + Math.sin(t * 2) * 0.3;
+  });
+
+  return (
+    <points ref={starsRef}>
+      <bufferGeometry>
+        <bufferAttribute
+          attach="attributes-position"
+          count={count}
+          array={positions}
+          itemSize={3}
+        />
+      </bufferGeometry>
+      <pointsMaterial size={0.05} color={0xffffff} transparent opacity={0.6} sizeAttenuation />
+    </points>
+  );
+}
+
+function RGBLightCycle({ baseColor }) {
+  const lightRef = useRef();
+
+  useFrame((state) => {
+    if (!lightRef.current) return;
+    const t = state.clock.elapsedTime;
+    // Cycle through hue
+    const hue = (t * 0.1) % 1;
+    lightRef.current.color.setHSL(hue, 1, 0.5);
+  });
+
+  return (
+    <pointLight
+      ref={lightRef}
+      color={baseColor}
+      intensity={1.5}
+      distance={8}
+      position={[0, 0.3, 0]}
+    />
+  );
+}
+
+function Fireflies() {
+  const groupRef = useRef();
+  const count = 8;
+
+  const fireflies = useMemo(() => {
+    return Array.from({ length: count }, (_, i) => ({
+      offset: (Math.sin(i * 12.9898) * 0.5 + 0.5) * Math.PI * 2,
+      speed: 0.3 + (Math.sin(i * 78.233) * 0.5 + 0.5) * 0.5,
+      radius: 1 + (Math.sin(i * 43.5453) * 0.5 + 0.5) * 2,
+      height: 0.5 + (Math.sin(i * 37.719) * 0.5 + 0.5) * 2,
+      phase: (Math.sin(i * 93.9898) * 0.5 + 0.5) * Math.PI * 2,
+    }));
+  }, []);
+
+  useFrame((state) => {
+    if (!groupRef.current) return;
+    const t = state.clock.elapsedTime;
+    groupRef.current.children.forEach((child, i) => {
+      const f = fireflies[i];
+      child.position.x = Math.cos(t * f.speed + f.offset) * f.radius;
+      child.position.z = Math.sin(t * f.speed + f.offset + f.phase) * f.radius;
+      child.position.y = f.height + Math.sin(t * 2 + f.offset) * 0.3;
+      child.material.opacity = 0.5 + Math.sin(t * 3 + f.offset) * 0.5;
+    });
+  });
+
+  return (
+    <group ref={groupRef}>
+      {fireflies.map((_, i) => (
+        <mesh key={i} position={[0, 1, 0]}>
+          <sphereGeometry args={[0.04, 8, 8]} />
+          <meshStandardMaterial
+            color={0xffff88}
+            emissive={0xffff44}
+            emissiveIntensity={2}
+            transparent
+            opacity={0.8}
+            toneMapped={false}
+          />
+        </mesh>
+      ))}
     </group>
   );
 }
