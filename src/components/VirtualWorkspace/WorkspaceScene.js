@@ -161,13 +161,19 @@ export default function WorkspaceScene({ onClose }) {
       onClick={stopPropagation}
     >
       {/* 3D Canvas - takes full space */}
-      <div style={{ flex: 1, position: 'relative', width: '100%', height: '100%' }}>
+      <div style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 }}>
         <Canvas
           shadows
           camera={{ position: [2.5, 2.5, 3], fov: 50 }}
           gl={{ preserveDrawingBuffer: true }}
           style={{ width: '100%', height: '100%' }}
+          onCreated={({ gl }) => {
+            gl.setClearColor('#1a1a2e');
+          }}
         >
+          {/* Fallback lighting in case Environment fails */}
+          <ambientLight intensity={0.5} />
+          <directionalLight position={[5, 10, 5]} intensity={1} />
           <Scene envPreset={envPreset} timeOfDay={timeOfDay} onSceneRef={handleSceneRef} />
         </Canvas>
 
