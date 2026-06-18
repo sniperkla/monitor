@@ -4,6 +4,7 @@ import { useState, useRef, useCallback, useEffect } from 'react';
 import { Canvas, useThree } from '@react-three/fiber';
 import { OrbitControls } from '@react-three/drei';
 import { X, Download, Sun, Moon, Sunset } from 'lucide-react';
+import * as THREE from 'three';
 
 import Desk from './components/Desk';
 import Character from './components/Character';
@@ -165,7 +166,7 @@ export default function WorkspaceScene({ onClose }) {
         <Canvas
           shadows
           camera={{ position: [2.5, 2.5, 3], fov: 50 }}
-          gl={{ preserveDrawingBuffer: true }}
+          gl={{ preserveDrawingBuffer: true, shadowMap: { type: THREE.PCFShadowMap } }}
           style={{ width: '100%', height: '100%' }}
           onCreated={({ gl }) => {
             gl.setClearColor('#1a1a2e');
