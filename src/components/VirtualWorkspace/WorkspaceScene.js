@@ -4,7 +4,6 @@ import { useState, useRef, useCallback, useEffect } from 'react';
 import { Canvas, useThree } from '@react-three/fiber';
 import { OrbitControls } from '@react-three/drei';
 import { X, Download, Sun, Moon, Sunset } from 'lucide-react';
-import * as THREE from 'three';
 
 import Desk from './components/Desk';
 import Character from './components/Character';
@@ -164,16 +163,21 @@ export default function WorkspaceScene({ onClose }) {
       {/* 3D Canvas - takes full space */}
       <div style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 }}>
         <Canvas
-          shadows
           camera={{ position: [2.5, 2.5, 3], fov: 50 }}
-          gl={{ preserveDrawingBuffer: true, shadowMap: { type: THREE.PCFShadowMap } }}
+          gl={{
+            preserveDrawingBuffer: true,
+            powerPreference: 'low-power',
+            antialias: false,
+            stencil: false,
+          }}
+          dpr={1}
           style={{ width: '100%', height: '100%' }}
           onCreated={({ gl }) => {
             gl.setClearColor('#1a1a2e');
+            gl.shadowMap.enabled = false;
           }}
         >
-          {/* Fallback lighting in case Environment fails */}
-          <ambientLight intensity={0.5} />
+          <ambientLight intensity={0.6} />
           <directionalLight position={[5, 10, 5]} intensity={1} />
           <Scene envPreset={envPreset} timeOfDay={timeOfDay} onSceneRef={handleSceneRef} />
         </Canvas>

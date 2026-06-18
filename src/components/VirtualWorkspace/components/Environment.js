@@ -45,7 +45,7 @@ function RoomWalls({ wallColor, floorColor, ceilingColor }) {
   return (
     <group>
       {/* Floor */}
-      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0, 0]} receiveShadow>
+      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0, 0]}>
         <planeGeometry args={[width, depth]} />
         <meshStandardMaterial color={floorColor} roughness={0.8} />
       </mesh>
@@ -132,7 +132,7 @@ function SpaceStation() {
   return (
     <group>
       {/* Floor */}
-      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0, 0]} material={wallMaterial} receiveShadow>
+      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0, 0]} material={wallMaterial}>
         <planeGeometry args={[width, depth]} />
       </mesh>
 
@@ -206,7 +206,7 @@ function GamingRoom({ accentColor }) {
   return (
     <group>
       {/* Floor */}
-      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0, 0]} receiveShadow>
+      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0, 0]}>
         <planeGeometry args={[width, depth]} />
         <meshStandardMaterial color={0x0f0f1a} roughness={0.4} />
       </mesh>
@@ -272,7 +272,7 @@ function OutdoorEnvironment({ timeOfDay }) {
       />
 
       {/* Ground plane */}
-      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -0.01, 0]} receiveShadow>
+      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -0.01, 0]}>
         <planeGeometry args={[100, 100]} />
         <meshStandardMaterial color={0x558833} roughness={1} />
       </mesh>
@@ -452,15 +452,6 @@ export default function Environment({
         color={config.directionalColor}
         intensity={config.directionalIntensity}
         position={config.sunPosition}
-        castShadow
-        shadow-mapSize-width={1024}
-        shadow-mapSize-height={1024}
-        shadow-camera-near={0.5}
-        shadow-camera-far={50}
-        shadow-camera-left={-10}
-        shadow-camera-right={10}
-        shadow-camera-top={10}
-        shadow-camera-bottom={-10}
       />
 
       {/* Preset-specific environment */}
