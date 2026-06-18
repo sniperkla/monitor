@@ -235,6 +235,7 @@ export default function DesktopIcon({ id, title, icon: Icon, component, defaultP
   const [isExploding, setIsExploding] = useState(false);
   const [isReforming, setIsReforming] = useState(false);
   const [isArmed, setIsArmed] = useState(false);
+  const [countdown, setCountdown] = useState(0); // 4, 3, 2, 1 during arming
   const [isIrradiated, setIsIrradiated] = useState(false);
   const [isCratered, setIsCratered] = useState(false);
   const [impactTransform, setImpactTransform] = useState('');
@@ -271,7 +272,7 @@ export default function DesktopIcon({ id, title, icon: Icon, component, defaultP
         const rotate = (Math.random() > 0.5 ? 1 : -1) * force * (45 + Math.random() * 45);
 
         // Instantly get hit by the shockwave
-        setImpactTransform(`translate(${pushX}px, ${pushY}px) rotate(${rotate}deg) scale(${1 - force*0.3})`);
+        setImpactTransform(`translate(${pushX}px, ${pushY}px) rotate(${rotate}deg)`);
         
         // Wait out the blast, then spring back
         setTimeout(() => {
@@ -560,6 +561,7 @@ export default function DesktopIcon({ id, title, icon: Icon, component, defaultP
     // so they can double-click or swipe past icons without annoyance.
     hoverDelayTimerRef.current = setTimeout(() => {
       setIsArmed(true); // Icon starts physically tearing apart
+      setCountdown(3); // Start countdown from 3
 
       // Start Air Raid Siren
       startSiren();
@@ -572,9 +574,22 @@ export default function DesktopIcon({ id, title, icon: Icon, component, defaultP
       };
       geigerIntervalRef.current = setTimeout(clickLoop, 100);
 
-      // Arm the detonation for 2.5 seconds *after* the warning sirens start
+      // Countdown ticks: 3 → 2 → 1 → BOOM
+      let currentCount = 3;
+      const countdownInterval = setInterval(() => {
+        currentCount--;
+        if (currentCount > 0) {
+          setCountdown(currentCount);
+        } else {
+          clearInterval(countdownInterval);
+          setCountdown(0);
+        }
+      }, 1000);
+
+      // Detonate after 3 seconds of countdown
       explosionTimerRef.current = setTimeout(() => {
         setIsArmed(false); // Explosion takes over
+        setCountdown(0);
 
         // Clear geiger counter
         if (geigerIntervalRef.current) {
@@ -610,12 +625,14 @@ export default function DesktopIcon({ id, title, icon: Icon, component, defaultP
         setTimeout(() => setIsCratered(false), 14000);
 
         // Spawn full-screen CRT damage static
+        document.querySelectorAll('.fallout-crt-damage').forEach(el => el.remove());
         const crtDamage = document.createElement('div');
         crtDamage.className = 'fallout-crt-damage';
         document.body.appendChild(crtDamage);
         setTimeout(() => crtDamage.remove(), 3000);
 
         // Spawn radioactive fallout rain across the viewport (Optimized Count)
+        document.querySelectorAll('.fallout-rain-container').forEach(el => el.remove());
         const rainContainer = document.createElement('div');
         rainContainer.className = 'fallout-rain-container';
         for (let i = 0; i < 20; i++) {
@@ -651,6 +668,7 @@ export default function DesktopIcon({ id, title, icon: Icon, component, defaultP
 
   const handleMouseLeave = useCallback(() => {
     setIsArmed(false);
+    setCountdown(0);
     if (hoverDelayTimerRef.current) {
       clearTimeout(hoverDelayTimerRef.current);
       hoverDelayTimerRef.current = null;
@@ -990,6 +1008,15 @@ export default function DesktopIcon({ id, title, icon: Icon, component, defaultP
             filter: 'hue-rotate(80deg) brightness(1.3) drop-shadow(0 0 12px rgba(50,255,50,0.8))',
             animation: 'fallout-irradiated-pulse 0.8s ease-in-out infinite alternate',
           } : {}),
+          // Progressive shake during countdown — more intense as numbers decrease
+          ...(isArmed && countdown > 0 ? {
+            animation: countdown === 1 
+              ? 'fallout-countdown-shake-hard 0.15s infinite'
+              : countdown === 2
+                ? 'fallout-countdown-shake-medium 0.2s infinite'
+                : 'fallout-countdown-shake-light 0.3s infinite',
+            filter: `brightness(${1 + (4 - countdown) * 0.15}) saturate(${1 + (4 - countdown) * 0.3})`,
+          } : {}),
         }}
       >
         <div className={`${sizes.iconBox} ${state.theme === 'retro' || state.theme === 'fallout' || state.theme === 'cyberpunk' ? '' : styleClass} rounded-2xl flex items-center justify-center overflow-hidden relative`}>
@@ -1028,18 +1055,43 @@ export default function DesktopIcon({ id, title, icon: Icon, component, defaultP
         {title}
       </span>
 
-      {/* Massive Flashing Radiation Symbol During Arming Phase */}
-      {isArmed && (
+      {/* Countdown Timer During Arming Phase */}
+      {isArmed && countdown > 0 && (
         <div 
-          className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-50 pointer-events-none flex items-center justify-center font-bold"
-          style={{ 
-            fontSize: '6rem',
-            color: '#ffcc00', // Bright warning yellow
-            textShadow: '0 0 20px #ffaa00, 0 0 40px #ff6600, 0 0 80px #ffffff',
-            animation: 'fallout-biohazard-flash 0.15s infinite alternate ease-in-out'
-          }}
+          className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-50 pointer-events-none flex flex-col items-center justify-center"
         >
-          ☢
+          {/* Glowing countdown number */}
+          <div
+            key={countdown}
+            style={{ 
+              fontSize: '5rem',
+              fontWeight: '900',
+              fontFamily: 'monospace',
+              color: countdown === 1 ? '#ff2200' : countdown === 2 ? '#ff6600' : '#ffcc00',
+              textShadow: countdown === 1
+                ? '0 0 30px #ff0000, 0 0 60px #ff0000, 0 0 100px #ff4400, 0 0 150px #ffffff'
+                : countdown === 2
+                  ? '0 0 25px #ff6600, 0 0 50px #ff4400, 0 0 80px #ffaa00'
+                  : '0 0 20px #ffaa00, 0 0 40px #ff6600, 0 0 60px #ffcc00',
+              animation: 'fallout-countdown-pulse 1s ease-out forwards',
+              lineHeight: 1,
+            }}
+          >
+            {countdown}
+          </div>
+          {/* Small radiation symbol below number */}
+          <div
+            style={{
+              fontSize: '1.2rem',
+              color: '#ffcc00',
+              marginTop: '-4px',
+              opacity: 0.7,
+              textShadow: '0 0 10px #ffaa00',
+              animation: 'fallout-biohazard-flash 0.3s infinite alternate ease-in-out',
+            }}
+          >
+            ☢
+          </div>
         </div>
       )}
     </div>

@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo } from 'react';
+import { useMemo, useState, useRef, useEffect } from 'react';
 import { useApp } from '@/context/AppContext';
 import { useOS } from '@/context/OSContext';
 
@@ -81,5 +81,26 @@ export default function useWorkspaceState() {
     osState.windows,
   ]);
 
-  return workspaceState;
+  const [isAppIdle, setIsAppIdle] = useState(false);
+  const lastActivityRef = useRef(null);
+  useEffect(() => {
+    lastActivityRef.current = Date.now();
+  }, []);
+
+  useEffect(() => {
+    const checkIdle = () => {
+      const timeSinceActivity = Date.now() - lastActivityRef.current;
+      setIsAppIdle(timeSinceActivity > 30000);
+    };
+    const interval = setInterval(checkIdle, 5000);
+    return () => clearInterval(interval);
+  }, []);
+
+  useEffect(() => {
+    if (workspaceState.sshCount > 0 || workspaceState.dbCount > 0 || workspaceState.deployActive) {
+      lastActivityRef.current = Date.now();
+    }
+  }, [workspaceState.sshCount, workspaceState.dbCount, workspaceState.deployActive]);
+
+  return { ...workspaceState, isAppIdle };
 }

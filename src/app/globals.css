@@ -690,13 +690,13 @@
   --bg-primary: #0d0015;
   --bg-secondary: #130020;
   --bg-tertiary: #1a0030;
-  --bg-card: rgba(26, 0, 48, 0.85);
-  --bg-card-hover: rgba(40, 0, 70, 0.92);
-  --border-color: rgba(255, 60, 200, 0.35);
-  --border-hover: rgba(255, 100, 230, 0.7);
-  --text-primary: #ffe8ff;
-  --text-secondary: #ff9de2;
-  --text-muted: #b066cc;
+  --bg-card: rgba(20, 27, 45, 0.85);
+  --bg-card-hover: rgba(26, 35, 64, 0.92);
+  --border-color: rgba(255, 255, 255, 0.1);
+  --border-hover: rgba(255, 255, 255, 0.2);
+  --text-primary: #f1f5f9;
+  --text-secondary: #94a3b8;
+  --text-muted: #64748b;
   --accent-indigo: #ff2d96;
   --accent-indigo-hover: #ff5aba;
   --accent-emerald: #0affcd;
@@ -704,21 +704,21 @@
   --accent-rose: #ff2d96;
   --accent-cyan: #0affcd;
   --accent-purple: #bf5fff;
-  --glow-indigo: rgba(255, 45, 150, 0.3);
-  --glow-emerald: rgba(10, 255, 205, 0.25);
-  --glow-rose: rgba(255, 45, 150, 0.35);
+  --glow-indigo: rgba(255, 45, 150, 0.15);
+  --glow-emerald: rgba(10, 255, 205, 0.15);
+  --glow-rose: rgba(255, 45, 150, 0.15);
   --terminal-bg: #0d0015;
   --terminal-green: #0affcd;
-  --window-bg: rgba(13, 0, 21, 0.97);
-  --taskbar-bg: rgba(10, 0, 18, 0.95);
-  --bg-primary-overlay: rgba(0, 0, 10, 0.85);
-  --shadow-strong: rgba(255, 45, 150, 0.5);
-  --bg-selected: rgba(255, 45, 150, 0.25);
-  --text-selected: #fff;
-  --desktop-icon-text: #ffe8ff;
+  --window-bg: rgba(15, 23, 42, 0.95);
+  --taskbar-bg: rgba(10, 10, 20, 0.95);
+  --bg-primary-overlay: rgba(0, 0, 0, 0.85);
+  --shadow-strong: rgba(0, 0, 0, 0.4);
+  --bg-selected: rgba(255, 45, 150, 0.2);
+  --text-selected: #ffffff;
+  --desktop-icon-text: #ffffff;
   --desktop-icon-glyph: #ff2d96;
-  --neumorphic-shadow-dark: 4px 4px 12px rgba(0, 0, 0, 0.9);
-  --neumorphic-shadow-light: -2px -2px 8px rgba(255, 45, 150, 0.12);
+  --neumorphic-shadow-dark: 6px 6px 12px rgba(0, 0, 0, 0.3);
+  --neumorphic-shadow-light: -6px -6px 12px rgba(255, 255, 255, 0.05);
 }
 
 /* Synthwave font */
@@ -782,7 +782,7 @@
   background-size: 100% 100%, 100% 100%, 100% 100%;
   z-index: 0;
   pointer-events: none;
-  opacity: 0.28;
+  opacity: 0.12;
 }
 
 /* Scanline overlay + chromatic aberration */
@@ -792,28 +792,28 @@
   top: 0; left: 0; right: 0; bottom: 0;
   background: linear-gradient(
     transparent 50%,
-    rgba(255, 45, 150, 0.03) 50%
+    rgba(255, 45, 150, 0.015) 50%
   );
   background-size: 100% 4px;
-  z-index: 9999;
+  z-index: 0;
   pointer-events: none;
-  box-shadow: inset 0 0 150px rgba(255, 45, 150, 0.12), inset 0 0 80px rgba(10, 255, 205, 0.04);
+  box-shadow: inset 0 0 150px rgba(255, 45, 150, 0.04), inset 0 0 80px rgba(10, 255, 205, 0.01);
 }
 
 /* Neon glow pulse for synthwave */
 @keyframes synthwave-neon-pulse {
-  0%   { box-shadow: 0 0 6px rgba(255, 45, 150, 0.3), 0 0 20px rgba(10, 255, 205, 0.1); }
-  50%  { box-shadow: 0 0 18px rgba(255, 45, 150, 0.7), 0 0 40px rgba(10, 255, 205, 0.2); }
-  100% { box-shadow: 0 0 6px rgba(255, 45, 150, 0.3), 0 0 20px rgba(10, 255, 205, 0.1); }
+  0%   { box-shadow: 0 0 3px rgba(255, 45, 150, 0.15); }
+  50%  { box-shadow: 0 0 8px rgba(255, 45, 150, 0.3); }
+  100% { box-shadow: 0 0 3px rgba(255, 45, 150, 0.15); }
 }
 
 /* Hover glitch effect for desktop icons */
 @keyframes synthwave-glitch {
-  0%   { transform: translate(0); filter: hue-rotate(0deg) drop-shadow(0 0 8px rgba(255, 45, 150, 0.8)); }
-  15%  { transform: translate(-3px, 1px); filter: hue-rotate(20deg) drop-shadow(3px 0 0 rgba(10, 255, 205, 0.8)) drop-shadow(-3px 0 0 rgba(255, 45, 150, 0.8)); }
-  30%  { transform: translate(3px, -1px); filter: hue-rotate(-20deg) drop-shadow(-3px 0 0 rgba(10, 255, 205, 0.8)); }
-  45%  { transform: translate(0); filter: hue-rotate(0deg) drop-shadow(0 0 8px rgba(255, 45, 150, 0.8)); }
-  100% { transform: translate(0); filter: drop-shadow(0 0 8px rgba(255, 45, 150, 0.8)); }
+  0%   { transform: translate(0); filter: drop-shadow(0 0 3px rgba(255, 45, 150, 0.4)); }
+  15%  { transform: translate(-2px, 1px); filter: drop-shadow(2px 0 0 rgba(10, 255, 205, 0.4)) drop-shadow(-2px 0 0 rgba(255, 45, 150, 0.4)); }
+  30%  { transform: translate(2px, -1px); filter: drop-shadow(-2px 0 0 rgba(10, 255, 205, 0.4)); }
+  45%  { transform: translate(0); filter: drop-shadow(0 0 3px rgba(255, 45, 150, 0.4)); }
+  100% { transform: translate(0); filter: drop-shadow(0 0 3px rgba(255, 45, 150, 0.4)); }
 }
 
 .synthwave .desktop-icon:hover {
@@ -822,22 +822,17 @@
 
 /* Glass modification for synthwave */
 .synthwave .glass {
-  background: rgba(26, 0, 48, 0.88);
-  border: 1px solid rgba(255, 45, 150, 0.5);
-  box-shadow:
-    0 0 20px rgba(255, 45, 150, 0.15),
-    inset 0 0 20px rgba(10, 255, 205, 0.05);
-  backdrop-filter: blur(12px);
+  background: rgba(20, 27, 45, 0.9);
+  border: 1px solid rgba(255, 45, 150, 0.3);
   border-radius: 4px;
   border-left: 3px solid #ff2d96;
 }
 
 .synthwave .card {
-  border: 1px solid rgba(255, 45, 150, 0.35);
-  background: rgba(20, 0, 40, 0.9);
+  border: 1px solid rgba(255, 45, 150, 0.2);
+  background: rgba(20, 27, 45, 0.9);
   border-radius: 4px;
   border-bottom: 2px solid #0affcd;
-  box-shadow: 0 0 12px rgba(255, 45, 150, 0.1);
 }
 
 .synthwave .btn-primary {
@@ -849,15 +844,14 @@
   font-weight: 700;
   letter-spacing: 2px;
   position: relative;
-  box-shadow: 0 0 12px rgba(255, 45, 150, 0.35), inset 0 0 6px rgba(255, 45, 150, 0.2);
   overflow: hidden;
 }
 
 .synthwave .btn-primary:hover {
-  background: rgba(255, 45, 150, 0.18);
+  background: rgba(255, 45, 150, 0.1);
   color: #fff;
-  box-shadow: 0 0 24px rgba(255, 45, 150, 0.8), inset 0 0 12px rgba(255, 45, 150, 0.4);
-  text-shadow: 0 0 10px #fff;
+  box-shadow: none;
+  text-shadow: none;
 }
 
 .synthwave .btn-primary::after {
@@ -874,36 +868,62 @@
   border-radius: 0 !important;
   border-bottom: 2px solid #0affcd !important;
   border-left: 2px solid #ff2d96 !important;
-  background: rgba(10, 0, 18, 0.97) !important;
-  box-shadow: 0 0 20px rgba(255, 45, 150, 0.35), 0 -1px 0 rgba(10, 255, 205, 0.2) !important;
+  background: rgba(10, 10, 20, 0.97) !important;
+  box-shadow: none !important;
 }
 
 /* Window styles */
 .synthwave .window-container {
   border-radius: 2px !important;
-  border: 1px solid rgba(255, 45, 150, 0.5);
-  box-shadow: 0 0 30px rgba(255, 45, 150, 0.2), 0 0 60px rgba(10, 255, 205, 0.08);
+  border: 1px solid rgba(255, 45, 150, 0.3);
+  box-shadow: none;
 }
 
 .synthwave .window-titlebar {
   border-radius: 0 !important;
-  border-bottom: 1px solid rgba(255, 45, 150, 0.4);
-  background: linear-gradient(90deg, rgba(255, 45, 150, 0.18) 0%, rgba(10, 255, 205, 0.1) 100%);
+  border-bottom: 1px solid rgba(255, 45, 150, 0.2);
+  background: rgba(15, 23, 42, 0.95);
+  color: #f1f5f9 !important;
+  text-shadow: none;
 }
 
 /* Neon text glow */
 .synthwave h1, .synthwave h2, .synthwave h3, .synthwave h4, .synthwave strong {
-  text-shadow: 0 0 8px rgba(255, 45, 150, 0.7), 0 0 20px rgba(255, 45, 150, 0.3), 0 0 2px rgba(255, 255, 255, 0.5);
-  letter-spacing: 1px;
+  text-shadow: none;
+  letter-spacing: 0.5px;
+}
+
+/* Labels and secondary text */
+.synthwave label,
+.synthwave .text-\[var\(--text-muted\)\],
+.synthwave span[class*="text-muted"] {
+  color: #64748b !important;
+  text-shadow: none;
+}
+
+/* Status badges and tags */
+.synthwave .badge,
+.synthwave [class*="status-"] {
+  text-shadow: none;
+}
+
+/* Desktop icon text — strong outline for synthwave */
+.synthwave .desktop-icon span {
+  color: #ffffff !important;
+  text-shadow:
+    1px 1px 2px rgba(0,0,0,1),
+    -1px -1px 2px rgba(0,0,0,1),
+    1px -1px 2px rgba(0,0,0,1),
+    -1px 1px 2px rgba(0,0,0,1) !important;
 }
 
 /* Inputs */
 .synthwave input:not(.xterm-helper-textarea),
 .synthwave textarea:not(.xterm-helper-textarea),
 .synthwave select {
-  background: rgba(13, 0, 21, 0.7) !important;
-  border: 1px solid rgba(255, 45, 150, 0.45) !important;
-  color: #ffe8ff !important;
+  background: rgba(15, 23, 42, 0.8) !important;
+  border: 1px solid rgba(255, 255, 255, 0.1) !important;
+  color: #f1f5f9 !important;
   border-radius: 2px !important;
   transition: all 0.2s ease;
 }
@@ -913,43 +933,45 @@
 .synthwave select:focus {
   outline: none !important;
   border-color: #0affcd !important;
-  box-shadow: 0 0 15px rgba(10, 255, 205, 0.3), inset 0 0 5px rgba(10, 255, 205, 0.15) !important;
+  box-shadow: 0 0 8px rgba(10, 255, 205, 0.15) !important;
 }
 
 /* Scrollbars */
 .synthwave *::-webkit-scrollbar { width: 8px; height: 8px; }
-.synthwave *::-webkit-scrollbar-track { background: #0d0015; border-left: 1px solid rgba(255, 45, 150, 0.15); }
-.synthwave *::-webkit-scrollbar-thumb { background: rgba(255, 45, 150, 0.5); border-radius: 0; border: 1px solid #0affcd; }
-.synthwave *::-webkit-scrollbar-thumb:hover { background: #0affcd; border-color: #ff2d96; box-shadow: 0 0 10px #0affcd; }
-.synthwave * { scrollbar-color: rgba(255, 45, 150, 0.5) #0d0015; }
+.synthwave *::-webkit-scrollbar-track { background: #0d0015; border-left: 1px solid rgba(255, 255, 255, 0.05); }
+.synthwave *::-webkit-scrollbar-thumb { background: rgba(255, 45, 150, 0.3); border-radius: 0; border: 1px solid rgba(10, 255, 205, 0.2); }
+.synthwave *::-webkit-scrollbar-thumb:hover { background: rgba(255, 45, 150, 0.5); border-color: rgba(10, 255, 205, 0.3); }
+.synthwave * { scrollbar-color: rgba(255, 45, 150, 0.3) #0d0015; }
 
 /* Solid accent buttons */
 .synthwave .bg-\[var\(--accent-indigo\)\] {
   background: rgba(255, 45, 150, 0.15) !important;
-  border: 1px solid rgba(255, 45, 150, 0.5) !important;
+  border: 1px solid rgba(255, 45, 150, 0.3) !important;
   color: #ff2d96 !important;
-  text-shadow: 0 0 8px rgba(255, 45, 150, 0.6) !important;
+  text-shadow: none !important;
 }
+
 .synthwave .bg-\[var\(--accent-indigo\)\]:hover {
-  background: rgba(255, 45, 150, 0.28) !important;
+  background: rgba(255, 45, 150, 0.2) !important;
 }
 
 /* Status dot */
 .synthwave .status-online {
   background: var(--accent-cyan);
-  box-shadow: 0 0 10px rgba(10, 255, 205, 0.8);
+  box-shadow: 0 0 4px rgba(10, 255, 205, 0.4);
   animation: pulse-synthwave 2s infinite;
 }
 
 @keyframes pulse-synthwave {
-  0%, 100% { box-shadow: 0 0 6px rgba(10, 255, 205, 0.6); }
-  50%       { box-shadow: 0 0 18px rgba(10, 255, 205, 1); }
+  0%, 100% { box-shadow: 0 0 3px rgba(10, 255, 205, 0.3); }
+  50%       { box-shadow: 0 0 8px rgba(10, 255, 205, 0.6); }
 }
 
 /* Taskbar button hover */
 .synthwave .taskbar button:hover,
 .synthwave .window-titlebar:hover {
   animation: synthwave-neon-pulse 2s infinite;
+  text-shadow: none;
 }
 
 /* Reparse trigger for Next.js */
@@ -1518,6 +1540,25 @@ body {
   box-shadow: 0 0 0 2px var(--accent-indigo);
 }
 
+/* Desktop icon text — default shadow (all themes) */
+.desktop-icon span {
+  text-shadow: 0 1px 2px rgba(0,0,0,0.9), 0 1px 4px rgba(0,0,0,0.7), 0 2px 8px rgba(0,0,0,0.6);
+}
+
+/* Desktop icon text — outline for light theme (needs contrast on bright wallpaper) */
+.light .desktop-icon span {
+  text-shadow:
+    0 0 3px rgba(0,0,0,1),
+    0 0 6px rgba(0,0,0,0.9),
+    0 0 10px rgba(0,0,0,0.7),
+    1px 1px 2px rgba(0,0,0,1),
+    -1px -1px 2px rgba(0,0,0,1),
+    1px -1px 2px rgba(0,0,0,1),
+    -1px 1px 2px rgba(0,0,0,1) !important;
+  -webkit-text-stroke: 0.3px rgba(0,0,0,0.4);
+  font-weight: 700 !important;
+}
+
 /* Global Responsive Adjustments */
 @media (max-width: 768px) {
   :root {
@@ -1925,4 +1966,93 @@ body {
   71%  { transform: translate(-3px, 1px) rotate(-0.18deg); }
   80%  { transform: translate(2px, -2px) rotate(0.10deg); }
   90%  { transform: translate(-1px, 1px) rotate(0deg); }
+}
+
+/* === NUCLEAR POST-PROCESSING EFFECTS === */
+
+@keyframes nuke-screen-flash {
+  0% { opacity: 1; transform: scale(1); }
+  15% { opacity: 0.95; background: radial-gradient(circle, #ffffff 0%, #ffff00 30%, #ff6600 60%, transparent 100%); }
+  40% { opacity: 0.6; background: radial-gradient(circle, #ffcc00 0%, #ff4400 50%, transparent 100%); }
+  70% { opacity: 0.2; background: radial-gradient(circle, #ff2200 0%, transparent 70%); }
+  100% { opacity: 0; }
+}
+
+@keyframes nuke-chromatic-aberration {
+  0% { box-shadow: inset -8px 0 40px rgba(255,0,0,0.5), inset 8px 0 40px rgba(0,100,255,0.5); opacity: 1; }
+  30% { box-shadow: inset -5px 0 30px rgba(255,0,0,0.3), inset 5px 0 30px rgba(0,100,255,0.3); }
+  100% { box-shadow: inset 0 0 0 transparent; opacity: 0; }
+}
+
+@keyframes nuke-heat-distortion {
+  0% { backdrop-filter: blur(0px); opacity: 0; }
+  10% { backdrop-filter: blur(4px); opacity: 1; }
+  30% { backdrop-filter: blur(2px); }
+  60% { backdrop-filter: blur(1px); opacity: 0.5; }
+  100% { backdrop-filter: blur(0px); opacity: 0; }
+}
+
+@keyframes nuke-radiation-vignette {
+  0% { box-shadow: inset 0 0 200px rgba(50,255,50,0.0); }
+  15% { box-shadow: inset 0 0 300px rgba(50,255,50,0.15); }
+  40% { box-shadow: inset 0 0 250px rgba(50,255,50,0.1); }
+  70% { box-shadow: inset 0 0 200px rgba(50,255,50,0.05); }
+  100% { box-shadow: inset 0 0 200px rgba(50,255,50,0.0); }
+}
+
+@keyframes nuke-static-overlay {
+  0% { opacity: 0; }
+  20% { opacity: 0.6; }
+  40% { opacity: 0.3; }
+  60% { opacity: 0.5; }
+  80% { opacity: 0.2; }
+  100% { opacity: 0; }
+}
+
+@keyframes nuke-fallout-rain {
+  0% { transform: translateY(0) translateX(0); opacity: 0; }
+  10% { opacity: 0.8; }
+  50% { transform: translateY(50vh) translateX(20px); opacity: 0.5; }
+  100% { transform: translateY(100vh) translateX(-10px); opacity: 0; }
+}
+
+@keyframes fallout-biohazard-flash {
+  0% { filter: brightness(1.1) drop-shadow(0 0 8px rgba(255,200,0,0.5)); }
+  100% { filter: brightness(1.5) drop-shadow(0 0 20px rgba(255,200,0,1)); }
+}
+
+@keyframes fallout-countdown-pulse {
+  0% { transform: scale(2.0); opacity: 0; }
+  12% { transform: scale(1.15); opacity: 1; }
+  25% { transform: scale(1.0); }
+  60% { transform: scale(0.95); opacity: 1; }
+  100% { transform: scale(0.85); opacity: 0.5; }
+}
+
+@keyframes fallout-countdown-shake-light {
+  0%, 100% { transform: translate(0, 0); }
+  25% { transform: translate(-1px, 1px); }
+  50% { transform: translate(1px, -1px); }
+  75% { transform: translate(-1px, -1px); }
+}
+
+@keyframes fallout-countdown-shake-medium {
+  0%, 100% { transform: translate(0, 0); }
+  20% { transform: translate(-2px, 1px); }
+  40% { transform: translate(2px, -2px); }
+  60% { transform: translate(-1px, 2px); }
+  80% { transform: translate(1px, -1px); }
+}
+
+@keyframes fallout-countdown-shake-hard {
+  0%, 100% { transform: translate(0, 0); }
+  10% { transform: translate(-3px, 2px); }
+  20% { transform: translate(3px, -3px); }
+  30% { transform: translate(-2px, 3px); }
+  40% { transform: translate(3px, -2px); }
+  50% { transform: translate(-3px, 1px); }
+  60% { transform: translate(2px, -3px); }
+  70% { transform: translate(-1px, 2px); }
+  80% { transform: translate(3px, -1px); }
+  90% { transform: translate(-2px, 3px); }
 }

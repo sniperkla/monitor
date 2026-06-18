@@ -13,23 +13,20 @@ export default function SSHMonitor({
   username = 'admin',
   color = 0x333333
 }) {
-  const canvasRef = useRef(null);
-  const textureRef = useRef(null);
   const cursorVisible = useRef(true);
   const lastBlink = useRef(0);
 
-  const { texture, canvas, ctx } = useMemo(() => {
+  const { ctx, texture } = useMemo(() => {
     const canvas = document.createElement('canvas');
     canvas.width = 512;
     canvas.height = 320;
     const ctx = canvas.getContext('2d');
     const texture = new THREE.CanvasTexture(canvas);
     texture.needsUpdate = true;
-    canvasRef.current = canvas;
-    textureRef.current = texture;
-    return { texture, canvas, ctx };
+    return { ctx, texture };
   }, []);
 
+  /* eslint-disable react-hooks/immutability -- CanvasTexture requires imperative mutation for per-frame updates */
   useFrame((state) => {
     if (!isActive) return;
     const time = state.clock.elapsedTime;
@@ -57,6 +54,7 @@ export default function SSHMonitor({
 
     texture.needsUpdate = true;
   });
+  /* eslint-enable react-hooks/immutability */
 
   return <Monitor position={position} rotation={rotation} screenContent={texture} isActive={isActive} color={color} />;
 }

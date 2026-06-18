@@ -167,7 +167,16 @@ export async function POST(request) {
     const finalConnectionId = body.connectionId !== undefined ? (typeof body.connectionId === 'string' ? body.connectionId.trim() : '') : String(existingValue.connectionId || '').trim();
 
     // Use cached connection data if available, otherwise use existing data
-    const finalSshConnectionData = sshConnectionData || existingValue.sshConnectionData || null;
+    // Encrypt sensitive fields before storing
+    let finalSshConnectionData = sshConnectionData || existingValue.sshConnectionData || null;
+    if (finalSshConnectionData) {
+      finalSshConnectionData = {
+        ...finalSshConnectionData,
+        password: finalSshConnectionData.password ? encrypt(finalSshConnectionData.password) : '',
+        privateKey: finalSshConnectionData.privateKey ? encrypt(finalSshConnectionData.privateKey) : '',
+        passphrase: finalSshConnectionData.passphrase ? encrypt(finalSshConnectionData.passphrase) : '',
+      };
+    }
 
     const updatedValue = {
       id: projectId,
@@ -179,6 +188,7 @@ export async function POST(request) {
       connectionId: finalTargetType === 'ssh' ? finalConnectionId : '',
       deployCommand: body.deployCommand !== undefined ? body.deployCommand : existingValue.deployCommand || '',
       projectPath: body.projectPath !== undefined ? body.projectPath : existingValue.projectPath || '.',
+      timeoutSeconds: body.timeoutSeconds !== undefined ? Math.max(30, Math.min(3600, Number(body.timeoutSeconds) || 600)) : (existingValue.timeoutSeconds || 600),
       status: body.status || existingValue.status || 'idle',
       lastDeployLog: body.lastDeployLog !== undefined ? body.lastDeployLog : existingValue.lastDeployLog || '',
       lastDeployAt: body.lastDeployAt !== undefined ? body.lastDeployAt : existingValue.lastDeployAt || null,
@@ -195,7 +205,7 @@ export async function POST(request) {
       githubRepo: body.githubRepo !== undefined ? body.githubRepo : existingValue.githubRepo || '',
       githubToken: body.githubToken !== undefined && body.githubToken ? encrypt(body.githubToken) : existingValue.githubToken || '',
       telegramNotification: typeof body.telegramNotification === 'boolean' ? body.telegramNotification : existingValue.telegramNotification || false,
-      telegramBotToken: body.telegramBotToken !== undefined ? body.telegramBotToken : existingValue.telegramBotToken || '',
+      telegramBotToken: body.telegramBotToken !== undefined && body.telegramBotToken ? encrypt(body.telegramBotToken) : existingValue.telegramBotToken || '',
       telegramChatId: body.telegramChatId !== undefined ? body.telegramChatId : existingValue.telegramChatId || '',
       sshConnectionData: finalSshConnectionData
     };

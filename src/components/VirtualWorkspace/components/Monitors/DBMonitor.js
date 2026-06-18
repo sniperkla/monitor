@@ -1,6 +1,6 @@
 'use client';
 
-import { useRef, useMemo } from 'react';
+import { useMemo } from 'react';
 import { useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
 import Monitor from '../Monitor';
@@ -13,22 +13,17 @@ export default function DBMonitor({
   queryCount = 0,
   color = 0x333333
 }) {
-  const canvasRef = useRef(null);
-  const textureRef = useRef(null);
-  const pulseRef = useRef(0);
-
-  const { texture, canvas, ctx } = useMemo(() => {
+  const { ctx, texture } = useMemo(() => {
     const canvas = document.createElement('canvas');
     canvas.width = 512;
     canvas.height = 320;
     const ctx = canvas.getContext('2d');
     const texture = new THREE.CanvasTexture(canvas);
     texture.needsUpdate = true;
-    canvasRef.current = canvas;
-    textureRef.current = texture;
-    return { texture, canvas, ctx };
+    return { ctx, texture };
   }, []);
 
+  /* eslint-disable react-hooks/immutability -- CanvasTexture requires imperative mutation for per-frame updates */
   useFrame((state) => {
     if (!isActive) return;
     const time = state.clock.elapsedTime;
@@ -61,6 +56,7 @@ export default function DBMonitor({
 
     texture.needsUpdate = true;
   });
+  /* eslint-enable react-hooks/immutability */
 
   return <Monitor position={position} rotation={rotation} screenContent={texture} isActive={isActive} color={color} />;
 }

@@ -35,52 +35,16 @@ export async function POST(request) {
       // Local Host listing
       const cmd = `cd ${resolvedPath} && ls -la && cat package.json 2>/dev/null && cat docker-compose.yml 2>/dev/null && cat Dockerfile 2>/dev/null && cat requirements.txt 2>/dev/null && cat pyproject.toml 2>/dev/null && cat pom.xml 2>/dev/null && cat build.gradle 2>/dev/null && echo "=== DOCKER COMPOSE VERSION ===" && (docker compose version 2>/dev/null || docker-compose --version 2>/dev/null)`;
       filesListing = await new Promise((resolve) => {
-        exec(cmd, (error, stdout, stderr) => {
-          resolve(stdout || stderr || 'No files found or unable to scan.');
-        });
-      });
-    } else if (targetType === 'ssh') {
-      // Remote SSH Server listing
-      if (!connectionId) {
-        return NextResponse.json({ success: false, error: 'Connection ID is required for SSH target' }, { status: 400 });
-      }
-
-      const db = await connectDB();
-      const repo = new ConnectionRepository(db);
-      await repo.init();
-
-      const normalizedId = String(connectionId || '').trim();
-      if (!normalizedId) {
-        return NextResponse.json({ success: false, error: 'SSH connection ID is required for remote analysis.' }, { status: 400 });
-      }
-
-      const connection = await repo.findById(normalizedId);
-      if (!connection) {
-        return NextResponse.json({ success: false, error: `SSH connection with ID ${normalizedId} not found.` }, { status: 400 });
-      }
-
-      // Build SSH connection config
-      const sshConfig = {
-        host: connection.host,
-        port: connection.port || 22,
-        username: connection.username || 'root',
-        readyTimeout: 20000,
-      };
-
-      if (connection.authType === 'password') {
-        sshConfig.password = decrypt(connection.password);
-      } else if (connection.authType === 'privateKey') {
-        sshConfig.privateKey = decrypt(connection.privateKey);
-        if (connection.passphrase) {
-          sshConfig.passphrase = decrypt(connection.passphrase);
-        }
-      }
-
-      filesListing = await new Promise((resolve, reject) => {
         const conn = new Client();
+        const sshTimeout = setTimeout(() => {
+          conn.end();
+          resolve('SSH Connection Error: timed out after 30 seconds');
+        }, 30000);
+
         conn.on('ready', () => {
+          clearTimeout(sshTimeout);
           const sshCmd = `cd ${resolvedPath} && ls -la && cat package.json 2>/dev/null && cat docker-compose.yml 2>/dev/null && cat Dockerfile 2>/dev/null && cat requirements.txt 2>/dev/null && cat pyproject.toml 2>/dev/null && cat pom.xml 2>/dev/null && cat build.gradle 2>/dev/null && echo "=== DOCKER COMPOSE VERSION ===" && (docker compose version 2>/dev/null || docker-compose --version 2>/dev/null)`;
-          conn.exec(sshCmd, (err, stream) => {
+          conn.exec(sshCmd, { timeout: 30000 }, (err, stream) => {
             if (err) {
               conn.end();
               return resolve(`SSH Exec Error: ${err.message}`);

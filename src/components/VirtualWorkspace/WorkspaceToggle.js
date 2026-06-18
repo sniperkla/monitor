@@ -44,7 +44,7 @@ export default function WorkspaceToggle() {
           position: 'fixed',
           bottom: '80px',
           right: '16px',
-          zIndex: 40,
+          zIndex: isOpen ? 10001 : 40,
           padding: '12px',
           background: isOpen ? 'rgba(239, 68, 68, 0.8)' : 'rgba(168, 85, 247, 0.8)',
           color: '#fff',

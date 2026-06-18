@@ -1,5 +1,5 @@
 import mongoose from "mongoose";
-import { headers } from "next/headers";
+import { headers } from "next/headers.js";
 import mysql from "mysql2/promise";
 import { createRequire } from 'module';
 import { getToken } from 'next-auth/jwt';

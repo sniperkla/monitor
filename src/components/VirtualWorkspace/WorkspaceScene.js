@@ -18,6 +18,7 @@ import DBMonitor from './components/Monitors/DBMonitor';
 import DeployMonitor from './components/Monitors/DeployMonitor';
 import ServerMonitor from './components/Monitors/ServerMonitor';
 import useWorkspaceState from './hooks/useWorkspaceState';
+import useCharacterRoutine from './hooks/useCharacterRoutine';
 import { exportSceneToGLB } from './utils/exportGLB';
 
 const ENV_PRESETS = [
@@ -36,6 +37,7 @@ const TIME_OPTIONS = [
 function Scene({ envPreset, timeOfDay, onSceneRef }) {
   const { scene } = useThree();
   const workspace = useWorkspaceState();
+  const routine = useCharacterRoutine({ sshActive: workspace.sshCount > 0 });
 
   useEffect(() => {
     onSceneRef(scene);
@@ -58,7 +60,13 @@ function Scene({ envPreset, timeOfDay, onSceneRef }) {
 
       <Desk position={[0, 0, 0]} />
       <Chair position={[0, 0, 0.6]} />
-      <Character position={[0, 0, 0.5]} isTyping={workspace.sshCount > 0} />
+      <Character
+        position={[0, 0, 0.5]}
+        isTyping={workspace.sshCount > 0}
+        routineState={routine.state}
+        targetPosition={routine.targetPosition}
+        isMoving={routine.isMoving}
+      />
       <Keyboard position={[0, 0.79, 0.15]} />
       <Mouse position={[0.35, 0.79, 0.15]} />
       <CoffeeMug position={[-0.7, 0.79, 0.25]} />

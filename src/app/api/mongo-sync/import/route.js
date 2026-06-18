@@ -4,22 +4,10 @@ import { authOptions } from "@/lib/auth";
 import { getPooledConnection } from '@/lib/dbPool';
 import connectDB from '@/lib/mongodb';
 import { ConnectionRepository } from '@/lib/repositories/ConnectionRepository';
+import { sanitizeDocument } from '@/lib/mongoSyncUtils';
 import mongoose from 'mongoose';
 
-function sanitizeObjectId(id) {
-  if (!id) return id;
-  if (typeof id === 'string' && /^[0-9a-fA-F]{24}$/.test(id)) {
-    try {
-      return new mongoose.Types.ObjectId(id);
-    } catch (e) {}
-  }
-  if (typeof id === 'object' && id.$oid) {
-    try {
-      return new mongoose.Types.ObjectId(id.$oid);
-    } catch (e) {}
-  }
-  return id;
-}
+const MAX_IMPORT_DOCS = 100000;
 
 export async function POST(request) {
   try {
@@ -37,6 +25,10 @@ export async function POST(request) {
 
     if (!Array.isArray(documents) || documents.length === 0) {
       return NextResponse.json({ success: false, error: 'Documents array is empty or invalid' }, { status: 400 });
+    }
+
+    if (documents.length > MAX_IMPORT_DOCS) {
+      return NextResponse.json({ success: false, error: `Import limit exceeded. Maximum ${MAX_IMPORT_DOCS} documents per request.` }, { status: 400 });
     }
 
     let pooled;
@@ -61,27 +53,7 @@ export async function POST(request) {
     const col = targetDb.collection(collection);
 
     // Sanitize document IDs (converting $oid structures or 24-character hex strings to ObjectIds)
-    const sanitizedDocs = documents.map(doc => {
-      const cleanDoc = { ...doc };
-      if (cleanDoc._id) {
-        cleanDoc._id = sanitizeObjectId(cleanDoc._id);
-      }
-      // Recursively clean up nested $oid values if present in the document
-      const walk = (obj) => {
-        if (!obj || typeof obj !== 'object') return;
-        for (const [k, v] of Object.entries(obj)) {
-          if (v && typeof v === 'object') {
-            if (v.$oid) {
-              obj[k] = sanitizeObjectId(v.$oid);
-            } else {
-              walk(v);
-            }
-          }
-        }
-      };
-      walk(cleanDoc);
-      return cleanDoc;
-    });
+    const sanitizedDocs = documents.map(doc => sanitizeDocument(doc));
 
     let insertedCount = 0;
     let updatedCount = 0;

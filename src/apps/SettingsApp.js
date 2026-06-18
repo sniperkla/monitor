@@ -107,6 +107,7 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
     connectionId: '',
     deployCommand: '',
     projectPath: '.',
+    timeoutSeconds: 600,
     status: 'idle',
     lastDeployLog: '',
     lastDeployAt: null,
@@ -156,6 +157,7 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
               ...prev,
               ...configData.config,
               projectPath: configData.config.projectPath || '.',
+              timeoutSeconds: configData.config.timeoutSeconds || 600,
               aiProfile: configData.config.aiProfile || null,
               aiLogs: configData.config.aiLogs || [],
               githubConnected: configData.config.githubConnected || false,
@@ -2328,6 +2330,19 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
                             className="w-full bg-[var(--bg-primary)] border border-[var(--border-color)] rounded-xl px-3 py-2 text-xs text-[var(--text-primary)] focus:outline-none focus:border-indigo-500 transition-all"
                           />
                           <span className="block text-[9px] text-[var(--text-muted)] mt-1">{t('deploy.projectRootPathHint', 'Relative or absolute path containing deployment files.')}</span>
+                        </div>
+
+                        <div>
+                          <label className="block text-[11px] font-bold text-[var(--text-secondary)] uppercase tracking-wider mb-2">{t('deploy.timeout', 'Timeout (seconds)')}</label>
+                          <input
+                            type="number"
+                            min="30"
+                            max="3600"
+                            value={deployConfig.timeoutSeconds || 600}
+                            onChange={(e) => setDeployConfig(p => ({ ...p, timeoutSeconds: parseInt(e.target.value, 10) || 600 }))}
+                            className="w-full bg-[var(--bg-primary)] border border-[var(--border-color)] rounded-xl px-3 py-2 text-xs text-[var(--text-primary)] focus:outline-none focus:border-indigo-500 transition-all"
+                          />
+                          <span className="block text-[9px] text-[var(--text-muted)] mt-1">{t('deploy.timeoutHint', 'Maximum time in seconds a deployment can run before being terminated (30-3600).')}</span>
                         </div>
                       </div>
                     </div>

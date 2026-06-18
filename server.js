@@ -436,6 +436,15 @@ async function getModels(uri, userId) {
 app.prepare().then(async () => {
   await connectMongo();
 
+  // Reset deployment process state on startup (clears stale entries from prior crashes)
+  try {
+    const { resetAllState } = await import('./src/lib/deployProcesses.js');
+    resetAllState();
+    console.log('✅ Deployment process state reset on startup');
+  } catch (err) {
+    console.error('❌ Failed to reset deployment state:', err.message);
+  }
+
   // Start background sync scheduler
   try {
     const mongoSyncScheduler = require('./scripts/mongoSyncScheduler');

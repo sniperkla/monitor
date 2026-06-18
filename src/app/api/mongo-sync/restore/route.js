@@ -5,22 +5,10 @@ import { getPooledConnection } from '@/lib/dbPool';
 import connectDB from '@/lib/mongodb';
 import { ConnectionRepository } from '@/lib/repositories/ConnectionRepository';
 import { listDriveFiles, downloadDriveFile } from '@/lib/gdriveHelper';
+import { sanitizeDocument } from '@/lib/mongoSyncUtils';
 import mongoose from 'mongoose';
 
-function sanitizeObjectId(id) {
-  if (!id) return id;
-  if (typeof id === 'string' && /^[0-9a-fA-F]{24}$/.test(id)) {
-    try {
-      return new mongoose.Types.ObjectId(id);
-    } catch (e) {}
-  }
-  if (typeof id === 'object' && id.$oid) {
-    try {
-      return new mongoose.Types.ObjectId(id.$oid);
-    } catch (e) {}
-  }
-  return id;
-}
+const MAX_RESTORE_DOCS = 100000;
 
 export async function GET(request) {
   try {
@@ -71,6 +59,10 @@ export async function POST(request) {
       return NextResponse.json({ success: true, message: 'Backup file is empty. No documents imported.', count: 0 });
     }
 
+    if (backupData.length > MAX_RESTORE_DOCS) {
+      return NextResponse.json({ success: false, error: `Restore limit exceeded. Maximum ${MAX_RESTORE_DOCS} documents per request.` }, { status: 400 });
+    }
+
     // 2. Establish connection to target DB
     let pooled;
     if (connectionId === 'default') {
@@ -93,26 +85,7 @@ export async function POST(request) {
     const col = targetDb.collection(collection);
 
     // 3. Sanitize IDs
-    const sanitizedDocs = backupData.map(doc => {
-      const cleanDoc = { ...doc };
-      if (cleanDoc._id) {
-        cleanDoc._id = sanitizeObjectId(cleanDoc._id);
-      }
-      const walk = (obj) => {
-        if (!obj || typeof obj !== 'object') return;
-        for (const [k, v] of Object.entries(obj)) {
-          if (v && typeof v === 'object') {
-            if (v.$oid) {
-              obj[k] = sanitizeObjectId(v.$oid);
-            } else {
-              walk(v);
-            }
-          }
-        }
-      };
-      walk(cleanDoc);
-      return cleanDoc;
-    });
+    const sanitizedDocs = backupData.map(doc => sanitizeDocument(doc));
 
     let insertedCount = 0;
     let updatedCount = 0;

@@ -15,30 +15,24 @@ function StatusSphere({ position, color, intensity = 1, pulseSpeed = 2 }) {
   const meshRef = useRef();
   const glowRef = useRef();
 
-  const material = useMemo(
-    () =>
-      new THREE.MeshStandardMaterial({
-        color,
-        emissive: color,
-        emissiveIntensity: intensity,
-        toneMapped: false,
-      }),
-    [color, intensity]
-  );
+  const { material, glowMaterial } = useMemo(() => ({
+    material: new THREE.MeshStandardMaterial({
+      color,
+      emissive: color,
+      emissiveIntensity: intensity,
+      toneMapped: false,
+    }),
+    glowMaterial: new THREE.MeshStandardMaterial({
+      color,
+      emissive: color,
+      emissiveIntensity: intensity * 2,
+      transparent: true,
+      opacity: 0.3,
+      toneMapped: false,
+    }),
+  }), [color, intensity]);
 
-  const glowMaterial = useMemo(
-    () =>
-      new THREE.MeshStandardMaterial({
-        color,
-        emissive: color,
-        emissiveIntensity: intensity * 2,
-        transparent: true,
-        opacity: 0.3,
-        toneMapped: false,
-      }),
-    [color, intensity]
-  );
-
+  /* eslint-disable react-hooks/immutability -- Three.js materials require imperative property updates per frame */
   useFrame((state) => {
     const t = state.clock.elapsedTime;
     if (meshRef.current) {
@@ -52,6 +46,7 @@ function StatusSphere({ position, color, intensity = 1, pulseSpeed = 2 }) {
       glowMaterial.opacity = 0.2 + Math.sin(t * pulseSpeed) * 0.15;
     }
   });
+  /* eslint-enable react-hooks/immutability */
 
   return (
     <group position={position}>
@@ -76,7 +71,6 @@ export default function StatusIndicators({
 
   const indicators = useMemo(() => {
     const items = [];
-    let index = 0;
 
     if (sshCount > 0) {
       items.push({
@@ -85,7 +79,6 @@ export default function StatusIndicators({
         intensity: Math.min(1 + sshCount * 0.3, 2.5),
         pulseSpeed: 2 + sshCount * 0.5,
       });
-      index++;
     }
 
     if (dbCount > 0) {
@@ -95,7 +88,6 @@ export default function StatusIndicators({
         intensity: Math.min(1 + dbCount * 0.3, 2.5),
         pulseSpeed: 1.5 + dbCount * 0.3,
       });
-      index++;
     }
 
     if (deployActive) {
@@ -105,7 +97,6 @@ export default function StatusIndicators({
         intensity: 2.0,
         pulseSpeed: 4,
       });
-      index++;
     }
 
     if (serverOnline) {
@@ -115,7 +106,6 @@ export default function StatusIndicators({
         intensity: 1.5,
         pulseSpeed: 1,
       });
-      index++;
     }
 
     return items;

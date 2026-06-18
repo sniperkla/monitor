@@ -17,6 +17,13 @@ export async function GET(request) {
     const state = crypto.randomBytes(16).toString('hex');
 
     await connectDB(process.env.MONGODB_URI, true);
+    // Clean up expired state records (older than 10 minutes)
+    const tenMinutesAgo = new Date(Date.now() - 10 * 60 * 1000);
+    await SystemSetting.deleteMany({
+      key: { $regex: '^auto_deploy_oauth_state_' },
+      'value.createdAt': { $lt: tenMinutesAgo }
+    });
+
     // Save temporary state mapping
     await SystemSetting.findOneAndUpdate(
       { key: `auto_deploy_oauth_state_${state}` },

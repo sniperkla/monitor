@@ -2,21 +2,20 @@ import { NextResponse } from 'next/server';
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "@/lib/auth";
 import connectDB from '@/lib/mongodb';
-import { SystemSettingRepository } from '@/lib/repositories/SystemSettingRepository';
-import SystemSetting from '@/models/SystemSetting';
 import { v4 as uuidv4 } from 'uuid';
 
-async function getJobs(settingRepo) {
-  const jobsSetting = await settingRepo.findOne({ key: 'mongo_sync_jobs' });
-  return jobsSetting ? jobsSetting.value : [];
+async function getJobs() {
+  const centerDb = await connectDB(null, true);
+  const jobsSetting = await centerDb.collection('system_settings').findOne({ key: 'mongo_sync_jobs' });
+  return jobsSetting?.value || [];
 }
 
 async function saveJobs(jobs) {
-  await connectDB();
-  await SystemSetting.findOneAndUpdate(
+  const centerDb = await connectDB(null, true);
+  await centerDb.collection('system_settings').updateOne(
     { key: 'mongo_sync_jobs' },
-    { key: 'mongo_sync_jobs', value: jobs },
-    { upsert: true, new: true }
+    { $set: { key: 'mongo_sync_jobs', value: jobs } },
+    { upsert: true }
   );
 }
 
@@ -27,11 +26,7 @@ export async function GET(request) {
       return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
     }
 
-    const db = await connectDB();
-    const settingRepo = new SystemSettingRepository(db);
-    await settingRepo.init();
-    const jobs = await getJobs(settingRepo);
-
+    const jobs = await getJobs();
     return NextResponse.json({ success: true, data: jobs });
 
   } catch (error) {
@@ -47,11 +42,7 @@ export async function POST(request) {
       return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
     }
 
-    const db = await connectDB();
-    const settingRepo = new SystemSettingRepository(db);
-    await settingRepo.init();
-    const jobs = await getJobs(settingRepo);
-
+    const jobs = await getJobs();
     const body = await request.json();
     const { id, name, connectionId, connectionName, database, collection, driveFolderId, driveFolderName, schedule, enabled = true } = body;
 
@@ -126,11 +117,7 @@ export async function DELETE(request) {
       return NextResponse.json({ success: false, error: 'Job ID is required' }, { status: 400 });
     }
 
-    const db = await connectDB();
-    const settingRepo = new SystemSettingRepository(db);
-    await settingRepo.init();
-    const jobs = await getJobs(settingRepo);
-
+    const jobs = await getJobs();
     const filteredJobs = jobs.filter(j => j.id !== id);
     await saveJobs(filteredJobs);
 

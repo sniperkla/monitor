@@ -1,8 +1,30 @@
 import { NextResponse } from 'next/server';
+import { getServerSession } from 'next-auth/next';
+import { authOptions } from '@/lib/auth';
 import connectDB from '@/lib/mongodb';
 import SystemSetting from "@/models/SystemSetting";
 import { runDeployment } from '../webhook/route';
-import { getRunning } from '@/lib/deployProcesses';
+import { getRunning, tryAcquireStartLock, releaseStartLock } from '@/lib/deployProcesses';
+
+// Simple per-project rate limiter
+const triggerRateLimit = new Map();
+const TRIGGER_RATE_WINDOW_MS = 60000;
+const TRIGGER_RATE_MAX = 10;
+
+function checkTriggerRateLimit(projectId) {
+  const now = Date.now();
+  const entry = triggerRateLimit.get(projectId);
+  if (!entry || now - entry.windowStart > TRIGGER_RATE_WINDOW_MS) {
+    triggerRateLimit.set(projectId, { windowStart: now, count: 1 });
+    return { allowed: true };
+  }
+  entry.count++;
+  if (entry.count > TRIGGER_RATE_MAX) {
+    const resetIn = TRIGGER_RATE_WINDOW_MS - (now - entry.windowStart);
+    return { allowed: false, resetIn };
+  }
+  return { allowed: true };
+}
 
 export async function GET(request) {
   return handleTrigger(request);
@@ -36,11 +58,18 @@ async function handleTrigger(request) {
       return NextResponse.json({ success: false, error: `Auto-deployment for project "${projectId}" is disabled` }, { status: 400 });
     }
 
-    // 2. Security validation: check secret token if configured
+    // 2. Security validation: require secret token OR authenticated session
     if (config.secret) {
       if (!token || token !== config.secret) {
         console.log(`[trigger] ❌ Invalid or missing secret token for project: ${projectId}`);
         return NextResponse.json({ success: false, error: 'Unauthorized: Invalid or missing secret token' }, { status: 401 });
+      }
+    } else {
+      // No secret configured — require authenticated session to prevent unauthenticated triggers
+      const session = await getServerSession(authOptions);
+      if (!session) {
+        console.log(`[trigger] ❌ No secret configured and no session — rejecting unauthenticated trigger`);
+        return NextResponse.json({ success: false, error: 'Unauthorized: Configure a deployment secret in settings to use the direct trigger URL, or sign in to trigger manually.' }, { status: 401 });
       }
     }
 
@@ -70,12 +99,24 @@ async function handleTrigger(request) {
       }
     }
 
-    // 4. Trigger in background
+    // 4. Trigger in background with race-condition lock
+    const rateCheck = checkTriggerRateLimit(projectId);
+    if (!rateCheck.allowed) {
+      return NextResponse.json({ success: false, error: `Rate limit exceeded. Try again in ${Math.ceil(rateCheck.resetIn / 1000)}s.` }, { status: 429 });
+    }
+
+    if (!tryAcquireStartLock(projectId)) {
+      console.log(`[trigger] Deployment start already in progress for project: ${projectId}`);
+      return NextResponse.json({ success: false, error: 'A deployment is already starting for this project' }, { status: 409 });
+    }
+
     console.log(`[trigger] ✅ Launching deployment in background for project: ${projectId}`);
     runDeployment(config, {
       triggerSource: 'Direct Trigger URL (curl/script)'
     }).catch(err => {
       console.error('[trigger] Unhandled background deployment error:', err.message);
+    }).finally(() => {
+      releaseStartLock(projectId);
     });
 
     return NextResponse.json({ 

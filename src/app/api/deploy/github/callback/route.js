@@ -15,7 +15,14 @@ export async function GET(request) {
     await connectDB(process.env.MONGODB_URI, true);
     const stateKey = `auto_deploy_oauth_state_${state}`;
     const stateRecord = await SystemSetting.findOne({ key: stateKey });
-    if (!stateRecord) return NextResponse.json({ success: false, error: 'Invalid state' }, { status: 400 });
+    if (!stateRecord) return NextResponse.json({ success: false, error: 'Invalid or expired state' }, { status: 400 });
+
+    // Reject expired state records (older than 10 minutes)
+    const createdAt = stateRecord.value?.createdAt;
+    if (createdAt && (Date.now() - new Date(createdAt).getTime()) > 10 * 60 * 1000) {
+      await SystemSetting.deleteOne({ key: stateKey });
+      return NextResponse.json({ success: false, error: 'OAuth state expired. Please try again.' }, { status: 400 });
+    }
 
     const project = stateRecord.value?.project || 'default';
 

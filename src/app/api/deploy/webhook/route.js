@@ -9,7 +9,27 @@ import SystemSetting from "@/models/SystemSetting";
 import { ConnectionRepository } from '@/lib/repositories/ConnectionRepository';
 import { decrypt } from '@/utils/encryption';
 import { broadcastDeploymentStatus } from '@/app/api/deploy/sse/route';
-import { setRunning, clearRunning, getRunning } from '@/lib/deployProcesses';
+import { setRunning, clearRunning, getRunning, tryAcquireStartLock, releaseStartLock } from '@/lib/deployProcesses';
+
+// Simple per-project rate limiter for deployment triggers
+const triggerRateLimit = new Map();
+const TRIGGER_RATE_WINDOW_MS = 60000; // 1 minute
+const TRIGGER_RATE_MAX = 10; // max 10 triggers per minute per project
+
+function checkTriggerRateLimit(projectId) {
+  const now = Date.now();
+  const entry = triggerRateLimit.get(projectId);
+  if (!entry || now - entry.windowStart > TRIGGER_RATE_WINDOW_MS) {
+    triggerRateLimit.set(projectId, { windowStart: now, count: 1 });
+    return { allowed: true };
+  }
+  entry.count++;
+  if (entry.count > TRIGGER_RATE_MAX) {
+    const resetIn = TRIGGER_RATE_WINDOW_MS - (now - entry.windowStart);
+    return { allowed: false, resetIn };
+  }
+  return { allowed: true };
+}
 
 // Verify GitHub webhook signature using HMAC-SHA256
 function verifySignature(bodyText, secret, signatureHeader) {
@@ -76,6 +96,13 @@ async function sendTelegramNotification(config, status, extra = {}) {
   if (!config.telegramNotification || !config.telegramBotToken || !config.telegramChatId) {
     return;
   }
+
+  let botToken;
+  try {
+    botToken = decrypt(config.telegramBotToken);
+  } catch (e) {
+    botToken = config.telegramBotToken; // fallback for unencrypted legacy tokens
+  }
   
   let text = '';
   const projectName = config.name || config.id || 'Default Project';
@@ -117,7 +144,7 @@ async function sendTelegramNotification(config, status, extra = {}) {
   }
 
   try {
-    const url = `https://api.telegram.org/bot${config.telegramBotToken}/sendMessage`;
+    const url = `https://api.telegram.org/bot${botToken}/sendMessage`;
     const response = await fetch(url, {
       method: 'POST',
       headers: {
@@ -309,13 +336,13 @@ export async function runDeployment(config, runMeta = {}) {
 
     childProcess.stdout.on('data', (data) => {
       logOutput += data.toString();
-      logOutput = limitLogOutput(logOutput);
+      if (logOutput.length > 200000) logOutput = limitLogOutput(logOutput);
       throttledUpdateStatus('running', logOutput).catch(() => {}); // Stream logs
     });
 
     childProcess.stderr.on('data', (data) => {
       logOutput += data.toString();
-      logOutput = limitLogOutput(logOutput);
+      if (logOutput.length > 200000) logOutput = limitLogOutput(logOutput);
       throttledUpdateStatus('running', logOutput).catch(() => {}); // Stream logs
     });
 
@@ -393,11 +420,14 @@ export async function runDeployment(config, runMeta = {}) {
       };
 
       if (sshConnData.authType === 'password') {
-        sshConfig.password = decrypt(sshConnData.password);
+        sshConfig.password = typeof sshConnData.password === 'string' && sshConnData.password.length > 0
+          ? decrypt(sshConnData.password) : sshConnData.password;
       } else if (sshConnData.authType === 'privateKey') {
-        sshConfig.privateKey = decrypt(sshConnData.privateKey);
+        sshConfig.privateKey = typeof sshConnData.privateKey === 'string' && sshConnData.privateKey.length > 0
+          ? decrypt(sshConnData.privateKey) : sshConnData.privateKey;
         if (sshConnData.passphrase) {
-          sshConfig.passphrase = decrypt(sshConnData.passphrase);
+          sshConfig.passphrase = typeof sshConnData.passphrase === 'string' && sshConnData.passphrase.length > 0
+            ? decrypt(sshConnData.passphrase) : sshConnData.passphrase;
         }
       }
 
@@ -544,13 +574,13 @@ export async function runDeployment(config, runMeta = {}) {
                     }
                   }
 
-                  logOutput = limitLogOutput(logOutput);
+                  if (logOutput.length > 200000) logOutput = limitLogOutput(logOutput);
                   throttledUpdateStatus('running', logOutput).catch(() => {});
                 });
 
                 stream.stderr.on('data', (data) => {
                   logOutput += data.toString();
-                  logOutput = limitLogOutput(logOutput);
+                  if (logOutput.length > 200000) logOutput = limitLogOutput(logOutput);
                   throttledUpdateStatus('running', logOutput).catch(() => {});
                 });
 
@@ -745,6 +775,19 @@ export async function POST(request) {
     }
 
     // 4. Trigger the deployment in the background
+    // Rate limit check
+    const rateCheck = checkTriggerRateLimit(projectId);
+    if (!rateCheck.allowed) {
+      console.log(`[webhook] Rate limit exceeded for project: ${projectId}`);
+      return NextResponse.json({ success: false, error: `Rate limit exceeded. Try again in ${Math.ceil(rateCheck.resetIn / 1000)}s.` }, { status: 429 });
+    }
+
+    // Acquire per-project start lock to prevent race conditions
+    if (!tryAcquireStartLock(projectId)) {
+      console.log(`[webhook] Deployment start already in progress for project: ${projectId}`);
+      return NextResponse.json({ success: false, error: 'A deployment is already starting for this project' }, { status: 409 });
+    }
+
     console.log(`[webhook] ✅ Triggering deployment for project: ${projectId}`);
 
     // Parse GitHub push payload for rich Telegram notifications
@@ -768,6 +811,8 @@ export async function POST(request) {
       triggerSource: isManual ? 'Manual (Dashboard)' : 'GitHub Webhook'
     }).catch(err => {
       console.error('Unhandled background deployment error:', err.message);
+    }).finally(() => {
+      releaseStartLock(projectId);
     });
 
     return NextResponse.json({ 
