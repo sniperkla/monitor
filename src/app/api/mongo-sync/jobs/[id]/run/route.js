@@ -3,6 +3,7 @@ import { getServerSession } from "next-auth/next";
 import { authOptions } from "@/lib/auth";
 import { getPooledConnection } from '@/lib/dbPool';
 import connectDB from '@/lib/mongodb';
+import mongoose from 'mongoose';
 import { ConnectionRepository } from '@/lib/repositories/ConnectionRepository';
 import { SystemSettingRepository } from '@/lib/repositories/SystemSettingRepository';
 import SystemSetting from '@/models/SystemSetting';
@@ -37,8 +38,8 @@ export async function POST(request, { params }) {
     try {
       let pooled;
       if (job.connectionId === 'default') {
-        const centerDb = await connectDB(null, true);
-        pooled = { db: centerDb };
+        await connectDB(null, true);
+        pooled = { db: mongoose.connection.db };
       } else {
         const repo = new ConnectionRepository(db);
         await repo.init();

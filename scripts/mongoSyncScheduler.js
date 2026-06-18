@@ -52,7 +52,8 @@ async function runJob(job, driveConfig) {
     let docs = [];
     if (job.connectionId === 'default') {
       const { default: connectDB } = await import('../src/lib/mongodb.js');
-      const centerDb = await connectDB(null, true);
+      await connectDB(null, true);
+      const centerDb = mongoose.connection.db;
       const targetDb = centerDb.databaseName === job.database
         ? centerDb
         : centerDb.client.db(job.database);
@@ -131,8 +132,8 @@ async function runJob(job, driveConfig) {
   // Update job status and history in center DB
   try {
     const { default: connectDB } = await import('../src/lib/mongodb.js');
-    const centerDb = await connectDB(null, true);
-    const settingsCol = centerDb.collection('system_settings');
+    await connectDB(null, true);
+    const settingsCol = mongoose.connection.db.collection('system_settings');
 
     const jobsSetting = await settingsCol.findOne({ key: 'mongo_sync_jobs' });
     if (jobsSetting?.value) {
@@ -174,8 +175,8 @@ async function tick() {
 
   try {
     const { default: connectDB } = await import('../src/lib/mongodb.js');
-    const centerDb = await connectDB(null, true);
-    const settingsCol = centerDb.collection('system_settings');
+    await connectDB(null, true);
+    const settingsCol = mongoose.connection.db.collection('system_settings');
 
     const driveSetting = await settingsCol.findOne({ key: 'google_drive_config' });
     const driveConfig = driveSetting?.value;

@@ -2,17 +2,18 @@ import { NextResponse } from 'next/server';
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "@/lib/auth";
 import connectDB from '@/lib/mongodb';
+import mongoose from 'mongoose';
 import { v4 as uuidv4 } from 'uuid';
 
 async function getJobs() {
-  const centerDb = await connectDB(null, true);
-  const jobsSetting = await centerDb.collection('system_settings').findOne({ key: 'mongo_sync_jobs' });
+  await connectDB(null, true);
+  const jobsSetting = await mongoose.connection.db.collection('system_settings').findOne({ key: 'mongo_sync_jobs' });
   return jobsSetting?.value || [];
 }
 
 async function saveJobs(jobs) {
-  const centerDb = await connectDB(null, true);
-  await centerDb.collection('system_settings').updateOne(
+  await connectDB(null, true);
+  await mongoose.connection.db.collection('system_settings').updateOne(
     { key: 'mongo_sync_jobs' },
     { $set: { key: 'mongo_sync_jobs', value: jobs } },
     { upsert: true }
