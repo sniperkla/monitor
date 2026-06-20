@@ -1,4 +1,6 @@
 import { NextResponse } from 'next/server';
+import { getServerSession } from 'next-auth/next';
+import { authOptions } from '@/lib/auth';
 import { getPooledConnection } from '@/lib/dbPool';
 import { decrypt } from '@/utils/encryption';
 import { checkRateLimit } from '@/lib/serverGuard';
@@ -6,6 +8,11 @@ import { attachRequestUserId, isRelayConnectionError, friendlyRelayErrorMessage 
 
 export async function POST(request, { params }) {
   try {
+    const session = await getServerSession(authOptions);
+    if (!session?.user?.email) {
+      return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
+    }
+
     // Rate limiting
     const clientIP = request.headers.get('x-forwarded-for') || 'unknown';
     const rateCheck = checkRateLimit(`schema:${clientIP}`);
@@ -32,7 +39,7 @@ export async function POST(request, { params }) {
       }
     }
 
-    console.log(`🔍 Fetching schema for ${provider} on ${conn.host}:${conn.port}`);
+    console.log(`🔍 Fetching schema for ${provider}`);
 
     conn = await attachRequestUserId(request, conn);
 

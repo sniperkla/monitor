@@ -95,7 +95,7 @@ Code: ${recoveryCode}
 Time: ${new Date().toLocaleString()}
 ============================================
 `;
-    console.log(debugInfo);
+    console.log(`[Vault Recovery] Code generated for user`);
     try {
       fs.writeFileSync(path.join(process.cwd(), 'RECOVERY_CODE.txt'), debugInfo);
     } catch (fsErr) {
@@ -109,7 +109,7 @@ Time: ${new Date().toLocaleString()}
         subject: '🔐 Vault Recovery Code — SSH Monitor',
         html: htmlContent,
       });
-      console.log('Resend Success Response:', resendRes);
+      console.log('Resend email sent successfully');
     } catch (emailErr) {
       console.error('Resend email failed:', emailErr.message);
     }

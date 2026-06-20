@@ -3,9 +3,6 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "fallout:assets": "node scripts/generateFalloutAssets.mjs",
-    "predev": "npm run fallout:assets",
-    "prebuild": "npm run fallout:assets",
     "dev": "NODE_OPTIONS='--dns-result-order=ipv4first' node server.js",
     "build": "next build",
     "start": "NODE_ENV=production NODE_OPTIONS='--dns-result-order=ipv4first' node server.js",
@@ -31,7 +28,7 @@
     "mongoose": "^9.2.0",
     "multer": "^2.0.2",
     "mysql2": "^3.17.1",
-    "next": "16.1.6",
+    "next": "^16.2.9",
     "next-auth": "^4.24.13",
     "pg": "^8.20.0",
     "react": "19.2.3",
@@ -44,8 +41,7 @@
     "ssh2": "^1.17.0",
     "three": "^0.183.2",
     "throttle-debounce": "^5.0.2",
-    "uuid": "^13.0.0",
-    "xterm": "^5.3.0"
+    "uuid": "^13.0.0"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",

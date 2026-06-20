@@ -4,13 +4,12 @@ import { useOS } from '@/context/OSContext';
 import { useState, useRef, useEffect, useCallback } from 'react';
 import AppIcon from '@/components/common/AppIcon';
 
-export default function DesktopIcon({ id, title, icon: Icon, component, defaultPos, initialWidth, initialHeight, isFalloutIdleMode }) {
+export default function DesktopIcon({ id, title, icon: Icon, component, defaultPos, initialWidth, initialHeight }) {
   const { state, openWindow, updateIconPosition, setSortBy, setSelectedIcons, toggleIconSelection, updateMultipleIconPositions } = useOS();
   const { selectedIconIds } = state;
   const isSelected = selectedIconIds.includes(id);
   const [isDragging, setIsDragging] = useState(false);
-  const [consumedAsAmmo, setConsumedAsAmmo] = useState(false);
-  const dragRef = useRef({ startX: 0, startY: 0, snapshot: null, isConsumed: false });
+  const dragRef = useRef({ startX: 0, startY: 0, snapshot: null });
   const hoverTimeoutRef = useRef(null);
   const iconRef = useRef(null);
   
@@ -24,9 +23,9 @@ export default function DesktopIcon({ id, title, icon: Icon, component, defaultP
 
   const getSizes = () => {
     switch (iconSize) {
-      case 'small': return { container: 'w-20', icon: 32, iconBox: 'w-10 h-10', text: 'text-[10px]' };
-      case 'large': return { container: 'w-28', icon: 32, iconBox: 'w-16 h-16', text: 'text-sm' };
-      default: return { container: 'w-24', icon: 24, iconBox: 'w-12 h-12', text: 'text-xs' };
+      case 'small': return { container: 'w-20', icon: 36, iconBox: 'w-12 h-12', text: 'text-xs' };
+      case 'large': return { container: 'w-32', icon: 52, iconBox: 'w-20 h-20', text: 'text-base' };
+      default: return { container: 'w-24', icon: 44, iconBox: 'w-14 h-14', text: 'text-sm' };
     }
   };
 
@@ -108,69 +107,12 @@ export default function DesktopIcon({ id, title, icon: Icon, component, defaultP
       // (avoids stale closure reading old state.iconPositions)
       dragRef.current.lastPositions = updates;
       updateMultipleIconPositions(updates);
-
-      // --- HOVER TO AIRSTRIKE LOGIC ---
-      const myLatestY = updates[id]?.y;
-      if (isFalloutTheme && isFalloutIdleMode && myLatestY !== undefined) {
-        if (myLatestY < 300) {
-          if (!hoverTimeoutRef.current) {
-             hoverTimeoutRef.current = setTimeout(() => {
-                if (dragRef.current.isConsumed) return;
-                dragRef.current.isConsumed = true;
-                
-                const myLatestX = dragRef.current.lastPositions?.[id]?.x || updates[id].x;
-                window.dispatchEvent(
-                  new CustomEvent('fallout-airstrike', { detail: { x: myLatestX, y: myLatestY } })
-                );
-                setConsumedAsAmmo(true);
-                
-                // End drag manually
-                setIsDragging(false);
-                window.removeEventListener('pointermove', handlePointerMove);
-                window.removeEventListener('pointerup', handlePointerUp);
-             }, 800); // 800ms hover threshold
-          }
-        } else {
-          if (hoverTimeoutRef.current) {
-            clearTimeout(hoverTimeoutRef.current);
-            hoverTimeoutRef.current = null;
-          }
-        }
-      }
     };
 
     const handlePointerUp = (e) => {
       setIsDragging(false);
       window.removeEventListener('pointermove', handlePointerMove);
       window.removeEventListener('pointerup', handlePointerUp);
-
-      if (hoverTimeoutRef.current) {
-        clearTimeout(hoverTimeoutRef.current);
-        hoverTimeoutRef.current = null;
-      }
-
-      const latestX = dragRef.current.lastPositions?.[id]?.x;
-      const latestY = dragRef.current.lastPositions?.[id]?.y;
-
-      // Abort if already consumed by the hover timeout
-      if (dragRef.current.isConsumed) return;
-
-      // Special Fallout Interaction: Drag icon to the Sky to call an airstrike!
-      // The icon "disappears" like ammunition being loaded into the bomber
-      if (isFalloutTheme && isFalloutIdleMode && latestY !== undefined && latestY < 300) {
-          // Dispatch airstrike event (plane only, no self-detonation)
-          window.dispatchEvent(
-            new CustomEvent('fallout-airstrike', {
-               detail: { x: latestX, y: latestY }
-            })
-          );
-          dragRef.current.isConsumed = true;
-          // Hide icon visually (it becomes the "ammo")
-          setConsumedAsAmmo(true);
-          dragRef.current.snapshot = null;
-          dragRef.current.lastPositions = null;
-          return; // Skip normal grid-snap logic
-      }
 
       // Grid snap all moved icons using the latest dragged positions
       // (not state.iconPositions which is stale due to React closure)
@@ -199,7 +141,7 @@ export default function DesktopIcon({ id, title, icon: Icon, component, defaultP
 
     window.addEventListener('pointermove', handlePointerMove);
     window.addEventListener('pointerup', handlePointerUp);
-  }, [id, isSelected, selectedIconIds, state.iconPositions, defaultPos, isFalloutTheme, isFalloutIdleMode]);
+  }, [id, isSelected, selectedIconIds, state.iconPositions, defaultPos, isFalloutTheme]);
 
   const handleDragOver = (e) => {
     if (e.dataTransfer.types.includes('application/ssh-connection') || e.dataTransfer.types.includes('Files')) {
@@ -225,12 +167,6 @@ export default function DesktopIcon({ id, title, icon: Icon, component, defaultP
       }
     }
   };
-
-  // ========== FALLOUT EXPLOSION EASTER EGG ==========
-  // Reset ammo state when exiting wasteland mode
-  useEffect(() => {
-    if (!isFalloutIdleMode) setConsumedAsAmmo(false);
-  }, [isFalloutIdleMode]);
 
   const [isExploding, setIsExploding] = useState(false);
   const [isReforming, setIsReforming] = useState(false);
@@ -555,7 +491,7 @@ export default function DesktopIcon({ id, title, icon: Icon, component, defaultP
   const hoverDelayTimerRef = useRef(null);
 
   const handleMouseEnter = useCallback(() => {
-    if (!isFalloutTheme || isExploding || isReforming || isFalloutIdleMode) return;
+    if (!isFalloutTheme || isExploding || isReforming) return;
     
     // Don't trigger the apocalyptic audio instantly. Give the user a 1-second grace period 
     // so they can double-click or swipe past icons without annoyance.
@@ -932,17 +868,15 @@ export default function DesktopIcon({ id, title, icon: Icon, component, defaultP
     );
   };
 
-  return (
+   return (
     <div
       ref={iconRef}
       className={`desktop-icon absolute flex flex-col items-center justify-center p-2 rounded-xl 
         cursor-grab active:cursor-grabbing hover:bg-[var(--text-primary)]/10 dark:hover:bg-white/10 active:bg-[var(--text-primary)]/15 
-        transition-all duration-150
         ${sizes.container} gap-2 z-10 group 
         ${isSelected ? 'bg-[var(--accent-indigo)]/15 border border-[var(--accent-indigo)]/40 shadow-[0_8px_24px_rgba(0,0,0,0.15)] ring-1 ring-[var(--accent-indigo)]/20' : 'border border-transparent'}
         ${isDragging ? 'z-50 opacity-90' : ''}
         ${isExploding ? 'z-50' : ''}
-        ${consumedAsAmmo ? 'pointer-events-none' : ''}
       `}
       data-icon-id={id}
       onDoubleClick={handleDoubleClick}
@@ -959,9 +893,8 @@ export default function DesktopIcon({ id, title, icon: Icon, component, defaultP
         transform: impactTransform || 'none',
         transition: isDragging ? 'none' : 
                     impactTransform ? 'transform 0.05s cubic-bezier(0, 0.9, 0.1, 1)' : 
-                    'transform 0.8s cubic-bezier(0.3, -0.3, 0.2, 1.4), left 0.15s ease, top 0.15s ease',
+                    'left 0.15s ease, top 0.15s ease',
         touchAction: 'none',
-        opacity: consumedAsAmmo ? 0 : undefined,
       }}
     >
       {/* Ghost Shadow (Grid Snap Preview) */}
@@ -1000,7 +933,7 @@ export default function DesktopIcon({ id, title, icon: Icon, component, defaultP
       )}
 
       <div 
-        className={`flex items-center justify-center transition-all duration-300 pointer-events-none group-hover:shadow-indigo-500/20 ${isDragging ? 'scale-110 shadow-2xl' : (!isArmed && !isExploding && !isReforming ? 'group-hover:scale-110' : '')}`}
+        className={`flex items-center justify-center transition-transform duration-300 pointer-events-none group-hover:shadow-indigo-500/20 ${isDragging ? 'scale-110 shadow-2xl' : (!isArmed && !isExploding && !isReforming ? 'group-hover:scale-110' : '')}`}
         style={{
           ...(isExploding ? { animation: 'fallout-icon-disintegrate 0.6s 0.2s ease-in forwards' } : {}),
           ...(isReforming ? { animation: 'fallout-icon-reform 0.8s ease-out forwards' } : {}),
@@ -1019,7 +952,7 @@ export default function DesktopIcon({ id, title, icon: Icon, component, defaultP
           } : {}),
         }}
       >
-        <div className={`${sizes.iconBox} ${state.theme === 'retro' || state.theme === 'fallout' || state.theme === 'cyberpunk' ? '' : styleClass} rounded-2xl flex items-center justify-center overflow-hidden relative`}>
+        <div className={`${sizes.iconBox} ${state.theme === 'retro' || state.theme === 'fallout' || state.theme === 'cyberpunk' ? '' : styleClass} rounded-[22%] flex items-center justify-center overflow-hidden relative`}>
           {(() => {
             const InnerIcon = () => (
               <AppIcon id={id} size={sizes.icon} theme={state.theme} iconStyle={state.iconStyle} isDesktop={true} />
@@ -1046,9 +979,9 @@ export default function DesktopIcon({ id, title, icon: Icon, component, defaultP
         </div>
       </div>
       <span 
-        className={`${sizes.text} text-[var(--desktop-icon-text)] text-center font-semibold select-none leading-tight pointer-events-none px-1 py-0.5 mt-1.5`} 
+        className={`${sizes.text} text-[var(--desktop-icon-text)] text-center font-bold select-none leading-tight pointer-events-none px-1.5 py-0.5 mt-1.5`} 
         style={{ 
-          textShadow: '0 1px 2px rgba(0,0,0,0.9), 0 1px 4px rgba(0,0,0,0.7), 0 2px 8px rgba(0,0,0,0.6)',
+          textShadow: '0 1px 3px rgba(0,0,0,1), 0 2px 6px rgba(0,0,0,0.8), 0 0 10px rgba(0,0,0,0.5)',
           ...(isExploding ? { animation: 'fallout-icon-disintegrate 0.6s 0.2s ease-in forwards' } : {}),
           ...(isReforming ? { animation: 'fallout-icon-reform 0.8s ease-out forwards' } : {}),
         }}>

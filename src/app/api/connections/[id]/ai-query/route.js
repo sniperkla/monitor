@@ -122,7 +122,7 @@ const requestChatCompletion = async ({ modelName, messages, aiConfig, apiKey, pr
     }
 
     const resData = await response.json();
-    console.log('[OpenRouter Raw Response]:', JSON.stringify(resData));
+    console.log('[OpenRouter] Response status:', resData.error ? 'error' : 'success');
     
     if (resData.error) {
        throw new Error(resData.error.message || JSON.stringify(resData.error));

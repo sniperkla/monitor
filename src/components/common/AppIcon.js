@@ -433,7 +433,7 @@ const AppIcon = ({ id, size = 32, className = "", theme = "dark", iconStyle = "g
   };
 
   const getIcon = (IconComponent) => {
-    const iconSize = size * 0.6;
+      const iconSize = size * 0.75;
     let color = isLight ? '#475569' : 'white';
     
     // Desktop icons in Outline or Minimal modes need high visibility against wallpapers

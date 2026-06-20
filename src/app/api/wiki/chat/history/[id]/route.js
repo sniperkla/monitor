@@ -7,13 +7,12 @@ import { getChatHistoryModel } from '@/models/ChatHistory';
 export async function GET(req, { params }) {
   try {
     const session = await getServerSession(authOptions);
-    const clientUri = req.headers.get('x-mongodb-uri');
     
-    if (!session && !clientUri) {
+    if (!session) {
       return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
     }
 
-    const userId = session?.user?.id || 'guest';
+    const userId = session.user.id;
     const { id } = await params;
     
     const db = await connectDB();
@@ -35,13 +34,12 @@ export async function GET(req, { params }) {
 export async function DELETE(req, { params }) {
   try {
     const session = await getServerSession(authOptions);
-    const clientUri = req.headers.get('x-mongodb-uri');
     
-    if (!session && !clientUri) {
+    if (!session) {
        return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
     }
 
-    const userId = session?.user?.id || 'guest';
+    const userId = session.user.id;
     const { id } = await params;
     
     const db = await connectDB();

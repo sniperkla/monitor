@@ -247,6 +247,9 @@ export default function Window({ id, title, icon: Icon, component, isMinimized, 
       rndRef.current.updateSize({ width: r.width, height: r.height });
     }
 
+    // Force Rnd to re-render so it passes updated position/size to Draggable/Resizable
+    if (rndRef.current.forceUpdate) rndRef.current.forceUpdate();
+
   }, [isMaximized, snapSide, screen.w, screen.h, taskbarPosition]);
 
   // ── Drag handlers ──

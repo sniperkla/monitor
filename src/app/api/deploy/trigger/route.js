@@ -1,10 +1,21 @@
 import { NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth/next';
 import { authOptions } from '@/lib/auth';
+import crypto from 'crypto';
 import connectDB from '@/lib/mongodb';
 import SystemSetting from "@/models/SystemSetting";
 import { runDeployment } from '../webhook/route';
 import { getRunning, tryAcquireStartLock, releaseStartLock } from '@/lib/deployProcesses';
+
+function timingSafeCompare(a, b) {
+  if (typeof a !== 'string' || typeof b !== 'string') return false;
+  if (a.length !== b.length) return false;
+  try {
+    return crypto.timingSafeEqual(Buffer.from(a), Buffer.from(b));
+  } catch {
+    return false;
+  }
+}
 
 // Simple per-project rate limiter
 const triggerRateLimit = new Map();
@@ -48,6 +59,21 @@ async function handleTrigger(request) {
     const setting = await SystemSetting.findOne({ key: dbKey });
     const config = setting?.value;
 
+    // 2. Security validation: require secret token OR authenticated session (BEFORE any config checks)
+    if (config?.secret) {
+      if (!token || !timingSafeCompare(token, config.secret)) {
+        console.log(`[trigger] ❌ Invalid or missing secret token for project: ${projectId}`);
+        return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
+      }
+    } else {
+      const session = await getServerSession(authOptions);
+      if (!session) {
+        console.log(`[trigger] ❌ No secret configured and no session — rejecting unauthenticated trigger`);
+        return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
+      }
+    }
+
+    // 3. Now check config state (only reachable by authenticated users)
     if (!config) {
       console.log(`[trigger] ❌ Project config for "${projectId}" not found`);
       return NextResponse.json({ success: false, error: `Project "${projectId}" not found or deployment not configured` }, { status: 404 });
@@ -56,21 +82,6 @@ async function handleTrigger(request) {
     if (!config.enabled) {
       console.log(`[trigger] ❌ Deployment is disabled for project: ${projectId}`);
       return NextResponse.json({ success: false, error: `Auto-deployment for project "${projectId}" is disabled` }, { status: 400 });
-    }
-
-    // 2. Security validation: require secret token OR authenticated session
-    if (config.secret) {
-      if (!token || token !== config.secret) {
-        console.log(`[trigger] ❌ Invalid or missing secret token for project: ${projectId}`);
-        return NextResponse.json({ success: false, error: 'Unauthorized: Invalid or missing secret token' }, { status: 401 });
-      }
-    } else {
-      // No secret configured — require authenticated session to prevent unauthenticated triggers
-      const session = await getServerSession(authOptions);
-      if (!session) {
-        console.log(`[trigger] ❌ No secret configured and no session — rejecting unauthenticated trigger`);
-        return NextResponse.json({ success: false, error: 'Unauthorized: Configure a deployment secret in settings to use the direct trigger URL, or sign in to trigger manually.' }, { status: 401 });
-      }
     }
 
     if (!config.deployCommand?.trim()) {

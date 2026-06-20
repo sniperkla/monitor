@@ -62,7 +62,7 @@ export default function SSHApp({ windowId }) {
         onClick={() => dispatch({ type: 'TOGGLE_SIDEBAR' })}
         className={`absolute top-1/2 -translate-y-1/2 z-[100] w-6 h-16 flex flex-col items-center justify-center bg-[var(--bg-tertiary)] border border-[var(--border-color)] rounded-r-xl transition-all duration-300 shadow-[4px_0_15px_rgba(0,0,0,0.5)] group overflow-hidden ${state.sidebarOpen ? 'opacity-30 hover:opacity-100 hover:w-7' : 'opacity-100 w-8 bg-[var(--accent-indigo)] border-l-transparent'}`}
         style={{ 
-          left: state.sidebarOpen ? '320px' : '0', 
+          left: state.sidebarOpen ? '360px' : '0', 
           marginLeft: '-1px',
         }}
         title={state.sidebarOpen ? 'Collapse Sidebar' : 'Expand Sidebar'}

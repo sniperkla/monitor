@@ -1,6 +1,6 @@
 'use client';
 
-import { createContext, useContext, useState, useCallback, useEffect } from 'react';
+import { createContext, useContext, useState, useCallback, useEffect, useRef } from 'react';
 import { useSession } from 'next-auth/react';
 import { encryptWithPassword, decryptWithPassword, hashPassword } from '@/utils/clientCrypto';
 
@@ -27,6 +27,20 @@ export function VaultProvider({ children }) {
   const [legacyUri, setLegacyUri] = useState('');
   const [isDismissed, setIsDismissed] = useState(false);
   const [error, setError] = useState('');
+  const prevUserIdRef = useRef(null);
+
+  // Clear stale vault cache when user changes (different account login)
+  useEffect(() => {
+    const currentUserId = session?.user?.id || session?.user?.email || null;
+    if (prevUserIdRef.current !== null && prevUserIdRef.current !== currentUserId) {
+      sessionStorage.removeItem('_vault_uri');
+      sessionStorage.removeItem('_vault_tunnel');
+      setDecryptedUri('');
+      setDecryptedTunnel(null);
+      setVaultData(null);
+    }
+    prevUserIdRef.current = currentUserId;
+  }, [session]);
 
   // Fetch vault data when user status changes
   useEffect(() => {

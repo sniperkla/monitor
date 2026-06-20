@@ -1,4 +1,6 @@
 import { NextResponse } from 'next/server';
+import { getServerSession } from 'next-auth/next';
+import { authOptions } from '@/lib/auth';
 import connectDB from '@/lib/mongodb';
 import SystemSetting from '@/models/SystemSetting';
 
@@ -6,6 +8,11 @@ import SystemSetting from '@/models/SystemSetting';
 const sseClients = new Map();
 
 export async function GET(request) {
+  const session = await getServerSession(authOptions);
+  if (!session?.user?.email) {
+    return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
+  }
+
   const { searchParams } = new URL(request.url);
   const projectId = searchParams.get('project') || 'default';
 

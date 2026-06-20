@@ -103,6 +103,18 @@ export const authOptions = {
       // Do not spread settings here either
       return session;
     },
+
+    /**
+     * redirect — validate callbackUrl to prevent open redirects
+     */
+    async redirect({ url, baseUrl }) {
+      // Allows relative callback URLs
+      if (url.startsWith('/')) return `${baseUrl}${url}`;
+      // Allows callback URLs on the same origin
+      if (new URL(url).origin === baseUrl) return url;
+      // Reject all other URLs (prevents open redirect to external sites)
+      return baseUrl;
+    },
   },
   session: {
     strategy: "jwt",

@@ -1,4 +1,6 @@
 import { NextResponse } from 'next/server';
+import { getServerSession } from 'next-auth/next';
+import { authOptions } from '@/lib/auth';
 import { Client } from 'ssh2';
 import connectDB from '@/lib/mongodb';
 import { ConnectionRepository } from '@/lib/repositories/ConnectionRepository';
@@ -10,6 +12,11 @@ import { attachRequestUserId, isRelayConnectionError } from '@/lib/requestUser';
 // POST test connection
 export async function POST(request, { params }) {
   try {
+    const session = await getServerSession(authOptions);
+    if (!session?.user?.email) {
+      return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
+    }
+
     // Rate limiting
     const clientIP = request.headers.get('x-forwarded-for') || 'unknown';
     const rateCheck = checkRateLimit(`test:${clientIP}`, 20); // Max 20 tests per minute
@@ -124,7 +131,8 @@ function testSSHConnection(config) {
 
     conn.on('ready', () => {
       clearTimeout(timeout);
-      conn.exec('uptime', (err, stream) => {
+      // Gather system info: OS, CPU, RAM, uptime
+      conn.exec('uname -srm && nproc && free -m 2>/dev/null || sysctl -n hw.memsize 2>/dev/null && uptime', (err, stream) => {
         if (err) {
           conn.end();
           resolve({ success: true, info: 'Connected' });
@@ -134,7 +142,33 @@ function testSSHConnection(config) {
         stream.on('data', (data) => output += data.toString());
         stream.on('close', () => {
           conn.end();
-          resolve({ success: true, info: output.trim() || 'Connected' });
+          const lines = output.trim().split('\n');
+          const osInfo = lines[0] || '';
+          const cpuCores = lines[1] || '';
+          const memLine = lines[2] || '';
+          const uptimeLine = lines[3] || '';
+
+          // Parse RAM (Linux: free -m shows "Mem: total used free...")
+          let ram = '';
+          if (memLine.includes('Mem:')) {
+            const parts = memLine.split(/\s+/);
+            const total = parseInt(parts[1]);
+            if (total > 1024) ram = `${(total / 1024).toFixed(1)}GB`;
+            else ram = `${total}MB`;
+          } else if (memLine.match(/^\d+$/)) {
+            // macOS: sysctl returns bytes
+            const bytes = parseInt(memLine);
+            ram = `${(bytes / 1024 / 1024 / 1024).toFixed(1)}GB`;
+          }
+
+          const info = [
+            osInfo,
+            cpuCores ? `${cpuCores} cores` : '',
+            ram ? `${ram} RAM` : '',
+            uptimeLine
+          ].filter(Boolean).join(' | ');
+
+          resolve({ success: true, info: info || 'Connected', specs: { os: osInfo, cpu: cpuCores, ram, uptime: uptimeLine } });
         });
       });
     });

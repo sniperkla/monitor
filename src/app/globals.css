@@ -695,8 +695,8 @@
   --border-color: rgba(255, 255, 255, 0.1);
   --border-hover: rgba(255, 255, 255, 0.2);
   --text-primary: #f1f5f9;
-  --text-secondary: #94a3b8;
-  --text-muted: #64748b;
+  --text-secondary: #b0bec5;
+  --text-muted: #8a9bb0;
   --accent-indigo: #ff2d96;
   --accent-indigo-hover: #ff5aba;
   --accent-emerald: #0affcd;
@@ -897,7 +897,7 @@
 .synthwave label,
 .synthwave .text-\[var\(--text-muted\)\],
 .synthwave span[class*="text-muted"] {
-  color: #64748b !important;
+  color: #8a9bb0 !important;
   text-shadow: none;
 }
 
@@ -1364,8 +1364,8 @@ body {
 .sidebar {
   background: var(--bg-card);
   border-right: 1px solid var(--border-color);
-  width: 280px;
-  min-width: 280px;
+  width: 360px;
+  min-width: 360px;
   height: 100%;
   overflow: hidden;
   transition: all 0.3s ease;
@@ -1617,7 +1617,7 @@ body {
 @media (max-width: 768px) {
   .sidebar {
     position: fixed;
-    left: -280px;
+    left: -360px;
     z-index: 50;
   }
 

@@ -6,7 +6,7 @@ import {
   Database, CheckCircle, AlertCircle, RefreshCw, Zap, Wifi, WifiOff, 
   Loader, Trash2, Lock, Unlock, Key, Mail, Code, Volume2, Sun, Moon, Cpu,
   Search, Terminal, Network, Download, Copy, X, CheckCheck, Sparkles,
-  GitBranch, ChevronDown, Settings, Send, Music
+  GitBranch, ChevronDown, Settings, Send, Music, ChevronRight, Globe, LogOut
 } from 'lucide-react';
 import { useOS } from '@/context/OSContext';
 import { useApp } from '@/context/AppContext';
@@ -16,6 +16,85 @@ import { useTranslation } from 'react-i18next';
 
 import { motion, AnimatePresence } from 'framer-motion';
 import ShortcutInput from '@/components/Desktop/ShortcutInput';
+
+/* ─── Production-grade reusable UI primitives ─── */
+
+function SettingsCard({ children, className = '', noPad = false }) {
+  return (
+    <div className={`rounded-2xl bg-[var(--bg-card)] border border-[var(--border-color)] shadow-sm ${noPad ? '' : 'p-5'} ${className}`}>
+      {children}
+    </div>
+  );
+}
+
+function SettingsSectionTitle({ icon: Icon, iconColor = 'text-indigo-400', title, description }) {
+  return (
+    <div className="mb-6">
+      <div className="flex items-center gap-3 mb-1">
+        {Icon && (
+          <div className="w-9 h-9 rounded-xl bg-[var(--bg-tertiary)] flex items-center justify-center shrink-0">
+            <Icon size={18} className={iconColor} />
+          </div>
+        )}
+        <h2 className="text-lg font-bold text-[var(--text-primary)] tracking-tight">{title}</h2>
+      </div>
+      {description && <p className="text-xs text-[var(--text-muted)] mt-1.5 ml-12 leading-relaxed">{description}</p>}
+    </div>
+  );
+}
+
+function Toggle({ value, onChange, accent = 'indigo' }) {
+  const colors = {
+    indigo: 'bg-indigo-500',
+    emerald: 'bg-emerald-500',
+    amber: 'bg-amber-500',
+    rose: 'bg-rose-500',
+    blue: 'bg-blue-500',
+  };
+  return (
+    <button
+      type="button"
+      onClick={onChange}
+      className={`relative w-11 h-6 rounded-full transition-colors duration-200 cursor-pointer ${value ? colors[accent] || colors.indigo : 'bg-[var(--bg-tertiary)]'}`}
+      style={{ border: value ? 'none' : '1px solid var(--border-color)' }}
+    >
+      <span className={`absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full shadow-md transition-transform duration-200 ${value ? 'translate-x-5' : 'translate-x-0'}`} />
+    </button>
+  );
+}
+
+function PillButton({ active, onClick, children, accent = 'indigo', className = '' }) {
+  const accents = {
+    indigo: active ? 'bg-indigo-500/15 border-indigo-500/50 text-indigo-400 shadow-sm shadow-indigo-500/10' : '',
+    emerald: active ? 'bg-emerald-500/15 border-emerald-500/50 text-emerald-400 shadow-sm shadow-emerald-500/10' : '',
+    amber: active ? 'bg-amber-500/15 border-amber-500/50 text-amber-400 shadow-sm shadow-amber-500/10' : '',
+    rose: active ? 'bg-rose-500/15 border-rose-500/50 text-rose-400 shadow-sm shadow-rose-500/10' : '',
+  };
+  return (
+    <button
+      onClick={onClick}
+      className={`px-4 py-2.5 rounded-xl text-xs font-semibold border transition-all duration-150 cursor-pointer ${
+        active
+          ? accents[accent] || accents.indigo
+          : 'bg-[var(--bg-tertiary)] border-[var(--border-color)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-card-hover)]'
+      } ${className}`}
+    >
+      {children}
+    </button>
+  );
+}
+
+function SettingRow({ label, description, children, noBorder = false }) {
+  return (
+    <div className={`flex items-center justify-between gap-4 py-4 ${noBorder ? '' : 'border-b border-[var(--border-color)]/50'}`}>
+      <div className="min-w-0 flex-1">
+        <span className="block text-sm font-medium text-[var(--text-primary)]">{label}</span>
+        {description && <span className="block text-[11px] text-[var(--text-muted)] mt-0.5 leading-relaxed">{description}</span>}
+      </div>
+      <div className="shrink-0">{children}</div>
+    </div>
+  );
+}
 
 const WALLPAPERS = [
   { id: 'space', name: 'Space Earth', url: 'https://images.unsplash.com/photo-1451187580459-43490279c0fa?q=80&w=2072&auto=format&fit=crop' },
@@ -798,90 +877,115 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
       {!deploymentOnly && (
         <div className={`
           ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'}
-          fixed md:relative z-20 md:z-0 w-52 border-r border-[var(--border-color)] p-4 flex flex-col shrink-0 h-full overflow-y-auto custom-scrollbar transition-transform duration-300 bg-transparent
+          fixed md:relative z-20 md:z-0 w-64 border-r border-[var(--border-color)] flex flex-col shrink-0 h-full overflow-y-auto custom-scrollbar transition-transform duration-300 bg-[var(--bg-secondary)]/60 backdrop-blur-xl
         `}>
         {/* User Profile Section */}
-        <div className="mb-8 px-2">
+        <div className="p-4 border-b border-[var(--border-color)]/60">
           {session ? (
             <div className="space-y-3">
               <div className="flex items-center gap-3">
-                <img 
-                  src={session.user.image || `https://ui-avatars.com/api/?name=${encodeURIComponent(session.user.name)}&background=6366f1&color=fff`} 
-                  className="w-10 h-10 rounded-full border border-[var(--border-color)] object-cover" 
-                  alt="Avatar" 
-                  onError={(e) => {
-                  if (e.target.src.includes('ui-avatars.com')) {
-                    e.target.onerror = null;
-                    e.target.src = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%236366f1'%3E%3Cpath d='M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z'/%3E%3C/svg%3E";
-                  } else {
-                    e.target.src = `https://ui-avatars.com/api/?name=${encodeURIComponent(session.user.name)}&background=6366f1&color=fff`;
-                  }
-                }} 
-
-                />
-                <div className="min-w-0">
-                  <p className="text-xs font-bold truncate text-[var(--text-primary)]">{session.user.name}</p>
+                <div className="relative">
+                  <img 
+                    src={session.user.image || `https://ui-avatars.com/api/?name=${encodeURIComponent(session.user.name)}&background=6366f1&color=fff`} 
+                    className="w-10 h-10 rounded-xl border border-[var(--border-color)] object-cover" 
+                    alt="Avatar" 
+                    onError={(e) => {
+                    if (e.target.src.includes('ui-avatars.com')) {
+                      e.target.onerror = null;
+                      e.target.src = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%236366f1'%3E%3Cpath d='M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z'/%3E%3C/svg%3E";
+                    } else {
+                      e.target.src = `https://ui-avatars.com/api/?name=${encodeURIComponent(session.user.name)}&background=6366f1&color=fff`;
+                    }
+                  }} 
+                  />
+                  <div className={`absolute -bottom-0.5 -right-0.5 w-3.5 h-3.5 rounded-full border-2 border-[var(--bg-secondary)] ${
+                    vaultStatus === 'unlocked' ? 'bg-emerald-400' : vaultStatus === 'locked' ? 'bg-amber-400' : 'bg-gray-400'
+                  }`} />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-semibold truncate text-[var(--text-primary)]">{session.user.name}</p>
                   <p className="text-[10px] text-[var(--text-muted)] truncate">{session.user.email}</p>
                 </div>
               </div>
-              {/* Vault Status Badge */}
-              <div className={`flex items-center gap-2 text-[10px] font-bold px-2 py-1 rounded-lg ${
-                vaultStatus === 'unlocked' 
-                  ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-400'
-                  : vaultStatus === 'locked' 
-                  ? 'bg-amber-500/10 text-amber-700 dark:text-amber-400'
-                  : 'bg-gray-500/10 text-gray-700 dark:text-[var(--text-muted)]'
+              <div className={`flex items-center gap-2 px-2.5 py-1.5 rounded-lg border ${
+                vaultStatus === 'unlocked'
+                  ? 'bg-emerald-500/8 border-emerald-500/15'
+                  : vaultStatus === 'locked'
+                  ? 'bg-amber-500/8 border-amber-500/15'
+                  : 'bg-[var(--bg-tertiary)]/50 border-[var(--border-color)]'
               }`}>
-                {vaultStatus === 'unlocked' ? (
-                  <><Unlock size={10} /> {t('settings_ui.vaultStatus.unlocked')}</>
-                ) : vaultStatus === 'locked' ? (
-                  <><Lock size={10} /> {t('settings_ui.vaultStatus.locked')}</>
-                ) : (
-                  <><Shield size={10} /> {t('settings_ui.vaultStatus.none')}</>
-                )}
+                <div className={`w-5 h-5 rounded flex items-center justify-center shrink-0 ${
+                  vaultStatus === 'unlocked'
+                    ? 'bg-emerald-500/15 text-emerald-400'
+                    : vaultStatus === 'locked'
+                    ? 'bg-amber-500/15 text-amber-400'
+                    : 'bg-[var(--bg-tertiary)] text-[var(--text-muted)]'
+                }`}>
+                  {vaultStatus === 'unlocked' ? (
+                    <Unlock size={10} />
+                  ) : vaultStatus === 'locked' ? (
+                    <Lock size={10} />
+                  ) : (
+                    <Shield size={10} />
+                  )}
+                </div>
+                <span className={`flex-1 text-[11px] font-medium truncate ${
+                  vaultStatus === 'unlocked'
+                    ? 'text-emerald-400'
+                    : vaultStatus === 'locked'
+                    ? 'text-amber-400'
+                    : 'text-[var(--text-muted)]'
+                }`}>
+                  {vaultStatus === 'unlocked'
+                    ? t('settings_ui.vaultStatus.unlocked')
+                    : vaultStatus === 'locked'
+                    ? t('settings_ui.vaultStatus.locked')
+                    : t('settings_ui.vaultStatus.none')
+                  }
+                </span>
+                <button
+                  onClick={async () => {
+                    try { await saveSettings(); } catch(e) { console.error(e); }
+                    sessionStorage.removeItem('_vault_uri');
+                    sessionStorage.removeItem('_vault_tunnel');
+                    signOut();
+                  }}
+                  className="shrink-0 p-1 rounded text-[var(--text-muted)] hover:text-red-400 hover:bg-red-500/10 transition-all"
+                  title={t('common.logout')}
+                >
+                  <LogOut size={10} />
+                </button>
               </div>
-              <button 
-                onClick={async () => {
-                  try {
-                    await saveSettings();
-                  } catch(e) { console.error(e); }
-                  signOut();
-                }}
-                className="w-full text-left text-[10px] font-bold text-red-400/70 hover:text-red-400 transition-colors flex items-center gap-2"
-              >
-                <div className="w-1.5 h-1.5 rounded-full bg-red-400" />
-                {t('common.logout')}
-              </button>
             </div>
           ) : (
             <div className="space-y-3">
-              <p className="text-[10px] font-bold text-[var(--text-secondary)] uppercase tracking-widest">{t('common.login')}</p>
               <button 
                 onClick={() => signIn('google')}
-                className="w-full py-2 px-3 rounded-xl bg-[var(--bg-tertiary)] text-[var(--text-primary)] text-xs font-bold border border-[var(--border-color)] hover:bg-[var(--bg-card-hover)] transition-all flex items-center justify-center gap-2 shadow-sm"
+                className="w-full py-2.5 px-3 rounded-xl bg-[var(--bg-tertiary)] text-[var(--text-primary)] text-xs font-semibold border border-[var(--border-color)] hover:bg-[var(--bg-card-hover)] transition-all flex items-center justify-center gap-2"
               >
                 <img src="https://lh3.googleusercontent.com/COxitqgJr1sJnIDe8-jiKhxDx1FrYbtRHKJ9z_hELisAlapwE9LUPh6fcXIfb5vwpbMl4xl9H9TRFPc5NOO8Sb3VSgIBrfRYvW6cUA" className="w-4 h-4" alt="Google" />
                 {t('common.login')}
               </button>
-              <p className="text-[9px] text-center text-[var(--text-secondary)] px-1">{t('vault.setupDescription')}</p>
+              <p className="text-[9px] text-center text-[var(--text-muted)] px-1">{t('vault.setupDescription')}</p>
             </div>
           )}
         </div>
 
-        <h2 className="text-xs font-bold text-[var(--text-muted)] uppercase tracking-wider mb-4 px-2">{t('common.settings')}</h2>
-        <div className="space-y-1">
+        {/* Navigation */}
+        <div className="flex-1 p-3 space-y-0.5">
+          <p className="text-[10px] font-semibold text-[var(--text-muted)] uppercase tracking-wider px-3 py-2">{t('common.settings')}</p>
           {[
-            { id: 'appearance', label: t('settings.appearanceTitle'), icon: Palette, color: 'text-indigo-400', desc: t('settings.appearanceDesc') },
-            { id: 'terminal', label: t('settings_ui.terminal.title') || 'Terminal', icon: Terminal, color: 'text-emerald-400', desc: t('settings_ui.terminal.desc') },
-
-            { id: 'database', label: t('settings.databaseTitle'), icon: Database, color: 'text-purple-400', desc: t('settings.databaseDesc'), requireLogin: true },
-            { id: 'display', label: t('settings_ui.display.title'), icon: Monitor, color: 'text-blue-400', desc: t('settings_ui.display.desc') },
-            { id: 'notifications', label: t('settings_ui.notifications.title'), icon: Bell, color: 'text-amber-400', desc: t('settings_ui.notifications.desc') },
-            { id: 'privacy', label: t('settings_ui.privacy.title'), icon: Shield, color: 'text-emerald-400', desc: t('settings_ui.privacy.desc') },
-            { id: 'keyboard', label: t('settings_ui.keyboard.title') || 'Shortcuts', icon: Key, color: 'text-rose-400', desc: t('settings_ui.keyboard.desc') || 'Manage system shortcuts' },
-            { id: 'about', label: t('common.about'), icon: Info, color: 'text-[var(--text-muted)]', desc: t('settings_ui.about.desc') },
+            { id: 'appearance', label: t('settings.appearanceTitle'), icon: Palette, color: 'text-indigo-400', bg: 'bg-indigo-500/10' },
+            { id: 'terminal', label: t('settings_ui.terminal.title') || 'Terminal', icon: Terminal, color: 'text-emerald-400', bg: 'bg-emerald-500/10' },
+            { id: 'display', label: t('settings_ui.display.title'), icon: Monitor, color: 'text-blue-400', bg: 'bg-blue-500/10' },
+            { id: 'notifications', label: t('settings_ui.notifications.title'), icon: Bell, color: 'text-amber-400', bg: 'bg-amber-500/10' },
+            { id: 'database', label: t('settings.databaseTitle'), icon: Database, color: 'text-purple-400', bg: 'bg-purple-500/10', requireLogin: true },
+            { id: 'privacy', label: t('settings_ui.privacy.title'), icon: Shield, color: 'text-emerald-400', bg: 'bg-emerald-500/10' },
+            { id: 'keyboard', label: t('settings_ui.keyboard.title') || 'Shortcuts', icon: Key, color: 'text-rose-400', bg: 'bg-rose-500/10' },
+            { id: 'about', label: t('common.about'), icon: Info, color: 'text-[var(--text-muted)]', bg: 'bg-[var(--bg-tertiary)]' },
           ].map(tab => {
             const isDisabled = tab.requireLogin && !session;
+            const isActive = activeTab === tab.id;
             return (
               <button
                 key={tab.id}
@@ -892,19 +996,25 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
                   }
                 }}
                 disabled={isDisabled}
-                className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg transition-all ${
-                  activeTab === tab.id
+                className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl transition-all duration-150 relative ${
+                  isActive
                     ? 'bg-[var(--glow-indigo)] text-[var(--accent-indigo)] font-semibold'
                     : isDisabled
-                    ? 'text-[var(--text-muted)] cursor-not-allowed opacity-50'
+                    ? 'text-[var(--text-muted)] cursor-not-allowed opacity-40'
                     : 'text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]'
                 }`}
               >
-                <tab.icon size={16} className={activeTab === tab.id ? 'text-[var(--accent-indigo)]' : ''} />
-                <span className="text-sm font-medium truncate">{tab.label}</span>
-                {isDisabled && (
-                  <span className="ml-auto text-[8px] text-amber-700 dark:text-amber-400 font-bold bg-amber-500/10 px-1.5 py-0.5 rounded">{t('vault.loginBtn').toUpperCase()}</span>
+                {isActive && (
+                  <div className="absolute left-0 top-1/2 -translate-y-1/2 w-[3px] h-5 rounded-r-full bg-indigo-500" />
                 )}
+                <div className={`w-7 h-7 rounded-lg flex items-center justify-center ${isActive ? tab.bg : 'bg-transparent'}`}>
+                  <tab.icon size={15} className={isActive ? tab.color : ''} />
+                </div>
+                <span className="text-[13px] truncate">{tab.label}</span>
+                {isDisabled && (
+                  <span className="ml-auto text-[8px] font-bold text-amber-400 bg-amber-500/10 px-1.5 py-0.5 rounded">{t('vault.loginBtn').toUpperCase()}</span>
+                )}
+                {isActive && <ChevronRight size={12} className="ml-auto opacity-40" />}
               </button>
             );
           })}
@@ -921,13 +1031,13 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
       )}
 
       {/* Content */}
-      <div className="flex-1 overflow-y-auto h-full p-4 md:p-8 pb-28 custom-scrollbar">
+      <div className={`flex-1 overflow-y-auto h-full pb-28 custom-scrollbar ${deploymentOnly ? 'p-6 md:p-10 lg:p-12' : 'p-4 md:p-8'}`}>
         {/* Mobile Header */}
         {!deploymentOnly && (
           <div className="flex items-center gap-3 mb-6 md:hidden">
             <button 
               onClick={() => setIsSidebarOpen(true)}
-              className="p-2 rounded-lg bg-[var(--bg-tertiary)] border border-[var(--border-color)]"
+              className="p-2.5 rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)]"
             >
               <Layout size={18} />
             </button>
@@ -938,342 +1048,207 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
         )}
 
         {activeTab === 'appearance' && (
-          <div className="max-w-2xl animate-in fade-in slide-in-from-bottom-2 duration-300">
-            <h1 className="text-2xl font-bold mb-2 text-[var(--text-primary)]">{t('settings.appearanceTitle')}</h1>
-            <p className="text-[var(--text-secondary)] text-sm mb-8">{t('settings.appearanceDesc')}</p>
+          <div className="max-w-3xl animate-in fade-in slide-in-from-bottom-2 duration-300">
+            <SettingsSectionTitle icon={Palette} iconColor="text-indigo-400" title={t('settings.appearanceTitle')} description={t('settings.appearanceDesc')} />
 
             <section className="space-y-6">
-              <div>
-                <h3 className="text-sm font-semibold mb-4 flex items-center gap-2">
-                  <ImageIcon size={16} className="text-indigo-400" />
-                  {t('settings.wallpaper')}
-                </h3>
-                <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
-                  {/* Preset Wallpapers */}
+              {/* Wallpaper */}
+              <SettingsCard>
+                <div className="flex items-center gap-2 mb-4">
+                  <ImageIcon size={15} className="text-indigo-400" />
+                  <h3 className="text-sm font-semibold text-[var(--text-primary)]">{t('settings.wallpaper')}</h3>
+                </div>
+                <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
                   {WALLPAPERS.map(wp => {
                     const isActive = osState.wallpaper === wp.url;
                     return (
                       <div 
                         key={wp.id}
-                        className={`group relative h-28 rounded-xl overflow-hidden cursor-pointer border-2 transition-all shadow-lg ${
+                        className={`group relative h-24 rounded-xl overflow-hidden cursor-pointer border-2 transition-all ${
                           isActive 
-                            ? 'border-indigo-500 ring-2 ring-indigo-500/30' 
-                            : 'border-transparent hover:border-indigo-500'
+                            ? 'border-indigo-500 ring-2 ring-indigo-500/20 shadow-lg shadow-indigo-500/10' 
+                            : 'border-transparent hover:border-indigo-500/50'
                         }`}
                         onClick={() => handleSetWallpaper(wp.url)}
                       >
-                        <img src={wp.url} alt={wp.name} className="w-full h-full object-cover transition-transform group-hover:scale-110 duration-500" />
-                        <div className={`absolute inset-0 bg-black/40 flex items-center justify-center transition-opacity ${isActive ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}>
-                          {isActive && <CheckCircle size={24} className="text-white drop-shadow-lg mb-4" />}
-                          {!isActive && <span className="text-xs font-bold bg-indigo-500 px-2 py-1 rounded shadow text-white pointer-events-none">{t('settings_ui.appearance.apply')}</span>}
-                        </div>
-                        <div className="absolute bottom-0 left-0 right-0 p-2 bg-gradient-to-t from-black/80 to-transparent">
-                          <span className="text-[10px] font-medium text-white opacity-90">{wp.name}</span>
+                        <img src={wp.url} alt={wp.name} className="w-full h-full object-cover transition-transform group-hover:scale-105 duration-300" />
+                        <div className={`absolute inset-0 bg-gradient-to-t from-black/70 via-transparent to-transparent flex items-end justify-between p-2.5 transition-opacity ${isActive ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}>
+                          <span className="text-[10px] font-semibold text-white">{wp.name}</span>
+                          {isActive && <CheckCircle size={16} className="text-indigo-300" />}
                         </div>
                       </div>
                     );
                   })}
-
-                  {/* Custom Wallpapers (Persistent) */}
                   {osState.customWallpapers?.map((url, idx) => {
                     const isActive = osState.wallpaper === url;
                     return (
                       <div 
                         key={`custom-${idx}`}
-                        className={`group relative h-28 rounded-xl overflow-hidden cursor-pointer border-2 transition-all shadow-lg ${
-                          isActive 
-                            ? 'border-indigo-500 ring-2 ring-indigo-500/30' 
-                            : 'border-[var(--border-color)] hover:border-[var(--border-hover)]'
+                        className={`group relative h-24 rounded-xl overflow-hidden cursor-pointer border-2 transition-all ${
+                          isActive ? 'border-indigo-500 ring-2 ring-indigo-500/20' : 'border-[var(--border-color)] hover:border-indigo-500/50'
                         }`}
                         onClick={() => handleSetWallpaper(url)}
                       >
-                        <img src={url} alt="Custom" className="w-full h-full object-cover transition-transform group-hover:scale-110 duration-500" />
-                        
-                        {/* Overlay Actions */}
-                        <div className={`absolute inset-0 bg-black/40 flex items-center justify-center transition-opacity ${isActive ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}>
-                           {isActive ? (
-                             <CheckCircle size={24} className="text-white drop-shadow-lg mb-4" />
-                           ) : (
-                             <span className="text-xs font-bold bg-indigo-500 px-2 py-1 rounded shadow text-white pointer-events-none">{t('settings_ui.appearance.apply')}</span>
-                           )}
-                           
-                           {/* Delete Button */}
-                           <button 
-                             onClick={(e) => {
-                               e.stopPropagation();
-                               removeCustomWallpaper(url);
-                             }}
-                             className="absolute top-2 right-2 p-1.5 bg-red-500/80 hover:bg-red-500 text-white rounded-lg transition-colors shadow-lg"
-                             title={t('common.delete')}
-                           >
-                             <Trash2 size={12} />
-                           </button>
-                        </div>
-                        
-                        <div className="absolute bottom-0 left-0 right-0 p-2 bg-gradient-to-t from-black/80 to-transparent">
-                          <span className="text-[10px] font-medium text-white opacity-90">{t('settings_ui.appearance.customUrl')} #{idx + 1}</span>
+                        <img src={url} alt="Custom" className="w-full h-full object-cover transition-transform group-hover:scale-105 duration-300" />
+                        <div className={`absolute inset-0 bg-gradient-to-t from-black/70 via-transparent to-transparent flex items-end justify-between p-2.5 transition-opacity ${isActive ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}>
+                          <span className="text-[10px] font-semibold text-white">Custom #{idx + 1}</span>
+                          <div className="flex items-center gap-1.5">
+                            {isActive && <CheckCircle size={14} className="text-indigo-300" />}
+                            <button 
+                              onClick={(e) => { e.stopPropagation(); removeCustomWallpaper(url); }}
+                              className="p-1 bg-red-500/80 hover:bg-red-500 text-white rounded-md transition-colors"
+                            >
+                              <Trash2 size={10} />
+                            </button>
+                          </div>
                         </div>
                       </div>
                     );
                   })}
-
-                  {/* Add New Custom URL Card */}
                   {showCustomInput ? (
-                    <div className="h-28 rounded-xl bg-[var(--bg-tertiary)] border border-indigo-500/50 p-2 flex flex-col gap-2 animate-in fade-in zoom-in-95 duration-200">
+                    <div className="h-24 rounded-xl bg-[var(--bg-tertiary)] border border-indigo-500/40 p-2.5 flex flex-col gap-2 animate-in fade-in duration-200">
                       <input
-                        autoFocus
-                        type="text"
-                        placeholder="https://images.unsplash.com/..."
-                        className="w-full bg-[var(--bg-primary)] border border-[var(--border-color)] rounded-lg px-2 py-1.5 text-[10px] text-[var(--text-primary)] focus:outline-none focus:border-indigo-500"
-                        value={customUrlInput}
-                        onChange={(e) => setCustomUrlInput(e.target.value)}
+                        autoFocus type="text" placeholder="https://images.unsplash.com/..."
+                        className="w-full bg-[var(--bg-primary)] border border-[var(--border-color)] rounded-lg px-2.5 py-1.5 text-[11px] text-[var(--text-primary)] focus:outline-none focus:border-indigo-500"
+                        value={customUrlInput} onChange={(e) => setCustomUrlInput(e.target.value)}
                         onKeyDown={(e) => {
-                          if (e.key === 'Enter') {
-                            if (customUrlInput) {
-                              addCustomWallpaper(customUrlInput);
-                              handleSetWallpaper(customUrlInput);
-                              setCustomUrlInput('');
-                            }
-                            setShowCustomInput(false);
-                          }
+                          if (e.key === 'Enter' && customUrlInput) { addCustomWallpaper(customUrlInput); handleSetWallpaper(customUrlInput); setCustomUrlInput(''); setShowCustomInput(false); }
                           if (e.key === 'Escape') setShowCustomInput(false);
                         }}
                       />
                       <div className="flex gap-1.5">
-                        <button 
-                          onClick={() => {
-                            if (customUrlInput) {
-                              addCustomWallpaper(customUrlInput);
-                              handleSetWallpaper(customUrlInput);
-                              setCustomUrlInput('');
-                            }
-                            setShowCustomInput(false);
-                          }}
-                          className="flex-1 py-1.5 bg-indigo-500 hover:bg-indigo-600 rounded-lg text-[10px] font-bold transition-colors"
-                        >
-                          {t('settings_ui.appearance.apply')}
-                        </button>
-                        <button 
-                          onClick={() => setShowCustomInput(false)}
-                          className="px-2 py-1.5 bg-[var(--bg-tertiary)] hover:bg-[var(--bg-card-hover)] rounded-lg text-[10px] font-bold border border-[var(--border-color)] transition-colors"
-                        >
-                          {t('common.cancel')}
-                        </button>
+                        <button onClick={() => { if (customUrlInput) { addCustomWallpaper(customUrlInput); handleSetWallpaper(customUrlInput); setCustomUrlInput(''); } setShowCustomInput(false); }} className="flex-1 py-1.5 bg-indigo-500 hover:bg-indigo-600 rounded-lg text-[10px] font-semibold text-white transition-colors">{t('settings_ui.appearance.apply')}</button>
+                        <button onClick={() => setShowCustomInput(false)} className="px-2 py-1.5 bg-[var(--bg-tertiary)] rounded-lg text-[10px] font-semibold border border-[var(--border-color)] transition-colors">{t('common.cancel')}</button>
                       </div>
                     </div>
                   ) : (
-                    <div 
-                      className="h-28 rounded-xl border-dashed border-2 border-[var(--border-color)] flex flex-col items-center justify-center hover:border-[var(--border-hover)] transition-all cursor-pointer group hover:bg-[var(--bg-card)]"
-                      onClick={() => setShowCustomInput(true)}
-                    >
-                      <PlusIcon size={20} className="text-[var(--text-secondary)] mb-1 group-hover:text-indigo-400 transition-colors" />
-                      <span className="text-[10px] text-[var(--text-secondary)] group-hover:text-[var(--text-muted)] transition-colors">{t('settings_ui.appearance.customUrl')}</span>
+                    <div className="h-24 rounded-xl border-2 border-dashed border-[var(--border-color)] flex flex-col items-center justify-center hover:border-indigo-500/40 transition-all cursor-pointer group" onClick={() => setShowCustomInput(true)}>
+                      <PlusIcon size={18} className="text-[var(--text-muted)] mb-1 group-hover:text-indigo-400 transition-colors" />
+                      <span className="text-[10px] text-[var(--text-muted)]">{t('settings_ui.appearance.customUrl')}</span>
                     </div>
                   )}
                 </div>
-              </div>
+              </SettingsCard>
 
-              <div className="pt-6 border-t border-[var(--border-color)]">
-                <h3 className="text-sm font-semibold mb-4 flex items-center gap-2">
-                  <Layout size={16} className="text-[var(--accent-emerald)]" />
-                  {t('settings.interfaceStyle')}
-                </h3>
-                <div className="grid grid-cols-2 gap-4">
-                  <div 
-                    className={`p-4 rounded-xl cursor-pointer transition-all border shadow-sm ${
-                      glassmorphism ? 'bg-[var(--glow-indigo)] border-[var(--accent-indigo)]' : 'bg-[var(--bg-card)] border-[var(--border-color)] hover:bg-[var(--bg-card-hover)]'
-                    } flex items-center justify-between`}
-                    onClick={() => setGlassmorphism(true)}
-                  >
-                    <div>
-                      <span className="block text-sm font-medium text-[var(--text-primary)]">{t('settings_ui.appearance.glassmorphism')}</span>
-                      <span className="text-[10px] text-[var(--text-muted)]">{t('settings_ui.appearance.glassmorphismDesc')}</span>
-                    </div>
-                    <div className={`w-10 h-6 rounded-full p-1 transition-colors cursor-pointer ${glassmorphism ? 'bg-[var(--accent-indigo)]' : 'bg-slate-300 dark:bg-slate-700'}`}>
-                      <div className={`w-4 h-4 bg-white rounded-full shadow-lg transition-transform ${glassmorphism ? 'translate-x-4' : 'translate-x-0'}`} />
-                    </div>
-                  </div>
-                  <div 
-                    className={`p-4 rounded-xl cursor-pointer transition-all border shadow-sm ${
-                      !glassmorphism ? 'bg-[var(--glow-indigo)] border-[var(--accent-indigo)]' : 'bg-[var(--bg-card)] border-[var(--border-color)] hover:bg-[var(--bg-card-hover)]'
-                    } flex items-center justify-between`}
-                    onClick={() => setGlassmorphism(false)}
-                  >
-                    <div>
-                      <span className="block text-sm font-medium text-[var(--text-primary)]">{t('settings_ui.appearance.opaqueMode')}</span>
-                      <span className="text-[10px] text-[var(--text-muted)]">{t('settings_ui.appearance.opaqueModeDesc')}</span>
-                    </div>
-                    <div className={`w-10 h-6 rounded-full p-1 transition-colors cursor-pointer ${!glassmorphism ? 'bg-[var(--accent-indigo)]' : 'bg-slate-300 dark:bg-slate-700'}`}>
-                      <div className={`w-4 h-4 bg-white rounded-full shadow-lg transition-transform ${!glassmorphism ? 'translate-x-4' : 'translate-x-0'}`} />
-                    </div>
-                  </div>
+              {/* Interface Style */}
+              <SettingsCard>
+                <SettingRow label={t('settings_ui.appearance.glassmorphism')} description={t('settings_ui.appearance.glassmorphismDesc')} noBorder>
+                  <Toggle value={glassmorphism} onChange={() => setGlassmorphism(!glassmorphism)} />
+                </SettingRow>
+              </SettingsCard>
+
+              {/* Icon Style */}
+              <SettingsCard>
+                <div className="flex items-center gap-2 mb-4">
+                  <Layout size={15} className="text-purple-400" />
+                  <h3 className="text-sm font-semibold text-[var(--text-primary)]">{t('settings_ui.appearance.iconStyle')}</h3>
                 </div>
-              </div>
-
-              <div className="pt-6 border-t border-[var(--border-color)]">
-                <h3 className="text-sm font-semibold mb-4 flex items-center gap-2">
-                  <Layout size={16} className="text-[var(--accent-purple)]" />
-                  {t('settings_ui.appearance.iconStyle')}
-                </h3>
-                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
-                  {[
-                    { id: 'glass' },
-                    { id: 'flat' },
-                    { id: 'neumorphic' },
-                    { id: 'outline' },
-                    { id: 'minimal' },
-                  ].map(style => (
-                    <button
-                      key={style.id}
-                      onClick={() => setIconStyle(style.id)}
-                      className={`p-3 rounded-xl border transition-all text-left flex flex-col justify-between h-full ${
-                        osState.iconStyle === style.id 
-                          ? 'bg-[var(--glow-indigo)] border-[var(--accent-indigo)] shadow-lg shadow-[var(--glow-indigo)]' 
-                          : 'bg-[var(--bg-card)] border-[var(--border-color)] hover:bg-[var(--bg-card-hover)]'
-                      }`}
-                    >
-                      <span className="block text-[11px] font-bold text-[var(--text-primary)] mb-1">{t(`settings_ui.appearance.styles.${style.id}`)}</span>
-                      <span className="text-[9px] text-[var(--text-muted)] leading-tight">{t(`settings_ui.appearance.styles.${style.id}Desc`)}</span>
+                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2">
+                  {['glass', 'flat', 'neumorphic', 'outline', 'minimal'].map(id => (
+                    <button key={id} onClick={() => setIconStyle(id)}
+                      className={`p-3 rounded-xl border transition-all text-center ${osState.iconStyle === id ? 'bg-indigo-500/10 border-indigo-500/40 shadow-sm' : 'bg-[var(--bg-tertiary)] border-[var(--border-color)] hover:bg-[var(--bg-card-hover)]'}`}>
+                      <span className="block text-[11px] font-semibold text-[var(--text-primary)]">{t(`settings_ui.appearance.styles.${id}`)}</span>
+                      <span className="block text-[9px] text-[var(--text-muted)] mt-0.5">{t(`settings_ui.appearance.styles.${id}Desc`)}</span>
                     </button>
                   ))}
                 </div>
-              </div>
+              </SettingsCard>
 
-              <div className="pt-6 border-t border-[var(--border-color)]">
-                <h3 className="text-sm font-semibold mb-4 flex items-center gap-2">
-                  <Palette size={16} className="text-[var(--accent-indigo)]" />
-                  {t('settings_ui.appearance.theme')}
-                </h3>
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+              {/* Theme */}
+              <SettingsCard>
+                <div className="flex items-center gap-2 mb-4">
+                  <Palette size={15} className="text-indigo-400" />
+                  <h3 className="text-sm font-semibold text-[var(--text-primary)]">{t('settings_ui.appearance.theme')}</h3>
+                </div>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
                   {[
                     { id: 'dark', label: t('settings_ui.appearance.themes.dark'), icon: Moon },
                     { id: 'retro', label: t('settings_ui.appearance.themes.retro'), icon: Cpu },
                     { id: 'cyberpunk', label: t('settings_ui.appearance.themes.cyberpunk') || 'Cyberpunk', icon: Zap },
                     { id: 'synthwave', label: 'Synthwave', icon: Music },
                   ].map(theme => (
-                    <button
-                      key={theme.id}
-                      onClick={() => {
-                        setTheme(theme.id);
-                        if (window.innerWidth < 768) setIsSidebarOpen(false);
-                      }}
-                      className={`p-4 rounded-xl border transition-all text-left flex flex-col justify-center items-start gap-2 h-full ${
-                        osState.theme === theme.id 
-                          ? 'bg-[var(--glow-indigo)] border-[var(--accent-indigo)]' 
-                          : 'bg-[var(--bg-card)] border-[var(--border-color)] hover:bg-[var(--bg-card-hover)]'
-                      }`}
-                    >
-                      <theme.icon size={20} className={osState.theme === theme.id ? 'text-[var(--accent-indigo)]' : 'text-[var(--text-muted)]'} />
-                      <span className="block text-sm font-bold truncate text-[var(--text-primary)] w-full">{theme.label}</span>
+                    <button key={theme.id} onClick={() => { setTheme(theme.id); if (window.innerWidth < 768) setIsSidebarOpen(false); }}
+                      className={`p-4 rounded-xl border transition-all flex flex-col items-center gap-2.5 ${osState.theme === theme.id ? 'bg-indigo-500/10 border-indigo-500/40' : 'bg-[var(--bg-tertiary)] border-[var(--border-color)] hover:bg-[var(--bg-card-hover)]'}`}>
+                      <theme.icon size={22} className={osState.theme === theme.id ? 'text-indigo-400' : 'text-[var(--text-muted)]'} />
+                      <span className="text-xs font-semibold text-[var(--text-primary)]">{theme.label}</span>
                     </button>
                   ))}
                 </div>
-              </div>
+              </SettingsCard>
 
-              <div className="pt-6 border-t border-[var(--border-color)]">
-                <h3 className="text-sm font-semibold mb-4 flex items-center gap-2">
-                  <Monitor size={16} className="text-[var(--accent-indigo)]" />
-                  {t('settings_ui.appearance.language')}
-                </h3>
-                <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+              {/* Language */}
+              <SettingsCard>
+                <div className="flex items-center gap-2 mb-4">
+                  <Globe size={15} className="text-blue-400" />
+                  <h3 className="text-sm font-semibold text-[var(--text-primary)]">{t('settings_ui.appearance.language')}</h3>
+                </div>
+                <div className="grid grid-cols-3 gap-2">
                   {[
-                    { code: 'en', label: 'English', sub: 'USA' },
-                    { code: 'th', label: 'ภาษาไทย', sub: 'TH' },
-                    { code: 'cn', label: '简体中文', sub: 'CN' },
+                    { code: 'en', label: 'English', flag: '🇺🇸' },
+                    { code: 'th', label: 'ภาษาไทย', flag: '🇹🇭' },
+                    { code: 'cn', label: '简体中文', flag: '🇨🇳' },
                   ].map(lang => (
-                    <button
-                      key={lang.code}
-                      onClick={() => setLanguage(lang.code)}
-                      className={`p-4 rounded-xl border transition-all text-left h-full ${
-                        i18n.language === lang.code 
-                          ? 'bg-[var(--glow-indigo)] border-[var(--accent-indigo)]' 
-                          : 'bg-[var(--bg-card)] border-[var(--border-color)] hover:bg-[var(--bg-card-hover)]'
-                      }`}
-                    >
-                      <span className="block text-sm font-bold truncate text-[var(--text-primary)]">{lang.label}</span>
-                      <span className="text-[10px] text-[var(--text-muted)] uppercase tracking-widest">{lang.sub}</span>
+                    <button key={lang.code} onClick={() => setLanguage(lang.code)}
+                      className={`p-3 rounded-xl border transition-all flex items-center gap-3 ${i18n.language === lang.code ? 'bg-indigo-500/10 border-indigo-500/40' : 'bg-[var(--bg-tertiary)] border-[var(--border-color)] hover:bg-[var(--bg-card-hover)]'}`}>
+                      <span className="text-lg">{lang.flag}</span>
+                      <span className="text-xs font-semibold text-[var(--text-primary)]">{lang.label}</span>
                     </button>
                   ))}
                 </div>
-              </div>
+              </SettingsCard>
 
-              {/* Taskbar Section (Merged from Personalization) */}
-              <div className="pt-6 border-t border-[var(--border-color)]">
-                <h3 className="text-sm font-semibold mb-4 flex items-center gap-2">
-                  <Layout size={16} className="text-indigo-400" />
-                  {t('settings_ui.personalization.taskbarTitle')}
-                </h3>
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+              {/* Taskbar Position */}
+              <SettingsCard>
+                <div className="flex items-center gap-2 mb-4">
+                  <Layout size={15} className="text-indigo-400" />
+                  <h3 className="text-sm font-semibold text-[var(--text-primary)]">{t('settings_ui.personalization.taskbarTitle')}</h3>
+                </div>
+                <div className="grid grid-cols-4 gap-2">
                   {['bottom', 'top', 'left', 'right'].map(pos => (
-                    <button
-                      key={pos}
-                      onClick={() => setTaskbarPosition(pos)}
-                      className={`py-3 rounded-xl text-xs font-bold border transition-all ${
-                        osState.taskbarPosition === pos
-                          ? 'bg-[var(--glow-indigo)] border-[var(--accent-indigo)] text-[var(--accent-indigo)]'
-                          : 'bg-[var(--bg-tertiary)] border-[var(--border-color)] text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-card-hover)]'
-                      }`}
-                    >
+                    <button key={pos} onClick={() => setTaskbarPosition(pos)}
+                      className={`py-2.5 rounded-xl text-xs font-semibold border transition-all capitalize ${osState.taskbarPosition === pos ? 'bg-indigo-500/10 border-indigo-500/40 text-indigo-400' : 'bg-[var(--bg-tertiary)] border-[var(--border-color)] text-[var(--text-secondary)] hover:text-[var(--text-primary)]'}`}>
                       {t(`settings_ui.personalization.positions.${pos}`)}
                     </button>
                   ))}
                 </div>
-              </div>
+              </SettingsCard>
 
-              {/* Window Layout Section */}
-              <div className="pt-6 border-t border-[var(--border-color)]">
-                <h3 className="text-sm font-semibold mb-4 flex items-center gap-2">
-                  <Monitor size={16} className="text-blue-400" />
-                  {t('settings_ui.personalization.windowLayoutTitle')}
-                </h3>
+              {/* Window Layout */}
+              <SettingsCard>
+                <div className="flex items-center gap-2 mb-4">
+                  <Monitor size={15} className="text-blue-400" />
+                  <h3 className="text-sm font-semibold text-[var(--text-primary)]">{t('settings_ui.personalization.windowLayoutTitle')}</h3>
+                </div>
                 <div className="grid grid-cols-2 gap-3">
                   {['mac', 'pc'].map(layout => (
-                    <button
-                      key={layout}
-                      onClick={() => setWindowLayout(layout)}
-                      className={`p-4 rounded-xl text-xs font-bold border transition-all flex flex-col items-center gap-2 ${
-                        osState.windowLayout === layout
-                          ? 'bg-[var(--glow-indigo)] border-[var(--accent-indigo)] text-[var(--accent-indigo)]'
-                          : 'bg-[var(--bg-tertiary)] border-[var(--border-color)] text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-card-hover)]'
-                      }`}
-                    >
-                      <div className={`w-full h-8 rounded-lg bg-black/20 flex items-center px-1.5 ${layout === 'mac' ? 'justify-start gap-1' : 'justify-end gap-1 flex-row-reverse'}`}>
-                        <div className={`w-1.5 h-1.5 rounded-full ${layout === 'mac' ? 'bg-[#ff5f57]' : 'bg-gray-400/50'}`} />
-                        <div className={`w-1.5 h-1.5 rounded-full ${layout === 'mac' ? 'bg-[#febc2e]' : 'bg-gray-400/50'}`} />
-                        <div className={`w-1.5 h-1.5 rounded-full ${layout === 'mac' ? 'bg-[#28c840]' : 'bg-gray-400/50'}`} />
+                    <button key={layout} onClick={() => setWindowLayout(layout)}
+                      className={`p-4 rounded-xl border transition-all flex flex-col items-center gap-2.5 ${osState.windowLayout === layout ? 'bg-indigo-500/10 border-indigo-500/40' : 'bg-[var(--bg-tertiary)] border-[var(--border-color)] hover:bg-[var(--bg-card-hover)]'}`}>
+                      <div className={`w-full h-7 rounded-lg bg-black/20 flex items-center px-2 gap-1 ${layout === 'mac' ? 'justify-start' : 'justify-end'}`}>
+                        <div className={`w-2 h-2 rounded-full ${layout === 'mac' ? 'bg-[#ff5f57]' : 'bg-gray-500/40'}`} />
+                        <div className={`w-2 h-2 rounded-full ${layout === 'mac' ? 'bg-[#febc2e]' : 'bg-gray-500/40'}`} />
+                        <div className={`w-2 h-2 rounded-full ${layout === 'mac' ? 'bg-[#28c840]' : 'bg-gray-500/40'}`} />
                       </div>
-                      {t(`settings_ui.personalization.windowLayouts.${layout}`)}
+                      <span className="text-xs font-semibold text-[var(--text-primary)]">{t(`settings_ui.personalization.windowLayouts.${layout}`)}</span>
                     </button>
                   ))}
                 </div>
-              </div>
+              </SettingsCard>
 
-              {/* Desktop Icon Size (Merged from Personalization) */}
-              <div className="pt-6 border-t border-[var(--border-color)]">
-                <h3 className="text-sm font-semibold mb-4 flex items-center gap-2">
-                  <Monitor size={16} className="text-emerald-400" />
-                  {t('settings_ui.personalization.desktopTitle')}
-                </h3>
-                <div className="flex gap-3">
-                  {[
-                    { id: 'small', size: 48 },
-                    { id: 'medium', size: 64 },
-                    { id: 'large', size: 80 },
-                  ].map(size => (
-                    <button
-                      key={size.id}
-                      onClick={() => setIconSize(size.id)}
-                      className={`flex-1 py-3 rounded-xl text-xs font-bold border transition-all ${
-                        osState.iconSize === size.id
-                          ? 'bg-emerald-500/10 border-emerald-500/50 text-emerald-400'
-                          : 'bg-[var(--bg-tertiary)] border-[var(--border-color)] text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-card-hover)]'
-                      }`}
-                    >
-                      {t(`desktop.context.icons.${size.id}`)}
+              {/* Desktop Icon Size */}
+              <SettingsCard>
+                <div className="flex items-center gap-2 mb-4">
+                  <Monitor size={15} className="text-emerald-400" />
+                  <h3 className="text-sm font-semibold text-[var(--text-primary)]">{t('settings_ui.personalization.desktopTitle')}</h3>
+                </div>
+                <div className="grid grid-cols-3 gap-2">
+                  {['small', 'medium', 'large'].map(size => (
+                    <button key={size} onClick={() => setIconSize(size)}
+                      className={`py-2.5 rounded-xl text-xs font-semibold border transition-all capitalize ${osState.iconSize === size ? 'bg-emerald-500/10 border-emerald-500/40 text-emerald-400' : 'bg-[var(--bg-tertiary)] border-[var(--border-color)] text-[var(--text-secondary)] hover:text-[var(--text-primary)]'}`}>
+                      {t(`desktop.context.icons.${size}`)}
                     </button>
                   ))}
                 </div>
-              </div>
+              </SettingsCard>
             </section>
           </div>
         )}
@@ -1281,134 +1256,98 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
 
         
         {activeTab === 'display' && (
-          <div className="max-w-2xl animate-in fade-in slide-in-from-bottom-2 duration-300">
-            <h1 className="text-2xl font-bold mb-2 text-[var(--text-primary)]">{t('settings_ui.display.title')}</h1>
-            <p className="text-[var(--text-secondary)] text-sm mb-8">{t('settings_ui.display.desc')}</p>
+          <div className="max-w-3xl animate-in fade-in slide-in-from-bottom-2 duration-300">
+            <SettingsSectionTitle icon={Monitor} iconColor="text-blue-400" title={t('settings_ui.display.title')} description={t('settings_ui.display.desc')} />
 
-            <section className="space-y-8">
-              {/* Actual Brightness Control */}
-              <div className="p-6 bg-[var(--bg-card)] border border-[var(--border-color)] rounded-2xl">
-                <div className="flex items-center justify-between mb-4">
-                  <h3 className="text-sm font-semibold flex items-center gap-2 text-[var(--text-primary)]">
-                    <Zap size={16} className="text-yellow-400" />
-                    {t('settings_ui.display.brightness')}
-                  </h3>
-                  <span className="text-xs text-[var(--text-muted)] font-mono">{brightness}%</span>
-                </div>
+            <section className="space-y-6">
+              <SettingsCard>
+                <SettingRow label={t('settings_ui.display.brightness')} description={t('settings_ui.display.brightnessDesc')}>
+                  <span className="text-xs font-mono text-[var(--text-muted)] w-10 text-right">{brightness}%</span>
+                </SettingRow>
                 <input 
-                  type="range"
-                  min="30"
-                  max="100"
-                  value={brightness}
+                  type="range" min="30" max="100" value={brightness}
                   onChange={(e) => setBrightness(parseInt(e.target.value))}
-                  className="w-full h-1.5 bg-[var(--bg-tertiary)] rounded-full appearance-none cursor-pointer accent-indigo-500 mb-6"
+                  className="w-full h-1.5 bg-[var(--bg-tertiary)] rounded-full appearance-none cursor-pointer accent-indigo-500 mt-2"
                 />
-                <div className="p-3 bg-[var(--bg-tertiary)]/50 rounded-xl border border-[var(--border-color)] flex items-center gap-3">
-                   <Info size={14} className="text-[var(--text-muted)]" />
-                   <p className="text-[10px] text-[var(--text-muted)] italic">{t('settings_ui.display.brightnessDesc')}</p>
-                </div>
-              </div>
+              </SettingsCard>
 
-              {/* UI Scaling (Realistic Resolution Replacement) */}
-              <div className="p-6 bg-[var(--bg-card)] border border-[var(--border-color)] rounded-2xl">
-                <h4 className="text-[10px] font-bold text-[var(--text-muted)] uppercase tracking-widest mb-4">{t('settings_ui.display.interfaceScaling')}</h4>
-                <div className="grid grid-cols-3 gap-3">
-                   {[75, 100, 125].map(scale => (
-                     <button 
-                       key={scale} 
-                       onClick={() => {
-                         setUiScale(scale);
-                         addNotification({ title: 'UI Scale', message: t('settings_ui.display.scalingSet', { scale }), type: 'success' });
-                       }}
-                       className={`py-3 rounded-xl text-xs font-bold border transition-all ${
-                         uiScale === scale 
-                           ? 'bg-indigo-500/20 border-indigo-500/50 text-indigo-400' 
-                           : 'bg-[var(--bg-tertiary)] border-[var(--border-color)] text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-card-hover)]'
-                       }`}
-                     >
-                       {scale}%
-                     </button>
-                   ))}
+              <SettingsCard>
+                <div className="flex items-center gap-2 mb-4">
+                  <Monitor size={15} className="text-blue-400" />
+                  <h3 className="text-sm font-semibold text-[var(--text-primary)]">{t('settings_ui.display.interfaceScaling')}</h3>
                 </div>
-                <p className="mt-4 text-[11px] text-[var(--text-muted)]">{t('settings_ui.display.scalingInfo')}</p>
-              </div>
+                <div className="grid grid-cols-3 gap-2">
+                  {[75, 100, 125].map(scale => (
+                    <PillButton key={scale} active={uiScale === scale} onClick={() => { setUiScale(scale); addNotification({ title: 'UI Scale', message: t('settings_ui.display.scalingSet', { scale }), type: 'success' }); }}>
+                      {scale}%
+                    </PillButton>
+                  ))}
+                </div>
+                <p className="mt-3 text-[11px] text-[var(--text-muted)]">{t('settings_ui.display.scalingInfo')}</p>
+              </SettingsCard>
             </section>
           </div>
         )}
 
         {activeTab === 'notifications' && (
-          <div className="max-w-2xl animate-in fade-in slide-in-from-bottom-2 duration-300">
-            <h1 className="text-2xl font-bold mb-2 text-[var(--text-primary)]">{t('settings_ui.notifications.title')}</h1>
-            <p className="text-[var(--text-secondary)] text-sm mb-8">{t('settings_ui.notifications.desc')}</p>
+          <div className="max-w-3xl animate-in fade-in slide-in-from-bottom-2 duration-300">
+            <SettingsSectionTitle icon={Bell} iconColor="text-amber-400" title={t('settings_ui.notifications.title')} description={t('settings_ui.notifications.desc')} />
 
-            <section className="space-y-4">
-               {[
-                 { id: 'system', icon: Bell, title: t('settings_ui.notifications.system'), desc: t('settings_ui.notifications.systemDesc') },
-                 { id: 'terminal', icon: Volume2, title: t('settings_ui.notifications.terminal'), desc: t('settings_ui.notifications.terminalDesc') },
-                 { id: 'desktop', icon: Monitor, title: t('settings_ui.notifications.desktop'), desc: t('settings_ui.notifications.desktopDesc') },
-               ].map((item, i) => {
-                 const isActive = notifications[item.id];
-                 return (
-                   <motion.div 
-                     key={item.id}
-                     initial={{ opacity: 0, y: 10 }}
-                     animate={{ opacity: 1, y: 0 }}
-                     transition={{ delay: i * 0.1 }}
-                     className="p-4 bg-[var(--bg-card)] border border-[var(--border-color)] rounded-2xl flex items-center justify-between group hover:bg-[var(--bg-card-hover)] transition-all"
-                   >
-                     <div className="flex items-center gap-4">
-                        <div className="w-10 h-10 rounded-xl bg-[var(--bg-tertiary)] flex items-center justify-center group-hover:bg-indigo-500/10 transition-colors">
-                          <item.icon size={20} className={isActive ? 'text-indigo-400' : 'text-[var(--text-muted)]'} />
+            <section className="space-y-3">
+              {[
+                { id: 'system', icon: Bell, title: t('settings_ui.notifications.system'), desc: t('settings_ui.notifications.systemDesc'), accent: 'indigo' },
+                { id: 'terminal', icon: Volume2, title: t('settings_ui.notifications.terminal'), desc: t('settings_ui.notifications.terminalDesc'), accent: 'emerald' },
+                { id: 'desktop', icon: Monitor, title: t('settings_ui.notifications.desktop'), desc: t('settings_ui.notifications.desktopDesc'), accent: 'blue' },
+              ].map(item => {
+                const isActive = notifications[item.id];
+                return (
+                  <SettingsCard key={item.id}>
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-4">
+                        <div className={`w-10 h-10 rounded-xl flex items-center justify-center transition-colors ${isActive ? 'bg-indigo-500/10' : 'bg-[var(--bg-tertiary)]'}`}>
+                          <item.icon size={18} className={isActive ? 'text-indigo-400' : 'text-[var(--text-muted)]'} />
                         </div>
                         <div>
-                          <h4 className="text-sm font-bold text-[var(--text-primary)]">{item.title}</h4>
-                          <p className="text-xs text-[var(--text-muted)] italic">{item.desc}</p>
+                          <h4 className="text-sm font-semibold text-[var(--text-primary)]">{item.title}</h4>
+                          <p className="text-[11px] text-[var(--text-muted)] mt-0.5">{item.desc}</p>
                         </div>
-                     </div>
-                     <div 
-                        onClick={() => setNotifications({ [item.id]: !isActive })}
-                        className={`w-11 h-6 rounded-full p-1 transition-colors cursor-pointer ${isActive ? 'bg-[var(--accent-indigo)]' : 'bg-slate-300 dark:bg-slate-700'}`}
-                     >
-                        <div className={`w-4 h-4 bg-white rounded-full shadow-lg transition-transform ${isActive ? 'translate-x-5' : 'translate-x-0'}`} />
-                     </div>
-                   </motion.div>
-                 );
-               })}
+                      </div>
+                      <Toggle value={isActive} onChange={() => setNotifications({ [item.id]: !isActive })} accent={item.accent} />
+                    </div>
+                  </SettingsCard>
+                );
+              })}
             </section>
           </div>
         )}
 
         {activeTab === 'privacy' && (
-          <div className="max-w-2xl animate-in fade-in slide-in-from-bottom-2 duration-300">
-            <h1 className="text-2xl font-bold mb-2 text-[var(--text-primary)]">{t('settings_ui.privacy.title')}</h1>
-            <p className="text-[var(--text-secondary)] text-sm mb-8">{t('settings_ui.privacy.desc')}</p>
+          <div className="max-w-3xl animate-in fade-in slide-in-from-bottom-2 duration-300">
+            <SettingsSectionTitle icon={Shield} iconColor="text-emerald-400" title={t('settings_ui.privacy.title')} description={t('settings_ui.privacy.desc')} />
 
             <section className="space-y-6">
-              <div className="p-6 bg-gradient-to-br from-indigo-500/10 to-purple-500/10 border border-[var(--border-color)] rounded-3xl relative overflow-hidden group">
-                <div className="absolute -right-10 -top-10 w-40 h-40 bg-indigo-500/10 rounded-full blur-3xl group-hover:bg-indigo-500/20 transition-all duration-700" />
-                <div className="relative z-10 flex items-start gap-4">
-                  <div className="w-12 h-12 rounded-2xl bg-[var(--bg-selected)] border border-[var(--accent-indigo)]/30 flex items-center justify-center shadow-xl shadow-[var(--glow-indigo)]/20">
-                    <Shield size={24} className="text-[var(--text-selected)]" />
+              <SettingsCard className="bg-gradient-to-br from-indigo-500/5 to-purple-500/5">
+                <div className="flex items-start gap-4">
+                  <div className="w-12 h-12 rounded-2xl bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center shrink-0">
+                    <Shield size={22} className="text-indigo-400" />
                   </div>
                   <div className="flex-1">
-                    <h3 className="text-lg font-bold text-[var(--text-primary)] mb-1">{t('settings_ui.privacy.dashboard')}</h3>
-                    <p className="text-sm text-[var(--text-secondary)] leading-relaxed mb-4">
-                      {t('settings_ui.privacy.dashboardDesc')}
-                    </p>
+                    <h3 className="text-base font-bold text-[var(--text-primary)] mb-1">{t('settings_ui.privacy.dashboard')}</h3>
+                    <p className="text-xs text-[var(--text-secondary)] leading-relaxed mb-3">{t('settings_ui.privacy.dashboardDesc')}</p>
                     <div className="flex flex-wrap gap-2">
-                      <span className="px-3 py-1 bg-gray-500/5 dark:bg-white/10 rounded-full text-[10px] font-bold uppercase text-[var(--text-secondary)] border border-gray-500/10 dark:border-white/10">{t('settings_ui.privacy.zeroKnowledge')}</span>
-                      <span className="px-3 py-1 bg-gray-500/5 dark:bg-white/10 rounded-full text-[10px] font-bold uppercase text-[var(--text-secondary)] border border-gray-500/10 dark:border-white/10">{t('settings_ui.privacy.clientSideEncryption')}</span>
+                      <span className="px-3 py-1 bg-indigo-500/10 rounded-full text-[10px] font-semibold text-indigo-400 border border-indigo-500/20">{t('settings_ui.privacy.zeroKnowledge')}</span>
+                      <span className="px-3 py-1 bg-emerald-500/10 rounded-full text-[10px] font-semibold text-emerald-400 border border-emerald-500/20">{t('settings_ui.privacy.clientSideEncryption')}</span>
                     </div>
                   </div>
                 </div>
-              </div>
+              </SettingsCard>
 
-              <div className="space-y-3">
-                  <div className="p-4 bg-[var(--bg-tertiary)] border border-[var(--border-color)] rounded-2xl flex items-center gap-3">
-                    <Info size={16} className="text-indigo-400" />
-                    <p className="text-xs text-[var(--text-muted)] font-medium">{t('settings_ui.privacy.autoHandled')}</p>
-                  </div>
-               </div>
+              <SettingsCard>
+                <div className="flex items-center gap-3">
+                  <Info size={16} className="text-indigo-400 shrink-0" />
+                  <p className="text-xs text-[var(--text-muted)]">{t('settings_ui.privacy.autoHandled')}</p>
+                </div>
+              </SettingsCard>
             </section>
           </div>
         )}
@@ -1458,10 +1397,10 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
                         </>
                       ) : vaultStatus === 'locked' ? (
                         <>
-                          <Lock size={18} className="text-amber-600 dark:text-amber-400" />
+                          <Lock size={18} className="text-[var(--accent-amber)]" />
                           <div className="flex-1">
-                            <span className="text-sm font-medium text-amber-600 dark:text-amber-400">{t('settings_ui.vaultStatus.locked')}</span>
-                            <p className="text-[11px] text-amber-600/60 dark:text-amber-400/60">{t('vault.unlockDescription')}</p>
+                            <span className="text-sm font-medium text-[var(--accent-amber)]">{t('settings_ui.vaultStatus.locked')}</span>
+                            <p className="text-[11px] text-[var(--accent-amber)]/60">{t('vault.unlockDescription')}</p>
                           </div>
                           <button
                             onClick={showVault}
@@ -1472,10 +1411,10 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
                         </>
                       ) : (
                         <>
-                          <Shield size={18} className="text-indigo-600 dark:text-indigo-400" />
+                          <Shield size={18} className="text-[var(--accent-indigo)]" />
                           <div className="flex-1">
-                            <span className="text-sm font-medium text-indigo-600 dark:text-indigo-400">{t('settings_ui.vaultStatus.none')}</span>
-                            <p className="text-[11px] text-indigo-600/60 dark:text-indigo-400/60">{t('vault.setupDescription')}</p>
+                            <span className="text-sm font-medium text-[var(--accent-indigo)]">{t('settings_ui.vaultStatus.none')}</span>
+                            <p className="text-[11px] text-[var(--accent-indigo)]/60">{t('vault.setupDescription')}</p>
                           </div>
                           <button
                             onClick={showVault}
@@ -1648,10 +1587,10 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
                         </>
                       ) : (
                         <>
-                           <WifiOff size={18} className="text-amber-600 dark:text-amber-400" />
+                           <WifiOff size={18} className="text-[var(--accent-amber)]" />
                            <div>
-                             <span className="text-sm font-medium text-amber-600 dark:text-amber-400">{t('settings_ui.db.notConnected')}</span>
-                             <p className="text-[11px] text-amber-600/60 dark:text-amber-400/60">{t('settings_ui.db.notConnectedDesc')}</p>
+                             <span className="text-sm font-medium text-[var(--accent-amber)]">{t('settings_ui.db.notConnected')}</span>
+                             <p className="text-[11px] text-[var(--accent-amber)]/60">{t('settings_ui.db.notConnectedDesc')}</p>
                            </div>
                         </>
                       )}
@@ -1678,7 +1617,7 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
                              }}
                              className={`flex flex-col items-center gap-2 py-4 rounded-2xl border transition-all ${
                                (dbUri.startsWith(prov.id === 'mongodb' ? 'mongodb' : prov.id) || (prov.id === 'mongodb' && dbUri === ''))
-                                 ? 'bg-indigo-500/10 border-indigo-500/50 text-indigo-600 dark:text-indigo-400'
+                                 ? 'bg-[var(--glow-indigo)] border-[var(--accent-indigo)]/50 text-[var(--accent-indigo)]'
                                  : 'bg-[var(--bg-tertiary)] border-[var(--border-color)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-card-hover)]'
                              }`}
                            >
@@ -1697,7 +1636,7 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
                       <div className="flex gap-2">
                         <input
                           type="text"
-                          className="flex-1 px-4 py-3 bg-gray-500/5 dark:bg-white/5 border border-gray-500/10 dark:border-white/10 rounded-xl text-sm font-mono text-[var(--text-primary)] placeholder-gray-400 dark:placeholder-gray-600 focus:outline-none focus:border-indigo-500/50 focus:ring-1 focus:ring-indigo-500/25 transition-all"
+                          className="flex-1 px-4 py-3 bg-[var(--bg-primary)] border border-[var(--border-color)] rounded-xl text-sm font-mono text-[var(--text-primary)] placeholder-[var(--text-muted)] focus:outline-none focus:border-[var(--accent-indigo)]/50 focus:ring-1 focus:ring-[var(--accent-indigo)]/25 transition-all"
                           placeholder={dbUri.includes('mysql') ? 'mysql://user:pass@host:port/db' : dbUri.includes('postgres') ? 'postgres://user:pass@host:port/db' : 'mongodb://127.0.0.1:27017/ssh-monitor'}
                           value={dbUri}
                           onChange={(e) => setDbUri(e.target.value)}
@@ -1734,8 +1673,8 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
                             onClick={() => setDbUri(preset.uri)}
                             className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-all ${
                               dbUri === preset.uri 
-                                ? 'bg-indigo-500/20 border-indigo-500/50 text-indigo-600 dark:text-indigo-400' 
-                                : 'bg-gray-500/5 dark:bg-white/5 border-gray-500/10 dark:border-white/10 text-[var(--text-muted)] hover:bg-gray-500/10 dark:hover:bg-white/10 hover:text-[var(--text-primary)]'
+                                ? 'bg-[var(--glow-indigo)] border-[var(--accent-indigo)]/50 text-[var(--accent-indigo)]' 
+                                : 'bg-[var(--bg-tertiary)] border-[var(--border-color)] text-[var(--text-muted)] hover:bg-[var(--bg-card-hover)] hover:text-[var(--text-primary)]'
                             }`}
                           >
                             {preset.label}
@@ -1752,120 +1691,106 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
         )}
 
         {activeTab === 'keyboard' && (
-          <div className="max-w-2xl animate-in fade-in slide-in-from-bottom-2 duration-300">
-            <h1 className="text-2xl font-bold mb-2 text-[var(--text-primary)]">{t('settings_ui.keyboard.title')}</h1>
-            <p className="text-[var(--text-secondary)] text-sm mb-8">{t('settings_ui.keyboard.desc')}</p>
+          <div className="max-w-3xl animate-in fade-in slide-in-from-bottom-2 duration-300">
+            <SettingsSectionTitle icon={Key} iconColor="text-rose-400" title={t('settings_ui.keyboard.title')} description={t('settings_ui.keyboard.desc')} />
 
-            <section className="space-y-6">
-              <div className="grid gap-4">
-                {[
-                  { id: 'previewWindow', label: t('settings_ui.keyboard.missionControl'), desc: t('settings_ui.keyboard.descriptions.missionControl'), icon: Layout },
-                  { id: 'spotlight', label: t('settings_ui.keyboard.spotlightSearch'), desc: t('settings_ui.keyboard.descriptions.spotlightSearch'), icon: Search },
-                  { id: 'prevDesktop', label: t('settings_ui.keyboard.prevDesktop'), desc: t('settings_ui.keyboard.descriptions.prevDesktop'), icon: Monitor },
-                  { id: 'nextDesktop', label: t('settings_ui.keyboard.nextDesktop'), desc: t('settings_ui.keyboard.descriptions.nextDesktop'), icon: Monitor },
-                  { id: 'minimizeAll', label: t('settings_ui.keyboard.minimizeAll'), desc: t('settings_ui.keyboard.descriptions.minimizeAll'), icon: Layout },
-                  { id: 'closeAll', label: t('settings_ui.keyboard.closeAll'), desc: t('settings_ui.keyboard.descriptions.closeAll'), icon: Trash2 },
-                ].map((item) => (
-                  <div key={item.id} className="p-4 bg-[var(--bg-card)] border border-[var(--border-color)] rounded-2xl flex items-center justify-between group hover:bg-[var(--bg-card-hover)] transition-all">
-                    <div className="flex items-center gap-4">
-                      <div className="w-10 h-10 rounded-xl bg-[var(--bg-tertiary)] flex items-center justify-center">
-                        <item.icon size={18} className="text-indigo-400" />
+            <section className="space-y-3">
+              {[
+                { id: 'previewWindow', label: t('settings_ui.keyboard.missionControl'), desc: t('settings_ui.keyboard.descriptions.missionControl'), icon: Layout },
+                { id: 'spotlight', label: t('settings_ui.keyboard.spotlightSearch'), desc: t('settings_ui.keyboard.descriptions.spotlightSearch'), icon: Search },
+                { id: 'prevDesktop', label: t('settings_ui.keyboard.prevDesktop'), desc: t('settings_ui.keyboard.descriptions.prevDesktop'), icon: Monitor },
+                { id: 'nextDesktop', label: t('settings_ui.keyboard.nextDesktop'), desc: t('settings_ui.keyboard.descriptions.nextDesktop'), icon: Monitor },
+                { id: 'minimizeAll', label: t('settings_ui.keyboard.minimizeAll'), desc: t('settings_ui.keyboard.descriptions.minimizeAll'), icon: Layout },
+                { id: 'closeAll', label: t('settings_ui.keyboard.closeAll'), desc: t('settings_ui.keyboard.descriptions.closeAll'), icon: Trash2 },
+              ].map(item => (
+                <SettingsCard key={item.id}>
+                  <div className="flex items-center justify-between gap-4">
+                    <div className="flex items-center gap-3.5">
+                      <div className="w-9 h-9 rounded-xl bg-[var(--bg-tertiary)] flex items-center justify-center shrink-0">
+                        <item.icon size={16} className="text-indigo-400" />
                       </div>
                       <div>
-                        <h4 className="text-sm font-bold text-[var(--text-primary)]">{item.label}</h4>
-                        <p className="text-[10px] text-[var(--text-muted)]">{item.desc}</p>
+                        <h4 className="text-sm font-semibold text-[var(--text-primary)]">{item.label}</h4>
+                        <p className="text-[10px] text-[var(--text-muted)] mt-0.5">{item.desc}</p>
                       </div>
                     </div>
-                    <div className="flex items-center gap-2">
-                        <ShortcutInput
-                          value={osState.keyboardShortcuts?.[item.id] || ''}
-                          onChange={(val) => {
-                            setKeyboardShortcuts({ [item.id]: val });
-                          }}
-                          placeholder="e.g. Cmd+K"
-                          className="w-32 border-indigo-500/20 text-[var(--accent-indigo)]"
-                        />
-                    </div>
+                    <ShortcutInput
+                      value={osState.keyboardShortcuts?.[item.id] || ''}
+                      onChange={(val) => setKeyboardShortcuts({ [item.id]: val })}
+                      placeholder="e.g. Cmd+K"
+                      className="w-36 border-indigo-500/20 text-[var(--accent-indigo)]"
+                    />
                   </div>
-                ))}
-              </div>
+                </SettingsCard>
+              ))}
 
-              <div className="p-4 bg-amber-500/10 border border-amber-500/20 rounded-2xl flex items-start gap-3">
-                <AlertCircle size={16} className="text-amber-500 shrink-0 mt-0.5" />
-                <p className="text-[11px] text-amber-700 dark:text-amber-200/70 leading-relaxed">
-                  <strong>Tip:</strong> Shortcuts use standard combinations like <code>Cmd+K</code>, <code>Ctrl+Shift+L</code>, etc. Use <code>Cmd</code> for Command (Mac) or Windows Key (PC), and <code>Ctrl</code> for Control.
-                </p>
-              </div>
+              <SettingsCard className="bg-amber-500/5 border-amber-500/20">
+                <div className="flex items-start gap-3">
+                  <AlertCircle size={15} className="text-amber-400 shrink-0 mt-0.5" />
+                  <p className="text-[11px] text-amber-300/80 leading-relaxed">
+                    <strong>Tip:</strong> Use standard combos like <code className="bg-amber-500/10 px-1 rounded">Cmd+K</code>, <code className="bg-amber-500/10 px-1 rounded">Ctrl+Shift+L</code>. <code className="bg-amber-500/10 px-1 rounded">Cmd</code> = Command/Windows Key, <code className="bg-amber-500/10 px-1 rounded">Ctrl</code> = Control.
+                  </p>
+                </div>
+              </SettingsCard>
             </section>
           </div>
         )}
 
         {activeTab === 'about' && (
-          <div className="max-w-md mx-auto py-12 text-center animate-in zoom-in-95 duration-300">
-            <div className="w-24 h-24 mx-auto bg-gradient-to-br from-indigo-500 to-purple-600 rounded-3xl shadow-2xl flex items-center justify-center mb-6">
-              <Monitor size={48} className="text-white drop-shadow-lg" />
+          <div className="max-w-lg mx-auto py-8 text-center animate-in zoom-in-95 duration-300">
+            <div className="w-20 h-20 mx-auto bg-gradient-to-br from-indigo-500 to-purple-600 rounded-3xl shadow-2xl shadow-indigo-500/20 flex items-center justify-center mb-5">
+              <Monitor size={40} className="text-white" />
             </div>
-            <h2 className="text-2xl font-bold mb-1">Webtop OS</h2>
+            <h2 className="text-xl font-bold mb-0.5">Webtop OS</h2>
             <p className="text-indigo-400 text-sm font-medium mb-6">{t('settings_ui.about.version', { version: '1.0.5 (Beta)' })}</p>
-            <div className="bg-gray-500/5 dark:bg-white/5 rounded-2xl p-6 border border-gray-500/10 dark:border-white/10 text-sm text-[var(--text-primary)] leading-relaxed text-left">
-              <p className="mb-4 text-xs">{t('settings_ui.about.description')}</p>
-              
-              <div className="space-y-4">
-                {/* Environment Info */}
-                <div className="space-y-2">
-                  <div className="flex justify-between border-b border-gray-500/5 dark:border-white/5 pb-2">
-                    <span className="font-medium text-gray-600 dark:text-gray-300">{t('settings_ui.about.environment')}</span>
-                    <span className="text-[var(--text-primary)]">{t('settings_ui.about.environmentValue')}</span>
-                  </div>
-                  <div className="flex justify-between border-b border-gray-500/5 dark:border-white/5 pb-2">
-                    <span className="font-medium text-gray-600 dark:text-gray-300">{t('settings_ui.about.resolution')}</span>
-                    <span className="text-[var(--text-primary)]">{typeof window !== 'undefined' ? `${window.innerWidth} x ${window.innerHeight}` : 'N/A'}</span>
-                  </div>
+            
+            <SettingsCard className="text-left">
+              <p className="text-xs text-[var(--text-secondary)] mb-4">{t('settings_ui.about.description')}</p>
+              <div className="space-y-2.5">
+                <div className="flex justify-between py-2 border-b border-[var(--border-color)]/40">
+                  <span className="text-xs text-[var(--text-muted)]">{t('settings_ui.about.environment')}</span>
+                  <span className="text-xs font-semibold text-[var(--text-primary)]">{t('settings_ui.about.environmentValue')}</span>
                 </div>
-
-                {/* Security Engineering Section */}
-                <div>
-                  <h4 className="text-[10px] font-bold text-indigo-400 uppercase tracking-widest mb-3">{t('settings_ui.about.securityEng')}</h4>
-                  <div className="grid grid-cols-1 gap-2">
-                    <div className="flex items-center gap-2 bg-indigo-500/5 border border-indigo-500/10 rounded-lg p-2">
-                      <Shield size={12} className="text-indigo-400" />
-                      <div className="flex-1">
-                        <p className="text-[10px] font-bold text-gray-600 dark:text-gray-300 uppercase">{t('settings_ui.about.keyDerivation')}</p>
-                        <p className="text-[10px] text-[var(--text-secondary)]">{t('settings_ui.about.keyDerivationValue')}</p>
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-2 bg-emerald-500/5 border border-emerald-500/10 rounded-lg p-2">
-                      <Lock size={12} className="text-emerald-400" />
-                      <div className="flex-1">
-                        <p className="text-[10px] font-bold text-gray-600 dark:text-gray-300 uppercase">{t('settings_ui.about.encryption')}</p>
-                        <p className="text-[10px] text-[var(--text-secondary)]">{t('settings_ui.about.encryptionValue')}</p>
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-2 bg-amber-500/5 border border-amber-500/10 rounded-lg p-2">
-                      <Code size={12} className="text-amber-400" />
-                      <div className="flex-1">
-                        <p className="text-[10px] font-bold text-gray-600 dark:text-gray-300 uppercase">{t('settings_ui.about.defense')}</p>
-                        <p className="text-[10px] text-[var(--text-secondary)]">{t('settings_ui.about.defenseValue')}</p>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="flex justify-between pt-2 border-t border-gray-500/5 dark:border-white/5">
-                  <span className="font-medium text-gray-600 dark:text-gray-300">{t('settings_ui.about.license')}</span>
-                  <span className="text-[var(--text-primary)] font-bold">{t('settings_ui.about.licenseValue')}</span>
+                <div className="flex justify-between py-2 border-b border-[var(--border-color)]/40">
+                  <span className="text-xs text-[var(--text-muted)]">{t('settings_ui.about.resolution')}</span>
+                  <span className="text-xs font-mono text-[var(--text-primary)]">{typeof window !== 'undefined' ? `${window.innerWidth}x${window.innerHeight}` : 'N/A'}</span>
                 </div>
               </div>
-            </div>
-            <p className="mt-8 text-[10px] text-gray-600 italic">{t('settings_ui.about.quote')}</p>
+
+              <div className="mt-5 space-y-2">
+                <p className="text-[10px] font-semibold text-indigo-400 uppercase tracking-wider mb-3">{t('settings_ui.about.securityEng')}</p>
+                {[
+                  { icon: Shield, color: 'text-indigo-400', bg: 'bg-indigo-500/10', label: t('settings_ui.about.keyDerivation'), value: t('settings_ui.about.keyDerivationValue') },
+                  { icon: Lock, color: 'text-emerald-400', bg: 'bg-emerald-500/10', label: t('settings_ui.about.encryption'), value: t('settings_ui.about.encryptionValue') },
+                  { icon: Code, color: 'text-amber-400', bg: 'bg-amber-500/10', label: t('settings_ui.about.defense'), value: t('settings_ui.about.defenseValue') },
+                ].map((item, i) => (
+                  <div key={i} className="flex items-center gap-3 p-2.5 rounded-xl bg-[var(--bg-tertiary)]">
+                    <div className={`w-7 h-7 rounded-lg ${item.bg} flex items-center justify-center shrink-0`}>
+                      <item.icon size={13} className={item.color} />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-[10px] font-semibold text-[var(--text-secondary)] uppercase">{item.label}</p>
+                      <p className="text-[10px] text-[var(--text-muted)]">{item.value}</p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              <div className="flex justify-between mt-4 pt-3 border-t border-[var(--border-color)]/40">
+                <span className="text-xs text-[var(--text-muted)]">{t('settings_ui.about.license')}</span>
+                <span className="text-xs font-bold text-[var(--text-primary)]">{t('settings_ui.about.licenseValue')}</span>
+              </div>
+            </SettingsCard>
+
+            <p className="mt-6 text-[10px] text-[var(--text-muted)] italic">{t('settings_ui.about.quote')}</p>
           </div>
         )}
 
         {activeTab === 'deployment' && (
-          <div className="max-w-3xl animate-in fade-in slide-in-from-bottom-2 duration-300">
+          <div className="max-w-6xl animate-in fade-in slide-in-from-bottom-2 duration-300">
             {/* Top Toolbar / Dashboard Selector */}
             <div className="p-4 mb-6 rounded-2xl bg-slate-900/40 border border-[var(--border-color)] flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-              <div className="flex items-center gap-3">
+              <div className="flex flex-wrap items-center gap-3">
                 <label className="text-xs font-bold text-[var(--text-secondary)] uppercase tracking-wider">{t('deploy.selectProject', 'Select Project:')}</label>
                 <select
                   value={selectedProjectId}
@@ -1907,15 +1832,15 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
               </div>
             </div>
 
-            <div className="flex items-center justify-between mb-2">
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-2">
               <div>
                 <h1 className="text-2xl font-bold text-[var(--text-primary)] flex items-center gap-2">
                   {t('deploy.title', 'Auto Deployment')}: <span className="text-indigo-400">{selectedProjectId}</span>
                   {deployConfig.name && <span className="text-sm text-[var(--text-secondary)]">({t('deploy.alias', 'Alias:')} {deployConfig.name})</span>}
                 </h1>
-                <p className="text-[var(--text-secondary)] text-sm">{t('deploy.subtitle', 'Configure automated git-triggered deployments via webhooks.')}</p>
+                <p className="text-[var(--text-secondary)] text-sm mt-1">{t('deploy.subtitle', 'Configure automated git-triggered deployments via webhooks.')}</p>
               </div>
-              <div className="flex gap-2">
+              <div className="flex flex-wrap gap-2">
                 <button
                   onClick={handleSaveDeployConfig}
                   disabled={deploySaving || deployLoading}
@@ -2017,9 +1942,9 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
                 </div>
 
                 {/* Configuration form */}
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
                   {/* Left block - settings inputs */}
-                  <div className="md:col-span-2 space-y-6">
+                  <div className="lg:col-span-2 space-y-6">
                     {/* General Settings */}
                     <div className="p-6 rounded-2xl bg-[var(--bg-card)] border border-[var(--border-color)] shadow-sm space-y-4">
                       <h3 className="text-sm font-bold text-[var(--text-primary)] flex items-center gap-2 border-b border-[var(--border-color)] pb-3">
@@ -2036,14 +1961,14 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
                           onClick={() => {
                             setDeployConfig(p => ({ ...p, enabled: !p.enabled }));
                           }}
-                          className={`w-10 h-6 rounded-full p-1 transition-colors cursor-pointer ${deployConfig.enabled ? 'bg-indigo-500' : 'bg-slate-300 dark:bg-slate-700'}`}
+                          className={`w-10 h-6 rounded-full p-1 transition-colors cursor-pointer ${deployConfig.enabled ? 'bg-[var(--accent-indigo)]' : 'bg-[var(--bg-tertiary)]'}`}
                         >
                           <div className={`w-4 h-4 bg-white rounded-full shadow-lg transition-transform ${deployConfig.enabled ? 'translate-x-4' : 'translate-x-0'}`} />
                         </button>
                       </div>
 
-                      <div className="space-y-4">
-                        <div className="rounded-2xl bg-slate-950/30 border border-[var(--border-color)] p-4">
+                        <div className="space-y-4">
+                        <div className="rounded-2xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] p-4">
                           <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
                             <div>
                               <p className="text-[11px] font-bold uppercase tracking-wider text-[var(--text-secondary)]">{t('deploy.githubConnection', 'GitHub Connection')}</p>
@@ -2073,7 +1998,7 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
                         </div>
 
                         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-                          <div className="rounded-2xl bg-slate-950/30 border border-[var(--border-color)] p-4">
+                          <div className="rounded-2xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] p-4">
                             <label className="block text-[11px] font-bold text-[var(--text-secondary)] uppercase tracking-wider mb-2">{t('deploy.githubRepoLabel', 'GitHub repository')}</label>
                             <input
                               type="text"
@@ -2133,7 +2058,7 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
                             </p>
                           </div>
 
-                          <div className="rounded-2xl bg-slate-950/30 border border-[var(--border-color)] p-4">
+                          <div className="rounded-2xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] p-4">
                             <label className="block text-[11px] font-bold text-[var(--text-secondary)] uppercase tracking-wider mb-2">{t('deploy.branchToWatch', 'Branch to watch')}</label>
                             {branches && branches.length > 0 ? (
                               <select
@@ -2157,7 +2082,7 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
                           </div>
                         </div>
 
-                        <div className="rounded-2xl bg-slate-950/30 border border-[var(--border-color)] p-4">
+                        <div className="rounded-2xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] p-4">
                           <label className="block text-[11px] font-bold text-[var(--text-secondary)] uppercase tracking-wider mb-2">{t('deploy.webhookSecret', 'Webhook Secret (Optional)')}</label>
                           <input
                             type="password"
@@ -2364,7 +2289,7 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
                           onClick={() => {
                             setDeployConfig(p => ({ ...p, telegramNotification: !p.telegramNotification }));
                           }}
-                          className={`w-9 h-5 rounded-full p-0.5 transition-colors cursor-pointer ${deployConfig.telegramNotification ? 'bg-indigo-500' : 'bg-slate-300 dark:bg-slate-700'}`}
+                          className={`w-9 h-5 rounded-full p-0.5 transition-colors cursor-pointer ${deployConfig.telegramNotification ? 'bg-[var(--accent-indigo)]' : 'bg-[var(--bg-tertiary)]'}`}
                         >
                           <div className={`w-4 h-4 bg-white rounded-full shadow transition-transform ${deployConfig.telegramNotification ? 'translate-x-4' : 'translate-x-0'}`} />
                         </button>
@@ -2424,7 +2349,7 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
                         </div>
 
                         {deployConfig.aiModel === 'manual' && (
-                          <div className="space-y-4 rounded-2xl bg-slate-950/30 border border-[var(--border-color)] p-4">
+                          <div className="space-y-4 rounded-2xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] p-4">
                             <div>
                               <div className="flex flex-wrap gap-2 mb-3">
                                 <button
@@ -2626,18 +2551,17 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
           </div>
         )}
         {activeTab === 'terminal' && (
-          <div className="max-w-2xl animate-in fade-in slide-in-from-bottom-2 duration-300">
-            <h1 className="text-2xl font-bold mb-2 text-[var(--text-primary)]">{t('settings_ui.terminal.title') || 'Terminal Customization'}</h1>
-            <p className="text-[var(--text-secondary)] text-sm mb-8">Personalize your command-line interface with presets and custom styling.</p>
+          <div className="max-w-3xl animate-in fade-in slide-in-from-bottom-2 duration-300">
+            <SettingsSectionTitle icon={Terminal} iconColor="text-emerald-400" title={t('settings_ui.terminal.title') || 'Terminal Customization'} description="Personalize your command-line interface with presets and custom styling." />
 
-            <section className="space-y-8">
-              {/* Presets Grid */}
-              <div>
-                <h3 className="text-sm font-semibold mb-4 flex items-center gap-2">
-                  <Monitor size={16} className="text-emerald-400" />
-                  {t('settings_ui.terminal.presets') || 'Interface Presets'}
-                </h3>
-                <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+            <section className="space-y-6">
+              {/* Presets */}
+              <SettingsCard>
+                <div className="flex items-center gap-2 mb-4">
+                  <Monitor size={15} className="text-emerald-400" />
+                  <h3 className="text-sm font-semibold text-[var(--text-primary)]">{t('settings_ui.terminal.presets') || 'Interface Presets'}</h3>
+                </div>
+                <div className="grid grid-cols-3 gap-2">
                   {[
                     { id: 'modern', name: 'Standard Modern', desc: 'Clean font, smooth colors' },
                     { id: 'retro', name: 'Pip-Boy 3000', desc: 'Monochrome, phosphor glow' },
@@ -2645,195 +2569,104 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
                   ].map(p => {
                     const isActive = osState.terminalSettings?.activePreset === p.id;
                     return (
-                      <button 
-                        key={p.id}
-                        onClick={() => setTerminalSettings({ activePreset: p.id })}
-                        className={`p-4 rounded-xl border text-left transition-all relative overflow-hidden ${
-                          isActive 
-                            ? 'bg-emerald-500/5 border-emerald-500/50 shadow-[0_0_20px_rgba(16,185,129,0.1)]' 
-                            : 'bg-[var(--bg-card)] border-[var(--border-color)] hover:bg-[var(--bg-card-hover)]'
-                        }`}
-                      >
-                        <div className={`w-8 h-8 rounded-lg mb-3 flex items-center justify-center ${isActive ? 'bg-emerald-500/20' : 'bg-[var(--bg-tertiary)]'}`}>
-                          <Terminal size={16} className={isActive ? 'text-emerald-400' : 'text-[var(--text-muted)]'} />
+                      <button key={p.id} onClick={() => setTerminalSettings({ activePreset: p.id })}
+                        className={`p-4 rounded-xl border text-left transition-all ${isActive ? 'bg-emerald-500/10 border-emerald-500/40 shadow-sm shadow-emerald-500/10' : 'bg-[var(--bg-tertiary)] border-[var(--border-color)] hover:bg-[var(--bg-card-hover)]'}`}>
+                        <div className={`w-8 h-8 rounded-lg mb-2.5 flex items-center justify-center ${isActive ? 'bg-emerald-500/20' : 'bg-[var(--bg-card)]'}`}>
+                          <Terminal size={14} className={isActive ? 'text-emerald-400' : 'text-[var(--text-muted)]'} />
                         </div>
-                        <span className="block text-sm font-bold text-[var(--text-primary)]">{p.name}</span>
+                        <span className="block text-xs font-semibold text-[var(--text-primary)]">{p.name}</span>
                         <span className="text-[10px] text-[var(--text-muted)]">{p.desc}</span>
                       </button>
                     );
                   })}
                 </div>
-              </div>
+              </SettingsCard>
 
-              {/* Advanced Typography */}
-              <div className="pt-6 border-t border-[var(--border-color)]">
-                <h3 className="text-sm font-semibold mb-4 flex items-center gap-2">
-                   <Code size={16} className="text-indigo-400" />
-                   Typography & Sizing
-                </h3>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                  {/* Font Size */}
-                  <div className="space-y-3">
-                    <label className="text-xs font-bold text-[var(--text-muted)] uppercase tracking-widest">{t('settings_ui.terminal.fontSize') || 'Font Size'}</label>
-                    <div className="flex items-center gap-4">
-                      <input 
-                        type="range"
-                        min="10"
-                        max="32"
-                        value={osState.terminalSettings?.fontSize || 14}
+              {/* Typography */}
+              <SettingsCard>
+                <div className="flex items-center gap-2 mb-4">
+                  <Code size={15} className="text-indigo-400" />
+                  <h3 className="text-sm font-semibold text-[var(--text-primary)]">Typography & Sizing</h3>
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="text-[10px] font-semibold text-[var(--text-muted)] uppercase tracking-wider">{t('settings_ui.terminal.fontSize') || 'Font Size'}</label>
+                    <div className="flex items-center gap-3 mt-2">
+                      <input type="range" min="10" max="32" value={osState.terminalSettings?.fontSize || 14}
                         onChange={(e) => setTerminalSettings({ fontSize: parseInt(e.target.value) })}
-                        className="flex-1 h-1.5 bg-[var(--bg-tertiary)] rounded-full appearance-none cursor-pointer accent-emerald-500"
-                      />
-                      <span className="text-sm font-mono text-emerald-400 w-8">{osState.terminalSettings?.fontSize || 14}px</span>
+                        className="flex-1 h-1.5 bg-[var(--bg-tertiary)] rounded-full appearance-none cursor-pointer accent-emerald-500" />
+                      <span className="text-xs font-mono text-emerald-400 w-8">{osState.terminalSettings?.fontSize || 14}px</span>
                     </div>
                   </div>
-
-                  {/* Cursor Style */}
-                  <div className="space-y-3">
-                    <label className="text-xs font-bold text-[var(--text-muted)] uppercase tracking-widest">Cursor Style</label>
-                    <div className="flex gap-2">
+                  <div>
+                    <label className="text-[10px] font-semibold text-[var(--text-muted)] uppercase tracking-wider">Cursor Style</label>
+                    <div className="flex gap-1.5 mt-2">
                       {['bar', 'block', 'underline'].map(style => (
-                        <button
-                          key={style}
-                          onClick={() => setTerminalSettings({ cursorStyle: style })}
-                          className={`flex-1 py-1.5 rounded-lg border text-[10px] font-bold transition-all ${
-                            (osState.terminalSettings?.cursorStyle || 'bar') === style
-                              ? 'bg-[var(--glow-indigo)] border-[var(--accent-indigo)] text-[var(--accent-indigo)]'
-                              : 'bg-[var(--bg-tertiary)] border-[var(--border-color)] text-[var(--text-muted)]'
-                          }`}
-                        >
-                          {style.toUpperCase()}
+                        <button key={style} onClick={() => setTerminalSettings({ cursorStyle: style })}
+                          className={`flex-1 py-2 rounded-lg border text-[10px] font-semibold transition-all capitalize ${(osState.terminalSettings?.cursorStyle || 'bar') === style ? 'bg-indigo-500/10 border-indigo-500/40 text-indigo-400' : 'bg-[var(--bg-tertiary)] border-[var(--border-color)] text-[var(--text-muted)]'}`}>
+                          {style}
                         </button>
                       ))}
                     </div>
                   </div>
                 </div>
-              </div>
+              </SettingsCard>
 
               {/* Terminal Colors */}
-              <div className="pt-6 border-t border-[var(--border-color)]">
-                <h3 className="text-sm font-semibold mb-6 flex items-center gap-2">
-                   <Palette size={16} className="text-amber-400" />
-                   {t('settings_ui.terminal.colors') || 'Terminal Colors'}
-                </h3>
-                <div className="space-y-4">
+              <SettingsCard>
+                <div className="flex items-center gap-2 mb-4">
+                  <Palette size={15} className="text-amber-400" />
+                  <h3 className="text-sm font-semibold text-[var(--text-primary)]">{t('settings_ui.terminal.colors') || 'Terminal Colors'}</h3>
+                </div>
+                <div className="space-y-3">
                   {[
-                    { key: 'background', label: t('settings_ui.terminal.background'), colorId: 'amber', default: '#0c0c0c' },
-                    { key: 'foreground', label: t('settings_ui.terminal.foreground'), colorId: 'emerald', default: '#e4e4e7' },
-                    { key: 'cursor', label: t('settings_ui.terminal.cursor'), colorId: 'indigo', default: '#6366f1' }
+                    { key: 'background', label: t('settings_ui.terminal.background'), default: '#0c0c0c' },
+                    { key: 'foreground', label: t('settings_ui.terminal.foreground'), default: '#e4e4e7' },
+                    { key: 'cursor', label: t('settings_ui.terminal.cursor'), default: '#6366f1' }
                   ].map(c => (
-                    <div key={c.key} className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 p-4 rounded-2xl bg-[var(--bg-card)] border border-[var(--border-color)]">
-                      <div className="flex flex-col">
-                        <span className="text-sm font-bold text-[var(--text-primary)]">{c.label}</span>
-                        <span className="text-[10px] text-[var(--text-muted)] font-mono uppercase opacity-60">{c.key}</span>
+                    <div key={c.key} className="flex items-center justify-between p-3 rounded-xl bg-[var(--bg-tertiary)]">
+                      <div>
+                        <span className="text-sm font-medium text-[var(--text-primary)]">{c.label}</span>
+                        <span className="text-[10px] text-[var(--text-muted)] font-mono ml-2">{c.key}</span>
                       </div>
                       <div className="flex items-center gap-2">
-                         <div className="relative w-10 h-10 rounded-xl border border-[var(--border-color)] overflow-hidden bg-[var(--bg-tertiary)] flex-shrink-0 shadow-sm group">
-                           <div 
-                             className="absolute inset-0 transition-transform group-hover:scale-110" 
-                             style={{ backgroundColor: osState.terminalSettings?.theme?.[c.key] || c.default }} 
-                           />
-                           <input 
-                             type="color" 
-                             value={osState.terminalSettings?.theme?.[c.key] || c.default}
-                             onChange={(e) => updateTerminalTheme(c.key, e.target.value)}
-                             className="absolute inset-0 opacity-0 cursor-pointer w-[200%] h-[200%] -left-1/2 -top-1/2"
-                           />
-                         </div>
-                         <input 
-                           type="text"
-                           value={osState.terminalSettings?.theme?.[c.key] || c.default}
-                           onChange={(e) => updateTerminalTheme(c.key, e.target.value)}
-                           className={`w-28 h-10 bg-[var(--bg-tertiary)] border border-[var(--border-color)] rounded-xl px-3 text-xs font-mono text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent-indigo)] transition-all`}
-                         />
+                        <div className="relative w-8 h-8 rounded-lg border border-[var(--border-color)] overflow-hidden shrink-0">
+                          <div className="absolute inset-0" style={{ backgroundColor: osState.terminalSettings?.theme?.[c.key] || c.default }} />
+                          <input type="color" value={osState.terminalSettings?.theme?.[c.key] || c.default}
+                            onChange={(e) => updateTerminalTheme(c.key, e.target.value)}
+                            className="absolute inset-0 opacity-0 cursor-pointer w-[200%] h-[200%] -left-1/2 -top-1/2" />
+                        </div>
+                        <input type="text" value={osState.terminalSettings?.theme?.[c.key] || c.default}
+                          onChange={(e) => updateTerminalTheme(c.key, e.target.value)}
+                          className="w-24 h-8 bg-[var(--bg-card)] border border-[var(--border-color)] rounded-lg px-2 text-[11px] font-mono text-[var(--text-primary)] focus:outline-none focus:border-indigo-500" />
                       </div>
                     </div>
                   ))}
                 </div>
-              </div>
+              </SettingsCard>
 
-              {/* Opacity Control */}
-              <div className="pt-6 border-t border-[var(--border-color)]">
-                <div className="p-6 bg-[var(--bg-card)] border border-[var(--border-color)] rounded-2xl">
-                  <div className="flex items-center justify-between mb-4">
-                    <h3 className="text-sm font-semibold flex items-center gap-2 text-[var(--text-primary)]">
-                      <Layout size={16} className="text-blue-400" />
-                      {t('settings_ui.terminal.opacity') || 'Background Opacity'}
-                    </h3>
-                    <span className="text-xs text-blue-400 font-mono">{Math.round((osState.terminalSettings?.backgroundOpacity ?? 1) * 100)}%</span>
-                  </div>
-                  <input 
-                    type="range"
-                    min="30"
-                    max="100"
-                    value={(osState.terminalSettings?.backgroundOpacity ?? 1) * 100}
-                    onChange={(e) => setTerminalSettings({ backgroundOpacity: parseInt(e.target.value) / 100 })}
-                    className="w-full h-1.5 bg-[var(--bg-tertiary)] rounded-full appearance-none cursor-pointer accent-blue-500"
-                  />
-                  <p className="mt-4 text-[10px] text-[var(--text-muted)] italic">
-                    Lower opacity allows the desktop wallpaper to shine through. Works best with darker background colors.
-                  </p>
-                </div>
-              </div>
+              {/* Opacity */}
+              <SettingsCard>
+                <SettingRow label={t('settings_ui.terminal.opacity') || 'Background Opacity'} description="Lower opacity allows the desktop wallpaper to shine through.">
+                  <span className="text-xs font-mono text-blue-400">{Math.round((osState.terminalSettings?.backgroundOpacity ?? 1) * 100)}%</span>
+                </SettingRow>
+                <input type="range" min="30" max="100" value={(osState.terminalSettings?.backgroundOpacity ?? 1) * 100}
+                  onChange={(e) => setTerminalSettings({ backgroundOpacity: parseInt(e.target.value) / 100 })}
+                  className="w-full h-1.5 bg-[var(--bg-tertiary)] rounded-full appearance-none cursor-pointer accent-blue-500 mt-2" />
+              </SettingsCard>
 
-              {/* Behavior Settings */}
-              <div className="pt-6 border-t border-[var(--border-color)]">
-                <div className="p-4 bg-[var(--bg-card)] border border-[var(--border-color)] rounded-2xl flex items-center justify-between group hover:bg-[var(--bg-card-hover)] transition-all">
-                  <div className="flex items-center gap-4">
-                    <div className="w-10 h-10 rounded-xl bg-[var(--bg-tertiary)] flex items-center justify-center">
-                      <RefreshCw size={18} className="text-amber-400" />
-                    </div>
-                    <div>
-                      <h4 className="text-sm font-bold text-[var(--text-primary)]">Cursor Blinking</h4>
-                      <p className="text-[10px] text-[var(--text-muted)] italic">Enable or disable smooth cursor animation</p>
-                    </div>
-                  </div>
-                  <div 
-                    onClick={() => setTerminalSettings({ cursorBlink: !osState.terminalSettings?.cursorBlink })}
-                    className={`w-11 h-6 rounded-full p-1 transition-colors cursor-pointer ${osState.terminalSettings?.cursorBlink !== false ? 'bg-[var(--accent-emerald)]' : 'bg-slate-300 dark:bg-slate-700'}`}
-                  >
-                    <div className={`w-4 h-4 bg-white rounded-full shadow-lg transition-transform ${osState.terminalSettings?.cursorBlink !== false ? 'translate-x-5' : 'translate-x-0'}`} />
-                  </div>
-                </div>
-
-                <div className="p-4 bg-[var(--bg-card)] border border-[var(--border-color)] rounded-2xl flex items-center justify-between group hover:bg-[var(--bg-card-hover)] transition-all">
-                  <div className="flex items-center gap-4">
-                    <div className="w-10 h-10 rounded-xl bg-[var(--bg-tertiary)] flex items-center justify-center">
-                      <Zap size={18} className="text-indigo-400" />
-                    </div>
-                    <div>
-                      <h4 className="text-sm font-bold text-[var(--text-primary)]">Tmux Mouse Scroll</h4>
-                      <p className="text-[10px] text-[var(--text-muted)] italic">Allow mouse wheel to scroll history within Tmux</p>
-                    </div>
-                  </div>
-                  <div 
-                    onClick={() => setTerminalSettings({ tmuxMouseScrolling: !osState.terminalSettings?.tmuxMouseScrolling })}
-                    className={`w-11 h-6 rounded-full p-1 transition-colors cursor-pointer ${osState.terminalSettings?.tmuxMouseScrolling ? 'bg-[var(--accent-indigo)]' : 'bg-slate-300 dark:bg-slate-700'}`}
-                  >
-                    <div className={`w-4 h-4 bg-white rounded-full shadow-lg transition-transform ${osState.terminalSettings?.tmuxMouseScrolling ? 'translate-x-5' : 'translate-x-0'}`} />
-                  </div>
-                </div>
-
-                <div className="p-4 bg-[var(--bg-card)] border border-[var(--border-color)] rounded-2xl flex items-center justify-between group hover:bg-[var(--bg-card-hover)] transition-all">
-                  <div className="flex items-center gap-4">
-                    <div className="w-10 h-10 rounded-xl bg-[var(--bg-tertiary)] flex items-center justify-center">
-                      <Terminal size={18} className="text-emerald-400" />
-                    </div>
-                    <div>
-                      <h4 className="text-sm font-bold text-[var(--text-primary)]">Auto-Attach Tmux</h4>
-                      <p className="text-[10px] text-[var(--text-muted)] italic">Automatically open Tmux on every terminal start</p>
-                    </div>
-                  </div>
-                  <div 
-                    onClick={() => setTerminalSettings({ autoTmuxAttach: !osState.terminalSettings?.autoTmuxAttach })}
-                    className={`w-11 h-6 rounded-full p-1 transition-colors cursor-pointer ${osState.terminalSettings?.autoTmuxAttach ? 'bg-[var(--accent-emerald)]' : 'bg-slate-300 dark:bg-slate-700'}`}
-                  >
-                    <div className={`w-4 h-4 bg-white rounded-full shadow-lg transition-transform ${osState.terminalSettings?.autoTmuxAttach ? 'translate-x-5' : 'translate-x-0'}`} />
-                  </div>
-                </div>
-              </div>
-
-
+              {/* Behavior */}
+              <SettingsCard>
+                <SettingRow label="Cursor Blinking" description="Enable or disable smooth cursor animation">
+                  <Toggle value={osState.terminalSettings?.cursorBlink !== false} onChange={() => setTerminalSettings({ cursorBlink: !osState.terminalSettings?.cursorBlink })} accent="emerald" />
+                </SettingRow>
+                <SettingRow label="Tmux Mouse Scroll" description="Allow mouse wheel to scroll history within Tmux">
+                  <Toggle value={osState.terminalSettings?.tmuxMouseScrolling || false} onChange={() => setTerminalSettings({ tmuxMouseScrolling: !osState.terminalSettings?.tmuxMouseScrolling })} />
+                </SettingRow>
+                <SettingRow label="Auto-Attach Tmux" description="Automatically open Tmux on every terminal start" noBorder>
+                  <Toggle value={osState.terminalSettings?.autoTmuxAttach || false} onChange={() => setTerminalSettings({ autoTmuxAttach: !osState.terminalSettings?.autoTmuxAttach })} accent="emerald" />
+                </SettingRow>
+              </SettingsCard>
             </section>
           </div>
         )}

@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { getServerSession } from 'next-auth/next';
 import mongoose from 'mongoose';
 import mysql from 'mysql2/promise';
 import { Client } from 'pg';
@@ -26,6 +27,11 @@ function writeConfig(config) {
 }
 
 export async function GET() {
+  const session = await getServerSession();
+  if (!session) {
+    return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
+  }
+
   const config = readConfig();
   let connected = mongoose.connection.readyState === 1;
   let currentUri = mongoose.connection._connectionString || config.uri || '';
@@ -51,6 +57,11 @@ export async function GET() {
 
 // POST — save config AND live-connect (with auto-migration)
 export async function POST(request) {
+  const session = await getServerSession();
+  if (!session) {
+    return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
+  }
+
   try {
     const body = await request.json();
     const { uri, skipMigration } = body;
@@ -172,7 +183,7 @@ export async function POST(request) {
     let migration = null;
     if (!skipMigration && oldUri && oldUri !== uri) {
       try {
-        console.log(`🔄 Auto-migration: ${oldUri.substring(0, 30)}... → ${uri.substring(0, 30)}...`);
+        console.log(`🔄 Auto-migration: changing database connection`);
         migration = await migrateConnections(oldUri, uri);
         console.log('✅ Auto-migration result:', migration);
       } catch (migErr) {

@@ -333,6 +333,8 @@ export default function Taskbar() {
                         try {
                           await saveSettings();
                         } catch(e) { console.error(e) }
+                        sessionStorage.removeItem('_vault_uri');
+                        sessionStorage.removeItem('_vault_tunnel');
                         await signOut({ redirect: false });
                         window.location.href = '/login'; 
                       }

@@ -6791,7 +6791,7 @@ If this is a deployment task, switch task mode to 'deploy' instead of 'code'.`
           >
             <div className={`w-full h-full rounded-2xl border border-[var(--border-color)] bg-[var(--bg-secondary)]/95 backdrop-blur-2xl shadow-2xl overflow-hidden flex flex-col relative transition-all duration-700 ${aiLoading || autoRunningRef.current ? 'ai-glow-thinking' : aiDone ? 'ai-glow-accomplished' : ''}`}>
               {/* Header */}
-              <div className="ai-panel-drag-handle flex items-center justify-between px-3 py-2 border-b border-[var(--border-color)] bg-[var(--bg-tertiary)]/30 dark:bg-black/20">
+              <div className="ai-panel-drag-handle flex items-center justify-between px-3 py-2 border-b border-[var(--border-color)] bg-[var(--bg-tertiary)]/30">
                 <div className="flex items-center gap-2 min-w-0">
                   <Sparkles size={14} className="text-[var(--accent-indigo)] shrink-0" />
                   <div className="flex flex-col min-w-0">
@@ -6830,23 +6830,23 @@ If this is a deployment task, switch task mode to 'deploy' instead of 'code'.`
                       setDockerComposeOptions(detected);
                       setDockerComposeAnalyzing(false);
                     }} 
-                    className="p-1.5 rounded hover:bg-[var(--bg-tertiary)] dark:hover:bg-white/5 flex items-center gap-1" 
+                    className="p-1.5 rounded hover:bg-[var(--bg-tertiary)] hover:bg-white/5 flex items-center gap-1" 
                     title="Generate Docker Compose (Auto-Detect Services)" 
                     style={{ color: 'var(--text-secondary)' }}
                   >
                     <Container size={12} />
                   </button>
-                  <button type="button" onClick={() => setAiHistoryOpen(v => !v)} className="p-1.5 rounded hover:bg-[var(--bg-tertiary)] dark:hover:bg-white/5" title={t('ai.history')} style={{ color: 'var(--text-secondary)' }}><Clock size={12} /></button>
-                  <button type="button" onClick={() => setAiSettingsOpen(v => !v)} className="p-1.5 rounded hover:bg-[var(--bg-tertiary)] dark:hover:bg-white/5" title={t('ai.settings')} style={{ color: 'var(--text-secondary)' }}><Settings2 size={12} /></button>
+                  <button type="button" onClick={() => setAiHistoryOpen(v => !v)} className="p-1.5 rounded hover:bg-[var(--bg-tertiary)] hover:bg-white/5" title={t('ai.history')} style={{ color: 'var(--text-secondary)' }}><Clock size={12} /></button>
+                  <button type="button" onClick={() => setAiSettingsOpen(v => !v)} className="p-1.5 rounded hover:bg-[var(--bg-tertiary)] hover:bg-white/5" title={t('ai.settings')} style={{ color: 'var(--text-secondary)' }}><Settings2 size={12} /></button>
                   <button 
                     type="button" 
                     onClick={() => setAutoTranslate(v => !v)} 
-                    className={`p-1.5 rounded transition ${autoTranslate ? 'bg-indigo-500/20 text-indigo-400' : 'hover:bg-[var(--bg-tertiary)] dark:hover:bg-white/5 text-[var(--text-secondary)] hover:text-indigo-400'}`} 
+                    className={`p-1.5 rounded transition ${autoTranslate ? 'bg-indigo-500/20 text-indigo-400' : 'hover:bg-[var(--bg-tertiary)] hover:bg-white/5 text-[var(--text-secondary)] hover:text-indigo-400'}`} 
                     title={t('wiki.autoTranslate')}
                   >
                     <Languages size={12} />
                   </button>
-                  <button type="button" onClick={() => { setAiOpen(false); setAiSettingsOpen(false); setAiHistoryOpen(false); }} className="p-1.5 rounded hover:bg-[var(--bg-tertiary)] dark:hover:bg-white/5" title={t('ai.close')} style={{ color: 'var(--text-secondary)' }}><X size={12} /></button>
+                  <button type="button" onClick={() => { setAiOpen(false); setAiSettingsOpen(false); setAiHistoryOpen(false); }} className="p-1.5 rounded hover:bg-[var(--bg-tertiary)] hover:bg-white/5" title={t('ai.close')} style={{ color: 'var(--text-secondary)' }}><X size={12} /></button>
                 </div>
               </div>
 
@@ -7043,19 +7043,19 @@ If this is a deployment task, switch task mode to 'deploy' instead of 'code'.`
 
               {/* Floating Mode Toggle */}
               <div className="px-4 py-2 border-b border-white/5 bg-[var(--bg-secondary)]/50 backdrop-blur-xl">
-                <div className="rounded-xl border border-[var(--border-color)] bg-[var(--bg-tertiary)]/20 dark:bg-black/20 p-2 flex items-center justify-between gap-3 flex-wrap">
-                  <div className="inline-flex rounded-lg bg-[var(--bg-tertiary)]/50 dark:bg-black/20 p-1 border border-white/5">
+                <div className="rounded-xl border border-[var(--border-color)] bg-[var(--bg-tertiary)]/20 bg-black/20 p-2 flex items-center justify-between gap-3 flex-wrap">
+                  <div className="inline-flex rounded-lg bg-[var(--bg-tertiary)]/50 bg-black/20 p-1 border border-white/5">
                     <button
                       type="button"
                       onClick={() => { setAiMode('manual'); setAutoMode(false); }}
-                      className={`px-3 py-1.5 rounded-md text-[10px] font-bold uppercase tracking-wider transition ${aiMode === 'manual' ? 'bg-[var(--bg-primary)] dark:bg-white/10 shadow-sm text-indigo-400' : 'hover:bg-[var(--bg-primary)]/50 dark:hover:bg-white/5 text-[var(--text-muted)]'}`}
+                      className={`px-3 py-1.5 rounded-md text-[10px] font-bold uppercase tracking-wider transition ${aiMode === 'manual' ? 'bg-[var(--bg-primary)] bg-white/10 shadow-sm text-[var(--accent-indigo)]' : 'hover:bg-[var(--bg-primary)]/50 hover:bg-white/5 text-[var(--text-muted)]'}`}
                     >
                       {t('ai.manual')}
                     </button>
                     <button
                       type="button"
                       onClick={() => setAiMode('auto')}
-                      className={`px-3 py-1.5 rounded-md text-[10px] font-bold uppercase tracking-wider transition ${aiMode === 'auto' ? 'bg-[var(--bg-primary)] dark:bg-white/10 shadow-sm text-emerald-400' : 'hover:bg-[var(--bg-primary)]/50 dark:hover:bg-white/5 text-[var(--text-muted)]'}`}
+                      className={`px-3 py-1.5 rounded-md text-[10px] font-bold uppercase tracking-wider transition ${aiMode === 'auto' ? 'bg-[var(--bg-primary)] bg-white/10 shadow-sm text-[var(--accent-emerald)]' : 'hover:bg-[var(--bg-primary)]/50 hover:bg-white/5 text-[var(--text-muted)]'}`}
                     >
                       {t('ai.auto')}
                     </button>
@@ -7126,7 +7126,7 @@ If this is a deployment task, switch task mode to 'deploy' instead of 'code'.`
                       <div key={msg.id} className={`flex flex-col ${msg.role === 'user' ? 'items-end' : 'items-start'}`}>
                         {/* User Message */}
                         {msg.role === 'user' && (
-                          <div className="max-w-[85%] rounded-2xl rounded-tr-sm bg-indigo-600/90 dark:bg-indigo-600/80 px-4 py-2.5 text-[12px] leading-relaxed text-white shadow-lg shadow-indigo-500/10">
+                          <div className="max-w-[85%] rounded-2xl rounded-tr-sm bg-indigo-600/90 bg-indigo-600/80 px-4 py-2.5 text-[12px] leading-relaxed text-white shadow-lg shadow-indigo-500/10">
                             <div className="flex items-center gap-1.5 mb-1 opacity-70">
                               <span className="text-[9px] font-bold uppercase tracking-wider">You</span>
                               <span className="text-[9px] opacity-50">{msg.timestamp.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</span>
@@ -7138,8 +7138,8 @@ If this is a deployment task, switch task mode to 'deploy' instead of 'code'.`
                         {/* AI Message — only show in Manual Mode to avoid redundancy with the Roadmap/Plan in Auto Mode */}
                         {msg.role === 'assistant' && aiMode === 'manual' && (
                           <div className={`max-w-[90%] rounded-2xl rounded-tl-sm px-4 py-3 text-[12px] leading-relaxed shadow-lg ${
-                            msg.danger ? 'bg-red-500/10 border border-red-500/20 text-red-600 dark:text-red-200' : 
-                            msg.done ? 'bg-emerald-500/10 border border-emerald-500/20 text-emerald-600 dark:text-emerald-200' : 
+                            msg.danger ? 'bg-red-500/10 border border-red-500/20 text-red-600 text-red-300' : 
+                            msg.done ? 'bg-emerald-500/10 border border-emerald-500/20 text-emerald-600 text-emerald-300' : 
                             'bg-[var(--bg-tertiary)]/60 border border-[var(--border-color)] text-[var(--text-primary)]'
                           }`}>
                             <div className="flex items-center gap-1.5 mb-2">
@@ -7405,7 +7405,7 @@ If this is a deployment task, switch task mode to 'deploy' instead of 'code'.`
                                       setAiError(`Patch failed: ${result.error || result.summary || 'Unknown error'}`);
                                     }
                                     setPatchModalAutoApplied(true);
-                                  }} disabled={!isLoggedIn} className="flex-1 flex items-center justify-center gap-1 py-2 rounded bg-emerald-600/80 dark:bg-emerald-600/50 hover:bg-emerald-500 text-white text-xs transition border border-emerald-500/20">
+                                  }} disabled={!isLoggedIn} className="flex-1 flex items-center justify-center gap-1 py-2 rounded bg-emerald-600/80 bg-emerald-600/50 hover:bg-emerald-500 text-white text-xs transition border border-emerald-500/20">
                                     <CornerDownLeft size={12} /> Apply Patch
                                   </button>
                                 ) : (
@@ -7417,14 +7417,14 @@ If this is a deployment task, switch task mode to 'deploy' instead of 'code'.`
                             </div>
                           </Rnd>
                         </div>,
-                        document.body
+                        document.getElementById('portal-root') || document.body
                       )
                     : null)
                 )}
 
                 {/* File Changes (diff) - Collapsible */}
                 {sshAiPrefs?.aiTask === 'code' && fileChanges?.diffText && (
-                  <div className="rounded-lg border border-[var(--border-color)] bg-[var(--bg-tertiary)]/20 dark:bg-black/20 overflow-hidden">
+                  <div className="rounded-lg border border-[var(--border-color)] bg-[var(--bg-tertiary)]/20 bg-black/20 overflow-hidden">
                     <div
                       className="flex items-center justify-between px-3 py-1.5 border-b border-white/10 cursor-pointer hover:bg-white/5 transition-colors"
                       onClick={() => setFileChangesCollapsed(!fileChangesCollapsed)}
@@ -7585,7 +7585,7 @@ If this is a deployment task, switch task mode to 'deploy' instead of 'code'.`
                             <button onClick={() => {
                               setPatchModalDiff(aiAnswer.diff || '');
                               setPatchModalOpen(true);
-                            }} className="flex-1 flex items-center justify-center gap-1 py-1.5 rounded bg-indigo-600/80 dark:bg-indigo-600/50 hover:bg-indigo-500 text-white text-xs transition border border-indigo-500/20">
+                            }} className="flex-1 flex items-center justify-center gap-1 py-1.5 rounded bg-indigo-600/80 bg-indigo-600/50 hover:bg-indigo-500 text-white text-xs transition border border-indigo-500/20">
                               Review Patch
                             </button>
                             <button onClick={() => navigator.clipboard.writeText(aiAnswer.diff || '')} className="flex-1 flex items-center justify-center gap-1 py-1.5 rounded bg-[var(--bg-tertiary)] hover:bg-[var(--bg-card-hover)] text-xs transition border border-[var(--border-color)]" style={{ color: 'var(--text-primary)' }}><Copy size={12} /> {t('ai.copy')}</button>
@@ -7605,7 +7605,7 @@ If this is a deployment task, switch task mode to 'deploy' instead of 'code'.`
                     {aiAnswer.command && (
                       <div className="flex items-center gap-1 p-2 border-t border-[var(--border-color)] bg-[var(--bg-secondary)]/50">
                         <button onClick={() => navigator.clipboard.writeText(aiAnswer.command || '')} className="flex-1 flex items-center justify-center gap-1 py-1.5 rounded bg-[var(--bg-tertiary)] hover:bg-[var(--bg-card-hover)] text-xs transition border border-[var(--border-color)]" style={{ color: 'var(--text-primary)' }}><Copy size={12} /> {t('ai.copy')}</button>
-                        <button onClick={() => handleInsertCommand(aiAnswer.command)} className="flex-1 flex items-center justify-center gap-1 py-1.5 rounded bg-emerald-600/80 dark:bg-emerald-600/50 hover:bg-emerald-500 text-white text-xs transition border border-emerald-500/20"><CornerDownLeft size={12} /> {t('ai.insert')}</button>
+                        <button onClick={() => handleInsertCommand(aiAnswer.command)} className="flex-1 flex items-center justify-center gap-1 py-1.5 rounded bg-emerald-600/80 bg-emerald-600/50 hover:bg-emerald-500 text-white text-xs transition border border-emerald-500/20"><CornerDownLeft size={12} /> {t('ai.insert')}</button>
                         <button onClick={() => {
                           if (!isLoggedIn) { setAiError(t('ai.loginRequired')); return; }
                           if (aiAnswer.danger) { setExecuteConfirmOpen(true); return; }
@@ -7639,11 +7639,11 @@ If this is a deployment task, switch task mode to 'deploy' instead of 'code'.`
                     <div className="p-3 space-y-2">
                       {/* All available skills */}
                       <div className="text-[9px] text-[var(--text-muted)] font-mono leading-relaxed">
-                        <span className="text-emerald-500/70 dark:text-emerald-400/70 font-bold">[Skills]</span> Available: {injectedSkills.allAvailable.length > 0 ? injectedSkills.allAvailable.join(', ') : 'none'}
+                        <span className="text-emerald-500/70 text-emerald-400/70 font-bold">[Skills]</span> Available: {injectedSkills.allAvailable.length > 0 ? injectedSkills.allAvailable.join(', ') : 'none'}
                       </div>
                       {/* Matched skills with staggered animation */}
                       <div className="text-[9px] text-[var(--text-muted)] font-mono leading-relaxed">
-                        <span className="text-emerald-500/70 dark:text-emerald-400/70 font-bold">[Skills]</span> Matched: {injectedSkills.skills.length > 0 ? injectedSkills.skills.map(s => s.name).join(', ') : 'none'}
+                        <span className="text-emerald-500/70 text-emerald-400/70 font-bold">[Skills]</span> Matched: {injectedSkills.skills.length > 0 ? injectedSkills.skills.map(s => s.name).join(', ') : 'none'}
                       </div>
                       {injectedSkills.skills.length > 0 && (
                         <div className="space-y-1.5 mt-2">
@@ -7657,7 +7657,7 @@ If this is a deployment task, switch task mode to 'deploy' instead of 'code'.`
                                 <CheckCircle2 size={10} className="text-emerald-400" />
                               </div>
                               <div className="flex-1 min-w-0">
-                                <div className="text-[10px] font-bold text-emerald-600 dark:text-emerald-300 truncate">{skill.name}</div>
+                                <div className="text-[10px] font-bold text-emerald-600 text-emerald-300 truncate">{skill.name}</div>
                                 <div className="text-[8px] text-[var(--text-muted)] truncate mt-0.5">
                                   {skill.description || (skill.source === 'custom' ? 'Local expert skill' : 'Installed SkillMP knowledge')}
                                 </div>
@@ -8033,7 +8033,7 @@ If this is a deployment task, switch task mode to 'deploy' instead of 'code'.`
                 {/* Danger Confirmation */}
                 {executeConfirmOpen && aiAnswer?.danger && (
                   <div className="rounded-lg border border-red-500/30 bg-red-500/10 p-3">
-                    <div className="flex items-center gap-2 text-xs font-bold text-red-600 dark:text-red-300 mb-2"><ShieldAlert size={12} /> {t('ai.confirmExecution')}</div>
+                    <div className="flex items-center gap-2 text-xs font-bold text-red-600 text-red-300 mb-2"><ShieldAlert size={12} /> {t('ai.confirmExecution')}</div>
                     <div className="text-[11px] opacity-80 mb-3" style={{ color: 'var(--text-primary)' }}>{t('ai.confirmText')}</div>
                     <div className="flex gap-2">
                       <button onClick={() => setExecuteConfirmOpen(false)} className="flex-1 py-1.5 rounded border border-white/10 hover:bg-white/5 text-xs font-medium" style={{ color: 'var(--text-primary)' }}>{t('ai.cancel')}</button>
@@ -8132,7 +8132,7 @@ If this is a deployment task, switch task mode to 'deploy' instead of 'code'.`
                 {/* Sensitive Operation Confirmation */}
                 {sensitiveConfirmOpen && pendingSensitiveCommand && (
                   <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-3">
-                    <div className="flex items-center gap-2 text-xs font-bold text-amber-600 dark:text-amber-300 mb-2">
+                    <div className="flex items-center gap-2 text-xs font-bold text-amber-600 text-amber-300 mb-2">
                       <ShieldAlert size={12} /> Sensitive Operation
                     </div>
                     <div className="text-[11px] opacity-80 mb-2" style={{ color: 'var(--text-primary)' }}>
@@ -8248,7 +8248,7 @@ If this is a deployment task, switch task mode to 'deploy' instead of 'code'.`
               )}
 
               {/* Floating Input Footer - Antigravity Style */}
-              <div className="border-t border-white/5 bg-[var(--bg-secondary)] dark:bg-[#0c0c0c]/90 backdrop-blur-3xl z-40 transition-all duration-300">
+              <div className="border-t border-white/5 bg-[var(--bg-secondary)] bg-[var(--bg-secondary)]/90 backdrop-blur-3xl z-40 transition-all duration-300">
                 {/* Active Skills Panel — slides in above the footer */}
                 {showSkillsList && activeSkills.length > 0 && (
                   <div className="border-b border-indigo-500/20 bg-indigo-950/60 animate-in fade-in slide-in-from-bottom-2 duration-200">
@@ -8679,7 +8679,7 @@ If this is a deployment task, switch task mode to 'deploy' instead of 'code'.`
               </div>
             </div>
           </Rnd>,
-          document.body
+          document.getElementById('portal-root') || document.body
         )}
       </div>
     </div>

@@ -1253,6 +1253,10 @@ export function OSProvider({ children }) {
         html.classList.add(isDark ? 'dark' : 'light');
       } else {
         html.classList.add(theme);
+        // Synthwave, cyberpunk, retro are dark themes — also add 'dark' so dark: Tailwind classes work
+        if (theme === 'synthwave' || theme === 'cyberpunk' || theme === 'retro') {
+          html.classList.add('dark');
+        }
       }
     };
 
@@ -1271,8 +1275,8 @@ export function OSProvider({ children }) {
     dispatch({ type: 'SHOW_MODAL', payload: { type: 'alert', title, message } });
   };
 
-  const showConfirm = (message, onConfirm, title = 'Confirm', confirmLabel, cancelLabel) => {
-    dispatch({ type: 'SHOW_MODAL', payload: { type: 'confirm', title, message, onConfirm, confirmLabel, cancelLabel } });
+  const showConfirm = (message, onConfirm, title = 'Confirm', confirmLabel, cancelLabel, onCancel) => {
+    dispatch({ type: 'SHOW_MODAL', payload: { type: 'confirm', title, message, onConfirm, confirmLabel, cancelLabel, onCancel } });
   };
 
   const showModal = (component, title = '', options = {}) => {

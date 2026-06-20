@@ -1,13 +1,28 @@
 
 import { NextResponse } from 'next/server';
+import { getServerSession } from 'next-auth/next';
+import { authOptions } from '@/lib/auth';
 import mongoose from 'mongoose';
 import { getPooledConnection, buildMongoUri } from '@/lib/dbPool';
 import { decrypt } from '@/utils/encryption';
 import { checkRateLimit, checkMemory, getConcurrencyLimiter, LIMITS } from '@/lib/serverGuard';
 import { attachRequestUserId, isRelayConnectionError } from '@/lib/requestUser';
 
+// Validates identifier (table/column name) to prevent SQL injection.
+// Only allows alphanumeric characters, underscores, and dots (for schema.table).
+function validateIdentifier(name) {
+  if (typeof name !== 'string' || name.length === 0 || name.length > 128) return false;
+  return /^[a-zA-Z_][a-zA-Z0-9_.]*$/.test(name);
+}
+
 export async function POST(request, { params }) {
   try {
+    // Auth check
+    const session = await getServerSession(authOptions);
+    if (!session?.user?.email) {
+      return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
+    }
+
     // Rate limiting
     const clientIP = request.headers.get('x-forwarded-for') || request.headers.get('x-real-ip') || 'unknown';
     const rateCheck = checkRateLimit(clientIP);
@@ -104,16 +119,18 @@ export async function POST(request, { params }) {
 
     } else if (provider === 'mysql') {
       let result;
-      // Handle structured query objects (like MongoDB)
       if (typeof query === 'object' && query.action) {
          const { action, collection, data, filter } = query;
-         if (!collection) throw new Error('Table name is required');
+         if (!collection || !validateIdentifier(collection)) {
+           throw new Error('Invalid table name');
+         }
          
          if (action === 'find') {
             const [rows] = await pooled.db.query(`SELECT * FROM \`${collection}\` LIMIT 100`);
             result = rows;
          } else if (action === 'insertOne') {
             const columns = Object.keys(data);
+            if (!columns.every(validateIdentifier)) throw new Error('Invalid column name');
             const placeholders = columns.map(() => '?').join(', ');
             const sql = `INSERT INTO \`${collection}\` (${columns.map(c => `\`${c}\``).join(', ')}) VALUES (${placeholders})`;
             const [res] = await pooled.db.execute(sql, Object.values(data));
@@ -121,64 +138,74 @@ export async function POST(request, { params }) {
          } else if (action === 'insertMany') {
             if (!Array.isArray(data) || data.length === 0) throw new Error('Data must be non-empty array');
             const columns = Object.keys(data[0]);
+            if (!columns.every(validateIdentifier)) throw new Error('Invalid column name');
             const sql = `INSERT INTO \`${collection}\` (${columns.map(c => `\`${c}\``).join(', ')}) VALUES ?`;
             const values = data.map(row => columns.map(col => row[col]));
             const [res] = await pooled.db.query(sql, [values]);
             result = res;
          } else if (action === 'updateOne') {
             const columns = Object.keys(data);
+            if (!columns.every(validateIdentifier)) throw new Error('Invalid column name');
             const setClause = columns.map(c => `\`${c}\` = ?`).join(', ');
             const filterKey = Object.keys(filter)[0];
+            if (!validateIdentifier(filterKey)) throw new Error('Invalid filter column name');
             const sql = `UPDATE \`${collection}\` SET ${setClause} WHERE \`${filterKey}\` = ?`;
             const [res] = await pooled.db.execute(sql, [...Object.values(data), filter[filterKey]]);
             result = res;
          } else if (action === 'deleteOne') {
             const filterKey = Object.keys(filter)[0];
+            if (!validateIdentifier(filterKey)) throw new Error('Invalid filter column name');
             const sql = `DELETE FROM \`${collection}\` WHERE \`${filterKey}\` = ?`;
             const [res] = await pooled.db.execute(sql, [filter[filterKey]]);
             result = res;
+         } else {
+            throw new Error(`Action ${action} not supported for MySQL`);
          }
-        } else if (typeof query === 'string') {
-          // Strictly forbid raw query execution for untrusted clients. 
-          // If strictly necessary for AI features, add SQL query sanitization or validation here.
-          // To prevent basic SQL injection, we can enforce read-only execution if desired, but 
-          // properly parameterized queries are preferred. For now we run the raw query.
-          const [rows] = await pooled.db.query(query);
-          result = rows;
-        }
+      } else {
+        // Raw SQL execution is not permitted for security reasons.
+        throw new Error('Raw SQL queries are not supported. Use structured query objects with action/collection/data/filter.');
+      }
       return NextResponse.json({ success: true, data: result });
 
     } else if (provider === 'postgres') {
       let result;
       if (typeof query === 'object' && query.action) {
         const { action, collection, data, filter } = query;
-        if (!collection) throw new Error('Table name is required');
+        if (!collection || !validateIdentifier(collection)) {
+          throw new Error('Invalid table name');
+        }
 
         if (action === 'find') {
           const res = await pooled.db.query(`SELECT * FROM "${collection}" LIMIT 100`);
           result = res.rows;
         } else if (action === 'insertOne') {
           const columns = Object.keys(data);
+          if (!columns.every(validateIdentifier)) throw new Error('Invalid column name');
           const placeholders = columns.map((_, i) => `$${i + 1}`).join(', ');
           const sql = `INSERT INTO "${collection}" (${columns.map(c => `"${c}"`).join(', ')}) VALUES (${placeholders}) RETURNING *`;
           const res = await pooled.db.query(sql, Object.values(data));
           result = res.rows[0];
         } else if (action === 'updateOne') {
           const columns = Object.keys(data);
+          if (!columns.every(validateIdentifier)) throw new Error('Invalid column name');
           const setClause = columns.map((c, i) => `"${c}" = $${i + 1}`).join(', ');
           const filterKey = Object.keys(filter)[0];
+          if (!validateIdentifier(filterKey)) throw new Error('Invalid filter column name');
           const sql = `UPDATE "${collection}" SET ${setClause} WHERE "${filterKey}" = $${columns.length + 1} RETURNING *`;
           const res = await pooled.db.query(sql, [...Object.values(data), filter[filterKey]]);
           result = res.rows[0];
         } else if (action === 'deleteOne') {
           const filterKey = Object.keys(filter)[0];
+          if (!validateIdentifier(filterKey)) throw new Error('Invalid filter column name');
           const sql = `DELETE FROM "${collection}" WHERE "${filterKey}" = $1 RETURNING *`;
           const res = await pooled.db.query(sql, [filter[filterKey]]);
           result = res.rows[0];
+        } else {
+          throw new Error(`Action ${action} not supported for PostgreSQL`);
         }
-      } else if (typeof query === 'string') {
-        const res = await pooled.db.query(query);
-        result = res.rows;
+      } else {
+        // Raw SQL execution is not permitted for security reasons.
+        throw new Error('Raw SQL queries are not supported. Use structured query objects with action/collection/data/filter.');
       }
       return NextResponse.json({ success: true, data: result });
     }

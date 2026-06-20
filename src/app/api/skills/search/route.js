@@ -31,7 +31,7 @@ export async function POST(req) {
     }
     
     // DEBUG: Log key prefix and length to verify it's loaded correctly
-    console.log(`[SkillsMP] Key check: prefix=${apiKey.substring(0, 10)}... length=${apiKey.length}`);
+    console.log(`[SkillsMP] Key check: configured=${!!apiKey}, length=${apiKey.length}`);
 
     // 'smart' mode: use Groq to extract concise keywords, then call normal keyword search
     // 'ai' mode: use SkillsMP AI vector search (hits rate limit)

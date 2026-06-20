@@ -51,7 +51,7 @@ function reEncrypt(value, password, oldKey, fieldName) {
       console.log(`[reEncrypt] ${fieldName} - Success using password`);
       return encrypt(plain);
     } else {
-      console.log(`[reEncrypt] ${fieldName} - FAILED using password! value: ${value.substring(0, 15)}...`);
+      console.log(`[reEncrypt] ${fieldName} - FAILED using password`);
     }
   }
 

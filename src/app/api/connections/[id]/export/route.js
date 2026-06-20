@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { getServerSession } from 'next-auth/next';
 import mongoose from 'mongoose';
 import { getPooledConnection } from '@/lib/dbPool';
 import { decrypt } from '@/utils/encryption';
@@ -10,6 +11,11 @@ import {
   LIMITS 
 } from '@/lib/serverGuard';
 
+function validateIdentifier(name) {
+  if (typeof name !== 'string' || name.length === 0 || name.length > 128) return false;
+  return /^[a-zA-Z_][a-zA-Z0-9_.]*$/.test(name);
+}
+
 /**
  * Streaming Export API
  * 
@@ -20,6 +26,11 @@ import {
  * 4. Has concurrency limits — max 5 exports at a time across all users
  */
 export async function POST(request, { params }) {
+  const session = await getServerSession();
+  if (!session) {
+    return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
+  }
+
   const limiter = getConcurrencyLimiter('export', 5);
 
   if (!limiter.allowed) {
@@ -38,6 +49,11 @@ export async function POST(request, { params }) {
     const collection = body.collection;
     const maxRecords = Math.min(body.limit || LIMITS.MAX_EXPORT_RECORDS, LIMITS.MAX_EXPORT_RECORDS);
     const provider = conn.dbProvider || 'mongodb';
+
+    // Validate collection name for SQL injection prevention
+    if (provider !== 'mongodb' && !validateIdentifier(collection)) {
+      return NextResponse.json({ success: false, error: 'Invalid collection/table name' }, { status: 400 });
+    }
 
     // Attach userId so dbPool can route localhost connections via relay
     try {

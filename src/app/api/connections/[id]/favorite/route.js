@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { getServerSession } from 'next-auth/next';
 import connectDB from '@/lib/mongodb';
 import { ConnectionRepository } from '@/lib/repositories/ConnectionRepository';
 import mongoose from 'mongoose';
@@ -7,6 +8,11 @@ const isValidMongoId = (id) => mongoose.Types.ObjectId.isValid(id);
 
 // PUT toggle favorite
 export async function PUT(request, { params }) {
+  const session = await getServerSession();
+  if (!session) {
+    return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
+  }
+
   try {
     const { id } = await params;
     const db = await connectDB();

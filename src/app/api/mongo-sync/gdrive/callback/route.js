@@ -139,7 +139,7 @@ export async function GET(request) {
       <body>
         <div class="card">
           <h1>Google Drive Linked!</h1>
-          <p>Your Google Drive account has been connected successfully as <strong>${driveConfig.email}</strong>.</p>
+          <p>Your Google Drive account has been connected successfully as <strong>${driveConfig.email.replace(/[<>&"']/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;', "'": '&#39;' }[c]))}</strong>.</p>
           <div class="spinner"></div>
           <p style="margin-top: 1.5rem; font-size: 0.8rem; color: #64748b;">This window will close automatically...</p>
         </div>

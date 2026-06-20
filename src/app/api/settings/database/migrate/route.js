@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { getServerSession } from 'next-auth/next';
 import { migrateConnections } from './migrator';
 
 /**
@@ -11,6 +12,11 @@ import { migrateConnections } from './migrator';
  * Credentials are kept encrypted as-is (same ENCRYPTION_KEY on both sides).
  */
 export async function POST(request) {
+  const session = await getServerSession();
+  if (!session) {
+    return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
+  }
+
   try {
     const { sourceUri, targetUri } = await request.json();
 

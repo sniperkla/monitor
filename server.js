@@ -886,6 +886,7 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
             sftp: null,
             sftpPending: null,
             activeTransfers: new Set(),
+            pendingUploadPaths: new Set(),
             recentUploads: new Map(),
             lastActivityAt: Date.now(),
             lastIdleLogAt: 0,
@@ -1586,6 +1587,25 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
               stream.on('error', (err) => {
                   console.error('SFTP Read Error:', err);
                   runCat();
+              });
+            });
+          });
+
+          // Read File as Base64 (for preview)
+          socket.on('sftp:readFileBase64', (path) => {
+            console.log(`📖 [${socket.id}] SFTP READ BASE64: ${path}`);
+
+            // Use ssh exec base64 — faster than SFTP read + Node.js Buffer conversion
+            const escapedPath = path.replace(/"/g, '\\"');
+            sshClient.exec(`base64 "${escapedPath}"`, (err, stream) => {
+              if (err) return emitSftpError(err, 'Read failed');
+              let content = '';
+              let stderr = '';
+              stream.on('data', d => content += d.toString());
+              stream.stderr.on('data', d => stderr += d.toString());
+              stream.on('close', (code) => {
+                if (code !== 0) return emitSftpError(stderr || `Exit code ${code}`, 'Read failed');
+                socket.emit('sftp:file_base64', { path, content: content.replace(/\s/g, '') });
               });
             });
           });
@@ -2430,9 +2450,10 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
             if (!mem.safe) {
               console.warn(`🛡️ [${socket.id}] Upload blocked by memory guard: RSS=${mem.rssMB ?? 'n/a'}MB, SysFree=${mem.sysFreeMB ?? 'n/a'}MB`);
               return socket.emit('sftp:error', { 
-                message: `Upload blocked by memory guard. Free RAM: ${mem.sysFreeMB ?? 'n/a'}MB, RSS: ${mem.rssMB ?? 'n/a'}MB.`,
+                message: `Upload blocked by memory guard (${filename}). Free RAM: ${mem.sysFreeMB ?? 'n/a'}MB, RSS: ${mem.rssMB ?? 'n/a'}MB.`,
                 guard: 'memory',
                 details: mem,
+                filename,
               });
             }
 
@@ -2441,10 +2462,11 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
             if (!limiter.allowed) {
               console.warn(`🛡️ [${socket.id}] Upload blocked by transfer capacity: ${limiter.current}/${limiter.max}`);
               return socket.emit('sftp:error', { 
-                message: `Transfer capacity reached (${limiter.current}/${limiter.max} active). Please wait for another transfer to finish.`,
+                message: `Transfer capacity reached (${filename}). ${limiter.current}/${limiter.max} active transfers.`,
                 guard: 'concurrency',
                 current: limiter.current,
                 max: limiter.max,
+                filename,
               });
             }
 
@@ -2452,9 +2474,10 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
             const rate = checkRateLimit(`sftp_upload:${socket.id}`, 20); 
             if (!rate.allowed) {
                return socket.emit('sftp:error', { 
-                 message: `Upload rate limit exceeded. Please wait ${Math.ceil(rate.resetIn / 1000)}s.`,
+                 message: `Upload rate limit exceeded (${filename}). Please wait ${Math.ceil(rate.resetIn / 1000)}s.`,
                  guard: 'rate-limit',
-                 resetIn: rate.resetIn
+                 resetIn: rate.resetIn,
+                 filename,
                });
             }
 
@@ -2466,16 +2489,32 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
                }
                
                const transferId = `up_${Date.now()}`;
-               const startUpload = (actualOffset) => {
-                  sessionData.activeTransfers.add(transferId);
-                  limiter.acquire(); 
+                const startUpload = (actualOffset) => {
+                   sessionData.activeTransfers.add(transferId);
+                   sessionData.pendingUploadPaths.add(destPath);
+                   limiter.acquire(); 
 
-                  const cleanup = () => {
-                    if (sessionData.activeTransfers.has(transferId)) {
-                        limiter.release();
-                        sessionData.activeTransfers.delete(transferId);
-                    }
-                  };
+                   const cleanup = () => {
+                     if (sessionData.activeTransfers.has(transferId)) {
+                         limiter.release();
+                         sessionData.activeTransfers.delete(transferId);
+                     }
+                     sessionData.pendingUploadPaths.delete(destPath);
+                   };
+
+                   const deletePartialFile = () => {
+                     try {
+                       getSftp((sftpErr, sftp) => {
+                         if (!sftpErr && sftp) {
+                           sftp.unlink(destPath, () => {
+                             sshClient.exec(`rm -f "${destPath}"`, () => {});
+                           });
+                         } else {
+                           sshClient.exec(`rm -f "${destPath}"`, () => {});
+                         }
+                       });
+                     } catch (_) {}
+                   };
 
                   const useFallback = !sftp || !!sessionData.dockerContainerId;
 
@@ -2509,7 +2548,9 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
                           if (typeof wStream.destroy === 'function') wStream.destroy();
                           else if (wStream.writable) wStream.end();
                         } catch (_) {}
-                        emitSftpError(err, prefix, { resetSftp: !useFallback, recoverable: !useFallback });
+                        console.warn(`🗑️ [${socket.id}] Upload failed, deleting partial file: ${destPath}`);
+                        deletePartialFile();
+                        emitSftpError(err, `${prefix} (${filename})`, { resetSftp: !useFallback, recoverable: !useFallback });
                       });
                     };
 
@@ -2541,15 +2582,7 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
                           else if (wStream.writable) wStream.end();
                         } catch (_) {}
                         console.warn(`🗑️ [${socket.id}] SFTP UPLOAD ABORTED: Deleting partial file: ${destPath}`);
-                        getSftp((sftpErr, sftp) => {
-                          if (!sftpErr && sftp) {
-                            sftp.unlink(destPath, () => {
-                              sshClient.exec(`rm -f "${destPath}"`, () => {});
-                            });
-                            return;
-                          }
-                          sshClient.exec(`rm -f "${destPath}"`, () => {});
-                        });
+                        deletePartialFile();
                       });
                     };
 
@@ -2564,6 +2597,7 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
 
                     wStream.on('close', () => {
                       finalize(() => {
+                        sessionData.pendingUploadPaths.delete(destPath);
                         if (sessionData?.recentUploads) {
                           sessionData.recentUploads.set(destPath, {
                             uploadedAt: Date.now(),
@@ -2595,6 +2629,16 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
                   } else {
                     const flags = actualOffset > 0 ? 'r+' : 'w';
                     const writeStream = sftp.createWriteStream(destPath, { flags, start: actualOffset });
+                    writeStream.on('error', (streamErr) => {
+                      // If resume fails because file was deleted (partial cleanup), retry with fresh write
+                      if (actualOffset > 0 && streamErr.code === 'ENOENT') {
+                        console.log(`🔄 [${socket.id}] Resume target gone, restarting upload from 0: ${destPath}`);
+                        const freshStream = sftp.createWriteStream(destPath, { flags: 'w', start: 0 });
+                        setupHandlers(freshStream);
+                      } else {
+                        setupHandlers(writeStream); // let existing error handler deal with it
+                      }
+                    });
                     setupHandlers(writeStream);
                   }
                };
@@ -3031,6 +3075,24 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
               console.log(`🧹 Released capacity for abandoned transfer: ${tId}`);
            }
            session.activeTransfers.clear();
+        }
+
+        // --- Cleanup partial upload files left by failed/abandoned transfers ---
+        if (session.pendingUploadPaths && session.pendingUploadPaths.size > 0) {
+           const sshClient = session.sshClient;
+           const sftp = session.sftp;
+           for (const partialPath of session.pendingUploadPaths) {
+             console.log(`🧹 Deleting orphaned partial upload: ${partialPath}`);
+             try {
+               if (sftp) {
+                 sftp.unlink(partialPath, () => {});
+               }
+               if (sshClient && sshClient._state !== 'closed') {
+                 sshClient.exec(`rm -f "${partialPath}"`, () => {});
+               }
+             } catch (_) {}
+           }
+           session.pendingUploadPaths.clear();
         }
       } catch (err) {
         console.error('Error cleaning up session:', err);

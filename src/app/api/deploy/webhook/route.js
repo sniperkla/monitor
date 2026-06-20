@@ -653,7 +653,6 @@ export async function POST(request) {
       branch: config.branch,
       targetType: config.targetType,
       hasDeployCommand: !!config.deployCommand?.trim(),
-      commandPreview: config.deployCommand?.substring(0, 50)
     } : 'NO CONFIG');
 
     if (!config || (!config.enabled && !isManual)) {

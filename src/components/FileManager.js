@@ -5,7 +5,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { 
   Folder, File as FileIcon, ChevronLeft, ChevronRight, ChevronUp, ChevronDown, RefreshCw, 
   Download, Upload, Trash2, FolderPlus, Search, Grid, List as ListIcon,
-  AlertCircle, Edit, FileText, X, Save, AlertTriangle, 
+  AlertCircle, Edit, FileText, X, Save, AlertTriangle, Eye,
   Copy, Scissors, Clipboard, Wifi, AtSign, Replace, Columns, Rows,
   Sparkles, Brain, Clock, Settings2, Languages, CornerDownLeft, 
   MessagesSquare, BrainCircuit, ShieldAlert, Terminal
@@ -113,7 +113,7 @@ if (typeof window !== 'undefined' && !window.__fmSocketPoolUnloadBound) {
 }
 
 const SFTP_REUSE_EVENTS = [
-  'heartbeat:pong', 'ssh:pong', 'sftp:list', 'sftp:file_content', 'sftp:action_success',
+  'heartbeat:pong', 'ssh:pong', 'sftp:list', 'sftp:file_content', 'sftp:file_base64', 'sftp:action_success',
   'sftp:progress', 'sftp:download_start', 'sftp:download_chunk', 'sftp:download_done',
   'sftp:error', 'ssh:error', 'ssh:idle_timeout',
 ];
@@ -149,6 +149,8 @@ export default function FileManager({
   const [socket, setSocket] = useState(null);
   const [viewMode, setViewMode] = useState('grid');
   const [deletingFiles, setDeletingFiles] = useState(new Set());
+  const [renamingFile, setRenamingFile] = useState(null); // { filename, value }
+  const renameInputRef = useRef(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState([]); // global search results
   const [searchLoading, setSearchLoading] = useState(false);
@@ -175,6 +177,7 @@ export default function FileManager({
   
   // Editor State
   const [editor, setEditor] = useState({ visible: false, file: null, content: '', saving: false });
+  const [preview, setPreview] = useState({ visible: false, file: null, content: '', loading: false, type: 'text' });
   const [infoModal, setInfoModal] = useState({ visible: false, file: null, sizeLoading: false, realSize: null });
   const editorTextareaRef = useRef(null);
   const [mentionState, setMentionState] = useState({ active: false, query: '', results: [], selectedIndex: 0, triggerPos: 0 });
@@ -523,6 +526,7 @@ export default function FileManager({
         setStatus('ready');
         newSocket.emit('sftp:list', currentPathRef.current);
         appDispatch({ type: 'UPDATE_CONNECTION', payload: { _id: connectionId, status: 'online' } });
+        window.dispatchEvent(new CustomEvent('connection-status-update', { detail: { connectionId, status: 'online' } }));
 
         const pendingResume = pendingTransferResumeRef.current;
         if (pendingResume?.type === 'upload' && uploadQueueRef.current.length > 0) {
@@ -1381,7 +1385,39 @@ export default function FileManager({
     });
   };
 
-  const handleFileUpload = async (e, specificFile = null, resumeOffset = 0, overridePath = null, displayName = null) => {
+  const handleFileUpload = async (e, specificFile = null, resumeOffset = 0, overridePath = null, displayName = null, skipOverwriteCheck = false) => {
+    // Handle multiple files from file input
+    if (e?.target?.files && e.target.files.length > 1 && !specificFile) {
+      const inputFiles = Array.from(e.target.files);
+      const baseTarget = overridePath !== null ? overridePath : currentPath;
+
+      // Bulk overwrite check
+      const conflicting = inputFiles.filter(f => files.some(existing => existing.filename === f.name));
+      let filesToUpload = inputFiles;
+
+      if (conflicting.length > 0) {
+        const choice = await new Promise(resolve => {
+          showConfirm(
+            `${conflicting.length} file${conflicting.length > 1 ? 's' : ''} already exist${conflicting.length === 1 ? 's' : ''} on the server:\n${conflicting.map(f => `• ${f.name}`).join('\n')}\n\nOverwrite all existing files?`,
+            () => resolve('overwrite'),
+            'Files Already Exist',
+            'Overwrite All',
+            'Skip Existing',
+            () => resolve('skip'),
+          );
+        });
+        if (choice === 'skip') {
+          filesToUpload = inputFiles.filter(f => !conflicting.some(c => c.name === f.name));
+        }
+      }
+
+      for (const file of filesToUpload) {
+        await handleFileUpload(null, file, 0, overridePath, null, true);
+      }
+      e.target.value = null;
+      return;
+    }
+
     const file = specificFile || e?.target?.files[0];
     if (!file) return;
 
@@ -1392,6 +1428,27 @@ export default function FileManager({
     const baseTarget = overridePath !== null ? overridePath : currentPath;
     const path = baseTarget === '.' ? file.name : `${baseTarget}/${file.name}`;
     
+    // Check if file already exists on server (skip check for resume or bulk uploads)
+    if (resumeOffset === 0 && !skipOverwriteCheck) {
+      const existingFile = files.find(f => f.filename === file.name);
+      if (existingFile) {
+        const confirmed = await new Promise(resolve => {
+          showConfirm(
+            `"${file.name}" already exists on the server. Overwrite?`,
+            () => resolve(true),
+            t('files.status.upload'),
+            'Overwrite',
+            t('common.cancel'),
+            () => resolve(false),
+          );
+        });
+        if (!confirmed) {
+          if (e?.target?.value) e.target.value = null;
+          return;
+        }
+      }
+    }
+
     // Add to queue if not already there (for manual retry support)
     setUploadQueue(prev => {
       const exists = prev.find(item => item.path === path);
@@ -1409,6 +1466,14 @@ export default function FileManager({
     };
     setTransfer(transferObj);
     transferRef.current = transferObj;
+
+    // Create upload progress notification
+    const uploadNotifId = addNotification({
+      title: t('files.status.upload'),
+      message: `${file.name} — 0%`,
+      type: 'loading',
+      duration: 0,
+    });
 
     let activeHandshakeCleanup = null;
     const waitForUploadHandshake = (expectedOffset) => new Promise(resolve => {
@@ -1505,7 +1570,7 @@ export default function FileManager({
             setUploadQueue(prev => prev.filter(item => item.path !== path));
             addNotification({
               title: t('files.status.errorTitle'),
-              message: 'Server still busy after several retries. Please try again in a moment.',
+              message: `${file.name}: Server still busy after several retries. Please try again in a moment.`,
               type: 'error',
             });
             return;
@@ -1538,20 +1603,21 @@ export default function FileManager({
         }
       } while (startData.guardBlocked || startData.rateLimited);
 
-      if (startData.error) {
+        if (startData.error) {
         setTransfer(prev => ({ ...prev, waiting: true, error: true }));
         if (startData.recoverable || isTransferChannelError(startData.error)) {
           requestReconnect('Upload channel stalled. Reconnecting...', {
             preserveTransfer: true,
-            notificationMessage: 'Upload stalled. Reconnecting and keeping the upload queue for retry.',
+            notificationMessage: `${file.name}: Upload stalled. Reconnecting and keeping the upload queue for retry.`,
           });
           return { interrupted: true, path };
         }
         setTransfer(null);
         transferRef.current = null;
+        setUploadQueue(prev => prev.filter(item => item.path !== path));
         addNotification({
           title: t('files.status.errorTitle'),
-          message: startData.error,
+          message: `${file.name}: ${startData.error}`,
           type: 'error',
         });
         return;
@@ -1722,12 +1788,25 @@ export default function FileManager({
           progress: Math.round((offset / file.size) * 100),
           waiting: false
         }));
+
+        // Update upload notification with progress
+        const pct = Math.round((offset / file.size) * 100);
+        updateNotification(uploadNotifId, {
+          message: `${file.name} — ${pct}%`,
+        });
       }
 
       if (transferRef.current === transferObj) {
         socket.emit(`sftp:upload_done:${file.name}`);
         await waitForUploadCompletion();
         if (transferRef.current === transferObj) {
+          // Update notification to success
+          updateNotification(uploadNotifId, {
+            title: t('files.status.upload'),
+            message: `${file.name} — 100%`,
+            type: 'success',
+            duration: 3000,
+          });
           // Remove from queue on completion
           setUploadQueue(prev => prev.filter(item => item.path !== path));
           setTransfer(null);
@@ -1740,6 +1819,13 @@ export default function FileManager({
       console.error("Upload Loop Error:", err);
       if (transferRef.current === transferObj) {
         if (isTransferChannelError(err)) {
+          // Update notification to paused state
+          updateNotification(uploadNotifId, {
+            title: t('files.status.upload'),
+            message: `${file.name} — paused, reconnecting...`,
+            type: 'warning',
+            duration: 0,
+          });
           requestReconnect('Upload interrupted. Reconnecting SSH...', {
             preserveTransfer: true,
             notificationMessage: `${file.name} paused while SSH reconnects. Your upload queue is kept for retry.`,
@@ -1748,7 +1834,13 @@ export default function FileManager({
         }
         setTransfer(null);
         transferRef.current = null;
-        throw err;
+        setUploadQueue(prev => prev.filter(item => item.path !== path));
+        updateNotification(uploadNotifId, {
+          title: t('files.status.errorTitle'),
+          message: `${file.name} — ${err.message || 'Upload failed'}`,
+          type: 'error',
+          duration: 5000,
+        });
       }
     } finally {
       if (activeHandshakeCleanup) activeHandshakeCleanup();
@@ -2100,12 +2192,39 @@ export default function FileManager({
         await traverseEntry(entry, currentPath);
       }
     } else {
-      const files = Array.from(e.dataTransfer.files);
-      if (!files || files.length === 0 || !socket) return;
+      const droppedFiles = Array.from(e.dataTransfer.files);
+      if (!droppedFiles || droppedFiles.length === 0 || !socket) return;
 
-      // Upload files sequentially using the new robust handler
-      for (const file of files) {
-        await handleFileUpload(null, file);
+      // Bulk overwrite check for multi-file uploads
+      const conflicting = droppedFiles.filter(f => files.some(existing => existing.filename === f.name));
+      if (conflicting.length > 0) {
+        const choice = await new Promise(resolve => {
+          showConfirm(
+            `${conflicting.length} file${conflicting.length > 1 ? 's' : ''} already exist${conflicting.length === 1 ? 's' : ''} on the server:\n${conflicting.map(f => `• ${f.name}`).join('\n')}\n\nOverwrite all existing files?`,
+            () => resolve('overwrite'),
+            'Files Already Exist',
+            'Overwrite All',
+            'Skip Existing',
+            () => resolve('skip'),
+          );
+        });
+        if (choice === 'skip') {
+          // Upload only non-conflicting files
+          const nonConflicting = droppedFiles.filter(f => !conflicting.some(c => c.name === f.name));
+          for (const file of nonConflicting) {
+            await handleFileUpload(null, file, 0, null, null, true);
+          }
+        } else {
+          // Overwrite all
+          for (const file of droppedFiles) {
+            await handleFileUpload(null, file, 0, null, null, true);
+          }
+        }
+      } else {
+        // No conflicts, upload all
+        for (const file of droppedFiles) {
+          await handleFileUpload(null, file, 0, null, null, true);
+        }
       }
     }
   };
@@ -2181,6 +2300,17 @@ export default function FileManager({
     if (!createModal.name || !socket) return;
     const path = currentPath === '.' ? createModal.name : `${currentPath}/${createModal.name}`;
     
+    // Check if folder/file already exists
+    const existing = files.find(f => f.filename === createModal.name);
+    if (existing) {
+      addNotification({
+        title: t('files.modals.create.create'),
+        message: `"${createModal.name}" already exists.`,
+        type: 'error',
+      });
+      return;
+    }
+
     toastRef.current = addNotification({ title: t('files.modals.create.create'), message: `${t('files.actions.loading', { action: t('files.modals.create.create') })} ${createModal.type}...`, type: 'loading', duration: 0 });
     if (createModal.type === 'folder') {
       socket.emit('sftp:mkdir', path);
@@ -2318,6 +2448,48 @@ export default function FileManager({
     setContextMenu({ ...contextMenu, visible: false });
   };
 
+  const startInlineRename = (filename) => {
+    setRenamingFile({ filename, value: filename });
+    // Focus input on next tick
+    setTimeout(() => {
+      if (renameInputRef.current) {
+        renameInputRef.current.focus();
+        // Select filename without extension
+        const dotIdx = filename.lastIndexOf('.');
+        if (dotIdx > 0) {
+          renameInputRef.current.setSelectionRange(0, dotIdx);
+        } else {
+          renameInputRef.current.select();
+        }
+      }
+    }, 0);
+  };
+
+  const commitRename = () => {
+    if (!renamingFile || !socket) return;
+    const originalName = renamingFile.filename;
+    const newName = renamingFile.value.trim();
+    setRenamingFile(null);
+
+    if (!newName || newName === originalName) return;
+
+    const srcPath = currentPath === '.' ? originalName : `${currentPath}/${originalName}`;
+    const destPath = currentPath === '.' ? newName : `${currentPath}/${newName}`;
+
+    toastRef.current = addNotification({
+      title: t('files.status.renaming') || 'Renaming',
+      message: `Renaming ${originalName} to ${newName}...`,
+      type: 'loading',
+      duration: 0,
+    });
+
+    socket.emit('sftp:move', { src: srcPath, dest: destPath, overwrite: false });
+  };
+
+  const cancelRename = () => {
+    setRenamingFile(null);
+  };
+
   const handleCreatePrompt = (type) => {
     showPrompt(
       type === 'folder' ? t('files.modals.create.titleFolder') : t('files.modals.create.titleFile'),
@@ -2347,6 +2519,75 @@ export default function FileManager({
     toastRef.current = addNotification({ title: t('common.loading'), message: t('files.actions.loading', { action: t('files.context.edit') }), type: 'loading', duration: 0 });
     setEditor({ visible: false, file: contextMenu.file, content: '', saving: false });
     socket.emit('sftp:readFile', path);
+  };
+
+  const IMAGE_EXTS = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.bmp', '.ico'];
+  const PDF_EXTS = ['.pdf'];
+  const TEXT_EXTS = ['.txt', '.md', '.json', '.js', '.ts', '.jsx', '.tsx', '.py', '.rb', '.go', '.rs', '.java', '.c', '.cpp', '.h', '.css', '.html', '.xml', '.yaml', '.yml', '.toml', '.ini', '.cfg', '.conf', '.sh', '.bash', '.zsh', '.fish', '.env', '.log', '.csv', '.sql', '.dockerfile', '.makefile'];
+
+  const getFilePreviewType = (filename) => {
+    const lower = filename.toLowerCase();
+    if (IMAGE_EXTS.some(ext => lower.endsWith(ext))) return 'image';
+    if (PDF_EXTS.some(ext => lower.endsWith(ext))) return 'pdf';
+    return 'text';
+  };
+
+  const PREVIEW_MAX_SIZE = 5 * 1024 * 1024; // 5MB limit for preview
+
+  const handlePreview = () => {
+    if (!contextMenu.file || !socket) return;
+    if (contextMenu.file.longname.startsWith('d')) return;
+
+    const file = contextMenu.file;
+    const previewType = getFilePreviewType(file.filename);
+    const path = file.absPath || (currentPath === '.' ? file.filename : `${currentPath}/${file.filename}`);
+
+    // Check file size for non-text files
+    if (previewType !== 'text' && file.attrs?.size > PREVIEW_MAX_SIZE) {
+      addNotification({
+        title: 'File Too Large',
+        message: `${file.filename} (${formatSize(file.attrs.size)}) is too large to preview. Maximum is 5MB.`,
+        type: 'warning',
+      });
+      return;
+    }
+
+    setPreview({ visible: true, file, content: '', loading: true, type: previewType });
+
+    if (previewType === 'text') {
+      // Read text content
+      const handler = (data) => {
+        if (data.path === path) {
+          socket.off('sftp:file_content', handler);
+          setPreview(prev => ({ ...prev, content: data.content, loading: false }));
+        }
+      };
+      socket.on('sftp:file_content', handler);
+      socket.emit('sftp:readFile', path);
+    } else {
+      // For images/PDFs, read as base64
+      const handler = (data) => {
+        if (data.path === path) {
+          socket.off('sftp:file_base64', handler);
+          const mime = previewType === 'image' ? getMimeType(file.filename) : 'application/pdf';
+          const dataUrl = `data:${mime};base64,${data.content}`;
+          setPreview(prev => ({ ...prev, content: dataUrl, loading: false }));
+        }
+      };
+      socket.on('sftp:file_base64', handler);
+      socket.emit('sftp:readFileBase64', path);
+    }
+    setContextMenu({ ...contextMenu, visible: false });
+  };
+
+  const getMimeType = (filename) => {
+    const ext = filename.toLowerCase().split('.').pop();
+    const mimeMap = {
+      'png': 'image/png', 'jpg': 'image/jpeg', 'jpeg': 'image/jpeg',
+      'gif': 'image/gif', 'webp': 'image/webp', 'svg': 'image/svg+xml',
+      'bmp': 'image/bmp', 'ico': 'image/x-icon', 'pdf': 'application/pdf'
+    };
+    return mimeMap[ext] || 'application/octet-stream';
   };
 
   const handleSave = () => {
@@ -2459,6 +2700,28 @@ export default function FileManager({
   }
 
   // --- Keyboard Shortcuts for Copy, Cut, Paste ---
+  // In search mode show global results; otherwise filter current-dir listing
+  const filteredFiles = isSearchMode
+    ? searchResults.map(r => ({
+        filename: r.filename,
+        absPath: r.absPath,
+        dir: r.dir,
+        longname: r.filename.includes('.') ? '-' : 'd', // best-effort dir detection by absence of extension
+        attrs: {},
+        _searchResult: true,
+      }))
+    : files
+        .filter(f => (f.filename || '').toLowerCase().includes((searchQuery || '').toLowerCase()))
+        .sort((a, b) => {
+           const aIsDir = a.longname.startsWith('d');
+           const bIsDir = b.longname.startsWith('d');
+           if (aIsDir && !bIsDir) return -1;
+           if (!aIsDir && bIsDir) return 1;
+           return a.filename.localeCompare(b.filename);
+        });
+  const filteredFilesRef = useRef(filteredFiles);
+  useEffect(() => { filteredFilesRef.current = filteredFiles; }, [filteredFiles]);
+
   useEffect(() => {
     const handleKeyDown = (e) => {
       // Ignore if focus is in an input, textarea, contenteditable, ace editor, or terminal
@@ -2474,6 +2737,36 @@ export default function FileManager({
       }
 
       const isModKey = e.ctrlKey || e.metaKey;
+
+      // Ctrl+A — Select all files
+      if (isModKey && (e.key === 'a' || e.key === 'A')) {
+        e.preventDefault();
+        const allNames = filteredFilesRef.current.map(f => f.filename);
+        setSelectedFiles(new Set(allNames));
+        return;
+      }
+
+      // Delete — Delete selected files
+      if (e.key === 'Delete' || e.key === 'Backspace') {
+        if (selectedFiles.size > 0) {
+          e.preventDefault();
+          handleDelete();
+        }
+        return;
+      }
+
+      // Enter — Open selected folder
+      if (e.key === 'Enter') {
+        if (selectedFiles.size === 1) {
+          const name = Array.from(selectedFiles)[0];
+          const file = files.find(f => f.filename === name);
+          if (file && file.longname.startsWith('d')) {
+            e.preventDefault();
+            handleFolderClick(name);
+          }
+        }
+        return;
+      }
 
       if (isModKey && (e.key === 'c' || e.key === 'C')) {
         const targets = Array.from(selectedFiles).map(name => files.find(f => f.filename === name)).filter(Boolean);
@@ -2524,27 +2817,7 @@ export default function FileManager({
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
     };
-  }, [selectedFiles, lastSelectedFile, files, currentPath, clipboard, connectionId, handlePaste, t]);
-
-  // In search mode show global results; otherwise filter current-dir listing
-  const filteredFiles = isSearchMode
-    ? searchResults.map(r => ({
-        filename: r.filename,
-        absPath: r.absPath,
-        dir: r.dir,
-        longname: r.filename.includes('.') ? '-' : 'd', // best-effort dir detection by absence of extension
-        attrs: {},
-        _searchResult: true,
-      }))
-    : files
-        .filter(f => (f.filename || '').toLowerCase().includes((searchQuery || '').toLowerCase()))
-        .sort((a, b) => {
-           const aIsDir = a.longname.startsWith('d');
-           const bIsDir = b.longname.startsWith('d');
-           if (aIsDir && !bIsDir) return -1;
-           if (!aIsDir && bIsDir) return 1;
-           return a.filename.localeCompare(b.filename);
-        });
+  }, [selectedFiles, lastSelectedFile, files, currentPath, clipboard, connectionId, handlePaste, handleDelete, t]);
 
   const getActionLabel = () => {
     if (!transfer) return '';
@@ -2971,6 +3244,41 @@ export default function FileManager({
         document.body
       )}
 
+      {/* File Preview Modal */}
+      {preview.visible && createPortal(
+        <MacOSModalWindow
+          isOpen
+          title={`Preview: ${preview.file?.filename || ''}`}
+          icon={Eye}
+          onClose={() => {
+            setPreview({ visible: false, file: null, content: '', loading: false, type: 'text' });
+          }}
+          zIndexClassName="z-[9999]"
+          draggable={true}
+          resizable={true}
+          defaultWidth={800}
+          defaultHeight={600}
+          contentClassName="p-0 overflow-hidden"
+        >
+          {preview.loading ? (
+            <div className="flex items-center justify-center h-full">
+              <RefreshCw size={24} className="animate-spin text-[var(--accent-indigo)]" />
+            </div>
+          ) : preview.type === 'image' ? (
+            <div className="flex items-center justify-center h-full bg-[var(--bg-primary)] p-4">
+              <img src={preview.content} alt={preview.file?.filename} className="max-w-full max-h-full object-contain" />
+            </div>
+          ) : preview.type === 'pdf' ? (
+            <iframe src={preview.content} className="w-full h-full border-0" title={preview.file?.filename} />
+          ) : (
+            <pre className="p-4 text-xs font-mono text-[var(--text-primary)] whitespace-pre-wrap break-words overflow-auto h-full bg-[var(--bg-primary)]">
+              {preview.content}
+            </pre>
+          )}
+        </MacOSModalWindow>,
+        document.body
+      )}
+
 
 
       {contextMenu.visible && createPortal(
@@ -3011,6 +3319,13 @@ export default function FileManager({
                 <Edit size={14} /> {t('files.context.edit')}
               </button>
               <button 
+                onClick={handlePreview}
+                className="w-full text-left px-3 py-2 text-sm hover:bg-[var(--glow-emerald)] text-[var(--text-primary)] hover:text-[var(--accent-emerald)] flex items-center gap-2 transition-colors disabled:opacity-50"
+                disabled={contextMenu.file?.longname.startsWith('d')}
+              >
+                <Eye size={14} /> Preview
+              </button>
+              <button 
                 onClick={() => {
                   const f = contextMenu.file;
                   if (f?.longname.startsWith('d')) handleDownloadFolder(f);
@@ -3034,7 +3349,7 @@ export default function FileManager({
                 </button>
               )}
                <button 
-                onClick={handleRename}
+                onClick={() => { startInlineRename(contextMenu.file.filename); setContextMenu({ ...contextMenu, visible: false }); }}
                 className="w-full text-left px-3 py-2 text-sm hover:bg-[var(--glow-indigo)] text-[var(--text-primary)] hover:text-[var(--accent-indigo)] flex items-center gap-2 transition-colors"
               >
                 <Replace size={14} className="text-indigo-400" /> {t('files.context.rename') || 'Rename'}
@@ -3314,7 +3629,8 @@ export default function FileManager({
               type="file" 
               ref={uploadInputRef} 
               onChange={handleFileUpload} 
-              className="hidden" 
+              className="hidden"
+              multiple
             />
             {selectedFiles.size > 0 && (
               <button
@@ -3535,6 +3851,44 @@ export default function FileManager({
                       setSelectedFiles(new Set());
                       setLastSelectedFile(null);
                       handleFolderClick(file.filename);
+                    } else {
+                      // Open preview for files
+                      const previewType = getFilePreviewType(file.filename);
+                      const path = file.absPath || (currentPath === '.' ? file.filename : `${currentPath}/${file.filename}`);
+
+                      // Check file size for non-text files
+                      if (previewType !== 'text' && file.attrs?.size > PREVIEW_MAX_SIZE) {
+                        addNotification({
+                          title: 'File Too Large',
+                          message: `${file.filename} (${formatSize(file.attrs.size)}) is too large to preview. Maximum is 5MB.`,
+                          type: 'warning',
+                        });
+                        return;
+                      }
+
+                      setPreview({ visible: true, file, content: '', loading: true, type: previewType });
+
+                      if (previewType === 'text') {
+                        const handler = (data) => {
+                          if (data.path === path) {
+                            socket.off('sftp:file_content', handler);
+                            setPreview(prev => ({ ...prev, content: data.content, loading: false }));
+                          }
+                        };
+                        socket.on('sftp:file_content', handler);
+                        socket.emit('sftp:readFile', path);
+                      } else {
+                        const handler = (data) => {
+                          if (data.path === path) {
+                            socket.off('sftp:file_base64', handler);
+                            const mime = getMimeType(file.filename);
+                            const dataUrl = `data:${mime};base64,${data.content}`;
+                            setPreview(prev => ({ ...prev, content: dataUrl, loading: false }));
+                          }
+                        };
+                        socket.on('sftp:file_base64', handler);
+                        socket.emit('sftp:readFileBase64', path);
+                      }
                     }
                   }}
                   onContextMenu={(e) => {
@@ -3561,9 +3915,34 @@ export default function FileManager({
                     )}
                   </div>
                   <div className={viewMode === 'grid' ? "text-center" : "flex-1 flex items-center justify-between"}>
-                    <span className="text-xs font-medium truncate max-w-[120px] block text-[var(--text-primary)]">
-                      {file.filename}
-                    </span>
+                    {renamingFile?.filename === file.filename ? (
+                      <input
+                        ref={renameInputRef}
+                        type="text"
+                        value={renamingFile.value}
+                        onChange={(e) => setRenamingFile(prev => prev ? { ...prev, value: e.target.value } : null)}
+                        onKeyDown={(e) => {
+                          e.stopPropagation();
+                          if (e.key === 'Enter') commitRename();
+                          if (e.key === 'Escape') cancelRename();
+                        }}
+                        onBlur={() => commitRename()}
+                        onClick={(e) => e.stopPropagation()}
+                        className="text-xs font-medium w-full max-w-[180px] px-1.5 py-0.5 rounded border border-[var(--accent-indigo)] bg-[var(--bg-primary)] text-[var(--text-primary)] outline-none"
+                        style={{ minWidth: '60px' }}
+                      />
+                    ) : (
+                      <span
+                        className="text-xs font-medium truncate max-w-[120px] block text-[var(--text-primary)] cursor-text"
+                        title={file.filename}
+                        onDoubleClick={(e) => {
+                          e.stopPropagation();
+                          if (!file._searchResult) startInlineRename(file.filename);
+                        }}
+                      >
+                        {file.filename}
+                      </span>
+                    )}
                     {file._searchResult && (
                       <span className="text-[9px] text-[var(--text-muted)] truncate max-w-[120px] block mt-0.5" title={file.dir}>
                         {file.dir}

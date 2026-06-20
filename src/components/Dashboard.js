@@ -17,6 +17,12 @@ export default function Dashboard({ onNewConnection, onEditConnection }) {
   const { t } = useTranslation();
   const { connections, relayWarning } = state;
   const [refreshing, setRefreshing] = useState(false);
+  const [healthHistory, setHealthHistory] = useState({}); // { connectionId: [{ timestamp, success, latency }] }
+  const [systemSpecs, setSystemSpecs] = useState({}); // { connectionId: { os, cpu, ram, uptime } }
+  const [autoPingEnabled, setAutoPingEnabled] = useState(false);
+  const autoPingRef = useRef(null);
+  const connectionsRef = useRef(connections);
+  useEffect(() => { connectionsRef.current = connections; }, [connections]);
 
   // Export / Import state
   const [showExportPanel, setShowExportPanel] = useState(false);
@@ -27,6 +33,117 @@ export default function Dashboard({ onNewConnection, onEditConnection }) {
   const [showImportPw, setShowImportPw] = useState(false);
   const [importData, setImportData] = useState(null); // parsed connections from file
   const importFileRef = useRef(null);
+
+  const pingConnection = async (conn) => {
+    const startTime = Date.now();
+    try {
+      const res = await apiFetch(`/api/connections/${conn._id}/test`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ connection: conn })
+      });
+      const data = await res.json();
+      const latency = Date.now() - startTime;
+      const entry = { timestamp: Date.now(), success: data.success, latency };
+
+      setHealthHistory(prev => {
+        const history = prev[conn._id] ? [...prev[conn._id], entry].slice(-20) : [entry];
+        return { ...prev, [conn._id]: history };
+      });
+
+      // Store system specs if available
+      if (data.specs) {
+        setSystemSpecs(prev => ({ ...prev, [conn._id]: data.specs }));
+      }
+
+      dispatch({
+        type: 'UPDATE_CONNECTION',
+        payload: {
+          _id: conn._id,
+          status: data.success ? 'online' : 'offline',
+          lastConnected: data.success ? new Date().toISOString() : conn.lastConnected,
+          info: data.success ? data.info : conn.info,
+        },
+      });
+    } catch {
+      const latency = Date.now() - startTime;
+      setHealthHistory(prev => {
+        const entry = { timestamp: Date.now(), success: false, latency };
+        const history = prev[conn._id] ? [...prev[conn._id], entry].slice(-20) : [entry];
+        return { ...prev, [conn._id]: history };
+      });
+      dispatch({ type: 'UPDATE_CONNECTION', payload: { _id: conn._id, status: 'offline' } });
+    }
+  };
+
+  const pingAllConnections = async () => {
+    const conns = connectionsRef.current;
+    for (const conn of conns) {
+      if (conn.storage !== 'manual') {
+        await pingConnection(conn);
+      }
+    }
+  };
+
+  useEffect(() => {
+    if (!autoPingEnabled) {
+      if (autoPingRef.current) {
+        clearInterval(autoPingRef.current);
+        autoPingRef.current = null;
+      }
+      return;
+    }
+
+    // Initial ping
+    pingAllConnections();
+
+    // Ping every 60 seconds
+    autoPingRef.current = setInterval(pingAllConnections, 60000);
+    return () => {
+      if (autoPingRef.current) clearInterval(autoPingRef.current);
+    };
+  }, [autoPingEnabled]);
+
+  const getUptime = (connId) => {
+    const history = healthHistory[connId];
+    if (!history || history.length < 2) return null;
+    const successes = history.filter(h => h.success).length;
+    return Math.round((successes / history.length) * 100);
+  };
+
+  const getAvgLatency = (connId) => {
+    const history = healthHistory[connId];
+    if (!history || history.length === 0) return null;
+    const successful = history.filter(h => h.success);
+    if (successful.length === 0) return null;
+    return Math.round(successful.reduce((sum, h) => sum + h.latency, 0) / successful.length);
+  };
+
+  // Listen for real-time connection status updates (from SSH terminal, file manager, etc.)
+  useEffect(() => {
+    const handleStatusUpdate = (e) => {
+      const { connectionId, status, info, specs } = e.detail || {};
+      if (!connectionId) return;
+
+      const entry = {
+        timestamp: Date.now(),
+        success: status === 'online',
+        latency: 0,
+      };
+
+      setHealthHistory(prev => {
+        const history = prev[connectionId] ? [...prev[connectionId], entry].slice(-20) : [entry];
+        return { ...prev, [connectionId]: history };
+      });
+
+      if (specs) {
+        setSystemSpecs(prev => ({ ...prev, [connectionId]: specs }));
+      }
+    };
+
+    window.addEventListener('connection-status-update', handleStatusUpdate);
+    return () => window.removeEventListener('connection-status-update', handleStatusUpdate);
+  }, []);
 
   const handleExport = async () => {
     if (!exportPassword) {
@@ -402,7 +519,7 @@ export default function Dashboard({ onNewConnection, onEditConnection }) {
                   setRefreshing(false);
                 }
               }}
-              className="px-6 py-3 bg-white dark:bg-slate-100 text-indigo-600 font-bold rounded-2xl hover:bg-slate-100 dark:hover:bg-white transition-all shadow-xl border border-indigo-200 dark:border-transparent whitespace-nowrap"
+              className="px-6 py-3 bg-[var(--accent-indigo)] text-white font-bold rounded-2xl hover:bg-[var(--accent-indigo-hover)] transition-all shadow-xl whitespace-nowrap"
             >
               {t('ssh.dashboard_ui.syncPromo.btn')}
             </button>
@@ -441,6 +558,127 @@ export default function Dashboard({ onNewConnection, onEditConnection }) {
           subValue={t('ssh.dashboard_ui.statsSub.unknown')}
         />
       </div>
+
+      {/* Connection Health Monitor */}
+      <motion.div variants={itemVariants} className="mb-5">
+        <div className="flex items-center justify-between mb-3 px-1">
+          <h2 className="text-base font-bold flex items-center gap-2 text-[var(--text-primary)]">
+            <Activity size={18} className="text-emerald-400" />
+            Connection Health
+          </h2>
+          <button
+            onClick={() => setAutoPingEnabled(!autoPingEnabled)}
+            className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
+              autoPingEnabled
+                ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
+                : 'bg-[var(--bg-tertiary)] text-[var(--text-muted)] border border-[var(--border-color)] hover:text-[var(--text-primary)]'
+            }`}
+          >
+            {autoPingEnabled ? 'Auto-Ping ON' : 'Auto-Ping OFF'}
+          </button>
+        </div>
+
+        {connections.length > 0 && (
+          <div className="bg-[var(--bg-card)] rounded-2xl border border-[var(--border-color)] overflow-hidden">
+            <div className="grid grid-cols-[1fr_80px_80px_100px] gap-2 px-4 py-2 border-b border-[var(--border-color)] text-[10px] font-bold text-[var(--text-muted)] uppercase tracking-wider">
+              <span>Connection</span>
+              <span className="text-center">Status</span>
+              <span className="text-center">Latency</span>
+              <span className="text-center">Uptime</span>
+            </div>
+            {connections.filter(c => c.storage !== 'manual').map((conn, idx) => {
+              const uptime = getUptime(conn._id);
+              const avgLatency = getAvgLatency(conn._id);
+              const specs = systemSpecs[conn._id];
+              const history = healthHistory[conn._id] || [];
+
+              return (
+                <div
+                  key={conn._id || idx}
+                  className="border-b border-[var(--border-color)]/30 last:border-0"
+                >
+                  <div className="grid grid-cols-[1fr_80px_80px_100px] gap-2 px-4 py-2.5 items-center hover:bg-[var(--bg-card-hover)] transition-colors">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <div className="w-2 h-2 rounded-full shrink-0" style={{ background: conn.color || '#6366f1' }} />
+                      <span className="text-xs font-medium text-[var(--text-primary)] truncate">{conn.name}</span>
+                    </div>
+                    <div className="flex justify-center">
+                      <span className={`px-2 py-0.5 rounded-full text-[9px] font-bold ${
+                        conn.status === 'online'
+                          ? 'bg-emerald-500/15 text-emerald-400'
+                          : conn.status === 'offline'
+                          ? 'bg-red-500/15 text-red-400'
+                          : 'bg-[var(--bg-tertiary)] text-[var(--text-muted)]'
+                      }`}>
+                        {conn.status || 'unknown'}
+                      </span>
+                    </div>
+                    <div className="text-center">
+                      {avgLatency !== null ? (
+                        <span className={`text-xs font-mono ${
+                          avgLatency < 200 ? 'text-emerald-400' : avgLatency < 500 ? 'text-amber-400' : 'text-red-400'
+                        }`}>
+                          {avgLatency}ms
+                        </span>
+                      ) : (
+                        <span className="text-xs text-[var(--text-muted)]">—</span>
+                      )}
+                    </div>
+                    <div className="flex items-center justify-center gap-2">
+                      {uptime !== null ? (
+                        <>
+                          <div className="flex-1 h-1.5 rounded-full bg-[var(--bg-tertiary)] overflow-hidden max-w-[50px]">
+                            <div
+                              className={`h-full rounded-full transition-all ${
+                                uptime >= 90 ? 'bg-emerald-400' : uptime >= 70 ? 'bg-amber-400' : 'bg-red-400'
+                              }`}
+                              style={{ width: `${uptime}%` }}
+                            />
+                          </div>
+                          <span className="text-[10px] font-mono text-[var(--text-muted)]">{uptime}%</span>
+                        </>
+                      ) : (
+                        <span className="text-xs text-[var(--text-muted)]">—</span>
+                      )}
+                    </div>
+                  </div>
+                  {/* System specs row */}
+                  {specs && (
+                    <div className="px-4 pb-2 pt-0 flex flex-wrap gap-3 text-[10px] text-[var(--text-muted)]">
+                      {specs.os && (
+                        <span className="flex items-center gap-1">
+                          <Cpu size={10} /> {specs.os}
+                        </span>
+                      )}
+                      {specs.cpu && (
+                        <span className="flex items-center gap-1">
+                          <Cpu size={10} /> {specs.cpu} cores
+                        </span>
+                      )}
+                      {specs.ram && (
+                        <span className="flex items-center gap-1">
+                          <HardDrive size={10} /> {specs.ram}
+                        </span>
+                      )}
+                    </div>
+                  )}
+                  {!specs && conn.info && (
+                    <div className="px-4 pb-2 pt-0 text-[10px] text-[var(--text-muted)] truncate">
+                      {conn.info}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {!autoPingEnabled && connections.length > 0 && (
+          <div className="bg-[var(--bg-card)] rounded-2xl border border-[var(--border-color)] p-4 text-center">
+            <p className="text-[11px] text-[var(--text-muted)]">Enable auto-ping to collect latency and uptime history. Status updates in real-time when you connect.</p>
+          </div>
+        )}
+      </motion.div>
 
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-5">
         {/* Quick Connect - Favorites */}
@@ -586,10 +824,10 @@ export default function Dashboard({ onNewConnection, onEditConnection }) {
 
 function StatCard({ icon: Icon, label, value, color, subValue }) {
   const colorMap = {
-    indigo: { bg: 'bg-indigo-500/10', icon: 'text-indigo-600 dark:text-indigo-400', border: 'border-indigo-500/20', shadow: 'shadow-indigo-500/10' },
-    emerald: { bg: 'bg-emerald-500/10', icon: 'text-emerald-600 dark:text-emerald-400', border: 'border-emerald-500/20', shadow: 'shadow-emerald-500/10' },
-    rose: { bg: 'bg-rose-500/10', icon: 'text-rose-600 dark:text-rose-400', border: 'border-rose-500/20', shadow: 'shadow-rose-500/10' },
-    slate: { bg: 'bg-slate-500/10', icon: 'text-slate-600 dark:text-slate-400', border: 'border-slate-500/20', shadow: 'shadow-slate-500/10' },
+    indigo: { bg: 'bg-indigo-500/10', icon: 'text-[var(--accent-indigo)]', border: 'border-indigo-500/20', shadow: 'shadow-indigo-500/10' },
+    emerald: { bg: 'bg-emerald-500/10', icon: 'text-[var(--accent-emerald)]', border: 'border-emerald-500/20', shadow: 'shadow-emerald-500/10' },
+    rose: { bg: 'bg-rose-500/10', icon: 'text-[var(--accent-rose)]', border: 'border-rose-500/20', shadow: 'shadow-rose-500/10' },
+    slate: { bg: 'bg-slate-500/10', icon: 'text-[var(--text-secondary)]', border: 'border-slate-500/20', shadow: 'shadow-slate-500/10' },
   };
   const theme = colorMap[color];
 
@@ -674,7 +912,7 @@ function ConnectionCard({ conn, onClick }) {
       <div className="space-y-3">
         {conn.info && (
           <div className="px-3 py-2 rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)]">
-             <div className="flex items-center gap-1.5 text-indigo-700 dark:text-indigo-400 mb-1">
+             <div className="flex items-center gap-1.5 text-[var(--accent-indigo)] mb-1">
                 <Shield size={10} />
                 <span className="text-[9px] font-bold uppercase tracking-widest">{t('ssh.dashboard_ui.healthState')}</span>
              </div>
@@ -687,7 +925,7 @@ function ConnectionCard({ conn, onClick }) {
         <div className="flex items-center justify-between pt-1">
           <div className="flex gap-1.5">
              {conn.tags?.slice(0, 2).map(tag => (
-                <span key={tag} className="text-[9px] px-2 py-0.5 rounded-full bg-indigo-500/10 text-indigo-700 dark:text-indigo-400 border border-indigo-500/10 font-medium">
+                 <span key={tag} className="text-[9px] px-2 py-0.5 rounded-full bg-indigo-500/10 text-[var(--accent-indigo)] border border-indigo-500/10 font-medium">
                   {tag}
                 </span>
              ))}

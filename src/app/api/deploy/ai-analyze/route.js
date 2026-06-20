@@ -30,10 +30,15 @@ export async function POST(request) {
 
     let filesListing = '';
     const resolvedPath = projectPath?.trim() || '.';
+    
+    // Sanitize projectPath to prevent command injection
+    if (/[;&|`$(){}!#]/.test(resolvedPath) || resolvedPath.includes('..')) {
+      return NextResponse.json({ success: false, error: 'Invalid project path' }, { status: 400 });
+    }
 
     if (targetType === 'local') {
       // Local Host listing
-      const cmd = `cd ${resolvedPath} && ls -la && cat package.json 2>/dev/null && cat docker-compose.yml 2>/dev/null && cat Dockerfile 2>/dev/null && cat requirements.txt 2>/dev/null && cat pyproject.toml 2>/dev/null && cat pom.xml 2>/dev/null && cat build.gradle 2>/dev/null && echo "=== DOCKER COMPOSE VERSION ===" && (docker compose version 2>/dev/null || docker-compose --version 2>/dev/null)`;
+      const cmd = `cd "${resolvedPath}" && ls -la && cat package.json 2>/dev/null && cat docker-compose.yml 2>/dev/null && cat Dockerfile 2>/dev/null && cat requirements.txt 2>/dev/null && cat pyproject.toml 2>/dev/null && cat pom.xml 2>/dev/null && cat build.gradle 2>/dev/null && echo "=== DOCKER COMPOSE VERSION ===" && (docker compose version 2>/dev/null || docker-compose --version 2>/dev/null)`;
       filesListing = await new Promise((resolve) => {
         const conn = new Client();
         const sshTimeout = setTimeout(() => {
@@ -43,7 +48,7 @@ export async function POST(request) {
 
         conn.on('ready', () => {
           clearTimeout(sshTimeout);
-          const sshCmd = `cd ${resolvedPath} && ls -la && cat package.json 2>/dev/null && cat docker-compose.yml 2>/dev/null && cat Dockerfile 2>/dev/null && cat requirements.txt 2>/dev/null && cat pyproject.toml 2>/dev/null && cat pom.xml 2>/dev/null && cat build.gradle 2>/dev/null && echo "=== DOCKER COMPOSE VERSION ===" && (docker compose version 2>/dev/null || docker-compose --version 2>/dev/null)`;
+          const sshCmd = `cd "${resolvedPath}" && ls -la && cat package.json 2>/dev/null && cat docker-compose.yml 2>/dev/null && cat Dockerfile 2>/dev/null && cat requirements.txt 2>/dev/null && cat pyproject.toml 2>/dev/null && cat pom.xml 2>/dev/null && cat build.gradle 2>/dev/null && echo "=== DOCKER COMPOSE VERSION ===" && (docker compose version 2>/dev/null || docker-compose --version 2>/dev/null)`;
           conn.exec(sshCmd, { timeout: 30000 }, (err, stream) => {
             if (err) {
               conn.end();

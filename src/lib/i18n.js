@@ -1353,9 +1353,9 @@ const resources = {
       },
       settings_ui: {
         vaultStatus: {
-          unlocked: "เปิดห้องนิรภัยแล้ว",
-          locked: "ห้องนิรภัยถูกล็อค",
-          none: "ไม่มีห้องนิรภัย",
+          unlocked: "ปลดล็อค",
+          locked: "ล็อค",
+          none: "ไม่มี",
         },
         appearance: {
           apply: "ปรับใช้",

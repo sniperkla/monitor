@@ -1,4 +1,6 @@
 import { NextResponse } from 'next/server';
+import { getServerSession } from 'next-auth/next';
+import { authOptions } from '@/lib/auth';
 import connectDB from '@/lib/mongodb';
 import Wiki, { getWikiModel } from '@/models/Wiki';
 
@@ -50,6 +52,11 @@ export async function GET(request) {
 // Seed function to add some initial data if empty
 export async function POST(request) {
   try {
+    const session = await getServerSession(authOptions);
+    if (!session?.user?.email) {
+      return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
+    }
+
     const db = await connectDB();
     const WikiModel = getWikiModel(db);
     const body = await request.json();

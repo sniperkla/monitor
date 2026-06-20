@@ -8,13 +8,12 @@ import { getChatHistoryModel } from '@/models/ChatHistory';
 export async function GET(req) {
   try {
     const session = await getServerSession(authOptions);
-    const clientUri = req.headers.get('x-mongodb-uri');
     
-    if (!session && !clientUri) {
+    if (!session) {
       return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
     }
 
-    const userId = session?.user?.id || 'guest';
+    const userId = session.user.id;
     
     // Always use Central DB for chat history to avoid crashing on MySQL private DBs
     const db = await connectDB(null, true);
@@ -35,13 +34,12 @@ export async function GET(req) {
 export async function POST(req) {
   try {
     const session = await getServerSession(authOptions);
-    const clientUri = req.headers.get('x-mongodb-uri');
     
-    if (!session && !clientUri) {
+    if (!session) {
       return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
     }
 
-    const userId = session?.user?.id || 'guest';
+    const userId = session.user.id;
     const { historyId, guideId, title, messages } = await req.json();
     
     if (!messages || !messages.length) {

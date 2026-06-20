@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { getServerSession } from 'next-auth/next';
 import connectDB from '@/lib/mongodb';
 import SystemSetting from '@/models/SystemSetting';
 import { broadcastDeploymentStatus } from '@/app/api/deploy/sse/route';
@@ -28,6 +29,11 @@ async function updateStatusToCancelled(projectId, message) {
 }
 
 export async function POST(request) {
+  const session = await getServerSession();
+  if (!session) {
+    return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
+  }
+
   try {
     const { searchParams } = new URL(request.url);
     const projectId = searchParams.get('project') || 'default';

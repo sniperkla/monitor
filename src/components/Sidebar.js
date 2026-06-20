@@ -259,7 +259,7 @@ export default function Sidebar({ onNewConnection, onEditConnection }) {
   };
 
   return (
-    <div className={`sidebar flex flex-col shrink-0 ${!sidebarOpen ? 'hidden' : ''}`} style={{ width: '320px', borderRight: '1px solid var(--border-color)' }}>
+    <div className={`sidebar flex flex-col shrink-0 ${!sidebarOpen ? 'hidden' : ''}`} style={{ width: '360px', borderRight: '1px solid var(--border-color)' }}>
       {/* Header */}
       <div className="p-4 border-b" style={{ borderColor: 'var(--border-color)' }}>
         <div className="flex items-center justify-between mb-4">
