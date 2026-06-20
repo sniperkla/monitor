@@ -27,10 +27,9 @@ function checkSigninRateLimit(request) {
 }
 
 async function rateLimitedHandler(request, context) {
-  // Only rate limit credential/signin requests, not session checks
   const url = new URL(request.url);
-  const isSigninRequest = url.pathname.includes('/signin') ||
-    url.searchParams.has('callbackUrl') ||
+  const isSigninRequest =
+    (request.method === 'POST' && url.pathname.includes('/signin')) ||
     (request.method === 'POST' && url.pathname.includes('/credentials'));
 
   if (isSigninRequest && !checkSigninRateLimit(request)) {

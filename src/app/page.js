@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { useSession } from 'next-auth/react';
-import LandingPage from '@/components/LandingPage';
+import LandingPage from '@/components/landing';
 
 export default function Home() {
   const { data: session, status } = useSession();

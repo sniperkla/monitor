@@ -4,6 +4,7 @@ import React, { useState, useCallback, useRef, useEffect, useMemo, useLayoutEffe
 import { createPortal } from 'react-dom';
 import { useApp } from '@/context/AppContext';
 import TerminalView from '@/components/TerminalView';
+import RelayTerminalView from '@/components/RelayTerminalView';
 import { Terminal, Plus, X, Columns, Rows, Maximize2, Minimize2, Server, ExternalLink, RefreshCw } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
@@ -1003,14 +1004,25 @@ const TerminalBridge = React.memo(({ term, target, hiddenRoom, onClose }) => {
   return (
     <div ref={wrapperRef} className="react-dom-bridge-anchor" style={{ display: 'none' }}>
       <div ref={bridgeRef} className="h-full w-full overflow-hidden" data-pane-id={term.paneId}>
-        <TerminalView
-          connectionId={term.connectionId}
-          connectionName={term.connectionName}
-          host={term.host}
-          color={term.color}
-          connection={term.connection}
-          onClose={onClose}
-        />
+        {localStorage.getItem('ssh_monitor_ssh_mode') === 'local' ? (
+          <RelayTerminalView
+            connectionId={term.connectionId}
+            connectionName={term.connectionName}
+            host={term.host}
+            color={term.color}
+            connection={term.connection}
+            onClose={onClose}
+          />
+        ) : (
+          <TerminalView
+            connectionId={term.connectionId}
+            connectionName={term.connectionName}
+            host={term.host}
+            color={term.color}
+            connection={term.connection}
+            onClose={onClose}
+          />
+        )}
       </div>
     </div>
   );

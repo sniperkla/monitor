@@ -6,6 +6,7 @@ import { Laptop, Terminal as TermIcon, Play, Square, Settings, RefreshCw, Layers
 import { useApp } from '@/context/AppContext';
 import { useOS } from '@/context/OSContext';
 import TerminalView from '@/components/TerminalView';
+import RelayTerminalView from '@/components/RelayTerminalView';
 import { io } from 'socket.io-client';
 
 export default function TmuxApp({ initialConnection }) {
@@ -545,16 +546,27 @@ export default function TmuxApp({ initialConnection }) {
             {/* Terminal View */}
             <div style={{ display: activeTab === 'terminal' ? 'block' : 'none', height: '100%' }}>
                 {activeSession && (
-                    <TerminalView 
-                      connectionId={selectedConnection._id}
-                      connectionName={`${selectedConnection.name} [${activeSession}]`}
-                      host={selectedConnection.host}
-                      color={selectedConnection.color}
-                      connection={selectedConnection}
-                      onClose={() => setActiveTab('dashboard')}
-                      // We inject an initial command to automatically attach to the target session when it opens
-                      initialCommand={`tmux attach -t ${activeSession}\r`}
-                    />
+                    localStorage.getItem('ssh_monitor_ssh_mode') === 'local' ? (
+                      <RelayTerminalView 
+                        connectionId={selectedConnection._id}
+                        connectionName={`${selectedConnection.name} [${activeSession}]`}
+                        host={selectedConnection.host}
+                        color={selectedConnection.color}
+                        connection={selectedConnection}
+                        onClose={() => setActiveTab('dashboard')}
+                        initialCommand={`tmux attach -t ${activeSession}\r`}
+                      />
+                    ) : (
+                      <TerminalView 
+                        connectionId={selectedConnection._id}
+                        connectionName={`${selectedConnection.name} [${activeSession}]`}
+                        host={selectedConnection.host}
+                        color={selectedConnection.color}
+                        connection={selectedConnection}
+                        onClose={() => setActiveTab('dashboard')}
+                        initialCommand={`tmux attach -t ${activeSession}\r`}
+                      />
+                    )
                 )}
             </div>
         </div>

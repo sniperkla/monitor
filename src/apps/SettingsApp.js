@@ -3,10 +3,10 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { 
   Palette, Image as ImageIcon, Monitor, Layout, Bell, Shield, Info, 
-  Database, CheckCircle, AlertCircle, RefreshCw, Zap, Wifi, WifiOff, 
+  Database, CheckCircle, AlertCircle, RefreshCw, Zap, Wifi, WifiOff, Server,
   Loader, Trash2, Lock, Unlock, Key, Mail, Code, Volume2, Sun, Moon, Cpu,
   Search, Terminal, Network, Download, Copy, X, CheckCheck, Sparkles,
-  GitBranch, ChevronDown, Settings, Send, Music, ChevronRight, Globe, LogOut
+  GitBranch, ChevronDown, Settings, Send, Music, ChevronRight, Globe, LogOut, Check
 } from 'lucide-react';
 import { useOS } from '@/context/OSContext';
 import { useApp } from '@/context/AppContext';
@@ -1483,6 +1483,141 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
                       </div>
                     )}
 
+                    {/* SSH Connection Mode Selector */}
+                    <div className="rounded-2xl border overflow-hidden" style={{ borderColor: 'var(--border-color)' }}>
+                      <div className="px-4 py-3">
+                        <div className="flex items-center gap-3 mb-3">
+                          <div className="w-8 h-8 rounded-xl flex items-center justify-center shrink-0 bg-indigo-500/10">
+                            <Terminal size={15} className="text-indigo-400" />
+                          </div>
+                          <div>
+                            <h4 className="text-xs font-bold text-[var(--text-primary)]">SSH Connection Mode</h4>
+                            <p className="text-[10px] text-[var(--text-muted)]">Choose how SSH connections are handled</p>
+                          </div>
+                        </div>
+
+                        <div className="grid grid-cols-2 gap-2">
+                          {/* Server Mode */}
+                          <button
+                            onClick={() => {
+                              localStorage.setItem('ssh_monitor_ssh_mode', 'server');
+                              addNotification({ title: 'SSH Mode', message: 'Switched to Server mode', type: 'info' });
+                            }}
+                            className={`relative p-3 rounded-xl border text-left transition-all ${
+                              (localStorage.getItem('ssh_monitor_ssh_mode') || 'server') === 'server'
+                                ? 'border-indigo-500/50 bg-indigo-500/10'
+                                : 'border-[var(--border-color)] hover:border-[var(--border-hover)]'
+                            }`}
+                          >
+                            {(localStorage.getItem('ssh_monitor_ssh_mode') || 'server') === 'server' && (
+                              <div className="absolute top-2 right-2 w-4 h-4 rounded-full bg-indigo-500 flex items-center justify-center">
+                                <Check size={10} className="text-white" />
+                              </div>
+                            )}
+                            <div className="flex items-center gap-2 mb-2">
+                              <Server size={14} className="text-indigo-400" />
+                              <span className="text-[11px] font-bold text-[var(--text-primary)]">Server</span>
+                            </div>
+                            <div className="space-y-1">
+                              <p className="text-[9px] text-emerald-400">✓ Zero setup required</p>
+                              <p className="text-[9px] text-emerald-400">✓ SFTP, Docker, AI included</p>
+                              <p className="text-[9px] text-amber-400">• Uses server resources</p>
+                              <p className="text-[9px] text-amber-400">• Server sees traffic</p>
+                            </div>
+                          </button>
+
+                          {/* Local Mode */}
+                          <button
+                            onClick={() => {
+                              if (relayConnected) {
+                                localStorage.setItem('ssh_monitor_ssh_mode', 'local');
+                                addNotification({ title: 'SSH Mode', message: 'Switched to Local mode', type: 'success' });
+                              } else {
+                                addNotification({ title: 'Relay Required', message: 'Install the relay agent first', type: 'warning' });
+                              }
+                            }}
+                            className={`relative p-3 rounded-xl border text-left transition-all ${
+                              localStorage.getItem('ssh_monitor_ssh_mode') === 'local'
+                                ? 'border-emerald-500/50 bg-emerald-500/10'
+                                : !relayConnected
+                                ? 'border-[var(--border-color)] opacity-60'
+                                : 'border-[var(--border-color)] hover:border-[var(--border-hover)]'
+                            }`}
+                          >
+                            {localStorage.getItem('ssh_monitor_ssh_mode') === 'local' && (
+                              <div className="absolute top-2 right-2 w-4 h-4 rounded-full bg-emerald-500 flex items-center justify-center">
+                                <Check size={10} className="text-white" />
+                              </div>
+                            )}
+                            <div className="flex items-center gap-2 mb-2">
+                              <Monitor size={14} className="text-emerald-400" />
+                              <span className="text-[11px] font-bold text-[var(--text-primary)]">Local</span>
+                              {!relayConnected && (
+                                <span className="text-[8px] px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-400">Requires Relay</span>
+                              )}
+                            </div>
+                            <div className="space-y-1">
+                              <p className="text-[9px] text-emerald-400">✓ Your machine handles SSH</p>
+                              <p className="text-[9px] text-emerald-400">✓ Server sees nothing</p>
+                              <p className="text-[9px] text-emerald-400">✓ Faster (direct connection)</p>
+                              <p className="text-[9px] text-amber-400">• Requires relay agent</p>
+                            </div>
+                          </button>
+                        </div>
+
+                        {/* Comparison table */}
+                        <details className="mt-3 group">
+                          <summary className="text-[10px] text-[var(--text-muted)] cursor-pointer select-none hover:text-[var(--text-secondary)] transition-colors flex items-center gap-1.5">
+                            <ChevronDown size={11} className="group-open:rotate-180 transition-transform" />
+                            Compare modes in detail
+                          </summary>
+                          <div className="mt-2 overflow-x-auto">
+                            <table className="w-full text-[9px]">
+                              <thead>
+                                <tr className="border-b border-[var(--border-color)]">
+                                  <th className="text-left py-1.5 pr-3 text-[var(--text-muted)] font-medium">Feature</th>
+                                  <th className="text-center py-1.5 px-2 text-indigo-400 font-medium">Server</th>
+                                  <th className="text-center py-1.5 pl-2 text-emerald-400 font-medium">Local</th>
+                                </tr>
+                              </thead>
+                              <tbody className="text-[var(--text-secondary)]">
+                                <tr className="border-b border-[var(--border-color)]/50">
+                                  <td className="py-1.5 pr-3">Setup</td>
+                                  <td className="text-center py-1.5 px-2 text-emerald-400">None</td>
+                                  <td className="text-center py-1.5 pl-2 text-amber-400">Install agent</td>
+                                </tr>
+                                <tr className="border-b border-[var(--border-color)]/50">
+                                  <td className="py-1.5 pr-3">Speed</td>
+                                  <td className="text-center py-1.5 px-2">Good</td>
+                                  <td className="text-center py-1.5 pl-2 text-emerald-400">Faster</td>
+                                </tr>
+                                <tr className="border-b border-[var(--border-color)]/50">
+                                  <td className="py-1.5 pr-3">Privacy</td>
+                                  <td className="text-center py-1.5 px-2 text-amber-400">Server sees</td>
+                                  <td className="text-center py-1.5 pl-2 text-emerald-400">End-to-end</td>
+                                </tr>
+                                <tr className="border-b border-[var(--border-color)]/50">
+                                  <td className="py-1.5 pr-3">SFTP/Docker/AI</td>
+                                  <td className="text-center py-1.5 px-2 text-emerald-400">Built-in</td>
+                                  <td className="text-center py-1.5 pl-2">Needs ssh2</td>
+                                </tr>
+                                <tr className="border-b border-[var(--border-color)]/50">
+                                  <td className="py-1.5 pr-3">Server load</td>
+                                  <td className="text-center py-1.5 px-2 text-amber-400">High</td>
+                                  <td className="text-center py-1.5 pl-2 text-emerald-400">Minimal</td>
+                                </tr>
+                                <tr>
+                                  <td className="py-1.5 pr-3">100+ users</td>
+                                  <td className="text-center py-1.5 px-2 text-red-400">Slow</td>
+                                  <td className="text-center py-1.5 pl-2 text-emerald-400">No issue</td>
+                                </tr>
+                              </tbody>
+                            </table>
+                          </div>
+                        </details>
+                      </div>
+                    </div>
+
                     {/* Local Relay Agent — always visible compact card */}
                     <div id="relay-agent-section" className="rounded-2xl border overflow-hidden"
                       style={{ borderColor: relayConnected ? 'rgba(52,211,153,0.25)' : 'var(--border-color)' }}
@@ -1741,7 +1876,7 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
             <div className="w-20 h-20 mx-auto bg-gradient-to-br from-indigo-500 to-purple-600 rounded-3xl shadow-2xl shadow-indigo-500/20 flex items-center justify-center mb-5">
               <Monitor size={40} className="text-white" />
             </div>
-            <h2 className="text-xl font-bold mb-0.5">Webtop OS</h2>
+            <h2 className="text-xl font-bold mb-0.5">SSH Monitor</h2>
             <p className="text-indigo-400 text-sm font-medium mb-6">{t('settings_ui.about.version', { version: '1.0.5 (Beta)' })}</p>
             
             <SettingsCard className="text-left">

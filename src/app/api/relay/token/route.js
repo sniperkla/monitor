@@ -44,11 +44,14 @@ export async function GET(request) {
       return Response.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
-    const relay = global.__activeRelays?.get(token.sub);
+    const userId = token.sub;
+    const relay = global.__activeRelays?.get(userId);
+    
     return Response.json({
       success: true,
       connected: !!relay,
       localPort: relay?.localPort || null,
+      capabilities: relay?.capabilities || { ssh: false, sftp: false, docker: false },
     });
   } catch (err) {
     return Response.json({ error: err.message }, { status: 500 });

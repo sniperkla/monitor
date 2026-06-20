@@ -1265,50 +1265,62 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
                                         </div>
                                       )}
 
-                                      {/* Action buttons */}
-                                      <div className="flex items-center gap-1.5 px-4 pb-4">
+                                      {/* Action buttons — grouped sections */}
+                                      <div className="px-4 pb-3 flex items-center gap-2">
+                                        {/* Control section */}
+                                        <div className="flex items-center gap-1 p-1 rounded-lg bg-white/[0.03]">
                                           {c.state === 'running' ? (
-                                              <button onClick={(e) => { e.stopPropagation(); handleContainerAction(c.id, 'stop'); }} className="flex-1 py-1.5 rounded-lg bg-orange-500/10 text-orange-400 text-[10px] font-bold hover:bg-orange-500/15 transition-all flex items-center justify-center gap-1 whitespace-nowrap overflow-hidden">
-                                                {isPending === 'stop' ? <RefreshCw size={9} className="animate-spin" /> : <Square size={9} />} {isPending === 'stop' ? 'STOPPING' : 'STOP'}
-                                              </button>
+                                            <button onClick={(e) => { e.stopPropagation(); handleContainerAction(c.id, 'stop'); }} className="flex items-center gap-1 px-2 py-1.5 rounded-md bg-orange-500/10 text-orange-400 text-[10px] font-medium hover:bg-orange-500/15 transition-all">
+                                              {isPending === 'stop' ? <RefreshCw size={10} className="animate-spin" /> : <Square size={10} />}
+                                              <span>{isPending === 'stop' ? 'Stopping' : 'Stop'}</span>
+                                            </button>
                                           ) : (
-                                              <button onClick={(e) => { e.stopPropagation(); handleContainerAction(c.id, 'start'); }} className="flex-1 py-1.5 rounded-lg bg-emerald-500/10 text-emerald-400 text-[10px] font-bold hover:bg-emerald-500/15 transition-all flex items-center justify-center gap-1 whitespace-nowrap overflow-hidden">
-                                                {isPending === 'start' ? <RefreshCw size={9} className="animate-spin" /> : <Play size={9} />} {isPending === 'start' ? 'STARTING' : 'START'}
-                                              </button>
+                                            <button onClick={(e) => { e.stopPropagation(); handleContainerAction(c.id, 'start'); }} className="flex items-center gap-1 px-2 py-1.5 rounded-md bg-emerald-500/10 text-emerald-400 text-[10px] font-medium hover:bg-emerald-500/15 transition-all">
+                                              {isPending === 'start' ? <RefreshCw size={10} className="animate-spin" /> : <Play size={10} />}
+                                              <span>{isPending === 'start' ? 'Starting' : 'Start'}</span>
+                                            </button>
                                           )}
-                                          <button onClick={(e) => { e.stopPropagation(); handleContainerAction(c.id, 'restart'); }} className="py-1.5 px-2.5 rounded-lg bg-white/5 text-[10px] font-bold hover:bg-white/10 transition-all flex items-center justify-center" title="Restart">
-                                            {isPending === 'restart' ? <RefreshCw size={10} className="animate-spin" /> : <RotateCcw size={10} />}
+                                          <button onClick={(e) => { e.stopPropagation(); handleContainerAction(c.id, 'restart'); }} className="flex items-center gap-1 px-2 py-1.5 rounded-md text-blue-400 text-[10px] font-medium hover:bg-blue-500/10 transition-all">
+                                            <RotateCcw size={10} />
+                                            <span>Restart</span>
                                           </button>
-                                          <button onClick={(e) => { e.stopPropagation(); fetchLogs(c.id, c.name); }} className="flex-1 py-1.5 rounded-lg bg-white/5 text-[10px] font-bold hover:bg-white/10 transition-all flex items-center justify-center gap-1">
-                                            <FileText size={9} /> LOGS
+                                        </div>
+
+                                        {/* Inspect section */}
+                                        <div className="flex items-center gap-1 p-1 rounded-lg bg-white/[0.03]">
+                                          <button onClick={(e) => { e.stopPropagation(); fetchLogs(c.id, c.name); }} className="flex items-center gap-1 px-2 py-1.5 rounded-md text-sky-400 text-[10px] font-medium hover:bg-sky-500/10 transition-all">
+                                            <FileText size={10} />
+                                            <span>Logs</span>
                                           </button>
-                                          <button onClick={(e) => { e.stopPropagation(); browseContainer(c.id, c.name); }} disabled={c.state !== 'running'} className="py-1.5 px-2.5 rounded-lg bg-white/5 text-[10px] font-bold disabled:opacity-20 hover:bg-white/10 transition-all" title="Files">
+                                          <button onClick={(e) => { e.stopPropagation(); browseContainer(c.id, c.name); }} disabled={c.state !== 'running'} className="flex items-center gap-1 px-2 py-1.5 rounded-md text-amber-400 text-[10px] font-medium disabled:opacity-20 hover:bg-amber-500/10 transition-all">
                                             <Folder size={10} />
+                                            <span>Files</span>
                                           </button>
-                                          <button onClick={(e) => { e.stopPropagation(); attachToContainer(c.id, c.name); }} disabled={c.state !== 'running'} className="py-1.5 px-2.5 rounded-lg bg-white/5 text-[10px] font-bold disabled:opacity-20 hover:bg-white/10 transition-all" title="Exec">
+                                          <button onClick={(e) => { e.stopPropagation(); attachToContainer(c.id, c.name); }} disabled={c.state !== 'running'} className="flex items-center gap-1 px-2 py-1.5 rounded-md text-purple-400 text-[10px] font-medium disabled:opacity-20 hover:bg-purple-500/10 transition-all">
                                             <TermIcon size={10} />
+                                            <span>Exec</span>
                                           </button>
-                                          <button 
-                                            onClick={(e) => { e.stopPropagation(); handleBackup(c.id, c.name); }} 
-                                            className="py-1.5 px-2.5 rounded-lg bg-emerald-500/10 text-emerald-400 text-[10px] font-bold hover:bg-emerald-500/20 transition-all flex items-center gap-1" 
-                                            title="Backup Files & Data (Heavy)"
-                                          >
+                                        </div>
+
+                                        {/* Data section */}
+                                        <div className="flex items-center gap-1 p-1 rounded-lg bg-white/[0.03]">
+                                          <button onClick={(e) => { e.stopPropagation(); handleBackup(c.id, c.name); }} className="flex items-center gap-1 px-2 py-1.5 rounded-md text-teal-400 text-[10px] font-medium hover:bg-teal-500/10 transition-all" title="Backup Files & Data">
                                             <Archive size={10} />
+                                            <span>Backup</span>
                                           </button>
-                                          <button 
-                                            onClick={(e) => { e.stopPropagation(); handleExportProject(c); }} 
-                                            className="py-1.5 px-2.5 rounded-lg bg-sky-500/10 text-sky-400 text-[10px] font-bold hover:bg-sky-500/20 transition-all flex items-center gap-1" 
-                                            title="Export Configuration (Light)"
-                                          >
+                                          <button onClick={(e) => { e.stopPropagation(); handleExportProject(c); }} className="flex items-center gap-1 px-2 py-1.5 rounded-md text-cyan-400 text-[10px] font-medium hover:bg-cyan-500/10 transition-all" title="Export Configuration">
                                             <Share2 size={10} />
+                                            <span>Export</span>
                                           </button>
-                                          <button 
-                                            onClick={(e) => { e.stopPropagation(); showConfirm(`Delete ${c.name}?`, () => handleContainerAction(c.id, 'rm'), 'Remove', 'Delete'); }} 
-                                            className="py-1.5 px-2 rounded-lg border border-rose-500/20 text-rose-500 hover:bg-rose-500/10 transition-all flex items-center justify-center min-w-[32px]"
-                                            disabled={isPending}
-                                          >
-                                            {isPending === 'rm' ? <RefreshCw size={10} className="animate-spin text-rose-400" /> : <Trash2 size={10} />}
-                                          </button>
+                                        </div>
+
+                                        <div className="flex-1" />
+
+                                        {/* Danger section */}
+                                        <button onClick={(e) => { e.stopPropagation(); showConfirm(`Delete ${c.name}?`, () => handleContainerAction(c.id, 'rm'), 'Remove', 'Delete'); }} className="flex items-center gap-1 px-2 py-1.5 rounded-lg bg-rose-500/10 text-rose-400 text-[10px] font-medium hover:bg-rose-500/15 transition-all" disabled={isPending}>
+                                          {isPending === 'rm' ? <RefreshCw size={10} className="animate-spin" /> : <Trash2 size={10} />}
+                                          <span>Delete</span>
+                                        </button>
                                       </div>
                                     </motion.div>
                                   );

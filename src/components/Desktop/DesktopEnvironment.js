@@ -731,33 +731,66 @@ export default function DesktopEnvironment() {
           <motion.div
             initial={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="fixed inset-0 z-[50000] bg-[var(--bg-primary)] flex flex-col items-center justify-center"
+            className="fixed inset-0 z-[50000] bg-black flex flex-col items-center justify-center overflow-hidden"
           >
+            {/* Scanlines */}
+            <div className="absolute inset-0 pointer-events-none" style={{ background: 'repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(255,255,255,0.012) 2px, rgba(255,255,255,0.012) 4px)' }} />
+            <div className="absolute inset-0 pointer-events-none" style={{ background: 'radial-gradient(ellipse at center, transparent 50%, rgba(0,0,0,0.5) 100%)' }} />
+
             <motion.div
               initial={{ scale: 0.8, opacity: 0 }}
               animate={{ scale: 1, opacity: 1 }}
-              transition={{ duration: 0.5 }}
-              className="relative w-24 h-24 mb-6"
+              transition={{ type: 'spring', stiffness: 100, damping: 15 }}
+              className="relative flex flex-col items-center"
             >
-              <div className="absolute inset-0 rounded-3xl bg-indigo-500 blur-2xl opacity-20 animate-pulse" />
-              <div className="relative w-full h-full bg-gradient-to-br from-indigo-500 to-purple-600 rounded-3xl flex items-center justify-center shadow-2xl">
-                <Monitor size={48} className="text-white" />
-              </div>
-            </motion.div>
-            <motion.div 
-              initial={{ y: 10, opacity: 0 }}
-              animate={{ y: 0, opacity: 1 }}
-              transition={{ delay: 0.3 }}
-              className="text-center"
-            >
-              <h1 className="text-[var(--text-primary)] font-bold text-xl tracking-widest uppercase mb-2">Webtop OS</h1>
-              <div className="flex gap-1 justify-center">
+              {/* Logo container */}
+              <motion.div
+                initial={{ y: -10 }}
+                animate={{ y: 0 }}
+                className="relative flex items-center px-4 py-3 rounded-2xl mb-6"
+                style={{
+                  background: 'linear-gradient(135deg, rgba(15,23,42,0.8) 0%, rgba(30,27,75,0.6) 50%, rgba(15,23,42,0.8) 100%)',
+                  backdropFilter: 'blur(20px)',
+                  border: '1px solid rgba(99,102,241,0.2)',
+                  boxShadow: '0 0 40px rgba(99,102,241,0.12), 0 8px 32px rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,255,255,0.03)',
+                }}
+              >
+                {/* Gradient accent line */}
+                <div className="absolute top-0 left-4 right-4 h-[1px]" style={{ background: 'linear-gradient(90deg, transparent, rgba(99,102,241,0.3), rgba(34,211,238,0.2), transparent)' }} />
+
+                {/* Terminal icon */}
+                <div className="relative">
+                  <div
+                    className="w-14 h-14 rounded-xl flex items-center justify-center"
+                    style={{
+                      background: 'linear-gradient(135deg, #1e1b4b 0%, #0f172a 100%)',
+                      border: '1px solid rgba(99,102,241,0.25)',
+                      boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.05), 0 0 20px rgba(99,102,241,0.1)',
+                    }}
+                  >
+                    <div className="flex items-center">
+                      <span className="text-lg font-bold" style={{ color: '#6366f1', textShadow: '0 0 8px rgba(99,102,241,0.5)' }}>{'>'}</span>
+                      <motion.span
+                        animate={{ opacity: [1, 0, 1] }}
+                        transition={{ duration: 0.8, repeat: Infinity }}
+                        className="inline-block w-[2px] h-[18px] ml-0.5"
+                        style={{ background: '#22d3ee', boxShadow: '0 0 6px rgba(34,211,238,0.6)' }}
+                      />
+                    </div>
+                  </div>
+                  <div className="absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full" style={{ background: '#4ade80', boxShadow: '0 0 8px rgba(74,222,128,0.5)', border: '2px solid rgba(15,23,42,0.9)' }} />
+                </div>
+              </motion.div>
+
+              {/* Loading dots */}
+              <div className="flex gap-1.5">
                 {[0, 1, 2].map(i => (
                   <motion.div
                     key={i}
                     animate={{ scale: [1, 1.5, 1], opacity: [0.3, 1, 0.3] }}
                     transition={{ repeat: Infinity, duration: 1, delay: i * 0.2 }}
                     className="w-1 h-1 bg-indigo-400 rounded-full"
+                    style={{ boxShadow: '0 0 4px rgba(99,102,241,0.4)' }}
                   />
                 ))}
               </div>

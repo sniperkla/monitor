@@ -8,7 +8,7 @@ export const metadata = {
   appleWebApp: {
     capable: true,
     statusBarStyle: "default",
-    title: "Webtop OS",
+    title: "SSH Monitor",
   },
 };
 

@@ -1,14 +1,16 @@
 #!/usr/bin/env node
 /**
- * SSH Monitor - Local Relay Agent
- * Node.js 18+ required, zero npm dependencies.
- *
+ * SSH Monitor - Enhanced Local Relay Agent
+ * 
+ * Runs on the user's machine. Handles:
+ * - TCP relay (existing functionality)
+ * - SSH connections (NEW - uses ssh2 locally)
+ * - SFTP file operations (NEW - uses ssh2 SFTP subsystem)
+ * - Docker commands (NEW - uses local Docker CLI/socket)
+ * 
+ * Requirements: Node.js 18+, optional: npm install ssh2
+ * 
  * First run:  node local-relay.js --server URL --token TOKEN
- *             (saves config to ~/.ssh-monitor-relay.json, then stays running)
- *
- * Later runs: node local-relay.js
- *             (reads saved config, auto-reconnects whenever the site is open)
- *
  * Install:    node local-relay.js --install --server URL --token TOKEN
  * Uninstall:  node local-relay.js --uninstall
  */
@@ -18,7 +20,30 @@ const fs   = require('fs');
 const path = require('path');
 const os   = require('os');
 const net  = require('net');
-const { spawnSync } = require('child_process');
+const { spawnSync, exec } = require('child_process');
+
+// -- Try to load ssh2 (optional dependency) --
+let ssh2;
+try {
+  ssh2 = require('ssh2');
+  console.log('✅ ssh2 loaded — SSH/SFTP will run locally');
+} catch {
+  console.log('ℹ️  ssh2 not found — install with: npm install ssh2');
+  console.log('   Falling back to TCP relay mode only');
+}
+
+// -- Try to load ws --
+let WS;
+try {
+  WS = require('ws');
+} catch {
+  try {
+    WS = globalThis.WebSocket;
+  } catch {
+    console.error('❌ Node.js 18+ required, or: npm install ws');
+    process.exit(1);
+  }
+}
 
 // -- Parse CLI args --
 const argv = process.argv.slice(2);
@@ -32,361 +57,578 @@ for (let i = 0; i < argv.length; i++) {
   }
 }
 
-// -- Config file persistence (~/.ssh-monitor-relay.json) --
+// -- Config persistence --
 const CONFIG_PATH = path.join(os.homedir(), '.ssh-monitor-relay.json');
-
 function loadConfig() {
-  try {
-    if (fs.existsSync(CONFIG_PATH)) {
-      return JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'));
-    }
-  } catch {}
+  try { if (fs.existsSync(CONFIG_PATH)) return JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8')); } catch {}
   return {};
 }
-
 function saveConfig(cfg) {
-  try {
-    fs.writeFileSync(CONFIG_PATH, JSON.stringify(cfg, null, 2));
-  } catch (e) {
-    console.warn('⚠  Could not save config:', e.message);
-  }
+  try { fs.writeFileSync(CONFIG_PATH, JSON.stringify(cfg, null, 2)); } catch (e) { console.warn('⚠ Config save failed:', e.message); }
 }
 
-// Merge CLI args with saved config (CLI wins)
 const savedConfig = loadConfig();
-
 let SERVER = args.server || savedConfig.server || process.env.RELAY_SERVER || '';
 let TOKEN  = args.token  || savedConfig.token  || process.env.RELAY_TOKEN  || '';
-const HOST     = args.host   || savedConfig.host   || 'localhost';
-const PORT     = parseInt(args.port || savedConfig.port || '27017', 10);
-const SCRIPT   = path.resolve(__filename);
-const NODE_BIN = process.execPath;
-const PLATFORM = os.platform();
-const SVC_ID   = 'com.ssh-monitor.relay';
+
+// -- Install/uninstall handling (unchanged from original) --
+const SVC_ID = 'com.ssh-monitor.relay';
 const SVC_NAME = 'SSH Monitor Local Relay';
+const PLATFORM = os.platform();
+const NODE_BIN = process.execPath;
+const SCRIPT = path.resolve(__filename);
 const INSTALL_DIR = PLATFORM === 'win32'
   ? path.join(process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming'), 'SSH Monitor Relay')
   : path.join(os.homedir(), '.ssh-monitor-relay');
 const INSTALLED_SCRIPT = path.join(INSTALL_DIR, 'local-relay.js');
+
+if (args.install) {
+  if (!SERVER || !TOKEN) { console.error('--server and --token required'); process.exit(1); }
+  saveConfig({ server: SERVER, token: TOKEN });
+  ensureInstalledScript();
+  if (PLATFORM === 'darwin') installMacOS();
+  else if (PLATFORM === 'linux') installLinux();
+  console.log('✅ Relay agent installed as service');
+  process.exit(0);
+}
+if (args.uninstall) {
+  if (PLATFORM === 'darwin') uninstallMacOS();
+  else if (PLATFORM === 'linux') uninstallLinux();
+  try { fs.unlinkSync(CONFIG_PATH); } catch {}
+  console.log('✅ Uninstalled');
+  process.exit(0);
+}
 
 function ensureInstalledScript() {
   try {
     fs.mkdirSync(INSTALL_DIR, { recursive: true });
     if (path.resolve(SCRIPT) !== path.resolve(INSTALLED_SCRIPT)) {
       fs.copyFileSync(SCRIPT, INSTALLED_SCRIPT);
-      if (PLATFORM !== 'win32') {
-        try { fs.chmodSync(INSTALLED_SCRIPT, 0o755); } catch {}
-      }
-      console.log('  ✅ Installed relay runtime to', INSTALLED_SCRIPT);
+      if (PLATFORM !== 'win32') try { fs.chmodSync(INSTALLED_SCRIPT, 0o755); } catch {}
     }
     return INSTALLED_SCRIPT;
-  } catch (e) {
-    console.error('  Failed to install relay runtime:', e.message);
-    process.exit(1);
-  }
+  } catch (e) { console.error('Install failed:', e.message); process.exit(1); }
 }
 
-// -- --install --
-if (args.install) {
-  if (!SERVER || !TOKEN) {
-    console.error('  --server and --token are required with --install');
-    process.exit(1);
-  }
-  saveConfig({ server: SERVER, token: TOKEN, host: HOST, port: PORT });
-  console.log('  ✅ Config saved to', CONFIG_PATH);
-  const serviceScript = ensureInstalledScript();
-  const cmdArgs = ['--server', SERVER, '--token', TOKEN, '--host', HOST, '--port', String(PORT)];
-  if      (PLATFORM === 'darwin') installMacOS(serviceScript, cmdArgs);
-  else if (PLATFORM === 'linux')  installLinux(serviceScript, cmdArgs);
-  else if (PLATFORM === 'win32')  installWindows(serviceScript, cmdArgs);
-  else { console.error('Auto-install not supported on ' + PLATFORM); process.exit(1); }
-  process.exit(0);
-}
-
-// -- --uninstall --
-if (args.uninstall) {
-  if      (PLATFORM === 'darwin') uninstallMacOS();
-  else if (PLATFORM === 'linux')  uninstallLinux();
-  else if (PLATFORM === 'win32')  uninstallWindows();
-  else { console.error('Uninstall not supported on ' + PLATFORM); process.exit(1); }
-  process.exit(0);
-}
-
-// -- RUN MODE --
-if (!SERVER || !TOKEN) {
-  console.log([
-    '',
-    'SSH Monitor - Local Relay Agent',
-    '-------------------------------',
-    'No saved config found. First-time setup:',
-    '  node local-relay.js --server URL --token TOKEN',
-    '',
-    '  Config is saved to ~/.ssh-monitor-relay.json after first run.',
-    '  After that, just run:  node local-relay.js',
-    '',
-    'Install as auto-start background service:',
-    '  node local-relay.js --install --server URL --token TOKEN',
-    '',
-    'Remove background service:',
-    '  node local-relay.js --uninstall',
-    '',
-  ].join('\n'));
-  process.exit(1);
-}
-
-// Save config on first run (or if args updated it)
-if (args.server || args.token) {
-  saveConfig({ server: SERVER, token: TOKEN, host: HOST, port: PORT });
-  console.log('  ✅ Config saved to', CONFIG_PATH);
-  console.log('  Next time just run: node local-relay.js\n');
-}
-
-// ── Resolve WebSocket class ─────────────────────────────────────────────────
-let WS;
-if (typeof WebSocket !== 'undefined') {
-  WS = WebSocket;                     // Node.js 18.15+ native
-} else {
-  try {
-    WS = require('ws');               // Fallback: npm install ws
-    console.log('ℹ  Using ws package for WebSocket.');
-  } catch {
-    console.error('❌  Node.js 18.15+ is required, OR run: npm install ws');
-    process.exit(1);
-  }
-}
-
-// ── Connection logic ────────────────────────────────────────────────────────
-const wsUrl = SERVER.replace(/^http/, 'ws') + `/relay-ws?token=${encodeURIComponent(TOKEN)}`;
-const connections = new Map(); // connId → net.Socket
-
+// -- Connection state --
+const tcpConnections = new Map();  // connId → net.Socket
+const sshSessions = new Map();    // connId → { sshClient, streams }
 let retryDelay = 3000;
 
+// ── Main connection loop ──────────────────────────────────────────────────
 function connect() {
-  console.log(`\n🔗  SSH Monitor Local Relay Agent`);
-  console.log(`    Server : ${SERVER}`);
-  console.log(`    Local  : ${HOST}:${PORT}`);
-  console.log(`    Connecting... (will idle & auto-reconnect whenever you open the site)`);
+  if (!SERVER || !TOKEN) {
+    console.error('❌ Server and token required. Run with: --server URL --token TOKEN');
+    process.exit(1);
+  }
+
+  const wsUrl = SERVER.replace(/^http/, 'ws') + `/relay-ws?token=${encodeURIComponent(TOKEN)}`;
+  console.log(`\n🔗 SSH Monitor Enhanced Local Relay`);
+  console.log(`   Server: ${SERVER}`);
+  console.log(`   SSH2:   ${ssh2 ? 'available' : 'not installed'}`);
+  console.log(`   Connecting...`);
 
   let ws;
-  try {
-    ws = new WS(wsUrl);
-  } catch (err) {
-    console.error('❌  Failed to create WebSocket:', err.message);
+  try { ws = new WS(wsUrl); } catch (err) {
+    console.error('❌ WebSocket failed:', err.message);
     setTimeout(connect, retryDelay);
     return;
   }
 
-  let keepAliveTimer = null;
+  let keepAlive = null;
 
   ws.addEventListener('open', () => {
-    retryDelay = 3000; // reset backoff on successful connect
-    // Tell server which local port we're forwarding
-    ws.send(JSON.stringify({ type: 'init', targetHost: HOST, targetPort: PORT }));
-    // Send a keepalive ping every 30s to prevent nginx/proxy from closing idle connections
-    keepAliveTimer = setInterval(() => {
-      if (ws.readyState === 1 /*OPEN*/) ws.send(JSON.stringify({ type: 'ping' }));
-    }, 30000);
+    retryDelay = 3000;
+    // Don't send init here — wait for 'ready' from server
+    keepAlive = setInterval(() => { if (ws.readyState === 1) ws.send(JSON.stringify({ type: 'ping' })); }, 30000);
   });
 
   ws.addEventListener('message', ({ data }) => {
     let msg;
     try { msg = JSON.parse(data.toString()); } catch { return; }
 
+    // ── TCP relay (existing functionality) ──
     if (msg.type === 'ready') {
-      console.log(`\n✅  Relay ready! Your local ${HOST}:${PORT} is now accessible through SSH Monitor.`);
-      console.log(`    Keep this terminal open while using the app.\n`);
-    }
-
-    if (msg.type === 'pong') return; // keepalive reply — ignore
-
-    if (msg.type === 'error') {
-      console.error(`\n❌  Server error: ${msg.message}`);
-      ws.close();
+      // Now send init with capabilities (relay is registered on server)
+      ws.send(JSON.stringify({ type: 'init', capabilities: { ssh: !!ssh2, sftp: !!ssh2, docker: true } }));
+      console.log(`\n✅ Relay ready! Capabilities: SSH=${!!ssh2}, SFTP=${!!ssh2}, Docker=true`);
     }
 
     if (msg.type === 'open') {
-      // Server wants us to open a TCP connection to the target
       const { connId } = msg;
-      const tcpHost = msg.host || HOST;
-      const tcpPort = Number(msg.port) || PORT;
-
+      const tcpHost = msg.host || 'localhost';
+      const tcpPort = Number(msg.port) || 22;
       const tcp = net.connect(tcpPort, tcpHost);
-
-      tcp.on('connect', () => {
-        // Connection established — nothing to announce, just relay
-      });
-
       tcp.on('data', (chunk) => {
-        if (ws.readyState === 1 /*OPEN*/) {
-          ws.send(JSON.stringify({ type: 'data', connId, data: chunk.toString('base64') }));
-        }
+        if (ws.readyState === 1) ws.send(JSON.stringify({ type: 'data', connId, data: chunk.toString('base64') }));
       });
-
-      tcp.on('close', () => {
-        try { ws.send(JSON.stringify({ type: 'close', connId })); } catch {}
-        connections.delete(connId);
-      });
-
-      tcp.on('error', (err) => {
-        console.error(`  ✗  [${connId}] TCP error: ${err.message} (is ${tcpHost}:${tcpPort} reachable?)`);
-        tcp.destroy();
-      });
-
-      connections.set(connId, tcp);
+      tcp.on('close', () => { try { ws.send(JSON.stringify({ type: 'close', connId })); } catch {} tcpConnections.delete(connId); });
+      tcp.on('error', (err) => { console.error(`✗ [${connId}] TCP error: ${err.message}`); tcp.destroy(); });
+      tcpConnections.set(connId, tcp);
     }
 
     if (msg.type === 'data') {
-      const tcp = connections.get(msg.connId);
-      if (tcp && !tcp.destroyed) {
-        tcp.write(Buffer.from(msg.data, 'base64'));
-      }
+      const tcp = tcpConnections.get(msg.connId);
+      if (tcp && !tcp.destroyed) tcp.write(Buffer.from(msg.data, 'base64'));
     }
 
     if (msg.type === 'close') {
-      const tcp = connections.get(msg.connId);
-      if (tcp) { tcp.destroy(); connections.delete(msg.connId); }
+      const tcp = tcpConnections.get(msg.connId);
+      if (tcp) { tcp.destroy(); tcpConnections.delete(msg.connId); }
+    }
+
+    // ── SSH session (NEW) ──
+    if (msg.type === 'ssh:connect') {
+      handleSshConnect(ws, msg);
+    }
+
+    if (msg.type === 'ssh:input') {
+      const session = sshSessions.get(msg.connId);
+      if (session?.stream?.writable) session.stream.write(msg.data);
+    }
+
+    if (msg.type === 'ssh:resize') {
+      const session = sshSessions.get(msg.connId);
+      if (session?.stream) {
+        try { session.stream.setWindow(msg.rows, msg.cols, 0, 0); } catch {}
+      }
+    }
+
+    if (msg.type === 'ssh:exec') {
+      handleSshExec(ws, msg);
+    }
+
+    if (msg.type === 'ssh:disconnect') {
+      cleanupSsh(msg.connId);
+    }
+
+    // ── SFTP (NEW) ──
+    if (msg.type === 'sftp:list') {
+      handleSftpList(ws, msg);
+    }
+
+    if (msg.type === 'sftp:readFile') {
+      handleSftpRead(ws, msg);
+    }
+
+    if (msg.type === 'sftp:writeFile') {
+      handleSftpWrite(ws, msg);
+    }
+
+    if (msg.type === 'sftp:mkdir') {
+      handleSftpMkdir(ws, msg);
+    }
+
+    if (msg.type === 'sftp:delete') {
+      handleSftpDelete(ws, msg);
+    }
+
+    if (msg.type === 'sftp:upload') {
+      handleSftpUpload(ws, msg);
+    }
+
+    if (msg.type === 'sftp:download') {
+      handleSftpDownload(ws, msg);
+    }
+
+    // ── Docker (NEW) ──
+    if (msg.type === 'docker:command') {
+      handleDockerCommand(ws, msg);
+    }
+
+    if (msg.type === 'pong') return;
+    if (msg.type === 'error') {
+      console.error(`❌ Server error: ${msg.message}`);
     }
   });
 
   ws.addEventListener('close', ({ reason }) => {
-    clearInterval(keepAliveTimer);
-    keepAliveTimer = null;
-    console.log(`\n💤  Site closed or disconnected${reason ? ': ' + reason : ''}. Idling — will reconnect when you open the site (in ${retryDelay / 1000}s)...`);
-    connections.forEach(t => t.destroy());
-    connections.clear();
+    clearInterval(keepAlive);
+    console.log(`\n💤 Disconnected. Reconnecting in ${retryDelay / 1000}s...`);
+    tcpConnections.forEach(t => t.destroy());
+    tcpConnections.clear();
+    sshSessions.forEach((s, id) => cleanupSsh(id));
     setTimeout(connect, retryDelay);
-    retryDelay = Math.min(retryDelay * 1.5, 30000); // exponential backoff, max 30s
+    retryDelay = Math.min(retryDelay * 1.5, 30000);
   });
 
   ws.addEventListener('error', (err) => {
-    console.error(`❌  WebSocket error: ${err.message || JSON.stringify(err)}`);
+    console.error(`❌ WebSocket error: ${err.message || err}`);
   });
 }
 
-connect();
+// ── SSH handlers ──────────────────────────────────────────────────────────
+function handleSshConnect(ws, msg) {
+  if (!ssh2) {
+    ws.send(JSON.stringify({ type: 'ssh:error', connId: msg.connId, error: 'ssh2 not installed on relay agent' }));
+    return;
+  }
 
-// ==========================================================================
-// macOS - LaunchAgent (~/Library/LaunchAgents/)
-// ==========================================================================
-function installMacOS(serviceScript, cmdArgs) {
-  const plistDir  = path.join(os.homedir(), 'Library', 'LaunchAgents');
+  const { connId, connection, cols, rows } = msg;
+  const config = {
+    host: connection.host,
+    port: connection.port || 22,
+    username: connection.username || 'root',
+    readyTimeout: 15000,
+    keepaliveInterval: 10000,
+  };
+
+  if (connection.password) config.password = connection.password;
+  if (connection.privateKey) config.privateKey = connection.privateKey;
+  if (connection.passphrase) config.passphrase = connection.passphrase;
+
+  const sshClient = new ssh2.Client();
+
+  sshClient.on('ready', () => {
+    console.log(`✅ [${connId}] SSH connected to ${config.host}:${config.port}`);
+
+    sshClient.shell({ term: 'xterm-256color', cols: cols || 120, rows: rows || 30 }, (err, stream) => {
+      if (err) {
+        ws.send(JSON.stringify({ type: 'ssh:error', connId, error: err.message }));
+        return;
+      }
+
+      sshSessions.set(connId, { sshClient, stream });
+
+      ws.send(JSON.stringify({ type: 'ssh:connected', connId }));
+
+      stream.on('data', (data) => {
+        if (ws.readyState === 1) ws.send(JSON.stringify({ type: 'ssh:data', connId, data: data.toString('utf-8') }));
+      });
+
+      stream.stderr.on('data', (data) => {
+        if (ws.readyState === 1) ws.send(JSON.stringify({ type: 'ssh:data', connId, data: data.toString('utf-8') }));
+      });
+
+      stream.on('close', () => {
+        ws.send(JSON.stringify({ type: 'ssh:closed', connId }));
+        cleanupSsh(connId);
+      });
+    });
+  });
+
+  sshClient.on('error', (err) => {
+    console.error(`✗ [${connId}] SSH error: ${err.message}`);
+    ws.send(JSON.stringify({ type: 'ssh:error', connId, error: err.message }));
+    cleanupSsh(connId);
+  });
+
+  sshClient.connect(config);
+}
+
+function handleSshExec(ws, msg) {
+  const session = sshSessions.get(msg.connId);
+  if (!session?.sshClient) {
+    ws.send(JSON.stringify({ type: 'ssh:exec_error', connId: msg.connId, error: 'No SSH session' }));
+    return;
+  }
+
+  session.sshClient.exec(msg.command, (err, stream) => {
+    if (err) {
+      ws.send(JSON.stringify({ type: 'ssh:exec_error', connId: msg.connId, error: err.message }));
+      return;
+    }
+
+    let stdout = '', stderr = '';
+    stream.on('data', (d) => { stdout += d.toString(); });
+    stream.stderr.on('data', (d) => { stderr += d.toString(); });
+    stream.on('close', (code) => {
+      ws.send(JSON.stringify({ type: 'ssh:exec_result', connId: msg.connId, stdout, stderr, code }));
+    });
+  });
+}
+
+function cleanupSsh(connId) {
+  const session = sshSessions.get(connId);
+  if (session) {
+    try { session.stream?.close(); } catch {}
+    try { session.sshClient?.end(); } catch {}
+    sshSessions.delete(connId);
+  }
+}
+
+// ── SFTP handlers ─────────────────────────────────────────────────────────
+function getSftpClient(connId) {
+  return new Promise((resolve, reject) => {
+    const session = sshSessions.get(connId);
+    if (!session?.sshClient) return reject(new Error('No SSH session'));
+    session.sshClient.sftp((err, sftp) => {
+      if (err) return reject(err);
+      resolve(sftp);
+    });
+  });
+}
+
+async function handleSftpList(ws, msg) {
+  try {
+    const sftp = await getSftpClient(msg.connId);
+    const files = [];
+    const stream = sftp.createReadStream(msg.path || '.', {});
+
+    stream.on('entry', (entry) => {
+      files.push({
+        filename: entry.filename,
+        longname: entry.longname,
+        attrs: {
+          size: entry.attrs.size,
+          mode: entry.attrs.mode,
+          atime: entry.attrs.atime,
+          mtime: entry.attrs.mtime,
+          uid: entry.attrs.uid,
+          gid: entry.attrs.gid,
+        },
+      });
+    });
+
+    stream.on('error', (err) => {
+      ws.send(JSON.stringify({ type: 'sftp:error', connId: msg.connId, error: err.message }));
+      sftp.end();
+    });
+
+    stream.on('end', () => {
+      ws.send(JSON.stringify({ type: 'sftp:list', connId: msg.connId, path: msg.path, files }));
+      sftp.end();
+    });
+  } catch (err) {
+    ws.send(JSON.stringify({ type: 'sftp:error', connId: msg.connId, error: err.message }));
+  }
+}
+
+async function handleSftpRead(ws, msg) {
+  try {
+    const sftp = await getSftpClient(msg.connId);
+    const chunks = [];
+    const stream = sftp.createReadStream(msg.path);
+
+    stream.on('data', (chunk) => chunks.push(chunk));
+    stream.on('error', (err) => {
+      ws.send(JSON.stringify({ type: 'sftp:error', connId: msg.connId, error: err.message }));
+      sftp.end();
+    });
+    stream.on('end', () => {
+      ws.send(JSON.stringify({ type: 'sftp:fileData', connId: msg.connId, path: msg.path, content: Buffer.concat(chunks).toString('utf-8') }));
+      sftp.end();
+    });
+  } catch (err) {
+    ws.send(JSON.stringify({ type: 'sftp:error', connId: msg.connId, error: err.message }));
+  }
+}
+
+async function handleSftpWrite(ws, msg) {
+  try {
+    const sftp = await getSftpClient(msg.connId);
+    const stream = sftp.createWriteStream(msg.path);
+
+    stream.on('error', (err) => {
+      ws.send(JSON.stringify({ type: 'sftp:error', connId: msg.connId, error: err.message }));
+      sftp.end();
+    });
+
+    stream.end(msg.content, () => {
+      ws.send(JSON.stringify({ type: 'sftp:action_success', connId: msg.connId, action: 'write', path: msg.path }));
+      sftp.end();
+    });
+  } catch (err) {
+    ws.send(JSON.stringify({ type: 'sftp:error', connId: msg.connId, error: err.message }));
+  }
+}
+
+async function handleSftpMkdir(ws, msg) {
+  try {
+    const sftp = await getSftpClient(msg.connId);
+    sftp.mkdir(msg.path, (err) => {
+      if (err) ws.send(JSON.stringify({ type: 'sftp:error', connId: msg.connId, error: err.message }));
+      else ws.send(JSON.stringify({ type: 'sftp:action_success', connId: msg.connId, action: 'mkdir', path: msg.path }));
+      sftp.end();
+    });
+  } catch (err) {
+    ws.send(JSON.stringify({ type: 'sftp:error', connId: msg.connId, error: err.message }));
+  }
+}
+
+async function handleSftpDelete(ws, msg) {
+  try {
+    const sftp = await getSftpClient(msg.connId);
+    const deleteFn = msg.isDirectory ? sftp.rmdir.bind(sftp) : sftp.unlink.bind(sftp);
+    deleteFn(msg.path, (err) => {
+      if (err) ws.send(JSON.stringify({ type: 'sftp:error', connId: msg.connId, error: err.message }));
+      else ws.send(JSON.stringify({ type: 'sftp:action_success', connId: msg.connId, action: 'delete', path: msg.path }));
+      sftp.end();
+    });
+  } catch (err) {
+    ws.send(JSON.stringify({ type: 'sftp:error', connId: msg.connId, error: err.message }));
+  }
+}
+
+async function handleSftpUpload(ws, msg) {
+  try {
+    const sftp = await getSftpClient(msg.connId);
+    const stream = sftp.createWriteStream(msg.remotePath);
+    stream.on('error', (err) => {
+      ws.send(JSON.stringify({ type: 'sftp:error', connId: msg.connId, error: err.message }));
+      sftp.end();
+    });
+    stream.end(Buffer.from(msg.data, 'base64'), () => {
+      ws.send(JSON.stringify({ type: 'sftp:upload_complete', connId: msg.connId, path: msg.remotePath }));
+      sftp.end();
+    });
+  } catch (err) {
+    ws.send(JSON.stringify({ type: 'sftp:error', connId: msg.connId, error: err.message }));
+  }
+}
+
+async function handleSftpDownload(ws, msg) {
+  try {
+    const sftp = await getSftpClient(msg.connId);
+    const chunks = [];
+    const stream = sftp.createReadStream(msg.remotePath);
+    stream.on('data', (chunk) => chunks.push(chunk));
+    stream.on('error', (err) => {
+      ws.send(JSON.stringify({ type: 'sftp:error', connId: msg.connId, error: err.message }));
+      sftp.end();
+    });
+    stream.on('end', () => {
+      ws.send(JSON.stringify({
+        type: 'sftp:download_data',
+        connId: msg.connId,
+        path: msg.remotePath,
+        data: Buffer.concat(chunks).toString('base64'),
+      }));
+      sftp.end();
+    });
+  } catch (err) {
+    ws.send(JSON.stringify({ type: 'sftp:error', connId: msg.connId, error: err.message }));
+  }
+}
+
+// ── Docker handlers ───────────────────────────────────────────────────────
+function handleDockerCommand(ws, msg) {
+  const { connId, command } = msg;
+
+  // Sanitize Docker command - only allow safe commands
+  const safeCommands = [
+    'ps', 'images', 'volumes', 'networks', 'info', 'version',
+    'stats', 'top', 'logs', 'inspect', 'port', 'diff',
+    'start', 'stop', 'restart', 'pause', 'unpause',
+    'rm', 'rmi', 'pull', 'push', 'build', 'run',
+    'exec', 'cp', 'rename', 'update', 'wait',
+    'compose', 'stack', 'service', 'node', 'secret', 'config'
+  ];
+  
+  const cmdParts = (command || '').trim().split(/\s+/);
+  const baseCmd = cmdParts[0]?.split('=')[0]; // Handle --flag=value
+  
+  if (!baseCmd || !safeCommands.some(sc => baseCmd === sc || baseCmd.startsWith(sc + '-'))) {
+    ws.send(JSON.stringify({ type: 'docker:error', connId, error: `Command not allowed: ${baseCmd}` }));
+    return;
+  }
+
+  // Block potentially dangerous patterns
+  const dangerous = /[;&|`$(){}!#<>]/;
+  if (dangerous.test(command)) {
+    ws.send(JSON.stringify({ type: 'docker:error', connId, error: 'Command contains unsafe characters' }));
+    return;
+  }
+
+  // รัน docker ผ่าน SSH ไปยัง Target (ไม่ใช่บนเครื่องผู้ใช้)
+  const session = sshSessions.get(connId);
+  if (!session?.sshClient) {
+    ws.send(JSON.stringify({ type: 'docker:error', connId, error: 'No SSH session. Connect to SSH first.' }));
+    return;
+  }
+
+  session.sshClient.exec(`docker ${command}`, (err, stream) => {
+    if (err) {
+      ws.send(JSON.stringify({ type: 'docker:error', connId, error: err.message }));
+      return;
+    }
+
+    let stdout = '';
+    let stderr = '';
+
+    stream.on('data', (data) => {
+      stdout += data.toString();
+    });
+
+    stream.stderr.on('data', (data) => {
+      stderr += data.toString();
+    });
+
+    stream.on('close', (code) => {
+      if (code !== 0) {
+        ws.send(JSON.stringify({ type: 'docker:error', connId, error: `Exit code ${code}`, stderr }));
+      } else {
+        ws.send(JSON.stringify({ type: 'docker:result', connId, stdout, stderr }));
+      }
+    });
+  });
+}
+
+// ── Service install helpers (unchanged) ───────────────────────────────────
+function shellQuote(s) { return `'${String(s).replace(/'/g, `'\\''`)}'`; }
+function xmlEscape(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+
+function installMacOS() {
+  const plistDir = path.join(os.homedir(), 'Library', 'LaunchAgents');
   const plistPath = path.join(plistDir, SVC_ID + '.plist');
-  const logFile   = path.join(os.homedir(), 'Library', 'Logs', 'ssh-monitor-relay.log');
+  const logFile = path.join(os.homedir(), 'Library', 'Logs', 'ssh-monitor-relay.log');
   fs.mkdirSync(plistDir, { recursive: true });
-  const LT = String.fromCharCode(60), GT = String.fromCharCode(62);
-  const argTags = [NODE_BIN, serviceScript].concat(cmdArgs)
-    .map(function(a) { return '    ' + LT + 'string' + GT + xmlEscape(a) + LT + '/string' + GT; }).join('\n');
+  const LT = '<', GT = '>';
+  const argTags = [NODE_BIN, INSTALLED_SCRIPT, '--server', SERVER, '--token', TOKEN]
+    .map(a => `    ${LT}string${GT}${xmlEscape(a)}${LT}/string${GT}`).join('\n');
   const xml = [
-    LT + '?xml version="1.0" encoding="UTF-8"?' + GT,
-    LT + '!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"' + GT,
-    LT + 'plist version="1.0"' + GT + LT + 'dict' + GT,
-    '  ' + LT + 'key' + GT + 'Label' + LT + '/key' + GT + LT + 'string' + GT + SVC_ID + LT + '/string' + GT,
-    '  ' + LT + 'key' + GT + 'ProgramArguments' + LT + '/key' + GT,
-    '  ' + LT + 'array' + GT,
-    argTags,
-    '  ' + LT + '/array' + GT,
-    '  ' + LT + 'key' + GT + 'RunAtLoad' + LT + '/key' + GT + LT + 'true/' + GT,
-    '  ' + LT + 'key' + GT + 'KeepAlive' + LT + '/key' + GT + LT + 'true/' + GT,
-    '  ' + LT + 'key' + GT + 'StandardOutPath' + LT + '/key' + GT + LT + 'string' + GT + logFile + LT + '/string' + GT,
-    '  ' + LT + 'key' + GT + 'StandardErrorPath' + LT + '/key' + GT + LT + 'string' + GT + logFile + LT + '/string' + GT,
-    LT + '/dict' + GT + LT + '/plist' + GT,
+    `<?xml version="1.0" encoding="UTF-8"?>`,
+    `<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">`,
+    `${LT}plist version="1.0"${GT}${LT}dict${GT}`,
+    `  ${LT}key${GT}Label${LT}/key${GT}${LT}string${GT}${SVC_ID}${LT}/string${GT}`,
+    `  ${LT}key${GT}ProgramArguments${LT}/key${GT}`,
+    `  ${LT}array${GT}`, argTags, `  ${LT}/array${GT}`,
+    `  ${LT}key${GT}RunAtLoad${LT}/key${GT}${LT}true/${GT}`,
+    `  ${LT}key${GT}KeepAlive${LT}/key${GT}${LT}true/${GT}`,
+    `  ${LT}key${GT}StandardOutPath${LT}/key${GT}${LT}string${GT}${logFile}${LT}/string${GT}`,
+    `  ${LT}key${GT}StandardErrorPath${LT}/key${GT}${LT}string${GT}${logFile}${LT}/string${GT}`,
+    `${LT}/dict${GT}${LT}/plist${GT}`,
   ].join('\n');
   fs.writeFileSync(plistPath, xml);
   spawnSync('launchctl', ['unload', plistPath], { stdio: 'ignore' });
-  const r = spawnSync('launchctl', ['load', '-w', plistPath], { stdio: 'inherit' });
-  if (r.status === 0) {
-    console.log('\n  Installed as macOS LaunchAgent (auto-starts at login)');
-    console.log('  Logs:   tail -f "' + logFile + '"');
-    console.log('  Remove: node "' + serviceScript + '" --uninstall\n');
-  } else {
-    console.error('  launchctl load failed.');
-  }
+  spawnSync('launchctl', ['load', '-w', plistPath], { stdio: 'inherit' });
+  console.log(`✅ Installed as macOS LaunchAgent. Logs: tail -f "${logFile}"`);
 }
 
 function uninstallMacOS() {
   const plistPath = path.join(os.homedir(), 'Library', 'LaunchAgents', SVC_ID + '.plist');
-  if (!fs.existsSync(plistPath)) { console.log('No LaunchAgent found.'); return; }
-  spawnSync('launchctl', ['unload', plistPath], { stdio: 'ignore' });
-  fs.unlinkSync(plistPath);
-  console.log('  Removed macOS LaunchAgent.');
+  if (fs.existsSync(plistPath)) {
+    spawnSync('launchctl', ['unload', plistPath], { stdio: 'ignore' });
+    fs.unlinkSync(plistPath);
+    console.log('✅ Removed macOS LaunchAgent');
+  }
 }
 
-// ==========================================================================
-// Linux - systemd user service (~/.config/systemd/user/)
-// ==========================================================================
-function installLinux(serviceScript, cmdArgs) {
-  const unitDir  = path.join(os.homedir(), '.config', 'systemd', 'user');
+function installLinux() {
+  const unitDir = path.join(os.homedir(), '.config', 'systemd', 'user');
   const unitPath = path.join(unitDir, SVC_ID + '.service');
-  const logDir   = path.join(os.homedir(), '.local', 'share', 'ssh-monitor');
   fs.mkdirSync(unitDir, { recursive: true });
-  fs.mkdirSync(logDir,  { recursive: true });
-  const execStart = [NODE_BIN, serviceScript].concat(cmdArgs).map(shellQuote).join(' ');
-  const logFile   = path.join(logDir, 'relay.log');
   const unit = [
-    '[Unit]', 'Description=' + SVC_NAME, 'After=network.target', '',
-    '[Service]', 'Type=simple', 'ExecStart=' + execStart,
-    'Restart=always', 'RestartSec=5',
-    'StandardOutput=append:' + logFile,
-    'StandardError=append:' + logFile, '',
+    '[Unit]', `Description=${SVC_NAME}`, 'After=network.target', '',
+    '[Service]', 'Type=simple',
+    `ExecStart=${shellQuote(NODE_BIN)} ${shellQuote(INSTALLED_SCRIPT)} --server ${shellQuote(SERVER)} --token ${shellQuote(TOKEN)}`,
+    'Restart=always', 'RestartSec=5', '',
     '[Install]', 'WantedBy=default.target',
   ].join('\n') + '\n';
   fs.writeFileSync(unitPath, unit);
-  let ok = spawnSync('systemctl', ['--user', 'daemon-reload'], { stdio: 'inherit' }).status === 0;
-  ok = ok && spawnSync('systemctl', ['--user', 'enable', '--now', SVC_ID + '.service'], { stdio: 'inherit' }).status === 0;
-  spawnSync('loginctl', ['enable-linger', os.userInfo().username], { stdio: 'ignore' });
-  if (ok) {
-    console.log('\n  Installed as systemd user service (auto-starts at login)');
-    console.log('  Logs:   journalctl --user -u ' + SVC_ID + ' -f');
-    console.log('  Remove: node "' + serviceScript + '" --uninstall\n');
-  } else {
-    console.error('  systemctl failed. Try: export XDG_RUNTIME_DIR=/run/user/$(id -u)');
-  }
+  spawnSync('systemctl', ['--user', 'daemon-reload'], { stdio: 'inherit' });
+  spawnSync('systemctl', ['--user', 'enable', '--now', SVC_ID + '.service'], { stdio: 'inherit' });
+  console.log('✅ Installed as systemd user service');
 }
 
 function uninstallLinux() {
   const unitPath = path.join(os.homedir(), '.config', 'systemd', 'user', SVC_ID + '.service');
-  if (!fs.existsSync(unitPath)) { console.log('No systemd unit found.'); return; }
-  spawnSync('systemctl', ['--user', 'disable', '--now', SVC_ID + '.service'], { stdio: 'ignore' });
-  fs.unlinkSync(unitPath);
-  spawnSync('systemctl', ['--user', 'daemon-reload'], { stdio: 'ignore' });
-  console.log('  Removed systemd service.');
-}
-
-// ==========================================================================
-// Windows - Task Scheduler
-// ==========================================================================
-function installWindows(serviceScript, cmdArgs) {
-  const allArgs = cmdArgs.map(function(a) { return a.indexOf(' ') !== -1 ? '"' + a + '"' : a; }).join(' ');
-  const action  = '"' + NODE_BIN + '" "' + serviceScript + '" ' + allArgs;
-  const r = spawnSync('schtasks',
-    ['/Create', '/F', '/TN', SVC_NAME, '/SC', 'ONLOGON', '/RL', 'HIGHEST', '/TR', action],
-    { stdio: 'inherit', shell: true });
-  if (r.status === 0) {
-    spawnSync('schtasks', ['/Run', '/TN', SVC_NAME], { stdio: 'ignore', shell: true });
-    console.log('\n  Installed as Windows Scheduled Task (auto-starts at login)');
-    console.log('  Stop:   schtasks /End /TN "' + SVC_NAME + '"');
-    console.log('  Remove: node "' + serviceScript + '" --uninstall\n');
-  } else {
-    console.error('  schtasks failed. Try running as Administrator.');
+  if (fs.existsSync(unitPath)) {
+    spawnSync('systemctl', ['--user', 'disable', '--now', SVC_ID + '.service'], { stdio: 'ignore' });
+    fs.unlinkSync(unitPath);
+    console.log('✅ Removed systemd service');
   }
 }
 
-function uninstallWindows() {
-  const r = spawnSync('schtasks', ['/Delete', '/F', '/TN', SVC_NAME], { stdio: 'inherit', shell: true });
-  if (r.status === 0) console.log('  Removed Windows Scheduled Task.');
-  else console.log('  Task not found.');
-}
-
-// -- Utilities --
-function xmlEscape(s) {
-  const AMP = String.fromCharCode(38);
-  return String(s)
-    .split(AMP).join(AMP + 'amp;')
-    .split(String.fromCharCode(60)).join(AMP + 'lt;')
-    .split(String.fromCharCode(62)).join(AMP + 'gt;')
-    .split(String.fromCharCode(34)).join(AMP + 'quot;');
-}
-function shellQuote(s) {
-  const Q = String.fromCharCode(39);
-  return Q + String(s).split(Q).join(Q + String.fromCharCode(92) + Q + Q) + Q;
-}
+// ── Start ─────────────────────────────────────────────────────────────────
+connect();

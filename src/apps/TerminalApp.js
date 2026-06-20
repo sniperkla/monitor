@@ -3,12 +3,27 @@
 import { useState, useEffect, useRef } from 'react';
 import { useApp } from '@/context/AppContext';
 import TerminalView from '@/components/TerminalView';
+import RelayTerminalView from '@/components/RelayTerminalView';
 import { Server, Terminal as TermIcon, Zap, X, Plus } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 export default function TerminalApp({ onEditConnection, initialConnection, initialConnectionId, initialCommand, windowId }) {
   const { state, dispatch } = useApp();
   const { t } = useTranslation();
+  
+  // Read SSH mode from settings (default: server)
+  const getUseRelay = () => {
+    if (typeof window === 'undefined') return false;
+    return localStorage.getItem('ssh_monitor_ssh_mode') === 'local';
+  };
+  const [useRelay, setUseRelay] = useState(getUseRelay);
+  
+  // Listen for setting changes
+  useEffect(() => {
+    const check = () => setUseRelay(getUseRelay());
+    window.addEventListener('storage', check);
+    return () => window.removeEventListener('storage', check);
+  }, []);
   const { connections, standaloneTerminals } = state;
   const sshConnections = connections.filter(c => c.type !== 'database');
   const [activeTab, setActiveTab] = useState(null);
@@ -141,9 +156,10 @@ export default function TerminalApp({ onEditConnection, initialConnection, initi
     if (!localStandaloneTerm) {
       return <div className="flex flex-col h-full bg-transparent overflow-hidden" />;
     }
+    const TermComponent = useRelay ? RelayTerminalView : TerminalView;
     return (
       <div className="flex flex-col h-full bg-transparent overflow-hidden">
-        <TerminalView 
+        <TermComponent 
           connectionId={localStandaloneTerm.connectionId}
           connectionName={localStandaloneTerm.connectionName}
           host={localStandaloneTerm.host}
@@ -283,23 +299,26 @@ export default function TerminalApp({ onEditConnection, initialConnection, initi
 
         {/* Terminals - Always mounted but hidden if selecting connection picker */}
         <div className={`h-full ${isSelecting ? 'opacity-0 pointer-events-none' : 'opacity-100'}`}>
-          {standaloneTerminals.map(term => (
-            <div
-              key={term.id}
-              className="h-full"
-              style={{ display: activeTab === term.id ? 'block' : 'none' }}
-            >
-              <TerminalView 
-                connectionId={term.connectionId}
-                connectionName={term.connectionName}
-                host={term.host}
-                color={term.color}
-                connection={term.connection}
-                initialCommand={term.initialCommand}
-                onClose={() => handleCloseTab(term.id)}
-              />
-            </div>
-          ))}
+          {standaloneTerminals.map(term => {
+            const TermComponent = useRelay ? RelayTerminalView : TerminalView;
+            return (
+              <div
+                key={term.id}
+                className="h-full"
+                style={{ display: activeTab === term.id ? 'block' : 'none' }}
+              >
+                <TermComponent 
+                  connectionId={term.connectionId}
+                  connectionName={term.connectionName}
+                  host={term.host}
+                  color={term.color}
+                  connection={term.connection}
+                  initialCommand={term.initialCommand}
+                  onClose={() => handleCloseTab(term.id)}
+                />
+              </div>
+            );
+          })}
         </div>
       </div>
     </div>

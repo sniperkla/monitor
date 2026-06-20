@@ -91,7 +91,7 @@ export default function PWAHandler() {
               </div>
             </div>
 
-            <h2 className="text-2xl font-bold text-[var(--text-primary)] mb-2">Install Webtop OS</h2>
+            <h2 className="text-2xl font-bold text-[var(--text-primary)] mb-2">Install SSH Monitor</h2>
             <p className="text-[var(--text-secondary)] mb-8 text-sm leading-relaxed">
               Experience the monitor with a native look and feel. Faster loading, full-screen mode, and no browser distraction.
             </p>

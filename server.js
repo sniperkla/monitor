@@ -548,6 +548,11 @@ const activeSessions = new Map();
 const SSH_IDLE_TIMEOUT_MS = 10 * 60 * 1000;
 const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
 
+  // Initialize WebSocket-to-TCP relay (lightweight byte-pipe mode)
+  const { WsTcpRelay } = require('./src/lib/wsRelayServer');
+  const relay = new WsTcpRelay(io, { proxyProtocol: true });
+  console.log('🔌 WebSocket TCP relay initialized on /relay namespace');
+
   io.on('connection', (socket) => {
     const dbUri = socket.handshake.query.dbUri;
     console.log(`🔌 Socket connected: ${socket.id} ${dbUri ? '(Private DB)' : '(Global DB)'}`);
@@ -3143,6 +3148,8 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
           const obj = {};
           for (const [token, entry] of global.__relayTokens) obj[token] = entry;
           fs.writeFileSync(RELAY_TOKENS_FILE, JSON.stringify(obj, null, 2));
+          // Set file permissions to owner-only read/write (600)
+          try { fs.chmodSync(RELAY_TOKENS_FILE, 0o600); } catch {}
         } catch (e) {
           console.warn('⚠️  Could not persist relay tokens:', e.message);
         }
@@ -3247,9 +3254,13 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
               return;
             }
             if (msg.type === 'init') {
-              // Relay agent reports which local port it is forwarding
+              // Relay agent reports which local port it is forwarding and its capabilities
               const r = global.__activeRelays.get(userId);
-              if (r) { r.targetHost = msg.targetHost || 'localhost'; r.targetPort = Number(msg.targetPort) || 27017; }
+              if (r) {
+                r.targetHost = msg.targetHost || 'localhost';
+                r.targetPort = Number(msg.targetPort) || 27017;
+                r.capabilities = msg.capabilities || { ssh: false, sftp: false, docker: false };
+              }
             }
             if (msg.type === 'data') {
               const s = tcpSockets.get(msg.connId);
@@ -3343,4 +3354,7 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
   process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
   process.on('SIGINT',  () => gracefulShutdown('SIGINT'));
 });
+
+// Export getModels for use by wsRelayServer
+module.exports = { getModels };
 
