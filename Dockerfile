@@ -1,10 +1,10 @@
-FROM node:20-bookworm-slim AS deps
+FROM node:22-bookworm-slim AS deps
 WORKDIR /app
 
 COPY package.json package-lock.json ./
 RUN npm ci
 
-FROM node:20-bookworm-slim AS builder
+FROM node:22-bookworm-slim AS builder
 WORKDIR /app
 ENV NODE_ENV=production
 ENV ENCRYPTION_KEY=placeholder_build_key
@@ -14,7 +14,7 @@ COPY . .
 RUN if [ ! -f db-config.json ]; then echo '{}' > db-config.json; fi
 RUN npm run build
 
-FROM node:20-bookworm-slim AS runner
+FROM node:22-bookworm-slim AS runner
 WORKDIR /app
 ENV NODE_ENV=production
 ENV PORT=3030
