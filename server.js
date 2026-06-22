@@ -3073,19 +3073,44 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
           global.__relayConnMap.set(relayConnId, socket.id);
           console.log(`🏠 [Relay SSH] Routing ${sshConfig.host}:${sshConfig.port} through relay agent (connId: ${relayConnId})`);
 
+          // ── Relay-ready gate ─────────────────────────────────────────────
+          // SFTP events can arrive from the browser immediately on mount, but the relay
+          // SSH session isn't established yet. Queue them and flush once ssh:connected.
+          let relayReady = false;
+          const sftpQueue = []; // { type, payload }
+
+          function sendToRelay(msgObj) {
+            if (userRelay.ws?.readyState === 1)
+              userRelay.ws.send(JSON.stringify(msgObj));
+          }
+
+          function flushSftpQueue() {
+            while (sftpQueue.length > 0) {
+              const item = sftpQueue.shift();
+              sendToRelay(item);
+            }
+          }
+
+          function forwardOrQueue(msgObj) {
+            if (relayReady) {
+              sendToRelay(msgObj);
+            } else {
+              if (sftpQueue.length < 20) sftpQueue.push(msgObj); // bounded queue
+            }
+          }
+          // ────────────────────────────────────────────────────────────────
+
           // Register ssh:input, ssh:resize forwarding to relay
           socket.removeAllListeners('ssh:input');
           socket.removeAllListeners('ssh:resize');
           socket.on('ssh:input', (inputData) => {
-            if (userRelay.ws?.readyState === 1)
-              userRelay.ws.send(JSON.stringify({ type: 'ssh:input', connId: relayConnId, data: inputData }));
+            sendToRelay({ type: 'ssh:input', connId: relayConnId, data: inputData });
           });
           socket.on('ssh:resize', ({ cols: c, rows: r }) => {
-            if (userRelay.ws?.readyState === 1)
-              userRelay.ws.send(JSON.stringify({ type: 'ssh:resize', connId: relayConnId, cols: c, rows: r }));
+            sendToRelay({ type: 'ssh:resize', connId: relayConnId, cols: c, rows: r });
           });
 
-          // Forward simple SFTP events to relay
+          // Forward simple SFTP events to relay (queued until ssh:connected)
           const sftpSimpleEvents = [
             'sftp:list', 'sftp:mkdir', 'sftp:delete', 'sftp:readFile',
             'sftp:writeFile', 'sftp:download', 'sftp:download_folder',
@@ -3094,12 +3119,10 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
           sftpSimpleEvents.forEach(ev => {
             socket.removeAllListeners(ev);
             socket.on(ev, (payload) => {
-              if (userRelay.ws?.readyState === 1) {
-                const msg = typeof payload === 'string'
-                  ? { type: ev, connId: relayConnId, path: payload }
-                  : { type: ev, connId: relayConnId, ...payload };
-                userRelay.ws.send(JSON.stringify(msg));
-              }
+              const msg = typeof payload === 'string'
+                ? { type: ev, connId: relayConnId, path: payload }
+                : { type: ev, connId: relayConnId, ...payload };
+              forwardOrQueue(msg);
             });
           });
 
@@ -3123,15 +3146,13 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
 
             const doneHandler = () => {
               socket.removeAllListeners(`sftp:upload_chunk:${filename}`);
-              if (userRelay.ws?.readyState === 1) {
-                const combined = Buffer.concat(chunks);
-                userRelay.ws.send(JSON.stringify({
-                  type: 'sftp:upload',
-                  connId: relayConnId,
-                  remotePath: destPath,
-                  data: combined.toString('base64'),
-                }));
-              }
+              const combined = Buffer.concat(chunks);
+              forwardOrQueue({
+                type: 'sftp:upload',
+                connId: relayConnId,
+                remotePath: destPath,
+                data: combined.toString('base64'),
+              });
             };
 
             const abortHandler = () => {
@@ -3150,24 +3171,32 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
           // Forward ssh:exec and docker:command
           socket.removeAllListeners('ssh:exec');
           socket.on('ssh:exec', ({ command }) => {
-            if (userRelay.ws?.readyState === 1)
-              userRelay.ws.send(JSON.stringify({ type: 'ssh:exec', connId: relayConnId, command }));
+            sendToRelay({ type: 'ssh:exec', connId: relayConnId, command });
           });
           socket.removeAllListeners('docker:command');
           socket.on('docker:command', (payload) => {
-            if (userRelay.ws?.readyState === 1)
-              userRelay.ws.send(JSON.stringify({ type: 'docker:command', connId: relayConnId, ...payload }));
+            sendToRelay({ type: 'docker:command', connId: relayConnId, ...payload });
+          });
+
+          // Mark relay as ready when ssh:connected arrives and flush the SFTP queue
+          // (this is called from the relay-ws response handler in the WS section below)
+          global.__relayConnMap.set(relayConnId, socket.id);
+          // Store the flush callback so the relay-ws handler can call it
+          if (!global.__relayReadyCallbacks) global.__relayReadyCallbacks = new Map();
+          global.__relayReadyCallbacks.set(relayConnId, () => {
+            relayReady = true;
+            flushSftpQueue();
           });
 
           // Cleanup on disconnect
           socket.once('ssh:disconnect', () => {
-            if (userRelay.ws?.readyState === 1)
-              userRelay.ws.send(JSON.stringify({ type: 'ssh:disconnect', connId: relayConnId }));
+            sendToRelay({ type: 'ssh:disconnect', connId: relayConnId });
             global.__relayConnMap.delete(relayConnId);
+            global.__relayReadyCallbacks?.delete(relayConnId);
           });
 
           // Send ssh:connect with PLAINTEXT credentials to relay agent
-          userRelay.ws.send(JSON.stringify({
+          sendToRelay({
             type: 'ssh:connect',
             connId: relayConnId,
             connection: {
@@ -3180,7 +3209,7 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
             },
             cols: cols || 120,
             rows: rows || 30,
-          }));
+          });
 
           return; // Don't create a server-side ssh2 client
         }
@@ -3471,6 +3500,12 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
                     targetSocket.emit('ssh:data', msg.data || '');
                   } else if (msg.type === 'ssh:connected') {
                     targetSocket.emit('ssh:connected');
+                    // Flush any SFTP events that arrived before SSH was ready
+                    const readyCb = global.__relayReadyCallbacks?.get(msg.connId);
+                    if (readyCb) {
+                      readyCb();
+                      global.__relayReadyCallbacks.delete(msg.connId);
+                    }
                   } else if (msg.type === 'ssh:closed') {
                     targetSocket.emit('ssh:closed');
                     global.__relayConnMap.delete(msg.connId);

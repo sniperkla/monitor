@@ -1,7 +1,7 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   poweredByHeader: false,
-  serverExternalPackages: ['ssh2', 'pg-native'],
+  serverExternalPackages: ['ssh2', 'pg', 'pg-native', 'pg-pool', 'mysql2', 'mongoose', 'mongodb'],
   async headers() {
     return [
       {

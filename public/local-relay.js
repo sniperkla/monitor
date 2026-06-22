@@ -112,7 +112,7 @@ function ensureInstalledScript() {
 
 // -- Connection state --
 const tcpConnections = new Map();  // connId → net.Socket
-const sshSessions = new Map();    // connId → { sshClient, streams }
+const sshSessions = new Map();    // connId → { sshClient, stream, sftpClient, sftpPending }
 let retryDelay = 3000;
 
 // ── Main connection loop ──────────────────────────────────────────────────
@@ -342,55 +342,85 @@ function cleanupSsh(connId) {
   const session = sshSessions.get(connId);
   if (session) {
     try { session.stream?.close(); } catch {}
+    try { session.sftpClient?.end(); } catch {}
     try { session.sshClient?.end(); } catch {}
     sshSessions.delete(connId);
   }
 }
 
-// ── SFTP handlers ─────────────────────────────────────────────────────────
+// ── SFTP helpers ──────────────────────────────────────────────────────────
+/**
+ * Returns a cached SFTP client for the given connId.
+ * Opens a new SFTP channel only if one is not already open.
+ * This avoids exhausting SSH channel limits (max ~10 concurrent channels).
+ */
 function getSftpClient(connId) {
   return new Promise((resolve, reject) => {
     const session = sshSessions.get(connId);
     if (!session?.sshClient) return reject(new Error('No SSH session'));
-    session.sshClient.sftp((err, sftp) => {
-      if (err) return reject(err);
-      resolve(sftp);
+
+    // Return cached client if still alive
+    if (session.sftpClient && !session.sftpClient._ending) {
+      return resolve(session.sftpClient);
+    }
+
+    // If a pending promise already exists, wait for it
+    if (session.sftpPending) {
+      return session.sftpPending.then(resolve, reject);
+    }
+
+    // Open a new SFTP channel and cache it
+    const pending = new Promise((res, rej) => {
+      session.sshClient.sftp((err, sftp) => {
+        session.sftpPending = null;
+        if (err) {
+          session.sftpClient = null;
+          return rej(err);
+        }
+        session.sftpClient = sftp;
+        // Clean up cache when the SFTP channel closes
+        sftp.on('close', () => {
+          if (session.sftpClient === sftp) session.sftpClient = null;
+        });
+        sftp.on('error', () => {
+          if (session.sftpClient === sftp) session.sftpClient = null;
+        });
+        res(sftp);
+      });
     });
+    session.sftpPending = pending;
+    pending.then(resolve, reject);
   });
 }
 
+function sendSftpError(ws, connId, err) {
+  ws.send(JSON.stringify({ type: 'sftp:error', connId, error: err?.message || String(err) }));
+}
+
+// ── SFTP handlers ─────────────────────────────────────────────────────────
 async function handleSftpList(ws, msg) {
   try {
     const sftp = await getSftpClient(msg.connId);
-    const files = [];
-    const stream = sftp.createReadStream(msg.path || '.', {});
-
-    stream.on('entry', (entry) => {
-      files.push({
+    const listPath = msg.path || '.';
+    // Use readdir() — NOT createReadStream() which is for file bytes
+    sftp.readdir(listPath, (err, list) => {
+      if (err) return sendSftpError(ws, msg.connId, err);
+      const files = list.map(entry => ({
         filename: entry.filename,
         longname: entry.longname,
         attrs: {
-          size: entry.attrs.size,
-          mode: entry.attrs.mode,
+          size:  entry.attrs.size,
+          mode:  entry.attrs.mode,
           atime: entry.attrs.atime,
           mtime: entry.attrs.mtime,
-          uid: entry.attrs.uid,
-          gid: entry.attrs.gid,
+          uid:   entry.attrs.uid,
+          gid:   entry.attrs.gid,
         },
-      });
-    });
-
-    stream.on('error', (err) => {
-      ws.send(JSON.stringify({ type: 'sftp:error', connId: msg.connId, error: err.message }));
-      sftp.end();
-    });
-
-    stream.on('end', () => {
-      ws.send(JSON.stringify({ type: 'sftp:list', connId: msg.connId, path: msg.path, files }));
-      sftp.end();
+      }));
+      ws.send(JSON.stringify({ type: 'sftp:list', connId: msg.connId, path: listPath, files }));
     });
   } catch (err) {
-    ws.send(JSON.stringify({ type: 'sftp:error', connId: msg.connId, error: err.message }));
+    sendSftpError(ws, msg.connId, err);
   }
 }
 
@@ -399,18 +429,13 @@ async function handleSftpRead(ws, msg) {
     const sftp = await getSftpClient(msg.connId);
     const chunks = [];
     const stream = sftp.createReadStream(msg.path);
-
     stream.on('data', (chunk) => chunks.push(chunk));
-    stream.on('error', (err) => {
-      ws.send(JSON.stringify({ type: 'sftp:error', connId: msg.connId, error: err.message }));
-      sftp.end();
-    });
+    stream.on('error', (err) => sendSftpError(ws, msg.connId, err));
     stream.on('end', () => {
       ws.send(JSON.stringify({ type: 'sftp:fileData', connId: msg.connId, path: msg.path, content: Buffer.concat(chunks).toString('utf-8') }));
-      sftp.end();
     });
   } catch (err) {
-    ws.send(JSON.stringify({ type: 'sftp:error', connId: msg.connId, error: err.message }));
+    sendSftpError(ws, msg.connId, err);
   }
 }
 
@@ -418,18 +443,12 @@ async function handleSftpWrite(ws, msg) {
   try {
     const sftp = await getSftpClient(msg.connId);
     const stream = sftp.createWriteStream(msg.path);
-
-    stream.on('error', (err) => {
-      ws.send(JSON.stringify({ type: 'sftp:error', connId: msg.connId, error: err.message }));
-      sftp.end();
-    });
-
+    stream.on('error', (err) => sendSftpError(ws, msg.connId, err));
     stream.end(msg.content, () => {
       ws.send(JSON.stringify({ type: 'sftp:action_success', connId: msg.connId, action: 'write', path: msg.path }));
-      sftp.end();
     });
   } catch (err) {
-    ws.send(JSON.stringify({ type: 'sftp:error', connId: msg.connId, error: err.message }));
+    sendSftpError(ws, msg.connId, err);
   }
 }
 
@@ -437,12 +456,11 @@ async function handleSftpMkdir(ws, msg) {
   try {
     const sftp = await getSftpClient(msg.connId);
     sftp.mkdir(msg.path, (err) => {
-      if (err) ws.send(JSON.stringify({ type: 'sftp:error', connId: msg.connId, error: err.message }));
+      if (err) sendSftpError(ws, msg.connId, err);
       else ws.send(JSON.stringify({ type: 'sftp:action_success', connId: msg.connId, action: 'mkdir', path: msg.path }));
-      sftp.end();
     });
   } catch (err) {
-    ws.send(JSON.stringify({ type: 'sftp:error', connId: msg.connId, error: err.message }));
+    sendSftpError(ws, msg.connId, err);
   }
 }
 
@@ -451,12 +469,11 @@ async function handleSftpDelete(ws, msg) {
     const sftp = await getSftpClient(msg.connId);
     const deleteFn = msg.isDirectory ? sftp.rmdir.bind(sftp) : sftp.unlink.bind(sftp);
     deleteFn(msg.path, (err) => {
-      if (err) ws.send(JSON.stringify({ type: 'sftp:error', connId: msg.connId, error: err.message }));
+      if (err) sendSftpError(ws, msg.connId, err);
       else ws.send(JSON.stringify({ type: 'sftp:action_success', connId: msg.connId, action: 'delete', path: msg.path }));
-      sftp.end();
     });
   } catch (err) {
-    ws.send(JSON.stringify({ type: 'sftp:error', connId: msg.connId, error: err.message }));
+    sendSftpError(ws, msg.connId, err);
   }
 }
 
@@ -464,16 +481,12 @@ async function handleSftpUpload(ws, msg) {
   try {
     const sftp = await getSftpClient(msg.connId);
     const stream = sftp.createWriteStream(msg.remotePath);
-    stream.on('error', (err) => {
-      ws.send(JSON.stringify({ type: 'sftp:error', connId: msg.connId, error: err.message }));
-      sftp.end();
-    });
+    stream.on('error', (err) => sendSftpError(ws, msg.connId, err));
     stream.end(Buffer.from(msg.data, 'base64'), () => {
       ws.send(JSON.stringify({ type: 'sftp:upload_complete', connId: msg.connId, path: msg.remotePath }));
-      sftp.end();
     });
   } catch (err) {
-    ws.send(JSON.stringify({ type: 'sftp:error', connId: msg.connId, error: err.message }));
+    sendSftpError(ws, msg.connId, err);
   }
 }
 
@@ -483,10 +496,7 @@ async function handleSftpDownload(ws, msg) {
     const chunks = [];
     const stream = sftp.createReadStream(msg.remotePath);
     stream.on('data', (chunk) => chunks.push(chunk));
-    stream.on('error', (err) => {
-      ws.send(JSON.stringify({ type: 'sftp:error', connId: msg.connId, error: err.message }));
-      sftp.end();
-    });
+    stream.on('error', (err) => sendSftpError(ws, msg.connId, err));
     stream.on('end', () => {
       ws.send(JSON.stringify({
         type: 'sftp:download_data',
@@ -494,10 +504,9 @@ async function handleSftpDownload(ws, msg) {
         path: msg.remotePath,
         data: Buffer.concat(chunks).toString('base64'),
       }));
-      sftp.end();
     });
   } catch (err) {
-    ws.send(JSON.stringify({ type: 'sftp:error', connId: msg.connId, error: err.message }));
+    sendSftpError(ws, msg.connId, err);
   }
 }
 

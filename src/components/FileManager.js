@@ -890,7 +890,7 @@ export default function FileManager({
         if (refreshTimeoutRef.current) clearTimeout(refreshTimeoutRef.current);
         refreshTimeoutRef.current = setTimeout(() => {
           const targetPath = currentPathRef.current || '.';
-          if (newSocket.connected) {
+          if (newSocket.connected && statusRef.current === 'ready') {
             newSocket.emit('sftp:list', targetPath);
           }
         }, 300);
@@ -947,6 +947,20 @@ export default function FileManager({
         return;
       }
 
+      // ── Relay / SFTP subsystem fatal errors ──────────────────────────────
+      // "Failure" = SSH server rejected the SFTP operation (bad session state)
+      // "No response from server" = relay timed-out waiting for the SSH server
+      // Both indicate the SFTP session is broken; trigger a clean reconnect
+      // instead of looping back with another sftp:list call.
+      if (/^(Failure|No response from server)$/i.test(msg.trim())) {
+        console.warn('⚠️ SFTP session broken (relay). Reconnecting...', msg);
+        requestReconnect('SFTP session broken. Reconnecting...', {
+          preserveTransfer: false,
+          notificationMessage: 'SFTP connection lost. Reconnecting now.',
+        });
+        return;
+      }
+
       addNotification({ title: t('files.status.errorTitle'), message: msg || t('files.status.errorTitle'), type: 'error' });
 
       if (reusedSocket && /ssh connection closed|not connected|channel .*closed|connection .*closed|socket .*disconnected/i.test(msg)) {
@@ -965,8 +979,12 @@ export default function FileManager({
         return;
       }
       
-      const targetPath = currentPathRef.current || '.';
-      newSocket.emit('sftp:list', targetPath);
+      // Only retry listing if the socket is healthy and we are fully connected.
+      // Never retry if we are still in a connecting state — it would loop.
+      if (statusRef.current === 'ready' && newSocket.connected) {
+        const targetPath = currentPathRef.current || '.';
+        newSocket.emit('sftp:list', targetPath);
+      }
 
       if (status === 'connecting' || status === 'ssh_connecting') {
         setStatus('error');
