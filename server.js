@@ -30,7 +30,6 @@ const { Server } = require('socket.io');
 const { Client } = require('ssh2');
 const mongoose = require('mongoose');
 const mysql = require('mysql2/promise');
-const { Client: PgClient, Pool: PgPool } = require('pg');
 const { decrypt } = require('./src/utils/encryption');
 const compression = require('compression');
 
@@ -307,6 +306,7 @@ async function getModels(uri, userId) {
 
   if (effectiveUri.startsWith('postgres://') || effectiveUri.startsWith('postgresql://')) {
     try {
+      const { Pool: PgPool } = require('pg');
       const pool = new PgPool({ connectionString: effectiveUri, max: 5, connectionTimeoutMillis: 10000 });
       const repo = {
         type: 'postgres',

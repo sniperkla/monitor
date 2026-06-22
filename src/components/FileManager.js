@@ -875,14 +875,18 @@ export default function FileManager({
      });
 
     newSocket.on('sftp:error', (err) => {
-      const msg = err?.message || (typeof err === 'string' ? err : JSON.stringify(err));
+      const msg = err?.message || (typeof err === 'string' ? err : (err && Object.keys(err).length > 0 ? JSON.stringify(err) : ''));
       
+      // Skip empty/no-op errors — nothing useful to show or retry
+      if (!msg || msg === '{}' || msg === 'undefined' || msg === 'null') {
+        return;
+      }
+
       // Clear batch deletion toast on error too
       if (deleteBatchRef.current.toastId) {
         removeNotification(deleteBatchRef.current.toastId);
         deleteBatchRef.current = { count: 0, total: 0, toastId: null };
         setDeletingFiles(new Set());
-        // Trigger a list refresh to reconcile optimistic UI deletion with the actual server state
         if (refreshTimeoutRef.current) clearTimeout(refreshTimeoutRef.current);
         refreshTimeoutRef.current = setTimeout(() => {
           const targetPath = currentPathRef.current || '.';

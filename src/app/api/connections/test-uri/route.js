@@ -1,13 +1,10 @@
 import { NextResponse } from 'next/server';
 import mongoose from 'mongoose';
 import mysql from 'mysql2/promise';
-import { createRequire } from 'module';
+import { Client } from 'pg';
 import { checkRateLimit } from '@/lib/serverGuard';
 import { getActiveRelayInfo } from '@/lib/mongodb';
 import { rewriteUriForTunnel, normalizeRelayDatabaseUri } from '@/lib/sshTunnel';
-
-const require = createRequire(import.meta.url);
-const { Client } = require('pg');
 
 /**
  * POST - Test a raw database URI connection

@@ -62,6 +62,12 @@ export default function RelayTerminalView({
   const fitAddonRef = useRef(null);
   const relayRef = useRef(null);
   const propsRef = useRef({ connectionId, connection, connectionName, host, initialCommand, dbUri });
+  const osStateRef = useRef(osState);
+
+  // Keep osState ref in sync (avoids re-creating initTerminal on every OS state change)
+  useEffect(() => {
+    osStateRef.current = osState;
+  }, [osState]);
 
   const [status, setStatus] = useState('connecting');
   const [latency, setLatency] = useState(null);
@@ -116,7 +122,8 @@ export default function RelayTerminalView({
     const fitAddon = new FitAddon();
     fitAddonRef.current = fitAddon;
 
-    const settings = osState?.terminalSettings || {};
+    // Read terminal settings directly from ref to avoid osState dependency
+    const settings = osStateRef.current?.terminalSettings || {};
     const bgOpacity = settings.backgroundOpacity ?? 1;
     const baseBg = settings.theme?.background || '#0c0c0c';
 
@@ -323,7 +330,7 @@ export default function RelayTerminalView({
       termInstanceRef.current = null;
       relayRef.current = null;
     };
-  }, [vaultStatus, osState, updateConnectionStatus]);
+  }, [vaultStatus, updateConnectionStatus]);
 
   // Initialize terminal on mount
   useEffect(() => {

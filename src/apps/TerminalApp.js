@@ -37,15 +37,16 @@ export default function TerminalApp({ onEditConnection, initialConnection, initi
       const hasLocalhost = sshConnections.some(c => isLocalhost(c.host));
       if (hasLocalhost) {
         // Don't switch global mode — just let shouldUseRelay handle it per-connection
-        // This prevents remote connections from being affected
       }
     }
   }, [relayOnline, useRelay, sshConnections]);
 
   // Determine if a specific connection should use relay
+  // ALWAYS checks if host is localhost — never blindly returns true for remote hosts
   const shouldUseRelay = (host) => {
+    if (!isLocalhost(host)) return false; // Remote hosts never use relay
     if (useRelay) return true; // User manually set to Local mode
-    return relayOnline && isLocalhost(host); // Auto-detect per connection
+    return relayOnline; // Auto-detect: relay online + localhost
   };
   
   // Listen for setting changes
@@ -54,18 +55,6 @@ export default function TerminalApp({ onEditConnection, initialConnection, initi
     window.addEventListener('storage', check);
     return () => window.removeEventListener('storage', check);
   }, []);
-
-  // Auto-switch to relay when server detects localhost target
-  useEffect(() => {
-    const handleUseRelay = (e) => {
-      if (!useRelay) {
-        localStorage.setItem('ssh_monitor_ssh_mode', 'local');
-        setUseRelay(true);
-      }
-    };
-    window.addEventListener('terminal-use-relay', handleUseRelay);
-    return () => window.removeEventListener('terminal-use-relay', handleUseRelay);
-  }, [useRelay]);
   const { connections, standaloneTerminals } = state;
   const sshConnections = connections.filter(c => c.type !== 'database');
   const [activeTab, setActiveTab] = useState(null);

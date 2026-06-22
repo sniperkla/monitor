@@ -1,7 +1,7 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   poweredByHeader: false,
-  serverExternalPackages: ['ssh2', 'pg', 'pg-native'],
+  serverExternalPackages: ['ssh2', 'pg-native'],
   async headers() {
     return [
       {

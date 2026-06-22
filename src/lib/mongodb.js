@@ -1,7 +1,6 @@
 import mongoose from "mongoose";
 import { headers } from "next/headers.js";
 import mysql from "mysql2/promise";
-import { createRequire } from 'module';
 import { getToken } from 'next-auth/jwt';
 import {
   createSSHTunnel,
@@ -11,11 +10,9 @@ import {
   applyRelayTarget,
   normalizeRelayDatabaseUri,
 } from './sshTunnel.js';
+import { Pool as PgPool } from 'pg';
 import fs from 'fs';
 import path from 'path';
-
-const require = createRequire(import.meta.url);
-const { Pool: PgPool } = require('pg');
 
 /**
  * Global is used here to maintain a cached connection across hot reloads

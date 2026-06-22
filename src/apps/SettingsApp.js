@@ -1661,20 +1661,34 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
                         </div>
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center gap-2">
-                            <h4 className="text-xs font-bold text-[var(--text-primary)]">Localhost Testing</h4>
+                            <h4 className="text-xs font-bold text-[var(--text-primary)]">SSH Relay</h4>
                             <span className={`flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-bold uppercase tracking-wider ${
                               relayConnected ? 'bg-emerald-500/15 text-emerald-400' : 'bg-[var(--bg-tertiary)] text-[var(--text-muted)]'
                             }`}>
                               <span className={`w-1.5 h-1.5 rounded-full ${relayConnected ? 'bg-emerald-400 animate-pulse' : 'bg-[var(--text-muted)]'}`} />
-                              {relayConnected ? 'Connected' : 'Offline'}
+                              {relayConnected ? 'Ready' : 'Offline'}
                             </span>
                             {!relayConnected && (
                               <span className="text-[8px] px-1.5 py-0.5 rounded bg-blue-500/20 text-blue-400">Optional</span>
                             )}
+                            <button
+                              onClick={async () => {
+                                try {
+                                  const res = await fetch('/api/relay/token');
+                                  const data = await res.json();
+                                  if (data.success) setRelayConnected(data.connected);
+                                  addNotification({ title: data.connected ? 'Relay Online' : 'Relay Offline', message: data.connected ? 'Agent is running.' : 'Agent not detected.', type: data.connected ? 'success' : 'warning' });
+                                } catch { addNotification({ title: 'Check failed', message: 'Could not reach relay API.', type: 'error' }); }
+                              }}
+                              className="ml-1 p-1 rounded-lg hover:bg-white/10 transition-colors text-[var(--text-muted)] hover:text-[var(--text-secondary)]"
+                              title="Re-check relay status"
+                            >
+                              <RefreshCw size={11} />
+                            </button>
                           </div>
                           <p className="text-[10px] text-[var(--text-muted)] mt-0.5 truncate">
                             {relayConnected
-                              ? 'Localhost databases accessible — install on your desktop to test local connections'
+                              ? 'Relay agent ready — local databases accessible'
                               : 'Only needed to connect to localhost/127.0.0.1 databases from your desktop'}
                           </p>
                         </div>
