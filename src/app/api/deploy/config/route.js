@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth/next';
 import { authOptions } from '@/lib/auth';
 import connectDB from '@/lib/mongodb';
-import { encrypt } from '@/utils/encryption';
+import { encrypt, decryptWithMetadata } from '@/utils/encryption';
 import SystemSetting from '@/models/SystemSetting';
 import { ConnectionRepository } from '@/lib/repositories/ConnectionRepository';
 
@@ -167,14 +167,24 @@ export async function POST(request) {
     const finalConnectionId = body.connectionId !== undefined ? (typeof body.connectionId === 'string' ? body.connectionId.trim() : '') : String(existingValue.connectionId || '').trim();
 
     // Use cached connection data if available, otherwise use existing data
-    // Encrypt sensitive fields before storing
+    // Only encrypt if values are plaintext (not already encrypted from Connection model)
     let finalSshConnectionData = sshConnectionData || existingValue.sshConnectionData || null;
     if (finalSshConnectionData) {
+      const encryptIfNeeded = (value) => {
+        if (!value) return '';
+        // Check if already encrypted (contains colons like "iv_hex:ciphertext_hex")
+        if (typeof value === 'string' && value.includes(':')) {
+          const test = decryptWithMetadata(value);
+          if (test.success) return value; // Already encrypted, keep as-is
+        }
+        return encrypt(value); // Plaintext, encrypt it
+      };
+
       finalSshConnectionData = {
         ...finalSshConnectionData,
-        password: finalSshConnectionData.password ? encrypt(finalSshConnectionData.password) : '',
-        privateKey: finalSshConnectionData.privateKey ? encrypt(finalSshConnectionData.privateKey) : '',
-        passphrase: finalSshConnectionData.passphrase ? encrypt(finalSshConnectionData.passphrase) : '',
+        password: encryptIfNeeded(finalSshConnectionData.password),
+        privateKey: encryptIfNeeded(finalSshConnectionData.privateKey),
+        passphrase: encryptIfNeeded(finalSshConnectionData.passphrase),
       };
     }
 

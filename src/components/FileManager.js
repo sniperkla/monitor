@@ -929,6 +929,20 @@ export default function FileManager({
 
       setTransfer(null);
       console.error('❌ SFTP Error:', err);
+
+      // Stop reconnect loop on channel failures — these won't resolve by retrying
+      if (/channel open failure|open failed/i.test(msg)) {
+        setStatus('error');
+        setError('SFTP channel failed. The SSH server may not support SFTP, or too many channels are open.');
+        setLoading(false);
+        addNotification({ 
+          title: 'SFTP Error', 
+          message: 'Channel open failed. Close other SFTP sessions or restart the SSH server.', 
+          type: 'error' 
+        });
+        return;
+      }
+
       addNotification({ title: t('files.status.errorTitle'), message: msg || t('files.status.errorTitle'), type: 'error' });
 
       if (reusedSocket && /ssh connection closed|not connected|channel .*closed|connection .*closed|socket .*disconnected/i.test(msg)) {

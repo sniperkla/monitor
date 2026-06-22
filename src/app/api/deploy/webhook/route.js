@@ -420,14 +420,33 @@ export async function runDeployment(config, runMeta = {}) {
       };
 
       if (sshConnData.authType === 'password') {
-        sshConfig.password = typeof sshConnData.password === 'string' && sshConnData.password.length > 0
-          ? decrypt(sshConnData.password) : sshConnData.password;
+        if (typeof sshConnData.password === 'string' && sshConnData.password.length > 0) {
+          let decrypted = decrypt(sshConnData.password);
+          // Handle legacy double-encrypted configs: if result still looks encrypted, decrypt again
+          if (decrypted && decrypted.includes(':') && decrypted.length > 40) {
+            const test = decrypt(decrypted);
+            if (test && !test.includes(':')) decrypted = test;
+          }
+          sshConfig.password = decrypted;
+        }
       } else if (sshConnData.authType === 'privateKey') {
-        sshConfig.privateKey = typeof sshConnData.privateKey === 'string' && sshConnData.privateKey.length > 0
-          ? decrypt(sshConnData.privateKey) : sshConnData.privateKey;
+        if (typeof sshConnData.privateKey === 'string' && sshConnData.privateKey.length > 0) {
+          let decrypted = decrypt(sshConnData.privateKey);
+          if (decrypted && decrypted.includes(':') && decrypted.length > 40) {
+            const test = decrypt(decrypted);
+            if (test && !test.includes(':')) decrypted = test;
+          }
+          sshConfig.privateKey = decrypted;
+        }
         if (sshConnData.passphrase) {
-          sshConfig.passphrase = typeof sshConnData.passphrase === 'string' && sshConnData.passphrase.length > 0
-            ? decrypt(sshConnData.passphrase) : sshConnData.passphrase;
+          if (typeof sshConnData.passphrase === 'string' && sshConnData.passphrase.length > 0) {
+            let decrypted = decrypt(sshConnData.passphrase);
+            if (decrypted && decrypted.includes(':') && decrypted.length > 40) {
+              const test = decrypt(decrypted);
+              if (test && !test.includes(':')) decrypted = test;
+            }
+            sshConfig.passphrase = decrypted;
+          }
         }
       }
 

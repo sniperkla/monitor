@@ -727,8 +727,15 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
                // Resolve to null so callers can decide to use exec fallbacks.
                return resolve(null);
             }
+            if (sessionData._sftpFailed) {
+               return reject(new Error('SFTP subsystem previously failed on this connection'));
+            }
             sessionData.sshClient.sftp((err, sftp) => {
-              if (err) return reject(err);
+              if (err) {
+                sessionData._sftpFailed = true;
+                console.error(`❌ SFTP subsystem failed for ${sessionData.host || 'unknown'}:`, err.message);
+                return reject(err);
+              }
               sessionData.sftp = sftp;
               resolve(sftp);
             });
@@ -2948,21 +2955,14 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
           // debug: (str) => console.log(`[SSH DEBUG ${connection.host}]`, str), // Uncomment for verbose logs
         };
 
-        // AUTO-RELAY: If user has an active relay agent with SSH capability,
-        // forward the SSH connection through the relay so it originates from the user's machine.
+        // AUTO-RELAY: If user has an active relay agent,
+        // notify client to route through relay for localhost targets.
         const isLocalhost = /localhost|127\.0\.0\.1/.test(sshConfig.host);
         const userId = socket.user?.sub || socket.user?.dbId;
         const userRelay = userId ? global.__activeRelays?.get(userId) : null;
         
-        // Localhost-only auto-relay notification (legacy — kept for backward compat)
-        if (isLocalhost && userRelay && !userRelay.capabilities?.ssh) {
-          console.log(`🔄 Auto-routing localhost SSH through relay for user ${userId}`);
-          socket.emit('ssh:use-relay', { 
-            message: 'Localhost target detected — connecting through your local relay agent',
-            connectionId: connectionId,
-          });
-          return;
-        }
+        // Client-side detection handles this now, but keep as fallback
+        // Removed: was checking !ssh (backwards logic). Client handles via shouldUseRelay().
         // userId/userRelay are needed below (after decryption) for relay routing
 
         const { encrypt, decryptWithMetadata } = require('./src/utils/encryption');

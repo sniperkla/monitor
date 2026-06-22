@@ -36,16 +36,16 @@ export default function TerminalApp({ onEditConnection, initialConnection, initi
     if (relayOnline && !useRelay) {
       const hasLocalhost = sshConnections.some(c => isLocalhost(c.host));
       if (hasLocalhost) {
-        localStorage.setItem('ssh_monitor_ssh_mode', 'local');
-        setUseRelay(true);
+        // Don't switch global mode — just let shouldUseRelay handle it per-connection
+        // This prevents remote connections from being affected
       }
     }
   }, [relayOnline, useRelay, sshConnections]);
 
   // Determine if a specific connection should use relay
   const shouldUseRelay = (host) => {
-    if (useRelay) return true;
-    return relayOnline && isLocalhost(host);
+    if (useRelay) return true; // User manually set to Local mode
+    return relayOnline && isLocalhost(host); // Auto-detect per connection
   };
   
   // Listen for setting changes

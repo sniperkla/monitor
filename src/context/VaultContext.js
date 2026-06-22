@@ -269,8 +269,10 @@ export function VaultProvider({ children }) {
       // If vault already had data (password change/reset), old synced connections are now undecryptable
       if (session && vaultData?.isConfigured) {
         try {
-          await fetch('/api/user/synced-connections', { method: 'DELETE', 
+          await fetch('/api/user/synced-connections', { 
+            method: 'DELETE', 
             headers: { 'Content-Type': 'application/json' },
+            credentials: 'include',
             body: JSON.stringify({ clearAll: true }) });
         } catch (_) {}
         // Notify UI that password changed — synced connections need re-sync
