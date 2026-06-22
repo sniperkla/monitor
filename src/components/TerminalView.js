@@ -6797,7 +6797,7 @@ If this is a deployment task, switch task mode to 'deploy' instead of 'code'.`
             minHeight={280}
             dragHandleClassName="ai-panel-drag-handle"
             cancel="button,input,textarea,select,option,label"
-            style={{ position: 'fixed', zIndex: 250000 }}
+            style={{ position: 'fixed', zIndex: 250000, pointerEvents: 'auto' }}
           >
             <div className={`w-full h-full rounded-2xl border border-[var(--border-color)] bg-[var(--bg-secondary)]/95 backdrop-blur-2xl shadow-2xl overflow-hidden flex flex-col relative transition-all duration-700 ${aiLoading || autoRunningRef.current ? 'ai-glow-thinking' : aiDone ? 'ai-glow-accomplished' : ''}`}>
               {/* Header */}
@@ -7313,8 +7313,8 @@ If this is a deployment task, switch task mode to 'deploy' instead of 'code'.`
                             minHeight={320}
                             dragHandleClassName="patch-modal-drag-handle"
                             cancel="button,input,textarea,select,option,label,pre"
-                            className="z-[250001]"
-                            style={{ position: 'relative' }}
+                             className="z-[250001]"
+                            style={{ position: 'relative', pointerEvents: 'auto' }}
                           >
                             <div className="w-full h-full rounded-xl border border-[var(--border-color)] bg-[var(--bg-secondary)] shadow-2xl overflow-hidden flex flex-col">
                               <div className="patch-modal-drag-handle flex items-center justify-between px-4 py-3 border-b border-[var(--border-color)] cursor-move min-h-[50px]">

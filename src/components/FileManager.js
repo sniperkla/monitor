@@ -948,11 +948,10 @@ export default function FileManager({
       }
 
       // ── Relay / SFTP subsystem fatal errors ──────────────────────────────
-      // "Failure" = SSH server rejected the SFTP operation (bad session state)
       // "No response from server" = relay timed-out waiting for the SSH server
       // Both indicate the SFTP session is broken; trigger a clean reconnect
       // instead of looping back with another sftp:list call.
-      if (/^(Failure|No response from server)$/i.test(msg.trim())) {
+      if (/^(No response from server)$/i.test(msg.trim())) {
         console.warn('⚠️ SFTP session broken (relay). Reconnecting...', msg);
         requestReconnect('SFTP session broken. Reconnecting...', {
           preserveTransfer: false,
@@ -979,17 +978,11 @@ export default function FileManager({
         return;
       }
       
-      // Only retry listing if the socket is healthy and we are fully connected.
-      // Never retry if we are still in a connecting state — it would loop.
-      if (statusRef.current === 'ready' && newSocket.connected) {
-        const targetPath = currentPathRef.current || '.';
-        newSocket.emit('sftp:list', targetPath);
-      }
+      setLoading(false);
 
       if (status === 'connecting' || status === 'ssh_connecting') {
         setStatus('error');
         setError(msg);
-        setLoading(false);
         clearTimeout(timeout);
       }
       setEditor(prev => ({ ...prev, saving: false }));
