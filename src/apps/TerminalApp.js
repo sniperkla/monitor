@@ -193,7 +193,7 @@ export default function TerminalApp({ onEditConnection, initialConnection, initi
     if (!localStandaloneTerm) {
       return <div className="flex flex-col h-full bg-transparent overflow-hidden" />;
     }
-            const TermComponent = shouldUseRelay(term.host) ? RelayTerminalView : TerminalView;
+    const TermComponent = shouldUseRelay(localStandaloneTerm.host) ? RelayTerminalView : TerminalView;
     return (
       <div className="flex flex-col h-full bg-transparent overflow-hidden">
         <TermComponent 
