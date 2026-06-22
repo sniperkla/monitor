@@ -227,7 +227,12 @@ export function AppProvider({ children }) {
     if (state.dbConfig?.tunnel?.enabled) {
       headers['x-vault-tunnel'] = JSON.stringify(state.dbConfig.tunnel);
     }
-    return fetch(url, { ...options, headers, credentials: 'include' });
+    const res = await fetch(url, { ...options, headers, credentials: 'include' });
+    const contentType = res.headers.get('content-type') || '';
+    if (contentType.includes('text/html')) {
+      throw new Error('Session expired or server error');
+    }
+    return res;
   }, [state.dbConfig]);
 
   const latestRequestIdRef = useRef(0);

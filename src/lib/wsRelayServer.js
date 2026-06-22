@@ -22,7 +22,7 @@ class WsTcpRelay {
     this.connections = new Map();
     this.maxConnections = options.maxConnections || 200;
     this.rateLimiter = new Map(); // userId → { count, resetAt }
-    this.RATE_LIMIT = 10; // max connections per minute per user
+    this.RATE_LIMIT = 50; // max connections per minute per user
     this.RATE_WINDOW = 60 * 1000; // 1 minute
 
     // Create a dedicated namespace for the relay

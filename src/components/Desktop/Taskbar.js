@@ -441,10 +441,10 @@ export default function Taskbar() {
           ))}
         </div>
 
-        <div className={`flex items-center shrink-0 ${isVertical ? 'flex-col gap-3 py-3' : 'flex-row gap-3 ml-4'}`}>
-          {/* Desktop Switcher */}
+        <div className={`flex items-center shrink-0 ${isVertical ? 'flex-col gap-3 py-3' : 'flex-row gap-2 sm:gap-3 ml-2 sm:ml-4'}`}>
+          {/* Desktop Switcher - hidden on mobile */}
           {isHorizontal && (
-            <div className="flex items-center gap-1 bg-[var(--bg-tertiary)] rounded-full border border-[var(--border-color)] px-2 py-1">
+            <div className="hidden sm:flex items-center gap-1 bg-[var(--bg-tertiary)] rounded-full border border-[var(--border-color)] px-2 py-1">
               <button
                 onClick={() => switchToPrevDesktop()}
                 className="p-1 rounded hover:bg-[var(--bg-card-hover)] text-[var(--text-muted)] hover:text-[var(--text-primary)] transition-colors"
@@ -465,14 +465,14 @@ export default function Taskbar() {
             </div>
           )}
 
-          {isHorizontal && <AiUsageBar compact={true} />}
+          {isHorizontal && <div className="hidden md:block"><AiUsageBar compact={true} /></div>}
 
-          <LanguageSwitcher vertical={isVertical} taskbarPosition={taskbarPosition} />
-          <div className={`flex items-center gap-2 ${isVertical ? 'flex-col py-2.5 px-2' : 'px-3 py-1'} bg-[var(--bg-tertiary)] rounded-full border border-[var(--border-color)]`}>
+          <div className="hidden sm:block"><LanguageSwitcher vertical={isVertical} taskbarPosition={taskbarPosition} /></div>
+          <div className={`hidden sm:flex items-center gap-2 ${isVertical ? 'flex-col py-2.5 px-2' : 'px-3 py-1'} bg-[var(--bg-tertiary)] rounded-full border border-[var(--border-color)]`}>
             <Wifi size={14} className="text-[var(--accent-emerald)]" />
             <Volume2 size={14} className="text-[var(--text-muted)]" />
           </div>
-          {isHorizontal && <div className="w-px h-6 bg-[var(--border-color)]" />}
+          {isHorizontal && <div className="hidden sm:block w-px h-6 bg-[var(--border-color)]" />}
           <SystemClock vertical={isVertical} />
         </div>
         </div>

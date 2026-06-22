@@ -743,6 +743,7 @@ const resources = {
           getInfo: "Get Info",
           rename: "Rename",
           currentFolder: "Current Folder",
+          openTerminal: "Open Terminal Here",
         },
         modals: {
           editor: {
@@ -1639,6 +1640,45 @@ const resources = {
         notepad: "สมุดโน้ตลับ",
         docker: "Docker",
       },
+      desktop: {
+        context: {
+          view: "มุมมอง",
+          sort: "เรียงตาม",
+          refresh: "รีเฟรช",
+          newConn: "เพิ่มการเชื่อมต่อใหม่",
+          terminal: "เปิดเทอร์มินัล",
+          disableGlass: "ปิดเอฟเฟกต์กระจกฝ้า",
+          enableGlass: "เปิดเอฟเฟกต์กระจกฝ้า",
+          wallpaper: "เปลี่ยนวอลเปเปอร์",
+          display: "ตั้งค่าจอแสดงผล",
+          personalize: "ปรับแต่ง",
+          icons: {
+            large: "ไอคอนขนาดใหญ่",
+            medium: "ไอคอนขนาดกลาง",
+            small: "ไอคอนขนาดเล็ก",
+          },
+          sortBy: {
+            name: "ชื่อ",
+            type: "ประเภทรายการ",
+            none: "ไม่มี (แมนนวล)",
+          }
+        },
+        taskbar: {
+          search: "ค้นหาแอปและไฟล์...",
+          pinned: "แอปที่ปักหมุด",
+          systemApp: "แอประบบ",
+          quickLaunch: "เปิดด่วน",
+          bringToFront: "นำขึ้นหน้า",
+          showDesktop: "แสดงเดสก์ท็อป",
+          restoreAll: "กู้คืนทั้งหมด",
+          closeAll: "ปิดหน้าต่างทั้งหมด",
+          running: "กำลังทำงาน",
+          settings: "ตั้งค่าแถบงาน",
+        },
+        toasts: {
+          sorted: "เรียงตาม ",
+        }
+      },
       database: {
         naming: {
           prefix: "คำนำหน้า",
@@ -1679,44 +1719,44 @@ const resources = {
           }
         },
         status: {
-          connected: "Online",
-          fetching: "Fetching Data...",
-          resuming: "Resuming",
-          pausing: "Pausing",
-          retryIn: "Retry in {{seconds}}s",
-          rateLimited: "Rate Limited",
-          errorTitle: "Query Error",
-          download: "Download"
+          connected: "ออนไลน์",
+          fetching: "กำลังดึงข้อมูล...",
+          resuming: "กำลังดำเนินการต่อ",
+          pausing: "กำลังหยุดชั่วคราว",
+          retryIn: "ลองใหม่ใน {{seconds}} วินาที",
+          rateLimited: "จำกัดอัตรา",
+          errorTitle: "ข้อผิดพลาดในการคิวรี",
+          download: "ดาวน์โหลด"
         },
         notifications: {
-          noSchemaTitle: "No Schema",
-          noSchemaMsg: "No tables/collections to export",
-          unfinishedExport: "Unfinished Export Found",
-          unfinishedExportMsg: "You have {{count}} tables pending from a previous session.",
-          exportBatchStartTitle: "Batch Export",
-          exportBatchStartMsg: "Starting export of {{count}} items...",
-          networkIssueTitle: "Network Issue",
-          networkIssueMsg: "Pausing export for 15s...",
-          partialExportTitle: "Partial Export",
-          partialExportMsg: "Exported {{success}} files, but {{failed}} failed.",
-          batchExportSuccessTitle: "✅ Batch Export Successful",
-          batchExportSuccessMsg: "All {{success}} files exported ({{total}} total records)",
-          exportFailedTitle: "Export Failed",
-          exportingTitle: "Exporting...",
-          exportingChunksMsg: "Requesting dataset in chunks for safety...",
-          rateLimitTitle: "Rate Limit",
-          rateLimitMsg: "Export paused. Retrying in {{seconds}}s...",
-          fetchedMsg: "Fetched {{count}} records...",
-          exportSuccessTitle: "Export Success",
-          exportSuccessMsg: "Successfully exported {{count}} records.",
-          importingTitle: "Importing...",
-          importingMsg: "Processing {{count}} records in {{batches}} batches",
-          importCompleteTitle: "Import Complete",
-          importCompleteMsg: "Successfully imported {{success}} out of {{total}} records",
-          importErrorTitle: "Import Error",
-          importErrorMsg: "Failed to process import file. Ensure it is a valid JSON array.",
-          actionPreviewTitle: "Action Preview",
-          actionPreviewMsg: "Previewing {{action}}. {{count}} mock rows ready.",
+          noSchemaTitle: "ไม่มี Schema",
+          noSchemaMsg: "ไม่มีตาราง/คอลเลกชันสำหรับส่งออก",
+          unfinishedExport: "พบการส่งออกที่ยังไม่เสร็จ",
+          unfinishedExportMsg: "คุณมี {{count}} ตารางที่ค้างจากเซสชันก่อนหน้า",
+          exportBatchStartTitle: "ส่งออกเป็นชุด",
+          exportBatchStartMsg: "เริ่มส่งออก {{count}} รายการ...",
+          networkIssueTitle: "ปัญหาเครือข่าย",
+          networkIssueMsg: "หยุดส่งออกชั่วคราว 15 วินาที...",
+          partialExportTitle: "ส่งออกบางส่วน",
+          partialExportMsg: "ส่งออก {{success}} ไฟล์สำเร็จ แต่ {{failed}} ไฟล์ล้มเหลว",
+          batchExportSuccessTitle: "✅ ส่งออกเป็นชุดสำเร็จ",
+          batchExportSuccessMsg: "ส่งออก {{success}} ไฟล์ทั้งหมด ({{total}} รายการ)",
+          exportFailedTitle: "ส่งออกล้มเหลว",
+          exportingTitle: "กำลังส่งออก...",
+          exportingChunksMsg: "กำลังขอข้อมูลเป็นชิ้นเพื่อความปลอดภัย...",
+          rateLimitTitle: "จำกัดอัตรา",
+          rateLimitMsg: "หยุดส่งออกชั่วคราว ลองใหม่ใน {{seconds}} วินาที...",
+          fetchedMsg: "ดึงข้อมูล {{count}} รายการแล้ว...",
+          exportSuccessTitle: "ส่งออกสำเร็จ",
+          exportSuccessMsg: "ส่งออก {{count}} รายการสำเร็จ",
+          importingTitle: "กำลังนำเข้า...",
+          importingMsg: "กำลังประมวลผล {{count}} รายการใน {{batches}} แบทช์",
+          importCompleteTitle: "นำเข้าเสร็จสิ้น",
+          importCompleteMsg: "นำเข้า {{success}} จาก {{total}} รายการสำเร็จ",
+          importErrorTitle: "ข้อผิดพลาดในการนำเข้า",
+          importErrorMsg: "ประมวลผลไฟล์นำเข้าล้มเหลว โปรดตรวจสอบว่าเป็น JSON array ที่ถูกต้อง",
+          actionPreviewTitle: "ตัวอย่างการดำเนินการ",
+          actionPreviewMsg: "กำลังแสดงตัวอย่าง {{action}} {{count}} แถวพร้อมแล้ว",
           fetchFail: "ดึงโครงสร้างข้อมูลไม่สำเร็จ",
           actionError: "ข้อผิดพลาดในการดำเนินการ",
           actionSuccess: "ดำเนินการสำเร็จแล้ว",
@@ -1771,15 +1811,15 @@ const resources = {
           insertReady: "พร้อมสำหรับเพิ่มรายการใหม่",
           showingRecords: "กำลังแสดง {{count}} รายการ",
           toBeDeleted: "ที่จะถูกลบ",
-          toBeUpdated: "that will be updated",
-          title: "{{type}} PREVIEW",
-          actions: "Actions",
-          previewing: "PREVIEWING TARGETS",
-          confirmAndExecute: "Confirm & Execute"
+          toBeUpdated: "ที่จะถูกอัปเดต",
+          title: "ตัวอย่าง {{type}}",
+          actions: "การดำเนินการ",
+          previewing: "กำลังแสดงตัวอย่าง",
+          confirmAndExecute: "ยืนยันและดำเนินการ"
         },
         errors: {
-          connectionError: "Connection Error",
-          retry: "Retry Connection"
+          connectionError: "ข้อผิดพลาดการเชื่อมต่อ",
+          retry: "ลองเชื่อมต่อใหม่"
         }
       },
       wiki: {
@@ -1873,11 +1913,11 @@ const resources = {
           },
           storageOptions: {
             db: "Server DB",
-            dbDesc: "Encrypted on Server",
+            dbDesc: "เข้ารหัสบนเซิร์ฟเวอร์",
             local: "Local Storage",
-            localDesc: "Secure browser storage",
-            manual: "Manual Only",
-            manualDesc: "Session memory only",
+            localDesc: "พื้นที่เก็บข้อมูลปลอดภัยในเบราว์เซอร์",
+            manual: "แมนนวลเท่านั้น",
+            manualDesc: "เฉพาะหน่วยความจำเซสชัน",
           },
           auth: {
             title: "การยืนยันตัวตน",
@@ -2086,8 +2126,8 @@ const resources = {
           downloadSelected: "ดาวน์โหลดไฟล์ที่เลือก {{count}} รายการ",
           downloadSingle: "ดาวน์โหลดไฟล์ที่เลือก",
         },
-        noFileManagers: "No active file managers",
-        noFileManagersDesc: "Select a connection in the sidebar to open its file manager.",
+        noFileManagers: "ไม่มีตัวจัดการไฟล์ที่ใช้งานอยู่",
+        noFileManagersDesc: "เลือกการเชื่อมต่อในแถบด้านข้างเพื่อเปิดตัวจัดการไฟล์",
         context: {
           edit: "แก้ไขข้อความ",
           download: "ดาวน์โหลด",
@@ -2101,6 +2141,7 @@ const resources = {
           getInfo: "Get Info",
           rename: "เปลี่ยนชื่อ",
           currentFolder: "โฟลเดอร์ปัจจุบัน",
+          openTerminal: "เปิดเทอร์มินัลที่นี่",
         },
         modals: {
           editor: {
@@ -2183,8 +2224,8 @@ const resources = {
           pasting: "กำลังวาง",
         },
         errors: {
-          cannotEditDir: "Cannot edit directory",
-          cannotMoveToSelf: "Cannot move to self",
+          cannotEditDir: "ไม่สามารถแก้ไขโฟลเดอร์ได้",
+          cannotMoveToSelf: "ไม่สามารถย้ายไปยังตัวเองได้",
         },
         toasts: {
           downloadComplete: "ดาวน์โหลดเสร็จสมบูรณ์",
@@ -2350,6 +2391,7 @@ const resources = {
         online: "在线",
         offline: "离线",
         servers: "服务器",
+        to: "到",
         user: "用户",
         type: "连接类型",
         disconnected: "已断开",
@@ -2784,6 +2826,7 @@ const resources = {
         deleteTitle: "删除连接？",
         deleteConfirm: "此操作无法撤销。",
         manager: "终端管理器",
+        pinnedServers: "已固定服务器",
         dashboard_ui: {
           systemOverview: "System Overview",
           monitoring: "监控中",
@@ -3059,6 +3102,7 @@ const resources = {
           getInfo: "获取信息",
           rename: "重命名",
           currentFolder: "当前文件夹",
+          openTerminal: "在此打开终端",
         },
         modals: {
           editor: {
@@ -3105,20 +3149,10 @@ const resources = {
           connFailed: "○ 连接失败",
           initializing: "○ 正在初始化...",
           dropToUpload: "拖放到此处上传",
-        },
-        editor: {
-            title: "文件编辑器",
-            save: "保存",
-            saving: "正在保存...",
-            close: "关闭编辑器",
-          }
-        },
-        status: {
           connecting: "正在建立 Socket...",
           ssh_connecting: "正在连接 SFTP...",
           errorTitle: "文件系统错误",
           emptyFolder: "此文件夹为空",
-          dropToUpload: "拖放文件即可上传",
           uploadingTo: "正在上传到",
           doNotClose: "请勿关闭",
           timeout: "连接超时。请检查服务器是否可达。",
@@ -3133,12 +3167,21 @@ const resources = {
           waiting: "正在等待服务器响应...",
           latency: "网络延迟 (Ping)",
         },
+        editor: {
+            title: "文件编辑器",
+            save: "保存",
+            saving: "正在保存...",
+            close: "关闭编辑器",
+          },
         actions: {
           success: "{{action}} 成功",
           loading: "正在执行 {{action}}...",
           deleting: "正在删除",
           copied: "已复制",
           cut: "已剪切",
+          copying: "正在复制",
+          moving: "正在移动",
+          pasting: "正在粘贴",
         },
         errors: {
           cannotEditDir: "无法编辑目录",
@@ -3337,7 +3380,9 @@ const resources = {
           confirmDeleteMsg: "您确定要删除此记录吗？此操作无法撤消。",
           confirmCancel: "取消",
           confirmYes: "是的，我确定",
-          confirmOk: "确认"
+          confirmOk: "确认",
+          dangerousActionTitle: "检测到危险操作",
+          dangerousActionMsg: "此查询将修改或删除数据库中的数据。该操作无法撤销。",
         },
         editor: {
           edit: "编辑",
@@ -3504,6 +3549,7 @@ const resources = {
       }
     }
   }
+};
 
 
 i18n

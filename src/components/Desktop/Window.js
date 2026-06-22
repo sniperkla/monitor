@@ -211,6 +211,11 @@ export default function Window({ id, title, icon: Icon, component, isMinimized, 
       });
     }
 
+    // Auto-maximize on mobile screens
+    if (window.innerWidth < 768 && !isMaximized) {
+      toggleMaximize(id);
+    }
+
     // Force Rnd to re-sync its internal resizable state on mount.
     // After a soft refresh (F5), Rnd mounts with `default` values but its internal
     // re-resizable component may have stale resize-handle bounds. This deferred
@@ -472,8 +477,8 @@ export default function Window({ id, title, icon: Icon, component, isMinimized, 
           width: freeRect.width,
           height: freeRect.height,
         }}
-        minWidth={300}
-        minHeight={200}
+        minWidth={window.innerWidth < 768 ? 200 : 300}
+        minHeight={window.innerWidth < 768 ? 150 : 200}
         dragHandleClassName="window-drag-handle"
         cancel=".nodrag,button,input,textarea,select,option,label"
         enableUserSelectHack={false}

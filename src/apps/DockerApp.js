@@ -196,6 +196,8 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
   const [configEditor, setConfigEditor] = useState({ isOpen: false, file: '', content: '', containerId: '', containerName: '' });
   const [pruneVolumesModal, setPruneVolumesModal] = useState({ isOpen: false, confirmText: '' });
   const [pruneImagesModal, setPruneImagesModal] = useState({ isOpen: false, pruneAll: false, confirmText: '' });
+  const [pruneSystemModal, setPruneSystemModal] = useState({ isOpen: false, targets: { containers: false, images: false, volumes: false, networks: false, cache: false }, pruneAll: false, confirmText: '' });
+  const [pruneSelections, setPruneSelections] = useState({ containers: {}, images: {}, volumes: {}, networks: {} });
   const [selectedVolumes, setSelectedVolumes] = useState([]);
 
   const [pendingActions, setPendingActions] = useState({}); // { id: actionName }
@@ -635,6 +637,27 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
           setIsLoading(false);
           addNotification({ title: 'Images Pruned', message: 'Unused Docker images have been successfully deleted.', type: 'success' });
           socketRef.current.emit('docker:command', { action: 'images' });
+        } else if (action === 'prune-system') {
+          setIsLoading(false);
+          addNotification({ title: 'System Pruned', message: 'Docker system has been cleaned up. Unused containers, images, networks, and volumes removed.', type: 'success' });
+          socketRef.current.emit('docker:command', { action: 'list' });
+          socketRef.current.emit('docker:command', { action: 'images' });
+          socketRef.current.emit('docker:command', { action: 'volumes' });
+          socketRef.current.emit('docker:command', { action: 'networks' });
+        } else if (action === 'prune-custom') {
+          setIsLoading(false);
+          addNotification({ title: 'Prune Complete', message: 'Selected Docker resources have been cleaned up.', type: 'success' });
+          socketRef.current.emit('docker:command', { action: 'list' });
+          socketRef.current.emit('docker:command', { action: 'images' });
+          socketRef.current.emit('docker:command', { action: 'volumes' });
+          socketRef.current.emit('docker:command', { action: 'networks' });
+        } else if (action === 'remove-selected') {
+          setIsLoading(false);
+          addNotification({ title: 'Removed', message: 'Selected Docker resources have been removed.', type: 'success' });
+          socketRef.current.emit('docker:command', { action: 'list' });
+          socketRef.current.emit('docker:command', { action: 'images' });
+          socketRef.current.emit('docker:command', { action: 'volumes' });
+          socketRef.current.emit('docker:command', { action: 'networks' });
         } else if (action === 'rm-volumes') {
           setIsLoading(false);
           addNotification({ title: 'Volumes Deleted', message: 'Selected volumes were deleted successfully.', type: 'success' });
@@ -1063,18 +1086,18 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
   return (
     <div className="flex flex-col h-full bg-transparent text-[var(--text-primary)]">
         {/* ── Toolbar ── */}
-        <div className="flex items-center justify-between bg-[var(--bg-secondary)] border-b border-[var(--border-color)] px-4 h-12 shrink-0">
-            <div className="flex items-center gap-4">
-                <span className="text-sm font-bold flex items-center gap-2">
+        <div className="flex items-center justify-between bg-[var(--bg-secondary)] border-b border-[var(--border-color)] px-2 sm:px-4 h-12 shrink-0 gap-2">
+            <div className="flex items-center gap-2 sm:gap-4 min-w-0 flex-1 overflow-hidden">
+                <span className="text-xs sm:text-sm font-bold flex items-center gap-2 shrink-0">
                     <Box size={14} className="text-sky-400" />
-                    {selectedConnection.name}
+                    <span className="truncate max-w-[80px] sm:max-w-none">{selectedConnection.name}</span>
                 </span>
-                <div className="flex items-center gap-0.5 bg-black/20 p-0.5 rounded-lg">
+                <div className="toolbar-tabs flex items-center gap-0.5 bg-black/20 p-0.5 rounded-lg shrink-0">
                     {tabs.map(tab => (
                       <button 
                         key={tab.id}
                         onClick={() => setActiveTab(tab.id)} 
-                        className={`px-3 py-1 text-[10px] font-bold rounded-md transition-all flex items-center gap-1.5 ${
+                        className={`px-2 sm:px-3 py-1 text-[10px] font-bold rounded-md transition-all flex items-center gap-1.5 whitespace-nowrap ${
                           activeTab === tab.id 
                             ? `${tabColors[tab.color]} text-white shadow-lg` 
                             : 'text-[var(--text-muted)] hover:text-white hover:bg-white/5'
@@ -1088,7 +1111,7 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
                     ))}
                 </div>
             </div>
-            <div className="flex items-center gap-3">
+            <div className="flex items-center gap-1 sm:gap-3 shrink-0">
                 {/* Export/Import Buttons like SSH Manager */}
                 <div className="flex items-center gap-1.5 bg-black/20 p-0.5 rounded-lg mr-2">
                   <button 
@@ -1099,6 +1122,29 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
                     <Upload size={12} /> IMPORT
                   </button>
                   <input ref={importFileRef} type="file" accept=".json" className="hidden" onChange={handleImportFileChange} />
+                  <div className="w-px h-4 bg-white/10" />
+                  <button 
+                    onClick={() => {
+                      const stopped = containers.filter(c => c.state !== 'running');
+                      const unusedImgs = images.filter(img => !containers.some(c => c.image.includes(img.Repository)));
+                      const unusedVols = volumes.filter(vol => {
+                        const vName = (vol.Name || '').toLowerCase().trim();
+                        return vName && !containers.some(c => String(c.detailedMounts || c.mounts || '').toLowerCase().includes(vName));
+                      });
+                      const removableNets = networks.filter(n => n.Name !== 'bridge' && n.Name !== 'host' && n.Name !== 'none');
+                      setPruneSelections({
+                        containers: Object.fromEntries(stopped.map(c => [c.id, true])),
+                        images: Object.fromEntries(unusedImgs.map((img, i) => [`${img.Repository}:${img.Tag}`, true])),
+                        volumes: Object.fromEntries(unusedVols.map(vol => [vol.Name, true])),
+                        networks: Object.fromEntries(removableNets.map(n => [n.Name, true])),
+                      });
+                      setPruneSystemModal({ isOpen: true, targets: { containers: false, images: false, volumes: false, networks: false, cache: false }, pruneAll: false, confirmText: '' });
+                    }}
+                    className="px-2 py-1 text-[10px] font-bold rounded-md text-rose-400 hover:text-white hover:bg-rose-500/20 transition-all flex items-center gap-1"
+                    title="Docker System Prune - Free disk space"
+                  >
+                    <Trash2 size={12} /> PRUNE
+                  </button>
                 </div>
                 
                 <button onClick={fetchContainers} className="p-1.5 hover:bg-white/5 rounded-lg text-sky-400 transition-colors active:scale-90" title="Refresh">
@@ -1266,7 +1312,7 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
                                       )}
 
                                       {/* Action buttons — grouped sections */}
-                                      <div className="px-4 pb-3 flex items-center gap-2">
+                                      <div className="px-4 pb-3 flex items-center gap-2 flex-wrap">
                                         {/* Control section */}
                                         <div className="flex items-center gap-1 p-1 rounded-lg bg-white/[0.03]">
                                           {c.state === 'running' ? (
@@ -2035,6 +2081,327 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
                   }}
                   className="px-4 py-2 rounded-lg text-sm font-bold bg-rose-500 text-white hover:bg-rose-600 transition-all disabled:opacity-50"
                >Prune</button>
+              </div>
+            </div>
+          </MacOSModalWindow>
+        )}
+
+        {pruneSystemModal.isOpen && (
+          <MacOSModalWindow
+            isOpen
+            title="Docker Prune"
+            icon={AlertTriangle}
+            onClose={() => setPruneSystemModal({ isOpen: false, targets: { containers: false, images: false, volumes: false, networks: false, cache: false }, pruneAll: false, confirmText: '' })}
+            zIndexClassName="z-[9999]"
+            defaultWidth={440}
+            defaultHeight={640}
+            maxWidthClassName="max-w-[440px]"
+            closeOnOverlayClick
+          >
+            <div className="p-5 flex flex-col h-full bg-transparent">
+              <p className="text-[13px] leading-relaxed text-[var(--text-primary)] mb-3">
+                Select resources to prune:
+              </p>
+              <div className="space-y-2 mb-3">
+                {[
+                  { key: 'containers', label: 'Stopped containers', cmd: 'docker container prune -f' },
+                  { key: 'images', label: 'Images', cmd: 'docker image prune -f' },
+                  { key: 'volumes', label: 'Volumes', cmd: 'docker volume prune -f', danger: true },
+                  { key: 'networks', label: 'Networks', cmd: 'docker network prune -f' },
+                  { key: 'cache', label: 'Build cache', cmd: 'docker builder prune -f' },
+                ].map(item => (
+                  <div key={item.key} className={`flex items-center gap-3 p-2.5 rounded-xl border transition-colors ${
+                    pruneSystemModal.targets[item.key]
+                      ? item.danger ? 'bg-rose-500/10 border-rose-500/30' : 'bg-sky-500/10 border-sky-500/30'
+                      : 'bg-white/5 border-white/5'
+                  }`}>
+                    <input
+                      type="checkbox"
+                      id={`prune-${item.key}`}
+                      checked={pruneSystemModal.targets[item.key]}
+                      onChange={(e) => setPruneSystemModal(prev => ({
+                        ...prev,
+                        targets: { ...prev.targets, [item.key]: e.target.checked }
+                      }))}
+                      className="accent-rose-500 rounded"
+                    />
+                    <label htmlFor={`prune-${item.key}`} className={`flex-1 text-xs cursor-pointer select-none ${item.danger && pruneSystemModal.targets[item.key] ? 'text-rose-400 font-bold' : 'text-[var(--text-muted)]'}`}>
+                      {item.label}
+                      {item.danger && pruneSystemModal.targets[item.key] && ' — data will be lost!'}
+                    </label>
+                    <span className="text-[9px] font-mono opacity-40">{item.cmd}</span>
+                  </div>
+                ))}
+              </div>
+
+              {/* Select All */}
+              <button
+                onClick={() => {
+                  const allSelected = Object.values(pruneSystemModal.targets).every(Boolean);
+                  const newVal = !allSelected;
+                  setPruneSystemModal(prev => ({
+                    ...prev,
+                    targets: { containers: newVal, images: newVal, volumes: newVal, networks: newVal, cache: newVal }
+                  }));
+                }}
+                className="text-[11px] text-[var(--text-muted)] hover:text-white transition-colors mb-3 self-start"
+              >
+                {Object.values(pruneSystemModal.targets).every(Boolean) ? '✕ Deselect All' : '☐ Select All'}
+              </button>
+
+              {/* Scrollable preview area */}
+              <div className="flex-1 min-h-0 overflow-y-auto space-y-3 mb-2 scrollbar-hide">
+
+                {/* Stopped containers */}
+                {pruneSystemModal.targets.containers && (() => {
+                  const stopped = containers.filter(c => c.state !== 'running');
+                  const sel = pruneSelections.containers;
+                  const selectedCount = Object.values(sel).filter(Boolean).length;
+                  if (stopped.length === 0) return (
+                    <div className="text-[11px] text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 rounded-xl p-2.5">
+                      No stopped containers found.
+                    </div>
+                  );
+                  return (
+                    <div>
+                      <div className="flex items-center justify-between mb-1.5">
+                        <p className="text-[10px] uppercase font-bold text-[var(--text-muted)] tracking-wider">
+                          Stopped Containers ({selectedCount}/{stopped.length})
+                        </p>
+                        <button onClick={() => {
+                          const allOn = stopped.every(c => sel[c.id]);
+                          const upd = {};
+                          stopped.forEach(c => { upd[c.id] = !allOn; });
+                          setPruneSelections(prev => ({ ...prev, containers: upd }));
+                        }} className="text-[9px] text-[var(--text-muted)] hover:text-white">
+                          {stopped.every(c => sel[c.id]) ? 'Uncheck All' : 'Check All'}
+                        </button>
+                      </div>
+                      <div className="max-h-[100px] overflow-y-auto space-y-0.5 scrollbar-hide rounded-xl border border-white/5 bg-black/20 p-2">
+                        {stopped.map(c => (
+                          <label key={c.id} className="flex items-center gap-2 text-[11px] py-1 px-2 rounded-lg hover:bg-white/5 cursor-pointer select-none">
+                            <input type="checkbox" checked={!!sel[c.id]} onChange={() => setPruneSelections(prev => ({ ...prev, containers: { ...prev.containers, [c.id]: !prev.containers[c.id] } }))} className="accent-rose-500 rounded shrink-0" />
+                            <span className="font-mono text-[var(--text-primary)] truncate flex-1">{c.name}</span>
+                            <span className="text-[9px] font-mono opacity-40 shrink-0">{c.id.substring(0, 12)}</span>
+                            <span className="text-[9px] opacity-40 shrink-0">{c.image}</span>
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })()}
+
+                {/* Images */}
+                {pruneSystemModal.targets.images && (() => {
+                  const unused = images.filter(img => !containers.some(c => c.image.includes(img.Repository)));
+                  const sel = pruneSelections.images;
+                  const selectedCount = Object.values(sel).filter(Boolean).length;
+                  return (
+                    <div>
+                      {unused.length === 0 ? (
+                        <div className="text-[11px] text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 rounded-xl p-2.5">
+                          No unused images found.
+                        </div>
+                      ) : (
+                        <>
+                          <div className="flex items-center justify-between mb-1.5">
+                            <p className="text-[10px] uppercase font-bold text-[var(--text-muted)] tracking-wider">
+                              Unused Images ({selectedCount}/{unused.length})
+                            </p>
+                            <button onClick={() => {
+                              const allOn = unused.every((img, i) => sel[`${img.Repository}:${img.Tag}`]);
+                              const upd = {};
+                              unused.forEach(img => { upd[`${img.Repository}:${img.Tag}`] = !allOn; });
+                              setPruneSelections(prev => ({ ...prev, images: upd }));
+                            }} className="text-[9px] text-[var(--text-muted)] hover:text-white">
+                              {unused.every((img, i) => sel[`${img.Repository}:${img.Tag}`]) ? 'Uncheck All' : 'Check All'}
+                            </button>
+                          </div>
+                          <div className="max-h-[100px] overflow-y-auto space-y-0.5 scrollbar-hide rounded-xl border border-white/5 bg-black/20 p-2">
+                            {unused.map((img, i) => {
+                              const key = `${img.Repository}:${img.Tag}`;
+                              return (
+                                <label key={i} className="flex items-center gap-2 text-[11px] py-1 px-2 rounded-lg hover:bg-white/5 cursor-pointer select-none">
+                                  <input type="checkbox" checked={!!sel[key]} onChange={() => setPruneSelections(prev => ({ ...prev, images: { ...prev.images, [key]: !prev.images[key] } }))} className="accent-rose-500 rounded shrink-0" />
+                                  <span className="font-mono text-[var(--text-primary)] truncate flex-1">{img.Repository === '<none>' ? '(untagged)' : img.Repository}</span>
+                                  <span className="text-[9px] font-mono opacity-40 shrink-0">{img.Tag || '-'}</span>
+                                  <span className="text-[9px] opacity-40 shrink-0">{img.Size || '-'}</span>
+                                </label>
+                              );
+                            })}
+                          </div>
+                        </>
+                      )}
+                      <div className="flex items-center gap-2 bg-white/5 p-2 rounded-xl border border-white/5 mt-2">
+                        <input
+                          type="checkbox"
+                          id="prune-system-all-checkbox"
+                          checked={pruneSystemModal.pruneAll}
+                          onChange={(e) => setPruneSystemModal(prev => ({ ...prev, pruneAll: e.target.checked }))}
+                          className="accent-rose-500 rounded"
+                        />
+                        <label htmlFor="prune-system-all-checkbox" className="text-xs text-[var(--text-muted)] cursor-pointer select-none">
+                          Include all unused images, not just dangling ones (-a)
+                        </label>
+                      </div>
+                    </div>
+                  );
+                })()}
+
+                {/* Volumes */}
+                {pruneSystemModal.targets.volumes && (() => {
+                  const unused = volumes.filter(vol => {
+                    const vName = (vol.Name || '').toLowerCase().trim();
+                    return vName && !containers.some(c => String(c.detailedMounts || c.mounts || '').toLowerCase().includes(vName));
+                  });
+                  const sel = pruneSelections.volumes;
+                  const selectedCount = Object.values(sel).filter(Boolean).length;
+                  return (
+                    <div>
+                      <div className="flex items-center gap-2 bg-rose-500/10 border border-rose-500/20 p-2.5 rounded-xl mb-2">
+                        <AlertTriangle size={14} className="text-rose-400 shrink-0" />
+                        <p className="text-[11px] text-rose-300">
+                          <strong>Warning:</strong> Volumes with database files or persistent data will be permanently deleted.
+                        </p>
+                      </div>
+                      {unused.length === 0 ? (
+                        <div className="text-[11px] text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 rounded-xl p-2.5">
+                          No unused volumes found.
+                        </div>
+                      ) : (
+                        <>
+                          <div className="flex items-center justify-between mb-1.5">
+                            <p className="text-[10px] uppercase font-bold text-[var(--text-muted)] tracking-wider">
+                              Unused Volumes ({selectedCount}/{unused.length})
+                            </p>
+                            <button onClick={() => {
+                              const allOn = unused.every(vol => sel[vol.Name]);
+                              const upd = {};
+                              unused.forEach(vol => { upd[vol.Name] = !allOn; });
+                              setPruneSelections(prev => ({ ...prev, volumes: upd }));
+                            }} className="text-[9px] text-[var(--text-muted)] hover:text-white">
+                              {unused.every(vol => sel[vol.Name]) ? 'Uncheck All' : 'Check All'}
+                            </button>
+                          </div>
+                          <div className="max-h-[100px] overflow-y-auto space-y-0.5 scrollbar-hide rounded-xl border border-white/5 bg-black/20 p-2">
+                            {unused.map((vol, i) => (
+                              <label key={i} className="flex items-center gap-2 text-[11px] py-1 px-2 rounded-lg hover:bg-white/5 cursor-pointer select-none">
+                                <input type="checkbox" checked={!!sel[vol.Name]} onChange={() => setPruneSelections(prev => ({ ...prev, volumes: { ...prev.volumes, [vol.Name]: !prev.volumes[vol.Name] } }))} className="accent-rose-500 rounded shrink-0" />
+                                <span className="font-mono text-[var(--text-primary)] truncate flex-1">{vol.Name || 'unnamed'}</span>
+                                <span className="text-[9px] opacity-40 shrink-0">{vol.Driver || 'local'}</span>
+                              </label>
+                            ))}
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  );
+                })()}
+
+                {/* Networks */}
+                {pruneSystemModal.targets.networks && (() => {
+                  const removable = networks.filter(n => n.Name !== 'bridge' && n.Name !== 'host' && n.Name !== 'none');
+                  const sel = pruneSelections.networks;
+                  const selectedCount = Object.values(sel).filter(Boolean).length;
+                  return (
+                    <div>
+                      {removable.length === 0 ? (
+                        <div className="text-[11px] text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 rounded-xl p-2.5">
+                          No removable networks found. (bridge/host/none are kept)
+                        </div>
+                      ) : (
+                        <>
+                          <div className="flex items-center justify-between mb-1.5">
+                            <p className="text-[10px] uppercase font-bold text-[var(--text-muted)] tracking-wider">
+                              Unused Networks ({selectedCount}/{removable.length})
+                            </p>
+                            <button onClick={() => {
+                              const allOn = removable.every(n => sel[n.Name]);
+                              const upd = {};
+                              removable.forEach(n => { upd[n.Name] = !allOn; });
+                              setPruneSelections(prev => ({ ...prev, networks: upd }));
+                            }} className="text-[9px] text-[var(--text-muted)] hover:text-white">
+                              {removable.every(n => sel[n.Name]) ? 'Uncheck All' : 'Check All'}
+                            </button>
+                          </div>
+                          <div className="max-h-[100px] overflow-y-auto space-y-0.5 scrollbar-hide rounded-xl border border-white/5 bg-black/20 p-2">
+                            {removable.map((net, i) => (
+                              <label key={i} className="flex items-center gap-2 text-[11px] py-1 px-2 rounded-lg hover:bg-white/5 cursor-pointer select-none">
+                                <input type="checkbox" checked={!!sel[net.Name]} onChange={() => setPruneSelections(prev => ({ ...prev, networks: { ...prev.networks, [net.Name]: !prev.networks[net.Name] } }))} className="accent-rose-500 rounded shrink-0" />
+                                <span className="font-mono text-[var(--text-primary)] truncate flex-1">{net.Name}</span>
+                                <span className="text-[9px] opacity-40 shrink-0">{net.Driver || '-'}</span>
+                                <span className="text-[9px] font-mono opacity-40 shrink-0">{net.ID?.substring(0, 12)}</span>
+                              </label>
+                            ))}
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  );
+                })()}
+
+                {/* Build cache note */}
+                {pruneSystemModal.targets.cache && (
+                  <div className="text-[11px] text-sky-400 bg-sky-500/10 border border-sky-500/20 rounded-xl p-2.5">
+                    Build cache will be cleared. This does not affect running containers or images.
+                  </div>
+                )}
+              </div>
+
+              {/* Confirm input */}
+              {Object.values(pruneSystemModal.targets).some(Boolean) && (
+                <>
+                  <div className="text-[12px] text-[var(--text-muted)] mb-2">
+                    Type <strong className="text-rose-400">prune</strong> to confirm:
+                  </div>
+                  <input 
+                    autoFocus
+                    type="text"
+                    placeholder="prune"
+                    className="w-full bg-black/30 border border-white/10 rounded-xl px-4 py-2.5 text-sm outline-none font-mono text-[var(--text-primary)] focus:border-rose-500/50 transition-colors"
+                    value={pruneSystemModal.confirmText}
+                    onChange={(e) => setPruneSystemModal(prev => ({ ...prev, confirmText: e.target.value }))}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && pruneSystemModal.confirmText === 'prune') {
+                        const selected = {
+                          containers: Object.entries(pruneSelections.containers).filter(([,v]) => v).map(([k]) => k),
+                          images: Object.entries(pruneSelections.images).filter(([,v]) => v).map(([k]) => k),
+                          volumes: Object.entries(pruneSelections.volumes).filter(([,v]) => v).map(([k]) => k),
+                          networks: Object.entries(pruneSelections.networks).filter(([,v]) => v).map(([k]) => k),
+                          cache: pruneSystemModal.targets.cache,
+                          pruneAll: pruneSystemModal.pruneAll,
+                        };
+                        setIsLoading(true);
+                        socketRef.current.emit('docker:command', { action: 'remove-selected', args: [selected] });
+                        setPruneSystemModal({ isOpen: false, targets: { containers: false, images: false, volumes: false, networks: false, cache: false }, pruneAll: false, confirmText: '' });
+                      }
+                    }}
+                  />
+                </>
+              )}
+
+              <div className="mt-auto flex justify-end gap-2 pt-4 border-t border-white/5">
+                <button 
+                  onClick={() => setPruneSystemModal({ isOpen: false, targets: { containers: false, images: false, volumes: false, networks: false, cache: false }, pruneAll: false, confirmText: '' })}
+                  className="px-4 py-2 rounded-lg text-sm font-bold text-[var(--text-muted)] hover:bg-white/5 transition-all"
+                >Cancel</button>
+                <button 
+                  disabled={!Object.values(pruneSystemModal.targets).some(Boolean) || pruneSystemModal.confirmText !== 'prune'}
+                  onClick={() => {
+                    const selected = {
+                      containers: Object.entries(pruneSelections.containers).filter(([,v]) => v).map(([k]) => k),
+                      images: Object.entries(pruneSelections.images).filter(([,v]) => v).map(([k]) => k),
+                      volumes: Object.entries(pruneSelections.volumes).filter(([,v]) => v).map(([k]) => k),
+                      networks: Object.entries(pruneSelections.networks).filter(([,v]) => v).map(([k]) => k),
+                      cache: pruneSystemModal.targets.cache,
+                      pruneAll: pruneSystemModal.pruneAll,
+                    };
+                    setIsLoading(true);
+                    socketRef.current.emit('docker:command', { action: 'remove-selected', args: [selected] });
+                    setPruneSystemModal({ isOpen: false, targets: { containers: false, images: false, volumes: false, networks: false, cache: false }, pruneAll: false, confirmText: '' });
+                  }}
+                  className="px-4 py-2 rounded-lg text-sm font-bold bg-rose-500 text-white hover:bg-rose-600 transition-all disabled:opacity-50"
+               >Prune Selected</button>
               </div>
             </div>
           </MacOSModalWindow>

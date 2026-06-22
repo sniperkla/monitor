@@ -1496,7 +1496,7 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
                           </div>
                         </div>
 
-                        <div className="grid grid-cols-2 gap-2">
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                           {/* Server Mode */}
                           <button
                             onClick={() => {
@@ -1517,18 +1517,26 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
                             <div className="flex items-center gap-2 mb-2">
                               <Server size={14} className="text-indigo-400" />
                               <span className="text-[11px] font-bold text-[var(--text-primary)]">Server</span>
+                              {window.innerWidth < 768 && (
+                                <span className="text-[8px] px-1.5 py-0.5 rounded bg-indigo-500/20 text-indigo-400 font-bold">Recommended</span>
+                              )}
                             </div>
                             <div className="space-y-1">
+                              <p className="text-[9px] text-emerald-400">✓ Works on phone & desktop</p>
                               <p className="text-[9px] text-emerald-400">✓ Zero setup required</p>
                               <p className="text-[9px] text-emerald-400">✓ SFTP, Docker, AI included</p>
                               <p className="text-[9px] text-amber-400">• Uses server resources</p>
-                              <p className="text-[9px] text-amber-400">• Server sees traffic</p>
                             </div>
                           </button>
 
                           {/* Local Mode */}
                           <button
                             onClick={() => {
+                              const isMobile = window.innerWidth < 768;
+                              if (isMobile) {
+                                addNotification({ title: 'Not Available on Mobile', message: 'Local mode requires a desktop with the relay agent. Use Server mode on mobile.', type: 'warning' });
+                                return;
+                              }
                               if (relayConnected) {
                                 localStorage.setItem('ssh_monitor_ssh_mode', 'local');
                                 addNotification({ title: 'SSH Mode', message: 'Switched to Local mode', type: 'success' });
@@ -1537,7 +1545,9 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
                               }
                             }}
                             className={`relative p-3 rounded-xl border text-left transition-all ${
-                              localStorage.getItem('ssh_monitor_ssh_mode') === 'local'
+                              window.innerWidth < 768
+                                ? 'border-[var(--border-color)] opacity-50 cursor-not-allowed'
+                                : localStorage.getItem('ssh_monitor_ssh_mode') === 'local'
                                 ? 'border-emerald-500/50 bg-emerald-500/10'
                                 : !relayConnected
                                 ? 'border-[var(--border-color)] opacity-60'
@@ -1552,18 +1562,40 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
                             <div className="flex items-center gap-2 mb-2">
                               <Monitor size={14} className="text-emerald-400" />
                               <span className="text-[11px] font-bold text-[var(--text-primary)]">Local</span>
-                              {!relayConnected && (
-                                <span className="text-[8px] px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-400">Requires Relay</span>
+                              {window.innerWidth >= 768 && (
+                                <span className="text-[8px] px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-400 font-bold">Recommended</span>
                               )}
+                              {window.innerWidth < 768 ? (
+                                <span className="text-[8px] px-1.5 py-0.5 rounded bg-red-500/20 text-red-400">Desktop only</span>
+                              ) : !relayConnected ? (
+                                <span className="text-[8px] px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-400">Requires Relay</span>
+                              ) : null}
                             </div>
                             <div className="space-y-1">
                               <p className="text-[9px] text-emerald-400">✓ Your machine handles SSH</p>
                               <p className="text-[9px] text-emerald-400">✓ Server sees nothing</p>
                               <p className="text-[9px] text-emerald-400">✓ Faster (direct connection)</p>
-                              <p className="text-[9px] text-amber-400">• Requires relay agent</p>
+                              <p className="text-[9px] text-amber-400">• Desktop + relay agent required</p>
                             </div>
                           </button>
                         </div>
+
+                        {/* Platform tip */}
+                        {window.innerWidth < 768 ? (
+                          <div className="mt-2 flex items-start gap-2 p-2.5 rounded-xl bg-indigo-500/10 border border-indigo-500/20">
+                            <Server size={13} className="text-indigo-400 shrink-0 mt-0.5" />
+                            <p className="text-[10px] text-indigo-300">
+                              <strong>Mobile tip:</strong> Use Server mode to connect to remote servers. For localhost targets, make sure your desktop relay is running — the app server will route through it automatically.
+                            </p>
+                          </div>
+                        ) : (
+                          <div className="mt-2 flex items-start gap-2 p-2.5 rounded-xl bg-emerald-500/10 border border-emerald-500/20">
+                            <Monitor size={13} className="text-emerald-400 shrink-0 mt-0.5" />
+                            <p className="text-[10px] text-emerald-300">
+                              <strong>Desktop tip:</strong> Local mode is recommended — your machine handles SSH directly, the server sees nothing, and it's faster. Install the relay agent to enable it.
+                            </p>
+                          </div>
+                        )}
 
                         {/* Comparison table */}
                         <details className="mt-3 group">
@@ -1618,7 +1650,7 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
                       </div>
                     </div>
 
-                    {/* Local Relay Agent — always visible compact card */}
+                    {/* Local Relay Agent — Localhost Testing Tool */}
                     <div id="relay-agent-section" className="rounded-2xl border overflow-hidden"
                       style={{ borderColor: relayConnected ? 'rgba(52,211,153,0.25)' : 'var(--border-color)' }}
                     >
@@ -1629,36 +1661,57 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
                         </div>
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center gap-2">
-                            <h4 className="text-xs font-bold text-[var(--text-primary)]">{t('settings_ui.relay.title')}</h4>
+                            <h4 className="text-xs font-bold text-[var(--text-primary)]">Localhost Testing</h4>
                             <span className={`flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-bold uppercase tracking-wider ${
                               relayConnected ? 'bg-emerald-500/15 text-emerald-400' : 'bg-[var(--bg-tertiary)] text-[var(--text-muted)]'
                             }`}>
                               <span className={`w-1.5 h-1.5 rounded-full ${relayConnected ? 'bg-emerald-400 animate-pulse' : 'bg-[var(--text-muted)]'}`} />
                               {relayConnected ? 'Connected' : 'Offline'}
                             </span>
+                            {!relayConnected && (
+                              <span className="text-[8px] px-1.5 py-0.5 rounded bg-blue-500/20 text-blue-400">Optional</span>
+                            )}
                           </div>
                           <p className="text-[10px] text-[var(--text-muted)] mt-0.5 truncate">
                             {relayConnected
-                              ? 'Local databases accessible via relay tunnel'
-                              : 'Needed to connect to localhost databases from this dashboard'}
+                              ? 'Localhost databases accessible — install on your desktop to test local connections'
+                              : 'Only needed to connect to localhost/127.0.0.1 databases from your desktop'}
                           </p>
                         </div>
-                        <button
-                          onClick={() => {
-                            setRelayWizardStep(relayToken ? 2 : 1);
-                            setRelayInstallSuccess(false);
-                            setRelayModalOpen(true);
-                          }}
-                          className={`shrink-0 px-3 py-1.5 rounded-xl text-[11px] font-bold transition-all flex items-center gap-1.5 ${
-                            relayConnected
-                              ? 'bg-[var(--bg-tertiary)] hover:bg-[var(--border-color)] text-[var(--text-secondary)]'
-                              : 'bg-amber-500 hover:bg-amber-600 text-white shadow-md shadow-amber-500/20'
-                          }`}
-                        >
-                          {relayConnected ? <Settings size={11} /> : <Zap size={11} />}
-                          {relayConnected ? 'Manage' : 'Setup'}
-                        </button>
+                        <div className="flex items-center gap-2 shrink-0">
+                          <button
+                            onClick={() => {
+                              setRelayWizardStep(relayToken ? 2 : 1);
+                              setRelayInstallSuccess(false);
+                              setRelayModalOpen(true);
+                            }}
+                            className={`px-3 py-1.5 rounded-xl text-[11px] font-bold transition-all flex items-center gap-1.5 ${
+                              relayConnected
+                                ? 'bg-[var(--bg-tertiary)] hover:bg-[var(--border-color)] text-[var(--text-secondary)]'
+                                : 'bg-amber-500 hover:bg-amber-600 text-white shadow-md shadow-amber-500/20'
+                            }`}
+                          >
+                            {relayConnected ? <Settings size={11} /> : <Zap size={11} />}
+                            {relayConnected ? 'Manage' : 'Setup'}
+                          </button>
+                        </div>
                       </div>
+
+                      {/* Info when not connected */}
+                      {!relayConnected && (
+                        <div className="px-4 py-3 border-t border-[var(--border-color)] bg-[var(--bg-tertiary)]/30">
+                          <div className="flex items-start gap-2.5">
+                            <Info size={13} className="text-blue-400 shrink-0 mt-0.5" />
+                            <div className="text-[10px] text-[var(--text-muted)] space-y-1">
+                              <p><strong className="text-[var(--text-secondary)]">When do you need this?</strong></p>
+                              <p>• Your SSH/database server runs on <code className="text-amber-300">localhost</code> or <code className="text-amber-300">127.0.0.1</code></p>
+                              <p>• You want to access it from this dashboard (which runs on a different server)</p>
+                              <p className="text-emerald-400/80">✓ Not needed for remote servers (public IP/domain)</p>
+                              <p className="text-emerald-400/80">✓ Not needed if you access the dashboard directly on localhost</p>
+                            </div>
+                          </div>
+                        </div>
+                      )}
                     </div>
 
                     {/* Security Info */}
@@ -2831,8 +2884,8 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
                   <Network size={15} className="text-amber-400" />
                 </div>
                 <div className="flex-1">
-                  <h3 className="text-sm font-bold text-[var(--text-primary)]">Local Relay Agent Setup</h3>
-                  <p className="text-[10px] text-[var(--text-muted)] mt-0.5">Connect your local database to this dashboard</p>
+                  <h3 className="text-sm font-bold text-[var(--text-primary)]">Localhost Testing Setup</h3>
+                  <p className="text-[10px] text-[var(--text-muted)] mt-0.5">Install relay agent on your desktop to test localhost connections</p>
                 </div>
                 <span className={`text-[9px] font-bold px-2 py-0.5 rounded-full border uppercase tracking-wider ${osMeta[detectedOS].badge}`}>
                   {osMeta[detectedOS].label}
@@ -2911,8 +2964,10 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
                       <Info size={14} className="shrink-0 text-blue-400 mt-0.5" />
                       <div className="text-[11px] text-[var(--text-muted)] leading-relaxed space-y-1">
                         <p><span className="font-semibold text-[var(--text-secondary)]">What is the Relay Agent?</span></p>
-                        <p>A small background service you run on your own computer. It creates a secure tunnel so this dashboard can reach databases on <code className="text-amber-300">localhost</code>.</p>
-                        <p className="text-emerald-400/80 font-medium">✓ Nothing is stored on our servers — the connection is end-to-end.</p>
+                        <p>A small background service you run on your own desktop computer. It creates a secure tunnel so this dashboard can reach databases on <code className="text-amber-300">localhost</code>.</p>
+                        <p className="text-emerald-400/80 font-medium">✓ Only needed for localhost/127.0.0.1 targets — remote servers work without it</p>
+                        <p className="text-emerald-400/80 font-medium">✓ Nothing is stored on our servers — the connection is end-to-end</p>
+                        <p className="text-blue-400/80 font-medium">✓ Install on your desktop, not on the server</p>
                       </div>
                     </div>
 

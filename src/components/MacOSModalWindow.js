@@ -413,7 +413,7 @@ export default function MacOSModalWindow({
               animate="animate"
               exit="exit"
               transition={{ duration: 0.15 }}
-              className={`${!effectiveMaximized ? 'w-auto min-w-[320px] ' + maxWidthClassName : 'w-full h-full'} ${!effectiveMaximized ? maxHeightClassName : ''} flex flex-col overflow-hidden ${windowClassName}`}
+              className={`${!effectiveMaximized ? 'w-auto min-w-[280px] sm:min-w-[320px] ' + maxWidthClassName : 'w-full h-full'} ${!effectiveMaximized ? maxHeightClassName : ''} flex flex-col overflow-hidden ${windowClassName}`}
               onClick={(e) => e.stopPropagation()}
             >
               <div

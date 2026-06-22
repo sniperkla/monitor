@@ -1,6 +1,24 @@
-import middleware from "next-auth/middleware";
-export const proxy = middleware;
-export default middleware;
+import { NextResponse } from "next/server";
+import { withAuth } from "next-auth/middleware";
+
+export const proxy = withAuth({
+  callbacks: {
+    authorized: ({ token, req }) => {
+      if (!token) {
+        const pathname = req.nextUrl.pathname;
+        if (pathname.startsWith("/api/")) {
+          return NextResponse.json(
+            { error: "Unauthorized" },
+            { status: 401 }
+          );
+        }
+      }
+      return !!token;
+    },
+  },
+});
+
+export default proxy;
 
 export const config = {
   matcher: [

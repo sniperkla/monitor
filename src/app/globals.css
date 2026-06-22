@@ -1595,8 +1595,50 @@ body {
   }
   
   .title-bar {
-     height: 36px !important;
+     height: 44px !important;
   }
+
+  .title-bar button,
+  .window-control-btn {
+    min-width: 44px !important;
+    min-height: 44px !important;
+  }
+
+  /* Sidebar overlay on mobile */
+  .sidebar {
+    width: 85vw !important;
+    max-width: 360px !important;
+  }
+
+  .sidebar-backdrop {
+    display: block;
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.5);
+    z-index: 49;
+    opacity: 1;
+    transition: opacity 0.3s;
+  }
+
+  .sidebar-backdrop.hidden {
+    opacity: 0;
+    pointer-events: none;
+  }
+
+  /* Improve touch targets globally */
+  button, a, [role="button"] {
+    min-height: 36px;
+  }
+
+  /* Scrollable toolbar tabs */
+  .toolbar-tabs {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+    flex-shrink: 1;
+    min-width: 0;
+  }
+  .toolbar-tabs::-webkit-scrollbar { display: none; }
 }
 
 @media (max-width: 480px) {

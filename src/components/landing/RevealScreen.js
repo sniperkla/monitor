@@ -589,7 +589,7 @@ export function RevealScreen({ onDismiss }) {
               </RenderItem>
 
               {/* Phase 1: Title with glitch + cursor */}
-              <div className="flex items-center justify-center mb-2 min-h-[48px]">
+              <div className="flex items-center justify-center mb-1.5 min-h-[44px]">
                 {phase >= 1 && (
                   <motion.div
                     initial={{ opacity: 0 }}
@@ -597,7 +597,7 @@ export function RevealScreen({ onDismiss }) {
                     className="flex items-center"
                   >
                     <h1
-                      className="glitch-text text-4xl md:text-5xl font-extrabold tracking-[0.2em] text-center uppercase bg-clip-text text-transparent bg-gradient-to-r from-white via-indigo-200 to-cyan-200 font-sans"
+                      className="glitch-text text-3xl md:text-4xl font-extrabold tracking-[0.15em] text-center uppercase bg-clip-text text-transparent bg-gradient-to-r from-white via-indigo-200 to-cyan-200 font-sans"
                       data-text="SSH MONITOR"
                     >
                       {phase >= 1 ? 'SSH MONITOR' : ''}
@@ -608,10 +608,10 @@ export function RevealScreen({ onDismiss }) {
               </div>
 
               {/* Phase 2: Subtitle types out + cursor */}
-              <div className="flex items-center justify-center mb-6 min-h-[20px]">
+              <div className="flex items-center justify-center mb-5 min-h-[18px]">
                 {phase >= 2 && (
                   <div className="flex items-center">
-                    <p className="text-xs md:text-sm text-slate-400 font-mono tracking-widest text-center uppercase">
+                    <p className="text-[10px] md:text-xs text-slate-400 font-mono tracking-widest text-center uppercase">
                       {'> '}
                       <TypewriterText text="Terminal & Server Control Center" speed={40} />
                     </p>
@@ -621,17 +621,17 @@ export function RevealScreen({ onDismiss }) {
               </div>
 
               {/* Phase 3: Badges + cursor */}
-              <div className="flex items-center gap-3 mb-8 font-mono text-xs tracking-wider text-slate-400 shrink-0 min-h-[28px]">
+              <div className="flex items-center gap-2 mb-6 font-mono text-[10px] tracking-wider text-slate-400 shrink-0 min-h-[24px]">
                 <RenderItem phase={phase} targetPhase={3} direction="up">
-                  <div className="flex items-center gap-3">
-                    <div className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-400">
-                      <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                  <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-400">
+                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
                       <span>ONLINE</span>
                     </div>
-                    <div className="px-3 py-1 rounded-full bg-indigo-500/10 border border-indigo-500/20 text-indigo-300">
+                    <div className="px-2.5 py-0.5 rounded-full bg-indigo-500/10 border border-indigo-500/20 text-indigo-300">
                       <span>v1.0.0</span>
                     </div>
-                    <div className="px-3 py-1 rounded-full bg-cyan-500/10 border border-cyan-500/20 text-cyan-300">
+                    <div className="px-2.5 py-0.5 rounded-full bg-cyan-500/10 border border-cyan-500/20 text-cyan-300">
                       <span>SECURE</span>
                     </div>
                     <BlockCursor visible={phase === 3} />
@@ -639,49 +639,15 @@ export function RevealScreen({ onDismiss }) {
                 </RenderItem>
               </div>
 
-              {/* Phase 4: Feature cards — staggered one by one */}
-              <div className="grid grid-cols-2 gap-4 w-full mb-8 shrink-0">
-                {features.map((f, i) => (
-                  <AnimatePresence key={f.label}>
-                    {phase >= 4 && (
-                      <motion.div
-                        initial={{ opacity: 0, y: 16, scale: 0.95 }}
-                        animate={{ opacity: 1, y: 0, scale: 1 }}
-                        transition={{ delay: i * 0.15, duration: 0.4, ease: 'easeOut' }}
-                        whileHover={{ scale: 1.03, translateY: -2 }}
-                        className="relative p-4 md:p-5 rounded-2xl border border-white/5 bg-slate-950/40 backdrop-blur-md overflow-hidden group cursor-default transition-all duration-300"
-                      >
-                        <div
-                          className="absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity duration-300 pointer-events-none"
-                          style={{ background: `radial-gradient(circle at center, ${f.color}15, transparent 70%)` }}
-                        />
-                        <div className="flex items-center gap-3">
-                          <div
-                            className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0 transition-colors"
-                            style={{ background: `${f.color}10`, border: `1px solid ${f.color}20` }}
-                          >
-                            <f.icon size={18} style={{ color: f.color }} />
-                          </div>
-                          <div className="min-w-0">
-                            <h3 className="text-xs md:text-sm font-bold text-slate-200 group-hover:text-white transition-colors">{f.label}</h3>
-                            <p className="text-[10px] md:text-xs text-slate-500 truncate">{f.desc}</p>
-                          </div>
-                        </div>
-                      </motion.div>
-                    )}
-                  </AnimatePresence>
-                ))}
-              </div>
-
-              {/* Phase 5: Buttons + cursor */}
-              <div className="w-full space-y-4 shrink-0">
-                <RenderItem phase={phase} targetPhase={5}>
-                  <div className="space-y-4">
+              {/* Phase 4: Buttons — moved up for better balance */}
+              <div className="w-full max-w-xs space-y-3 shrink-0 mb-6">
+                <RenderItem phase={phase} targetPhase={4}>
+                  <div className="space-y-3">
                     <motion.button
                       whileHover={{ scale: 1.02 }}
                       whileTap={{ scale: 0.98 }}
                       onClick={() => signIn('google', { callbackUrl: '/' })}
-                      className="relative w-full flex items-center justify-center gap-3 px-6 py-4 rounded-2xl text-base font-semibold cursor-pointer overflow-hidden group transition-all"
+                      className="relative w-full flex items-center justify-center gap-3 px-5 py-3.5 rounded-xl text-sm font-semibold cursor-pointer overflow-hidden group transition-all"
                       style={{
                         background: 'linear-gradient(135deg, #6366f1, #06b6d4)',
                         boxShadow: '0 4px 20px rgba(99, 102, 241, 0.25), inset 0 1px 0 rgba(255,255,255,0.2)',
@@ -695,12 +661,14 @@ export function RevealScreen({ onDismiss }) {
                         transition={{ repeat: Infinity, duration: 2, ease: 'linear', repeatDelay: 1 }}
                         style={{ transform: 'skewX(-20deg)' }}
                       />
-                      <svg className="relative shrink-0 fill-white" width="20" height="20" viewBox="0 0 24 24">
-                        <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92a5.06 5.06 0 0 1-2.2 3.32v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.1z" />
-                        <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" opacity="0.85" />
-                        <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" opacity="0.75" />
-                        <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" opacity="0.9" />
-                      </svg>
+                      <span className="relative flex items-center justify-center w-5 h-5 rounded-full bg-white shrink-0">
+                        <svg width="16" height="16" viewBox="0 0 24 24">
+                          <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92a5.06 5.06 0 0 1-2.2 3.32v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.1z" fill="#4285F4" />
+                          <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853" />
+                          <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" fill="#FBBC05" />
+                          <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335" />
+                        </svg>
+                      </span>
                       <span className="relative font-bold text-white">Sign in with Google</span>
                     </motion.button>
 
@@ -708,20 +676,54 @@ export function RevealScreen({ onDismiss }) {
                       whileHover={{ scale: 1.01 }}
                       whileTap={{ scale: 0.99 }}
                       onClick={onDismiss}
-                      className="w-full flex items-center justify-center gap-2 px-6 py-3 rounded-2xl text-sm font-semibold cursor-pointer text-slate-400 hover:text-slate-200 transition-colors bg-white/5 hover:bg-white/10 border border-white/5 hover:border-white/10"
+                      className="w-full flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl text-xs font-semibold cursor-pointer text-slate-400 hover:text-slate-200 transition-colors bg-white/5 hover:bg-white/10 border border-white/5 hover:border-white/10"
                     >
-                      <ChevronRight size={16} />
+                      <ChevronRight size={14} />
                       <span>Continue without login</span>
                     </motion.button>
                   </div>
                 </RenderItem>
               </div>
 
+              {/* Phase 5: Feature cards — compact grid below buttons */}
+              <div className="grid grid-cols-2 gap-2.5 w-full max-w-xs shrink-0 mb-5">
+                {features.map((f, i) => (
+                  <AnimatePresence key={f.label}>
+                    {phase >= 5 && (
+                      <motion.div
+                        initial={{ opacity: 0, y: 12, scale: 0.95 }}
+                        animate={{ opacity: 1, y: 0, scale: 1 }}
+                        transition={{ delay: i * 0.1, duration: 0.35, ease: 'easeOut' }}
+                        whileHover={{ scale: 1.03, translateY: -2 }}
+                        className="relative p-3 rounded-xl border border-white/5 bg-slate-950/40 backdrop-blur-md overflow-hidden group cursor-default transition-all duration-300"
+                      >
+                        <div
+                          className="absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity duration-300 pointer-events-none"
+                          style={{ background: `radial-gradient(circle at center, ${f.color}15, transparent 70%)` }}
+                        />
+                        <div className="flex items-center gap-2.5">
+                          <div
+                            className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0 transition-colors"
+                            style={{ background: `${f.color}10`, border: `1px solid ${f.color}20` }}
+                          >
+                            <f.icon size={15} style={{ color: f.color }} />
+                          </div>
+                          <div className="min-w-0">
+                            <h3 className="text-[11px] font-bold text-slate-200 group-hover:text-white transition-colors">{f.label}</h3>
+                            <p className="text-[9px] text-slate-500 truncate">{f.desc}</p>
+                          </div>
+                        </div>
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
+                ))}
+              </div>
+
               {/* Phase 6: Footer + cursor */}
-              <div className="mt-6 min-h-[16px] flex items-center justify-center">
+              <div className="min-h-[14px] flex items-center justify-center">
                 <RenderItem phase={phase} targetPhase={6}>
                   <div className="flex items-center">
-                    <p className="text-[10.5px] md:text-[11px] text-center text-slate-500 max-w-sm leading-relaxed">
+                    <p className="text-[9px] md:text-[10px] text-center text-slate-500 max-w-xs leading-relaxed">
                       Login to sync settings, connections, and vault across devices.
                     </p>
                     <BlockCursor visible={phase === 6} />

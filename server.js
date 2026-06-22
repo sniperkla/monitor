@@ -1263,10 +1263,46 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
                  cmdSuffix = `${dockerSudo}docker exec ${containerId} sh -c "${checks}; echo 'NONE'"`;
              } else if (action === 'prune-volumes') {
                  cmdSuffix = `volume prune -f`;
-             } else if (action === 'prune-images') {
-                 const pruneAll = args && (args[0] === true || args[0] === 'all');
-                 cmdSuffix = `image prune ${pruneAll ? '-a ' : ''}-f`;
-             } else if (action === 'rm-volumes' && args.length > 0) {
+              } else if (action === 'prune-images') {
+                  const pruneAll = args && (args[0] === true || args[0] === 'all');
+                  cmdSuffix = `image prune ${pruneAll ? '-a ' : ''}-f`;
+              } else if (action === 'prune-system') {
+                  const pruneAll = args && (args[0] === true || args[0] === 'all');
+                  cmdSuffix = `system prune ${pruneAll ? '-a ' : ''}-f --volumes`;
+              } else if (action === 'prune-custom') {
+                  const targets = args[0] || {};
+                  const pruneAll = args[1] === true;
+                  const cmds = [];
+                  if (targets.containers) cmds.push('container prune -f');
+                  if (targets.images) cmds.push(`image prune ${pruneAll ? '-a ' : ''}-f`);
+                  if (targets.volumes) cmds.push('volume prune -f');
+                  if (targets.networks) cmds.push('network prune -f');
+                  if (targets.cache) cmds.push('builder prune -f');
+                  if (cmds.length === 0) return socket.emit('docker:error', 'No targets selected');
+                  cmdSuffix = cmds.join(' && ');
+              } else if (action === 'remove-selected') {
+                  const sel = args[0] || {};
+                  const cmds = [];
+                  if (sel.containers && sel.containers.length > 0) {
+                    const ids = sel.containers.map(id => String(id).replace(/[^a-zA-Z0-9._-]/g, '')).filter(Boolean);
+                    if (ids.length > 0) cmds.push(`rm ${ids.join(' ')}`);
+                  }
+                  if (sel.images && sel.images.length > 0) {
+                    const tags = sel.images.map(t => String(t).replace(/[^a-zA-Z0-9._:@/-]/g, '')).filter(Boolean);
+                    if (tags.length > 0) cmds.push(`rmi ${tags.join(' ')}`);
+                  }
+                  if (sel.volumes && sel.volumes.length > 0) {
+                    const names = sel.volumes.map(n => String(n).replace(/[^a-zA-Z0-9._-]/g, '')).filter(Boolean);
+                    if (names.length > 0) cmds.push(`volume rm ${names.join(' ')}`);
+                  }
+                  if (sel.networks && sel.networks.length > 0) {
+                    const names = sel.networks.map(n => String(n).replace(/[^a-zA-Z0-9._-]/g, '')).filter(Boolean);
+                    if (names.length > 0) cmds.push(`network rm ${names.join(' ')}`);
+                  }
+                  if (sel.cache) cmds.push('builder prune -f');
+                  if (cmds.length === 0) return socket.emit('docker:error', 'Nothing selected to remove');
+                  cmdSuffix = cmds.join(' && ');
+              } else if (action === 'rm-volumes' && args.length > 0) {
                  const volumeIds = args.map(id => String(id).replace(/[^a-zA-Z0-9._/:-]/g, '')).filter(Boolean);
                  if (volumeIds.length === 0) return socket.emit('docker:error', 'No valid volume IDs');
                  cmdSuffix = `volume rm ${volumeIds.join(' ')}`;

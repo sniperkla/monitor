@@ -4,19 +4,221 @@ import { useApp } from '@/context/AppContext';
 import {
   Server, Star, StarOff, Wifi, WifiOff, Clock, MoreVertical, Terminal, Edit, Trash2,  
   RotateCw, Plus, Search, Filter, Key, Lock, BarChart3, TrendingUp, Zap, RefreshCw, Folder, Box, AlertTriangle, X, Database,
-  PanelLeftClose, PanelLeft
+  PanelLeftClose, PanelLeft, CloudUpload, CloudDownload, Check
 } from 'lucide-react';
 import { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useOS } from '@/context/OSContext';
+import { useVault } from '@/context/VaultContext';
+import { encryptWithPassword } from '@/utils/clientCrypto';
 
 export default function Sidebar({ onNewConnection, onEditConnection }) {
   const { state, dispatch, fetchConnections, apiFetch } = useApp();
   const { state: osState, addNotification, showConfirm, closeWindow } = useOS();
+  const { getMasterPassword, isUnlocked } = useVault();
   const { t } = useTranslation();
   const { connections, sidebarOpen } = state;
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState('all'); // all, favorites, online, offline
+  const [isSyncing, setIsSyncing] = useState(false);
+  const [syncedFingerprints, setSyncedFingerprints] = useState(new Set());
+
+  // Generate a fingerprint for dedup (hash of name+host+type)
+  const getFingerprint = (conn) => {
+    const raw = `${conn.name || ''}|${conn.host || ''}|${conn.type || ''}`;
+    let hash = 0;
+    for (let i = 0; i < raw.length; i++) {
+      hash = ((hash << 5) - hash + raw.charCodeAt(i)) | 0;
+    }
+    return `fp_${Math.abs(hash).toString(36)}`;
+  };
+
+  // Fetch synced fingerprints from server
+  const fetchSyncedFingerprints = async () => {
+    try {
+      const res = await apiFetch('/api/user/synced-connections');
+      if (res.ok) {
+        const data = await res.json();
+        setSyncedFingerprints(new Set((data.connections || []).map(c => c.fingerprint)));
+      }
+    } catch (_) {}
+  };
+
+  useEffect(() => {
+    if (isUnlocked) fetchSyncedFingerprints();
+  }, [isUnlocked]);
+
+  // Alert user when vault password changes — old synced connections are now undecryptable
+  useEffect(() => {
+    const handlePasswordChanged = () => {
+      setSyncedFingerprints(new Set());
+      addNotification({
+        title: 'Vault Password Changed',
+        message: 'Your synced connections were cleared. Please re-sync with your new password.',
+        type: 'warning',
+      });
+    };
+    window.addEventListener('vault-password-changed', handlePasswordChanged);
+    return () => window.removeEventListener('vault-password-changed', handlePasswordChanged);
+  }, [addNotification]);
+
+  // Sync all connections to server (encrypted with vault master password)
+  const handleSyncAll = async () => {
+    const masterPwd = getMasterPassword();
+    if (!masterPwd) {
+      addNotification({ title: 'Vault Locked', message: 'Unlock your vault first to sync connections.', type: 'warning' });
+      return;
+    }
+
+    if (connections.length === 0) {
+      addNotification({ title: 'Nothing to Sync', message: 'No connections found to sync.', type: 'info' });
+      return;
+    }
+
+    setIsSyncing(true);
+    try {
+      const encrypted = [];
+      for (const conn of connections) {
+        // For db connections, fetch full data (with encrypted password) from server
+        let fullConn = conn;
+        if (conn.storage === 'db' && conn._id) {
+          try {
+            const res = await apiFetch(`/api/connections/${conn._id}`);
+            const data = await res.json();
+            if (data.success && data.data) fullConn = data.data;
+          } catch (_) { /* use sanitized data as fallback */ }
+        }
+
+        const payload = JSON.stringify({
+          host: fullConn.host, port: fullConn.port, username: fullConn.username,
+          authType: fullConn.authType, password: fullConn.password, privateKey: fullConn.privateKey,
+          passphrase: fullConn.passphrase, database: fullConn.database, dbProvider: fullConn.dbProvider,
+          isSrv: fullConn.isSrv, authSource: fullConn.authSource, dbOptions: fullConn.dbOptions,
+          sshTunnel: fullConn.sshTunnel, sshTunnelHost: fullConn.sshTunnelHost, sshTunnelPort: fullConn.sshTunnelPort,
+          sshTunnelUser: fullConn.sshTunnelUser, sshTunnelAuth: fullConn.sshTunnelAuth,
+          sshTunnelPassword: fullConn.sshTunnelPassword, sshTunnelPrivateKey: fullConn.sshTunnelPrivateKey,
+          sshTunnelPassphrase: fullConn.sshTunnelPassphrase, tags: fullConn.tags, color: fullConn.color,
+          notes: fullConn.notes, keyFileName: fullConn.keyFileName,
+        });
+        const { encrypted: enc, salt, iv } = await encryptWithPassword(payload, masterPwd);
+        encrypted.push({
+          fingerprint: getFingerprint(conn),
+          name: conn.name, host: conn.host, type: conn.type,
+          encryptedData: enc, salt, iv,
+        });
+      }
+
+      const res = await apiFetch('/api/user/synced-connections', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ connections: encrypted }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        addNotification({ title: 'Synced', message: `${data.added} added, ${data.updated} updated.`, type: 'success' });
+        setSyncedFingerprints(new Set(encrypted.map(c => c.fingerprint)));
+      } else {
+        addNotification({ title: 'Sync Failed', message: data.error || 'Unknown error', type: 'error' });
+      }
+    } catch (err) {
+      addNotification({ title: 'Sync Error', message: err.message, type: 'error' });
+    } finally {
+      setIsSyncing(false);
+    }
+  };
+
+  // Sync a single connection
+  const handleSyncOne = async (conn) => {
+    const masterPwd = getMasterPassword();
+    if (!masterPwd) {
+      addNotification({ title: 'Vault Locked', message: 'Unlock your vault first.', type: 'warning' });
+      return;
+    }
+
+    try {
+      // For db connections, fetch full data (with encrypted password) from server
+      let fullConn = conn;
+      if (conn.storage === 'db' && conn._id) {
+        try {
+          const res = await apiFetch(`/api/connections/${conn._id}`);
+          const data = await res.json();
+          if (data.success && data.data) fullConn = data.data;
+        } catch (_) { /* use sanitized data as fallback */ }
+      }
+
+      const payload = JSON.stringify({
+        host: fullConn.host, port: fullConn.port, username: fullConn.username,
+        authType: fullConn.authType, password: fullConn.password, privateKey: fullConn.privateKey,
+        passphrase: fullConn.passphrase, database: fullConn.database, dbProvider: fullConn.dbProvider,
+        isSrv: fullConn.isSrv, authSource: fullConn.authSource, dbOptions: fullConn.dbOptions,
+        sshTunnel: fullConn.sshTunnel, sshTunnelHost: fullConn.sshTunnelHost, sshTunnelPort: fullConn.sshTunnelPort,
+        sshTunnelUser: fullConn.sshTunnelUser, sshTunnelAuth: fullConn.sshTunnelAuth,
+        sshTunnelPassword: fullConn.sshTunnelPassword, sshTunnelPrivateKey: fullConn.sshTunnelPrivateKey,
+        sshTunnelPassphrase: fullConn.sshTunnelPassphrase, tags: fullConn.tags, color: fullConn.color,
+        notes: fullConn.notes, keyFileName: fullConn.keyFileName,
+      });
+      const { encrypted: enc, salt, iv } = await encryptWithPassword(payload, masterPwd);
+      const fp = getFingerprint(conn);
+
+      const res = await apiFetch('/api/user/synced-connections', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ connections: [{
+          fingerprint: fp, name: conn.name, host: conn.host, type: conn.type,
+          encryptedData: enc, salt, iv,
+        }] }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        addNotification({ title: 'Synced', message: `"${conn.name}" synced to server.`, type: 'success' });
+        setSyncedFingerprints(prev => new Set([...prev, fp]));
+      }
+    } catch (err) {
+      addNotification({ title: 'Sync Error', message: err.message, type: 'error' });
+    }
+  };
+
+  // Pull synced connections from server (decrypt with vault master password)
+  const handlePullSynced = async () => {
+    const masterPwd = getMasterPassword();
+    if (!masterPwd) {
+      addNotification({ title: 'Vault Locked', message: 'Unlock your vault first to pull connections.', type: 'warning' });
+      return;
+    }
+
+    setIsSyncing(true);
+    try {
+      const res = await apiFetch('/api/user/synced-connections');
+      const data = await res.json();
+      if (!data.connections || data.connections.length === 0) {
+        addNotification({ title: 'No Synced Data', message: 'No synced connections found on server.', type: 'info' });
+        return;
+      }
+
+      const existing = JSON.parse(localStorage.getItem('ssh_monitor_connections') || '[]');
+      let imported = 0;
+
+      for (const sc of data.connections) {
+        try {
+          const decrypted = await import('@/utils/clientCrypto').then(m => m.decryptWithPassword(sc.encryptedData, sc.salt, sc.iv, masterPwd));
+          const parsed = JSON.parse(decrypted);
+          const alreadyExists = existing.some(e => e.name === sc.name && e.host === sc.host && e.type === sc.type);
+          if (!alreadyExists) {
+            existing.push({ ...parsed, name: sc.name, type: sc.type, storage: 'localstorage', _id: `local_${Date.now()}_${Math.random().toString(36).slice(2)}` });
+            imported++;
+          }
+        } catch (_) { /* skip failed decryptions */ }
+      }
+
+      localStorage.setItem('ssh_monitor_connections', JSON.stringify(existing));
+      fetchConnections();
+      addNotification({ title: 'Pulled', message: `${imported} connection(s) imported from server.`, type: 'success' });
+    } catch (err) {
+      addNotification({ title: 'Pull Error', message: err.message, type: 'error' });
+    } finally {
+      setIsSyncing(false);
+    }
+  };
 
   // Export / Import state — moved to Dashboard
 
@@ -259,7 +461,15 @@ export default function Sidebar({ onNewConnection, onEditConnection }) {
   };
 
   return (
-    <div className={`sidebar flex flex-col shrink-0 ${!sidebarOpen ? 'hidden' : ''}`} style={{ width: '360px', borderRight: '1px solid var(--border-color)' }}>
+    <>
+      {/* Mobile backdrop */}
+      {sidebarOpen && (
+        <div 
+          className="sidebar-backdrop md:hidden" 
+          onClick={() => dispatch({ type: 'TOGGLE_SIDEBAR' })}
+        />
+      )}
+      <div className={`sidebar flex flex-col shrink-0 ${sidebarOpen ? 'open' : ''} ${!sidebarOpen ? 'hidden' : ''}`} style={{ width: 'min(360px, 85vw)', borderRight: '1px solid var(--border-color)' }}>
       {/* Header */}
       <div className="p-4 border-b" style={{ borderColor: 'var(--border-color)' }}>
         <div className="flex items-center justify-between mb-4">
@@ -455,6 +665,20 @@ export default function Sidebar({ onNewConnection, onEditConnection }) {
                     </>
                   )}
 
+                  {isUnlocked && conn.storage !== 'manual' && (
+                    <button
+                      className="btn-icon p-1.5 hover:bg-[var(--bg-card-hover)] rounded"
+                      title={syncedFingerprints.has(getFingerprint(conn)) ? 'Synced to server' : 'Sync to server (encrypted)'}
+                      onClick={(e) => { e.stopPropagation(); handleSyncOne(conn); }}
+                    >
+                      {syncedFingerprints.has(getFingerprint(conn)) ? (
+                        <Check size={14} className="text-emerald-400" />
+                      ) : (
+                        <CloudUpload size={14} className="text-sky-400" />
+                      )}
+                    </button>
+                  )}
+
                   <button
                     className="btn-icon p-1.5 hover:bg-[var(--bg-card-hover)] rounded"
                     title={t('ssh.modal.actions.edit')}
@@ -476,13 +700,36 @@ export default function Sidebar({ onNewConnection, onEditConnection }) {
         )}
       </div>
 
-      {/* Footer: Add connection */}
-      <div className="p-4 border-t pb-16" style={{ borderColor: 'var(--border-color)' }}>
+      {/* Footer: Sync + Add connection */}
+      <div className="p-4 border-t pb-16 space-y-2" style={{ borderColor: 'var(--border-color)' }}>
+        {isUnlocked && (
+          <div className="flex gap-1.5">
+            <button 
+              onClick={handleSyncAll} 
+              disabled={isSyncing}
+              className="flex-1 flex items-center justify-center gap-1.5 px-2 py-2 text-xs font-bold rounded-lg bg-sky-500/10 text-sky-400 hover:bg-sky-500/20 border border-sky-500/20 transition-all disabled:opacity-50"
+              title="Sync all local connections to server (encrypted)"
+            >
+              {isSyncing ? <RefreshCw size={13} className="animate-spin" /> : <CloudUpload size={13} />}
+              Sync All
+            </button>
+            <button 
+              onClick={handlePullSynced} 
+              disabled={isSyncing}
+              className="flex-1 flex items-center justify-center gap-1.5 px-2 py-2 text-xs font-bold rounded-lg bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20 border border-emerald-500/20 transition-all disabled:opacity-50"
+              title="Pull synced connections from server"
+            >
+              {isSyncing ? <RefreshCw size={13} className="animate-spin" /> : <CloudDownload size={13} />}
+              Pull
+            </button>
+          </div>
+        )}
         <button className="btn-primary w-full justify-center" onClick={onNewConnection}>
           <Plus size={16} /> {t('ssh.newConnection')}
         </button>
       </div>
 
     </div>
+    </>
   );
 }

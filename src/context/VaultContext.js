@@ -28,6 +28,7 @@ export function VaultProvider({ children }) {
   const [isDismissed, setIsDismissed] = useState(false);
   const [error, setError] = useState('');
   const prevUserIdRef = useRef(null);
+  const masterPwdRef = useRef(null); // Cached for sync operations (memory only, never persisted)
 
   // Clear stale vault cache when user changes (different account login)
   useEffect(() => {
@@ -191,6 +192,9 @@ export function VaultProvider({ children }) {
       sessionStorage.setItem('_vault_uri', uri);
       setVaultStatus('unlocked');
 
+      // Cache password in memory for sync operations (never persisted)
+      masterPwdRef.current = masterPassword;
+
       return uri;
     } catch (err) {
       if (err.message === 'WRONG_PASSWORD') {
@@ -259,6 +263,20 @@ export function VaultProvider({ children }) {
       setVaultData(vaultPayload);
       setVaultStatus('unlocked');
 
+      // Cache password in memory for sync operations (never persisted)
+      masterPwdRef.current = masterPassword;
+
+      // If vault already had data (password change/reset), old synced connections are now undecryptable
+      if (session && vaultData?.isConfigured) {
+        try {
+          await fetch('/api/user/synced-connections', { method: 'DELETE', 
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ clearAll: true }) });
+        } catch (_) {}
+        // Notify UI that password changed — synced connections need re-sync
+        window.dispatchEvent(new CustomEvent('vault-password-changed'));
+      }
+
       return true;
     } catch (err) {
       setError(err.message);
@@ -306,6 +324,7 @@ export function VaultProvider({ children }) {
     setDecryptedTunnel(null);
     sessionStorage.removeItem('_vault_uri');
     sessionStorage.removeItem('_vault_tunnel');
+    masterPwdRef.current = null; // Clear cached sync key
     if (vaultData?.isConfigured) {
       setVaultStatus('locked');
     }
@@ -324,6 +343,7 @@ export function VaultProvider({ children }) {
       setDecryptedUri('');
       setVaultData(null);
       sessionStorage.removeItem('_vault_uri');
+      masterPwdRef.current = null; // Clear cached sync key
       setVaultStatus('setup');
     } catch (err) {
       console.error('Failed to clear vault:', err);
@@ -364,6 +384,7 @@ export function VaultProvider({ children }) {
       showVault,        // () => void
       isConfigured: vaultStatus !== 'setup' && vaultStatus !== 'loading',
       isUnlocked: vaultStatus === 'unlocked',
+      getMasterPassword: () => masterPwdRef.current, // Returns cached password or null (memory only)
       verifyMasterPassword: async (password) => {
         if (!vaultData?.passwordHash || !vaultData?.salt) return false;
         const hash = await hashPassword(password, vaultData.salt);

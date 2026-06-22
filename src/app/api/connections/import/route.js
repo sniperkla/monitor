@@ -39,6 +39,12 @@ function decryptWithCustomKey(encryptedText, hexKey) {
 function reEncrypt(value, password, oldKey, fieldName) {
   if (!value) return null;
 
+  // Normalize: if value is an object from encryptWithPassword ({ encrypted, salt, iv }),
+  // convert to the "salt:iv:ciphertext" string format that decryptWithPassword expects.
+  if (typeof value === 'object' && value.salt && value.iv && value.encrypted) {
+    value = `${value.salt}:${value.iv}:${value.encrypted}`;
+  }
+
   // If it's not and doesn't look like an encrypted string (no colons), treat as plain text
   if (typeof value === 'string' && !value.includes(':')) {
     console.log(`[reEncrypt] ${fieldName} - plain text detected`);
@@ -124,7 +130,12 @@ export async function POST(request) {
     // ── Password verification ──────────────────────────────────────────────────
     // If the file has a _verify sentinel, check the password before touching any data.
     if (body._verify && password) {
-      const check = decryptWithPassword(body._verify, password);
+      // _verify can be either a string "salt:iv:ciphertext" or an object { encrypted, salt, iv }
+      let verifyStr = body._verify;
+      if (typeof body._verify === 'object' && body._verify.salt && body._verify.iv && body._verify.encrypted) {
+        verifyStr = `${body._verify.salt}:${body._verify.iv}:${body._verify.encrypted}`;
+      }
+      const check = decryptWithPassword(verifyStr, password);
       if (check !== '__ok__') {
         console.warn('🔑 Import rejected: wrong password (verify sentinel mismatch)');
         return NextResponse.json(

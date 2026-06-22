@@ -83,7 +83,21 @@ const UserSchema = new mongoose.Schema({
       lastUsageReset: { type: Date, default: Date.now },
       lastResetDayKey: { type: String, default: '' }
     }
-  }
+  },
+
+  // === SYNCED CONNECTIONS (Zero-Knowledge Encrypted) ===
+  // Encrypted client-side with the vault master password.
+  // The server NEVER sees plaintext connection data.
+  syncedConnections: [{
+    fingerprint: { type: String, required: true },  // hash of name+host+type for dedup
+    name: { type: String, default: '' },             // plaintext display name (not sensitive)
+    host: { type: String, default: '' },             // plaintext host for display
+    type: { type: String, default: 'ssh' },          // ssh or database
+    encryptedData: { type: String, required: true }, // AES-256-GCM encrypted JSON blob (hex)
+    salt: { type: String, required: true },           // Argon2id salt (hex)
+    iv: { type: String, required: true },             // AES-GCM IV (hex)
+    syncedAt: { type: Date, default: Date.now },
+  }],
 }, {
   timestamps: true,
 });
