@@ -31,16 +31,21 @@ export default function TerminalApp({ onEditConnection, initialConnection, initi
       .catch(() => {});
   }, []);
 
-  // Auto-switch to relay mode when localhost detected and relay is available
-  const shouldUseRelay = (host) => {
-    if (useRelay) return true; // Already in local mode
-    if (relayOnline && isLocalhost(host)) {
-      // Auto-switch
-      localStorage.setItem('ssh_monitor_ssh_mode', 'local');
-      setUseRelay(true);
-      return true;
+  // Auto-switch to relay when localhost connections exist and relay is available
+  useEffect(() => {
+    if (relayOnline && !useRelay) {
+      const hasLocalhost = sshConnections.some(c => isLocalhost(c.host));
+      if (hasLocalhost) {
+        localStorage.setItem('ssh_monitor_ssh_mode', 'local');
+        setUseRelay(true);
+      }
     }
-    return false;
+  }, [relayOnline, useRelay, sshConnections]);
+
+  // Determine if a specific connection should use relay
+  const shouldUseRelay = (host) => {
+    if (useRelay) return true;
+    return relayOnline && isLocalhost(host);
   };
   
   // Listen for setting changes
