@@ -972,6 +972,18 @@ export default function TmuxLayout({ windowId = 'default', isTmuxMode = false })
 const TerminalBridge = React.memo(({ term, target, hiddenRoom, onClose }) => {
   const bridgeRef = useRef(null);
   const wrapperRef = useRef(null);
+  const [relayMode, setRelayMode] = useState(() => localStorage.getItem('ssh_monitor_ssh_mode') === 'local');
+  
+  // Listen for auto-relay switch
+  useEffect(() => {
+    const handleUseRelay = () => setRelayMode(localStorage.getItem('ssh_monitor_ssh_mode') === 'local');
+    window.addEventListener('terminal-use-relay', handleUseRelay);
+    window.addEventListener('storage', handleUseRelay);
+    return () => {
+      window.removeEventListener('terminal-use-relay', handleUseRelay);
+      window.removeEventListener('storage', handleUseRelay);
+    };
+  }, []);
   
   // 1. Structural Move: Move terminal to the active pane (target) or hiddenRoom
   useLayoutEffect(() => {
@@ -1004,7 +1016,7 @@ const TerminalBridge = React.memo(({ term, target, hiddenRoom, onClose }) => {
   return (
     <div ref={wrapperRef} className="react-dom-bridge-anchor" style={{ display: 'none' }}>
       <div ref={bridgeRef} className="h-full w-full overflow-hidden" data-pane-id={term.paneId}>
-        {localStorage.getItem('ssh_monitor_ssh_mode') === 'local' ? (
+        {relayMode ? (
           <RelayTerminalView
             connectionId={term.connectionId}
             connectionName={term.connectionName}

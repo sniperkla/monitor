@@ -7,6 +7,10 @@ import RelayTerminalView from '@/components/RelayTerminalView';
 import { Server, Terminal as TermIcon, Zap, X, Plus } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
+function isLocalhost(host) {
+  return /^(localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\])(:\d+)?$/.test(host || '');
+}
+
 export default function TerminalApp({ onEditConnection, initialConnection, initialConnectionId, initialCommand, windowId }) {
   const { state, dispatch } = useApp();
   const { t } = useTranslation();
@@ -17,6 +21,27 @@ export default function TerminalApp({ onEditConnection, initialConnection, initi
     return localStorage.getItem('ssh_monitor_ssh_mode') === 'local';
   };
   const [useRelay, setUseRelay] = useState(getUseRelay);
+  const [relayOnline, setRelayOnline] = useState(false);
+  
+  // Check relay status once on mount
+  useEffect(() => {
+    fetch('/api/relay/token')
+      .then(r => r.json())
+      .then(data => { if (data.connected) setRelayOnline(true); })
+      .catch(() => {});
+  }, []);
+
+  // Auto-switch to relay mode when localhost detected and relay is available
+  const shouldUseRelay = (host) => {
+    if (useRelay) return true; // Already in local mode
+    if (relayOnline && isLocalhost(host)) {
+      // Auto-switch
+      localStorage.setItem('ssh_monitor_ssh_mode', 'local');
+      setUseRelay(true);
+      return true;
+    }
+    return false;
+  };
   
   // Listen for setting changes
   useEffect(() => {
@@ -24,6 +49,18 @@ export default function TerminalApp({ onEditConnection, initialConnection, initi
     window.addEventListener('storage', check);
     return () => window.removeEventListener('storage', check);
   }, []);
+
+  // Auto-switch to relay when server detects localhost target
+  useEffect(() => {
+    const handleUseRelay = (e) => {
+      if (!useRelay) {
+        localStorage.setItem('ssh_monitor_ssh_mode', 'local');
+        setUseRelay(true);
+      }
+    };
+    window.addEventListener('terminal-use-relay', handleUseRelay);
+    return () => window.removeEventListener('terminal-use-relay', handleUseRelay);
+  }, [useRelay]);
   const { connections, standaloneTerminals } = state;
   const sshConnections = connections.filter(c => c.type !== 'database');
   const [activeTab, setActiveTab] = useState(null);
@@ -156,7 +193,7 @@ export default function TerminalApp({ onEditConnection, initialConnection, initi
     if (!localStandaloneTerm) {
       return <div className="flex flex-col h-full bg-transparent overflow-hidden" />;
     }
-    const TermComponent = useRelay ? RelayTerminalView : TerminalView;
+            const TermComponent = shouldUseRelay(term.host) ? RelayTerminalView : TerminalView;
     return (
       <div className="flex flex-col h-full bg-transparent overflow-hidden">
         <TermComponent 
@@ -300,7 +337,7 @@ export default function TerminalApp({ onEditConnection, initialConnection, initi
         {/* Terminals - Always mounted but hidden if selecting connection picker */}
         <div className={`h-full ${isSelecting ? 'opacity-0 pointer-events-none' : 'opacity-100'}`}>
           {standaloneTerminals.map(term => {
-            const TermComponent = useRelay ? RelayTerminalView : TerminalView;
+    const TermComponent = shouldUseRelay(localStandaloneTerm.host) ? RelayTerminalView : TerminalView;
             return (
               <div
                 key={term.id}

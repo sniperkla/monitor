@@ -2948,6 +2948,21 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
           // debug: (str) => console.log(`[SSH DEBUG ${connection.host}]`, str), // Uncomment for verbose logs
         };
 
+        // AUTO-RELAY: If target is localhost and user has an active relay, 
+        // tell the client to use relay mode instead of direct connection
+        const isLocalhost = /localhost|127\.0\.0\.1/.test(sshConfig.host);
+        const userId = socket.user?.sub || socket.user?.dbId;
+        const userRelay = userId ? global.__activeRelays?.get(userId) : null;
+        
+        if (isLocalhost && userRelay) {
+          console.log(`🔄 Auto-routing localhost SSH through relay for user ${userId}`);
+          socket.emit('ssh:use-relay', { 
+            message: 'Localhost target detected — connecting through your local relay agent',
+            connectionId: connectionId,
+          });
+          return;
+        }
+
         const { encrypt, decryptWithMetadata } = require('./src/utils/encryption');
         
         // Track if migration is needed

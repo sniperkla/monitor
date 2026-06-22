@@ -1460,6 +1460,16 @@ logstash:
       appendOutput(`\n✗ ${t('terminal.errorPrefix')} ${data.message}\n`);
     });
 
+    // Auto-relay: server detected localhost target and user has active relay
+    socket.on('ssh:use-relay', (data) => {
+      term.writeln(`\n\x1b[1;36m🔄 ${data.message || 'Connecting through local relay...'}\x1b[0m`);
+      // Notify parent to switch this terminal to relay mode
+      window.dispatchEvent(new CustomEvent('terminal-use-relay', { 
+        detail: { connectionId: propsRef.current.connectionId, connection: propsRef.current.connection }
+      }));
+      // Don't disconnect — let the parent handle the switch smoothly
+    });
+
     socket.on('ssh:closed', () => {
       setStatus('closed');
       updateConnectionStatus('offline'); // Update global state
