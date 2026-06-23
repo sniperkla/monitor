@@ -680,6 +680,12 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
           setRelayConnected(data.connected);
           const fetchedRelays = data.relays || [];
           setRelays(fetchedRelays);
+
+          // Auto-switch SSH mode to server when no relay is connected
+          if (!data.connected && localStorage.getItem('ssh_monitor_ssh_mode') === 'local') {
+            localStorage.setItem('ssh_monitor_ssh_mode', 'server');
+          }
+
           if (fetchedRelays.length > 0) {
             const currentPreferred = localStorage.getItem('ssh_monitor_preferred_relay');
             const isStillConnected = currentPreferred && fetchedRelays.some(r => r.relayName === currentPreferred || r.relayId === currentPreferred);
