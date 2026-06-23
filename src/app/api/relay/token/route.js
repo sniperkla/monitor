@@ -94,6 +94,7 @@ export async function DELETE(request) {
       if (userRelays instanceof Map) {
         const relay = userRelays.get(relayId);
         if (relay) {
+          try { relay.ws?.close(4000, 'Disconnected by user'); } catch {}
           try { relay.netServer?.close(); } catch {}
           userRelays.delete(relayId);
           if (userRelays.size === 0) global.__activeRelays.delete(userId);
