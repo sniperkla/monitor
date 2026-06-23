@@ -119,10 +119,13 @@ function ensureInstalledScript() {
         }));
       }
       const npmCmd = PLATFORM === 'win32' ? 'npm.cmd' : 'npm';
-      const result = spawnSync(npmCmd, ['install', '--no-audit', '--no-fund', 'ssh2', 'ws'], { 
-        cwd: INSTALL_DIR, 
-        stdio: 'inherit' 
-      });
+      // Use a local cache inside INSTALL_DIR to avoid EACCES errors from root-owned global npm cache
+      const localCache = path.join(INSTALL_DIR, '.npm-cache');
+      const result = spawnSync(npmCmd, [
+        'install', '--no-audit', '--no-fund', '--prefer-offline',
+        '--cache', localCache,
+        'ssh2', 'ws'
+      ], { cwd: INSTALL_DIR, stdio: 'inherit' });
       if (result.status === 0) {
         console.log('✅ Dependencies installed successfully.');
       } else {

@@ -171,6 +171,8 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
   const [relayInstallSuccess, setRelayInstallSuccess] = useState(false);
   // Wizard step: 1 = generate token, 2 = install, 3 = success
   const [relayWizardStep, setRelayWizardStep] = useState(1);
+  // Set of relay IDs that were already connected before starting the wizard
+  const [existingRelayIds, setExistingRelayIds] = useState(new Set());
   // The relay this browser prefers to route through (saved in localStorage)
   const [preferredRelay, setPreferredRelay] = useState(() =>
     typeof window !== 'undefined' ? (localStorage.getItem('ssh_monitor_preferred_relay') || null) : null
@@ -679,18 +681,19 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
     return () => clearInterval(id);
   }, [session, relayModalOpen, relayWaiting]);
 
-  // Show success screen when relay connects during install wizard
+  // Show success screen when a new relay connects during install wizard
   useEffect(() => {
     if (!relayModalOpen) {
       setRelayWaiting(false);
       setRelayInstallSuccess(false);
       return;
     }
-    if (relayWaiting && relayConnected && !relayInstallSuccess && relayWizardStep >= 2) {
+    const hasNewRelay = relays.some(r => !existingRelayIds.has(r.relayId || r.relayName));
+    if (relayWaiting && hasNewRelay && !relayInstallSuccess && relayWizardStep >= 2) {
       setRelayInstallSuccess(true);
       addNotification({ title: 'Relay Connected!', message: 'Your local relay agent is now running.', type: 'success' });
     }
-  }, [relayConnected, relayWaiting, relayModalOpen, relayInstallSuccess, relayWizardStep]);
+  }, [relays, existingRelayIds, relayWaiting, relayModalOpen, relayInstallSuccess, relayWizardStep]);
 
   const handleGenerateRelayToken = async () => {
     setRelayLoading(true);
@@ -1731,6 +1734,7 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
                           {!relayToken ? (
                             <button
                               onClick={async () => {
+                                setExistingRelayIds(new Set(relays.map(r => r.relayId || r.relayName)));
                                 const success = await handleGenerateRelayToken();
                                 if (success) {
                                   setRelayWizardStep(2);
@@ -1755,6 +1759,7 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
                               </button>
                               <button
                                 onClick={() => {
+                                  setExistingRelayIds(new Set(relays.map(r => r.relayId || r.relayName)));
                                   setRelayWizardStep(2);
                                   setRelayInstallSuccess(false);
                                   setRelayModalOpen(true);
@@ -3134,7 +3139,6 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
                           <button
                             onClick={() => {
                               navigator.clipboard.writeText(getRelayOneLiner('install'));
-                              setRelayWaiting(true);
                               addNotification({ title: 'Copied!', message: 'Paste in your Terminal and press Enter.', type: 'success' });
                             }}
                             className="absolute right-2 top-2 p-1.5 hover:bg-white/10 rounded-lg transition-colors"
@@ -3183,118 +3187,115 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
                       </p>
                     </div>
 
-                    {/* macOS */}
-                    {detectedOS === 'macos' && (
-                      <div className="space-y-3">
-                        <p className="text-[11px] font-bold text-[var(--text-secondary)]">Step 2 — Copy & paste into Terminal</p>
-                        <div className="relative">
-                          <code className="block p-3 pr-10 bg-slate-950 border border-slate-800 rounded-xl text-[10px] font-mono text-amber-300 break-all leading-relaxed">
-                            {getRelayOneLiner('install')}
-                          </code>
-                          <button
-                            onClick={() => {
-                              navigator.clipboard.writeText(getRelayOneLiner('install'));
-                              setRelayWaiting(true);
-                              addNotification({ title: 'Copied!', message: 'Paste in your Terminal and press Enter.', type: 'success' });
-                            }}
-                            className="absolute right-2 top-2 p-1.5 hover:bg-white/10 rounded-lg transition-colors"
-                          >
-                            <Copy size={13} className="text-[var(--text-muted)]" />
-                          </button>
-                        </div>
-                        <button
-                          onClick={() => {
-                            navigator.clipboard.writeText(getRelayOneLiner('install'));
-                            setRelayWaiting(true);
-                            addNotification({ title: 'Copied!', message: 'Open Terminal, paste and press Enter.', type: 'success' });
-                          }}
-                          className="w-full flex items-center justify-center gap-2 py-3 bg-amber-500 hover:bg-amber-600 active:scale-[0.98] rounded-xl text-white font-bold text-sm transition-all shadow-lg shadow-amber-500/20"
-                        >
-                          <Copy size={14} /> Copy Install Command
-                        </button>
-                        <div className="grid grid-cols-3 gap-2">
-                          {['Copy command', 'Open Terminal', 'Paste & Enter'].map((s, i) => (
-                            <div key={i} className="flex flex-col items-center gap-1.5 p-2.5 rounded-xl bg-[var(--bg-tertiary)]">
-                              <span className="text-amber-400 font-bold text-xs">{i + 1}</span>
-                              <span className="text-[9px] text-[var(--text-muted)] text-center leading-tight">{s}</span>
-                            </div>
-                          ))}
-                        </div>
-                        <details className="group">
-                          <summary className="text-[10px] text-[var(--text-muted)] cursor-pointer select-none hover:text-[var(--text-secondary)] transition-colors py-1 flex items-center gap-1.5">
-                            <ChevronDown size={11} className="group-open:rotate-180 transition-transform" />
-                            Prefer a script file instead?
-                          </summary>
-                          <div className="pt-2 space-y-2">
+                    {/* Unified install section — dynamically adapts per OS */}
+                    {(() => {
+                      const isWin = detectedOS === 'windows';
+                      const isMac = detectedOS === 'macos';
+                      const scriptFilename = getRelayScriptFilename('install');
+                      return (
+                        <div className="space-y-3">
+                          <p className="text-[11px] font-bold text-[var(--text-secondary)]">
+                            Step 2 — {isWin ? 'Download & double-click to install' : 'Copy & paste into Terminal'}
+                          </p>
+
+                          {/* Command block — visible for all platforms */}
+                          <div className="relative">
+                            <code className="block p-3 pr-10 bg-slate-950 border border-slate-800 rounded-xl text-[10px] font-mono text-amber-300 break-all leading-relaxed">
+                              {getRelayOneLiner('install')}
+                            </code>
+                            <button
+                              onClick={() => {
+                                navigator.clipboard.writeText(getRelayOneLiner('install'));
+                                addNotification({ title: 'Copied!', message: isWin ? 'Paste in PowerShell or CMD and press Enter.' : 'Paste in your Terminal and press Enter.', type: 'success' });
+                              }}
+                              className="absolute right-2 top-2 p-1.5 hover:bg-white/10 rounded-lg transition-colors"
+                            >
+                              <Copy size={13} className="text-[var(--text-muted)]" />
+                            </button>
+                          </div>
+
+                          {/* Primary CTA: Download for Windows, Copy for macOS/Linux */}
+                          {isWin ? (
                             <button
                               onClick={() => downloadInstallerScript('install')}
-                              className="w-full flex items-center gap-2 px-4 py-2.5 bg-[var(--bg-tertiary)] hover:bg-[var(--border-color)] rounded-xl text-[var(--text-secondary)] text-[11px] font-bold transition-colors"
+                              className="w-full flex items-center gap-3 px-4 py-3.5 bg-amber-500 hover:bg-amber-600 active:scale-[0.98] rounded-xl text-white font-bold text-sm transition-all shadow-lg shadow-amber-500/25"
                             >
-                              <Download size={13} /> Download relay-install.command
+                              <Download size={16} />
+                              <div className="text-left">
+                                <div>Download {scriptFilename}</div>
+                                <div className="text-[10px] font-normal opacity-80">Run as Administrator if prompted</div>
+                              </div>
                             </button>
-                            <p className="text-[10px] text-amber-300/70 bg-amber-500/5 border border-amber-500/15 rounded-lg px-3 py-2 leading-relaxed">
-                              macOS may block downloaded scripts. If it won&apos;t open, run:<br />
-                              <code className="text-[9px] break-all">xattr -d com.apple.quarantine ~/Downloads/relay-install.command</code>
-                            </p>
-                          </div>
-                        </details>
-                      </div>
-                    )}
+                          ) : (
+                            <button
+                              onClick={() => {
+                                navigator.clipboard.writeText(getRelayOneLiner('install'));
+                                addNotification({ title: 'Copied!', message: 'Open Terminal, paste and press Enter — then click the button below.', type: 'success' });
+                              }}
+                              className="w-full flex items-center justify-center gap-2 py-3 bg-amber-500 hover:bg-amber-600 active:scale-[0.98] rounded-xl text-white font-bold text-sm transition-all shadow-lg shadow-amber-500/20"
+                            >
+                              <Copy size={14} /> Copy Install Command
+                            </button>
+                          )}
 
-                    {/* Windows */}
-                    {detectedOS === 'windows' && (
-                      <div className="space-y-3">
-                        <p className="text-[11px] font-bold text-[var(--text-secondary)]">Step 2 — Download & double-click to install</p>
-                        <button
-                          onClick={() => downloadInstallerScript('install')}
-                          className="w-full flex items-center gap-3 px-4 py-3.5 bg-amber-500 hover:bg-amber-600 active:scale-[0.98] rounded-xl text-white font-bold text-sm transition-all shadow-lg shadow-amber-500/25"
-                        >
-                          <Download size={16} />
-                          <div className="text-left">
-                            <div>Download relay-install.bat</div>
-                            <div className="text-[10px] font-normal opacity-80">Run as Administrator if prompted</div>
+                          {/* Step hints */}
+                          <div className="grid grid-cols-3 gap-2">
+                            {(isWin
+                              ? ['Download file', 'Double-click it', 'Done!']
+                              : ['Copy command', 'Open Terminal', 'Paste & Enter']
+                            ).map((s, i) => (
+                              <div key={i} className="flex flex-col items-center gap-1.5 p-2.5 rounded-xl bg-[var(--bg-tertiary)]">
+                                <span className="text-amber-400 font-bold text-xs">{i + 1}</span>
+                                <span className="text-[9px] text-[var(--text-muted)] text-center leading-tight">{s}</span>
+                              </div>
+                            ))}
                           </div>
-                        </button>
-                        <div className="grid grid-cols-3 gap-2">
-                          {['Download file', 'Double-click it', 'Done!'].map((s, i) => (
-                            <div key={i} className="flex flex-col items-center gap-1.5 p-2.5 rounded-xl bg-[var(--bg-tertiary)]">
-                              <span className="text-amber-400 font-bold text-xs">{i + 1}</span>
-                              <span className="text-[9px] text-[var(--text-muted)] text-center leading-tight">{s}</span>
+
+                          {/* "I ran it" — start relay polling */}
+                          {!relayWaiting && (
+                            <button
+                              onClick={() => setRelayWaiting(true)}
+                              className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl font-bold text-[12px] transition-all border border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/10"
+                            >
+                              <Loader size={13} /> I ran it — check for relay connection
+                            </button>
+                          )}
+
+                          {/* Secondary option — flipped per OS */}
+                          <details className="group">
+                            <summary className="text-[10px] text-[var(--text-muted)] cursor-pointer select-none hover:text-[var(--text-secondary)] transition-colors py-1 flex items-center gap-1.5">
+                              <ChevronDown size={11} className="group-open:rotate-180 transition-transform" />
+                              {isWin ? 'Or run via PowerShell / CMD instead' : 'Prefer a script file instead?'}
+                            </summary>
+                            <div className="pt-2 space-y-2">
+                              {isWin ? (
+                                <p className="text-[10px] text-blue-300/70 bg-blue-500/5 border border-blue-500/15 rounded-lg px-3 py-2 leading-relaxed">
+                                  Paste the command above into PowerShell or CMD. Requires Node.js and curl in PATH. If curl isn&apos;t available, use the .bat download above.
+                                </p>
+                              ) : (
+                                <>
+                                  <button
+                                    onClick={() => downloadInstallerScript('install')}
+                                    className="w-full flex items-center gap-2 px-4 py-2.5 bg-[var(--bg-tertiary)] hover:bg-[var(--border-color)] rounded-xl text-[var(--text-secondary)] text-[11px] font-bold transition-colors"
+                                  >
+                                    <Download size={13} /> Download {scriptFilename}
+                                  </button>
+                                  {isMac && (
+                                    <p className="text-[10px] text-amber-300/70 bg-amber-500/5 border border-amber-500/15 rounded-lg px-3 py-2 leading-relaxed">
+                                      macOS may block downloaded scripts. If it won&apos;t open, run:<br />
+                                      <code className="text-[9px] break-all">xattr -d com.apple.quarantine ~/Downloads/{scriptFilename}</code>
+                                    </p>
+                                  )}
+                                  {!isMac && (
+                                    <p className="text-[10px] text-[var(--text-muted)] bg-[var(--bg-tertiary)] rounded-lg px-3 py-2">{t('settings_ui.relay.linuxRunHint')}</p>
+                                  )}
+                                </>
+                              )}
                             </div>
-                          ))}
+                          </details>
                         </div>
-                        <p className="text-[10px] text-[var(--text-muted)] bg-[var(--bg-tertiary)] rounded-lg px-3 py-2">{t('settings_ui.relay.winRunHint')}</p>
-                      </div>
-                    )}
-
-                    {/* Linux */}
-                    {(detectedOS === 'linux' || detectedOS === 'unknown') && (
-                      <div className="space-y-3">
-                        <p className="text-[11px] font-bold text-[var(--text-secondary)]">Step 2 — Copy & paste into Terminal</p>
-                        <div className="relative">
-                          <code className="block p-3 pr-10 bg-slate-950 border border-slate-800 rounded-xl text-[10px] font-mono text-amber-300 break-all leading-relaxed">
-                            {getRelayOneLiner('install')}
-                          </code>
-                          <button
-                            onClick={() => {
-                              navigator.clipboard.writeText(getRelayOneLiner('install'));
-                              setRelayWaiting(true);
-                              addNotification({ title: 'Copied!', message: 'Paste in your Terminal and press Enter.', type: 'success' });
-                            }}
-                            className="absolute right-2 top-2 p-1.5 hover:bg-white/10 rounded-lg transition-colors"
-                          >
-                            <Copy size={13} className="text-[var(--text-muted)]" />
-                          </button>
-                        </div>
-                        <button
-                          onClick={() => downloadInstallerScript('install')}
-                          className="w-full flex items-center gap-2 px-4 py-2.5 bg-[var(--bg-tertiary)] hover:bg-[var(--border-color)] rounded-xl text-[var(--text-secondary)] text-[11px] font-bold transition-colors"
-                        >
-                          <Download size={13} /> Download relay-install.sh
-                        </button>
-                        <p className="text-[10px] text-[var(--text-muted)] bg-[var(--bg-tertiary)] rounded-lg px-3 py-2">{t('settings_ui.relay.linuxRunHint')}</p>
-                      </div>
-                    )}
+                      );
+                    })()}
 
                     {/* Waiting indicator */}
                     <AnimatePresence>
@@ -3347,25 +3348,24 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
                         <ChevronDown size={11} className="group-open:rotate-180 transition-transform" />
                         Uninstall relay agent
                       </summary>
-                      <div className="pt-3">
-                        {detectedOS === 'macos' ? (
-                          <button
-                            onClick={() => {
-                              navigator.clipboard.writeText(getRelayOneLiner('uninstall'));
-                              addNotification({ title: 'Copied!', message: 'Paste in Terminal to uninstall.', type: 'info' });
-                            }}
-                            className="w-full flex items-center gap-2 px-4 py-2.5 bg-red-500/10 hover:bg-red-500/20 border border-red-500/20 rounded-xl text-red-400 text-[11px] font-bold transition-all"
-                          >
-                            <Copy size={12} /> Copy Uninstall Command
-                          </button>
-                        ) : (
-                          <button
-                            onClick={() => downloadInstallerScript('uninstall')}
-                            className="w-full flex items-center gap-2 px-4 py-2.5 bg-red-500/10 hover:bg-red-500/20 border border-red-500/20 rounded-xl text-red-400 text-[11px] font-bold transition-all"
-                          >
-                            <Download size={12} /> Download Uninstaller
-                          </button>
-                        )}
+                      <div className="pt-3 space-y-2">
+                        {/* Copy uninstall command — works for all */}
+                        <button
+                          onClick={() => {
+                            navigator.clipboard.writeText(getRelayOneLiner('uninstall'));
+                            addNotification({ title: 'Copied!', message: detectedOS === 'windows' ? 'Paste in PowerShell or CMD to uninstall.' : 'Paste in Terminal to uninstall.', type: 'info' });
+                          }}
+                          className="w-full flex items-center gap-2 px-4 py-2.5 bg-red-500/10 hover:bg-red-500/20 border border-red-500/20 rounded-xl text-red-400 text-[11px] font-bold transition-all"
+                        >
+                          <Copy size={12} /> Copy Uninstall Command
+                        </button>
+                        {/* Download uninstall script — works for all */}
+                        <button
+                          onClick={() => downloadInstallerScript('uninstall')}
+                          className="w-full flex items-center gap-2 px-4 py-2.5 bg-[var(--bg-tertiary)] hover:bg-[var(--border-color)] rounded-xl text-[var(--text-secondary)] text-[11px] font-bold transition-colors"
+                        >
+                          <Download size={12} /> Download {getRelayScriptFilename('uninstall')}
+                        </button>
                       </div>
                     </details>
                   </div>
