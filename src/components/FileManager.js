@@ -514,6 +514,7 @@ export default function FileManager({
           connection: shouldPreferProvidedConnection ? connectionRef.current : undefined,
           useShell: false,
           preferProvidedConnection: shouldPreferProvidedConnection,
+          preferredRelay: typeof window !== 'undefined' ? (localStorage.getItem('ssh_monitor_preferred_relay') || undefined) : undefined,
         });
       });
 

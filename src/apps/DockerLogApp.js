@@ -87,6 +87,7 @@ export default function DockerLogApp({ initialConnection, initialConnectionId, i
       socketRef.current.emit('ssh:connect', {
         connectionId: selectedConnection._id,
         connection: selectedConnection,
+        preferredRelay: typeof window !== 'undefined' ? (localStorage.getItem('ssh_monitor_preferred_relay') || undefined) : undefined,
       });
     });
 

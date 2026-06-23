@@ -1318,7 +1318,8 @@ logstash:
         connectionId: propsRef.current.connectionId, 
         connection: propsRef.current.connection,
         cols: term.cols,
-        rows: term.rows
+        rows: term.rows,
+        preferredRelay: typeof window !== 'undefined' ? (localStorage.getItem('ssh_monitor_preferred_relay') || undefined) : undefined,
       });
     });
 

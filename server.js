@@ -178,16 +178,31 @@ function normalizeRelayDatabaseUri(uri) {
  * Rewrite a localhost URI through the user's active Local Relay Agent.
  * If no relay is active for this user, returns the URI unchanged.
  */
-function rewriteUriViaRelay(uri, userId) {
+function rewriteUriViaRelay(uri, userId, relayName) {
   if (!uri || !/localhost|127\.0\.0\.1/.test(uri)) return uri;
   if (!global.__activeRelays?.size) return uri;
 
+  const centerUri = getLatestCenterUri();
+  if (uri === centerUri || uri === process.env.MONGODB_URI) {
+    return uri;
+  }
+
   uri = normalizeRelayDatabaseUri(uri);
 
-  let relay = userId ? global.__activeRelays.get(userId) : null;
-  if (relay instanceof Map) {
-    relay = relay.size > 0 ? relay.values().next().value : null;
+  let relay = null;
+  if (userId && global.__activeRelays.has(userId)) {
+    const userRelays = global.__activeRelays.get(userId);
+    if (userRelays instanceof Map) {
+      if (relayName && userRelays.has(relayName)) {
+        relay = userRelays.get(relayName);
+      } else if (userRelays.size > 0) {
+        relay = userRelays.values().next().value;
+      }
+    } else {
+      relay = userRelays;
+    }
   }
+
   if (!relay && global.__activeRelays.size === 1) {
     const allRelays = global.__activeRelays.values().next().value;
     if (allRelays instanceof Map && allRelays.size > 0) {
@@ -196,6 +211,7 @@ function rewriteUriViaRelay(uri, userId) {
       relay = allRelays;
     }
   }
+
   if (!relay?.localPort) return uri;
 
   try {
@@ -210,12 +226,12 @@ function rewriteUriViaRelay(uri, userId) {
   }
 }
 
-async function getModels(uri, userId) {
+async function getModels(uri, userId, relayName) {
   let targetUri = uri || getLatestCenterUri();
   if (!targetUri) return { Connection: null, Session: null };
 
   // Route localhost URIs through the user's relay agent if one is active
-  const effectiveUri = rewriteUriViaRelay(targetUri, userId) || targetUri;
+  const effectiveUri = rewriteUriViaRelay(targetUri, userId, relayName) || targetUri;
   if (modelsPool.has(effectiveUri)) {
     const cached = modelsPool.get(effectiveUri);
     if (cached.type === 'mysql' || cached.type === 'postgres') return cached;
@@ -630,7 +646,7 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
     });
 
       socket.on('ssh:connect', async (data) => {
-      let { connectionId, connection: connectionData, cols, rows, dockerContainerId, dockerMode, useShell = true, preferProvidedConnection = false } = data;
+      let { connectionId, connection: connectionData, cols, rows, dockerContainerId, dockerMode, useShell = true, preferProvidedConnection = false, preferredRelay } = data;
 
       // Extract docker info from connectionId if missing but prefixed
       if (connectionId && typeof connectionId === 'string' && connectionId.startsWith('docker-')) {
@@ -642,7 +658,7 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
               console.log(`🐳 Detected Docker mode: ${dockerContainerId} (Base ID: ${connectionId})`);
           }
       }
-      const repo = await getModels(dbUri, socket.user?.sub);
+      const repo = await getModels(dbUri, socket.user?.sub, preferredRelay);
       const { Connection: CurrentConnectionModel, Session: CurrentSessionModel } = repo;
 
       try {
@@ -2974,7 +2990,7 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
         const userRelays = userId ? global.__activeRelays?.get(userId) : null;
         let userRelay = null;
         if (userRelays instanceof Map) {
-          const connRelayName = connection?.relayName;
+          const connRelayName = connection?.relayName || preferredRelay;
           userRelay = (connRelayName && userRelays.get(connRelayName)) || (userRelays.size > 0 ? userRelays.values().next().value : null);
         } else if (userRelays) {
           userRelay = userRelays;

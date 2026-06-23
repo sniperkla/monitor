@@ -227,6 +227,12 @@ export function AppProvider({ children }) {
     if (state.dbConfig?.tunnel?.enabled) {
       headers['x-vault-tunnel'] = JSON.stringify(state.dbConfig.tunnel);
     }
+    if (typeof window !== 'undefined') {
+      const preferredRelay = localStorage.getItem('ssh_monitor_preferred_relay');
+      if (preferredRelay) {
+        headers['x-preferred-relay'] = preferredRelay;
+      }
+    }
     const res = await fetch(url, { ...options, headers, credentials: 'include' });
     const contentType = res.headers.get('content-type') || '';
     if (contentType.includes('text/html')) {

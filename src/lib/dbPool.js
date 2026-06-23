@@ -20,6 +20,8 @@ import { Client as PgClient } from 'pg';
 import { Client as SshClient } from 'ssh2';
 import { decrypt } from '@/utils/encryption';
 import { resolveLocalhostViaRelay } from '@/lib/sshTunnel';
+import { headers } from 'next/headers.js';
+
 
 // Global pool (survives hot reloads in dev)
 const globalPool = global.__dbPool || (global.__dbPool = new Map());
@@ -30,7 +32,15 @@ const POOL_TTL_MS = 5 * 60 * 1000; // 5 minutes idle timeout
 const MAX_POOL_SIZE = 20; // Max concurrent different connections
 
 async function resolveRelayForLocalhost(host, port, userId, relayId) {
-  return resolveLocalhostViaRelay(host, port, userId, relayId);
+  let targetRelayId = relayId;
+  if (!targetRelayId) {
+    try {
+      const h = await headers();
+      const preferred = h.get('x-preferred-relay');
+      if (preferred) targetRelayId = preferred;
+    } catch (e) {}
+  }
+  return resolveLocalhostViaRelay(host, port, userId, targetRelayId);
 }
 
 /**

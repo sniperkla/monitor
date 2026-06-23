@@ -81,6 +81,7 @@ export async function getActiveRelayInfo(uri, relayName) {
     uri = normalizeRelayDatabaseUri(uri);
 
     const h = await headers();
+    const preferredRelay = h.get('x-preferred-relay');
     const cookie = h.get('cookie') || '';
     const cookies = Object.fromEntries(
       cookie.split(';').map(c => c.trim()).filter(Boolean).map(c => {
@@ -93,7 +94,7 @@ export async function getActiveRelayInfo(uri, relayName) {
       secret: process.env.NEXTAUTH_SECRET,
     });
 
-    const found = findActiveRelay(token?.sub, relayName);
+    const found = findActiveRelay(token?.sub, relayName || preferredRelay || undefined);
     if (!found?.relay) return null;
 
     const { remoteHost, remotePort } = parseUriHostPort(uri);
