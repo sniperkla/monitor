@@ -74,6 +74,9 @@ export async function GET(request) {
 
 /**
  * DELETE /api/relay/token — revoke token and disconnect relay
+ * Query params:
+ *   - relayId: disconnect only this relay (keep token for others)
+ *   - no relayId: revoke all tokens and disconnect all relays
  */
 export async function DELETE(request) {
   try {
@@ -82,17 +85,33 @@ export async function DELETE(request) {
       return Response.json({ error: 'Unauthorized' }, { status: 401 });
     }
     const userId = token.sub;
+    const url = new URL(request.url);
+    const relayId = url.searchParams.get('relayId');
 
-    // Revoke tokens
+    if (relayId) {
+      // Disconnect single relay only (keep token for other machines)
+      const userRelays = global.__activeRelays?.get(userId);
+      if (userRelays instanceof Map) {
+        const relay = userRelays.get(relayId);
+        if (relay) {
+          try { relay.netServer?.close(); } catch {}
+          userRelays.delete(relayId);
+          if (userRelays.size === 0) global.__activeRelays.delete(userId);
+          return Response.json({ success: true, disconnected: relayId });
+        }
+      }
+      return Response.json({ success: true, disconnected: null });
+    }
+
+    // Full revoke: delete all tokens and disconnect all relays
     global.__relayTokens = global.__relayTokens || new Map();
     for (const [t, e] of global.__relayTokens) {
       if (e.userId === userId) global.__relayTokens.delete(t);
     }
 
-    // Close active relays if present
     const userRelays = global.__activeRelays?.get(userId);
     if (userRelays instanceof Map) {
-      for (const [relayId, relay] of userRelays) {
+      for (const [rid, relay] of userRelays) {
         try { relay.netServer?.close(); } catch {}
       }
       global.__activeRelays.delete(userId);

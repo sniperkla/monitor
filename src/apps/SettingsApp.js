@@ -708,11 +708,19 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
     setRelayLoading(false);
   };
 
-  const handleRevokeRelayToken = async () => {
+  const handleDisconnectRelay = async (relayId) => {
+    try {
+      await fetch(`/api/relay/token?relayId=${encodeURIComponent(relayId)}`, { method: 'DELETE' });
+      addNotification({ title: 'Relay Disconnected', message: `"${relayId}" has been disconnected.`, type: 'info' });
+    } catch {}
+  };
+
+  const handleRevokeAllRelays = async () => {
     try {
       await fetch('/api/relay/token', { method: 'DELETE' });
       setRelayToken(null);
       setRelayConnected(false);
+      setRelays([]);
       addNotification({ title: t('settings_ui.relay.toasts.tokenRevoked'), message: t('settings_ui.relay.toasts.tokenRevokedMsg'), type: 'info' });
     } catch {}
   };
@@ -1728,11 +1736,11 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
                           ) : (
                             <>
                               <button
-                                onClick={handleRevokeRelayToken}
+                                onClick={handleRevokeAllRelays}
                                 className="px-2.5 py-1.5 rounded-xl text-[10px] font-bold transition-all flex items-center gap-1 border border-red-500/30 text-red-400 hover:bg-red-500/10"
                                 title="Revoke token and disconnect all relays"
                               >
-                                <X size={10} /> Revoke
+                                <X size={10} /> Revoke All
                               </button>
                               <button
                                 onClick={() => {
@@ -1783,6 +1791,16 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
                                     Active
                                   </span>
                                 )}
+                                <button
+                                  onClick={async (e) => {
+                                    e.stopPropagation();
+                                    await handleDisconnectRelay(r.relayId);
+                                  }}
+                                  className="p-1 rounded hover:bg-red-500/20 text-[var(--text-muted)] hover:text-red-400 transition-colors shrink-0"
+                                  title={`Disconnect ${relayLabel}`}
+                                >
+                                  <X size={10} />
+                                </button>
                               </button>
                             );
                           })}
@@ -3279,10 +3297,10 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
                         )}
                         {relayConnected && (
                           <button
-                            onClick={handleRevokeRelayToken}
+                            onClick={handleRevokeAllRelays}
                             className="text-[10px] text-red-400/60 hover:text-red-400 transition-colors"
                           >
-                            Revoke token
+                            Revoke all tokens
                           </button>
                         )}
                       </div>
