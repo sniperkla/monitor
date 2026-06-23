@@ -694,12 +694,14 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
 
   const handleGenerateRelayToken = async () => {
     setRelayLoading(true);
+    let success = false;
     try {
       const res = await fetch('/api/relay/token', { method: 'POST', credentials: 'include' });
       const data = await res.json();
       if (data.success) {
         setRelayToken(data.token);
         try { addNotification({ title: 'Token Created', message: 'Your relay token has been generated.', type: 'success' }); } catch (_) {}
+        success = true;
       } else {
         addNotification({ title: 'Error', message: data.error || 'Failed to generate token', type: 'error' });
       }
@@ -707,6 +709,7 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
       addNotification({ title: 'Error', message: err.message || 'Failed to generate token', type: 'error' });
     }
     setRelayLoading(false);
+    return success;
   };
 
   const handleDisconnectRelay = async (relayId) => {
@@ -1727,7 +1730,14 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
                         <div className="flex items-center gap-2 shrink-0">
                           {!relayToken ? (
                             <button
-                              onClick={handleGenerateRelayToken}
+                              onClick={async () => {
+                                const success = await handleGenerateRelayToken();
+                                if (success) {
+                                  setRelayWizardStep(2);
+                                  setRelayInstallSuccess(false);
+                                  setRelayModalOpen(true);
+                                }
+                              }}
                               disabled={relayLoading}
                               className="px-3 py-1.5 rounded-xl text-[11px] font-bold transition-all flex items-center gap-1.5 bg-amber-500 hover:bg-amber-600 text-white shadow-md shadow-amber-500/20 disabled:opacity-50"
                             >
@@ -3143,8 +3153,8 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
                     ) : (
                       <button
                         onClick={async () => {
-                          await handleGenerateRelayToken();
-                          if (!relayConnected) setRelayWizardStep(2);
+                          const success = await handleGenerateRelayToken();
+                          if (success) setRelayWizardStep(2);
                         }}
                         disabled={relayLoading}
                         className="w-full flex items-center justify-center gap-2 py-3 bg-amber-500 hover:bg-amber-600 disabled:opacity-50 rounded-xl text-white font-bold text-sm transition-all shadow-lg shadow-amber-500/20 active:scale-[0.98]"

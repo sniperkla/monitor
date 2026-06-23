@@ -115,10 +115,12 @@ export async function DELETE(request) {
     const userRelays = global.__activeRelays?.get(userId);
     if (userRelays instanceof Map) {
       for (const [rid, relay] of userRelays) {
+        try { relay.ws?.close(4000, 'Token revoked'); } catch {}
         try { relay.netServer?.close(); } catch {}
       }
       global.__activeRelays.delete(userId);
     } else if (userRelays) {
+      try { userRelays.ws?.close(4000, 'Token revoked'); } catch {}
       try { userRelays.netServer?.close(); } catch {}
       global.__activeRelays.delete(userId);
     }

@@ -107,6 +107,32 @@ function ensureInstalledScript() {
       fs.copyFileSync(SCRIPT, INSTALLED_SCRIPT);
       if (PLATFORM !== 'win32') try { fs.chmodSync(INSTALLED_SCRIPT, 0o755); } catch {}
     }
+    
+    // Automatically initialize package.json and install ssh2 + ws in the installation folder
+    try {
+      console.log('📦 Installing dependencies (ssh2, ws) for relay agent service...');
+      if (!fs.existsSync(path.join(INSTALL_DIR, 'package.json'))) {
+        fs.writeFileSync(path.join(INSTALL_DIR, 'package.json'), JSON.stringify({
+          name: 'ssh-monitor-relay-agent',
+          version: '1.0.0',
+          private: true
+        }));
+      }
+      const npmCmd = PLATFORM === 'win32' ? 'npm.cmd' : 'npm';
+      const result = spawnSync(npmCmd, ['install', '--no-audit', '--no-fund', 'ssh2', 'ws'], { 
+        cwd: INSTALL_DIR, 
+        stdio: 'inherit' 
+      });
+      if (result.status === 0) {
+        console.log('✅ Dependencies installed successfully.');
+      } else {
+        console.warn('⚠️  npm install returned non-zero status code. Some features might not be available.');
+      }
+    } catch (npmErr) {
+      console.warn('⚠️  Could not automatically install dependencies:', npmErr.message);
+      console.warn('   You can install them manually by running: cd ' + INSTALL_DIR + ' && npm install ssh2 ws');
+    }
+
     return INSTALLED_SCRIPT;
   } catch (e) { console.error('Install failed:', e.message); process.exit(1); }
 }
