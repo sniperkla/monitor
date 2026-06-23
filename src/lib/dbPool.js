@@ -29,8 +29,8 @@ const tunnelPool = global.__tunnelPool || (global.__tunnelPool = new Map());
 const POOL_TTL_MS = 5 * 60 * 1000; // 5 minutes idle timeout
 const MAX_POOL_SIZE = 20; // Max concurrent different connections
 
-async function resolveRelayForLocalhost(host, port, userId) {
-  return resolveLocalhostViaRelay(host, port, userId);
+async function resolveRelayForLocalhost(host, port, userId, relayId) {
+  return resolveLocalhostViaRelay(host, port, userId, relayId);
 }
 
 /**
@@ -63,7 +63,7 @@ async function resolveConnectEndpoint(conn) {
     connectPort = tunnel.port;
     tunnelKey = tunnel.tunnelKey;
   } else {
-    const resolved = await resolveRelayForLocalhost(connectHost, connectPort, conn._userId);
+    const resolved = await resolveRelayForLocalhost(connectHost, connectPort, conn._userId, conn.relayName);
     connectHost = resolved.host;
     connectPort = resolved.port;
     usedRelay = resolved.usedRelay;
@@ -325,10 +325,11 @@ export async function getPooledConnection(conn) {
  * Drop pooled DB connections when the Local Relay reconnects or disconnects.
  * Stale mongoose pools keep talking to old relay ports (e.g. 127.0.0.1:55004) and fail with "connection closed".
  */
-export async function flushRelayPooledConnections(reason = 'relay disconnect') {
+export async function flushRelayPooledConnections(reason = 'relay disconnect', filterPort = null) {
   let flushed = 0;
   for (const [key, entry] of globalPool.entries()) {
     if (!entry.usedRelay) continue;
+    if (filterPort && entry.relayPort !== filterPort) continue;
     try {
       if (entry.provider === 'mongodb') await entry.db.close();
       else if (entry.provider === 'mysql' || entry.provider === 'postgres') await entry.db.end();
@@ -338,7 +339,7 @@ export async function flushRelayPooledConnections(reason = 'relay disconnect') {
     flushed++;
   }
   if (flushed > 0) {
-    console.log(`🧹 Pool: Flushed ${flushed} relay-backed connection(s) (${reason})`);
+    console.log(`🧹 Pool: Flushed ${flushed} relay-backed connection(s) (${reason}${filterPort ? ` port ${filterPort}` : ''})`);
   }
 }
 

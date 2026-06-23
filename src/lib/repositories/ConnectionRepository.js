@@ -43,6 +43,9 @@ export class ConnectionRepository {
       try {
         await this.db.query('ALTER TABLE connections ADD COLUMN authSource VARCHAR(255)');
       } catch (e) {}
+      try {
+        await this.db.query('ALTER TABLE connections ADD COLUMN relayName VARCHAR(255)');
+      } catch (e) {}
       
       // Migration: Add SSH tunnel columns if missing
       const tunnelCols = [
@@ -98,6 +101,9 @@ export class ConnectionRepository {
       try {
         await this.db.query('ALTER TABLE connections ADD COLUMN authSource VARCHAR(255)');
       } catch (e) {}
+      try {
+        await this.db.query('ALTER TABLE connections ADD COLUMN relayName VARCHAR(255)');
+      } catch (e) {}
     }
   }
 
@@ -123,6 +129,7 @@ export class ConnectionRepository {
       sshTunnelPassword: r.sshtunnelpassword || r.sshTunnelPassword || null,
       sshTunnelPrivateKey: r.sshtunnelprivatekey || r.sshTunnelPrivateKey || null,
       sshTunnelPassphrase: r.sshtunnelpassphrase || r.sshTunnelPassphrase || null,
+      relayName: r.relayname || r.relayName || null,
       lastConnected: r.lastconnected || r.lastConnected || null,
       createdAt: r.createdat || r.createdAt,
       updatedAt: r.updatedat || r.updatedAt,
@@ -187,7 +194,7 @@ export class ConnectionRepository {
         'password', 'database_name', 'privateKey', 'keyFileName', 'passphrase', 
         'tags', 'color', 'status', 'isFavorite', 'isSrv', 'notes',
         'sshTunnel', 'sshTunnelHost', 'sshTunnelPort', 'sshTunnelUser', 'sshTunnelAuth',
-        'sshTunnelPassword', 'sshTunnelPrivateKey', 'sshTunnelPassphrase'
+        'sshTunnelPassword', 'sshTunnelPrivateKey', 'sshTunnelPassphrase', 'relayName'
       ];
       const values = [
         data.type || 'ssh',
@@ -215,7 +222,8 @@ export class ConnectionRepository {
         data.sshTunnelAuth || 'password',
         data.sshTunnelPassword || null,
         data.sshTunnelPrivateKey || null,
-        data.sshTunnelPassphrase || null
+        data.sshTunnelPassphrase || null,
+        data.relayName || null
       ];
 
       const placeholders = this.isPostgres 

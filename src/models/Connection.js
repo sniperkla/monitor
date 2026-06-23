@@ -32,6 +32,7 @@ const ConnectionSchema = new mongoose.Schema({
   sshTunnelPassword: { type: String, default: null },
   sshTunnelPrivateKey: { type: String, default: null },
   sshTunnelPassphrase: { type: String, default: null },
+  relayName: { type: String, default: null },
 }, {
   timestamps: true,
 });

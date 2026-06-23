@@ -34,6 +34,7 @@ export default function ConnectionModal({ onClose, editConnection = null }) {
   const [uriInput, setUriInput] = useState('');
   const [isTesting, setIsTesting] = useState(false);
   const [relayConnected, setRelayConnected] = useState(false);
+  const [relays, setRelays] = useState([]);
   const [showMasterPasswordPrompt, setShowMasterPasswordPrompt] = useState(false);
   const [verifyPassword, setVerifyPassword] = useState('');
   const [isVerifying, setIsVerifying] = useState(false);
@@ -57,7 +58,12 @@ export default function ConnectionModal({ onClose, editConnection = null }) {
     if (session) {
       fetch('/api/relay/token')
         .then(r => r.json())
-        .then(d => { if (d.success) setRelayConnected(d.connected); })
+        .then(d => {
+          if (d.success) {
+            setRelayConnected(d.connected);
+            setRelays(d.relays || []);
+          }
+        })
         .catch(() => {});
     }
   }, [session]);
@@ -80,6 +86,7 @@ export default function ConnectionModal({ onClose, editConnection = null }) {
     color: editConnection?.color || (editConnection?.type === 'database' ? '#10b981' : '#6366f1'),
     notes: editConnection?.notes || '',
     targetStorage: editConnection?.storage || state.storageMode || 'db',
+    relayName: editConnection?.relayName || '',
   });
 
   // Auto-set ports based on provider
@@ -396,6 +403,7 @@ export default function ConnectionModal({ onClose, editConnection = null }) {
       color: form.color,
       notes: form.notes,
       storage: form.targetStorage,
+      relayName: form.relayName || null,
     };
 
     const combinedPassword = form.password || revealedSecrets.password;
@@ -818,6 +826,26 @@ export default function ConnectionModal({ onClose, editConnection = null }) {
                             <strong>{t('ssh.modal.relay.localDetected')}</strong> {t('ssh.modal.relay.localDesc')}
                             <span className="text-[var(--text-muted)]"> {t('ssh.modal.relay.localHint')}</span>
                           </span>
+                        </div>
+                      )}
+                      {/* Relay agent selector when host is localhost (if relay is connected) */}
+                      {/^(localhost|127\.0\.0\.1)$/.test(form.host) && relayConnected && relays.length > 0 && (
+                        <div className="mt-2 space-y-1.5 animate-in fade-in slide-in-from-top-1 duration-200">
+                          <label className="text-[10px] font-bold text-indigo-400 uppercase tracking-wider block">
+                            Local Relay Agent
+                          </label>
+                          <select
+                            className="input-field py-1.5 text-xs bg-[var(--bg-tertiary)] border-[var(--border-color)] text-[var(--text-primary)] rounded-lg w-full"
+                            value={form.relayName}
+                            onChange={(e) => handleChange('relayName', e.target.value)}
+                          >
+                            <option value="">Any connected relay (Auto-select)</option>
+                            {relays.map((r) => (
+                              <option key={r.relayId} value={r.relayName}>
+                                {r.relayName} (:{r.localPort})
+                              </option>
+                            ))}
+                          </select>
                         </div>
                       )}
                     </div>

@@ -261,5 +261,5 @@ export function resolveLocalhostViaRelay(host, port, userId, relayId) {
     `🔗 Relay: routing ${found.relay.targetHost}:${found.relay.targetPort} → 127.0.0.1:${found.relay.localPort}` +
     (userId ? ` (user ${userId})` : ' (single active relay)')
   );
-  return { host: '127.0.0.1', port: found.relay.localPort, usedRelay: true };
+  return { host: '127.0.0.1', port: found.relay.localPort, usedRelay: true, relayId: found.relayId };
 }

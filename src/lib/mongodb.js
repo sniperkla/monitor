@@ -73,7 +73,7 @@ export async function getTunnelFromRequest() {
  * and the URI targets localhost. Returns { port, userId } or null.
  * Updates the relay's targetHost/targetPort so the TCP proxy knows where to forward.
  */
-export async function getActiveRelayInfo(uri) {
+export async function getActiveRelayInfo(uri, relayName) {
   if (!global.__activeRelays?.size) return null;
   if (!/localhost|127\.0\.0\.1/.test(uri)) return null;
 
@@ -93,7 +93,7 @@ export async function getActiveRelayInfo(uri) {
       secret: process.env.NEXTAUTH_SECRET,
     });
 
-    const found = findActiveRelay(token?.sub);
+    const found = findActiveRelay(token?.sub, relayName);
     if (!found?.relay) return null;
 
     const { remoteHost, remotePort } = parseUriHostPort(uri);
@@ -155,10 +155,11 @@ async function connectCenter(uri) {
  * @param {string} uri           Database URI
  * @param {object|null} tunnelConfig  SSH tunnel config from x-vault-tunnel header
  */
-export async function flushRelayDynamicConnections(reason = 'relay disconnect') {
+export async function flushRelayDynamicConnections(reason = 'relay disconnect', filterPort = null) {
   let flushed = 0;
   for (const [key, conn] of connectionPool.entries()) {
     if (!key.startsWith('relay:')) continue;
+    if (filterPort && !key.includes(`:${filterPort}`) && !key.includes(`@127.0.0.1:${filterPort}`)) continue;
     try {
       if (conn.readyState) await conn.close();
       else if (conn.pool) await conn.pool.end();
@@ -167,11 +168,11 @@ export async function flushRelayDynamicConnections(reason = 'relay disconnect') 
     flushed++;
   }
   if (flushed > 0) {
-    console.log(`🧹 [mongodb] Flushed ${flushed} relay-backed connection(s) (${reason})`);
+    console.log(`🧹 [mongodb] Flushed ${flushed} relay-backed connection(s) (${reason}${filterPort ? ` port ${filterPort}` : ''})`);
   }
 }
 
-async function getDynamicConnection(uri, tunnelConfig = null) {
+async function getDynamicConnection(uri, tunnelConfig = null, relayName = null) {
   if (!uri) throw new Error("Database URI is missing.");
 
   uri = normalizeRelayDatabaseUri(uri);
@@ -182,7 +183,7 @@ async function getDynamicConnection(uri, tunnelConfig = null) {
   // 1. Try Local Relay Agent (free, no SSH/Tailscale needed)
   if (!tunnelConfig?.enabled) {
     const isLocalhost = /localhost|127\.0\.0\.1/.test(uri);
-    const relayInfo = isLocalhost ? await getActiveRelayInfo(uri) : null;
+    const relayInfo = isLocalhost ? await getActiveRelayInfo(uri, relayName) : null;
 
     if (relayInfo) {
       connectUri = rewriteUriForTunnel(uri, relayInfo.port);
@@ -286,7 +287,7 @@ async function getDynamicConnection(uri, tunnelConfig = null) {
  * @param {string} uri - Optional URI to connect to.
  * @param {boolean} isCenter - If true, connects to the default instance.
  */
-async function connectDB(uri = null, isCenter = false) {
+async function connectDB(uri = null, isCenter = false, relayName = null) {
   const targetUri = uri || (await getUriFromRequest());
   const normalizedUri = normalizeRelayDatabaseUri(targetUri);
 
@@ -304,7 +305,7 @@ async function connectDB(uri = null, isCenter = false) {
   const tunnelConfig = uri ? null : await getTunnelFromRequest();
 
   // Otherwise, use a separate pool connection for tenant isolation
-  return getDynamicConnection(normalizedUri, tunnelConfig);
+  return getDynamicConnection(normalizedUri, tunnelConfig, relayName);
 }
 
 export default connectDB;

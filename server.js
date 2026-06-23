@@ -3420,7 +3420,7 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
         const netServer = net.createServer((tcpSock) => {
           const connId  = Math.random().toString(36).slice(2, 10);
           const userRelays = global.__activeRelays.get(userId);
-          const relay   = userRelays ? userRelays.values().next().value : undefined;
+          const relay = userRelays && ws.__relayId ? userRelays.get(ws.__relayId) : undefined;
           const tHost   = relay?.targetHost || 'localhost';
           const tPort   = relay?.targetPort || 27017;
 
@@ -3446,21 +3446,6 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
 
         netServer.listen(0, '127.0.0.1', () => {
           const localPort = netServer.address().port;
-          const userRelays = global.__activeRelays.get(userId);
-          if (userRelays) {
-            for (const r of userRelays.values()) {
-              if (r.netServer && r.netServer !== netServer) {
-                try { r.netServer.close(); } catch (_) {}
-              }
-            }
-          }
-          try {
-            const { flushRelayPooledConnections } = require('./src/lib/dbPool');
-            flushRelayPooledConnections('relay reconnected with new local port').catch(() => {});
-            import('./src/lib/mongodb.js').then(({ flushRelayDynamicConnections }) => {
-              flushRelayDynamicConnections('relay reconnected with new local port');
-            }).catch(() => {});
-          } catch (_) {}
           const tempRelayId = `relay-${Date.now()}`;
           ws.__relayId = tempRelayId;
           if (!global.__activeRelays.has(userId)) {
@@ -3496,6 +3481,20 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
                   r.capabilities = msg.capabilities || { ssh: false, sftp: false, docker: false };
                   r.ws = ws;
                   if (msg.relayName && msg.relayName !== ws.__relayId) {
+                    // Close duplicate if one already exists with this name
+                    const oldRelay = userRelays.get(msg.relayName);
+                    if (oldRelay) {
+                      const oldPort = oldRelay.localPort;
+                      try { oldRelay.netServer?.close(); } catch (_) {}
+                      try { oldRelay.ws?.close(4002, 'Duplicate relay name'); } catch (_) {}
+                      try {
+                        const { flushRelayPooledConnections } = require('./src/lib/dbPool');
+                        flushRelayPooledConnections('duplicate relay replaced', oldPort).catch(() => {});
+                        import('./src/lib/mongodb.js').then(({ flushRelayDynamicConnections }) => {
+                          flushRelayDynamicConnections('duplicate relay replaced', oldPort);
+                        }).catch(() => {});
+                      } catch (_) {}
+                    }
                     userRelays.delete(ws.__relayId);
                     r.relayName = msg.relayName;
                     userRelays.set(msg.relayName, r);
@@ -3618,9 +3617,9 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
               }
               try {
                 const { flushRelayPooledConnections } = require('./src/lib/dbPool');
-                flushRelayPooledConnections('relay websocket closed').catch(() => {});
+                flushRelayPooledConnections('relay websocket closed', entry.localPort).catch(() => {});
                 import('./src/lib/mongodb.js').then(({ flushRelayDynamicConnections }) => {
-                  flushRelayDynamicConnections('relay websocket closed');
+                  flushRelayDynamicConnections('relay websocket closed', entry.localPort);
                 }).catch(() => {});
               } catch (_) {}
             }

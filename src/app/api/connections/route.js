@@ -63,6 +63,7 @@ export async function GET(request) {
       sshTunnelPort: conn.sshTunnelPort || 22,
       sshTunnelUser: conn.sshTunnelUser || null,
       sshTunnelAuth: conn.sshTunnelAuth || 'password',
+      relayName: conn.relayName || null,
     }));
 
     return NextResponse.json({ success: true, data: sanitized });
@@ -115,6 +116,7 @@ export async function POST(request) {
       sshTunnelPassword: body.sshTunnelPassword ? encrypt(body.sshTunnelPassword) : null,
       sshTunnelPrivateKey: body.sshTunnelPrivateKey ? encrypt(body.sshTunnelPrivateKey) : null,
       sshTunnelPassphrase: body.sshTunnelPassphrase ? encrypt(body.sshTunnelPassphrase) : null,
+      relayName: body.relayName || null,
     });
 
     return NextResponse.json(
