@@ -211,6 +211,7 @@ export default function Sidebar({ onNewConnection, onEditConnection }) {
       }
 
       let imported = 0;
+      let usedFallback = false;
 
       for (const sc of data.connections) {
         try {
@@ -221,32 +222,36 @@ export default function Sidebar({ onNewConnection, onEditConnection }) {
 
           if (useDb) {
             // Save to database via API
-            const saveRes = await apiFetch('/api/connections', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                name: sc.name,
-                type: sc.type || 'ssh',
-                host: parsed.host,
-                port: parsed.port,
-                username: parsed.username,
-                authType: parsed.authType,
-                password: parsed.password,
-                privateKey: parsed.privateKey,
-                passphrase: parsed.passphrase,
-                database: parsed.database,
-                dbProvider: parsed.dbProvider,
-                tags: parsed.tags,
-                color: parsed.color,
-                notes: parsed.notes,
-                keyFileName: parsed.keyFileName,
-                relayName: null,
-              }),
-            });
-            const saveData = await saveRes.json();
-            if (!saveData.success) {
-              console.error(`Failed to save "${sc.name}":`, saveData.error);
-              continue; // Don't count as imported
+            try {
+              const saveRes = await apiFetch('/api/connections', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  name: sc.name,
+                  type: sc.type || 'ssh',
+                  host: parsed.host,
+                  port: parsed.port,
+                  username: parsed.username,
+                  authType: parsed.authType,
+                  password: parsed.password,
+                  privateKey: parsed.privateKey,
+                  passphrase: parsed.passphrase,
+                  database: parsed.database,
+                  dbProvider: parsed.dbProvider,
+                  tags: parsed.tags,
+                  color: parsed.color,
+                  notes: parsed.notes,
+                  keyFileName: parsed.keyFileName,
+                  relayName: null,
+                }),
+              });
+              const saveData = await saveRes.json();
+              if (!saveData.success) throw new Error(saveData.error);
+            } catch (dbErr) {
+              // Database save failed — fall back to localStorage
+              console.warn(`DB save failed for "${sc.name}", saving to localStorage:`, dbErr.message);
+              existing.push({ ...parsed, name: sc.name, type: sc.type, storage: 'localstorage', _id: `local_${Date.now()}_${Math.random().toString(36).slice(2)}` });
+              usedFallback = true;
             }
           } else {
             // Fallback to localStorage
@@ -256,11 +261,12 @@ export default function Sidebar({ onNewConnection, onEditConnection }) {
         } catch (err) { console.error(`Skip "${sc.name}":`, err.message); }
       }
 
-      if (!useDb) {
+      if (!useDb || usedFallback) {
         localStorage.setItem('ssh_monitor_connections', JSON.stringify(existing));
       }
       fetchConnections();
-      addNotification({ title: 'Pulled', message: `${imported} connection(s) imported to ${useDb ? 'database' : 'local storage'}.`, type: 'success' });
+      const storage = usedFallback ? 'local storage (DB unavailable)' : useDb ? 'database' : 'local storage';
+      addNotification({ title: 'Pulled', message: `${imported} connection(s) imported to ${storage}.`, type: 'success' });
     } catch (err) {
       addNotification({ title: 'Pull Error', message: err.message, type: 'error' });
     } finally {
