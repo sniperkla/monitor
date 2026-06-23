@@ -654,7 +654,7 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
     const interval = isWaiting ? 2000 : 5000;
     const poll = async () => {
       try {
-        const res = await fetch('/api/relay/token');
+        const res = await fetch('/api/relay/token', { credentials: 'include' });
         const data = await res.json();
         if (data.success) {
           setRelayConnected(data.connected);
@@ -695,7 +695,7 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
   const handleGenerateRelayToken = async () => {
     setRelayLoading(true);
     try {
-      const res = await fetch('/api/relay/token', { method: 'POST' });
+      const res = await fetch('/api/relay/token', { method: 'POST', credentials: 'include' });
       const data = await res.json();
       if (data.success) {
         setRelayToken(data.token);
@@ -711,14 +711,14 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
 
   const handleDisconnectRelay = async (relayId) => {
     try {
-      await fetch(`/api/relay/token?relayId=${encodeURIComponent(relayId)}`, { method: 'DELETE' });
+      await fetch(`/api/relay/token?relayId=${encodeURIComponent(relayId)}`, { method: 'DELETE', credentials: 'include' });
       addNotification({ title: 'Relay Disconnected', message: `"${relayId}" has been disconnected.`, type: 'info' });
     } catch {}
   };
 
   const handleRevokeAllRelays = async () => {
     try {
-      await fetch('/api/relay/token', { method: 'DELETE' });
+      await fetch('/api/relay/token', { method: 'DELETE', credentials: 'include' });
       setRelayToken(null);
       setRelayConnected(false);
       setRelays([]);
@@ -1703,7 +1703,7 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
                             <button
                               onClick={async () => {
                                 try {
-                                  const res = await fetch('/api/relay/token');
+                                  const res = await fetch('/api/relay/token', { credentials: 'include' });
                                   const data = await res.json();
                                   if (data.success) {
                                     setRelayConnected(data.connected);
