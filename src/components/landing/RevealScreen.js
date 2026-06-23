@@ -569,23 +569,16 @@ export function RevealScreen({ onDismiss }) {
               />
             </div>
 
-            {/* Terminal focus indicator - top left corner */}
-            <div
-              className="absolute top-3 left-4 z-[2] flex items-center gap-1.5 font-mono text-[8px] pointer-events-none"
-              style={{ opacity: hovered ? 0.5 : 0, transition: 'opacity 0.3s' }}
-            >
-              <div className="w-1.5 h-1.5 rounded-full bg-emerald-400/50" style={{ boxShadow: '0 0 4px rgba(74,222,128,0.3)' }} />
-              <span className="text-emerald-400/40">FOCUSED</span>
-            </div>
-
             {/* Fake terminal run text */}
             <TerminalRunText active={hovered} />
 
             <div className="relative z-10 flex flex-col items-center w-full">
 
-              {/* Phase 0: Logo */}
+              {/* Phase 0: Logo — fades out when terminal run text is active */}
               <RenderItem phase={phase} targetPhase={0}>
-                <LogoWithPulseRings />
+                <div style={{ opacity: hovered ? 0.15 : 1, transition: 'opacity 0.5s ease-out' }}>
+                  <LogoWithPulseRings />
+                </div>
               </RenderItem>
 
               {/* Phase 1: Title with glitch + cursor */}
