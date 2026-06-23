@@ -221,7 +221,7 @@ export default function Sidebar({ onNewConnection, onEditConnection }) {
 
           if (useDb) {
             // Save to database via API
-            await apiFetch('/api/connections', {
+            const saveRes = await apiFetch('/api/connections', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
@@ -240,15 +240,20 @@ export default function Sidebar({ onNewConnection, onEditConnection }) {
                 color: parsed.color,
                 notes: parsed.notes,
                 keyFileName: parsed.keyFileName,
-                relayName: null, // Don't copy relayName — let this machine use its own relay
+                relayName: null,
               }),
             });
+            const saveData = await saveRes.json();
+            if (!saveData.success) {
+              console.error(`Failed to save "${sc.name}":`, saveData.error);
+              continue; // Don't count as imported
+            }
           } else {
             // Fallback to localStorage
             existing.push({ ...parsed, name: sc.name, type: sc.type, storage: 'localstorage', _id: `local_${Date.now()}_${Math.random().toString(36).slice(2)}` });
           }
           imported++;
-        } catch (_) { /* skip failed decryptions */ }
+        } catch (err) { console.error(`Skip "${sc.name}":`, err.message); }
       }
 
       if (!useDb) {
