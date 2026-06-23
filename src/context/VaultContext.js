@@ -95,6 +95,11 @@ export function VaultProvider({ children }) {
           if (cachedTunnel) {
             try { setDecryptedTunnel(JSON.parse(cachedTunnel)); } catch (_) {}
           }
+          // Restore master password for sync operations
+          try {
+            const encodedPwd = window.sessionStorage.getItem('_vault_pwd');
+            if (encodedPwd) masterPwdRef.current = atob(encodedPwd);
+          } catch (_) {}
           setVaultStatus('unlocked');
         }
       }
@@ -128,6 +133,11 @@ export function VaultProvider({ children }) {
           if (cachedTunnel) {
             try { setDecryptedTunnel(JSON.parse(cachedTunnel)); } catch (_) {}
           }
+          // Restore master password for sync operations
+          try {
+            const encodedPwd = sessionStorage.getItem('_vault_pwd');
+            if (encodedPwd) masterPwdRef.current = atob(encodedPwd);
+          } catch (_) {}
           setVaultStatus('unlocked');
         } else {
           setVaultStatus('locked');
@@ -190,6 +200,12 @@ export function VaultProvider({ children }) {
         sessionStorage.removeItem('_vault_tunnel');
       }
       sessionStorage.setItem('_vault_uri', uri);
+      sessionStorage.setItem('_vault_pwd_ts', String(Date.now()));
+      // Store encrypted password for sync operations (cleared on tab close)
+      try {
+        const encoded = btoa(masterPassword);
+        sessionStorage.setItem('_vault_pwd', encoded);
+      } catch (_) {}
       setVaultStatus('unlocked');
 
       // Cache password in memory for sync operations (never persisted)
