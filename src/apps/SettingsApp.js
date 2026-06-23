@@ -171,6 +171,10 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
   const [relayInstallSuccess, setRelayInstallSuccess] = useState(false);
   // Wizard step: 1 = generate token, 2 = install, 3 = success
   const [relayWizardStep, setRelayWizardStep] = useState(1);
+  // The relay this browser prefers to route through (saved in localStorage)
+  const [preferredRelay, setPreferredRelay] = useState(() =>
+    typeof window !== 'undefined' ? (localStorage.getItem('ssh_monitor_preferred_relay') || null) : null
+  );
 
   // Detect PWA (standalone) mode
   const isPWA = useMemo(() =>
@@ -655,7 +659,19 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
         const data = await res.json();
         if (data.success) {
           setRelayConnected(data.connected);
-          setRelays(data.relays || []);
+          const fetchedRelays = data.relays || [];
+          setRelays(fetchedRelays);
+          // Auto-select the first relay if no preferred relay is set or if the saved one is no longer connected
+          if (fetchedRelays.length > 0) {
+            const currentPreferred = localStorage.getItem('ssh_monitor_preferred_relay');
+            const isStillConnected = currentPreferred && fetchedRelays.some(r => r.relayName === currentPreferred || r.relayId === currentPreferred);
+            if (!isStillConnected) {
+              const firstRelay = fetchedRelays[0];
+              const firstRelayName = firstRelay.relayName || firstRelay.relayId;
+              localStorage.setItem('ssh_monitor_preferred_relay', firstRelayName);
+              setPreferredRelay(firstRelayName);
+            }
+          }
         }
       } catch {}
     };
@@ -671,11 +687,11 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
       setRelayInstallSuccess(false);
       return;
     }
-    if (relayWaiting && relayConnected && !relayInstallSuccess) {
+    if (relayWaiting && relayConnected && !relayInstallSuccess && relayWizardStep >= 2) {
       setRelayInstallSuccess(true);
       addNotification({ title: 'Relay Connected!', message: 'Your local relay agent is now running.', type: 'success' });
     }
-  }, [relayConnected, relayWaiting, relayModalOpen, relayInstallSuccess]);
+  }, [relayConnected, relayWaiting, relayModalOpen, relayInstallSuccess, relayWizardStep]);
 
   const handleGenerateRelayToken = async () => {
     setRelayLoading(true);
@@ -1700,39 +1716,102 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
                           </p>
                         </div>
                         <div className="flex items-center gap-2 shrink-0">
-                          <button
-                            onClick={() => {
-                              setRelayWizardStep(relayToken ? 2 : 1);
-                              setRelayInstallSuccess(false);
-                              setRelayModalOpen(true);
-                            }}
-                            className={`px-3 py-1.5 rounded-xl text-[11px] font-bold transition-all flex items-center gap-1.5 ${
-                              relayConnected
-                                ? 'bg-[var(--bg-tertiary)] hover:bg-[var(--border-color)] text-[var(--text-secondary)]'
-                                : 'bg-amber-500 hover:bg-amber-600 text-white shadow-md shadow-amber-500/20'
-                            }`}
-                          >
-                            {relayConnected ? <Settings size={11} /> : <Zap size={11} />}
-                            {relayConnected ? 'Manage' : 'Setup'}
-                          </button>
+                          {!relayToken ? (
+                            <button
+                              onClick={handleGenerateRelayToken}
+                              disabled={relayLoading}
+                              className="px-3 py-1.5 rounded-xl text-[11px] font-bold transition-all flex items-center gap-1.5 bg-amber-500 hover:bg-amber-600 text-white shadow-md shadow-amber-500/20 disabled:opacity-50"
+                            >
+                              {relayLoading ? <Loader size={11} className="animate-spin" /> : <Zap size={11} />}
+                              {relayLoading ? 'Generating…' : 'Generate Token'}
+                            </button>
+                          ) : (
+                            <>
+                              <button
+                                onClick={handleRevokeRelayToken}
+                                className="px-2.5 py-1.5 rounded-xl text-[10px] font-bold transition-all flex items-center gap-1 border border-red-500/30 text-red-400 hover:bg-red-500/10"
+                                title="Revoke token and disconnect all relays"
+                              >
+                                <X size={10} /> Revoke
+                              </button>
+                              <button
+                                onClick={() => {
+                                  setRelayWizardStep(2);
+                                  setRelayInstallSuccess(false);
+                                  setRelayModalOpen(true);
+                                }}
+                                className="px-3 py-1.5 rounded-xl text-[11px] font-bold transition-all flex items-center gap-1.5 bg-[var(--bg-tertiary)] hover:bg-[var(--border-color)] text-[var(--text-secondary)]"
+                              >
+                                <Settings size={11} /> Install Guide
+                              </button>
+                            </>
+                          )}
                         </div>
                       </div>
 
                       {/* Active relays list */}
                       {relayConnected && relays.length > 0 && (
-                        <div className="px-4 py-3 border-t border-[var(--border-color)] space-y-1">
-                          {relays.map(r => (
-                            <div key={r.relayId} className="flex items-center gap-2 text-[11px]">
-                              <span className="w-2 h-2 rounded-full bg-emerald-400" />
-                              <span className="font-mono">{r.relayName}</span>
-                              <span className="opacity-50">:{r.localPort}</span>
-                            </div>
-                          ))}
+                        <div className="px-4 py-3 border-t border-[var(--border-color)] space-y-1.5">
+                          {relays.length > 1 && (
+                            <p className="text-[10px] text-[var(--text-muted)] mb-2 flex items-center gap-1.5">
+                              <span className="opacity-60">Click a relay to set it as your active connection for this browser</span>
+                            </p>
+                          )}
+                          {relays.map(r => {
+                            const relayLabel = r.relayName || r.relayId;
+                            const isPreferred = preferredRelay === relayLabel;
+                            return (
+                              <button
+                                key={r.relayId}
+                                onClick={() => {
+                                  localStorage.setItem('ssh_monitor_preferred_relay', relayLabel);
+                                  setPreferredRelay(relayLabel);
+                                  addNotification({ title: 'Relay Selected', message: `"${relayLabel}" is now your active relay for this browser.`, type: 'success' });
+                                }}
+                                className={`w-full flex items-center gap-2.5 text-[11px] px-2.5 py-1.5 rounded-lg transition-all cursor-pointer ${
+                                  isPreferred
+                                    ? 'bg-emerald-500/15 border border-emerald-500/40 text-emerald-300'
+                                    : 'hover:bg-white/5 border border-transparent text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
+                                }`}
+                                title={isPreferred ? 'Currently active relay for this browser' : 'Click to use this relay'}
+                              >
+                                <span className={`w-2 h-2 rounded-full shrink-0 ${isPreferred ? 'bg-emerald-400 shadow-[0_0_6px_rgba(52,211,153,0.6)]' : 'bg-emerald-500/40'}`} />
+                                <span className="font-mono flex-1 text-left">{relayLabel}</span>
+                                <span className="opacity-40">:{r.localPort}</span>
+                                {isPreferred && (
+                                  <span className="text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 shrink-0">
+                                    Active
+                                  </span>
+                                )}
+                              </button>
+                            );
+                          })}
                         </div>
                       )}
 
-                      {/* Info when not connected */}
-                      {!relayConnected && (
+                      {/* Install command when token exists but relay not connected */}
+                      {relayToken && !relayConnected && (
+                        <div className="px-4 py-3 border-t border-[var(--border-color)] space-y-2">
+                          <p className="text-[10px] font-bold text-[var(--text-secondary)]">Run this on your machine:</p>
+                          <div className="relative">
+                            <code className="block p-2.5 pr-10 bg-slate-950 border border-slate-800 rounded-lg text-[9px] font-mono text-amber-300 break-all leading-relaxed">
+                              {getRelayOneLiner('install')}
+                            </code>
+                            <button
+                              onClick={() => {
+                                navigator.clipboard.writeText(getRelayOneLiner('install'));
+                                addNotification({ title: 'Copied!', message: 'Paste in your Terminal and press Enter.', type: 'success' });
+                              }}
+                              className="absolute right-1.5 top-1.5 p-1.5 hover:bg-white/10 rounded-lg transition-colors"
+                            >
+                              <Copy size={12} className="text-[var(--text-muted)]" />
+                            </button>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Info when not connected and no token */}
+                      {!relayConnected && !relayToken && (
                         <div className="px-4 py-3 border-t border-[var(--border-color)] bg-[var(--bg-tertiary)]/30">
                           <div className="flex items-start gap-2.5">
                             <Info size={13} className="text-blue-400 shrink-0 mt-0.5" />
@@ -3022,7 +3101,7 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
                       <button
                         onClick={async () => {
                           await handleGenerateRelayToken();
-                          setRelayWizardStep(2);
+                          if (!relayConnected) setRelayWizardStep(2);
                         }}
                         disabled={relayLoading}
                         className="w-full flex items-center justify-center gap-2 py-3 bg-amber-500 hover:bg-amber-600 disabled:opacity-50 rounded-xl text-white font-bold text-sm transition-all shadow-lg shadow-amber-500/20 active:scale-[0.98]"
