@@ -70,6 +70,7 @@ function saveConfig(cfg) {
 const savedConfig = loadConfig();
 let SERVER = args.server || savedConfig.server || process.env.RELAY_SERVER || '';
 let TOKEN  = args.token  || savedConfig.token  || process.env.RELAY_TOKEN  || '';
+const RELAY_NAME = args.name || savedConfig.name || os.hostname();
 
 // -- Install/uninstall handling (unchanged from original) --
 const SVC_ID = 'com.ssh-monitor.relay';
@@ -84,7 +85,7 @@ const INSTALLED_SCRIPT = path.join(INSTALL_DIR, 'local-relay.js');
 
 if (args.install) {
   if (!SERVER || !TOKEN) { console.error('--server and --token required'); process.exit(1); }
-  saveConfig({ server: SERVER, token: TOKEN });
+  saveConfig({ server: SERVER, token: TOKEN, name: RELAY_NAME });
   ensureInstalledScript();
   if (PLATFORM === 'darwin') installMacOS();
   else if (PLATFORM === 'linux') installLinux();
@@ -150,8 +151,8 @@ function connect() {
     // ── TCP relay (existing functionality) ──
     if (msg.type === 'ready') {
       // Now send init with capabilities (relay is registered on server)
-      ws.send(JSON.stringify({ type: 'init', capabilities: { ssh: !!ssh2, sftp: !!ssh2, docker: true } }));
-      console.log(`\n✅ Relay ready! Capabilities: SSH=${!!ssh2}, SFTP=${!!ssh2}, Docker=true`);
+      ws.send(JSON.stringify({ type: 'init', relayName: RELAY_NAME, capabilities: { ssh: !!ssh2, sftp: !!ssh2, docker: true } }));
+      console.log(`\n✅ Relay ready! Name: ${RELAY_NAME}, Capabilities: SSH=${!!ssh2}, SFTP=${!!ssh2}, Docker=true`);
     }
 
     if (msg.type === 'open') {
