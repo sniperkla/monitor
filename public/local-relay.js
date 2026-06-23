@@ -243,12 +243,20 @@ function connect() {
     }
   });
 
-  ws.addEventListener('close', ({ reason }) => {
+  ws.addEventListener('close', ({ code, reason }) => {
     clearInterval(keepAlive);
-    console.log(`\n💤 Disconnected. Reconnecting in ${retryDelay / 1000}s...`);
     tcpConnections.forEach(t => t.destroy());
     tcpConnections.clear();
     sshSessions.forEach((s, id) => cleanupSsh(id));
+
+    // Code 4000 = intentional disconnect (user revoked/disconnected from dashboard)
+    if (code === 4000) {
+      console.log(`\n🛑 Disconnected by server: ${reason || 'Token revoked or relay disconnected'}`);
+      console.log('   Run with a new token to reconnect. Exiting.');
+      process.exit(0);
+    }
+
+    console.log(`\n💤 Disconnected (code: ${code}). Reconnecting in ${retryDelay / 1000}s...`);
     setTimeout(connect, retryDelay);
     retryDelay = Math.min(retryDelay * 1.5, 30000);
   });
