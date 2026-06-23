@@ -99,7 +99,7 @@ export async function getActiveRelayInfo(uri) {
     const { remoteHost, remotePort } = parseUriHostPort(uri);
     applyRelayTarget(found.relay, remoteHost, remotePort);
 
-    return { port: found.relay.localPort, userId: found.userId };
+    return { port: found.relay.localPort, userId: found.userId, relayId: found.relayId };
   } catch {
     return null;
   }

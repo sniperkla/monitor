@@ -164,6 +164,7 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
   // Local Relay Agent state
   const [relayToken, setRelayToken] = useState(null);
   const [relayConnected, setRelayConnected] = useState(false);
+  const [relays, setRelays] = useState([]);
   const [relayLoading, setRelayLoading] = useState(false);
   const [relayModalOpen, setRelayModalOpen] = useState(false);
   const [relayWaiting, setRelayWaiting] = useState(false);
@@ -652,7 +653,10 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
       try {
         const res = await fetch('/api/relay/token');
         const data = await res.json();
-        if (data.success) setRelayConnected(data.connected);
+        if (data.success) {
+          setRelayConnected(data.connected);
+          setRelays(data.relays || []);
+        }
       } catch {}
     };
     poll();
@@ -1676,7 +1680,10 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
                                 try {
                                   const res = await fetch('/api/relay/token');
                                   const data = await res.json();
-                                  if (data.success) setRelayConnected(data.connected);
+                                  if (data.success) {
+                                    setRelayConnected(data.connected);
+                                    setRelays(data.relays || []);
+                                  }
                                   addNotification({ title: data.connected ? 'Relay Online' : 'Relay Offline', message: data.connected ? 'Agent is running.' : 'Agent not detected.', type: data.connected ? 'success' : 'warning' });
                                 } catch { addNotification({ title: 'Check failed', message: 'Could not reach relay API.', type: 'error' }); }
                               }}
@@ -1710,6 +1717,19 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
                           </button>
                         </div>
                       </div>
+
+                      {/* Active relays list */}
+                      {relayConnected && relays.length > 0 && (
+                        <div className="px-4 py-3 border-t border-[var(--border-color)] space-y-1">
+                          {relays.map(r => (
+                            <div key={r.relayId} className="flex items-center gap-2 text-[11px]">
+                              <span className="w-2 h-2 rounded-full bg-emerald-400" />
+                              <span className="font-mono">{r.relayName}</span>
+                              <span className="opacity-50">:{r.localPort}</span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
 
                       {/* Info when not connected */}
                       {!relayConnected && (

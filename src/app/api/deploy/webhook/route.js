@@ -463,8 +463,12 @@ export async function runDeployment(config, runMeta = {}) {
         while (Date.now() - startTime < timeoutMs) {
           const activeRelays = global.__activeRelays;
           if (activeRelays && activeRelays.size > 0) {
-            // Pick first active relay (or matching connection owner if available)
-            relay = Array.from(activeRelays.values())[0];
+            const userRelays = activeRelays.values().next().value;
+            if (userRelays instanceof Map && userRelays.size > 0) {
+              relay = userRelays.values().next().value;
+            } else if (userRelays && !(userRelays instanceof Map)) {
+              relay = userRelays;
+            }
             break;
           }
           logOutput += `[Relay] Local Relay Agent not active. Retrying detection in 2 seconds...\n`;

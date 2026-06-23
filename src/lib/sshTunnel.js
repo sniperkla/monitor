@@ -145,16 +145,35 @@ export function isLocalHost(host) {
  * Find an active Local Relay for the given user.
  * Falls back to the only active relay when userId is unknown (single-user setups).
  */
-export function findActiveRelay(userId) {
+export function findActiveRelay(userId, relayId) {
   if (!global.__activeRelays?.size) return null;
 
   if (userId && global.__activeRelays.has(userId)) {
-    return { relay: global.__activeRelays.get(userId), userId };
+    const userRelays = global.__activeRelays.get(userId);
+
+    if (userRelays instanceof Map) {
+      if (relayId && userRelays.has(relayId)) {
+        return { relay: userRelays.get(relayId), userId, relayId };
+      }
+      if (userRelays.size > 0) {
+        const [rid, relay] = userRelays.entries().next().value;
+        return { relay, userId, relayId: rid };
+      }
+    } else {
+      return { relay: userRelays, userId };
+    }
   }
 
   if (global.__activeRelays.size === 1) {
-    const [uid, relay] = global.__activeRelays.entries().next().value;
-    return { relay, userId: uid };
+    const [uid, userRelays] = global.__activeRelays.entries().next().value;
+    if (userRelays instanceof Map) {
+      if (userRelays.size > 0) {
+        const [rid, relay] = userRelays.entries().next().value;
+        return { relay, userId: uid, relayId: rid };
+      }
+    } else {
+      return { relay: userRelays, userId: uid };
+    }
   }
 
   return null;
@@ -188,11 +207,25 @@ export function normalizeRelayDatabaseUri(uri) {
     const uriPort = parseInt(url.port, 10);
     if (!uriPort) return uri;
 
-    for (const relay of global.__activeRelays.values()) {
-      if (uriPort === relay.localPort) {
+    for (const userRelays of global.__activeRelays.values()) {
+      if (userRelays instanceof Map) {
+        for (const relay of userRelays.values()) {
+          if (uriPort === relay.localPort) {
+            const restoredPort =
+              relay.targetPort && relay.targetPort !== relay.localPort
+                ? relay.targetPort
+                : 27017;
+            url.port = String(restoredPort);
+            console.log(
+              `🔧 [Relay] Normalized URI port ${uriPort} → ${restoredPort} (relay proxy port)`
+            );
+            return url.toString();
+          }
+        }
+      } else if (uriPort === userRelays.localPort) {
         const restoredPort =
-          relay.targetPort && relay.targetPort !== relay.localPort
-            ? relay.targetPort
+          userRelays.targetPort && userRelays.targetPort !== userRelays.localPort
+            ? userRelays.targetPort
             : 27017;
         url.port = String(restoredPort);
         console.log(
@@ -209,10 +242,10 @@ export function normalizeRelayDatabaseUri(uri) {
 /**
  * Route a localhost DB host/port through the user's relay agent when available.
  */
-export function resolveLocalhostViaRelay(host, port, userId) {
+export function resolveLocalhostViaRelay(host, port, userId, relayId) {
   if (!isLocalHost(host)) return { host, port, usedRelay: false };
 
-  const found = findActiveRelay(userId);
+  const found = findActiveRelay(userId, relayId);
   if (!found?.relay?.localPort) {
     if (process.env.NODE_ENV === 'development') {
       console.warn('⚠️ [Relay] No active relay — using server localhost (development only)');

@@ -45,13 +45,27 @@ export async function GET(request) {
     }
 
     const userId = token.sub;
-    const relay = global.__activeRelays?.get(userId);
-    
+    const userRelays = global.__activeRelays?.get(userId);
+
+    if (userRelays instanceof Map) {
+      const relays = [];
+      for (const [relayId, relay] of userRelays) {
+        relays.push({
+          relayId,
+          connected: true,
+          localPort: relay.localPort,
+          capabilities: relay.capabilities || { ssh: false, sftp: false, docker: false },
+          relayName: relay.relayName || relayId,
+        });
+      }
+      return Response.json({ success: true, connected: relays.length > 0, relays });
+    }
+
+    const relay = userRelays;
     return Response.json({
       success: true,
       connected: !!relay,
-      localPort: relay?.localPort || null,
-      capabilities: relay?.capabilities || { ssh: false, sftp: false, docker: false },
+      relays: relay ? [{ relayId: relay.relayName || 'default', connected: true, localPort: relay.localPort, capabilities: relay.capabilities || { ssh: false, sftp: false, docker: false }, relayName: relay.relayName || 'default' }] : [],
     });
   } catch (err) {
     return Response.json({ error: err.message }, { status: 500 });
@@ -75,10 +89,15 @@ export async function DELETE(request) {
       if (e.userId === userId) global.__relayTokens.delete(t);
     }
 
-    // Close active relay if present
-    const relay = global.__activeRelays?.get(userId);
-    if (relay) {
-      try { relay.netServer?.close(); } catch {}
+    // Close active relays if present
+    const userRelays = global.__activeRelays?.get(userId);
+    if (userRelays instanceof Map) {
+      for (const [relayId, relay] of userRelays) {
+        try { relay.netServer?.close(); } catch {}
+      }
+      global.__activeRelays.delete(userId);
+    } else if (userRelays) {
+      try { userRelays.netServer?.close(); } catch {}
       global.__activeRelays.delete(userId);
     }
 

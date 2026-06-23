@@ -156,14 +156,18 @@ function normalizeRelayDatabaseUri(uri) {
     const url = new URL(uri);
     const uriPort = parseInt(url.port, 10);
     if (!uriPort) return uri;
-    for (const relay of global.__activeRelays.values()) {
-      if (uriPort === relay.localPort) {
-        const restoredPort =
-          relay.targetPort && relay.targetPort !== relay.localPort
-            ? relay.targetPort
-            : 27017;
-        url.port = String(restoredPort);
-        return url.toString();
+    for (const userRelays of global.__activeRelays.values()) {
+      const relays = userRelays instanceof Map ? userRelays.values() : [userRelays];
+      for (const relay of relays) {
+        if (!relay) continue;
+        if (uriPort === relay.localPort) {
+          const restoredPort =
+            relay.targetPort && relay.targetPort !== relay.localPort
+              ? relay.targetPort
+              : 27017;
+          url.port = String(restoredPort);
+          return url.toString();
+        }
       }
     }
   } catch {}
@@ -181,8 +185,16 @@ function rewriteUriViaRelay(uri, userId) {
   uri = normalizeRelayDatabaseUri(uri);
 
   let relay = userId ? global.__activeRelays.get(userId) : null;
+  if (relay instanceof Map) {
+    relay = relay.size > 0 ? relay.values().next().value : null;
+  }
   if (!relay && global.__activeRelays.size === 1) {
-    relay = global.__activeRelays.values().next().value;
+    const allRelays = global.__activeRelays.values().next().value;
+    if (allRelays instanceof Map && allRelays.size > 0) {
+      relay = allRelays.values().next().value;
+    } else if (allRelays && !(allRelays instanceof Map)) {
+      relay = allRelays;
+    }
   }
   if (!relay?.localPort) return uri;
 
@@ -2959,7 +2971,14 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
         // notify client to route through relay for localhost targets.
         const isLocalhost = /localhost|127\.0\.0\.1/.test(sshConfig.host);
         const userId = socket.user?.sub || socket.user?.dbId;
-        const userRelay = userId ? global.__activeRelays?.get(userId) : null;
+        const userRelays = userId ? global.__activeRelays?.get(userId) : null;
+        let userRelay = null;
+        if (userRelays instanceof Map) {
+          const connRelayName = connection?.relayName;
+          userRelay = (connRelayName && userRelays.get(connRelayName)) || (userRelays.size > 0 ? userRelays.values().next().value : null);
+        } else if (userRelays) {
+          userRelay = userRelays;
+        }
         
         // Client-side detection handles this now, but keep as fallback
         // Removed: was checking !ssh (backwards logic). Client handles via shouldUseRelay().
@@ -3320,7 +3339,7 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
     if (WebSocketServer) {
       // Global stores — shared between server.js and Next.js API routes (same process)
       global.__relayTokens  = global.__relayTokens  || new Map(); // token → {userId, expiresAt}
-      global.__activeRelays = global.__activeRelays || new Map(); // userId → {localPort, netServer, targetHost, targetPort, ws, capabilities}
+      global.__activeRelays = global.__activeRelays || new Map(); // userId → Map<relayId, {localPort, netServer, targetHost, targetPort, ws, capabilities, relayName}>
       // Map: relayConnId → socketId — routes relay agent SSH/SFTP responses back to the right browser socket
       global.__relayConnMap = global.__relayConnMap || new Map();
 
@@ -3400,7 +3419,8 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
         // Local TCP server — Mongoose driver connects here; we proxy to relay agent
         const netServer = net.createServer((tcpSock) => {
           const connId  = Math.random().toString(36).slice(2, 10);
-          const relay   = global.__activeRelays.get(userId);
+          const userRelays = global.__activeRelays.get(userId);
+          const relay   = userRelays ? userRelays.values().next().value : undefined;
           const tHost   = relay?.targetHost || 'localhost';
           const tPort   = relay?.targetPort || 27017;
 
@@ -3426,9 +3446,13 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
 
         netServer.listen(0, '127.0.0.1', () => {
           const localPort = netServer.address().port;
-          const prev = global.__activeRelays.get(userId);
-          if (prev?.netServer && prev.netServer !== netServer) {
-            try { prev.netServer.close(); } catch (_) {}
+          const userRelays = global.__activeRelays.get(userId);
+          if (userRelays) {
+            for (const r of userRelays.values()) {
+              if (r.netServer && r.netServer !== netServer) {
+                try { r.netServer.close(); } catch (_) {}
+              }
+            }
           }
           try {
             const { flushRelayPooledConnections } = require('./src/lib/dbPool');
@@ -3437,8 +3461,12 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
               flushRelayDynamicConnections('relay reconnected with new local port');
             }).catch(() => {});
           } catch (_) {}
-          // Store ws reference so SSH/SFTP handlers can forward commands to relay agent
-          global.__activeRelays.set(userId, { localPort, netServer, ws, targetHost: 'localhost', targetPort: 27017, capabilities: {} });
+          const tempRelayId = `relay-${Date.now()}`;
+          ws.__relayId = tempRelayId;
+          if (!global.__activeRelays.has(userId)) {
+            global.__activeRelays.set(userId, new Map());
+          }
+          global.__activeRelays.get(userId).set(tempRelayId, { localPort, netServer, ws, targetHost: 'localhost', targetPort: 27017, capabilities: {}, relayName: tempRelayId });
           ws.send(JSON.stringify({ type: 'ready', localPort }));
           console.log(`🔗 [Relay] Connected: user ${userId} → :${localPort}`);
         });
@@ -3459,12 +3487,21 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
             }
             if (msg.type === 'init') {
               // Relay agent reports capabilities and target
-              const r = global.__activeRelays.get(userId);
-              if (r) {
-                r.targetHost = msg.targetHost || 'localhost';
-                r.targetPort = Number(msg.targetPort) || 27017;
-                r.capabilities = msg.capabilities || { ssh: false, sftp: false, docker: false };
-                r.ws = ws; // ensure ws ref is always current
+              const userRelays = global.__activeRelays.get(userId);
+              if (userRelays && ws.__relayId) {
+                const r = userRelays.get(ws.__relayId);
+                if (r) {
+                  r.targetHost = msg.targetHost || 'localhost';
+                  r.targetPort = Number(msg.targetPort) || 27017;
+                  r.capabilities = msg.capabilities || { ssh: false, sftp: false, docker: false };
+                  r.ws = ws;
+                  if (msg.relayName && msg.relayName !== ws.__relayId) {
+                    userRelays.delete(ws.__relayId);
+                    r.relayName = msg.relayName;
+                    userRelays.set(msg.relayName, r);
+                    ws.__relayId = msg.relayName;
+                  }
+                }
               }
             }
             // ── TCP relay (MongoDB) ──
@@ -3570,18 +3607,23 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
         ws.on('close', () => {
           clearInterval(serverPingTimer);
           netServer.close();
-          // Only clear __activeRelays if OUR netServer is still the registered one.
-          // A newer relay connection may have already replaced it — don't wipe theirs.
-          const current = global.__activeRelays.get(userId);
-          if (current && current.netServer === netServer) {
-            global.__activeRelays.delete(userId);
-            try {
-              const { flushRelayPooledConnections } = require('./src/lib/dbPool');
-              flushRelayPooledConnections('relay websocket closed').catch(() => {});
-              import('./src/lib/mongodb.js').then(({ flushRelayDynamicConnections }) => {
-                flushRelayDynamicConnections('relay websocket closed');
-              }).catch(() => {});
-            } catch (_) {}
+          const relayId = ws.__relayId;
+          const userRelays = global.__activeRelays.get(userId);
+          if (userRelays && relayId) {
+            const entry = userRelays.get(relayId);
+            if (entry && entry.netServer === netServer) {
+              userRelays.delete(relayId);
+              if (userRelays.size === 0) {
+                global.__activeRelays.delete(userId);
+              }
+              try {
+                const { flushRelayPooledConnections } = require('./src/lib/dbPool');
+                flushRelayPooledConnections('relay websocket closed').catch(() => {});
+                import('./src/lib/mongodb.js').then(({ flushRelayDynamicConnections }) => {
+                  flushRelayDynamicConnections('relay websocket closed');
+                }).catch(() => {});
+              } catch (_) {}
+            }
           }
           // Clean up any SSH relay conn mappings for this user
           for (const [connId, sockId] of global.__relayConnMap) {
@@ -3589,7 +3631,7 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
             // so we leave stale entries — they'll be ignored since targetSocket won't be connected
           }
           tcpSockets.forEach(s => s.destroy());
-          console.log(`🔗 [Relay] Disconnected: user ${userId}`);
+          console.log(`🔗 [Relay] Disconnected: user ${userId} relay ${relayId}`);
         });
 
         ws.on('error', () => {});
