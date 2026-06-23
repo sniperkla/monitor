@@ -96,7 +96,12 @@ export async function DELETE(request) {
       if (userRelays instanceof Map) {
         const relay = userRelays.get(relayId);
         if (relay) {
-          try { relay.ws?.close(4000, 'Disconnected by user'); } catch {}
+          // Send disconnect message BEFORE closing WebSocket
+          try {
+            if (relay.ws?.readyState === 1) {
+              relay.ws.send(JSON.stringify({ type: 'disconnect', reason: 'Disconnected by user' }));
+            }
+          } catch {}
           try { relay.netServer?.close(); } catch {}
           userRelays.delete(relayId);
           if (userRelays.size === 0) global.__activeRelays.delete(userId);
@@ -115,12 +120,20 @@ export async function DELETE(request) {
     const userRelays = global.__activeRelays?.get(userId);
     if (userRelays instanceof Map) {
       for (const [rid, relay] of userRelays) {
-        try { relay.ws?.close(4000, 'Token revoked'); } catch {}
+        try {
+          if (relay.ws?.readyState === 1) {
+            relay.ws.send(JSON.stringify({ type: 'disconnect', reason: 'Token revoked' }));
+          }
+        } catch {}
         try { relay.netServer?.close(); } catch {}
       }
       global.__activeRelays.delete(userId);
     } else if (userRelays) {
-      try { userRelays.ws?.close(4000, 'Token revoked'); } catch {}
+      try {
+        if (userRelays.ws?.readyState === 1) {
+          userRelays.ws.send(JSON.stringify({ type: 'disconnect', reason: 'Token revoked' }));
+        }
+      } catch {}
       try { userRelays.netServer?.close(); } catch {}
       global.__activeRelays.delete(userId);
     }

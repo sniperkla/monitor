@@ -232,6 +232,14 @@ function connect() {
       cleanupSsh(msg.connId);
     }
 
+    // Server asks relay to stop (user disconnected/revoked from dashboard)
+    if (msg.type === 'disconnect') {
+      console.log(`\n🛑 Disconnected by server: ${msg.reason || 'Relay disconnected'}`);
+      console.log('   Exiting. Run with a new token to reconnect.');
+      ws.close(4000, 'disconnect');
+      process.exit(0);
+    }
+
     // ── SFTP (NEW) ──
     if (msg.type === 'sftp:list') {
       handleSftpList(ws, msg);
