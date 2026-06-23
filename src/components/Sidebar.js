@@ -195,7 +195,21 @@ export default function Sidebar({ onNewConnection, onEditConnection }) {
         return;
       }
 
-      const existing = JSON.parse(localStorage.getItem('ssh_monitor_connections') || '[]');
+      // Check if DB storage is available
+      const useDb = state.storageMode === 'db';
+      
+      // Get existing connections for duplicate check
+      let existing = [];
+      if (useDb) {
+        try {
+          const existingRes = await apiFetch('/api/connections');
+          const existingData = await existingRes.json();
+          if (existingData.success) existing = existingData.data || [];
+        } catch (_) {}
+      } else {
+        existing = JSON.parse(localStorage.getItem('ssh_monitor_connections') || '[]');
+      }
+
       let imported = 0;
 
       for (const sc of data.connections) {
@@ -203,16 +217,45 @@ export default function Sidebar({ onNewConnection, onEditConnection }) {
           const decrypted = await import('@/utils/clientCrypto').then(m => m.decryptWithPassword(sc.encryptedData, sc.salt, sc.iv, masterPwd));
           const parsed = JSON.parse(decrypted);
           const alreadyExists = existing.some(e => e.name === sc.name && e.host === sc.host && e.type === sc.type);
-          if (!alreadyExists) {
+          if (alreadyExists) continue;
+
+          if (useDb) {
+            // Save to database via API
+            await apiFetch('/api/connections', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                name: sc.name,
+                type: sc.type || 'ssh',
+                host: parsed.host,
+                port: parsed.port,
+                username: parsed.username,
+                authType: parsed.authType,
+                password: parsed.password,
+                privateKey: parsed.privateKey,
+                passphrase: parsed.passphrase,
+                database: parsed.database,
+                dbProvider: parsed.dbProvider,
+                tags: parsed.tags,
+                color: parsed.color,
+                notes: parsed.notes,
+                keyFileName: parsed.keyFileName,
+                relayName: null, // Don't copy relayName — let this machine use its own relay
+              }),
+            });
+          } else {
+            // Fallback to localStorage
             existing.push({ ...parsed, name: sc.name, type: sc.type, storage: 'localstorage', _id: `local_${Date.now()}_${Math.random().toString(36).slice(2)}` });
-            imported++;
           }
+          imported++;
         } catch (_) { /* skip failed decryptions */ }
       }
 
-      localStorage.setItem('ssh_monitor_connections', JSON.stringify(existing));
+      if (!useDb) {
+        localStorage.setItem('ssh_monitor_connections', JSON.stringify(existing));
+      }
       fetchConnections();
-      addNotification({ title: 'Pulled', message: `${imported} connection(s) imported from server.`, type: 'success' });
+      addNotification({ title: 'Pulled', message: `${imported} connection(s) imported to ${useDb ? 'database' : 'local storage'}.`, type: 'success' });
     } catch (err) {
       addNotification({ title: 'Pull Error', message: err.message, type: 'error' });
     } finally {
