@@ -1723,7 +1723,7 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
                       </div>
                     </div>
 
-                    {/* Local Relay Agent — Localhost Testing Tool */}
+                    {/* Local Relay Agent — Local Access Gateway */}
                     <div id="relay-agent-section" className="rounded-2xl border overflow-hidden"
                       style={{ borderColor: relayConnected ? 'rgba(52,211,153,0.25)' : 'var(--border-color)' }}
                     >
@@ -1745,7 +1745,7 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
                           <p className="text-[10px] text-[var(--text-muted)] mt-0.5 truncate">
                             {relayConnected
                               ? 'Relay agent ready — local databases accessible'
-                              : 'Only needed to connect to localhost/127.0.0.1 databases from your desktop'}
+                              : 'Access local databases from your machine via secure relay'}
                           </p>
                         </div>
                         <div className="flex items-center gap-2 shrink-0">
@@ -3049,8 +3049,8 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
                   <Network size={15} className="text-amber-400" />
                 </div>
                 <div className="flex-1">
-                  <h3 className="text-sm font-bold text-[var(--text-primary)]">Localhost Testing Setup</h3>
-                  <p className="text-[10px] text-[var(--text-muted)] mt-0.5">Install relay agent on your desktop to test localhost connections</p>
+                  <h3 className="text-sm font-bold text-[var(--text-primary)]">Local Relay Agent Setup</h3>
+                  <p className="text-[10px] text-[var(--text-muted)] mt-0.5">Securely access local databases from your machine</p>
                 </div>
                 <span className={`text-[9px] font-bold px-2 py-0.5 rounded-full border uppercase tracking-wider ${osMeta[detectedOS].badge}`}>
                   {osMeta[detectedOS].label}
