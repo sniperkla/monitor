@@ -699,10 +699,12 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
       const data = await res.json();
       if (data.success) {
         setRelayToken(data.token);
-        addNotification({ title: t('settings_ui.relay.toasts.tokenCreated'), message: t('settings_ui.relay.toasts.tokenCreatedMsg'), type: 'success' });
+        try { addNotification({ title: 'Token Created', message: 'Your relay token has been generated.', type: 'success' }); } catch (_) {}
+      } else {
+        addNotification({ title: 'Error', message: data.error || 'Failed to generate token', type: 'error' });
       }
-    } catch {
-      addNotification({ title: t('common.error'), message: t('settings_ui.relay.toasts.tokenError'), type: 'error' });
+    } catch (err) {
+      addNotification({ title: 'Error', message: err.message || 'Failed to generate token', type: 'error' });
     }
     setRelayLoading(false);
   };
