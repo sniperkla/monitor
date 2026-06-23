@@ -650,10 +650,28 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
   }, [activeTab, vaultStatus, decryptedUri]);
 
   // Poll relay status — every 5s when logged in, every 2s while install wizard is waiting
+  // Also auto-detects local relay via discovery server on localhost:48923
   useEffect(() => {
     if (!session) return;
     const isWaiting = relayModalOpen && relayWaiting;
     const interval = isWaiting ? 2000 : 5000;
+
+    // Auto-detect local relay (runs once, then caches result)
+    let localRelayName = null;
+    const detectLocalRelay = async () => {
+      try {
+        const res = await fetch('http://127.0.0.1:48923', { signal: AbortSignal.timeout(1000) });
+        const data = await res.json();
+        if (data.relayName) {
+          localRelayName = data.relayName;
+          localStorage.setItem('ssh_monitor_local_relay', localRelayName);
+        }
+      } catch {
+        // Discovery server not running — no local relay agent on this machine
+      }
+    };
+    detectLocalRelay();
+
     const poll = async () => {
       try {
         const res = await fetch('/api/relay/token', { credentials: 'include' });
@@ -662,15 +680,29 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
           setRelayConnected(data.connected);
           const fetchedRelays = data.relays || [];
           setRelays(fetchedRelays);
-          // Auto-select the first relay if no preferred relay is set or if the saved one is no longer connected
           if (fetchedRelays.length > 0) {
             const currentPreferred = localStorage.getItem('ssh_monitor_preferred_relay');
             const isStillConnected = currentPreferred && fetchedRelays.some(r => r.relayName === currentPreferred || r.relayId === currentPreferred);
+
+            // Priority: 1) local relay detected, 2) saved preferred, 3) first available
             if (!isStillConnected) {
-              const firstRelay = fetchedRelays[0];
-              const firstRelayName = firstRelay.relayName || firstRelay.relayId;
-              localStorage.setItem('ssh_monitor_preferred_relay', firstRelayName);
-              setPreferredRelay(firstRelayName);
+              let targetRelay = null;
+              // Try to find the local relay
+              if (localRelayName) {
+                targetRelay = fetchedRelays.find(r => r.relayName === localRelayName || r.relayId === localRelayName);
+              }
+              if (!targetRelay) {
+                const cachedLocal = localStorage.getItem('ssh_monitor_local_relay');
+                if (cachedLocal) {
+                  targetRelay = fetchedRelays.find(r => r.relayName === cachedLocal || r.relayId === cachedLocal);
+                }
+              }
+              if (!targetRelay) {
+                targetRelay = fetchedRelays[0];
+              }
+              const relayName = targetRelay.relayName || targetRelay.relayId;
+              localStorage.setItem('ssh_monitor_preferred_relay', relayName);
+              setPreferredRelay(relayName);
             }
           }
         }

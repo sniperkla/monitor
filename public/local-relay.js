@@ -19,6 +19,7 @@
 const fs   = require('fs');
 const path = require('path');
 const os   = require('os');
+const http = require('http');
 const net  = require('net');
 const { spawnSync, exec } = require('child_process');
 
@@ -145,6 +146,27 @@ const tcpConnections = new Map();  // connId → net.Socket
 const sshSessions = new Map();    // connId → { sshClient, stream, sftpClient, sftpPending }
 let retryDelay = 3000;
 
+// ── Local discovery server (browser auto-detect) ───────────────────────
+let discoveryServer = null;
+const DISCOVERY_PORT = 48923;
+
+function startDiscoveryServer(relayName) {
+  if (discoveryServer) return;
+  try {
+    discoveryServer = http.createServer((req, res) => {
+      res.writeHead(200, {
+        'Content-Type': 'application/json',
+        'Access-Control-Allow-Origin': '*',
+      });
+      res.end(JSON.stringify({ relayName, hostname: os.hostname() }));
+    });
+    discoveryServer.listen(DISCOVERY_PORT, '127.0.0.1', () => {
+      console.log(`🔍 Discovery server on http://127.0.0.1:${DISCOVERY_PORT}`);
+    });
+    discoveryServer.on('error', () => {}); // Port in use — ignore
+  } catch (_) {}
+}
+
 // ── Main connection loop ──────────────────────────────────────────────────
 function connect() {
   if (!SERVER || !TOKEN) {
@@ -182,6 +204,9 @@ function connect() {
       // Now send init with capabilities (relay is registered on server)
       ws.send(JSON.stringify({ type: 'init', relayName: RELAY_NAME, capabilities: { ssh: !!ssh2, sftp: !!ssh2, docker: true } }));
       console.log(`\n✅ Relay ready! Name: ${RELAY_NAME}, Capabilities: SSH=${!!ssh2}, SFTP=${!!ssh2}, Docker=true`);
+
+      // Start local discovery server so browser can auto-detect this relay
+      startDiscoveryServer(RELAY_NAME);
     }
 
     if (msg.type === 'open') {
