@@ -34,7 +34,26 @@ export async function GET(request) {
 
     const repo = new ConnectionRepository(db);
     await repo.init();
-    const connections = await repo.findAll();
+    let connections = await repo.findAll();
+
+    // Filter localhost connections: only show if matching relay is active
+    const userId = session.user?.id || session.user?.sub;
+    const userRelays = global.__activeRelays?.get(userId);
+    const activeRelayNames = new Set();
+    if (userRelays instanceof Map) {
+      for (const [relayId, relay] of userRelays) {
+        activeRelayNames.add(relayId);
+        if (relay.relayName) activeRelayNames.add(relay.relayName);
+      }
+    }
+
+    const isLocalhost = (host) => /localhost|127\.0\.0\.1/.test(host);
+    connections = connections.filter(conn => {
+      if (!isLocalhost(conn.host)) return true;
+      // Localhost connection — only show if its relay is active
+      if (!conn.relayName) return true; // No relayName = legacy, show always
+      return activeRelayNames.has(conn.relayName);
+    });
     
     // Sanitize - don't send sensitive data
     const sanitized = connections.map(conn => ({
