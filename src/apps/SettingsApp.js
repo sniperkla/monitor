@@ -3108,12 +3108,36 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
                     </div>
 
                     {relayToken ? (
-                      <div className="p-3 rounded-xl bg-emerald-500/[0.07] border border-emerald-500/20 flex items-center gap-3">
-                        <CheckCircle size={14} className="shrink-0 text-emerald-400" />
-                        <div>
-                          <p className="text-[11px] font-bold text-emerald-300">Token already generated</p>
-                          <p className="text-[10px] text-[var(--text-muted)]">Click Next to go to the install step.</p>
+                      <div className="space-y-3">
+                        <div className="p-3 rounded-xl bg-emerald-500/[0.07] border border-emerald-500/20 flex items-center gap-3">
+                          <CheckCircle size={14} className="shrink-0 text-emerald-400" />
+                          <div>
+                            <p className="text-[11px] font-bold text-emerald-300">Token generated</p>
+                            <p className="text-[10px] text-[var(--text-muted)]">Copy the install command below, or click Next.</p>
+                          </div>
                         </div>
+                        <div className="relative">
+                          <code className="block p-3 pr-10 bg-slate-950 border border-slate-800 rounded-xl text-[10px] font-mono text-amber-300 break-all leading-relaxed">
+                            {getRelayOneLiner('install')}
+                          </code>
+                          <button
+                            onClick={() => {
+                              navigator.clipboard.writeText(getRelayOneLiner('install'));
+                              setRelayWaiting(true);
+                              addNotification({ title: 'Copied!', message: 'Paste in your Terminal and press Enter.', type: 'success' });
+                            }}
+                            className="absolute right-2 top-2 p-1.5 hover:bg-white/10 rounded-lg transition-colors"
+                          >
+                            <Copy size={13} className="text-[var(--text-muted)]" />
+                          </button>
+                        </div>
+                        <button
+                          onClick={handleGenerateRelayToken}
+                          disabled={relayLoading}
+                          className="w-full text-[10px] text-[var(--text-muted)] hover:text-[var(--text-secondary)] transition-colors py-1"
+                        >
+                          {relayLoading ? 'Regenerating…' : 'Regenerate token'}
+                        </button>
                       </div>
                     ) : (
                       <button
