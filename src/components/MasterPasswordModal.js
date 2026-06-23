@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { useVault } from '@/context/VaultContext';
 import { useSession } from 'next-auth/react';
@@ -14,6 +14,50 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { useTranslation } from 'react-i18next';
 import { useOS } from '@/context/OSContext';
 import MacOSModalWindow from '@/components/MacOSModalWindow';
+
+// Floating particles background
+function Particles({ count = 30, color = 'rgba(99,102,241,0.15)' }) {
+  const particles = useMemo(() => 
+    Array.from({ length: count }, (_, i) => ({
+      id: i,
+      x: Math.random() * 100,
+      y: Math.random() * 100,
+      size: Math.random() * 3 + 1,
+      duration: Math.random() * 15 + 10,
+      delay: Math.random() * 5,
+    })),
+    [count]
+  );
+  return (
+    <div className="absolute inset-0 overflow-hidden pointer-events-none">
+      {particles.map(p => (
+        <motion.div
+          key={p.id}
+          className="absolute rounded-full"
+          style={{
+            left: `${p.x}%`,
+            top: `${p.y}%`,
+            width: p.size,
+            height: p.size,
+            background: color,
+            boxShadow: `0 0 ${p.size * 3}px ${color}`,
+          }}
+          animate={{
+            y: [0, -30, 0],
+            x: [0, Math.random() * 20 - 10, 0],
+            opacity: [0.2, 0.6, 0.2],
+          }}
+          transition={{
+            duration: p.duration,
+            delay: p.delay,
+            repeat: Infinity,
+            ease: 'easeInOut',
+          }}
+        />
+      ))}
+    </div>
+  );
+}
 
 const PRESETS = [
   { label: 'MongoDB', uri: 'mongodb://localhost:27017/ssh-monitor' },
@@ -354,37 +398,60 @@ export default function MasterPasswordModal() {
 
   // === UNLOCK VIEW ===
   const renderUnlock = () => (
-    <form onSubmit={handleUnlock} className="space-y-6 px-2 py-4 relative">
-      {/* Decorative Background Elements */}
-      <div className="absolute top-0 left-1/2 -translate-x-1/2 w-48 h-48 bg-blue-500/10 blur-[80px] rounded-full pointer-events-none" />
+    <form onSubmit={handleUnlock} className="space-y-6 px-2 py-4 relative overflow-hidden">
+      {/* Background Effects */}
+      <Particles count={25} color="rgba(99,102,241,0.12)" />
+      <div className="absolute top-0 left-1/2 -translate-x-1/2 w-64 h-64 bg-blue-500/10 blur-[100px] rounded-full pointer-events-none animate-pulse" />
+      <div className="absolute bottom-0 right-0 w-48 h-48 bg-indigo-500/8 blur-[80px] rounded-full pointer-events-none" />
       
       <div className="text-center relative z-10">
         <motion.div 
-          initial={{ scale: 0.9, opacity: 0 }}
+          initial={{ scale: 0.8, opacity: 0 }}
           animate={{ scale: 1, opacity: 1 }}
-          transition={{ duration: 0.5, type: 'spring' }}
+          transition={{ duration: 0.6, type: 'spring', bounce: 0.3 }}
           className="relative inline-block mb-6"
         >
-          {/* Glowing Ring */}
-          <div className="absolute inset-0 rounded-2xl bg-gradient-to-tr from-blue-500/30 to-indigo-500/30 blur-xl animate-pulse" />
+          {/* Animated Glow Rings */}
+          <motion.div 
+            className="absolute inset-0 rounded-2xl"
+            animate={{ 
+              boxShadow: [
+                '0 0 20px rgba(99,102,241,0.2), 0 0 40px rgba(99,102,241,0.1)',
+                '0 0 30px rgba(99,102,241,0.3), 0 0 60px rgba(99,102,241,0.15)',
+                '0 0 20px rgba(99,102,241,0.2), 0 0 40px rgba(99,102,241,0.1)',
+              ]
+            }}
+            transition={{ duration: 3, repeat: Infinity, ease: 'easeInOut' }}
+          />
+          <div className="absolute inset-0 rounded-2xl bg-gradient-to-tr from-blue-500/30 to-indigo-500/30 blur-xl" />
           
           <div className="relative w-20 h-20 bg-gradient-to-br from-[var(--bg-secondary)] to-[var(--bg-tertiary)] border border-[var(--border-color)] rounded-2xl flex items-center justify-center shadow-2xl overflow-hidden group">
             <div className="absolute inset-0 bg-gradient-to-tr from-[var(--accent-indigo)]/20 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-500" />
             <motion.div
-              animate={{ rotate: [0, -5, 5, 0] }}
-              transition={{ duration: 4, repeat: Infinity, ease: 'easeInOut' }}
+              animate={{ rotate: [0, -8, 8, -4, 0], scale: [1, 1.05, 1] }}
+              transition={{ duration: 5, repeat: Infinity, ease: 'easeInOut' }}
             >
-              <Lock size={32} className="text-[var(--accent-indigo)] drop-shadow-[0_0_8px_var(--glow-indigo)]" />
+              <Lock size={32} className="text-[var(--accent-indigo)] drop-shadow-[0_0_12px_var(--glow-indigo)]" />
             </motion.div>
           </div>
         </motion.div>
         
-        <h2 className="text-2xl font-extrabold tracking-tight text-[var(--text-primary)] mb-2">
+        <motion.h2 
+          initial={{ y: 10, opacity: 0 }}
+          animate={{ y: 0, opacity: 1 }}
+          transition={{ delay: 0.2 }}
+          className="text-2xl font-extrabold tracking-tight text-[var(--text-primary)] mb-2"
+        >
           {t('vault.locked') || 'Secured Vault'}
-        </h2>
-        <p className="text-[var(--text-secondary)] text-sm max-w-[280px] mx-auto leading-relaxed">
+        </motion.h2>
+        <motion.p 
+          initial={{ y: 10, opacity: 0 }}
+          animate={{ y: 0, opacity: 1 }}
+          transition={{ delay: 0.3 }}
+          className="text-[var(--text-secondary)] text-sm max-w-[280px] mx-auto leading-relaxed"
+        >
           {t('vault.unlockNow') || 'Your connection data is securely encrypted. Enter your master password to access.'}
-        </p>
+        </motion.p>
         
         {!session && (
           <motion.div 
@@ -398,7 +465,12 @@ export default function MasterPasswordModal() {
       </div>
 
       <div className="space-y-4 relative z-10">
-        <div className="group relative">
+        <motion.div 
+          initial={{ y: 15, opacity: 0 }}
+          animate={{ y: 0, opacity: 1 }}
+          transition={{ delay: 0.4 }}
+          className="group relative"
+        >
           <div className="absolute -inset-0.5 bg-gradient-to-r from-blue-500/50 to-indigo-500/50 rounded-xl blur opacity-0 group-focus-within:opacity-100 transition duration-500" />
           <div className="relative">
             <input
@@ -407,7 +479,7 @@ export default function MasterPasswordModal() {
               value={masterPassword}
               onChange={(e) => setMasterPassword(e.target.value)}
               placeholder={t('vault.masterPassword') || 'Master Password'}
-              className="w-full px-4 py-3.5 bg-[var(--bg-primary)]/80 backdrop-blur-xl border border-[var(--border-color)] rounded-xl text-[var(--text-primary)] placeholder-[var(--text-muted)] focus:outline-none focus:ring-0 transition-all text-base shadow-inner pointer-events-auto relative z-10"
+              className="w-full px-4 py-3.5 bg-[var(--bg-primary)]/80 backdrop-blur-xl border border-[var(--border-color)] rounded-xl text-[var(--text-primary)] placeholder-[var(--text-muted)] focus:outline-none focus:ring-0 focus:border-blue-500/40 transition-all text-base shadow-inner pointer-events-auto relative z-10"
               autoComplete="off"
             />
             <button
@@ -418,35 +490,43 @@ export default function MasterPasswordModal() {
               {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
             </button>
           </div>
-        </div>
+        </motion.div>
 
         {error && (
           <motion.div 
             key={shakeKey}
             initial={{ x: -10, opacity: 0 }}
-            animate={{ x: [0, -8, 8, -4, 4, 0], opacity: 1 }}
-            transition={{ duration: 0.4 }}
+            animate={{ x: [0, -12, 12, -6, 6, 0], opacity: 1 }}
+            transition={{ duration: 0.5 }}
             className="flex items-center gap-2.5 text-rose-400 text-xs bg-rose-500/10 border border-rose-500/20 rounded-xl px-4 py-3 shadow-lg backdrop-blur-md"
+            style={{ boxShadow: '0 0 20px rgba(244,63,94,0.15)' }}
           >
             <AlertTriangle size={14} className="shrink-0" />
             <span className="font-medium">{error}</span>
           </motion.div>
         )}
 
-        <button
-          type="submit"
-          disabled={loading || !masterPassword}
-          className="w-full py-4 px-6 relative group overflow-hidden rounded-xl bg-blue-600 font-bold text-white text-base shadow-[0_8px_30px_rgb(37,99,235,0.4)] hover:shadow-[0_8px_40px_rgb(37,99,235,0.6)] active:scale-[0.98] transition-all disabled:opacity-50 disabled:shadow-none disabled:active:scale-100"
+        <motion.div
+          initial={{ y: 15, opacity: 0 }}
+          animate={{ y: 0, opacity: 1 }}
+          transition={{ delay: 0.5 }}
         >
-          <div className="absolute inset-0 bg-gradient-to-r from-blue-500 to-indigo-600 transition-all group-hover:scale-105" />
-          <div className="relative flex items-center justify-center gap-3">
-            {loading ? (
-              <><Loader size={20} className="animate-spin" /> {t('vault.unlocking') || 'Authorizing...'}</>
-            ) : (
-              <><Unlock size={20} /> {t('vault.unlockVault') || 'Unlock & Access Dashboard'}</>
-            )}
-          </div>
-        </button>
+          <button
+            type="submit"
+            disabled={loading || !masterPassword}
+            className="w-full py-4 px-6 relative group overflow-hidden rounded-xl bg-blue-600 font-bold text-white text-base shadow-[0_8px_30px_rgb(37,99,235,0.4)] hover:shadow-[0_8px_40px_rgb(37,99,235,0.6)] active:scale-[0.98] transition-all disabled:opacity-50 disabled:shadow-none disabled:active:scale-100"
+          >
+            <div className="absolute inset-0 bg-gradient-to-r from-blue-500 to-indigo-600 transition-all group-hover:scale-105" />
+            <div className="absolute inset-0 bg-white/10 opacity-0 group-hover:opacity-100 transition-opacity" />
+            <div className="relative flex items-center justify-center gap-3">
+              {loading ? (
+                <><Loader size={20} className="animate-spin" /> {t('vault.unlocking') || 'Authorizing...'}</>
+              ) : (
+                <><Unlock size={20} /> {t('vault.unlockVault') || 'Unlock & Access Dashboard'}</>
+              )}
+            </div>
+          </button>
+        </motion.div>
 
         <div className="flex items-center justify-between px-1">
           <button
@@ -476,27 +556,50 @@ export default function MasterPasswordModal() {
 
   // === SETUP VIEW ===
   const renderSetup = () => (
-    <form onSubmit={handleSetup} className="space-y-6 px-2 py-4 relative">
-      <div className="absolute top-0 left-1/2 -translate-x-1/2 w-48 h-48 bg-emerald-500/10 blur-[80px] rounded-full pointer-events-none" />
+    <form onSubmit={handleSetup} className="space-y-6 px-2 py-4 relative overflow-hidden">
+      <Particles count={20} color="rgba(52,211,153,0.12)" />
+      <div className="absolute top-0 left-1/2 -translate-x-1/2 w-64 h-64 bg-emerald-500/10 blur-[100px] rounded-full pointer-events-none animate-pulse" />
 
       <div className="text-center relative z-10">
         <motion.div 
-          initial={{ scale: 0.9, opacity: 0 }}
+          initial={{ scale: 0.8, opacity: 0 }}
           animate={{ scale: 1, opacity: 1 }}
+          transition={{ duration: 0.6, type: 'spring', bounce: 0.3 }}
           className="relative inline-block mb-4"
         >
-          <div className="absolute inset-0 rounded-2xl bg-gradient-to-tr from-emerald-500/30 to-teal-500/30 blur-xl animate-pulse" />
+          <motion.div 
+            className="absolute inset-0 rounded-2xl"
+            animate={{ 
+              boxShadow: [
+                '0 0 20px rgba(52,211,153,0.2), 0 0 40px rgba(52,211,153,0.1)',
+                '0 0 30px rgba(52,211,153,0.3), 0 0 60px rgba(52,211,153,0.15)',
+                '0 0 20px rgba(52,211,153,0.2), 0 0 40px rgba(52,211,153,0.1)',
+              ]
+            }}
+            transition={{ duration: 3, repeat: Infinity, ease: 'easeInOut' }}
+          />
+          <div className="absolute inset-0 rounded-2xl bg-gradient-to-tr from-emerald-500/30 to-teal-500/30 blur-xl" />
           <div className="relative w-16 h-16 bg-gradient-to-br from-slate-800 to-slate-900 border border-white/10 rounded-2xl flex items-center justify-center shadow-2xl">
             <Shield size={28} className="text-emerald-400 shadow-[0_0_15px_rgba(52,211,153,0.5)]" />
           </div>
         </motion.div>
         
-        <h2 className="text-2xl font-extrabold tracking-tight text-[var(--text-primary)] mb-1">
+        <motion.h2 
+          initial={{ y: 10, opacity: 0 }}
+          animate={{ y: 0, opacity: 1 }}
+          transition={{ delay: 0.2 }}
+          className="text-2xl font-extrabold tracking-tight text-[var(--text-primary)] mb-1"
+        >
           {session ? (t('vault.setupVault') || 'Initialize Secure Vault') : (t('vault.localVault') || 'Local Vault Setup')}
-        </h2>
-        <p className="text-[var(--text-secondary)] text-sm max-w-[320px] mx-auto leading-relaxed">
+        </motion.h2>
+        <motion.p 
+          initial={{ y: 10, opacity: 0 }}
+          animate={{ y: 0, opacity: 1 }}
+          transition={{ delay: 0.3 }}
+          className="text-[var(--text-secondary)] text-sm max-w-[320px] mx-auto leading-relaxed"
+        >
           {t('vault.setupDescription') || 'Set up your private database and master password to start encrypting your connections.'}
-        </p>
+        </motion.p>
       </div>
 
       <div className="space-y-4 relative z-10">
