@@ -1741,26 +1741,6 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
                               <span className={`w-1.5 h-1.5 rounded-full ${relayConnected ? 'bg-emerald-400 animate-pulse' : 'bg-[var(--text-muted)]'}`} />
                               {relayConnected ? 'Ready' : 'Offline'}
                             </span>
-                            {!relayConnected && (
-                              <span className="text-[8px] px-1.5 py-0.5 rounded bg-blue-500/20 text-blue-400">Optional</span>
-                            )}
-                            <button
-                              onClick={async () => {
-                                try {
-                                  const res = await fetch('/api/relay/token', { credentials: 'include' });
-                                  const data = await res.json();
-                                  if (data.success) {
-                                    setRelayConnected(data.connected);
-                                    setRelays(data.relays || []);
-                                  }
-                                  addNotification({ title: data.connected ? 'Relay Online' : 'Relay Offline', message: data.connected ? 'Agent is running.' : 'Agent not detected.', type: data.connected ? 'success' : 'warning' });
-                                } catch { addNotification({ title: 'Check failed', message: 'Could not reach relay API.', type: 'error' }); }
-                              }}
-                              className="ml-1 p-1 rounded-lg hover:bg-white/10 transition-colors text-[var(--text-muted)] hover:text-[var(--text-secondary)]"
-                              title="Re-check relay status"
-                            >
-                              <RefreshCw size={11} />
-                            </button>
                           </div>
                           <p className="text-[10px] text-[var(--text-muted)] mt-0.5 truncate">
                             {relayConnected
