@@ -12,12 +12,15 @@ export async function POST(request) {
     if (!token?.sub) {
       return Response.json({ error: 'Unauthorized' }, { status: 401 });
     }
-    const userId = token.sub; // Google's stable OAuth sub — no DB call needed
+    const userId = token.sub;
 
-    // Revoke any existing tokens for this user
     global.__relayTokens = global.__relayTokens || new Map();
+
+    // Clean up expired tokens for this user (but keep active ones)
     for (const [t, e] of global.__relayTokens) {
-      if (e.userId === userId) global.__relayTokens.delete(t);
+      if (e.userId === userId && e.expiresAt < Date.now()) {
+        global.__relayTokens.delete(t);
+      }
     }
 
     const relayToken = randomUUID();
@@ -26,7 +29,6 @@ export async function POST(request) {
       expiresAt: Date.now() + TOKEN_TTL,
     });
 
-    // Persist tokens to disk so relay survives server restarts
     if (typeof global.__persistRelayTokens === 'function') global.__persistRelayTokens();
     return Response.json({ success: true, token: relayToken });
   } catch (err) {
