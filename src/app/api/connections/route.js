@@ -48,12 +48,8 @@ export async function GET(request) {
     }
 
     const isLocalhost = (host) => /localhost|127\.0\.0\.1/.test(host);
-    const hasAnyRelay = activeRelayNames.size > 0;
-    connections = connections.filter(conn => {
-      if (!isLocalhost(conn.host)) return true;
-      // Localhost connection — show if any relay is active (routing handles the rest)
-      return hasAnyRelay;
-    });
+    // Show all connections — localhost connections will fallback to server resources if no relay is active
+    // No filtering needed
     
     // Sanitize - don't send sensitive data
     const sanitized = connections.map(conn => ({

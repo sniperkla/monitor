@@ -647,11 +647,10 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
     }
   }, [activeTab, vaultStatus, decryptedUri]);
 
-  // Poll relay status — every 5s on database tab, every 2s while install wizard is waiting
+  // Poll relay status — every 5s when logged in, every 2s while install wizard is waiting
   useEffect(() => {
-    const isOnDbTab = activeTab === 'database' && session;
+    if (!session) return;
     const isWaiting = relayModalOpen && relayWaiting;
-    if (!isOnDbTab && !isWaiting) return;
     const interval = isWaiting ? 2000 : 5000;
     const poll = async () => {
       try {
@@ -678,7 +677,7 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
     poll();
     const id = setInterval(poll, interval);
     return () => clearInterval(id);
-  }, [activeTab, session, relayModalOpen, relayWaiting]);
+  }, [session, relayModalOpen, relayWaiting]);
 
   // Show success screen when relay connects during install wizard
   useEffect(() => {
