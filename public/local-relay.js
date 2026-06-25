@@ -564,53 +564,17 @@ async function handleSftpMkdir(ws, msg) {
 }
 
 async function handleSftpDelete(ws, msg) {
-  const session = sshSessions.get(msg.connId);
-  if (!session?.sshClient) return sendSftpError(ws, msg.connId, new Error('No SSH session'));
-
-  const onSuccess = () => {
-    ws.send(JSON.stringify({ type: 'sftp:action_success', connId: msg.connId, action: 'delete', path: msg.path }));
-  };
-
-  const trySftp = () => {
-    return new Promise((resolve, reject) => {
-      session.sshClient.sftp((err, sftp) => {
-        if (err) return reject(err);
-        sftp.unlink(msg.path, (unlinkErr) => {
-          if (!unlinkErr) { sftp.end(); return resolve(true); }
-          sftp.rmdir(msg.path, (rmdirErr) => {
-            sftp.end();
-            if (!rmdirErr) return resolve(true);
-            reject(rmdirErr);
-          });
-        });
-      });
-    });
-  };
-
-  const tryShell = () => {
-    return new Promise((resolve, reject) => {
-      session.sshClient.exec(`rm -rf "${msg.path}"`, (err, stream) => {
-        if (err) return reject(err);
-        let stderr = '';
-        stream.stderr.on('data', (d) => stderr += d.toString());
-        stream.on('close', (code) => {
-          if (code === 0) resolve(true);
-          else reject(new Error(stderr.trim() || `rm exited with code ${code}`));
-        });
-      });
-    });
-  };
-
   try {
-    await trySftp();
-    onSuccess();
-  } catch (_) {
-    try {
-      await tryShell();
-      onSuccess();
-    } catch (shellErr) {
-      sendSftpError(ws, msg.connId, shellErr);
-    }
+    const sftp = await getSftpClient(msg.connId);
+    sftp.unlink(msg.path, (err) => {
+      if (!err) return ws.send(JSON.stringify({ type: 'sftp:action_success', connId: msg.connId, action: 'delete', path: msg.path }));
+      sftp.rmdir(msg.path, (err2) => {
+        if (!err2) return ws.send(JSON.stringify({ type: 'sftp:action_success', connId: msg.connId, action: 'delete', path: msg.path }));
+        sendSftpError(ws, msg.connId, err2);
+      });
+    });
+  } catch (err) {
+    sendSftpError(ws, msg.connId, err);
   }
 }
 

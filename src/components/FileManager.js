@@ -325,7 +325,7 @@ export default function FileManager({
   }, []);
 
   const ensureSocketReady = useCallback((actionLabel = 'complete this action') => {
-    if (socketRef.current?.connected && statusRef.current === 'ready' && lastHealthOkRef.current) {
+    if (socketRef.current?.connected && statusRef.current === 'ready') {
       return true;
     }
 
@@ -1124,9 +1124,14 @@ export default function FileManager({
   useEffect(() => {
     const verifyAfterReturn = () => {
       if (statusRef.current !== 'ready' || !socketRef.current?.connected) return;
-      lastHealthOkRef.current = false;
+      const cacheFresh = Date.now() - lastHealthCheckAtRef.current < HEALTH_CHECK_TTL_MS;
+      if (cacheFresh && lastHealthOkRef.current) {
+        refreshFiles();
+        return;
+      }
       pingConnection().then((ok) => {
         if (!ok && statusRef.current === 'ready') {
+          lastHealthOkRef.current = false;
           requestReconnect('Connection became stale while inactive. Reconnecting...', {
             preserveTransfer: !!transferRef.current || uploadQueueRef.current.length > 0,
             notificationMessage: 'Your SSH session expired while you were away. Reconnecting now.',
@@ -2406,7 +2411,7 @@ export default function FileManager({
                 socketRef.current.emit('sftp:list', targetPath);
               }
            }
-        }, 15000);
+        }, 60000);
 
         const targetSet = new Set(targets);
         setDeletingFiles(prev => new Set([...prev, ...targetSet]));
