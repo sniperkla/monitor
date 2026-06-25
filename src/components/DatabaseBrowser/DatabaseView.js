@@ -1290,7 +1290,10 @@ export default function DatabaseView({ connection, onClose }) {
         ) : (
            <div className="flex flex-col h-full">
               {/* Toolbar */}
-              <div className="h-11 border-b border-[var(--border-color)] bg-[var(--bg-tertiary)]/5 flex items-center justify-between px-3 gap-2">
+               <div className="h-11 border-b border-[var(--border-color)] bg-[var(--bg-tertiary)]/5 flex items-center justify-between px-3 gap-2">
+                 <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-medium shrink-0 ${typeof window !== 'undefined' && localStorage.getItem('ssh_monitor_ssh_mode') === 'local' ? 'bg-emerald-500/15 text-emerald-400' : 'bg-blue-500/15 text-blue-400'}`}>
+                   {typeof window !== 'undefined' && localStorage.getItem('ssh_monitor_ssh_mode') === 'local' ? '⚡ Local' : '☁ Server'}
+                 </span>
                  {/* Left: Schema Info */}
                  <div className="flex items-center gap-3 min-w-0">
                     <div className="flex items-center gap-1.5 min-w-0">

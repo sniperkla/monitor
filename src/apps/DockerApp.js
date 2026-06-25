@@ -1113,6 +1113,9 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
                 </div>
             </div>
             <div className="flex items-center gap-1 sm:gap-3 shrink-0">
+                <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-medium ${typeof window !== 'undefined' && localStorage.getItem('ssh_monitor_ssh_mode') === 'local' ? 'bg-emerald-500/15 text-emerald-400' : 'bg-blue-500/15 text-blue-400'}`}>
+                  {typeof window !== 'undefined' && localStorage.getItem('ssh_monitor_ssh_mode') === 'local' ? '⚡ Local' : '☁ Server'}
+                </span>
                 {/* Export/Import Buttons like SSH Manager */}
                 <div className="flex items-center gap-1.5 bg-black/20 p-0.5 rounded-lg mr-2">
                   <button 

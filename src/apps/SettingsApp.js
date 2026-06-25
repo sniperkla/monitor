@@ -684,6 +684,7 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
           // Auto-switch SSH mode to server when no relay is connected
           if (!data.connected && localStorage.getItem('ssh_monitor_ssh_mode') === 'local') {
             localStorage.setItem('ssh_monitor_ssh_mode', 'server');
+            window.dispatchEvent(new Event('ssh-mode-changed'));
           }
 
           if (fetchedRelays.length > 0) {
@@ -1581,6 +1582,7 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
                           <button
                             onClick={() => {
                               localStorage.setItem('ssh_monitor_ssh_mode', 'server');
+                              window.dispatchEvent(new Event('ssh-mode-changed'));
                               addNotification({ title: 'SSH Mode', message: 'Switched to Server mode', type: 'info' });
                             }}
                             className={`relative p-3 rounded-xl border text-left transition-all ${
@@ -1619,6 +1621,7 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
                               }
                               if (relayConnected) {
                                 localStorage.setItem('ssh_monitor_ssh_mode', 'local');
+                                window.dispatchEvent(new Event('ssh-mode-changed'));
                                 addNotification({ title: 'SSH Mode', message: 'Switched to Local mode', type: 'success' });
                               } else {
                                 addNotification({ title: 'Relay Required', message: 'Install the relay agent first', type: 'warning' });

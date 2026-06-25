@@ -280,6 +280,9 @@ function LayoutRenderer({ layout, activePaneId, onFocusPane, onClosePane, onSpli
                 <span className="text-[10px] font-mono text-[var(--text-primary)]/50 truncate max-w-[120px]">
                   {layout.termData.connectionName}
                 </span>
+                <span className={`inline-flex items-center gap-0.5 px-1 py-0 rounded text-[8px] font-medium ${typeof window !== 'undefined' && localStorage.getItem('ssh_monitor_ssh_mode') === 'local' ? 'bg-emerald-500/15 text-emerald-400' : 'bg-blue-500/15 text-blue-400'}`}>
+                  {typeof window !== 'undefined' && localStorage.getItem('ssh_monitor_ssh_mode') === 'local' ? '⚡ Local' : '☁ Server'}
+                </span>
               </>
             )}
             {!layout.termData && (
@@ -987,7 +990,11 @@ const TerminalBridge = React.memo(({ term, target, hiddenRoom, onClose }) => {
   useEffect(() => {
     const handleUseRelay = () => setRelayMode(localStorage.getItem('ssh_monitor_ssh_mode') === 'local');
     window.addEventListener('storage', handleUseRelay);
-    return () => window.removeEventListener('storage', handleUseRelay);
+    window.addEventListener('ssh-mode-changed', handleUseRelay);
+    return () => {
+      window.removeEventListener('storage', handleUseRelay);
+      window.removeEventListener('ssh-mode-changed', handleUseRelay);
+    };
   }, []);
 
   // Determine if this specific terminal should use relay

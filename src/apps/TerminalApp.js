@@ -56,7 +56,11 @@ export default function TerminalApp({ onEditConnection, initialConnection, initi
   useEffect(() => {
     const check = () => setUseRelay(getUseRelay());
     window.addEventListener('storage', check);
-    return () => window.removeEventListener('storage', check);
+    window.addEventListener('ssh-mode-changed', check);
+    return () => {
+      window.removeEventListener('storage', check);
+      window.removeEventListener('ssh-mode-changed', check);
+    };
   }, []);
   const [activeTab, setActiveTab] = useState(null);
   

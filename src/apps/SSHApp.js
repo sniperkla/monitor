@@ -214,32 +214,28 @@ export default function SSHApp({ windowId }) {
         </div>
 
         {/* Terminal view: zero padding, fills full area via absolute inset */}
-        {state.view === 'terminal' && (
-          <div className="flex-1 relative overflow-hidden">
-            <TerminalTabs windowId={windowId} />
-          </div>
-        )}
+        <div className={state.view === 'terminal' ? 'flex-1 relative overflow-hidden' : 'hidden h-full'}>
+          <TerminalTabs windowId={windowId} />
+        </div>
 
         {/* All other views: use the original padded scrollable main */}
-        {state.view !== 'terminal' && (
-          <main className="flex-1 overflow-y-auto relative custom-scrollbar p-6">
-            <div className={state.view === 'dashboard' ? 'block h-full' : 'hidden h-full'}>
-              <Dashboard
-                onNewConnection={handleNewConnection}
-                onEditConnection={handleEditConnection}
-              />
-            </div>
-            <div className={state.view === 'files' ? 'block h-full' : 'hidden h-full'}>
-              <FileTabs />
-            </div>
-            <div className={state.view === 'database' ? 'block h-full' : 'hidden h-full'}>
-              <DatabaseBrowser
-                onNewConnection={handleNewConnection}
-                onEditConnection={handleEditConnection}
-              />
-            </div>
-          </main>
-        )}
+        <main className={state.view !== 'terminal' ? 'flex-1 overflow-y-auto relative custom-scrollbar p-6' : 'hidden h-full'}>
+          <div className={state.view === 'dashboard' ? 'block h-full' : 'hidden h-full'}>
+            <Dashboard
+              onNewConnection={handleNewConnection}
+              onEditConnection={handleEditConnection}
+            />
+          </div>
+          <div className={state.view === 'files' ? 'block h-full' : 'hidden h-full'}>
+            <FileTabs />
+          </div>
+          <div className={state.view === 'database' ? 'block h-full' : 'hidden h-full'}>
+            <DatabaseBrowser
+              onNewConnection={handleNewConnection}
+              onEditConnection={handleEditConnection}
+            />
+          </div>
+        </main>
       </div>
 
       {isModalOpen && (

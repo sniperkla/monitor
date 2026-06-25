@@ -217,6 +217,9 @@ export default function DockerLogApp({ initialConnection, initialConnectionId, i
             </div>
             
             <div className="flex items-center gap-4">
+                <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-medium ${typeof window !== 'undefined' && localStorage.getItem('ssh_monitor_ssh_mode') === 'local' ? 'bg-emerald-500/15 text-emerald-400' : 'bg-blue-500/15 text-blue-400'}`}>
+                  {typeof window !== 'undefined' && localStorage.getItem('ssh_monitor_ssh_mode') === 'local' ? '⚡ Local' : '☁ Server'}
+                </span>
                 {/* Find Bar */}
                 <div className="relative group flex items-center">
                     <div className="absolute left-2.5 text-white/20">
