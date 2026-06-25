@@ -130,6 +130,25 @@ function normalizeGitHubRepo(value) {
   return trimmed;
 }
 
+function normalizeBitbucketRepo(value) {
+  if (!value) return '';
+  const raw = value.trim();
+  try {
+    if (/^https?:\/\//i.test(raw)) {
+      const parsed = new URL(raw);
+      if (parsed.hostname.toLowerCase().includes('bitbucket.org')) {
+        const path = parsed.pathname.replace(/^\/+|\/+$/g, '');
+        const parts = path.split('/').filter(Boolean);
+        if (parts.length >= 2) {
+          return `${parts[0]}/${parts[1]}`;
+        }
+      }
+    }
+  } catch (err) {}
+  const trimmed = raw.replace(/^\/+|\/+$/g, '');
+  return trimmed;
+}
+
 export default function SettingsApp({ initialTab, deploymentOnly = false }) {
   const [activeTab, setActiveTab] = useState(initialTab || (deploymentOnly ? 'deployment' : 'appearance'));
   const { data: session } = useSession();
@@ -205,6 +224,8 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
     aiApiKey: '',
     githubConnected: false,
     githubUser: '',
+    bitbucketConnected: false,
+    bitbucketUser: '',
     telegramNotification: false,
     telegramBotToken: '',
     telegramChatId: ''
@@ -229,6 +250,10 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
   const [loadingBranches, setLoadingBranches] = useState(false);
   const [repoInput, setRepoInput] = useState('');
   const prevDeployStatusRef = useRef(null);
+  const [gitProvider, setGitProvider] = useState('github');
+  const [bbUsername, setBbUsername] = useState('');
+  const [bbAppPassword, setBbAppPassword] = useState('');
+  const [bbConnecting, setBbConnecting] = useState(false);
 
   // Fetch deployment configurations and connections
   useEffect(() => {
@@ -248,10 +273,15 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
               aiLogs: configData.config.aiLogs || [],
               githubConnected: configData.config.githubConnected || false,
               githubUser: configData.config.githubUser || '',
+              bitbucketConnected: configData.config.bitbucketConnected || false,
+              bitbucketUser: configData.config.bitbucketUser || '',
               // load saved repo into repo input
               githubRepo: configData.config.githubRepo || ''
             }));
             setRepoInput(configData.config.githubRepo || '');
+            // Detect active provider
+            if (configData.config.bitbucketConnected) setGitProvider('bitbucket');
+            else setGitProvider('github');
           }
 
           const listRes = await apiFetch('/api/deploy/config');
@@ -505,6 +535,52 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
     } catch (err) {
       console.error('Disconnect failed:', err);
       addNotification({ title: 'Error', message: 'Failed to disconnect GitHub', type: 'error' });
+    }
+  };
+
+  const handleConnectBitbucket = async () => {
+    if (!bbUsername.trim() || !bbAppPassword.trim()) {
+      addNotification({ title: 'Error', message: 'Enter Bitbucket username and app password', type: 'error' });
+      return;
+    }
+    setBbConnecting(true);
+    try {
+      const res = await apiFetch(`/api/deploy/bitbucket/connect?project=${encodeURIComponent(selectedProjectId)}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: bbUsername.trim(), appPassword: bbAppPassword.trim() }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setDeployConfig(prev => ({ ...prev, bitbucketConnected: true, bitbucketUser: data.bitbucketUser }));
+        setBbUsername('');
+        setBbAppPassword('');
+        addNotification({ title: 'Bitbucket Connected', message: `Connected as ${data.bitbucketUser}`, type: 'success' });
+      } else {
+        addNotification({ title: 'Error', message: data.error || 'Failed to connect Bitbucket', type: 'error' });
+      }
+    } catch (err) {
+      addNotification({ title: 'Error', message: 'Failed to connect to Bitbucket', type: 'error' });
+    }
+    setBbConnecting(false);
+  };
+
+  const handleDisconnectBitbucket = async () => {
+    if (!confirm('Disconnect Bitbucket for this project? This will remove stored credentials.')) return;
+    try {
+      const res = await apiFetch(`/api/deploy/bitbucket/disconnect?project=${selectedProjectId}`, { method: 'POST' });
+      const data = await res.json();
+      if (data.success) {
+        setDeployConfig(prev => ({ ...prev, bitbucketConnected: false, bitbucketUser: '' }));
+        addNotification({ title: 'Bitbucket Disconnected', message: 'Bitbucket connection removed for this project', type: 'success' });
+        const listRes = await apiFetch('/api/deploy/config');
+        const listData = await listRes.json();
+        if (listData.success && listData.projects) setDeployProjects(listData.projects);
+      } else {
+        addNotification({ title: 'Error', message: data.error || 'Failed to disconnect', type: 'error' });
+      }
+    } catch (err) {
+      addNotification({ title: 'Error', message: 'Failed to disconnect Bitbucket', type: 'error' });
     }
   };
 
@@ -2318,7 +2394,7 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
                       <div className="flex items-center justify-between py-2 border-b border-[var(--border-color)] pb-4">
                         <div>
                           <span className="block text-sm font-medium text-[var(--text-primary)]">{t('deploy.enableAutoDeploy', 'Enable Auto-Deploy')}</span>
-                          <span className="text-[10px] text-[var(--text-muted)]">{t('deploy.enableAutoDeployDesc', 'Automatically run deployment script when GitHub pushes arrive')}</span>
+                          <span className="text-[10px] text-[var(--text-muted)]">{t('deploy.enableAutoDeployDesc', 'Automatically run deployment script when pushes arrive')}</span>
                         </div>
                         <button
                           onClick={() => {
@@ -2332,12 +2408,32 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
 
                         <div className="space-y-4">
                         <div className="rounded-2xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] p-4">
+                          <p className="text-[11px] font-bold uppercase tracking-wider text-[var(--text-secondary)] mb-3">{t('deploy.gitProvider', 'Git Provider')}</p>
+                          <div className="flex gap-2">
+                            <button
+                              onClick={() => setGitProvider('github')}
+                              className={`px-4 py-2 rounded-xl text-xs font-bold transition ${gitProvider === 'github' ? 'bg-indigo-600 text-white' : 'bg-[var(--bg-primary)] text-[var(--text-secondary)] hover:bg-[var(--border-color)]'}`}
+                            >
+                              GitHub
+                            </button>
+                            <button
+                              onClick={() => setGitProvider('bitbucket')}
+                              className={`px-4 py-2 rounded-xl text-xs font-bold transition ${gitProvider === 'bitbucket' ? 'bg-indigo-600 text-white' : 'bg-[var(--bg-primary)] text-[var(--text-secondary)] hover:bg-[var(--border-color)]'}`}
+                            >
+                              Bitbucket
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* GitHub Connection */}
+                        {gitProvider === 'github' && (
+                        <div className="rounded-2xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] p-4">
                           <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
                             <div>
                               <p className="text-[11px] font-bold uppercase tracking-wider text-[var(--text-secondary)]">{t('deploy.githubConnection', 'GitHub Connection')}</p>
                               <p className="mt-1 text-sm text-[var(--text-primary)]">
-                                {deployConfig.githubConnected 
-                                  ? t('deploy.githubConnectedAs', 'Connected as {{user}}', { user: deployConfig.githubUser || 'GitHub user' }) 
+                                {deployConfig.githubConnected
+                                  ? t('deploy.githubConnectedAs', 'Connected as {{user}}', { user: deployConfig.githubUser || 'GitHub user' })
                                   : t('deploy.githubNotConnected', 'Not connected')}
                               </p>
                             </div>
@@ -2359,36 +2455,91 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
                             </div>
                           </div>
                         </div>
+                        )}
+
+                        {/* Bitbucket Connection */}
+                        {gitProvider === 'bitbucket' && (
+                        <div className="rounded-2xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] p-4">
+                          <div className="flex flex-col gap-4">
+                            <div>
+                              <p className="text-[11px] font-bold uppercase tracking-wider text-[var(--text-secondary)]">Bitbucket Connection</p>
+                              <p className="mt-1 text-sm text-[var(--text-primary)]">
+                                {deployConfig.bitbucketConnected
+                                  ? `Connected as ${deployConfig.bitbucketUser || 'Bitbucket user'}`
+                                  : 'Not connected'}
+                              </p>
+                            </div>
+                            {!deployConfig.bitbucketConnected ? (
+                              <div className="space-y-3">
+                                <input
+                                  type="text"
+                                  value={bbUsername}
+                                  onChange={(e) => setBbUsername(e.target.value)}
+                                  placeholder="Bitbucket username"
+                                  className="w-full bg-[var(--bg-primary)] border border-[var(--border-color)] rounded-xl px-3 py-2 text-xs text-[var(--text-primary)] focus:outline-none focus:border-indigo-500"
+                                />
+                                <input
+                                  type="password"
+                                  value={bbAppPassword}
+                                  onChange={(e) => setBbAppPassword(e.target.value)}
+                                  placeholder="App password"
+                                  className="w-full bg-[var(--bg-primary)] border border-[var(--border-color)] rounded-xl px-3 py-2 text-xs text-[var(--text-primary)] focus:outline-none focus:border-indigo-500"
+                                />
+                                <p className="text-[10px] text-[var(--text-muted)]">Create an app password at Bitbucket Settings &gt; App passwords with <b>Repositories: Read</b> permission.</p>
+                                <button
+                                  onClick={handleConnectBitbucket}
+                                  disabled={bbConnecting}
+                                  className="px-3 py-2 bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-600 text-white rounded-xl text-xs font-bold"
+                                >
+                                  {bbConnecting ? 'Connecting...' : 'Connect'}
+                                </button>
+                              </div>
+                            ) : (
+                              <div className="flex flex-wrap gap-2">
+                                <button
+                                  onClick={() => { setBbUsername(''); setBbAppPassword(''); handleDisconnectBitbucket(); }}
+                                  className="px-3 py-2 bg-red-600 hover:bg-red-500 text-white rounded-xl text-xs font-bold"
+                                >
+                                  Disconnect
+                                </button>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                        )}
 
                         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
                           <div className="rounded-2xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] p-4">
-                            <label className="block text-[11px] font-bold text-[var(--text-secondary)] uppercase tracking-wider mb-2">{t('deploy.githubRepoLabel', 'GitHub repository')}</label>
+                            <label className="block text-[11px] font-bold text-[var(--text-secondary)] uppercase tracking-wider mb-2">{gitProvider === 'github' ? t('deploy.githubRepoLabel', 'GitHub repository') : 'Bitbucket repository'}</label>
                             <input
                               type="text"
                               value={repoInput}
                               onChange={(e) => setRepoInput(e.target.value)}
                               onBlur={() => {
-                                const normalized = normalizeGitHubRepo(repoInput);
+                                const normalizer = gitProvider === 'bitbucket' ? normalizeBitbucketRepo : normalizeGitHubRepo;
+                                const normalized = normalizer(repoInput);
                                 if (normalized !== repoInput) {
                                   setRepoInput(normalized);
                                 }
                               }}
-                              placeholder={t('deploy.githubRepoPlaceholder', 'owner/repo')}
+                              placeholder={gitProvider === 'github' ? t('deploy.githubRepoPlaceholder', 'owner/repo') : 'workspace/repo-slug'}
                               className="w-full bg-[var(--bg-primary)] border border-[var(--border-color)] rounded-xl px-3 py-2 text-xs text-[var(--text-primary)] focus:outline-none focus:border-indigo-500"
                             />
                             <button
                               onClick={async () => {
                                 const rawRepo = repoInput || deployConfig.githubRepo;
-                                const repoValue = normalizeGitHubRepo(rawRepo);
+                                const normalizer = gitProvider === 'bitbucket' ? normalizeBitbucketRepo : normalizeGitHubRepo;
+                                const repoValue = normalizer(rawRepo);
                                 if (!repoValue || repoValue.split('/').length < 2) {
-                                  addNotification({ title: t('deploy.branchesNotifTitle', 'Branches'), message: t('deploy.branchInvalidRepo', 'Enter a valid repository in owner/repo format or GitHub URL.'), type: 'error' });
+                                  addNotification({ title: t('deploy.branchesNotifTitle', 'Branches'), message: t('deploy.branchInvalidRepo', 'Enter a valid repository in owner/repo format or URL.'), type: 'error' });
                                   return;
                                 }
                                 try {
                                   setLoadingBranches(true);
                                   setBranches([]);
-                                  const param = `repo=${encodeURIComponent(repoValue)}`;
-                                  const res = await apiFetch(`/api/deploy/github/branches?${param}`);
+                                  const param = `repo=${encodeURIComponent(repoValue)}&project=${encodeURIComponent(selectedProjectId)}`;
+                                  const endpoint = gitProvider === 'bitbucket' ? '/api/deploy/bitbucket/branches' : '/api/deploy/github/branches';
+                                  const res = await apiFetch(`${endpoint}?${param}`);
                                   const data = await res.json();
                                   if (data.success) {
                                     setBranches(data.branches || []);
@@ -2417,7 +2568,9 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
                                 : t('deploy.branchEnterFirst', 'Enter an owner/repo or use the saved repository before loading branches.')}
                             </p>
                             <p className="text-[10px] text-[var(--text-muted)]">
-                              {t('deploy.branchPublicHint', 'Public repos can load without GitHub auth; private repos require connection.')}
+                              {gitProvider === 'github'
+                                ? t('deploy.branchPublicHint', 'Public repos can load without GitHub auth; private repos require connection.')
+                                : 'Private repos require Bitbucket connection.'}
                             </p>
                           </div>
 
@@ -2472,7 +2625,7 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
                               {copySuccess ? <CheckCheck size={14} className="text-emerald-500" /> : <Copy size={14} />}
                             </button>
                           </div>
-                          <span className="block text-[9px] text-[var(--text-muted)] mt-1">{t('deploy.webhookUrlHint', 'Use this unique Webhook URL for the project "{{project}}" in GitHub repository Webhook settings. Make sure Payload format is application/json.', { project: selectedProjectId })}</span>
+                          <span className="block text-[9px] text-[var(--text-muted)] mt-1">{t('deploy.webhookUrlHint', 'Use this Webhook URL in your repository\'s webhook settings (GitHub or Bitbucket). Make sure Payload format is application/json.', { project: selectedProjectId })}</span>
                         </div>
 
                         <div className="space-y-1 pt-2">

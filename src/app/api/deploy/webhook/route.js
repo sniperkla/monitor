@@ -31,15 +31,18 @@ function checkTriggerRateLimit(projectId) {
   return { allowed: true };
 }
 
-// Verify GitHub webhook signature using HMAC-SHA256
+// Verify webhook signature using HMAC-SHA256
+// Supports both GitHub (x-hub-signature-256) and Bitbucket (x-hub-signature) headers
 function verifySignature(bodyText, secret, signatureHeader) {
   if (!signatureHeader) return false;
   const parts = signatureHeader.split('=');
-  if (parts.length !== 2 || parts[0] !== 'sha256') return false;
+  if (parts.length !== 2) return false;
+  const algo = parts[0]; // 'sha256' for GitHub, 'sha1' for Bitbucket
   const signature = parts[1];
-  const hmac = crypto.createHmac('sha256', secret);
+  if (algo !== 'sha256' && algo !== 'sha1') return false;
+  const hmac = crypto.createHmac(algo, secret);
   const digest = hmac.update(bodyText).digest('hex');
-  
+
   try {
     return crypto.timingSafeEqual(Buffer.from(signature, 'hex'), Buffer.from(digest, 'hex'));
   } catch (e) {
@@ -743,56 +746,81 @@ export async function POST(request) {
 
     const bodyText = await request.text();
 
-    // 3. Signature verification for GitHub Webhook calls (when not a manual trigger)
+    // 3. Signature verification for webhook calls (when not a manual trigger)
     if (!isManual) {
       const githubEvent = request.headers.get('x-github-event');
+      const bitbucketEvent = request.headers.get('x-event-key');
+
+      // Detect provider
+      const isGitHub = !!githubEvent;
+      const isBitbucket = !!bitbucketEvent;
+
+      // Handle ping events
       if (githubEvent === 'ping') {
         console.log(`[webhook] Received GitHub ping`);
         return NextResponse.json({ success: true, message: 'GitHub Ping received successfully' });
       }
+      if (bitbucketEvent === 'diagnostics:ping') {
+        console.log(`[webhook] Received Bitbucket ping`);
+        return NextResponse.json({ success: true, message: 'Bitbucket Ping received successfully' });
+      }
 
-      if (config.secret) {
-        const signatureHeader = request.headers.get('x-hub-signature-256');
-        if (!signatureHeader || !verifySignature(bodyText, config.secret, signatureHeader)) {
-          console.log(`[webhook] Signature verification failed`);
+      // For push events, verify signature and check branch
+      const isPushEvent = (isGitHub && githubEvent === 'push') || (isBitbucket && bitbucketEvent === 'repo:push');
+
+      if (isPushEvent) {
+        if (config.secret) {
+          // GitHub uses x-hub-signature-256, Bitbucket uses x-hub-signature
+          const signatureHeader = request.headers.get('x-hub-signature-256') || request.headers.get('x-hub-signature');
+          if (!signatureHeader || !verifySignature(bodyText, config.secret, signatureHeader)) {
+            console.log(`[webhook] Signature verification failed`);
+            await updateDeployStatus(
+              projectId,
+              'failed',
+              `[Webhook Error] Signature verification failed. Please check that the Secret configured on ${isGitHub ? 'GitHub' : 'Bitbucket'} matches the Secret in the Auto Deploy settings.`
+            );
+            return NextResponse.json({ success: false, error: 'Invalid signature verification' }, { status: 401 });
+          }
+        }
+
+        // Check push branch matches config
+        try {
+          const payload = JSON.parse(bodyText);
+          let pushRef = null;
+
+          if (isGitHub && payload.ref) {
+            pushRef = payload.ref;
+          } else if (isBitbucket && payload.push?.changes?.[0]?.new?.name) {
+            pushRef = `refs/heads/${payload.push.changes[0].new.name}`;
+          }
+
+          if (pushRef) {
+            const rawBranch = String(config.branch || '').trim();
+            const expectedRef = rawBranch
+              ? (rawBranch.startsWith('refs/heads/') ? rawBranch : `refs/heads/${rawBranch}`)
+              : null;
+            console.log(`[webhook] Push ref: ${pushRef}${expectedRef ? `, expected: ${expectedRef}` : ', no branch filter configured'}`);
+            if (expectedRef && pushRef !== expectedRef) {
+              console.log(`[webhook] Branch mismatch - skipping deployment`);
+              await updateDeployStatus(
+                projectId,
+                'idle',
+                `[Webhook Skipped] Received ${isGitHub ? 'GitHub' : 'Bitbucket'} push event for ref "${pushRef}" but watched branch is configured as "${rawBranch}". Skipping deployment.`
+              );
+              return NextResponse.json({
+                success: true,
+                message: `Ref ${pushRef} does not match watched branch ${expectedRef}. Skipping deployment.`
+              });
+            }
+          }
+        } catch (e) {
+          console.log(`[webhook] Warning: Could not parse payload:`, e.message);
           await updateDeployStatus(
             projectId,
             'failed',
-            `[Webhook Error] Signature verification failed. Please check that the Secret configured on GitHub matches the Secret in the Auto Deploy settings.`
+            `[Webhook Error] Failed to parse payload from ${isGitHub ? 'GitHub' : 'Bitbucket'} request: ${e.message}`
           );
-          return NextResponse.json({ success: false, error: 'Invalid signature verification' }, { status: 401 });
         }
-      }
-
-      // Check push branch matches config
-      try {
-        const payload = JSON.parse(bodyText);
-        if (payload.ref) {
-          const rawBranch = String(config.branch || '').trim();
-          const expectedRef = rawBranch
-            ? (rawBranch.startsWith('refs/heads/') ? rawBranch : `refs/heads/${rawBranch}`)
-            : null;
-          console.log(`[webhook] Push ref: ${payload.ref}${expectedRef ? `, expected: ${expectedRef}` : ', no branch filter configured'}`);
-          if (expectedRef && payload.ref !== expectedRef) {
-            console.log(`[webhook] Branch mismatch - skipping deployment`);
-            await updateDeployStatus(
-              projectId,
-              'idle',
-              `[Webhook Skipped] Received GitHub push event for ref "${payload.ref}" but watched branch is configured as "${rawBranch}". Skipping deployment.`
-            );
-            return NextResponse.json({ 
-              success: true, 
-              message: `Ref ${payload.ref} does not match watched branch ${expectedRef}. Skipping deployment.` 
-            });
-          }
-        }
-      } catch (e) {
-        console.log(`[webhook] Warning: Could not parse payload:`, e.message);
-        await updateDeployStatus(
-          projectId,
-          'failed',
-          `[Webhook Error] Failed to parse payload from GitHub request: ${e.message}`
-        );
       }
     }
 
@@ -812,34 +840,51 @@ export async function POST(request) {
 
     console.log(`[webhook] ✅ Triggering deployment for project: ${projectId}`);
 
-    // Parse GitHub push payload for rich Telegram notifications
+    // Parse push payload for rich Telegram notifications (supports GitHub and Bitbucket)
     let gitInfo = null;
     if (!isManual && bodyText) {
       try {
         const payload = JSON.parse(bodyText);
-        const latestCommit = payload.commits?.[0];
-        const rawRef = payload.ref || '';
-        gitInfo = {
-          branch: rawRef.replace('refs/heads/', '') || null,
-          commitMsg: latestCommit?.message || null,
-          commitId: latestCommit?.id || null,
-          author: payload.pusher?.name || latestCommit?.author?.name || null,
-        };
+
+        // GitHub push payload
+        if (payload.ref && payload.pusher) {
+          const latestCommit = payload.commits?.[0];
+          gitInfo = {
+            branch: String(payload.ref || '').replace('refs/heads/', '') || null,
+            commitMsg: latestCommit?.message || null,
+            commitId: latestCommit?.id || null,
+            author: payload.pusher?.name || latestCommit?.author?.name || null,
+          };
+        }
+        // Bitbucket push payload
+        else if (payload.push?.changes?.[0]) {
+          const change = payload.push.changes[0];
+          const newRef = change.new || {};
+          const target = newRef.target || {};
+          gitInfo = {
+            branch: newRef.name || null,
+            commitMsg: target.message || null,
+            commitId: target.hash || null,
+            author: payload.actor?.display_name || target.author?.raw || null,
+          };
+        }
       } catch (e) { /* ignore parse errors */ }
     }
 
+    const triggerSource = isManual ? 'Manual (Dashboard)' : (bodyText?.includes?.('"actor"') ? 'Bitbucket Webhook' : 'GitHub Webhook');
+
     runDeployment(config, {
       gitInfo,
-      triggerSource: isManual ? 'Manual (Dashboard)' : 'GitHub Webhook'
+      triggerSource
     }).catch(err => {
       console.error('Unhandled background deployment error:', err.message);
     }).finally(() => {
       releaseStartLock(projectId);
     });
 
-    return NextResponse.json({ 
-      success: true, 
-      message: isManual ? 'Manual deployment triggered successfully' : 'Auto deployment triggered by GitHub Webhook' 
+    return NextResponse.json({
+      success: true,
+      message: isManual ? 'Manual deployment triggered successfully' : 'Auto deployment triggered by Webhook'
     });
 
   } catch (error) {
