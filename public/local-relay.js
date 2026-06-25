@@ -168,6 +168,7 @@ function startDiscoveryServer(relayName) {
 }
 
 // ── Main connection loop ──────────────────────────────────────────────────
+let activeWs = null;
 function connect() {
   if (!SERVER || !TOKEN) {
     console.error('❌ Server and token required. Run with: --server URL --token TOKEN');
@@ -181,7 +182,10 @@ function connect() {
   console.log(`   Connecting...`);
 
   let ws;
-  try { ws = new WS(wsUrl); } catch (err) {
+  try {
+    ws = new WS(wsUrl);
+    activeWs = ws;
+  } catch (err) {
     console.error('❌ WebSocket failed:', err.message);
     setTimeout(connect, retryDelay);
     return;
@@ -334,6 +338,7 @@ function connect() {
   });
 
   ws.addEventListener('close', ({ code, reason }) => {
+    if (ws !== activeWs) return;
     clearInterval(keepAlive);
     tcpConnections.forEach(t => t.destroy());
     tcpConnections.clear();
@@ -352,6 +357,7 @@ function connect() {
   });
 
   ws.addEventListener('error', (err) => {
+    if (ws !== activeWs) return;
     console.error(`❌ WebSocket error: ${err.message || err}`);
   });
 }
@@ -573,19 +579,23 @@ function handleSftpDelete(ws, msg) {
     ws.send(JSON.stringify({ type: 'sftp:action_success', connId: msg.connId, action: 'delete', path: msg.path }));
   };
 
-  const onError = (err) => {
-    sendSftpError(ws, msg.connId, err);
-  };
-
   session.sshClient.sftp((sftpErr, sftp) => {
-    if (sftpErr) return onError(sftpErr);
+    if (sftpErr) return sendSftpError(ws, msg.connId, sftpErr);
 
     sftp.unlink(msg.path, (unlinkErr) => {
       if (!unlinkErr) { sftp.end(); return onSuccess(); }
       sftp.rmdir(msg.path, (rmdirErr) => {
         sftp.end();
         if (!rmdirErr) return onSuccess();
-        onError(rmdirErr);
+        session.sshClient.exec(`rm -rf "${msg.path}"`, (execErr, stream) => {
+          if (execErr) return sendSftpError(ws, msg.connId, execErr);
+          let stderr = '';
+          stream.stderr.on('data', (d) => stderr += d.toString());
+          stream.on('close', (code) => {
+            if (code === 0) onSuccess();
+            else sendSftpError(ws, msg.connId, new Error(stderr.trim() || `Delete failed (exit ${code})`));
+          });
+        });
       });
     });
   });
@@ -608,17 +618,56 @@ async function handleSftpDownload(ws, msg) {
   try {
     const sftp = await getSftpClient(msg.connId);
     const filePath = msg.filePath || msg.remotePath;
-    const chunks = [];
-    const stream = sftp.createReadStream(filePath);
-    stream.on('data', (chunk) => chunks.push(chunk));
-    stream.on('error', (err) => sendSftpError(ws, msg.connId, err));
-    stream.on('end', () => {
-      ws.send(JSON.stringify({
-        type: 'sftp:download_data',
-        connId: msg.connId,
-        path: filePath,
-        data: Buffer.concat(chunks).toString('base64'),
-      }));
+    const filename = path.posix.basename(filePath);
+
+    // Get file size for progress calculation
+    sftp.stat(filePath, (statErr, stat) => {
+      if (statErr) return sendSftpError(ws, msg.connId, statErr);
+
+      const size = stat.size;
+      if (ws.readyState === 1) {
+        ws.send(JSON.stringify({
+          type: 'sftp:download_start',
+          connId: msg.connId,
+          filename,
+          size,
+          offset: 0
+        }));
+      }
+
+      const stream = sftp.createReadStream(filePath, {
+        highWaterMark: 256 * 1024 // 256 KB chunks
+      });
+
+      let bytesSent = 0;
+      stream.on('data', (chunk) => {
+        bytesSent += chunk.length;
+        const progress = size > 0 ? Math.round((bytesSent / size) * 100) : 0;
+        if (ws.readyState === 1) {
+          ws.send(JSON.stringify({
+            type: 'sftp:download_chunk',
+            connId: msg.connId,
+            filename,
+            chunk: chunk.toString('base64'),
+            progress,
+            offset: bytesSent
+          }));
+        }
+      });
+
+      stream.on('error', (err) => {
+        sendSftpError(ws, msg.connId, err);
+      });
+
+      stream.on('end', () => {
+        if (ws.readyState === 1) {
+          ws.send(JSON.stringify({
+            type: 'sftp:download_done',
+            connId: msg.connId,
+            filename
+          }));
+        }
+      });
     });
   } catch (err) {
     sendSftpError(ws, msg.connId, err);
@@ -652,21 +701,45 @@ async function handleSftpDownloadFolder(ws, msg) {
     session.sshClient.exec(tarCmd, (err, stream) => {
       if (err) return sendSftpError(ws, msg.connId, err);
 
-      const chunks = [];
+      if (ws.readyState === 1) {
+        ws.send(JSON.stringify({
+          type: 'sftp:download_start',
+          connId: msg.connId,
+          filename: archiveName,
+          size: -1,
+          offset: 0
+        }));
+      }
+
+      let totalSent = 0;
       let stderrBuf = '';
 
-      stream.on('data', (chunk) => chunks.push(chunk));
+      stream.on('data', (chunk) => {
+        totalSent += chunk.length;
+        if (ws.readyState === 1) {
+          ws.send(JSON.stringify({
+            type: 'sftp:download_chunk',
+            connId: msg.connId,
+            filename: archiveName,
+            chunk: chunk.toString('base64'),
+            progress: -1,
+            offset: totalSent
+          }));
+        }
+      });
+
       stream.stderr.on('data', (d) => { stderrBuf += d.toString(); });
       stream.on('close', (code) => {
         if (code !== 0) {
           return sendSftpError(ws, msg.connId, new Error(`tar failed (exit ${code}): ${stderrBuf}`));
         }
-        ws.send(JSON.stringify({
-          type: 'sftp:download_data',
-          connId: msg.connId,
-          path: archiveName,
-          data: Buffer.concat(chunks).toString('base64'),
-        }));
+        if (ws.readyState === 1) {
+          ws.send(JSON.stringify({
+            type: 'sftp:download_done',
+            connId: msg.connId,
+            filename: archiveName
+          }));
+        }
       });
     });
   } catch (err) {
@@ -676,32 +749,99 @@ async function handleSftpDownloadFolder(ws, msg) {
 
 async function handleSftpSearch(ws, msg) {
   try {
-    const sftp = await getSftpClient(msg.connId);
-    const query = (msg.query || '').toLowerCase();
-    const results = [];
-    const MAX_RESULTS = 200;
-
-    async function walk(dir) {
-      if (results.length >= MAX_RESULTS) return;
-      const list = await new Promise((resolve, reject) => {
-        sftp.readdir(dir, (err, list) => err ? reject(err) : resolve(list || []));
-      });
-      for (const item of list) {
-        if (results.length >= MAX_RESULTS) break;
-        const fullPath = dir === '/' ? `/${item.filename}` : `${dir}/${item.filename}`;
-        if (item.filename.toLowerCase().includes(query)) {
-          results.push({ filename: item.filename, path: fullPath, isDirectory: item.attrs.isDirectory() });
-        }
-        if (item.attrs.isDirectory() && !item.filename.startsWith('.')) {
-          await walk(fullPath);
-        }
+    const session = sshSessions.get(msg.connId);
+    const q = String(msg.query || '').trim();
+    if (!q) {
+      if (ws.readyState === 1) {
+        ws.send(JSON.stringify({ type: 'sftp:searchResult', connId: msg.connId, query: msg.query, results: [] }));
       }
+      return;
     }
 
-    await walk(msg.path || '.');
-    ws.send(JSON.stringify({ type: 'sftp:searchResult', connId: msg.connId, query: msg.query, results }));
+    const startDir = msg.path || '.';
+
+    const runManualWalk = async () => {
+      try {
+        const sftp = await getSftpClient(msg.connId);
+        const query = q.toLowerCase();
+        const results = [];
+        const MAX_RESULTS = 200;
+
+        async function walk(dir) {
+          if (results.length >= MAX_RESULTS) return;
+          const list = await new Promise((resolve, reject) => {
+            sftp.readdir(dir, (err, list) => err ? reject(err) : resolve(list || []));
+          });
+          for (const item of list) {
+            if (results.length >= MAX_RESULTS) break;
+            const fullPath = dir === '/' ? `/${item.filename}` : `${dir}/${item.filename}`;
+            if (item.filename.toLowerCase().includes(query)) {
+              results.push({
+                filename: item.filename,
+                path: fullPath,
+                absPath: fullPath,
+                dir: dir,
+                isDirectory: item.attrs.isDirectory()
+              });
+            }
+            if (item.attrs.isDirectory() && !item.filename.startsWith('.')) {
+              await walk(fullPath);
+            }
+          }
+        }
+
+        await walk(startDir);
+        if (ws.readyState === 1) {
+          ws.send(JSON.stringify({ type: 'sftp:searchResult', connId: msg.connId, query: msg.query, results }));
+        }
+      } catch (err) {
+        if (ws.readyState === 1) {
+          ws.send(JSON.stringify({ type: 'sftp:searchResult', connId: msg.connId, query: msg.query, results: [], error: err?.message }));
+        }
+      }
+    };
+
+    if (session?.sshClient) {
+      const escapedQ = q.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/`/g, '\\`').replace(/\$/g, '\\$');
+      const findCmd = `find "${startDir}" -iname "*${escapedQ}*" 2>/dev/null | head -200`;
+
+      session.sshClient.exec(findCmd, (err, stream) => {
+        if (err) return runManualWalk();
+
+        let output = '';
+        stream.on('data', (d) => { output += d.toString(); });
+        stream.on('close', (code) => {
+          if (code !== 0) return runManualWalk();
+
+          const seen = new Set();
+          const results = output
+            .split('\n')
+            .map(l => l.trim())
+            .filter(l => l && !seen.has(l) && seen.add(l))
+            .map(absPath => {
+              const filename = absPath.split('/').pop();
+              const dir = absPath.split('/').slice(0, -1).join('/') || '/';
+              return {
+                filename,
+                path: absPath,
+                absPath,
+                dir,
+                isDirectory: !filename.includes('.')
+              };
+            });
+
+          if (ws.readyState === 1) {
+            ws.send(JSON.stringify({ type: 'sftp:searchResult', connId: msg.connId, query: msg.query, results }));
+          }
+        });
+      });
+    } else {
+      await runManualWalk();
+    }
   } catch (err) {
-    ws.send(JSON.stringify({ type: 'sftp:searchResult', connId: msg.connId, query: msg.query, results: [], error: err?.message }));
+    if (ws.readyState === 1) {
+      ws.send(JSON.stringify({ type: 'sftp:searchResult', connId: msg.connId, query: msg.query, results: [], error: err?.message }));
+    }
   }
 }
 
@@ -714,28 +854,72 @@ async function handleSftpGetSize(ws, msg) {
       sftp.stat(targetPath, (err, stats) => err ? reject(err) : resolve(stats));
     });
 
-    if (stat.isDirectory()) {
-      let totalSize = 0;
-      async function walk(dir) {
-        const list = await new Promise((resolve, reject) => {
-          sftp.readdir(dir, (err, list) => err ? reject(err) : resolve(list || []));
-        });
-        for (const item of list) {
-          const fullPath = `${dir}/${item.filename}`;
-          if (item.attrs.isDirectory()) {
-            await walk(fullPath);
-          } else {
-            totalSize += item.attrs.size || 0;
+    const runManualGetSize = async () => {
+      try {
+        if (stat.isDirectory()) {
+          let totalSize = 0;
+          async function walk(dir) {
+            const list = await new Promise((resolve, reject) => {
+              sftp.readdir(dir, (err, list) => err ? reject(err) : resolve(list || []));
+            });
+            for (const item of list) {
+              const fullPath = `${dir}/${item.filename}`;
+              if (item.attrs.isDirectory()) {
+                await walk(fullPath);
+              } else {
+                totalSize += item.attrs.size || 0;
+              }
+            }
+          }
+          await walk(targetPath);
+          if (ws.readyState === 1) {
+            ws.send(JSON.stringify({ type: 'sftp:sizeResult', connId: msg.connId, path: targetPath, size: totalSize }));
+          }
+        } else {
+          if (ws.readyState === 1) {
+            ws.send(JSON.stringify({ type: 'sftp:sizeResult', connId: msg.connId, path: targetPath, size: stat.size }));
           }
         }
+      } catch (err) {
+        if (ws.readyState === 1) {
+          ws.send(JSON.stringify({ type: 'sftp:sizeResult', connId: msg.connId, path: msg.path, size: 0, error: err?.message }));
+        }
       }
-      await walk(targetPath);
-      ws.send(JSON.stringify({ type: 'sftp:sizeResult', connId: msg.connId, path: targetPath, size: totalSize }));
+    };
+
+    if (stat.isDirectory()) {
+      const session = sshSessions.get(msg.connId);
+      if (session?.sshClient) {
+        // Run remote du command (much faster)
+        const cmd = `du -sb ${shellQuote(targetPath)} 2>/dev/null | cut -f1`;
+        session.sshClient.exec(cmd, (err, stream) => {
+          if (err) return runManualGetSize();
+
+          let output = '';
+          stream.on('data', (d) => { output += d.toString(); });
+          stream.on('close', (code) => {
+            const parsed = parseInt(output.trim(), 10);
+            if (code === 0 && !isNaN(parsed)) {
+              if (ws.readyState === 1) {
+                ws.send(JSON.stringify({ type: 'sftp:sizeResult', connId: msg.connId, path: targetPath, size: parsed }));
+              }
+            } else {
+              runManualGetSize();
+            }
+          });
+        });
+      } else {
+        await runManualGetSize();
+      }
     } else {
-      ws.send(JSON.stringify({ type: 'sftp:sizeResult', connId: msg.connId, path: targetPath, size: stat.size }));
+      if (ws.readyState === 1) {
+        ws.send(JSON.stringify({ type: 'sftp:sizeResult', connId: msg.connId, path: targetPath, size: stat.size }));
+      }
     }
   } catch (err) {
-    ws.send(JSON.stringify({ type: 'sftp:sizeResult', connId: msg.connId, path: msg.path, size: 0, error: err?.message }));
+    if (ws.readyState === 1) {
+      ws.send(JSON.stringify({ type: 'sftp:sizeResult', connId: msg.connId, path: msg.path, size: 0, error: err?.message }));
+    }
   }
 }
 

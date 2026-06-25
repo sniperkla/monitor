@@ -3182,13 +3182,13 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
 
           // Chunked upload: server uses sftp:upload → sftp:upload_chunk:N → sftp:upload_done
           // Relay agent uses a single blob. We reassemble chunks here then forward.
-          socket.removeAllListeners('sftp:upload');
+           socket.removeAllListeners('sftp:upload');
           socket.on('sftp:upload', ({ filename, path: destPath, size, offset = 0 }) => {
             const chunks = [];
             let totalBytes = 0;
 
             // Ack the upload start so browser starts sending chunks
-            socket.emit(`sftp:upload_ack:${filename}`, { offset, ready: true });
+            socket.emit('sftp:can_upload', { filename, offset, ready: true });
 
             const chunkHandler = (chunk) => {
               const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
@@ -3596,7 +3596,8 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
                   } else if (msg.type === 'sftp:download_start') {
                     targetSocket.emit('sftp:download_start', { filename: msg.filename, size: msg.size, offset: msg.offset || 0 });
                   } else if (msg.type === 'sftp:download_chunk') {
-                    targetSocket.emit('sftp:download_chunk', { filename: msg.filename, chunk: msg.chunk, progress: msg.progress, offset: msg.offset });
+                    const chunkBuf = typeof msg.chunk === 'string' ? Buffer.from(msg.chunk, 'base64') : msg.chunk;
+                    targetSocket.emit('sftp:download_chunk', { filename: msg.filename, chunk: chunkBuf, progress: msg.progress, offset: msg.offset });
                   } else if (msg.type === 'sftp:download_done') {
                     targetSocket.emit('sftp:download_done', { filename: msg.filename });
                   } else if (msg.type === 'sftp:download_data') {
