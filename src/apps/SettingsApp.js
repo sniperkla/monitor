@@ -485,6 +485,10 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
         ? `/api/deploy/bitbucket/commits?repo=${encodeURIComponent(repo)}&project=${selectedProjectId}&branch=${deployConfig.branch || 'main'}`
         : `/api/deploy/github/commits?repo=${encodeURIComponent(repo)}&project=${selectedProjectId}&branch=${deployConfig.branch || 'main'}`;
       const res = await apiFetch(endpoint);
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error || `Server error: ${res.status}`);
+      }
       const data = await res.json();
       if (data.success && data.commits) {
         setCommits(data.commits);
@@ -493,7 +497,8 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
         addNotification({ title: 'Error', message: data.error || 'Failed to fetch commits', type: 'error' });
       }
     } catch (err) {
-      addNotification({ title: 'Error', message: 'Failed to fetch commits', type: 'error' });
+      console.error('Failed to fetch commits:', err);
+      addNotification({ title: 'Error', message: err.message || 'Failed to fetch commits', type: 'error' });
     }
     setLoadingCommits(false);
   };
