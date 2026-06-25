@@ -563,19 +563,32 @@ async function handleSftpMkdir(ws, msg) {
   }
 }
 
-async function handleSftpDelete(ws, msg) {
-  try {
-    const sftp = await getSftpClient(msg.connId);
-    sftp.unlink(msg.path, (err) => {
-      if (!err) return ws.send(JSON.stringify({ type: 'sftp:action_success', connId: msg.connId, action: 'delete', path: msg.path }));
-      sftp.rmdir(msg.path, (err2) => {
-        if (!err2) return ws.send(JSON.stringify({ type: 'sftp:action_success', connId: msg.connId, action: 'delete', path: msg.path }));
-        sendSftpError(ws, msg.connId, err2);
+function handleSftpDelete(ws, msg) {
+  const session = sshSessions.get(msg.connId);
+  if (!session?.sshClient) {
+    return sendSftpError(ws, msg.connId, new Error('No SSH session'));
+  }
+
+  const onSuccess = () => {
+    ws.send(JSON.stringify({ type: 'sftp:action_success', connId: msg.connId, action: 'delete', path: msg.path }));
+  };
+
+  const onError = (err) => {
+    sendSftpError(ws, msg.connId, err);
+  };
+
+  session.sshClient.sftp((sftpErr, sftp) => {
+    if (sftpErr) return onError(sftpErr);
+
+    sftp.unlink(msg.path, (unlinkErr) => {
+      if (!unlinkErr) { sftp.end(); return onSuccess(); }
+      sftp.rmdir(msg.path, (rmdirErr) => {
+        sftp.end();
+        if (!rmdirErr) return onSuccess();
+        onError(rmdirErr);
       });
     });
-  } catch (err) {
-    sendSftpError(ws, msg.connId, err);
-  }
+  });
 }
 
 async function handleSftpUpload(ws, msg) {
