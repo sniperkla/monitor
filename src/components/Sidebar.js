@@ -203,17 +203,23 @@ export default function Sidebar({ onNewConnection, onEditConnection }) {
       // Check if DB storage is available
       const useDb = state.storageMode === 'db';
       
-      // Get existing connections for duplicate check
+      // Get existing connections for duplicate check — always check BOTH sources
+      // since fetchConnections combines DB + localStorage in the UI
       let existing = [];
-      if (useDb) {
-        try {
-          const existingRes = await apiFetch('/api/connections');
-          const existingData = await existingRes.json();
-          if (existingData.success) existing = existingData.data || [];
-        } catch (_) {}
-      } else {
-        existing = JSON.parse(localStorage.getItem('ssh_monitor_connections') || '[]');
-      }
+      try {
+        const existingRes = await apiFetch('/api/connections');
+        const existingData = await existingRes.json();
+        if (existingData.success) existing = existingData.data || [];
+      } catch (_) {}
+      // Also include localStorage connections to prevent cross-storage duplicates
+      try {
+        const localConns = JSON.parse(localStorage.getItem('ssh_monitor_connections') || '[]');
+        for (const lc of localConns) {
+          if (!existing.some(e => e.name === lc.name && e.host === lc.host && e.type === lc.type)) {
+            existing.push(lc);
+          }
+        }
+      } catch (_) {}
 
       let imported = 0;
       let usedFallback = false;
