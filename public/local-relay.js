@@ -219,7 +219,24 @@ function connect() {
       const tcpPort = Number(msg.port) || 22;
       const tcp = net.connect(tcpPort, tcpHost);
       tcp.on('data', (chunk) => {
-        if (ws.readyState === 1) ws.send(JSON.stringify({ type: 'data', connId, data: chunk.toString('base64') }));
+        if (ws.readyState === 1) {
+          ws.send(JSON.stringify({ type: 'data', connId, data: chunk.toString('base64') }));
+          if (ws.bufferedAmount && ws.bufferedAmount > 1024 * 1024) {
+            tcp.pause();
+            const checkBuffer = () => {
+              if (ws.readyState !== 1) {
+                tcp.destroy();
+                return;
+              }
+              if (ws.bufferedAmount === 0) {
+                tcp.resume();
+              } else {
+                setTimeout(checkBuffer, 50);
+              }
+            };
+            setTimeout(checkBuffer, 50);
+          }
+        }
       });
       tcp.on('close', () => { try { ws.send(JSON.stringify({ type: 'close', connId })); } catch {} tcpConnections.delete(connId); });
       tcp.on('error', (err) => { console.error(`✗ [${connId}] TCP error: ${err.message}`); tcp.destroy(); });
@@ -362,6 +379,13 @@ function connect() {
   });
 }
 
+// Helper to safely check if SFTP attributes represent a directory (handles raw objects as well as Stats objects)
+function isDir(attrs) {
+  if (!attrs) return false;
+  if (typeof attrs.isDirectory === 'function') return attrs.isDirectory();
+  return typeof attrs.mode === 'number' && (attrs.mode & 0o170000) === 0o040000;
+}
+
 // ── SSH handlers ──────────────────────────────────────────────────────────
 function handleSshConnect(ws, msg) {
   if (!ssh2) {
@@ -393,7 +417,7 @@ function handleSshConnect(ws, msg) {
         return;
       }
 
-      sshSessions.set(connId, { sshClient, stream });
+      sshSessions.set(connId, { sshClient, stream, connection });
 
       ws.send(JSON.stringify({ type: 'ssh:connected', connId }));
 
@@ -415,6 +439,10 @@ function handleSshConnect(ws, msg) {
   sshClient.on('error', (err) => {
     console.error(`✗ [${connId}] SSH error: ${err.message}`);
     ws.send(JSON.stringify({ type: 'ssh:error', connId, error: err.message }));
+    cleanupSsh(connId);
+  });
+
+  sshClient.on('close', () => {
     cleanupSsh(connId);
   });
 
@@ -532,12 +560,21 @@ async function handleSftpList(ws, msg) {
 async function handleSftpRead(ws, msg) {
   try {
     const sftp = await getSftpClient(msg.connId);
-    const chunks = [];
-    const stream = sftp.createReadStream(msg.path);
-    stream.on('data', (chunk) => chunks.push(chunk));
-    stream.on('error', (err) => sendSftpError(ws, msg.connId, err));
-    stream.on('end', () => {
-      ws.send(JSON.stringify({ type: 'sftp:fileData', connId: msg.connId, path: msg.path, content: Buffer.concat(chunks).toString('utf-8') }));
+    sftp.stat(msg.path, (statErr, stat) => {
+      if (statErr) return sendSftpError(ws, msg.connId, statErr);
+      
+      const MAX_SIZE = 10 * 1024 * 1024; // 10 MB limit
+      if (stat.size > MAX_SIZE) {
+        return sendSftpError(ws, msg.connId, new Error(`File is too large to open in editor (${(stat.size / 1024 / 1024).toFixed(1)}MB). Please download it instead.`));
+      }
+
+      const chunks = [];
+      const stream = sftp.createReadStream(msg.path);
+      stream.on('data', (chunk) => chunks.push(chunk));
+      stream.on('error', (err) => sendSftpError(ws, msg.connId, err));
+      stream.on('end', () => {
+        ws.send(JSON.stringify({ type: 'sftp:fileData', connId: msg.connId, path: msg.path, content: Buffer.concat(chunks).toString('utf-8') }));
+      });
     });
   } catch (err) {
     sendSftpError(ws, msg.connId, err);
@@ -583,18 +620,16 @@ function handleSftpDelete(ws, msg) {
     if (sftpErr) return sendSftpError(ws, msg.connId, sftpErr);
 
     sftp.unlink(msg.path, (unlinkErr) => {
-      if (!unlinkErr) { sftp.end(); return onSuccess(); }
-      sftp.rmdir(msg.path, (rmdirErr) => {
-        sftp.end();
-        if (!rmdirErr) return onSuccess();
-        session.sshClient.exec(`rm -rf "${msg.path}"`, (execErr, stream) => {
-          if (execErr) return sendSftpError(ws, msg.connId, execErr);
-          let stderr = '';
-          stream.stderr.on('data', (d) => stderr += d.toString());
-          stream.on('close', (code) => {
-            if (code === 0) onSuccess();
-            else sendSftpError(ws, msg.connId, new Error(stderr.trim() || `Delete failed (exit ${code})`));
-          });
+      sftp.end();
+      if (!unlinkErr) return onSuccess();
+      // unlink failed — must be a directory (or permission issue). Use rm -rf directly.
+      session.sshClient.exec(`rm -rf "${msg.path}"`, (execErr, stream) => {
+        if (execErr) return sendSftpError(ws, msg.connId, execErr);
+        let stderr = '';
+        stream.stderr.on('data', (d) => stderr += d.toString());
+        stream.on('close', (code) => {
+          if (code === 0) onSuccess();
+          else sendSftpError(ws, msg.connId, new Error(stderr.trim() || `Delete failed (exit ${code})`));
         });
       });
     });
@@ -652,6 +687,22 @@ async function handleSftpDownload(ws, msg) {
             progress,
             offset: bytesSent
           }));
+
+          if (ws.bufferedAmount && ws.bufferedAmount > 1024 * 1024) {
+            stream.pause();
+            const checkBuffer = () => {
+              if (ws.readyState !== 1) {
+                stream.destroy();
+                return;
+              }
+              if (ws.bufferedAmount === 0) {
+                stream.resume();
+              } else {
+                setTimeout(checkBuffer, 50);
+              }
+            };
+            setTimeout(checkBuffer, 50);
+          }
         }
       });
 
@@ -725,6 +776,22 @@ async function handleSftpDownloadFolder(ws, msg) {
             progress: -1,
             offset: totalSent
           }));
+
+          if (ws.bufferedAmount && ws.bufferedAmount > 1024 * 1024) {
+            stream.pause();
+            const checkBuffer = () => {
+              if (ws.readyState !== 1) {
+                stream.destroy();
+                return;
+              }
+              if (ws.bufferedAmount === 0) {
+                stream.resume();
+              } else {
+                setTimeout(checkBuffer, 50);
+              }
+            };
+            setTimeout(checkBuffer, 50);
+          }
         }
       });
 
@@ -781,10 +848,10 @@ async function handleSftpSearch(ws, msg) {
                 path: fullPath,
                 absPath: fullPath,
                 dir: dir,
-                isDirectory: item.attrs.isDirectory()
+                isDirectory: isDir(item.attrs)
               });
             }
-            if (item.attrs.isDirectory() && !item.filename.startsWith('.')) {
+            if (isDir(item.attrs) && !item.filename.startsWith('.')) {
               await walk(fullPath);
             }
           }
@@ -864,7 +931,7 @@ async function handleSftpGetSize(ws, msg) {
             });
             for (const item of list) {
               const fullPath = `${dir}/${item.filename}`;
-              if (item.attrs.isDirectory()) {
+              if (isDir(item.attrs)) {
                 await walk(fullPath);
               } else {
                 totalSize += item.attrs.size || 0;
@@ -963,12 +1030,21 @@ async function handleSftpMove(ws, msg) {
 async function handleSftpReadBase64(ws, msg) {
   try {
     const sftp = await getSftpClient(msg.connId);
-    const chunks = [];
-    const stream = sftp.createReadStream(msg.path);
-    stream.on('data', (chunk) => chunks.push(chunk));
-    stream.on('error', (err) => sendSftpError(ws, msg.connId, err));
-    stream.on('end', () => {
-      ws.send(JSON.stringify({ type: 'sftp:fileData', connId: msg.connId, path: msg.path, content: Buffer.concat(chunks).toString('base64') }));
+    sftp.stat(msg.path, (statErr, stat) => {
+      if (statErr) return sendSftpError(ws, msg.connId, statErr);
+
+      const MAX_SIZE = 10 * 1024 * 1024; // 10 MB limit
+      if (stat.size > MAX_SIZE) {
+        return sendSftpError(ws, msg.connId, new Error(`File is too large to open in editor (${(stat.size / 1024 / 1024).toFixed(1)}MB). Please download it instead.`));
+      }
+
+      const chunks = [];
+      const stream = sftp.createReadStream(msg.path);
+      stream.on('data', (chunk) => chunks.push(chunk));
+      stream.on('error', (err) => sendSftpError(ws, msg.connId, err));
+      stream.on('end', () => {
+        ws.send(JSON.stringify({ type: 'sftp:fileData', connId: msg.connId, path: msg.path, content: Buffer.concat(chunks).toString('base64') }));
+      });
     });
   } catch (err) {
     sendSftpError(ws, msg.connId, err);
@@ -1013,7 +1089,274 @@ async function handleSftpExtract(ws, msg) {
 
 // ── Docker handlers ───────────────────────────────────────────────────────
 function handleDockerCommand(ws, msg) {
-  const { connId, command } = msg;
+  const { connId } = msg;
+  const session = sshSessions.get(connId);
+  if (!session?.sshClient) {
+    ws.send(JSON.stringify({ type: 'docker:error', connId, error: 'No SSH session. Connect to SSH first.' }));
+    return;
+  }
+
+  const connection = session.connection || {};
+  const dockerSudo = session.dockerSudo || '';
+
+  let action = msg.action;
+  let args = msg.args || [];
+  let command = msg.command;
+
+  const runRawCmd = (cmd) => {
+    session.sshClient.exec(cmd, (err, stream) => {
+      if (err) {
+        ws.send(JSON.stringify({ type: 'docker:error', connId, error: err.message }));
+        return;
+      }
+      let stdout = '';
+      stream.on('data', (d) => { stdout += d.toString(); });
+      stream.stderr.on('data', () => {});
+      stream.on('close', (code) => {
+        ws.send(JSON.stringify({ type: 'docker:result', connId, action, output: stdout.trim(), code, args }));
+      });
+    });
+  };
+
+  const runWithSudoDetection = (cmdSuffix, attemptWithSudo = false) => {
+    const escapedPass = (connection.password || '').replace(/'/g, "'\\''");
+    const prefix = attemptWithSudo ? `echo '${escapedPass}' | sudo -S su root -c ` : '';
+    const finalCmd = attemptWithSudo
+      ? `${prefix} 'docker ${cmdSuffix.replace(/'/g, "'\\''")}'`
+      : `docker ${cmdSuffix}`;
+
+    session.sshClient.exec(finalCmd, (err, stream) => {
+      if (err) {
+        ws.send(JSON.stringify({ type: 'docker:error', connId, error: err.message }));
+        return;
+      }
+      let stdout = '';
+      let stderr = '';
+      stream.on('data', (d) => {
+        stdout += d.toString().replace(/\/home\/.+?\.bashrc: line \d+: .+?: No such file or directory\n?/g, '');
+      });
+      stream.stderr.on('data', (d) => {
+        stderr += d.toString().replace(/\/home\/.+?\.bashrc: line \d+: .+?: No such file or directory\n?/g, '');
+      });
+      stream.on('close', (code) => {
+        stdout = stdout.replace(/\/home\/.+?\.bashrc: line \d+: .+?: No such file or directory\n?/g, '').trim();
+        stderr = stderr.replace(/\/home\/.+?\.bashrc: line \d+: .+?: No such file or directory\n?/g, '').trim();
+
+        const combined = (stdout + stderr).toLowerCase();
+        if (action === 'info' && code !== 0 && combined.includes('permission denied') && !attemptWithSudo) {
+          console.warn('⚠️ Docker info failed, retrying with sudo...');
+          session.dockerSudo = 'sudo '; // Cache it for pull/build
+          runWithSudoDetection(cmdSuffix, true);
+          return;
+        }
+
+        if (attemptWithSudo && code === 0) {
+          session.dockerSudo = 'sudo ';
+        }
+
+        if (action === 'pull' || action === 'pull:status') {
+          ws.send(JSON.stringify({ type: 'docker:result', connId, action, output: stdout, code, args }));
+        } else if (code !== 0) {
+          const errText = stderr || `Docker ${action || 'command'} failed (code ${code})`;
+          ws.send(JSON.stringify({ type: 'docker:error', connId, error: errText }));
+        } else {
+          ws.send(JSON.stringify({ type: 'docker:result', connId, action, output: stdout, code, args }));
+        }
+      });
+    });
+  };
+
+  if (action) {
+    const sudoPrefix = dockerSudo;
+    let cmdSuffix = '';
+
+    if (action === 'list') {
+      cmdSuffix = `ps -a --format "{{json .}}"`;
+    } else if (action === 'images') {
+      cmdSuffix = `image ls -a --format "{{json .}}"`;
+    } else if (action === 'vol-assoc') {
+      cmdSuffix = `ids=$(docker ps -aq); [ -z "$ids" ] || docker inspect --format 'assoc:{{.ID}}\t{{.Name}}\t{{range .Mounts}}{{.Name}} {{end}}' $ids`;
+    } else if (action === 'search' && args.length > 0) {
+      const query = String(args[0] || '').replace(/[^a-zA-Z0-9._\- ]/g, '').trim();
+      if (!query) return ws.send(JSON.stringify({ type: 'docker:error', connId, error: 'Invalid Search Query' }));
+      cmdSuffix = `search --format "{{json .}}" "${query}"`;
+    } else if (action === 'volumes') {
+      cmdSuffix = `volume ls --format "{{json .}}"`;
+    } else if (action === 'networks') {
+      cmdSuffix = `network ls --format "{{json .}}"`;
+    } else if (action === 'rmi' && args.length > 0) {
+      const targetId = String(args[0] || '').replace(/[^a-zA-Z0-9._/:-]/g, '');
+      if (!targetId) return ws.send(JSON.stringify({ type: 'docker:error', connId, error: 'Invalid Image ID' }));
+      cmdSuffix = `rmi ${targetId}`;
+    } else if (action === 'info') {
+      cmdSuffix = `info --format "{{json .}}"`;
+    } else if (action === 'logs' && args.length > 0) {
+      const targetId = String(args[0] || '').replace(/[^a-zA-Z0-9._/:-]/g, '');
+      if (!targetId) return ws.send(JSON.stringify({ type: 'docker:error', connId, error: 'Invalid Container ID' }));
+      cmdSuffix = `logs --tail 200 ${targetId}`;
+    } else if (action === 'run' && args.length >= 2) {
+      const name = String(args[0] || '').replace(/[^a-zA-Z0-9._-]/g, '');
+      const image = String(args[1] || '').replace(/[^a-zA-Z0-9.@/:-]/g, '');
+      const rawPorts = String(args[2] || '');
+      const rawEnv = String(args[3] || '');
+      const rawVolumes = String(args[4] || '');
+      if (!image) return ws.send(JSON.stringify({ type: 'docker:error', connId, error: 'Invalid Image' }));
+
+      let runArgs = ['-d'];
+      if (name) runArgs.push(`--name ${name}`);
+      if (rawPorts) {
+        rawPorts.split(',').forEach(p => {
+          const pair = p.trim().replace(/[^0-9:]/g, '');
+          if (pair) runArgs.push(`-p ${pair}`);
+        });
+      }
+      if (rawEnv) {
+        rawEnv.split(',').forEach(e => {
+          const kv = e.trim().replace(/[^a-zA-Z0-9._=\-]/g, '');
+          if (kv.includes('=')) runArgs.push(`-e "${kv}"`);
+        });
+      }
+      if (rawVolumes) {
+        rawVolumes.split(',').forEach(v => {
+          const pair = v.trim().replace(/[^a-zA-Z0-9._/:-]/g, '');
+          if (pair && pair.includes(':')) runArgs.push(`-v ${pair}`);
+        });
+      }
+      cmdSuffix = `run ${runArgs.join(' ')} ${image}`;
+    } else if (action === 'pull' && args.length > 0) {
+      const image = String(args[0] || '').replace(/[^a-zA-Z0-9.@/:-]/g, '');
+      if (!image) return ws.send(JSON.stringify({ type: 'docker:error', connId, error: 'Invalid Image Name' }));
+      const safeName = image.replace(/[^a-z0-9]/gi, '_');
+      const pullCmd = `rm -f /tmp/pull_${safeName}.log; touch /tmp/pull_${safeName}.log; nohup sh -c '${sudoPrefix}docker pull ${image} 2>&1 | tee /tmp/pull_${safeName}.log; echo "---FINISHED---" >> /tmp/pull_${safeName}.log' >/dev/null 2>&1 & echo STARTED`;
+      return runRawCmd(pullCmd);
+    } else if (action === 'pull:status' && args.length > 0) {
+      const image = String(args[0] || '').replace(/[^a-zA-Z0-9.@/:-]/g, '');
+      if (!image) return ws.send(JSON.stringify({ type: 'docker:error', connId, error: 'Invalid Image Name' }));
+      const safeName = image.replace(/[^a-z0-9]/gi, '_');
+      const statusCmd = `(if [ -f "/tmp/pull_${safeName}.log" ]; then RUNNING=$(ps aux 2>/dev/null | grep -v grep | grep "${sudoPrefix}docker pull ${image}" | wc -l); if [ "$RUNNING" = "0" ] && ! grep -q "---FINISHED---" "/tmp/pull_${safeName}.log"; then echo "---FINISHED---" >> /tmp/pull_${safeName}.log; fi; tr '\\r' '\\n' < "/tmp/pull_${safeName}.log" | tail -n 20; else echo "INITIALIZING..."; fi); exit 0`;
+      return runRawCmd(statusCmd);
+    } else if (action === 'build' && args.length >= 2) {
+      const tag = String(args[0] || '').replace(/[^a-zA-Z0-9._-]/g, '');
+      const dockerfileBase64 = String(args[1] || '').replace(/[^a-zA-Z0-9+/=]/g, '');
+      if (!tag || !dockerfileBase64) return ws.send(JSON.stringify({ type: 'docker:error', connId, error: 'Invalid Build Parameters' }));
+      const safeTag = tag.replace(/[^a-z0-9]/gi, '_');
+      const buildCmd = `rm -f /tmp/build_${safeTag}.log; touch /tmp/build_${safeTag}.log; nohup sh -c 'echo "${dockerfileBase64}" | base64 -d > /tmp/Dockerfile_${safeTag} && ${sudoPrefix}docker build -t ${tag} -f /tmp/Dockerfile_${safeTag} . 2>&1 | tee /tmp/build_${safeTag}.log; echo "---FINISHED---" >> /tmp/build_${safeTag}.log; rm -f /tmp/Dockerfile_${safeTag}' >/dev/null 2>&1 & echo STARTED`;
+      return runRawCmd(buildCmd);
+    } else if (action === 'build:status' && args.length > 0) {
+      const tag = String(args[0] || '').replace(/[^a-zA-Z0-9._-]/g, '');
+      if (!tag) return ws.send(JSON.stringify({ type: 'docker:error', connId, error: 'Invalid Tag Name' }));
+      const safeTag = tag.replace(/[^a-z0-9]/gi, '_');
+      const statusCmd = `(if [ -f "/tmp/build_${safeTag}.log" ]; then RUNNING=$(ps aux 2>/dev/null | grep -v grep | grep "docker build -t ${tag}" | wc -l); if [ "$RUNNING" = "0" ] && ! grep -q "---FINISHED---" "/tmp/build_${safeTag}.log"; then echo "---FINISHED---" >> /tmp/build_${safeTag}.log; fi; tr '\\r' '\\n' < "/tmp/build_${safeTag}.log" | tail -n 20; else echo "INITIALIZING..."; fi); exit 0`;
+      return runRawCmd(statusCmd);
+    } else if (['start', 'stop', 'restart', 'rm'].includes(action) && args.length > 0) {
+      const targetId = String(args[0] || '').replace(/[^a-zA-Z0-9._/:-]/g, '');
+      if (!targetId) return ws.send(JSON.stringify({ type: 'docker:error', connId, error: 'Invalid Target ID' }));
+      cmdSuffix = action === 'rm' ? `rm -f ${targetId}` : `${action} ${targetId}`;
+    } else if (action === 'inspect' && args.length > 0) {
+      const targetId = String(args[0] || '').replace(/[^a-zA-Z0-9._/:-]/g, '');
+      if (!targetId) return ws.send(JSON.stringify({ type: 'docker:error', connId, error: 'Invalid Target ID' }));
+      cmdSuffix = `inspect ${targetId}`;
+    } else if (action === 'backup' && args.length > 0) {
+      const targetId = String(args[0] || '').replace(/[^a-zA-Z0-9._/:-]/g, '');
+      if (!targetId) return ws.send(JSON.stringify({ type: 'docker:error', connId, error: 'Invalid ID for backup' }));
+      const safeId = targetId.substring(0, 12);
+      const backupCmd = `rm -f /tmp/backup_${safeId}.log; touch /tmp/backup_${safeId}.log; nohup sh -c '
+        ROOT=$(${sudoPrefix}docker inspect ${targetId} --format "{{ index .Config.Labels \\"com.docker.compose.project.working_dir\\" }}"); 
+        if [ -z "$ROOT" ]; then 
+            ROOT=$(${sudoPrefix}docker inspect ${targetId} --format "{{ index .Config.Labels \\"com.docker.compose.project.config_files\\" }}" | xargs dirname | head -n 1); 
+        fi; 
+        if [ -z "$ROOT" ]; then
+            BIND=$(${sudoPrefix}docker inspect ${targetId} --format "{{ range .Mounts }}{{ if eq .Type \\"bind\\" }}{{ .Source }}{{ break }}{{ end }}{{ end }}");
+            if [ -n "$BIND" ]; then 
+                ROOT=$(dirname "$BIND"); 
+            fi;
+        fi;
+        if [ -n "$ROOT" ] && [ -d "$ROOT" ]; then 
+            echo "Found project root: $ROOT" >> /tmp/backup_${safeId}.log;
+            cd "$ROOT" && ${sudoPrefix}tar -czf /tmp/project_backup_${safeId}.tar.gz . 2>&1 | tee -a /tmp/backup_${safeId}.log; 
+            echo "---FINISHED---" >> /tmp/backup_${safeId}.log; 
+            echo "BACKUP_PATH:/tmp/project_backup_${safeId}.tar.gz" >> /tmp/backup_${safeId}.log; 
+        else 
+            echo "ERROR: Could not find project source directory." > /tmp/backup_${safeId}.log; 
+            echo "---FINISHED---" >> /tmp/backup_${safeId}.log; 
+        fi' >/dev/null 2>&1 & echo STARTED`;
+      return runRawCmd(backupCmd);
+    } else if (action === 'backup:status' && args.length > 0) {
+      const targetId = String(args[0] || '').replace(/[^a-zA-Z0-9._/:-]/g, '');
+      const safeId = targetId.substring(0, 12);
+      const statusCmd = `(if [ -f "/tmp/backup_${safeId}.log" ]; then RUNNING=$(ps aux 2>/dev/null | grep -v grep | grep "tar -czf /tmp/project_backup_${safeId}.tar.gz" | wc -l); if [ "$RUNNING" = "0" ] && ! grep -q "---FINISHED---" "/tmp/backup_${safeId}.log"; then echo "---FINISHED---" >> /tmp/backup_${safeId}.log; fi; tail -n 20 "/tmp/backup_${safeId}.log"; else echo "INITIALIZING..."; fi); exit 0`;
+      return runRawCmd(statusCmd);
+    } else if (action === 'read-config' && args.length >= 2) {
+      const containerId = String(args[0] || '').replace(/[^a-zA-Z0-9._/:-]/g, '');
+      const filePath = String(args[1] || '').replace(/[`$]/g, '');
+      if (!containerId || !filePath) return ws.send(JSON.stringify({ type: 'docker:error', connId, error: 'Invalid read-config args' }));
+      return runRawCmd(`${sudoPrefix}docker exec ${containerId} cat "${filePath}"`);
+    } else if (action === 'write-config' && args.length >= 3) {
+      const containerId = String(args[0] || '').replace(/[^a-zA-Z0-9._/:-]/g, '');
+      const filePath = String(args[1] || '').replace(/[`$]/g, '');
+      const b64Content = String(args[2] || '');
+      if (!containerId || !filePath) return ws.send(JSON.stringify({ type: 'docker:error', connId, error: 'Invalid write-config args' }));
+      return runRawCmd(`echo "${b64Content}" | base64 -d | ${sudoPrefix}docker exec -i ${containerId} sh -c "cat > '${filePath}'"`);
+    } else if (action === 'find-config' && args.length >= 2) {
+      const containerId = String(args[0] || '').replace(/[^a-zA-Z0-9._/:-]/g, '');
+      if (!containerId) return ws.send(JSON.stringify({ type: 'docker:error', connId, error: 'Invalid find-config args' }));
+      const paths = args.slice(1).map(p => String(p).replace(/[`$]/g, ''));
+      const checks = paths.map(p => `if [ -f '${p}' ]; then echo "FILE:${p}"; exit 0; fi; if [ -d '${p}' ]; then echo "DIR:${p}"; exit 0; fi`).join('; ');
+      return runRawCmd(`${sudoPrefix}docker exec ${containerId} sh -c "${checks}; echo 'NONE'"`);
+    } else if (action === 'prune-volumes') {
+      cmdSuffix = `volume prune -f`;
+    } else if (action === 'prune-images') {
+      const pruneAll = args && (args[0] === true || args[0] === 'all');
+      cmdSuffix = `image prune ${pruneAll ? '-a ' : ''}-f`;
+    } else if (action === 'prune-system') {
+      const pruneAll = args && (args[0] === true || args[0] === 'all');
+      cmdSuffix = `system prune ${pruneAll ? '-a ' : ''}-f --volumes`;
+    } else if (action === 'prune-custom') {
+      const targets = args[0] || {};
+      const pruneAll = args[1] === true;
+      const cmds = [];
+      if (targets.containers) cmds.push('container prune -f');
+      if (targets.images) cmds.push(`image prune ${pruneAll ? '-a ' : ''}-f`);
+      if (targets.volumes) cmds.push('volume prune -f');
+      if (targets.networks) cmds.push('network prune -f');
+      if (targets.cache) cmds.push('builder prune -f');
+      if (cmds.length === 0) return ws.send(JSON.stringify({ type: 'docker:error', connId, error: 'No targets selected' }));
+      cmdSuffix = cmds.join(' && ');
+    } else if (action === 'remove-selected') {
+      const sel = args[0] || {};
+      const cmds = [];
+      if (sel.containers && sel.containers.length > 0) {
+        const ids = sel.containers.map(id => String(id).replace(/[^a-zA-Z0-9._-]/g, '')).filter(Boolean);
+        if (ids.length > 0) cmds.push(`rm ${ids.join(' ')}`);
+      }
+      if (sel.images && sel.images.length > 0) {
+        const tags = sel.images.map(t => String(t).replace(/[^a-zA-Z0-9._:@/-]/g, '')).filter(Boolean);
+        if (tags.length > 0) cmds.push(`rmi ${tags.join(' ')}`);
+      }
+      if (sel.volumes && sel.volumes.length > 0) {
+        const names = sel.volumes.map(n => String(n).replace(/[^a-zA-Z0-9._-]/g, '')).filter(Boolean);
+        if (names.length > 0) cmds.push(`volume rm ${names.join(' ')}`);
+      }
+      if (sel.networks && sel.networks.length > 0) {
+        const names = sel.networks.map(n => String(n).replace(/[^a-zA-Z0-9._-]/g, '')).filter(Boolean);
+        if (names.length > 0) cmds.push(`network rm ${names.join(' ')}`);
+      }
+      if (sel.cache) cmds.push('builder prune -f');
+      if (cmds.length === 0) return ws.send(JSON.stringify({ type: 'docker:error', connId, error: 'Nothing selected to remove' }));
+      cmdSuffix = cmds.join(' && ');
+    } else if (action === 'rm-volumes' && args.length > 0) {
+      const volumeIds = args.map(id => String(id).replace(/[^a-zA-Z0-9._/:-]/g, '')).filter(Boolean);
+      if (volumeIds.length === 0) return ws.send(JSON.stringify({ type: 'docker:error', connId, error: 'No valid volume IDs' }));
+      cmdSuffix = `volume rm ${volumeIds.join(' ')}`;
+    } else if (action === 'check-port' && args.length > 0) {
+      const port = String(args[0]).replace(/[^0-9]/g, '');
+      if (!port) return ws.send(JSON.stringify({ type: 'docker:error', connId, error: 'Invalid Port' }));
+      return runRawCmd(`sh -c "(ss -tuln 2>/dev/null || netstat -tuln) | grep -q -w ':${port}' && echo 'IN_USE' || echo 'FREE'"`);
+    }
+
+    runWithSudoDetection(cmdSuffix);
+    return;
+  }
 
   // Sanitize Docker command - only allow safe commands
   const safeCommands = [
@@ -1037,13 +1380,6 @@ function handleDockerCommand(ws, msg) {
   const dangerous = /[;&|`$(){}!#<>]/;
   if (dangerous.test(command)) {
     ws.send(JSON.stringify({ type: 'docker:error', connId, error: 'Command contains unsafe characters' }));
-    return;
-  }
-
-  // รัน docker ผ่าน SSH ไปยัง Target (ไม่ใช่บนเครื่องผู้ใช้)
-  const session = sshSessions.get(connId);
-  if (!session?.sshClient) {
-    ws.send(JSON.stringify({ type: 'docker:error', connId, error: 'No SSH session. Connect to SSH first.' }));
     return;
   }
 
