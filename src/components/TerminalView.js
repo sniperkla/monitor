@@ -6623,9 +6623,14 @@ If this is a deployment task, switch task mode to 'deploy' instead of 'code'.`
             </div>
           </div>
 
-          <div className="flex items-center gap-1.5 text-xs" style={{ color: statusInfo.color }}>
-            {statusInfo.icon}
-            <span>{statusInfo.text}</span>
+          <div className="flex items-center gap-2">
+            <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-medium ${typeof window !== 'undefined' && localStorage.getItem('ssh_monitor_ssh_mode') === 'local' ? 'bg-emerald-500/15 text-emerald-400' : 'bg-blue-500/15 text-blue-400'}`}>
+              {typeof window !== 'undefined' && localStorage.getItem('ssh_monitor_ssh_mode') === 'local' ? '⚡ Local' : '☁ Server'}
+            </span>
+            <div className="flex items-center gap-1.5 text-xs" style={{ color: statusInfo.color }}>
+              {statusInfo.icon}
+              <span>{statusInfo.text}</span>
+            </div>
           </div>
         </div>
       )}

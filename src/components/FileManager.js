@@ -4028,6 +4028,9 @@ export default function FileManager({
                 </button>
              </div>
           )}
+          <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-medium ${typeof window !== 'undefined' && localStorage.getItem('ssh_monitor_ssh_mode') === 'local' ? 'bg-emerald-500/15 text-emerald-400' : 'bg-blue-500/15 text-blue-400'}`}>
+            {typeof window !== 'undefined' && localStorage.getItem('ssh_monitor_ssh_mode') === 'local' ? '⚡ Local' : '☁ Server'}
+          </span>
           <span className={status === 'ready' ? 'text-emerald-500' : status === 'error' ? 'text-rose-500' : 'text-amber-500'}>
             {status === 'ready' ? t('files.status.sftpActive') : status === 'error' ? t('files.status.connFailed') : t('files.status.initializing')}
           </span>
