@@ -57,6 +57,10 @@ export class RelayClient {
         this._emit('closed');
       });
 
+      this.socket.on('relay:heartbeat:pong', (timestamp) => {
+        this._emit('heartbeat:pong', timestamp);
+      });
+
       this.socket.on('disconnect', () => {
         this.connected = false;
         this._emit('disconnected');
@@ -92,6 +96,15 @@ export class RelayClient {
   resize(cols, rows) {
     if (this.socket && this.connected) {
       this.socket.emit('relay:resize', { cols, rows });
+    }
+  }
+
+  /**
+   * Send heartbeat ping through SSH for accurate latency
+   */
+  heartbeat() {
+    if (this.socket && this.connected) {
+      this.socket.emit('relay:heartbeat', Date.now());
     }
   }
 

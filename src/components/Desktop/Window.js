@@ -519,9 +519,15 @@ export default function Window({ id, title, icon: Icon, component, isMinimized, 
         className={isSnappedOrMax ? (
           `
           !transform-none 
-          ${taskbarPosition === 'top' ? '!top-[56px]' : '!top-0'} 
-          ${taskbarPosition === 'left' ? '!left-[56px]' : (snapSide === 'right' ? '!left-auto !right-0' : '!left-0')} 
-          ${taskbarPosition === 'right' ? '!right-[56px] !left-auto' : ''}
+          ${taskbarPosition === 'top' ? '!top-[56px] !bottom-0 !h-[calc(100vh-56px)]' : ''} 
+          ${taskbarPosition === 'bottom' ? '!top-0 !bottom-[56px] !h-[calc(100vh-56px)]' : ''} 
+          ${taskbarPosition === 'left' ? '!top-0 !bottom-0 !h-full' : ''} 
+          ${taskbarPosition === 'right' ? '!top-0 !bottom-0 !h-full' : ''}
+          ${taskbarPosition === 'right' ? '!right-[56px] !left-auto' : (
+            snapSide === 'right' ? '!left-auto !right-0' : (
+              taskbarPosition === 'left' ? '!left-[56px]' : '!left-0'
+            )
+          )}
           `
         ) : ''}
       >

@@ -1331,6 +1331,9 @@ logstash:
     socket.on('ssh:connected', () => {
       setStatus('connected');
       updateConnectionStatus('online'); // Update global state
+      // Register socket globally for dashboard ping reuse
+      if (!window.__terminalSockets) window.__terminalSockets = {};
+      window.__terminalSockets[propsRef.current.connectionId] = socket;
       idleTimedOutRef.current = false;
       setShowReconnect(false);
       term.writeln(`\x1b[1;32m✓ ${t('terminal.connectedSuccess')}\x1b[0m\n`);
@@ -1474,6 +1477,8 @@ logstash:
     socket.on('ssh:closed', () => {
       setStatus('closed');
       updateConnectionStatus('offline'); // Update global state
+      // Unregister socket from global map
+      if (window.__terminalSockets) delete window.__terminalSockets[propsRef.current.connectionId];
       idleTimedOutRef.current = false;
       setShowReconnect(false);
       resetAiOnDisconnect();
@@ -6495,6 +6500,8 @@ If this is a deployment task, switch task mode to 'deploy' instead of 'code'.`
         socketRef.current.emit('ssh:disconnect');
         socketRef.current.disconnect();
       }
+      // Unregister socket from global map
+      if (window.__terminalSockets) delete window.__terminalSockets[connectionId];
       if (termInstanceRef.current) {
         termInstanceRef.current.dispose();
         termInstanceRef.current = null;

@@ -70,13 +70,17 @@ export async function POST(request, { params }) {
       result = await testSSHConnection(sshConfig);
     }
 
-    // 3. Update DB if it's a DB connection
+    // 3. Update DB status and systemInfo on success
     if (id && !id.startsWith('local-')) {
-      await repo.update(id, {
+      const update = {
         status: result.success ? 'online' : 'offline',
         lastConnected: result.success ? new Date() : (connection.lastConnected || null),
         info: result.success ? result.info : (connection.info || null),
-      });
+      };
+      if (result.success && result.specs) {
+        update.systemInfo = { ...result.specs, fetchedAt: new Date() };
+      }
+      await repo.update(id, update);
     }
 
     return NextResponse.json(result);

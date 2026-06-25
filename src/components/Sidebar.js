@@ -4,9 +4,9 @@ import { useApp } from '@/context/AppContext';
 import {
   Server, Star, StarOff, Wifi, WifiOff, Clock, MoreVertical, Terminal, Edit, Trash2,  
   RotateCw, Plus, Search, Filter, Key, Lock, BarChart3, TrendingUp, Zap, RefreshCw, Folder, Box, AlertTriangle, X, Database,
-  PanelLeftClose, PanelLeft, CloudUpload, CloudDownload, Check
+  PanelLeftClose, PanelLeft, CloudUpload, CloudDownload, Check, Cpu, MemoryStick, HardDrive
 } from 'lucide-react';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useOS } from '@/context/OSContext';
 import { useVault } from '@/context/VaultContext';
@@ -22,6 +22,11 @@ export default function Sidebar({ onNewConnection, onEditConnection }) {
   const [filter, setFilter] = useState('all'); // all, favorites, online, offline
   const [isSyncing, setIsSyncing] = useState(false);
   const [syncedFingerprints, setSyncedFingerprints] = useState(new Set());
+  const [fetchingSpecs, setFetchingSpecs] = useState(new Set());
+  const [hoverPanel, setHoverPanel] = useState(null); // { conn, x, y }
+  const [menuPosition, setMenuPosition] = useState(null);
+  const hoverTimerRef = useRef(null);
+  const hoverPanelRef = useRef(null);
 
   // Generate a fingerprint for dedup (hash of name+host+type)
   const getFingerprint = (conn) => {
@@ -285,6 +290,51 @@ export default function Sidebar({ onNewConnection, onEditConnection }) {
     fetchConnections();
   }, [fetchConnections]);
 
+  // Position Hover Action Panel dynamically within safe boundaries
+  useEffect(() => {
+    if (!hoverPanel) {
+      setMenuPosition(null);
+      return;
+    }
+
+    const measureAndPosition = () => {
+      if (hoverPanelRef.current) {
+        const rect = hoverPanelRef.current.getBoundingClientRect();
+        const menuH = rect.height;
+        const menuW = rect.width;
+        
+        const taskbarPos = osState?.taskbarPosition || 'bottom';
+        const taskbarSize = 56;
+        
+        let topBoundary = taskbarPos === 'top' ? taskbarSize + 8 : 8;
+        let bottomBoundary = taskbarPos === 'bottom' ? window.innerHeight - taskbarSize - 8 : window.innerHeight - 8;
+        let leftBoundary = taskbarPos === 'left' ? taskbarSize + 8 : 8;
+        let rightBoundary = taskbarPos === 'right' ? window.innerWidth - taskbarSize - 8 : window.innerWidth - 8;
+
+        let left = hoverPanel.x;
+        if (left + menuW > rightBoundary) {
+          left = Math.max(leftBoundary, window.innerWidth - menuW - 16);
+        }
+
+        let top = hoverPanel.y;
+        if (top + menuH > bottomBoundary) {
+          top = Math.max(topBoundary, bottomBoundary - menuH);
+        }
+
+        setMenuPosition({ left, top });
+      }
+    };
+
+    measureAndPosition();
+    const rafId = requestAnimationFrame(measureAndPosition);
+    
+    window.addEventListener('resize', measureAndPosition);
+    return () => {
+      cancelAnimationFrame(rafId);
+      window.removeEventListener('resize', measureAndPosition);
+    };
+  }, [hoverPanel, osState?.taskbarPosition]);
+
   const filtered = connections.filter(conn => {
     const matchSearch = (conn.name || '').toLowerCase().includes((search || '').toLowerCase()) ||
       (conn.host || '').toLowerCase().includes((search || '').toLowerCase()) ||
@@ -300,6 +350,32 @@ export default function Sidebar({ onNewConnection, onEditConnection }) {
     total: connections.length,
     online: connections.filter(c => c.status === 'online').length,
     offline: connections.filter(c => c.status === 'offline').length,
+  };
+
+  const handleFetchSpecs = async (conn) => {
+    if (!conn._id || conn._id.startsWith('local-')) {
+      addNotification({ title: 'Save First', message: 'Save the connection to DB before fetching specs.', type: 'warning' });
+      return;
+    }
+    setFetchingSpecs(prev => new Set([...prev, conn._id]));
+    try {
+      const res = await apiFetch('/api/ssh/specs', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ connectionId: conn._id }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        dispatch({ type: 'UPDATE_CONNECTION', payload: { _id: conn._id, systemInfo: data.systemInfo } });
+        addNotification({ title: 'System Specs', message: data.info || 'Fetched successfully', type: 'success' });
+      } else {
+        addNotification({ title: 'Fetch Failed', message: data.error || 'Could not fetch specs', type: 'error' });
+      }
+    } catch (err) {
+      addNotification({ title: 'Error', message: err.message, type: 'error' });
+    } finally {
+      setFetchingSpecs(prev => { const next = new Set(prev); next.delete(conn._id); return next; });
+    }
   };
 
   const handleConnect = (conn) => {
@@ -523,7 +599,7 @@ export default function Sidebar({ onNewConnection, onEditConnection }) {
           onClick={() => dispatch({ type: 'TOGGLE_SIDEBAR' })}
         />
       )}
-      <div className={`sidebar flex flex-col shrink-0 ${sidebarOpen ? 'open' : ''} ${!sidebarOpen ? 'hidden' : ''}`} style={{ width: 'min(360px, 85vw)', borderRight: '1px solid var(--border-color)' }}>
+      <div className={`sidebar flex flex-col shrink-0 ${sidebarOpen ? 'open' : ''} ${!sidebarOpen ? 'hidden' : ''}`} style={{ width: '100%', height: '100%', borderRight: '1px solid var(--border-color)' }}>
       {/* Header */}
       <div className="p-4 border-b" style={{ borderColor: 'var(--border-color)' }}>
         <div className="flex items-center justify-between mb-4">
@@ -627,9 +703,20 @@ export default function Sidebar({ onNewConnection, onEditConnection }) {
                   : 'border-transparent'
               }`}
               onClick={() => {
-                dispatch({ type: 'SELECT_CONNECTION', payload: conn });
-                handleConnect(conn);
+                clearTimeout(hoverTimerRef.current);
+                const el = document.querySelector(`[data-conn-id="${conn._id}"]`);
+                if (el) {
+                  el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+                  const rect = el.getBoundingClientRect();
+                  setHoverPanel(prev => prev?.conn?._id === conn._id ? null : { conn, x: rect.right + 8, y: rect.top });
+                } else {
+                  setHoverPanel(prev => prev?.conn?._id === conn._id ? null : { conn, x: 380, y: 200 });
+                }
               }}
+              onMouseEnter={(e) => {
+                clearTimeout(hoverTimerRef.current);
+              }}
+              data-conn-id={conn._id}
             >
               <div className="flex items-center gap-3">
                 {/* Color indicator */}
@@ -644,6 +731,7 @@ export default function Sidebar({ onNewConnection, onEditConnection }) {
                     <span className="text-sm font-semibold truncate" style={{ color: state.selectedConnection?._id === conn._id ? 'var(--text-selected)' : 'var(--text-primary)' }}>
                       {conn.name}
                     </span>
+                    <Star size={12} className={`flex-shrink-0 cursor-pointer hover:scale-125 transition-transform ${conn.isFavorite ? 'text-amber-400 fill-amber-400' : 'text-[var(--text-muted)] opacity-0 group-hover:opacity-50 hover:!opacity-100'}`} onClick={(e) => { e.stopPropagation(); handleToggleFavorite(conn._id); }} />
                     <span className={`text-[8px] font-bold px-1 rounded-sm border uppercase flex-shrink-0 ${
                       conn.storage === 'db' ? 'text-[var(--accent-indigo)] border-[var(--accent-indigo)]/30' :
                       conn.storage === 'localstorage' ? 'text-[var(--accent-emerald)] border-[var(--accent-emerald)]/30' :
@@ -651,9 +739,6 @@ export default function Sidebar({ onNewConnection, onEditConnection }) {
                     }`}>
                       {conn.storage === 'localstorage' ? t('common.storage.local') : conn.storage === 'manual' ? t('common.storage.tmp') : t('common.storage.db')}
                     </span>
-                    {conn.isFavorite && (
-                      <Star size={12} className="text-amber-400 fill-amber-400 flex-shrink-0" />
-                    )}
                   </div>
                   <div className="flex items-center gap-2">
                     <span className="text-[10px] font-bold uppercase py-0.5 px-2 bg-[var(--bg-tertiary)] rounded-full border border-[var(--border-color)]" style={{ color: conn.color }}>
@@ -663,90 +748,22 @@ export default function Sidebar({ onNewConnection, onEditConnection }) {
                       {conn.username ? `${conn.username}@` : ''}{conn.host}
                     </span>
                     {conn.tags?.slice(0, 1).map((tag, tagIndex) => (
-                       <span key={`${tag}-${tagIndex}`} className="tag-pill !py-0.5 !px-1.5 !text-[10px] opacity-70">{tag}</span>
+                       <span key={`${tag}-${tagIndex}`} className="tag-pill !py-0 !px-1 !text-[8px] opacity-70 max-w-[60px] truncate">{tag}</span>
                     ))}
                   </div>
-                </div>
-
-                {/* Actions (Absolute Overlay) */}
-                <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity bg-[var(--bg-tertiary)]/90 p-1 rounded-lg backdrop-blur-sm shadow-lg border border-[var(--border-color)]">
-                  <button
-                    className="btn-icon p-1.5 hover:bg-[var(--bg-card-hover)] rounded"
-                    title={conn.type === 'database' ? t('common.database') : t('ssh.modal.actions.connect')}
-                    onClick={(e) => { e.stopPropagation(); handleConnect(conn); }}
-                  >
-                    {conn.type === 'database' ? (
-                      state.activeDatabaseBrowsers.some(b => b.connectionId === conn._id) ? (
-                        <div className="relative">
-                          <Database size={14} className="text-indigo-400" />
-                          <div className="absolute -top-1 -right-1 w-1.5 h-1.5 bg-emerald-500 rounded-full border border-[var(--bg-tertiary)]" />
-                        </div>
-                      ) : (
-                        <Database size={14} className="text-emerald-400" />
-                      )
-                    ) : (
-                      state.activeTerminals.some(t => t.connectionId === conn._id) ? (
-                        <div className="relative">
-                          <Terminal size={14} className="text-indigo-400" />
-                          <div className="absolute -top-1 -right-1 w-1.5 h-1.5 bg-emerald-500 rounded-full border border-[var(--bg-tertiary)]" />
-                        </div>
-                      ) : (
-                        <Terminal size={14} className="text-emerald-400" />
-                      )
-                    )}
-                  </button>
-                  
-                  {conn.type !== 'database' && (
-                    <>
-                      <button
-                        className="btn-icon p-1.5 hover:bg-[var(--bg-card-hover)] rounded"
-                        title={t('ssh.modal.actions.files')}
-                        onClick={(e) => { e.stopPropagation(); handleFiles(conn); }}
-                      >
-                        <Folder size={14} className={state.activeFileManagers.some(f => f.connectionId === conn._id) ? "text-indigo-400" : "text-blue-400"} />
-                      </button>
-                      
-                      <button
-                        className="btn-icon p-1.5 hover:bg-[var(--bg-card-hover)] rounded"
-                        title="Docker Manager"
-                        onClick={(e) => { 
-                          e.stopPropagation(); 
-                          window.dispatchEvent(new CustomEvent('open-docker-manager', { detail: { connection: conn } })); 
-                        }}
-                      >
-                        <Box size={14} className="text-sky-400" />
-                      </button>
-                    </>
+                  {conn.systemInfo && conn.type === 'ssh' && (
+                    <div className="flex items-center gap-2 mt-0.5">
+                      <span className="text-[8px] font-mono opacity-50 inline-flex items-center gap-0.5" title={conn.systemInfo.distro || conn.systemInfo.os || ''}>
+                        <HardDrive size={8} />{conn.systemInfo.distro || conn.systemInfo.os?.split(' ')[0] || '?'}
+                      </span>
+                      <span className="text-[8px] font-mono opacity-50 inline-flex items-center gap-0.5" title={conn.systemInfo.cpu || ''}>
+                        <Cpu size={8} />{conn.systemInfo.cores || '?'}c
+                      </span>
+                      <span className="text-[8px] font-mono opacity-50 inline-flex items-center gap-0.5" title={`RAM: ${conn.systemInfo.ram || '?'}`}>
+                        <MemoryStick size={8} />{conn.systemInfo.ram || '?'}
+                      </span>
+                    </div>
                   )}
-
-                  {isUnlocked && conn.storage !== 'manual' && (
-                    <button
-                      className="btn-icon p-1.5 hover:bg-[var(--bg-card-hover)] rounded"
-                      title={syncedFingerprints.has(getFingerprint(conn)) ? 'Synced to server' : 'Sync to server (encrypted)'}
-                      onClick={(e) => { e.stopPropagation(); handleSyncOne(conn); }}
-                    >
-                      {syncedFingerprints.has(getFingerprint(conn)) ? (
-                        <Check size={14} className="text-emerald-400" />
-                      ) : (
-                        <CloudUpload size={14} className="text-sky-400" />
-                      )}
-                    </button>
-                  )}
-
-                  <button
-                    className="btn-icon p-1.5 hover:bg-[var(--bg-card-hover)] rounded"
-                    title={t('ssh.modal.actions.edit')}
-                    onClick={(e) => { e.stopPropagation(); onEditConnection(conn); }}
-                  >
-                    <Edit size={14} />
-                  </button>
-                  <button
-                    className="btn-icon p-1.5 hover:bg-[var(--bg-card-hover)] rounded"
-                    title={t('ssh.modal.actions.delete')}
-                    onClick={(e) => { e.stopPropagation(); handleDelete(conn._id); }}
-                  >
-                    <Trash2 size={14} className="text-red-400" />
-                  </button>
                 </div>
               </div>
             </div>
@@ -755,7 +772,7 @@ export default function Sidebar({ onNewConnection, onEditConnection }) {
       </div>
 
       {/* Footer: Sync + Add connection */}
-      <div className="p-4 border-t pb-16 space-y-2" style={{ borderColor: 'var(--border-color)' }}>
+      <div className="p-4 border-t pb-16 md:pb-4 space-y-2" style={{ borderColor: 'var(--border-color)' }}>
         {isUnlocked && (
           <div className="flex gap-1.5">
             <button 
@@ -784,6 +801,71 @@ export default function Sidebar({ onNewConnection, onEditConnection }) {
       </div>
 
     </div>
+
+    {/* Hover Action Panel - appears after 2s hold */}
+    {hoverPanel && createPortal(
+      <div
+        ref={hoverPanelRef}
+        className="fixed z-[99999] animate-in fade-in zoom-in-95 duration-200"
+        style={{
+          left: menuPosition ? menuPosition.left : hoverPanel.x,
+          top: menuPosition ? menuPosition.top : hoverPanel.y,
+          opacity: menuPosition ? 1 : 0,
+          pointerEvents: menuPosition ? 'auto' : 'none',
+        }}
+        onMouseEnter={() => clearTimeout(hoverTimerRef.current)}
+        onMouseLeave={() => setHoverPanel(null)}
+      >
+        <div className="w-56 max-h-[70vh] overflow-y-auto rounded-xl border shadow-2xl p-2 space-y-0.5 custom-scrollbar" style={{ background: 'var(--bg-secondary)', borderColor: 'var(--border-color)' }}>
+          {/* Header */}
+          <div className="px-2 py-1.5 mb-1">
+            <div className="text-xs font-bold truncate" style={{ color: 'var(--text-primary)' }}>{hoverPanel.conn.name}</div>
+            <div className="text-[10px] font-mono opacity-50 truncate">{hoverPanel.conn.username}@{hoverPanel.conn.host}</div>
+          </div>
+
+          <div className="h-px" style={{ background: 'var(--border-color)' }} />
+
+          {/* Actions */}
+          <PanelItem icon={hoverPanel.conn.type === 'database' ? Database : Terminal} label={hoverPanel.conn.type === 'database' ? 'Open Database' : 'Connect Terminal'} color="text-emerald-400" onClick={() => { handleConnect(hoverPanel.conn); setHoverPanel(null); }} />
+          {hoverPanel.conn.type === 'ssh' && (
+            <PanelItem icon={Folder} label="File Manager" color="text-blue-400" onClick={() => { handleFiles(hoverPanel.conn); setHoverPanel(null); }} />
+          )}
+          {hoverPanel.conn.type === 'ssh' && (
+            <PanelItem icon={Box} label="Docker Manager" color="text-sky-400" onClick={() => { window.dispatchEvent(new CustomEvent('open-docker-manager', { detail: { connection: hoverPanel.conn } })); setHoverPanel(null); }} />
+          )}
+
+          <div className="h-px" style={{ background: 'var(--border-color)' }} />
+
+          <PanelItem icon={Star} label={hoverPanel.conn.isFavorite ? 'Remove Favorite' : 'Add Favorite'} color="text-amber-400" onClick={() => { handleToggleFavorite(hoverPanel.conn._id); setHoverPanel(null); }} />
+          {hoverPanel.conn.type === 'ssh' && (
+            <PanelItem icon={Cpu} label={fetchingSpecs.has(hoverPanel.conn._id) ? 'Fetching...' : 'Refresh Specs'} color="text-purple-400" disabled={fetchingSpecs.has(hoverPanel.conn._id)} onClick={() => { handleFetchSpecs(hoverPanel.conn); setHoverPanel(null); }} />
+          )}
+          {isUnlocked && hoverPanel.conn.storage !== 'manual' && (
+            <PanelItem icon={CloudUpload} label="Sync to Server" color="text-sky-400" onClick={() => { handleSyncOne(hoverPanel.conn); setHoverPanel(null); }} />
+          )}
+
+          <div className="h-px" style={{ background: 'var(--border-color)' }} />
+
+          <PanelItem icon={Edit} label="Edit Connection" onClick={() => { onEditConnection(hoverPanel.conn); setHoverPanel(null); }} />
+          <PanelItem icon={Trash2} label="Delete Connection" color="text-red-400" onClick={() => { handleDelete(hoverPanel.conn._id); setHoverPanel(null); }} />
+        </div>
+      </div>,
+      document.body
+    )}
     </>
+  );
+}
+
+function PanelItem({ icon: Icon, label, color, disabled, onClick }) {
+  return (
+    <button
+      className={`flex items-center gap-2.5 w-full px-2.5 py-2 rounded-lg text-xs font-medium transition-colors ${disabled ? 'opacity-50 cursor-not-allowed' : 'hover:bg-[var(--bg-tertiary)]'}`}
+      style={{ color: color || 'var(--text-primary)' }}
+      onClick={disabled ? undefined : onClick}
+      disabled={disabled}
+    >
+      <Icon size={14} />
+      <span>{label}</span>
+    </button>
   );
 }

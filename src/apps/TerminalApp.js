@@ -31,6 +31,9 @@ export default function TerminalApp({ onEditConnection, initialConnection, initi
       .catch(() => {});
   }, []);
 
+  const { connections, standaloneTerminals } = state;
+  const sshConnections = connections.filter(c => c.type !== 'database');
+
   // Auto-switch to relay when localhost connections exist and relay is available
   useEffect(() => {
     if (relayOnline && !useRelay) {
@@ -55,8 +58,6 @@ export default function TerminalApp({ onEditConnection, initialConnection, initi
     window.addEventListener('storage', check);
     return () => window.removeEventListener('storage', check);
   }, []);
-  const { connections, standaloneTerminals } = state;
-  const sshConnections = connections.filter(c => c.type !== 'database');
   const [activeTab, setActiveTab] = useState(null);
   
   const [isSelecting, setIsSelecting] = useState(() => {

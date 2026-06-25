@@ -631,10 +631,27 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
       }
     });
 
-    // Latency Ping-Pong - Also serves as a keep-alive to prevent SSH idle timeout
+    // Latency Ping-Pong - Measures real SSH latency via lightweight exec
     socket.on('heartbeat:ping', (timestamp) => {
       touchActivity();
-      socket.emit('heartbeat:pong', timestamp);
+      const sessionData = activeSessions.get(socket.id);
+      const sshClient = sessionData?.sshClient;
+      if (sshClient && sshClient._state !== 'closed') {
+        sshClient.exec(':', (err, stream) => {
+          if (err) {
+            socket.emit('heartbeat:pong', timestamp);
+            return;
+          }
+          stream.on('close', () => {
+            socket.emit('heartbeat:pong', timestamp);
+          });
+          stream.on('error', () => {
+            socket.emit('heartbeat:pong', timestamp);
+          });
+        });
+      } else {
+        socket.emit('heartbeat:pong', timestamp);
+      }
     });
 
     // Lightweight SSH session health probe (used by FileManager before transfers)

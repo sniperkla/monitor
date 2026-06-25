@@ -174,6 +174,17 @@ export default function RelayTerminalView({
       term.writeln('\r');
       term.focus();
 
+      // Heartbeat loop for latency monitoring
+      client._heartbeatInterval = setInterval(() => {
+        if (client.connected) {
+          client.heartbeat();
+        }
+      }, 3000);
+
+      client.on('heartbeat:pong', (sentTimestamp) => {
+        setLatency(Date.now() - sentTimestamp);
+      });
+
       // Send initial command if provided
       if (propsRef.current.initialCommand) {
         setTimeout(() => {
@@ -243,12 +254,14 @@ export default function RelayTerminalView({
     client.on('closed', () => {
       setStatus('disconnected');
       updateConnectionStatus('offline');
+      if (client._heartbeatInterval) clearInterval(client._heartbeatInterval);
       term.writeln('\r\n\x1b[1;33m⚠ Connection closed\x1b[0m');
       setShowReconnect(true);
     });
 
     client.on('disconnected', () => {
       setStatus('disconnected');
+      if (client._heartbeatInterval) clearInterval(client._heartbeatInterval);
       setShowReconnect(true);
     });
 
@@ -324,6 +337,7 @@ export default function RelayTerminalView({
 
     // Cleanup function
     return () => {
+      if (client._heartbeatInterval) clearInterval(client._heartbeatInterval);
       resizeObserver.disconnect();
       client.close();
       term.dispose();

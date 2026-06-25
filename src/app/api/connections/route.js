@@ -79,6 +79,7 @@ export async function GET(request) {
       sshTunnelUser: conn.sshTunnelUser || null,
       sshTunnelAuth: conn.sshTunnelAuth || 'password',
       relayName: conn.relayName || null,
+      systemInfo: conn.systemInfo || null,
     }));
 
     return NextResponse.json({ success: true, data: sanitized });

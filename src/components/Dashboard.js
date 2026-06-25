@@ -37,13 +37,35 @@ export default function Dashboard({ onNewConnection, onEditConnection }) {
   const pingConnection = async (conn) => {
     const startTime = Date.now();
     try {
-      const res = await apiFetch(`/api/connections/${conn._id}/test`, {
+      // If a terminal is already open for this connection, use its SSH session
+      const existingSocket = window.__terminalSockets?.[conn._id];
+      if (existingSocket?.connected) {
+        return new Promise((resolve) => {
+          const handler = (sentTimestamp) => {
+            existingSocket.off('heartbeat:pong', handler);
+            const latency = Date.now() - sentTimestamp;
+            const entry = { timestamp: Date.now(), success: true, latency };
+            setHealthHistory(prev => {
+              const history = prev[conn._id] ? [...prev[conn._id], entry].slice(-20) : [entry];
+              return { ...prev, [conn._id]: history };
+            });
+            dispatch({ type: 'UPDATE_CONNECTION', payload: { _id: conn._id, status: 'online', lastConnected: new Date().toISOString() } });
+            resolve();
+          };
+          existingSocket.once('heartbeat:pong', handler);
+          existingSocket.emit('heartbeat:ping', Date.now());
+          // Timeout fallback
+          setTimeout(() => { existingSocket.off('heartbeat:pong', handler); resolve(); }, 5000);
+        });
+      }
+
+      // No open terminal — use HTTP ping endpoint
+      const res = await apiFetch(`/api/connections/${conn._id}/ping`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ connection: conn })
       });
       const data = await res.json();
-      const latency = Date.now() - startTime;
+      const latency = data.latency || (Date.now() - startTime);
       const entry = { timestamp: Date.now(), success: data.success, latency };
 
       setHealthHistory(prev => {
@@ -51,18 +73,12 @@ export default function Dashboard({ onNewConnection, onEditConnection }) {
         return { ...prev, [conn._id]: history };
       });
 
-      // Store system specs if available
-      if (data.specs) {
-        setSystemSpecs(prev => ({ ...prev, [conn._id]: data.specs }));
-      }
-
       dispatch({
         type: 'UPDATE_CONNECTION',
         payload: {
           _id: conn._id,
           status: data.success ? 'online' : 'offline',
           lastConnected: data.success ? new Date().toISOString() : conn.lastConnected,
-          info: data.success ? data.info : conn.info,
         },
       });
     } catch {
@@ -709,6 +725,7 @@ export default function Dashboard({ onNewConnection, onEditConnection }) {
                 favorites.map((conn, index) => (
                   <ConnectionCard 
                     key={conn._id || `fav-${index}`} 
+                    conn={conn}
                     onClick={() => handleQuickConnect(conn)} 
                   />
                 ))

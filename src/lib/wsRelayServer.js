@@ -187,6 +187,26 @@ class WsTcpRelay {
     // Browser disconnect
     socket.on('relay:close', () => this.cleanup(socket.id));
     socket.on('disconnect', () => this.cleanup(socket.id));
+
+    // Heartbeat ping through SSH session for accurate latency
+    socket.on('relay:heartbeat', (timestamp) => {
+      if (sshClient && sshClient._state !== 'closed') {
+        sshClient.exec(':', (err, stream) => {
+          if (err) {
+            if (socket.connected) socket.emit('relay:heartbeat:pong', timestamp);
+            return;
+          }
+          stream.on('close', () => {
+            if (socket.connected) socket.emit('relay:heartbeat:pong', timestamp);
+          });
+          stream.on('error', () => {
+            if (socket.connected) socket.emit('relay:heartbeat:pong', timestamp);
+          });
+        });
+      } else {
+        if (socket.connected) socket.emit('relay:heartbeat:pong', timestamp);
+      }
+    });
   }
 
   async buildSshConfig(connection) {

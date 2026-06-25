@@ -23,6 +23,18 @@ const ConnectionSchema = new mongoose.Schema({
   dbOptions: { type: mongoose.Schema.Types.Mixed, default: null }, // Extra URI query params
   notes: { type: String, default: '' },
   info: { type: String, default: null },
+  systemInfo: {
+    distro: { type: String, default: null },
+    os: { type: String, default: null },
+    cpu: { type: String, default: null },
+    cores: { type: Number, default: null },
+    ram: { type: String, default: null },
+    ramBytes: { type: Number, default: null },
+    uptime: { type: String, default: null },
+    hostname: { type: String, default: null },
+    kernel: { type: String, default: null },
+    fetchedAt: { type: Date, default: null },
+  },
   // SSH Tunnel (for reaching local/private DBs through an SSH jump)
   sshTunnel: { type: Boolean, default: false },
   sshTunnelHost: { type: String, default: null },
