@@ -675,8 +675,6 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
               console.log(`🐳 Detected Docker mode: ${dockerContainerId} (Base ID: ${connectionId})`);
           }
       }
-      const repo = await getModels(dbUri, socket.user?.sub, preferredRelay);
-      const { Connection: CurrentConnectionModel, Session: CurrentSessionModel } = repo;
 
       try {
         let connection;
@@ -700,6 +698,17 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
           !!connectionData &&
           (isProvidedLocalConnection || providedHasAuthMaterial);
 
+        // Lazy DB init — only call getModels when we actually need DB access
+        let repo, CurrentConnectionModel, CurrentSessionModel;
+        const ensureRepo = async () => {
+          if (!repo) {
+            repo = await getModels(dbUri, socket.user?.sub, preferredRelay);
+            CurrentConnectionModel = repo.Connection;
+            CurrentSessionModel = repo.Session;
+          }
+          return repo;
+        };
+
         if (shouldSkipConnectionLookup) {
           connection = connectionData;
           console.log(`⚡ Using provided connectionData for ${connection?.host || connectionId} (skipping DB lookup)`);
@@ -709,6 +718,7 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
 
         // Handle DB Connections
         if (!connection && connectionId && !connectionId.startsWith('local-')) {
+          await ensureRepo();
           if (CurrentConnectionModel) {
             try {
               // For MongoDB: only look up if connectionId looks like a real ObjectId
@@ -2958,7 +2968,7 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
           socket.emit('ssh:connected', { sessionId: session ? session._id : null });
 
           // Update connection status only for DB
-          if (connectionId && !connectionId.startsWith('local-') && isValidObjectId(connectionId)) {
+          if (connectionId && !connectionId.startsWith('local-') && isValidObjectId(connectionId) && CurrentConnectionModel) {
             CurrentConnectionModel.findByIdAndUpdate(connectionId, {
               status: 'online',
               lastConnected: new Date(),
@@ -2978,7 +2988,7 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
             });
           }
 
-          if (connectionId && !connectionId.startsWith('local-') && isValidObjectId(connectionId)) {
+          if (connectionId && !connectionId.startsWith('local-') && isValidObjectId(connectionId) && CurrentConnectionModel) {
             await CurrentConnectionModel.findByIdAndUpdate(connectionId, {
               status: 'offline',
             });
@@ -3102,7 +3112,7 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
         }
 
         // AUTO-MIGRATION: Update DB if we used an old key
-        if (needsMigration && connectionId && !connectionId.startsWith('local-') && isValidObjectId(connectionId) && !dockerContainerId) {
+        if (needsMigration && connectionId && !connectionId.startsWith('local-') && isValidObjectId(connectionId) && !dockerContainerId && CurrentConnectionModel) {
             CurrentConnectionModel.findByIdAndUpdate(connectionId, {
               password: originalPass,
               privateKey: originalKey,
