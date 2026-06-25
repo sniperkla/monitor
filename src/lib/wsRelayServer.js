@@ -133,12 +133,12 @@ class WsTcpRelay {
             // SSH → Browser
             stream.on('data', (data) => {
               if (socket.connected) {
-                socket.emit('relay:data', data);
+                socket.emit('relay:data', data.toString('utf-8'));
               }
             });
             stream.stderr.on('data', (data) => {
               if (socket.connected) {
-                socket.emit('relay:data', data);
+                socket.emit('relay:data', data.toString('utf-8'));
               }
             });
 
