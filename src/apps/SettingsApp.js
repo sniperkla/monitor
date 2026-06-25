@@ -475,9 +475,15 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
   const handleFetchCommits = async () => {
     setLoadingCommits(true);
     try {
+      const repo = repoInput || (gitProvider === 'bitbucket' ? deployConfig.bitbucketRepo : deployConfig.githubRepo);
+      if (!repo) {
+        addNotification({ title: 'Error', message: 'Please enter a repository first', type: 'error' });
+        setLoadingCommits(false);
+        return;
+      }
       const endpoint = gitProvider === 'bitbucket'
-        ? `/api/deploy/bitbucket/commits?project=${selectedProjectId}&branch=${deployConfig.branch || 'main'}`
-        : `/api/deploy/github/commits?project=${selectedProjectId}&branch=${deployConfig.branch || 'main'}`;
+        ? `/api/deploy/bitbucket/commits?repo=${encodeURIComponent(repo)}&project=${selectedProjectId}&branch=${deployConfig.branch || 'main'}`
+        : `/api/deploy/github/commits?repo=${encodeURIComponent(repo)}&project=${selectedProjectId}&branch=${deployConfig.branch || 'main'}`;
       const res = await apiFetch(endpoint);
       const data = await res.json();
       if (data.success && data.commits) {
@@ -2578,7 +2584,8 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
                                   if (data.success) {
                                     setBranches(data.branches || []);
                                     if ((data.branches || []).length > 0) {
-                                      setDeployConfig(p => ({ ...p, branch: data.branches[0], githubRepo: repoValue }));
+                                      const repoField = gitProvider === 'bitbucket' ? 'bitbucketRepo' : 'githubRepo';
+                                      setDeployConfig(p => ({ ...p, branch: data.branches[0], [repoField]: repoValue }));
                                       setRepoInput(repoValue);
                                     }
                                   } else {
