@@ -719,6 +719,13 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
     return () => clearInterval(id);
   }, [session, relayModalOpen, relayWaiting]);
 
+  // Auto-start relay polling when entering step 2 (no manual "I ran it" button needed)
+  useEffect(() => {
+    if (relayModalOpen && relayWizardStep >= 2 && !relayWaiting && !relayInstallSuccess) {
+      setRelayWaiting(true);
+    }
+  }, [relayModalOpen, relayWizardStep, relayWaiting, relayInstallSuccess]);
+
   // Show success screen when a new relay connects during install wizard
   useEffect(() => {
     if (!relayModalOpen) {
@@ -3248,7 +3255,7 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
                             <button
                               onClick={() => {
                                 navigator.clipboard.writeText(getRelayOneLiner('install'));
-                                addNotification({ title: 'Copied!', message: 'Open Terminal, paste and press Enter — then click the button below.', type: 'success' });
+                                addNotification({ title: 'Copied!', message: 'Open Terminal, paste and press Enter. Connection will be detected automatically.', type: 'success' });
                               }}
                               className="w-full flex items-center justify-center gap-2 py-3 bg-amber-500 hover:bg-amber-600 active:scale-[0.98] rounded-xl text-white font-bold text-sm transition-all shadow-lg shadow-amber-500/20"
                             >
@@ -3269,15 +3276,7 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
                             ))}
                           </div>
 
-                          {/* "I ran it" — start relay polling */}
-                          {!relayWaiting && (
-                            <button
-                              onClick={() => setRelayWaiting(true)}
-                              className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl font-bold text-[12px] transition-all border border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/10"
-                            >
-                              <Loader size={13} /> I ran it — check for relay connection
-                            </button>
-                          )}
+                          {/* Polling starts automatically on step 2 — see useEffect above */}
 
                           {/* Secondary option — flipped per OS */}
                           <details className="group">

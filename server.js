@@ -663,7 +663,7 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
     });
 
       socket.on('ssh:connect', async (data) => {
-      let { connectionId, connection: connectionData, cols, rows, dockerContainerId, dockerMode, useShell = true, preferProvidedConnection = false, preferredRelay } = data;
+      let { connectionId, connection: connectionData, cols, rows, dockerContainerId, dockerMode, useShell = true, preferProvidedConnection = false, preferredRelay, sshMode } = data;
 
       // Extract docker info from connectionId if missing but prefixed
       if (connectionId && typeof connectionId === 'string' && connectionId.startsWith('docker-')) {
@@ -3120,7 +3120,8 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
 
         // ── RELAY SSH: Forward SSH through user's local relay agent (AFTER credential decryption) ──
         // sshConfig now has plaintext password/privateKey. Send to relay so SSH originates from user's machine.
-        if (userRelay?.ws && userRelay.ws.readyState === 1 /* WS OPEN */ && userRelay.capabilities?.ssh) {
+        // Only route through relay when user explicitly selected "local" mode (sshMode === 'local')
+        if (sshMode === 'local' && userRelay?.ws && userRelay.ws.readyState === 1 /* WS OPEN */ && userRelay.capabilities?.ssh) {
           const relayConnId = Math.random().toString(36).slice(2, 12);
           global.__relayConnMap.set(relayConnId, socket.id);
           console.log(`🏠 [Relay SSH] Routing ${sshConfig.host}:${sshConfig.port} through relay agent (connId: ${relayConnId})`);

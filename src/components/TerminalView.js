@@ -1314,12 +1314,13 @@ logstash:
     socketRef.current = socket;
 
     socket.on('connect', () => {
-      socket.emit('ssh:connect', { 
-        connectionId: propsRef.current.connectionId, 
+      socket.emit('ssh:connect', {
+        connectionId: propsRef.current.connectionId,
         connection: propsRef.current.connection,
         cols: term.cols,
         rows: term.rows,
         preferredRelay: typeof window !== 'undefined' ? (localStorage.getItem('ssh_monitor_preferred_relay') || undefined) : undefined,
+        sshMode: typeof window !== 'undefined' ? (localStorage.getItem('ssh_monitor_ssh_mode') || 'server') : 'server',
       });
     });
 
