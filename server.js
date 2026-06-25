@@ -3168,6 +3168,7 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
             'sftp:list', 'sftp:mkdir', 'sftp:delete', 'sftp:readFile',
             'sftp:writeFile', 'sftp:download', 'sftp:download_folder',
             'sftp:search', 'sftp:getSize', 'sftp:copy', 'sftp:move',
+            'sftp:extract',
           ];
           sftpSimpleEvents.forEach(ev => {
             socket.removeAllListeners(ev);
@@ -3612,7 +3613,7 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
                       const progress = Math.round((sent / totalSize) * 100);
                       targetSocket.emit('sftp:download_chunk', {
                         filename,
-                        chunk: slice.toString('base64'),
+                        chunk: slice,
                         progress,
                         offset: sent,
                       });

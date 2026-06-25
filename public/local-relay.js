@@ -294,6 +294,34 @@ function connect() {
       handleSftpDownload(ws, msg);
     }
 
+    if (msg.type === 'sftp:download_folder') {
+      handleSftpDownloadFolder(ws, msg);
+    }
+
+    if (msg.type === 'sftp:search') {
+      handleSftpSearch(ws, msg);
+    }
+
+    if (msg.type === 'sftp:getSize') {
+      handleSftpGetSize(ws, msg);
+    }
+
+    if (msg.type === 'sftp:copy') {
+      handleSftpCopy(ws, msg);
+    }
+
+    if (msg.type === 'sftp:move') {
+      handleSftpMove(ws, msg);
+    }
+
+    if (msg.type === 'sftp:readFileBase64') {
+      handleSftpReadBase64(ws, msg);
+    }
+
+    if (msg.type === 'sftp:extract') {
+      handleSftpExtract(ws, msg);
+    }
+
     // ── Docker (NEW) ──
     if (msg.type === 'docker:command') {
       handleDockerCommand(ws, msg);
@@ -538,10 +566,12 @@ async function handleSftpMkdir(ws, msg) {
 async function handleSftpDelete(ws, msg) {
   try {
     const sftp = await getSftpClient(msg.connId);
-    const deleteFn = msg.isDirectory ? sftp.rmdir.bind(sftp) : sftp.unlink.bind(sftp);
-    deleteFn(msg.path, (err) => {
-      if (err) sendSftpError(ws, msg.connId, err);
-      else ws.send(JSON.stringify({ type: 'sftp:action_success', connId: msg.connId, action: 'delete', path: msg.path }));
+    sftp.unlink(msg.path, (err) => {
+      if (!err) return ws.send(JSON.stringify({ type: 'sftp:action_success', connId: msg.connId, action: 'delete', path: msg.path }));
+      sftp.rmdir(msg.path, (err2) => {
+        if (!err2) return ws.send(JSON.stringify({ type: 'sftp:action_success', connId: msg.connId, action: 'delete', path: msg.path }));
+        sendSftpError(ws, msg.connId, err2);
+      });
     });
   } catch (err) {
     sendSftpError(ws, msg.connId, err);
@@ -564,17 +594,220 @@ async function handleSftpUpload(ws, msg) {
 async function handleSftpDownload(ws, msg) {
   try {
     const sftp = await getSftpClient(msg.connId);
+    const filePath = msg.filePath || msg.remotePath;
     const chunks = [];
-    const stream = sftp.createReadStream(msg.remotePath);
+    const stream = sftp.createReadStream(filePath);
     stream.on('data', (chunk) => chunks.push(chunk));
     stream.on('error', (err) => sendSftpError(ws, msg.connId, err));
     stream.on('end', () => {
       ws.send(JSON.stringify({
         type: 'sftp:download_data',
         connId: msg.connId,
-        path: msg.remotePath,
+        path: filePath,
         data: Buffer.concat(chunks).toString('base64'),
       }));
+    });
+  } catch (err) {
+    sendSftpError(ws, msg.connId, err);
+  }
+}
+
+async function handleSftpDownloadFolder(ws, msg) {
+  try {
+    const session = sshSessions.get(msg.connId);
+    if (!session?.sshClient) {
+      return sendSftpError(ws, msg.connId, new Error('No SSH session'));
+    }
+
+    const sq = (s) => `'${String(s).replace(/'/g, "'\\''")}' `;
+
+    let archiveName, tarCmd;
+    if (msg.folderPath) {
+      const folderName = path.posix.basename(msg.folderPath);
+      const parentDir = path.posix.dirname(msg.folderPath);
+      archiveName = folderName + '.tar.gz';
+      tarCmd = `tar czf - -C ${sq(parentDir)} ${sq(folderName)}`;
+    } else if (msg.paths && msg.paths.length > 0) {
+      archiveName = 'selection.tar.gz';
+      const parentDir = path.posix.dirname(msg.paths[0].filePath);
+      const items = msg.paths.map(p => sq(path.posix.basename(p.filePath))).join(' ');
+      tarCmd = `tar czf - -C ${sq(parentDir)} ${items}`;
+    } else {
+      return sendSftpError(ws, msg.connId, new Error('No paths specified'));
+    }
+
+    session.sshClient.exec(tarCmd, (err, stream) => {
+      if (err) return sendSftpError(ws, msg.connId, err);
+
+      const chunks = [];
+      let stderrBuf = '';
+
+      stream.on('data', (chunk) => chunks.push(chunk));
+      stream.stderr.on('data', (d) => { stderrBuf += d.toString(); });
+      stream.on('close', (code) => {
+        if (code !== 0) {
+          return sendSftpError(ws, msg.connId, new Error(`tar failed (exit ${code}): ${stderrBuf}`));
+        }
+        ws.send(JSON.stringify({
+          type: 'sftp:download_data',
+          connId: msg.connId,
+          path: archiveName,
+          data: Buffer.concat(chunks).toString('base64'),
+        }));
+      });
+    });
+  } catch (err) {
+    sendSftpError(ws, msg.connId, err);
+  }
+}
+
+async function handleSftpSearch(ws, msg) {
+  try {
+    const sftp = await getSftpClient(msg.connId);
+    const query = (msg.query || '').toLowerCase();
+    const results = [];
+    const MAX_RESULTS = 200;
+
+    async function walk(dir) {
+      if (results.length >= MAX_RESULTS) return;
+      const list = await new Promise((resolve, reject) => {
+        sftp.readdir(dir, (err, list) => err ? reject(err) : resolve(list || []));
+      });
+      for (const item of list) {
+        if (results.length >= MAX_RESULTS) break;
+        const fullPath = dir === '/' ? `/${item.filename}` : `${dir}/${item.filename}`;
+        if (item.filename.toLowerCase().includes(query)) {
+          results.push({ filename: item.filename, path: fullPath, isDirectory: item.attrs.isDirectory() });
+        }
+        if (item.attrs.isDirectory() && !item.filename.startsWith('.')) {
+          await walk(fullPath);
+        }
+      }
+    }
+
+    await walk(msg.path || '.');
+    ws.send(JSON.stringify({ type: 'sftp:searchResult', connId: msg.connId, query: msg.query, results }));
+  } catch (err) {
+    ws.send(JSON.stringify({ type: 'sftp:searchResult', connId: msg.connId, query: msg.query, results: [], error: err?.message }));
+  }
+}
+
+async function handleSftpGetSize(ws, msg) {
+  try {
+    const sftp = await getSftpClient(msg.connId);
+    const targetPath = msg.path;
+
+    const stat = await new Promise((resolve, reject) => {
+      sftp.stat(targetPath, (err, stats) => err ? reject(err) : resolve(stats));
+    });
+
+    if (stat.isDirectory()) {
+      let totalSize = 0;
+      async function walk(dir) {
+        const list = await new Promise((resolve, reject) => {
+          sftp.readdir(dir, (err, list) => err ? reject(err) : resolve(list || []));
+        });
+        for (const item of list) {
+          const fullPath = `${dir}/${item.filename}`;
+          if (item.attrs.isDirectory()) {
+            await walk(fullPath);
+          } else {
+            totalSize += item.attrs.size || 0;
+          }
+        }
+      }
+      await walk(targetPath);
+      ws.send(JSON.stringify({ type: 'sftp:sizeResult', connId: msg.connId, path: targetPath, size: totalSize }));
+    } else {
+      ws.send(JSON.stringify({ type: 'sftp:sizeResult', connId: msg.connId, path: targetPath, size: stat.size }));
+    }
+  } catch (err) {
+    ws.send(JSON.stringify({ type: 'sftp:sizeResult', connId: msg.connId, path: msg.path, size: 0, error: err?.message }));
+  }
+}
+
+async function handleSftpCopy(ws, msg) {
+  try {
+    const session = sshSessions.get(msg.connId);
+    if (!session?.sshClient) return sendSftpError(ws, msg.connId, new Error('No SSH session'));
+    session.sshClient.exec(`cp -r "${msg.src}" "${msg.dest}"`, (err, stream) => {
+      if (err) return sendSftpError(ws, msg.connId, err);
+      let stderr = '';
+      stream.stderr.on('data', (d) => { stderr += d.toString(); });
+      stream.on('close', (code) => {
+        if (code !== 0) return sendSftpError(ws, msg.connId, new Error(`Copy failed: ${stderr}`));
+        ws.send(JSON.stringify({ type: 'sftp:action_success', connId: msg.connId, action: 'copy', path: msg.dest }));
+      });
+    });
+  } catch (err) {
+    sendSftpError(ws, msg.connId, err);
+  }
+}
+
+async function handleSftpMove(ws, msg) {
+  try {
+    const session = sshSessions.get(msg.connId);
+    if (!session?.sshClient) return sendSftpError(ws, msg.connId, new Error('No SSH session'));
+    const overwriteFlag = msg.overwrite ? '-f' : '';
+    session.sshClient.exec(`mv ${overwriteFlag} "${msg.src}" "${msg.dest}"`, (err, stream) => {
+      if (err) return sendSftpError(ws, msg.connId, err);
+      let stderr = '';
+      stream.stderr.on('data', (d) => { stderr += d.toString(); });
+      stream.on('close', (code) => {
+        if (code !== 0) return sendSftpError(ws, msg.connId, new Error(`Move failed: ${stderr}`));
+        ws.send(JSON.stringify({ type: 'sftp:action_success', connId: msg.connId, action: 'move', path: msg.dest }));
+      });
+    });
+  } catch (err) {
+    sendSftpError(ws, msg.connId, err);
+  }
+}
+
+async function handleSftpReadBase64(ws, msg) {
+  try {
+    const sftp = await getSftpClient(msg.connId);
+    const chunks = [];
+    const stream = sftp.createReadStream(msg.path);
+    stream.on('data', (chunk) => chunks.push(chunk));
+    stream.on('error', (err) => sendSftpError(ws, msg.connId, err));
+    stream.on('end', () => {
+      ws.send(JSON.stringify({ type: 'sftp:fileData', connId: msg.connId, path: msg.path, content: Buffer.concat(chunks).toString('base64') }));
+    });
+  } catch (err) {
+    sendSftpError(ws, msg.connId, err);
+  }
+}
+
+async function handleSftpExtract(ws, msg) {
+  try {
+    const session = sshSessions.get(msg.connId);
+    if (!session?.sshClient) return sendSftpError(ws, msg.connId, new Error('No SSH session'));
+
+    const archivePath = msg.path;
+    const type = msg.type;
+    const targetDir = path.posix.dirname(archivePath);
+    const cleanupArchive = msg.cleanupArchive;
+
+    let extractCmd;
+    if (type === 'zip') {
+      extractCmd = `unzip -o "${archivePath}" -d "${targetDir}" 2>/dev/null || python3 -c "import zipfile; zipfile.ZipFile('${archivePath}').extractall('${targetDir}')"`;
+    } else {
+      extractCmd = `tar xf "${archivePath}" -C "${targetDir}"`;
+    }
+
+    session.sshClient.exec(extractCmd, (err, stream) => {
+      if (err) return sendSftpError(ws, msg.connId, err);
+      let stderr = '';
+      stream.stderr.on('data', (d) => { stderr += d.toString(); });
+      stream.on('close', (code) => {
+        if (code !== 0) return sendSftpError(ws, msg.connId, new Error(`Extract failed: ${stderr}`));
+
+        if (cleanupArchive) {
+          session.sshClient.exec(`rm -f "${archivePath}"`, () => {});
+        }
+
+        ws.send(JSON.stringify({ type: 'sftp:action_success', connId: msg.connId, action: 'extract', path: archivePath }));
+      });
     });
   } catch (err) {
     sendSftpError(ws, msg.connId, err);
