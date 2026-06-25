@@ -854,6 +854,12 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
                   });
                   
                   cb(null, stream);
+                  
+                  // 🚨 CRITICAL FIX: If the caller ignores the stream output (e.g., rm -f),
+                  // the stream stays paused and 'close' NEVER fires, hanging the queue.
+                  // We must ensure the stream is in flowing mode.
+                  if (stream.listenerCount('data') === 0) stream.resume();
+                  if (stream.stderr && stream.stderr.listenerCount('data') === 0) stream.stderr.resume();
               });
           };
 
@@ -1344,22 +1350,31 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
                   cmdSuffix = cmds.join(' && ');
               } else if (action === 'remove-selected') {
                   const sel = args[0] || {};
+                  const pruneAll = sel.pruneAll === true;
                   const cmds = [];
                   if (sel.containers && sel.containers.length > 0) {
                     const ids = sel.containers.map(id => String(id).replace(/[^a-zA-Z0-9._-]/g, '')).filter(Boolean);
                     if (ids.length > 0) cmds.push(`rm ${ids.join(' ')}`);
+                  } else if (sel.targets?.containers) {
+                    cmds.push('container prune -f');
                   }
                   if (sel.images && sel.images.length > 0) {
                     const tags = sel.images.map(t => String(t).replace(/[^a-zA-Z0-9._:@/-]/g, '')).filter(Boolean);
                     if (tags.length > 0) cmds.push(`rmi ${tags.join(' ')}`);
+                  } else if (sel.targets?.images) {
+                    cmds.push(`image prune ${pruneAll ? '-a ' : ''}-f`);
                   }
                   if (sel.volumes && sel.volumes.length > 0) {
                     const names = sel.volumes.map(n => String(n).replace(/[^a-zA-Z0-9._-]/g, '')).filter(Boolean);
                     if (names.length > 0) cmds.push(`volume rm ${names.join(' ')}`);
+                  } else if (sel.targets?.volumes) {
+                    cmds.push('volume prune -f');
                   }
                   if (sel.networks && sel.networks.length > 0) {
                     const names = sel.networks.map(n => String(n).replace(/[^a-zA-Z0-9._-]/g, '')).filter(Boolean);
                     if (names.length > 0) cmds.push(`network rm ${names.join(' ')}`);
+                  } else if (sel.targets?.networks) {
+                    cmds.push('network prune -f');
                   }
                   if (sel.cache) cmds.push('builder prune -f');
                   if (cmds.length === 0) return socket.emit('docker:error', 'Nothing selected to remove');
@@ -1619,40 +1634,33 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
           // Delete File/Directory
           socket.on('sftp:delete', (path) => {
             console.log(`🗑️ [${socket.id}] SFTP DELETE: ${path}`);
-            
-            const runRm = (isRetry = false) => {
-                const escalatedCmd = (isRetry && connection?.password)
-                  ? `echo "${Buffer.from(connection.password).toString('base64')}" | base64 -d | sudo -S sh -c 'rm -rf "${path.replace(/'/g, "'\\''")}"'`
-                  : `rm -rf "${path}"`;
-                
-                sshClient.exec(escalatedCmd, (err, stream) => {
-                  if (err) return emitSftpError(err, 'Delete failed');
-                  let stderr = '';
-                  stream.on('data', () => {});
-                  stream.stderr.on('data', d => stderr += d.toString());
-                  stream.on('close', (code) => {
-                    if (code !== 0 && !isRetry && stderr.toLowerCase().includes('permission denied') && connection?.password) {
-                        console.warn(`⚠️ [${socket.id}] Delete failed. Retrying with base64-sudo.`);
-                        return runRm(true);
-                    }
-                    if (code === 0) socket.emit('sftp:action_success', { action: 'delete', path });
-                    else emitSftpError(`Exit code ${code}`, 'Delete failed');
-                  });
-                });
-            };
 
-            getSftp((err, sftp) => {
-              if (err) return runRm();
-              
-              // Try unlink via SFTP first (cleaner)
-              sftp.unlink(path, (err) => {
-                if (!err) return socket.emit('sftp:action_success', { action: 'delete', path });
-                sftp.rmdir(path, (err2) => {
-                    if (!err2) return socket.emit('sftp:action_success', { action: 'delete', path });
-                    runRm(); // Fallback to rm -rf which may use sudo
+            const doDelete = (isRetry = false) => {
+              // Build the command: try plain rm -rf first, sudo on retry
+              const cmd = (isRetry && connection?.password)
+                ? `echo "${Buffer.from(connection.password).toString('base64')}" | base64 -d | sudo -S rm -rf "${path.replace(/"/g, '\\"')}"`
+                : `rm -rf "${path.replace(/"/g, '\\"')}"`;
+
+              sshClient.exec(cmd, (err, stream) => {
+                if (err) return emitSftpError(err, 'Delete failed');
+                let stderr = '';
+                stream.on('data', () => {});
+                stream.stderr.on('data', d => stderr += d.toString());
+                stream.on('close', (code) => {
+                  if (code !== 0 && !isRetry && stderr.toLowerCase().includes('permission denied') && connection?.password) {
+                    console.warn(`⚠️ [${socket.id}] Delete failed with permission denied. Retrying with sudo.`);
+                    return doDelete(true);
+                  }
+                  if (code === 0) {
+                    socket.emit('sftp:action_success', { action: 'delete', path });
+                  } else {
+                    emitSftpError(stderr.trim() || `Exit code ${code}`, 'Delete failed');
+                  }
                 });
               });
-            });
+            };
+
+            doDelete();
           });
 
           // Read File
@@ -2418,115 +2426,75 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
             const shouldCleanupArchive = cleanupArchive || uploadedMomentsAgo;
             const removeArchive = () => {
               if (!shouldCleanupArchive) return;
-              getSftp((sftpErr, sftp) => {
-                if (!sftpErr && sftp) {
-                  sftp.unlink(archivePath, () => {
-                    sshClient.exec(`rm -f "${archivePath}"`, () => {});
-                  });
-                  return;
-                }
-                sshClient.exec(`rm -f "${archivePath}"`, () => {});
+              console.log(`🗑️ Cleaning up archive: ${archivePath}`);
+              sshClient.exec(`rm -f "${archivePath}"`, (rmErr) => {
+                if (rmErr) console.warn(`Failed to cleanup archive: ${rmErr.message}`);
+                else console.log(`✅ Archive cleaned up: ${archivePath}`);
               });
               if (sessionData?.recentUploads) {
                 sessionData.recentUploads.delete(archivePath);
               }
             };
 
-            // Step 1: Detect availability of unzip vs python fallback
-            // Step 1: Detect availability of unzip vs python fallback vs tar
-            const detectCmd = `if command -v unzip >/dev/null; then echo "unzip"; elif command -v python3 >/dev/null; then echo "python3"; fi; if command -v tar >/dev/null; then echo "tar"; fi`;
-            
-            sshClient.exec(detectCmd, (err, detStream) => {
-              if (err) return emitSftpError(err, 'Tool detection failed');
-              let detected = "";
-              detStream.on('data', (d) => detected += d.toString());
+            // Build the single command that performs detection, execution, and fallbacks at shell level
+            let extractCmd;
+            if (type === 'zip') {
+              extractCmd = `if command -v unzip >/dev/null; then unzip -o "${archivePath}" -d "${targetDir}"; elif command -v python3 >/dev/null; then python3 -c "import zipfile; zipfile.ZipFile('${archivePath}').extractall('${targetDir}')"; else echo "Neither 'unzip' nor 'python3' command found on the remote server." >&2; exit 127; fi`;
+            } else {
+              const isGzip = archivePath.endsWith('.gz') || archivePath.endsWith('.tgz');
+              extractCmd = `if command -v tar >/dev/null; then tar -xv${isGzip ? 'z' : ''}f "${archivePath}" -C "${targetDir}"; else echo "'tar' command not found on the remote server." >&2; exit 127; fi`;
+            }
 
-              detStream.on('close', () => {
-                let countCmd, extractCmd;
-                const hasUnzip = detected.includes('unzip');
-                const hasPython = detected.includes('python3');
-                const hasTar = detected.includes('tar');
-                const usePython = type === 'zip' && !hasUnzip && hasPython;
+            socket.emit('sftp:progress', { action: 'extract', filename, progress: -1, status: 'Starting extraction...' });
 
-                if (type === 'zip') {
-                  if (usePython) {
-                    console.log(`🐍 Using Python fallback for unzipping: ${archivePath}`);
-                    countCmd = `python3 -c "import zipfile; z = zipfile.ZipFile('${archivePath}'); print(len([f for f in z.namelist() if not f.endswith('/')]))"`;
-                    extractCmd = `python3 -c "import zipfile; zipfile.ZipFile('${archivePath}').extractall('${targetDir}')"`;
-                  } else if (hasUnzip) {
-                    countCmd = `unzip -Z1 "${archivePath}" | wc -l`;
-                    extractCmd = `unzip -o "${archivePath}" -d "${targetDir}"`;
-                  } else {
-                    return emitSftpError('Neither "unzip" nor "python3" were found on the remote server. Please install zip support.', 'Server Environment');
-                  }
-                } else {
-                  if (hasTar) {
-                    const isGzip = archivePath.endsWith('.gz') || archivePath.endsWith('.tgz');
-                    countCmd = `tar -t${isGzip ? 'z' : ''}f "${archivePath}" | wc -l`;
-                    extractCmd = `tar -xv${isGzip ? 'z' : ''}f "${archivePath}" -C "${targetDir}"`;
-                  } else {
-                    return emitSftpError('"tar" command not found on the remote server.', 'Server Environment');
+            sshClient.exec(extractCmd, (err, stream) => {
+              if (err) return emitSftpError(err, 'Extract failed');
+              
+              let extractedCount = 0;
+              let buffer = '';
+              let lastEmitTime = 0;
+              
+              stream.on('data', (data) => {
+                buffer += data.toString();
+                const lines = buffer.split('\n');
+                buffer = lines.pop() || '';
+                
+                const validLines = lines.filter(l => l.trim().length > 0);
+                if (validLines.length > 0) {
+                  extractedCount += validLines.length;
+                  const lastLine = validLines[validLines.length - 1];
+                  const currentFile = lastLine.replace(/^(extracting:|  inflating:|inflating:|creating:|  creating:)/i, '').trim();
+                  
+                  const now = Date.now();
+                  if (now - lastEmitTime > 250) {
+                    socket.emit('sftp:progress', { 
+                      action: 'extract', 
+                      filename, 
+                      progress: -1, 
+                      status: `${currentFile} (${extractedCount} files)`
+                    });
+                    lastEmitTime = now;
                   }
                 }
+              });
 
-                socket.emit('sftp:progress', { action: 'extract', filename, progress: 5, status: 'Initializing metadata...' });
+              let extractError = '';
+              stream.stderr.on('data', (d) => extractError += d.toString());
 
-                sshClient.exec(countCmd, (err, countStream) => {
-                  if (err) return emitSftpError(err, 'Extract Init');
-                  
-                  let output = '';
-                  countStream.on('data', (d) => output += d.toString());
-                  
-                  countStream.on('close', (code) => {
-                    const totalItems = parseInt(output.trim()) || 0;
-                    
-                    sshClient.exec(extractCmd, (err, stream) => {
-                      if (err) return emitSftpError(err, 'Extract failed');
-                      
-                      let extractedCount = 0;
-                      let buffer = '';
-                      
-                      stream.on('data', (data) => {
-                        buffer += data.toString();
-                        const lines = buffer.split('\n');
-                        buffer = lines.pop() || '';
-                        
-                        const validLines = lines.filter(l => l.trim().length > 0);
-                        if (validLines.length > 0) {
-                          extractedCount += validLines.length;
-                          const lastLine = validLines[validLines.length - 1];
-                          const currentFile = lastLine.replace(/^(extracting:|  inflating:|inflating:|creating:|  creating:)/i, '').trim();
-                          
-                          if (totalItems > 0) {
-                            const prog = Math.min(99, Math.round((extractedCount / totalItems) * 100));
-                            socket.emit('sftp:progress', { 
-                              action: 'extract', filename, progress: prog, status: usePython ? 'Processing files...' : `Extracting: ${currentFile}`
-                            });
-                          }
-                        }
-                      });
-
-                      let extractError = '';
-                      stream.stderr.on('data', (d) => extractError += d.toString());
-
-                      stream.on('close', (code) => {
-                        removeArchive();
-                        
-                        if (code === 0) {
-                          socket.emit('sftp:progress', { action: 'extract', filename, progress: 100 });
-                          socket.emit('sftp:action_success', { action: 'extract', path: targetDir });
-                        } else {
-                          const errorMsg = extractError || `Exit code ${code}`;
-                          if (errorMsg.includes('command not found')) {
-                            emitSftpError('Missing "unzip" or "python3" on server. Please install zip utilities.', 'Server Environment');
-                          } else {
-                            emitSftpError(errorMsg, 'Extraction failed');
-                          }
-                        }
-                      });
-                    });
-                  });
-                });
+              stream.on('close', (code) => {
+                removeArchive();
+                
+                // Exit code 0, 1, or 2 are treated as success if stdout was produced (indicating some extraction happened)
+                // unzip returns 1 for warnings (e.g. success with minor warnings). tar returns 1 or 2 on some warnings.
+                const wasSuccessful = code === 0 || ((code === 1 || code === 2) && extractedCount > 0);
+                
+                if (wasSuccessful) {
+                  socket.emit('sftp:progress', { action: 'extract', filename, progress: 100 });
+                  socket.emit('sftp:action_success', { action: 'extract', path: targetDir });
+                } else {
+                  const errorMsg = extractError.trim() || `Exit code ${code}`;
+                  emitSftpError(errorMsg, 'Extraction failed');
+                }
               });
             });
           });
@@ -3185,7 +3153,7 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
             socket.on(ev, (payload) => {
               const msg = typeof payload === 'string'
                 ? { type: ev, connId: relayConnId, path: payload }
-                : { type: ev, connId: relayConnId, ...payload };
+                : { connId: relayConnId, ...payload, type: ev, archiveType: payload.type };
               forwardOrQueue(msg);
             });
           });

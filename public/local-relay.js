@@ -612,28 +612,28 @@ function handleSftpDelete(ws, msg) {
     return sendSftpError(ws, msg.connId, new Error('No SSH session'));
   }
 
-  const onSuccess = () => {
-    ws.send(JSON.stringify({ type: 'sftp:action_success', connId: msg.connId, action: 'delete', path: msg.path }));
-  };
+  const filePath = msg.path;
 
-  session.sshClient.sftp((sftpErr, sftp) => {
-    if (sftpErr) return sendSftpError(ws, msg.connId, sftpErr);
+  const doDelete = (isRetry = false) => {
+    // Use rm -rf directly — handles both files and directories without opening a new SFTP subsystem
+    const cmd = `rm -rf "${filePath.replace(/"/g, '\\"')}"`;
 
-    sftp.unlink(msg.path, (unlinkErr) => {
-      sftp.end();
-      if (!unlinkErr) return onSuccess();
-      // unlink failed — must be a directory (or permission issue). Use rm -rf directly.
-      session.sshClient.exec(`rm -rf "${msg.path}"`, (execErr, stream) => {
-        if (execErr) return sendSftpError(ws, msg.connId, execErr);
-        let stderr = '';
-        stream.stderr.on('data', (d) => stderr += d.toString());
-        stream.on('close', (code) => {
-          if (code === 0) onSuccess();
-          else sendSftpError(ws, msg.connId, new Error(stderr.trim() || `Delete failed (exit ${code})`));
-        });
+    session.sshClient.exec(cmd, (err, stream) => {
+      if (err) return sendSftpError(ws, msg.connId, err);
+      let stderr = '';
+      stream.on('data', () => {});
+      stream.stderr.on('data', (d) => { stderr += d.toString(); });
+      stream.on('close', (code) => {
+        if (code === 0) {
+          ws.send(JSON.stringify({ type: 'sftp:action_success', connId: msg.connId, action: 'delete', path: filePath }));
+        } else {
+          sendSftpError(ws, msg.connId, new Error(stderr.trim() || `Delete failed (exit ${code})`));
+        }
       });
     });
-  });
+  };
+
+  doDelete();
 }
 
 async function handleSftpUpload(ws, msg) {
@@ -1057,29 +1057,95 @@ async function handleSftpExtract(ws, msg) {
     if (!session?.sshClient) return sendSftpError(ws, msg.connId, new Error('No SSH session'));
 
     const archivePath = msg.path;
-    const type = msg.type;
+    const type = msg.archiveType || msg.type; // use archiveType passed from server.js to avoid overriding message type
     const targetDir = path.posix.dirname(archivePath);
+    const filename = path.posix.basename(archivePath);
     const cleanupArchive = msg.cleanupArchive;
 
+    // Build the single command that performs detection, execution, and fallbacks at shell level
     let extractCmd;
     if (type === 'zip') {
-      extractCmd = `unzip -o "${archivePath}" -d "${targetDir}" 2>/dev/null || python3 -c "import zipfile; zipfile.ZipFile('${archivePath}').extractall('${targetDir}')"`;
+      extractCmd = `if command -v unzip >/dev/null; then unzip -o "${archivePath}" -d "${targetDir}"; elif command -v python3 >/dev/null; then python3 -c "import zipfile; zipfile.ZipFile('${archivePath}').extractall('${targetDir}')"; else echo "Neither 'unzip' nor 'python3' command found on the remote server." >&2; exit 127; fi`;
     } else {
-      extractCmd = `tar xf "${archivePath}" -C "${targetDir}"`;
+      const isGzip = archivePath.endsWith('.gz') || archivePath.endsWith('.tgz');
+      extractCmd = `if command -v tar >/dev/null; then tar -xv${isGzip ? 'z' : ''}f "${archivePath}" -C "${targetDir}"; else echo "'tar' command not found on the remote server." >&2; exit 127; fi`;
     }
+
+    // Start progress
+    ws.send(JSON.stringify({
+      type: 'sftp:progress',
+      connId: msg.connId,
+      action: 'extract',
+      filename,
+      progress: -1,
+      status: 'Starting extraction...'
+    }));
 
     session.sshClient.exec(extractCmd, (err, stream) => {
       if (err) return sendSftpError(ws, msg.connId, err);
+      
+      let extractedCount = 0;
+      let buffer = '';
+      let lastEmitTime = 0;
       let stderr = '';
-      stream.stderr.on('data', (d) => { stderr += d.toString(); });
-      stream.on('close', (code) => {
-        if (code !== 0) return sendSftpError(ws, msg.connId, new Error(`Extract failed: ${stderr}`));
 
+      stream.on('data', (data) => {
+        buffer += data.toString();
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+
+        const validLines = lines.filter(l => l.trim().length > 0);
+        if (validLines.length > 0) {
+          extractedCount += validLines.length;
+          const lastLine = validLines[validLines.length - 1];
+          const currentFile = lastLine.replace(/^(extracting:|  inflating:|inflating:|creating:|  creating:)/i, '').trim();
+
+          const now = Date.now();
+          if (now - lastEmitTime > 250) {
+            ws.send(JSON.stringify({
+              type: 'sftp:progress',
+              connId: msg.connId,
+              action: 'extract',
+              filename,
+              progress: -1,
+              status: `${currentFile} (${extractedCount} files)`
+            }));
+            lastEmitTime = now;
+          }
+        }
+      });
+
+      stream.stderr.on('data', (d) => { stderr += d.toString(); });
+
+      stream.on('close', (code) => {
         if (cleanupArchive) {
-          session.sshClient.exec(`rm -f "${archivePath}"`, () => {});
+          session.sshClient.exec(`rm -f "${archivePath}"`, (rmErr, rmStream) => {
+            if (!rmErr && rmStream) rmStream.resume();
+          });
+        }
+        // Exit code 0, 1, or 2 are treated as success if stdout was produced (indicating some extraction happened)
+        // unzip returns 1 for warnings (e.g. success with minor warnings). tar returns 1 or 2 on some warnings.
+        const wasSuccessful = code === 0 || ((code === 1 || code === 2) && extractedCount > 0);
+
+        if (!wasSuccessful) {
+          return sendSftpError(ws, msg.connId, new Error(`Extract failed: ${stderr || `Exit code ${code}`}`));
         }
 
-        ws.send(JSON.stringify({ type: 'sftp:action_success', connId: msg.connId, action: 'extract', path: archivePath }));
+        // Final 100% progress update
+        ws.send(JSON.stringify({
+          type: 'sftp:progress',
+          connId: msg.connId,
+          action: 'extract',
+          filename,
+          progress: 100
+        }));
+
+        ws.send(JSON.stringify({
+          type: 'sftp:action_success',
+          connId: msg.connId,
+          action: 'extract',
+          path: targetDir
+        }));
       });
     });
   } catch (err) {
