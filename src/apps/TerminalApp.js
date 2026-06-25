@@ -336,7 +336,7 @@ export default function TerminalApp({ onEditConnection, initialConnection, initi
         {/* Terminals - Always mounted but hidden if selecting connection picker */}
         <div className={`h-full ${isSelecting ? 'opacity-0 pointer-events-none' : 'opacity-100'}`}>
           {standaloneTerminals.map(term => {
-    const TermComponent = shouldUseRelay(localStandaloneTerm.host) ? RelayTerminalView : TerminalView;
+    const TermComponent = shouldUseRelay(term.host) ? RelayTerminalView : TerminalView;
             return (
               <div
                 key={term.id}
