@@ -1,35 +1,29 @@
 /**
  * WebSocket-to-TCP Relay Server (Lightweight SSH Mode)
  *
- * Uses ssh2 on the server (browsers can't do SSH natively) but with
- * minimal overhead:
- * - No session tracking Map
- * - No SFTP handling
- * - No exec queue
- * - No idle timeout management
- * - Just SSH connect + byte piping
- *
- * This reduces per-connection memory and CPU usage significantly
- * compared to the full Socket.io SSH handler.
+ * Handles SSH shell + SFTP via a single ssh2 connection per socket.
+ * The /relay namespace mirrors the main Socket.io SSH+SFTP event contract
+ * so the FileManager and terminal work identically in relay mode.
  */
 
 const { Client } = require('ssh2');
+const path = require('path');
 const { decryptWithMetadata } = require('../utils/encryption');
+
+const shellQuote = (v) => `'${String(v).replace(/'/g, `'\\''`)}'`;
 
 class WsTcpRelay {
   constructor(io, options = {}) {
     this.io = io;
     this.connections = new Map();
     this.maxConnections = options.maxConnections || 200;
-    this.rateLimiter = new Map(); // userId → { count, resetAt }
-    this.RATE_LIMIT = 50; // max connections per minute per user
-    this.RATE_WINDOW = 60 * 1000; // 1 minute
+    this.rateLimiter = new Map();
+    this.RATE_LIMIT = 50;
+    this.RATE_WINDOW = 60 * 1000;
 
-    // Create a dedicated namespace for the relay
     this.nsp = io.of('/relay');
     this.nsp.use(async (socket, next) => {
       try {
-        // Polyfill req.cookies for NextAuth (same as main Socket.io namespace)
         if (!socket.request.cookies) {
           const cookieHeader = socket.request.headers.cookie || '';
           socket.request.cookies = Object.fromEntries(
@@ -44,7 +38,6 @@ class WsTcpRelay {
         const token = await getToken({ req: socket.request, secret: process.env.NEXTAUTH_SECRET });
         if (!token) return next(new Error('Unauthorized'));
         
-        // Rate limit check
         const userId = token.sub || token.dbId;
         const now = Date.now();
         const entry = this.rateLimiter.get(userId) || { count: 0, resetAt: now + this.RATE_WINDOW };
@@ -81,39 +74,89 @@ class WsTcpRelay {
 
     let sshClient = null;
     let sshStream = null;
+    let sftp = null;
+    let connection = null;
+
+    const emitSftpError = (err, prefix = '') => {
+      const msg = typeof err === 'string' ? err : (err?.message || 'Unknown SFTP error');
+      socket.emit('sftp:error', { message: prefix ? `${prefix}: ${msg}` : msg });
+    };
+
+    const getSftp = (cb) => {
+      if (sftp) return cb(null, sftp);
+      if (!sshClient || sshClient._state === 'closed') return cb(new Error('SSH not connected'));
+      sshClient.sftp((err, sftpInst) => {
+        if (err) return cb(err);
+        sftp = sftpInst;
+        cb(null, sftp);
+      });
+    };
+
+    const parseLsOutput = (output) => {
+      const lines = output.split('\n').filter(l => l.trim().length > 0 && !l.startsWith('total'));
+      return lines.map(line => {
+        const parts = line.split(/\s+/);
+        if (parts.length < 9) return null;
+        const isDir = parts[0].startsWith('d');
+        const size = parseInt(parts[4]) || 0;
+        const dateStr = `${parts[5]} ${parts[6]}`;
+        const filename = parts.slice(8).join(' ');
+        if (filename === '.' || filename === '..') return null;
+        return {
+          filename,
+          longname: line,
+          attrs: { size, mtime: new Date(dateStr).getTime() / 1000, mode: isDir ? 16877 : 33188 }
+        };
+      }).filter(f => f !== null);
+    };
+
+    const fallbackFileListing = (client, listPath) => {
+      const target = listPath === '.' ? '.' : `"${listPath}"`;
+      const cmd = `ls -la --full-time ${target}`;
+      client.exec(cmd, (err, stream) => {
+        if (err) return socket.emit('sftp:error', { message: 'Listing failed: ' + err.message });
+        let output = '';
+        stream.on('data', (data) => { output += data.toString(); });
+        stream.stderr.on('data', () => {});
+        stream.on('close', () => {
+          socket.emit('sftp:list', { path: listPath, files: parseLsOutput(output) });
+        });
+      });
+    };
 
     socket.on('relay:connect', async (opts) => {
-      const { connectionId, connection, cols, rows } = opts;
+      const { connectionId, connection: connectionData, cols, rows } = opts;
 
       try {
         sshClient = new Client();
+        connection = connectionData;
 
-        // Fetch full connection from database (with credentials)
-        // The browser doesn't have the password (API strips it for security)
-        let fullConnection = connection;
-        
         if (connectionId && !connectionId.startsWith('local-')) {
           try {
-            // Use the same getModels approach as the old Socket.io handler
             const getModels = require('../../server').getModels;
             const repo = await getModels(null, userId);
             const { Connection: ConnectionModel } = repo;
-            
             if (ConnectionModel) {
               const dbConn = await ConnectionModel.findById(connectionId);
               if (dbConn) {
-                fullConnection = dbConn.toObject ? dbConn.toObject() : dbConn;
+                connection = dbConn.toObject ? dbConn.toObject() : dbConn;
               }
             }
-          } catch (dbErr) {
-            // DB fetch failed, use browser data as fallback
-          }
+          } catch (dbErr) {}
         }
 
-        // Build SSH config from connection data
-        const sshConfig = await this.buildSshConfig(fullConnection);
+        const sshConfig = await this.buildSshConfig(connection);
 
         sshClient.on('ready', () => {
+          // Open SFTP subsystem
+          sshClient.sftp((err, sftpInst) => {
+            if (!err) {
+              sftp = sftpInst;
+              console.log(`[relay] ${socket.id} SFTP subsystem ready`);
+            } else {
+              console.warn(`[relay] ${socket.id} SFTP init failed (will use exec fallback):`, err.message);
+            }
+          });
 
           sshClient.shell({
             term: 'xterm-256color',
@@ -130,7 +173,6 @@ class WsTcpRelay {
             this.connections.set(socket.id, { sshClient, sshStream, userId });
             socket.emit('relay:connected', { host: sshConfig.host });
 
-            // SSH → Browser
             stream.on('data', (data) => {
               if (socket.connected) {
                 socket.emit('relay:data', data.toString('utf-8'));
@@ -146,6 +188,618 @@ class WsTcpRelay {
               socket.emit('relay:closed');
               this.cleanup(socket.id);
             });
+
+            // ── Register all SFTP handlers ──
+
+            socket.on('sftp:list', (listPath = '.') => {
+              if (!sshClient || sshClient._state === 'closed') {
+                return socket.emit('sftp:error', { message: 'SSH Connection Closed' });
+              }
+              getSftp((err, s) => {
+                if (err) return fallbackFileListing(sshClient, listPath);
+                const targetPath = listPath === '.' ? './' : listPath;
+                s.readdir(targetPath, (readdirErr, list) => {
+                  if (readdirErr) return fallbackFileListing(sshClient, listPath);
+                  socket.emit('sftp:list', { path: listPath, files: list });
+                });
+              });
+            });
+
+            socket.on('sftp:search', ({ query } = {}) => {
+              const q = String(query || '').trim();
+              if (!q) return socket.emit('sftp:searchResult', { query: q, results: [], error: null });
+              if (!sshClient || sshClient._state === 'closed') {
+                return socket.emit('sftp:searchResult', { query: q, results: [], error: 'SSH not connected' });
+              }
+              const escapedQ = q.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/`/g, '\\`').replace(/\$/g, '\\$');
+              const cmd = [
+                `find $HOME -iname "*${escapedQ}*" 2>/dev/null | head -150`,
+                `find / \\( -path "$HOME" -o -path /proc -o -path /sys -o -path /dev -o -path /run \\) -prune -o -iname "*${escapedQ}*" -print 2>/dev/null | head -100`,
+              ].join(' ; ');
+              let output = '';
+              let done = false;
+              const safetyTimer = setTimeout(() => { if (!done) { done = true; emitSearchResults(); } }, 8000);
+              const emitSearchResults = () => {
+                clearTimeout(safetyTimer);
+                const seen = new Set();
+                const results = output.split('\n').map(l => l.trim()).filter(l => l && !seen.has(l) && seen.add(l))
+                  .map(absPath => ({ filename: absPath.split('/').pop(), absPath, dir: absPath.split('/').slice(0, -1).join('/') || '/' }));
+                socket.emit('sftp:searchResult', { query: q, results, error: null });
+              };
+              sshClient.exec(cmd, (err, stream) => {
+                if (err) { clearTimeout(safetyTimer); return socket.emit('sftp:searchResult', { query: q, results: [], error: err.message }); }
+                stream.on('data', d => { output += d.toString(); });
+                stream.stderr.on('data', () => {});
+                stream.on('close', () => { if (!done) { done = true; emitSearchResults(); } });
+              });
+            });
+
+            socket.on('sftp:getSize', ({ path: targetPath }) => {
+              if (!sshClient || sshClient._state === 'closed') {
+                return socket.emit('sftp:sizeResult', { path: targetPath, error: 'SSH not connected' });
+              }
+              const cmd = `du -sb ${shellQuote(targetPath)} 2>/dev/null | cut -f1`;
+              sshClient.exec(cmd, (err, stream) => {
+                if (err) return socket.emit('sftp:sizeResult', { path: targetPath, error: err.message });
+                let output = '';
+                let stderr = '';
+                stream.on('data', (d) => { output += d.toString(); });
+                stream.stderr.on('data', (d) => { stderr += d.toString(); });
+                stream.on('close', (code) => {
+                  const parsed = parseInt(output.trim(), 10);
+                  if (code === 0 && !isNaN(parsed)) {
+                    socket.emit('sftp:sizeResult', { path: targetPath, size: parsed });
+                  } else {
+                    socket.emit('sftp:sizeResult', { path: targetPath, error: stderr || 'Could not read size' });
+                  }
+                });
+              });
+            });
+
+            socket.on('sftp:mkdir', (mkdirPath) => {
+              const runMkdir = () => {
+                sshClient.exec(`mkdir -p "${mkdirPath}"`, (err, stream) => {
+                  if (err) return emitSftpError(err, 'Mkdir failed');
+                  let stderr = '';
+                  stream.on('data', () => {});
+                  stream.stderr.on('data', d => stderr += d.toString());
+                  stream.on('close', (code) => {
+                    if (code === 0) socket.emit('sftp:action_success', { action: 'mkdir', path: mkdirPath });
+                    else emitSftpError(stderr || `Exit code ${code}`, 'Mkdir failed');
+                  });
+                });
+              };
+              getSftp((err, s) => {
+                if (err) return runMkdir();
+                s.mkdir(mkdirPath, (mkdirErr) => {
+                  if (mkdirErr) return runMkdir();
+                  socket.emit('sftp:action_success', { action: 'mkdir', path: mkdirPath });
+                });
+              });
+            });
+
+            socket.on('sftp:delete', (deletePath) => {
+              const runRm = () => {
+                sshClient.exec(`rm -rf "${deletePath}"`, (err, stream) => {
+                  if (err) return emitSftpError(err, 'Delete failed');
+                  let stderr = '';
+                  stream.on('data', () => {});
+                  stream.stderr.on('data', d => stderr += d.toString());
+                  stream.on('close', (code) => {
+                    if (code === 0) socket.emit('sftp:action_success', { action: 'delete', path: deletePath });
+                    else emitSftpError(stderr || `Exit code ${code}`, 'Delete failed');
+                  });
+                });
+              };
+              getSftp((err, s) => {
+                if (err) return runRm();
+                s.unlink(deletePath, (unlinkErr) => {
+                  if (!unlinkErr) return socket.emit('sftp:action_success', { action: 'delete', path: deletePath });
+                  s.rmdir(deletePath, (rmdirErr) => {
+                    if (!rmdirErr) return socket.emit('sftp:action_success', { action: 'delete', path: deletePath });
+                    runRm();
+                  });
+                });
+              });
+            });
+
+            socket.on('sftp:readFile', (readPath) => {
+              const runCat = () => {
+                sshClient.exec(`cat "${readPath}"`, (err, stream) => {
+                  if (err) return emitSftpError(err, 'Read failed');
+                  let content = '';
+                  let stderr = '';
+                  stream.on('data', d => content += d.toString());
+                  stream.stderr.on('data', d => stderr += d.toString());
+                  stream.on('close', (code) => {
+                    if (code !== 0) return emitSftpError(stderr || `Exit code ${code}`, 'Read failed');
+                    socket.emit('sftp:file_content', { path: readPath, content });
+                  });
+                });
+              };
+              getSftp((err, s) => {
+                if (err) return runCat();
+                const rStream = s.createReadStream(readPath);
+                let content = '';
+                rStream.on('data', d => content += d.toString());
+                rStream.on('end', () => socket.emit('sftp:file_content', { path: readPath, content }));
+                rStream.on('error', () => runCat());
+              });
+            });
+
+            socket.on('sftp:readFileBase64', (readPath) => {
+              const escapedPath = readPath.replace(/"/g, '\\"');
+              sshClient.exec(`base64 "${escapedPath}"`, (err, stream) => {
+                if (err) return emitSftpError(err, 'Read failed');
+                let content = '';
+                let stderr = '';
+                stream.on('data', d => content += d.toString());
+                stream.stderr.on('data', d => stderr += d.toString());
+                stream.on('close', (code) => {
+                  if (code !== 0) return emitSftpError(stderr || `Exit code ${code}`, 'Read failed');
+                  socket.emit('sftp:file_base64', { path: readPath, content: content.replace(/\s/g, '') });
+                });
+              });
+            });
+
+            socket.on('sftp:writeFile', ({ path: writePath, content }) => {
+              const runWrite = () => {
+                const b64 = Buffer.from(content).toString('base64');
+                const cmd = content.length === 0
+                  ? `touch "${writePath}"`
+                  : `echo -n "${b64}" | base64 -d > "${writePath}"`;
+                sshClient.exec(cmd, (err, stream) => {
+                  if (err) return emitSftpError(err, 'Write failed');
+                  let stderr = '';
+                  stream.on('data', () => {});
+                  stream.stderr.on('data', (d) => stderr += d.toString());
+                  stream.on('close', (code) => {
+                    if (code === 0) socket.emit('sftp:action_success', { action: 'write', path: writePath });
+                    else emitSftpError(stderr || `Exit code ${code}`, 'Write failed');
+                  });
+                });
+              };
+              getSftp((err, s) => {
+                if (err) return runWrite();
+                const ws = s.createWriteStream(writePath);
+                ws.on('close', () => socket.emit('sftp:action_success', { action: 'write', path: writePath }));
+                ws.on('error', () => runWrite());
+                ws.end(content);
+              });
+            });
+
+            socket.on('sftp:copy', ({ src, dest, overwrite = false }) => {
+              getSftp((err, s) => {
+                if (err) return emitSftpError(err, 'SFTP Init');
+                s.stat(src, (statErr, stats) => {
+                  if (statErr) return emitSftpError(statErr, 'Stat failed');
+                  if (src === dest) return emitSftpError('Source and destination are the same', 'Copy failed');
+
+                  const doCopy = () => {
+                    if (stats.isDirectory()) {
+                      const srcBase = path.posix.basename(src);
+                      const cmd = [
+                        `rm -rf ${shellQuote(dest)}`,
+                        `mkdir -p ${shellQuote(dest)}`,
+                        `tar czf - -C ${shellQuote(src)} . | tar xzf - -C ${shellQuote(dest)}`,
+                      ].join(' && ');
+                      sshClient.exec(cmd, (execErr, stream) => {
+                        if (execErr) return emitSftpError(execErr, 'Copy Init');
+                        let stderr = '';
+                        stream.on('data', () => {});
+                        stream.stderr.on('data', (d) => { stderr += d.toString(); });
+                        stream.on('close', (code) => {
+                          if (code === 0) socket.emit('sftp:action_success', { action: 'copy', path: dest });
+                          else emitSftpError(stderr || `Exit code ${code}`, 'Copy failed');
+                        });
+                      });
+                    } else {
+                      const rStream = s.createReadStream(src);
+                      const wStream = s.createWriteStream(dest);
+                      rStream.pipe(wStream);
+                      wStream.on('close', () => socket.emit('sftp:action_success', { action: 'copy', path: dest }));
+                      rStream.on('error', (e) => emitSftpError(e, 'Read Source'));
+                      wStream.on('error', (e) => emitSftpError(e, 'Write Dest'));
+                    }
+                  };
+
+                  if (!overwrite) {
+                    s.stat(dest, (destErr) => {
+                      if (!destErr) return emitSftpError('Destination already exists', 'Copy failed');
+                      doCopy();
+                    });
+                  } else {
+                    doCopy();
+                  }
+                });
+              });
+            });
+
+            socket.on('sftp:move', ({ src, dest, overwrite = false }) => {
+              const moveWithShell = () => {
+                const cmd = overwrite
+                  ? `rm -rf ${shellQuote(dest)} && mv ${shellQuote(src)} ${shellQuote(dest)}`
+                  : `mv ${shellQuote(src)} ${shellQuote(dest)}`;
+                sshClient.exec(cmd, (err, stream) => {
+                  if (err) return emitSftpError(err, 'Move failed');
+                  let stderr = '';
+                  stream.on('data', () => {});
+                  stream.stderr.on('data', (d) => { stderr += d.toString(); });
+                  stream.on('close', (code) => {
+                    if (code === 0) socket.emit('sftp:action_success', { action: 'move', path: dest });
+                    else emitSftpError(stderr || `Exit code ${code}`, 'Move failed');
+                  });
+                });
+              };
+              getSftp((err, s) => {
+                if (err) return moveWithShell();
+                s.stat(dest, (destErr) => {
+                  if (!destErr && !overwrite) return emitSftpError('Destination already exists', 'Move failed');
+                  if (overwrite) return moveWithShell();
+                  s.rename(src, dest, (renameErr) => {
+                    if (!renameErr) return socket.emit('sftp:action_success', { action: 'move', path: dest });
+                    moveWithShell();
+                  });
+                });
+              });
+            });
+
+            socket.on('sftp:extract', ({ path: archivePath, type, cleanupArchive = false }) => {
+              if (!sshClient || sshClient._state === 'closed') return emitSftpError('SSH Connection Closed', 'Extract');
+              const targetDir = path.posix.dirname(archivePath);
+              const filename = path.posix.basename(archivePath);
+
+              const removeArchive = () => {
+                if (!cleanupArchive) return;
+                sshClient.exec(`rm -f "${archivePath}"`, () => {});
+              };
+
+              const detectCmd = `if command -v unzip >/dev/null; then echo "unzip"; elif command -v python3 >/dev/null; then echo "python3"; fi; if command -v tar >/dev/null; then echo "tar"; fi`;
+              sshClient.exec(detectCmd, (err, detStream) => {
+                if (err) return emitSftpError(err, 'Tool detection failed');
+                let detected = "";
+                detStream.on('data', (d) => detected += d.toString());
+                detStream.on('close', () => {
+                  let countCmd, extractCmd;
+                  const hasUnzip = detected.includes('unzip');
+                  const hasPython = detected.includes('python3');
+                  const hasTar = detected.includes('tar');
+                  const usePython = type === 'zip' && !hasUnzip && hasPython;
+
+                  if (type === 'zip') {
+                    if (usePython) {
+                      countCmd = `python3 -c "import zipfile; z = zipfile.ZipFile('${archivePath}'); print(len([f for f in z.namelist() if not f.endswith('/')]))"`;
+                      extractCmd = `python3 -c "import zipfile; zipfile.ZipFile('${archivePath}').extractall('${targetDir}')"`;
+                    } else if (hasUnzip) {
+                      countCmd = `unzip -Z1 "${archivePath}" | wc -l`;
+                      extractCmd = `unzip -o "${archivePath}" -d "${targetDir}"`;
+                    } else {
+                      return emitSftpError('Neither "unzip" nor "python3" found on server', 'Server Environment');
+                    }
+                  } else {
+                    if (hasTar) {
+                      const isGzip = archivePath.endsWith('.gz') || archivePath.endsWith('.tgz');
+                      countCmd = `tar -t${isGzip ? 'z' : ''}f "${archivePath}" | wc -l`;
+                      extractCmd = `tar -xv${isGzip ? 'z' : ''}f "${archivePath}" -C "${targetDir}"`;
+                    } else {
+                      return emitSftpError('"tar" not found on server', 'Server Environment');
+                    }
+                  }
+
+                  sshClient.exec(countCmd, (countErr, countStream) => {
+                    if (countErr) return emitSftpError(countErr, 'Extract Init');
+                    let output = '';
+                    countStream.on('data', (d) => output += d.toString());
+                    countStream.on('close', () => {
+                      const totalItems = parseInt(output.trim()) || 0;
+                      sshClient.exec(extractCmd, (extractErr, stream) => {
+                        if (extractErr) return emitSftpError(extractErr, 'Extract failed');
+                        let extractedCount = 0;
+                        let buffer = '';
+                        stream.on('data', (data) => {
+                          buffer += data.toString();
+                          const lines = buffer.split('\n');
+                          buffer = lines.pop() || '';
+                          const validLines = lines.filter(l => l.trim().length > 0);
+                          if (validLines.length > 0) {
+                            extractedCount += validLines.length;
+                            if (totalItems > 0) {
+                              socket.emit('sftp:progress', { action: 'extract', filename, progress: Math.min(99, Math.round((extractedCount / totalItems) * 100)) });
+                            }
+                          }
+                        });
+                        let extractError = '';
+                        stream.stderr.on('data', (d) => extractError += d.toString());
+                        stream.on('close', (code) => {
+                          removeArchive();
+                          if (code === 0) {
+                            socket.emit('sftp:progress', { action: 'extract', filename, progress: 100 });
+                            socket.emit('sftp:action_success', { action: 'extract', path: targetDir });
+                          } else {
+                            emitSftpError(extractError || `Exit code ${code}`, 'Extraction failed');
+                          }
+                        });
+                      });
+                    });
+                  });
+                });
+              });
+            });
+
+            socket.on('sftp:upload', ({ filename, path: destPath, size, offset = 0 }) => {
+              if (!sshClient || sshClient._state === 'closed') {
+                return socket.emit('sftp:error', { message: 'SSH session not ready', recoverable: true });
+              }
+
+              const transferId = `up_${Date.now()}`;
+              const activeTransfers = new Set();
+              activeTransfers.add(transferId);
+
+              const cleanup = () => { activeTransfers.delete(transferId); };
+
+              const setupHandlers = (wStream) => {
+                let bytesReceived = 0;
+                let settled = false;
+                let inactivityTimer = null;
+
+                const armInactivityTimer = () => {
+                  clearTimeout(inactivityTimer);
+                  inactivityTimer = setTimeout(() => {
+                    if (!settled) failTransfer(new Error('Upload stalled'), 'Upload stalled');
+                  }, 60000);
+                };
+
+                const finalize = (onFinish) => {
+                  if (settled) return;
+                  settled = true;
+                  clearTimeout(inactivityTimer);
+                  socket.off(`sftp:upload_chunk:${filename}`, chunkHandler);
+                  socket.off(`sftp:upload_done:${filename}`, doneHandler);
+                  socket.off(`sftp:upload_abort:${filename}`, abortHandler);
+                  cleanup();
+                  onFinish?.();
+                };
+
+                const failTransfer = (err, prefix) => {
+                  finalize(() => {
+                    try { if (typeof wStream.destroy === 'function') wStream.destroy(); else if (wStream.writable) wStream.end(); } catch (_) {}
+                    sshClient.exec(`rm -f "${destPath}"`, () => {});
+                    emitSftpError(err, `${prefix} (${filename})`);
+                  });
+                };
+
+                const chunkHandler = (chunk) => {
+                  if (settled) return;
+                  armInactivityTimer();
+                  wStream.write(chunk, (writeErr) => {
+                    if (writeErr) return failTransfer(writeErr, 'Stream Write Error');
+                    bytesReceived += chunk.length;
+                    socket.emit(`sftp:upload_ack:${filename}`, {
+                      received: chunk.length,
+                      totalTransferred: offset + bytesReceived,
+                      progress: Math.round(((offset + bytesReceived) / size) * 100)
+                    });
+                  });
+                };
+
+                const doneHandler = () => {
+                  if (!settled && wStream.writable) wStream.end();
+                };
+
+                const abortHandler = () => {
+                  finalize(() => {
+                    try { if (typeof wStream.destroy === 'function') wStream.destroy(); else if (wStream.writable) wStream.end(); } catch (_) {}
+                    sshClient.exec(`rm -f "${destPath}"`, () => {});
+                  });
+                };
+
+                socket.removeAllListeners(`sftp:upload_chunk:${filename}`);
+                socket.removeAllListeners(`sftp:upload_done:${filename}`);
+                socket.removeAllListeners(`sftp:upload_abort:${filename}`);
+                socket.on(`sftp:upload_chunk:${filename}`, chunkHandler);
+                socket.once(`sftp:upload_done:${filename}`, doneHandler);
+                socket.once(`sftp:upload_abort:${filename}`, abortHandler);
+                socket.emit('sftp:can_upload', { filename, offset });
+                armInactivityTimer();
+
+                wStream.on('close', () => {
+                  finalize(() => { socket.emit('sftp:action_success', { action: 'upload', path: destPath }); });
+                });
+                wStream.on('error', (err) => { failTransfer(err, 'Upload failed'); });
+              };
+
+              getSftp((sftpErr, s) => {
+                if (sftpErr || !s) {
+                  const cmd = `cat > "${destPath}"`;
+                  sshClient.exec(cmd, (execErr, stream) => {
+                    if (execErr) { cleanup(); return emitSftpError(execErr, 'Upload exec failed'); }
+                    setupHandlers(stream);
+                  });
+                } else {
+                  const flags = offset > 0 ? 'r+' : 'w';
+                  const writeStream = s.createWriteStream(destPath, { flags, start: offset });
+                  setupHandlers(writeStream);
+                }
+              });
+            });
+
+            socket.on('sftp:download', ({ filePath, offset = 0 }) => {
+              if (!sshClient || sshClient._state === 'closed') {
+                return socket.emit('sftp:error', { message: 'SSH session not ready', recoverable: true });
+              }
+
+              const filename = path.posix.basename(filePath);
+
+              const startDownload = (s, stats) => {
+                const totalSize = stats?.size || 0;
+                socket.emit('sftp:download_start', { filename, size: totalSize, offset });
+
+                const setupHandlers = (rStream) => {
+                  let bytesSent = 0;
+                  rStream.on('data', (chunk) => {
+                    bytesSent += chunk.length;
+                    const progress = totalSize > 0 ? Math.round(((offset + bytesSent) / totalSize) * 100) : 0;
+                    socket.emit('sftp:download_chunk', { filename, chunk, progress, offset: offset + bytesSent });
+                  });
+                  rStream.on('end', () => { socket.emit('sftp:download_done', { filename }); });
+                  rStream.on('error', (err) => { emitSftpError(err, 'Download failed'); });
+                };
+
+                if (!s) {
+                  sshClient.exec(`cat "${filePath}"`, (err, stream) => {
+                    if (err) return emitSftpError(err, 'Download exec failed');
+                    setupHandlers(stream);
+                  });
+                } else {
+                  const readStream = s.createReadStream(filePath, { start: offset });
+                  setupHandlers(readStream);
+                }
+              };
+
+              getSftp((sftpErr, s) => {
+                if (sftpErr || !s) {
+                  sshClient.exec(`ls -nl "${filePath}" | awk '{print $5}'`, (err, stream) => {
+                    let output = '';
+                    if (!err) {
+                      stream.on('data', (d) => output += d.toString());
+                      stream.on('close', () => { startDownload(null, { size: parseInt(output.trim()) || 0 }); });
+                    } else {
+                      startDownload(null, { size: 0 });
+                    }
+                  });
+                } else {
+                  s.stat(filePath, (statErr, stats) => {
+                    if (statErr) return emitSftpError(statErr, 'Download stat failed');
+                    startDownload(s, stats);
+                  });
+                }
+              });
+            });
+
+            socket.on('sftp:download_folder', ({ folderPath, paths: multiPaths }) => {
+              if (!sshClient || sshClient._state === 'closed') return;
+              const sq = (v) => `'${String(v).replace(/'/g, "'\\''")}' `;
+              let archiveName, tarCmd;
+              if (folderPath) {
+                const folderName = path.posix.basename(folderPath);
+                const parentDir = path.posix.dirname(folderPath);
+                archiveName = folderName + '.tar.gz';
+                tarCmd = `tar czf - -C ${sq(parentDir)} ${sq(folderName)}`;
+              } else {
+                if (!multiPaths || multiPaths.length === 0) return socket.emit('sftp:error', { message: 'No paths specified' });
+                archiveName = 'selection.tar.gz';
+                const parentDir = path.posix.dirname(multiPaths[0].filePath);
+                const items = multiPaths.map(p => sq(path.posix.basename(p.filePath))).join(' ');
+                tarCmd = `tar czf - -C ${sq(parentDir)} ${items}`;
+              }
+              sshClient.exec(tarCmd, (execErr, stream) => {
+                if (execErr) return socket.emit('sftp:error', { message: `Archive failed: ${execErr.message}` });
+                let headerSent = false;
+                let totalSent = 0;
+                let stderrBuf = '';
+                stream.on('data', (chunk) => {
+                  if (!headerSent) {
+                    socket.emit('sftp:download_start', { filename: archiveName, size: 0, offset: 0 });
+                    headerSent = true;
+                  }
+                  totalSent += chunk.length;
+                  socket.emit('sftp:download_chunk', { filename: archiveName, chunk, progress: -1, offset: totalSent });
+                });
+                stream.stderr.on('data', (d) => { stderrBuf += d.toString(); });
+                stream.on('close', (code) => {
+                  if (code === 0) {
+                    if (!headerSent) socket.emit('sftp:download_start', { filename: archiveName, size: 0, offset: 0 });
+                    socket.emit('sftp:download_done', { filename: archiveName });
+                  } else {
+                    socket.emit('sftp:error', { message: stderrBuf.trim() || `tar exited with code ${code}` });
+                  }
+                });
+              });
+            });
+
+            socket.on('sftp:applyPatch', ({ diffText, backupId }) => {
+              try {
+                const diff_match_patch = require('diff-match-patch');
+                const parseDiffIntoFiles = (text) => {
+                  const lines = String(text || '').replace(/\r\n/g, '\n').split('\n');
+                  const sections = [];
+                  let current = null;
+                  for (let i = 0; i < lines.length; i++) {
+                    const line = lines[i];
+                    const trimmed = line.trim();
+                    if (trimmed.startsWith('--- ') && !trimmed.startsWith('--- a/')) {
+                      const nextLine = (lines[i + 1] || '').trim();
+                      if (nextLine.startsWith('+++ ')) {
+                        if (current) sections.push(current);
+                        let filePath = trimmed.slice(4).split('\t')[0].trim();
+                        if (filePath.startsWith('a/')) filePath = filePath.slice(2);
+                        current = { filePath, diffLines: [] };
+                        i++;
+                        const destLine = nextLine;
+                        let destPath = destLine.slice(4).split('\t')[0].trim();
+                        if (destPath.startsWith('b/')) destPath = destPath.slice(2);
+                        if (!current.filePath || current.filePath === '/dev/null') current.filePath = destPath;
+                        continue;
+                      }
+                    }
+                    if (current) current.diffLines.push(line);
+                  }
+                  if (current) sections.push(current);
+                  return sections;
+                };
+
+                const dmp = new diff_match_patch();
+                const sections = parseDiffIntoFiles(diffText);
+                if (sections.length === 0) {
+                  return socket.emit('sftp:error', { message: 'No valid diff sections found' });
+                }
+
+                let appliedCount = 0;
+                let failedCount = 0;
+
+                const applyNext = (idx) => {
+                  if (idx >= sections.length) {
+                    socket.emit('sftp:action_success', { action: 'applyPatch', path: `${appliedCount} files patched` });
+                    return;
+                  }
+                  const section = sections[idx];
+                  const filePath = section.filePath;
+                  const diffTextForFile = section.diffLines.join('\n');
+
+                  sshClient.exec(`cat "${filePath}"`, (err, stream) => {
+                    if (err) { failedCount++; return applyNext(idx + 1); }
+                    let content = '';
+                    stream.on('data', d => content += d.toString());
+                    stream.on('close', () => {
+                      const patches = dmp.patch_make(content, diffTextForFile);
+                      const [newText, results] = dmp.patch_apply(patches, content);
+                      const allApplied = results.every(r => r === true);
+                      if (!allApplied) { failedCount++; return applyNext(idx + 1); }
+
+                      const b64 = Buffer.from(newText).toString('base64');
+                      sshClient.exec(`echo -n "${b64}" | base64 -d > "${filePath}"`, (writeErr, wStream) => {
+                        if (writeErr) { failedCount++; }
+                        else {
+                          wStream.on('close', (code) => {
+                            if (code === 0) appliedCount++;
+                            else failedCount++;
+                            applyNext(idx + 1);
+                          });
+                        }
+                      });
+                    });
+                  });
+                };
+                applyNext(0);
+              } catch (e) {
+                emitSftpError(e, 'Patch failed');
+              }
+            });
+
+            socket.on('sftp:cross_server_transfer', ({ srcConnId, srcPath, destPath, action, overwrite = false }) => {
+              emitSftpError('Cross-server transfer not supported in relay mode. Use the direct SSH connection for cross-server transfers.', 'Cross Transfer');
+            });
+
           });
         });
 
@@ -168,40 +822,28 @@ class WsTcpRelay {
       }
     });
 
-    // Browser → SSH
+    // Browser → SSH terminal
     socket.on('relay:data', (data) => {
       if (sshStream && sshStream.writable) {
         sshStream.write(data);
       }
     });
 
-    // Terminal resize
     socket.on('relay:resize', ({ cols, rows }) => {
       if (sshStream) {
-        try {
-          sshStream.setWindow(rows, cols, 0, 0);
-        } catch (_) {}
+        try { sshStream.setWindow(rows, cols, 0, 0); } catch (_) {}
       }
     });
 
-    // Browser disconnect
     socket.on('relay:close', () => this.cleanup(socket.id));
     socket.on('disconnect', () => this.cleanup(socket.id));
 
-    // Heartbeat ping through SSH session for accurate latency
     socket.on('relay:heartbeat', (timestamp) => {
       if (sshClient && sshClient._state !== 'closed') {
         sshClient.exec(':', (err, stream) => {
-          if (err) {
-            if (socket.connected) socket.emit('relay:heartbeat:pong', timestamp);
-            return;
-          }
-          stream.on('close', () => {
-            if (socket.connected) socket.emit('relay:heartbeat:pong', timestamp);
-          });
-          stream.on('error', () => {
-            if (socket.connected) socket.emit('relay:heartbeat:pong', timestamp);
-          });
+          if (err) { if (socket.connected) socket.emit('relay:heartbeat:pong', timestamp); return; }
+          stream.on('close', () => { if (socket.connected) socket.emit('relay:heartbeat:pong', timestamp); });
+          stream.on('error', () => { if (socket.connected) socket.emit('relay:heartbeat:pong', timestamp); });
         });
       } else {
         if (socket.connected) socket.emit('relay:heartbeat:pong', timestamp);
@@ -220,27 +862,18 @@ class WsTcpRelay {
       keepaliveCountMax: 3,
     };
 
-    // Passwords are stored encrypted — use decryptWithMetadata for key rotation support
     if (conn.password) {
       const { text, success } = decryptWithMetadata(conn.password);
-      if (success) {
-        config.password = text;
-      } else {
-        console.error('[relay] Password decryption failed for', conn.host);
-      }
+      if (success) config.password = text;
+      else console.error('[relay] Password decryption failed for', conn.host);
     }
     if (conn.privateKey) {
       const { text, success } = decryptWithMetadata(conn.privateKey);
-      if (success) {
-        config.privateKey = text;
-      } else {
-        console.error('[relay] Private key decryption failed for', conn.host);
-      }
+      if (success) config.privateKey = text;
+      else console.error('[relay] Private key decryption failed for', conn.host);
       if (conn.passphrase) {
         const { text: ppText, success: ppSuccess } = decryptWithMetadata(conn.passphrase);
-        if (ppSuccess) {
-          config.passphrase = ppText;
-        }
+        if (ppSuccess) config.passphrase = ppText;
       }
     }
 
