@@ -702,7 +702,7 @@ export default function FileManager({
 
     newSocket.on('sftp:action_success', ({ action, path }) => {
        if (action === 'delete') {
-          const deletedFilename = path ? path.split('/').pop() : '';
+          const deletedFilename = path ? path.replace(/\/+$/, '').split('/').pop() : '';
           if (deletedFilename) {
             setFiles(prev => prev.filter(f => f.filename !== deletedFilename));
             setDeletingFiles(prev => {
@@ -1098,7 +1098,7 @@ export default function FileManager({
       if (interval) clearInterval(interval);
     };
   }, [status]);
-  
+
   // Transfer Retry Countdown
   useEffect(() => {
     let timer;
@@ -1124,6 +1124,12 @@ export default function FileManager({
   useEffect(() => {
     const verifyAfterReturn = () => {
       if (statusRef.current !== 'ready' || !socketRef.current?.connected) return;
+      // Send immediate ssh:ping to refresh health check cache before evaluating staleness.
+      // Browser throttles background-tab timers, so lastHealthCheckAtRef can be very old
+      // even though the SSH connection is still alive.
+      if (socketRef.current.connected) {
+        socketRef.current.emit('ssh:ping');
+      }
       const cacheFresh = Date.now() - lastHealthCheckAtRef.current < HEALTH_CHECK_TTL_MS;
       if (cacheFresh && lastHealthOkRef.current) {
         refreshFiles();

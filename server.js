@@ -572,8 +572,8 @@ app.prepare().then(async () => {
 // Track active SSH connections
 const activeSessions = new Map();
 
-// Idle timeout (10 minutes)
-const SSH_IDLE_TIMEOUT_MS = 10 * 60 * 1000;
+// Idle timeout (30 minutes — browser throttles background-tab timers aggressively)
+const SSH_IDLE_TIMEOUT_MS = 30 * 60 * 1000;
 const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
 
   // Initialize WebSocket-to-TCP relay (lightweight byte-pipe mode)
