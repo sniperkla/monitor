@@ -6,7 +6,8 @@ import {
   Database, CheckCircle, AlertCircle, RefreshCw, Zap, Wifi, WifiOff, Server,
   Loader, Trash2, Lock, Unlock, Key, Mail, Code, Volume2, Sun, Moon, Cpu,
   Search, Terminal, Network, Download, Copy, X, CheckCheck, Sparkles,
-  GitBranch, ChevronDown, Settings, Send, Music, ChevronRight, Globe, LogOut, Check
+  GitBranch, GitCommit, ChevronDown, Settings, Send, Music, ChevronRight, Globe, LogOut, Check,
+  RotateCcw
 } from 'lucide-react';
 import { useOS } from '@/context/OSContext';
 import { useApp } from '@/context/AppContext';
@@ -249,6 +250,9 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
   const [branches, setBranches] = useState([]);
   const [loadingBranches, setLoadingBranches] = useState(false);
   const [repoInput, setRepoInput] = useState('');
+  const [commits, setCommits] = useState([]);
+  const [loadingCommits, setLoadingCommits] = useState(false);
+  const [showCommitSelector, setShowCommitSelector] = useState(false);
   const prevDeployStatusRef = useRef(null);
   const [gitProvider, setGitProvider] = useState('github');
   const [bbUsername, setBbUsername] = useState('');
@@ -430,17 +434,17 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
     setDeploySaving(false);
   };
 
-  const handleTriggerDeploy = async () => {
+  const handleTriggerDeploy = async (commitSha = null) => {
     setDeployTriggering(true);
     try {
       const res = await apiFetch(`/api/deploy/webhook?project=${selectedProjectId}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ manual: true })
+        body: JSON.stringify({ manual: true, commitSha })
       });
       const data = await res.json();
       if (data.success) {
-        addNotification({ title: 'Deployment Triggered', message: 'Deployment started. Status updates will appear in real-time.', type: 'info' });
+        addNotification({ title: 'Deployment Triggered', message: commitSha ? `Deploying commit ${commitSha.substring(0, 7)}...` : 'Deployment started. Status updates will appear in real-time.', type: 'info' });
         setDeployConfig(prev => ({ ...prev, status: 'running', lastDeployLog: 'Deploying...' }));
         // SSE will handle real-time updates automatically
       } else {
@@ -466,6 +470,26 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
     } catch (err) {
       addNotification({ title: 'Error', message: 'Failed to communicate with cancel API', type: 'error' });
     }
+  };
+
+  const handleFetchCommits = async () => {
+    setLoadingCommits(true);
+    try {
+      const endpoint = gitProvider === 'bitbucket'
+        ? `/api/deploy/bitbucket/commits?project=${selectedProjectId}&branch=${deployConfig.branch || 'main'}`
+        : `/api/deploy/github/commits?project=${selectedProjectId}&branch=${deployConfig.branch || 'main'}`;
+      const res = await apiFetch(endpoint);
+      const data = await res.json();
+      if (data.success && data.commits) {
+        setCommits(data.commits);
+        setShowCommitSelector(true);
+      } else {
+        addNotification({ title: 'Error', message: data.error || 'Failed to fetch commits', type: 'error' });
+      }
+    } catch (err) {
+      addNotification({ title: 'Error', message: 'Failed to fetch commits', type: 'error' });
+    }
+    setLoadingCommits(false);
   };
 
   const handleCopyWebhookUrl = () => {
@@ -2296,6 +2320,16 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
                   {deployTriggering ? <Loader size={12} className="animate-spin" /> : <RefreshCw size={12} />}
                   {t('deploy.deployNow', 'Deploy Now')}
                 </button>
+                {deployConfig.status === 'failed' && (
+                  <button
+                    onClick={handleTriggerDeploy}
+                    disabled={deployTriggering || deployLoading}
+                    className="px-4 py-2 bg-amber-600 hover:bg-amber-700 disabled:opacity-50 text-white rounded-xl text-xs font-bold transition-all shadow-lg flex items-center gap-1.5 cursor-pointer"
+                  >
+                    {deployTriggering ? <Loader size={12} className="animate-spin" /> : <RotateCcw size={12} />}
+                    {t('deploy.retry', 'Retry')}
+                  </button>
+                )}
                 {deployConfig.status === 'running' && (
                   <button
                     onClick={handleCancelDeploy}
@@ -3012,10 +3046,91 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
                       </p>
                     </div>
                   </div>
-                  <span className={`text-xs font-bold px-3 py-1 rounded-lg ${isDeployFailed ? 'bg-red-500/20 text-red-300' : 'bg-emerald-500/20 text-emerald-300'}`}>
-                    {deployConfig.status === 'running' ? t('deploy.logsStatusRunning', 'Running...') : isDeployFailed ? t('deploy.logsStatusFailed', 'Failed') : t('deploy.logsStatusComplete', 'Complete')}
-                  </span>
+                  <div className="flex items-center gap-2">
+                    {isDeployFailed && (
+                      <button
+                        onClick={handleTriggerDeploy}
+                        disabled={deployTriggering || deployLoading}
+                        className="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 disabled:opacity-50 text-white rounded-lg text-[10px] font-bold transition-all flex items-center gap-1.5 cursor-pointer"
+                      >
+                        {deployTriggering ? <Loader size={10} className="animate-spin" /> : <RotateCcw size={10} />}
+                        {t('deploy.retry', 'Retry')}
+                      </button>
+                    )}
+                    <button
+                      onClick={handleFetchCommits}
+                      disabled={loadingCommits || deployConfig.status === 'running'}
+                      className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white rounded-lg text-[10px] font-bold transition-all flex items-center gap-1.5 cursor-pointer"
+                    >
+                      {loadingCommits ? <Loader size={10} className="animate-spin" /> : <GitCommit size={10} />}
+                      {t('deploy.selectCommit', 'Select Commit')}
+                    </button>
+                    <span className={`text-xs font-bold px-3 py-1 rounded-lg ${isDeployFailed ? 'bg-red-500/20 text-red-300' : 'bg-emerald-500/20 text-emerald-300'}`}>
+                      {deployConfig.status === 'running' ? t('deploy.logsStatusRunning', 'Running...') : isDeployFailed ? t('deploy.logsStatusFailed', 'Failed') : t('deploy.logsStatusComplete', 'Complete')}
+                    </span>
+                  </div>
                 </div>
+
+                {/* Commit Selector Panel */}
+                {showCommitSelector && (
+                  <div className="p-5 rounded-2xl bg-[var(--bg-card)] border border-[var(--border-color)] shadow-sm space-y-3">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <GitCommit size={16} className="text-indigo-400" />
+                        <h4 className="text-sm font-bold text-[var(--text-primary)]">{t('deploy.commitSelectorTitle', 'Select Commit to Deploy')}</h4>
+                      </div>
+                      <button
+                        onClick={() => setShowCommitSelector(false)}
+                        className="text-[var(--text-muted)] hover:text-red-400 transition-colors cursor-pointer"
+                      >
+                        <X size={14} />
+                      </button>
+                    </div>
+                    <p className="text-[10px] text-[var(--text-muted)]">
+                      {t('deploy.commitSelectorDesc', 'Choose a specific commit to deploy. This will checkout the commit before running the deploy command.')}
+                    </p>
+                    <div className="max-h-64 overflow-y-auto custom-scrollbar space-y-1.5">
+                      {commits.length === 0 ? (
+                        <p className="text-xs text-[var(--text-muted)] text-center py-4">{t('deploy.noCommits', 'No commits found')}</p>
+                      ) : (
+                        commits.map((commit, idx) => (
+                          <button
+                            key={commit.fullSha}
+                            onClick={() => {
+                              handleTriggerDeploy(commit.fullSha);
+                              setShowCommitSelector(false);
+                            }}
+                            disabled={deployTriggering || deployConfig.status === 'running'}
+                            className="w-full text-left p-3 rounded-xl bg-[var(--bg-secondary)] hover:bg-[var(--bg-tertiary)] border border-transparent hover:border-indigo-500/30 transition-all disabled:opacity-50 cursor-pointer group"
+                          >
+                            <div className="flex items-center justify-between gap-2">
+                              <div className="flex items-center gap-2 min-w-0">
+                                {commit.avatar ? (
+                                  <img src={commit.avatar} alt="" className="w-5 h-5 rounded-full" />
+                                ) : (
+                                  <div className="w-5 h-5 rounded-full bg-slate-600 flex items-center justify-center text-[8px] text-white font-bold">
+                                    {commit.author?.charAt(0)?.toUpperCase() || '?'}
+                                  </div>
+                                )}
+                                <span className="font-mono text-[10px] text-indigo-400 font-bold">{commit.sha}</span>
+                                <span className="text-xs text-[var(--text-primary)] truncate">{commit.message}</span>
+                              </div>
+                              <div className="flex items-center gap-2 shrink-0">
+                                <span className="text-[9px] text-[var(--text-muted)]">{commit.author}</span>
+                                <span className="text-[9px] text-[var(--text-muted)]">
+                                  {commit.date ? new Date(commit.date).toLocaleDateString() : ''}
+                                </span>
+                                <span className="text-[9px] text-indigo-400 opacity-0 group-hover:opacity-100 transition-opacity font-bold">
+                                  {t('deploy.deployThisCommit', 'DEPLOY')}
+                                </span>
+                              </div>
+                            </div>
+                          </button>
+                        ))
+                      )}
+                    </div>
+                  </div>
+                )}
 
                 {deployConfig.lastDeployLog ? (
                   <div className="p-6 rounded-2xl bg-[var(--bg-card)] border border-[var(--border-color)] shadow-sm space-y-4">

@@ -175,11 +175,15 @@ export async function runDeployment(config, runMeta = {}) {
   const dbKey = projectId === 'default' ? 'auto_deploy_config' : `auto_deploy_config_${projectId}`;
   let lastNotifiedStatus = null;
   let isFinished = false;
+  const commitSha = runMeta.commitSha || null;
 
   let logOutput = `[${startedAt.toISOString()}] 🚀 Deployment started in the background for project "${config.name || projectId}"...\n`;
   logOutput += `Target: ${config.targetType.toUpperCase()}\n`;
   if (config.targetType === 'ssh') {
     logOutput += `SSH Connection ID: ${config.connectionId}\n`;
+  }
+  if (commitSha) {
+    logOutput += `📌 Deploying specific commit: ${commitSha}\n`;
   }
   if (runMeta.gitInfo) {
     const g = runMeta.gitInfo;
@@ -297,13 +301,18 @@ export async function runDeployment(config, runMeta = {}) {
     const logFile = `/tmp/deploy_${projectId}.log`;
     const codeFile = `/tmp/deploy_${projectId}.code`;
 
-    const script = [
+    const scriptLines = [
       '#!/bin/bash',
       'set -e',
       'set -o pipefail',
-      `cd "${cwdPath}" || { echo "[deploy] ERROR: cannot cd to ${cwdPath}"; exit 1; }`,
-      config.deployCommand
-    ].join('\n');
+      `cd "${cwdPath}" || { echo "[deploy] ERROR: cannot cd to ${cwdPath}"; exit 1; }`
+    ];
+    if (commitSha) {
+      scriptLines.push(`echo "[deploy] Checking out commit: ${commitSha}"`);
+      scriptLines.push(`git checkout ${commitSha}`);
+    }
+    scriptLines.push(config.deployCommand);
+    const script = scriptLines.join('\n');
 
     // Spawn bash reading script from stdin — avoids shell escaping issues
     // Using detached: true to run inside a separate process group for group termination
@@ -533,13 +542,18 @@ export async function runDeployment(config, runMeta = {}) {
           const remoteDeployPath = `/tmp/deploy_run_${projectId}.sh`;
 
           // ── The actual deploy script ──────────────────────────
-          const deployScript = [
+          const scriptLines = [
             '#!/bin/bash',
             'set -e',
             'set -o pipefail',
-            `cd "${resolvedPath}" || { echo "[deploy] ERROR: Cannot cd to ${resolvedPath}"; exit 1; }`,
-            config.deployCommand
-          ].join('\n') + '\n';
+            `cd "${resolvedPath}" || { echo "[deploy] ERROR: Cannot cd to ${resolvedPath}"; exit 1; }`
+          ];
+          if (commitSha) {
+            scriptLines.push(`echo "[deploy] Checking out commit: ${commitSha}"`);
+            scriptLines.push(`git checkout ${commitSha}`);
+          }
+          scriptLines.push(config.deployCommand);
+          const deployScript = scriptLines.join('\n') + '\n';
 
           // ── Write deploy script via SFTP ─────────────────────────────────
             sftp.writeFile(remoteDeployPath, deployScript, (writeErr) => {
@@ -873,9 +887,19 @@ export async function POST(request) {
 
     const triggerSource = isManual ? 'Manual (Dashboard)' : (bodyText?.includes?.('"actor"') ? 'Bitbucket Webhook' : 'GitHub Webhook');
 
+    // Extract commitSha from manual trigger body
+    let commitSha = null;
+    if (isManual && bodyText) {
+      try {
+        const body = JSON.parse(bodyText);
+        if (body.commitSha) commitSha = body.commitSha;
+      } catch (e) {}
+    }
+
     runDeployment(config, {
       gitInfo,
-      triggerSource
+      triggerSource,
+      commitSha
     }).catch(err => {
       console.error('Unhandled background deployment error:', err.message);
     }).finally(() => {

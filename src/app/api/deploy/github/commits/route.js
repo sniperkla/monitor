@@ -1,0 +1,99 @@
+import { NextResponse } from 'next/server';
+import { getServerSession } from 'next-auth/next';
+import { authOptions } from '@/lib/auth';
+import connectDB from '@/lib/mongodb';
+import SystemSetting from '@/models/SystemSetting';
+import { decrypt } from '@/utils/encryption';
+
+function normalizeRepoParam(value) {
+  if (!value) return '';
+  const raw = value.trim();
+  try {
+    if (/^https?:\/\//i.test(raw)) {
+      const parsed = new URL(raw);
+      if (parsed.hostname.toLowerCase().includes('github.com')) {
+        const path = parsed.pathname.replace(/^\/+|\/+$/g, '');
+        const parts = path.split('/').filter(Boolean);
+        if (parts.length >= 2) {
+          return `${parts[0]}/${parts[1]}`;
+        }
+      }
+    }
+  } catch (err) {}
+  return raw.replace(/^\/+|\/+$/g, '');
+}
+
+// GET /api/deploy/github/commits?repo=owner/repo&project=projectId&branch=main&sha=abc123
+export async function GET(request) {
+  try {
+    const session = await getServerSession(authOptions);
+    if (!session) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
+
+    const url = new URL(request.url);
+    let repo = url.searchParams.get('repo');
+    const project = url.searchParams.get('project');
+    const branch = url.searchParams.get('branch') || 'main';
+    const sha = url.searchParams.get('sha');
+    repo = normalizeRepoParam(repo);
+
+    await connectDB(process.env.MONGODB_URI, true);
+
+    let token = null;
+    let resolvedRepo = repo;
+
+    if (project) {
+      const dbKey = project === 'default' ? 'auto_deploy_config' : `auto_deploy_config_${project}`;
+      const setting = await SystemSetting.findOne({ key: dbKey });
+      const cfg = setting?.value || {};
+      if (!resolvedRepo && cfg.githubRepo) resolvedRepo = cfg.githubRepo;
+      if (cfg.githubToken) {
+        try {
+          token = decrypt(cfg.githubToken);
+        } catch (err) {
+          console.warn('[deploy/github/commits] failed to decrypt githubToken', err.message);
+        }
+      }
+    }
+
+    const headerToken = request.headers.get('x-github-token');
+    if (headerToken) token = headerToken;
+
+    if (!resolvedRepo) {
+      return NextResponse.json({ success: false, error: 'Missing repo (owner/repo) parameter' }, { status: 400 });
+    }
+
+    let apiUrl;
+    if (sha) {
+      apiUrl = `https://api.github.com/repos/${resolvedRepo}/commits?sha=${sha}&per_page=20`;
+    } else {
+      apiUrl = `https://api.github.com/repos/${resolvedRepo}/commits?sha=${branch}&per_page=20`;
+    }
+
+    const headers = {
+      'User-Agent': 'monitor-app',
+      Accept: 'application/vnd.github+json'
+    };
+    if (token) headers.Authorization = `token ${token}`;
+
+    const res = await fetch(apiUrl, { headers });
+    if (!res.ok) {
+      const text = await res.text();
+      return NextResponse.json({ success: false, error: `GitHub API error: ${res.status} ${text}` }, { status: 502 });
+    }
+
+    const data = await res.json();
+    const commits = Array.isArray(data) ? data.map(c => ({
+      sha: c.sha?.substring(0, 7),
+      fullSha: c.sha,
+      message: c.commit?.message?.split('\n')[0]?.substring(0, 100) || '',
+      author: c.commit?.author?.name || c.author?.login || '',
+      date: c.commit?.author?.date || '',
+      avatar: c.author?.avatar_url || ''
+    })) : [];
+
+    return NextResponse.json({ success: true, commits });
+  } catch (error) {
+    console.error('[deploy/github/commits] GET error:', error.message);
+    return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+  }
+}
