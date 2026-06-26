@@ -564,7 +564,16 @@ export async function runDeployment(config, runMeta = {}) {
           
           if (commitSha) {
             scriptLines.push(`echo "[deploy] Checking out specific commit: ${commitSha}"`);
-            scriptLines.push(`git checkout ${commitSha}`);
+            scriptLines.push(`git checkout -q ${commitSha}`);
+            // Intercept git pull to skip it when a specific commit is selected
+            scriptLines.push(`git() {`);
+            scriptLines.push(`  if [ "$1" = "pull" ]; then`);
+            scriptLines.push(`    echo "[deploy] Specific commit selected: skipping git pull"`);
+            scriptLines.push(`    return 0`);
+            scriptLines.push(`  fi`);
+            scriptLines.push(`  command git "$@"`);
+            scriptLines.push(`}`);
+            scriptLines.push(`export -f git 2>/dev/null || true`);
           }
           scriptLines.push('echo "[deploy] Running deploy command..."');
           scriptLines.push(config.deployCommand);
