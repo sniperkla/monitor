@@ -603,6 +603,7 @@ export async function runDeployment(config, runMeta = {}) {
                 `command -v tmux >/dev/null 2>&1 && HAS_TMUX=0 || HAS_TMUX=1`,
                 `if [ "$HAS_TMUX" = "0" ]; then`,
                 `  rm -f "${logFile}"`,
+                `  touch "${logFile}"`,
                 `  tmux kill-session -t ${tmuxSession} 2>/dev/null || true`,
                 `  tmux new-session -d -s ${tmuxSession} -x 220 -y 50`,
                 `  tmux send-keys -t ${tmuxSession} "bash ${tmuxWrapperPath} 2>&1; tmux set-option -t ${tmuxSession} remain-on-exit off; exit" Enter`,
