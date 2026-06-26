@@ -652,13 +652,14 @@ export async function runDeployment(config, runMeta = {}) {
                   const lines = stdoutBuf.split('\n');
                   stdoutBuf = lines.pop();
 
-                  for (const line of lines) {
-                    const m = line.match(/^---DEPLOY_EXIT:(\d+)---$/);
+                  for (const rawLine of lines) {
+                    const line = rawLine.replace(/\r/g, '').trim();
+                    const m = line.match(/---DEPLOY_EXIT:(\d+)---/);
                     if (m) {
                       exitCodeDetected = parseInt(m[1], 10);
-                    } else {
-                      logOutput += line + '\n';
                     }
+                    // Keep original line in logs
+                    logOutput += rawLine + '\n';
                   }
 
                   if (logOutput.length > 200000) logOutput = limitLogOutput(logOutput);
@@ -676,7 +677,8 @@ export async function runDeployment(config, runMeta = {}) {
 
                   // Flush remaining buffer
                   if (stdoutBuf) {
-                    const m = stdoutBuf.match(/^---DEPLOY_EXIT:(\d+)---$/);
+                    const cleanBuf = stdoutBuf.replace(/\r/g, '').trim();
+                    const m = cleanBuf.match(/---DEPLOY_EXIT:(\d+)---/);
                     if (m) {
                       exitCodeDetected = parseInt(m[1], 10);
                     } else if (stdoutBuf.trim()) {
