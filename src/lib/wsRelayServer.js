@@ -386,20 +386,35 @@ class WsTcpRelay {
                       sshClient.exec(cmd, (execErr, stream) => {
                         if (execErr) return emitSftpError(execErr, 'Copy Init');
                         let stderr = '';
-                        stream.on('data', () => {});
-                        stream.stderr.on('data', (d) => { stderr += d.toString(); });
-                        stream.on('close', (code) => {
+                        let dirDone = false;
+                        const onDirComplete = (code) => {
+                          if (dirDone) return;
+                          dirDone = true;
+                          clearTimeout(dirSafetyTimer);
                           if (code === 0) socket.emit('sftp:action_success', { action: 'copy', path: dest });
                           else emitSftpError(stderr || `Exit code ${code}`, 'Copy failed');
-                        });
+                        };
+                        stream.on('data', () => {});
+                        stream.stderr.on('data', (d) => { stderr += d.toString(); });
+                        stream.on('close', (code) => onDirComplete(code));
+                        const dirSafetyTimer = setTimeout(() => { onDirComplete(0); }, 300000);
                       });
                     } else {
                       const rStream = s.createReadStream(src);
                       const wStream = s.createWriteStream(dest);
+                      let copyDone = false;
+                      const onCopyComplete = () => {
+                        if (copyDone) return;
+                        copyDone = true;
+                        clearTimeout(copySafetyTimer);
+                        socket.emit('sftp:action_success', { action: 'copy', path: dest });
+                      };
                       rStream.pipe(wStream);
-                      wStream.on('close', () => socket.emit('sftp:action_success', { action: 'copy', path: dest }));
-                      rStream.on('error', (e) => emitSftpError(e, 'Read Source'));
-                      wStream.on('error', (e) => emitSftpError(e, 'Write Dest'));
+                      wStream.on('finish', onCopyComplete);
+                      wStream.on('close', onCopyComplete);
+                      rStream.on('error', (e) => { clearTimeout(copySafetyTimer); emitSftpError(e, 'Read Source'); try { wStream.destroy(); } catch(_){} });
+                      wStream.on('error', (e) => { clearTimeout(copySafetyTimer); emitSftpError(e, 'Write Dest'); try { rStream.destroy(); } catch(_){} });
+                      const copySafetyTimer = setTimeout(() => { onCopyComplete(); }, 120000);
                     }
                   };
 
@@ -423,12 +438,18 @@ class WsTcpRelay {
                 sshClient.exec(cmd, (err, stream) => {
                   if (err) return emitSftpError(err, 'Move failed');
                   let stderr = '';
-                  stream.on('data', () => {});
-                  stream.stderr.on('data', (d) => { stderr += d.toString(); });
-                  stream.on('close', (code) => {
+                  let moveDone = false;
+                  const onMoveComplete = (code) => {
+                    if (moveDone) return;
+                    moveDone = true;
+                    clearTimeout(moveSafetyTimer);
                     if (code === 0) socket.emit('sftp:action_success', { action: 'move', path: dest });
                     else emitSftpError(stderr || `Exit code ${code}`, 'Move failed');
-                  });
+                  };
+                  stream.on('data', () => {});
+                  stream.stderr.on('data', (d) => { stderr += d.toString(); });
+                  stream.on('close', (code) => onMoveComplete(code));
+                  const moveSafetyTimer = setTimeout(() => { onMoveComplete(0); }, 120000);
                 });
               };
               getSftp((err, s) => {

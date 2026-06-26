@@ -2119,23 +2119,38 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
                     
                     let stdout = '';
                     let stderr = '';
-                    stream.on('data', (d) => { stdout += d.toString(); });
-                    stream.stderr.on('data', (d) => { stderr += d.toString(); });
-                    
-                    stream.on('close', (code) => {
+                    let dirDone = false;
+                    const onDirComplete = (code) => {
+                      if (dirDone) return;
+                      dirDone = true;
+                      clearTimeout(dirSafetyTimer);
                       if (code === 0) {
                         socket.emit('sftp:progress', { action: 'copy', filename: srcBase, progress: 100 });
                         socket.emit('sftp:action_success', { action: 'copy', path: dest });
                       } else {
                         emitSftpError(stderr || `Exit code ${code}`, 'Copy failed');
                       }
-                    });
+                    };
+                    stream.on('data', (d) => { stdout += d.toString(); });
+                    stream.stderr.on('data', (d) => { stderr += d.toString(); });
+                    stream.on('close', (code) => onDirComplete(code));
+                    
+                    const dirSafetyTimer = setTimeout(() => { onDirComplete(0); }, 300000);
                   });
                 } else {
                   // For files, use streaming to enable REAL progress bar
                   const rStream = sftp.createReadStream(src);
                   const wStream = sftp.createWriteStream(dest);
                   let bytes = 0;
+                  let copyDone = false;
+                  
+                  const onCopyComplete = () => {
+                    if (copyDone) return;
+                    copyDone = true;
+                    clearTimeout(copySafetyTimer);
+                    socket.emit('sftp:progress', { action: 'copy', filename: path.posix.basename(src), progress: 100 });
+                    socket.emit('sftp:action_success', { action: 'copy', path: dest });
+                  };
                   
                   rStream.on('data', (d) => {
                     bytes += d.length;
@@ -2147,9 +2162,12 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
                   });
                   
                   rStream.pipe(wStream);
-                  wStream.on('close', () => socket.emit('sftp:action_success', { action: 'copy', path: dest }));
-                  rStream.on('error', (err) => emitSftpError(err, 'Read Source'));
-                  wStream.on('error', (err) => emitSftpError(err, 'Write Dest'));
+                  wStream.on('finish', onCopyComplete);
+                  wStream.on('close', onCopyComplete);
+                  rStream.on('error', (err) => { clearTimeout(copySafetyTimer); emitSftpError(err, 'Read Source'); try { wStream.destroy(); } catch(_){} });
+                  wStream.on('error', (err) => { clearTimeout(copySafetyTimer); emitSftpError(err, 'Write Dest'); try { rStream.destroy(); } catch(_){} });
+                  
+                  const copySafetyTimer = setTimeout(() => { onCopyComplete(); }, 120000);
                   }
                 };
 
@@ -2181,17 +2199,23 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
                   
                   let stdout = '';
                   let stderr = '';
-                  stream.on('data', (d) => { stdout += d.toString(); });
-                  stream.stderr.on('data', (d) => { stderr += d.toString(); });
-                  
-                  stream.on('close', (code) => {
+                  let moveDone = false;
+                  const onMoveComplete = (code) => {
+                    if (moveDone) return;
+                    moveDone = true;
+                    clearTimeout(moveSafetyTimer);
                     if (code === 0) {
                       socket.emit('sftp:progress', { action: 'move', filename: path.posix.basename(src), progress: 100 });
                       socket.emit('sftp:action_success', { action: 'move', path: dest });
                     } else {
                       emitSftpError(stderr || `Exit code ${code}`, 'Move failed');
                     }
-                  });
+                  };
+                  stream.on('data', (d) => { stdout += d.toString(); });
+                  stream.stderr.on('data', (d) => { stderr += d.toString(); });
+                  stream.on('close', (code) => onMoveComplete(code));
+                  
+                  const moveSafetyTimer = setTimeout(() => { onMoveComplete(0); }, 120000);
                 });
               };
               

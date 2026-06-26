@@ -199,7 +199,8 @@ export default function FileManager({
   const deleteBatchRef = useRef({ count: 0, total: 0, toastId: null });
   const lastDeleteToastRef = useRef(0); // Per-instance debounce for delete success toast
   const refreshTimeoutRef = useRef(null); // Per-instance refresh debounce (avoids split-pane collision on window._refreshTimeout)
-  
+  const transferSafetyTimerRef = useRef(null); // Safety timeout for stuck copy/move transfers
+
   // AI State
   const [aiOpen, setAiOpen] = useState(false);
   const [aiPrompt, setAiPrompt] = useState('');
@@ -1119,6 +1120,31 @@ export default function FileManager({
     }
     return () => clearInterval(timer);
   }, [transferCountdown]);
+
+  // Safety timeout: auto-dismiss copy/move transfer if stuck (no progress/success)
+  useEffect(() => {
+    if (transferSafetyTimerRef.current) {
+      clearTimeout(transferSafetyTimerRef.current);
+      transferSafetyTimerRef.current = null;
+    }
+    if (transfer && (transfer.action === 'copy' || transfer.action === 'move') && !transfer.waiting && !transfer.reconnecting) {
+      transferSafetyTimerRef.current = setTimeout(() => {
+        console.warn('⚠️ Transfer safety timeout — auto-dismissing stuck copy/move modal');
+        setTransfer(null);
+        transferRef.current = null;
+        if (socket) {
+          const targetPath = currentPathRef.current || '.';
+          socket.emit('sftp:list', targetPath);
+        }
+      }, 60000);
+    }
+    return () => {
+      if (transferSafetyTimerRef.current) {
+        clearTimeout(transferSafetyTimerRef.current);
+        transferSafetyTimerRef.current = null;
+      }
+    };
+  }, [transfer?.action, transfer?.waiting, transfer?.reconnecting, transfer?.filename]);
 
   // 2. Refresh on Window Focus / tab visibility (When user clicks back into the tab)
   useEffect(() => {

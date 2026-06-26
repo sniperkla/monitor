@@ -994,15 +994,24 @@ async function handleSftpCopy(ws, msg) {
   try {
     const session = sshSessions.get(msg.connId);
     if (!session?.sshClient) return sendSftpError(ws, msg.connId, new Error('No SSH session'));
+    let done = false;
+    const sendSuccess = () => {
+      if (done) return;
+      done = true;
+      clearTimeout(safetyTimer);
+      try { ws.send(JSON.stringify({ type: 'sftp:action_success', connId: msg.connId, action: 'copy', path: msg.dest })); } catch {}
+    };
     session.sshClient.exec(`cp -r "${msg.src}" "${msg.dest}"`, (err, stream) => {
-      if (err) return sendSftpError(ws, msg.connId, err);
+      if (err) { clearTimeout(safetyTimer); return sendSftpError(ws, msg.connId, err); }
       let stderr = '';
       stream.stderr.on('data', (d) => { stderr += d.toString(); });
+      stream.on('error', (streamErr) => { clearTimeout(safetyTimer); sendSftpError(ws, msg.connId, streamErr); });
       stream.on('close', (code) => {
-        if (code !== 0) return sendSftpError(ws, msg.connId, new Error(`Copy failed: ${stderr}`));
-        ws.send(JSON.stringify({ type: 'sftp:action_success', connId: msg.connId, action: 'copy', path: msg.dest }));
+        if (code !== 0) { clearTimeout(safetyTimer); return sendSftpError(ws, msg.connId, new Error(`Copy failed: ${stderr}`)); }
+        sendSuccess();
       });
     });
+    const safetyTimer = setTimeout(() => { sendSuccess(); }, 120000);
   } catch (err) {
     sendSftpError(ws, msg.connId, err);
   }
@@ -1013,15 +1022,24 @@ async function handleSftpMove(ws, msg) {
     const session = sshSessions.get(msg.connId);
     if (!session?.sshClient) return sendSftpError(ws, msg.connId, new Error('No SSH session'));
     const overwriteFlag = msg.overwrite ? '-f' : '';
+    let done = false;
+    const sendSuccess = () => {
+      if (done) return;
+      done = true;
+      clearTimeout(safetyTimer);
+      try { ws.send(JSON.stringify({ type: 'sftp:action_success', connId: msg.connId, action: 'move', path: msg.dest })); } catch {}
+    };
     session.sshClient.exec(`mv ${overwriteFlag} "${msg.src}" "${msg.dest}"`, (err, stream) => {
-      if (err) return sendSftpError(ws, msg.connId, err);
+      if (err) { clearTimeout(safetyTimer); return sendSftpError(ws, msg.connId, err); }
       let stderr = '';
       stream.stderr.on('data', (d) => { stderr += d.toString(); });
+      stream.on('error', (streamErr) => { clearTimeout(safetyTimer); sendSftpError(ws, msg.connId, streamErr); });
       stream.on('close', (code) => {
-        if (code !== 0) return sendSftpError(ws, msg.connId, new Error(`Move failed: ${stderr}`));
-        ws.send(JSON.stringify({ type: 'sftp:action_success', connId: msg.connId, action: 'move', path: msg.dest }));
+        if (code !== 0) { clearTimeout(safetyTimer); return sendSftpError(ws, msg.connId, new Error(`Move failed: ${stderr}`)); }
+        sendSuccess();
       });
     });
+    const safetyTimer = setTimeout(() => { sendSuccess(); }, 120000);
   } catch (err) {
     sendSftpError(ws, msg.connId, err);
   }
