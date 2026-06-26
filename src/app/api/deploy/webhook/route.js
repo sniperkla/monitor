@@ -556,6 +556,9 @@ export async function runDeployment(config, runMeta = {}) {
           const deployScript = scriptLines.join('\n') + '\n';
 
           // ── Write deploy script via SFTP ─────────────────────────────────
+            const tmuxSession = `deploy-${projectId.replace(/[^a-zA-Z0-9_-]/g, '-')}`.slice(0, 60);
+            const tmuxWrapperPath = `/tmp/deploy_tmux_${projectId}.sh`;
+
             sftp.writeFile(remoteDeployPath, deployScript, (writeErr) => {
             if (writeErr) {
               logOutput += `[SSH Error] Failed to write deploy script: ${writeErr.message}\n`;
@@ -566,15 +569,46 @@ export async function runDeployment(config, runMeta = {}) {
               return;
             }
 
-            logOutput += `[SSH] Script uploaded. Launching deployment synchronously...\n\n`;
+            logOutput += `[SSH] Script uploaded. Launching deployment...\n\n`;
             logOutput = limitLogOutput(logOutput);
             updateStatus('running', logOutput);
 
-            // Execute the script directly and stream output back.
-            // When done, it prints an exit code marker and cleans up.
-            const command = `bash "${remoteDeployPath}"; CODE=$?; rm -f "${remoteDeployPath}"; echo ""; echo "---DEPLOY_EXIT:$CODE---"`;
-            
-            conn.exec(command, (execErr, stream) => {
+            // tmux wrapper: runs the deploy script, captures exit code, cleans up
+            const tmuxWrapper = [
+              '#!/bin/bash',
+              `bash "${remoteDeployPath}"`,
+              'CODE=$?',
+              `rm -f "${remoteDeployPath}"`,
+              'echo ""',
+              'echo "---DEPLOY_EXIT:$CODE---"',
+              'exit $CODE',
+            ].join('\n');
+
+            // Write tmux wrapper, then exec. If wrapper write fails, just exec directly.
+            const launchDeploy = () => {
+              const logFile = `/tmp/deploy_${tmuxSession}.log`;
+              const command = [
+                `set +e`,
+                `command -v tmux >/dev/null 2>&1 && HAS_TMUX=0 || HAS_TMUX=1`,
+                `set -e`,
+                `if [ "$HAS_TMUX" = "0" ]; then`,
+                `  rm -f "${logFile}"`,
+                `  tmux kill-session -t ${tmuxSession} 2>/dev/null`,
+                `  tmux new-session -d -s ${tmuxSession} -x 220 -y 50`,
+                `  tmux send-keys -t ${tmuxSession} "bash ${tmuxWrapperPath} 2>&1; tmux set-option -t ${tmuxSession} remain-on-exit off; exit" Enter`,
+                `  tmux pipe-pane -t ${tmuxSession} "cat >> ${logFile}"`,
+                `  echo "[deploy] Running in tmux session: ${tmuxSession}  (attach: tmux attach -t ${tmuxSession})"`,
+                `  tail -n +1 -f "${logFile}" & TAIL_PID=$!`,
+                `  while tmux has-session -t ${tmuxSession} 2>/dev/null; do sleep 0.5; done`,
+                `  kill $TAIL_PID 2>/dev/null; wait $TAIL_PID 2>/dev/null`,
+                `  rm -f "${logFile}" "${tmuxWrapperPath}"`,
+                `else`,
+                `  echo "[deploy] tmux not installed \u2014 running directly"`,
+                `  bash "${remoteDeployPath}"; CODE=$?; rm -f "${remoteDeployPath}"; echo ""; echo "---DEPLOY_EXIT:$CODE---"`,
+                `fi`,
+              ].join('\n');
+
+              conn.exec(command, (execErr, stream) => {
                 if (execErr) {
                   logOutput += `[SSH Error] Execution failed: ${execErr.message}\n`;
                   logOutput = limitLogOutput(logOutput);
@@ -590,6 +624,8 @@ export async function runDeployment(config, runMeta = {}) {
                   logOutput += `\n[Timeout] Deployment exceeded ${timeoutMs / 1000}s. Terminating...\n`;
                   logOutput = limitLogOutput(logOutput);
                   updateStatus('failed', logOutput).catch(() => {});
+                  // Kill tmux session + cleanup
+                  try { conn.exec(`tmux kill-session -t ${tmuxSession} 2>/dev/null; rm -f /tmp/deploy_${tmuxSession}.log /tmp/deploy_tmux_${projectId}.sh; true`, () => {}); } catch {}
                   stream.destroy();
                   conn.end();
                   try { clearRunning(projectId); } catch (e) {}
@@ -645,10 +681,17 @@ export async function runDeployment(config, runMeta = {}) {
                   const status = finalCode === 0 ? 'success' : 'failed';
 
                   try { clearRunning(projectId); } catch (e) {}
-                  updateStatus(status, logOutput).catch(() => {});
+                   updateStatus(status, logOutput).catch(() => {});
                   conn.end();
                 });
               });
+            }; // end launchDeploy
+
+            // Write tmux wrapper script, then launch. If write fails, launch anyway (tmux check handles fallback).
+            sftp.writeFile(tmuxWrapperPath, tmuxWrapper, { mode: 0o755 }, (tmuxWriteErr) => {
+              if (tmuxWriteErr) logOutput += `[deploy] tmux wrapper write failed: ${tmuxWriteErr.message}\n`;
+              launchDeploy();
+            });
           });
         });
       });

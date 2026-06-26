@@ -55,6 +55,11 @@ export async function POST(request) {
           }
         }
       } else if (running.type === 'ssh' && running.conn) {
+        // Kill tmux deploy session + cleanup temp files on the remote server
+        try {
+          const tmuxSession = `deploy-${projectId.replace(/[^a-zA-Z0-9_-]/g, '-')}`.slice(0, 60);
+          running.conn.exec(`tmux kill-session -t ${tmuxSession} 2>/dev/null; rm -f /tmp/deploy_${tmuxSession}.log /tmp/deploy_tmux_${projectId}.sh; true`, () => {});
+        } catch {}
         try { running.conn.end(); } catch (e) { console.warn('[deploy/cancel] Failed to end SSH connection:', e.message); }
       }
     } catch (err) {
