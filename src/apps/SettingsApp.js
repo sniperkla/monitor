@@ -155,7 +155,7 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
   const { data: session } = useSession();
   const { t, i18n } = useTranslation();
   const { state: osState, setWallpaper, setGlassmorphism, setIconSize, setIconStyle, setBrightness, setUiScale, setNotifications, setLanguage, setTheme, setTaskbarPosition, setWindowLayout, addCustomWallpaper, removeCustomWallpaper, saveSettings, addNotification, showConfirm, setKeyboardShortcuts, setTerminalSettings } = useOS();
-  const { state: appState, dispatch, apiFetch } = useApp();
+  const { state: appState, dispatch, apiFetch, fetchConnections } = useApp();
   const { vaultStatus, decryptedUri, lockVault, clearVault, setupVault, showVault } = useVault();
   const { glassmorphism, brightness, uiScale, notifications } = osState;
 
@@ -319,6 +319,14 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
               console.error('Failed to load SSH connections:', e);
             }
           }
+          // Final fallback: use globally-loaded connections from AppContext
+          // This covers the case where AutoDeployApp is opened before SSHApp
+          if (sshConns.length === 0 && appState.connections.length > 0) {
+            sshConns = appState.connections.filter(c => c.type === 'ssh');
+          } else if (sshConns.length === 0) {
+            // Ensure global connections are loaded so they become available
+            fetchConnections();
+          }
           setConnections(sshConns);
         } catch (err) {
           console.error('Failed to load deployment data:', err);
@@ -327,7 +335,7 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
       };
       fetchDeployData();
     }
-  }, [activeTab, selectedProjectId, apiFetch, relayConnected, vaultStatus, decryptedUri]);
+  }, [activeTab, selectedProjectId, apiFetch, relayConnected, vaultStatus, decryptedUri, appState.connections, fetchConnections]);
 
   // Real-time Server-Sent Events for deployment status
   useEffect(() => {

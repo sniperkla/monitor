@@ -24,9 +24,10 @@ const net  = require('net');
 const { spawnSync, exec } = require('child_process');
 
 // -- Try to load ssh2 (optional dependency) --
+// Resolve from script's own directory first (handles tmux/installed-service cwd mismatch)
 let ssh2;
 try {
-  ssh2 = require('ssh2');
+  ssh2 = require(require.resolve('ssh2', { paths: [__dirname, ...module.paths] }));
   console.log('✅ ssh2 loaded — SSH/SFTP will run locally');
 } catch {
   console.log('ℹ️  ssh2 not found — install with: npm install ssh2');
@@ -36,7 +37,7 @@ try {
 // -- Try to load ws --
 let WS;
 try {
-  WS = require('ws');
+  WS = require(require.resolve('ws', { paths: [__dirname, ...module.paths] }));
 } catch {
   try {
     WS = globalThis.WebSocket;
