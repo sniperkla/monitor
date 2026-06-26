@@ -1,6 +1,17 @@
 'use client';
 
 import React, { useState, useEffect, useMemo, useRef } from 'react';
+
+function safeStringify(obj) {
+  const seen = new WeakSet();
+  return JSON.stringify(obj, (key, value) => {
+    if (typeof value === 'object' && value !== null) {
+      if (seen.has(value)) return '[Circular]';
+      seen.add(value);
+    }
+    return value;
+  });
+}
 import { 
   Palette, Image as ImageIcon, Monitor, Layout, Bell, Shield, Info, 
   Database, CheckCircle, AlertCircle, RefreshCw, Zap, Wifi, WifiOff, Server,
@@ -281,8 +292,12 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
               bitbucketUser: configData.config.bitbucketUser || '',
               githubRepo: configData.config.githubRepo || ''
             }));
-            setRepoInput(configData.config.githubRepo || '');
-            if (configData.config.bitbucketConnected) setGitProvider('bitbucket');
+            const isBitbucket = !!configData.config.bitbucketConnected;
+            const activeRepo = isBitbucket
+              ? (configData.config.bitbucketRepo || '')
+              : (configData.config.githubRepo || '');
+            setRepoInput(activeRepo);
+            if (isBitbucket) setGitProvider('bitbucket');
             else setGitProvider('github');
           }
 
@@ -419,10 +434,11 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
 
     setDeploySaving(true);
     try {
+      const { sshConnectionData, ...safeConfig } = deployConfig;
       const res = await apiFetch('/api/deploy/config', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(deployConfig)
+        body: safeStringify(safeConfig)
       });
       const data = await res.json();
       if (data.success && data.config) {
@@ -439,7 +455,8 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
         addNotification({ title: 'Error', message: data.error || 'Failed to save deployment settings', type: 'error' });
       }
     } catch (err) {
-      addNotification({ title: 'Error', message: 'Failed to communicate with deploy settings API', type: 'error' });
+      console.error('[Deploy] Save config error:', err);
+      addNotification({ title: 'Error', message: err.message || 'Failed to communicate with deploy settings API', type: 'error' });
     }
     setDeploySaving(false);
   };
@@ -447,14 +464,15 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
   const handleTriggerDeploy = async (commitSha = null) => {
     setDeployTriggering(true);
     try {
+      const actualCommitSha = typeof commitSha === 'string' ? commitSha : null;
       const res = await apiFetch(`/api/deploy/webhook?project=${selectedProjectId}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ manual: true, commitSha })
+        body: JSON.stringify({ manual: true, commitSha: actualCommitSha })
       });
       const data = await res.json();
       if (data.success) {
-        addNotification({ title: 'Deployment Triggered', message: commitSha ? `Deploying commit ${commitSha.substring(0, 7)}...` : 'Deployment started. Status updates will appear in real-time.', type: 'info' });
+        addNotification({ title: 'Deployment Triggered', message: actualCommitSha ? `Deploying commit ${actualCommitSha.substring(0, 7)}...` : 'Deployment started. Status updates will appear in real-time.', type: 'info' });
         setDeployConfig(prev => ({ ...prev, status: 'running', lastDeployLog: 'Deploying...' }));
         // SSE will handle real-time updates automatically
       } else {
