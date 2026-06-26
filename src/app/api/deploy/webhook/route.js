@@ -557,8 +557,13 @@ export async function runDeployment(config, runMeta = {}) {
             'set -e',
             'set -o pipefail',
           ];
+          const targetBranch = (config.branch || 'main').replace('refs/heads/', '');
+          scriptLines.push(`git fetch origin`);
+          scriptLines.push(`echo "[deploy] Checking out branch: ${targetBranch}"`);
+          scriptLines.push(`git checkout -B ${targetBranch} origin/${targetBranch}`);
+          
           if (commitSha) {
-            scriptLines.push(`echo "[deploy] Checking out commit: ${commitSha}"`);
+            scriptLines.push(`echo "[deploy] Checking out specific commit: ${commitSha}"`);
             scriptLines.push(`git checkout ${commitSha}`);
           }
           scriptLines.push('echo "[deploy] Running deploy command..."');
