@@ -303,15 +303,20 @@ export async function runDeployment(config, runMeta = {}) {
 
     const scriptLines = [
       '#!/bin/bash',
+      'echo "[deploy] Starting deployment at $(date)"',
+      `if [ ! -d "${cwdPath}" ]; then echo "[deploy] ERROR: Directory '${cwdPath}' does not exist"; exit 1; fi`,
+      `cd "${cwdPath}" || { echo "[deploy] ERROR: cannot cd to ${cwdPath}"; exit 1; }`,
+      'echo "[deploy] Working directory: $(pwd)"',
       'set -e',
       'set -o pipefail',
-      `cd "${cwdPath}" || { echo "[deploy] ERROR: cannot cd to ${cwdPath}"; exit 1; }`
     ];
     if (commitSha) {
       scriptLines.push(`echo "[deploy] Checking out commit: ${commitSha}"`);
       scriptLines.push(`git checkout ${commitSha}`);
     }
+    scriptLines.push('echo "[deploy] Running deploy command..."');
     scriptLines.push(config.deployCommand);
+    scriptLines.push('echo "[deploy] Deploy command finished successfully"');
     const script = scriptLines.join('\n');
 
     // Spawn bash reading script from stdin — avoids shell escaping issues
@@ -544,15 +549,21 @@ export async function runDeployment(config, runMeta = {}) {
           // ── The actual deploy script ──────────────────────────
           const scriptLines = [
             '#!/bin/bash',
+            'echo "[deploy] Starting deployment on $(hostname) at $(date)"',
+            'echo "[deploy] Working directory: ' + resolvedPath + '"',
+            `if [ ! -d "${resolvedPath}" ]; then echo "[deploy] ERROR: Directory '${resolvedPath}' does not exist"; exit 1; fi`,
+            `cd "${resolvedPath}" || { echo "[deploy] ERROR: Cannot cd to ${resolvedPath}"; exit 1; }`,
+            'echo "[deploy] Now in: $(pwd)"',
             'set -e',
             'set -o pipefail',
-            `cd "${resolvedPath}" || { echo "[deploy] ERROR: Cannot cd to ${resolvedPath}"; exit 1; }`
           ];
           if (commitSha) {
             scriptLines.push(`echo "[deploy] Checking out commit: ${commitSha}"`);
             scriptLines.push(`git checkout ${commitSha}`);
           }
+          scriptLines.push('echo "[deploy] Running deploy command..."');
           scriptLines.push(config.deployCommand);
+          scriptLines.push('echo "[deploy] Deploy command finished successfully"');
           const deployScript = scriptLines.join('\n') + '\n';
 
           // ── Write deploy script via SFTP ─────────────────────────────────
