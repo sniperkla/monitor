@@ -9,6 +9,8 @@
 const { Client } = require('ssh2');
 const path = require('path');
 const { decryptWithMetadata } = require('../utils/encryption');
+// Imported at module level — avoids repeated require() overhead per connection
+const { getToken } = require('next-auth/jwt');
 
 const shellQuote = (v) => `'${String(v).replace(/'/g, `'\\''`)}'`;
 
@@ -34,7 +36,6 @@ class WsTcpRelay {
           );
         }
 
-        const { getToken } = require('next-auth/jwt');
         const token = await getToken({ req: socket.request, secret: process.env.NEXTAUTH_SECRET });
         if (!token) return next(new Error('Unauthorized'));
         
@@ -61,6 +62,14 @@ class WsTcpRelay {
 
     this.nsp.on('connection', (socket) => this.handleConnection(socket));
     console.log(`[relay] Namespace /relay initialized (max: ${this.maxConnections})`);
+
+    // Prevent rate limiter Map from growing unboundedly — purge expired entries every 5 min
+    setInterval(() => {
+      const now = Date.now();
+      for (const [uid, entry] of this.rateLimiter.entries()) {
+        if (now > entry.resetAt) this.rateLimiter.delete(uid);
+      }
+    }, 5 * 60 * 1000).unref();
   }
 
   handleConnection(socket) {
@@ -153,6 +162,9 @@ class WsTcpRelay {
             if (!err) {
               sftp = sftpInst;
               console.log(`[relay] ${socket.id} SFTP subsystem ready`);
+              // Store sftp ref so cleanup() can end the channel properly
+              const conn = this.connections.get(socket.id);
+              if (conn) conn.sftp = sftpInst;
             } else {
               console.warn(`[relay] ${socket.id} SFTP init failed (will use exec fallback):`, err.message);
             }
@@ -905,6 +917,7 @@ class WsTcpRelay {
     const conn = this.connections.get(socketId);
     if (conn) {
       try { conn.sshStream?.close(); } catch (_) {}
+      try { conn.sftp?.end(); } catch (_) {}        // end SFTP channel before SSH client
       try { conn.sshClient?.end(); } catch (_) {}
       this.connections.delete(socketId);
       console.log(`[relay] ${socketId} cleaned up (active: ${this.connections.size})`);

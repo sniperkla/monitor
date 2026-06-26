@@ -204,154 +204,107 @@ function connect() {
     let msg;
     try { msg = JSON.parse(data.toString()); } catch { return; }
 
-    // ── TCP relay (existing functionality) ──
-    if (msg.type === 'ready') {
-      // Now send init with capabilities (relay is registered on server)
-      ws.send(JSON.stringify({ type: 'init', relayName: RELAY_NAME, capabilities: { ssh: !!ssh2, sftp: !!ssh2, docker: true } }));
-      console.log(`\n✅ Relay ready! Name: ${RELAY_NAME}, Capabilities: SSH=${!!ssh2}, SFTP=${!!ssh2}, Docker=true`);
+    // O(1) dispatch — switch is faster than 27 linear if-checks for every message
+    switch (msg.type) {
+      // ── TCP relay ──
+      case 'ready':
+        ws.send(JSON.stringify({ type: 'init', relayName: RELAY_NAME, capabilities: { ssh: !!ssh2, sftp: !!ssh2, docker: true } }));
+        console.log(`\n✅ Relay ready! Name: ${RELAY_NAME}, Capabilities: SSH=${!!ssh2}, SFTP=${!!ssh2}, Docker=true`);
+        startDiscoveryServer(RELAY_NAME);
+        break;
 
-      // Start local discovery server so browser can auto-detect this relay
-      startDiscoveryServer(RELAY_NAME);
-    }
-
-    if (msg.type === 'open') {
-      const { connId } = msg;
-      const tcpHost = msg.host || 'localhost';
-      const tcpPort = Number(msg.port) || 22;
-      const tcp = net.connect(tcpPort, tcpHost);
-      tcp.on('data', (chunk) => {
-        if (ws.readyState === 1) {
-          ws.send(JSON.stringify({ type: 'data', connId, data: chunk.toString('base64') }));
-          if (ws.bufferedAmount && ws.bufferedAmount > 1024 * 1024) {
+      case 'open': {
+        const { connId } = msg;
+        const tcpHost = msg.host || 'localhost';
+        const tcpPort = Number(msg.port) || 22;
+        const tcp = net.connect(tcpPort, tcpHost);
+        tcp.on('data', (chunk) => {
+          if (ws.readyState !== 1) return;
+          ws.send(JSON.stringify({ type: 'data', connId, data: chunk.toString('base64') }), (err) => {
+            if (err) { tcp.destroy(); return; }
+          });
+          // Backpressure: pause TCP if WS buffer is full, resume on drain
+          if (ws.bufferedAmount > 512 * 1024) {
             tcp.pause();
-            const checkBuffer = () => {
-              if (ws.readyState !== 1) {
-                tcp.destroy();
-                return;
-              }
-              if (ws.bufferedAmount === 0) {
-                tcp.resume();
-              } else {
-                setTimeout(checkBuffer, 50);
-              }
+            const resume = () => {
+              if (ws.readyState !== 1) { tcp.destroy(); return; }
+              tcp.resume();
             };
-            setTimeout(checkBuffer, 50);
+            // Poll until drained (ws package doesn't emit drain on client sockets)
+            const poll = () => {
+              if (ws.bufferedAmount === 0) resume();
+              else if (ws.readyState === 1) setTimeout(poll, 32);
+            };
+            setTimeout(poll, 32);
           }
-        }
-      });
-      tcp.on('close', () => { try { ws.send(JSON.stringify({ type: 'close', connId })); } catch {} tcpConnections.delete(connId); });
-      tcp.on('error', (err) => { console.error(`✗ [${connId}] TCP error: ${err.message}`); tcp.destroy(); });
-      tcpConnections.set(connId, tcp);
-    }
-
-    if (msg.type === 'data') {
-      const tcp = tcpConnections.get(msg.connId);
-      if (tcp && !tcp.destroyed) tcp.write(Buffer.from(msg.data, 'base64'));
-    }
-
-    if (msg.type === 'close') {
-      const tcp = tcpConnections.get(msg.connId);
-      if (tcp) { tcp.destroy(); tcpConnections.delete(msg.connId); }
-    }
-
-    // ── SSH session (NEW) ──
-    if (msg.type === 'ssh:connect') {
-      handleSshConnect(ws, msg);
-    }
-
-    if (msg.type === 'ssh:input') {
-      const session = sshSessions.get(msg.connId);
-      if (session?.stream?.writable) session.stream.write(msg.data);
-    }
-
-    if (msg.type === 'ssh:resize') {
-      const session = sshSessions.get(msg.connId);
-      if (session?.stream) {
-        try { session.stream.setWindow(msg.rows, msg.cols, 0, 0); } catch {}
+        });
+        tcp.on('close', () => { try { ws.send(JSON.stringify({ type: 'close', connId })); } catch {} tcpConnections.delete(connId); });
+        tcp.on('error', (err) => { console.error(`✗ [${connId}] TCP error: ${err.message}`); tcp.destroy(); });
+        tcpConnections.set(connId, tcp);
+        break;
       }
-    }
 
-    if (msg.type === 'ssh:exec') {
-      handleSshExec(ws, msg);
-    }
+      case 'data': {
+        const tcp = tcpConnections.get(msg.connId);
+        if (tcp && !tcp.destroyed) tcp.write(Buffer.from(msg.data, 'base64'));
+        break;
+      }
 
-    if (msg.type === 'ssh:disconnect') {
-      cleanupSsh(msg.connId);
-    }
+      case 'close': {
+        const tcp = tcpConnections.get(msg.connId);
+        if (tcp) { tcp.destroy(); tcpConnections.delete(msg.connId); }
+        break;
+      }
 
-    // Server asks relay to stop (user disconnected/revoked from dashboard)
-    if (msg.type === 'disconnect') {
-      console.log(`\n🛑 Disconnected by server: ${msg.reason || 'Relay disconnected'}`);
-      console.log('   Exiting. Run with a new token to reconnect.');
-      ws.close(4000, 'disconnect');
-      process.exit(0);
-    }
+      // ── SSH ──
+      case 'ssh:connect':     handleSshConnect(ws, msg); break;
+      case 'ssh:exec':        handleSshExec(ws, msg);    break;
+      case 'ssh:disconnect':  cleanupSsh(msg.connId);    break;
 
-    // ── SFTP (NEW) ──
-    if (msg.type === 'sftp:list') {
-      handleSftpList(ws, msg);
-    }
+      case 'ssh:input': {
+        const session = sshSessions.get(msg.connId);
+        if (session?.stream?.writable) session.stream.write(msg.data);
+        break;
+      }
 
-    if (msg.type === 'sftp:readFile') {
-      handleSftpRead(ws, msg);
-    }
+      case 'ssh:resize': {
+        const session = sshSessions.get(msg.connId);
+        if (session?.stream) try { session.stream.setWindow(msg.rows, msg.cols, 0, 0); } catch {}
+        break;
+      }
 
-    if (msg.type === 'sftp:writeFile') {
-      handleSftpWrite(ws, msg);
-    }
+      // ── SFTP ──
+      case 'sftp:list':           handleSftpList(ws, msg);           break;
+      case 'sftp:readFile':       handleSftpRead(ws, msg);           break;
+      case 'sftp:writeFile':      handleSftpWrite(ws, msg);          break;
+      case 'sftp:mkdir':          handleSftpMkdir(ws, msg);          break;
+      case 'sftp:delete':         handleSftpDelete(ws, msg);         break;
+      case 'sftp:upload':         handleSftpUpload(ws, msg);         break;
+      case 'sftp:download':       handleSftpDownload(ws, msg);       break;
+      case 'sftp:download_folder':handleSftpDownloadFolder(ws, msg); break;
+      case 'sftp:search':         handleSftpSearch(ws, msg);         break;
+      case 'sftp:getSize':        handleSftpGetSize(ws, msg);        break;
+      case 'sftp:copy':           handleSftpCopy(ws, msg);           break;
+      case 'sftp:move':           handleSftpMove(ws, msg);           break;
+      case 'sftp:readFileBase64': handleSftpReadBase64(ws, msg);     break;
+      case 'sftp:extract':        handleSftpExtract(ws, msg);        break;
 
-    if (msg.type === 'sftp:mkdir') {
-      handleSftpMkdir(ws, msg);
-    }
+      // ── Docker ──
+      case 'docker:command': handleDockerCommand(ws, msg); break;
 
-    if (msg.type === 'sftp:delete') {
-      handleSftpDelete(ws, msg);
-    }
+      // ── Control ──
+      case 'disconnect':
+        console.log(`\n🛑 Disconnected by server: ${msg.reason || 'Relay disconnected'}`);
+        console.log('   Exiting. Run with a new token to reconnect.');
+        ws.close(4000, 'disconnect');
+        process.exit(0);
+        break;
 
-    if (msg.type === 'sftp:upload') {
-      handleSftpUpload(ws, msg);
-    }
+      case 'pong': break; // keepalive reply — no-op
 
-    if (msg.type === 'sftp:download') {
-      handleSftpDownload(ws, msg);
-    }
-
-    if (msg.type === 'sftp:download_folder') {
-      handleSftpDownloadFolder(ws, msg);
-    }
-
-    if (msg.type === 'sftp:search') {
-      handleSftpSearch(ws, msg);
-    }
-
-    if (msg.type === 'sftp:getSize') {
-      handleSftpGetSize(ws, msg);
-    }
-
-    if (msg.type === 'sftp:copy') {
-      handleSftpCopy(ws, msg);
-    }
-
-    if (msg.type === 'sftp:move') {
-      handleSftpMove(ws, msg);
-    }
-
-    if (msg.type === 'sftp:readFileBase64') {
-      handleSftpReadBase64(ws, msg);
-    }
-
-    if (msg.type === 'sftp:extract') {
-      handleSftpExtract(ws, msg);
-    }
-
-    // ── Docker (NEW) ──
-    if (msg.type === 'docker:command') {
-      handleDockerCommand(ws, msg);
-    }
-
-    if (msg.type === 'pong') return;
-    if (msg.type === 'error') {
-      console.error(`❌ Server error: ${msg.message}`);
+      case 'error':
+        console.error(`❌ Server error: ${msg.message}`);
+        break;
     }
   });
 

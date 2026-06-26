@@ -259,7 +259,7 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
   const [bbAppPassword, setBbAppPassword] = useState('');
   const [bbConnecting, setBbConnecting] = useState(false);
 
-  // Fetch deployment configurations and connections
+  // Fetch deployment config + SSH connections (deploy-relevant triggers only)
   useEffect(() => {
     if (activeTab === 'deployment') {
       const fetchDeployData = async () => {
@@ -279,11 +279,9 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
               githubUser: configData.config.githubUser || '',
               bitbucketConnected: configData.config.bitbucketConnected || false,
               bitbucketUser: configData.config.bitbucketUser || '',
-              // load saved repo into repo input
               githubRepo: configData.config.githubRepo || ''
             }));
             setRepoInput(configData.config.githubRepo || '');
-            // Detect active provider
             if (configData.config.bitbucketConnected) setGitProvider('bitbucket');
             else setGitProvider('github');
           }
@@ -294,8 +292,7 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
             setDeployProjects(listData.projects);
           }
 
-          // Try to fetch SSH connections through the relay endpoint first (works with vault)
-          // Falls back to general connections endpoint if relay endpoint fails
+          // Fetch SSH connections
           let sshConns = [];
           try {
             const sshRes = await apiFetch('/api/deploy/ssh-connections');
@@ -303,12 +300,10 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
             if (sshData.success && sshData.connections) {
               sshConns = sshData.connections;
             } else if (sshData.relayRequired) {
-              // Relay is required but not connected - try fallback
               console.warn('SSH connections via relay not available, falling back to server DB');
               throw new Error('Relay not available');
             }
           } catch (relayErr) {
-            // Fallback to regular connections endpoint
             try {
               const connRes = await apiFetch('/api/connections');
               const connData = await connRes.json();
@@ -319,15 +314,8 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
               console.error('Failed to load SSH connections:', e);
             }
           }
-          // Final fallback: use globally-loaded connections from AppContext
-          // This covers the case where AutoDeployApp is opened before SSHApp
-          if (sshConns.length === 0 && appState.connections.length > 0) {
-            sshConns = appState.connections.filter(c => c.type === 'ssh');
-          } else if (sshConns.length === 0) {
-            // Ensure global connections are loaded so they become available
-            fetchConnections();
-          }
-          setConnections(sshConns);
+          if (sshConns.length === 0) fetchConnections();
+          if (sshConns.length > 0) setConnections(sshConns);
         } catch (err) {
           console.error('Failed to load deployment data:', err);
         }
@@ -335,7 +323,21 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
       };
       fetchDeployData();
     }
-  }, [activeTab, selectedProjectId, apiFetch, relayConnected, vaultStatus, decryptedUri, appState.connections, fetchConnections]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab, selectedProjectId, relayConnected, vaultStatus, decryptedUri]);
+
+  // Separately sync SSH connection list from global AppContext whenever it updates
+  // (does NOT re-fetch deploy config — avoids resetting connectionId)
+  useEffect(() => {
+    if (activeTab !== 'deployment') return;
+    if (appState.connections.length === 0) return;
+    setConnections(prev => {
+      const global = appState.connections.filter(c => c.type === 'ssh');
+      // Only update if the global list has more/different entries than what we have
+      if (global.length > prev.length) return global;
+      return prev;
+    });
+  }, [activeTab, appState.connections]);
 
   // Real-time Server-Sent Events for deployment status
   useEffect(() => {
