@@ -461,7 +461,8 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
         addNotification({ title: 'Error', message: data.error || 'Failed to trigger deployment', type: 'error' });
       }
     } catch (err) {
-      addNotification({ title: 'Error', message: 'Failed to communicate with deployment trigger API', type: 'error' });
+      console.error('[Deploy] Trigger error:', err);
+      addNotification({ title: 'Error', message: err.message || 'Failed to communicate with deployment trigger API', type: 'error' });
     }
     setDeployTriggering(false);
   };

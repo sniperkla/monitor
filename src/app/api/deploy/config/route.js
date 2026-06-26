@@ -222,7 +222,7 @@ export async function POST(request) {
       bitbucketAppPassword: body.bitbucketAppPassword !== undefined ? body.bitbucketAppPassword : existingValue.bitbucketAppPassword || '',
       bitbucketRepo: body.bitbucketRepo !== undefined ? body.bitbucketRepo : existingValue.bitbucketRepo || '',
       telegramNotification: typeof body.telegramNotification === 'boolean' ? body.telegramNotification : existingValue.telegramNotification || false,
-      telegramBotToken: body.telegramBotToken !== undefined && body.telegramBotToken ? encrypt(body.telegramBotToken) : existingValue.telegramBotToken || '',
+      telegramBotToken: body.telegramBotToken !== undefined ? (body.telegramBotToken ? encrypt(body.telegramBotToken) : '') : existingValue.telegramBotToken || '',
       telegramChatId: body.telegramChatId !== undefined ? body.telegramChatId : existingValue.telegramChatId || '',
       sshConnectionData: finalSshConnectionData
     };
