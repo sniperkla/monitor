@@ -4,7 +4,6 @@ import { SessionProvider } from "next-auth/react";
 import { AppProvider } from "@/context/AppContext";
 import { OSProvider } from "@/context/OSContext";
 import { VaultProvider } from "@/context/VaultContext";
-import MasterPasswordModal from "@/components/MasterPasswordModal";
 import { useEffect } from "react";
 import '@/lib/i18n';
 
@@ -60,7 +59,6 @@ export function Providers({ children }) {
         <OSProvider>
           <AppProvider>
             {children}
-            <MasterPasswordModal />
           </AppProvider>
         </OSProvider>
       </VaultProvider>

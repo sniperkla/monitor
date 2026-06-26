@@ -23,6 +23,7 @@ import { AnimatePresence, motion } from 'framer-motion';
 import { useTranslation } from 'react-i18next';
 import WikiChatWindow from './WikiChatWindow';
 import PWAHandler from './PWAHandler';
+import MasterPasswordModal from '@/components/MasterPasswordModal';
 import SpotlightSearch from './SpotlightSearch';
 import PreviewWindow from './PreviewWindow';
 import TmuxApp from '@/apps/TmuxApp';
@@ -1026,6 +1027,7 @@ export default function DesktopEnvironment() {
       )}
 
       <DesktopModal />
+      <MasterPasswordModal />
       <PWAHandler />
       <SpotlightSearch />
       <PreviewWindow isOpen={showPreview} onClose={() => setShowPreview(false)} />
