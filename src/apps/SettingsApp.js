@@ -474,6 +474,7 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
       if (data.success) {
         addNotification({ title: 'Deployment Triggered', message: actualCommitSha ? `Deploying commit ${actualCommitSha.substring(0, 7)}...` : 'Deployment started. Status updates will appear in real-time.', type: 'info' });
         setDeployConfig(prev => ({ ...prev, status: 'running', lastDeployLog: 'Deploying...' }));
+        setDeploymentTab('logs'); // Auto-switch to logs tab to show live output
         // SSE will handle real-time updates automatically
       } else {
         addNotification({ title: 'Error', message: data.error || 'Failed to trigger deployment', type: 'error' });
@@ -483,6 +484,22 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
       addNotification({ title: 'Error', message: err.message || 'Failed to communicate with deployment trigger API', type: 'error' });
     }
     setDeployTriggering(false);
+  };
+
+  const handleForceResetDeploy = async () => {
+    if (!confirm('Force-reset the deployment status to "failed"? Use this only if the deployment is stuck in a running state.')) return;
+    try {
+      const res = await apiFetch(`/api/deploy/cancel?project=${selectedProjectId}`, { method: 'POST' });
+      const data = await res.json();
+      if (data.success) {
+        addNotification({ title: 'Status Reset', message: 'Deployment status has been force-reset to failed. You can now retry.', type: 'info' });
+        setDeployConfig(prev => ({ ...prev, status: 'failed', lastDeployLog: (prev.lastDeployLog || '') + '\n[User] Force-reset deployment status.' }));
+      } else {
+        addNotification({ title: 'Error', message: data.error || 'Failed to reset deployment status', type: 'error' });
+      }
+    } catch (err) {
+      addNotification({ title: 'Error', message: err.message || 'Failed to communicate with cancel API', type: 'error' });
+    }
   };
 
   const handleCancelDeploy = async () => {
@@ -2371,13 +2388,23 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
                   </button>
                 )}
                 {deployConfig.status === 'running' && (
-                  <button
-                    onClick={handleCancelDeploy}
-                    disabled={deployLoading}
-                    className="px-4 py-2 bg-rose-600 hover:bg-rose-700 disabled:opacity-50 text-white rounded-xl text-xs font-bold transition-all shadow-lg flex items-center gap-1.5 cursor-pointer"
-                  >
-                    {t('deploy.cancel', 'Cancel')}
-                  </button>
+                  <>
+                    <button
+                      onClick={handleCancelDeploy}
+                      disabled={deployLoading}
+                      className="px-4 py-2 bg-rose-600 hover:bg-rose-700 disabled:opacity-50 text-white rounded-xl text-xs font-bold transition-all shadow-lg flex items-center gap-1.5 cursor-pointer"
+                    >
+                      {t('deploy.cancel', 'Cancel')}
+                    </button>
+                    <button
+                      onClick={handleForceResetDeploy}
+                      disabled={deployLoading}
+                      className="px-4 py-2 bg-slate-600 hover:bg-slate-500 disabled:opacity-50 text-white rounded-xl text-xs font-bold transition-all shadow-lg flex items-center gap-1.5 cursor-pointer"
+                      title="Force-reset if deploy is stuck"
+                    >
+                      {t('deploy.forceReset', 'Force Reset')}
+                    </button>
+                  </>
                 )}
               </div>
             </div>
@@ -3096,6 +3123,16 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
                       >
                         {deployTriggering ? <Loader size={10} className="animate-spin" /> : <RotateCcw size={10} />}
                         {t('deploy.retry', 'Retry')}
+                      </button>
+                    )}
+                    {deployConfig.status === 'running' && (
+                      <button
+                        onClick={handleForceResetDeploy}
+                        disabled={deployLoading}
+                        className="px-3 py-1.5 bg-slate-600 hover:bg-slate-500 disabled:opacity-50 text-white rounded-lg text-[10px] font-bold transition-all flex items-center gap-1.5 cursor-pointer"
+                        title="Force-reset stuck deployment"
+                      >
+                        {t('deploy.forceReset', 'Force Reset')}
                       </button>
                     )}
                     <button

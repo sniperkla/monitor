@@ -51,8 +51,12 @@ export async function GET(request) {
       if (cfg.githubToken) {
         try {
           token = decrypt(cfg.githubToken);
+          // If decryption returns the raw ciphertext (bad decrypt), discard it
+          if (token && token.includes(':') && token.length > 40) {
+            token = null;
+          }
         } catch (err) {
-          console.warn('[deploy/github/branches] failed to decrypt githubToken', err.message);
+          console.warn('[deploy/github/branches] failed to decrypt githubToken — proceeding without auth:', err.message);
           token = null;
         }
       }

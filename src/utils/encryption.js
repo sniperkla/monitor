@@ -6,7 +6,7 @@ if (!SECRET_KEY && process.env.NODE_ENV === 'production') {
   throw new Error("CRITICAL: ENCRYPTION_KEY is required in production environments.");
 }
 
-const FALLBACK_SECRET = SECRET_KEY || crypto.randomBytes(32).toString('hex');
+const FALLBACK_SECRET = SECRET_KEY || 'development_fallback_secret_key_32_chars';
 const SECRET_KEY_OLD = process.env.ENCRYPTION_KEY_OLD;
 
 // Use SHA-256 to ensure key is exactly 32 bytes
@@ -88,6 +88,9 @@ function decryptWithPassword(encryptedText, password) {
 
 function decrypt(text) {
   const result = decryptWithMetadata(text);
+  if (!result.success) {
+    throw new Error('Decryption failed');
+  }
   return result.text;
 }
 
