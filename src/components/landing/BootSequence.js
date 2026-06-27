@@ -178,7 +178,7 @@ function FetchLine({ label, status, resultText, onDone }) {
 }
 
 export function BootSequence({ onComplete, onSkip }) {
-  const { state: appState, fetchConnections } = useApp();
+  const { state: appState, fetchConnections, relayInfo } = useApp();
   const { vaultStatus } = useVault();
   const { data: session } = useSession();
 
@@ -194,10 +194,11 @@ export function BootSequence({ onComplete, onSkip }) {
   const [sessionStatus, setSessionStatus] = useState('pending');
   const [vaultFetchStatus, setVaultFetchStatus] = useState('pending');
   const [connStatus, setConnStatus] = useState('pending');
+  const [relayStatus, setRelayStatus] = useState('pending');
 
   // Phase: 'static' → show static lines; 'dynamic' → show dynamic fetch lines; 'complete'
   const [showDynamic, setShowDynamic] = useState(false);
-  const [dynamicStep, setDynamicStep] = useState(0); // 0=session, 1=vault, 2=connections
+  const [dynamicStep, setDynamicStep] = useState(0); // 0=session, 1=vault, 2=connections, 3=relay
   const completedRef = useRef(false);
 
   // Cursor blink
@@ -228,6 +229,11 @@ export function BootSequence({ onComplete, onSkip }) {
     }
   }, [appState.isLoading, appState.connections.length, vaultStatus]);
 
+  // Resolve relay status
+  useEffect(() => {
+    if (relayInfo.checkDone) setRelayStatus('ok');
+  }, [relayInfo.checkDone]);
+
   // After static animation completes, start dynamic phase
   useEffect(() => {
     if (staticComplete) setShowDynamic(true);
@@ -247,9 +253,13 @@ export function BootSequence({ onComplete, onSkip }) {
     if (dynamicStep === 2 && connStatus === 'ok') setDynamicStep(3);
   }, [dynamicStep, connStatus]);
 
+  useEffect(() => {
+    if (dynamicStep === 3 && relayStatus === 'ok') setDynamicStep(4);
+  }, [dynamicStep, relayStatus]);
+
   // All dynamic steps done → complete
   useEffect(() => {
-    if (dynamicStep >= 3 && !completedRef.current) {
+    if (dynamicStep >= 4 && !completedRef.current) {
       completedRef.current = true;
       setTimeout(onComplete, 600);
     }
@@ -276,7 +286,7 @@ export function BootSequence({ onComplete, onSkip }) {
   }, []);
 
   const done = staticDoneRef.current;
-  const total = STATIC_BOOT_LINES.length + 3; // +3 dynamic steps
+  const total = STATIC_BOOT_LINES.length + 4; // +4 dynamic steps
   const dynamicDone = dynamicStep;
   const progress = Math.min(((done + dynamicDone) / total) * 100, 100);
   const blocks = 40;
@@ -288,6 +298,9 @@ export function BootSequence({ onComplete, onSkip }) {
     : 'No connections found';
   const vaultText = vaultStatus === 'unlocked' ? 'Vault unlocked' : vaultStatus === 'locked' ? 'Vault locked — enter master password' : 'No vault configured';
   const sessionText = session?.user?.email ? `Authenticated as ${session.user.email}` : 'Session active';
+  const relayText = relayInfo.connected
+    ? `${relayInfo.relays.length} relay${relayInfo.relays.length !== 1 ? 's' : ''} connected`
+    : 'No relay agent detected';
 
   return (
     <motion.div
@@ -436,8 +449,18 @@ export function BootSequence({ onComplete, onSkip }) {
                   />
                 )}
 
-                {/* Final ready line */}
+                {/* Step 4: Relay — only after step 3 */}
                 {dynamicStep >= 3 && (
+                  <FetchLine
+                    label="Checking local relay agent................"
+                    status={relayStatus}
+                    resultText={relayText}
+                    onDone={() => {}}
+                  />
+                )}
+
+                {/* Final ready line */}
+                {dynamicStep >= 4 && (
                   <motion.div
                     initial={{ opacity: 0, y: 4 }}
                     animate={{ opacity: 1, y: 0 }}

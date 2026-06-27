@@ -12,7 +12,7 @@ function isLocalhost(host) {
 }
 
 export default function TerminalApp({ onEditConnection, initialConnection, initialConnectionId, initialCommand, windowId }) {
-  const { state, dispatch } = useApp();
+  const { state, dispatch, relayInfo } = useApp();
   const { t } = useTranslation();
   
   // Read SSH mode from settings (default: server)
@@ -21,28 +21,11 @@ export default function TerminalApp({ onEditConnection, initialConnection, initi
     return localStorage.getItem('ssh_monitor_ssh_mode') === 'local';
   };
   const [useRelay, setUseRelay] = useState(getUseRelay);
-  const [relayOnline, setRelayOnline] = useState(false);
-  
-  // Check relay status once on mount
-  useEffect(() => {
-    fetch('/api/relay/token')
-      .then(r => r.json())
-      .then(data => { if (data.connected) setRelayOnline(true); })
-      .catch(() => {});
-  }, []);
+  const relayOnline = relayInfo.connected;
+  const relayCheckDone = relayInfo.checkDone;
 
   const { connections, standaloneTerminals } = state;
   const sshConnections = connections.filter(c => c.type !== 'database');
-
-  // Auto-switch to relay when localhost connections exist and relay is available
-  useEffect(() => {
-    if (relayOnline && !useRelay) {
-      const hasLocalhost = sshConnections.some(c => isLocalhost(c.host));
-      if (hasLocalhost) {
-        // Don't switch global mode — just let shouldUseRelay handle it per-connection
-      }
-    }
-  }, [relayOnline, useRelay, sshConnections]);
 
   // Determine if a specific connection should use relay
   // ALWAYS checks if host is localhost — never blindly returns true for remote hosts
@@ -187,10 +170,19 @@ export default function TerminalApp({ onEditConnection, initialConnection, initi
     }
   };
 
+  // Wait for relay check before rendering localhost terminals to avoid wrong mode
+  const needsRelayCheck = !relayCheckDone && (
+    (localStandaloneTerm && isLocalhost(localStandaloneTerm.host)) ||
+    standaloneTerminals.some(t => isLocalhost(t.host))
+  );
+
   // In standalone mode, render just the single terminal without tabs (uses local state)
   if (isStandalone || localStandaloneTerm) {
     if (!localStandaloneTerm) {
       return <div className="flex flex-col h-full bg-transparent overflow-hidden" />;
+    }
+    if (needsRelayCheck) {
+      return <div className="flex flex-col h-full bg-transparent overflow-hidden items-center justify-center"><div className="text-xs text-[var(--text-muted)] animate-pulse">Checking relay...</div></div>;
     }
     const TermComponent = shouldUseRelay(localStandaloneTerm.host) ? RelayTerminalView : TerminalView;
     return (
@@ -335,7 +327,9 @@ export default function TerminalApp({ onEditConnection, initialConnection, initi
 
         {/* Terminals - Always mounted but hidden if selecting connection picker */}
         <div className={`h-full ${isSelecting ? 'opacity-0 pointer-events-none' : 'opacity-100'}`}>
-          {standaloneTerminals.map(term => {
+          {needsRelayCheck ? (
+            <div className="flex items-center justify-center h-full"><div className="text-xs text-[var(--text-muted)] animate-pulse">Checking relay...</div></div>
+          ) : standaloneTerminals.map(term => {
     const TermComponent = shouldUseRelay(term.host) ? RelayTerminalView : TerminalView;
             return (
               <div

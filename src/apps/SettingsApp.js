@@ -843,6 +843,12 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
     };
     detectLocalRelay();
 
+    // Grace period: on page load, if mode was 'local', don't auto-switch on the
+    // first poll — the relay agent may still be reconnecting to the server.
+    let firstPoll = true;
+    const wasLocalOnLoad = localStorage.getItem('ssh_monitor_ssh_mode') === 'local';
+    let consecutiveDisconnects = 0;
+
     const poll = async () => {
       try {
         const res = await fetch('/api/relay/token', { credentials: 'include' });
@@ -853,9 +859,22 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
           setRelays(fetchedRelays);
 
           // Auto-switch SSH mode to server when no relay is connected
+          // Skip on first poll if mode was 'local' — give relay agent time to reconnect
           if (!data.connected && localStorage.getItem('ssh_monitor_ssh_mode') === 'local') {
-            localStorage.setItem('ssh_monitor_ssh_mode', 'server');
-            window.dispatchEvent(new Event('ssh-mode-changed'));
+            if (firstPoll && wasLocalOnLoad) {
+              consecutiveDisconnects++;
+              firstPoll = false;
+            } else {
+              consecutiveDisconnects++;
+              // Require 2 consecutive failures before switching to avoid false positives
+              if (consecutiveDisconnects >= 2) {
+                localStorage.setItem('ssh_monitor_ssh_mode', 'server');
+                window.dispatchEvent(new Event('ssh-mode-changed'));
+              }
+            }
+          } else {
+            consecutiveDisconnects = 0;
+            firstPoll = false;
           }
 
           if (fetchedRelays.length > 0) {

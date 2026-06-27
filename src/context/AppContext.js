@@ -29,6 +29,7 @@ const initialState = {
   activeFileManagerId: null,
   activeDatabaseBrowserId: null,
   wikiChatWindows: [], // { id, guide }
+  relayInfo: { connected: false, relays: [], checkDone: false },
 };
 
 function reducer(state, action) {
@@ -199,6 +200,8 @@ function reducer(state, action) {
       return { ...state, wikiChatWindows: [...state.wikiChatWindows, action.payload] };
     case 'CLOSE_WIKI_CHAT':
       return { ...state, wikiChatWindows: state.wikiChatWindows.filter(w => w.id !== action.payload) };
+    case 'SET_RELAY_INFO':
+      return { ...state, relayInfo: action.payload };
     case 'SET_ACTIVE_TERMINALS':
       return { ...state, activeTerminals: action.payload };
     case 'SET_ACTIVE_FILE_MANAGERS':
@@ -383,7 +386,22 @@ export function AppProvider({ children }) {
     }
   }, []);
 
-  // 5. Persistence: Save active workspace state to localStorage when it changes
+  // 5. Fetch relay status once on mount
+  useEffect(() => {
+    fetch('/api/relay/token')
+      .then(r => r.json())
+      .then(data => {
+        dispatch({
+          type: 'SET_RELAY_INFO',
+          payload: { connected: data.connected || false, relays: data.relays || [], checkDone: true },
+        });
+      })
+      .catch(() => {
+        dispatch({ type: 'SET_RELAY_INFO', payload: { connected: false, relays: [], checkDone: true } });
+      });
+  }, []);
+
+  // 6. Persistence: Save active workspace state to localStorage when it changes
   useEffect(() => {
     if (typeof window === 'undefined') return;
     try {
@@ -402,7 +420,7 @@ export function AppProvider({ children }) {
   }, [state.activeTerminals, state.activeFileManagers, state.activeDatabaseBrowsers, state.standaloneTerminals, state.standaloneDatabaseBrowsers, state.activeTerminalId, state.activeDatabaseBrowserId, state.activeFileManagerId, state.view]);
 
   return (
-    <AppContext.Provider value={{ state, dispatch, fetchConnections, apiFetch }}>
+    <AppContext.Provider value={{ state, dispatch, fetchConnections, apiFetch, relayInfo: state.relayInfo }}>
       {children}
     </AppContext.Provider>
   );

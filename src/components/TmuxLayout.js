@@ -975,16 +975,10 @@ export default function TmuxLayout({ windowId = 'default', isTmuxMode = false })
 const TerminalBridge = React.memo(({ term, target, hiddenRoom, onClose }) => {
   const bridgeRef = useRef(null);
   const wrapperRef = useRef(null);
+  const { relayInfo } = useApp();
   const [relayMode, setRelayMode] = useState(() => localStorage.getItem('ssh_monitor_ssh_mode') === 'local');
-  const [relayOnline, setRelayOnline] = useState(false);
-  
-  // Check relay status once
-  useEffect(() => {
-    fetch('/api/relay/token')
-      .then(r => r.json())
-      .then(data => { if (data.connected) setRelayOnline(true); })
-      .catch(() => {});
-  }, []);
+  const relayOnline = relayInfo.connected;
+  const relayCheckDone = relayInfo.checkDone;
 
   // Listen for setting changes
   useEffect(() => {
@@ -1000,6 +994,9 @@ const TerminalBridge = React.memo(({ term, target, hiddenRoom, onClose }) => {
   // Determine if this specific terminal should use relay
   const isLocalhost = /^(localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\])(:\d+)?$/.test(term.host || '');
   const useRelayForThis = isLocalhost && (relayMode || relayOnline);
+  
+  // Wait for relay check before rendering localhost terminals to avoid wrong mode
+  const needsRelayCheck = isLocalhost && !relayCheckDone;
   
   // 1. Structural Move: Move terminal to the active pane (target) or hiddenRoom
   useLayoutEffect(() => {
@@ -1032,7 +1029,9 @@ const TerminalBridge = React.memo(({ term, target, hiddenRoom, onClose }) => {
   return (
     <div ref={wrapperRef} className="react-dom-bridge-anchor" style={{ display: 'none' }}>
       <div ref={bridgeRef} className="h-full w-full overflow-hidden" data-pane-id={term.paneId}>
-        {useRelayForThis ? (
+        {needsRelayCheck ? (
+          <div className="flex items-center justify-center h-full"><div className="text-xs text-[var(--text-muted)] animate-pulse">Checking relay...</div></div>
+        ) : useRelayForThis ? (
           <RelayTerminalView
             connectionId={term.connectionId}
             connectionName={term.connectionName}
