@@ -29,7 +29,7 @@ export async function POST(request) {
       expiresAt: Date.now() + TOKEN_TTL,
     });
 
-    if (typeof global.__persistRelayTokens === 'function') global.__persistRelayTokens();
+    if (typeof global.__persistRelayTokens === 'function') await global.__persistRelayTokens();
     return Response.json({ success: true, token: relayToken });
   } catch (err) {
     return Response.json({ error: err.message }, { status: 500 });
@@ -138,7 +138,7 @@ export async function DELETE(request) {
       global.__activeRelays.delete(userId);
     }
 
-    if (typeof global.__persistRelayTokens === 'function') global.__persistRelayTokens();
+    if (typeof global.__persistRelayTokens === 'function') await global.__persistRelayTokens();
     return Response.json({ success: true });
   } catch (err) {
     return Response.json({ error: err.message }, { status: 500 });

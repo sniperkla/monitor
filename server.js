@@ -3380,51 +3380,88 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
       // Map: relayConnId → socketId — routes relay agent SSH/SFTP responses back to the right browser socket
       global.__relayConnMap = global.__relayConnMap || new Map();
 
-      // ── Persist tokens to disk so they survive server restarts ──────────────
+      // ── Persist tokens to MongoDB so they survive container rebuilds ───────
       const RELAY_TOKENS_FILE = path.resolve(__dirname, '.relay-tokens.json');
+      const RELAY_TOKENS_DB_KEY = 'relay_tokens';
 
-      function loadPersistedRelayTokens() {
+      async function loadPersistedRelayTokens() {
+        const now = Date.now();
+        let loaded = 0;
+
+        // 1. Load from MongoDB (primary store)
+        try {
+          if (mongoose.connection.readyState === 1) {
+            const SystemSetting = mongoose.model('SystemSetting');
+            const doc = await SystemSetting.findOne({ key: RELAY_TOKENS_DB_KEY });
+            if (doc?.value) {
+              for (const [token, entry] of Object.entries(doc.value)) {
+                if (entry.expiresAt > now) {
+                  global.__relayTokens.set(token, entry);
+                  loaded++;
+                }
+              }
+              if (loaded > 0) console.log(`🔗 [Relay] Loaded ${loaded} persisted token(s) from MongoDB.`);
+            }
+          }
+        } catch (e) {
+          console.warn('⚠️  Could not load relay tokens from MongoDB:', e.message);
+        }
+
+        // 2. Migrate tokens from legacy file (one-time, then delete file)
         try {
           if (fs.existsSync(RELAY_TOKENS_FILE)) {
             const raw = JSON.parse(fs.readFileSync(RELAY_TOKENS_FILE, 'utf-8'));
-            const now = Date.now();
-            let loaded = 0;
+            let migrated = 0;
             for (const [token, entry] of Object.entries(raw)) {
-              if (entry.expiresAt > now) {
+              if (entry.expiresAt > now && !global.__relayTokens.has(token)) {
                 global.__relayTokens.set(token, entry);
+                migrated++;
                 loaded++;
               }
             }
-            if (loaded > 0) console.log(`🔗 [Relay] Loaded ${loaded} persisted token(s) from disk.`);
+            if (migrated > 0) {
+              console.log(`🔗 [Relay] Migrated ${migrated} token(s) from legacy file to memory.`);
+              await persistRelayTokens(); // Save to MongoDB
+            }
+            fs.unlinkSync(RELAY_TOKENS_FILE);
+            console.log('🔗 [Relay] Removed legacy .relay-tokens.json file.');
           }
         } catch (e) {
-          console.warn('⚠️  Could not load persisted relay tokens:', e.message);
+          console.warn('⚠️  Could not migrate legacy relay tokens file:', e.message);
         }
+
+        if (loaded > 0) console.log(`🔗 [Relay] Total ${loaded} token(s) loaded.`);
       }
 
-      function persistRelayTokens() {
+      async function persistRelayTokens() {
+        const obj = {};
+        for (const [token, entry] of global.__relayTokens) obj[token] = entry;
+        // Save to MongoDB (primary store)
         try {
-          const obj = {};
-          for (const [token, entry] of global.__relayTokens) obj[token] = entry;
-          fs.writeFileSync(RELAY_TOKENS_FILE, JSON.stringify(obj, null, 2));
-          // Set file permissions to owner-only read/write (600)
-          try { fs.chmodSync(RELAY_TOKENS_FILE, 0o600); } catch {}
+          if (mongoose.connection.readyState === 1) {
+            const SystemSetting = mongoose.model('SystemSetting');
+            await SystemSetting.findOneAndUpdate(
+              { key: RELAY_TOKENS_DB_KEY },
+              { $set: { value: obj } },
+              { upsert: true }
+            );
+          }
         } catch (e) {
-          console.warn('⚠️  Could not persist relay tokens:', e.message);
+          console.warn('⚠️  Could not persist relay tokens to MongoDB:', e.message);
         }
       }
 
-      // Load on startup
+      // Load on startup (async, non-blocking)
       loadPersistedRelayTokens();
 
       // Purge expired tokens every 24h and persist
-      setInterval(() => {
+      setInterval(async () => {
         const now = Date.now();
         let changed = false;
         for (const [t, e] of global.__relayTokens) {
           if (e.expiresAt < now) { global.__relayTokens.delete(t); changed = true; }
         }
-        if (changed) persistRelayTokens();
+        if (changed) await persistRelayTokens();
       }, 24 * 60 * 60 * 1000);
 
       // Expose persist function for use by API route
