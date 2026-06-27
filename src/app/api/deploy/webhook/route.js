@@ -95,7 +95,7 @@ function escapeHtml(text) {
     .replace(/>/g, '&gt;');
 }
 
-async function sendTelegramNotification(config, status, extra = {}) {
+export async function sendTelegramNotification(config, status, extra = {}) {
   if (!config.telegramNotification || !config.telegramBotToken || !config.telegramChatId) {
     return;
   }

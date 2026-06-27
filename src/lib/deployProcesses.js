@@ -101,6 +101,7 @@ export async function resetAllState() {
 
 /** Attempt to reconnect to a tmux session on the remote server after a server restart. */
 async function attemptTmuxReconnect(config, projectId, dbKey) {
+  const startedAt = config.lastDeployAt ? new Date(config.lastDeployAt) : new Date();
   const { Client } = await import('ssh2');
   const { ConnectionRepository } = await import('./repositories/ConnectionRepository.js');
   const { decrypt } = await import('../utils/encryption.js');
@@ -118,16 +119,8 @@ async function attemptTmuxReconnect(config, projectId, dbKey) {
     const connection = await repo.findById(config.connectionId);
     if (!connection) {
       console.error(`[deployReconnect] SSH connection ${config.connectionId} not found for project "${projectId}"`);
-      await SystemSetting.findOneAndUpdate(
-        { key: dbKey },
-        {
-          $set: {
-            'value.status': 'failed',
-            'value.deployRunId': null,
-            'value.lastDeployLog': (config.lastDeployLog || '') + `\n[${new Date().toISOString()}] ❌ Could not reconnect — SSH connection not found.\n`
-          }
-        }
-      );
+      const failLog = (config.lastDeployLog || '') + `\n[${new Date().toISOString()}] ❌ Could not reconnect — SSH connection not found.\n`;
+      await updateDeployLog(dbKey, failLog, 'failed', config, startedAt);
       await broadcastDeploymentStatus(projectId);
       return;
     }
@@ -204,7 +197,7 @@ async function attemptTmuxReconnect(config, projectId, dbKey) {
         settled = true;
 
         logOutput += `\n[SSH-monitor] Reconnected after server restart! Monitoring tmux session "${tmuxSession}"...\n`;
-        updateDeployLog(dbKey, logOutput, 'running');
+        updateDeployLog(dbKey, logOutput, 'running', config, startedAt);
         broadcastDeploymentStatus(projectId).catch(() => {});
 
         const logFile = `/tmp/deploy_${tmuxSession}.log`;
@@ -229,7 +222,7 @@ async function attemptTmuxReconnect(config, projectId, dbKey) {
         conn.exec(monitorCmd, (execErr, stream) => {
           if (execErr) {
             logOutput += `[SSH-monitor] Failed: ${execErr.message}\n`;
-            updateDeployLog(dbKey, logOutput, 'failed');
+            updateDeployLog(dbKey, logOutput, 'failed', config, startedAt);
             broadcastDeploymentStatus(projectId).catch(() => {});
             conn.end();
             resolve();
@@ -255,7 +248,7 @@ async function attemptTmuxReconnect(config, projectId, dbKey) {
                 logOutput += `\n--------------------------------------------------\n`;
                 logOutput += `[${finishedAt.toISOString()}] [SSH-monitor] tmux session completed. Exit code: ${exitCode}\n`;
                 const status = exitCode === 0 ? 'success' : 'failed';
-                updateDeployLog(dbKey, logOutput, status);
+                updateDeployLog(dbKey, logOutput, status, config, startedAt);
                 broadcastDeploymentStatus(projectId).catch(() => {});
                 conn.exec(`rm -f /tmp/deploy_${tmuxSession}.log /tmp/deploy_${tmuxSession}.status /tmp/deploy_tmux_${projectId}.sh; true`, () => {});
                 conn.end();
@@ -264,12 +257,12 @@ async function attemptTmuxReconnect(config, projectId, dbKey) {
               }
               logOutput += rawLine + '\n';
             }
-            updateDeployLog(dbKey, logOutput, 'running');
+            updateDeployLog(dbKey, logOutput, 'running', config, startedAt);
           });
 
           stream.stderr.on('data', (data) => {
             logOutput += data.toString();
-            updateDeployLog(dbKey, logOutput, 'running');
+            updateDeployLog(dbKey, logOutput, 'running', config, startedAt);
           });
 
           stream.on('close', () => {
@@ -296,12 +289,12 @@ async function attemptTmuxReconnect(config, projectId, dbKey) {
     await tryReconnect(1);
   } catch (err) {
     logOutput += `\n[SSH-monitor] ❌ Could not reconnect after ${maxRetries} attempts. Deploy may have succeeded — check server manually.\n`;
-    await updateDeployLog(dbKey, logOutput, 'failed');
+    await updateDeployLog(dbKey, logOutput, 'failed', config, startedAt);
     await broadcastDeploymentStatus(projectId).catch(() => {});
   }
 }
 
-async function updateDeployLog(dbKey, logText, status) {
+async function updateDeployLog(dbKey, logText, status, config, startedAt) {
   try {
     const mongoUri = process.env.MONGODB_URI || getCenterUri();
     await import('./mongodb.js').then(m => m.default(mongoUri, true));
@@ -316,6 +309,17 @@ async function updateDeployLog(dbKey, logText, status) {
       }
     }
     await SystemSetting.findOneAndUpdate({ key: dbKey }, { $set: updateFields });
+
+    // Send Telegram notification on terminal status (success/failed)
+    if (config && status && status !== 'running') {
+      try {
+        const { sendTelegramNotification } = await import('../app/api/deploy/webhook/route.js');
+        const duration = startedAt ? Math.round((Date.now() - startedAt.getTime()) / 1000) : undefined;
+        await sendTelegramNotification(config, status, { duration, logText });
+      } catch (err) {
+        console.error('[deployReconnect] Failed to send Telegram notification:', err.message);
+      }
+    }
   } catch (err) {
     console.error('[deployReconnect] Failed to update deploy log:', err.message);
   }
