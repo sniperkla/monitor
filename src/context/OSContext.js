@@ -1227,10 +1227,30 @@ export function OSProvider({ children }) {
 
   const addNotification = useCallback((notification) => {
     // notification: { title, message, type (success/error/info), duration }
+    // Check system alerts setting
+    if (state.notifications?.system === false) return null;
+
     const id = Date.now().toString() + Math.random().toString(36).substr(2, 9);
     dispatch({ type: 'ADD_NOTIFICATION', payload: { ...notification, id, timestamp: Date.now() } });
+
+    // Terminal sound
+    if (state.notifications?.terminal) {
+      import('@/utils/sound').then(({ playSuccess, playError, playBell }) => {
+        if (notification.type === 'error') playError();
+        else if (notification.type === 'success') playSuccess();
+        else playBell();
+      }).catch(() => {});
+    }
+
+    // Desktop notification (when tab is in background)
+    if (state.notifications?.desktop) {
+      import('@/utils/sound').then(({ showDesktopNotification }) => {
+        showDesktopNotification(notification.title || 'SSH Monitor', notification.message || '', notification.type);
+      }).catch(() => {});
+    }
+
     return id;
-  }, [dispatch]);
+  }, [dispatch, state.notifications]);
 
   const removeNotification = useCallback((id) => {
     dispatch({ type: 'REMOVE_NOTIFICATION', payload: id });

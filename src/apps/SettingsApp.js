@@ -1592,7 +1592,14 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
                           <p className="text-[11px] text-[var(--text-muted)] mt-0.5">{item.desc}</p>
                         </div>
                       </div>
-                      <Toggle value={isActive} onChange={() => setNotifications({ [item.id]: !isActive })} accent={item.accent} />
+                      <Toggle value={isActive} onChange={() => {
+                        const next = !isActive;
+                        // Request browser notification permission when enabling desktop alerts
+                        if (item.id === 'desktop' && next && typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'default') {
+                          Notification.requestPermission();
+                        }
+                        setNotifications({ [item.id]: next });
+                      }} accent={item.accent} />
                     </div>
                   </SettingsCard>
                 );
