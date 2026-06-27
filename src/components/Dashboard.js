@@ -2,6 +2,7 @@
 
 import { useApp } from '@/context/AppContext';
 import { useOS } from '@/context/OSContext';
+import { getLocalConnections, saveLocalConnections } from '@/utils/localConnections';
 import {
   Server, Terminal, Activity, Clock, Globe, Shield, Cpu, HardDrive, Database,
   BarChart3, TrendingUp, Zap, Plus, RefreshCw, ChevronRight, AlertCircle,
@@ -392,7 +393,7 @@ export default function Dashboard({ onNewConnection, onEditConnection }) {
             {showExportPanel && (
               <div className="absolute right-0 top-full mt-2 w-64 p-3 rounded-xl border shadow-xl z-50" style={{ background: 'var(--bg-card)', borderColor: 'var(--border-color)' }}>
                 <p className="text-[11px] text-[var(--text-muted)] mb-1">Credentials are encrypted with this password.</p>
-                <p className="text-[11px] text-amber-400 mb-2">⚠ Required — you'll need it to import.</p>
+                <p className="text-[11px] text-amber-400 mb-2">⚠ Required — you&apos;ll need it to import.</p>
                 <div className="relative mb-2">
                   <input
                     type={showExportPw ? 'text' : 'password'}
@@ -523,9 +524,9 @@ export default function Dashboard({ onNewConnection, onEditConnection }) {
                       body: JSON.stringify({ ...conn, storage: 'db' })
                     });
                     // Cleanup local storage for this item
-                    const saved = JSON.parse(localStorage.getItem('ssh_monitor_connections') || '[]');
+                    const saved = (await getLocalConnections()) || [];
                     const updated = saved.filter(c => c._id !== conn._id);
-                    localStorage.setItem('ssh_monitor_connections', JSON.stringify(updated));
+                    await saveLocalConnections(updated);
                   }
                   await fetchConnections();
                   dispatch({ type: 'ADD_NOTIFICATION', payload: { title: t('ssh.dashboard_ui.syncPromo.synced'), message: t('ssh.dashboard_ui.syncPromo.syncedDesc'), type: 'success' } });

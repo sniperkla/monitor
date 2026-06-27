@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useApp } from '@/context/AppContext';
 import { useOS } from '@/context/OSContext';
+import { getLocalConnections, saveLocalConnections } from '@/utils/localConnections';
 import MacOSModalWindow from '@/components/MacOSModalWindow';
 import { 
   Search, RefreshCw, Layers, Table, Code, Activity, Save, Loader2, 
@@ -337,12 +338,12 @@ export default function DatabaseView({ connection, onClose }) {
 
         // If local storage, also persist the online status
         if (connection.storage === 'localstorage') {
-            const saved = JSON.parse(localStorage.getItem('ssh_monitor_connections') || '[]');
+            const saved = (await getLocalConnections()) || [];
             const updated = saved.map(c => {
                 if (c._id === connection._id) return { ...c, status: 'online', lastConnected: new Date().toISOString() };
                 return c;
             });
-            localStorage.setItem('ssh_monitor_connections', JSON.stringify(updated));
+            await saveLocalConnections(updated);
         }
       } else {
         const errMsg = resData.error || t('database.notifications.fetchFail');

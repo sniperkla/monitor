@@ -209,6 +209,20 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
     typeof window !== 'undefined' ? (localStorage.getItem('ssh_monitor_preferred_relay') || null) : null
   );
 
+  const [sshMode, setSshMode] = useState(() =>
+    typeof window !== 'undefined' ? (localStorage.getItem('ssh_monitor_ssh_mode') || 'server') : 'server'
+  );
+
+  useEffect(() => {
+    const handleSshModeChange = () => {
+      setSshMode(localStorage.getItem('ssh_monitor_ssh_mode') || 'server');
+    };
+    window.addEventListener('ssh-mode-changed', handleSshModeChange);
+    return () => {
+      window.removeEventListener('ssh-mode-changed', handleSshModeChange);
+    };
+  }, []);
+
   // Detect PWA (standalone) mode
   const isPWA = useMemo(() =>
     typeof window !== 'undefined' && window.matchMedia('(display-mode: standalone)').matches, []);
@@ -891,12 +905,21 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
       setRelayInstallSuccess(false);
       return;
     }
-    const hasNewRelay = relays.some(r => !existingRelayIds.has(r.relayId || r.relayName));
-    if (relayWaiting && hasNewRelay && !relayInstallSuccess && relayWizardStep >= 2) {
+    const newRelay = relays.find(r => !existingRelayIds.has(r.relayId || r.relayName));
+    if (relayWaiting && newRelay && !relayInstallSuccess && relayWizardStep >= 2) {
       setRelayInstallSuccess(true);
       addNotification({ title: 'Relay Connected!', message: 'Your local relay agent is now running.', type: 'success' });
+      
+      // Auto-swap to SSH connection mode to local relay
+      localStorage.setItem('ssh_monitor_ssh_mode', 'local');
+      window.dispatchEvent(new Event('ssh-mode-changed'));
+      
+      // Auto-select preferred relay to this new local relay
+      const relayName = newRelay.relayName || newRelay.relayId;
+      localStorage.setItem('ssh_monitor_preferred_relay', relayName);
+      setPreferredRelay(relayName);
     }
-  }, [relays, existingRelayIds, relayWaiting, relayModalOpen, relayInstallSuccess, relayWizardStep]);
+  }, [relays, existingRelayIds, relayWaiting, relayModalOpen, relayInstallSuccess, relayWizardStep, addNotification]);
 
   const handleGenerateRelayToken = async () => {
     setRelayLoading(true);
@@ -1743,12 +1766,12 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
                               addNotification({ title: 'SSH Mode', message: 'Switched to Server mode', type: 'info' });
                             }}
                             className={`relative p-3 rounded-xl border text-left transition-all ${
-                              (localStorage.getItem('ssh_monitor_ssh_mode') || 'server') === 'server'
+                              sshMode === 'server'
                                 ? 'border-indigo-500/50 bg-indigo-500/10'
                                 : 'border-[var(--border-color)] hover:border-[var(--border-hover)]'
                             }`}
                           >
-                            {(localStorage.getItem('ssh_monitor_ssh_mode') || 'server') === 'server' && (
+                            {sshMode === 'server' && (
                               <div className="absolute top-2 right-2 w-4 h-4 rounded-full bg-indigo-500 flex items-center justify-center">
                                 <Check size={10} className="text-white" />
                               </div>
@@ -1787,14 +1810,14 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
                             className={`relative p-3 rounded-xl border text-left transition-all ${
                               window.innerWidth < 768
                                 ? 'border-[var(--border-color)] opacity-50 cursor-not-allowed'
-                                : localStorage.getItem('ssh_monitor_ssh_mode') === 'local'
+                                : sshMode === 'local'
                                 ? 'border-emerald-500/50 bg-emerald-500/10'
                                 : !relayConnected
                                 ? 'border-[var(--border-color)] opacity-60'
                                 : 'border-[var(--border-color)] hover:border-[var(--border-hover)]'
                             }`}
                           >
-                            {localStorage.getItem('ssh_monitor_ssh_mode') === 'local' && (
+                            {sshMode === 'local' && (
                               <div className="absolute top-2 right-2 w-4 h-4 rounded-full bg-emerald-500 flex items-center justify-center">
                                 <Check size={10} className="text-white" />
                               </div>
@@ -1832,7 +1855,7 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
                           <div className="mt-2 flex items-start gap-2 p-2.5 rounded-xl bg-emerald-500/10 border border-emerald-500/20">
                             <Monitor size={13} className="text-emerald-400 shrink-0 mt-0.5" />
                             <p className="text-[10px] text-emerald-300">
-                              <strong>Desktop tip:</strong> Local mode is recommended — your machine handles SSH directly, the server sees nothing, and it's faster. Install the relay agent to enable it.
+                              <strong>Desktop tip:</strong> Local mode is recommended — your machine handles SSH directly, the server sees nothing, and it&apos;s faster. Install the relay agent to enable it.
                             </p>
                           </div>
                         )}

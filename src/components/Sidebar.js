@@ -11,6 +11,7 @@ import { useTranslation } from 'react-i18next';
 import { useOS } from '@/context/OSContext';
 import { useVault } from '@/context/VaultContext';
 import { encryptWithPassword } from '@/utils/clientCrypto';
+import { getLocalConnections, saveLocalConnections } from '@/utils/localConnections';
 
 export default function Sidebar({ onNewConnection, onEditConnection }) {
   const { state, dispatch, fetchConnections, apiFetch } = useApp();
@@ -200,20 +201,24 @@ export default function Sidebar({ onNewConnection, onEditConnection }) {
         return;
       }
 
-      // Check if DB storage is available
-      const useDb = state.storageMode === 'db';
-      
-      // Get existing connections for duplicate check — always check BOTH sources
-      // since fetchConnections combines DB + localStorage in the UI
+      // Live-probe the DB reachability instead of relying on cached storageMode preference.
+      // If /api/connections returns relayRequired=true the relay/DB is not reachable on this
+      // machine, so we fall back to localStorage. Otherwise we save straight to the DB so
+      // pulled connections always get the "DB" tag when the local relay is active.
       let existing = [];
+      let dbReachable = false;
       try {
         const existingRes = await apiFetch('/api/connections');
         const existingData = await existingRes.json();
-        if (existingData.success) existing = existingData.data || [];
+        if (existingData.success && !existingData.relayRequired) {
+          dbReachable = true;
+          existing = existingData.data || [];
+        }
       } catch (_) {}
+
       // Also include localStorage connections to prevent cross-storage duplicates
       try {
-        const localConns = JSON.parse(localStorage.getItem('ssh_monitor_connections') || '[]');
+        const localConns = (await getLocalConnections()) || [];
         for (const lc of localConns) {
           if (!existing.some(e => e.name === lc.name && e.host === lc.host && e.type === lc.type)) {
             existing.push(lc);
@@ -231,8 +236,8 @@ export default function Sidebar({ onNewConnection, onEditConnection }) {
           const alreadyExists = existing.some(e => e.name === sc.name && e.host === sc.host && e.type === sc.type);
           if (alreadyExists) continue;
 
-          if (useDb) {
-            // Save to database via API
+          if (dbReachable) {
+            // DB is live — save there so the connection gets the "DB" tag
             try {
               const saveRes = await apiFetch('/api/connections', {
                 method: 'POST',
@@ -259,24 +264,29 @@ export default function Sidebar({ onNewConnection, onEditConnection }) {
               const saveData = await saveRes.json();
               if (!saveData.success) throw new Error(saveData.error);
             } catch (dbErr) {
-              // Database save failed — fall back to localStorage
+              // DB write failed mid-way — fall back to localStorage for this entry
               console.warn(`DB save failed for "${sc.name}", saving to localStorage:`, dbErr.message);
               existing.push({ ...parsed, name: sc.name, type: sc.type, storage: 'localstorage', _id: `local_${Date.now()}_${Math.random().toString(36).slice(2)}` });
               usedFallback = true;
             }
           } else {
-            // Fallback to localStorage
+            // DB not reachable (relay offline / no relay installed) — use localStorage as fallback
             existing.push({ ...parsed, name: sc.name, type: sc.type, storage: 'localstorage', _id: `local_${Date.now()}_${Math.random().toString(36).slice(2)}` });
+            usedFallback = true;
           }
           imported++;
         } catch (err) { console.error(`Skip "${sc.name}":`, err.message); }
       }
 
-      if (!useDb || usedFallback) {
-        localStorage.setItem('ssh_monitor_connections', JSON.stringify(existing));
+      if (usedFallback) {
+        await saveLocalConnections(existing.filter(c => c.storage === 'localstorage'));
       }
       fetchConnections();
-      const storage = usedFallback ? 'local storage (DB unavailable)' : useDb ? 'database' : 'local storage';
+      const storage = dbReachable && !usedFallback
+        ? 'database (local relay)'
+        : usedFallback && dbReachable
+        ? 'database + local storage (some DB writes failed)'
+        : 'local storage (relay not connected)';
       addNotification({ title: 'Pulled', message: `${imported} connection(s) imported to ${storage}.`, type: 'success' });
     } catch (err) {
       addNotification({ title: 'Pull Error', message: err.message, type: 'error' });
@@ -484,9 +494,9 @@ export default function Sidebar({ onNewConnection, onEditConnection }) {
       t('ssh.deleteConfirm'),
       async () => {
         if (conn.storage === 'localstorage') {
-          const saved = JSON.parse(localStorage.getItem('ssh_monitor_connections') || '[]');
+          const saved = (await getLocalConnections()) || [];
           const updated = saved.filter(c => c._id !== id);
-          localStorage.setItem('ssh_monitor_connections', JSON.stringify(updated));
+          await saveLocalConnections(updated);
           dispatch({ type: 'REMOVE_CONNECTION', payload: id });
           addNotification({ title: t('common.delete'), message: t('ssh.toasts.deletedLocal'), type: 'success' });
           return;
@@ -521,12 +531,12 @@ export default function Sidebar({ onNewConnection, onEditConnection }) {
     if (!conn) return;
 
     if (conn.storage === 'localstorage') {
-       const saved = JSON.parse(localStorage.getItem('ssh_monitor_connections') || '[]');
+       const saved = (await getLocalConnections()) || [];
        const updated = saved.map(c => {
          if (c._id === id) return { ...c, isFavorite: !c.isFavorite };
          return c;
        });
-       localStorage.setItem('ssh_monitor_connections', JSON.stringify(updated));
+       await saveLocalConnections(updated);
        const match = updated.find(c => c._id === id);
        dispatch({ type: 'UPDATE_CONNECTION', payload: match });
        return;
@@ -572,22 +582,22 @@ export default function Sidebar({ onNewConnection, onEditConnection }) {
         
         // If local storage, also persist the lastConnected status
         if (conn && conn.storage === 'localstorage') {
-            const saved = JSON.parse(localStorage.getItem('ssh_monitor_connections') || '[]');
+            const saved = (await getLocalConnections()) || [];
             const updated = saved.map(c => {
                 if (c._id === id) return { ...c, status: 'online', lastConnected: new Date().toISOString() };
                 return c;
             });
-            localStorage.setItem('ssh_monitor_connections', JSON.stringify(updated));
+            await saveLocalConnections(updated);
         }
       } else {
         addNotification({ title: t('ssh.status.error') || 'Error', message: t('ssh.toasts.testFail') + ': ' + data.error, type: 'error' });
         if (conn && conn.storage === 'localstorage') {
-            const saved = JSON.parse(localStorage.getItem('ssh_monitor_connections') || '[]');
+            const saved = (await getLocalConnections()) || [];
             const updated = saved.map(c => {
                 if (c._id === id) return { ...c, status: 'offline' };
                 return c;
             });
-            localStorage.setItem('ssh_monitor_connections', JSON.stringify(updated));
+            await saveLocalConnections(updated);
         }
       }
     } catch (err) {

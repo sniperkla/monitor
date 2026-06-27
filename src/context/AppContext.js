@@ -3,6 +3,7 @@
 import { createContext, useContext, useReducer, useCallback, useEffect, useRef } from 'react';
 import { useSession } from 'next-auth/react';
 import { useVault } from '@/context/VaultContext';
+import { getLocalConnections } from '@/utils/localConnections';
 
 const AppContext = createContext();
 
@@ -250,13 +251,15 @@ export function AppProvider({ children }) {
     let dbConnections = [];
     let localConnections = [];
 
-    // 1. Fetch from LocalStorage (for backward compatibility)
+    // 1. Fetch from LocalStorage (secure client-side decrypted)
     if (typeof window !== 'undefined') {
-       const saved = localStorage.getItem('ssh_monitor_connections');
-       if (saved) {
-         try {
-           localConnections = JSON.parse(saved).map(c => ({ ...c, storage: 'localstorage' }));
-         } catch (e) { console.error('Failed to parse local connections:', e); }
+       try {
+         const secureConns = await getLocalConnections();
+         if (secureConns !== null) {
+           localConnections = secureConns.map(c => ({ ...c, storage: 'localstorage' }));
+         }
+       } catch (e) {
+         console.error('Failed to parse secure local connections:', e);
        }
     }
 

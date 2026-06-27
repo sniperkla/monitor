@@ -5,6 +5,7 @@ import { createPortal } from 'react-dom';
 import { useApp } from '@/context/AppContext';
 import { useOS } from '@/context/OSContext';
 import { useVault } from '@/context/VaultContext';
+import { getLocalConnections, saveLocalConnections } from '@/utils/localConnections';
 import { useTranslation } from 'react-i18next';
 import { useSession, signIn } from 'next-auth/react';
 import MacOSModalWindow from '@/components/MacOSModalWindow';
@@ -447,7 +448,7 @@ export default function ConnectionModal({ onClose, editConnection = null }) {
       const data = { success: true, data: { ...finalPayload, _id: editConnection?._id || `local-${Date.now()}`, updatedAt: new Date().toISOString() } };
 
       if (form.targetStorage === 'localstorage') {
-        const saved = JSON.parse(localStorage.getItem('ssh_monitor_connections') || '[]');
+        const saved = (await getLocalConnections()) || [];
         let updated;
         let savedConn;
         if (editConnection) {
@@ -460,7 +461,7 @@ export default function ConnectionModal({ onClose, editConnection = null }) {
           savedConn = data.data;
           dispatch({ type: 'ADD_CONNECTION', payload: savedConn });
         }
-        localStorage.setItem('ssh_monitor_connections', JSON.stringify(updated));
+        await saveLocalConnections(updated);
         addNotification({ title: t('common.success'), message: editConnection ? t('ssh.modal.buttons.update') : t('ssh.modal.buttons.save'), type: 'success' });
         
         // AUTO-OPEN after save
@@ -550,9 +551,9 @@ export default function ConnectionModal({ onClose, editConnection = null }) {
       if (resData.success) {
         // If we were editing a local connection but saved it to DB, cleanup local
         if (editConnection && editConnection.storage === 'localstorage') {
-            const saved = JSON.parse(localStorage.getItem('ssh_monitor_connections') || '[]');
+            const saved = (await getLocalConnections()) || [];
             const updated = saved.filter(c => c._id !== editConnection._id);
-            localStorage.setItem('ssh_monitor_connections', JSON.stringify(updated));
+            await saveLocalConnections(updated);
         }
         
         addNotification({ title: t('common.success'), message: editConnection ? t('ssh.toasts.dbUpdate') : t('ssh.toasts.dbSuccess'), type: 'success' });
