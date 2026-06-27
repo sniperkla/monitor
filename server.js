@@ -3741,21 +3741,39 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
         const SystemSetting = mongoose.model('SystemSetting');
         const now = new Date();
         const updates = [];
-        for (const [projectId] of runningEntries) {
+        for (const [projectId, info] of runningEntries) {
           const dbKey = projectId === 'default' ? 'auto_deploy_config' : `auto_deploy_config_${projectId}`;
-          updates.push(
-            SystemSetting.findOneAndUpdate(
-              { key: dbKey },
-              {
-                $set: {
-                  'value.status': 'failed',
-                  'value.deployRunId': null,
-                  'value.cancelRequested': false,
-                  'value.lastDeployLog': `[${now.toISOString()}] ⚠️ Deployment interrupted — server was restarted during deployment.\nThis usually happens when your deploy command rebuilds and restarts the server itself.\nPlease check the server to confirm whether the deployment succeeded.`
+
+          if (info.type === 'ssh') {
+            // SSH deploy: tmux session is still running on remote server.
+            // Mark for reconnection on next startup instead of failing.
+            updates.push(
+              SystemSetting.findOneAndUpdate(
+                { key: dbKey },
+                {
+                  $set: {
+                    'value.serverRestarted': true,
+                    'value.lastDeployLog': (info.logOutput || '') + `\n[${now.toISOString()}] ⚠️ Server restarted — will attempt to reconnect to tmux session on next boot.\n`
+                  }
                 }
-              }
-            ).catch(e => console.error(`[shutdown] Failed to update project "${projectId}":`, e.message))
-          );
+              ).catch(e => console.error(`[shutdown] Failed to mark SSH deploy for reconnect "${projectId}":`, e.message))
+            );
+          } else {
+            // Local deploy: process is gone, mark as failed
+            updates.push(
+              SystemSetting.findOneAndUpdate(
+                { key: dbKey },
+                {
+                  $set: {
+                    'value.status': 'failed',
+                    'value.deployRunId': null,
+                    'value.cancelRequested': false,
+                    'value.lastDeployLog': `[${now.toISOString()}] ⚠️ Deployment interrupted — server was restarted during deployment.\nThis usually happens when your deploy command rebuilds and restarts the server itself.\nPlease check the server to confirm whether the deployment succeeded.`
+                  }
+                }
+              ).catch(e => console.error(`[shutdown] Failed to update project "${projectId}":`, e.message))
+            );
+          }
         }
         await Promise.allSettled(updates);
         console.log(`[server] Marked ${runningEntries.size} deployment(s) as interrupted.`);
