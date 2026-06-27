@@ -168,6 +168,136 @@ async function sendTelegramNotification(config, status, extra = {}) {
   }
 }
 
+// Reconnect to a remote server after SSH drops and monitor a tmux session to completion.
+// This handles the case where the deploy command restarts Docker/the server,
+// killing the original SSH connection — but the tmux session survives on the remote host.
+function monitorTmuxAfterReconnect(sshConfig, tmuxSession, projectId, logOutput, updateStatus, startedAt) {
+  const maxRetries = 30;
+  const retryInterval = 5000; // 5s between retries
+  let attempt = 0;
+
+  const tryReconnect = () => {
+    attempt++;
+    if (attempt > maxRetries) {
+      logOutput += `\n[SSH] Gave up reconnecting after ${maxRetries} attempts (${maxRetries * retryInterval / 1000}s).\n`;
+      logOutput += `⚠️ tmux session "${tmuxSession}" may still be running on the remote server.\n`;
+      logOutput += `   Check manually: ssh ${sshConfig.username}@${sshConfig.host} -p ${sshConfig.port} "tmux attach -t ${tmuxSession}"\n`;
+      updateStatus('failed', logOutput).catch(() => {});
+      return;
+    }
+
+    logOutput += `[SSH] Reconnect attempt ${attempt}/${maxRetries}...\n`;
+    updateStatus('running', logOutput).catch(() => {});
+
+    const reconnectConn = new Client();
+    let settled = false;
+
+    const timeout = setTimeout(() => {
+      if (!settled) {
+        settled = true;
+        try { reconnectConn.end(); } catch {}
+        setTimeout(tryReconnect, retryInterval);
+      }
+    }, 10000);
+
+    reconnectConn.on('ready', () => {
+      clearTimeout(timeout);
+      if (settled) return;
+      settled = true;
+
+      logOutput += `[SSH] Reconnected! Monitoring tmux session "${tmuxSession}"...\n`;
+      updateStatus('running', logOutput).catch(() => {});
+
+      const logFile = `/tmp/deploy_${tmuxSession}.log`;
+      const statusFile = `/tmp/deploy_${tmuxSession}.status`;
+      const monitorCmd = [
+        `set +e`,
+        `if tmux has-session -t ${tmuxSession} 2>/dev/null; then`,
+        `  echo "[deploy-monitor] tmux session still running, tailing log..."`,
+        `  tail -n +1 -f "${logFile}" & TAIL_PID=$!`,
+        `  while tmux has-session -t ${tmuxSession} 2>/dev/null; do sleep 1; done`,
+        `  kill $TAIL_PID 2>/dev/null || true; wait $TAIL_PID 2>/dev/null || true`,
+        `  echo "---DEPLOY_EXIT_CODE:$(cat "${statusFile}" 2>/dev/null || echo 0)---"`,
+        `  echo "---DEPLOY_MONITOR_DONE---"`,
+        `else`,
+        `  echo "[deploy-monitor] tmux session already ended"`,
+        `  if [ -f "${logFile}" ]; then cat "${logFile}"; fi`,
+        `  echo "---DEPLOY_EXIT_CODE:$(cat "${statusFile}" 2>/dev/null || echo 0)---"`,
+        `  echo "---DEPLOY_MONITOR_DONE---"`,
+        `fi`,
+      ].join('\n');
+
+      reconnectConn.exec(monitorCmd, (execErr, stream) => {
+        if (execErr) {
+          logOutput += `[SSH-monitor] Failed to exec monitor: ${execErr.message}\n`;
+          updateStatus('failed', logOutput).catch(() => {});
+          reconnectConn.end();
+          return;
+        }
+
+        let monitorBuf = '';
+        let monitorExitCode = 0;
+
+        stream.on('data', (data) => {
+          monitorBuf += data.toString();
+          const lines = monitorBuf.split('\n');
+          monitorBuf = lines.pop();
+
+          for (const rawLine of lines) {
+            const line = rawLine.replace(/\r/g, '');
+            // Capture exit code from status file embedded in monitor output
+            const exitMatch = line.match(/---DEPLOY_EXIT_CODE:(\d+)---/);
+            if (exitMatch) {
+              monitorExitCode = parseInt(exitMatch[1], 10);
+            }
+            if (line.includes('---DEPLOY_MONITOR_DONE---')) {
+              const exitCode = monitorExitCode;
+              const finishedAt = new Date();
+              logOutput += `\n--------------------------------------------------\n`;
+              logOutput += `[${finishedAt.toISOString()}] [SSH-monitor] tmux session completed. Exit code: ${exitCode}\n`;
+              const status = exitCode === 0 ? 'success' : 'failed';
+              updateStatus(status, logOutput).catch(() => {});
+              // Cleanup
+              reconnectConn.exec(`rm -f /tmp/deploy_${tmuxSession}.log /tmp/deploy_${tmuxSession}.status /tmp/deploy_tmux_${projectId}.sh; true`, () => {});
+              reconnectConn.end();
+              return;
+            }
+            logOutput += rawLine + '\n';
+          }
+          if (logOutput.length > 200000) logOutput = limitLogOutput(logOutput);
+          updateStatus('running', logOutput).catch(() => {});
+        });
+
+        stream.stderr.on('data', (data) => {
+          logOutput += data.toString();
+          if (logOutput.length > 200000) logOutput = limitLogOutput(logOutput);
+          updateStatus('running', logOutput).catch(() => {});
+        });
+
+        stream.on('close', () => {
+          // Flush remaining buffer
+          if (monitorBuf && monitorBuf.trim()) {
+            logOutput += monitorBuf;
+          }
+        });
+      });
+    });
+
+    reconnectConn.on('error', () => {
+      clearTimeout(timeout);
+      if (!settled) {
+        settled = true;
+        setTimeout(tryReconnect, retryInterval);
+      }
+    });
+
+    reconnectConn.connect(sshConfig);
+  };
+
+  // First attempt after a short delay to let the server come back up
+  setTimeout(tryReconnect, 10000);
+}
+
 // Background deployment execution
 export async function runDeployment(config, runMeta = {}) {
   const startedAt = new Date();
@@ -511,23 +641,34 @@ export async function runDeployment(config, runMeta = {}) {
       await updateStatus('running', logOutput);
 
       const conn = new Client();
+      let tmuxSession = null;
       // Register SSH connection so it can be cancelled
       try {
         setRunning(projectId, { type: 'ssh', conn });
       } catch (e) {
         console.warn('[deploy] Failed to register SSH connection:', e.message);
       }
-      
+
       // ── SSH connection lost (server restart / network drop) ───────────────
       // This fires when the TCP connection closes without a clean stream.close().
       // Typical cause: the deploy command restarts the server itself (docker-compose up).
+      // If tmux was used, the session is still alive on the remote server —
+      // spawn a background reconnection to monitor it to completion.
       conn.on('close', () => {
         if (!isFinished) {
           try { clearRunning(projectId); } catch (e) {}
           logOutput += `\n[SSH] Connection closed by remote host — server may have restarted.\n`;
-          logOutput += `⚠️ If your deploy command restarts the server, the deployment likely succeeded.\n`;
-          logOutput += `   Please verify the server is running correctly.\n`;
-          updateStatus('failed', logOutput).catch(() => {});
+
+          if (tmuxSession) {
+            logOutput += `[SSH] tmux session "${tmuxSession}" is still running on the remote server.\n`;
+            logOutput += `[SSH] Attempting to reconnect and monitor deployment...\n`;
+            throttledUpdateStatus('running', logOutput).catch(() => {});
+            monitorTmuxAfterReconnect(sshConfig, tmuxSession, projectId, logOutput, updateStatus, startedAt);
+          } else {
+            logOutput += `⚠️ If your deploy command restarts the server, the deployment likely succeeded.\n`;
+            logOutput += `   Please verify the server is running correctly.\n`;
+            updateStatus('failed', logOutput).catch(() => {});
+          }
         }
       });
 
@@ -581,7 +722,7 @@ export async function runDeployment(config, runMeta = {}) {
           const deployScript = scriptLines.join('\n') + '\n';
 
           // ── Write deploy script via SFTP ─────────────────────────────────
-            const tmuxSession = `deploy-${projectId.replace(/[^a-zA-Z0-9_-]/g, '-')}`.slice(0, 60);
+            tmuxSession = `deploy-${projectId.replace(/[^a-zA-Z0-9_-]/g, '-')}`.slice(0, 60);
             const tmuxWrapperPath = `/tmp/deploy_tmux_${projectId}.sh`;
 
             sftp.writeFile(remoteDeployPath, deployScript, (writeErr) => {
@@ -598,12 +739,14 @@ export async function runDeployment(config, runMeta = {}) {
             logOutput = limitLogOutput(logOutput);
             updateStatus('running', logOutput);
 
-            // tmux wrapper: runs the deploy script, captures exit code, cleans up
+            // tmux wrapper: runs the deploy script, captures exit code, writes status file for post-reconnect monitoring
+            const statusFile = `/tmp/deploy_${tmuxSession}.status`;
             const tmuxWrapper = [
               '#!/bin/bash',
               `bash "${remoteDeployPath}"`,
               'CODE=$?',
               `rm -f "${remoteDeployPath}"`,
+              `echo "$CODE" > "${statusFile}"`,
               'echo ""',
               'echo "---DEPLOY_EXIT:$CODE---"',
               'exit $CODE',
@@ -626,7 +769,7 @@ export async function runDeployment(config, runMeta = {}) {
                 `  tail -n +1 -f "${logFile}" & TAIL_PID=$!`,
                 `  while tmux has-session -t ${tmuxSession} 2>/dev/null; do sleep 0.5; done`,
                 `  kill $TAIL_PID 2>/dev/null || true; wait $TAIL_PID 2>/dev/null || true`,
-                `  rm -f "${logFile}" "${tmuxWrapperPath}"`,
+                `  rm -f "${tmuxWrapperPath}"`,
                 `else`,
                 `  echo "[deploy] tmux not installed \u2014 running directly"`,
                 `  bash "${remoteDeployPath}"; CODE=$?; rm -f "${remoteDeployPath}"; echo ""; echo "---DEPLOY_EXIT:$CODE---"`,
