@@ -102,17 +102,24 @@ export default function SSHApp({ windowId }) {
   return (
     <div className="flex h-full w-full bg-transparent text-[var(--text-primary)] font-sans overflow-hidden relative">
       {/* Mobile Overlay */}
-      {isMobile && state.sidebarOpen && (
-        <div 
-          className="fixed inset-0 bg-black/50 z-40"
+      {isMobile && (
+        <div
+          className="fixed inset-0 bg-black/50 z-40 transition-opacity duration-300"
+          style={{ opacity: state.sidebarOpen ? 1 : 0, pointerEvents: state.sidebarOpen ? 'auto' : 'none' }}
           onClick={() => dispatch({ type: 'TOGGLE_SIDEBAR' })}
         />
       )}
 
       {/* Sidebar with dynamic width */}
       <div
-        className={isMobile ? `fixed inset-y-0 left-0 z-50 bg-[var(--bg-primary)] shadow-2xl transition-transform duration-300 ${state.sidebarOpen ? 'translate-x-0' : '-translate-x-full'}` : ''}
-        style={isMobile ? { width: '80vw', maxWidth: '320px', overflow: 'hidden' } : {
+        className={isMobile ? 'fixed inset-y-0 left-0 z-50 bg-[var(--bg-primary)] shadow-2xl will-change-transform' : ''}
+        style={isMobile ? {
+          width: '80vw',
+          maxWidth: '320px',
+          transition: 'transform 300ms cubic-bezier(0.4, 0, 0.2, 1)',
+          transform: state.sidebarOpen ? 'translateX(0)' : 'translateX(-100%)',
+          pointerEvents: state.sidebarOpen ? 'auto' : 'none',
+        } : {
           width: state.sidebarOpen ? sidebarWidth : 0,
           minWidth: state.sidebarOpen ? sidebarWidth : 0,
           overflow: 'hidden',
