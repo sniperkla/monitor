@@ -19,7 +19,7 @@ export function HyperspaceTransition({ onComplete }) {
   const termRef = useRef(null);
   const termContentRef = useRef(null);
   const mouseRef = useRef({ x: 0, y: 0 }); // -1 to 1 range
-  const TOTAL_DURATION = 7500;
+  const TOTAL_DURATION = 3500;
 
   const getPhase = (t) => {
     if (t < 0.07) return 0;  // Charge
@@ -335,15 +335,25 @@ export function HyperspaceTransition({ onComplete }) {
       ctx.fillStyle = vigGrad;
       ctx.fillRect(0, 0, w, h);
 
-      // ── Film grain ──
-      const grainAlpha = 0.03 + Math.random() * 0.02;
-      for (let i = 0; i < 3000; i++) {
-        const gx = Math.random() * w;
-        const gy = Math.random() * h;
-        const gv = Math.random() * 255;
-        ctx.fillStyle = `rgba(${gv}, ${gv}, ${gv}, ${grainAlpha})`;
-        ctx.fillRect(gx, gy, 1, 1);
+      // ── Film grain (quarter-res for performance) ──
+      const gW = Math.ceil(w / 2);
+      const gH = Math.ceil(h / 2);
+      const grainData = ctx.createImageData(gW, gH);
+      const grainBuf = grainData.data;
+      for (let i = 0; i < grainBuf.length; i += 4) {
+        if (Math.random() < 0.06) {
+          const v = Math.random() * 200;
+          grainBuf[i] = v;
+          grainBuf[i + 1] = v;
+          grainBuf[i + 2] = v;
+          grainBuf[i + 3] = Math.floor(Math.random() * 22 + 6);
+        }
       }
+      // Draw grain to an offscreen canvas then scale onto main
+      const offscreen = new OffscreenCanvas(gW, gH);
+      offscreen.getContext('2d').putImageData(grainData, 0, 0);
+      ctx.globalCompositeOperation = 'source-over';
+      ctx.drawImage(offscreen, 0, 0, w, h);
 
       // ── Terminal overlay (arrival phase) ──
       const termEl = termRef.current;
