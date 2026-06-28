@@ -1591,7 +1591,7 @@ body {
   h2 { font-size: 1.25rem !important; }
   
   .window-container {
-     border-radius: 8px !important;
+     border-radius: 0 !important;
   }
   
   .title-bar {
@@ -1784,23 +1784,6 @@ body {
   .sidebar.open {
     left: 0;
     box-shadow: 20px 0 60px rgba(0, 0, 0, 0.5);
-  }
-
-  /* Touch-friendly resize handles for free-form windows */
-  .react-rnd .react-resizable-handle {
-    width: 16px !important;
-    height: 16px !important;
-  }
-  .react-rnd .react-resizable-handle::after {
-    display: none !important;
-  }
-  .react-rnd > div > .react-resizable-handle-e,
-  .react-rnd > div > .react-resizable-handle-w {
-    width: 20px !important;
-  }
-  .react-rnd > div > .react-resizable-handle-n,
-  .react-rnd > div > .react-resizable-handle-s {
-    height: 20px !important;
   }
 }
 

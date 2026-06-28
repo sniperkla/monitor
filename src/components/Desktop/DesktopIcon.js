@@ -18,13 +18,7 @@ export default function DesktopIcon({ id, title, icon: Icon, component, defaultP
   const isFalloutTheme = state.theme === 'retro' || state.theme === 'fallout';
 
   const handleDoubleClick = () => {
-    if (isMobile) {
-      const mobileW = Math.round(window.innerWidth * 0.7);
-      const mobileH = Math.round(window.innerHeight * 0.6);
-      openWindow(id, title, component, Icon, { initialWidth: mobileW, initialHeight: mobileH });
-    } else {
-      openWindow(id, title, component, Icon, { initialWidth, initialHeight });
-    }
+    openWindow(id, title, component, Icon, { initialWidth, initialHeight });
   };
 
   const getSizes = () => {

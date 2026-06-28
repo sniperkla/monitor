@@ -8,18 +8,15 @@ import {
   Lock, Unlock, Shield, Key, Eye, EyeOff,
   Mail, AlertTriangle, CheckCircle, Loader,
   Database, ArrowRight, RefreshCw, Zap,
-  HelpCircle, ChevronDown, ChevronUp, Monitor, Network,
-  X
+  HelpCircle, ChevronDown, ChevronUp, Monitor, Network
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useTranslation } from 'react-i18next';
 import { useOS } from '@/context/OSContext';
 import MacOSModalWindow from '@/components/MacOSModalWindow';
-import { useIsMobile } from '@/hooks/useIsMobile';
 
-// Floating particles background (disabled on mobile for performance)
+// Floating particles background
 function Particles({ count = 30, color = 'rgba(99,102,241,0.15)' }) {
-  const isMobile = useIsMobile();
   const particles = useMemo(() =>
     Array.from({ length: count }, (_, i) => ({
       id: i,
@@ -31,7 +28,6 @@ function Particles({ count = 30, color = 'rgba(99,102,241,0.15)' }) {
     })),
     [count]
   );
-  if (isMobile) return null;
   return (
     <div className="absolute inset-0 overflow-hidden pointer-events-none">
       {particles.map(p => (
@@ -81,7 +77,6 @@ const PRESETS = [
 export default function MasterPasswordModal({ isBooted = true }) {
   const { data: session } = useSession();
   const { t } = useTranslation();
-  const isMobile = useIsMobile();
   const {
     vaultStatus, unlockVault, setupVault,
     requestRecovery, verifyRecovery, error: vaultError,
@@ -984,47 +979,6 @@ export default function MasterPasswordModal({ isBooted = true }) {
   };
 
   const { title, icon } = getWindowTitle();
-
-  if (isMobile) {
-    return createPortal(
-      <AnimatePresence>
-        <motion.div
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          exit={{ opacity: 0 }}
-          className="fixed inset-0 z-[90000] flex items-end"
-          style={{ background: 'rgba(0,0,0,0.5)' }}
-        >
-          <motion.div
-            initial={{ y: '100%' }}
-            animate={{ y: 0 }}
-            exit={{ y: '100%' }}
-            transition={{ type: 'spring', damping: 25, stiffness: 300 }}
-            className="w-full max-h-[92vh] flex flex-col overflow-hidden rounded-t-2xl"
-            style={{ background: 'var(--window-bg)' }}
-          >
-            <div className="flex items-center justify-between px-4 py-3 border-b border-[var(--border-color)] shrink-0">
-              <div className="flex items-center gap-2 text-sm font-bold text-[var(--text-primary)]">
-                {icon && <span>{icon}</span>}
-                <span>{title}</span>
-              </div>
-              <button
-                type="button"
-                onClick={() => dismissVault?.()}
-                className="w-9 h-9 flex items-center justify-center rounded-full hover:bg-[var(--bg-tertiary)] transition-colors"
-              >
-                <X size={18} className="text-[var(--text-secondary)]" />
-              </button>
-            </div>
-            <div className="flex-1 overflow-y-auto p-4">
-              {renderContent()}
-            </div>
-          </motion.div>
-        </motion.div>
-      </AnimatePresence>,
-      document.body
-    );
-  }
 
   return createPortal(
     <MacOSModalWindow
