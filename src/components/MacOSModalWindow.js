@@ -5,6 +5,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { useEffect, useState } from 'react';
 import { useOS } from '@/context/OSContext';
 import { Rnd } from 'react-rnd';
+import { useIsMobile } from '@/hooks/useIsMobile';
 
 function WindowButtons({ onClose, onMinimize, onMaximize, isMaximized, layout = 'mac', enableMinimize = true, enableMaximize = true }) {
   const stopProp = (e) => e.stopPropagation();
@@ -186,6 +187,7 @@ export default function MacOSModalWindow({
   showTitleBar = true,
 }) {
   const { state: osState } = useOS();
+  const isMobile = useIsMobile();
   const windowLayout = osState?.windowLayout || 'mac';
 
   const [isMaximized, setIsMaximized] = useState(false);
@@ -201,7 +203,7 @@ export default function MacOSModalWindow({
 
   const [position, setPosition] = useState({ x: 0, y: 0 });
 
-  const useFloating = draggable || resizable;
+  const useFloating = (draggable || resizable) && !isMobile;
 
   // Reset local maximization state when modal closes
   useEffect(() => {
