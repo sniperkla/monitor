@@ -5,7 +5,7 @@ import { useSession } from 'next-auth/react';
 import LandingPage from '@/components/landing';
 import { BootSequence } from '@/components/landing/BootSequence';
 import { HyperspaceTransition } from '@/components/landing/HyperspaceTransition';
-import { AnimatePresence } from 'framer-motion';
+import { AnimatePresence, motion } from 'framer-motion';
 
 // Boot phases for logged-in users: boot → warp → desktop
 // Guests keep the existing landing flow
@@ -21,52 +21,90 @@ export default function Home() {
   const [bootPhase, setBootPhase] = useState('boot'); // 'boot' | 'warp' | 'desktop'
   const [DesktopEnvironment, setDesktopEnvironment] = useState(null);
   const desktopLoadStarted = useRef(false);
+  const warpFinishedRef = useRef(false);
 
-  // Start loading DesktopEnvironment as soon as session is known (parallel with boot animation)
+  // Start loading DesktopEnvironment as soon as session is known OR guest dismissed landing
   useEffect(() => {
-    if (session && !desktopLoadStarted.current) {
+    if ((session || dismissed) && !desktopLoadStarted.current) {
       desktopLoadStarted.current = true;
       import('@/components/Desktop/DesktopEnvironment').then((mod) => {
         setDesktopEnvironment(() => mod.default);
       });
     }
-  }, [session]);
+  }, [session, dismissed]);
+
+  // Warp animation completed its first full cycle
+  const handleWarpComplete = () => {
+    warpFinishedRef.current = true;
+    // Only transition if desktop is also ready
+    if (DesktopEnvironment) {
+      setBootPhase('desktop');
+    }
+  };
+
+  // If DesktopEnvironment loads after warp finishes, transition
+  useEffect(() => {
+    if (DesktopEnvironment && warpFinishedRef.current && bootPhase === 'warp') {
+      setBootPhase('desktop');
+    }
+  }, [DesktopEnvironment, bootPhase]);
 
   // --- Render ---
 
+  // Session still loading — show boot screen as placeholder
   if (status === 'loading') {
-    return <div className="fixed inset-0" style={{ background: '#0a0e1a' }} />;
+    return (
+      <div className="fixed inset-0 z-[9999] overflow-hidden bg-black">
+        <BootSequence onComplete={() => {}} onSkip={() => {}} />
+      </div>
+    );
   }
 
-  // Guest: show landing page (unchanged)
+  // Guest: show landing page
   if (shouldShowLanding) {
     return <LandingPage onDismiss={() => setDismissed(true)} />;
   }
 
-  // Logged-in boot sequence
-  if (bootPhase === 'boot') {
-    return (
-      <div className="fixed inset-0 z-[9999] overflow-hidden bg-black">
-        <BootSequence
-          onComplete={() => setBootPhase('warp')}
-          onSkip={() => setBootPhase('warp')}
-        />
-      </div>
-    );
-  }
+  return (
+    <div className="relative w-full h-screen overflow-hidden bg-black">
+      {/* Desktop Environment rendered underneath */}
+      {DesktopEnvironment && bootPhase !== 'boot' && (
+        <motion.div 
+          className="w-full h-full"
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          transition={{ duration: 0.6 }}
+        >
+          <DesktopEnvironment bootPhase={bootPhase} />
+        </motion.div>
+      )}
 
-  if (bootPhase === 'warp') {
-    return (
-      <div className="fixed inset-0 z-[9999] overflow-hidden bg-black">
-        <HyperspaceTransition onComplete={() => setBootPhase('desktop')} />
-      </div>
-    );
-  }
+      <AnimatePresence>
+        {bootPhase === 'boot' && (
+          <motion.div
+            key="boot"
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.5 }}
+            className="fixed inset-0 z-[9999] overflow-hidden bg-black"
+          >
+            <BootSequence
+              onComplete={() => setBootPhase('warp')}
+              onSkip={() => setBootPhase('warp')}
+            />
+          </motion.div>
+        )}
 
-  // Desktop — show blank bg while module loads if needed
-  if (!DesktopEnvironment) {
-    return <div className="fixed inset-0" style={{ background: '#0a0e1a' }} />;
-  }
-
-  return <DesktopEnvironment />;
+        {bootPhase === 'warp' && (
+          <motion.div
+            key="warp"
+            exit={{ opacity: 0 }}
+            transition={{ duration: 1.0, ease: 'easeOut' }}
+            className="fixed inset-0 z-[9998] overflow-hidden bg-black"
+          >
+            <HyperspaceTransition onComplete={handleWarpComplete} />
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
 }

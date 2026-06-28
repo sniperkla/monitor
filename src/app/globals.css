@@ -1755,7 +1755,26 @@ body {
   transition: all 0.3s ease;
 }
 
+/* ── Mobile Performance: kill expensive GPU effects ── */
 @media (max-width: 768px) {
+  /* backdrop-filter: blur is the #1 perf killer on mobile GPUs */
+  * {
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+  }
+
+  /* Reduce heavy box-shadows to simple outlines */
+  .shadow-2xl,
+  .shadow-xl,
+  .shadow-lg {
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3) !important;
+  }
+
+  /* Drop inset glows and multi-layer shadows */
+  [style*="box-shadow"] {
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3) !important;
+  }
+
   .sidebar {
     position: fixed;
     left: -260px;

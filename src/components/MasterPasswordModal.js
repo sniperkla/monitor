@@ -74,7 +74,7 @@ const PRESETS = [
  * 2. UNLOCK: Enter Master Password to decrypt
  * 3. RECOVERY: Forgot password → email code → reset vault
  */
-export default function MasterPasswordModal() {
+export default function MasterPasswordModal({ isBooted = true }) {
   const { data: session } = useSession();
   const { t } = useTranslation();
   const { 
@@ -122,10 +122,10 @@ export default function MasterPasswordModal() {
   const inputRef = useRef(null);
 
   useEffect(() => {
-    // Wait for system boot sequence to complete before showing the vault login
-    const timer = setTimeout(() => setMounted(true), 2500);
-    return () => clearTimeout(timer);
-  }, []);
+    if (isBooted) {
+      setMounted(true);
+    }
+  }, [isBooted]);
 
   // Auto-set mode based on vault status
   useEffect(() => {

@@ -536,18 +536,19 @@ export default function Window({ id, title, icon: Icon, component, isMinimized, 
         ) : ''}
       >
         <motion.div
-          initial={{ opacity: 0, scale: 0.95 }}
-          animate={{ opacity: 1, scale: 1 }}
-          exit={{ opacity: 0, scale: 0.95 }}
+          initial={isMobile ? { opacity: 0 } : { opacity: 0, scale: 0.95 }}
+          animate={isMobile ? { opacity: 1 } : { opacity: 1, scale: 1 }}
+          exit={isMobile ? { opacity: 0 } : { opacity: 0, scale: 0.95 }}
+          transition={isMobile ? { duration: 0.15 } : { duration: 0.2 }}
           data-window-id={id}
-          className={`window-container flex flex-col w-full h-full overflow-hidden shadow-2xl transition-all duration-200 ${isSnappedOrMax ? 'rounded-none border-0' : 'rounded-lg border'}`}
+          className={`window-container flex flex-col w-full h-full overflow-hidden ${isMobile ? '' : 'shadow-2xl'} transition-all duration-200 ${isSnappedOrMax ? 'rounded-none border-0' : 'rounded-lg border'}`}
           style={{
             position: 'relative',
             zIndex: 2,
             background: (glassmorphism && windowState.appType === 'terminal') 
               ? 'transparent' 
               : (glassmorphism ? 'var(--window-bg)' : 'var(--bg-primary)'),
-            backdropFilter: glassmorphism ? 'blur(20px)' : 'none',
+            backdropFilter: !isMobile && glassmorphism ? 'blur(20px)' : 'none',
             borderColor: 'var(--border-color)',
           }}
           onClick={() => focusWindow(id)}
