@@ -121,6 +121,7 @@ export function HyperspaceTransition({ onComplete }) {
       }
 
       // ── Clear ──
+      try {
       ctx.fillStyle = '#01020a';
       ctx.fillRect(0, 0, w, h);
 
@@ -350,10 +351,21 @@ export function HyperspaceTransition({ onComplete }) {
         }
       }
       // Draw grain to an offscreen canvas then scale onto main
-      const offscreen = new OffscreenCanvas(gW, gH);
-      offscreen.getContext('2d').putImageData(grainData, 0, 0);
-      ctx.globalCompositeOperation = 'source-over';
-      ctx.drawImage(offscreen, 0, 0, w, h);
+      try {
+        if (typeof OffscreenCanvas !== 'undefined') {
+          const offscreen = new OffscreenCanvas(gW, gH);
+          offscreen.getContext('2d').putImageData(grainData, 0, 0);
+          ctx.drawImage(offscreen, 0, 0, w, h);
+        } else {
+          const tmpCanvas = document.createElement('canvas');
+          tmpCanvas.width = gW;
+          tmpCanvas.height = gH;
+          tmpCanvas.getContext('2d').putImageData(grainData, 0, 0);
+          ctx.drawImage(tmpCanvas, 0, 0, w, h);
+        }
+      } catch (e) {
+        // Skip grain if canvas fails
+      }
 
       // ── Terminal overlay (arrival phase) ──
       const termEl = termRef.current;
@@ -387,6 +399,9 @@ export function HyperspaceTransition({ onComplete }) {
 
       // Restore parallax transform
       ctx.restore();
+      } catch (e) {
+        // If animation crashes on a frame, skip rendering but keep ticking
+      }
 
       // Continue or complete
       if (rawT < 1) {
@@ -398,7 +413,13 @@ export function HyperspaceTransition({ onComplete }) {
 
     animId = requestAnimationFrame(tick);
 
+    // Hard timeout: complete even if animation crashes on mobile
+    const safetyTimeout = setTimeout(() => {
+      onCompleteRef.current?.();
+    }, TOTAL_DURATION + 2000);
+
     return () => {
+      clearTimeout(safetyTimeout);
       cancelAnimationFrame(animId);
       window.removeEventListener('resize', handleResize);
       window.removeEventListener('mousemove', handleMouseMove);

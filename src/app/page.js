@@ -49,6 +49,18 @@ export default function Home() {
     }
   }, [DesktopEnvironment, bootPhase]);
 
+  // Safety: force-escape warp phase if it hangs (e.g. OffscreenCanvas crash on mobile)
+  useEffect(() => {
+    if (bootPhase !== 'warp') return;
+    const t = setTimeout(() => {
+      if (bootPhase === 'warp') {
+        warpFinishedRef.current = true;
+        setBootPhase('desktop');
+      }
+    }, 6000);
+    return () => clearTimeout(t);
+  }, [bootPhase]);
+
   // --- Render ---
 
   // Session still loading — show boot screen as placeholder
