@@ -5,6 +5,7 @@ import { Rnd } from 'react-rnd';
 import { useOS } from '@/context/OSContext';
 import { X, Minus, Maximize2, Minimize2, Square } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
+import { useIsMobile } from '@/hooks/useIsMobile';
 
 function WindowControls({ onClose, onMinimize, onMaximize, isMaximized, layout = 'mac' }) {
   if (layout === 'pc') {
@@ -88,7 +89,9 @@ function WindowControls({ onClose, onMinimize, onMaximize, isMaximized, layout =
   );
 }
 
-export default function Window({ id, title, icon: Icon, component, isMinimized, isMaximized, zIndex, initialWidth, initialHeight, previewMode = false, desktopHidden = false }) {
+export default function Window({ id, title, icon: Icon, component, isMinimized, isMaximized: _isMaximized, zIndex, initialWidth, initialHeight, previewMode = false, desktopHidden = false }) {
+  const isMobile = useIsMobile();
+  const isMaximized = _isMaximized || isMobile;
   const { state: osState, focusWindow, closeWindow, toggleMinimize, toggleMaximize, snapWindow, updateWindowPosition } = useOS();
   const { glassmorphism, taskbarPosition, windowLayout } = osState;
   const { snapSide } = osState.windows.find(w => w.id === id) || {};
@@ -211,8 +214,9 @@ export default function Window({ id, title, icon: Icon, component, isMinimized, 
       });
     }
 
-    // Auto-maximize on mobile screens
-    if (window.innerWidth < 768 && !isMaximized) {
+    // Auto-maximize on mobile screens is handled by the effective isMaximized flag above, 
+    // but we can still toggle it in global state just in case.
+    if (window.innerWidth < 768 && !_isMaximized) {
       toggleMaximize(id);
     }
 
@@ -563,13 +567,29 @@ export default function Window({ id, title, icon: Icon, component, isMinimized, 
             />
 
             <div style={{ position: 'relative', zIndex: 70 }}>
-              <WindowControls
-                onClose={(e) => { e?.stopPropagation?.(); closeWindow(id); }}
-                onMinimize={(e) => { e?.stopPropagation?.(); toggleMinimize(id); }}
-                onMaximize={(e) => { e?.stopPropagation?.(); toggleMaximize(id); }}
-                isMaximized={isMaximized}
-                layout={windowLayout}
-              />
+              {!isMobile && (
+                <WindowControls
+                  onClose={(e) => { e?.stopPropagation?.(); closeWindow(id); }}
+                  onMinimize={(e) => { e?.stopPropagation?.(); toggleMinimize(id); }}
+                  onMaximize={(e) => { e?.stopPropagation?.(); toggleMaximize(id); }}
+                  isMaximized={isMaximized}
+                  layout={windowLayout}
+                />
+              )}
+              {isMobile && (
+                <div className="flex items-center h-full px-2 nodrag">
+                  <button
+                    type="button"
+                    onMouseDown={(e) => e.stopPropagation()}
+                    onPointerDown={(e) => e.stopPropagation()}
+                    onClick={(e) => { e?.stopPropagation?.(); closeWindow(id); }}
+                    className="h-8 w-10 flex items-center justify-center rounded-lg hover:bg-[#c42b1c] transition-colors group"
+                    title="Close"
+                  >
+                    <X size={16} className="text-[var(--text-secondary)] group-hover:text-white" />
+                  </button>
+                </div>
+              )}
             </div>
 
             <div className={`flex items-center gap-2 text-xs font-medium text-[var(--text-secondary)] pointer-events-none select-none relative z-10 ${windowLayout === 'mac' ? 'flex-1 justify-center' : 'px-4'}`}>

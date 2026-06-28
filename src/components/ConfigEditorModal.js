@@ -116,10 +116,10 @@ export default function ConfigEditorModal({ file, initialContent, onSave, onClos
       zIndexClassName="z-[9999]"
       draggable={true}
       resizable={true}
-      defaultWidth={800}
-      defaultHeight={600}
-      minWidth={500}
-      minHeight={400}
+      defaultWidth={typeof window !== 'undefined' && window.innerWidth < 600 ? 320 : 800}
+      defaultHeight={typeof window !== 'undefined' && window.innerHeight < 600 ? 400 : 600}
+      minWidth={300}
+      minHeight={300}
       contentClassName="p-4"
       closeOnOverlayClick
       overlayClassName="bg-black/40 backdrop-blur-sm"

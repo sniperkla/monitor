@@ -1627,7 +1627,70 @@ body {
 
   /* Improve touch targets globally */
   button, a, [role="button"] {
-    min-height: 36px;
+    min-height: 44px;
+  }
+
+  /* Form inputs */
+  input[type="text"],
+  input[type="email"],
+  input[type="password"],
+  input[type="number"],
+  input[type="search"],
+  input[type="url"],
+  select,
+  textarea {
+    min-height: 44px;
+    font-size: 16px; /* prevents iOS zoom on focus */
+    padding: 10px 12px !important;
+  }
+
+  /* Table rows — more tap space */
+  tr {
+    min-height: 48px;
+  }
+  td, th {
+    padding: 12px 10px !important;
+  }
+
+  /* List items and clickable rows */
+  [role="option"],
+  [role="menuitem"],
+  [role="tab"],
+  .list-item,
+  .clickable-row {
+    min-height: 48px;
+    padding: 12px !important;
+  }
+
+  /* Tabs and toolbar buttons */
+  .tab-btn,
+  .toolbar-btn,
+  .nav-btn {
+    min-height: 44px;
+    min-width: 44px;
+    padding: 8px 12px !important;
+  }
+
+  /* Toggle switches — larger tap area */
+  .toggle-track,
+  [class*="Toggle"] {
+    min-width: 48px;
+    min-height: 28px;
+  }
+
+  /* Dropdown menus — larger items */
+  [role="listbox"] > *,
+  .dropdown-item,
+  .menu-item {
+    min-height: 44px;
+    padding: 10px 14px !important;
+  }
+
+  /* Card/grid items — more tap space */
+  .settings-card,
+  .connection-card,
+  .project-card {
+    padding: 16px !important;
   }
 
   /* Scrollable toolbar tabs */
@@ -1639,16 +1702,52 @@ body {
     min-width: 0;
   }
   .toolbar-tabs::-webkit-scrollbar { display: none; }
+
+  /* Prevent accidental text selection on tap */
+  button, [role="button"], .clickable {
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  /* Better scroll behavior */
+  .scroll-container {
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior-y: contain;
+  }
 }
 
 @media (max-width: 480px) {
   .taskbar button {
-    width: 36px !important;
-    height: 36px !important;
+    width: 44px !important;
+    height: 44px !important;
   }
   
   .taskbar .flex-row {
     gap: 0.25rem !important;
+  }
+
+  /* Stack form fields vertically */
+  .form-grid,
+  .form-row {
+    flex-direction: column !important;
+    gap: 12px !important;
+  }
+
+  /* Full-width buttons on very small screens */
+  .btn-full-mobile {
+    width: 100% !important;
+  }
+
+  /* Reduce padding but keep touch targets */
+  .window-content {
+    padding: 12px !important;
+  }
+
+  /* Smaller but still tappable icon buttons */
+  .icon-btn-sm {
+    min-width: 40px;
+    min-height: 40px;
   }
 }
 

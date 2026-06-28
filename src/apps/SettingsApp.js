@@ -18,13 +18,14 @@ import {
   Loader, Trash2, Lock, Unlock, Key, Mail, Code, Volume2, Sun, Moon, Cpu,
   Search, Terminal, Network, Download, Copy, X, CheckCheck, Sparkles,
   GitBranch, GitCommit, ChevronDown, Settings, Send, Music, ChevronRight, Globe, LogOut, Check,
-  RotateCcw
+  RotateCcw, Menu
 } from 'lucide-react';
 import { useOS } from '@/context/OSContext';
 import { useApp } from '@/context/AppContext';
 import { useVault } from '@/context/VaultContext';
 import { useSession, signIn, signOut } from 'next-auth/react';
 import { useTranslation } from 'react-i18next';
+import { useIsMobile } from '@/hooks/useIsMobile';
 
 import { motion, AnimatePresence } from 'framer-motion';
 import ShortcutInput from '@/components/Desktop/ShortcutInput';
@@ -184,7 +185,13 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
 
   const [showCustomInput, setShowCustomInput] = useState(false);
   const [customUrlInput, setCustomUrlInput] = useState('');
+  const isMobile = useIsMobile();
   const [isSidebarOpen, setIsSidebarOpen] = useState(false); // For mobile/small window view
+
+  // Auto-open sidebar on desktop
+  useEffect(() => {
+    setIsSidebarOpen(!isMobile);
+  }, [isMobile]);
 
   useEffect(() => {
     if (deploymentOnly) {
@@ -1319,7 +1326,7 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
               onClick={() => setIsSidebarOpen(true)}
               className="p-2.5 rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)]"
             >
-              <Layout size={18} />
+              <Menu size={18} />
             </button>
             <h2 className="text-lg font-bold truncate">
               {activeTab.charAt(0).toUpperCase() + activeTab.slice(1)}

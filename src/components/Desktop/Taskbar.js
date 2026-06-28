@@ -18,12 +18,15 @@ import AppIcon from '@/components/common/AppIcon';
 import PreviewWindow from './PreviewWindow';
 import AiUsageBar from '@/components/AiUsageBar';
 import { useAIUsagePolling } from '@/hooks/useAIUsage';
+import { useIsMobile } from '@/hooks/useIsMobile';
 
 export default function Taskbar() {
   const { state, focusWindow, toggleMinimize, openWindow, closeWindow, setTaskbarPosition, saveSettings, switchDesktop, switchToNextDesktop, switchToPrevDesktop, addNotification } = useOS();
   const { data: session } = useSession();
   const { t } = useTranslation();
-  const { windows, activeWindowId, glassmorphism, taskbarPosition, currentDesktopId, windowsByDesktop, desktops } = state;
+  const isMobile = useIsMobile();
+  const { windows, activeWindowId, glassmorphism, taskbarPosition: _taskbarPosition, currentDesktopId, windowsByDesktop, desktops } = state;
+  const taskbarPosition = isMobile ? 'bottom' : _taskbarPosition;
   const [startMenuOpen, setStartMenuOpen] = useState(false);
   const [contextMenu, setContextMenu] = useState(null); // { x, y, windowId }
   const [taskbarContextMenu, setTaskbarContextMenu] = useState(null); // { x, y }
@@ -396,8 +399,8 @@ export default function Taskbar() {
           <div className={isVertical ? 'h-px w-8 bg-[var(--border-color)] my-1' : 'w-px h-8 bg-[var(--border-color)] mx-2'} />
         </div>
 
-        {/* Preview Window Button */}
-        {isHorizontal && (
+        {/* Preview Window Button - hide on mobile */}
+        {isHorizontal && !isMobile && (
           <button
             onClick={() => setShowPreview(true)}
             className="w-10 h-10 rounded-2xl transition-all flex items-center justify-center shadow-lg shrink-0 bg-[var(--bg-tertiary)] hover:bg-[var(--bg-card-hover)] border border-[var(--border-color)] group"
@@ -443,7 +446,7 @@ export default function Taskbar() {
 
         <div className={`flex items-center shrink-0 ${isVertical ? 'flex-col gap-3 py-3' : 'flex-row gap-2 sm:gap-3 ml-2 sm:ml-4'}`}>
           {/* Desktop Switcher - hidden on mobile */}
-          {isHorizontal && (
+          {isHorizontal && !isMobile && (
             <div className="hidden sm:flex items-center gap-1 bg-[var(--bg-tertiary)] rounded-full border border-[var(--border-color)] px-2 py-1">
               <button
                 onClick={() => switchToPrevDesktop()}

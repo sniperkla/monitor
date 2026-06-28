@@ -9,7 +9,8 @@ import ConnectionModal from '@/components/ConnectionModal';
 import { useApp } from '@/context/AppContext';
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
-import { ChevronLeft, ChevronRight } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Menu } from 'lucide-react';
+import { useIsMobile } from '@/hooks/useIsMobile';
 
 import dynamic from 'next/dynamic';
 
@@ -25,6 +26,7 @@ const DEFAULT_SIDEBAR_W = 260;
 export default function SSHApp({ windowId }) {
   const { state, dispatch } = useApp();
   const { t } = useTranslation();
+  const isMobile = useIsMobile();
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [modalMode, setModalMode] = useState('add');
   const [selectedConnection, setSelectedConnection] = useState(null);
@@ -99,9 +101,18 @@ export default function SSHApp({ windowId }) {
 
   return (
     <div className="flex h-full w-full bg-transparent text-[var(--text-primary)] font-sans overflow-hidden relative">
+      {/* Mobile Overlay */}
+      {isMobile && state.sidebarOpen && (
+        <div 
+          className="fixed inset-0 bg-black/50 z-40"
+          onClick={() => dispatch({ type: 'TOGGLE_SIDEBAR' })}
+        />
+      )}
+
       {/* Sidebar with dynamic width */}
       <div
-        style={{
+        className={isMobile ? `fixed inset-y-0 left-0 z-50 bg-[var(--bg-primary)] shadow-2xl transition-transform duration-300 ${state.sidebarOpen ? 'translate-x-0' : '-translate-x-full'}` : ''}
+        style={isMobile ? { width: '80vw', maxWidth: '320px', overflow: 'hidden' } : {
           width: state.sidebarOpen ? sidebarWidth : 0,
           minWidth: state.sidebarOpen ? sidebarWidth : 0,
           overflow: 'hidden',
@@ -110,7 +121,7 @@ export default function SSHApp({ windowId }) {
           position: 'relative',
         }}
       >
-        {state.sidebarOpen && (
+        {(state.sidebarOpen || isMobile) && (
           <Sidebar
             onNewConnection={handleNewConnection}
             onEditConnection={handleEditConnection}
@@ -120,10 +131,11 @@ export default function SSHApp({ windowId }) {
       </div>
 
       {/* Resize Handle + Collapse Blade */}
-      <div
-        className="relative z-[100] flex-shrink-0 group/resizer"
-        style={{ width: state.sidebarOpen ? '10px' : '0px', transition: 'width 0.3s ease' }}
-      >
+      {!isMobile && (
+        <div
+          className="relative z-[100] flex-shrink-0 group/resizer"
+          style={{ width: state.sidebarOpen ? '10px' : '0px', transition: 'width 0.3s ease' }}
+        >
         {state.sidebarOpen && (
           <>
             {/* Drag resize strip */}
@@ -159,15 +171,22 @@ export default function SSHApp({ windowId }) {
           )}
         </button>
       </div>
+      )}
 
-      {/* Main content area — restored original structure */}
+      {/* Main content area */}
       <div className="flex-1 flex flex-col min-w-0 bg-transparent relative">
         {/* Top Navigation */}
-        <div className="h-14 border-b border-[var(--border-color)] flex items-center px-6 bg-[var(--bg-primary)]/20 backdrop-blur-md sticky top-0 z-10">
-           <div className="flex items-center gap-4 flex-1" />
+        <div className="h-14 border-b border-[var(--border-color)] flex items-center px-4 md:px-6 bg-[var(--bg-primary)]/20 backdrop-blur-md sticky top-0 z-10">
+           <div className="flex items-center gap-2 md:gap-4 flex-1">
+             {isMobile && (
+               <button onClick={() => dispatch({ type: 'TOGGLE_SIDEBAR' })} className="p-2 rounded-lg bg-[var(--bg-tertiary)]/50 text-[var(--text-primary)]">
+                 <Menu size={18} />
+               </button>
+             )}
+           </div>
 
            {/* Centered Navigation */}
-           <div className="flex bg-[var(--bg-tertiary)]/30 p-1 rounded-lg">
+           <div className="flex bg-[var(--bg-tertiary)]/30 p-1 rounded-lg overflow-x-auto no-scrollbar whitespace-nowrap max-w-full">
              <button
                onClick={() => dispatch({ type: 'SET_VIEW', payload: 'dashboard' })}
                className={`px-4 py-1.5 text-xs font-medium rounded-md transition-all ${

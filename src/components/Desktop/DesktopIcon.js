@@ -4,7 +4,7 @@ import { useOS } from '@/context/OSContext';
 import { useState, useRef, useEffect, useCallback } from 'react';
 import AppIcon from '@/components/common/AppIcon';
 
-export default function DesktopIcon({ id, title, icon: Icon, component, defaultPos, initialWidth, initialHeight }) {
+export default function DesktopIcon({ id, title, icon: Icon, component, defaultPos, initialWidth, initialHeight, isMobile }) {
   const { state, openWindow, updateIconPosition, setSortBy, setSelectedIcons, toggleIconSelection, updateMultipleIconPositions } = useOS();
   const { selectedIconIds } = state;
   const isSelected = selectedIconIds.includes(id);
@@ -868,10 +868,10 @@ export default function DesktopIcon({ id, title, icon: Icon, component, defaultP
     );
   };
 
-   return (
+  return (
     <div
       ref={iconRef}
-      className={`desktop-icon absolute flex flex-col items-center justify-center p-2 rounded-xl 
+      className={`desktop-icon ${isMobile ? 'relative mx-auto' : 'absolute'} flex flex-col items-center justify-start p-2 rounded-xl 
         cursor-grab active:cursor-grabbing hover:bg-[var(--text-primary)]/10 dark:hover:bg-white/10 active:bg-[var(--text-primary)]/15 
         ${sizes.container} gap-2 z-10 group 
         ${isSelected ? 'bg-[var(--accent-indigo)]/15 border border-[var(--accent-indigo)]/40 shadow-[0_8px_24px_rgba(0,0,0,0.15)] ring-1 ring-[var(--accent-indigo)]/20' : 'border border-transparent'}
@@ -880,7 +880,7 @@ export default function DesktopIcon({ id, title, icon: Icon, component, defaultP
       `}
       data-icon-id={id}
       onDoubleClick={handleDoubleClick}
-      onPointerDown={handlePointerDown}
+      onPointerDown={isMobile ? () => handleDoubleClick() : handlePointerDown} // Simple click to open on mobile
       onDragOver={handleDragOver}
       onDrop={handleDrop}
       onMouseEnter={handleMouseEnter}
@@ -888,13 +888,13 @@ export default function DesktopIcon({ id, title, icon: Icon, component, defaultP
       onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); }}
       tabIndex={0}
       style={{ 
-        left: position.x, 
-        top: position.y,
+        left: isMobile ? 'auto' : position.x, 
+        top: isMobile ? 'auto' : position.y,
         transform: impactTransform || 'none',
         transition: isDragging ? 'none' : 
                     impactTransform ? 'transform 0.05s cubic-bezier(0, 0.9, 0.1, 1)' : 
                     'left 0.15s ease, top 0.15s ease',
-        touchAction: 'none',
+        touchAction: isMobile ? 'auto' : 'none',
       }}
     >
       {/* Ghost Shadow (Grid Snap Preview) */}

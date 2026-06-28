@@ -2,7 +2,8 @@
 
 import { useState, useEffect } from 'react';
 import { useApp } from '@/context/AppContext';
-import { StickyNote, Database, Lock, Unlock, Save, Trash2, Plus, Search, Terminal, Zap } from 'lucide-react';
+import { useIsMobile } from '@/hooks/useIsMobile';
+import { StickyNote, Database, Lock, Unlock, Save, Trash2, Plus, Search, Terminal, Zap, Menu, ChevronLeft } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useTranslation } from 'react-i18next';
 
@@ -16,6 +17,18 @@ export default function NotepadApp() {
   const [activeNote, setActiveNote] = useState(null);
   const [loading, setLoading] = useState(false);
   const [search, setSearch] = useState('');
+  
+  const isMobile = useIsMobile();
+  const [showSidebar, setShowSidebar] = useState(true);
+
+  // Auto-hide sidebar on mobile when a note is selected
+  useEffect(() => {
+    if (isMobile) {
+      setShowSidebar(false);
+    } else {
+      setShowSidebar(true);
+    }
+  }, [isMobile, activeNote]);
 
   // Fetch notes if unlocked
   useEffect(() => {
@@ -116,9 +129,9 @@ export default function NotepadApp() {
   }
 
   return (
-    <div className="flex h-full bg-transparent text-[var(--text-primary)] overflow-hidden font-sans">
+    <div className="flex h-full bg-transparent text-[var(--text-primary)] overflow-hidden font-sans relative">
       {/* Sidebar */}
-      <div className="w-72 border-r border-[var(--border-color)] flex flex-col bg-[var(--bg-secondary)]/30">
+      <div className={`${showSidebar ? 'translate-x-0' : '-translate-x-full md:translate-x-0'} ${isMobile ? 'fixed inset-y-0 left-0 z-50 bg-[var(--bg-primary)] shadow-2xl transition-transform duration-300' : 'relative transition-none'} w-72 border-r border-[var(--border-color)] flex flex-col bg-[var(--bg-secondary)]/30 shrink-0`}>
         <div className="p-4 border-b border-[var(--border-color)] bg-[var(--bg-tertiary)]/10">
           <div className="flex items-center justify-between mb-4">
             <div className="flex items-center gap-2">
@@ -189,18 +202,31 @@ export default function NotepadApp() {
         </div>
       </div>
 
-      {/* Content */}
-      <div className="flex-1 flex flex-col bg-transparent">
+      {/* Mobile Overlay */}
+      {isMobile && showSidebar && (
+        <div className="fixed inset-0 bg-black/50 z-40" onClick={() => setShowSidebar(false)} />
+      )}
+
+      {/* Main Content Area */}
+      <div className="flex-1 flex flex-col relative min-w-0 bg-[var(--bg-primary)]/10 backdrop-blur-3xl">
         {activeNote ? (
           <>
-            <div className="h-14 border-b border-[var(--border-color)] flex items-center justify-between px-6 bg-[var(--bg-tertiary)]/5">
-              <input 
-                type="text"
-                value={activeNote.title}
-                onChange={e => setActiveNote({...activeNote, title: e.target.value})}
-                className="bg-transparent border-none text-lg font-bold text-[var(--text-primary)] focus:outline-none flex-1 italic tracking-tight"
-                placeholder={t('common.title') || "Title"}
-              />
+            {/* Header */}
+            <div className="h-16 flex items-center justify-between px-6 border-b border-[var(--border-color)] shrink-0">
+              <div className="flex items-center gap-3 w-full">
+                {isMobile && !showSidebar && (
+                  <button onClick={() => setShowSidebar(true)} className="p-2 rounded-lg bg-[var(--bg-tertiary)]/50 mr-2">
+                    <Menu size={16} />
+                  </button>
+                )}
+                <input 
+                  type="text"
+                  value={activeNote.title}
+                  onChange={e => setActiveNote({...activeNote, title: e.target.value})}
+                  className="bg-transparent border-none text-lg font-bold text-[var(--text-primary)] focus:outline-none flex-1 italic tracking-tight"
+                  placeholder={t('common.title') || "Title"}
+                />
+              </div>
               <div className="flex items-center gap-3">
                 <button 
                   onClick={() => handleDelete(activeNote._id)}
@@ -232,6 +258,11 @@ export default function NotepadApp() {
           </>
         ) : (
           <div className="flex-1 flex flex-col items-center justify-center p-12 text-center opacity-40">
+             {isMobile && !showSidebar && (
+                <button onClick={() => setShowSidebar(true)} className="mb-4 p-3 rounded-full bg-[var(--bg-tertiary)] hover:bg-[var(--bg-card-hover)] transition-colors border border-[var(--border-color)]">
+                  <Menu size={20} />
+                </button>
+              )}
              <StickyNote size={64} className="mb-4 text-[var(--text-muted)]" />
              <p className="text-sm font-medium">{t('notepad.emptyState')}</p>
           </div>

@@ -14,6 +14,7 @@ import NotificationCenter from '@/components/Desktop/NotificationCenter';
 import AutoDeployApp from '@/apps/AutoDeployApp';
 import { useState, useEffect, useRef, cloneElement, isValidElement } from 'react';
 import ConnectionModal from '@/components/ConnectionModal';
+import { useIsMobile } from '@/hooks/useIsMobile';
 import DesktopModal from '@/components/Desktop/DesktopModal';
 import { useApp } from '@/context/AppContext';
 import TerminalApp from '@/apps/TerminalApp';
@@ -40,6 +41,7 @@ const MongoBackupApp = dynamic(() => import('@/apps/MongoBackupApp'), {
 
 export default function DesktopEnvironment() {
   const { t } = useTranslation();
+  const isMobile = useIsMobile();
   const { state: osState, openWindow, setGlassmorphism, setIconSize, setSortBy, setWallpaper, updateIconPosition, setLanguage, setSelectedIcons, updateMultipleIconPositions, toggleMinimize, switchToPrevDesktop, switchToNextDesktop } = useOS();
   const { windows, iconSize, sortBy, currentDesktopId, windowsByDesktop, keyboardShortcuts } = osState;
   const { state: appState, dispatch: appDispatch, fetchConnections } = useApp();
@@ -801,9 +803,9 @@ export default function DesktopEnvironment() {
       </AnimatePresence>
 
       {/* Desktop Icons */}
-      <div className={`absolute inset-0 pointer-events-none ${getDesktopPadding()} ${isRefreshing ? 'opacity-0' : 'opacity-100'} z-[1]`}>
+      <div className={`absolute inset-0 pointer-events-none ${getDesktopPadding()} ${isRefreshing ? 'opacity-0' : 'opacity-100'} z-[1] overflow-y-auto no-scrollbar`}>
         <div 
-          className="desktop-layer relative w-full h-full pointer-events-auto"
+          className={`desktop-layer relative w-full ${isMobile ? 'h-auto min-h-full pt-10 px-4 grid grid-cols-4 sm:grid-cols-6 gap-y-8 gap-x-2 content-start' : 'h-full'} pointer-events-auto`}
           onContextMenu={handleContextMenu}
           onClick={() => {
             // Collapse preview window when clicking on blank desktop area
@@ -822,6 +824,7 @@ export default function DesktopEnvironment() {
               initialWidth={icon.initialWidth}
               initialHeight={icon.initialHeight}
               defaultPos={{ x: 20, y: 20 + idx * 110 }}
+              isMobile={isMobile}
             />
           ))}
         </div>

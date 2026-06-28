@@ -597,8 +597,10 @@ export default function Dashboard({ onNewConnection, onEditConnection }) {
 
         {connections.length > 0 && (
           <div className="bg-[var(--bg-card)] rounded-2xl border border-[var(--border-color)] overflow-hidden">
-            <div className="grid grid-cols-[1fr_80px_80px_100px] gap-2 px-4 py-2 border-b border-[var(--border-color)] text-[10px] font-bold text-[var(--text-muted)] uppercase tracking-wider">
-              <span>Connection</span>
+            <div className="overflow-x-auto custom-scrollbar">
+              <div className="min-w-[400px]">
+                <div className="grid grid-cols-[1fr_80px_80px_100px] gap-2 px-4 py-2 border-b border-[var(--border-color)] text-[10px] font-bold text-[var(--text-muted)] uppercase tracking-wider">
+                  <span>Connection</span>
               <span className="text-center">Status</span>
               <span className="text-center">Latency</span>
               <span className="text-center">Uptime</span>
@@ -687,6 +689,8 @@ export default function Dashboard({ onNewConnection, onEditConnection }) {
                 </div>
               );
             })}
+              </div>
+            </div>
           </div>
         )}
 

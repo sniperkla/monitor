@@ -3,12 +3,13 @@
 import { useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { useApp } from '@/context/AppContext';
+import { useIsMobile } from '@/hooks/useIsMobile';
 import { 
   Book, Search, Terminal, Copy, Check, ChevronRight, 
   Layers, Settings, Globe, Shield, Database, Layout,
   ExternalLink, Info, Filter, Plus, Monitor, Server,
   Cloud, Wrench, Activity, GitBranch, Clock, Cpu,
-  MessageSquare, Send, X, Bot, User, Sparkles, Lock, Languages
+  MessageSquare, Send, X, Bot, User, Sparkles, Lock, Languages, Menu
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useTranslation } from 'react-i18next';
@@ -37,6 +38,8 @@ export default function WikiApp({ initialGuideId }) {
   const { data: session } = useSession();
   const { isConfigured, isUnlocked } = useVault();
   const { t } = useTranslation();
+  const isMobile = useIsMobile();
+  const [showSidebar, setShowSidebar] = useState(false);
   const [guides, setGuides] = useState([]);
   const [categories, setCategories] = useState(['All']);
   const [osList, setOsList] = useState(['All']);
@@ -322,9 +325,18 @@ export default function WikiApp({ initialGuideId }) {
   };
 
   return (
-    <div className="flex h-full bg-[var(--bg-primary)] text-[var(--text-primary)] overflow-x-auto overflow-y-hidden font-sans custom-scrollbar">
+    <div className="flex h-full bg-[var(--bg-primary)] text-[var(--text-primary)] overflow-hidden font-sans custom-scrollbar relative">
+      {/* Mobile Overlay */}
+      {isMobile && showSidebar && (
+        <div className="fixed inset-0 bg-black/50 z-40" onClick={() => setShowSidebar(false)} />
+      )}
+
       {/* Categories & Search Sidebar */}
-      <div className="w-64 flex-shrink-0 border-r border-[var(--border-color)] flex flex-col bg-[var(--bg-secondary)]/30">
+      <div className={`${
+        isMobile
+          ? `fixed inset-y-0 left-0 z-50 bg-[var(--bg-primary)] shadow-2xl transition-transform duration-300 ${showSidebar ? 'translate-x-0' : '-translate-x-full'}`
+          : 'relative'
+      } w-64 flex-shrink-0 border-r border-[var(--border-color)] flex flex-col bg-[var(--bg-secondary)]/30`}>
         <div className="p-4 border-b border-[var(--border-color)]">
           <div className="flex items-center gap-2 mb-4">
             <div className="w-8 h-8 rounded-lg bg-[var(--glow-indigo)] flex items-center justify-center border border-[var(--accent-indigo)]/20 shadow-inner">
@@ -383,10 +395,35 @@ export default function WikiApp({ initialGuideId }) {
               {cat}
             </button>
           ))}
+
+          {/* Mobile-only guide list */}
+          {isMobile && (
+            <>
+              <p className="px-3 pt-4 pb-2 text-[10px] font-bold text-[var(--text-muted)] uppercase tracking-widest">{t('wiki.guides')}</p>
+              {loading ? (
+                <div className="py-6 text-center opacity-40 text-xs">Loading...</div>
+              ) : guides.map(guide => (
+                <button
+                  key={guide._id}
+                  onClick={() => { setActiveGuide(guide); setShowSidebar(false); }}
+                  className={`w-full p-3 rounded-xl text-left transition-all border text-xs mb-1 ${
+                    activeGuide?._id === guide._id
+                      ? 'bg-[var(--glow-indigo)] border-[var(--accent-indigo)]/20 text-[var(--accent-indigo)]'
+                      : 'border-transparent hover:bg-[var(--bg-tertiary)] text-[var(--text-secondary)]'
+                  }`}
+                >
+                  <span className="font-semibold truncate block">{guide.title}</span>
+                  <span className="text-[10px] text-[var(--text-muted)] line-clamp-1 opacity-70">{guide.category}</span>
+                </button>
+              ))}
+            </>
+          )}
         </div>
       </div>
 
-      {/* Guide List Pane */}
+
+      {/* Guide List Pane — hidden on mobile, shown inside sidebar */}
+      {!isMobile && (
       <div className="w-72 flex-shrink-0 border-r border-[var(--border-color)] flex flex-col bg-[var(--bg-primary)]">
         <div className="p-4 border-b border-[var(--border-color)] bg-[var(--bg-tertiary)]/5 flex items-center justify-between">
           <span className="text-xs font-bold text-[var(--text-primary)]">{t('wiki.guides')}</span>
@@ -442,13 +479,22 @@ export default function WikiApp({ initialGuideId }) {
           )}
         </div>
       </div>
+      )}
 
       {/* Content Area */}
-      <div className="flex-1 min-w-[500px] flex flex-col bg-[var(--bg-primary)]">
+      <div className="flex-1 flex flex-col bg-[var(--bg-primary)] min-w-0">
         {activeGuide ? (
           <>
-            <div className="h-16 border-b border-[var(--border-color)] flex items-center justify-between px-8 bg-[var(--bg-secondary)]">
-              <div className="flex items-center gap-3">
+            <div className="h-14 border-b border-[var(--border-color)] flex items-center justify-between px-4 md:px-8 bg-[var(--bg-secondary)] gap-3">
+            {isMobile && (
+              <button
+                onClick={() => setShowSidebar(true)}
+                className="p-2 rounded-lg bg-[var(--bg-tertiary)] border border-[var(--border-color)] shrink-0"
+              >
+                <Menu size={16} />
+              </button>
+            )}
+            <div className="flex items-center gap-3 min-w-0 flex-1">
                 <div className="p-2 rounded-xl bg-[var(--glow-indigo)] border border-[var(--accent-indigo)]/20">
                   {getCategoryIcon(activeGuide.category)}
                 </div>
@@ -618,11 +664,19 @@ export default function WikiApp({ initialGuideId }) {
           </>
         ) : (
           <div className="flex-1 flex flex-col items-center justify-center p-12 text-center opacity-40">
+             {isMobile && (
+               <button
+                 onClick={() => setShowSidebar(true)}
+                 className="mb-6 p-3 rounded-full bg-[var(--bg-tertiary)] border border-[var(--border-color)] opacity-100"
+               >
+                 <Menu size={24} />
+               </button>
+             )}
              <div className="w-24 h-24 rounded-full bg-[var(--glow-indigo)] flex items-center justify-center mb-6 border border-[var(--accent-indigo)]/20 shadow-xl">
                 <Book size={48} className="text-[var(--accent-indigo)]" />
              </div>
              <h2 className="text-xl font-bold mb-2 tracking-tight text-[var(--text-primary)]">{t('wiki.emptyTitle')}</h2>
-             <p className="text-sm max-w-xs mx-auto italic text-[var(--text-secondary)]">{t('wiki.emptyDesc')}</p>
+             <p className="text-sm max-w-xs mx-auto italic text-[var(--text-secondary)]">{isMobile ? 'Tap the menu icon to browse guides.' : t('wiki.emptyDesc')}</p>
           </div>
         )}
       </div>
