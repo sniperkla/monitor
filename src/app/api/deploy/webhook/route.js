@@ -446,19 +446,17 @@ export async function runDeployment(config, runMeta = {}) {
       'set -e',
       'set -o pipefail',
     ];
-    // Configure git credentials using credential.helper (avoids URL encoding issues with special chars)
+    // Configure git credentials via a temp script file
+    const localCredScript = `/tmp/.git-cred-local-${projectId}.sh`;
     if (config.bitbucketConnected && config.bitbucketUsername && config.bitbucketAppPassword) {
       try {
         let bbUser = decrypt(config.bitbucketUsername);
         let bbPass = decrypt(config.bitbucketAppPassword);
         if (bbUser && bbPass) {
-          // If the token starts with ATAT (Atlassian API token), the username must be 'x-token-auth'
-          if (bbPass.startsWith('ATAT')) {
-            bbUser = 'x-token-auth';
-          }
-          const escapedUser = bbUser.replace(/'/g, "'\\''");
-          const escapedPass = bbPass.replace(/'/g, "'\\''");
-          scriptLines.push(`git config --local credential.helper '!f() { echo "username=${escapedUser}"; echo "password=${escapedPass}"; }; f'`);
+          const credUser = bbPass.startsWith('ATAT') ? 'x-token-auth' : bbUser;
+          scriptLines.push(`printf '#!/bin/sh\\necho "username=${credUser}"\\necho "password=${bbPass}"\\n' > ${localCredScript}`);
+          scriptLines.push(`chmod 700 ${localCredScript}`);
+          scriptLines.push(`git config --local credential.helper ${localCredScript}`);
         }
       } catch (e) {
         console.warn('[deploy] Failed to decrypt Bitbucket credentials for local deploy:', e.message);
@@ -467,7 +465,9 @@ export async function runDeployment(config, runMeta = {}) {
       try {
         let ghToken = decrypt(config.githubToken);
         if (ghToken && !ghToken.includes(':')) {
-          scriptLines.push(`git config --local credential.helper '!f() { echo "username=x-access-token"; echo "password=${ghToken}"; }; f'`);
+          scriptLines.push(`printf '#!/bin/sh\\necho "username=x-access-token"\\necho "password=${ghToken}"\\n' > ${localCredScript}`);
+          scriptLines.push(`chmod 700 ${localCredScript}`);
+          scriptLines.push(`git config --local credential.helper ${localCredScript}`);
         }
       } catch (e) {
         console.warn('[deploy] Failed to decrypt GitHub token for local deploy:', e.message);
@@ -497,6 +497,9 @@ export async function runDeployment(config, runMeta = {}) {
     scriptLines.push('echo "[deploy] Running deploy command..."');
     scriptLines.push(config.deployCommand);
     scriptLines.push('echo "[deploy] Deploy command finished successfully"');
+    // Clean up credential helper script
+    scriptLines.push(`rm -f ${localCredScript} 2>/dev/null || true`);
+    scriptLines.push(`git config --local --unset credential.helper 2>/dev/null || true`);
     const script = scriptLines.join('\n');
 
     // Spawn bash reading script from stdin — avoids shell escaping issues
@@ -754,21 +757,21 @@ export async function runDeployment(config, runMeta = {}) {
           ];
           const targetBranch = (config.branch || 'main').replace('refs/heads/', '');
 
-          // Configure git credentials using credential.helper (avoids URL encoding issues with special chars)
+          // Configure git credentials via a temp script file (avoids shell quoting issues with inline helpers)
+          const credScriptPath = `/tmp/.git-cred-${projectId}.sh`;
           if (config.bitbucketConnected && config.bitbucketUsername && config.bitbucketAppPassword) {
             try {
               let bbUser = decrypt(config.bitbucketUsername);
               let bbPass = decrypt(config.bitbucketAppPassword);
               if (bbUser && bbPass) {
-                // If the token starts with ATAT (Atlassian API token), the username must be 'x-token-auth'
-                if (bbPass.startsWith('ATAT')) {
-                  bbUser = 'x-token-auth';
-                }
-                const escapedUser = bbUser.replace(/'/g, "'\\''");
-                const escapedPass = bbPass.replace(/'/g, "'\\''");
+                // For Bitbucket app passwords (ATAT...), use x-token-auth as username
+                // For regular app passwords, use the stored username
+                const credUser = bbPass.startsWith('ATAT') ? 'x-token-auth' : bbUser;
                 scriptLines.push(`echo "[deploy] Configuring Bitbucket credentials..."`);
-                scriptLines.push(`git config --local credential.helper '!f() { echo "username=${escapedUser}"; echo "password=${escapedPass}"; }; f'`);
-                scriptLines.push(`echo "[deploy] Bitbucket auth configured"`);
+                scriptLines.push(`printf '#!/bin/sh\\necho "username=${credUser}"\\necho "password=${bbPass}"\\n' > ${credScriptPath}`);
+                scriptLines.push(`chmod 700 ${credScriptPath}`);
+                scriptLines.push(`git config --local credential.helper ${credScriptPath}`);
+                scriptLines.push(`echo "[deploy] Bitbucket auth configured (user: ${credUser})"`);
               }
             } catch (e) {
               console.warn('[deploy] Failed to decrypt Bitbucket credentials:', e.message);
@@ -778,7 +781,9 @@ export async function runDeployment(config, runMeta = {}) {
               let ghToken = decrypt(config.githubToken);
               if (ghToken && !ghToken.includes(':')) {
                 scriptLines.push(`echo "[deploy] Configuring GitHub credentials..."`);
-                scriptLines.push(`git config --local credential.helper '!f() { echo "username=x-access-token"; echo "password=${ghToken}"; }; f'`);
+                scriptLines.push(`printf '#!/bin/sh\\necho "username=x-access-token"\\necho "password=${ghToken}"\\n' > ${credScriptPath}`);
+                scriptLines.push(`chmod 700 ${credScriptPath}`);
+                scriptLines.push(`git config --local credential.helper ${credScriptPath}`);
                 scriptLines.push(`echo "[deploy] GitHub auth configured"`);
               }
             } catch (e) {
@@ -823,6 +828,9 @@ export async function runDeployment(config, runMeta = {}) {
           scriptLines.push('echo "[deploy] Running deploy command..."');
           scriptLines.push(config.deployCommand);
           scriptLines.push('echo "[deploy] Deploy command finished successfully"');
+          // Clean up credential helper script
+          scriptLines.push(`rm -f ${credScriptPath} 2>/dev/null || true`);
+          scriptLines.push(`git config --local --unset credential.helper 2>/dev/null || true`);
           const deployScript = scriptLines.join('\n') + '\n';
 
           // ── Write deploy script via SFTP ─────────────────────────────────
