@@ -220,8 +220,9 @@ export async function POST(request) {
       githubToken: body.githubToken !== undefined && body.githubToken ? encrypt(body.githubToken) : existingValue.githubToken || '',
       bitbucketConnected: body.bitbucketConnected !== undefined ? body.bitbucketConnected : existingValue.bitbucketConnected || false,
       bitbucketUser: body.bitbucketUser !== undefined ? body.bitbucketUser : existingValue.bitbucketUser || '',
-      bitbucketUsername: body.bitbucketUsername !== undefined ? body.bitbucketUsername : existingValue.bitbucketUsername || '',
-      bitbucketAppPassword: body.bitbucketAppPassword !== undefined ? body.bitbucketAppPassword : existingValue.bitbucketAppPassword || '',
+      // Preserve encrypted credentials from connect route — don't overwrite with frontend values
+      bitbucketUsername: existingValue.bitbucketUsername || '',
+      bitbucketAppPassword: existingValue.bitbucketAppPassword || '',
       bitbucketRepo: body.bitbucketRepo !== undefined ? body.bitbucketRepo : existingValue.bitbucketRepo || '',
       telegramNotification: typeof body.telegramNotification === 'boolean' ? body.telegramNotification : existingValue.telegramNotification || false,
       telegramBotToken: body.telegramBotToken !== undefined ? (body.telegramBotToken ? encrypt(body.telegramBotToken) : '') : existingValue.telegramBotToken || '',

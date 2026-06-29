@@ -47,9 +47,8 @@ export async function GET(request) {
 
       if (cfg.bitbucketUsername && cfg.bitbucketAppPassword) {
         try {
-          let u = decrypt(cfg.bitbucketUsername);
+          let u = decrypt(cfg.bitbucketUsername) || cfg.bitbucketUser || '';
           const p = decrypt(cfg.bitbucketAppPassword);
-          // Strip email domain if username is an email
           if (u && u.includes('@')) {
             u = u.split('@')[0];
           }

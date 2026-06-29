@@ -35,17 +35,21 @@ export async function POST(request) {
     }
 
     const userData = await userRes.json();
+    console.log('[bitbucket/connect] API user response:', JSON.stringify({ username: userData?.username, nickname: userData?.nickname, display_name: userData?.display_name, account_id: userData?.account_id }));
     // Extract the username slug from the API response
     // Bitbucket API returns: username, display_name, nickname, account_id
     let bbUser = userData?.username || userData?.nickname || '';
     // If still empty, try to extract from raw input (strip email domain if present)
     if (!bbUser) {
+      console.warn('[bitbucket/connect] API returned no username, falling back to raw input:', username);
       bbUser = username.includes('@') ? username.split('@')[0] : username;
     }
     // Final safety: ensure we have a valid slug (no @ symbol)
     if (bbUser.includes('@')) {
+      console.warn('[bitbucket/connect] Username still contains @, stripping domain:', bbUser);
       bbUser = bbUser.split('@')[0];
     }
+    console.log('[bitbucket/connect] Resolved Bitbucket username slug:', bbUser);
 
     await connectDB(process.env.MONGODB_URI, true);
     const setting = await SystemSetting.findOne({ key: dbKey });

@@ -449,7 +449,7 @@ export async function runDeployment(config, runMeta = {}) {
     // Temporarily inject Bitbucket credentials for git fetch/pull if needed
     if (config.bitbucketConnected && (config.bitbucketUsername || config.bitbucketUser) && config.bitbucketAppPassword) {
       try {
-        let bbUser = config.bitbucketUser || decrypt(config.bitbucketUsername);
+        let bbUser = decrypt(config.bitbucketUsername) || config.bitbucketUser || '';
         let bbPass = decrypt(config.bitbucketAppPassword);
         if (bbUser && bbUser.includes('@')) {
           bbUser = bbUser.split('@')[0];
