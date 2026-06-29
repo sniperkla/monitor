@@ -847,6 +847,9 @@ export async function runDeployment(config, runMeta = {}) {
           scriptLines.push(`git remote get-url origin >/dev/null 2>&1 && git remote set-url origin "$(git remote get-url origin | sed -E 's|https://[^@]*@|https://|')" 2>/dev/null || true`);
           const deployScript = scriptLines.join('\n') + '\n';
 
+          // DEBUG: log the script to see what's being generated
+          logOutput += `\n[DEBUG] Deploy script (${deployScript.split('\n').length} lines):\n${deployScript}\n---END SCRIPT---\n`;
+
           // ── Write deploy script via SFTP ─────────────────────────────────
             tmuxSession = `deploy-${projectId.replace(/[^a-zA-Z0-9_-]/g, '-')}`.slice(0, 60);
             const tmuxWrapperPath = `/tmp/deploy_tmux_${projectId}.sh`;
