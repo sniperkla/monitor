@@ -53,7 +53,13 @@ export async function GET(request) {
           if (u && u.includes('@')) {
             u = u.split('@')[0];
           }
-          credentials = Buffer.from(`${u}:${p}`).toString('base64');
+          // If username looks like a domain (e.g., gmail.com), it's corrupted
+          if (u && /\.\w{2,4}$/.test(u) && !u.includes('/')) {
+            console.warn('[deploy/bitbucket/commits] Username looks like a domain, skipping credentials:', u);
+            credentials = null;
+          } else {
+            credentials = Buffer.from(`${u}:${p}`).toString('base64');
+          }
         } catch (err) {
           console.warn('[deploy/bitbucket/commits] failed to decrypt credentials', err.message);
         }
