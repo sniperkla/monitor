@@ -21,27 +21,28 @@ function buildBackupCommand(jobId, type, config) {
       const includeVolumes = config.includeVolumes;
       const includeImages = config.includeImages;
       cmd = `set -e\nmkdir -p /tmp/bk_${jobId}\n`;
+      cmd += `DOCKER="docker"; if ! docker info >/dev/null 2>&1; then DOCKER="sudo docker"; fi\n`;
       if (containers.length === 0 || containers.includes('all')) {
-        cmd += `docker ps -a --format '{{.Names}}' > /tmp/bk_${jobId}/containers.txt\n`;
+        cmd += `$DOCKER ps -a --format '{{.Names}}' > /tmp/bk_${jobId}/containers.txt\n`;
       } else {
         cmd += `echo '${containers.join('\n')}' > /tmp/bk_${jobId}/containers.txt\n`;
       }
       cmd += `while IFS= read -r c; do\n`;
       cmd += `  echo "[backup] Inspecting container: $c"\n`;
-      cmd += `  docker inspect "$c" > /tmp/bk_${jobId}/inspect_$c.json 2>/dev/null || true\n`;
-      cmd += `  ROOT=$(docker inspect "$c" --format '{{ index .Config.Labels "com.docker.compose.project.working_dir" }}' 2>/dev/null || true)\n`;
-      cmd += `  if [ -z "$ROOT" ]; then ROOT=$(docker inspect "$c" --format '{{ index .Config.Labels "com.docker.compose.project.config_files" }}' 2>/dev/null | xargs dirname 2>/dev/null || true); fi\n`;
+      cmd += `  $DOCKER inspect "$c" > /tmp/bk_${jobId}/inspect_$c.json 2>/dev/null || true\n`;
+      cmd += `  ROOT=$($DOCKER inspect "$c" --format '{{ index .Config.Labels "com.docker.compose.project.working_dir" }}' 2>/dev/null || true)\n`;
+      cmd += `  if [ -z "$ROOT" ]; then ROOT=$($DOCKER inspect "$c" --format '{{ index .Config.Labels "com.docker.compose.project.config_files" }}' 2>/dev/null | xargs dirname 2>/dev/null || true); fi\n`;
       cmd += `  if [ -n "$ROOT" ] && [ -d "$ROOT" ]; then tar -rf /tmp/bk_${jobId}/data.tar -C "$ROOT" . 2>/dev/null || true; fi\n`;
       cmd += `done < /tmp/bk_${jobId}/containers.txt\n`;
       if (includeVolumes) {
-        cmd += `for vol in $(docker volume ls -q); do\n`;
+        cmd += `for vol in $($DOCKER volume ls -q); do\n`;
         cmd += `  echo "[backup] Backing up volume: $vol"\n`;
-        cmd += `  docker run --rm -v "$vol":/src -v /tmp/bk_${jobId}:/dst alpine tar -cf /dst/vol_${jobId}_$vol.tar -C /src . 2>/dev/null || true\n`;
+        cmd += `  $DOCKER run --rm -v "$vol":/src -v /tmp/bk_${jobId}:/dst alpine tar -cf /dst/vol_${jobId}_$vol.tar -C /src . 2>/dev/null || true\n`;
         cmd += `done\n`;
       }
       if (includeImages) {
         cmd += `echo "[backup] Saving Docker images..."\n`;
-        cmd += `docker save $(docker images -q) | gzip > /tmp/bk_${jobId}/images.tar.gz 2>/dev/null || true\n`;
+        cmd += `$DOCKER save $($DOCKER images -q) | gzip > /tmp/bk_${jobId}/images.tar.gz 2>/dev/null || true\n`;
       }
       cmd += `cd /tmp/bk_${jobId} && tar -czf ${outFile} .\n`;
       cmd += `rm -rf /tmp/bk_${jobId}\n`;
@@ -52,12 +53,15 @@ function buildBackupCommand(jobId, type, config) {
       cmd = `set -e\nmkdir -p /tmp/dbdump_${jobId}\n`;
       if (dbType === 'mongodb') {
         const auth = username ? `--username '${username}' --password '${password}' --authenticationDatabase admin` : '';
-        cmd += `mongodump --host ${host || '127.0.0.1'} --port ${port || 27017} ${auth} --db ${database} --out /tmp/dbdump_${jobId} 2>&1\n`;
+        cmd += `if command -v mongodump >/dev/null 2>&1; then MONGODUMP="mongodump"; elif command -v sudo >/dev/null 2>&1; then MONGODUMP="sudo mongodump"; else echo "mongodump not found"; exit 1; fi\n`;
+        cmd += `$MONGODUMP --host ${host || '127.0.0.1'} --port ${port || 27017} ${auth} --db ${database} --out /tmp/dbdump_${jobId} 2>&1\n`;
       } else if (dbType === 'mysql') {
-        cmd += `mysqldump -h ${host || '127.0.0.1'} -P ${port || 3306} -u ${username || 'root'} ${password ? `-p'${password}'` : ''} ${database} > /tmp/dbdump_${jobId}/dump.sql 2>&1\n`;
+        cmd += `if command -v mysqldump >/dev/null 2>&1; then MYSQLDUMP="mysqldump"; elif command -v sudo >/dev/null 2>&1; then MYSQLDUMP="sudo mysqldump"; else echo "mysqldump not found"; exit 1; fi\n`;
+        cmd += `$MYSQLDUMP -h ${host || '127.0.0.1'} -P ${port || 3306} -u ${username || 'root'} ${password ? `-p'${password}'` : ''} ${database} > /tmp/dbdump_${jobId}/dump.sql 2>&1\n`;
       } else if (dbType === 'postgres') {
         const pgEnv = password ? `PGPASSWORD='${password}'` : '';
-        cmd += `${pgEnv} pg_dump -h ${host || '127.0.0.1'} -p ${port || 5432} -U ${username || 'postgres'} -d ${database} -F c -f /tmp/dbdump_${jobId}/dump.dump 2>&1\n`;
+        cmd += `if command -v pg_dump >/dev/null 2>&1; then PGDUMP="pg_dump"; elif command -v sudo >/dev/null 2>&1; then PGDUMP="sudo pg_dump"; else echo "pg_dump not found"; exit 1; fi\n`;
+        cmd += `${pgEnv} $PGDUMP -h ${host || '127.0.0.1'} -p ${port || 5432} -U ${username || 'postgres'} -d ${database} -F c -f /tmp/dbdump_${jobId}/dump.dump 2>&1\n`;
       }
       cmd += `tar -czf ${outFile} -C /tmp/dbdump_${jobId} .\n`;
       cmd += `rm -rf /tmp/dbdump_${jobId}\n`;
@@ -73,7 +77,7 @@ function buildBackupCommand(jobId, type, config) {
       if (config.firewall) items.push('etc/iptables');
       if (config.nginx) items.push('etc/nginx');
       if (items.length === 0) items.push('etc/ssh');
-      cmd = `tar -czf ${outFile} --ignore-failed-read -C / ${items.join(' ')}`;
+      cmd = `sudo tar -czf ${outFile} --ignore-failed-read -C / ${items.join(' ')}`;
       break;
     }
     case 'custom': {
