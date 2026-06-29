@@ -1,16 +1,29 @@
 'use client';
 
 import { motion } from 'framer-motion';
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
+
+function useIsMobileDevice() {
+  const [isMobile, setIsMobile] = useState(false);
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const check = () => setIsMobile(window.innerWidth < 768);
+    check();
+    window.addEventListener('resize', check);
+    return () => window.removeEventListener('resize', check);
+  }, []);
+  return isMobile;
+}
 
 /* ── Interactive Galaxy/Constellation Background — Infinite Pan ── */
 export function GalaxyBackground() {
   const canvasRef = useRef(null);
   const mouseRef = useRef({ x: null, y: null });
+  const isMobile = useIsMobileDevice();
 
   useEffect(() => {
     const canvas = canvasRef.current;
-    if (!canvas) return;
+    if (!canvas || isMobile) return;
     const ctx = canvas.getContext('2d');
     let w = canvas.width = window.innerWidth;
     let h = canvas.height = window.innerHeight;
@@ -205,10 +218,11 @@ export function GalaxyBackground() {
 /* ── Shooting Stars ── */
 export function ShootingStars() {
   const canvasRef = useRef(null);
+  const isMobile = useIsMobileDevice();
 
   useEffect(() => {
     const canvas = canvasRef.current;
-    if (!canvas) return;
+    if (!canvas || isMobile) return;
     const ctx = canvas.getContext('2d');
     let w = canvas.width = window.innerWidth;
     let h = canvas.height = window.innerHeight;
@@ -405,10 +419,11 @@ export function Nebula() {
 /* ── Matrix Rain ── */
 export function MatrixRain() {
   const canvasRef = useRef(null);
+  const isMobile = useIsMobileDevice();
 
   useEffect(() => {
     const canvas = canvasRef.current;
-    if (!canvas) return;
+    if (!canvas || isMobile) return;
     const ctx = canvas.getContext('2d');
     let w = canvas.width = window.innerWidth;
     let h = canvas.height = window.innerHeight;

@@ -354,6 +354,10 @@ export async function runDeployment(config, runMeta = {}) {
           updateFields['value.deployRunId'] = null;
         }
 
+        if (status === 'success' && commitSha) {
+          updateFields['value.lastDeployedCommitSha'] = commitSha;
+        }
+
         await SystemSetting.findOneAndUpdate(
           { key: dbKey },
           { $set: updateFields }
@@ -365,14 +369,16 @@ export async function runDeployment(config, runMeta = {}) {
         if (status !== lastNotifiedStatus && (status === 'running' || status === 'success' || status === 'failed')) {
           lastNotifiedStatus = status;
           const duration = status !== 'running' ? Math.round((Date.now() - startedAt.getTime()) / 1000) : undefined;
-          sendTelegramNotification(config, status, {
-            gitInfo: runMeta.gitInfo || null,
-            triggerSource: runMeta.triggerSource || null,
-            duration,
-            logText: status !== 'running' ? cleanLog : undefined
-          }).catch(err => {
+          try {
+            await sendTelegramNotification(config, status, {
+              gitInfo: runMeta.gitInfo || null,
+              triggerSource: runMeta.triggerSource || null,
+              duration,
+              logText: status !== 'running' ? cleanLog : undefined
+            });
+          } catch (err) {
             console.error('[Telegram] error:', err.message);
-          });
+          }
         }
         break; // success — exit retry loop
       } catch (dbErr) {
@@ -468,11 +474,15 @@ export async function runDeployment(config, runMeta = {}) {
 
     // Watchdog to avoid indefinitely hanging processes (default 10 minutes)
     const timeoutMs = (config.timeoutSeconds || 600) * 1000;
-    const watchdog = setTimeout(() => {
+    const watchdog = setTimeout(async () => {
       const now = new Date();
       logOutput += `\n[Timeout] Deployment exceeded ${timeoutMs / 1000} seconds and will be terminated.\n`;
       logOutput = limitLogOutput(logOutput);
-      updateStatus('failed', logOutput).catch(() => {});
+      try {
+        await updateStatus('failed', logOutput);
+      } catch (e) {
+        console.error('[deploy] Failed to update status on timeout:', e.message);
+      }
       try {
         // Kill the whole process group
         process.kill(-childProcess.pid, 'SIGTERM');
@@ -788,10 +798,14 @@ export async function runDeployment(config, runMeta = {}) {
 
                 // Watchdog timeout
                 const timeoutMs = (config.timeoutSeconds || 600) * 1000;
-                const watchdog = setTimeout(() => {
+                const watchdog = setTimeout(async () => {
                   logOutput += `\n[Timeout] Deployment exceeded ${timeoutMs / 1000}s. Terminating...\n`;
                   logOutput = limitLogOutput(logOutput);
-                  updateStatus('failed', logOutput).catch(() => {});
+                  try {
+                    await updateStatus('failed', logOutput);
+                  } catch (e) {
+                    console.error('[deploy] Failed to update status on timeout:', e.message);
+                  }
                   // Kill tmux session + cleanup
                   try { conn.exec(`tmux kill-session -t ${tmuxSession} 2>/dev/null; rm -f /tmp/deploy_${tmuxSession}.log /tmp/deploy_tmux_${projectId}.sh; true`, () => {}); } catch {}
                   stream.destroy();

@@ -19,6 +19,7 @@ const defaultConfig = {
   status: 'idle',
   lastDeployLog: '',
   lastDeployAt: null,
+  lastDeployedCommitSha: null,
   deployRunId: null,
   cancelRequested: false,
   aiProfile: null,

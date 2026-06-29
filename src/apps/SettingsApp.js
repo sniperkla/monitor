@@ -3227,7 +3227,9 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
                       {commits.length === 0 ? (
                         <p className="text-xs text-[var(--text-muted)] text-center py-4">{t('deploy.noCommits', 'No commits found')}</p>
                       ) : (
-                        commits.map((commit, idx) => (
+                        commits.map((commit, idx) => {
+                          const isDeployed = deployConfig.lastDeployedCommitSha && commit.fullSha === deployConfig.lastDeployedCommitSha;
+                          return (
                           <button
                             key={commit.fullSha}
                             onClick={() => {
@@ -3235,10 +3237,17 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
                               setShowCommitSelector(false);
                             }}
                             disabled={deployTriggering || deployConfig.status === 'running'}
-                            className="w-full text-left p-3 rounded-xl bg-[var(--bg-secondary)] hover:bg-[var(--bg-tertiary)] border border-transparent hover:border-indigo-500/30 transition-all disabled:opacity-50 cursor-pointer group"
+                            className={`w-full text-left p-3 rounded-xl border transition-all disabled:opacity-50 cursor-pointer group ${
+                              isDeployed
+                                ? 'bg-emerald-500/10 border-emerald-500/30 hover:border-emerald-400/50'
+                                : 'bg-[var(--bg-secondary)] hover:bg-[var(--bg-tertiary)] border-transparent hover:border-indigo-500/30'
+                            }`}
                           >
                             <div className="flex items-center justify-between gap-2">
                               <div className="flex items-center gap-2 min-w-0">
+                                {isDeployed && (
+                                  <span className="shrink-0 px-1.5 py-0.5 rounded-md bg-emerald-500/20 border border-emerald-500/30 text-emerald-400 text-[8px] font-bold uppercase tracking-wider">Live</span>
+                                )}
                                 {commit.avatar ? (
                                   <img src={commit.avatar} alt="" className="w-5 h-5 rounded-full" />
                                 ) : (
@@ -3252,7 +3261,7 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
                               <div className="flex items-center gap-2 shrink-0">
                                 <span className="text-[9px] text-[var(--text-muted)]">{commit.author}</span>
                                 <span className="text-[9px] text-[var(--text-muted)]">
-                                  {commit.date ? new Date(commit.date).toLocaleDateString() : ''}
+                                  {commit.date ? new Date(commit.date).toLocaleString([], { year: '2-digit', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : ''}
                                 </span>
                                 <span className="text-[9px] text-indigo-400 opacity-0 group-hover:opacity-100 transition-opacity font-bold">
                                   {t('deploy.deployThisCommit', 'DEPLOY')}
@@ -3260,7 +3269,8 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
                               </div>
                             </div>
                           </button>
-                        ))
+                          );
+                        })
                       )}
                     </div>
                   </div>

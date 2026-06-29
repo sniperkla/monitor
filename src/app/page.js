@@ -1,11 +1,46 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, Component } from 'react';
 import { useSession } from 'next-auth/react';
 import LandingPage from '@/components/landing';
 import { BootSequence } from '@/components/landing/BootSequence';
 import { HyperspaceTransition } from '@/components/landing/HyperspaceTransition';
 import { AnimatePresence, motion } from 'framer-motion';
+
+class DesktopErrorBoundary extends Component {
+  constructor(props) {
+    super(props);
+    this.state = { hasError: false };
+  }
+  static getDerivedStateFromError() {
+    return { hasError: true };
+  }
+  componentDidCatch(error, errorInfo) {
+    console.error('[DesktopErrorBoundary]', error, errorInfo);
+  }
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="fixed inset-0 bg-[#0a0e1a] flex items-center justify-center p-6">
+          <div className="text-center space-y-4 max-w-sm">
+            <div className="w-16 h-16 mx-auto rounded-2xl bg-red-500/10 border border-red-500/20 flex items-center justify-center">
+              <span className="text-2xl">⚠</span>
+            </div>
+            <h1 className="text-xl font-bold text-slate-100">Something went wrong</h1>
+            <p className="text-sm text-slate-400">The desktop failed to load. This may be due to memory limits on your device.</p>
+            <button
+              onClick={() => { this.setState({ hasError: false }); window.location.reload(); }}
+              className="px-6 py-3 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl font-semibold text-sm transition-colors"
+            >
+              Reload Page
+            </button>
+          </div>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
 
 // Boot phases for logged-in users: boot → warp → desktop
 // Guests keep the existing landing flow
@@ -52,12 +87,14 @@ export default function Home() {
   // Safety: force-escape warp phase if it hangs (e.g. OffscreenCanvas crash on mobile)
   useEffect(() => {
     if (bootPhase !== 'warp') return;
+    const isMobile = typeof window !== 'undefined' && window.innerWidth < 768;
+    const timeout = isMobile ? 500 : 6000;
     const t = setTimeout(() => {
       if (bootPhase === 'warp') {
         warpFinishedRef.current = true;
         setBootPhase('desktop');
       }
-    }, 6000);
+    }, timeout);
     return () => clearTimeout(t);
   }, [bootPhase]);
 
@@ -87,7 +124,9 @@ export default function Home() {
           animate={{ opacity: 1 }}
           transition={{ duration: 0.6 }}
         >
-          <DesktopEnvironment bootPhase={bootPhase} />
+          <DesktopErrorBoundary>
+            <DesktopEnvironment bootPhase={bootPhase} />
+          </DesktopErrorBoundary>
         </motion.div>
       )}
 

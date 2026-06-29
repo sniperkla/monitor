@@ -405,67 +405,59 @@ export default function MasterPasswordModal({ isBooted = true }) {
   const renderUnlock = () => (
     <form onSubmit={handleUnlock} className="space-y-6 px-2 py-4 relative overflow-hidden">
       {/* Background Effects */}
-      <Particles count={25} color="rgba(99,102,241,0.12)" />
-      <div className="absolute top-0 left-1/2 -translate-x-1/2 w-64 h-64 bg-blue-500/10 blur-[100px] rounded-full pointer-events-none animate-pulse" />
-      <div className="absolute bottom-0 right-0 w-48 h-48 bg-indigo-500/8 blur-[80px] rounded-full pointer-events-none" />
+      {!isMobile && <Particles count={25} color="rgba(99,102,241,0.12)" />}
+      {!isMobile && <div className="absolute top-0 left-1/2 -translate-x-1/2 w-64 h-64 bg-blue-500/10 blur-[100px] rounded-full pointer-events-none animate-pulse" />}
+      {!isMobile && <div className="absolute bottom-0 right-0 w-48 h-48 bg-indigo-500/8 blur-[80px] rounded-full pointer-events-none" />}
       
       <div className="text-center relative z-10">
-        <motion.div 
-          initial={{ scale: 0.8, opacity: 0 }}
-          animate={{ scale: 1, opacity: 1 }}
-          transition={{ duration: 0.6, type: 'spring', bounce: 0.3 }}
-          className="relative inline-block mb-6"
-        >
-          {/* Animated Glow Rings */}
-          <motion.div 
-            className="absolute inset-0 rounded-2xl"
-            animate={{ 
-              boxShadow: [
-                '0 0 20px rgba(99,102,241,0.2), 0 0 40px rgba(99,102,241,0.1)',
-                '0 0 30px rgba(99,102,241,0.3), 0 0 60px rgba(99,102,241,0.15)',
-                '0 0 20px rgba(99,102,241,0.2), 0 0 40px rgba(99,102,241,0.1)',
-              ]
-            }}
-            transition={{ duration: 3, repeat: Infinity, ease: 'easeInOut' }}
-          />
-          <div className="absolute inset-0 rounded-2xl bg-gradient-to-tr from-blue-500/30 to-indigo-500/30 blur-xl" />
-          
-          <div className="relative w-20 h-20 bg-gradient-to-br from-[var(--bg-secondary)] to-[var(--bg-tertiary)] border border-[var(--border-color)] rounded-2xl flex items-center justify-center shadow-2xl overflow-hidden group">
-            <div className="absolute inset-0 bg-gradient-to-tr from-[var(--accent-indigo)]/20 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-500" />
-            <motion.div
-              animate={{ rotate: [0, -8, 8, -4, 0], scale: [1, 1.05, 1] }}
-              transition={{ duration: 5, repeat: Infinity, ease: 'easeInOut' }}
-            >
-              <Lock size={32} className="text-[var(--accent-indigo)] drop-shadow-[0_0_12px_var(--glow-indigo)]" />
-            </motion.div>
+        {isMobile ? (
+          <div className="relative inline-block mb-6">
+            <div className="relative w-20 h-20 bg-gradient-to-br from-[var(--bg-secondary)] to-[var(--bg-tertiary)] border border-[var(--border-color)] rounded-2xl flex items-center justify-center shadow-2xl mx-auto">
+              <Lock size={32} className="text-[var(--accent-indigo)]" />
+            </div>
           </div>
-        </motion.div>
+        ) : (
+          <motion.div 
+            initial={{ scale: 0.8, opacity: 0 }}
+            animate={{ scale: 1, opacity: 1 }}
+            transition={{ duration: 0.6, type: 'spring', bounce: 0.3 }}
+            className="relative inline-block mb-6"
+          >
+            <motion.div 
+              className="absolute inset-0 rounded-2xl"
+              animate={{ 
+                boxShadow: [
+                  '0 0 20px rgba(99,102,241,0.2), 0 0 40px rgba(99,102,241,0.1)',
+                  '0 0 30px rgba(99,102,241,0.3), 0 0 60px rgba(99,102,241,0.15)',
+                  '0 0 20px rgba(99,102,241,0.2), 0 0 40px rgba(99,102,241,0.1)',
+                ]
+              }}
+              transition={{ duration: 3, repeat: Infinity, ease: 'easeInOut' }}
+            />
+            <div className="absolute inset-0 rounded-2xl bg-gradient-to-tr from-blue-500/30 to-indigo-500/30 blur-xl" />
+            <div className="relative w-20 h-20 bg-gradient-to-br from-[var(--bg-secondary)] to-[var(--bg-tertiary)] border border-[var(--border-color)] rounded-2xl flex items-center justify-center shadow-2xl overflow-hidden group">
+              <div className="absolute inset-0 bg-gradient-to-tr from-[var(--accent-indigo)]/20 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-500" />
+              <motion.div
+                animate={{ rotate: [0, -8, 8, -4, 0], scale: [1, 1.05, 1] }}
+                transition={{ duration: 5, repeat: Infinity, ease: 'easeInOut' }}
+              >
+                <Lock size={32} className="text-[var(--accent-indigo)] drop-shadow-[0_0_12px_var(--glow-indigo)]" />
+              </motion.div>
+            </div>
+          </motion.div>
+        )}
         
-        <motion.h2 
-          initial={{ y: 10, opacity: 0 }}
-          animate={{ y: 0, opacity: 1 }}
-          transition={{ delay: 0.2 }}
-          className="text-2xl font-extrabold tracking-tight text-[var(--text-primary)] mb-2"
-        >
+        <h2 className="text-2xl font-extrabold tracking-tight text-[var(--text-primary)] mb-2">
           {t('vault.locked') || 'Secured Vault'}
-        </motion.h2>
-        <motion.p 
-          initial={{ y: 10, opacity: 0 }}
-          animate={{ y: 0, opacity: 1 }}
-          transition={{ delay: 0.3 }}
-          className="text-[var(--text-secondary)] text-sm max-w-[280px] mx-auto leading-relaxed"
-        >
+        </h2>
+        <p className="text-[var(--text-secondary)] text-sm max-w-[280px] mx-auto leading-relaxed">
           {t('vault.unlockNow') || 'Your connection data is securely encrypted. Enter your master password to access.'}
-        </motion.p>
+        </p>
         
         {!session && (
-          <motion.div 
-            initial={{ opacity: 0, y: 5 }}
-            animate={{ opacity: 1, y: 0 }}
-            className="mt-4 inline-flex items-center gap-2 px-3 py-1 bg-[var(--bg-secondary)] border border-[var(--border-color)] backdrop-blur-md rounded-full text-[10px] font-semibold text-[var(--text-secondary)] uppercase tracking-wider"
-          >
+          <div className="mt-4 inline-flex items-center gap-2 px-3 py-1 bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-full text-[10px] font-semibold text-[var(--text-secondary)] uppercase tracking-wider">
             <Monitor size={10} className="text-[var(--accent-indigo)]" /> {t('vault.guestMode') || 'Guest Mode'}
-          </motion.div>
+          </div>
         )}
       </div>
 
@@ -484,7 +476,7 @@ export default function MasterPasswordModal({ isBooted = true }) {
               value={masterPassword}
               onChange={(e) => setMasterPassword(e.target.value)}
               placeholder={t('vault.masterPassword') || 'Master Password'}
-              className="w-full px-4 py-3.5 bg-[var(--bg-primary)]/80 backdrop-blur-xl border border-[var(--border-color)] rounded-xl text-[var(--text-primary)] placeholder-[var(--text-muted)] focus:outline-none focus:ring-0 focus:border-blue-500/40 transition-all text-base shadow-inner pointer-events-auto relative z-10"
+              className="w-full px-4 py-3.5 bg-[var(--bg-primary)] border border-[var(--border-color)] rounded-xl text-[var(--text-primary)] placeholder-[var(--text-muted)] focus:outline-none focus:ring-0 focus:border-blue-500/40 transition-all text-base shadow-inner pointer-events-auto relative z-10"
               autoComplete="off"
             />
             <button
@@ -562,8 +554,8 @@ export default function MasterPasswordModal({ isBooted = true }) {
   // === SETUP VIEW ===
   const renderSetup = () => (
     <form onSubmit={handleSetup} className="space-y-6 px-2 py-4 relative overflow-hidden">
-      <Particles count={20} color="rgba(52,211,153,0.12)" />
-      <div className="absolute top-0 left-1/2 -translate-x-1/2 w-64 h-64 bg-emerald-500/10 blur-[100px] rounded-full pointer-events-none animate-pulse" />
+      {!isMobile && <Particles count={20} color="rgba(52,211,153,0.12)" />}
+      {!isMobile && <div className="absolute top-0 left-1/2 -translate-x-1/2 w-64 h-64 bg-emerald-500/10 blur-[100px] rounded-full pointer-events-none animate-pulse" />}
 
       <div className="text-center relative z-10">
         <motion.div 
@@ -986,43 +978,33 @@ export default function MasterPasswordModal({ isBooted = true }) {
   const { title, icon } = getWindowTitle();
 
   if (isMobile) {
-    return createPortal(
-      <AnimatePresence>
-        <motion.div
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          exit={{ opacity: 0 }}
-          className="fixed inset-0 z-[90000] flex items-end"
-          style={{ background: 'rgba(0,0,0,0.5)' }}
+    return (
+      <div
+        className="fixed inset-0 flex items-end"
+        style={{ background: 'rgba(0,0,0,0.5)', zIndex: 90000 }}
+      >
+        <div
+          className="w-full max-h-[92vh] flex flex-col overflow-hidden rounded-t-2xl"
+          style={{ background: 'var(--window-bg)' }}
         >
-          <motion.div
-            initial={{ y: '100%' }}
-            animate={{ y: 0 }}
-            exit={{ y: '100%' }}
-            transition={{ type: 'spring', damping: 25, stiffness: 300 }}
-            className="w-full max-h-[92vh] flex flex-col overflow-hidden rounded-t-2xl"
-            style={{ background: 'var(--window-bg)' }}
-          >
-            <div className="flex items-center justify-between px-4 py-3 border-b border-[var(--border-color)] shrink-0">
-              <div className="flex items-center gap-2 text-sm font-bold text-[var(--text-primary)]">
-                {icon && <span>{icon}</span>}
-                <span>{title}</span>
-              </div>
-              <button
-                type="button"
-                onClick={() => dismissVault?.()}
-                className="w-9 h-9 flex items-center justify-center rounded-full hover:bg-[var(--bg-tertiary)] transition-colors"
-              >
-                <X size={18} className="text-[var(--text-secondary)]" />
-              </button>
+          <div className="flex items-center justify-between px-4 py-3 border-b border-[var(--border-color)] shrink-0">
+            <div className="flex items-center gap-2 text-sm font-bold text-[var(--text-primary)]">
+              {icon && <span>{icon}</span>}
+              <span>{title}</span>
             </div>
-            <div className="flex-1 overflow-y-auto p-4">
-              {renderContent()}
-            </div>
-          </motion.div>
-        </motion.div>
-      </AnimatePresence>,
-      document.body
+            <button
+              type="button"
+              onClick={() => dismissVault?.()}
+              className="w-9 h-9 flex items-center justify-center rounded-full hover:bg-[var(--bg-tertiary)] transition-colors"
+            >
+              <X size={18} className="text-[var(--text-secondary)]" />
+            </button>
+          </div>
+          <div className="flex-1 overflow-y-auto p-4">
+            {renderContent()}
+          </div>
+        </div>
+      </div>
     );
   }
 
