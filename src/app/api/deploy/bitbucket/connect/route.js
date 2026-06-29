@@ -45,7 +45,7 @@ export async function POST(request) {
       ...existing,
       bitbucketConnected: true,
       bitbucketUser: bbUser,
-      bitbucketUsername: encrypt(username),
+      bitbucketUsername: encrypt(bbUser), // use API-resolved slug, not raw email input
       bitbucketAppPassword: encrypt(appPassword),
     };
 
