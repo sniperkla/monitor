@@ -768,9 +768,14 @@ export async function runDeployment(config, runMeta = {}) {
                 const safeUser = bbUser.replace(/@/g, '%40');
                 scriptLines.push('echo "[deploy] Configuring Bitbucket credentials..."');
                 scriptLines.push('REMOTE_URL=$(git remote get-url origin 2>/dev/null || echo "")');
+                scriptLines.push('echo "[debug] Current remote: $REMOTE_URL"');
                 scriptLines.push('if [ -z "$REMOTE_URL" ]; then echo "[deploy] ERROR: No remote URL"; exit 1; fi');
                 scriptLines.push('HOST_PATH=$(echo "$REMOTE_URL" | sed -E \'s#^[^@]+@##; s#^[a-z]+://##\')');
-                scriptLines.push('git remote set-url origin "https://' + safeUser + ':' + bbPass + '@${HOST_PATH}"');
+                scriptLines.push('echo "[debug] Extracted host+path: $HOST_PATH"');
+                scriptLines.push('NEW_URL="https://' + safeUser + ':' + bbPass + '@${HOST_PATH}"');
+                scriptLines.push('echo "[debug] Setting remote to: $NEW_URL"');
+                scriptLines.push('git remote set-url origin "$NEW_URL"');
+                scriptLines.push('echo "[debug] Verifying remote: $(git remote get-url origin)"');
                 scriptLines.push('echo "[deploy] Bitbucket auth configured"');
               }
             } catch (e) {

@@ -78,3 +78,4 @@ scriptLines.push(`git remote get-url origin >/dev/null 2>&1 && git remote set-ur
 const deployScript = scriptLines.join('\n') + '\n';
 fs.writeFileSync('scratch/deploy_run.sh', deployScript);
 console.log('Written to scratch/deploy_run.sh');
+  
