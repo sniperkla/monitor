@@ -446,15 +446,22 @@ export async function runDeployment(config, runMeta = {}) {
       'set -e',
       'set -o pipefail',
     ];
-    // Configure git credentials using credential.helper (avoids URL encoding issues with special chars)
+    // Configure git credentials — clear any global/system credential helper first,
+    // then set ours so cached server credentials cannot interfere.
     if (config.bitbucketConnected && config.bitbucketUsername && config.bitbucketAppPassword) {
       try {
         let bbUser = decrypt(config.bitbucketUsername);
         let bbPass = decrypt(config.bitbucketAppPassword);
         if (bbUser && bbPass) {
-          const escapedUser = bbUser.replace(/'/g, "'\\''");
-          const escapedPass = bbPass.replace(/'/g, "'\\''");
-          scriptLines.push(`git config --local credential.helper '!f() { echo "username=${escapedUser}"; echo "password=${escapedPass}"; }; f'`);
+          const escapedUser = bbUser.replace(/'/g, "'\\''")
+          const escapedPass = bbPass.replace(/'/g, "'\\''")
+          // Empty-string helper clears the global/system helper chain, then we add ours
+          scriptLines.push(`git config --local credential.helper ''`);
+          scriptLines.push(`git config --local --add credential.helper '!f() { echo "username=${escapedUser}"; echo "password=${escapedPass}"; }; f'`);
+          // Also stash encoded creds for direct URL injection (belt-and-suspenders)
+          scriptLines.push(`BB_USER='${escapedUser}'`);
+          scriptLines.push(`BB_PASS='${escapedPass}'`);
+          scriptLines.push(`BB_AUTH_INJECTED=1`);
         }
       } catch (e) {
         console.warn('[deploy] Failed to decrypt Bitbucket credentials for local deploy:', e.message);
@@ -463,7 +470,8 @@ export async function runDeployment(config, runMeta = {}) {
       try {
         let ghToken = decrypt(config.githubToken);
         if (ghToken && !ghToken.includes(':')) {
-          scriptLines.push(`git config --local credential.helper '!f() { echo "username=x-access-token"; echo "password=${ghToken}"; }; f'`);
+          scriptLines.push(`git config --local credential.helper ''`);
+          scriptLines.push(`git config --local --add credential.helper '!f() { echo "username=x-access-token"; echo "password=${ghToken}"; }; f'`);
         }
       } catch (e) {
         console.warn('[deploy] Failed to decrypt GitHub token for local deploy:', e.message);
@@ -750,17 +758,24 @@ export async function runDeployment(config, runMeta = {}) {
           ];
           const targetBranch = (config.branch || 'main').replace('refs/heads/', '');
 
-          // Configure git credentials using credential.helper (avoids URL encoding issues with special chars)
+          // Configure git credentials — clear any global/system credential helper first,
+          // then set ours so cached server credentials cannot interfere.
           if (config.bitbucketConnected && config.bitbucketUsername && config.bitbucketAppPassword) {
             try {
               let bbUser = decrypt(config.bitbucketUsername);
               let bbPass = decrypt(config.bitbucketAppPassword);
               if (bbUser && bbPass) {
-                const escapedUser = bbUser.replace(/'/g, "'\\''");
-                const escapedPass = bbPass.replace(/'/g, "'\\''");
+                const escapedUser = bbUser.replace(/'/g, "'\\''")
+                const escapedPass = bbPass.replace(/'/g, "'\\''")
                 scriptLines.push(`echo "[deploy] Configuring Bitbucket credentials..."`);
-                scriptLines.push(`git config --local credential.helper '!f() { echo "username=${escapedUser}"; echo "password=${escapedPass}"; }; f'`);
-                scriptLines.push(`echo "[deploy] Bitbucket auth configured"`);
+                // Empty-string helper clears the global/system helper chain, then we add ours
+                scriptLines.push(`git config --local credential.helper ''`);
+                scriptLines.push(`git config --local --add credential.helper '!f() { echo "username=${escapedUser}"; echo "password=${escapedPass}"; }; f'`);
+                // Also stash encoded creds for direct URL injection (belt-and-suspenders)
+                scriptLines.push(`BB_USER='${escapedUser}'`);
+                scriptLines.push(`BB_PASS='${escapedPass}'`);
+                scriptLines.push(`BB_AUTH_INJECTED=1`);
+                scriptLines.push(`echo "[deploy] Bitbucket auth configured (username: ${escapedUser})"`);
               }
             } catch (e) {
               console.warn('[deploy] Failed to decrypt Bitbucket credentials:', e.message);
@@ -770,7 +785,8 @@ export async function runDeployment(config, runMeta = {}) {
               let ghToken = decrypt(config.githubToken);
               if (ghToken && !ghToken.includes(':')) {
                 scriptLines.push(`echo "[deploy] Configuring GitHub credentials..."`);
-                scriptLines.push(`git config --local credential.helper '!f() { echo "username=x-access-token"; echo "password=${ghToken}"; }; f'`);
+                scriptLines.push(`git config --local credential.helper ''`);
+                scriptLines.push(`git config --local --add credential.helper '!f() { echo "username=x-access-token"; echo "password=${ghToken}"; }; f'`);
                 scriptLines.push(`echo "[deploy] GitHub auth configured"`);
               }
             } catch (e) {
@@ -795,7 +811,18 @@ export async function runDeployment(config, runMeta = {}) {
           scriptLines.push('  fi');
           scriptLines.push('fi');
 
-          scriptLines.push(`git fetch origin`);
+          // If Bitbucket credentials are available, inject them directly into the fetch URL
+          // to completely bypass any credential helper chain on the remote server.
+          scriptLines.push(`if [ "\${BB_AUTH_INJECTED:-0}" = "1" ]; then`);
+          scriptLines.push(`  RAW_URL=$(git remote get-url origin)`);
+          scriptLines.push(`  BB_ENCODED_USER=$(python3 -c "import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1], safe=''))" "$BB_USER" 2>/dev/null || printf '%s' "$BB_USER" | sed 's/@/%40/g')`);
+          scriptLines.push(`  BB_ENCODED_PASS=$(python3 -c "import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1], safe=''))" "$BB_PASS" 2>/dev/null || printf '%s' "$BB_PASS" | sed 's/@/%40/g')`);
+          scriptLines.push(`  AUTH_URL=$(echo "$RAW_URL" | sed -E "s|^(https?://)|\\1\${BB_ENCODED_USER}:\${BB_ENCODED_PASS}@|")`);
+          scriptLines.push(`  echo "[deploy] Fetching with authenticated URL..."`);
+          scriptLines.push(`  git fetch "$AUTH_URL"`);
+          scriptLines.push(`else`);
+          scriptLines.push(`  git fetch origin`);
+          scriptLines.push(`fi`);
           scriptLines.push(`echo "[deploy] Checking out branch: ${targetBranch}"`);
           scriptLines.push(`git checkout -B ${targetBranch} origin/${targetBranch}`);
           
