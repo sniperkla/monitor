@@ -446,22 +446,7 @@ export async function runDeployment(config, runMeta = {}) {
       'set -e',
       'set -o pipefail',
     ];
-    // Inject Bitbucket credentials directly into the pull URL (most reliable — bypasses any credential helper on the server)
-    if (config.bitbucketConnected && config.bitbucketUsername && config.bitbucketAppPassword) {
-      try {
-        let bbUser = decrypt(config.bitbucketUsername);
-        let bbPass = decrypt(config.bitbucketAppPassword);
-        if (bbUser && bbPass) {
-          const encodedUser = encodeURIComponent(bbUser);
-          const encodedPass = encodeURIComponent(bbPass);
-          scriptLines.push(`BB_USER='${encodedUser}'`);
-          scriptLines.push(`BB_PASS='${encodedPass}'`);
-          scriptLines.push(`BB_AUTH_INJECTED=1`);
-        }
-      } catch (e) {
-        console.warn('[deploy] Failed to decrypt Bitbucket credentials for local deploy:', e.message);
-      }
-    } else if (config.githubToken) {
+    if (config.githubToken) {
       try {
         let ghToken = decrypt(config.githubToken);
         if (ghToken && !ghToken.includes(':')) {
@@ -472,15 +457,6 @@ export async function runDeployment(config, runMeta = {}) {
         console.warn('[deploy] Failed to decrypt GitHub token for local deploy:', e.message);
       }
     }
-
-    // Build authenticated pull URL for Bitbucket; strip any embedded creds from the stored remote first
-    scriptLines.push('RAW_URL=$(git remote get-url origin 2>/dev/null || echo "")');
-    scriptLines.push('if [ "${BB_AUTH_INJECTED:-0}" = "1" ] && [ -n "$RAW_URL" ]; then');
-    scriptLines.push('  CLEAN_PATH=$(echo "$RAW_URL" | sed -E \'s|^https?://([^@]+@)?||\')'); 
-    scriptLines.push('  AUTH_URL="https://${BB_USER}:${BB_PASS}@${CLEAN_PATH}"');
-    scriptLines.push('  echo "[deploy] Using authenticated Bitbucket URL for pull"');
-    scriptLines.push('  git remote set-url origin "$AUTH_URL"');
-    scriptLines.push('fi');
     if (commitSha) {
       scriptLines.push(`echo "[deploy] Checking out commit: ${commitSha}"`);
       scriptLines.push(`git checkout ${commitSha}`);
@@ -745,24 +721,7 @@ export async function runDeployment(config, runMeta = {}) {
           ];
           const targetBranch = (config.branch || 'main').replace('refs/heads/', '');
 
-          // Inject Bitbucket credentials directly into the pull URL (most reliable — bypasses any credential helper on the server)
-          if (config.bitbucketConnected && config.bitbucketUsername && config.bitbucketAppPassword) {
-            try {
-              let bbUser = decrypt(config.bitbucketUsername);
-              let bbPass = decrypt(config.bitbucketAppPassword);
-              if (bbUser && bbPass) {
-                const encodedUser = encodeURIComponent(bbUser);
-                const encodedPass = encodeURIComponent(bbPass);
-                scriptLines.push(`echo "[deploy] Configuring Bitbucket credentials..."`);
-                scriptLines.push(`BB_USER='${encodedUser}'`);
-                scriptLines.push(`BB_PASS='${encodedPass}'`);
-                scriptLines.push(`BB_AUTH_INJECTED=1`);
-                scriptLines.push(`echo "[deploy] Bitbucket auth configured (username: ${bbUser})"`);
-              }
-            } catch (e) {
-              console.warn('[deploy] Failed to decrypt Bitbucket credentials:', e.message);
-            }
-          } else if (config.githubToken) {
+          if (config.githubToken) {
             try {
               let ghToken = decrypt(config.githubToken);
               if (ghToken && !ghToken.includes(':')) {
@@ -775,19 +734,6 @@ export async function runDeployment(config, runMeta = {}) {
               console.warn('[deploy] Failed to decrypt GitHub token:', e.message);
             }
           }
-
-          // Build authenticated pull URL for Bitbucket; strip any embedded creds from the stored remote first
-          scriptLines.push('RAW_URL=$(git remote get-url origin 2>/dev/null || echo "")');
-          scriptLines.push('if [ "${BB_AUTH_INJECTED:-0}" = "1" ] && [ -n "$RAW_URL" ]; then');
-          scriptLines.push('  CLEAN_PATH=$(echo "$RAW_URL" | sed -E \'s|^https?://([^@]+@)?||\')'); 
-          scriptLines.push('  AUTH_URL="https://${BB_USER}:${BB_PASS}@${CLEAN_PATH}"');
-          scriptLines.push('  echo "[deploy] Using authenticated Bitbucket URL for pull"');
-          scriptLines.push('  git remote set-url origin "$AUTH_URL"');
-          scriptLines.push('elif [ -n "$RAW_URL" ]; then');
-          scriptLines.push('  # Strip any embedded creds from URL for non-Bitbucket repos');
-          scriptLines.push('  CLEAN_URL=$(echo "$RAW_URL" | sed -E \'s|^(https?://)([^@]+@)?|\\1|\')');
-          scriptLines.push('  [ "$CLEAN_URL" != "$RAW_URL" ] && git remote set-url origin "$CLEAN_URL"');
-          scriptLines.push('fi');
 
           scriptLines.push(`git fetch origin`);
           scriptLines.push(`echo "[deploy] Checking out branch: ${targetBranch}"`);
