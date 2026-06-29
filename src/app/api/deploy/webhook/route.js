@@ -446,22 +446,19 @@ export async function runDeployment(config, runMeta = {}) {
       'set -e',
       'set -o pipefail',
     ];
-    // Embed credentials in git remote URL using base64 to avoid escaping issues
+    // Embed credentials in git remote URL (URL-encoded in JS, no shell escaping needed)
     if (config.bitbucketConnected && config.bitbucketUsername && config.bitbucketAppPassword) {
       try {
         let bbUser = decrypt(config.bitbucketUsername);
         let bbPass = decrypt(config.bitbucketAppPassword);
         if (bbUser && bbPass) {
-          const b64User = Buffer.from(bbUser).toString('base64');
-          const b64Pass = Buffer.from(bbPass).toString('base64');
-          scriptLines.push(`BB_USER=$(echo '${b64User}' | base64 -d)`);
-          scriptLines.push(`BB_PASS=$(echo '${b64Pass}' | base64 -d)`);
+          const encUser = encodeURIComponent(bbUser);
+          const encPass = encodeURIComponent(bbPass);
           scriptLines.push(`BB_URL=$(git remote get-url origin 2>/dev/null || echo "")`);
           scriptLines.push(`if [ -n "$BB_URL" ]; then`);
-          scriptLines.push(`  BB_HOST=$(echo "$BB_URL" | sed -E 's|^[^:]+://([^@]*@)?||' | sed -E 's|/.*||')`);
-          scriptLines.push(`  BB_PATH=$(echo "$BB_URL" | sed -E 's|^[^:]+://([^@]*@)?[^/]+||')`);
-          scriptLines.push(`  NEW_URL="https://$(printf '%s' "$BB_USER" | python3 -c 'import sys,urllib.parse;print(urllib.parse.quote(sys.stdin.read(),safe=""))'):$(printf '%s' "$BB_PASS" | python3 -c 'import sys,urllib.parse;print(urllib.parse.quote(sys.stdin.read(),safe=""))')@${BB_HOST}${BB_PATH}"`);
-          scriptLines.push(`  git remote set-url origin "$NEW_URL"`);
+          scriptLines.push(`  BB_HOST=$(echo "$BB_URL" | sed -E 's|^[^:]+://||' | sed -E 's|/.*||')`);
+          scriptLines.push(`  BB_PATH=$(echo "$BB_URL" | sed -E 's|^[^:]+://[^/]+||')`);
+          scriptLines.push(`  git remote set-url origin "https://${encUser}:${encPass}@${BB_HOST}${BB_PATH}"`);
           scriptLines.push(`fi`);
         }
       } catch (e) {
@@ -471,14 +468,12 @@ export async function runDeployment(config, runMeta = {}) {
       try {
         let ghToken = decrypt(config.githubToken);
         if (ghToken && !ghToken.includes(':')) {
-          const b64Token = Buffer.from(ghToken).toString('base64');
-          scriptLines.push(`GH_TOKEN=$(echo '${b64Token}' | base64 -d)`);
+          const encToken = encodeURIComponent(ghToken);
           scriptLines.push(`GH_URL=$(git remote get-url origin 2>/dev/null || echo "")`);
           scriptLines.push(`if [ -n "$GH_URL" ]; then`);
-          scriptLines.push(`  GH_HOST=$(echo "$GH_URL" | sed -E 's|^[^:]+://([^@]*@)?||' | sed -E 's|/.*||')`);
-          scriptLines.push(`  GH_PATH=$(echo "$GH_URL" | sed -E 's|^[^:]+://([^@]*@)?[^/]+||')`);
-          scriptLines.push(`  NEW_URL="https://x-access-token:$(printf '%s' "$GH_TOKEN" | python3 -c 'import sys,urllib.parse;print(urllib.parse.quote(sys.stdin.read(),safe=""))')@${GH_HOST}${GH_PATH}"`);
-          scriptLines.push(`  git remote set-url origin "$NEW_URL"`);
+          scriptLines.push(`  GH_HOST=$(echo "$GH_URL" | sed -E 's|^[^:]+://||' | sed -E 's|/.*||')`);
+          scriptLines.push(`  GH_PATH=$(echo "$GH_URL" | sed -E 's|^[^:]+://[^/]+||')`);
+          scriptLines.push(`  git remote set-url origin "https://x-access-token:${encToken}@${GH_HOST}${GH_PATH}"`);
           scriptLines.push(`fi`);
         }
       } catch (e) {
@@ -786,25 +781,22 @@ export async function runDeployment(config, runMeta = {}) {
           scriptLines.push('fi');
 
           // Step 2: Embed fresh credentials in git remote URL
+          // Pre-encode credentials with URL-safe encoding in JavaScript (avoids python3 dependency)
           if (config.bitbucketConnected && config.bitbucketUsername && config.bitbucketAppPassword) {
             try {
               let bbUser = decrypt(config.bitbucketUsername);
               let bbPass = decrypt(config.bitbucketAppPassword);
               if (bbUser && bbPass) {
-                const b64User = Buffer.from(bbUser).toString('base64');
-                const b64Pass = Buffer.from(bbPass).toString('base64');
+                // URL-encode in JS: @ → %40, = → %3D, : → %3A, etc.
+                const encUser = encodeURIComponent(bbUser);
+                const encPass = encodeURIComponent(bbPass);
                 scriptLines.push(`echo "[deploy] Configuring Bitbucket credentials..."`);
-                scriptLines.push(`BB_USER=$(echo '${b64User}' | base64 -d 2>/dev/null || echo '${b64User}')`);
-                scriptLines.push(`BB_PASS=$(echo '${b64Pass}' | base64 -d 2>/dev/null || echo '${b64Pass}')`);
                 scriptLines.push(`BB_URL=$(git remote get-url origin 2>/dev/null || echo "")`);
                 scriptLines.push(`if [ -n "$BB_URL" ]; then`);
                 scriptLines.push(`  BB_HOST=$(echo "$BB_URL" | sed -E 's|^[^:]+://||' | sed -E 's|/.*||')`);
                 scriptLines.push(`  BB_PATH=$(echo "$BB_URL" | sed -E 's|^[^:]+://[^/]+||')`);
-                scriptLines.push(`  ENCODED_USER=$(printf '%s' "$BB_USER" | python3 -c 'import sys,urllib.parse;print(urllib.parse.quote(sys.stdin.read(),safe=""))')`);
-                scriptLines.push(`  ENCODED_PASS=$(printf '%s' "$BB_PASS" | python3 -c 'import sys,urllib.parse;print(urllib.parse.quote(sys.stdin.read(),safe=""))')`);
-                scriptLines.push(`  NEW_URL="https://${ENCODED_USER}:${ENCODED_PASS}@${BB_HOST}${BB_PATH}"`);
-                scriptLines.push(`  echo "[deploy] Setting remote URL with auth..."`);
-                scriptLines.push(`  git remote set-url origin "$NEW_URL"`);
+                scriptLines.push(`  git remote set-url origin "https://${encUser}:${encPass}@${BB_HOST}${BB_PATH}"`);
+                scriptLines.push(`  echo "[deploy] Bitbucket auth configured"`);
                 scriptLines.push(`else`);
                 scriptLines.push(`  echo "[deploy] Warning: Could not get remote URL"`);
                 scriptLines.push(`fi`);
@@ -816,16 +808,14 @@ export async function runDeployment(config, runMeta = {}) {
             try {
               let ghToken = decrypt(config.githubToken);
               if (ghToken && !ghToken.includes(':')) {
-                const b64Token = Buffer.from(ghToken).toString('base64');
+                const encToken = encodeURIComponent(ghToken);
                 scriptLines.push(`echo "[deploy] Configuring GitHub credentials..."`);
-                scriptLines.push(`GH_TOKEN=$(echo '${b64Token}' | base64 -d 2>/dev/null || echo '${b64Token}')`);
                 scriptLines.push(`GH_URL=$(git remote get-url origin 2>/dev/null || echo "")`);
                 scriptLines.push(`if [ -n "$GH_URL" ]; then`);
                 scriptLines.push(`  GH_HOST=$(echo "$GH_URL" | sed -E 's|^[^:]+://||' | sed -E 's|/.*||')`);
                 scriptLines.push(`  GH_PATH=$(echo "$GH_URL" | sed -E 's|^[^:]+://[^/]+||')`);
-                scriptLines.push(`  ENCODED_TOKEN=$(printf '%s' "$GH_TOKEN" | python3 -c 'import sys,urllib.parse;print(urllib.parse.quote(sys.stdin.read(),safe=""))')`);
-                scriptLines.push(`  NEW_URL="https://x-access-token:${ENCODED_TOKEN}@${GH_HOST}${GH_PATH}"`);
-                scriptLines.push(`  git remote set-url origin "$NEW_URL"`);
+                scriptLines.push(`  git remote set-url origin "https://x-access-token:${encToken}@${GH_HOST}${GH_PATH}"`);
+                scriptLines.push(`  echo "[deploy] GitHub auth configured"`);
                 scriptLines.push(`fi`);
               }
             } catch (e) {
