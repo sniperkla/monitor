@@ -35,21 +35,48 @@ export async function POST(request) {
     }
 
     const userData = await userRes.json();
-    console.log('[bitbucket/connect] API user response:', JSON.stringify({ username: userData?.username, nickname: userData?.nickname, display_name: userData?.display_name, account_id: userData?.account_id }));
+    console.log('[bitbucket/connect] API user response:', JSON.stringify(userData, null, 2));
+    
     // Extract the username slug from the API response
-    // Bitbucket API returns: username, display_name, nickname, account_id
+    // Bitbucket API /2.0/user returns: username, display_name, nickname, account_id, uuid
     let bbUser = userData?.username || userData?.nickname || '';
-    // If still empty, try to extract from raw input (strip email domain if present)
-    if (!bbUser) {
-      console.warn('[bitbucket/connect] API returned no username, falling back to raw input:', username);
-      bbUser = username.includes('@') ? username.split('@')[0] : username;
+    
+    // If username looks like an email or is empty, try to get workspace from repositories
+    if (!bbUser || bbUser.includes('@')) {
+      console.log('[bitbucket/connect] Username missing or is email, fetching repos to find workspace...');
+      try {
+        const reposRes = await fetch('https://api.bitbucket.org/2.0/repositories?role=owner&pagelen=1', {
+          headers: {
+            Authorization: `Basic ${credentials}`,
+            Accept: 'application/json',
+          },
+        });
+        if (reposRes.ok) {
+          const reposData = await reposRes.json();
+          const firstRepo = reposData?.values?.[0];
+          const workspace = firstRepo?.workspace?.slug || firstRepo?.owner?.username || '';
+          if (workspace && !workspace.includes('@')) {
+            bbUser = workspace;
+            console.log('[bitbucket/connect] Got username from repos workspace:', bbUser);
+          }
+        }
+      } catch (e) {
+        console.warn('[bitbucket/connect] Failed to fetch repos for workspace:', e.message);
+      }
     }
-    // Final safety: ensure we have a valid slug (no @ symbol)
-    if (bbUser.includes('@')) {
-      console.warn('[bitbucket/connect] Username still contains @, stripping domain:', bbUser);
-      bbUser = bbUser.split('@')[0];
+    
+    // If still empty or email, try to extract from raw input
+    if (!bbUser || bbUser.includes('@')) {
+      if (bbUser.includes('@')) {
+        console.warn('[bitbucket/connect] Username still contains @, stripping domain:', bbUser);
+        bbUser = bbUser.split('@')[0];
+      } else {
+        console.warn('[bitbucket/connect] API returned no username, falling back to raw input:', username);
+        bbUser = username.includes('@') ? username.split('@')[0] : username;
+      }
     }
-    console.log('[bitbucket/connect] Resolved Bitbucket username slug:', bbUser);
+    
+    console.log('[bitbucket/connect] ✅ Resolved Bitbucket username slug:', bbUser);
 
     await connectDB(process.env.MONGODB_URI, true);
     const setting = await SystemSetting.findOne({ key: dbKey });
