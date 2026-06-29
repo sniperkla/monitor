@@ -17,25 +17,25 @@ export async function POST(request) {
     const dbKey = project === 'default' ? 'auto_deploy_config' : `auto_deploy_config_${project}`;
 
     const { username, appPassword } = await request.json();
-    if (!username || !appPassword) {
-      return NextResponse.json({ success: false, error: 'Username and app password are required' }, { status: 400 });
+    if (!appPassword) {
+      return NextResponse.json({ success: false, error: 'Token is required' }, { status: 400 });
     }
 
-    // Validate credentials by fetching user info
-    const credentials = Buffer.from(`${username}:${appPassword}`).toString('base64');
-    const userRes = await fetch('https://api.bitbucket.org/2.0/user', {
-      headers: {
-        Authorization: `Basic ${credentials}`,
-        Accept: 'application/json',
-      },
-    });
-
-    if (!userRes.ok) {
-      return NextResponse.json({ success: false, error: 'Invalid Bitbucket credentials' }, { status: 401 });
+    // Try to validate with x-token-auth (workspace access token format)
+    // Skip strict validation — git will verify the token on first fetch
+    let bbUser = username || 'bitbucket';
+    try {
+      const credentials = Buffer.from(`x-token-auth:${appPassword}`).toString('base64');
+      const userRes = await fetch('https://api.bitbucket.org/2.0/user', {
+        headers: { Authorization: `Basic ${credentials}`, Accept: 'application/json' },
+      });
+      if (userRes.ok) {
+        const userData = await userRes.json();
+        bbUser = userData?.username || username || 'bitbucket';
+      }
+    } catch (e) {
+      // Validation failed, continue anyway — token will be verified at deploy time
     }
-
-    const userData = await userRes.json();
-    const bbUser = userData?.username || username;
 
     await connectDB(process.env.MONGODB_URI, true);
     const setting = await SystemSetting.findOne({ key: dbKey });

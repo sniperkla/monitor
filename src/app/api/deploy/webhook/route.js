@@ -446,18 +446,17 @@ export async function runDeployment(config, runMeta = {}) {
       'set -e',
       'set -o pipefail',
     ];
-    // Embed credentials in git remote URL (URL-encoded in JavaScript)
+    // Embed credentials in git remote URL
     if (config.bitbucketConnected && config.bitbucketUsername && config.bitbucketAppPassword) {
       try {
         let bbUser = decrypt(config.bitbucketUsername);
         let bbPass = decrypt(config.bitbucketAppPassword);
         if (bbUser && bbPass) {
-          const encUser = encodeURIComponent(bbUser);
-          const encPass = encodeURIComponent(bbPass);
+          const safeUser = bbUser.replace(/@/g, '%40');
           scriptLines.push('REMOTE_URL=$(git remote get-url origin 2>/dev/null || echo "")');
           scriptLines.push('if [ -z "$REMOTE_URL" ]; then echo "[deploy] ERROR: No remote URL"; exit 1; fi');
           scriptLines.push('HOST_PATH=$(echo "$REMOTE_URL" | sed -E \'s#^[^@]+@##; s#^[a-z]+://##\')');
-          scriptLines.push('git remote set-url origin "https://' + encUser + ':' + encPass + '@${HOST_PATH}"');
+          scriptLines.push('git remote set-url origin "https://' + safeUser + ':' + bbPass + '@${HOST_PATH}"');
         }
       } catch (e) {
         console.warn('[deploy] Failed to decrypt Bitbucket credentials for local deploy:', e.message);
@@ -759,19 +758,19 @@ export async function runDeployment(config, runMeta = {}) {
           ];
           const targetBranch = (config.branch || 'main').replace('refs/heads/', '');
 
-          // Embed credentials in git remote URL (URL-encoded in JavaScript)
+          // Embed credentials in git remote URL
+          // Only encode @ in email (needed for URL parsing), leave token as-is
           if (config.bitbucketConnected && config.bitbucketUsername && config.bitbucketAppPassword) {
             try {
               let bbUser = decrypt(config.bitbucketUsername);
               let bbPass = decrypt(config.bitbucketAppPassword);
               if (bbUser && bbPass) {
-                const encUser = encodeURIComponent(bbUser);
-                const encPass = encodeURIComponent(bbPass);
+                const safeUser = bbUser.replace(/@/g, '%40');
                 scriptLines.push('echo "[deploy] Configuring Bitbucket credentials..."');
                 scriptLines.push('REMOTE_URL=$(git remote get-url origin 2>/dev/null || echo "")');
                 scriptLines.push('if [ -z "$REMOTE_URL" ]; then echo "[deploy] ERROR: No remote URL"; exit 1; fi');
                 scriptLines.push('HOST_PATH=$(echo "$REMOTE_URL" | sed -E \'s#^[^@]+@##; s#^[a-z]+://##\')');
-                scriptLines.push('git remote set-url origin "https://' + encUser + ':' + encPass + '@${HOST_PATH}"');
+                scriptLines.push('git remote set-url origin "https://' + safeUser + ':' + bbPass + '@${HOST_PATH}"');
                 scriptLines.push('echo "[deploy] Bitbucket auth configured"');
               }
             } catch (e) {
