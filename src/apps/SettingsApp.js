@@ -319,6 +319,23 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
             setRepoInput(activeRepo);
             if (isBitbucket) setGitProvider('bitbucket');
             else setGitProvider('github');
+
+            if (activeRepo) {
+              const fetchBranches = async () => {
+                try {
+                  const param = `repo=${encodeURIComponent(activeRepo)}&project=${encodeURIComponent(selectedProjectId)}`;
+                  const endpoint = isBitbucket ? '/api/deploy/bitbucket/branches' : '/api/deploy/github/branches';
+                  const res = await apiFetch(`${endpoint}?${param}`);
+                  const data = await res.json();
+                  if (data.success && data.branches) {
+                    setBranches(data.branches);
+                  }
+                } catch (err) {
+                  console.error('Failed to auto-load branches:', err);
+                }
+              };
+              fetchBranches();
+            }
           }
 
           const listRes = await apiFetch('/api/deploy/config');

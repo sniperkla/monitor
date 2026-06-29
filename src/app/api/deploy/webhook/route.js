@@ -469,6 +469,23 @@ export async function runDeployment(config, runMeta = {}) {
         console.warn('[deploy] Failed to decrypt GitHub token for local deploy:', e.message);
       }
     }
+
+    // Sanitize remote URL to remove any embedded credentials that might cause Git URL parsing issues (especially when username contains '@')
+    scriptLines.push('if git remote get-url origin >/dev/null 2>&1; then');
+    scriptLines.push('  CURRENT_URL=$(git remote get-url origin)');
+    scriptLines.push('  if [[ "$CURRENT_URL" =~ ^https?:// ]]; then');
+    scriptLines.push('    CLEAN_URL=""');
+    scriptLines.push('    if [[ "$CURRENT_URL" == *github.com* ]]; then');
+    scriptLines.push('      CLEAN_URL="https://github.com/$(echo "$CURRENT_URL" | sed -E \'s|.*github\\.com/||\')"');
+    scriptLines.push('    elif [[ "$CURRENT_URL" == *bitbucket.org* ]]; then');
+    scriptLines.push('      CLEAN_URL="https://bitbucket.org/$(echo "$CURRENT_URL" | sed -E \'s|.*bitbucket\\.org/||\')"');
+    scriptLines.push('    fi');
+    scriptLines.push('    if [ -n "$CLEAN_URL" ] && [ "$CURRENT_URL" != "$CLEAN_URL" ]; then');
+    scriptLines.push('      echo "[deploy] Cleaning remote URL to $CLEAN_URL"');
+    scriptLines.push('      git remote set-url origin "$CLEAN_URL"');
+    scriptLines.push('    fi');
+    scriptLines.push('  fi');
+    scriptLines.push('fi');
     if (commitSha) {
       scriptLines.push(`echo "[deploy] Checking out commit: ${commitSha}"`);
       scriptLines.push(`git checkout ${commitSha}`);
@@ -760,6 +777,23 @@ export async function runDeployment(config, runMeta = {}) {
               console.warn('[deploy] Failed to decrypt GitHub token:', e.message);
             }
           }
+
+          // Sanitize remote URL to remove any embedded credentials that might cause Git URL parsing issues (especially when username contains '@')
+          scriptLines.push('if git remote get-url origin >/dev/null 2>&1; then');
+          scriptLines.push('  CURRENT_URL=$(git remote get-url origin)');
+          scriptLines.push('  if [[ "$CURRENT_URL" =~ ^https?:// ]]; then');
+          scriptLines.push('    CLEAN_URL=""');
+          scriptLines.push('    if [[ "$CURRENT_URL" == *github.com* ]]; then');
+          scriptLines.push('      CLEAN_URL="https://github.com/$(echo "$CURRENT_URL" | sed -E \'s|.*github\\.com/||\')"');
+          scriptLines.push('    elif [[ "$CURRENT_URL" == *bitbucket.org* ]]; then');
+          scriptLines.push('      CLEAN_URL="https://bitbucket.org/$(echo "$CURRENT_URL" | sed -E \'s|.*bitbucket\\.org/||\')"');
+          scriptLines.push('    fi');
+          scriptLines.push('    if [ -n "$CLEAN_URL" ] && [ "$CURRENT_URL" != "$CLEAN_URL" ]; then');
+          scriptLines.push('      echo "[deploy] Cleaning remote URL to $CLEAN_URL"');
+          scriptLines.push('      git remote set-url origin "$CLEAN_URL"');
+          scriptLines.push('    fi');
+          scriptLines.push('  fi');
+          scriptLines.push('fi');
 
           scriptLines.push(`git fetch origin`);
           scriptLines.push(`echo "[deploy] Checking out branch: ${targetBranch}"`);
