@@ -290,6 +290,8 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
   const [bbUsername, setBbUsername] = useState('');
   const [bbAppPassword, setBbAppPassword] = useState('');
   const [bbConnecting, setBbConnecting] = useState(false);
+  const [bbRepos, setBbRepos] = useState([]);
+  const [loadingBbRepos, setLoadingBbRepos] = useState(false);
 
   // Fetch deployment config + SSH connections (deploy-relevant triggers only)
   useEffect(() => {
@@ -335,6 +337,21 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
                 }
               };
               fetchBranches();
+            } else if (isBitbucket && configData.config.bitbucketConnected) {
+              const fetchRepos = async () => {
+                setLoadingBbRepos(true);
+                try {
+                  const res = await apiFetch(`/api/deploy/bitbucket/repos?project=${encodeURIComponent(selectedProjectId)}`);
+                  const data = await res.json();
+                  if (data.success && data.repos) {
+                    setBbRepos(data.repos);
+                  }
+                } catch (err) {
+                  console.error('Failed to auto-load Bitbucket repos:', err);
+                }
+                setLoadingBbRepos(false);
+              };
+              fetchRepos();
             }
           }
 
@@ -2689,6 +2706,26 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
                         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
                           <div className="rounded-2xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] p-4">
                             <label className="block text-[11px] font-bold text-[var(--text-secondary)] uppercase tracking-wider mb-2">{gitProvider === 'github' ? t('deploy.githubRepoLabel', 'GitHub repository') : 'Bitbucket repository'}</label>
+                            {gitProvider === 'bitbucket' && bbRepos.length > 0 && !repoInput && (
+                              <div className="mb-2">
+                                <label className="block text-[10px] text-[var(--text-muted)] mb-1">Select from your repos:</label>
+                                <select
+                                  value=""
+                                  onChange={(e) => {
+                                    if (e.target.value) {
+                                      setRepoInput(e.target.value);
+                                      setBbRepos([]);
+                                    }
+                                  }}
+                                  className="w-full bg-[var(--bg-primary)] border border-[var(--border-color)] rounded-xl px-3 py-2 text-xs text-[var(--text-primary)] focus:outline-none"
+                                >
+                                  <option value="">{loadingBbRepos ? 'Loading repos...' : 'Choose a repository...'}</option>
+                                  {bbRepos.map(r => (
+                                    <option key={r.slug} value={r.slug}>{r.name} ({r.slug}){r.isPrivate ? ' 🔒' : ''}</option>
+                                  ))}
+                                </select>
+                              </div>
+                            )}
                             <input
                               type="text"
                               value={repoInput}

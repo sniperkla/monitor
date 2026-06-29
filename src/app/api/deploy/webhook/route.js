@@ -446,7 +446,7 @@ export async function runDeployment(config, runMeta = {}) {
       'set -e',
       'set -o pipefail',
     ];
-    // Embed credentials in git remote URL (URL-encoded in JS, no shell escaping needed)
+    // Embed credentials in git remote URL (URL-encoded in JavaScript)
     if (config.bitbucketConnected && config.bitbucketUsername && config.bitbucketAppPassword) {
       try {
         let bbUser = decrypt(config.bitbucketUsername);
@@ -454,12 +454,10 @@ export async function runDeployment(config, runMeta = {}) {
         if (bbUser && bbPass) {
           const encUser = encodeURIComponent(bbUser);
           const encPass = encodeURIComponent(bbPass);
-          scriptLines.push(`BB_URL=$(git remote get-url origin 2>/dev/null || echo "")`);
-          scriptLines.push(`if [ -n "$BB_URL" ]; then`);
-          scriptLines.push(`  BB_HOST=$(echo "$BB_URL" | sed -E 's|^[^:]+://||' | sed -E 's|/.*||')`);
-          scriptLines.push(`  BB_PATH=$(echo "$BB_URL" | sed -E 's|^[^:]+://[^/]+||')`);
-          scriptLines.push(`  git remote set-url origin "https://${encUser}:${encPass}@${BB_HOST}${BB_PATH}"`);
-          scriptLines.push(`fi`);
+          scriptLines.push('REMOTE_URL=$(git remote get-url origin 2>/dev/null || echo "")');
+          scriptLines.push('if [ -z "$REMOTE_URL" ]; then echo "[deploy] ERROR: No remote URL"; exit 1; fi');
+          scriptLines.push('CLEAN_URL=$(echo "$REMOTE_URL" | sed -E \'s#https?://[^/]*@##\' | sed -E \'s#^#https://#\')');
+          scriptLines.push('git remote set-url origin "https://' + encUser + ':' + encPass + '@$(echo "$CLEAN_URL" | sed -E \'s#^https://##\')"');
         }
       } catch (e) {
         console.warn('[deploy] Failed to decrypt Bitbucket credentials for local deploy:', e.message);
@@ -469,12 +467,10 @@ export async function runDeployment(config, runMeta = {}) {
         let ghToken = decrypt(config.githubToken);
         if (ghToken && !ghToken.includes(':')) {
           const encToken = encodeURIComponent(ghToken);
-          scriptLines.push(`GH_URL=$(git remote get-url origin 2>/dev/null || echo "")`);
-          scriptLines.push(`if [ -n "$GH_URL" ]; then`);
-          scriptLines.push(`  GH_HOST=$(echo "$GH_URL" | sed -E 's|^[^:]+://||' | sed -E 's|/.*||')`);
-          scriptLines.push(`  GH_PATH=$(echo "$GH_URL" | sed -E 's|^[^:]+://[^/]+||')`);
-          scriptLines.push(`  git remote set-url origin "https://x-access-token:${encToken}@${GH_HOST}${GH_PATH}"`);
-          scriptLines.push(`fi`);
+          scriptLines.push('REMOTE_URL=$(git remote get-url origin 2>/dev/null || echo "")');
+          scriptLines.push('if [ -z "$REMOTE_URL" ]; then echo "[deploy] ERROR: No remote URL"; exit 1; fi');
+          scriptLines.push('CLEAN_URL=$(echo "$REMOTE_URL" | sed -E \'s#https?://[^/]*@##\' | sed -E \'s#^#https://#\')');
+          scriptLines.push('git remote set-url origin "https://x-access-token:' + encToken + '@$(echo "$CLEAN_URL" | sed -E \'s#^https://##\')"');
         }
       } catch (e) {
         console.warn('[deploy] Failed to decrypt GitHub token for local deploy:', e.message);
@@ -763,43 +759,20 @@ export async function runDeployment(config, runMeta = {}) {
           ];
           const targetBranch = (config.branch || 'main').replace('refs/heads/', '');
 
-          // Step 1: Strip any stale embedded credentials from remote URL
-          scriptLines.push('if git remote get-url origin >/dev/null 2>&1; then');
-          scriptLines.push('  CURRENT_URL=$(git remote get-url origin)');
-          scriptLines.push('  if [[ "$CURRENT_URL" =~ ^https?://[^/]*@ ]]; then');
-          scriptLines.push('    CLEAN_URL=""');
-          scriptLines.push('    if [[ "$CURRENT_URL" == *github.com* ]]; then');
-          scriptLines.push('      CLEAN_URL="https://github.com/$(echo "$CURRENT_URL" | sed -E \'s|.*github\\.com/||\')"');
-          scriptLines.push('    elif [[ "$CURRENT_URL" == *bitbucket.org* ]]; then');
-          scriptLines.push('      CLEAN_URL="https://bitbucket.org/$(echo "$CURRENT_URL" | sed -E \'s|.*bitbucket\\.org/||\')"');
-          scriptLines.push('    fi');
-          scriptLines.push('    if [ -n "$CLEAN_URL" ]; then');
-          scriptLines.push('      echo "[deploy] Cleaned stale credentials from remote URL"');
-          scriptLines.push('      git remote set-url origin "$CLEAN_URL"');
-          scriptLines.push('    fi');
-          scriptLines.push('  fi');
-          scriptLines.push('fi');
-
-          // Step 2: Embed fresh credentials in git remote URL
-          // Pre-encode credentials with URL-safe encoding in JavaScript (avoids python3 dependency)
+          // Embed credentials in git remote URL (URL-encoded in JavaScript)
           if (config.bitbucketConnected && config.bitbucketUsername && config.bitbucketAppPassword) {
             try {
               let bbUser = decrypt(config.bitbucketUsername);
               let bbPass = decrypt(config.bitbucketAppPassword);
               if (bbUser && bbPass) {
-                // URL-encode in JS: @ → %40, = → %3D, : → %3A, etc.
                 const encUser = encodeURIComponent(bbUser);
                 const encPass = encodeURIComponent(bbPass);
-                scriptLines.push(`echo "[deploy] Configuring Bitbucket credentials..."`);
-                scriptLines.push(`BB_URL=$(git remote get-url origin 2>/dev/null || echo "")`);
-                scriptLines.push(`if [ -n "$BB_URL" ]; then`);
-                scriptLines.push(`  BB_HOST=$(echo "$BB_URL" | sed -E 's|^[^:]+://||' | sed -E 's|/.*||')`);
-                scriptLines.push(`  BB_PATH=$(echo "$BB_URL" | sed -E 's|^[^:]+://[^/]+||')`);
-                scriptLines.push(`  git remote set-url origin "https://${encUser}:${encPass}@${BB_HOST}${BB_PATH}"`);
-                scriptLines.push(`  echo "[deploy] Bitbucket auth configured"`);
-                scriptLines.push(`else`);
-                scriptLines.push(`  echo "[deploy] Warning: Could not get remote URL"`);
-                scriptLines.push(`fi`);
+                scriptLines.push('echo "[deploy] Configuring Bitbucket credentials..."');
+                scriptLines.push('REMOTE_URL=$(git remote get-url origin 2>/dev/null || echo "")');
+                scriptLines.push('if [ -z "$REMOTE_URL" ]; then echo "[deploy] ERROR: No remote URL"; exit 1; fi');
+                scriptLines.push('CLEAN_URL=$(echo "$REMOTE_URL" | sed -E \'s#https?://[^/]*@##\' | sed -E \'s#^#https://#\')');
+                scriptLines.push('git remote set-url origin "https://' + encUser + ':' + encPass + '@$(echo "$CLEAN_URL" | sed -E \'s#^https://##\')"');
+                scriptLines.push('echo "[deploy] Bitbucket auth configured"');
               }
             } catch (e) {
               console.warn('[deploy] Failed to decrypt Bitbucket credentials:', e.message);
@@ -809,21 +782,19 @@ export async function runDeployment(config, runMeta = {}) {
               let ghToken = decrypt(config.githubToken);
               if (ghToken && !ghToken.includes(':')) {
                 const encToken = encodeURIComponent(ghToken);
-                scriptLines.push(`echo "[deploy] Configuring GitHub credentials..."`);
-                scriptLines.push(`GH_URL=$(git remote get-url origin 2>/dev/null || echo "")`);
-                scriptLines.push(`if [ -n "$GH_URL" ]; then`);
-                scriptLines.push(`  GH_HOST=$(echo "$GH_URL" | sed -E 's|^[^:]+://||' | sed -E 's|/.*||')`);
-                scriptLines.push(`  GH_PATH=$(echo "$GH_URL" | sed -E 's|^[^:]+://[^/]+||')`);
-                scriptLines.push(`  git remote set-url origin "https://x-access-token:${encToken}@${GH_HOST}${GH_PATH}"`);
-                scriptLines.push(`  echo "[deploy] GitHub auth configured"`);
-                scriptLines.push(`fi`);
+                scriptLines.push('echo "[deploy] Configuring GitHub credentials..."');
+                scriptLines.push('REMOTE_URL=$(git remote get-url origin 2>/dev/null || echo "")');
+                scriptLines.push('if [ -z "$REMOTE_URL" ]; then echo "[deploy] ERROR: No remote URL"; exit 1; fi');
+                scriptLines.push('CLEAN_URL=$(echo "$REMOTE_URL" | sed -E \'s#https?://[^/]*@##\' | sed -E \'s#^#https://#\')');
+                scriptLines.push('git remote set-url origin "https://x-access-token:' + encToken + '@$(echo "$CLEAN_URL" | sed -E \'s#^https://##\')"');
+                scriptLines.push('echo "[deploy] GitHub auth configured"');
               }
             } catch (e) {
               console.warn('[deploy] Failed to decrypt GitHub token:', e.message);
             }
           }
 
-          scriptLines.push(`git fetch origin`);
+          scriptLines.push('git fetch origin');
           scriptLines.push(`echo "[deploy] Checking out branch: ${targetBranch}"`);
           scriptLines.push(`git checkout -B ${targetBranch} origin/${targetBranch}`);
           
