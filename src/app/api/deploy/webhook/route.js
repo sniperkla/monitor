@@ -446,17 +446,21 @@ export async function runDeployment(config, runMeta = {}) {
       'set -e',
       'set -o pipefail',
     ];
-    // Embed credentials in git remote URL
+    // Use git credential helper via temp script
     if (config.bitbucketConnected && config.bitbucketUsername && config.bitbucketAppPassword) {
       try {
         let bbUser = decrypt(config.bitbucketUsername);
         let bbPass = decrypt(config.bitbucketAppPassword);
         if (bbUser && bbPass) {
-          const safeUser = bbUser.replace(/@/g, '%40');
-          scriptLines.push('REMOTE_URL=$(git remote get-url origin 2>/dev/null || echo "")');
-          scriptLines.push('if [ -z "$REMOTE_URL" ]; then echo "[deploy] ERROR: No remote URL"; exit 1; fi');
-          scriptLines.push('HOST_PATH=$(echo "$REMOTE_URL" | sed -E \'s#^[^@]+@##; s#^[a-z]+://##\')');
-          scriptLines.push('git remote set-url origin "https://' + safeUser + ':' + bbPass + '@${HOST_PATH}"');
+          const credScript = `/tmp/.git-cred-${projectId}.sh`;
+          scriptLines.push(`cat > ${credScript} << 'CRED_EOF'`);
+          scriptLines.push('#!/bin/sh');
+          scriptLines.push(`echo "username=${bbUser}"`);
+          scriptLines.push(`echo "password=${bbPass}"`);
+          scriptLines.push('CRED_EOF');
+          scriptLines.push(`chmod 700 ${credScript}`);
+          scriptLines.push(`export GIT_ASKPASS=${credScript}`);
+          scriptLines.push(`export GIT_TERMINAL_PROMPT=0`);
         }
       } catch (e) {
         console.warn('[deploy] Failed to decrypt Bitbucket credentials for local deploy:', e.message);
@@ -499,8 +503,9 @@ export async function runDeployment(config, runMeta = {}) {
     scriptLines.push('echo "[deploy] Running deploy command..."');
     scriptLines.push(config.deployCommand);
     scriptLines.push('echo "[deploy] Deploy command finished successfully"');
-    // Reset remote URL to remove embedded credentials
-    scriptLines.push(`git remote get-url origin >/dev/null 2>&1 && git remote set-url origin "$(git remote get-url origin | sed -E 's|https://[^@]*@|https://|')" 2>/dev/null || true`);
+    // Clean up credential script
+    scriptLines.push(`rm -f /tmp/.git-cred-${projectId}.sh 2>/dev/null || true`);
+    scriptLines.push(`unset GIT_ASKPASS`);
     const script = scriptLines.join('\n');
 
     // Spawn bash reading script from stdin — avoids shell escaping issues
@@ -758,24 +763,22 @@ export async function runDeployment(config, runMeta = {}) {
           ];
           const targetBranch = (config.branch || 'main').replace('refs/heads/', '');
 
-          // Embed credentials in git remote URL
-          // Only encode @ in email (needed for URL parsing), leave token as-is
+          // Use git credential helper via temp script (avoids URL encoding issues with @ in email)
           if (config.bitbucketConnected && config.bitbucketUsername && config.bitbucketAppPassword) {
             try {
               let bbUser = decrypt(config.bitbucketUsername);
               let bbPass = decrypt(config.bitbucketAppPassword);
               if (bbUser && bbPass) {
-                const safeUser = bbUser.replace(/@/g, '%40');
+                const credScript = `/tmp/.git-cred-${projectId}.sh`;
                 scriptLines.push('echo "[deploy] Configuring Bitbucket credentials..."');
-                scriptLines.push('REMOTE_URL=$(git remote get-url origin 2>/dev/null || echo "")');
-                scriptLines.push('echo "[debug] Current remote: $REMOTE_URL"');
-                scriptLines.push('if [ -z "$REMOTE_URL" ]; then echo "[deploy] ERROR: No remote URL"; exit 1; fi');
-                scriptLines.push('HOST_PATH=$(echo "$REMOTE_URL" | sed -E \'s#^[^@]+@##; s#^[a-z]+://##\')');
-                scriptLines.push('echo "[debug] Extracted host+path: $HOST_PATH"');
-                scriptLines.push('NEW_URL="https://' + safeUser + ':' + bbPass + '@${HOST_PATH}"');
-                scriptLines.push('echo "[debug] Setting remote to: $NEW_URL"');
-                scriptLines.push('git remote set-url origin "$NEW_URL"');
-                scriptLines.push('echo "[debug] Verifying remote: $(git remote get-url origin)"');
+                scriptLines.push(`cat > ${credScript} << 'CRED_EOF'`);
+                scriptLines.push('#!/bin/sh');
+                scriptLines.push(`echo "username=${bbUser}"`);
+                scriptLines.push(`echo "password=${bbPass}"`);
+                scriptLines.push('CRED_EOF');
+                scriptLines.push(`chmod 700 ${credScript}`);
+                scriptLines.push(`export GIT_ASKPASS=${credScript}`);
+                scriptLines.push(`export GIT_TERMINAL_PROMPT=0`);
                 scriptLines.push('echo "[deploy] Bitbucket auth configured"');
               }
             } catch (e) {
@@ -818,8 +821,9 @@ export async function runDeployment(config, runMeta = {}) {
           scriptLines.push('echo "[deploy] Running deploy command..."');
           scriptLines.push(config.deployCommand);
           scriptLines.push('echo "[deploy] Deploy command finished successfully"');
-          // Reset remote URL to remove embedded credentials
-          scriptLines.push(`git remote get-url origin >/dev/null 2>&1 && git remote set-url origin "$(git remote get-url origin | sed -E 's|https://[^@]*@|https://|')" 2>/dev/null || true`);
+          // Clean up credential script
+          scriptLines.push(`rm -f /tmp/.git-cred-${projectId}.sh 2>/dev/null || true`);
+          scriptLines.push(`unset GIT_ASKPASS`);
           const deployScript = scriptLines.join('\n') + '\n';
 
           // DEBUG: log the script to see what's being generated
