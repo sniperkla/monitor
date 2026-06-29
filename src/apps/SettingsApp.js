@@ -292,6 +292,23 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
   const [bbConnecting, setBbConnecting] = useState(false);
   const [bbRepos, setBbRepos] = useState([]);
   const [loadingBbRepos, setLoadingBbRepos] = useState(false);
+  const savedDeployConfigRef = useRef(null);
+
+  // Track unsaved deploy config changes
+  const hasUnsavedDeployChanges = (() => {
+    if (!savedDeployConfigRef.current) return false;
+    const saved = savedDeployConfigRef.current;
+    const fields = ['name', 'enabled', 'branch', 'targetType', 'connectionId', 'deployCommand', 'projectPath', 'timeoutSeconds', 'bitbucketRepo', 'githubRepo'];
+    return fields.some(f => (deployConfig[f] || '') !== (saved[f] || ''));
+  })();
+
+  // Warn before leaving with unsaved changes
+  useEffect(() => {
+    if (!hasUnsavedDeployChanges) return;
+    const handler = (e) => { e.preventDefault(); e.returnValue = ''; };
+    window.addEventListener('beforeunload', handler);
+    return () => window.removeEventListener('beforeunload', handler);
+  }, [hasUnsavedDeployChanges]);
 
   // Fetch deployment config + SSH connections (deploy-relevant triggers only)
   useEffect(() => {
@@ -302,8 +319,7 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
           const configRes = await apiFetch(`/api/deploy/config?project=${selectedProjectId}`);
           const configData = await configRes.json();
           if (configData.success && configData.config) {
-            setDeployConfig(prev => ({
-              ...prev,
+            const loadedConfig = {
               ...configData.config,
               projectPath: configData.config.projectPath || '.',
               timeoutSeconds: configData.config.timeoutSeconds || 600,
@@ -313,7 +329,9 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
               githubUser: configData.config.githubUser || '',
               githubRepo: configData.config.githubRepo || '',
               bitbucketRepo: configData.config.bitbucketRepo || ''
-            }));
+            };
+            setDeployConfig(prev => ({ ...prev, ...loadedConfig }));
+            savedDeployConfigRef.current = loadedConfig;
             const isBitbucket = !!configData.config.bitbucketConnected;
             const activeRepo = isBitbucket
               ? (configData.config.bitbucketRepo || '')
@@ -502,6 +520,7 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
       const data = await res.json();
       if (data.success && data.config) {
         setDeployConfig(data.config);
+        savedDeployConfigRef.current = { ...data.config };
         addNotification({ title: 'Success', message: 'Deployment settings saved successfully', type: 'success' });
         
         // Refresh project list names
@@ -2402,6 +2421,21 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
 
         {activeTab === 'deployment' && (
           <div className="max-w-6xl animate-in fade-in slide-in-from-bottom-2 duration-300">
+            {hasUnsavedDeployChanges && (
+              <div className="mb-4 px-4 py-3 rounded-xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-between gap-3">
+                <div className="flex items-center gap-2 text-amber-400 text-xs font-bold">
+                  <span className="text-base">⚠</span>
+                  <span>You have unsaved changes</span>
+                </div>
+                <button
+                  onClick={handleSaveDeployConfig}
+                  disabled={deploySaving}
+                  className="px-4 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-400 text-white text-xs font-bold transition-all disabled:opacity-50"
+                >
+                  {deploySaving ? 'Saving...' : 'Save Now'}
+                </button>
+              </div>
+            )}
             {/* Top Toolbar / Dashboard Selector */}
             <div className="p-4 mb-6 rounded-2xl bg-slate-900/40 border border-[var(--border-color)] flex flex-col sm:flex-row sm:items-center justify-between gap-4">
               <div className="flex flex-wrap items-center gap-3">
