@@ -452,10 +452,10 @@ export async function runDeployment(config, runMeta = {}) {
         let bbUser = decrypt(config.bitbucketUsername);
         let bbPass = decrypt(config.bitbucketAppPassword);
         if (bbUser && bbPass) {
-          const escapedUser = bbUser.replace(/'/g, "'\\''")
-          const escapedPass = bbPass.replace(/'/g, "'\\''")
-          scriptLines.push(`BB_USER='${escapedUser}'`);
-          scriptLines.push(`BB_PASS='${escapedPass}'`);
+          const encodedUser = encodeURIComponent(bbUser);
+          const encodedPass = encodeURIComponent(bbPass);
+          scriptLines.push(`BB_USER='${encodedUser}'`);
+          scriptLines.push(`BB_PASS='${encodedPass}'`);
           scriptLines.push(`BB_AUTH_INJECTED=1`);
         }
       } catch (e) {
@@ -477,10 +477,7 @@ export async function runDeployment(config, runMeta = {}) {
     scriptLines.push('RAW_URL=$(git remote get-url origin 2>/dev/null || echo "")');
     scriptLines.push('if [ "${BB_AUTH_INJECTED:-0}" = "1" ] && [ -n "$RAW_URL" ]; then');
     scriptLines.push('  CLEAN_PATH=$(echo "$RAW_URL" | sed -E \'s|^https?://([^@]+@)?||\')'); 
-    scriptLines.push('  # URL-encode @ and : in username/password so email addresses work correctly in URLs');
-    scriptLines.push('  BB_ENC_USER=$(printf \'%s\' "$BB_USER" | sed \'s/%/%25/g; s/@/%40/g; s/:/%3A/g\')');
-    scriptLines.push('  BB_ENC_PASS=$(printf \'%s\' "$BB_PASS" | sed \'s/%/%25/g; s/@/%40/g; s/:/%3A/g\')');
-    scriptLines.push('  AUTH_URL="https://${BB_ENC_USER}:${BB_ENC_PASS}@${CLEAN_PATH}"');
+    scriptLines.push('  AUTH_URL="https://${BB_USER}:${BB_PASS}@${CLEAN_PATH}"');
     scriptLines.push('  echo "[deploy] Using authenticated Bitbucket URL for pull"');
     scriptLines.push('  git remote set-url origin "$AUTH_URL"');
     scriptLines.push('fi');
@@ -754,13 +751,13 @@ export async function runDeployment(config, runMeta = {}) {
               let bbUser = decrypt(config.bitbucketUsername);
               let bbPass = decrypt(config.bitbucketAppPassword);
               if (bbUser && bbPass) {
-                const escapedUser = bbUser.replace(/'/g, "'\\''")
-                const escapedPass = bbPass.replace(/'/g, "'\\''")
+                const encodedUser = encodeURIComponent(bbUser);
+                const encodedPass = encodeURIComponent(bbPass);
                 scriptLines.push(`echo "[deploy] Configuring Bitbucket credentials..."`);
-                scriptLines.push(`BB_USER='${escapedUser}'`);
-                scriptLines.push(`BB_PASS='${escapedPass}'`);
+                scriptLines.push(`BB_USER='${encodedUser}'`);
+                scriptLines.push(`BB_PASS='${encodedPass}'`);
                 scriptLines.push(`BB_AUTH_INJECTED=1`);
-                scriptLines.push(`echo "[deploy] Bitbucket auth configured (username: ${escapedUser})"`);
+                scriptLines.push(`echo "[deploy] Bitbucket auth configured (username: ${bbUser})"`);
               }
             } catch (e) {
               console.warn('[deploy] Failed to decrypt Bitbucket credentials:', e.message);
@@ -783,10 +780,7 @@ export async function runDeployment(config, runMeta = {}) {
           scriptLines.push('RAW_URL=$(git remote get-url origin 2>/dev/null || echo "")');
           scriptLines.push('if [ "${BB_AUTH_INJECTED:-0}" = "1" ] && [ -n "$RAW_URL" ]; then');
           scriptLines.push('  CLEAN_PATH=$(echo "$RAW_URL" | sed -E \'s|^https?://([^@]+@)?||\')'); 
-          scriptLines.push('  # URL-encode @ and : in username/password so email addresses work correctly in URLs');
-          scriptLines.push('  BB_ENC_USER=$(printf \'%s\' "$BB_USER" | sed \'s/%/%25/g; s/@/%40/g; s/:/%3A/g\')');
-          scriptLines.push('  BB_ENC_PASS=$(printf \'%s\' "$BB_PASS" | sed \'s/%/%25/g; s/@/%40/g; s/:/%3A/g\')');
-          scriptLines.push('  AUTH_URL="https://${BB_ENC_USER}:${BB_ENC_PASS}@${CLEAN_PATH}"');
+          scriptLines.push('  AUTH_URL="https://${BB_USER}:${BB_PASS}@${CLEAN_PATH}"');
           scriptLines.push('  echo "[deploy] Using authenticated Bitbucket URL for pull"');
           scriptLines.push('  git remote set-url origin "$AUTH_URL"');
           scriptLines.push('elif [ -n "$RAW_URL" ]; then');
