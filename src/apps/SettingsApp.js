@@ -559,8 +559,11 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
       }
     } catch (err) {
       console.error('[Deploy] Trigger error:', err);
-      if (err.message?.includes('Session expired')) {
+      if (err.message === 'SESSION_EXPIRED') {
         addNotification({ title: 'Session Expired', message: 'Your session has expired. Please sign in again.', type: 'error' });
+        signIn('google');
+      } else if (err.message === 'SERVER_ERROR') {
+        addNotification({ title: 'Server Error', message: 'The server returned an unexpected response. Please try again.', type: 'error' });
       } else {
         addNotification({ title: 'Error', message: err.message || 'Failed to communicate with deployment trigger API', type: 'error' });
       }
@@ -616,7 +619,7 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
       if (!res.ok) {
         const errData = await res.json().catch(() => ({}));
         if (res.status === 401) {
-          throw new Error('Session expired. Please sign in again.');
+          throw new Error('SESSION_EXPIRED');
         }
         throw new Error(errData.error || `Server error: ${res.status}`);
       }
@@ -629,8 +632,11 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
       }
     } catch (err) {
       console.error('Failed to fetch commits:', err);
-      if (err.message?.includes('Session expired')) {
+      if (err.message === 'SESSION_EXPIRED') {
         addNotification({ title: 'Session Expired', message: 'Your session has expired. Please sign in again.', type: 'error' });
+        signIn('google');
+      } else if (err.message === 'SERVER_ERROR') {
+        addNotification({ title: 'Server Error', message: 'The server returned an unexpected response. Please try again.', type: 'error' });
       } else {
         addNotification({ title: 'Error', message: err.message || 'Failed to fetch commits', type: 'error' });
       }

@@ -241,20 +241,21 @@ export function AppProvider({ children }) {
     
     // Check for explicit 401 Unauthorized
     if (res.status === 401) {
-      signIn('google');
-      throw new Error('Session expired. Redirecting to sign-in...');
+      console.warn('[apiFetch] 401 Unauthorized for:', url);
+      throw new Error('SESSION_EXPIRED');
     }
     
-    // Check if response is HTML (likely a redirect to sign-in page)
+    // Check if response is HTML (likely a redirect to sign-in page or error page)
     const contentType = res.headers.get('content-type') || '';
     if (contentType.includes('text/html')) {
-      // Verify if it's a NextAuth sign-in redirect by checking URL
       const resUrl = res.url || '';
-      if (resUrl.includes('/api/auth/signin') || resUrl.includes('/api/auth/callback')) {
-        signIn('google');
-        throw new Error('Session expired. Redirecting to sign-in...');
+      console.warn('[apiFetch] HTML response received:', { url, status: res.status, responseUrl: resUrl });
+      // If redirected to auth pages, it's a session issue
+      if (resUrl.includes('/api/auth/signin') || resUrl.includes('/api/auth/callback') || res.status === 401) {
+        throw new Error('SESSION_EXPIRED');
       }
-      throw new Error('Server error. Please try again.');
+      // Otherwise it's a server error
+      throw new Error('SERVER_ERROR');
     }
     
     return res;
