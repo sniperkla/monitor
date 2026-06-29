@@ -559,7 +559,11 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
       }
     } catch (err) {
       console.error('[Deploy] Trigger error:', err);
-      addNotification({ title: 'Error', message: err.message || 'Failed to communicate with deployment trigger API', type: 'error' });
+      if (err.message?.includes('Session expired')) {
+        addNotification({ title: 'Session Expired', message: 'Your session has expired. Please sign in again.', type: 'error' });
+      } else {
+        addNotification({ title: 'Error', message: err.message || 'Failed to communicate with deployment trigger API', type: 'error' });
+      }
     }
     setDeployTriggering(false);
   };
@@ -611,6 +615,9 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
       const res = await apiFetch(endpoint);
       if (!res.ok) {
         const errData = await res.json().catch(() => ({}));
+        if (res.status === 401) {
+          throw new Error('Session expired. Please sign in again.');
+        }
         throw new Error(errData.error || `Server error: ${res.status}`);
       }
       const data = await res.json();
@@ -622,7 +629,11 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
       }
     } catch (err) {
       console.error('Failed to fetch commits:', err);
-      addNotification({ title: 'Error', message: err.message || 'Failed to fetch commits', type: 'error' });
+      if (err.message?.includes('Session expired')) {
+        addNotification({ title: 'Session Expired', message: 'Your session has expired. Please sign in again.', type: 'error' });
+      } else {
+        addNotification({ title: 'Error', message: err.message || 'Failed to fetch commits', type: 'error' });
+      }
     }
     setLoadingCommits(false);
   };

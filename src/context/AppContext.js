@@ -1,7 +1,7 @@
 'use client';
 
 import { createContext, useContext, useReducer, useCallback, useEffect, useRef } from 'react';
-import { useSession } from 'next-auth/react';
+import { useSession, signIn } from 'next-auth/react';
 import { useVault } from '@/context/VaultContext';
 import { getLocalConnections } from '@/utils/localConnections';
 
@@ -238,10 +238,25 @@ export function AppProvider({ children }) {
       }
     }
     const res = await fetch(url, { ...options, headers, credentials: 'include' });
+    
+    // Check for explicit 401 Unauthorized
+    if (res.status === 401) {
+      signIn('google');
+      throw new Error('Session expired. Redirecting to sign-in...');
+    }
+    
+    // Check if response is HTML (likely a redirect to sign-in page)
     const contentType = res.headers.get('content-type') || '';
     if (contentType.includes('text/html')) {
-      throw new Error('Session expired or server error');
+      // Verify if it's a NextAuth sign-in redirect by checking URL
+      const resUrl = res.url || '';
+      if (resUrl.includes('/api/auth/signin') || resUrl.includes('/api/auth/callback')) {
+        signIn('google');
+        throw new Error('Session expired. Redirecting to sign-in...');
+      }
+      throw new Error('Server error. Please try again.');
     }
+    
     return res;
   }, [state.dbConfig]);
 
