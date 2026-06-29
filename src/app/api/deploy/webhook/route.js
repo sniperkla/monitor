@@ -447,10 +447,13 @@ export async function runDeployment(config, runMeta = {}) {
       'set -o pipefail',
     ];
     // Temporarily inject Bitbucket credentials for git fetch/pull if needed
-    if (config.bitbucketConnected && config.bitbucketUsername && config.bitbucketAppPassword) {
+    if (config.bitbucketConnected && (config.bitbucketUsername || config.bitbucketUser) && config.bitbucketAppPassword) {
       try {
-        let bbUser = decrypt(config.bitbucketUsername);
+        let bbUser = config.bitbucketUser || decrypt(config.bitbucketUsername);
         let bbPass = decrypt(config.bitbucketAppPassword);
+        if (bbUser && bbUser.includes('@')) {
+          bbUser = bbUser.split('@')[0];
+        }
         if (bbUser && bbPass) {
           const encodedUser = encodeURIComponent(bbUser);
           const encodedPass = encodeURIComponent(bbPass);
@@ -763,10 +766,13 @@ export async function runDeployment(config, runMeta = {}) {
           }
 
           // Temporarily inject Bitbucket credentials for git fetch/pull if needed
-          if (config.bitbucketConnected && config.bitbucketUsername && config.bitbucketAppPassword) {
+          if (config.bitbucketConnected && (config.bitbucketUsername || config.bitbucketUser) && config.bitbucketAppPassword) {
             try {
-              let bbUser = decrypt(config.bitbucketUsername);
+              let bbUser = config.bitbucketUser || decrypt(config.bitbucketUsername);
               let bbPass = decrypt(config.bitbucketAppPassword);
+              if (bbUser && bbUser.includes('@')) {
+                bbUser = bbUser.split('@')[0];
+              }
               if (bbUser && bbPass) {
                 const encodedUser = encodeURIComponent(bbUser);
                 const encodedPass = encodeURIComponent(bbPass);
