@@ -402,7 +402,8 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
           ...prev,
           status: data.status,
           lastDeployLog: data.lastDeployLog,
-          lastDeployAt: data.lastDeployAt
+          lastDeployAt: data.lastDeployAt,
+          ...(data.lastDeployedCommitSha !== undefined ? { lastDeployedCommitSha: data.lastDeployedCommitSha } : {})
         }));
       } catch (err) {
         console.error('[SSE] Failed to parse message:', err);
@@ -432,7 +433,8 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
             ...prev,
             status: data.config.status,
             lastDeployLog: data.config.lastDeployLog,
-            lastDeployAt: data.config.lastDeployAt
+            lastDeployAt: data.config.lastDeployAt,
+            ...(data.config.lastDeployedCommitSha !== undefined ? { lastDeployedCommitSha: data.config.lastDeployedCommitSha } : {})
           }));
         }
       } catch (err) {

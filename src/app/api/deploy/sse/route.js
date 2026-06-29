@@ -43,7 +43,8 @@ export async function GET(request) {
             type: 'init',
             status: config.status,
             lastDeployLog: config.lastDeployLog,
-            lastDeployAt: config.lastDeployAt
+            lastDeployAt: config.lastDeployAt,
+            lastDeployedCommitSha: config.lastDeployedCommitSha || null
           })}\n\n`;
           controller.enqueue(encoder.encode(message));
         }
@@ -95,7 +96,8 @@ export async function broadcastDeploymentStatus(projectId = 'default') {
       project: projectId,
       status: config.status,
       lastDeployLog: config.lastDeployLog,
-      lastDeployAt: config.lastDeployAt
+      lastDeployAt: config.lastDeployAt,
+      lastDeployedCommitSha: config.lastDeployedCommitSha || null
     })}\n\n`;
 
     const encoded = encoder.encode(message);

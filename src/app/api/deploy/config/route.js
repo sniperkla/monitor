@@ -212,6 +212,7 @@ export async function POST(request) {
       aiEndpoint: body.aiEndpoint !== undefined ? body.aiEndpoint : existingValue.aiEndpoint || '',
       aiApiKey: body.aiApiKey !== undefined ? body.aiApiKey : existingValue.aiApiKey || '',
       deployRunId: body.deployRunId !== undefined ? body.deployRunId : existingValue.deployRunId || null,
+      lastDeployedCommitSha: body.lastDeployedCommitSha !== undefined ? body.lastDeployedCommitSha : existingValue.lastDeployedCommitSha || null,
       cancelRequested: body.cancelRequested !== undefined ? body.cancelRequested : existingValue.cancelRequested || false,
       githubConnected: body.githubConnected !== undefined ? body.githubConnected : existingValue.githubConnected || false,
       githubUser: body.githubUser !== undefined ? body.githubUser : existingValue.githubUser || '',
