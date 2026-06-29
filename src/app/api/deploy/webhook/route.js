@@ -709,7 +709,36 @@ export async function runDeployment(config, runMeta = {}) {
             'set -o pipefail',
           ];
           const targetBranch = (config.branch || 'main').replace('refs/heads/', '');
-          scriptLines.push(`git fetch origin`);
+
+          // Pass credentials via HTTP Basic auth header
+          if (config.bitbucketConnected && config.bitbucketUsername && config.bitbucketAppPassword) {
+            try {
+              let bbUser = decrypt(config.bitbucketUsername);
+              let bbPass = decrypt(config.bitbucketAppPassword);
+              if (bbUser && bbPass) {
+                const b64Cred = Buffer.from(`${bbUser}:${bbPass}`).toString('base64');
+                scriptLines.push(`git -c http.extraHeader="Authorization: Basic ${b64Cred}" fetch origin`);
+              } else {
+                scriptLines.push(`git fetch origin`);
+              }
+            } catch (e) {
+              scriptLines.push(`git fetch origin`);
+            }
+          } else if (config.githubToken) {
+            try {
+              let ghToken = decrypt(config.githubToken);
+              if (ghToken) {
+                const b64Cred = Buffer.from(`x-access-token:${ghToken}`).toString('base64');
+                scriptLines.push(`git -c http.extraHeader="Authorization: Basic ${b64Cred}" fetch origin`);
+              } else {
+                scriptLines.push(`git fetch origin`);
+              }
+            } catch (e) {
+              scriptLines.push(`git fetch origin`);
+            }
+          } else {
+            scriptLines.push(`git fetch origin`);
+          }
           scriptLines.push(`echo "[deploy] Checking out branch: ${targetBranch}"`);
           scriptLines.push(`git checkout -B ${targetBranch} origin/${targetBranch}`);
           
