@@ -452,6 +452,10 @@ export async function runDeployment(config, runMeta = {}) {
         let bbUser = decrypt(config.bitbucketUsername);
         let bbPass = decrypt(config.bitbucketAppPassword);
         if (bbUser && bbPass) {
+          // If the token starts with ATAT (Atlassian API token), the username must be 'x-token-auth'
+          if (bbPass.startsWith('ATAT')) {
+            bbUser = 'x-token-auth';
+          }
           const escapedUser = bbUser.replace(/'/g, "'\\''");
           const escapedPass = bbPass.replace(/'/g, "'\\''");
           scriptLines.push(`git config --local credential.helper '!f() { echo "username=${escapedUser}"; echo "password=${escapedPass}"; }; f'`);
@@ -756,6 +760,10 @@ export async function runDeployment(config, runMeta = {}) {
               let bbUser = decrypt(config.bitbucketUsername);
               let bbPass = decrypt(config.bitbucketAppPassword);
               if (bbUser && bbPass) {
+                // If the token starts with ATAT (Atlassian API token), the username must be 'x-token-auth'
+                if (bbPass.startsWith('ATAT')) {
+                  bbUser = 'x-token-auth';
+                }
                 const escapedUser = bbUser.replace(/'/g, "'\\''");
                 const escapedPass = bbPass.replace(/'/g, "'\\''");
                 scriptLines.push(`echo "[deploy] Configuring Bitbucket credentials..."`);

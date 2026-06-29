@@ -47,8 +47,11 @@ export async function GET(request) {
 
       if (cfg.bitbucketUsername && cfg.bitbucketAppPassword) {
         try {
-          const u = decrypt(cfg.bitbucketUsername);
+          let u = decrypt(cfg.bitbucketUsername);
           const p = decrypt(cfg.bitbucketAppPassword);
+          if (p.startsWith('ATAT')) {
+            u = 'x-token-auth';
+          }
           credentials = Buffer.from(`${u}:${p}`).toString('base64');
         } catch (err) {
           console.warn('[deploy/bitbucket/branches] failed to decrypt credentials', err.message);
