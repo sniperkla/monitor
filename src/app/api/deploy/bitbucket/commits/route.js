@@ -48,8 +48,12 @@ export async function GET(request) {
 
       if (cfg.bitbucketUsername && cfg.bitbucketAppPassword) {
         try {
-          const u = decrypt(cfg.bitbucketUsername);
+          let u = decrypt(cfg.bitbucketUsername);
           const p = decrypt(cfg.bitbucketAppPassword);
+          // Strip email domain if username is an email
+          if (u && u.includes('@')) {
+            u = u.split('@')[0];
+          }
           credentials = Buffer.from(`${u}:${p}`).toString('base64');
         } catch (err) {
           console.warn('[deploy/bitbucket/commits] failed to decrypt credentials', err.message);
