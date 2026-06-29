@@ -309,9 +309,8 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
               aiLogs: configData.config.aiLogs || [],
               githubConnected: configData.config.githubConnected || false,
               githubUser: configData.config.githubUser || '',
-              bitbucketConnected: configData.config.bitbucketConnected || false,
-              bitbucketUser: configData.config.bitbucketUser || '',
-              githubRepo: configData.config.githubRepo || ''
+              githubRepo: configData.config.githubRepo || '',
+              bitbucketRepo: configData.config.bitbucketRepo || ''
             }));
             const isBitbucket = !!configData.config.bitbucketConnected;
             const activeRepo = isBitbucket
@@ -457,7 +456,10 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
 
     setDeploySaving(true);
     try {
-      const { sshConnectionData, ...safeConfig } = deployConfig;
+      // Sync repoInput to the correct repo field before saving
+      const repoField = gitProvider === 'bitbucket' ? 'bitbucketRepo' : 'githubRepo';
+      const configToSave = { ...deployConfig, [repoField]: repoInput || deployConfig[repoField] || '' };
+      const { sshConnectionData, ...safeConfig } = configToSave;
       const res = await apiFetch('/api/deploy/config', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },

@@ -1,4 +1,4 @@
-import { Terminal, Settings, Monitor, Database, Folder, AlertCircle, StickyNote, Book, MonitorPlay, Server, FileText, GitBranch, CloudSync, Rocket } from 'lucide-react';
+import { Terminal, Settings, Monitor, Database, Folder, AlertCircle, StickyNote, Book, MonitorPlay, Server, FileText, GitBranch, CloudSync, Rocket, HardDrive } from 'lucide-react';
 
 import TerminalApp from '@/apps/TerminalApp';
 import SettingsApp from '@/apps/SettingsApp';
@@ -12,9 +12,15 @@ import DockerApp from '@/apps/DockerApp';
 import DockerLogApp from '@/apps/DockerLogApp';
 import DatabaseBrowser from '@/components/DatabaseBrowser';
 import MongoBackupApp from '@/apps/MongoBackupApp';
+import ServerBackupApp from '@/apps/ServerBackupApp';
  
 // Add other apps here as needed
 export const AppRegistry = {
+  'server-backup': {
+    component: ServerBackupApp,
+    icon: HardDrive,
+    defaultTitle: 'Server Backup'
+  },
   'mongo-backup': {
     component: MongoBackupApp,
     icon: CloudSync,

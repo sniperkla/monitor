@@ -446,6 +446,35 @@ export async function runDeployment(config, runMeta = {}) {
       'set -e',
       'set -o pipefail',
     ];
+    // Embed Bitbucket/GitHub credentials in git remote URL to avoid password prompts
+    if (config.bitbucketConnected && config.bitbucketUsername && config.bitbucketAppPassword) {
+      try {
+        let bbUser = decrypt(config.bitbucketUsername);
+        let bbPass = decrypt(config.bitbucketAppPassword);
+        if (bbUser && bbPass) {
+          scriptLines.push(`BB_URL=$(git remote get-url origin 2>/dev/null || echo "")`);
+          scriptLines.push(`if [ -n "$BB_URL" ]; then`);
+          scriptLines.push(`  BB_URL=$(echo "$BB_URL" | sed -E 's#https://[^@]*@#https://${bbUser}:${bbPass}@#' | sed -E 's#^https://#https://${bbUser}:${bbPass}@#')`);
+          scriptLines.push(`  git remote set-url origin "$BB_URL"`);
+          scriptLines.push(`fi`);
+        }
+      } catch (e) {
+        console.warn('[deploy] Failed to decrypt Bitbucket credentials for local deploy:', e.message);
+      }
+    } else if (config.githubToken) {
+      try {
+        let ghToken = decrypt(config.githubToken);
+        if (ghToken && !ghToken.includes(':')) {
+          scriptLines.push(`GH_URL=$(git remote get-url origin 2>/dev/null || echo "")`);
+          scriptLines.push(`if [ -n "$GH_URL" ]; then`);
+          scriptLines.push(`  GH_URL=$(echo "$GH_URL" | sed -E 's#https://[^@]*@#https://x-access-token:${ghToken}@#' | sed -E 's#^https://#https://x-access-token:${ghToken}@#')`);
+          scriptLines.push(`  git remote set-url origin "$GH_URL"`);
+          scriptLines.push(`fi`);
+        }
+      } catch (e) {
+        console.warn('[deploy] Failed to decrypt GitHub token for local deploy:', e.message);
+      }
+    }
     if (commitSha) {
       scriptLines.push(`echo "[deploy] Checking out commit: ${commitSha}"`);
       scriptLines.push(`git checkout ${commitSha}`);
@@ -709,6 +738,41 @@ export async function runDeployment(config, runMeta = {}) {
             'set -o pipefail',
           ];
           const targetBranch = (config.branch || 'main').replace('refs/heads/', '');
+
+          // Embed Bitbucket/GitHub credentials in git remote URL to avoid password prompts
+          if (config.bitbucketConnected && config.bitbucketUsername && config.bitbucketAppPassword) {
+            try {
+              let bbUser = decrypt(config.bitbucketUsername);
+              let bbPass = decrypt(config.bitbucketAppPassword);
+              if (bbUser && bbPass) {
+                scriptLines.push(`echo "[deploy] Configuring Bitbucket credentials..."`);
+                scriptLines.push(`BB_URL=$(git remote get-url origin 2>/dev/null || echo "")`);
+                scriptLines.push(`if [ -n "$BB_URL" ]; then`);
+                scriptLines.push(`  BB_URL=$(echo "$BB_URL" | sed -E 's#https://[^@]*@#https://${bbUser}:${bbPass}@#' | sed -E 's#^https://#https://${bbUser}:${bbPass}@#')`);
+                scriptLines.push(`  git remote set-url origin "$BB_URL"`);
+                scriptLines.push(`  echo "[deploy] Bitbucket auth configured"`);
+                scriptLines.push(`fi`);
+              }
+            } catch (e) {
+              console.warn('[deploy] Failed to decrypt Bitbucket credentials:', e.message);
+            }
+          } else if (config.githubToken) {
+            try {
+              let ghToken = decrypt(config.githubToken);
+              if (ghToken && !ghToken.includes(':')) {
+                scriptLines.push(`echo "[deploy] Configuring GitHub credentials..."`);
+                scriptLines.push(`GH_URL=$(git remote get-url origin 2>/dev/null || echo "")`);
+                scriptLines.push(`if [ -n "$GH_URL" ]; then`);
+                scriptLines.push(`  GH_URL=$(echo "$GH_URL" | sed -E 's#https://[^@]*@#https://x-access-token:${ghToken}@#' | sed -E 's#^https://#https://x-access-token:${ghToken}@#')`);
+                scriptLines.push(`  git remote set-url origin "$GH_URL"`);
+                scriptLines.push(`  echo "[deploy] GitHub auth configured"`);
+                scriptLines.push(`fi`);
+              }
+            } catch (e) {
+              console.warn('[deploy] Failed to decrypt GitHub token:', e.message);
+            }
+          }
+
           scriptLines.push(`git fetch origin`);
           scriptLines.push(`echo "[deploy] Checking out branch: ${targetBranch}"`);
           scriptLines.push(`git checkout -B ${targetBranch} origin/${targetBranch}`);
