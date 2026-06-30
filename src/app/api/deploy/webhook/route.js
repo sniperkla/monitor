@@ -459,7 +459,7 @@ export async function runDeployment(config, runMeta = {}) {
           const encodedPass = encodeURIComponent(bbPass);
           scriptLines.push('RAW_URL=$(git remote get-url origin 2>/dev/null || echo "")');
           scriptLines.push('if [ -n "$RAW_URL" ]; then');
-          scriptLines.push('  CLEAN_PATH=$(echo "$RAW_URL" | sed -E \'s|^https?://([^@]+@)?||\')'); 
+          scriptLines.push('  CLEAN_PATH=$(echo "$RAW_URL" | sed -E \'s|.*bitbucket\\.org/|bitbucket.org/|; s|.*github\\.com/|github.com/|\')'); 
           scriptLines.push(`  AUTH_URL="https://${encodedUser}:${encodedPass}@\${CLEAN_PATH}"`);
           scriptLines.push('  git remote set-url origin "$AUTH_URL"');
           scriptLines.push('fi');
@@ -477,8 +477,8 @@ export async function runDeployment(config, runMeta = {}) {
     // Clean up Bitbucket credentials after deploy command completes
     if (config.bitbucketConnected) {
       scriptLines.push('if [ -n "$RAW_URL" ]; then');
-      scriptLines.push('  CLEAN_URL=$(echo "$RAW_URL" | sed -E \'s|^(https?://)([^@]+@)?|\\1|\')');
-      scriptLines.push('  git remote set-url origin "$CLEAN_URL"');
+      scriptLines.push('  CLEAN_PATH=$(echo "$RAW_URL" | sed -E \'s|.*bitbucket\\.org/|bitbucket.org/|; s|.*github\\.com/|github.com/|\')');
+      scriptLines.push('  git remote set-url origin "https://${CLEAN_PATH}"');
       scriptLines.push('fi');
     }
     scriptLines.push('echo "[deploy] Deploy command finished successfully"');
@@ -739,8 +739,7 @@ export async function runDeployment(config, runMeta = {}) {
           ];
           const targetBranch = (config.branch || 'main').replace('refs/heads/', '');
 
-           // Pass credentials for fetch
-          if (config.bitbucketConnected && (config.bitbucketUsername || config.bitbucketUser) && config.bitbucketAppPassword) {
+          if (config.bitbucketConnected && (config.bitbucketUser || config.bitbucketUsername) && config.bitbucketAppPassword) {
             try {
               let bbUser = config.bitbucketUser || decrypt(config.bitbucketUsername);
               let bbPass = decrypt(config.bitbucketAppPassword);
@@ -752,7 +751,7 @@ export async function runDeployment(config, runMeta = {}) {
                 const encodedPass = encodeURIComponent(bbPass);
                 scriptLines.push('RAW_URL=$(git remote get-url origin 2>/dev/null || echo "")');
                 scriptLines.push('if [ -n "$RAW_URL" ]; then');
-                scriptLines.push('  CLEAN_PATH=$(echo "$RAW_URL" | sed -E \'s|^https?://([^@]+@)?||\')'); 
+                scriptLines.push('  CLEAN_PATH=$(echo "$RAW_URL" | sed -E \'s|.*bitbucket\\.org/|bitbucket.org/|; s|.*github\\.com/|github.com/|\')'); 
                 scriptLines.push(`  AUTH_URL="https://${encodedUser}:${encodedPass}@\${CLEAN_PATH}"`);
                 scriptLines.push('  git remote set-url origin "$AUTH_URL"');
                 scriptLines.push('fi');
@@ -796,8 +795,8 @@ export async function runDeployment(config, runMeta = {}) {
           // Clean up Bitbucket credentials after deploy command completes
           if (config.bitbucketConnected) {
             scriptLines.push('if [ -n "$RAW_URL" ]; then');
-            scriptLines.push('  CLEAN_URL=$(echo "$RAW_URL" | sed -E \'s|^(https?://)([^@]+@)?|\\1|\')');
-            scriptLines.push('  git remote set-url origin "$CLEAN_URL"');
+            scriptLines.push('  CLEAN_PATH=$(echo "$RAW_URL" | sed -E \'s|.*bitbucket\\.org/|bitbucket.org/|; s|.*github\\.com/|github.com/|\')');
+            scriptLines.push('  git remote set-url origin "https://${CLEAN_PATH}"');
             scriptLines.push('fi');
           }
           scriptLines.push('echo "[deploy] Deploy command finished successfully"');
