@@ -2213,20 +2213,19 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
                               Unused Images ({selectedCount}/{unused.length})
                             </p>
                             <button onClick={() => {
-                              const allOn = unused.every((img, i) => sel[`${img.Repository}:${img.Tag}`]);
+                              const allOn = unused.every((img, i) => sel[img.ID]);
                               const upd = {};
-                              unused.forEach(img => { upd[`${img.Repository}:${img.Tag}`] = !allOn; });
+                              unused.forEach(img => { upd[img.ID] = !allOn; });
                               setPruneSelections(prev => ({ ...prev, images: upd }));
                             }} className="text-[9px] text-[var(--text-muted)] hover:text-white">
-                              {unused.every((img, i) => sel[`${img.Repository}:${img.Tag}`]) ? 'Uncheck All' : 'Check All'}
+                              {unused.every((img, i) => sel[img.ID]) ? 'Uncheck All' : 'Check All'}
                             </button>
                           </div>
                           <div className="max-h-[100px] overflow-y-auto space-y-0.5 scrollbar-hide rounded-xl border border-white/5 bg-black/20 p-2">
                             {unused.map((img, i) => {
-                              const key = `${img.Repository}:${img.Tag}`;
                               return (
                                 <label key={i} className="flex items-center gap-2 text-[11px] py-1 px-2 rounded-lg hover:bg-white/5 cursor-pointer select-none">
-                                  <input type="checkbox" checked={!!sel[key]} onChange={() => setPruneSelections(prev => ({ ...prev, images: { ...prev.images, [key]: !prev.images[key] } }))} className="accent-rose-500 rounded shrink-0" />
+                                  <input type="checkbox" checked={!!sel[img.ID]} onChange={() => setPruneSelections(prev => ({ ...prev, images: { ...prev.images, [img.ID]: !prev.images[img.ID] } }))} className="accent-rose-500 rounded shrink-0" />
                                   <span className="font-mono text-[var(--text-primary)] truncate flex-1">{img.Repository === '<none>' ? '(untagged)' : img.Repository}</span>
                                   <span className="text-[9px] font-mono opacity-40 shrink-0">{img.Tag || '-'}</span>
                                   <span className="text-[9px] opacity-40 shrink-0">{img.Size || '-'}</span>
