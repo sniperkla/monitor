@@ -759,11 +759,6 @@ export async function runDeployment(config, runMeta = {}) {
               }
             } catch (e) {}
             scriptLines.push(`git fetch origin`);
-            // Clean up Bitbucket credentials immediately after fetch
-            scriptLines.push('if [ -n "$RAW_URL" ]; then');
-            scriptLines.push('  CLEAN_URL=$(echo "$RAW_URL" | sed -E \'s|^(https?://)([^@]+@)?|\\1|\')');
-            scriptLines.push('  git remote set-url origin "$CLEAN_URL"');
-            scriptLines.push('fi');
           } else if (config.githubToken) {
             try {
               let ghToken = decrypt(config.githubToken);
@@ -797,6 +792,14 @@ export async function runDeployment(config, runMeta = {}) {
           }
           scriptLines.push('echo "[deploy] Running deploy command..."');
           scriptLines.push(config.deployCommand);
+
+          // Clean up Bitbucket credentials after deploy command completes
+          if (config.bitbucketConnected) {
+            scriptLines.push('if [ -n "$RAW_URL" ]; then');
+            scriptLines.push('  CLEAN_URL=$(echo "$RAW_URL" | sed -E \'s|^(https?://)([^@]+@)?|\\1|\')');
+            scriptLines.push('  git remote set-url origin "$CLEAN_URL"');
+            scriptLines.push('fi');
+          }
           scriptLines.push('echo "[deploy] Deploy command finished successfully"');
           const deployScript = scriptLines.join('\n') + '\n';
 
