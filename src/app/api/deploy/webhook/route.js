@@ -446,8 +446,7 @@ export async function runDeployment(config, runMeta = {}) {
       'set -e',
       'set -o pipefail',
     ];
-    // Temporarily write Bitbucket/GitHub credentials to ~/.git-credentials so all git processes
-    // (including docker build subprocesses) can authenticate during the deployCommand
+    // Temporarily write Bitbucket/GitHub credentials depending on provider
     if (config.bitbucketConnected && (config.bitbucketUser || config.bitbucketUsername) && config.bitbucketAppPassword) {
       try {
         let bbUser = config.bitbucketUser || decrypt(config.bitbucketUsername);
@@ -466,8 +465,8 @@ export async function runDeployment(config, runMeta = {}) {
       try {
         let ghToken = decrypt(config.githubToken);
         if (ghToken) {
-          scriptLines.push(`echo "https://x-access-token:${ghToken}@github.com" > ~/.git-credentials`);
-          scriptLines.push(`git config --global credential.helper store`);
+          const b64Cred = Buffer.from(`x-access-token:${ghToken}`).toString('base64');
+          scriptLines.push(`git config http.extraHeader "Authorization: Basic ${b64Cred}"`);
         }
       } catch (e) {}
     }
@@ -480,9 +479,11 @@ export async function runDeployment(config, runMeta = {}) {
     scriptLines.push(config.deployCommand);
 
     // Clean up credentials after deploy command completes
-    if (config.bitbucketConnected || config.githubToken) {
+    if (config.bitbucketConnected) {
       scriptLines.push('rm -f ~/.git-credentials');
       scriptLines.push('git config --global --unset credential.helper || true');
+    } else if (config.githubToken) {
+      scriptLines.push('git config --unset http.extraHeader || true');
     }
     scriptLines.push('echo "[deploy] Deploy command finished successfully"');
     const script = scriptLines.join('\n');
@@ -742,8 +743,7 @@ export async function runDeployment(config, runMeta = {}) {
           ];
           const targetBranch = (config.branch || 'main').replace('refs/heads/', '');
 
-          // Temporarily write Bitbucket/GitHub credentials to ~/.git-credentials so all git processes
-          // (including docker build subprocesses) can authenticate during the deployCommand
+          // Temporarily write Bitbucket/GitHub credentials depending on provider
           if (config.bitbucketConnected && (config.bitbucketUser || config.bitbucketUsername) && config.bitbucketAppPassword) {
             try {
               let bbUser = config.bitbucketUser || decrypt(config.bitbucketUsername);
@@ -772,12 +772,9 @@ export async function runDeployment(config, runMeta = {}) {
               let ghToken = decrypt(config.githubToken);
               if (ghToken) {
                 const b64Cred = Buffer.from(`x-access-token:${ghToken}`).toString('base64');
-                scriptLines.push('RAW_URL=$(git remote get-url origin 2>/dev/null || echo "")');
-                // Set credentials in git credential store for all subprocesses
-                scriptLines.push(`echo "https://x-access-token:${ghToken}@github.com" > ~/.git-credentials`);
-                scriptLines.push(`git config --global credential.helper store`);
-                // Use token auth header for git fetch
-                scriptLines.push(`git -c http.extraHeader="Authorization: Basic ${b64Cred}" fetch origin`);
+                // Set local repository header so all subsequent git commands (including git pull in deployCommand) inherit it
+                scriptLines.push(`git config http.extraHeader "Authorization: Basic ${b64Cred}"`);
+                scriptLines.push(`git fetch origin`);
               } else {
                 scriptLines.push(`git fetch origin`);
               }
@@ -807,15 +804,15 @@ export async function runDeployment(config, runMeta = {}) {
           scriptLines.push(config.deployCommand);
 
           // Clean up credentials after deploy command completes
-          if (config.bitbucketConnected || config.githubToken) {
+          if (config.bitbucketConnected) {
             scriptLines.push('rm -f ~/.git-credentials');
             scriptLines.push('git config --global --unset credential.helper || true');
-            if (config.bitbucketConnected) {
-              scriptLines.push('if [ -n "$RAW_URL" ]; then');
-              scriptLines.push('  CLEAN_PATH=$(echo "$RAW_URL" | sed -E \'s|.*bitbucket\\.org/|bitbucket.org/|; s|.*github\\.com/|github.com/|\')');
-              scriptLines.push('  git remote set-url origin "https://${CLEAN_PATH}"');
-              scriptLines.push('fi');
-            }
+            scriptLines.push('if [ -n "$RAW_URL" ]; then');
+            scriptLines.push('  CLEAN_PATH=$(echo "$RAW_URL" | sed -E \'s|.*bitbucket\\.org/|bitbucket.org/|; s|.*github\\.com/|github.com/|\')');
+            scriptLines.push('  git remote set-url origin "https://${CLEAN_PATH}"');
+            scriptLines.push('fi');
+          } else if (config.githubToken) {
+            scriptLines.push('git config --unset http.extraHeader || true');
           }
           scriptLines.push('echo "[deploy] Deploy command finished successfully"');
           const deployScript = scriptLines.join('\n') + '\n';
