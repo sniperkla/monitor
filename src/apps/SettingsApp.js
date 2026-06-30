@@ -310,12 +310,22 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
     return () => window.removeEventListener('beforeunload', handler);
   }, [hasUnsavedDeployChanges]);
 
-  // Fetch deployment config + SSH connections (deploy-relevant triggers only)
+  // Track last fetched combo to avoid redundant re-fetches
+  const deployFetchKeyRef = React.useRef(null);
+  const deployFetchInProgressRef = React.useRef(false);
+
+  // Fetch deployment config + SSH connections (only when tab or project changes)
   useEffect(() => {
-    if (activeTab === 'deployment') {
-      const fetchDeployData = async () => {
-        setDeployLoading(true);
-        try {
+    if (activeTab !== 'deployment') return;
+    const fetchKey = `${activeTab}:${selectedProjectId}`;
+    // Avoid refetching if already loading or already fetched for this key
+    if (deployFetchInProgressRef.current) return;
+    if (deployFetchKeyRef.current === fetchKey) return;
+
+    const fetchDeployData = async () => {
+      deployFetchInProgressRef.current = true;
+      setDeployLoading(true);
+      try {
           const configRes = await apiFetch(`/api/deploy/config?project=${selectedProjectId}`);
           const configData = await configRes.json();
           if (configData.success && configData.config) {
@@ -403,15 +413,16 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
           }
           if (sshConns.length === 0) fetchConnections();
           if (sshConns.length > 0) setConnections(sshConns);
+          deployFetchKeyRef.current = fetchKey;
         } catch (err) {
           console.error('Failed to load deployment data:', err);
         }
+        deployFetchInProgressRef.current = false;
         setDeployLoading(false);
       };
       fetchDeployData();
-    }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeTab, selectedProjectId, relayConnected, vaultStatus, decryptedUri]);
+  }, [activeTab, selectedProjectId]);
 
   // Separately sync SSH connection list from global AppContext whenever it updates
   // (does NOT re-fetch deploy config — avoids resetting connectionId)
