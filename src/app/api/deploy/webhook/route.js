@@ -480,9 +480,11 @@ export async function runDeployment(config, runMeta = {}) {
 
     // Clean up credentials after deploy command completes
     if (config.bitbucketConnected) {
+      scriptLines.push(`cd "${cwdPath}" || true`);
       scriptLines.push('rm -f ~/.git-credentials');
       scriptLines.push('git config --global --unset credential.helper || true');
     } else if (config.githubToken) {
+      scriptLines.push(`cd "${cwdPath}" || true`);
       scriptLines.push('git config --unset http.extraHeader || true');
     }
     scriptLines.push('echo "[deploy] Deploy command finished successfully"');
@@ -805,6 +807,7 @@ export async function runDeployment(config, runMeta = {}) {
 
           // Clean up credentials after deploy command completes
           if (config.bitbucketConnected) {
+            scriptLines.push(`cd "${resolvedPath}" || true`);
             scriptLines.push('rm -f ~/.git-credentials');
             scriptLines.push('git config --global --unset credential.helper || true');
             scriptLines.push('if [ -n "$RAW_URL" ]; then');
@@ -812,6 +815,7 @@ export async function runDeployment(config, runMeta = {}) {
             scriptLines.push('  git remote set-url origin "https://${CLEAN_PATH}"');
             scriptLines.push('fi');
           } else if (config.githubToken) {
+            scriptLines.push(`cd "${resolvedPath}" || true`);
             scriptLines.push('git config --unset http.extraHeader || true');
           }
           scriptLines.push('echo "[deploy] Deploy command finished successfully"');
