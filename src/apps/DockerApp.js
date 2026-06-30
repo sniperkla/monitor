@@ -2405,6 +2405,12 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
                       networks: Object.entries(pruneSelections.networks).filter(([,v]) => v).map(([k]) => k),
                       cache: pruneSystemModal.targets.cache,
                       pruneAll: pruneSystemModal.pruneAll,
+                      targets: {
+                        containers: pruneSystemModal.targets.containers,
+                        images: pruneSystemModal.targets.images,
+                        volumes: pruneSystemModal.targets.volumes,
+                        networks: pruneSystemModal.targets.networks,
+                      },
                     };
                     setIsLoading(true);
                     socketRef.current.emit('docker:command', { action: 'remove-selected', args: [selected] });
