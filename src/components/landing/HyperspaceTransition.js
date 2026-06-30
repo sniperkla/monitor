@@ -125,14 +125,24 @@ export function HyperspaceTransition({ onComplete }) {
       ctx.fillStyle = '#01020a';
       ctx.fillRect(0, 0, w, h);
 
-      // ── Mouse-look parallax ──
+      // ── Mouse-look parallax & High-Speed Warp Shake ──
       const mx = mouseRef.current.x;
       const my = mouseRef.current.y;
       // Smooth lerp for less jitter
       const parallaxX = mx * 30; // max 30px shift
       const parallaxY = my * 20; // max 20px shift
+      
+      // Calculate high-speed vibration/shake intensity
+      let shakeX = 0;
+      let shakeY = 0;
+      if (speed > 25) {
+        const shakeIntensity = ((speed - 25) / 40) * 5.0; // Max 5px shake at max speed (65)
+        shakeX = (Math.random() - 0.5) * shakeIntensity;
+        shakeY = (Math.random() - 0.5) * shakeIntensity;
+      }
+
       ctx.save();
-      ctx.translate(parallaxX, parallaxY);
+      ctx.translate(parallaxX + shakeX, parallaxY + shakeY);
 
       // ── Deep space nebula ──
       ctx.globalCompositeOperation = 'screen';
