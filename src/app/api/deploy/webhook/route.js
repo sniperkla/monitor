@@ -446,12 +446,41 @@ export async function runDeployment(config, runMeta = {}) {
       'set -e',
       'set -o pipefail',
     ];
+    // Temporarily inject Bitbucket credentials for git fetch/pull if needed
+    if (config.bitbucketConnected && (config.bitbucketUser || config.bitbucketUsername) && config.bitbucketAppPassword) {
+      try {
+        let bbUser = config.bitbucketUser || decrypt(config.bitbucketUsername);
+        let bbPass = decrypt(config.bitbucketAppPassword);
+        if (bbUser && bbUser.includes('@')) {
+          bbUser = bbUser.split('@')[0];
+        }
+        if (bbUser && bbPass) {
+          const encodedUser = encodeURIComponent(bbUser);
+          const encodedPass = encodeURIComponent(bbPass);
+          scriptLines.push('RAW_URL=$(git remote get-url origin 2>/dev/null || echo "")');
+          scriptLines.push('if [ -n "$RAW_URL" ]; then');
+          scriptLines.push('  CLEAN_PATH=$(echo "$RAW_URL" | sed -E \'s|^https?://([^@]+@)?||\')'); 
+          scriptLines.push(`  AUTH_URL="https://${encodedUser}:${encodedPass}@\${CLEAN_PATH}"`);
+          scriptLines.push('  git remote set-url origin "$AUTH_URL"');
+          scriptLines.push('fi');
+        }
+      } catch (e) {}
+    }
+
     if (commitSha) {
       scriptLines.push(`echo "[deploy] Checking out commit: ${commitSha}"`);
       scriptLines.push(`git checkout ${commitSha}`);
     }
     scriptLines.push('echo "[deploy] Running deploy command..."');
     scriptLines.push(config.deployCommand);
+
+    // Clean up Bitbucket credentials after deploy command completes
+    if (config.bitbucketConnected) {
+      scriptLines.push('if [ -n "$RAW_URL" ]; then');
+      scriptLines.push('  CLEAN_URL=$(echo "$RAW_URL" | sed -E \'s|^(https?://)([^@]+@)?|\\1|\')');
+      scriptLines.push('  git remote set-url origin "$CLEAN_URL"');
+      scriptLines.push('fi');
+    }
     scriptLines.push('echo "[deploy] Deploy command finished successfully"');
     const script = scriptLines.join('\n');
 
@@ -710,20 +739,31 @@ export async function runDeployment(config, runMeta = {}) {
           ];
           const targetBranch = (config.branch || 'main').replace('refs/heads/', '');
 
-          // Pass credentials via HTTP Basic auth header
-          if (config.bitbucketConnected && config.bitbucketUsername && config.bitbucketAppPassword) {
+           // Pass credentials for fetch
+          if (config.bitbucketConnected && (config.bitbucketUsername || config.bitbucketUser) && config.bitbucketAppPassword) {
             try {
-              let bbUser = decrypt(config.bitbucketUsername);
+              let bbUser = config.bitbucketUser || decrypt(config.bitbucketUsername);
               let bbPass = decrypt(config.bitbucketAppPassword);
-              if (bbUser && bbPass) {
-                const b64Cred = Buffer.from(`${bbUser}:${bbPass}`).toString('base64');
-                scriptLines.push(`git -c http.extraHeader="Authorization: Basic ${b64Cred}" fetch origin`);
-              } else {
-                scriptLines.push(`git fetch origin`);
+              if (bbUser && bbUser.includes('@')) {
+                bbUser = bbUser.split('@')[0];
               }
-            } catch (e) {
-              scriptLines.push(`git fetch origin`);
-            }
+              if (bbUser && bbPass) {
+                const encodedUser = encodeURIComponent(bbUser);
+                const encodedPass = encodeURIComponent(bbPass);
+                scriptLines.push('RAW_URL=$(git remote get-url origin 2>/dev/null || echo "")');
+                scriptLines.push('if [ -n "$RAW_URL" ]; then');
+                scriptLines.push('  CLEAN_PATH=$(echo "$RAW_URL" | sed -E \'s|^https?://([^@]+@)?||\')'); 
+                scriptLines.push(`  AUTH_URL="https://${encodedUser}:${encodedPass}@\${CLEAN_PATH}"`);
+                scriptLines.push('  git remote set-url origin "$AUTH_URL"');
+                scriptLines.push('fi');
+              }
+            } catch (e) {}
+            scriptLines.push(`git fetch origin`);
+            // Clean up Bitbucket credentials immediately after fetch
+            scriptLines.push('if [ -n "$RAW_URL" ]; then');
+            scriptLines.push('  CLEAN_URL=$(echo "$RAW_URL" | sed -E \'s|^(https?://)([^@]+@)?|\\1|\')');
+            scriptLines.push('  git remote set-url origin "$CLEAN_URL"');
+            scriptLines.push('fi');
           } else if (config.githubToken) {
             try {
               let ghToken = decrypt(config.githubToken);
