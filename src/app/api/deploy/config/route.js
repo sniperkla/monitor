@@ -217,14 +217,28 @@ export async function POST(request) {
       githubConnected: body.githubConnected !== undefined ? body.githubConnected : existingValue.githubConnected || false,
       githubUser: body.githubUser !== undefined ? body.githubUser : existingValue.githubUser || '',
       githubRepo: body.githubRepo !== undefined ? body.githubRepo : existingValue.githubRepo || '',
-      githubToken: body.githubToken !== undefined && body.githubToken ? encrypt(body.githubToken) : existingValue.githubToken || '',
+      githubToken: (() => {
+        if (body.githubToken !== undefined && body.githubToken) {
+          // Only encrypt if not already encrypted (encrypted values contain ':')
+          const test = decryptWithMetadata(body.githubToken);
+          return test.success ? body.githubToken : encrypt(body.githubToken);
+        }
+        return existingValue.githubToken || '';
+      })(),
       bitbucketConnected: body.bitbucketConnected !== undefined ? body.bitbucketConnected : existingValue.bitbucketConnected || false,
       bitbucketUser: body.bitbucketUser !== undefined ? body.bitbucketUser : existingValue.bitbucketUser || '',
       bitbucketUsername: body.bitbucketUsername !== undefined ? body.bitbucketUsername : existingValue.bitbucketUsername || '',
       bitbucketAppPassword: body.bitbucketAppPassword !== undefined ? body.bitbucketAppPassword : existingValue.bitbucketAppPassword || '',
       bitbucketRepo: body.bitbucketRepo !== undefined ? body.bitbucketRepo : existingValue.bitbucketRepo || '',
       telegramNotification: typeof body.telegramNotification === 'boolean' ? body.telegramNotification : existingValue.telegramNotification || false,
-      telegramBotToken: body.telegramBotToken !== undefined ? (body.telegramBotToken ? encrypt(body.telegramBotToken) : '') : existingValue.telegramBotToken || '',
+      telegramBotToken: (() => {
+        if (body.telegramBotToken !== undefined && body.telegramBotToken) {
+          // Only encrypt if not already encrypted (encrypted values contain ':')
+          const test = decryptWithMetadata(body.telegramBotToken);
+          return test.success ? body.telegramBotToken : encrypt(body.telegramBotToken);
+        }
+        return body.telegramBotToken !== undefined ? '' : existingValue.telegramBotToken || '';
+      })(),
       telegramChatId: body.telegramChatId !== undefined ? body.telegramChatId : existingValue.telegramChatId || '',
       sshConnectionData: finalSshConnectionData
     };
