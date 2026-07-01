@@ -273,6 +273,29 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
     : null;
   const selectedConnectionMissing = deployConfig.targetType === 'ssh' && deployConfig.connectionId && !selectedConnection;
   const isDeployFailed = deployConfig.status === 'failed';
+
+  // Compute readiness status for a deploy config
+  const getReadinessStatus = (config) => {
+    if (!config || !config.enabled) return { status: 'disabled', missing: [] };
+    const missing = [];
+    const cmd = (config.deployCommand || '').trim();
+    if (!cmd || cmd === '# Enter your deployment shell script here\n# e.g., git pull && npm run build') {
+      missing.push('deploy command');
+    }
+    if (!(config.githubConnected || config.bitbucketConnected)) {
+      missing.push('git provider');
+    }
+    if (!config.branch?.trim()) {
+      missing.push('branch');
+    }
+    if (config.targetType === 'ssh' && !config.connectionId) {
+      missing.push('SSH connection');
+    }
+    return { status: missing.length === 0 ? 'ready' : 'incomplete', missing };
+  };
+
+  const readiness = getReadinessStatus(deployConfig);
+
   const [deploySaving, setDeploySaving] = useState(false);
   const [deployTriggering, setDeployTriggering] = useState(false);
   const [copySuccess, setCopySuccess] = useState(false);
@@ -293,6 +316,8 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
   const [bbRepos, setBbRepos] = useState([]);
   const [loadingBbRepos, setLoadingBbRepos] = useState(false);
   const savedDeployConfigRef = useRef(null);
+  const [webhookTesting, setWebhookTesting] = useState(false);
+  const [webhookTestResult, setWebhookTestResult] = useState(null);
 
   // Track unsaved deploy config changes
   const hasUnsavedDeployChanges = (() => {
@@ -629,6 +654,29 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
     } catch (err) {
       addNotification({ title: 'Error', message: 'Failed to communicate with cancel API', type: 'error' });
     }
+  };
+
+  const handleTestWebhook = async () => {
+    setWebhookTesting(true);
+    setWebhookTestResult(null);
+    try {
+      const res = await apiFetch(`/api/deploy/webhook-test?project=${selectedProjectId}`, { method: 'POST' });
+      const data = await res.json();
+      if (data.success) {
+        setWebhookTestResult(data);
+        if (data.allPassed) {
+          addNotification({ title: t('deploy.testWebhookSuccess', 'Webhook OK'), message: 'All checks passed.', type: 'success' });
+        } else {
+          const failed = data.checks.filter(c => c.status === 'fail').map(c => c.name).join(', ');
+          addNotification({ title: t('deploy.testWebhookFailed', 'Webhook Failed'), message: `Failed: ${failed}`, type: 'warning' });
+        }
+      } else {
+        addNotification({ title: t('deploy.testWebhookFailed', 'Webhook Failed'), message: data.error || 'Test failed', type: 'error' });
+      }
+    } catch (err) {
+      addNotification({ title: t('deploy.testWebhookFailed', 'Webhook Failed'), message: err.message || 'Could not reach test endpoint', type: 'error' });
+    }
+    setWebhookTesting(false);
   };
 
   const handleFetchCommits = async () => {
@@ -2475,9 +2523,13 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
                   onChange={(e) => setSelectedProjectId(e.target.value)}
                   className="bg-[var(--bg-primary)] border border-[var(--border-color)] rounded-xl px-3 py-1.5 text-xs text-[var(--text-primary)] font-bold focus:outline-none focus:border-indigo-500 max-w-[200px]"
                 >
-                  {deployProjects.map(p => (
-                    <option key={p.id} value={p.id}>{p.id}{p.name ? ` - ${p.name}` : ''}</option>
-                  ))}
+                  {deployProjects.map(p => {
+                    const rs = getReadinessStatus(p);
+                    const dot = rs.status === 'ready' ? '\u25CF ' : rs.status === 'incomplete' ? '\u25CF ' : '\u25CB ';
+                    return (
+                      <option key={p.id} value={p.id}>{dot}{p.id}{p.name ? ` - ${p.name}` : ''}</option>
+                    );
+                  })}
                 </select>
                 
                 <button
@@ -2619,20 +2671,36 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
                       </p>
                     </div>
                   </div>
-                  <div className="flex flex-col items-end gap-1 shrink-0">
-                    <span className={`px-3 py-1 rounded-full text-[10px] font-extrabold uppercase border ${
-                      deployConfig.status === 'running'
-                        ? 'bg-amber-500/10 text-amber-500 border-amber-500/20'
-                        : deployConfig.status === 'success'
-                        ? 'bg-emerald-500/10 text-emerald-500 border-emerald-500/20'
-                        : deployConfig.status === 'failed'
-                        ? 'bg-red-500/10 text-red-500 border-red-500/20'
-                        : 'bg-[var(--bg-tertiary)] text-[var(--text-muted)] border-[var(--border-color)]'
-                    }`}>
-                      {deployConfig.status}
-                    </span>
+                  <div className="flex flex-col items-end gap-1.5 shrink-0">
+                    <div className="flex items-center gap-2">
+                      <span className={`px-3 py-1 rounded-full text-[10px] font-extrabold uppercase border ${
+                        readiness.status === 'ready'
+                          ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'
+                          : readiness.status === 'incomplete'
+                          ? 'bg-amber-500/10 text-amber-400 border-amber-500/20'
+                          : 'bg-[var(--bg-tertiary)] text-[var(--text-muted)] border-[var(--border-color)]'
+                      }`}>
+                        {readiness.status === 'ready' ? t('deploy.readinessReady', 'Ready') : readiness.status === 'incomplete' ? t('deploy.readinessIncomplete', 'Incomplete') : t('deploy.readinessDisabled', 'Disabled')}
+                      </span>
+                      <span className={`px-3 py-1 rounded-full text-[10px] font-extrabold uppercase border ${
+                        deployConfig.status === 'running'
+                          ? 'bg-amber-500/10 text-amber-500 border-amber-500/20'
+                          : deployConfig.status === 'success'
+                          ? 'bg-emerald-500/10 text-emerald-500 border-emerald-500/20'
+                          : deployConfig.status === 'failed'
+                          ? 'bg-red-500/10 text-red-500 border-red-500/20'
+                          : 'bg-[var(--bg-tertiary)] text-[var(--text-muted)] border-[var(--border-color)]'
+                      }`}>
+                        {deployConfig.status}
+                      </span>
+                    </div>
+                    {readiness.status === 'incomplete' && readiness.missing.length > 0 && (
+                      <span className="text-[10px] text-amber-400/80">
+                        {t('deploy.readinessMissing', 'Missing: {{items}}', { items: readiness.missing.join(', ') })}
+                      </span>
+                    )}
                     {deployConfig.lastDeployAt && (
-                      <span className="text-[10px] text-[var(--text-muted)] mt-1">
+                      <span className="text-[10px] text-[var(--text-muted)]">
                         {t('deploy.lastRun', 'Last Run: ')}{new Date(deployConfig.lastDeployAt).toLocaleString()}
                       </span>
                     )}
@@ -2910,8 +2978,29 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
                             >
                               {copySuccess ? <CheckCheck size={14} className="text-emerald-500" /> : <Copy size={14} />}
                             </button>
+                            <button
+                              onClick={handleTestWebhook}
+                              disabled={webhookTesting}
+                              className="px-3 py-2 bg-indigo-600/10 hover:bg-indigo-600/20 disabled:opacity-50 border border-indigo-500/30 rounded-xl text-xs text-indigo-400 font-bold transition-all flex items-center gap-1.5 cursor-pointer"
+                            >
+                              {webhookTesting ? <Loader size={14} className="animate-spin" /> : <Wifi size={14} />}
+                              {webhookTesting ? t('deploy.testWebhookRunning', 'Testing...') : t('deploy.testWebhook', 'Test Webhook')}
+                            </button>
                           </div>
                           <span className="block text-[9px] text-[var(--text-muted)] mt-1">{t('deploy.webhookUrlHint', 'Use this Webhook URL in your repository\'s webhook settings (GitHub or Bitbucket). Make sure Payload format is application/json.', { project: selectedProjectId })}</span>
+                          {webhookTestResult && (
+                            <div className="mt-3 rounded-xl border border-[var(--border-color)] bg-[var(--bg-tertiary)] p-3 space-y-2">
+                              {webhookTestResult.checks.map((check, i) => (
+                                <div key={i} className="flex items-center gap-2 text-xs">
+                                  {check.status === 'pass' && <CheckCircle size={14} className="text-emerald-400 shrink-0" />}
+                                  {check.status === 'fail' && <AlertCircle size={14} className="text-red-400 shrink-0" />}
+                                  {check.status === 'skip' && <Info size={14} className="text-[var(--text-muted)] shrink-0" />}
+                                  <span className="font-bold text-[var(--text-secondary)] capitalize">{check.name.replace(/_/g, ' ')}:</span>
+                                  <span className={check.status === 'fail' ? 'text-red-300' : check.status === 'pass' ? 'text-emerald-300' : 'text-[var(--text-muted)]'}>{check.message}</span>
+                                </div>
+                              ))}
+                            </div>
+                          )}
                         </div>
 
                         <div className="space-y-1 pt-2">

@@ -1188,6 +1188,14 @@ const resources = {
         branchesNotifTitle: "Branches",
         branchInvalidRepo: "Enter a valid repository in owner/repo format or GitHub URL.",
         branchLoadFailed: "Failed to load branches",
+        readinessReady: "Ready",
+        readinessIncomplete: "Incomplete",
+        readinessDisabled: "Disabled",
+        readinessMissing: "Missing: {{items}}",
+        testWebhook: "Test Webhook",
+        testWebhookRunning: "Testing...",
+        testWebhookSuccess: "Webhook OK",
+        testWebhookFailed: "Webhook Failed",
       }
     }
   },
@@ -2368,6 +2376,14 @@ const resources = {
         branchesNotifTitle: "Branches",
         branchInvalidRepo: "กรุณากรอก repository ในรูปแบบ owner/repo หรือ GitHub URL ที่ถูกต้อง",
         branchLoadFailed: "โหลด branches ไม่สำเร็จ",
+        readinessReady: "พร้อมใช้งาน",
+        readinessIncomplete: "ยังไม่สมบูรณ์",
+        readinessDisabled: "ปิดอยู่",
+        readinessMissing: "ขาด: {{items}}",
+        testWebhook: "ทดสอบ Webhook",
+        testWebhookRunning: "กำลังทดสอบ...",
+        testWebhookSuccess: "Webhook ใช้งานได้",
+        testWebhookFailed: "Webhook ล้มเหลว",
       }
     }
   },
@@ -3546,6 +3562,14 @@ const resources = {
         branchesNotifTitle: "分支",
         branchInvalidRepo: "请输入有效的 owner/repo 格式或 GitHub URL 的仓库。",
         branchLoadFailed: "加载分支失败",
+        readinessReady: "就绪",
+        readinessIncomplete: "未完成",
+        readinessDisabled: "已禁用",
+        readinessMissing: "缺少: {{items}}",
+        testWebhook: "测试 Webhook",
+        testWebhookRunning: "测试中...",
+        testWebhookSuccess: "Webhook 正常",
+        testWebhookFailed: "Webhook 失败",
       }
     }
   }
