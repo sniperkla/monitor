@@ -392,6 +392,23 @@
   color: #1aff1a;
 }
 
+.retro select {
+  background: rgba(5, 5, 5, 0.95) !important;
+  border: 1px solid rgba(26, 255, 26, 0.4) !important;
+  color: #1aff1a !important;
+  text-shadow: 0 0 6px rgba(26, 255, 26, 0.6);
+}
+.retro select option {
+  background: #0a0a0a;
+  color: #1aff1a;
+  padding: 8px;
+}
+.retro select:focus {
+  outline: none !important;
+  border-color: #1aff1a !important;
+  box-shadow: 0 0 12px rgba(26, 255, 26, 0.4) !important;
+}
+
 .retro .taskbar {
   background: rgba(5, 8, 5, 0.95);
   border-top: 1px solid rgba(26, 255, 26, 0.1);

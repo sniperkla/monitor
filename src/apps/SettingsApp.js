@@ -298,8 +298,25 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
   const hasUnsavedDeployChanges = (() => {
     if (!savedDeployConfigRef.current) return false;
     const saved = savedDeployConfigRef.current;
-    const fields = ['name', 'enabled', 'branch', 'targetType', 'connectionId', 'deployCommand', 'projectPath', 'timeoutSeconds', 'bitbucketRepo', 'githubRepo'];
+    const fields = ['name', 'enabled', 'branch', 'targetType', 'connectionId', 'deployCommand', 'projectPath', 'timeoutSeconds', 'bitbucketRepo', 'githubRepo', 'secret', 'telegramNotification', 'telegramBotToken', 'telegramChatId', 'aiEndpoint', 'aiApiKey', 'aiCustomModel'];
     return fields.some(f => (deployConfig[f] || '') !== (saved[f] || ''));
+  })();
+
+  const sectionChanged = (fields) => {
+    if (!savedDeployConfigRef.current) return false;
+    const saved = savedDeployConfigRef.current;
+    return fields.some(f => (deployConfig[f] || '') !== (saved[f] || ''));
+  };
+  const triggerChanged = sectionChanged(['branch', 'bitbucketRepo', 'githubRepo', 'secret', 'enabled']);
+  const commandChanged = sectionChanged(['deployCommand']);
+  const targetChanged = sectionChanged(['targetType', 'connectionId', 'projectPath', 'timeoutSeconds']);
+  const telegramChanged = sectionChanged(['telegramNotification', 'telegramBotToken', 'telegramChatId']);
+  const aiChanged = sectionChanged(['aiEndpoint', 'aiApiKey', 'aiCustomModel']);
+  const repoChanged = (() => {
+    if (!savedDeployConfigRef.current) return false;
+    const saved = savedDeployConfigRef.current;
+    const savedRepo = gitProvider === 'bitbucket' ? (saved.bitbucketRepo || '') : (saved.githubRepo || '');
+    return repoInput !== savedRepo;
   })();
 
   // Warn before leaving with unsaved changes
@@ -2449,23 +2466,8 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
 
         {activeTab === 'deployment' && (
           <div className="max-w-6xl animate-in fade-in slide-in-from-bottom-2 duration-300">
-            {hasUnsavedDeployChanges && (
-              <div className="mb-4 px-4 py-3 rounded-xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-between gap-3">
-                <div className="flex items-center gap-2 text-amber-400 text-xs font-bold">
-                  <span className="text-base">⚠</span>
-                  <span>You have unsaved changes</span>
-                </div>
-                <button
-                  onClick={handleSaveDeployConfig}
-                  disabled={deploySaving}
-                  className="px-4 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-400 text-white text-xs font-bold transition-all disabled:opacity-50"
-                >
-                  {deploySaving ? 'Saving...' : 'Save Now'}
-                </button>
-              </div>
-            )}
             {/* Top Toolbar / Dashboard Selector */}
-            <div className="p-4 mb-6 rounded-2xl bg-slate-900/40 border border-[var(--border-color)] flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div className="p-4 mb-4 rounded-2xl bg-slate-900/40 border border-[var(--border-color)] flex flex-col sm:flex-row sm:items-center justify-between gap-4">
               <div className="flex flex-wrap items-center gap-3">
                 <label className="text-xs font-bold text-[var(--text-secondary)] uppercase tracking-wider">{t('deploy.selectProject', 'Select Project:')}</label>
                 <select
@@ -2850,6 +2852,12 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
                                 ? t('deploy.branchPublicHint', 'Public repos can load without GitHub auth; private repos require connection.')
                                 : 'Private repos require Bitbucket connection.'}
                             </p>
+                            {repoChanged && (
+                              <div className="mt-3 px-3 py-2 rounded-lg bg-amber-500/10 border border-amber-500/30 flex items-center gap-2">
+                                <span className="text-xs">⚠</span>
+                                <span className="text-[11px] text-amber-400 font-bold">You have unsaved changes</span>
+                              </div>
+                            )}
                           </div>
 
                           <div className="rounded-2xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] p-4">
@@ -2925,6 +2933,12 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
                           <span className="block text-[9px] text-[var(--text-muted)] mt-1">{t('deploy.directTriggerUrlHint', 'Use this URL to trigger deployment directly via HTTP (e.g. from curl or custom scripts) without a browser. The secret token is automatically appended if configured.')}</span>
                         </div>
                       </div>
+                      {triggerChanged && (
+                        <div className="mt-3 px-3 py-2 rounded-lg bg-amber-500/10 border border-amber-500/30 flex items-center gap-2">
+                          <span className="text-xs">⚠</span>
+                          <span className="text-[11px] text-amber-400 font-bold">You have unsaved changes</span>
+                        </div>
+                      )}
                     </div>
 
                     {/* Script editor */}
@@ -2965,6 +2979,12 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
                           </button>
                         </div>
                       </div>
+                      {commandChanged && (
+                        <div className="mt-3 px-3 py-2 rounded-lg bg-amber-500/10 border border-amber-500/30 flex items-center gap-2">
+                          <span className="text-xs">⚠</span>
+                          <span className="text-[11px] text-amber-400 font-bold">You have unsaved changes</span>
+                        </div>
+                      )}
                     </div>
                   </div>
 
@@ -3064,6 +3084,12 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
                           <span className="block text-[9px] text-[var(--text-muted)] mt-1">{t('deploy.timeoutHint', 'Maximum time in seconds a deployment can run before being terminated (30-3600).')}</span>
                         </div>
                       </div>
+                      {targetChanged && (
+                        <div className="mt-3 px-3 py-2 rounded-lg bg-amber-500/10 border border-amber-500/30 flex items-center gap-2">
+                          <span className="text-xs">⚠</span>
+                          <span className="text-[11px] text-amber-400 font-bold">You have unsaved changes</span>
+                        </div>
+                      )}
                     </div>
 
                     {/* Telegram Notifications */}
@@ -3111,6 +3137,12 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
                               className="w-full bg-[var(--bg-primary)] border border-[var(--border-color)] rounded-xl px-3 py-2 text-xs text-[var(--text-primary)] focus:outline-none focus:border-indigo-500"
                             />
                           </div>
+                        </div>
+                      )}
+                      {telegramChanged && (
+                        <div className="mt-3 px-3 py-2 rounded-lg bg-amber-500/10 border border-amber-500/30 flex items-center gap-2">
+                          <span className="text-xs">⚠</span>
+                          <span className="text-[11px] text-amber-400 font-bold">You have unsaved changes</span>
                         </div>
                       )}
                     </div>
@@ -3268,6 +3300,12 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
                               </div>
                             ))}
                           </div>
+                        </div>
+                      )}
+                      {aiChanged && (
+                        <div className="mt-3 px-3 py-2 rounded-lg bg-amber-500/10 border border-amber-500/30 flex items-center gap-2">
+                          <span className="text-xs">⚠</span>
+                          <span className="text-[11px] text-amber-400 font-bold">You have unsaved changes</span>
                         </div>
                       )}
                     </div>

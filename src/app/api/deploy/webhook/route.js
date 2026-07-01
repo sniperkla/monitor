@@ -1213,6 +1213,12 @@ export async function POST(request) {
       } catch (e) {}
     }
 
+    // For webhook triggers, use the commit ID from git payload so
+    // lastDeployedCommitSha is updated and the "Live" badge stays correct.
+    if (!commitSha && gitInfo?.commitId) {
+      commitSha = gitInfo.commitId;
+    }
+
     runDeployment(config, {
       gitInfo,
       triggerSource,
