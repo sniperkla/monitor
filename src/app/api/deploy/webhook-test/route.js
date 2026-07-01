@@ -83,13 +83,12 @@ export async function POST(request) {
       }
     } else if (config.bitbucketConnected && (config.bitbucketUsername || config.bitbucketUser) && config.bitbucketAppPassword) {
       try {
-        // bitbucketUsername is the encrypted login username, bitbucketUser is the display name
-        let bbUser;
-        try { bbUser = decrypt(config.bitbucketUsername); } catch { bbUser = config.bitbucketUser || config.bitbucketUsername; }
         let bbPass;
         try { bbPass = decrypt(config.bitbucketAppPassword); } catch { bbPass = config.bitbucketAppPassword; }
-        if (bbUser && bbUser.includes('@')) bbUser = bbUser.split('@')[0];
-        const credentials = Buffer.from(`${bbUser}:${bbPass}`).toString('base64');
+
+        // Bitbucket App Passwords authenticate via x-token-auth:<app_password>
+        // (same pattern used in the connect route and deploy scripts)
+        const credentials = Buffer.from(`x-token-auth:${bbPass}`).toString('base64');
         const bbRes = await fetch('https://api.bitbucket.org/2.0/user', {
           headers: {
             Authorization: `Basic ${credentials}`,
@@ -102,14 +101,32 @@ export async function POST(request) {
           checks.push({
             name: 'git_provider',
             status: 'pass',
-            message: `Bitbucket token valid (authenticated as ${user.username || bbUser})`
+            message: `Bitbucket token valid (authenticated as ${user.username})`
           });
         } else {
-          checks.push({
-            name: 'git_provider',
-            status: 'fail',
-            message: `Bitbucket token invalid (HTTP ${bbRes.status})`
+          // Fallback: try with stored username (for non-app-password tokens)
+          let bbUser;
+          try { bbUser = decrypt(config.bitbucketUsername); } catch { bbUser = config.bitbucketUser; }
+          if (bbUser && bbUser.includes('@')) bbUser = bbUser.split('@')[0];
+          const credentials2 = Buffer.from(`${bbUser}:${bbPass}`).toString('base64');
+          const bbRes2 = await fetch('https://api.bitbucket.org/2.0/user', {
+            headers: { Authorization: `Basic ${credentials2}`, Accept: 'application/json' },
+            signal: AbortSignal.timeout(10000)
           });
+          if (bbRes2.ok) {
+            const user = await bbRes2.json();
+            checks.push({
+              name: 'git_provider',
+              status: 'pass',
+              message: `Bitbucket token valid (authenticated as ${user.username || bbUser})`
+            });
+          } else {
+            checks.push({
+              name: 'git_provider',
+              status: 'fail',
+              message: `Bitbucket token invalid (HTTP ${bbRes2.status})`
+            });
+          }
         }
       } catch (err) {
         checks.push({
