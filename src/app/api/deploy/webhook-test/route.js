@@ -83,8 +83,10 @@ export async function POST(request) {
       }
     } else if (config.bitbucketConnected && (config.bitbucketUsername || config.bitbucketUser) && config.bitbucketAppPassword) {
       try {
-        let bbUser, bbPass;
-        try { bbUser = decrypt(config.bitbucketUsername || config.bitbucketUser); } catch { bbUser = config.bitbucketUsername || config.bitbucketUser; }
+        // bitbucketUsername is the encrypted login username, bitbucketUser is the display name
+        let bbUser;
+        try { bbUser = decrypt(config.bitbucketUsername); } catch { bbUser = config.bitbucketUser || config.bitbucketUsername; }
+        let bbPass;
         try { bbPass = decrypt(config.bitbucketAppPassword); } catch { bbPass = config.bitbucketAppPassword; }
         if (bbUser && bbUser.includes('@')) bbUser = bbUser.split('@')[0];
         const credentials = Buffer.from(`${bbUser}:${bbPass}`).toString('base64');
