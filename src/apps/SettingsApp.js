@@ -367,6 +367,7 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
     const fetchDeployData = async () => {
       deployFetchInProgressRef.current = true;
       setDeployLoading(true);
+      setWebhookTestResult(null);
       try {
           const configRes = await apiFetch(`/api/deploy/config?project=${selectedProjectId}`);
           const configData = await configRes.json();
