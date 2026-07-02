@@ -95,6 +95,108 @@ function escapeHtml(text) {
     .replace(/>/g, '&gt;');
 }
 
+// Extract meaningful error lines from deploy log.
+// Returns an array of cleaned error strings (no duplicates, no noise).
+function extractErrorsFromLog(logText) {
+  if (!logText) return [];
+
+  const lines = logText.split('\n');
+
+  // Patterns that indicate an actual error line
+  const errorLinePattern = /\b(error|fatal|exception|crash|panic|segfault|killed|denied|cannot|unable to|refused|timed? ?out|broken|ENOENT|EACCES|EPERM|not found|no such file|undefined is not|cannot read|failed to|command not found|permission denied|syntax error|unexpected token|module not found|cannot find module|type error|reference error|range error)\b/i;
+
+  // Patterns to SKIP — these are noise or generic status lines
+  const skipPattern = /^(---DEPLOY_EXIT_CODE:|--->\s*Running|Deploying\.\.\.|warn\s*[:\-]|warning\s*[:\-]|info\s*[:\-]|\[SSE\]|npm warn|npm notice|yarn warning|deprecated|peer dep|info Visit|Done in \d|✨\s*Done)/i;
+
+  // Patterns for compiler-style messages: "file:line:col: error: message"
+  const compilerPattern = /(.+?):(\d+):(\d+):\s*(error|fatal error|E\d+):\s*(.+)/i;
+
+  // Patterns for common build tool errors
+  const buildErrorPatterns = [
+    // gcc/clang: "file:line: error: message"
+    /^(.+?):(\d+):\d*:\s*(?:fatal )?error:\s*(.+)/i,
+    // Node/JS: "SyntaxError: message", "TypeError: message", etc.
+    /^((?:Syntax|Type|Reference|Range|URI|Eval|Internal)?Error):?\s*(.+)/i,
+    // Go: "file:line:col: error message" or "./path: line: message"
+    /^(\.\/.+?):(\d+):\s*(.+)/i,
+    // Python: "File \"path\", line N, in module" + following "XError: message"
+    /^(?:Traceback|File\s+".+",\s+line\s+\d+)/i,
+    // Generic "Error: ..." at start of line
+    /^(?:Error|FATAL|FAILURE|FAILED)[\s:]+(.+)/i,
+    // "make: *** [target] Error N"
+    /^make:\s*\*\*\*/i,
+    // Docker build errors
+    /^(?:ERROR|executor failed|process.*did not complete)/i,
+    // "declare" style errors (unused variables, etc.)
+    /\b(unused|undeclared|undefined|redeclared|multiple definition|duplicate symbol|conflicting types|implicit declaration)\b/i,
+    // Exit code lines
+    /exit code[:\s]*[1-9]/i,
+    // Process failures
+    /\bprocess exited with code\s+[1-9]/i,
+  ];
+
+  const errors = new Set();
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i].trim();
+    if (!line) continue;
+    if (skipPattern.test(line)) continue;
+
+    // Check compiler-style messages first (most specific)
+    const compilerMatch = line.match(compilerPattern);
+    if (compilerMatch) {
+      const file = compilerMatch[1].replace(/^.*\//, ''); // basename
+      const lineNum = compilerMatch[2];
+      const msg = compilerMatch[5].trim();
+      errors.add(`${file}:${lineNum}: ${msg}`);
+      continue;
+    }
+
+    // Check build-tool specific patterns
+    let matched = false;
+    for (const pat of buildErrorPatterns) {
+      const m = line.match(pat);
+      if (m) {
+        // Use the captured group or the full line, cleaned up
+        const cleaned = (m[m.length - 1] || line).trim();
+        if (cleaned.length > 5 && cleaned.length < 300) {
+          errors.add(cleaned);
+        } else {
+          errors.add(line.slice(0, 300));
+        }
+        matched = true;
+        break;
+      }
+    }
+    if (matched) continue;
+
+    // Generic error line
+    if (errorLinePattern.test(line)) {
+      // Skip if it's just a summary/status line
+      if (line.length > 300) {
+        // Too long — try to extract just the error part
+        const errMatch = line.match(/(?:error|fatal|failed)[\s:]+(.{10,200})/i);
+        if (errMatch) {
+          errors.add(errMatch[1].trim());
+        }
+      } else {
+        errors.add(line);
+      }
+    }
+  }
+
+  // If we found nothing, fall back to last non-empty lines
+  if (errors.size === 0) {
+    const nonEmpty = lines.filter(l => l.trim().length > 0);
+    const last3 = nonEmpty.slice(-3);
+    for (const l of last3) {
+      errors.add(l.trim().slice(0, 200));
+    }
+  }
+
+  return [...errors].slice(0, 15); // Cap at 15 errors
+}
+
 export async function sendTelegramNotification(config, status, extra = {}) {
   if (!config.telegramNotification || !config.telegramBotToken || !config.telegramChatId) {
     return;
@@ -138,11 +240,19 @@ export async function sendTelegramNotification(config, status, extra = {}) {
     text += `<b>Duration:</b> ${extra.duration}s\n`;
   }
 
-  if ((status === 'success' || status === 'failed') && extra.logText) {
+  if (status === 'failed' && extra.logText) {
+    const errors = extractErrorsFromLog(extra.logText);
+    if (errors.length > 0) {
+      text += `\n<b>Errors:</b>\n`;
+      for (const err of errors) {
+        text += `• <code>${escapeHtml(err)}</code>\n`;
+      }
+    }
+  } else if (status === 'success' && extra.logText) {
     const lines = extra.logText.split('\n').filter(line => line.trim().length > 0);
-    const lastLines = lines.slice(-8).join('\n');
+    const lastLines = lines.slice(-3).join('\n');
     if (lastLines) {
-      text += `\n<b>Last Logs:</b>\n<pre>${escapeHtml(lastLines)}</pre>`;
+      text += `\n<b>Log:</b>\n<pre>${escapeHtml(lastLines)}</pre>`;
     }
   }
 

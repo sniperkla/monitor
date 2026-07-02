@@ -267,6 +267,47 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
   const [selectedProjectId, setSelectedProjectId] = useState('default');
   const [connections, setConnections] = useState([]);
   const [deployLoading, setDeployLoading] = useState(false);
+  const [projectDropdownOpen, setProjectDropdownOpen] = useState(false);
+  const [projectSearch, setProjectSearch] = useState('');
+  const [projectDropdownIndex, setProjectDropdownIndex] = useState(0);
+  const projectDropdownRef = useRef(null);
+  const projectSearchRef = useRef(null);
+  const [logSearch, setLogSearch] = useState('');
+  const [logSearchIndex, setLogSearchIndex] = useState(0);
+  const logContainerRef = useRef(null);
+
+  // Filtered projects for searchable dropdown
+  const filteredProjects = useMemo(() => {
+    const q = projectSearch.toLowerCase().trim();
+    if (!q) return deployProjects;
+    return deployProjects.filter(p =>
+      p.id.toLowerCase().includes(q) || (p.name && p.name.toLowerCase().includes(q))
+    );
+  }, [deployProjects, projectSearch]);
+
+  // Close project dropdown on click outside
+  useEffect(() => {
+    if (!projectDropdownOpen) return;
+    const handler = (e) => {
+      if (projectDropdownRef.current && !projectDropdownRef.current.contains(e.target)) {
+        setProjectDropdownOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [projectDropdownOpen]);
+
+  // Focus search input when dropdown opens
+  useEffect(() => {
+    if (projectDropdownOpen && projectSearchRef.current) {
+      projectSearchRef.current.focus();
+    }
+  }, [projectDropdownOpen]);
+
+  // Reset dropdown index when filtered results change
+  useEffect(() => {
+    setProjectDropdownIndex(0);
+  }, [projectSearch]);
 
   const selectedConnection = deployConfig.targetType === 'ssh' && deployConfig.connectionId
     ? connections.find(c => c._id === deployConfig.connectionId)
@@ -2519,19 +2560,91 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
             <div className="p-4 mb-4 rounded-2xl bg-slate-900/40 border border-[var(--border-color)] flex flex-col sm:flex-row sm:items-center justify-between gap-4">
               <div className="flex flex-wrap items-center gap-3">
                 <label className="text-xs font-bold text-[var(--text-secondary)] uppercase tracking-wider">{t('deploy.selectProject', 'Select Project:')}</label>
-                <select
-                  value={selectedProjectId}
-                  onChange={(e) => setSelectedProjectId(e.target.value)}
-                  className="bg-[var(--bg-primary)] border border-[var(--border-color)] rounded-xl px-3 py-1.5 text-xs text-[var(--text-primary)] font-bold focus:outline-none focus:border-indigo-500 max-w-[200px]"
-                >
-                  {deployProjects.map(p => {
-                    const rs = getReadinessStatus(p);
-                    const dot = rs.status === 'ready' ? '\u25CF ' : rs.status === 'incomplete' ? '\u25CF ' : '\u25CB ';
-                    return (
-                      <option key={p.id} value={p.id}>{dot}{p.id}{p.name ? ` - ${p.name}` : ''}</option>
-                    );
-                  })}
-                </select>
+                <div className="relative" ref={projectDropdownRef}>
+                  <button
+                    type="button"
+                    onClick={() => { setProjectDropdownOpen(!projectDropdownOpen); setProjectSearch(''); }}
+                    className="bg-[var(--bg-primary)] border border-[var(--border-color)] rounded-xl px-3 py-1.5 text-xs text-[var(--text-primary)] font-bold focus:outline-none focus:border-indigo-500 min-w-[200px] max-w-[280px] flex items-center justify-between gap-2 cursor-pointer hover:border-indigo-500/50 transition-colors"
+                  >
+                    <span className="truncate flex items-center gap-1.5">
+                      {(() => {
+                        const sel = deployProjects.find(p => p.id === selectedProjectId);
+                        const rs = sel ? getReadinessStatus(sel) : null;
+                        const dot = rs?.status === 'ready' ? '●' : rs?.status === 'incomplete' ? '●' : '○';
+                        const dotColor = rs?.status === 'ready' ? 'text-green-400' : rs?.status === 'incomplete' ? 'text-amber-400' : 'text-gray-500';
+                        return <span className={`text-[10px] ${dotColor}`}>{dot}</span>;
+                      })()}
+                      {selectedProjectId}{deployConfig.name ? ` - ${deployConfig.name}` : ''}
+                    </span>
+                    <ChevronDown size={12} className={`text-[var(--text-muted)] transition-transform ${projectDropdownOpen ? 'rotate-180' : ''}`} />
+                  </button>
+                  {projectDropdownOpen && (
+                    <div className="absolute top-full left-0 mt-1 w-[300px] bg-[var(--bg-primary)] border border-[var(--border-color)] rounded-xl shadow-2xl z-50 overflow-hidden">
+                      <div className="p-2 border-b border-[var(--border-color)]">
+                        <div className="flex items-center gap-2 bg-slate-800/50 rounded-lg px-2 py-1.5">
+                          <Search size={12} className="text-[var(--text-muted)] flex-shrink-0" />
+                          <input
+                            ref={projectSearchRef}
+                            type="text"
+                            value={projectSearch}
+                            onChange={(e) => setProjectSearch(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === 'ArrowDown') {
+                                e.preventDefault();
+                                setProjectDropdownIndex(i => Math.min(i + 1, filteredProjects.length - 1));
+                              } else if (e.key === 'ArrowUp') {
+                                e.preventDefault();
+                                setProjectDropdownIndex(i => Math.max(i - 1, 0));
+                              } else if (e.key === 'Enter' && filteredProjects[projectDropdownIndex]) {
+                                setSelectedProjectId(filteredProjects[projectDropdownIndex].id);
+                                setProjectDropdownOpen(false);
+                                setProjectSearch('');
+                              } else if (e.key === 'Escape') {
+                                setProjectDropdownOpen(false);
+                                setProjectSearch('');
+                              }
+                            }}
+                            placeholder="Search projects..."
+                            className="bg-transparent text-xs text-[var(--text-primary)] outline-none w-full placeholder:text-[var(--text-muted)]"
+                          />
+                          {projectSearch && (
+                            <button onClick={() => setProjectSearch('')} className="text-[var(--text-muted)] hover:text-[var(--text-primary)] cursor-pointer">
+                              <X size={10} />
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                      <div className="max-h-[240px] overflow-y-auto py-1">
+                        {filteredProjects.length === 0 ? (
+                          <div className="px-3 py-4 text-xs text-[var(--text-muted)] text-center">No projects found</div>
+                        ) : (
+                          filteredProjects.map((p, idx) => {
+                            const rs = getReadinessStatus(p);
+                            const dot = rs.status === 'ready' ? '●' : rs.status === 'incomplete' ? '●' : '○';
+                            const dotColor = rs.status === 'ready' ? 'text-green-400' : rs.status === 'incomplete' ? 'text-amber-400' : 'text-gray-500';
+                            const isSelected = p.id === selectedProjectId;
+                            const isHighlighted = idx === projectDropdownIndex;
+                            return (
+                              <button
+                                key={p.id}
+                                type="button"
+                                onClick={() => { setSelectedProjectId(p.id); setProjectDropdownOpen(false); setProjectSearch(''); }}
+                                onMouseEnter={() => setProjectDropdownIndex(idx)}
+                                className={`w-full text-left px-3 py-2 text-xs flex items-center gap-2 transition-colors cursor-pointer ${
+                                  isHighlighted ? 'bg-indigo-600/20' : 'hover:bg-slate-700/30'
+                                } ${isSelected ? 'text-indigo-400 font-bold' : 'text-[var(--text-primary)]'}`}
+                              >
+                                <span className={`text-[10px] ${dotColor} flex-shrink-0`}>{dot}</span>
+                                <span className="truncate">{p.id}{p.name ? ` - ${p.name}` : ''}</span>
+                                {isSelected && <Check size={12} className="ml-auto text-indigo-400 flex-shrink-0" />}
+                              </button>
+                            );
+                          })
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </div>
                 
                 <button
                   type="button"
@@ -3524,25 +3637,167 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
                   </div>
                 )}
 
-                {deployConfig.lastDeployLog ? (
-                  <div className="p-6 rounded-2xl bg-[var(--bg-card)] border border-[var(--border-color)] shadow-sm space-y-4">
-                    <div className="flex items-center justify-between gap-3">
-                      <div className="flex items-center gap-2 text-sm font-bold text-[var(--text-primary)]">
-                        <Terminal size={16} className="text-emerald-400 animate-pulse" />
-                        <span>{t('deploy.logsConsoleTitle', 'Deployment Console Output')}</span>
+                {deployConfig.lastDeployLog ? (() => {
+                  const logLines = deployConfig.lastDeployLog.split('\n');
+                  const errorLineIndices = [];
+                  const errorPattern = /\b(error|fail|fatal|exception|crash|abort|panic|segfault|killed|denied|not found|cannot|unable to|refused|timed? ?out|broken|ENOENT|EACCES|EPERM|exit code [^0]|status:?\s*[1-9])\b/i;
+                  logLines.forEach((line, idx) => {
+                    if (errorPattern.test(line)) errorLineIndices.push(idx);
+                  });
+                  const logQ = logSearch.toLowerCase().trim();
+                  const matchingLineIndices = [];
+                  if (logQ) {
+                    logLines.forEach((line, idx) => {
+                      if (line.toLowerCase().includes(logQ)) matchingLineIndices.push(idx);
+                    });
+                  }
+                  const jumpToError = (direction) => {
+                    if (errorLineIndices.length === 0) return;
+                    const el = logContainerRef.current;
+                    const currentScroll = el ? el.scrollTop : 0;
+                    const lineHeight = 18;
+                    const currentTopLine = Math.floor(currentScroll / lineHeight);
+                    let targetIdx;
+                    if (direction === 'next') {
+                      targetIdx = errorLineIndices.find(i => i > currentTopLine + 2) ?? errorLineIndices[0];
+                    } else {
+                      const reversed = [...errorLineIndices].reverse();
+                      targetIdx = reversed.find(i => i < currentTopLine - 2) ?? errorLineIndices[errorLineIndices.length - 1];
+                    }
+                    if (el) el.scrollTop = targetIdx * lineHeight;
+                  };
+                  const jumpToMatch = (idx) => {
+                    if (matchingLineIndices.length === 0) return;
+                    const el = logContainerRef.current;
+                    const targetLine = matchingLineIndices[idx];
+                    if (el) el.scrollTop = targetLine * 18;
+                    setLogSearchIndex(idx);
+                  };
+                  return (
+                    <div className="p-6 rounded-2xl bg-[var(--bg-card)] border border-[var(--border-color)] shadow-sm space-y-4">
+                      <div className="flex items-center justify-between gap-3 flex-wrap">
+                        <div className="flex items-center gap-2 text-sm font-bold text-[var(--text-primary)]">
+                          <Terminal size={16} className="text-emerald-400 animate-pulse" />
+                          <span>{t('deploy.logsConsoleTitle', 'Deployment Console Output')}</span>
+                          {errorLineIndices.length > 0 && (
+                            <span className="text-[10px] px-2 py-0.5 bg-red-500/20 text-red-400 rounded-full font-bold">
+                              {errorLineIndices.length} error{errorLineIndices.length > 1 ? 's' : ''}
+                            </span>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <button
+                            onClick={() => { const el = logContainerRef.current; if (el) el.scrollTop = el.scrollHeight; }}
+                            className="text-[10px] text-[var(--text-muted)] hover:text-emerald-400 transition-colors cursor-pointer"
+                            title="Scroll to bottom"
+                          >
+                            ↓ Bottom
+                          </button>
+                          <button
+                            onClick={() => {
+                              navigator.clipboard.writeText(deployConfig.lastDeployLog).catch(() => {});
+                            }}
+                            className="text-[10px] text-[var(--text-muted)] hover:text-indigo-400 transition-colors cursor-pointer"
+                            title="Copy full log"
+                          >
+                            <Copy size={12} />
+                          </button>
+                          <button
+                            onClick={() => setDeployConfig(p => ({ ...p, lastDeployLog: '' }))}
+                            className="text-[10px] text-[var(--text-muted)] hover:text-red-400 transition-colors cursor-pointer"
+                          >
+                            {t('deploy.logsClearConsole', 'Clear Console')}
+                          </button>
+                        </div>
                       </div>
-                      <button
-                        onClick={() => setDeployConfig(p => ({ ...p, lastDeployLog: '' }))}
-                        className="text-[10px] text-[var(--text-muted)] hover:text-red-400 transition-colors cursor-pointer"
-                      >
-                        {t('deploy.logsClearConsole', 'Clear Console')}
-                      </button>
+
+                      {/* Search & Error Jump Bar */}
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <div className="flex items-center gap-1.5 bg-slate-900/80 border border-slate-700/50 rounded-lg px-2 py-1 flex-1 min-w-[180px] max-w-[300px]">
+                          <Search size={12} className="text-[var(--text-muted)] flex-shrink-0" />
+                          <input
+                            type="text"
+                            value={logSearch}
+                            onChange={(e) => { setLogSearch(e.target.value); setLogSearchIndex(0); }}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter' && matchingLineIndices.length > 0) {
+                                const next = (e.shiftKey)
+                                  ? (logSearchIndex - 1 + matchingLineIndices.length) % matchingLineIndices.length
+                                  : (logSearchIndex + 1) % matchingLineIndices.length;
+                                jumpToMatch(next);
+                              }
+                              if (e.key === 'Escape') { setLogSearch(''); }
+                            }}
+                            placeholder="Search in logs..."
+                            className="bg-transparent text-[11px] text-[var(--text-primary)] outline-none w-full placeholder:text-[var(--text-muted)]"
+                          />
+                          {logSearch && (
+                            <span className="text-[9px] text-[var(--text-muted)] whitespace-nowrap">
+                              {matchingLineIndices.length > 0 ? `${logSearchIndex + 1}/${matchingLineIndices.length}` : '0'}
+                            </span>
+                          )}
+                          {logSearch && (
+                            <button onClick={() => { setLogSearch(''); }} className="text-[var(--text-muted)] hover:text-[var(--text-primary)] cursor-pointer">
+                              <X size={10} />
+                            </button>
+                          )}
+                        </div>
+                        {errorLineIndices.length > 0 && (
+                          <div className="flex items-center gap-1">
+                            <button
+                              onClick={() => jumpToError('prev')}
+                              className="px-2 py-1 text-[10px] bg-red-500/10 hover:bg-red-500/20 text-red-400 rounded-lg border border-red-500/20 transition-colors cursor-pointer"
+                              title="Previous error"
+                            >
+                              ↑ Prev Error
+                            </button>
+                            <button
+                              onClick={() => jumpToError('next')}
+                              className="px-2 py-1 text-[10px] bg-red-500/10 hover:bg-red-500/20 text-red-400 rounded-lg border border-red-500/20 transition-colors cursor-pointer"
+                              title="Next error"
+                            >
+                              ↓ Next Error
+                            </button>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Log Content */}
+                      <div ref={logContainerRef} className="bg-slate-950 border border-slate-900 rounded-xl shadow-inner max-h-[420px] overflow-y-auto custom-scrollbar font-mono text-[11px] leading-[18px] select-text">
+                        {logLines.map((line, idx) => {
+                          const isError = errorPattern.test(line);
+                          const isSearchMatch = logQ && line.toLowerCase().includes(logQ);
+                          const isCurrentMatch = isSearchMatch && matchingLineIndices[logSearchIndex] === idx;
+                          const shouldHighlight = logQ ? isSearchMatch : isError;
+                          return (
+                            <div
+                              key={idx}
+                              className={`flex px-4 ${isError ? 'bg-red-500/10 border-l-2 border-red-500' : isSearchMatch ? 'bg-indigo-500/10 border-l-2 border-indigo-500' : 'border-l-2 border-transparent'} ${isCurrentMatch ? 'ring-1 ring-inset ring-indigo-400' : ''}`}
+                            >
+                              <span className="text-slate-600 w-10 text-right pr-3 flex-shrink-0 select-none">{idx + 1}</span>
+                              <span className={`whitespace-pre-wrap break-all ${isError ? 'text-red-300' : isSearchMatch ? 'text-indigo-200' : 'text-slate-300'}`}>
+                                {logQ && isSearchMatch ? (() => {
+                                  const lower = line.toLowerCase();
+                                  const parts = [];
+                                  let last = 0;
+                                  let searchIdx = lower.indexOf(logQ);
+                                  while (searchIdx !== -1) {
+                                    if (searchIdx > last) parts.push(<span key={`t${last}`}>{line.slice(last, searchIdx)}</span>);
+                                    parts.push(<mark key={`m${searchIdx}`} className="bg-indigo-500/40 text-white rounded-sm px-0.5">{line.slice(searchIdx, searchIdx + logQ.length)}</mark>);
+                                    last = searchIdx + logQ.length;
+                                    searchIdx = lower.indexOf(logQ, last);
+                                  }
+                                  if (last < line.length) parts.push(<span key={`e${last}`}>{line.slice(last)}</span>);
+                                  return parts;
+                                })() : line}
+                              </span>
+                            </div>
+                          );
+                        })}
+                      </div>
                     </div>
-                    <div className="bg-slate-950 border border-slate-900 rounded-xl p-4 shadow-inner max-h-[420px] overflow-y-auto custom-scrollbar font-mono text-[11px] leading-relaxed text-slate-300 whitespace-pre-wrap select-text">
-                      {deployConfig.lastDeployLog}
-                    </div>
-                  </div>
-                ) : (
+                  );
+                })() : (
                   <div className="p-6 rounded-2xl bg-[var(--bg-card)] border border-[var(--border-color)] text-[var(--text-secondary)]">
                     {t('deploy.logsEmpty', 'No deployment console output is available yet. Run a deployment to see logs here.')}
                   </div>
