@@ -1,38 +1,50 @@
 import { NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth/next';
 import { authOptions } from '@/lib/auth';
-import { getSshConfig, execCommand, sftpUpload } from '../_ssh';
+import { getSshConfig, execCommand, sftpReadStream, sftpUpload } from '../_ssh';
 import crypto from 'crypto';
-import { writeFile, unlink } from 'fs/promises';
-import { join } from 'path';
-import { tmpdir } from 'os';
 
 export async function POST(request) {
-  let tempFile = null;
   try {
     const session = await getServerSession(authOptions);
     if (!session) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
 
-    const formData = await request.formData();
-    const file = formData.get('file');
-    const connectionId = formData.get('connectionId');
-    const dryRun = formData.get('dryRun') === 'true';
+    const body = await request.json();
+    const { sourceConnectionId, sourceFilePath, targetConnectionId, dryRun } = body;
 
-    if (!file || !connectionId) {
-      return NextResponse.json({ success: false, error: 'Missing file or connectionId' }, { status: 400 });
+    if (!sourceConnectionId || !sourceFilePath || !targetConnectionId) {
+      return NextResponse.json({ success: false, error: 'Missing sourceConnectionId, sourceFilePath, or targetConnectionId' }, { status: 400 });
     }
 
     const restoreId = crypto.randomUUID().substring(0, 8);
-    tempFile = join(tmpdir(), `docker_restore_${restoreId}.tar.gz`);
-    const bytes = await file.arrayBuffer();
-    await writeFile(tempFile, Buffer.from(bytes));
-
-    const sshConfig = await getSshConfig(connectionId);
+    const sourceSshConfig = await getSshConfig(sourceConnectionId);
+    const targetSshConfig = await getSshConfig(targetConnectionId);
     const remotePath = `/tmp/docker_restore_${restoreId}.tar.gz`;
     const extractPath = `/tmp/docker_restore_${restoreId}`;
 
-    // 1. Upload backup to target server
-    await sftpUpload(sshConfig, tempFile, remotePath);
+    // 1. Transfer backup from source server to target server via the Next.js server
+    // Stream: source → next.js → target (avoids browser upload limit)
+    console.log(`[restore-docker] Transferring ${sourceFilePath} from source to target...`);
+    const readStream = await sftpReadStream(sourceSshConfig, sourceFilePath);
+
+    // Write to temp file, then upload to target
+    const { writeFile, unlink } = await import('fs/promises');
+    const { join } = await import('path');
+    const { tmpdir } = await import('os');
+    const tempFile = join(tmpdir(), `docker_restore_${restoreId}.tar.gz`);
+
+    await new Promise((resolve, reject) => {
+      const fs = require('fs');
+      const writeStream = fs.createWriteStream(tempFile);
+      readStream.pipe(writeStream);
+      writeStream.on('close', resolve);
+      writeStream.on('error', reject);
+      readStream.on('error', reject);
+    });
+
+    console.log(`[restore-docker] Uploading to target server...`);
+    await sftpUpload(targetSshConfig, tempFile, remotePath);
+    try { await unlink(tempFile); } catch {}
 
     // 2. Extract and discover what's inside
     const discoverCmd = `
@@ -50,7 +62,7 @@ echo "INSPECT_LIST=$(ls ${extractPath}/inspect_*.json 2>/dev/null | xargs -I{} b
 echo "VOLUME_LIST=$(ls ${extractPath}/vol_*.tar 2>/dev/null | xargs -I{} basename {} .tar | sed "s/vol_[^_]*_//" | tr '\\n' ',')"
 echo "---END---"
 `;
-    const discovery = await execCommand(sshConfig, discoverCmd);
+    const discovery = await execCommand(targetSshConfig, discoverCmd);
 
     // Parse discovery output
     const output = discovery.stdout;
@@ -272,15 +284,15 @@ echo "---END---"
     // 4. Execute the restore script
     const scriptPath = `/tmp/docker_restore_${restoreId}.sh`;
     const writeScript = `cat > ${scriptPath} <<'RESTORE_EOF'\n${restoreScript}\nRESTORE_EOF\nchmod +x ${scriptPath}`;
-    await execCommand(sshConfig, writeScript);
+    await execCommand(targetSshConfig, writeScript);
 
-    const result = await execCommand(sshConfig, `bash ${scriptPath} 2>&1; echo "EXIT_CODE=$?"`);
+    const result = await execCommand(targetSshConfig, `bash ${scriptPath} 2>&1; echo "EXIT_CODE=$?"`);
 
     const exitCode = result.stdout.match(/EXIT_CODE=(\d+)/)?.[1];
     const resultLog = result.stdout.match(/---RESULT---\n([\s\S]*?)---END---/)?.[1]?.trim();
 
     // Cleanup script
-    await execCommand(sshConfig, `rm -f ${scriptPath}`);
+    await execCommand(targetSshConfig, `rm -f ${scriptPath}`);
 
     return NextResponse.json({
       success: exitCode === '0',
@@ -291,7 +303,5 @@ echo "---END---"
   } catch (error) {
     console.error('[restore-docker] error:', error.message);
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
-  } finally {
-    if (tempFile) { try { await unlink(tempFile); } catch {} }
   }
 }

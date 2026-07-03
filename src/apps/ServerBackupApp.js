@@ -414,33 +414,22 @@ export default function ServerBackupApp() {
 
   const handleMigrate = async () => {
     if (!migrateModal.entry || !migrateModal.targetId) return;
-    setMigrateModal(prev => ({ ...prev, status: 'running', logs: 'Starting Docker migration...\n' }));
+    setMigrateModal(prev => ({ ...prev, status: 'running', logs: 'Starting Docker migration...\nTransferring backup from source to target server...\n' }));
     try {
       const entry = migrateModal.entry;
-      // First download the backup file from R2 or source server
-      let backupBlob;
-      if (entry.r2Url) {
-        const res = await fetch(entry.r2Url);
-        backupBlob = await res.blob();
-      } else {
-        // Download from source server via our API
-        const filename = entry.filePath.split('/').pop() || 'backup.tar.gz';
-        const url = `/api/server-backup/download?connectionId=${entry.connectionId}&filePath=${encodeURIComponent(entry.filePath)}&filename=${encodeURIComponent(filename)}`;
-        const res = await apiFetch(url);
-        backupBlob = await res.blob();
-      }
-
-      // Upload to restore-docker endpoint
-      const fd = new FormData();
-      fd.append('file', backupBlob, 'backup.tar.gz');
-      fd.append('connectionId', migrateModal.targetId);
-
-      setMigrateModal(prev => ({ ...prev, logs: prev.logs + 'Uploading backup to target server...\n' }));
-      const res = await fetch('/api/server-backup/restore-docker', { method: 'POST', body: fd, credentials: 'include' });
+      const res = await apiFetch('/api/server-backup/restore-docker', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          sourceConnectionId: entry.connectionId,
+          sourceFilePath: entry.filePath,
+          targetConnectionId: migrateModal.targetId,
+        }),
+      });
       const data = await res.json();
 
       if (data.success) {
-        setMigrateModal(prev => ({ ...prev, status: 'done', logs: prev.logs + '\n' + (data.logs || 'Migration complete!') }));
+        setMigrateModal(prev => ({ ...prev, status: 'done', logs: prev.logs + (data.logs || 'Migration complete!') }));
         addNotification({ title: 'Migration Complete', message: 'Docker containers restored on target server', type: 'success' });
       } else {
         setMigrateModal(prev => ({ ...prev, status: 'error', logs: prev.logs + '\nError: ' + (data.error || 'Unknown error') }));
