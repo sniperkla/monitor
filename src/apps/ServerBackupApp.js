@@ -230,9 +230,10 @@ export default function ServerBackupApp() {
   };
 
   const openComposeBrowser = () => {
+    const sourceId = composeBrowse.sourceConnectionId || connectionId;
     composeBrowseHistory.current = ['/'];
-    setComposeBrowse({ isOpen: true, currentPath: '/', entries: [], loading: false, selectedFile: null, sourceConnectionId: connectionId });
-    browseComposeDir('/', connectionId);
+    setComposeBrowse(prev => ({ ...prev, isOpen: true, currentPath: '/', entries: [], loading: false, selectedFile: null }));
+    browseComposeDir('/', sourceId);
   };
 
   const navigateComposeDir = (dirPath) => {
@@ -1031,7 +1032,7 @@ export default function ServerBackupApp() {
                     <label className="block text-[10px] font-bold text-[var(--text-muted)] uppercase tracking-wider mb-1.5">Source Server</label>
                     <SearchableSelect
                       value={composeBrowse.sourceConnectionId || connectionId}
-                      onChange={(v) => setComposeBrowse(prev => ({ ...prev, sourceConnectionId: v }))}
+                      onChange={(v) => setComposeBrowse(prev => ({ ...prev, sourceConnectionId: v, selectedFile: null }))}
                       options={sshConnections.map(c => ({ value: c._id, label: `${c.name} (${c.host})` }))}
                       placeholder="Select source server..."
                     />
