@@ -442,16 +442,12 @@ export default function ServerBackupApp() {
         </div>
         <div className="p-3 border-t border-[var(--border-color)]">
           <label className="block text-[10px] font-bold text-[var(--text-muted)] uppercase tracking-wider mb-1.5">Server</label>
-          <select
+          <SearchableSelect
             value={connectionId}
-            onChange={e => setConnectionId(e.target.value)}
-            className="w-full px-2 py-1.5 rounded-lg bg-[var(--bg-primary)] border border-[var(--border-color)] text-xs text-[var(--text-primary)] focus:outline-none"
-          >
-            <option value="">Select connection...</option>
-            {sshConnections.map(c => (
-              <option key={c._id} value={c._id}>{c.name} ({c.host})</option>
-            ))}
-          </select>
+            onChange={setConnectionId}
+            options={sshConnections.map(c => ({ value: c._id, label: `${c.name} (${c.host})` }))}
+            placeholder="Select connection..."
+          />
         </div>
       </div>
 
@@ -645,55 +641,6 @@ export default function ServerBackupApp() {
               </ConfigSection>
             )}
 
-            {/* Backup History */}
-            {backupHistory.length > 0 && (
-              <ConfigSection title="Backup History">
-                <div className="space-y-2">
-                  {backupHistory.map((entry) => (
-                    <div key={entry.id} className="flex items-center gap-3 p-2.5 rounded-lg bg-[var(--bg-secondary)]/50 border border-[var(--border-color)]">
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2">
-                          <span className="text-[10px] font-mono text-[var(--text-primary)] truncate">{entry.filePath.split('/').pop()}</span>
-                          <span className="text-[9px] px-1.5 py-0.5 rounded bg-indigo-500/10 text-indigo-400 font-bold">{entry.type}</span>
-                          {entry.r2Url && <span className="text-[9px] px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-400 font-bold">Cloud</span>}
-                        </div>
-                        <div className="text-[9px] text-[var(--text-muted)] mt-0.5">
-                          {new Date(entry.timestamp).toLocaleString()}
-                          {entry.size ? ` · ${formatSize(entry.size)}` : ''}
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-1.5 shrink-0">
-                        <button
-                          onClick={() => {
-                            if (entry.r2Url) {
-                              window.open(entry.r2Url, '_blank');
-                            } else {
-                              const filename = entry.filePath.split('/').pop() || 'backup.tar.gz';
-                              const url = `/api/server-backup/download?connectionId=${entry.connectionId}&filePath=${encodeURIComponent(entry.filePath)}&filename=${encodeURIComponent(filename)}`;
-                              window.open(url, '_blank');
-                            }
-                          }}
-                          className="p-1.5 rounded-lg hover:bg-emerald-500/10 text-emerald-400 transition-colors"
-                          title="Download"
-                        >
-                          <Download size={13} />
-                        </button>
-                        <button
-                          onClick={() => {
-                            setBackupHistory(prev => prev.filter(h => h.id !== entry.id));
-                          }}
-                          className="p-1.5 rounded-lg hover:bg-red-500/10 text-red-400 transition-colors"
-                          title="Remove from history"
-                        >
-                          <X size={13} />
-                        </button>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-                <button onClick={() => setBackupHistory([])} className="text-[9px] text-[var(--text-muted)] hover:text-red-400 transition-colors mt-1">Clear all history</button>
-              </ConfigSection>
-            )}
           </>
         )}
 
@@ -712,10 +659,12 @@ export default function ServerBackupApp() {
             </ConfigSection>
 
             <ConfigSection title="Target Server">
-              <select value={restoreTargetId} onChange={e => setRestoreTargetId(e.target.value)} className="w-full px-3 py-2 rounded-lg bg-[var(--bg-primary)] border border-[var(--border-color)] text-xs focus:outline-none">
-                <option value="">Select server...</option>
-                {sshConnections.map(c => <option key={c._id} value={c._id}>{c.name} ({c.host})</option>)}
-              </select>
+              <SearchableSelect
+                value={restoreTargetId}
+                onChange={setRestoreTargetId}
+                options={sshConnections.map(c => ({ value: c._id, label: `${c.name} (${c.host})` }))}
+                placeholder="Select server..."
+              />
             </ConfigSection>
 
             <ConfigSection title="Restore Settings">
@@ -758,10 +707,12 @@ export default function ServerBackupApp() {
             </ConfigSection>
 
             <ConfigSection title="Target Server">
-              <select value={transferTargetId} onChange={e => setTransferTargetId(e.target.value)} className="w-full px-3 py-2 rounded-lg bg-[var(--bg-primary)] border border-[var(--border-color)] text-xs focus:outline-none">
-                <option value="">Select target server...</option>
-                {sshConnections.filter(c => c._id !== connectionId).map(c => <option key={c._id} value={c._id}>{c.name} ({c.host})</option>)}
-              </select>
+              <SearchableSelect
+                value={transferTargetId}
+                onChange={setTransferTargetId}
+                options={sshConnections.filter(c => c._id !== connectionId).map(c => ({ value: c._id, label: `${c.name} (${c.host})` }))}
+                placeholder="Select target server..."
+              />
               <InputField label="Target Path" value={transferTargetPath} onChange={setTransferTargetPath} placeholder="/tmp/" />
             </ConfigSection>
 
@@ -777,9 +728,62 @@ export default function ServerBackupApp() {
         )}
 
         {activeTab === 'jobs' && (
-          <ConfigSection title="Backup Jobs on Server">
-            <ServerFilesList connectionId={connectionId} apiFetch={apiFetch} />
-          </ConfigSection>
+          <>
+            {/* Backup History */}
+            <ConfigSection title="Backup History">
+              {backupHistory.length === 0 ? (
+                <div className="text-center py-6 text-[var(--text-muted)] text-xs">No backup history yet. Run a backup to see it here.</div>
+              ) : (
+                <div className="space-y-2">
+                  {backupHistory.map((entry) => (
+                    <div key={entry.id} className="flex items-center gap-3 p-3 rounded-xl bg-[var(--bg-secondary)]/50 border border-[var(--border-color)]">
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2">
+                          <span className="text-[11px] font-mono font-bold text-[var(--text-primary)] truncate">{entry.filePath.split('/').pop()}</span>
+                          <span className="text-[9px] px-1.5 py-0.5 rounded bg-indigo-500/10 text-indigo-400 font-bold uppercase">{entry.type}</span>
+                          {entry.r2Url && <span className="text-[9px] px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-400 font-bold">Cloud</span>}
+                        </div>
+                        <div className="text-[10px] text-[var(--text-muted)] mt-1">
+                          {new Date(entry.timestamp).toLocaleString()}
+                          {entry.size ? ` · ${formatSize(entry.size)}` : ''}
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2 shrink-0">
+                        <button
+                          onClick={() => {
+                            if (entry.r2Url) {
+                              window.open(entry.r2Url, '_blank');
+                            } else {
+                              const filename = entry.filePath.split('/').pop() || 'backup.tar.gz';
+                              const url = `/api/server-backup/download?connectionId=${entry.connectionId}&filePath=${encodeURIComponent(entry.filePath)}&filename=${encodeURIComponent(filename)}`;
+                              window.open(url, '_blank');
+                            }
+                          }}
+                          className="px-3 py-1.5 rounded-lg bg-emerald-600/10 hover:bg-emerald-600/20 border border-emerald-500/20 text-emerald-400 text-[10px] font-bold transition-all flex items-center gap-1.5"
+                        >
+                          <Download size={12} /> Download
+                        </button>
+                        <button
+                          onClick={() => setBackupHistory(prev => prev.filter(h => h.id !== entry.id))}
+                          className="p-1.5 rounded-lg hover:bg-red-500/10 text-red-400 transition-colors"
+                          title="Remove"
+                        >
+                          <X size={13} />
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {backupHistory.length > 0 && (
+                <button onClick={() => setBackupHistory([])} className="text-[10px] text-[var(--text-muted)] hover:text-red-400 transition-colors mt-2">Clear all history</button>
+              )}
+            </ConfigSection>
+
+            <ConfigSection title="Backup Files on Server">
+              <ServerFilesList connectionId={connectionId} apiFetch={apiFetch} />
+            </ConfigSection>
+          </>
         )}
       </div>
 
@@ -847,6 +851,68 @@ export default function ServerBackupApp() {
                 Select This Folder
               </button>
             </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SearchableSelect({ value, onChange, options, placeholder = 'Select...', disabled = false, className = '' }) {
+  const [isOpen, setIsOpen] = useState(false);
+  const [search, setSearch] = useState('');
+  const ref = useRef(null);
+
+  useEffect(() => {
+    const handleClickOutside = (e) => {
+      if (ref.current && !ref.current.contains(e.target)) setIsOpen(false);
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  const selected = options.find(o => o.value === value);
+  const filtered = options.filter(o => !search || o.label.toLowerCase().includes(search.toLowerCase()));
+
+  return (
+    <div className={`relative ${className}`} ref={ref}>
+      <button
+        type="button"
+        onClick={() => { if (!disabled) { setIsOpen(!isOpen); setSearch(''); } }}
+        className={`w-full flex items-center justify-between px-3 py-2 rounded-xl bg-[var(--bg-primary)] border text-xs text-left transition-all ${isOpen ? 'border-indigo-500/50' : 'border-[var(--border-color)]'} ${disabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer hover:border-[var(--border-hover)]'}`}
+      >
+        <span className={selected ? 'text-[var(--text-primary)]' : 'text-[var(--text-muted)]'}>
+          {selected ? selected.label : placeholder}
+        </span>
+        <ChevronRight size={12} className={`text-[var(--text-muted)] transition-transform ${isOpen ? 'rotate-90' : ''}`} />
+      </button>
+      {isOpen && (
+        <div className="absolute z-50 mt-1 w-full rounded-xl bg-[var(--bg-secondary)] border border-[var(--border-color)] shadow-xl overflow-hidden">
+          <div className="p-1.5 border-b border-[var(--border-color)]">
+            <input
+              autoFocus
+              type="text"
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+              placeholder="Search..."
+              className="w-full px-2.5 py-1.5 rounded-lg bg-[var(--bg-primary)] border border-[var(--border-color)] text-xs focus:outline-none focus:border-indigo-500/50"
+            />
+          </div>
+          <div className="max-h-48 overflow-y-auto p-1">
+            {filtered.length === 0 ? (
+              <div className="px-3 py-2 text-[10px] text-[var(--text-muted)]">No results</div>
+            ) : (
+              filtered.map(o => (
+                <button
+                  key={o.value}
+                  onClick={() => { onChange(o.value); setIsOpen(false); setSearch(''); }}
+                  className={`w-full text-left px-3 py-2 rounded-lg text-xs transition-colors flex items-center gap-2 ${value === o.value ? 'bg-indigo-500/10 text-indigo-400' : 'text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)]'}`}
+                >
+                  {value === o.value && <CheckCircle size={12} className="text-indigo-400 shrink-0" />}
+                  <span className="truncate">{o.label}</span>
+                </button>
+              ))
+            )}
           </div>
         </div>
       )}

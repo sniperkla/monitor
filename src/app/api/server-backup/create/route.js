@@ -90,13 +90,16 @@ function buildBackupCommand(jobId, type, config) {
       throw new Error(`Unknown backup type: ${type}`);
   }
 
+  const scriptFile = `/tmp/backup_${jobId}.sh`;
   const fullCmd = [
-    `nohup bash -c '`,
+    `cat > ${scriptFile} <<'BACKUP_EOF'`,
     `echo "[backup] Starting ${type} backup at $(date)"`,
     cmd,
     `echo "[backup] Backup complete: ${outFile}"`,
     `echo "---FINISHED---"`,
-    `' > ${logFile} 2>&1 &`,
+    `BACKUP_EOF`,
+    `chmod +x ${scriptFile}`,
+    `nohup bash ${scriptFile} > ${logFile} 2>&1 &`,
     `echo "PID=$!"`,
   ].join('\n');
 
