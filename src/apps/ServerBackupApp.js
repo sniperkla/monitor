@@ -861,22 +861,42 @@ export default function ServerBackupApp() {
 function SearchableSelect({ value, onChange, options, placeholder = 'Select...', disabled = false, className = '' }) {
   const [isOpen, setIsOpen] = useState(false);
   const [search, setSearch] = useState('');
-  const ref = useRef(null);
+  const [pos, setPos] = useState({ top: 0, left: 0, width: 0 });
+  const btnRef = useRef(null);
+  const dropdownRef = useRef(null);
 
   useEffect(() => {
+    if (isOpen && btnRef.current) {
+      const rect = btnRef.current.getBoundingClientRect();
+      const spaceBelow = window.innerHeight - rect.bottom;
+      const openUp = spaceBelow < 220;
+      setPos({
+        top: openUp ? rect.top - 8 : rect.bottom + 4,
+        left: rect.left,
+        width: rect.width,
+        transform: openUp ? 'translateY(-100%)' : '',
+      });
+    }
+  }, [isOpen]);
+
+  useEffect(() => {
+    if (!isOpen) return;
     const handleClickOutside = (e) => {
-      if (ref.current && !ref.current.contains(e.target)) setIsOpen(false);
+      if (btnRef.current && !btnRef.current.contains(e.target) && dropdownRef.current && !dropdownRef.current.contains(e.target)) {
+        setIsOpen(false);
+      }
     };
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, []);
+  }, [isOpen]);
 
   const selected = options.find(o => o.value === value);
   const filtered = options.filter(o => !search || o.label.toLowerCase().includes(search.toLowerCase()));
 
   return (
-    <div className={`relative ${className}`} ref={ref}>
+    <div className={className}>
       <button
+        ref={btnRef}
         type="button"
         onClick={() => { if (!disabled) { setIsOpen(!isOpen); setSearch(''); } }}
         className={`w-full flex items-center justify-between px-3 py-2 rounded-xl bg-[var(--bg-primary)] border text-xs text-left transition-all ${isOpen ? 'border-indigo-500/50' : 'border-[var(--border-color)]'} ${disabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer hover:border-[var(--border-hover)]'}`}
@@ -887,7 +907,11 @@ function SearchableSelect({ value, onChange, options, placeholder = 'Select...',
         <ChevronRight size={12} className={`text-[var(--text-muted)] transition-transform ${isOpen ? 'rotate-90' : ''}`} />
       </button>
       {isOpen && (
-        <div className="absolute z-50 mt-1 w-full rounded-xl bg-[var(--bg-secondary)] border border-[var(--border-color)] shadow-xl overflow-hidden">
+        <div
+          ref={dropdownRef}
+          className="fixed z-[9999] rounded-xl bg-[var(--bg-secondary)] border border-[var(--border-color)] shadow-2xl overflow-hidden"
+          style={{ top: pos.top, left: pos.left, width: pos.width, transform: pos.transform }}
+        >
           <div className="p-1.5 border-b border-[var(--border-color)]">
             <input
               autoFocus
@@ -980,20 +1004,20 @@ function ServerFilesList({ connectionId, apiFetch }) {
   const [files, setFiles] = useState([]);
   const [loading, setLoading] = useState(false);
 
-  useEffect(() => {
+  const loadFiles = async () => {
     if (!connectionId) return;
-    let cancelled = false;
-    const load = async () => {
-      try {
-        const res = await apiFetch(`/api/server-backup/jobs?connectionId=${connectionId}`);
-        const data = await res.json();
-        if (!cancelled && data.success) setFiles(data.files || []);
-      } catch {}
-      if (!cancelled) setLoading(false);
-    };
-    load();
-    return () => { cancelled = true; };
-  }, [connectionId, apiFetch]);
+    setLoading(true);
+    try {
+      const res = await apiFetch(`/api/server-backup/jobs?connectionId=${connectionId}`);
+      const data = await res.json();
+      if (data.success) setFiles(data.files || []);
+    } catch {}
+    setLoading(false);
+  };
+
+  useEffect(() => {
+    loadFiles();
+  }, [connectionId]);
 
   if (!connectionId) return <div className="text-xs text-[var(--text-muted)]">Select a server connection first</div>;
   if (loading) return <div className="text-xs text-[var(--text-muted)]"><Loader size={12} className="animate-spin inline mr-1" /> Loading...</div>;
@@ -1001,7 +1025,7 @@ function ServerFilesList({ connectionId, apiFetch }) {
 
   return (
     <div className="space-y-1.5">
-      <button onClick={fetchFiles} className="text-[10px] text-indigo-400 hover:text-indigo-300 font-bold mb-2 flex items-center gap-1"><RefreshCw size={10} /> Refresh</button>
+      <button onClick={loadFiles} className="text-[10px] text-indigo-400 hover:text-indigo-300 font-bold mb-2 flex items-center gap-1"><RefreshCw size={10} /> Refresh</button>
       {files.map((f, i) => (
         <div key={i} className="flex items-center justify-between p-2.5 rounded-lg bg-[var(--bg-secondary)]/50 border border-[var(--border-color)]">
           <div className="min-w-0">
