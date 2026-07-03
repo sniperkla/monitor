@@ -48,6 +48,7 @@ export default function ServerBackupApp() {
   });
   const [migrateModal, setMigrateModal] = useState({ isOpen: false, entry: null, targetId: '', status: 'idle', logs: '', mode: 'backup' });
   const [composeBrowse, setComposeBrowse] = useState({ isOpen: false, currentPath: '/', entries: [], loading: false, selectedFile: null, sourceConnectionId: '' });
+  const [composePreview, setComposePreview] = useState({ loading: false, services: [], error: null });
   const composeBrowseHistory = useRef([]);
 
   // Load backup history from database on mount
@@ -250,6 +251,24 @@ export default function ServerBackupApp() {
 
   const selectComposeFile = (filePath) => {
     setComposeBrowse(prev => ({ ...prev, selectedFile: filePath, isOpen: false }));
+    // Fetch preview of services in the compose file
+    fetchComposePreview(filePath, composeBrowse.sourceConnectionId || connectionId);
+  };
+
+  const fetchComposePreview = async (filePath, connId) => {
+    if (!filePath || !connId) return;
+    setComposePreview({ loading: true, services: [], error: null });
+    try {
+      const res = await apiFetch(`/api/server-backup/compose-preview?connectionId=${connId}&filePath=${encodeURIComponent(filePath)}`);
+      const data = await res.json();
+      if (data.success) {
+        setComposePreview({ loading: false, services: data.services || [], error: null });
+      } else {
+        setComposePreview({ loading: false, services: [], error: data.error || 'Failed to parse compose file' });
+      }
+    } catch (err) {
+      setComposePreview({ loading: false, services: [], error: err.message });
+    }
   };
 
   // Close container dropdown on outside click
@@ -1043,7 +1062,7 @@ export default function ServerBackupApp() {
                       <div className="flex items-center gap-2 p-2.5 rounded-lg bg-[var(--bg-primary)] border border-[var(--border-color)]">
                         <FileBox size={14} className="text-purple-400 shrink-0" />
                         <span className="text-xs font-mono text-[var(--text-primary)] truncate flex-1">{composeBrowse.selectedFile}</span>
-                        <button onClick={() => setComposeBrowse(prev => ({ ...prev, selectedFile: null }))} className="text-[var(--text-muted)] hover:text-red-400 transition-colors">
+                        <button onClick={() => { setComposeBrowse(prev => ({ ...prev, selectedFile: null })); setComposePreview({ loading: false, services: [], error: null }); }} className="text-[var(--text-muted)] hover:text-red-400 transition-colors">
                           <X size={12} />
                         </button>
                       </div>
@@ -1058,6 +1077,44 @@ export default function ServerBackupApp() {
                       </button>
                     )}
                   </div>
+
+                  {/* Services Preview */}
+                  {composeBrowse.selectedFile && (
+                    <div className="p-3 rounded-xl bg-[var(--bg-primary)] border border-[var(--border-color)]">
+                      <div className="text-[10px] text-[var(--text-muted)] uppercase mb-2">Services in Compose File</div>
+                      {composePreview.loading ? (
+                        <div className="flex items-center gap-2 text-xs text-[var(--text-muted)]">
+                          <Loader size={12} className="animate-spin" />
+                          <span>Parsing compose file...</span>
+                        </div>
+                      ) : composePreview.error ? (
+                        <div className="text-xs text-red-400">{composePreview.error}</div>
+                      ) : composePreview.services.length === 0 ? (
+                        <div className="text-xs text-[var(--text-muted)]">No services found</div>
+                      ) : (
+                        <div className="space-y-1.5">
+                          {composePreview.services.map((service, i) => (
+                            <div key={i} className="flex items-center gap-2 p-2 rounded-lg bg-[var(--bg-secondary)]/50">
+                              <div className={`w-2 h-2 rounded-full shrink-0 ${service.running ? 'bg-emerald-400' : 'bg-gray-500'}`} />
+                              <div className="flex-1 min-w-0">
+                                <div className="text-xs font-mono font-bold text-[var(--text-primary)]">{service.name}</div>
+                                <div className="text-[9px] text-[var(--text-muted)] truncate">
+                                  {service.image || 'no image'}
+                                  {service.ports.length > 0 && ` · ports: ${service.ports.join(', ')}`}
+                                </div>
+                              </div>
+                              {service.running && (
+                                <span className="text-[9px] px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-400 font-bold">RUNNING</span>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      <div className="mt-2 text-[9px] text-[var(--text-muted)]">
+                        {composePreview.services.length} service(s) found · {composePreview.services.filter(s => s.running).length} running
+                      </div>
+                    </div>
+                  )}
                 </>
               )}
 
