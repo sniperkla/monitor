@@ -48,10 +48,8 @@ export async function GET(request) {
       if (inServices) {
         // Check if we're still in services section (new top-level key)
         if (/^[a-zA-Z]/.test(trimmed) && !trimmed.startsWith(' ') && !trimmed.startsWith('-')) {
-          // Check if this is a new top-level key (not a service)
           if (!trimmed.includes(':') || /^[a-z]+:$/.test(trimmed.split(':')[0])) {
             const key = trimmed.split(':')[0].trim();
-            // These are top-level keys that end the services section
             if (['volumes', 'networks', 'configs', 'secrets', 'version'].includes(key)) {
               inServices = false;
               continue;
@@ -69,6 +67,7 @@ export async function GET(request) {
             volumes: [],
             env: [],
             running: false,
+            actualPorts: [],
           };
           services.push(currentService);
           indentLevel = 4;
@@ -85,7 +84,7 @@ export async function GET(request) {
             currentService.image = imageMatch[1].trim().replace(/['"]/g, '');
           }
 
-          // Ports
+          // Ports (handle both "- 80:80" and "- "80:80"" formats)
           const portMatch = propLine.match(/^-?\s*"?(\d+:\d+(?:\/\w+)?)"?\s*$/);
           if (portMatch) {
             currentService.ports.push(portMatch[1]);
@@ -106,27 +105,64 @@ export async function GET(request) {
       }
     }
 
-    // Check which services are currently running on the source server
+    // Check which services are currently running and get their actual ports
     const composeDir = filePath.substring(0, filePath.lastIndexOf('/')) || '/tmp';
     const composeFileName = filePath.split('/').pop();
     
-    // Try to get running containers from docker compose
+    // Get running containers and their actual port mappings
     try {
+      // First try docker compose ps
       const psResult = await execCommand(sshConfig, `cd '${composeDir}' && docker compose -f '${composeFileName}' ps --format json 2>/dev/null || docker-compose -f '${composeFileName}' ps --format json 2>/dev/null || echo "[]"`);
+      
       if (psResult.code === 0 && psResult.stdout.trim()) {
         const psLines = psResult.stdout.trim().split('\n').filter(l => l.trim());
+        const containerIds = [];
+        
         for (const line of psLines) {
           try {
             const container = JSON.parse(line);
             const serviceName = container.Service || container.service || container.Name?.split('-').pop();
             const state = container.State || container.state || '';
+            const containerId = container.ID || container.id;
+            
             const existing = services.find(s => s.name === serviceName);
             if (existing) {
               existing.running = state.toLowerCase().includes('running');
-              existing.containerId = container.ID || container.id;
+              existing.containerId = containerId;
               existing.containerState = state;
+              if (containerId) containerIds.push(containerId);
             }
           } catch {}
+        }
+        
+        // Get actual port mappings from container inspect
+        if (containerIds.length > 0) {
+          for (const service of services.filter(s => s.running && s.containerId)) {
+            try {
+              const inspectResult = await execCommand(sshConfig, `docker inspect --format '{{json .HostConfig.PortBindings}}' ${service.containerId} 2>/dev/null || echo "{}"`);
+              if (inspectResult.code === 0 && inspectResult.stdout.trim()) {
+                const portBindings = JSON.parse(inspectResult.stdout.trim());
+                const actualPorts = [];
+                for (const [containerPort, hostBindings] of Object.entries(portBindings || {})) {
+                  if (hostBindings && hostBindings.length > 0) {
+                    for (const binding of hostBindings) {
+                      const hostIp = binding.HostIp || '0.0.0.0';
+                      const hostPort = binding.HostPort;
+                      const cp = containerPort.split('/')[0];
+                      if (hostPort) {
+                        if (hostIp && hostIp !== '0.0.0.0') {
+                          actualPorts.push(`${hostIp}:${hostPort}:${cp}`);
+                        } else {
+                          actualPorts.push(`${hostPort}:${cp}`);
+                        }
+                      }
+                    }
+                  }
+                }
+                service.actualPorts = actualPorts;
+              }
+            } catch {}
+          }
         }
       }
     } catch {}
@@ -137,6 +173,7 @@ export async function GET(request) {
         name: s.name,
         image: s.image,
         ports: s.ports,
+        actualPorts: s.actualPorts,
         volumes: s.volumes.length,
         env: s.env.length,
         running: s.running,

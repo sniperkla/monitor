@@ -1093,21 +1093,36 @@ export default function ServerBackupApp() {
                         <div className="text-xs text-[var(--text-muted)]">No services found</div>
                       ) : (
                         <div className="space-y-1.5">
-                          {composePreview.services.map((service, i) => (
-                            <div key={i} className="flex items-center gap-2 p-2 rounded-lg bg-[var(--bg-secondary)]/50">
-                              <div className={`w-2 h-2 rounded-full shrink-0 ${service.running ? 'bg-emerald-400' : 'bg-gray-500'}`} />
-                              <div className="flex-1 min-w-0">
-                                <div className="text-xs font-mono font-bold text-[var(--text-primary)]">{service.name}</div>
-                                <div className="text-[9px] text-[var(--text-muted)] truncate">
-                                  {service.image || 'no image'}
-                                  {service.ports.length > 0 && ` · ports: ${service.ports.join(', ')}`}
+                          {composePreview.services.map((service, i) => {
+                            // Show actual ports from running container if available, otherwise show compose ports
+                            const displayPorts = service.actualPorts?.length > 0 ? service.actualPorts : service.ports;
+                            const hasPortMismatch = service.running && service.actualPorts?.length > 0 && service.ports.length === 0;
+                            
+                            return (
+                              <div key={i} className="flex items-center gap-2 p-2 rounded-lg bg-[var(--bg-secondary)]/50">
+                                <div className={`w-2 h-2 rounded-full shrink-0 ${service.running ? 'bg-emerald-400' : 'bg-gray-500'}`} />
+                                <div className="flex-1 min-w-0">
+                                  <div className="text-xs font-mono font-bold text-[var(--text-primary)]">{service.name}</div>
+                                  <div className="text-[9px] text-[var(--text-muted)] truncate">
+                                    {service.image || 'no image'}
+                                    {displayPorts.length > 0 && (
+                                      <span className={hasPortMismatch ? 'text-amber-400' : ''}>
+                                        {' · ports: '}{displayPorts.join(', ')}
+                                      </span>
+                                    )}
+                                  </div>
+                                  {hasPortMismatch && (
+                                    <div className="text-[8px] text-amber-400 mt-0.5">
+                                      Ports from running container (not in compose file)
+                                    </div>
+                                  )}
                                 </div>
+                                {service.running && (
+                                  <span className="text-[9px] px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-400 font-bold">RUNNING</span>
+                                )}
                               </div>
-                              {service.running && (
-                                <span className="text-[9px] px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-400 font-bold">RUNNING</span>
-                              )}
-                            </div>
-                          ))}
+                            );
+                          })}
                         </div>
                       )}
                       <div className="mt-2 text-[9px] text-[var(--text-muted)]">
