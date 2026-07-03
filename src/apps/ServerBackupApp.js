@@ -46,7 +46,9 @@ export default function ServerBackupApp() {
       return saved ? JSON.parse(saved) : [];
     } catch { return []; }
   });
-  const [migrateModal, setMigrateModal] = useState({ isOpen: false, entry: null, targetId: '', status: 'idle', logs: '' });
+  const [migrateModal, setMigrateModal] = useState({ isOpen: false, entry: null, targetId: '', status: 'idle', logs: '', mode: 'backup' });
+  const [composeBrowse, setComposeBrowse] = useState({ isOpen: false, currentPath: '/', entries: [], loading: false, selectedFile: null, sourceConnectionId: '' });
+  const composeBrowseHistory = useRef([]);
 
   // Load backup history from database on mount
   useEffect(() => {
@@ -200,6 +202,53 @@ export default function ServerBackupApp() {
       updatePath(idx, folderPath);
     }
     setFolderBrowser({ isOpen: false, currentPath: '/', entries: [], loading: false, targetPathIndex: null });
+  };
+
+  // Compose file browser functions
+  const browseComposeDir = async (path, sourceConnId) => {
+    const connId = sourceConnId || composeBrowse.sourceConnectionId || connectionId;
+    if (!connId) return;
+    setComposeBrowse(prev => ({ ...prev, loading: true, sourceConnectionId: connId }));
+    try {
+      const res = await apiFetch(`/api/server-backup/browse?connectionId=${connId}&path=${encodeURIComponent(path)}`);
+      const data = await res.json();
+      if (data.success) {
+        setComposeBrowse(prev => ({
+          ...prev,
+          currentPath: data.path,
+          entries: data.entries,
+          loading: false,
+        }));
+      } else {
+        addNotification({ title: 'Error', message: data.error || 'Cannot browse directory', type: 'error' });
+        setComposeBrowse(prev => ({ ...prev, loading: false }));
+      }
+    } catch (err) {
+      addNotification({ title: 'Error', message: err.message, type: 'error' });
+      setComposeBrowse(prev => ({ ...prev, loading: false }));
+    }
+  };
+
+  const openComposeBrowser = () => {
+    composeBrowseHistory.current = ['/'];
+    setComposeBrowse({ isOpen: true, currentPath: '/', entries: [], loading: false, selectedFile: null, sourceConnectionId: connectionId });
+    browseComposeDir('/', connectionId);
+  };
+
+  const navigateComposeDir = (dirPath) => {
+    composeBrowseHistory.current.push(dirPath);
+    browseComposeDir(dirPath);
+  };
+
+  const goBackComposeDir = () => {
+    if (composeBrowseHistory.current.length <= 1) return;
+    composeBrowseHistory.current.pop();
+    const prevPath = composeBrowseHistory.current[composeBrowseHistory.current.length - 1];
+    browseComposeDir(prevPath);
+  };
+
+  const selectComposeFile = (filePath) => {
+    setComposeBrowse(prev => ({ ...prev, selectedFile: filePath, isOpen: false }));
   };
 
   // Close container dropdown on outside click
@@ -413,24 +462,48 @@ export default function ServerBackupApp() {
   };
 
   const handleMigrate = async () => {
-    if (!migrateModal.entry || !migrateModal.targetId) return;
-    setMigrateModal(prev => ({ ...prev, status: 'running', logs: 'Starting Docker migration...\nTransferring backup from source to target server...\n' }));
+    if (!migrateModal.targetId) return;
+
+    // Validate based on mode
+    if (migrateModal.mode === 'backup' && !migrateModal.entry) return;
+    if (migrateModal.mode === 'compose' && !composeBrowse.selectedFile) return;
+
+    setMigrateModal(prev => ({ ...prev, status: 'running', logs: 'Starting Docker migration...\n' }));
+
     try {
-      const entry = migrateModal.entry;
-      const res = await apiFetch('/api/server-backup/restore-docker', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          sourceConnectionId: entry.connectionId,
-          sourceFilePath: entry.filePath,
-          targetConnectionId: migrateModal.targetId,
-        }),
-      });
+      let res;
+      if (migrateModal.mode === 'backup') {
+        // Original backup restore flow
+        setMigrateModal(prev => ({ ...prev, logs: prev.logs + 'Transferring backup from source to target server...\n' }));
+        const entry = migrateModal.entry;
+        res = await apiFetch('/api/server-backup/restore-docker', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            sourceConnectionId: entry.connectionId,
+            sourceFilePath: entry.filePath,
+            targetConnectionId: migrateModal.targetId,
+          }),
+        });
+      } else {
+        // Compose file deployment flow
+        setMigrateModal(prev => ({ ...prev, logs: prev.logs + `Deploying compose file: ${composeBrowse.selectedFile}\n` }));
+        res = await apiFetch('/api/server-backup/deploy-compose', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            sourceConnectionId: composeBrowse.sourceConnectionId || connectionId,
+            composeFilePath: composeBrowse.selectedFile,
+            targetConnectionId: migrateModal.targetId,
+          }),
+        });
+      }
+
       const data = await res.json();
 
       if (data.success) {
         setMigrateModal(prev => ({ ...prev, status: 'done', logs: prev.logs + (data.logs || 'Migration complete!') }));
-        addNotification({ title: 'Migration Complete', message: 'Docker containers restored on target server', type: 'success' });
+        addNotification({ title: 'Migration Complete', message: migrateModal.mode === 'backup' ? 'Docker containers restored on target server' : 'Compose file deployed on target server', type: 'success' });
       } else {
         setMigrateModal(prev => ({ ...prev, status: 'error', logs: prev.logs + '\nError: ' + (data.error || 'Unknown error') }));
         addNotification({ title: 'Migration Failed', message: data.error || 'Failed to migrate', type: 'error' });
@@ -759,6 +832,17 @@ export default function ServerBackupApp() {
 
         {activeTab === 'jobs' && (
           <>
+            {/* Quick Actions */}
+            <ConfigSection title="Quick Actions">
+              <button
+                onClick={() => setMigrateModal({ isOpen: true, entry: null, targetId: '', status: 'idle', logs: '', mode: 'compose' })}
+                className="w-full p-3 rounded-xl border border-dashed border-purple-500/30 hover:border-purple-500/60 hover:bg-purple-500/5 text-purple-400 transition-all flex items-center justify-center gap-2"
+              >
+                <FileBox size={16} />
+                <span className="text-xs font-bold">Deploy from Compose File</span>
+              </button>
+            </ConfigSection>
+
             {/* Backup History */}
             <ConfigSection title="Backup History">
               {backupHistory.length === 0 ? (
@@ -781,7 +865,7 @@ export default function ServerBackupApp() {
                       <div className="flex items-center gap-2 shrink-0">
                         {entry.type === 'docker' && (
                           <button
-                            onClick={() => setMigrateModal({ isOpen: true, entry, targetId: '', status: 'idle', logs: '' })}
+                            onClick={() => setMigrateModal({ isOpen: true, entry, targetId: '', status: 'idle', logs: '', mode: 'backup' })}
                             className="px-3 py-1.5 rounded-lg bg-purple-600/10 hover:bg-purple-600/20 border border-purple-500/20 text-purple-400 text-[10px] font-bold transition-all flex items-center gap-1.5"
                           >
                             <ArrowLeftRight size={12} /> Migrate
@@ -902,18 +986,79 @@ export default function ServerBackupApp() {
                 <ArrowLeftRight size={16} className="text-purple-400" />
                 <span className="text-sm font-bold text-[var(--text-primary)]">Docker Migration</span>
               </div>
-              <button onClick={() => setMigrateModal({ isOpen: false, entry: null, targetId: '', status: 'idle', logs: '' })} className="p-1 rounded-lg hover:bg-white/5 transition-colors">
+              <button onClick={() => setMigrateModal({ isOpen: false, entry: null, targetId: '', status: 'idle', logs: '', mode: 'backup' })} className="p-1 rounded-lg hover:bg-white/5 transition-colors">
                 <X size={16} className="text-[var(--text-muted)]" />
               </button>
             </div>
             <div className="p-4 space-y-4">
-              <div className="p-3 rounded-xl bg-[var(--bg-primary)] border border-[var(--border-color)]">
-                <div className="text-[10px] text-[var(--text-muted)] uppercase mb-1">Source Backup</div>
-                <div className="text-xs font-mono text-[var(--text-primary)]">{migrateModal.entry?.filePath?.split('/').pop()}</div>
-                <div className="text-[9px] text-[var(--text-muted)] mt-0.5">
-                  {migrateModal.entry?.timestamp ? new Date(migrateModal.entry.timestamp).toLocaleString() : ''}
+              {/* Mode selector */}
+              {migrateModal.status === 'idle' && (
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => setMigrateModal(prev => ({ ...prev, mode: 'backup' }))}
+                    className={`flex-1 p-2.5 rounded-xl border text-center transition-all ${migrateModal.mode === 'backup' ? 'bg-purple-500/15 border-purple-500/40 text-purple-400' : 'bg-[var(--bg-primary)] border-[var(--border-color)] text-[var(--text-secondary)] hover:border-purple-500/20'}`}
+                  >
+                    <History size={16} className="mx-auto mb-1" />
+                    <div className="text-[10px] font-bold">From Backup</div>
+                  </button>
+                  <button
+                    onClick={() => setMigrateModal(prev => ({ ...prev, mode: 'compose' }))}
+                    className={`flex-1 p-2.5 rounded-xl border text-center transition-all ${migrateModal.mode === 'compose' ? 'bg-purple-500/15 border-purple-500/40 text-purple-400' : 'bg-[var(--bg-primary)] border-[var(--border-color)] text-[var(--text-secondary)] hover:border-purple-500/20'}`}
+                  >
+                    <FileBox size={16} className="mx-auto mb-1" />
+                    <div className="text-[10px] font-bold">From Compose File</div>
+                  </button>
                 </div>
-              </div>
+              )}
+
+              {/* Backup mode content */}
+              {migrateModal.mode === 'backup' && (
+                <>
+                  <div className="p-3 rounded-xl bg-[var(--bg-primary)] border border-[var(--border-color)]">
+                    <div className="text-[10px] text-[var(--text-muted)] uppercase mb-1">Source Backup</div>
+                    <div className="text-xs font-mono text-[var(--text-primary)]">{migrateModal.entry?.filePath?.split('/').pop()}</div>
+                    <div className="text-[9px] text-[var(--text-muted)] mt-0.5">
+                      {migrateModal.entry?.timestamp ? new Date(migrateModal.entry.timestamp).toLocaleString() : ''}
+                    </div>
+                  </div>
+                </>
+              )}
+
+              {/* Compose file mode content */}
+              {migrateModal.mode === 'compose' && (
+                <>
+                  <div>
+                    <label className="block text-[10px] font-bold text-[var(--text-muted)] uppercase tracking-wider mb-1.5">Source Server</label>
+                    <SearchableSelect
+                      value={composeBrowse.sourceConnectionId || connectionId}
+                      onChange={(v) => setComposeBrowse(prev => ({ ...prev, sourceConnectionId: v }))}
+                      options={sshConnections.map(c => ({ value: c._id, label: `${c.name} (${c.host})` }))}
+                      placeholder="Select source server..."
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-bold text-[var(--text-muted)] uppercase tracking-wider mb-1.5">Compose File</label>
+                    {composeBrowse.selectedFile ? (
+                      <div className="flex items-center gap-2 p-2.5 rounded-lg bg-[var(--bg-primary)] border border-[var(--border-color)]">
+                        <FileBox size={14} className="text-purple-400 shrink-0" />
+                        <span className="text-xs font-mono text-[var(--text-primary)] truncate flex-1">{composeBrowse.selectedFile}</span>
+                        <button onClick={() => setComposeBrowse(prev => ({ ...prev, selectedFile: null }))} className="text-[var(--text-muted)] hover:text-red-400 transition-colors">
+                          <X size={12} />
+                        </button>
+                      </div>
+                    ) : (
+                      <button
+                        onClick={openComposeBrowser}
+                        disabled={!composeBrowse.sourceConnectionId && !connectionId}
+                        className="w-full p-3 rounded-lg border border-dashed border-[var(--border-color)] hover:border-purple-500/40 hover:bg-purple-500/5 text-[var(--text-secondary)] hover:text-purple-400 transition-all flex items-center justify-center gap-2 disabled:opacity-50"
+                      >
+                        <FolderOpen size={14} />
+                        <span className="text-xs font-bold">Browse for docker-compose.yml</span>
+                      </button>
+                    )}
+                  </div>
+                </>
+              )}
 
               {migrateModal.status === 'idle' && (
                 <>
@@ -922,12 +1067,17 @@ export default function ServerBackupApp() {
                     <SearchableSelect
                       value={migrateModal.targetId}
                       onChange={(v) => setMigrateModal(prev => ({ ...prev, targetId: v }))}
-                      options={sshConnections.filter(c => c._id !== migrateModal.entry?.connectionId).map(c => ({ value: c._id, label: `${c.name} (${c.host})` }))}
+                      options={sshConnections.filter(c => {
+                        if (migrateModal.mode === 'backup') return c._id !== migrateModal.entry?.connectionId;
+                        return c._id !== (composeBrowse.sourceConnectionId || connectionId);
+                      }).map(c => ({ value: c._id, label: `${c.name} (${c.host})` }))}
                       placeholder="Select target server..."
                     />
                   </div>
                   <div className="p-3 rounded-lg bg-purple-500/5 border border-purple-500/15 text-[10px] text-purple-300">
-                    This will restore all containers, volumes, and images on the target server. Existing containers with the same names will be replaced.
+                    {migrateModal.mode === 'backup'
+                      ? 'This will restore all containers, volumes, and images on the target server. Existing containers with the same names will be replaced.'
+                      : 'This will deploy the compose file on the target server. Existing containers with the same names will be replaced.'}
                   </div>
                 </>
               )}
@@ -946,18 +1096,101 @@ export default function ServerBackupApp() {
               )}
             </div>
             <div className="flex items-center justify-end gap-2 p-4 border-t border-[var(--border-color)]">
-              <button onClick={() => setMigrateModal({ isOpen: false, entry: null, targetId: '', status: 'idle', logs: '' })} className="px-4 py-2 rounded-lg text-xs font-bold text-[var(--text-muted)] hover:bg-white/5 transition-all">
+              <button onClick={() => setMigrateModal({ isOpen: false, entry: null, targetId: '', status: 'idle', logs: '', mode: 'backup' })} className="px-4 py-2 rounded-lg text-xs font-bold text-[var(--text-muted)] hover:bg-white/5 transition-all">
                 {migrateModal.status === 'done' || migrateModal.status === 'error' ? 'Close' : 'Cancel'}
               </button>
               {migrateModal.status === 'idle' && (
                 <button
                   onClick={handleMigrate}
-                  disabled={!migrateModal.targetId}
+                  disabled={!migrateModal.targetId || (migrateModal.mode === 'compose' && !composeBrowse.selectedFile)}
                   className="px-5 py-2 rounded-xl bg-purple-600 hover:bg-purple-500 disabled:opacity-50 text-white text-xs font-bold transition-all flex items-center gap-2"
                 >
                   <ArrowLeftRight size={14} /> Start Migration
                 </button>
               )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Compose File Browser Modal */}
+      {composeBrowse.isOpen && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 backdrop-blur-sm">
+          <div className="w-[480px] max-h-[80vh] rounded-2xl bg-[var(--bg-secondary)] border border-[var(--border-color)] shadow-2xl flex flex-col">
+            {/* Header */}
+            <div className="flex items-center justify-between p-4 border-b border-[var(--border-color)]">
+              <div className="flex items-center gap-2">
+                <FileBox size={16} className="text-purple-400" />
+                <span className="text-sm font-bold text-[var(--text-primary)]">Browse for Compose File</span>
+              </div>
+              <button onClick={() => setComposeBrowse(prev => ({ ...prev, isOpen: false }))} className="p-1 rounded-lg hover:bg-white/5 transition-colors">
+                <X size={16} className="text-[var(--text-muted)]" />
+              </button>
+            </div>
+            {/* Current path + navigation */}
+            <div className="flex items-center gap-2 px-4 py-2 border-b border-[var(--border-color)] bg-[var(--bg-primary)]/50">
+              <button onClick={goBackComposeDir} disabled={composeBrowseHistory.current.length <= 1} className="p-1 rounded hover:bg-white/5 disabled:opacity-30 transition-colors">
+                <ChevronRight size={14} className="rotate-180 text-[var(--text-secondary)]" />
+              </button>
+              <div className="flex-1 font-mono text-[11px] text-[var(--text-secondary)] truncate">{composeBrowse.currentPath}</div>
+              <button onClick={() => browseComposeDir(composeBrowse.currentPath)} className="p-1 rounded hover:bg-white/5 transition-colors">
+                <RefreshCw size={12} className={`text-[var(--text-muted)] ${composeBrowse.loading ? 'animate-spin' : ''}`} />
+              </button>
+            </div>
+            {/* Directory listing */}
+            <div className="flex-1 overflow-y-auto p-2 min-h-[200px]">
+              {composeBrowse.loading ? (
+                <div className="flex items-center justify-center py-8 text-[var(--text-muted)] text-xs"><Loader size={14} className="animate-spin mr-2" /> Loading...</div>
+              ) : composeBrowse.entries.length === 0 ? (
+                <div className="flex items-center justify-center py-8 text-[var(--text-muted)] text-xs">Empty directory</div>
+              ) : (
+                <div className="space-y-0.5">
+                  {composeBrowse.entries
+                    .filter(e => e.isDir || /^(docker-compose|compose)\.(yml|yaml)$/i.test(e.name))
+                    .map((entry) => {
+                      const isComposeFile = /^(docker-compose|compose)\.(yml|yaml)$/i.test(entry.name);
+                      return (
+                        <button
+                          key={entry.name}
+                          onClick={() => {
+                            if (entry.isDir) {
+                              const newPath = composeBrowse.currentPath === '/' ? `/${entry.name}` : `${composeBrowse.currentPath}/${entry.name}`;
+                              navigateComposeDir(newPath);
+                            } else if (isComposeFile) {
+                              const fullPath = composeBrowse.currentPath === '/' ? `/${entry.name}` : `${composeBrowse.currentPath}/${entry.name}`;
+                              selectComposeFile(fullPath);
+                            }
+                          }}
+                          className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-left transition-colors ${
+                            entry.isDir ? 'hover:bg-purple-500/10 cursor-pointer' : 
+                            isComposeFile ? 'hover:bg-purple-500/10 cursor-pointer bg-purple-500/5' : 
+                            'opacity-30 cursor-default'
+                          }`}
+                        >
+                          {entry.isDir ? (
+                            <FolderOpen size={14} className="text-amber-400 shrink-0" />
+                          ) : (
+                            <FileBox size={14} className={isComposeFile ? 'text-purple-400' : 'text-[var(--text-muted)]'} />
+                          )}
+                          <span className={`text-xs font-mono truncate ${isComposeFile ? 'text-purple-400 font-bold' : 'text-[var(--text-primary)]'}`}>{entry.name}</span>
+                          {isComposeFile && <span className="text-[9px] px-1.5 py-0.5 rounded bg-purple-500/15 text-purple-400 font-bold ml-auto">COMPOSE</span>}
+                        </button>
+                      );
+                    })}
+                </div>
+              )}
+            </div>
+            {/* Footer */}
+            <div className="flex items-center justify-between p-4 border-t border-[var(--border-color)]">
+              <span className="text-[10px] text-[var(--text-muted)] font-mono truncate max-w-[250px]">
+                {composeBrowse.selectedFile ? `Selected: ${composeBrowse.selectedFile}` : 'Select a docker-compose.yml file'}
+              </span>
+              <button
+                onClick={() => setComposeBrowse(prev => ({ ...prev, isOpen: false }))}
+                className="px-4 py-2 rounded-xl bg-purple-600 hover:bg-purple-500 text-white text-xs font-bold transition-all"
+              >
+                Done
+              </button>
             </div>
           </div>
         </div>
