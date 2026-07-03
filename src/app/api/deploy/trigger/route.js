@@ -48,20 +48,33 @@ export async function POST(request) {
 async function handleTrigger(request) {
   try {
     const { searchParams } = new URL(request.url);
-    const projectId = searchParams.get('project') || 'default';
-    const token = searchParams.get('token');
-    const dbKey = projectId === 'default' ? 'auto_deploy_config' : `auto_deploy_config_${projectId}`;
+    let projectId = searchParams.get('project') || 'default';
+    const secretToken = searchParams.get('token');
+    const webhookToken = searchParams.get('webhook_token');
+    let dbKey = projectId === 'default' ? 'auto_deploy_config' : `auto_deploy_config_${projectId}`;
 
     console.log(`[trigger] Received direct trigger request for project: ${projectId}`);
 
     // 1. Fetch deployment config from global/center database
     await connectDB(process.env.MONGODB_URI, true);
-    const setting = await SystemSetting.findOne({ key: dbKey });
+    let setting;
+    if (webhookToken) {
+      // Token-based lookup: find project by webhookToken
+      const allSettings = await SystemSetting.find({ key: { $regex: '^auto_deploy_config' } });
+      setting = allSettings.find(s => s.value?.webhookToken === webhookToken);
+      if (!setting) {
+        return NextResponse.json({ success: false, error: 'Invalid webhook token' }, { status: 404 });
+      }
+      dbKey = setting.key;
+      projectId = dbKey === 'auto_deploy_config' ? 'default' : dbKey.replace('auto_deploy_config_', '');
+    } else {
+      setting = await SystemSetting.findOne({ key: dbKey });
+    }
     const config = setting?.value;
 
     // 2. Security validation: require secret token OR authenticated session (BEFORE any config checks)
     if (config?.secret) {
-      if (!token || !timingSafeCompare(token, config.secret)) {
+      if (!secretToken || !timingSafeCompare(secretToken, config.secret)) {
         console.log(`[trigger] ❌ Invalid or missing secret token for project: ${projectId}`);
         return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
       }

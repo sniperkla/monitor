@@ -18,10 +18,20 @@ export async function POST(request) {
 
     const { searchParams } = new URL(request.url);
     const projectId = searchParams.get('project') || 'default';
-    const dbKey = projectId === 'default' ? 'auto_deploy_config' : `auto_deploy_config_${projectId}`;
+    const token = searchParams.get('token');
+    let dbKey = projectId === 'default' ? 'auto_deploy_config' : `auto_deploy_config_${projectId}`;
 
     await connectDB(process.env.MONGODB_URI, true);
-    const setting = await SystemSetting.findOne({ key: dbKey });
+    let setting;
+    if (token) {
+      const allSettings = await SystemSetting.find({ key: { $regex: '^auto_deploy_config' } });
+      setting = allSettings.find(s => s.value?.webhookToken === token);
+      if (!setting) {
+        return NextResponse.json({ success: false, error: 'Invalid webhook token' }, { status: 404 });
+      }
+    } else {
+      setting = await SystemSetting.findOne({ key: dbKey });
+    }
     const config = setting?.value;
 
     if (!config) {

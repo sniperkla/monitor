@@ -37,6 +37,8 @@ export default function ServerBackupApp() {
   const [jobStatus, setJobStatus] = useState(null);
   const [outFilePath, setOutFilePath] = useState('');
   const [logFilePath, setLogFilePath] = useState('');
+  const [r2UploadUrl, setR2UploadUrl] = useState('');
+  const [isUploadingR2, setIsUploadingR2] = useState(false);
   const logRef = useRef(null);
 
   const [config, setConfig] = useState({
@@ -78,6 +80,30 @@ export default function ServerBackupApp() {
     if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
   }, [jobLogs]);
 
+  const uploadToR2 = async (connId, outFile) => {
+    const filename = outFile.split('/').pop() || 'backup.tar.gz';
+    setIsUploadingR2(true);
+    setR2UploadUrl('');
+    try {
+      const res = await apiFetch('/api/server-backup/upload-r2', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ connectionId: connId, filePath: outFile, filename })
+      });
+      const data = await res.json();
+      if (data.success && data.downloadUrl) {
+        setR2UploadUrl(data.downloadUrl);
+        addNotification({ title: 'Cloud Upload Complete', message: 'Backup uploaded to cloud storage', type: 'success' });
+      } else {
+        addNotification({ title: 'Cloud Upload Failed', message: data.error || 'Failed to upload to cloud', type: 'error' });
+      }
+    } catch (err) {
+      console.error('[R2 upload] error:', err);
+      addNotification({ title: 'Cloud Upload Failed', message: err.message || 'Failed to upload to cloud', type: 'error' });
+    }
+    setIsUploadingR2(false);
+  };
+
   const pollStatus = (connId, logFile, outFile) => {
     const interval = setInterval(async () => {
       try {
@@ -91,6 +117,8 @@ export default function ServerBackupApp() {
             setJobStatus('completed');
             setOutFilePath(outFile);
             addNotification({ title: 'Backup Complete', message: `Backup saved to ${outFile}${data.backupSize ? ` (${formatSize(data.backupSize)})` : ''}`, type: 'success' });
+            // Auto-upload to R2
+            uploadToR2(connId, outFile);
           } else if (data.status === 'failed') {
             clearInterval(interval);
             setIsRunning(false);
@@ -122,6 +150,8 @@ export default function ServerBackupApp() {
     setJobLogs('Starting backup...\n');
     setJobStatus(null);
     setOutFilePath('');
+    setR2UploadUrl('');
+    setIsUploadingR2(false);
 
     try {
       const res = await apiFetch('/api/server-backup/create', {
@@ -149,6 +179,11 @@ export default function ServerBackupApp() {
 
   const handleDownload = () => {
     if (!outFilePath || !connectionId) return;
+    if (r2UploadUrl) {
+      window.open(r2UploadUrl, '_blank');
+      return;
+    }
+    // Fallback: stream through server (should rarely happen if R2 is configured)
     const filename = outFilePath.split('/').pop() || 'backup.tar.gz';
     const url = `/api/server-backup/download?connectionId=${connectionId}&filePath=${encodeURIComponent(outFilePath)}&filename=${encodeURIComponent(filename)}`;
     window.open(url, '_blank');
@@ -370,8 +405,9 @@ export default function ServerBackupApp() {
               </button>
               {outFilePath && !isRunning && (
                 <>
-                  <button onClick={handleDownload} className="px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold transition-all flex items-center gap-2">
-                    <Download size={14} /> Download
+                  <button onClick={handleDownload} disabled={isUploadingR2} className="px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white text-xs font-bold transition-all flex items-center gap-2">
+                    {isUploadingR2 ? <Loader size={14} className="animate-spin" /> : <Download size={14} />}
+                    {isUploadingR2 ? 'Uploading to cloud...' : r2UploadUrl ? 'Download from Cloud' : 'Download'}
                   </button>
                   <button onClick={handleCleanup} className="px-4 py-2.5 rounded-xl bg-[var(--bg-secondary)] hover:bg-[var(--bg-tertiary)] border border-[var(--border-color)] text-[var(--text-secondary)] text-xs font-bold transition-all flex items-center gap-2">
                     <Trash2 size={14} /> Cleanup

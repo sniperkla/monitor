@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth/next';
 import { authOptions } from '@/lib/auth';
+import crypto from 'crypto';
 import connectDB from '@/lib/mongodb';
 import { encrypt, decryptWithMetadata } from '@/utils/encryption';
 import SystemSetting from '@/models/SystemSetting';
@@ -34,7 +35,8 @@ const defaultConfig = {
   bitbucketUser: '',
   telegramNotification: false,
   telegramBotToken: '',
-  telegramChatId: ''
+  telegramChatId: '',
+  webhookToken: ''
 };
 
 // GET /api/deploy/config?project=id
@@ -58,15 +60,36 @@ export async function GET(request) {
 
     // Parse all projects
     let projects = [];
+    const needsTokenUpdate = [];
     allSettings.forEach(s => {
       // Compatibility with old auto_deploy_config
       if (s.key === 'auto_deploy_config') {
-        projects.push({ ...defaultConfig, ...s.value, id: 'default', name: s.value.name || 'Default Project' });
+        const proj = { ...defaultConfig, ...s.value, id: 'default', name: s.value.name || 'Default Project' };
+        if (!proj.webhookToken) {
+          proj.webhookToken = crypto.randomUUID();
+          needsTokenUpdate.push({ key: s.key, token: proj.webhookToken });
+        }
+        projects.push(proj);
       } else {
         const id = s.key.replace('auto_deploy_config_', '');
-        projects.push({ ...defaultConfig, ...s.value, id });
+        const proj = { ...defaultConfig, ...s.value, id };
+        if (!proj.webhookToken) {
+          proj.webhookToken = crypto.randomUUID();
+          needsTokenUpdate.push({ key: s.key, token: proj.webhookToken });
+        }
+        projects.push(proj);
       }
     });
+
+    // Auto-assign webhook tokens for existing projects that don't have one
+    if (needsTokenUpdate.length > 0) {
+      for (const { key, token } of needsTokenUpdate) {
+        await SystemSetting.findOneAndUpdate(
+          { key },
+          { $set: { 'value.webhookToken': token } }
+        );
+      }
+    }
 
     // Ensure we have at least one project
     if (projects.length === 0) {
@@ -165,6 +188,9 @@ export async function POST(request) {
     const existing = await SystemSetting.findOne({ key: dbKey });
     const existingValue = existing?.value || {};
 
+    // Generate webhookToken for new projects or existing ones without one
+    const webhookToken = existingValue.webhookToken || crypto.randomUUID();
+
     // Determine final values for this save
     const finalTargetType = body.targetType !== undefined ? body.targetType : (existingValue.targetType || 'local');
     const finalConnectionId = body.connectionId !== undefined ? (typeof body.connectionId === 'string' ? body.connectionId.trim() : '') : String(existingValue.connectionId || '').trim();
@@ -194,6 +220,7 @@ export async function POST(request) {
     const updatedValue = {
       id: projectId,
       name: body.name || existingValue.name || `Project ${projectId}`,
+      webhookToken,
       enabled: typeof body.enabled === 'boolean' ? body.enabled : existingValue.enabled || false,
       branch: body.branch || existingValue.branch || 'main',
       secret: body.secret !== undefined ? body.secret : existingValue.secret || '',

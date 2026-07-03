@@ -764,7 +764,9 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
 
   const handleCopyWebhookUrl = () => {
     if (typeof window === 'undefined') return;
-    const url = `${window.location.origin}/api/deploy/webhook?project=${selectedProjectId}`;
+    const url = deployConfig.webhookToken
+      ? `${window.location.origin}/api/deploy/webhook?token=${deployConfig.webhookToken}`
+      : `${window.location.origin}/api/deploy/webhook?project=${selectedProjectId}`;
     navigator.clipboard.writeText(url);
     setCopySuccess(true);
     setTimeout(() => setCopySuccess(false), 2000);
@@ -773,7 +775,10 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
 
   const handleCopyDirectTriggerUrl = () => {
     if (typeof window === 'undefined') return;
-    const url = `${window.location.origin}/api/deploy/trigger?project=${selectedProjectId}${deployConfig.secret ? `&token=${deployConfig.secret}` : ''}`;
+    const baseUrl = deployConfig.webhookToken
+      ? `${window.location.origin}/api/deploy/trigger?webhook_token=${deployConfig.webhookToken}`
+      : `${window.location.origin}/api/deploy/trigger?project=${selectedProjectId}`;
+    const url = `${baseUrl}${deployConfig.secret ? `&token=${deployConfig.secret}` : ''}`;
     navigator.clipboard.writeText(url);
     setDirectCopySuccess(true);
     setTimeout(() => setDirectCopySuccess(false), 2000);
@@ -3083,7 +3088,7 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
                             <input
                               type="text"
                               readOnly
-                              value={typeof window !== 'undefined' ? `${window.location.origin}/api/deploy/webhook?project=${selectedProjectId}` : ''}
+                              value={typeof window !== 'undefined' ? (deployConfig.webhookToken ? `${window.location.origin}/api/deploy/webhook?token=${deployConfig.webhookToken}` : `${window.location.origin}/api/deploy/webhook?project=${selectedProjectId}`) : ''}
                               className="flex-1 bg-[var(--bg-primary)] border border-[var(--border-color)] rounded-xl px-3 py-2 text-xs text-[var(--text-muted)] select-all focus:outline-none"
                             />
                             <button
@@ -3123,7 +3128,7 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
                             <input
                               type="text"
                               readOnly
-                              value={typeof window !== 'undefined' ? `${window.location.origin}/api/deploy/trigger?project=${selectedProjectId}${deployConfig.secret ? `&token=${deployConfig.secret}` : ''}` : ''}
+                              value={typeof window !== 'undefined' ? (deployConfig.webhookToken ? `${window.location.origin}/api/deploy/trigger?webhook_token=${deployConfig.webhookToken}${deployConfig.secret ? `&token=${deployConfig.secret}` : ''}` : `${window.location.origin}/api/deploy/trigger?project=${selectedProjectId}${deployConfig.secret ? `&token=${deployConfig.secret}` : ''}`) : ''}
                               className="flex-1 bg-[var(--bg-primary)] border border-[var(--border-color)] rounded-xl px-3 py-2 text-xs text-[var(--text-muted)] select-all focus:outline-none"
                             />
                             <button
