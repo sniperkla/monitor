@@ -436,7 +436,7 @@ export default function ServerBackupApp() {
       fd.append('connectionId', migrateModal.targetId);
 
       setMigrateModal(prev => ({ ...prev, logs: prev.logs + 'Uploading backup to target server...\n' }));
-      const res = await fetch('/api/server-backup/restore-docker', { method: 'POST', body: fd });
+      const res = await fetch('/api/server-backup/restore-docker', { method: 'POST', body: fd, credentials: 'include' });
       const data = await res.json();
 
       if (data.success) {
