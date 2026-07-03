@@ -321,7 +321,7 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
       socketRef.current.emit('docker:command', { action: 'info' });
     });
 
-    socketRef.current.on('docker:result', ({ action, output, args }) => {
+    socketRef.current.on('docker:result', ({ action, output, code, args }) => {
       setIsLoading(false);
       const targetId = args?.[0];
       if (targetId) setPendingActions(prev => { const n = { ...prev }; delete n[targetId]; return n; });
@@ -647,14 +647,25 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
           socketRef.current.emit('docker:command', { action: 'networks' });
         } else if (action === 'prune-custom') {
           setIsLoading(false);
-          addNotification({ title: 'Prune Complete', message: 'Selected Docker resources have been cleaned up.', type: 'success' });
+          if (code !== 0) {
+            const errSummary = output ? output.split('\n').filter(l => l.trim()).slice(0, 3).join('\n') : 'Unknown error';
+            addNotification({ title: 'Prune Failed', message: errSummary, type: 'error' });
+          } else {
+            const summary = output ? output.split('\n').filter(l => l.includes('reclaimed') || l.includes('deleted') || l.includes('Total') || l.includes('untagged')).join(' | ') : '';
+            addNotification({ title: 'Prune Complete', message: summary || 'Selected Docker resources have been cleaned up.', type: 'success' });
+          }
           socketRef.current.emit('docker:command', { action: 'list' });
           socketRef.current.emit('docker:command', { action: 'images' });
           socketRef.current.emit('docker:command', { action: 'volumes' });
           socketRef.current.emit('docker:command', { action: 'networks' });
         } else if (action === 'remove-selected') {
           setIsLoading(false);
-          addNotification({ title: 'Removed', message: 'Selected Docker resources have been removed.', type: 'success' });
+          if (code !== 0) {
+            const errSummary = output ? output.split('\n').filter(l => l.trim()).slice(0, 3).join('\n') : 'Unknown error';
+            addNotification({ title: 'Remove Failed', message: errSummary, type: 'error' });
+          } else {
+            addNotification({ title: 'Removed', message: 'Selected Docker resources have been removed.', type: 'success' });
+          }
           socketRef.current.emit('docker:command', { action: 'list' });
           socketRef.current.emit('docker:command', { action: 'images' });
           socketRef.current.emit('docker:command', { action: 'volumes' });

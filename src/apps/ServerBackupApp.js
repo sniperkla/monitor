@@ -39,6 +39,56 @@ export default function ServerBackupApp() {
   const [logFilePath, setLogFilePath] = useState('');
   const [r2UploadUrl, setR2UploadUrl] = useState('');
   const [isUploadingR2, setIsUploadingR2] = useState(false);
+  const [backupHistory, setBackupHistory] = useState(() => {
+    if (typeof window === 'undefined') return [];
+    try {
+      const saved = localStorage.getItem('server_backup_history');
+      return saved ? JSON.parse(saved) : [];
+    } catch { return []; }
+  });
+
+  // Load backup history from database on mount
+  useEffect(() => {
+    const loadHistory = async () => {
+      try {
+        const res = await apiFetch('/api/server-backup/history');
+        const data = await res.json();
+        if (data.success && Array.isArray(data.history) && data.history.length > 0) {
+          setBackupHistory(data.history);
+        }
+      } catch (err) {
+        console.error('[backup history] Failed to load from DB:', err);
+      }
+    };
+    loadHistory();
+  }, []);
+
+  // Persist backup history to database + localStorage
+  useEffect(() => {
+    try { localStorage.setItem('server_backup_history', JSON.stringify(backupHistory)); } catch {}
+    // Debounce DB save to avoid too many requests
+    const timer = setTimeout(async () => {
+      try {
+        await apiFetch('/api/server-backup/history', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ history: backupHistory }),
+        });
+      } catch (err) {
+        console.error('[backup history] Failed to save to DB:', err);
+      }
+    }, 1000);
+    return () => clearTimeout(timer);
+  }, [backupHistory]);
+  const [availableContainers, setAvailableContainers] = useState([]);
+  const [loadingContainers, setLoadingContainers] = useState(false);
+  const [containerSearch, setContainerSearch] = useState('');
+  const [showContainerDropdown, setShowContainerDropdown] = useState(false);
+  const containerDropdownRef = useRef(null);
+
+  // Folder browser state
+  const [folderBrowser, setFolderBrowser] = useState({ isOpen: false, currentPath: '/', entries: [], loading: false, targetPathIndex: null });
+  const [folderHistory, setFolderHistory] = useState(['/']);
   const logRef = useRef(null);
 
   const [config, setConfig] = useState({
@@ -80,7 +130,89 @@ export default function ServerBackupApp() {
     if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
   }, [jobLogs]);
 
-  const uploadToR2 = async (connId, outFile) => {
+  // Fetch Docker containers when connection changes and backup type is docker
+  useEffect(() => {
+    if (!connectionId || backupType !== 'docker') {
+      setAvailableContainers([]);
+      return;
+    }
+    let cancelled = false;
+    const fetchContainers = async () => {
+      setLoadingContainers(true);
+      try {
+        const res = await apiFetch(`/api/server-backup/containers?connectionId=${connectionId}`);
+        const data = await res.json();
+        if (!cancelled && data.success) {
+          setAvailableContainers(data.containers || []);
+        }
+      } catch (err) {
+        console.error('Failed to fetch containers:', err);
+      }
+      if (!cancelled) setLoadingContainers(false);
+    };
+    fetchContainers();
+    return () => { cancelled = true; };
+  }, [connectionId, backupType]);
+
+  // Fetch directory listing for folder browser
+  const browseFolder = async (path) => {
+    if (!connectionId) return;
+    setFolderBrowser(prev => ({ ...prev, loading: true, currentPath: path }));
+    try {
+      const res = await apiFetch(`/api/server-backup/browse?connectionId=${connectionId}&path=${encodeURIComponent(path)}`);
+      const data = await res.json();
+      if (data.success) {
+        setFolderBrowser(prev => ({ ...prev, entries: data.entries || [], loading: false }));
+      } else {
+        addNotification({ title: 'Error', message: data.error || 'Cannot list directory', type: 'error' });
+        setFolderBrowser(prev => ({ ...prev, loading: false }));
+      }
+    } catch (err) {
+      setFolderBrowser(prev => ({ ...prev, loading: false }));
+    }
+  };
+
+  const openFolderBrowser = (pathIndex) => {
+    const currentPath = config.paths[pathIndex] || '/';
+    const dirPath = currentPath.endsWith('/') ? currentPath : currentPath.split('/').slice(0, -1).join('/') || '/';
+    setFolderHistory([dirPath]);
+    setFolderBrowser({ isOpen: true, currentPath: dirPath, entries: [], loading: false, targetPathIndex: pathIndex });
+    browseFolder(dirPath);
+  };
+
+  const navigateToFolder = (folderPath) => {
+    setFolderHistory(prev => [...prev, folderPath]);
+    browseFolder(folderPath);
+  };
+
+  const goBackFolder = () => {
+    if (folderHistory.length <= 1) return;
+    const newHistory = folderHistory.slice(0, -1);
+    const prevPath = newHistory[newHistory.length - 1];
+    setFolderHistory(newHistory);
+    browseFolder(prevPath);
+  };
+
+  const selectFolder = (folderPath) => {
+    const idx = folderBrowser.targetPathIndex;
+    if (idx !== null) {
+      updatePath(idx, folderPath);
+    }
+    setFolderBrowser({ isOpen: false, currentPath: '/', entries: [], loading: false, targetPathIndex: null });
+  };
+
+  // Close container dropdown on outside click
+  useEffect(() => {
+    const handleClickOutside = (e) => {
+      if (containerDropdownRef.current && !containerDropdownRef.current.contains(e.target)) {
+        setShowContainerDropdown(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  const uploadToR2 = async (connId, outFile, historyId) => {
     const filename = outFile.split('/').pop() || 'backup.tar.gz';
     setIsUploadingR2(true);
     setR2UploadUrl('');
@@ -93,6 +225,9 @@ export default function ServerBackupApp() {
       const data = await res.json();
       if (data.success && data.downloadUrl) {
         setR2UploadUrl(data.downloadUrl);
+        if (historyId) {
+          setBackupHistory(prev => prev.map(h => h.id === historyId ? { ...h, r2Url: data.downloadUrl } : h));
+        }
         addNotification({ title: 'Cloud Upload Complete', message: 'Backup uploaded to cloud storage', type: 'success' });
       } else {
         addNotification({ title: 'Cloud Upload Failed', message: data.error || 'Failed to upload to cloud', type: 'error' });
@@ -117,8 +252,20 @@ export default function ServerBackupApp() {
             setJobStatus('completed');
             setOutFilePath(outFile);
             addNotification({ title: 'Backup Complete', message: `Backup saved to ${outFile}${data.backupSize ? ` (${formatSize(data.backupSize)})` : ''}`, type: 'success' });
+            // Add to history
+            const historyEntry = {
+              id: Date.now(),
+              timestamp: new Date().toISOString(),
+              type: backupType,
+              connectionId: connId,
+              filePath: outFile,
+              logFilePath: logFile,
+              size: data.backupSize || null,
+              r2Url: null,
+            };
+            setBackupHistory(prev => [historyEntry, ...prev]);
             // Auto-upload to R2
-            uploadToR2(connId, outFile);
+            uploadToR2(connId, outFile, historyEntry.id);
           } else if (data.status === 'failed') {
             clearInterval(interval);
             setIsRunning(false);
@@ -333,6 +480,9 @@ export default function ServerBackupApp() {
                 {config.paths.map((p, i) => (
                   <div key={i} className="flex gap-2">
                     <input value={p} onChange={e => updatePath(i, e.target.value)} placeholder="/var/www/myapp" className="flex-1 px-3 py-2 rounded-lg bg-[var(--bg-primary)] border border-[var(--border-color)] text-xs focus:outline-none" />
+                    <button onClick={() => openFolderBrowser(i)} disabled={!connectionId} className="px-2.5 py-2 rounded-lg bg-[var(--bg-tertiary)] hover:bg-indigo-500/10 border border-[var(--border-color)] text-[var(--text-secondary)] hover:text-indigo-400 text-xs transition-all disabled:opacity-30" title="Browse server folders">
+                      <FolderOpen size={14} />
+                    </button>
                     {config.paths.length > 1 && <button onClick={() => removePath(i)} className="text-red-400 hover:text-red-300"><X size={14} /></button>}
                   </div>
                 ))}
@@ -343,9 +493,74 @@ export default function ServerBackupApp() {
 
             {backupType === 'docker' && (
               <ConfigSection title="Docker Backup Options">
-                <div className="space-y-2">
-                  <label className="text-[10px] font-bold text-[var(--text-muted)] uppercase">Containers (comma-separated, or leave empty for all)</label>
-                  <input value={config.containers.join(',')} onChange={e => updateConfig('containers', e.target.value.split(',').map(s => s.trim()).filter(Boolean))} placeholder="container1, container2" className="w-full px-3 py-2 rounded-lg bg-[var(--bg-primary)] border border-[var(--border-color)] text-xs focus:outline-none" />
+                <div className="space-y-2" ref={containerDropdownRef}>
+                  <div className="flex items-center justify-between">
+                    <label className="text-[10px] font-bold text-[var(--text-muted)] uppercase">Containers</label>
+                    <span className="text-[9px] text-[var(--text-muted)]">{config.containers.length === 0 ? 'All containers' : `${config.containers.length} selected`}</span>
+                  </div>
+                  {/* Selected tags */}
+                  {config.containers.length > 0 && (
+                    <div className="flex flex-wrap gap-1">
+                      {config.containers.map(c => (
+                        <span key={c} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-indigo-500/15 border border-indigo-500/30 text-[10px] text-indigo-400 font-mono">
+                          {c}
+                          <button onClick={() => updateConfig('containers', config.containers.filter(x => x !== c))} className="hover:text-red-400 transition-colors"><X size={10} /></button>
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                  {/* Search / select input */}
+                  <div className="relative">
+                    <input
+                      type="text"
+                      value={containerSearch}
+                      onChange={e => { setContainerSearch(e.target.value); setShowContainerDropdown(true); }}
+                      onFocus={() => setShowContainerDropdown(true)}
+                      placeholder={loadingContainers ? 'Loading containers...' : 'Search containers...'}
+                      disabled={loadingContainers}
+                      className="w-full px-3 py-2 rounded-lg bg-[var(--bg-primary)] border border-[var(--border-color)] text-xs focus:outline-none focus:border-indigo-500/50 transition-colors disabled:opacity-50"
+                    />
+                    {loadingContainers && <Loader size={12} className="absolute right-3 top-1/2 -translate-y-1/2 animate-spin text-[var(--text-muted)]" />}
+                    {/* Dropdown */}
+                    {showContainerDropdown && availableContainers.length > 0 && (
+                      <div className="absolute z-50 mt-1 w-full max-h-48 overflow-y-auto rounded-xl bg-[var(--bg-secondary)] border border-[var(--border-color)] shadow-xl">
+                        {/* "All" option */}
+                        <button
+                          onClick={() => { updateConfig('containers', []); setContainerSearch(''); setShowContainerDropdown(false); }}
+                          className={`w-full px-3 py-2 text-left text-xs hover:bg-indigo-500/10 transition-colors flex items-center gap-2 ${config.containers.length === 0 ? 'text-indigo-400' : 'text-[var(--text-secondary)]'}`}
+                        >
+                          <CheckCircle size={12} className={config.containers.length === 0 ? 'opacity-100' : 'opacity-0'} />
+                          <span className="font-bold">All Containers</span>
+                        </button>
+                        <div className="border-t border-[var(--border-color)]" />
+                        {availableContainers
+                          .filter(c => !containerSearch || c.name.toLowerCase().includes(containerSearch.toLowerCase()) || c.image?.toLowerCase().includes(containerSearch.toLowerCase()))
+                          .map(c => {
+                            const selected = config.containers.includes(c.name);
+                            return (
+                              <button
+                                key={c.id || c.name}
+                                onClick={() => {
+                                  updateConfig('containers', selected ? config.containers.filter(x => x !== c.name) : [...config.containers, c.name]);
+                                }}
+                                className="w-full px-3 py-2 text-left text-xs hover:bg-indigo-500/10 transition-colors flex items-center gap-2"
+                              >
+                                <div className={`w-3.5 h-3.5 rounded border flex items-center justify-center shrink-0 ${selected ? 'bg-indigo-500 border-indigo-500' : 'border-[var(--border-color)]'}`}>
+                                  {selected && <CheckCircle size={10} className="text-white" />}
+                                </div>
+                                <div className="flex-1 min-w-0">
+                                  <div className="font-mono font-bold text-[var(--text-primary)] truncate">{c.name}</div>
+                                  <div className="text-[9px] text-[var(--text-muted)] truncate">{c.image} &middot; {c.status}</div>
+                                </div>
+                              </button>
+                            );
+                          })}
+                      </div>
+                    )}
+                  </div>
+                  <button onClick={() => { updateConfig('containers', []); setContainerSearch(''); }} className="text-[9px] text-[var(--text-muted)] hover:text-[var(--text-secondary)] transition-colors">
+                    Reset to all containers
+                  </button>
                 </div>
                 <Toggle label="Include named volumes" checked={config.includeVolumes} onChange={() => updateConfig('includeVolumes', !config.includeVolumes)} />
                 <Toggle label="Include Docker images" checked={config.includeImages} onChange={() => updateConfig('includeImages', !config.includeImages)} />
@@ -390,6 +605,9 @@ export default function ServerBackupApp() {
                 {config.paths.map((p, i) => (
                   <div key={i} className="flex gap-2">
                     <input value={p} onChange={e => updatePath(i, e.target.value)} placeholder="/path/to/backup" className="flex-1 px-3 py-2 rounded-lg bg-[var(--bg-primary)] border border-[var(--border-color)] text-xs focus:outline-none" />
+                    <button onClick={() => openFolderBrowser(i)} disabled={!connectionId} className="px-2.5 py-2 rounded-lg bg-[var(--bg-tertiary)] hover:bg-indigo-500/10 border border-[var(--border-color)] text-[var(--text-secondary)] hover:text-indigo-400 text-xs transition-all disabled:opacity-30" title="Browse server folders">
+                      <FolderOpen size={14} />
+                    </button>
                     {config.paths.length > 1 && <button onClick={() => removePath(i)} className="text-red-400 hover:text-red-300"><X size={14} /></button>}
                   </div>
                 ))}
@@ -424,6 +642,56 @@ export default function ServerBackupApp() {
                 </div>
                 {jobStatus === 'completed' && <StatusBadge status="completed" />}
                 {jobStatus === 'failed' && <StatusBadge status="failed" />}
+              </ConfigSection>
+            )}
+
+            {/* Backup History */}
+            {backupHistory.length > 0 && (
+              <ConfigSection title="Backup History">
+                <div className="space-y-2">
+                  {backupHistory.map((entry) => (
+                    <div key={entry.id} className="flex items-center gap-3 p-2.5 rounded-lg bg-[var(--bg-secondary)]/50 border border-[var(--border-color)]">
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2">
+                          <span className="text-[10px] font-mono text-[var(--text-primary)] truncate">{entry.filePath.split('/').pop()}</span>
+                          <span className="text-[9px] px-1.5 py-0.5 rounded bg-indigo-500/10 text-indigo-400 font-bold">{entry.type}</span>
+                          {entry.r2Url && <span className="text-[9px] px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-400 font-bold">Cloud</span>}
+                        </div>
+                        <div className="text-[9px] text-[var(--text-muted)] mt-0.5">
+                          {new Date(entry.timestamp).toLocaleString()}
+                          {entry.size ? ` · ${formatSize(entry.size)}` : ''}
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        <button
+                          onClick={() => {
+                            if (entry.r2Url) {
+                              window.open(entry.r2Url, '_blank');
+                            } else {
+                              const filename = entry.filePath.split('/').pop() || 'backup.tar.gz';
+                              const url = `/api/server-backup/download?connectionId=${entry.connectionId}&filePath=${encodeURIComponent(entry.filePath)}&filename=${encodeURIComponent(filename)}`;
+                              window.open(url, '_blank');
+                            }
+                          }}
+                          className="p-1.5 rounded-lg hover:bg-emerald-500/10 text-emerald-400 transition-colors"
+                          title="Download"
+                        >
+                          <Download size={13} />
+                        </button>
+                        <button
+                          onClick={() => {
+                            setBackupHistory(prev => prev.filter(h => h.id !== entry.id));
+                          }}
+                          className="p-1.5 rounded-lg hover:bg-red-500/10 text-red-400 transition-colors"
+                          title="Remove from history"
+                        >
+                          <X size={13} />
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                <button onClick={() => setBackupHistory([])} className="text-[9px] text-[var(--text-muted)] hover:text-red-400 transition-colors mt-1">Clear all history</button>
               </ConfigSection>
             )}
           </>
@@ -509,11 +777,79 @@ export default function ServerBackupApp() {
         )}
 
         {activeTab === 'jobs' && (
-          <ConfigSection title="Server Backup Files">
+          <ConfigSection title="Backup Jobs on Server">
             <ServerFilesList connectionId={connectionId} apiFetch={apiFetch} />
           </ConfigSection>
         )}
       </div>
+
+      {/* Folder Browser Modal */}
+      {folderBrowser.isOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
+          <div className="w-[480px] max-h-[80vh] rounded-2xl bg-[var(--bg-secondary)] border border-[var(--border-color)] shadow-2xl flex flex-col">
+            {/* Header */}
+            <div className="flex items-center justify-between p-4 border-b border-[var(--border-color)]">
+              <div className="flex items-center gap-2">
+                <FolderOpen size={16} className="text-indigo-400" />
+                <span className="text-sm font-bold text-[var(--text-primary)]">Browse Server Folders</span>
+              </div>
+              <button onClick={() => setFolderBrowser({ isOpen: false, currentPath: '/', entries: [], loading: false, targetPathIndex: null })} className="p-1 rounded-lg hover:bg-white/5 transition-colors">
+                <X size={16} className="text-[var(--text-muted)]" />
+              </button>
+            </div>
+            {/* Current path + navigation */}
+            <div className="flex items-center gap-2 px-4 py-2 border-b border-[var(--border-color)] bg-[var(--bg-primary)]/50">
+              <button onClick={goBackFolder} disabled={folderHistory.length <= 1} className="p-1 rounded hover:bg-white/5 disabled:opacity-30 transition-colors">
+                <ChevronRight size={14} className="rotate-180 text-[var(--text-secondary)]" />
+              </button>
+              <div className="flex-1 font-mono text-[11px] text-[var(--text-secondary)] truncate">{folderBrowser.currentPath}</div>
+              <button onClick={() => browseFolder(folderBrowser.currentPath)} className="p-1 rounded hover:bg-white/5 transition-colors">
+                <RefreshCw size={12} className={`text-[var(--text-muted)] ${folderBrowser.loading ? 'animate-spin' : ''}`} />
+              </button>
+            </div>
+            {/* Directory listing */}
+            <div className="flex-1 overflow-y-auto p-2 min-h-[200px]">
+              {folderBrowser.loading ? (
+                <div className="flex items-center justify-center py-8 text-[var(--text-muted)] text-xs"><Loader size={14} className="animate-spin mr-2" /> Loading...</div>
+              ) : folderBrowser.entries.length === 0 ? (
+                <div className="flex items-center justify-center py-8 text-[var(--text-muted)] text-xs">Empty directory</div>
+              ) : (
+                <div className="space-y-0.5">
+                  {folderBrowser.entries.map((entry) => (
+                    <button
+                      key={entry.name}
+                      onClick={() => {
+                        if (entry.isDir) {
+                          const newPath = folderBrowser.currentPath === '/' ? `/${entry.name}` : `${folderBrowser.currentPath}/${entry.name}`;
+                          navigateToFolder(newPath);
+                        }
+                      }}
+                      className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-left transition-colors ${entry.isDir ? 'hover:bg-indigo-500/10 cursor-pointer' : 'opacity-50 cursor-default'}`}
+                    >
+                      {entry.isDir ? (
+                        <FolderOpen size={14} className="text-amber-400 shrink-0" />
+                      ) : (
+                        <FileBox size={14} className="text-[var(--text-muted)] shrink-0" />
+                      )}
+                      <span className="text-xs font-mono text-[var(--text-primary)] truncate">{entry.name}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+            {/* Footer - select current path */}
+            <div className="flex items-center justify-between p-4 border-t border-[var(--border-color)]">
+              <span className="text-[10px] text-[var(--text-muted)] font-mono truncate max-w-[250px]">{folderBrowser.currentPath}</span>
+              <button
+                onClick={() => selectFolder(folderBrowser.currentPath)}
+                className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold transition-all"
+              >
+                Select This Folder
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

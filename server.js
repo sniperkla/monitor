@@ -1345,7 +1345,7 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
                   if (targets.images) cmds.push(`image prune ${pruneAll ? '-a ' : ''}-f`);
                   if (targets.volumes) cmds.push('volume prune -f');
                   if (targets.networks) cmds.push('network prune -f');
-                  if (targets.cache) cmds.push('builder prune -f');
+                  if (targets.cache) cmds.push(`builder prune ${pruneAll ? '-a ' : ''}-f`);
                   if (cmds.length === 0) return socket.emit('docker:error', 'No targets selected');
                   cmdSuffix = cmds.map(c => `docker ${c}`).join(' && ');
               } else if (action === 'remove-selected') {
@@ -1376,7 +1376,7 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
                   } else if (sel.targets?.networks) {
                     cmds.push('network prune -f');
                   }
-                  if (sel.cache) cmds.push('builder prune -f');
+                   if (sel.cache) cmds.push(`builder prune ${pruneAll ? '-a ' : ''}-f`);
                   if (cmds.length === 0) return socket.emit('docker:error', 'Nothing selected to remove');
                   cmdSuffix = cmds.map(c => `docker ${c}`).join(' && ');
               } else if (action === 'rm-volumes' && args.length > 0) {
@@ -1403,10 +1403,17 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
                         return socket.emit('docker:error', err.message);
                     }
                     let output = '';
+                    let stderr = '';
                     stream.on('data', (d) => output += d.toString());
-                    stream.stderr.on('data', () => {});
+                    stream.stderr.on('data', (d) => stderr += d.toString());
                     stream.on('close', (code) => {
-                        socket.emit('docker:result', { action, output: output.trim(), code, args });
+                        const combined = output.trim();
+                        const errText = stderr.trim();
+                        if (code !== 0 && errText) {
+                            socket.emit('docker:result', { action, output: combined + (combined ? '\n' : '') + `[stderr] ${errText}`, code, args });
+                        } else {
+                            socket.emit('docker:result', { action, output: combined + (errText ? `\n${errText}` : ''), code, args });
+                        }
                     });
                 });
             } else {
