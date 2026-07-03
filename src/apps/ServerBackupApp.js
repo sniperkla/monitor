@@ -46,6 +46,7 @@ export default function ServerBackupApp() {
       return saved ? JSON.parse(saved) : [];
     } catch { return []; }
   });
+  const [migrateModal, setMigrateModal] = useState({ isOpen: false, entry: null, targetId: '', status: 'idle', logs: '' });
 
   // Load backup history from database on mount
   useEffect(() => {
@@ -411,6 +412,46 @@ export default function ServerBackupApp() {
     }
   };
 
+  const handleMigrate = async () => {
+    if (!migrateModal.entry || !migrateModal.targetId) return;
+    setMigrateModal(prev => ({ ...prev, status: 'running', logs: 'Starting Docker migration...\n' }));
+    try {
+      const entry = migrateModal.entry;
+      // First download the backup file from R2 or source server
+      let backupBlob;
+      if (entry.r2Url) {
+        const res = await fetch(entry.r2Url);
+        backupBlob = await res.blob();
+      } else {
+        // Download from source server via our API
+        const filename = entry.filePath.split('/').pop() || 'backup.tar.gz';
+        const url = `/api/server-backup/download?connectionId=${entry.connectionId}&filePath=${encodeURIComponent(entry.filePath)}&filename=${encodeURIComponent(filename)}`;
+        const res = await apiFetch(url);
+        backupBlob = await res.blob();
+      }
+
+      // Upload to restore-docker endpoint
+      const fd = new FormData();
+      fd.append('file', backupBlob, 'backup.tar.gz');
+      fd.append('connectionId', migrateModal.targetId);
+
+      setMigrateModal(prev => ({ ...prev, logs: prev.logs + 'Uploading backup to target server...\n' }));
+      const res = await fetch('/api/server-backup/restore-docker', { method: 'POST', body: fd });
+      const data = await res.json();
+
+      if (data.success) {
+        setMigrateModal(prev => ({ ...prev, status: 'done', logs: prev.logs + '\n' + (data.logs || 'Migration complete!') }));
+        addNotification({ title: 'Migration Complete', message: 'Docker containers restored on target server', type: 'success' });
+      } else {
+        setMigrateModal(prev => ({ ...prev, status: 'error', logs: prev.logs + '\nError: ' + (data.error || 'Unknown error') }));
+        addNotification({ title: 'Migration Failed', message: data.error || 'Failed to migrate', type: 'error' });
+      }
+    } catch (err) {
+      setMigrateModal(prev => ({ ...prev, status: 'error', logs: prev.logs + '\nError: ' + err.message }));
+      addNotification({ title: 'Migration Failed', message: err.message, type: 'error' });
+    }
+  };
+
   const updateConfig = (key, value) => setConfig(prev => ({ ...prev, [key]: value }));
   const addPath = () => updateConfig('paths', [...config.paths, '']);
   const removePath = (i) => updateConfig('paths', config.paths.filter((_, idx) => idx !== i));
@@ -749,6 +790,14 @@ export default function ServerBackupApp() {
                         </div>
                       </div>
                       <div className="flex items-center gap-2 shrink-0">
+                        {entry.type === 'docker' && (
+                          <button
+                            onClick={() => setMigrateModal({ isOpen: true, entry, targetId: '', status: 'idle', logs: '' })}
+                            className="px-3 py-1.5 rounded-lg bg-purple-600/10 hover:bg-purple-600/20 border border-purple-500/20 text-purple-400 text-[10px] font-bold transition-all flex items-center gap-1.5"
+                          >
+                            <ArrowLeftRight size={12} /> Migrate
+                          </button>
+                        )}
                         <button
                           onClick={() => {
                             if (entry.r2Url) {
@@ -850,6 +899,76 @@ export default function ServerBackupApp() {
               >
                 Select This Folder
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Docker Migrate Modal */}
+      {migrateModal.isOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
+          <div className="w-[500px] max-h-[80vh] rounded-2xl bg-[var(--bg-secondary)] border border-[var(--border-color)] shadow-2xl flex flex-col">
+            <div className="flex items-center justify-between p-4 border-b border-[var(--border-color)]">
+              <div className="flex items-center gap-2">
+                <ArrowLeftRight size={16} className="text-purple-400" />
+                <span className="text-sm font-bold text-[var(--text-primary)]">Docker Migration</span>
+              </div>
+              <button onClick={() => setMigrateModal({ isOpen: false, entry: null, targetId: '', status: 'idle', logs: '' })} className="p-1 rounded-lg hover:bg-white/5 transition-colors">
+                <X size={16} className="text-[var(--text-muted)]" />
+              </button>
+            </div>
+            <div className="p-4 space-y-4">
+              <div className="p-3 rounded-xl bg-[var(--bg-primary)] border border-[var(--border-color)]">
+                <div className="text-[10px] text-[var(--text-muted)] uppercase mb-1">Source Backup</div>
+                <div className="text-xs font-mono text-[var(--text-primary)]">{migrateModal.entry?.filePath?.split('/').pop()}</div>
+                <div className="text-[9px] text-[var(--text-muted)] mt-0.5">
+                  {migrateModal.entry?.timestamp ? new Date(migrateModal.entry.timestamp).toLocaleString() : ''}
+                </div>
+              </div>
+
+              {migrateModal.status === 'idle' && (
+                <>
+                  <div>
+                    <label className="block text-[10px] font-bold text-[var(--text-muted)] uppercase tracking-wider mb-1.5">Target Server</label>
+                    <SearchableSelect
+                      value={migrateModal.targetId}
+                      onChange={(v) => setMigrateModal(prev => ({ ...prev, targetId: v }))}
+                      options={sshConnections.filter(c => c._id !== migrateModal.entry?.connectionId).map(c => ({ value: c._id, label: `${c.name} (${c.host})` }))}
+                      placeholder="Select target server..."
+                    />
+                  </div>
+                  <div className="p-3 rounded-lg bg-purple-500/5 border border-purple-500/15 text-[10px] text-purple-300">
+                    This will restore all containers, volumes, and images on the target server. Existing containers with the same names will be replaced.
+                  </div>
+                </>
+              )}
+
+              {migrateModal.status === 'running' && (
+                <div className="flex items-center gap-3 p-4 rounded-xl bg-indigo-500/5 border border-indigo-500/15">
+                  <Loader size={18} className="animate-spin text-indigo-400" />
+                  <span className="text-xs text-indigo-300 font-bold">Migrating Docker containers...</span>
+                </div>
+              )}
+
+              {(migrateModal.status === 'done' || migrateModal.status === 'error') && (
+                <div className="bg-slate-950 border border-slate-800 rounded-xl p-3 max-h-48 overflow-y-auto font-mono text-[10px] leading-relaxed text-slate-300 whitespace-pre-wrap">
+                  {migrateModal.logs || 'No logs'}
+                </div>
+              )}
+            </div>
+            <div className="flex items-center justify-end gap-2 p-4 border-t border-[var(--border-color)]">
+              <button onClick={() => setMigrateModal({ isOpen: false, entry: null, targetId: '', status: 'idle', logs: '' })} className="px-4 py-2 rounded-lg text-xs font-bold text-[var(--text-muted)] hover:bg-white/5 transition-all">
+                {migrateModal.status === 'done' || migrateModal.status === 'error' ? 'Close' : 'Cancel'}
+              </button>
+              {migrateModal.status === 'idle' && (
+                <button
+                  onClick={handleMigrate}
+                  disabled={!migrateModal.targetId}
+                  className="px-5 py-2 rounded-xl bg-purple-600 hover:bg-purple-500 disabled:opacity-50 text-white text-xs font-bold transition-all flex items-center gap-2"
+                >
+                  <ArrowLeftRight size={14} /> Start Migration
+                </button>
+              )}
             </div>
           </div>
         </div>

@@ -18,8 +18,8 @@ function buildBackupCommand(jobId, type, config) {
     }
     case 'docker': {
       const containers = config.containers || [];
-      const includeVolumes = config.includeVolumes;
-      const includeImages = config.includeImages;
+      const includeVolumes = config.includeVolumes !== false;
+      const includeImages = config.includeImages !== false;
       cmd = `set -e\nmkdir -p /tmp/bk_${jobId}\n`;
       cmd += `DOCKER="docker"; if ! docker info >/dev/null 2>&1; then DOCKER="sudo docker"; fi\n`;
       if (containers.length === 0 || containers.includes('all')) {
@@ -27,22 +27,39 @@ function buildBackupCommand(jobId, type, config) {
       } else {
         cmd += `echo '${containers.join('\n')}' > /tmp/bk_${jobId}/containers.txt\n`;
       }
+      // Collect images used by selected containers
+      cmd += `IMAGES=""\n`;
       cmd += `while IFS= read -r c; do\n`;
       cmd += `  echo "[backup] Inspecting container: $c"\n`;
       cmd += `  $DOCKER inspect "$c" > /tmp/bk_${jobId}/inspect_$c.json 2>/dev/null || true\n`;
+      cmd += `  IMG=$($DOCKER inspect "$c" --format '{{.Config.Image}}' 2>/dev/null || true)\n`;
+      cmd += `  [ -n "$IMG" ] && IMAGES="$IMAGES $IMG"\n`;
       cmd += `  ROOT=$($DOCKER inspect "$c" --format '{{ index .Config.Labels "com.docker.compose.project.working_dir" }}' 2>/dev/null || true)\n`;
       cmd += `  if [ -z "$ROOT" ]; then ROOT=$($DOCKER inspect "$c" --format '{{ index .Config.Labels "com.docker.compose.project.config_files" }}' 2>/dev/null | xargs dirname 2>/dev/null || true); fi\n`;
       cmd += `  if [ -n "$ROOT" ] && [ -d "$ROOT" ]; then tar -rf /tmp/bk_${jobId}/data.tar -C "$ROOT" . 2>/dev/null || true; fi\n`;
       cmd += `done < /tmp/bk_${jobId}/containers.txt\n`;
+      // Backup only volumes used by selected containers
       if (includeVolumes) {
-        cmd += `for vol in $($DOCKER volume ls -q); do\n`;
+        cmd += `VOLS=""\n`;
+        cmd += `while IFS= read -r c; do\n`;
+        cmd += `  for v in $($DOCKER inspect "$c" --format '{{range .Mounts}}{{if eq .Type "volume"}}{{.Name}} {{end}}{{end}}' 2>/dev/null || true); do\n`;
+        cmd += `    VOLS="$VOLS $v"\n`;
+        cmd += `  done\n`;
+        cmd += `done < /tmp/bk_${jobId}/containers.txt\n`;
+        cmd += `VOLS=$(echo $VOLS | tr ' ' '\\n' | sort -u)\n`;
+        cmd += `for vol in $VOLS; do\n`;
+        cmd += `  [ -z "$vol" ] && continue\n`;
         cmd += `  echo "[backup] Backing up volume: $vol"\n`;
         cmd += `  $DOCKER run --rm -v "$vol":/src -v /tmp/bk_${jobId}:/dst alpine tar -cf /dst/vol_${jobId}_$vol.tar -C /src . 2>/dev/null || true\n`;
         cmd += `done\n`;
       }
+      // Save only images used by selected containers
       if (includeImages) {
-        cmd += `echo "[backup] Saving Docker images..."\n`;
-        cmd += `$DOCKER save $($DOCKER images -q) | gzip > /tmp/bk_${jobId}/images.tar.gz 2>/dev/null || true\n`;
+        cmd += `IMAGES=$(echo $IMAGES | tr ' ' '\\n' | sort -u)\n`;
+        cmd += `if [ -n "$IMAGES" ]; then\n`;
+        cmd += `  echo "[backup] Saving Docker images..."\n`;
+        cmd += `  $DOCKER save $IMAGES | gzip > /tmp/bk_${jobId}/images.tar.gz 2>/dev/null || true\n`;
+        cmd += `fi\n`;
       }
       cmd += `cd /tmp/bk_${jobId} && tar -czf ${outFile} .\n`;
       cmd += `rm -rf /tmp/bk_${jobId}\n`;
