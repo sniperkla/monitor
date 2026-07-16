@@ -29,6 +29,7 @@ export function VaultProvider({ children }) {
   const [error, setError] = useState('');
   const prevUserIdRef = useRef(null);
   const masterPwdRef = useRef(null); // Cached for sync operations (memory only, never persisted)
+  const hasFetchedRef = useRef(false); // Track if we've already fetched vault data
 
   // Clear stale vault cache when user changes (different account login)
   useEffect(() => {
@@ -39,6 +40,7 @@ export function VaultProvider({ children }) {
       setDecryptedUri('');
       setDecryptedTunnel(null);
       setVaultData(null);
+      hasFetchedRef.current = false; // Reset fetch flag for new user
     }
     prevUserIdRef.current = currentUserId;
   }, [session]);
@@ -107,16 +109,30 @@ export function VaultProvider({ children }) {
       console.warn('[Vault] Storage check failed:', e);
     }
 
+    // Skip re-fetch if already fetched and unlocked (avoids popup on tab switch)
+    if (hasFetchedRef.current && vaultStatus === 'unlocked') {
+      return;
+    }
+
     fetchVault();
+    hasFetchedRef.current = true;
   }, [session, authStatus]);
 
   const fetchVault = useCallback(async () => {
+    // If already unlocked with cached data, don't risk resetting to setup
+    const cachedUri = sessionStorage.getItem('_vault_uri');
+    
     try {
       const res = await fetch('/api/user/vault');
       const data = await res.json();
 
       if (!data.success) {
-        setVaultStatus('setup');
+        // Don't reset to setup if we have cached unlock data
+        if (cachedUri) {
+          setVaultStatus('unlocked');
+        } else if (vaultData?.isConfigured) {
+          setVaultStatus('locked');
+        }
         return;
       }
 
@@ -126,9 +142,8 @@ export function VaultProvider({ children }) {
 
       if (data.data.vault.isConfigured) {
         // Check if we have a cached unlock in sessionStorage
-        const cached = sessionStorage.getItem('_vault_uri');
-        if (cached) {
-          setDecryptedUri(cached);
+        if (cachedUri) {
+          setDecryptedUri(cachedUri);
           const cachedTunnel = sessionStorage.getItem('_vault_tunnel');
           if (cachedTunnel) {
             try { setDecryptedTunnel(JSON.parse(cachedTunnel)); } catch (_) {}
@@ -143,14 +158,16 @@ export function VaultProvider({ children }) {
           setVaultStatus('locked');
         }
       } else {
-        setVaultStatus('setup');
+        // Only set to setup if we don't have cached data
+        if (!cachedUri) {
+          setVaultStatus('setup');
+        }
       }
     } catch (err) {
       console.error('Failed to fetch vault:', err);
       // Network error — don't nuke vault state if we have cached data
-      const cached = sessionStorage.getItem('_vault_uri');
-      if (cached) {
-        setDecryptedUri(cached);
+      if (cachedUri) {
+        setDecryptedUri(cachedUri);
         try {
           const encodedPwd = sessionStorage.getItem('_vault_pwd');
           if (encodedPwd) masterPwdRef.current = atob(encodedPwd);
@@ -162,11 +179,9 @@ export function VaultProvider({ children }) {
         setVaultStatus('unlocked');
       } else if (vaultData?.isConfigured) {
         setVaultStatus('locked');
-      } else {
-        setVaultStatus('setup');
       }
     }
-  }, []);
+  }, [vaultData]);
 
   /**
    * Unlock the vault with the Master Password.
@@ -360,6 +375,7 @@ export function VaultProvider({ children }) {
     sessionStorage.removeItem('_vault_uri');
     sessionStorage.removeItem('_vault_tunnel');
     masterPwdRef.current = null; // Clear cached sync key
+    hasFetchedRef.current = false; // Allow re-fetch after unlock
     if (vaultData?.isConfigured) {
       setVaultStatus('locked');
     }
@@ -379,6 +395,7 @@ export function VaultProvider({ children }) {
       setVaultData(null);
       sessionStorage.removeItem('_vault_uri');
       masterPwdRef.current = null; // Clear cached sync key
+      hasFetchedRef.current = false; // Allow re-fetch after setup
       setVaultStatus('setup');
     } catch (err) {
       console.error('Failed to clear vault:', err);
