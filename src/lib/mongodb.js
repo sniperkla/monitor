@@ -101,18 +101,44 @@ export async function getActiveRelayInfo(uri, relayName) {
  * Connects to the primary "Center" database using the default mongoose connection.
  */
 async function connectCenter() {
-  // Check if already connected via the default connection
+  // Already connected
   if (mongoose.connection.readyState === 1) {
     cached.conn = mongoose;
     return cached.conn;
   }
 
-  // Only return cached connection if it is actually connected
-  if (cached.conn && mongoose.connection.readyState === 1) {
+  // Connection in progress (e.g. initiated by server.js) — wait for it
+  if (mongoose.connection.readyState === 2) {
+    if (cached.promise) {
+      try {
+        cached.conn = await cached.promise;
+        return cached.conn;
+      } catch (e) {
+        cached.promise = null;
+        throw e;
+      }
+    }
+    // Connection initiated externally (e.g. server.js) — wait until ready or failed
+    await new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => reject(new Error('MongoDB connection timeout')), 10000);
+      const check = () => {
+        if (mongoose.connection.readyState === 1) {
+          clearTimeout(timeout);
+          resolve();
+        } else if (mongoose.connection.readyState === 0 || mongoose.connection.readyState === 3) {
+          clearTimeout(timeout);
+          reject(new Error('MongoDB connection failed'));
+        } else {
+          setTimeout(check, 100);
+        }
+      };
+      check();
+    });
+    cached.conn = mongoose;
     return cached.conn;
   }
 
-  // If there's no active promise, or connection is disconnected/connecting without a promise, start connection
+  // Disconnected — start new connection
   if (!cached.promise || mongoose.connection.readyState === 0) {
     const centerUri = process.env.MONGODB_URI;
     if (!centerUri) throw new Error("MONGODB_URI environment variable is not set");
