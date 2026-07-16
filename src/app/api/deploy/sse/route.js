@@ -33,7 +33,7 @@ export async function GET(request) {
 
       // Send initial status
       try {
-        await connectDB(process.env.MONGODB_URI, true);
+        await connectDB(null, true);
         const dbKey = projectId === 'default' ? 'auto_deploy_config' : `auto_deploy_config_${projectId}`;
         const setting = await SystemSetting.findOne({ key: dbKey });
         const config = setting?.value;
@@ -83,7 +83,7 @@ export async function broadcastDeploymentStatus(projectId = 'default') {
   if (clients.length === 0) return;
 
   try {
-    await connectDB(process.env.MONGODB_URI, true);
+    await connectDB(null, true);
     const dbKey = projectId === 'default' ? 'auto_deploy_config' : `auto_deploy_config_${projectId}`;
     const setting = await SystemSetting.findOne({ key: dbKey });
     const config = setting?.value;

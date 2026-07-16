@@ -7,7 +7,7 @@ import { getRunning, clearRunning } from '@/lib/deployProcesses';
 
 async function updateStatusToCancelled(projectId, message) {
   try {
-    await connectDB(process.env.MONGODB_URI, true);
+    await connectDB(null, true);
     const dbKey = projectId === 'default' ? 'auto_deploy_config' : `auto_deploy_config_${projectId}`;
     const setting = await SystemSetting.findOne({ key: dbKey });
     const config = setting?.value || {};

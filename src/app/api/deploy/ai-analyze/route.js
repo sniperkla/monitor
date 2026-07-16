@@ -80,7 +80,7 @@ export async function POST(request) {
     }
 
     // Load AI configurations
-    await connectDB(process.env.MONGODB_URI, true);
+    await connectDB(null, true);
     const keysSetting = await SystemSetting.findOne({ key: 'ai_api_keys' });
     const configSetting = await SystemSetting.findOne({ key: 'ai_config' });
     const projectSetting = await SystemSetting.findOne({ key: dbKey });

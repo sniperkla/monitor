@@ -36,7 +36,7 @@ export async function GET(request) {
     const sha = url.searchParams.get('sha');
     repo = normalizeRepoParam(repo);
 
-    await connectDB(process.env.MONGODB_URI, true);
+    await connectDB(null, true);
 
     let token = null;
     let resolvedRepo = repo;

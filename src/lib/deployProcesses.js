@@ -1,4 +1,4 @@
-import connectDB, { getCenterUri } from './mongodb.js';
+import connectDB from './mongodb.js';
 import SystemSetting from '../models/SystemSetting.js';
 
 // Simple in-memory registry of running deployment processes per project
@@ -44,12 +44,7 @@ export async function resetAllState() {
   startingLocks.clear();
 
   try {
-    const mongoUri = process.env.MONGODB_URI || getCenterUri();
-    if (!mongoUri) {
-      console.warn('[deployProcesses] MongoDB URI not available for startup reset');
-      return;
-    }
-    await connectDB(mongoUri, true);
+    await connectDB(null, true);
     // Find all settings keys that look like 'auto_deploy_config' or 'auto_deploy_config_*'
     // and where the status is 'running' OR serverRestarted flag is set.
     const settings = await SystemSetting.find({
@@ -112,8 +107,7 @@ async function attemptTmuxReconnect(config, projectId, dbKey) {
   // Build SSH config from stored connection data
   let sshConnData = config.sshConnectionData;
   if (!sshConnData || !sshConnData.host) {
-    const mongoUri = process.env.MONGODB_URI || getCenterUri();
-    const db = await import('./mongodb.js').then(m => m.default(mongoUri, true));
+    const db = await import('./mongodb.js').then(m => m.default(null, true));
     const repo = new ConnectionRepository(db);
     await repo.init();
     const connection = await repo.findById(config.connectionId);
@@ -296,8 +290,7 @@ async function attemptTmuxReconnect(config, projectId, dbKey) {
 
 async function updateDeployLog(dbKey, logText, status, config, startedAt) {
   try {
-    const mongoUri = process.env.MONGODB_URI || getCenterUri();
-    await import('./mongodb.js').then(m => m.default(mongoUri, true));
+    await import('./mongodb.js').then(m => m.default(null, true));
     const updateFields = {
       'value.lastDeployLog': logText,
       'value.lastDeployAt': new Date(),

@@ -29,7 +29,7 @@ export async function GET() {
       return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
     }
 
-    await connectDB(process.env.MONGODB_URI, true);
+    await connectDB(null, true);
     const progress = await GameProgress.findOne({
       userEmail: session.user.email,
       gameKey: 'fallout'
@@ -70,7 +70,7 @@ export async function POST(request) {
       lastPlayedAt: new Date()
     };
 
-    await connectDB(process.env.MONGODB_URI, true);
+    await connectDB(null, true);
     await GameProgress.findOneAndUpdate(
       {
         userEmail: session.user.email,

@@ -67,7 +67,7 @@ function limitLogOutput(logText, maxChars = 150000) {
 async function updateDeployStatus(projectId, status, logText, cancelRequested = false) {
   try {
     const dbKey = projectId === 'default' ? 'auto_deploy_config' : `auto_deploy_config_${projectId}`;
-    await connectDB(process.env.MONGODB_URI, true);
+    await connectDB(null, true);
     
     const updateFields = {
       'value.status': status,
@@ -450,7 +450,7 @@ export async function runDeployment(config, runMeta = {}) {
 
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       try {
-        await connectDB(process.env.MONGODB_URI, true);
+        await connectDB(null, true);
         const updateFields = {
           'value.status': status,
           'value.lastDeployLog': cleanLog,
@@ -684,7 +684,7 @@ export async function runDeployment(config, runMeta = {}) {
       if (!sshConnData || !sshConnData.host) {
         console.log(`[deploy] SSH connection data not cached, attempting fresh lookup for ID: ${connectionId}`);
         try {
-          const db = await connectDB(process.env.MONGODB_URI, true);
+          const db = await connectDB(null, true);
           const repo = new ConnectionRepository(db);
           await repo.init();
           const connection = await repo.findById(connectionId);
@@ -1112,7 +1112,7 @@ export async function POST(request) {
     const isManual = !!session;
 
     // 2. Fetch the deployment config
-    await connectDB(process.env.MONGODB_URI, true);
+    await connectDB(null, true);
     let setting;
     if (token) {
       // Token-based lookup: find project by webhookToken

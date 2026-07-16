@@ -20,7 +20,7 @@ export const authOptions = {
     async signIn({ user, account, profile }) {
       if (account.provider === "google") {
         try {
-          await connectDB(process.env.MONGODB_URI, true);
+          await connectDB(null, true);
           const profileImage = profile.picture || user.image;
           const isAdminEmail = !!process.env.ADMIN_EMAIL && user.email === process.env.ADMIN_EMAIL;
           const update = {
@@ -77,7 +77,7 @@ export const authOptions = {
           // IMPORTANT: Do not store user.settings in JWT to prevent HTTP 431 Error (Header Fields Too Large)
         } else {
           try {
-            await connectDB(process.env.MONGODB_URI, true);
+            await connectDB(null, true);
             const dbUser = await User.findOne({ email: token.email }).lean();
             if (dbUser) {
               token.dbId = dbUser._id.toString();

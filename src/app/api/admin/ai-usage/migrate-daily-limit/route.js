@@ -20,7 +20,7 @@ export async function POST(req) {
       return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 });
     }
 
-    await connectDB(process.env.MONGODB_URI, true);
+    await connectDB(null, true);
 
     let requestedLimit = null;
     try {

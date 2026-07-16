@@ -21,7 +21,7 @@ export async function POST(request) {
     const token = searchParams.get('token');
     let dbKey = projectId === 'default' ? 'auto_deploy_config' : `auto_deploy_config_${projectId}`;
 
-    await connectDB(process.env.MONGODB_URI, true);
+    await connectDB(null, true);
     let setting;
     if (token) {
       const allSettings = await SystemSetting.find({ key: { $regex: '^auto_deploy_config' } });
@@ -112,7 +112,7 @@ export async function POST(request) {
         let sshConnData = config.sshConnectionData;
 
         if (!sshConnData || !sshConnData.host) {
-          const db = await connectDB(process.env.MONGODB_URI, true);
+          const db = await connectDB(null, true);
           const repo = new ConnectionRepository(db);
           await repo.init();
           const connection = await repo.findById(connectionId);

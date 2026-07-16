@@ -11,7 +11,7 @@ export async function GET(request) {
     const category = searchParams.get('category');
     const os = searchParams.get('os');
 
-    const db = await connectDB(process.env.MONGODB_URI, true);
+    const db = await connectDB(null, true);
     const WikiModel = getWikiModel(db);
 
     let filter = {};

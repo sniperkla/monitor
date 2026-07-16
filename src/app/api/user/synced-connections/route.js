@@ -12,7 +12,7 @@ export async function GET() {
   }
 
   try {
-    await connectDB(process.env.MONGODB_URI, true);
+    await connectDB(null, true);
     const user = await User.findOne({ email: session.user.email })
       .select('syncedConnections')
       .lean();
@@ -47,7 +47,7 @@ export async function POST(request) {
       return NextResponse.json({ error: 'Max 100 connections per sync' }, { status: 400 });
     }
 
-    await connectDB(process.env.MONGODB_URI, true);
+    await connectDB(null, true);
     const user = await User.findOne({ email: session.user.email });
     if (!user) {
       return NextResponse.json({ error: 'User not found' }, { status: 404 });
@@ -112,7 +112,7 @@ export async function DELETE(request) {
   try {
     const body = await request.json().catch(() => ({}));
     
-    await connectDB(process.env.MONGODB_URI, true);
+    await connectDB(null, true);
     const user = await User.findOne({ email: session.user.email });
     if (!user) {
       return NextResponse.json({ error: 'User not found' }, { status: 404 });

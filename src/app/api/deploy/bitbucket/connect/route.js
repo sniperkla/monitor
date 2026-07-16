@@ -37,7 +37,7 @@ export async function POST(request) {
       // Validation failed, continue anyway — token will be verified at deploy time
     }
 
-    await connectDB(process.env.MONGODB_URI, true);
+    await connectDB(null, true);
     const setting = await SystemSetting.findOne({ key: dbKey });
     const existing = setting?.value || {};
 
@@ -69,7 +69,7 @@ export async function GET(request) {
     const project = searchParams.get('project') || 'default';
     const dbKey = project === 'default' ? 'auto_deploy_config' : `auto_deploy_config_${project}`;
 
-    await connectDB(process.env.MONGODB_URI, true);
+    await connectDB(null, true);
     const setting = await SystemSetting.findOne({ key: dbKey });
     const cfg = setting?.value || {};
 

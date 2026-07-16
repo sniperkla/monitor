@@ -3,24 +3,11 @@ import { getServerSession } from "next-auth/next";
 import { authOptions } from "@/lib/auth";
 import mongoose from 'mongoose';
 import User from "@/models/User";
-import fs from 'fs';
-import path from 'path';
-
-function readCenterUri() {
-  try {
-    const p = path.join(process.cwd(), 'db-config.json');
-    if (fs.existsSync(p)) {
-      const c = JSON.parse(fs.readFileSync(p, 'utf-8'));
-      if (c.uri) return c.uri;
-    }
-  } catch (e) {}
-  return process.env.MONGODB_URI || null;
-}
 
 async function ensureConnected() {
   if (mongoose.connection.readyState === 1) return; // already connected by server.js
-  const uri = readCenterUri();
-  if (!uri) throw new Error('No center DB URI configured');
+  const uri = process.env.MONGODB_URI;
+  if (!uri) throw new Error('MONGODB_URI environment variable is not set');
   if (!uri.startsWith('mongodb')) throw new Error('Settings require a MongoDB center DB');
   await mongoose.connect(uri, { bufferCommands: false, serverSelectionTimeoutMS: 5000 });
 }

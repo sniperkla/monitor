@@ -5,7 +5,7 @@ import { getWikiModel } from '@/models/Wiki';
 export async function GET(request, { params }) {
   try {
     const { id } = await params;
-    const db = await connectDB(process.env.MONGODB_URI, true);
+    const db = await connectDB(null, true);
     const WikiModel = getWikiModel(db);
 
     const guide = await WikiModel.findById(id);

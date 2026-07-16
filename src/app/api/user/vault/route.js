@@ -17,7 +17,7 @@ export async function GET() {
       return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
     }
 
-    await connectDB(process.env.MONGODB_URI, true);
+    await connectDB(null, true);
     const user = await User.findOne({ email: session.user.email });
 
     if (!user) {
@@ -72,7 +72,7 @@ export async function POST(request) {
       }, { status: 400 });
     }
 
-    await connectDB(process.env.MONGODB_URI, true);
+    await connectDB(null, true);
 
     await User.findOneAndUpdate(
       { email: session.user.email },
@@ -111,7 +111,7 @@ export async function DELETE() {
       return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
     }
 
-    await connectDB(process.env.MONGODB_URI, true);
+    await connectDB(null, true);
 
     await User.findOneAndUpdate(
       { email: session.user.email },

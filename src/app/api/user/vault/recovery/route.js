@@ -23,7 +23,7 @@ export async function POST() {
       return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
     }
 
-    await connectDB(process.env.MONGODB_URI, true);
+    await connectDB(null, true);
     const user = await User.findOne({ email: session.user.email });
 
     if (!user) {

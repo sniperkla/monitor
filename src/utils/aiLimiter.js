@@ -47,7 +47,7 @@ async function getOrCreateUsage(email, db) {
 }
 
 export async function checkAndTrackAiUsage(email, roughPrompt, roughResponse = '', roughContext = '') {
-  const db = await connectDB(process.env.MONGODB_URI, true);
+  const db = await connectDB(null, true);
 
   if (!email) {
     throw new Error('AI usage tracking requires a user email.');
@@ -95,7 +95,7 @@ export async function checkAndTrackAiUsage(email, roughPrompt, roughResponse = '
 }
 
 export async function getAiUsage(email) {
-  const db = await connectDB(process.env.MONGODB_URI, true);
+  const db = await connectDB(null, true);
   const dailyLimit = await getGlobalDailyLimit(db);
 
   if (!email) {

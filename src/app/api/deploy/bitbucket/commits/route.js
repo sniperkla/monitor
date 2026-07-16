@@ -35,7 +35,7 @@ export async function GET(request) {
     const branch = url.searchParams.get('branch') || 'main';
     repo = normalizeRepoParam(repo);
 
-    await connectDB(process.env.MONGODB_URI, true);
+    await connectDB(null, true);
 
     let credentials = null;
 

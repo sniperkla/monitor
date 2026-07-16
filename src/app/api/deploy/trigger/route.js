@@ -56,7 +56,7 @@ async function handleTrigger(request) {
     console.log(`[trigger] Received direct trigger request for project: ${projectId}`);
 
     // 1. Fetch deployment config from global/center database
-    await connectDB(process.env.MONGODB_URI, true);
+    await connectDB(null, true);
     let setting;
     if (webhookToken) {
       // Token-based lookup: find project by webhookToken

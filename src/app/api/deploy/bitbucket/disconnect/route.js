@@ -14,7 +14,7 @@ export async function POST(request) {
     const project = searchParams.get('project') || 'default';
     const dbKey = project === 'default' ? 'auto_deploy_config' : `auto_deploy_config_${project}`;
 
-    await connectDB(process.env.MONGODB_URI, true);
+    await connectDB(null, true);
     const setting = await SystemSetting.findOne({ key: dbKey });
     if (!setting || !setting.value) {
       return NextResponse.json({ success: false, error: 'Project not found' }, { status: 404 });

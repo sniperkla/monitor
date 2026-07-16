@@ -11,8 +11,6 @@ import {
   normalizeRelayDatabaseUri,
 } from './sshTunnel.js';
 import { Pool as PgPool } from 'pg';
-import fs from 'fs';
-import path from 'path';
 
 /**
  * Global is used here to maintain a cached connection across hot reloads
@@ -28,18 +26,6 @@ if (!cached) {
 const connectionPool = new Map();
 
 export function getCenterUri() {
-  // In production (Docker), always use the environment variable
-  if (process.env.NODE_ENV === 'production') {
-    return process.env.MONGODB_URI;
-  }
-  // In development, prefer db-config.json for local DB
-  try {
-    const p = path.join(process.cwd(), 'db-config.json');
-    if (fs.existsSync(p)) {
-      const c = JSON.parse(fs.readFileSync(p, 'utf-8'));
-      if (c.uri) return c.uri;
-    }
-  } catch (e) {}
   return process.env.MONGODB_URI;
 }
 
@@ -55,7 +41,7 @@ export async function getUriFromRequest() {
       return clientUri;
     }
   } catch (e) {}
-  return getCenterUri();
+  return process.env.MONGODB_URI;
 }
 
 /**
@@ -114,7 +100,7 @@ export async function getActiveRelayInfo(uri, relayName) {
 /**
  * Connects to the primary "Center" database using the default mongoose connection.
  */
-async function connectCenter(uri) {
+async function connectCenter() {
   // Check if already connected via the default connection
   if (mongoose.connection.readyState === 1) {
     cached.conn = mongoose;
@@ -128,12 +114,10 @@ async function connectCenter(uri) {
 
   // If there's no active promise, or connection is disconnected/connecting without a promise, start connection
   if (!cached.promise || mongoose.connection.readyState === 0) {
-    const opts = {
-      bufferCommands: false,
-    };
-    // Use the URI from env or config file as the definitive center DB if possible
-    const centerUri = getCenterUri() || uri;
-    cached.promise = mongoose.connect(centerUri, opts).then((mongoose) => {
+    const centerUri = process.env.MONGODB_URI;
+    if (!centerUri) throw new Error("MONGODB_URI environment variable is not set");
+    
+    cached.promise = mongoose.connect(centerUri, { bufferCommands: false }).then((mongoose) => {
       return mongoose;
     });
   }
@@ -196,9 +180,6 @@ async function getDynamicConnection(uri, tunnelConfig = null, relayName = null) 
       cachePrefix = `relay:${relayInfo.userId}:`;
       console.log(`🔗 [Local Relay] ${uri} → ${connectUri}`);
     } else if (isLocalhost) {
-      // Localhost URI but no relay active.
-      // In development the server itself is on localhost, so direct access is fine.
-      // In production, reject to avoid silently hitting the server's own loopback.
       const isDev = process.env.NODE_ENV === 'development';
       if (!isDev) {
         throw new Error(
@@ -206,7 +187,6 @@ async function getDynamicConnection(uri, tunnelConfig = null, relayName = null) 
           'Run local-relay.js on your machine to access localhost databases.'
         );
       }
-      // Dev mode: connect directly (server is on same machine as DB)
     }
   }
 
@@ -217,9 +197,7 @@ async function getDynamicConnection(uri, tunnelConfig = null, relayName = null) 
 
   if (connectionPool.has(cacheKey)) {
     const cachedConn = connectionPool.get(cacheKey);
-    // For Mongoose connections (connected or connecting)
     if (cachedConn.readyState && (cachedConn.readyState === 1 || cachedConn.readyState === 2)) return cachedConn;
-    // For MySQL pools (simple check)
     if (cachedConn.pool && !cachedConn._closing) return cachedConn;
     connectionPool.delete(cacheKey);
   }
@@ -255,7 +233,6 @@ async function getDynamicConnection(uri, tunnelConfig = null, relayName = null) 
 
   if (connectUri.startsWith('postgres://') || connectUri.startsWith('postgresql://')) {
     const pool = new PgPool({ connectionString: connectUri, max: 5, connectionTimeoutMillis: 10000 });
-    // Eagerly verify the connection is reachable
     const testClient = await pool.connect();
     testClient.release();
     const conn = {
@@ -280,7 +257,6 @@ async function getDynamicConnection(uri, tunnelConfig = null, relayName = null) 
     bufferCommands: false,
     serverSelectionTimeoutMS: useTunnel ? 15000 : 5000,
     connectTimeoutMS: useTunnel ? 15000 : 10000,
-    // directConnection required when going through a local proxy/tunnel
     ...(useTunnel ? { directConnection: true } : {}),
   };
   const conn = await mongoose.createConnection(connectUri, opts).asPromise();
@@ -290,24 +266,28 @@ async function getDynamicConnection(uri, tunnelConfig = null, relayName = null) 
 
 /**
  * Main entry point for database connections.
- * @param {string} uri - Optional URI to connect to.
- * @param {boolean} isCenter - If true, connects to the default instance.
+ * @param {string} uri - Optional URI to connect to (for vault/private DB).
+ * @param {boolean} isCenter - If true, connects to the default MONGODB_URI.
+ * @param {string} relayName - Optional relay name for Local Relay connections.
  */
 async function connectDB(uri = null, isCenter = false, relayName = null) {
-  const targetUri = uri || (await getUriFromRequest());
-  const normalizedUri = normalizeRelayDatabaseUri(targetUri);
+  // If requesting center DB, use the cached default connection
+  if (isCenter || !uri) {
+    return connectCenter();
+  }
 
   // Non-MongoDB URIs must always go through the dynamic connection path
+  const normalizedUri = normalizeRelayDatabaseUri(uri);
   const isNonMongo = normalizedUri && !normalizedUri.startsWith('mongodb://') && !normalizedUri.startsWith('mongodb+srv://');
 
-  const centerUri = getCenterUri();
-  // If this is the center DB (User storage), use the default connection
-  if (!isNonMongo && (isCenter || normalizedUri === centerUri || targetUri === centerUri || normalizedUri === process.env.MONGODB_URI || targetUri === process.env.MONGODB_URI)) {
-    return connectCenter(normalizedUri);
+  // Check if the URI matches the center URI (reuse cached connection)
+  if (!isNonMongo && normalizedUri === process.env.MONGODB_URI) {
+    return connectCenter();
   }
 
   // When URI came from request headers, also check for SSH tunnel config.
   // When URI was provided explicitly (e.g., internal server calls), skip tunnel.
+  // We need to re-check headers since uri was passed explicitly
   const tunnelConfig = uri ? null : await getTunnelFromRequest();
 
   // Otherwise, use a separate pool connection for tenant isolation

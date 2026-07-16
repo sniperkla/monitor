@@ -51,7 +51,7 @@ export async function GET(request) {
     const { searchParams } = new URL(request.url);
     const projectId = searchParams.get('project');
 
-    await connectDB(process.env.MONGODB_URI, true);
+    await connectDB(null, true);
     
     // Find all settings keys that start with auto_deploy_config
     const allSettings = await SystemSetting.find({
@@ -165,7 +165,7 @@ export async function POST(request) {
     }
 
     // NOW connect to main database for saving deployment config
-    await connectDB(process.env.MONGODB_URI, true);
+    await connectDB(null, true);
 
     // Check for duplicate project name (if provided)
     if (body.name && body.name.trim()) {
@@ -298,7 +298,7 @@ export async function DELETE(request) {
       return NextResponse.json({ success: false, error: 'Cannot delete the default project configuration' }, { status: 400 });
     }
 
-    await connectDB(process.env.MONGODB_URI, true);
+    await connectDB(null, true);
     await SystemSetting.deleteOne({ key: `auto_deploy_config_${projectId}` });
 
     return NextResponse.json({ success: true, message: 'Project deployment config deleted' });
