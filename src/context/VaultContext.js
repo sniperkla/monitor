@@ -30,6 +30,12 @@ export function VaultProvider({ children }) {
   const prevUserIdRef = useRef(null);
   const masterPwdRef = useRef(null); // Cached for sync operations (memory only, never persisted)
   const hasFetchedRef = useRef(false); // Track if we've already fetched vault data
+  const vaultStatusRef = useRef('loading'); // Ref to track current status synchronously
+
+  // Keep vaultStatusRef in sync with vaultStatus state
+  useEffect(() => {
+    vaultStatusRef.current = vaultStatus;
+  }, [vaultStatus]);
 
   // Clear stale vault cache when user changes (different account login)
   useEffect(() => {
@@ -103,6 +109,7 @@ export function VaultProvider({ children }) {
             if (encodedPwd) masterPwdRef.current = atob(encodedPwd);
           } catch (_) {}
           setVaultStatus('unlocked');
+          vaultStatusRef.current = 'unlocked'; // Update ref immediately
         }
       }
     } catch (e) {
@@ -110,7 +117,8 @@ export function VaultProvider({ children }) {
     }
 
     // Skip re-fetch if already fetched and unlocked (avoids popup on tab switch)
-    if (hasFetchedRef.current && vaultStatus === 'unlocked') {
+    // Use ref to get the most current value since state updates are async
+    if (hasFetchedRef.current && vaultStatusRef.current === 'unlocked') {
       return;
     }
 

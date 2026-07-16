@@ -54,7 +54,7 @@ export function Providers({ children }) {
   }, []);
 
   return (
-    <SessionProvider>
+    <SessionProvider refetchOnWindowFocus={false}>
       <VaultProvider>
         <OSProvider>
           <AppProvider>
