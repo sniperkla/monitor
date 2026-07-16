@@ -1559,10 +1559,21 @@ logstash:
       if (status !== 'closed') {
         setStatus('closed');
         updateConnectionStatus('offline');
-        if (!idleTimedOutRef.current) setShowReconnect(false);
         resetAiOnDisconnect();
-        term.writeln(`\n\x1b[1;31m✗ ${t('terminal.socketDisconnected')}\x1b[0m`);
-        appendOutput(`\n✗ ${t('terminal.socketDisconnected')}\n`);
+        if (idleTimedOutRef.current) {
+          setShowReconnect(true);
+          term.writeln(`\n\x1b[1;31m✗ ${t('terminal.socketDisconnected')}\x1b[0m`);
+          appendOutput(`\n✗ ${t('terminal.socketDisconnected')}\n`);
+        } else {
+          // Unexpected disconnect (tab backgrounded, network blip) — auto-reconnect
+          term.writeln(`\n\x1b[1;33m⟳ Connection lost. Reconnecting...\x1b[0m`);
+          appendOutput(`\n⟳ Connection lost. Reconnecting...\n`);
+          setTimeout(() => {
+            if (termStatusRef.current === 'closed' && !idleTimedOutRef.current) {
+              setReconnectNonce(n => n + 1);
+            }
+          }, 1500);
+        }
       }
     });
 

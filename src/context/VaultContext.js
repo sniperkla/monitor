@@ -147,7 +147,24 @@ export function VaultProvider({ children }) {
       }
     } catch (err) {
       console.error('Failed to fetch vault:', err);
-      setVaultStatus('setup');
+      // Network error — don't nuke vault state if we have cached data
+      const cached = sessionStorage.getItem('_vault_uri');
+      if (cached) {
+        setDecryptedUri(cached);
+        try {
+          const encodedPwd = sessionStorage.getItem('_vault_pwd');
+          if (encodedPwd) masterPwdRef.current = atob(encodedPwd);
+        } catch (_) {}
+        const cachedTunnel = sessionStorage.getItem('_vault_tunnel');
+        if (cachedTunnel) {
+          try { setDecryptedTunnel(JSON.parse(cachedTunnel)); } catch (_) {}
+        }
+        setVaultStatus('unlocked');
+      } else if (vaultData?.isConfigured) {
+        setVaultStatus('locked');
+      } else {
+        setVaultStatus('setup');
+      }
     }
   }, []);
 

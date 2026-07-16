@@ -98,7 +98,9 @@ const _fmSocketPool = typeof window !== 'undefined'
 
 if (typeof window !== 'undefined' && !window.__fmSocketPoolUnloadBound) {
   window.__fmSocketPoolUnloadBound = true;
-  window.addEventListener('pagehide', () => {
+  // Only disconnect sockets on actual page unload, not on tab hide/minimize.
+  // 'pagehide' fires on tab switches too, which kills active SSH sessions.
+  const disconnectPool = () => {
     _fmSocketPool.forEach((entry, pooledConnectionId) => {
       clearTimeout(entry?.cleanupTimer);
       try {
@@ -109,7 +111,8 @@ if (typeof window !== 'undefined' && !window.__fmSocketPoolUnloadBound) {
       }
     });
     _fmSocketPool.clear();
-  });
+  };
+  window.addEventListener('beforeunload', disconnectPool);
 }
 
 const SFTP_REUSE_EVENTS = [

@@ -543,6 +543,12 @@ app.prepare().then(async () => {
       credentials: true
     },
     path: '/api/socket',
+    pingTimeout: 30000,
+    pingInterval: 25000,
+    connectTimeout: 20000,
+    connectionStateRecovery: {
+      maxDisconnectionDuration: 2 * 60 * 1000,
+    },
   });
 
   io.use(async (socket, next) => {
@@ -571,6 +577,12 @@ app.prepare().then(async () => {
 
 // Track active SSH connections
 const activeSessions = new Map();
+
+// Pending SSH sessions awaiting reattachment (keyed by connectionId)
+// When a socket disconnects unexpectedly, the SSH session is moved here
+// so the client can reattach without creating a new SSH connection.
+const pendingSessions = new Map();
+const PENDING_SESSION_TTL_MS = 90 * 1000; // 90 seconds to reconnect
 
 // Idle timeout (30 minutes — browser throttles background-tab timers aggressively)
 const SSH_IDLE_TIMEOUT_MS = 30 * 60 * 1000;
@@ -678,6 +690,143 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
 
       try {
         let connection;
+
+        // ── Check for pending SSH session reattachment ──
+        const pending = pendingSessions.get(connectionId);
+        if (pending && pending.sshClient && pending.sshClient._state !== 'closed') {
+          console.log(`[REATTACH] Reattaching SSH session for ${connectionId} to socket ${socket.id}`);
+          clearTimeout(pending.cleanupTimer);
+          pendingSessions.delete(connectionId);
+
+          // Reassign to new socket
+          const sshClient = pending.sshClient;
+          const stream = pending.stream;
+          const sftp = pending.sftp;
+
+          // Update activity tracking
+          pending.lastActivityAt = Date.now();
+          pending.lastIdleLogAt = 0;
+          pending._explicitDisconnect = false;
+
+          activeSessions.set(socket.id, pending);
+
+          // Re-attach idle watcher
+          const touchActivity = () => {
+            const s = activeSessions.get(socket.id);
+            if (s) s.lastActivityAt = Date.now();
+          };
+
+          const ensureIdleWatcher = () => {
+            const s = activeSessions.get(socket.id);
+            if (!s || s.idleInterval) return;
+            s.idleInterval = setInterval(async () => {
+              const cur = activeSessions.get(socket.id);
+              if (!cur) return;
+              const idleFor = Date.now() - (cur.lastActivityAt || Date.now());
+              if (idleFor > SSH_IDLE_TIMEOUT_MS / 2) {
+                const lastLogAt = cur.lastIdleLogAt || 0;
+                if (Date.now() - lastLogAt > 30 * 1000) {
+                  cur.lastIdleLogAt = Date.now();
+                  console.log(`[IDLE] Reattached session idle: ${idleFor}ms`);
+                }
+              }
+              if (idleFor > SSH_IDLE_TIMEOUT_MS) {
+                console.log(`[IDLE TIMEOUT] Reattached session idle for ${idleFor}ms — closing`);
+                socket.emit('ssh:idle_timeout');
+                cleanupSession(socket.id);
+              }
+            }, SSH_IDLE_CHECK_INTERVAL_MS);
+          };
+          ensureIdleWatcher();
+
+          // Re-attach stream to new socket
+          if (stream && stream.writable) {
+            const sessionData = activeSessions.get(socket.id);
+            if (sessionData) sessionData.stream = stream;
+
+            stream.on('data', (data) => {
+              touchActivity();
+              socket.emit('ssh:data', data.toString('utf-8'));
+            });
+            if (stream.stderr) {
+              stream.stderr.on('data', (data) => {
+                touchActivity();
+                socket.emit('ssh:data', data.toString('utf-8'));
+              });
+            }
+            stream.on('close', () => {
+              console.log(`[CLOSED] Reattached SSH stream closed for socket ${socket.id}`);
+              socket.emit('ssh:closed');
+            });
+
+            socket.on('ssh:input', (inputData) => {
+              touchActivity();
+              if (stream.writable) stream.write(inputData);
+            });
+
+            socket.on('ssh:resize', ({ cols: c, rows: r }) => {
+              if (!stream || !c || !r) return;
+              try { stream.setWindow(r, c, 0, 0); } catch (_) {}
+            });
+
+            // Re-register SFTP events
+            const sftpEvents = [
+              'sftp:list', 'sftp:mkdir', 'sftp:delete', 'sftp:readFile',
+              'sftp:writeFile', 'sftp:applyPatch', 'sftp:copy', 'sftp:move', 'sftp:cross_server_transfer',
+              'sftp:upload', 'sftp:download', 'sftp:download_folder', 'sftp:search', 'docker:command'
+            ];
+            const sshEvents = ['ssh:input', 'ssh:resize'];
+            sftpEvents.forEach(ev => socket.removeAllListeners(ev));
+            sshEvents.forEach(ev => socket.removeAllListeners(ev));
+
+            // Re-register SFTP handlers using session data
+            const reattachSftp = (cb) => {
+              const sessionData = activeSessions.get(socket.id);
+              if (sessionData?.sftp) return cb(null, sessionData.sftp);
+              if (sessionData?.sshClient && sessionData.sshClient._state !== 'closed') {
+                sessionData.sshClient.sftp((err, sftp) => {
+                  if (err) return cb(err);
+                  if (sessionData) sessionData.sftp = sftp;
+                  cb(null, sftp);
+                });
+              } else {
+                cb(new Error('SSH client not available'));
+              }
+            };
+
+            socket.on('sftp:list', (path = '.') => {
+              const sessionData = activeSessions.get(socket.id);
+              const sc = sessionData?.sshClient;
+              if (!sc || sc._state === 'closed') {
+                return socket.emit('sftp:error', { message: 'SSH Connection Closed' });
+              }
+              let sftpHandled = false;
+              const sftpTimeout = setTimeout(() => {
+                if (sftpHandled) return;
+                sftpHandled = true;
+                fallbackFileListing(socket, sc, path);
+              }, 2000);
+              reattachSftp((err, sftp) => {
+                if (sftpHandled) return;
+                clearTimeout(sftpTimeout);
+                sftpHandled = true;
+                if (err) return fallbackFileListing(socket, sc, path);
+                const targetPath = path === '.' ? './' : path;
+                sftp.readdir(targetPath, (err, list) => {
+                  if (err) return fallbackFileListing(socket, sc, path);
+                  socket.emit('sftp:list', { path, files: list });
+                });
+              });
+            });
+
+            socket.emit('ssh:connected');
+            socket.emit('ssh:data', '\r\n\x1b[1;32m✓ Reconnected to session (session preserved)\x1b[0m\r\n');
+            return;
+          }
+          // Stream was dead — fall through to create new connection
+          console.log(`[REATTACH] Stream dead for ${connectionId}, creating new connection`);
+          forceCleanupSession(pending);
+        }
 
         // Helper: check if a string is a valid 24-char MongoDB ObjectId
         const isValidObjectId = (id) => /^[0-9a-fA-F]{24}$/.test(id);
@@ -3288,14 +3437,90 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
     });
 
     socket.on('ssh:disconnect', () => {
+      const session = activeSessions.get(socket.id);
+      if (session) session._explicitDisconnect = true;
       cleanupSession(socket.id);
     });
 
     socket.on('disconnect', () => {
       console.log(`[DISCONNECT] Socket disconnected: ${socket.id}`);
-      cleanupSession(socket.id);
+      const session = activeSessions.get(socket.id);
+      if (session?.sshClient && session?.connectionId &&
+          session.sshClient._state !== 'closed' && !session._explicitDisconnect) {
+        // Unexpected disconnect — move session to pending pool for reattachment
+        console.log(`[KEEPALIVE] Holding SSH session for ${session.connectionId} (90s grace)`);
+        if (session.idleInterval) {
+          clearInterval(session.idleInterval);
+          session.idleInterval = null;
+        }
+        // Detach stream listeners from old socket
+        if (session.stream) {
+          session.stream.removeAllListeners('data');
+          if (session.stream.stderr) session.stream.stderr.removeAllListeners('data');
+        }
+        // Store in pending pool keyed by connectionId
+        const existing = pendingSessions.get(session.connectionId);
+        if (existing) {
+          clearTimeout(existing.cleanupTimer);
+          try { existing.sshClient.end(); } catch (_) {}
+        }
+        session.detachedSocket = null;
+        session.disconnectedAt = Date.now();
+        const connId = session.connectionId;
+        const timer = setTimeout(() => {
+          const pending = pendingSessions.get(connId);
+          if (pending && pending.disconnectedAt === session.disconnectedAt) {
+            console.log(`[KEEPALIVE] Grace period expired for ${connId}, cleaning up`);
+            pendingSessions.delete(connId);
+            forceCleanupSession(pending);
+          }
+        }, PENDING_SESSION_TTL_MS);
+        session.cleanupTimer = timer;
+        // If the remote SSH server closes the connection while pending, clean up
+        if (session.stream) {
+          session.stream.once('close', () => {
+            const pending = pendingSessions.get(connId);
+            if (pending && pending.disconnectedAt === session.disconnectedAt) {
+              console.log(`[KEEPALIVE] SSH stream closed while pending for ${connId}`);
+              clearTimeout(pending.cleanupTimer);
+              pendingSessions.delete(connId);
+              forceCleanupSession(pending);
+            }
+          });
+        }
+        if (session.sshClient) {
+          session.sshClient.once('close', () => {
+            const pending = pendingSessions.get(connId);
+            if (pending && pending.disconnectedAt === session.disconnectedAt) {
+              console.log(`[KEEPALIVE] SSH client closed while pending for ${connId}`);
+              clearTimeout(pending.cleanupTimer);
+              pendingSessions.delete(connId);
+              forceCleanupSession(pending);
+            }
+          });
+        }
+        pendingSessions.set(connId, session);
+        activeSessions.delete(socket.id);
+      } else {
+        cleanupSession(socket.id);
+      }
     });
   });
+
+  async function forceCleanupSession(session) {
+    if (!session) return;
+    try {
+      if (session.idleInterval) clearInterval(session.idleInterval);
+      if (session.sshClient) session.sshClient.end();
+      if (session.activeTransfers?.size > 0) {
+        const { getConcurrencyLimiter } = require('./src/lib/serverGuard');
+        const limiter = getConcurrencyLimiter('file_transfer');
+        for (const tId of session.activeTransfers) limiter.release();
+      }
+    } catch (err) {
+      console.error('Error force-cleaning pending session:', err);
+    }
+  }
 
   async function cleanupSession(socketId) {
     const session = activeSessions.get(socketId);
