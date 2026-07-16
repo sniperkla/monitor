@@ -138,8 +138,10 @@ export function VaultProvider({ children }) {
         // Don't reset to setup if we have cached unlock data
         if (cachedUri) {
           setVaultStatus('unlocked');
+          vaultStatusRef.current = 'unlocked';
         } else if (vaultData?.isConfigured) {
           setVaultStatus('locked');
+          vaultStatusRef.current = 'locked';
         }
         return;
       }
@@ -162,13 +164,16 @@ export function VaultProvider({ children }) {
             if (encodedPwd) masterPwdRef.current = atob(encodedPwd);
           } catch (_) {}
           setVaultStatus('unlocked');
+          vaultStatusRef.current = 'unlocked';
         } else {
           setVaultStatus('locked');
+          vaultStatusRef.current = 'locked';
         }
       } else {
         // Only set to setup if we don't have cached data
         if (!cachedUri) {
           setVaultStatus('setup');
+          vaultStatusRef.current = 'setup';
         }
       }
     } catch (err) {
@@ -185,8 +190,10 @@ export function VaultProvider({ children }) {
           try { setDecryptedTunnel(JSON.parse(cachedTunnel)); } catch (_) {}
         }
         setVaultStatus('unlocked');
+        vaultStatusRef.current = 'unlocked';
       } else if (vaultData?.isConfigured) {
         setVaultStatus('locked');
+        vaultStatusRef.current = 'locked';
       }
     }
   }, [vaultData]);
@@ -247,6 +254,8 @@ export function VaultProvider({ children }) {
         sessionStorage.setItem('_vault_pwd', encoded);
       } catch (_) {}
       setVaultStatus('unlocked');
+      vaultStatusRef.current = 'unlocked'; // Update ref immediately
+      hasFetchedRef.current = true; // Mark as fetched to prevent re-fetch
 
       // Cache password in memory for sync operations (never persisted)
       masterPwdRef.current = masterPassword;
@@ -318,6 +327,8 @@ export function VaultProvider({ children }) {
       }
       setVaultData(vaultPayload);
       setVaultStatus('unlocked');
+      vaultStatusRef.current = 'unlocked'; // Update ref immediately
+      hasFetchedRef.current = true; // Mark as fetched to prevent re-fetch
 
       // Cache password in memory for sync operations (never persisted)
       masterPwdRef.current = masterPassword;
