@@ -1153,29 +1153,13 @@ export default function FileManager({
   useEffect(() => {
     const verifyAfterReturn = () => {
       if (statusRef.current !== 'ready' || !socketRef.current?.connected) return;
-      // Send immediate ssh:ping to refresh health check cache before evaluating staleness.
-      // Browser throttles background-tab timers, so lastHealthCheckAtRef can be very old
-      // even though the SSH connection is still alive.
-      if (socketRef.current.connected) {
-        socketRef.current.emit('ssh:ping');
-      }
-      const cacheFresh = Date.now() - lastHealthCheckAtRef.current < HEALTH_CHECK_TTL_MS;
-      if (cacheFresh && lastHealthOkRef.current) {
-        refreshFiles();
-        return;
-      }
-      pingConnection().then((ok) => {
-        if (!ok && statusRef.current === 'ready') {
-          lastHealthOkRef.current = false;
-          requestReconnect('Connection became stale while inactive. Reconnecting...', {
-            preserveTransfer: !!transferRef.current || uploadQueueRef.current.length > 0,
-            notificationMessage: 'Your SSH session expired while you were away. Reconnecting now.',
-          });
-          return;
-        }
-        console.log('🔄 Regained focus, refreshing file list...');
-        refreshFiles();
-      });
+      // Trust Socket.IO connection status — don't probe SSH on focus return.
+      // Browser throttles background-tab timers, so SSH ping/pong round-trips
+      // can easily exceed the timeout even when the connection is alive.
+      // If SSH is actually dead, the next user action (file list, download, etc.)
+      // will trigger the reconnect flow via ensureSocketReady/ensureSocketReadyAsync.
+      console.log('🔄 Regained focus, refreshing file list...');
+      refreshFiles();
     };
 
     const handleFocus = () => verifyAfterReturn();

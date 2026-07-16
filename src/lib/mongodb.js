@@ -28,6 +28,11 @@ if (!cached) {
 const connectionPool = new Map();
 
 export function getCenterUri() {
+  // In production (Docker), always use the environment variable
+  if (process.env.NODE_ENV === 'production') {
+    return process.env.MONGODB_URI;
+  }
+  // In development, prefer db-config.json for local DB
   try {
     const p = path.join(process.cwd(), 'db-config.json');
     if (fs.existsSync(p)) {
