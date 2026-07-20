@@ -1527,9 +1527,23 @@ export default function FileManager({
     const file = specificFile || e?.target?.files[0];
     if (!file) return;
 
-    const socket = socketRef.current;
+    let socket = socketRef.current;
     if (!socket) return;
-    if (!(await ensureSocketReadyAsync('retry the upload'))) return;
+    console.log(`📤 [${file.name}] Upload start — socket.connected=${socket.connected}, status=${statusRef.current}`);
+    if (!(await ensureSocketReadyAsync('retry the upload'))) {
+      console.warn(`📤 [${file.name}] ensureSocketReadyAsync returned false — upload blocked`);
+      return;
+    }
+    // Re-fetch socket after ensureSocketReadyAsync — reconnect may have replaced it
+    socket = socketRef.current;
+    if (!socket?.connected) {
+      console.warn(`📤 [${file.name}] Socket not connected after ensureSocketReadyAsync`);
+      return;
+    }
+    console.log(`📤 [${file.name}] Socket ready, emitting sftp:upload (socket=${socket.id})`);
+
+    // Helper to always get the current socket — reconnect may replace it mid-upload
+    const getSocket = () => socketRef.current;
 
     const baseTarget = overridePath !== null ? overridePath : currentPath;
     const path = baseTarget === '.' ? file.name : `${baseTarget}/${file.name}`;
@@ -1583,6 +1597,13 @@ export default function FileManager({
 
     let activeHandshakeCleanup = null;
     const waitForUploadHandshake = (expectedOffset) => new Promise(resolve => {
+      // Use fresh socket ref so listeners attach to the current socket (not a stale one after reconnect)
+      const sock = getSocket();
+      if (!sock?.connected) {
+        resolve({ offset: expectedOffset, error: 'Socket disconnected', recoverable: true });
+        return;
+      }
+
       const timeoutId = setTimeout(() => {
         cleanup();
         resolve({ offset: expectedOffset, error: 'Handshake timeout' });
@@ -1614,18 +1635,24 @@ export default function FileManager({
 
       const cleanup = () => {
         clearTimeout(timeoutId);
-        socket.off('sftp:can_upload', handler);
-        socket.off('sftp:error', guardErrHandler);
+        sock.off('sftp:can_upload', handler);
+        sock.off('sftp:error', guardErrHandler);
         activeHandshakeCleanup = null;
       };
 
       activeHandshakeCleanup = cleanup;
-      socket.on('sftp:can_upload', handler);
-      socket.on('sftp:error', guardErrHandler);
+      sock.on('sftp:can_upload', handler);
+      sock.on('sftp:error', guardErrHandler);
     });
 
     let activeCompletionCleanup = null;
     const waitForUploadCompletion = () => new Promise((resolve, reject) => {
+      const sock = getSocket();
+      if (!sock?.connected) {
+        reject(new Error('Socket disconnected before upload completion'));
+        return;
+      }
+
       const timeoutId = setTimeout(() => {
         console.error(`⏰ Upload completion timeout for ${path} (60s)`);
         cleanup();
@@ -1634,8 +1661,8 @@ export default function FileManager({
 
       const cleanup = () => {
         clearTimeout(timeoutId);
-        socket.off('sftp:action_success', successHandler);
-        socket.off('sftp:error', errorHandler);
+        sock.off('sftp:action_success', successHandler);
+        sock.off('sftp:error', errorHandler);
         activeCompletionCleanup = null;
       };
 
@@ -1656,8 +1683,8 @@ export default function FileManager({
       };
 
       activeCompletionCleanup = cleanup;
-      socket.on('sftp:action_success', successHandler);
-      socket.on('sftp:error', errorHandler);
+      sock.on('sftp:action_success', successHandler);
+      sock.on('sftp:error', errorHandler);
     });
     
     let activeAckCleanup = null;
@@ -1669,8 +1696,16 @@ export default function FileManager({
       const MAX_GUARD_RETRIES = 8;
       do {
         if (transferRef.current !== transferObj) return;
+        // Re-fetch socket — reconnect may have replaced it during guard/rate-limit wait
+        socket = getSocket();
+        if (!socket?.connected) break;
+        console.log(`📤 [${file.name}] Emitting sftp:upload (offset=${resumeOffset})`);
         socket.emit('sftp:upload', { filename: file.name, path, size: file.size, offset: resumeOffset });
         startData = await waitForUploadHandshake(resumeOffset);
+        console.log(`📤 [${file.name}] Handshake result:`, JSON.stringify(startData));
+        // Re-fetch socket after handshake (12s timeout — reconnect could have happened)
+        socket = getSocket();
+        if (!socket?.connected) break;
         if (transferRef.current !== transferObj) return;
 
         if (startData.guardBlocked) {
@@ -1757,8 +1792,12 @@ export default function FileManager({
           });
           if (transferRef.current !== transferObj) break;
           // After waiting, we need to RE-START the upload session from current offset
+          socket = getSocket();
+          if (!socket?.connected) break;
           socket.emit('sftp:upload', { filename: file.name, path, size: file.size, offset });
           const resumeStartData = await waitForUploadHandshake(offset);
+          socket = getSocket();
+          if (!socket?.connected) break;
           if (transferRef.current !== transferObj) break;
 
           if (resumeStartData.error) {
@@ -1792,6 +1831,12 @@ export default function FileManager({
 
         // Send chunk and wait for ACK (Ensures server keeps up and allows pausing)
         const ack = new Promise((resolve, reject) => {
+          const sock = getSocket();
+          if (!sock?.connected) {
+            reject(new Error('Socket disconnected before sending chunk'));
+            return;
+          }
+
           const timeoutId = setTimeout(() => {
             cleanup();
             reject(new Error('Upload acknowledgment timeout'));
@@ -1816,18 +1861,20 @@ export default function FileManager({
           };
           const cleanup = () => {
             clearTimeout(timeoutId);
-            socket.off(`sftp:upload_ack:${file.name}`, handler);
-            socket.off('sftp:error', errHandler);
+            sock.off(`sftp:upload_ack:${file.name}`, handler);
+            sock.off('sftp:error', errHandler);
             activeAckCleanup = null;
           };
           activeAckCleanup = cleanup;
-          socket.on(`sftp:upload_ack:${file.name}`, handler);
-          socket.on('sftp:error', errHandler);
+          sock.on(`sftp:upload_ack:${file.name}`, handler);
+          sock.on('sftp:error', errHandler);
         });
 
-        socket.emit(`sftp:upload_chunk:${file.name}`, buffer);
+        console.log(`📤 [${file.name}] Sending chunk at offset=${offset}, size=${chunk.size}`);
+        getSocket()?.emit(`sftp:upload_chunk:${file.name}`, buffer);
         
         const ackResult = await ack;
+        console.log(`📤 [${file.name}] ACK received:`, JSON.stringify(ackResult));
         if (transferRef.current !== transferObj) break;
 
         if (ackResult.rateLimited && !ackResult.guardBlocked) {
@@ -1852,8 +1899,12 @@ export default function FileManager({
           setTransfer(prev => prev ? { ...prev, waiting: false, countdown: 0 } : null);
           
           // Re-open upload session from current offset
+          socket = getSocket();
+          if (!socket?.connected) break;
           socket.emit('sftp:upload', { filename: file.name, path, size: file.size, offset });
           const resumeData = await waitForUploadHandshake(offset);
+          socket = getSocket();
+          if (!socket?.connected) break;
           if (transferRef.current !== transferObj) break;
           if (resumeData.error) {
             console.error("Handshake after mid-transfer rate limit failed:", resumeData.error);
@@ -1877,8 +1928,12 @@ export default function FileManager({
           await new Promise(r => setTimeout(r, waitMs));
           if (transferRef.current !== transferObj) break;
           // Re-open upload session from where we left off
+          socket = getSocket();
+          if (!socket?.connected) break;
           socket.emit('sftp:upload', { filename: file.name, path, size: file.size, offset });
           const resumeData = await waitForUploadHandshake(offset);
+          socket = getSocket();
+          if (!socket?.connected) break;
           if (transferRef.current !== transferObj) break;
           if (resumeData.guardBlocked) {
             // Still blocked — treat as a hard error after mid-transfer retry
@@ -1909,6 +1964,15 @@ export default function FileManager({
       }
 
       if (transferRef.current === transferObj) {
+        // Re-fetch socket before upload_done — reconnect could have happened during chunk loop
+        socket = getSocket();
+        if (!socket?.connected) {
+          requestReconnect('Connection lost before upload finalization. Reconnecting...', {
+            preserveTransfer: true,
+            notificationMessage: `${file.name}: Connection lost during upload finalization. Reconnecting...`,
+          });
+          return { interrupted: true, path };
+        }
         console.log(`📤 [${file.name}] Sending sftp:upload_done`);
         socket.emit(`sftp:upload_done:${file.name}`);
         console.log(`📤 [${file.name}] Waiting for upload completion (60s timeout)...`);
