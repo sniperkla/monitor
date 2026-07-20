@@ -280,6 +280,10 @@ function connect() {
       case 'sftp:mkdir':          handleSftpMkdir(ws, msg);          break;
       case 'sftp:delete':         handleSftpDelete(ws, msg);         break;
       case 'sftp:upload':         handleSftpUpload(ws, msg);         break;
+      case 'sftp:upload_start':   handleSftpUploadStart(ws, msg);    break;
+      case 'sftp:upload_chunk':   handleSftpUploadChunk(ws, msg);    break;
+      case 'sftp:upload_done':    handleSftpUploadDone(ws, msg);     break;
+      case 'sftp:upload_abort':   handleSftpUploadAbort(ws, msg);    break;
       case 'sftp:download':       handleSftpDownload(ws, msg);       break;
       case 'sftp:download_folder':handleSftpDownloadFolder(ws, msg); break;
       case 'sftp:search':         handleSftpSearch(ws, msg);         break;
@@ -314,6 +318,12 @@ function connect() {
     tcpConnections.forEach(t => t.destroy());
     tcpConnections.clear();
     sshSessions.forEach((s, id) => cleanupSsh(id));
+
+    // Cleanup any active upload streams
+    activeUploads.forEach((upload, key) => {
+      try { upload.stream.destroy(); } catch {}
+    });
+    activeUploads.clear();
 
     // Code 4000 = intentional disconnect (user revoked/disconnected from dashboard)
     if (code === 4000) {
@@ -432,6 +442,14 @@ function cleanupSsh(connId) {
     try { session.sftpClient?.end(); } catch {}
     try { session.sshClient?.end(); } catch {}
     sshSessions.delete(connId);
+  }
+
+  // Cleanup any active uploads for this connection
+  for (const [key, upload] of activeUploads.entries()) {
+    if (key.startsWith(`${connId}:`)) {
+      try { upload.stream.destroy(); } catch {}
+      activeUploads.delete(key);
+    }
   }
 }
 
@@ -590,6 +608,70 @@ function handleSftpDelete(ws, msg) {
   doDelete();
 }
 
+// Active upload streams: key = `${connId}:${remotePath}`
+const activeUploads = new Map();
+
+async function handleSftpUploadStart(ws, msg) {
+  try {
+    const sftp = await getSftpClient(msg.connId);
+    const stream = sftp.createWriteStream(msg.remotePath, { flags: 'w', autoClose: false });
+    const key = `${msg.connId}:${msg.remotePath}`;
+
+    stream.on('error', (err) => {
+      console.error(`Upload stream error for ${msg.remotePath}:`, err.message);
+      activeUploads.delete(key);
+      sendSftpError(ws, msg.connId, err);
+    });
+
+    activeUploads.set(key, { stream, ws, bytesWritten: 0 });
+  } catch (err) {
+    sendSftpError(ws, msg.connId, err);
+  }
+}
+
+function handleSftpUploadChunk(ws, msg) {
+  const key = `${msg.connId}:${msg.remotePath}`;
+  const upload = activeUploads.get(key);
+  if (!upload) {
+    sendSftpError(ws, msg.connId, new Error('No active upload session'));
+    return;
+  }
+
+  const buf = Buffer.from(msg.data, 'base64');
+  upload.bytesWritten += buf.length;
+
+  // Handle backpressure - pause reading if buffer is full
+  if (!upload.stream.write(buf)) {
+    upload.stream.once('drain', () => {});
+  }
+}
+
+function handleSftpUploadDone(ws, msg) {
+  const key = `${msg.connId}:${msg.remotePath}`;
+  const upload = activeUploads.get(key);
+  if (!upload) {
+    sendSftpError(ws, msg.connId, new Error('No active upload session'));
+    return;
+  }
+
+  upload.stream.end(() => {
+    activeUploads.delete(key);
+    if (ws.readyState === 1) {
+      ws.send(JSON.stringify({ type: 'sftp:upload_complete', connId: msg.connId, path: msg.remotePath }));
+    }
+  });
+}
+
+function handleSftpUploadAbort(ws, msg) {
+  const key = `${msg.connId}:${msg.remotePath}`;
+  const upload = activeUploads.get(key);
+  if (upload) {
+    upload.stream.destroy();
+    activeUploads.delete(key);
+  }
+}
+
+// Legacy single-message upload (kept for backward compatibility)
 async function handleSftpUpload(ws, msg) {
   try {
     const sftp = await getSftpClient(msg.connId);
@@ -1390,6 +1472,10 @@ function handleDockerCommand(ws, msg) {
       const port = String(args[0]).replace(/[^0-9]/g, '');
       if (!port) return ws.send(JSON.stringify({ type: 'docker:error', connId, error: 'Invalid Port' }));
       return runRawCmd(`sh -c "(ss -tuln 2>/dev/null || netstat -tuln) | grep -q -w ':${port}' && echo 'IN_USE' || echo 'FREE'"`);
+    } else if (action === 'start-all') {
+      // Start ALL stopped/exited/created/paused containers in one shot
+      const startAllCmd = `sh -c "STOPPED=$(${sudoPrefix}docker ps -a --filter status=exited --filter status=created --filter status=paused -q 2>/dev/null); if [ -z \\"$STOPPED\\" ]; then echo 'NONE_STOPPED'; else ${sudoPrefix}docker start $STOPPED 2>&1; echo '---FINISHED---'; fi"`;
+      return runRawCmd(startAllCmd);
     }
 
     runWithSudoDetection(cmdSuffix);

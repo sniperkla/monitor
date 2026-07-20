@@ -1594,7 +1594,7 @@ export default function FileManager({
       const timeoutId = setTimeout(() => {
         cleanup();
         reject(new Error('Upload completion timeout'));
-      }, 20000);
+      }, 60000); // 60s — relay must flush SFTP write; 20s was too tight on WAN
 
       const cleanup = () => {
         clearTimeout(timeoutId);

@@ -63,6 +63,12 @@ if (!MONGODB_URI && process.env.MONGODB_URI) {
 
 let mongoConnected = false;
 
+/**
+ * Connect to the central database at boot time.
+ * Throws if a URI is configured but the DB is unreachable — this is intentional:
+ * the bootloader will catch the error and exit so the process manager retries.
+ * Without a working DB, users cannot log in anyway.
+ */
 async function connectMongo() {
   // Support live reconnection — check if already connected (e.g. via API route)
   if (mongoose.connection.readyState === 1 || mongoose.connection.readyState === 2) {
@@ -76,17 +82,27 @@ async function connectMongo() {
 
   // ONLY connect to Mongoose if it's a MongoDB URI
   if (!MONGODB_URI.startsWith('mongodb')) {
-    console.log('📝 Mongoose skipped: Main database is not MongoDB (MySQL/PostgreSQL mode active)');
+    // MySQL / PostgreSQL — attempt a test connection to verify the DB is reachable
+    console.log('📝 Central database is MySQL/PostgreSQL — verifying connectivity...');
+    try {
+      const pool = mysql.createPool(MONGODB_URI);
+      const conn = await pool.getConnection();
+      conn.release();
+      await pool.end();
+      console.log('✅ Central SQL database reachable');
+    } catch (err) {
+      throw new Error(`Central SQL database unreachable at boot: ${err.message}`);
+    }
     return;
   }
 
   try {
-    await mongoose.connect(MONGODB_URI, { serverSelectionTimeoutMS: 5000 });
+    await mongoose.connect(MONGODB_URI, { serverSelectionTimeoutMS: 8000 });
     mongoConnected = true;
     console.log('✅ MongoDB connected');
   } catch (err) {
-    console.error('❌ MongoDB connection error:', err.message);
-    console.log('💡 You can configure MongoDB in Settings → Database');
+    // Throw so the bootloader can detect this and exit cleanly
+    throw new Error(`Central MongoDB unreachable at boot: ${err.message}`);
   }
 }
 
@@ -462,7 +478,26 @@ async function getModels(uri, userId, relayName) {
 
 
 app.prepare().then(async () => {
-  await connectMongo();
+  // ─── Central DB health check ───────────────────────────────────────────────
+  // Must happen BEFORE accepting any requests.
+  // If the DB URI is configured but unreachable, we crash intentionally so
+  // the process manager (PM2 / Docker restart) will retry — users cannot log
+  // in without a working database, so there is no point serving traffic.
+  try {
+    await connectMongo();
+  } catch (err) {
+    console.error('\n');
+    console.error('╔══════════════════════════════════════════════════════════════╗');
+    console.error('║  🚨  FATAL: Central database is DOWN — server will not start ║');
+    console.error('╠══════════════════════════════════════════════════════════════╣');
+    console.error(`║  ${String(err.message).padEnd(62)}║`);
+    console.error('╠══════════════════════════════════════════════════════════════╣');
+    console.error('║  The server is exiting to prevent serving a broken login.    ║');
+    console.error('║  Fix the database connection and restart the server.          ║');
+    console.error('╚══════════════════════════════════════════════════════════════╝');
+    console.error('\n');
+    process.exit(1);
+  }
 
   // Reset deployment process state on startup (clears stale entries from prior crashes)
   try {
@@ -1532,6 +1567,10 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
                  const volumeIds = args.map(id => String(id).replace(/[^a-zA-Z0-9._/:-]/g, '')).filter(Boolean);
                  if (volumeIds.length === 0) return socket.emit('docker:error', 'No valid volume IDs');
                  cmdSuffix = `volume rm ${volumeIds.join(' ')}`;
+             } else if (action === 'start-all') {
+                 // Start ALL stopped/exited/created containers in one shot.
+                 // If none are stopped, docker start returns exit 0 with no output (handled gracefully).
+                 cmdSuffix = `sh -c "STOPPED=$(${dockerSudo}docker ps -a --filter status=exited --filter status=created --filter status=paused -q 2>/dev/null); if [ -z \\"$STOPPED\\" ]; then echo 'NONE_STOPPED'; else ${dockerSudo}docker start $STOPPED 2>&1; echo '---FINISHED---'; fi"`;
              } else if (action === 'check-port' && args.length > 0) {
                  const port = String(args[0]).replace(/[^0-9]/g, '');
                  if (!port) return socket.emit('docker:error', 'Invalid Port');
@@ -1544,7 +1583,7 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
             
             // For pull & pull:status, cmdSuffix is a full shell script — execute directly
             // For all other actions, cmdSuffix is the part after 'docker' — use executeDockerCommand
-            if (['pull', 'pull:status', 'build', 'build:status', 'backup', 'backup:status', 'read-config', 'write-config', 'find-config', 'check-port', 'remove-selected', 'prune-custom'].includes(action)) {
+            if (['pull', 'pull:status', 'build', 'build:status', 'backup', 'backup:status', 'read-config', 'write-config', 'find-config', 'check-port', 'start-all', 'remove-selected', 'prune-custom'].includes(action)) {
                 console.log(`🐳 [${socket.id}] DOCKER EXEC (raw): ${cmdSuffix.substring(0, 120)}...`);
                 sshClient.exec(cmdSuffix, (err, stream) => {
                     if (err) {
@@ -3338,38 +3377,75 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
             });
           });
 
-          // Chunked upload: server uses sftp:upload → sftp:upload_chunk:N → sftp:upload_done
-          // Relay agent uses a single blob. We reassemble chunks here then forward.
+          // Chunked upload in relay mode: stream each browser chunk directly to the relay
+          // as it arrives — do NOT buffer everything in RAM and wait for done.
+          //
+          // Old approach (broken on WAN):
+          //   Browser chunks → server buffers all → sftp:upload_done → server sends bulk to relay
+          //   Problem: relay completion round-trip exceeds 20s timeout on high-latency links
+          //
+          // New approach (streaming):
+          //   Browser chunk → server forwards immediately to relay → ACK back to browser
+          //   sftp:upload_done → server forwards done to relay → relay sends sftp:upload_complete
+          //   Result: relay writes happen concurrently with browser sending → no latency pile-up
            socket.removeAllListeners('sftp:upload');
           socket.on('sftp:upload', ({ filename, path: destPath, size, offset = 0 }) => {
-            const chunks = [];
-            let totalBytes = 0;
+            let aborted = false;
 
-            // Ack the upload start so browser starts sending chunks
+            // Tell relay to open the write stream
+            forwardOrQueue({
+              type: 'sftp:upload_start',
+              connId: relayConnId,
+              remotePath: destPath,
+              filename,
+              size,
+              offset,
+            });
+
+            // Ack the upload start so the browser starts sending chunks
             socket.emit('sftp:can_upload', { filename, offset, ready: true });
 
             const chunkHandler = (chunk) => {
+              if (aborted) return;
               const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-              chunks.push(buf);
-              totalBytes += buf.length;
-              // Ack each chunk
-              socket.emit(`sftp:upload_ack:${filename}`, { offset: offset + totalBytes, ready: true });
+
+              // Forward chunk to relay immediately (no buffering)
+              sendToRelay({
+                type: 'sftp:upload_chunk',
+                connId: relayConnId,
+                remotePath: destPath,
+                filename,
+                data: buf.toString('base64'),
+              });
+
+              // ACK back to browser so it sends the next chunk
+              socket.emit(`sftp:upload_ack:${filename}`, { offset: offset + buf.length, ready: true });
+              offset += buf.length;
             };
 
             const doneHandler = () => {
+              if (aborted) return;
               socket.removeAllListeners(`sftp:upload_chunk:${filename}`);
-              const combined = Buffer.concat(chunks);
+              // Tell relay the file is fully sent
               forwardOrQueue({
-                type: 'sftp:upload',
+                type: 'sftp:upload_done',
                 connId: relayConnId,
                 remotePath: destPath,
-                data: combined.toString('base64'),
+                filename,
               });
             };
 
             const abortHandler = () => {
+              aborted = true;
               socket.removeAllListeners(`sftp:upload_chunk:${filename}`);
               socket.removeAllListeners(`sftp:upload_done:${filename}`);
+              // Tell relay to abort and discard the partial write
+              sendToRelay({
+                type: 'sftp:upload_abort',
+                connId: relayConnId,
+                remotePath: destPath,
+                filename,
+              });
             };
 
             socket.removeAllListeners(`sftp:upload_chunk:${filename}`);

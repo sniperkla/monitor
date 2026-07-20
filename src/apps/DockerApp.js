@@ -8,7 +8,7 @@ import {
   ExternalLink, AlertTriangle, Trash2, Folder, FileText, Star, Archive,
   Download, Search, X, RotateCcw, Cpu, HardDrive, Clock, Activity,
   ChevronDown, ChevronRight, Zap, Globe, Package, Shield, Plus, Share2,
-  Upload, Eye, EyeOff, Settings, CircleCheck, CircleAlert
+  Upload, Eye, EyeOff, Settings, CircleCheck, CircleAlert, Sunrise
 } from 'lucide-react';
 import { useApp } from '@/context/AppContext';
 import { useOS } from '@/context/OSContext';
@@ -201,7 +201,7 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
   const [selectedVolumes, setSelectedVolumes] = useState([]);
 
   const [pendingActions, setPendingActions] = useState({}); // { id: actionName }
-
+  const [isWakingUp, setIsWakingUp] = useState(false);
 
 
 
@@ -670,7 +670,16 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
           socketRef.current.emit('docker:command', { action: 'images' });
           socketRef.current.emit('docker:command', { action: 'volumes' });
           socketRef.current.emit('docker:command', { action: 'networks' });
-        } else if (action === 'rm-volumes') {
+      } else if (action === 'start-all') {
+        setIsWakingUp(false);
+        if (output.includes('NONE_STOPPED')) {
+          addNotification({ title: 'Wake All Up', message: 'All containers are already running.', type: 'info' });
+        } else {
+          const started = output.split('\n').filter(l => l.trim() && !l.includes('---FINISHED---'));
+          addNotification({ title: '🌅 Wake All Up', message: `Started ${started.length} container${started.length !== 1 ? 's' : ''} successfully.`, type: 'success' });
+        }
+        emitDockerLs();
+      } else if (action === 'rm-volumes') {
           setIsLoading(false);
           addNotification({ title: 'Volumes Deleted', message: 'Selected volumes were deleted successfully.', type: 'success' });
           setSelectedVolumes([]);
@@ -682,6 +691,7 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
 
     socketRef.current.on('docker:error', (err) => {
       setIsLoading(false);
+      setIsWakingUp(false);
       setPendingActions({});
 
       if (err.includes('command not found') || err.includes('not found')) {
@@ -829,6 +839,13 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
     setCreateModal({ isOpen: false, image: '', name: '', ports: '', env: '', volumes: '' });
   };
 
+
+  const handleWakeAllUp = () => {
+    if (!socketRef.current || isWakingUp) return;
+    setIsWakingUp(true);
+    addNotification({ title: '🌅 Wake All Up', message: 'Starting all stopped containers...', type: 'info' });
+    socketRef.current.emit('docker:command', { action: 'start-all' });
+  };
 
   const handleContainerAction = (id, action) => {
     if (!socketRef.current) return;
@@ -1223,12 +1240,32 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
                                       );
                                     })}
                                 </div>
+                                <div className="flex items-center gap-2">
+                                {stoppedCount > 0 && (
+                                  <button
+                                    onClick={handleWakeAllUp}
+                                    disabled={isWakingUp}
+                                    className={`px-3 py-1.5 rounded-lg text-[10px] font-bold transition-all flex items-center gap-1.5 ${
+                                      isWakingUp
+                                        ? 'bg-amber-500/20 text-amber-300 cursor-not-allowed'
+                                        : 'bg-amber-500/15 text-amber-400 hover:bg-amber-500/30 hover:text-amber-300 shadow-lg shadow-amber-500/10 active:scale-95 border border-amber-500/20'
+                                    }`}
+                                    title={`Start all ${stoppedCount} stopped container${stoppedCount !== 1 ? 's' : ''}`}
+                                  >
+                                    {isWakingUp
+                                      ? <RefreshCw size={12} className="animate-spin" />
+                                      : <Sunrise size={12} />}
+                                    {isWakingUp ? 'WAKING UP...' : `WAKE ALL UP`}
+                                    {!isWakingUp && <span className="px-1 py-0 bg-amber-500/20 rounded text-[8px]">{stoppedCount}</span>}
+                                  </button>
+                                )}
                                 <button 
                                   onClick={() => handleOpenCreateModal()}
                                   className="px-3 py-1.5 rounded-lg bg-emerald-500 text-white text-[10px] font-bold hover:bg-emerald-600 shadow-lg active:scale-95 transition-all flex items-center gap-1.5"
                                 >
                                   <Plus size={12} /> CREATE CONTAINER
                                 </button>
+                            </div>
                             </div>
 
                             {/* Container list */}
