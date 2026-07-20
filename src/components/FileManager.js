@@ -1627,6 +1627,7 @@ export default function FileManager({
     let activeCompletionCleanup = null;
     const waitForUploadCompletion = () => new Promise((resolve, reject) => {
       const timeoutId = setTimeout(() => {
+        console.error(`⏰ Upload completion timeout for ${path} (60s)`);
         cleanup();
         reject(new Error('Upload completion timeout'));
       }, 60000); // 60s — relay must flush SFTP write; 20s was too tight on WAN
@@ -1639,12 +1640,17 @@ export default function FileManager({
       };
 
       const successHandler = (data) => {
-        if (data?.action !== 'upload' || data?.path !== path) return;
+        if (data?.action !== 'upload' || data?.path !== path) {
+          console.log(`📤 Ignoring sftp:action_success for different upload: ${data?.action} ${data?.path} (expecting upload ${path})`);
+          return;
+        }
+        console.log(`✅ Received sftp:action_success for upload: ${path}`);
         cleanup();
         resolve(data);
       };
 
       const errorHandler = (err) => {
+        console.error(`❌ Received sftp:error during upload completion wait:`, err?.message);
         cleanup();
         reject(new Error(err?.message || 'Upload failed'));
       };
@@ -1903,8 +1909,16 @@ export default function FileManager({
       }
 
       if (transferRef.current === transferObj) {
+        console.log(`📤 [${file.name}] Sending sftp:upload_done`);
         socket.emit(`sftp:upload_done:${file.name}`);
-        await waitForUploadCompletion();
+        console.log(`📤 [${file.name}] Waiting for upload completion (60s timeout)...`);
+        try {
+          await waitForUploadCompletion();
+          console.log(`✅ [${file.name}] Upload completion received!`);
+        } catch (completionErr) {
+          console.error(`❌ [${file.name}] Upload completion failed:`, completionErr.message);
+          throw completionErr;
+        }
         if (transferRef.current === transferObj) {
           // Update notification to success
           updateNotification(uploadNotifId, {
@@ -2164,7 +2178,10 @@ export default function FileManager({
         console.log(`✅ TAR.GZ creation complete: ${archiveFile.size} bytes`);
         
         // Proceed to the actual upload
+        console.log(`📤 Starting upload for archive: ${archiveFile.name} (${archiveFile.size} bytes)`);
         const uploadResult = await handleFileUpload(null, archiveFile, 0, path, entry.name);
+        console.log(`📤 Upload result:`, uploadResult);
+        
         if (!uploadResult?.path || uploadResult?.interrupted) {
           // Upload was interrupted — the partial archive may already exist on the server.
           // Attempt a best-effort cleanup so it doesn't linger as a corrupt .tar.gz junk file.
@@ -2183,8 +2200,11 @@ export default function FileManager({
         socket.emit('sftp:extract', { path: archivePath, type: 'tar', cleanupArchive: true });
         addNotification({ title: 'Upload Complete', message: `Starting extraction for ${entry.name}...`, type: 'info' });
       } catch (err) {
-        console.error('❌ Compression failed:', err);
-        addNotification({ title: 'Compression Error', message: err.message, type: 'error' });
+        console.error('❌ Folder upload failed:', err);
+        const errorTitle = err.message?.includes('timeout') ? 'Upload Timeout' : 
+                          err.message?.includes('reconnect') ? 'Connection Lost' : 
+                          'Upload Error';
+        addNotification({ title: errorTitle, message: err.message, type: 'error' });
         setTransfer(null);
         // Refresh file list so any partially uploaded archive is reflected accurately
         if (refreshTimeoutRef.current) clearTimeout(refreshTimeoutRef.current);

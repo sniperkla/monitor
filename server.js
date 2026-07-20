@@ -2889,6 +2889,7 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
                     const sendCompletion = () => {
                       if (completionSent) return;
                       completionSent = true;
+                      console.log(`📤 [server] Sending sftp:action_success for upload: ${destPath}`);
                       finalize(() => {
                         sessionData.pendingUploadPaths.delete(destPath);
                         if (sessionData?.recentUploads) {
@@ -2906,17 +2907,27 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
                       });
                     };
 
-                    wStream.on('close', sendCompletion);
+                    wStream.on('close', () => {
+                      console.log(`📤 [server] Stream close event for: ${destPath}`);
+                      sendCompletion();
+                    });
                     // Fallback: 'finish' fires when stream.end() flushes all data to the SFTP subsystem.
                     // In production, the 'close' event (file-handle release) can be delayed or lost;
                     // 'finish' is reliable and sufficient for upload completion.
                     wStream.on('finish', () => {
+                      console.log(`📤 [server] Stream finish event for: ${destPath} (completionSent: ${completionSent})`);
                       if (!completionSent) {
-                        setTimeout(() => { if (!completionSent) sendCompletion(); }, 2000);
+                        setTimeout(() => {
+                          if (!completionSent) {
+                            console.log(`📤 [server] Finish fallback (2s) - sending completion for: ${destPath}`);
+                            sendCompletion();
+                          }
+                        }, 2000);
                       }
                     });
 
                     wStream.on('error', (err) => {
+                      console.error(`❌ [server] Stream error for: ${destPath}:`, err.message);
                       failTransfer(err, 'Upload failed');
                     });
                   };
@@ -3990,7 +4001,9 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
                       });
                     }
                   } else if (msg.type === 'sftp:upload_complete') {
+                    console.log(`📤 [relay] Received sftp:upload_complete for: ${msg.path}`);
                     targetSocket.emit('sftp:action_success', { action: 'upload', path: msg.path });
+                    console.log(`📤 [relay] Forwarded sftp:action_success to browser for: ${msg.path}`);
                   } else if (msg.type === 'sftp:progress') {
                     targetSocket.emit('sftp:progress', payload);
                   } else if (msg.type === 'sftp:searchResult') {

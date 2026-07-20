@@ -639,19 +639,32 @@ class WsTcpRelay {
                 const sendCompletion = () => {
                   if (completionSent) return;
                   completionSent = true;
+                  console.log(`📤 [wsRelay] Sending sftp:action_success for upload: ${destPath}`);
                   finalize(() => { socket.emit('sftp:action_success', { action: 'upload', path: destPath }); });
                 };
 
-                wStream.on('close', sendCompletion);
+                wStream.on('close', () => {
+                  console.log(`📤 [wsRelay] Stream close event for: ${destPath}`);
+                  sendCompletion();
+                });
                 // Fallback: 'finish' fires when stream.end() flushes all data to the SFTP subsystem.
                 // In production, the 'close' event (file-handle release) can be delayed or lost;
                 // 'finish' is reliable and sufficient for upload completion.
                 wStream.on('finish', () => {
+                  console.log(`📤 [wsRelay] Stream finish event for: ${destPath} (completionSent: ${completionSent})`);
                   if (!completionSent) {
-                    setTimeout(() => { if (!completionSent) sendCompletion(); }, 2000);
+                    setTimeout(() => {
+                      if (!completionSent) {
+                        console.log(`📤 [wsRelay] Finish fallback (2s) - sending completion for: ${destPath}`);
+                        sendCompletion();
+                      }
+                    }, 2000);
                   }
                 });
-                wStream.on('error', (err) => { failTransfer(err, 'Upload failed'); });
+                wStream.on('error', (err) => { 
+                  console.error(`❌ [wsRelay] Stream error for: ${destPath}:`, err.message);
+                  failTransfer(err, 'Upload failed'); 
+                });
               };
 
               getSftp((sftpErr, s) => {
