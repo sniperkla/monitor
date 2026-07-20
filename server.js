@@ -2885,7 +2885,10 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
                     socket.emit('sftp:can_upload', { filename, offset: actualOffset });
                     armInactivityTimer();
 
-                    wStream.on('close', () => {
+                    let completionSent = false;
+                    const sendCompletion = () => {
+                      if (completionSent) return;
+                      completionSent = true;
                       finalize(() => {
                         sessionData.pendingUploadPaths.delete(destPath);
                         if (sessionData?.recentUploads) {
@@ -2901,6 +2904,16 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
                         }
                         socket.emit('sftp:action_success', { action: 'upload', path: destPath });
                       });
+                    };
+
+                    wStream.on('close', sendCompletion);
+                    // Fallback: 'finish' fires when stream.end() flushes all data to the SFTP subsystem.
+                    // In production, the 'close' event (file-handle release) can be delayed or lost;
+                    // 'finish' is reliable and sufficient for upload completion.
+                    wStream.on('finish', () => {
+                      if (!completionSent) {
+                        setTimeout(() => { if (!completionSent) sendCompletion(); }, 2000);
+                      }
                     });
 
                     wStream.on('error', (err) => {
@@ -3418,8 +3431,9 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
                 data: buf.toString('base64'),
               });
 
-              // ACK back to browser so it sends the next chunk
-              socket.emit(`sftp:upload_ack:${filename}`, { offset: offset + buf.length, ready: true });
+              // Do NOT ACK the browser here — the relay will send sftp:upload_ack
+              // after the SFTP write callback confirms the chunk was written.
+              // This provides proper flow control so the browser doesn't outrun the relay.
               offset += buf.length;
             };
 
@@ -3899,7 +3913,7 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
               'ssh:connected', 'ssh:data', 'ssh:closed', 'ssh:error', 'ssh:exec_result',
               'sftp:list', 'sftp:fileData', 'sftp:action_success', 'sftp:error',
               'sftp:download_start', 'sftp:download_chunk', 'sftp:download_done', 'sftp:download_data',
-              'sftp:upload_complete', 'sftp:progress', 'sftp:searchResult', 'sftp:sizeResult',
+              'sftp:upload_ack', 'sftp:upload_complete', 'sftp:progress', 'sftp:searchResult', 'sftp:sizeResult',
               'docker:result', 'docker:error',
             ];
             if (msg.connId && sshSftpTypes.includes(msg.type)) {
@@ -3967,6 +3981,14 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
                       });
                     }
                     targetSocket.emit('sftp:download_done', { filename });
+                  } else if (msg.type === 'sftp:upload_ack') {
+                    // Forward relay's write-confirmed ACK to browser for proper flow control
+                    if (msg.filename) {
+                      targetSocket.emit(`sftp:upload_ack:${msg.filename}`, {
+                        totalTransferred: msg.offset,
+                        ready: true,
+                      });
+                    }
                   } else if (msg.type === 'sftp:upload_complete') {
                     targetSocket.emit('sftp:action_success', { action: 'upload', path: msg.path });
                   } else if (msg.type === 'sftp:progress') {

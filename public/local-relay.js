@@ -609,21 +609,50 @@ function handleSftpDelete(ws, msg) {
 }
 
 // Active upload streams: key = `${connId}:${remotePath}`
-// Each entry: { stream, ws, bytesWritten, ready, pendingChunks, pendingDone }
-// pendingChunks: Buffer[] queued while stream is opening (async race guard)
-// pendingDone:   {ws, msg} queued if 'done' arrives before stream ready
+// Each entry: { stream, ws, bytesWritten, initialOffset, ready, pendingChunks, pendingDone }
 const activeUploads = new Map();
+
+function writeChunk(ws, connId, key, buf, filename) {
+  const upload = activeUploads.get(key);
+  if (!upload) return;
+
+  upload.stream.write(buf, (err) => {
+    if (err) {
+      sendSftpError(ws, connId, err);
+      return;
+    }
+    upload.bytesWritten += buf.length;
+    const currentOffset = upload.initialOffset + upload.bytesWritten;
+    if (ws.readyState === 1) {
+      ws.send(JSON.stringify({
+        type: 'sftp:upload_ack',
+        connId: connId,
+        filename: filename,
+        offset: currentOffset
+      }));
+    }
+  });
+}
 
 async function handleSftpUploadStart(ws, msg) {
   const key = `${msg.connId}:${msg.remotePath}`;
 
-  // Placeholder entry so any chunks that arrive while we await getSftpClient
-  // know an upload IS in progress and can queue themselves instead of erroring.
-  activeUploads.set(key, { stream: null, ws, bytesWritten: 0, ready: false, pendingChunks: [], pendingDone: null });
+  // Placeholder entry with initialOffset
+  activeUploads.set(key, {
+    stream: null,
+    ws,
+    bytesWritten: 0,
+    initialOffset: msg.offset || 0,
+    ready: false,
+    pendingChunks: [],
+    pendingDone: null
+  });
 
   try {
     const sftp = await getSftpClient(msg.connId);
-    const stream = sftp.createWriteStream(msg.remotePath, { flags: 'w', autoClose: true });
+    const offset = msg.offset || 0;
+    const flags = offset > 0 ? 'r+' : 'w';
+    const stream = sftp.createWriteStream(msg.remotePath, { flags, start: offset, autoClose: true });
 
     stream.on('error', (err) => {
       console.error(`Upload stream error for ${msg.remotePath}:`, err.message);
@@ -631,11 +660,24 @@ async function handleSftpUploadStart(ws, msg) {
       sendSftpError(ws, msg.connId, err);
     });
 
-    stream.on('close', () => {
+    let completionSent = false;
+    const sendCompletion = () => {
+      if (completionSent) return;
+      completionSent = true;
       if (!activeUploads.has(key)) return;
       activeUploads.delete(key);
       if (ws.readyState === 1) {
         ws.send(JSON.stringify({ type: 'sftp:upload_complete', connId: msg.connId, path: msg.remotePath }));
+      }
+    };
+
+    stream.on('close', sendCompletion);
+    // Fallback: 'finish' fires when stream.end() flushes all data to the SFTP subsystem.
+    // In production, the 'close' event (file-handle release) can be delayed or lost;
+    // 'finish' is reliable and sufficient for upload completion.
+    stream.on('finish', () => {
+      if (!completionSent) {
+        setTimeout(() => { if (!completionSent) sendCompletion(); }, 2000);
       }
     });
 
@@ -647,9 +689,7 @@ async function handleSftpUploadStart(ws, msg) {
 
     // Flush any chunks that arrived before the stream was ready
     for (const buf of entry.pendingChunks) {
-      if (!stream.write(buf)) {
-        // backpressure — just continue; SFTP streams buffer internally
-      }
+      writeChunk(ws, msg.connId, key, buf, msg.filename || 'file');
     }
     entry.pendingChunks = [];
 
@@ -673,18 +713,14 @@ function handleSftpUploadChunk(ws, msg) {
   }
 
   const buf = Buffer.from(msg.data, 'base64');
-  upload.bytesWritten += buf.length;
 
   if (!upload.ready) {
-    // Stream not open yet — queue the chunk (race condition guard)
+    // Stream not open yet — queue the chunk
     upload.pendingChunks.push(buf);
     return;
   }
 
-  // Handle backpressure
-  if (!upload.stream.write(buf)) {
-    upload.stream.once('drain', () => {});
-  }
+  writeChunk(ws, msg.connId, key, buf, msg.filename);
 }
 
 function handleSftpUploadDone(ws, msg) {

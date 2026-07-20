@@ -635,8 +635,21 @@ class WsTcpRelay {
                 socket.emit('sftp:can_upload', { filename, offset });
                 armInactivityTimer();
 
-                wStream.on('close', () => {
+                let completionSent = false;
+                const sendCompletion = () => {
+                  if (completionSent) return;
+                  completionSent = true;
                   finalize(() => { socket.emit('sftp:action_success', { action: 'upload', path: destPath }); });
+                };
+
+                wStream.on('close', sendCompletion);
+                // Fallback: 'finish' fires when stream.end() flushes all data to the SFTP subsystem.
+                // In production, the 'close' event (file-handle release) can be delayed or lost;
+                // 'finish' is reliable and sufficient for upload completion.
+                wStream.on('finish', () => {
+                  if (!completionSent) {
+                    setTimeout(() => { if (!completionSent) sendCompletion(); }, 2000);
+                  }
                 });
                 wStream.on('error', (err) => { failTransfer(err, 'Upload failed'); });
               };
