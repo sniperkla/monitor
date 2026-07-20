@@ -623,12 +623,20 @@ async function handleSftpUploadStart(ws, msg) {
 
   try {
     const sftp = await getSftpClient(msg.connId);
-    const stream = sftp.createWriteStream(msg.remotePath, { flags: 'w', autoClose: false });
+    const stream = sftp.createWriteStream(msg.remotePath, { flags: 'w', autoClose: true });
 
     stream.on('error', (err) => {
       console.error(`Upload stream error for ${msg.remotePath}:`, err.message);
       activeUploads.delete(key);
       sendSftpError(ws, msg.connId, err);
+    });
+
+    stream.on('close', () => {
+      if (!activeUploads.has(key)) return;
+      activeUploads.delete(key);
+      if (ws.readyState === 1) {
+        ws.send(JSON.stringify({ type: 'sftp:upload_complete', connId: msg.connId, path: msg.remotePath }));
+      }
     });
 
     const entry = activeUploads.get(key);
@@ -647,14 +655,8 @@ async function handleSftpUploadStart(ws, msg) {
 
     // If 'done' arrived before we were ready, handle it now
     if (entry.pendingDone) {
-      const doneMsg = entry.pendingDone;
       entry.pendingDone = null;
-      stream.end(() => {
-        activeUploads.delete(key);
-        if (ws.readyState === 1) {
-          ws.send(JSON.stringify({ type: 'sftp:upload_complete', connId: doneMsg.connId, path: doneMsg.remotePath }));
-        }
-      });
+      stream.end();
     }
   } catch (err) {
     activeUploads.delete(key);
@@ -699,12 +701,7 @@ function handleSftpUploadDone(ws, msg) {
     return;
   }
 
-  upload.stream.end(() => {
-    activeUploads.delete(key);
-    if (ws.readyState === 1) {
-      ws.send(JSON.stringify({ type: 'sftp:upload_complete', connId: msg.connId, path: msg.remotePath }));
-    }
-  });
+  upload.stream.end();
 }
 
 function handleSftpUploadAbort(ws, msg) {
