@@ -1254,12 +1254,12 @@ export default function FileManager({
     return () => clearTimeout(searchDebounceRef.current);
   }, [searchQuery, socket]);
 
-  const refreshFiles = (path = currentPathRef.current) => {
+  function refreshFiles(path = currentPathRef.current) {
     if (socket) {
       // Don't full load, just refresh list
       socket.emit('sftp:list', path || '.');
     }
-  };
+  }
 
   useEffect(() => {
     if (loading || status !== 'ready' || isSearchMode || !socket) return;
