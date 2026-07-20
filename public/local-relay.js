@@ -609,13 +609,21 @@ function handleSftpDelete(ws, msg) {
 }
 
 // Active upload streams: key = `${connId}:${remotePath}`
+// Each entry: { stream, ws, bytesWritten, ready, pendingChunks, pendingDone }
+// pendingChunks: Buffer[] queued while stream is opening (async race guard)
+// pendingDone:   {ws, msg} queued if 'done' arrives before stream ready
 const activeUploads = new Map();
 
 async function handleSftpUploadStart(ws, msg) {
+  const key = `${msg.connId}:${msg.remotePath}`;
+
+  // Placeholder entry so any chunks that arrive while we await getSftpClient
+  // know an upload IS in progress and can queue themselves instead of erroring.
+  activeUploads.set(key, { stream: null, ws, bytesWritten: 0, ready: false, pendingChunks: [], pendingDone: null });
+
   try {
     const sftp = await getSftpClient(msg.connId);
     const stream = sftp.createWriteStream(msg.remotePath, { flags: 'w', autoClose: false });
-    const key = `${msg.connId}:${msg.remotePath}`;
 
     stream.on('error', (err) => {
       console.error(`Upload stream error for ${msg.remotePath}:`, err.message);
@@ -623,8 +631,33 @@ async function handleSftpUploadStart(ws, msg) {
       sendSftpError(ws, msg.connId, err);
     });
 
-    activeUploads.set(key, { stream, ws, bytesWritten: 0 });
+    const entry = activeUploads.get(key);
+    if (!entry) return; // was aborted while we were awaiting
+
+    entry.stream = stream;
+    entry.ready = true;
+
+    // Flush any chunks that arrived before the stream was ready
+    for (const buf of entry.pendingChunks) {
+      if (!stream.write(buf)) {
+        // backpressure — just continue; SFTP streams buffer internally
+      }
+    }
+    entry.pendingChunks = [];
+
+    // If 'done' arrived before we were ready, handle it now
+    if (entry.pendingDone) {
+      const doneMsg = entry.pendingDone;
+      entry.pendingDone = null;
+      stream.end(() => {
+        activeUploads.delete(key);
+        if (ws.readyState === 1) {
+          ws.send(JSON.stringify({ type: 'sftp:upload_complete', connId: doneMsg.connId, path: doneMsg.remotePath }));
+        }
+      });
+    }
   } catch (err) {
+    activeUploads.delete(key);
     sendSftpError(ws, msg.connId, err);
   }
 }
@@ -640,7 +673,13 @@ function handleSftpUploadChunk(ws, msg) {
   const buf = Buffer.from(msg.data, 'base64');
   upload.bytesWritten += buf.length;
 
-  // Handle backpressure - pause reading if buffer is full
+  if (!upload.ready) {
+    // Stream not open yet — queue the chunk (race condition guard)
+    upload.pendingChunks.push(buf);
+    return;
+  }
+
+  // Handle backpressure
   if (!upload.stream.write(buf)) {
     upload.stream.once('drain', () => {});
   }
@@ -651,6 +690,12 @@ function handleSftpUploadDone(ws, msg) {
   const upload = activeUploads.get(key);
   if (!upload) {
     sendSftpError(ws, msg.connId, new Error('No active upload session'));
+    return;
+  }
+
+  if (!upload.ready) {
+    // Stream not open yet — defer the done signal
+    upload.pendingDone = msg;
     return;
   }
 

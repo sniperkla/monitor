@@ -1151,31 +1151,65 @@ export default function FileManager({
 
   // 2. Refresh on Window Focus / tab visibility (When user clicks back into the tab)
   useEffect(() => {
+    let returnCheckTimer = null;
+
     const verifyAfterReturn = () => {
-      if (statusRef.current !== 'ready' || !socketRef.current?.connected) return;
-      // Send immediate ssh:ping to refresh health check cache before evaluating staleness.
-      // Browser throttles background-tab timers, so lastHealthCheckAtRef can be very old
-      // even though the SSH connection is still alive.
-      if (socketRef.current.connected) {
-        socketRef.current.emit('ssh:ping');
-      }
-      const cacheFresh = Date.now() - lastHealthCheckAtRef.current < HEALTH_CHECK_TTL_MS;
-      if (cacheFresh && lastHealthOkRef.current) {
-        refreshFiles();
+      // Only act if we were in a ready state
+      if (statusRef.current !== 'ready') return;
+
+      // If the socket is already disconnected, trigger a reconnect immediately
+      if (!socketRef.current?.connected) {
+        if (statusRef.current === 'ready') {
+          requestReconnect('Connection lost while tab was inactive. Reconnecting...', {
+            preserveTransfer: !!transferRef.current || uploadQueueRef.current.length > 0,
+            notificationMessage: 'Connection lost while you were away. Reconnecting now.',
+          });
+        }
         return;
       }
-      pingConnection().then((ok) => {
-        if (!ok && statusRef.current === 'ready') {
-          lastHealthOkRef.current = false;
-          requestReconnect('Connection became stale while inactive. Reconnecting...', {
+
+      // Give the browser 800ms to wake up before probing the SSH session.
+      // Background-tab timers are heavily throttled — the ping can time out
+      // the instant the tab becomes visible even when SSH is perfectly fine.
+      clearTimeout(returnCheckTimer);
+      returnCheckTimer = setTimeout(() => {
+        // Re-check: status or socket may have changed during the delay
+        if (statusRef.current !== 'ready') return;
+        if (!socketRef.current?.connected) {
+          requestReconnect('Connection lost while tab was inactive. Reconnecting...', {
             preserveTransfer: !!transferRef.current || uploadQueueRef.current.length > 0,
-            notificationMessage: 'Your SSH session expired while you were away. Reconnecting now.',
+            notificationMessage: 'Connection lost while you were away. Reconnecting now.',
           });
           return;
         }
-        console.log('🔄 Regained focus, refreshing file list...');
-        refreshFiles();
-      });
+
+        const cacheFresh = Date.now() - lastHealthCheckAtRef.current < HEALTH_CHECK_TTL_MS;
+        if (cacheFresh && lastHealthOkRef.current) {
+          refreshFiles();
+          return;
+        }
+
+        pingConnection().then((ok) => {
+          if (statusRef.current !== 'ready') return;
+          if (!ok) {
+            // Ping timed out — verify the socket is still connected before declaring dead.
+            // A single ping timeout after waking up does NOT mean the SSH session is gone.
+            if (!socketRef.current?.connected) {
+              requestReconnect('Connection dropped while tab was inactive. Reconnecting...', {
+                preserveTransfer: !!transferRef.current || uploadQueueRef.current.length > 0,
+                notificationMessage: 'Your SSH session dropped while you were away. Reconnecting now.',
+              });
+            } else {
+              // Socket is still up — just refresh files optimistically
+              console.log('⚠️ SSH ping timed out on tab return but socket is connected — refreshing files only');
+              refreshFiles();
+            }
+            return;
+          }
+          console.log('🔄 Regained focus, refreshing file list...');
+          refreshFiles();
+        });
+      }, 800);
     };
 
     const handleFocus = () => verifyAfterReturn();
@@ -1187,10 +1221,11 @@ export default function FileManager({
     window.addEventListener('focus', handleFocus);
     document.addEventListener('visibilitychange', handleVisibility);
     return () => {
+      clearTimeout(returnCheckTimer);
       window.removeEventListener('focus', handleFocus);
       document.removeEventListener('visibilitychange', handleVisibility);
     };
-  }, [pingConnection, requestReconnect]);
+  }, [pingConnection, requestReconnect, refreshFiles]);
 
   // Global search: listen for results from server
   useEffect(() => {
