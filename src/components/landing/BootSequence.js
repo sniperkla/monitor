@@ -185,6 +185,10 @@ export function BootSequence({ onComplete, onSkip }) {
   const [hovered, setHovered] = useState(false);
   const [cursorBlink, setCursorBlink] = useState(true);
 
+  // Server / DB health check
+  const [serverStatus, setServerStatus] = useState('pending'); // pending | ok | error
+  const [serverError, setServerError] = useState(null); // null or error message string
+
   // Static lines tracking
   const staticDoneRef = useRef(0);
   const [staticProgress, setStaticProgress] = useState(0);
@@ -234,16 +238,44 @@ export function BootSequence({ onComplete, onSkip }) {
     if (relayInfo.checkDone) setRelayStatus('ok');
   }, [relayInfo.checkDone]);
 
-  // After static animation completes, start dynamic phase
+  // Health check: first thing we do after static animation finishes
+  useEffect(() => {
+    if (!staticComplete) return;
+    let cancelled = false;
+    const doCheck = async () => {
+      try {
+        const res = await fetch('/api/health', { cache: 'no-store' });
+        if (cancelled) return;
+        if (!res.ok) {
+          const body = await res.json().catch(() => ({}));
+          const dbDown = body.status === 'degraded' || res.status === 503;
+          setServerError(dbDown
+            ? '[ FATAL ] Central database is unreachable. The server has shut down to prevent data corruption. Please restore the database connection and restart the server.'
+            : `[ FATAL ] Server returned HTTP ${res.status}. Please check server logs.`);
+          setServerStatus('error');
+        } else {
+          setServerStatus('ok');
+        }
+      } catch {
+        if (cancelled) return;
+        setServerError('[ FATAL ] Cannot reach the server. It may have crashed or the central database is down. Please restore the database and restart the server.');
+        setServerStatus('error');
+      }
+    };
+    doCheck();
+    return () => { cancelled = true; };
+  }, [staticComplete]);
+
+  // After static animation completes, start dynamic phase (health check gating is separate)
   useEffect(() => {
     if (staticComplete) setShowDynamic(true);
   }, [staticComplete]);
 
-  // Advance dynamic steps
+  // Advance dynamic steps — health check must pass first
   useEffect(() => {
     if (!showDynamic) return;
-    if (dynamicStep === 0 && sessionStatus === 'ok') setDynamicStep(1);
-  }, [showDynamic, dynamicStep, sessionStatus]);
+    if (dynamicStep === 0 && sessionStatus === 'ok' && serverStatus === 'ok') setDynamicStep(1);
+  }, [showDynamic, dynamicStep, sessionStatus, serverStatus]);
 
   useEffect(() => {
     if (dynamicStep === 1 && vaultFetchStatus === 'ok') setDynamicStep(2);
@@ -265,16 +297,22 @@ export function BootSequence({ onComplete, onSkip }) {
     }
   }, [dynamicStep, onComplete]);
 
-  // Hard timeout: 15s max to avoid hanging
+  // Hard timeout: 15s max — but show error if server never responded
   useEffect(() => {
     const t = setTimeout(() => {
       if (!completedRef.current) {
-        completedRef.current = true;
-        onComplete();
+        if (serverStatus === 'pending') {
+          // Server never replied — treat as fatal
+          setServerError('[ FATAL ] Server health check timed out. The central database may be down. Please restore the database and restart the server.');
+          setServerStatus('error');
+        } else {
+          completedRef.current = true;
+          onComplete();
+        }
       }
     }, 15000);
     return () => clearTimeout(t);
-  }, [onComplete]);
+  }, [onComplete, serverStatus]);
 
   // Static lines done handler
   const handleStaticLineDone = useCallback(() => {
@@ -409,9 +447,47 @@ export function BootSequence({ onComplete, onSkip }) {
             <TypewriterLine key={i} text={line.text} delay={line.delay} type={line.type} onDone={handleStaticLineDone} />
           ))}
 
-          {/* Dynamic fetch lines — appear after static animation */}
+          {/* ── FATAL ERROR PANEL — server or DB is down ── */}
           <AnimatePresence>
-            {showDynamic && (
+            {serverStatus === 'error' && serverError && (
+              <motion.div
+                key="fatal-error"
+                initial={{ opacity: 0, y: 8 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: 0.4 }}
+                className="mt-4 rounded-lg border border-red-500/40 p-4 font-mono text-[10px] md:text-[11px] space-y-2"
+                style={{
+                  background: 'rgba(220, 38, 38, 0.08)',
+                  boxShadow: '0 0 30px rgba(220,38,38,0.15), inset 0 0 20px rgba(220,38,38,0.05)',
+                }}
+              >
+                <motion.div
+                  animate={{ opacity: [1, 0.4, 1] }}
+                  transition={{ duration: 1.2, repeat: Infinity }}
+                  className="text-red-400 font-bold text-[12px] flex items-center gap-2"
+                >
+                  <span>⛔</span>
+                  <span>BOOT FAILURE — SYSTEM HALTED</span>
+                </motion.div>
+                <div className="text-red-300/80 leading-relaxed whitespace-pre-wrap">{serverError}</div>
+                <div className="text-slate-400/60 pt-1 border-t border-red-500/20">
+                  Waiting for database to recover... The server will restart automatically once the connection is restored.
+                </div>
+                <motion.div
+                  className="flex items-center gap-2 pt-1"
+                  animate={{ opacity: [1, 0.3, 1] }}
+                  transition={{ duration: 1.5, repeat: Infinity }}
+                >
+                  <span className="text-red-500">▐▌</span>
+                  <span className="text-red-400/70 text-[9px]">SYSTEM SUSPENDED — AWAITING DATABASE</span>
+                </motion.div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+
+          {/* Dynamic fetch lines — appear after static animation & health check passes */}
+          <AnimatePresence>
+            {showDynamic && serverStatus === 'ok' && (
               <motion.div
                 key="dynamic"
                 initial={{ opacity: 0 }}
@@ -480,11 +556,21 @@ export function BootSequence({ onComplete, onSkip }) {
         </div>
 
         {/* Progress bar */}
-        <div className="px-5 py-3 shrink-0 relative z-[2]" style={{ borderTop: '1px solid rgba(255,255,255,0.06)', background: 'rgba(0,0,0,0.4)' }}>
+        <div className="px-5 py-3 shrink-0 relative z-[2]" style={{ borderTop: `1px solid ${serverStatus === 'error' ? 'rgba(239,68,68,0.2)' : 'rgba(255,255,255,0.06)'}`, background: 'rgba(0,0,0,0.4)' }}>
           <div className="flex items-center gap-3 font-mono text-[10px] md:text-xs">
-            <span className="text-indigo-400/60 shrink-0">BOOT</span>
-            <span className="text-emerald-400/70 flex-1 overflow-hidden">{bar}</span>
-            <span className="text-slate-500 shrink-0">{Math.round(progress)}%</span>
+            <motion.span
+              className="shrink-0"
+              animate={serverStatus === 'error' ? { opacity: [1, 0.3, 1] } : {}}
+              transition={{ duration: 1, repeat: Infinity }}
+              style={{ color: serverStatus === 'error' ? '#f87171' : 'rgba(129,140,248,0.6)' }}
+            >{serverStatus === 'error' ? 'HALT' : 'BOOT'}</motion.span>
+            <motion.span
+              className="flex-1 overflow-hidden"
+              animate={serverStatus === 'error' ? { opacity: [1, 0.4, 1] } : {}}
+              transition={{ duration: 1, repeat: Infinity }}
+              style={{ color: serverStatus === 'error' ? 'rgba(248,113,113,0.7)' : 'rgba(74,222,128,0.7)' }}
+            >{bar}</motion.span>
+            <span className="shrink-0" style={{ color: serverStatus === 'error' ? '#f87171' : '#64748b' }}>{serverStatus === 'error' ? 'ERROR' : `${Math.round(progress)}%`}</span>
           </div>
         </div>
       </motion.div>
