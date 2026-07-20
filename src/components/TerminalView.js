@@ -1466,7 +1466,7 @@ logstash:
       setStatus('error');
       setErrorMsg(data.message);
       idleTimedOutRef.current = false;
-      setShowReconnect(false);
+      setShowReconnect(true);
       resetAiOnDisconnect();
       // updateConnectionStatus('offline'); // Optional, or keep as error
       term.writeln(`\n\x1b[1;31m✗ ${t('terminal.errorPrefix')} ${data.message}\x1b[0m`);
@@ -1489,7 +1489,7 @@ logstash:
       // Unregister socket from global map
       if (window.__terminalSockets) delete window.__terminalSockets[propsRef.current.connectionId];
       idleTimedOutRef.current = false;
-      setShowReconnect(false);
+      setShowReconnect(true);
       resetAiOnDisconnect();
       term.writeln(`\n\x1b[1;33m⚠ ${t('terminal.connectionClosed')}\x1b[0m`);
       appendOutput(`\n⚠ ${t('terminal.connectionClosed')}\n`);
