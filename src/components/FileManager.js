@@ -937,6 +937,14 @@ export default function FileManager({
         return;
       }
 
+      // If an upload is actively waiting for ACK, don't kill it here —
+      // the upload's own error/timeout handlers will deal with it.
+      // Clearing the transfer here races with and silently kills the upload loop.
+      if (transferRef.current?.action === 'upload' && !transferRef.current?.waiting) {
+        console.warn('⚠️ sftp:error during active upload — deferring to upload handler:', msg);
+        return;
+      }
+
       setTransfer(null);
       console.error('❌ SFTP Error:', err);
 
@@ -1630,6 +1638,13 @@ export default function FileManager({
         if (err?.recoverable || isTransferChannelError(err)) {
           cleanup();
           resolve({ error: err?.message || 'Transfer channel error', recoverable: true });
+          return;
+        }
+        // For any other sftp:error during handshake, resolve with the error
+        // so the upload handler can deal with it instead of silently waiting for timeout
+        if (err?.message) {
+          cleanup();
+          resolve({ error: err.message });
         }
       };
 

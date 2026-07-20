@@ -616,7 +616,21 @@ function writeChunk(ws, connId, key, buf, filename) {
   const upload = activeUploads.get(key);
   if (!upload) return;
 
+  let settled = false;
+  const writeTimeout = setTimeout(() => {
+    if (settled) return;
+    settled = true;
+    console.error(`⏰ [relay] SFTP write timeout for ${filename} (${buf.length} bytes) — write callback never fired`);
+    sendSftpError(ws, connId, new Error('SFTP write timeout — server did not acknowledge write'));
+    // Clean up the stuck upload
+    try { upload.stream.destroy(); } catch (_) {}
+    activeUploads.delete(key);
+  }, 30000);
+
   upload.stream.write(buf, (err) => {
+    if (settled) return;
+    settled = true;
+    clearTimeout(writeTimeout);
     if (err) {
       sendSftpError(ws, connId, err);
       return;
@@ -651,7 +665,11 @@ async function handleSftpUploadStart(ws, msg) {
 
   try {
     console.log(`📤 [relay] getting SFTP client for connId=${msg.connId}`);
-    const sftp = await getSftpClient(msg.connId);
+    // Add a timeout for getSftpClient — if the SFTP channel can't open, don't hang forever
+    const sftp = await Promise.race([
+      getSftpClient(msg.connId),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('SFTP channel open timeout')), 15000)),
+    ]);
     console.log(`📤 [relay] SFTP client obtained, creating write stream for ${msg.remotePath}`);
     const offset = msg.offset || 0;
     const flags = offset > 0 ? 'r+' : 'w';

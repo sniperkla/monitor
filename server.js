@@ -3397,9 +3397,10 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
 
           function forwardOrQueue(msgObj) {
             if (relayReady) {
-              sendToRelay(msgObj);
+              return sendToRelay(msgObj);
             } else {
-              if (sftpQueue.length < 20) sftpQueue.push(msgObj); // bounded queue
+              if (sftpQueue.length < 20) { sftpQueue.push(msgObj); return true; } // bounded queue
+              return false;
             }
           }
           // ────────────────────────────────────────────────────────────────
@@ -3448,7 +3449,7 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
             let aborted = false;
 
             // Tell relay to open the write stream
-            forwardOrQueue({
+            const delivered = forwardOrQueue({
               type: 'sftp:upload_start',
               connId: relayConnId,
               remotePath: destPath,
@@ -3456,7 +3457,14 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
               size,
               offset,
             });
-            console.log(`📤 [relay] sftp:upload_start forwarded/queued (relayReady=${relayReady})`);
+            console.log(`📤 [relay] sftp:upload_start forwarded/queued (relayReady=${relayReady}, delivered=${delivered})`);
+
+            // If the relay is unreachable, don't tell the browser to start sending chunks
+            if (!delivered) {
+              console.warn(`📤 [relay] Cannot reach relay agent — aborting upload for ${filename}`);
+              socket.emit('sftp:error', { message: 'Relay agent is not connected. Please check your local relay.', recoverable: true });
+              return;
+            }
 
             // Ack the upload start so the browser starts sending chunks
             socket.emit('sftp:can_upload', { filename, offset, ready: true });
