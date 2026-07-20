@@ -280,9 +280,9 @@ function connect() {
       case 'sftp:mkdir':          handleSftpMkdir(ws, msg);          break;
       case 'sftp:delete':         handleSftpDelete(ws, msg);         break;
       case 'sftp:upload':         handleSftpUpload(ws, msg);         break;
-      case 'sftp:upload_start':   handleSftpUploadStart(ws, msg);    break;
+      case 'sftp:upload_start':   console.log(`📤 [relay] received sftp:upload_start for ${msg.remotePath} (connId=${msg.connId})`); handleSftpUploadStart(ws, msg);    break;
       case 'sftp:upload_chunk':   handleSftpUploadChunk(ws, msg);    break;
-      case 'sftp:upload_done':    handleSftpUploadDone(ws, msg);     break;
+      case 'sftp:upload_done':    console.log(`📤 [relay] received sftp:upload_done for ${msg.remotePath}`); handleSftpUploadDone(ws, msg);     break;
       case 'sftp:upload_abort':   handleSftpUploadAbort(ws, msg);    break;
       case 'sftp:download':       handleSftpDownload(ws, msg);       break;
       case 'sftp:download_folder':handleSftpDownloadFolder(ws, msg); break;
@@ -636,6 +636,7 @@ function writeChunk(ws, connId, key, buf, filename) {
 
 async function handleSftpUploadStart(ws, msg) {
   const key = `${msg.connId}:${msg.remotePath}`;
+  console.log(`📤 [relay] handleSftpUploadStart: ${msg.remotePath} (connId=${msg.connId}, hasSession=${sshSessions.has(msg.connId)})`);
 
   // Placeholder entry with initialOffset
   activeUploads.set(key, {
@@ -649,10 +650,13 @@ async function handleSftpUploadStart(ws, msg) {
   });
 
   try {
+    console.log(`📤 [relay] getting SFTP client for connId=${msg.connId}`);
     const sftp = await getSftpClient(msg.connId);
+    console.log(`📤 [relay] SFTP client obtained, creating write stream for ${msg.remotePath}`);
     const offset = msg.offset || 0;
     const flags = offset > 0 ? 'r+' : 'w';
     const stream = sftp.createWriteStream(msg.remotePath, { flags, start: offset, autoClose: true });
+    console.log(`📤 [relay] write stream created for ${msg.remotePath}, waiting for 'open' event...`);
 
     stream.on('error', (err) => {
       console.error(`Upload stream error for ${msg.remotePath}:`, err.message);
@@ -701,6 +705,7 @@ async function handleSftpUploadStart(ws, msg) {
 
     entry.stream = stream;
     entry.ready = true;
+    console.log(`📤 [relay] stream ready for ${msg.remotePath}, pendingChunks=${entry.pendingChunks.length}`);
 
     // Flush any chunks that arrived before the stream was ready
     for (const buf of entry.pendingChunks) {

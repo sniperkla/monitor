@@ -705,9 +705,13 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
     socket.on('ssh:ping', () => {
       const sessionData = activeSessions.get(socket.id);
       if (!sessionData) return socket.emit('ssh:pong', { ok: false });
-      // Relay mode: session is alive if the relay WebSocket is still open
+      // Relay mode: session is alive if the relay agent's WebSocket is still open
       if (sessionData.relayMode) {
-        const ok = sessionData.relayWs?.readyState === 1;
+        const relays = sessionData.userId ? global.__activeRelays?.get(sessionData.userId) : null;
+        const relay = relays instanceof Map
+          ? (relays.get(sessionData.preferredRelay) || relays.values().next().value)
+          : null;
+        const ok = relay?.ws?.readyState === 1;
         return socket.emit('ssh:pong', { ok });
       }
       const sshClient = sessionData?.sshClient;
@@ -3348,6 +3352,13 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
         // ── RELAY SSH: Forward SSH through user's local relay agent (AFTER credential decryption) ──
         // sshConfig now has plaintext password/privateKey. Send to relay so SSH originates from user's machine.
         // Only route through relay when user explicitly selected "local" mode (sshMode === 'local')
+        // Fresh lookup: userRelay captured earlier may have stale ws if relay reconnected during credential decryption
+        if (sshMode === 'local') {
+          const freshRelays = userId ? global.__activeRelays?.get(userId) : null;
+          if (freshRelays instanceof Map) {
+            userRelay = (preferredRelay && freshRelays.get(preferredRelay)) || (freshRelays.size > 0 ? freshRelays.values().next().value : null);
+          }
+        }
         if (sshMode === 'local' && userRelay?.ws && userRelay.ws.readyState === 1 /* WS OPEN */ && userRelay.capabilities?.ssh) {
           const relayConnId = Math.random().toString(36).slice(2, 12);
           global.__relayConnMap.set(relayConnId, socket.id);
@@ -3360,8 +3371,21 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
           const sftpQueue = []; // { type, payload }
 
           function sendToRelay(msgObj) {
-            if (userRelay.ws?.readyState === 1)
-              userRelay.ws.send(JSON.stringify(msgObj));
+            // Fresh lookup: userRelay.ws may be stale if relay agent reconnected
+            const relays = userId ? global.__activeRelays?.get(userId) : null;
+            const freshRelay = relays instanceof Map
+              ? (relays.get(preferredRelay) || relays.values().next().value)
+              : null;
+            const ws = freshRelay?.ws;
+            const readyState = ws?.readyState;
+            if (readyState === 1) {
+              ws.send(JSON.stringify(msgObj));
+              return true;
+            }
+            if (msgObj.type === 'sftp:upload_chunk' || msgObj.type === 'sftp:upload_start' || msgObj.type === 'sftp:upload_done') {
+              console.warn(`📤 [relay] sendToRelay DROP: ${msgObj.type} — ws.readyState=${readyState}, relayExists=${!!freshRelay}`);
+            }
+            return false;
           }
 
           function flushSftpQueue() {
@@ -3420,6 +3444,7 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
           //   Result: relay writes happen concurrently with browser sending → no latency pile-up
            socket.removeAllListeners('sftp:upload');
           socket.on('sftp:upload', ({ filename, path: destPath, size, offset = 0 }) => {
+            console.log(`📤 [relay] sftp:upload received: ${filename} (relayReady=${relayReady}, connId=${relayConnId})`);
             let aborted = false;
 
             // Tell relay to open the write stream
@@ -3431,22 +3456,34 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
               size,
               offset,
             });
+            console.log(`📤 [relay] sftp:upload_start forwarded/queued (relayReady=${relayReady})`);
 
             // Ack the upload start so the browser starts sending chunks
             socket.emit('sftp:can_upload', { filename, offset, ready: true });
+            console.log(`📤 [relay] sftp:can_upload emitted to browser`);
 
+            let chunkCount = 0;
+            let relayLost = false;
             const chunkHandler = (chunk) => {
-              if (aborted) return;
+              if (aborted || relayLost) return;
               const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+              chunkCount++;
+              if (chunkCount <= 3) console.log(`📤 [relay] chunk #${chunkCount} received (${buf.length} bytes)`);
 
               // Forward chunk to relay immediately (no buffering)
-              sendToRelay({
+              const sent = sendToRelay({
                 type: 'sftp:upload_chunk',
                 connId: relayConnId,
                 remotePath: destPath,
                 filename,
                 data: buf.toString('base64'),
               });
+
+              if (!sent && !relayLost) {
+                relayLost = true;
+                console.warn(`📤 [relay] relay unreachable on chunk #${chunkCount} — notifying browser`);
+                socket.emit('sftp:error', { message: 'Relay agent disconnected during upload', recoverable: true });
+              }
 
               // Do NOT ACK the browser here — the relay will send sftp:upload_ack
               // after the SFTP write callback confirms the chunk was written.
@@ -3511,7 +3548,8 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
           activeSessions.set(socket.id, {
             relayMode: true,
             relayConnId,
-            relayWs: userRelay.ws,
+            userId,
+            preferredRelay,
             lastActivityAt: Date.now(),
             lastIdleLogAt: 0,
             idleInterval: null,
@@ -4058,9 +4096,9 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
               } catch (_) {}
             }
           }
-          // Clean up stale activeSessions entries for browser sockets using this relay
+          // Clean up relay-mode sessions for this user — relay is disconnecting
           for (const [sockId, sess] of activeSessions) {
-            if (sess.relayMode && sess.relayWs === ws) {
+            if (sess.relayMode && sess.userId === userId) {
               activeSessions.delete(sockId);
             }
           }
