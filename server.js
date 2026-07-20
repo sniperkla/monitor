@@ -704,6 +704,12 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
     // Lightweight SSH session health probe (used by FileManager before transfers)
     socket.on('ssh:ping', () => {
       const sessionData = activeSessions.get(socket.id);
+      if (!sessionData) return socket.emit('ssh:pong', { ok: false });
+      // Relay mode: session is alive if the relay WebSocket is still open
+      if (sessionData.relayMode) {
+        const ok = sessionData.relayWs?.readyState === 1;
+        return socket.emit('ssh:pong', { ok });
+      }
       const sshClient = sessionData?.sshClient;
       const ok = !!(sshClient && sshClient._state !== 'closed');
       socket.emit('ssh:pong', { ok });
@@ -3501,6 +3507,16 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
             flushSftpQueue();
           });
 
+          // Register a minimal session so ssh:ping and idle-watcher work in relay mode
+          activeSessions.set(socket.id, {
+            relayMode: true,
+            relayConnId,
+            relayWs: userRelay.ws,
+            lastActivityAt: Date.now(),
+            lastIdleLogAt: 0,
+            idleInterval: null,
+          });
+
           // Cleanup on disconnect
           socket.once('ssh:disconnect', () => {
             sendToRelay({ type: 'ssh:disconnect', connId: relayConnId });
@@ -4042,10 +4058,11 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
               } catch (_) {}
             }
           }
-          // Clean up any SSH relay conn mappings for this user
-          for (const [connId, sockId] of global.__relayConnMap) {
-            // We can't easily know which connIds belong to this user without extra tracking,
-            // so we leave stale entries — they'll be ignored since targetSocket won't be connected
+          // Clean up stale activeSessions entries for browser sockets using this relay
+          for (const [sockId, sess] of activeSessions) {
+            if (sess.relayMode && sess.relayWs === ws) {
+              activeSessions.delete(sockId);
+            }
           }
           tcpSockets.forEach(s => s.destroy());
           console.log(`🔗 [Relay] Disconnected: user ${userId} relay ${relayId}`);
