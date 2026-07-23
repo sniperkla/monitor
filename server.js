@@ -2676,56 +2676,65 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
 
             socket.emit('sftp:progress', { action: 'extract', filename, progress: -1, status: 'Starting extraction...' });
 
-            sshClient.exec(extractCmd, (err, stream) => {
-              if (err) return emitSftpError(err, 'Extract failed');
-              
-              let extractedCount = 0;
-              let buffer = '';
-              let lastEmitTime = 0;
-              
-              stream.on('data', (data) => {
-                buffer += data.toString();
-                const lines = buffer.split('\n');
-                buffer = lines.pop() || '';
+            const runExtraction = (attempt = 1) => {
+              sshClient.exec(extractCmd, (err, stream) => {
+                if (err) return emitSftpError(err, 'Extract failed');
                 
-                const validLines = lines.filter(l => l.trim().length > 0);
-                if (validLines.length > 0) {
-                  extractedCount += validLines.length;
-                  const lastLine = validLines[validLines.length - 1];
-                  const currentFile = lastLine.replace(/^(extracting:|  inflating:|inflating:|creating:|  creating:)/i, '').trim();
+                let extractedCount = 0;
+                let buffer = '';
+                let lastEmitTime = 0;
+                
+                stream.on('data', (data) => {
+                  buffer += data.toString();
+                  const lines = buffer.split('\n');
+                  buffer = lines.pop() || '';
                   
-                  const now = Date.now();
-                  if (now - lastEmitTime > 250) {
-                    socket.emit('sftp:progress', { 
-                      action: 'extract', 
-                      filename, 
-                      progress: -1, 
-                      status: `${currentFile} (${extractedCount} files)`
-                    });
-                    lastEmitTime = now;
+                  const validLines = lines.filter(l => l.trim().length > 0);
+                  if (validLines.length > 0) {
+                    extractedCount += validLines.length;
+                    const lastLine = validLines[validLines.length - 1];
+                    const currentFile = lastLine.replace(/^(extracting:|  inflating:|inflating:|creating:|  creating:)/i, '').trim();
+                    
+                    const now = Date.now();
+                    if (now - lastEmitTime > 250) {
+                      socket.emit('sftp:progress', { 
+                        action: 'extract', 
+                        filename, 
+                        progress: -1, 
+                        status: `${currentFile} (${extractedCount} files)`
+                      });
+                      lastEmitTime = now;
+                    }
                   }
-                }
-              });
+                });
 
-              let extractError = '';
-              stream.stderr.on('data', (d) => extractError += d.toString());
+                let extractError = '';
+                stream.stderr.on('data', (d) => extractError += d.toString());
 
-              stream.on('close', (code) => {
-                removeArchive();
-                
-                // Exit code 0, 1, or 2 are treated as success if stdout was produced (indicating some extraction happened)
-                // unzip returns 1 for warnings (e.g. success with minor warnings). tar returns 1 or 2 on some warnings.
-                const wasSuccessful = code === 0 || ((code === 1 || code === 2) && extractedCount > 0);
-                
-                if (wasSuccessful) {
-                  socket.emit('sftp:progress', { action: 'extract', filename, progress: 100 });
-                  socket.emit('sftp:action_success', { action: 'extract', path: targetDir });
-                } else {
-                  const errorMsg = extractError.trim() || `Exit code ${code}`;
-                  emitSftpError(errorMsg, 'Extraction failed');
-                }
+                stream.on('close', (code) => {
+                  // Exit code 0, 1, or 2 are treated as success if stdout was produced (indicating some extraction happened)
+                  // unzip returns 1 for warnings (e.g. success with minor warnings). tar returns 1 or 2 on some warnings.
+                  const wasSuccessful = code === 0 || ((code === 1 || code === 2) && extractedCount > 0);
+                  
+                  if (!wasSuccessful && attempt === 1) {
+                    console.warn(`⚠️ [server] Extract attempt 1 failed (${extractError.trim() || `Exit code ${code}`}). Retrying in 400ms after file flush...`);
+                    setTimeout(() => runExtraction(2), 400);
+                    return;
+                  }
+
+                  if (wasSuccessful) {
+                    removeArchive();
+                    socket.emit('sftp:progress', { action: 'extract', filename, progress: 100 });
+                    socket.emit('sftp:action_success', { action: 'extract', path: targetDir });
+                  } else {
+                    const errorMsg = extractError.trim() || `Exit code ${code}`;
+                    emitSftpError(errorMsg, 'Extraction failed');
+                  }
+                });
               });
-            });
+            };
+
+            runExtraction(1);
           });
 
           // Upload File (Client -> Server) - Resumable with Offset
@@ -3466,9 +3475,8 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
               return;
             }
 
-            // Ack the upload start so the browser starts sending chunks
-            socket.emit('sftp:can_upload', { filename, offset, ready: true });
-            console.log(`📤 [relay] sftp:can_upload emitted to browser`);
+            // Wait for relay agent to signal sftp:can_upload when write stream is ready
+            console.log(`📤 [relay] sftp:upload_start sent to relay, awaiting relay ready signal`);
 
             let chunkCount = 0;
             let relayLost = false;
@@ -3986,7 +3994,7 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
               'ssh:connected', 'ssh:data', 'ssh:closed', 'ssh:error', 'ssh:exec_result',
               'sftp:list', 'sftp:fileData', 'sftp:action_success', 'sftp:error',
               'sftp:download_start', 'sftp:download_chunk', 'sftp:download_done', 'sftp:download_data',
-              'sftp:upload_ack', 'sftp:upload_complete', 'sftp:progress', 'sftp:searchResult', 'sftp:sizeResult',
+              'sftp:can_upload', 'sftp:upload_ack', 'sftp:upload_complete', 'sftp:progress', 'sftp:searchResult', 'sftp:sizeResult',
               'docker:result', 'docker:error',
             ];
             if (msg.connId && sshSftpTypes.includes(msg.type)) {
@@ -4054,6 +4062,12 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
                       });
                     }
                     targetSocket.emit('sftp:download_done', { filename });
+                  } else if (msg.type === 'sftp:can_upload') {
+                    targetSocket.emit('sftp:can_upload', {
+                      filename: msg.filename,
+                      offset: msg.offset || 0,
+                      ready: true,
+                    });
                   } else if (msg.type === 'sftp:upload_ack') {
                     // Forward relay's write-confirmed ACK to browser for proper flow control
                     if (msg.filename) {

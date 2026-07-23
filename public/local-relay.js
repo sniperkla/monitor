@@ -725,6 +725,16 @@ async function handleSftpUploadStart(ws, msg) {
     entry.ready = true;
     console.log(`📤 [relay] stream ready for ${msg.remotePath}, pendingChunks=${entry.pendingChunks.length}`);
 
+    // Signal server/browser that relay is ready to receive chunks
+    if (ws.readyState === 1) {
+      ws.send(JSON.stringify({
+        type: 'sftp:can_upload',
+        connId: msg.connId,
+        filename: msg.filename,
+        offset: offset
+      }));
+    }
+
     // Flush any chunks that arrived before the stream was ready
     for (const buf of entry.pendingChunks) {
       writeChunk(ws, msg.connId, key, buf, msg.filename || 'file');
@@ -1251,73 +1261,84 @@ async function handleSftpExtract(ws, msg) {
       status: 'Starting extraction...'
     }));
 
-    session.sshClient.exec(extractCmd, (err, stream) => {
-      if (err) return sendSftpError(ws, msg.connId, err);
-      
-      let extractedCount = 0;
-      let buffer = '';
-      let lastEmitTime = 0;
-      let stderr = '';
+    const runExtraction = (attempt = 1) => {
+      session.sshClient.exec(extractCmd, (err, stream) => {
+        if (err) return sendSftpError(ws, msg.connId, err);
+        
+        let extractedCount = 0;
+        let buffer = '';
+        let lastEmitTime = 0;
+        let stderr = '';
 
-      stream.on('data', (data) => {
-        buffer += data.toString();
-        const lines = buffer.split('\n');
-        buffer = lines.pop() || '';
+        stream.on('data', (data) => {
+          buffer += data.toString();
+          const lines = buffer.split('\n');
+          buffer = lines.pop() || '';
 
-        const validLines = lines.filter(l => l.trim().length > 0);
-        if (validLines.length > 0) {
-          extractedCount += validLines.length;
-          const lastLine = validLines[validLines.length - 1];
-          const currentFile = lastLine.replace(/^(extracting:|  inflating:|inflating:|creating:|  creating:)/i, '').trim();
+          const validLines = lines.filter(l => l.trim().length > 0);
+          if (validLines.length > 0) {
+            extractedCount += validLines.length;
+            const lastLine = validLines[validLines.length - 1];
+            const currentFile = lastLine.replace(/^(extracting:|  inflating:|inflating:|creating:|  creating:)/i, '').trim();
 
-          const now = Date.now();
-          if (now - lastEmitTime > 250) {
-            ws.send(JSON.stringify({
-              type: 'sftp:progress',
-              connId: msg.connId,
-              action: 'extract',
-              filename,
-              progress: -1,
-              status: `${currentFile} (${extractedCount} files)`
-            }));
-            lastEmitTime = now;
+            const now = Date.now();
+            if (now - lastEmitTime > 250) {
+              ws.send(JSON.stringify({
+                type: 'sftp:progress',
+                connId: msg.connId,
+                action: 'extract',
+                filename,
+                progress: -1,
+                status: `${currentFile} (${extractedCount} files)`
+              }));
+              lastEmitTime = now;
+            }
           }
-        }
+        });
+
+        stream.stderr.on('data', (d) => { stderr += d.toString(); });
+
+        stream.on('close', (code) => {
+          // Exit code 0, 1, or 2 are treated as success if stdout was produced (indicating some extraction happened)
+          // unzip returns 1 for warnings (e.g. success with minor warnings). tar returns 1 or 2 on some warnings.
+          const wasSuccessful = code === 0 || ((code === 1 || code === 2) && extractedCount > 0);
+
+          if (!wasSuccessful && attempt === 1) {
+            console.warn(`⚠️ [relay] Extract attempt 1 failed (${stderr.trim() || `Exit code ${code}`}). Retrying in 400ms after file flush...`);
+            setTimeout(() => runExtraction(2), 400);
+            return;
+          }
+
+          if (!wasSuccessful) {
+            return sendSftpError(ws, msg.connId, new Error(`Extract failed: ${stderr.trim() || `Exit code ${code}`}`));
+          }
+
+          if (cleanupArchive) {
+            session.sshClient.exec(`rm -f "${archivePath}"`, (rmErr, rmStream) => {
+              if (!rmErr && rmStream) rmStream.resume();
+            });
+          }
+
+          // Final 100% progress update
+          ws.send(JSON.stringify({
+            type: 'sftp:progress',
+            connId: msg.connId,
+            action: 'extract',
+            filename,
+            progress: 100
+          }));
+
+          ws.send(JSON.stringify({
+            type: 'sftp:action_success',
+            connId: msg.connId,
+            action: 'extract',
+            path: targetDir
+          }));
+        });
       });
+    };
 
-      stream.stderr.on('data', (d) => { stderr += d.toString(); });
-
-      stream.on('close', (code) => {
-        if (cleanupArchive) {
-          session.sshClient.exec(`rm -f "${archivePath}"`, (rmErr, rmStream) => {
-            if (!rmErr && rmStream) rmStream.resume();
-          });
-        }
-        // Exit code 0, 1, or 2 are treated as success if stdout was produced (indicating some extraction happened)
-        // unzip returns 1 for warnings (e.g. success with minor warnings). tar returns 1 or 2 on some warnings.
-        const wasSuccessful = code === 0 || ((code === 1 || code === 2) && extractedCount > 0);
-
-        if (!wasSuccessful) {
-          return sendSftpError(ws, msg.connId, new Error(`Extract failed: ${stderr || `Exit code ${code}`}`));
-        }
-
-        // Final 100% progress update
-        ws.send(JSON.stringify({
-          type: 'sftp:progress',
-          connId: msg.connId,
-          action: 'extract',
-          filename,
-          progress: 100
-        }));
-
-        ws.send(JSON.stringify({
-          type: 'sftp:action_success',
-          connId: msg.connId,
-          action: 'extract',
-          path: targetDir
-        }));
-      });
-    });
+    runExtraction(1);
   } catch (err) {
     sendSftpError(ws, msg.connId, err);
   }

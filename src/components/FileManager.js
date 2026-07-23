@@ -1615,7 +1615,7 @@ export default function FileManager({
       const timeoutId = setTimeout(() => {
         cleanup();
         resolve({ offset: expectedOffset, error: 'Handshake timeout' });
-      }, 12000);
+      }, 20000);
 
       const handler = (data) => {
         if (data.filename !== file.name) return;
