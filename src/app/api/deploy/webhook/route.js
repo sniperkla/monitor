@@ -1252,11 +1252,12 @@ export async function POST(request) {
             pushRef = `refs/heads/${payload.push.changes[0].new.name}`;
           }
 
+          const rawBranch = String(config.branch || '').trim();
+          const expectedRef = rawBranch
+            ? (rawBranch.startsWith('refs/heads/') ? rawBranch : `refs/heads/${rawBranch}`)
+            : null;
+
           if (pushRef) {
-            const rawBranch = String(config.branch || '').trim();
-            const expectedRef = rawBranch
-              ? (rawBranch.startsWith('refs/heads/') ? rawBranch : `refs/heads/${rawBranch}`)
-              : null;
             console.log(`[webhook] Push ref: ${pushRef}${expectedRef ? `, expected: ${expectedRef}` : ', no branch filter configured'}`);
             if (expectedRef && pushRef !== expectedRef) {
               console.log(`[webhook] Branch mismatch (${pushRef} vs ${expectedRef}) - skipping deployment without updating status`);
@@ -1265,6 +1266,13 @@ export async function POST(request) {
                 message: `Ref ${pushRef} does not match watched branch ${expectedRef}. Skipping deployment.`
               });
             }
+          } else if (expectedRef) {
+            // Could not determine the pushed branch from the payload — skip to be safe
+            console.log(`[webhook] Could not extract push ref from payload but branch filter is set (${expectedRef}) — skipping deployment`);
+            return NextResponse.json({
+              success: true,
+              message: `Could not extract push ref from payload. Expected watched branch ${expectedRef}. Skipping deployment.`
+            });
           }
         } catch (e) {
           console.log(`[webhook] Warning: Could not parse payload:`, e.message);
@@ -1273,6 +1281,8 @@ export async function POST(request) {
             'failed',
             `[Webhook Error] Failed to parse payload from ${isGitHub ? 'GitHub' : 'Bitbucket'} request: ${e.message}`
           );
+          // Stop here — don't fall through to trigger a deployment on a broken payload
+          return NextResponse.json({ success: false, error: 'Failed to parse webhook payload' }, { status: 400 });
         }
       }
     }
