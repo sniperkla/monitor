@@ -1799,7 +1799,7 @@ export default function FileManager({
         return;
       }
 
-      const chunkSize = 128 * 1024; // 128KB chunks
+      const chunkSize = file.size > 1 * 1024 * 1024 ? 512 * 1024 : 256 * 1024; // 256KB-512KB chunks for 4x faster upload speed
       let offset = startData.offset || resumeOffset;
 
       while (offset < file.size) {

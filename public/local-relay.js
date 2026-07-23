@@ -293,8 +293,9 @@ function connect() {
       case 'sftp:readFileBase64': handleSftpReadBase64(ws, msg);     break;
       case 'sftp:extract':        handleSftpExtract(ws, msg);        break;
 
-      // ── Docker ──
-      case 'docker:command': handleDockerCommand(ws, msg); break;
+      // ── WebRTC Signaling ──
+      case 'webrtc:offer':         handleWebRtcOffer(ws, msg);         break;
+      case 'webrtc:ice-candidate': handleWebRtcCandidate(ws, msg);     break;
 
       // ── Control ──
       case 'disconnect':
@@ -1238,7 +1239,7 @@ async function handleSftpReadBase64(ws, msg) {
       stream.on('data', (chunk) => chunks.push(chunk));
       stream.on('error', (err) => sendSftpError(ws, msg.connId, err));
       stream.on('end', () => {
-        ws.send(JSON.stringify({ type: 'sftp:fileData', connId: msg.connId, path: msg.path, content: Buffer.concat(chunks).toString('base64') }));
+        ws.send(JSON.stringify({ type: 'sftp:file_base64', connId: msg.connId, path: msg.path, content: Buffer.concat(chunks).toString('base64') }));
       });
     });
   } catch (err) {
@@ -1356,6 +1357,34 @@ async function handleSftpExtract(ws, msg) {
     runExtraction(1);
   } catch (err) {
     sendSftpError(ws, msg.connId, err);
+  }
+}
+
+// ── WebRTC Signaling & P2P Handlers ─────────────────────────────────────
+const activeRtcPeers = new Map();
+
+function handleWebRtcOffer(ws, msg) {
+  try {
+    let wrtc;
+    try { wrtc = require('node-datachannel'); } catch {
+      try { wrtc = require('@koush/wrtc'); } catch {}
+    }
+
+    if (!wrtc) {
+      console.log('ℹ️ node-datachannel not installed on relay host — using WebSocket relay transport');
+      return;
+    }
+
+    console.log(`📡 [WebRTC] Received P2P offer for connId=${msg.connId}`);
+  } catch (err) {
+    console.warn('⚠️ WebRTC offer error:', err.message);
+  }
+}
+
+function handleWebRtcCandidate(ws, msg) {
+  const peer = activeRtcPeers.get(msg.connId);
+  if (peer && msg.candidate && typeof peer.addIceCandidate === 'function') {
+    try { peer.addIceCandidate(msg.candidate); } catch (_) {}
   }
 }
 

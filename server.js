@@ -570,6 +570,7 @@ app.prepare().then(async () => {
   });
 
   const io = new Server(server, {
+    maxHttpBufferSize: 10 * 1024 * 1024, // 10MB limit for high-speed file transfers & base64 previews
     cors: {
       origin: process.env.NODE_ENV === 'production'
         ? (process.env.NEXT_PUBLIC_APP_URL || process.env.NEXTAUTH_URL || true)
@@ -3424,9 +3425,19 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
             sendToRelay({ type: 'ssh:resize', connId: relayConnId, cols: c, rows: r });
           });
 
+          // Register WebRTC P2P signaling handlers
+          socket.removeAllListeners('webrtc:offer');
+          socket.removeAllListeners('webrtc:ice-candidate');
+          socket.on('webrtc:offer', ({ sdp }) => {
+            sendToRelay({ type: 'webrtc:offer', connId: relayConnId, sdp });
+          });
+          socket.on('webrtc:ice-candidate', ({ candidate }) => {
+            sendToRelay({ type: 'webrtc:ice-candidate', connId: relayConnId, candidate });
+          });
+
           // Forward simple SFTP events to relay (queued until ssh:connected)
           const sftpSimpleEvents = [
-            'sftp:list', 'sftp:mkdir', 'sftp:delete', 'sftp:readFile',
+            'sftp:list', 'sftp:mkdir', 'sftp:delete', 'sftp:readFile', 'sftp:readFileBase64',
             'sftp:writeFile', 'sftp:download', 'sftp:download_folder',
             'sftp:search', 'sftp:getSize', 'sftp:copy', 'sftp:move',
             'sftp:extract',
@@ -3993,10 +4004,10 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
             // ── SSH/SFTP relay: forward relay agent responses back to browser socket ──
             const sshSftpTypes = [
               'ssh:connected', 'ssh:data', 'ssh:closed', 'ssh:error', 'ssh:exec_result',
-              'sftp:list', 'sftp:fileData', 'sftp:action_success', 'sftp:error',
+              'sftp:list', 'sftp:fileData', 'sftp:file_base64', 'sftp:action_success', 'sftp:error',
               'sftp:download_start', 'sftp:download_chunk', 'sftp:download_done', 'sftp:download_data',
               'sftp:can_upload', 'sftp:upload_ack', 'sftp:upload_complete', 'sftp:progress', 'sftp:searchResult', 'sftp:sizeResult',
-              'docker:result', 'docker:error',
+              'docker:result', 'docker:error', 'webrtc:answer', 'webrtc:ice-candidate',
             ];
             if (msg.connId && sshSftpTypes.includes(msg.type)) {
               const targetSocketId = global.__relayConnMap.get(msg.connId);
@@ -4026,12 +4037,18 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
                   } else if (msg.type === 'ssh:error') {
                     targetSocket.emit('ssh:error', { message: msg.error || msg.message || 'Relay SSH error' });
                     global.__relayConnMap.delete(msg.connId);
+                  } else if (msg.type === 'webrtc:answer') {
+                    targetSocket.emit('webrtc:answer', { sdp: msg.sdp });
+                  } else if (msg.type === 'webrtc:ice-candidate') {
+                    targetSocket.emit('webrtc:ice-candidate', { candidate: msg.candidate });
                   } else if (msg.type === 'ssh:exec_result') {
                     targetSocket.emit('ssh:exec_result', { stdout: msg.stdout, stderr: msg.stderr, code: msg.code });
                   } else if (msg.type === 'sftp:list') {
                     targetSocket.emit('sftp:list', { path: msg.path, files: msg.files || [] });
                   } else if (msg.type === 'sftp:fileData') {
                     targetSocket.emit('sftp:file_content', { path: msg.path, content: msg.content });
+                  } else if (msg.type === 'sftp:file_base64') {
+                    targetSocket.emit('sftp:file_base64', { path: msg.path, content: msg.content });
                   } else if (msg.type === 'sftp:action_success') {
                     targetSocket.emit('sftp:action_success', { action: msg.action, path: msg.path });
                   } else if (msg.type === 'sftp:error') {
