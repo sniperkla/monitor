@@ -805,6 +805,16 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
               socket.emit('ssh:closed');
             });
 
+            // Clear old listeners before re-registering
+            const sftpEvents = [
+              'sftp:list', 'sftp:mkdir', 'sftp:delete', 'sftp:readFile',
+              'sftp:writeFile', 'sftp:applyPatch', 'sftp:copy', 'sftp:move', 'sftp:cross_server_transfer',
+              'sftp:upload', 'sftp:download', 'sftp:download_folder', 'sftp:search', 'docker:command'
+            ];
+            const sshEvents = ['ssh:input', 'ssh:resize'];
+            sftpEvents.forEach(ev => socket.removeAllListeners(ev));
+            sshEvents.forEach(ev => socket.removeAllListeners(ev));
+
             socket.on('ssh:input', (inputData) => {
               touchActivity();
               if (stream.writable) stream.write(inputData);
@@ -814,16 +824,6 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
               if (!stream || !c || !r) return;
               try { stream.setWindow(r, c, 0, 0); } catch (_) {}
             });
-
-            // Re-register SFTP events
-            const sftpEvents = [
-              'sftp:list', 'sftp:mkdir', 'sftp:delete', 'sftp:readFile',
-              'sftp:writeFile', 'sftp:applyPatch', 'sftp:copy', 'sftp:move', 'sftp:cross_server_transfer',
-              'sftp:upload', 'sftp:download', 'sftp:download_folder', 'sftp:search', 'docker:command'
-            ];
-            const sshEvents = ['ssh:input', 'ssh:resize'];
-            sftpEvents.forEach(ev => socket.removeAllListeners(ev));
-            sshEvents.forEach(ev => socket.removeAllListeners(ev));
 
             // Re-register SFTP handlers using session data
             const reattachSftp = (cb) => {
