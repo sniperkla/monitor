@@ -453,6 +453,23 @@ function cleanupSsh(connId) {
   }
 }
 
+function getSshSession(connId) {
+  let session = sshSessions.get(connId);
+  if (session?.sshClient) return session;
+  if (sshSessions.size === 1) return sshSessions.values().next().value;
+  if (sshSessions.size > 1) return Array.from(sshSessions.values()).pop();
+  return null;
+}
+
+function getUploadEntry(connId, remotePath) {
+  const exactKey = `${connId}:${remotePath}`;
+  if (activeUploads.has(exactKey)) return { key: exactKey, upload: activeUploads.get(exactKey) };
+  for (const [k, v] of activeUploads.entries()) {
+    if (k.endsWith(`:${remotePath}`)) return { key: k, upload: v };
+  }
+  return { key: exactKey, upload: null };
+}
+
 // ── SFTP helpers ──────────────────────────────────────────────────────────
 /**
  * Returns a cached SFTP client for the given connId.
@@ -461,7 +478,7 @@ function cleanupSsh(connId) {
  */
 function getSftpClient(connId) {
   return new Promise((resolve, reject) => {
-    const session = sshSessions.get(connId);
+    const session = getSshSession(connId);
     if (!session?.sshClient) return reject(new Error('No SSH session'));
 
     // Return cached client if still alive
@@ -579,7 +596,7 @@ async function handleSftpMkdir(ws, msg) {
 }
 
 function handleSftpDelete(ws, msg) {
-  const session = sshSessions.get(msg.connId);
+  const session = getSshSession(msg.connId);
   if (!session?.sshClient) {
     return sendSftpError(ws, msg.connId, new Error('No SSH session'));
   }
@@ -753,10 +770,9 @@ async function handleSftpUploadStart(ws, msg) {
 }
 
 function handleSftpUploadChunk(ws, msg) {
-  const key = `${msg.connId}:${msg.remotePath}`;
-  const upload = activeUploads.get(key);
+  const { key, upload } = getUploadEntry(msg.connId, msg.remotePath);
   if (!upload) {
-    sendSftpError(ws, msg.connId, new Error('No active upload session'));
+    console.warn(`⚠️ [relay] sftp:upload_chunk — No active upload session for ${msg.remotePath}`);
     return;
   }
 
@@ -772,10 +788,9 @@ function handleSftpUploadChunk(ws, msg) {
 }
 
 function handleSftpUploadDone(ws, msg) {
-  const key = `${msg.connId}:${msg.remotePath}`;
-  const upload = activeUploads.get(key);
+  const { key, upload } = getUploadEntry(msg.connId, msg.remotePath);
   if (!upload) {
-    sendSftpError(ws, msg.connId, new Error('No active upload session'));
+    console.warn(`⚠️ [relay] sftp:upload_done — No active upload session for ${msg.remotePath}`);
     return;
   }
 
@@ -1233,7 +1248,7 @@ async function handleSftpReadBase64(ws, msg) {
 
 async function handleSftpExtract(ws, msg) {
   try {
-    const session = sshSessions.get(msg.connId);
+    const session = getSshSession(msg.connId);
     if (!session?.sshClient) return sendSftpError(ws, msg.connId, new Error('No SSH session'));
 
     const archivePath = msg.path;

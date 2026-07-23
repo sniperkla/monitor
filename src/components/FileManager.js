@@ -1618,7 +1618,7 @@ export default function FileManager({
       }, 20000);
 
       const handler = (data) => {
-        if (data.filename !== file.name) return;
+        if (data.filename && data.filename !== file.name && data.filename !== displayName) return;
         cleanup();
         resolve(data);
       };
