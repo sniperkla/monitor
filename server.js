@@ -3475,8 +3475,9 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
               return;
             }
 
-            // Wait for relay agent to signal sftp:can_upload when write stream is ready
-            console.log(`📤 [relay] sftp:upload_start sent to relay, awaiting relay ready signal`);
+            // Ack the upload start so the browser starts sending chunks immediately
+            socket.emit('sftp:can_upload', { filename, offset, ready: true });
+            console.log(`📤 [relay] sftp:can_upload emitted to browser for ${filename}`);
 
             let chunkCount = 0;
             let relayLost = false;

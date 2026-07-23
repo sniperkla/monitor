@@ -443,6 +443,20 @@ export default function FileManager({
     }
   }, [appState.dbConfig?.uri]);
 
+  // Real-time mode switching: when the user swaps Server ↔ Local Relay in Settings,
+  // immediately reconnect the SSH session so the new mode takes effect without a page refresh.
+  useEffect(() => {
+    const handleModeChange = () => {
+      const newMode = localStorage.getItem('ssh_monitor_ssh_mode') || 'server';
+      console.log(`🔄 [FileManager] SSH mode changed to "${newMode}" — reconnecting session`);
+      reconnectAttemptsRef.current = 0;
+      setReconnectAlert(null);
+      setReconnectNonce(n => n + 1);
+    };
+    window.addEventListener('ssh-mode-changed', handleModeChange);
+    return () => window.removeEventListener('ssh-mode-changed', handleModeChange);
+  }, []);
+
   useEffect(() => {
     if (vaultStatus === 'loading') return;
 

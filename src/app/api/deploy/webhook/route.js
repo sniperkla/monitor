@@ -1259,12 +1259,7 @@ export async function POST(request) {
               : null;
             console.log(`[webhook] Push ref: ${pushRef}${expectedRef ? `, expected: ${expectedRef}` : ', no branch filter configured'}`);
             if (expectedRef && pushRef !== expectedRef) {
-              console.log(`[webhook] Branch mismatch - skipping deployment`);
-              await updateDeployStatus(
-                projectId,
-                'idle',
-                `[Webhook Skipped] Received ${isGitHub ? 'GitHub' : 'Bitbucket'} push event for ref "${pushRef}" but watched branch is configured as "${rawBranch}". Skipping deployment.`
-              );
+              console.log(`[webhook] Branch mismatch (${pushRef} vs ${expectedRef}) - skipping deployment without updating status`);
               return NextResponse.json({
                 success: true,
                 message: `Ref ${pushRef} does not match watched branch ${expectedRef}. Skipping deployment.`

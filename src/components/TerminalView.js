@@ -235,6 +235,17 @@ export default function TerminalView({ connectionId, connectionName, host, color
   const termStatusRef = useRef(status);
   useEffect(() => { termStatusRef.current = status; }, [status]);
 
+  // Real-time mode switching: reconnect terminal when user swaps SSH mode in Settings
+  useEffect(() => {
+    const handleModeChange = () => {
+      const newMode = localStorage.getItem('ssh_monitor_ssh_mode') || 'server';
+      console.log(`🔄 [TerminalView] SSH mode changed to "${newMode}" — reconnecting terminal`);
+      setReconnectNonce(n => n + 1);
+    };
+    window.addEventListener('ssh-mode-changed', handleModeChange);
+    return () => window.removeEventListener('ssh-mode-changed', handleModeChange);
+  }, []);
+
   const outputLinesRef = useRef([]);
   const outputBufferRef = useRef('');
   const lastCommandSentAtRef = useRef(0);
