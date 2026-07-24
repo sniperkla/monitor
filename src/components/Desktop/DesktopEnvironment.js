@@ -535,12 +535,6 @@ export default function DesktopEnvironment({ bootPhase }) {
     // Use unique ID so multiple standalone windows can coexist for same connection
     const winId = `standalone-files-${connectionIdOverride || conn._id}-${Date.now()}`;
 
-    // Close existing session in the manager if it exists
-    const existing = appState.activeFileManagers.find(f => f.connectionId === (connectionIdOverride || conn._id));
-    if (existing) {
-      appDispatch({ type: 'CLOSE_FILE_MANAGER', payload: existing.id });
-    }
-
     openWindow(
       winId,
       titleOverride || `Files: ${conn.name}`,
