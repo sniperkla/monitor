@@ -197,6 +197,7 @@ export default function FileManager({
   useEffect(() => { transferCountdownRef.current = transferCountdown; }, [transferCountdown]);
   const lastDownloadRef = useRef(null); // { file, offset }
   const transferRef = useRef(null); // Keep a ref of transfer for loop cancellation
+  const userCancelledUploadRef = useRef(false); // true when user explicitly clicks X to cancel upload — suppresses reconnect
   const reconnectTimerRef = useRef(null);
   const emptyRetryPathRef = useRef('');
   const deleteBatchRef = useRef({ count: 0, total: 0, toastId: null });
@@ -610,6 +611,13 @@ export default function FileManager({
     });
 
     newSocket.on('ssh:closed', () => {
+      // If the user intentionally cancelled an upload, the SFTP write stream
+      // destruction can trigger ssh:closed — do NOT reconnect in that case.
+      if (userCancelledUploadRef.current) {
+        userCancelledUploadRef.current = false;
+        console.log('[ssh:closed] Suppressed reconnect — user intentionally cancelled upload.');
+        return;
+      }
       appDispatch({ type: 'UPDATE_CONNECTION', payload: { _id: connectionId, status: 'offline' } });
       // Clean up any pending delete operations
       if (deleteBatchRef.current.toastId) {
@@ -630,6 +638,13 @@ export default function FileManager({
 
     newSocket.on('disconnect', (reason) => {
       if (reason === 'io client disconnect') return;
+      // If the user intentionally cancelled an upload, the resulting socket noise
+      // should not be treated as an unexpected disconnect requiring reconnect.
+      if (userCancelledUploadRef.current) {
+        userCancelledUploadRef.current = false;
+        console.log('[disconnect] Suppressed reconnect — user intentionally cancelled upload.');
+        return;
+      }
       appDispatch({ type: 'UPDATE_CONNECTION', payload: { _id: connectionId, status: 'offline' } });
       // Clean up any pending delete operations
       if (deleteBatchRef.current.toastId) {
@@ -3102,6 +3117,12 @@ export default function FileManager({
                 <button 
                   onClick={() => {
                     const filenameToAbort = transfer.realFilename || transfer.filename;
+                    // Mark as intentional user cancel BEFORE nulling transferRef
+                    // so ssh:closed / disconnect handlers know not to reconnect.
+                    userCancelledUploadRef.current = true;
+                    // Auto-clear the flag after a short window in case ssh:closed
+                    // never fires (e.g. server handled abort gracefully)
+                    setTimeout(() => { userCancelledUploadRef.current = false; }, 3000);
                     setTransfer(null);
                     transferRef.current = null;
                     if (socket) {
