@@ -1816,7 +1816,9 @@ export default function FileManager({
         return;
       }
 
-      const chunkSize = file.size > 1 * 1024 * 1024 ? 512 * 1024 : 256 * 1024; // 256KB-512KB chunks for 4x faster upload speed
+      // Dynamic chunk sizing for max network throughput:
+      // >10MB files: 1MB chunks, >1MB files: 512KB chunks, ≤1MB files: 256KB chunks
+      const chunkSize = file.size > 10 * 1024 * 1024 ? 1024 * 1024 : (file.size > 1 * 1024 * 1024 ? 512 * 1024 : 256 * 1024);
       let offset = startData.offset || resumeOffset;
 
       while (offset < file.size) {
