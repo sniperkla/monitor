@@ -198,6 +198,8 @@ export default function FileManager({
   const lastDownloadRef = useRef(null); // { file, offset }
   const transferRef = useRef(null); // Keep a ref of transfer for loop cancellation
   const userCancelledUploadRef = useRef(false); // true when user explicitly clicks X to cancel upload — suppresses reconnect
+  const activeAckCleanupRef = useRef(null);         // cancel pending ACK promise immediately on abort
+  const activeHandshakeCleanupRef = useRef(null);   // cancel pending handshake promise immediately on abort
   const reconnectTimerRef = useRef(null);
   const emptyRetryPathRef = useRef('');
   const deleteBatchRef = useRef({ count: 0, total: 0, toastId: null });
@@ -1632,7 +1634,7 @@ export default function FileManager({
       duration: 0,
     });
 
-    let activeHandshakeCleanup = null;
+    activeHandshakeCleanupRef.current = null;
     const waitForUploadHandshake = (expectedOffset) => new Promise(resolve => {
       // Use fresh socket ref so listeners attach to the current socket (not a stale one after reconnect)
       const sock = getSocket();
@@ -1681,10 +1683,10 @@ export default function FileManager({
         clearTimeout(timeoutId);
         sock.off('sftp:can_upload', handler);
         sock.off('sftp:error', guardErrHandler);
-        activeHandshakeCleanup = null;
+      activeHandshakeCleanupRef.current = null;
       };
 
-      activeHandshakeCleanup = cleanup;
+      activeHandshakeCleanupRef.current = cleanup;
       sock.on('sftp:can_upload', handler);
       sock.on('sftp:error', guardErrHandler);
     });
@@ -1731,7 +1733,7 @@ export default function FileManager({
       sock.on('sftp:error', errorHandler);
     });
     
-    let activeAckCleanup = null;
+    activeAckCleanupRef.current = null;
 
     try {
       // Request start — auto-retry if server is temporarily out of resources (memory / concurrency guard)
@@ -1907,9 +1909,9 @@ export default function FileManager({
             clearTimeout(timeoutId);
             sock.off(`sftp:upload_ack:${file.name}`, handler);
             sock.off('sftp:error', errHandler);
-            activeAckCleanup = null;
+            activeAckCleanupRef.current = null;
           };
-          activeAckCleanup = cleanup;
+          activeAckCleanupRef.current = cleanup;
           sock.on(`sftp:upload_ack:${file.name}`, handler);
           sock.on('sftp:error', errHandler);
         });
@@ -2071,8 +2073,8 @@ export default function FileManager({
         });
       }
     } finally {
-      if (activeHandshakeCleanup) activeHandshakeCleanup();
-      if (activeAckCleanup) activeAckCleanup();
+      if (activeHandshakeCleanupRef.current) { activeHandshakeCleanupRef.current(); activeHandshakeCleanupRef.current = null; }
+      if (activeAckCleanupRef.current) { activeAckCleanupRef.current(); activeAckCleanupRef.current = null; }
       if (activeCompletionCleanup) activeCompletionCleanup();
     }
   };
@@ -3123,6 +3125,10 @@ export default function FileManager({
                     // Auto-clear the flag after a short window in case ssh:closed
                     // never fires (e.g. server handled abort gracefully)
                     setTimeout(() => { userCancelledUploadRef.current = false; }, 3000);
+                    // Immediately cancel any pending ACK/handshake timeouts —
+                    // no need to wait 15 seconds for the promise to time out.
+                    if (activeAckCleanupRef.current) { activeAckCleanupRef.current(); activeAckCleanupRef.current = null; }
+                    if (activeHandshakeCleanupRef.current) { activeHandshakeCleanupRef.current(); activeHandshakeCleanupRef.current = null; }
                     setTransfer(null);
                     transferRef.current = null;
                     if (socket) {
