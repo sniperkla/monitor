@@ -2,7 +2,7 @@
 
 import { signIn } from 'next-auth/react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Terminal, Shield, ChevronRight, Server, Database } from 'lucide-react';
+import { Terminal, Shield, ChevronRight, Server, Database, Mail, Lock, User as UserIcon, X, Loader, AlertCircle, CheckCircle } from 'lucide-react';
 import { useState, useEffect, useRef } from 'react';
 import { GalaxyBackground, ShootingStars, Nebula, MatrixRain } from './BackgroundEffects';
 
@@ -480,6 +480,63 @@ export function RevealScreen({ onDismiss }) {
   const phase = useRenderSequence(8, 500);
   const showCursor = phase < 7;
 
+  // Email & Password Auth State
+  const [showAuthModal, setShowAuthModal] = useState(false);
+  const [authMode, setAuthMode] = useState('signin'); // 'signin' | 'register'
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [name, setName] = useState('');
+  const [authLoading, setAuthLoading] = useState(false);
+  const [authError, setAuthError] = useState(null);
+  const [authSuccess, setAuthSuccess] = useState(null);
+
+  const handleAuthSubmit = async (e) => {
+    e.preventDefault();
+    setAuthError(null);
+    setAuthSuccess(null);
+
+    if (!email || !password) {
+      setAuthError('Please fill in all required fields.');
+      return;
+    }
+
+    setAuthLoading(true);
+    try {
+      if (authMode === 'register') {
+        const res = await fetch('/api/auth/register', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name, email, password }),
+        });
+        const data = await res.json();
+        if (!data.success) {
+          setAuthError(data.error || 'Registration failed.');
+          setAuthLoading(false);
+          return;
+        }
+        setAuthSuccess('Account registered! Signing you in...');
+      }
+
+      // Perform Credentials Sign In via NextAuth
+      const result = await signIn('credentials', {
+        email: email.trim().toLowerCase(),
+        password,
+        redirect: false,
+        callbackUrl: '/',
+      });
+
+      if (result?.error) {
+        setAuthError(result.error === 'CredentialsSignin' ? 'Invalid email or password' : result.error);
+        setAuthLoading(false);
+      } else if (result?.ok) {
+        window.location.href = result.url || '/';
+      }
+    } catch (err) {
+      setAuthError(err.message || 'Authentication failed. Please try again.');
+      setAuthLoading(false);
+    }
+  };
+
   useEffect(() => {
     const blink = setInterval(() => setCursorBlink(v => !v), 530);
     return () => clearInterval(blink);
@@ -640,7 +697,7 @@ export function RevealScreen({ onDismiss }) {
                       whileHover={{ scale: 1.02 }}
                       whileTap={{ scale: 0.98 }}
                       onClick={() => signIn('google', { callbackUrl: '/' })}
-                      className="relative w-full flex items-center justify-center gap-3 px-5 py-3.5 rounded-xl text-sm font-semibold cursor-pointer overflow-hidden group transition-all"
+                      className="relative w-full flex items-center justify-center gap-3 px-5 py-3 rounded-xl text-xs font-semibold cursor-pointer overflow-hidden group transition-all"
                       style={{
                         background: 'linear-gradient(135deg, #6366f1, #06b6d4)',
                         boxShadow: '0 4px 20px rgba(99, 102, 241, 0.25), inset 0 1px 0 rgba(255,255,255,0.2)',
@@ -663,6 +720,16 @@ export function RevealScreen({ onDismiss }) {
                         </svg>
                       </span>
                       <span className="relative font-bold text-white">Sign in with Google</span>
+                    </motion.button>
+
+                    <motion.button
+                      whileHover={{ scale: 1.02 }}
+                      whileTap={{ scale: 0.98 }}
+                      onClick={() => setShowAuthModal(true)}
+                      className="w-full flex items-center justify-center gap-2 px-5 py-3 rounded-xl text-xs font-semibold cursor-pointer text-slate-200 transition-all bg-slate-800/80 hover:bg-slate-700/90 border border-slate-700/60 shadow-md"
+                    >
+                      <Mail size={15} className="text-cyan-400" />
+                      <span>Email & Password Sign In</span>
                     </motion.button>
 
                     <motion.button
@@ -728,6 +795,142 @@ export function RevealScreen({ onDismiss }) {
           </motion.div>
         </div>
       </div>
+
+      {/* ── Email & Password Authentication Modal ── */}
+      <AnimatePresence>
+        {showAuthModal && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 15 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 15 }}
+              className="relative w-full max-w-md p-6 bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl text-slate-100"
+            >
+              {/* Close Button */}
+              <button
+                onClick={() => setShowAuthModal(false)}
+                className="absolute right-4 top-4 p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
+              >
+                <X size={18} />
+              </button>
+
+              {/* Header */}
+              <div className="flex items-center gap-3 mb-6">
+                <div className="p-2.5 rounded-xl bg-indigo-500/10 border border-indigo-500/20 text-indigo-400">
+                  <Mail size={20} />
+                </div>
+                <div>
+                  <h2 className="text-base font-bold text-white">
+                    {authMode === 'register' ? 'Create Account' : 'Welcome Back'}
+                  </h2>
+                  <p className="text-xs text-slate-400">
+                    {authMode === 'register' ? 'Register with email and password' : 'Sign in to access your connections & vault'}
+                  </p>
+                </div>
+              </div>
+
+              {/* Tabs: Sign In vs Register */}
+              <div className="flex p-1 mb-5 rounded-xl bg-slate-950 border border-slate-800/80">
+                <button
+                  type="button"
+                  onClick={() => { setAuthMode('signin'); setAuthError(null); setAuthSuccess(null); }}
+                  className={`flex-1 py-1.5 text-xs font-bold rounded-lg transition-all ${
+                    authMode === 'signin'
+                      ? 'bg-gradient-to-r from-indigo-500 to-cyan-500 text-white shadow-md'
+                      : 'text-slate-400 hover:text-white'
+                  }`}
+                >
+                  Sign In
+                </button>
+                <button
+                  type="button"
+                  onClick={() => { setAuthMode('register'); setAuthError(null); setAuthSuccess(null); }}
+                  className={`flex-1 py-1.5 text-xs font-bold rounded-lg transition-all ${
+                    authMode === 'register'
+                      ? 'bg-gradient-to-r from-indigo-500 to-cyan-500 text-white shadow-md'
+                      : 'text-slate-400 hover:text-white'
+                  }`}
+                >
+                  Create Account
+                </button>
+              </div>
+
+              {/* Alert Messages */}
+              {authError && (
+                <div className="flex items-start gap-2 p-3 mb-4 rounded-xl bg-rose-500/10 border border-rose-500/20 text-rose-400 text-xs">
+                  <AlertCircle size={16} className="shrink-0 mt-0.5" />
+                  <span>{authError}</span>
+                </div>
+              )}
+              {authSuccess && (
+                <div className="flex items-start gap-2 p-3 mb-4 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-xs">
+                  <CheckCircle size={16} className="shrink-0 mt-0.5" />
+                  <span>{authSuccess}</span>
+                </div>
+              )}
+
+              {/* Form */}
+              <form onSubmit={handleAuthSubmit} className="space-y-4">
+                {authMode === 'register' && (
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-300 mb-1">Display Name</label>
+                    <div className="relative">
+                      <UserIcon size={15} className="absolute left-3 top-3 text-slate-500" />
+                      <input
+                        type="text"
+                        placeholder="John Doe"
+                        value={name}
+                        onChange={(e) => setName(e.target.value)}
+                        className="w-full py-2.5 pl-9 pr-3 text-xs bg-slate-950 border border-slate-800 rounded-xl text-slate-100 placeholder-slate-600 focus:outline-none focus:border-indigo-500 transition-colors"
+                      />
+                    </div>
+                  </div>
+                )}
+
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-300 mb-1">Email Address</label>
+                  <div className="relative">
+                    <Mail size={15} className="absolute left-3 top-3 text-slate-500" />
+                    <input
+                      type="email"
+                      required
+                      placeholder="user@example.com"
+                      value={email}
+                      onChange={(e) => setEmail(e.target.value)}
+                      className="w-full py-2.5 pl-9 pr-3 text-xs bg-slate-950 border border-slate-800 rounded-xl text-slate-100 placeholder-slate-600 focus:outline-none focus:border-indigo-500 transition-colors"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-300 mb-1">Password</label>
+                  <div className="relative">
+                    <Lock size={15} className="absolute left-3 top-3 text-slate-500" />
+                    <input
+                      type="password"
+                      required
+                      minLength={6}
+                      placeholder="••••••••"
+                      value={password}
+                      onChange={(e) => setPassword(e.target.value)}
+                      className="w-full py-2.5 pl-9 pr-3 text-xs bg-slate-950 border border-slate-800 rounded-xl text-slate-100 placeholder-slate-600 focus:outline-none focus:border-indigo-500 transition-colors"
+                    />
+                  </div>
+                </div>
+
+                <button
+                  type="submit"
+                  disabled={authLoading}
+                  className="w-full flex items-center justify-center gap-2 py-3 mt-2 rounded-xl text-xs font-bold text-white transition-all shadow-lg bg-gradient-to-r from-indigo-500 via-cyan-500 to-emerald-500 hover:opacity-95 active:scale-[0.98] disabled:opacity-50 cursor-pointer"
+                >
+                  {authLoading ? <Loader size={16} className="animate-spin" /> : null}
+                  <span>{authLoading ? 'Processing...' : (authMode === 'register' ? 'Register & Sign In' : 'Sign In')}</span>
+                </button>
+              </form>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
     </motion.div>
   );
 }

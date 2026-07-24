@@ -1,4 +1,6 @@
 import GoogleProvider from "next-auth/providers/google";
+import CredentialsProvider from "next-auth/providers/credentials";
+import bcrypt from "bcryptjs";
 import connectDB from "@/lib/mongodb";
 import User from "@/models/User";
 
@@ -11,23 +13,63 @@ export const authOptions = {
         timeout: 10000,
       },
     }),
+    CredentialsProvider({
+      name: "Credentials",
+      credentials: {
+        email: { label: "Email", type: "email" },
+        password: { label: "Password", type: "password" }
+      },
+      async authorize(credentials) {
+        if (!credentials?.email || !credentials?.password) {
+          throw new Error("Email and password are required");
+        }
+
+        const cleanEmail = String(credentials.email).trim().toLowerCase();
+        await connectDB(process.env.MONGODB_URI, true);
+
+        const dbUser = await User.findOne({ email: cleanEmail }).select('+password').lean();
+        if (!dbUser || !dbUser.password) {
+          throw new Error("Invalid email or password");
+        }
+
+        const isValid = await bcrypt.compare(credentials.password, dbUser.password);
+        if (!isValid) {
+          throw new Error("Invalid email or password");
+        }
+
+        const isAdminEmail = !!process.env.ADMIN_EMAIL && dbUser.email === process.env.ADMIN_EMAIL;
+
+        return {
+          id: dbUser._id.toString(),
+          name: dbUser.name,
+          email: dbUser.email,
+          image: dbUser.image || null,
+          role: dbUser.role || (isAdminEmail ? 'admin' : 'user'),
+          vaultConfigured: !!dbUser.vault?.isConfigured,
+        };
+      }
+    }),
   ],
   callbacks: {
     /**
-     * signIn — runs once when the user authenticates with Google.
-     * Creates or syncs the user record in the center DB.
+     * signIn — runs once when the user authenticates with Google or Credentials.
      */
     async signIn({ user, account, profile }) {
-      if (account.provider === "google") {
+      if (account?.provider === "credentials") {
+        user.dbId = user.id;
+        return true;
+      }
+
+      if (account?.provider === "google") {
         try {
           await connectDB(process.env.MONGODB_URI, true);
-          const profileImage = profile.picture || user.image;
+          const profileImage = profile?.picture || user.image;
           const isAdminEmail = !!process.env.ADMIN_EMAIL && user.email === process.env.ADMIN_EMAIL;
           const update = {
             $set: {
               name: user.name,
               image: profileImage,
-              googleId: profile.sub,
+              googleId: profile?.sub,
               ...(isAdminEmail ? { role: 'admin' } : {}),
             },
             $setOnInsert: {
