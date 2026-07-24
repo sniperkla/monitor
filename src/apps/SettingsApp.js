@@ -1189,6 +1189,8 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
       return 'node local-relay.js --uninstall';
     }
 
+    if (!relayToken) return '⚠ Token not yet generated — click Generate Token first';
+
     if (os === 'windows') {
       return `node local-relay.js --install --server ${quoteWindowsArg(window.location.origin)} --token ${quoteWindowsArg(relayToken)}`;
     }
@@ -1262,6 +1264,7 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
     if (mode === 'uninstall') {
       return `curl -fsSL "${scriptUrl}" -o ${targetPath} && node ${targetPath} --uninstall`;
     }
+    if (!relayToken) return '⚠ Token not yet generated — click Generate Token first';
     return `curl -fsSL "${scriptUrl}" -o ${targetPath} && node ${targetPath} --install --server ${quotePosixArg(server)} --token ${quotePosixArg(relayToken)}`;
   };
 
@@ -4148,15 +4151,19 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
 
                           {/* Command block — visible for all platforms */}
                           <div className="relative">
-                            <code className="block p-3 pr-10 bg-slate-950 border border-slate-800 rounded-xl text-[10px] font-mono text-amber-300 break-all leading-relaxed">
+                            <code className={`block p-3 pr-10 bg-slate-950 border rounded-xl text-[10px] font-mono break-all leading-relaxed ${
+                              relayToken ? 'border-slate-800 text-amber-300' : 'border-amber-500/30 text-amber-500/60 italic'
+                            }`}>
                               {getRelayOneLiner('install')}
                             </code>
                             <button
                               onClick={() => {
+                                if (!relayToken) return;
                                 navigator.clipboard.writeText(getRelayOneLiner('install'));
                                 addNotification({ title: 'Copied!', message: isWin ? 'Paste in PowerShell or CMD and press Enter.' : 'Paste in your Terminal and press Enter.', type: 'success' });
                               }}
-                              className="absolute right-2 top-2 p-1.5 hover:bg-white/10 rounded-lg transition-colors"
+                              disabled={!relayToken}
+                              className="absolute right-2 top-2 p-1.5 hover:bg-white/10 rounded-lg transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
                             >
                               <Copy size={13} className="text-[var(--text-muted)]" />
                             </button>
@@ -4166,7 +4173,8 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
                           {isWin ? (
                             <button
                               onClick={() => downloadInstallerScript('install')}
-                              className="w-full flex items-center gap-3 px-4 py-3.5 bg-amber-500 hover:bg-amber-600 active:scale-[0.98] rounded-xl text-white font-bold text-sm transition-all shadow-lg shadow-amber-500/25"
+                              disabled={!relayToken}
+                              className="w-full flex items-center gap-3 px-4 py-3.5 bg-amber-500 hover:bg-amber-600 active:scale-[0.98] disabled:opacity-40 disabled:cursor-not-allowed rounded-xl text-white font-bold text-sm transition-all shadow-lg shadow-amber-500/25"
                             >
                               <Download size={16} />
                               <div className="text-left">
