@@ -1683,7 +1683,7 @@ export default function FileManager({
         clearTimeout(timeoutId);
         sock.off('sftp:can_upload', handler);
         sock.off('sftp:error', guardErrHandler);
-      activeHandshakeCleanupRef.current = null;
+        activeHandshakeCleanupRef.current = null;
       };
 
       activeHandshakeCleanupRef.current = cleanup;
