@@ -785,7 +785,17 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
           };
           ensureIdleWatcher();
 
-          // Re-attach stream to new socket
+          // Clear old listeners before re-registering
+          const sftpEvents = [
+            'sftp:list', 'sftp:mkdir', 'sftp:delete', 'sftp:readFile',
+            'sftp:writeFile', 'sftp:applyPatch', 'sftp:copy', 'sftp:move', 'sftp:cross_server_transfer',
+            'sftp:upload', 'sftp:download', 'sftp:download_folder', 'sftp:search', 'docker:command'
+          ];
+          const sshEvents = ['ssh:input', 'ssh:resize'];
+          sftpEvents.forEach(ev => socket.removeAllListeners(ev));
+          sshEvents.forEach(ev => socket.removeAllListeners(ev));
+
+          // Re-attach PTY stream if this is an interactive terminal session
           if (stream && stream.writable) {
             const sessionData = activeSessions.get(socket.id);
             if (sessionData) sessionData.stream = stream;
@@ -805,16 +815,6 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
               socket.emit('ssh:closed');
             });
 
-            // Clear old listeners before re-registering
-            const sftpEvents = [
-              'sftp:list', 'sftp:mkdir', 'sftp:delete', 'sftp:readFile',
-              'sftp:writeFile', 'sftp:applyPatch', 'sftp:copy', 'sftp:move', 'sftp:cross_server_transfer',
-              'sftp:upload', 'sftp:download', 'sftp:download_folder', 'sftp:search', 'docker:command'
-            ];
-            const sshEvents = ['ssh:input', 'ssh:resize'];
-            sftpEvents.forEach(ev => socket.removeAllListeners(ev));
-            sshEvents.forEach(ev => socket.removeAllListeners(ev));
-
             socket.on('ssh:input', (inputData) => {
               touchActivity();
               if (stream.writable) stream.write(inputData);
@@ -824,62 +824,61 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
               if (!stream || !c || !r) return;
               try { stream.setWindow(r, c, 0, 0); } catch (_) {}
             });
+          }
 
-            // Re-register SFTP handlers using session data
-            const reattachSftp = (cb) => {
-              const sessionData = activeSessions.get(socket.id);
-              if (sessionData?.sftp) return cb(null, sessionData.sftp);
-              if (sessionData?.sshClient && sessionData.sshClient._state !== 'closed') {
-                sessionData.sshClient.sftp((err, sftp) => {
-                  if (err) return cb(err);
-                  if (sessionData) sessionData.sftp = sftp;
-                  cb(null, sftp);
-                });
-              } else {
-                cb(new Error('SSH client not available'));
-              }
-            };
+          // Re-register SFTP handlers using session data (works for both stream and file-only sessions)
+          const reattachSftp = (cb) => {
+            const sessionData = activeSessions.get(socket.id);
+            if (sessionData?.sftp) return cb(null, sessionData.sftp);
+            if (sessionData?.sshClient && sessionData.sshClient._state !== 'closed') {
+              sessionData.sshClient.sftp((err, sftp) => {
+                if (err) return cb(err);
+                if (sessionData) sessionData.sftp = sftp;
+                cb(null, sftp);
+              });
+            } else {
+              cb(new Error('SSH client not available'));
+            }
+          };
 
-            socket.on('sftp:list', (path = '.') => {
-              const sessionData = activeSessions.get(socket.id);
-              const sc = sessionData?.sshClient;
-              if (!sc || sc._state === 'closed') {
-                return socket.emit('sftp:error', { message: 'SSH Connection Closed' });
-              }
-              let sftpHandled = false;
-              const sftpTimeout = setTimeout(() => {
-                if (sftpHandled) return;
-                sftpHandled = true;
-                fallbackFileListing(socket, sc, path);
-              }, 2000);
-              reattachSftp((err, sftp) => {
-                if (sftpHandled) return;
-                clearTimeout(sftpTimeout);
-                sftpHandled = true;
+          socket.on('sftp:list', (path = '.') => {
+            const sessionData = activeSessions.get(socket.id);
+            const sc = sessionData?.sshClient;
+            if (!sc || sc._state === 'closed') {
+              return socket.emit('sftp:error', { message: 'SSH Connection Closed' });
+            }
+            let sftpHandled = false;
+            const sftpTimeout = setTimeout(() => {
+              if (sftpHandled) return;
+              sftpHandled = true;
+              fallbackFileListing(socket, sc, path);
+            }, 2000);
+            reattachSftp((err, sftp) => {
+              if (sftpHandled) return;
+              clearTimeout(sftpTimeout);
+              sftpHandled = true;
+              if (err) return fallbackFileListing(socket, sc, path);
+              const targetPath = path === '.' ? './' : path;
+              sftp.readdir(targetPath, (err, list) => {
                 if (err) return fallbackFileListing(socket, sc, path);
-                const targetPath = path === '.' ? './' : path;
-                sftp.readdir(targetPath, (err, list) => {
-                  if (err) return fallbackFileListing(socket, sc, path);
-                  socket.emit('sftp:list', { path, files: list });
-                });
+                socket.emit('sftp:list', { path, files: list });
               });
             });
+          });
 
-            socket.emit('ssh:connected');
+          socket.emit('ssh:connected');
+
+          if (stream && stream.writable) {
             socket.emit('ssh:data', '\r\n\x1b[1;32m✓ Reconnected to session (session preserved)\x1b[0m\r\n');
-            // Send a carriage return to the PTY after a short delay so the shell
-            // repaints its prompt. Without this, the terminal appears frozen/blank
-            // after reattachment even though the shell is alive.
             setTimeout(() => {
               if (stream && stream.writable) {
                 stream.write('\r');
               }
             }, 250);
-            return;
+          } else {
+            console.log(`⚡ [REATTACH] SFTP file-only session reattached successfully for socket ${socket.id}`);
           }
-          // Stream was dead — fall through to create new connection
-          console.log(`[REATTACH] Stream dead for ${connectionId}, creating new connection`);
-          forceCleanupSession(pending);
+          return;
         }
 
         // Helper: check if a string is a valid 24-char MongoDB ObjectId
@@ -1715,38 +1714,43 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
                 if (!client || client._state === 'closed') {
                    return socket.emit('sftp:error', { message: 'SSH Client Disconnected during listing' });
                 }
-                client.exec(currentCmd, (err, stream) => {
-                  if (err) return socket.emit('sftp:error', { message: 'Listing command failed: ' + err.message });
-                  
-                  let output = '';
-                  let stderr = '';
-                  stream.on('data', (data) => { output += data.toString(); });
-                  stream.stderr.on('data', (data) => { stderr += data.toString(); });
-                  stream.on('close', (code) => {
-                    if (stderr) console.warn(`⚠️ [${socket.id}] Listing stderr (Code: ${code}): ${stderr.trim()}`);
+                try {
+                  client.exec(currentCmd, (err, stream) => {
+                    if (err) return socket.emit('sftp:error', { message: 'Listing command failed: ' + err.message });
                     
-                    // Retry with sudo if it failed, even if we don't have a password (might be passwordless sudo)
-                    const canTrySudo = code !== 0 && !isRetry;
-                    
-                    if (canTrySudo) {
-                        let escalatedCmd;
-                        if (connection?.password) {
-                            const b64Pass = Buffer.from(connection.password).toString('base64');
-                            const b64Cmd = Buffer.from(currentCmd).toString('base64');
-                            escalatedCmd = `echo "${b64Pass}" | base64 -d | sudo -S sh -c 'echo "${b64Cmd}" | base64 -d | sh'`;
-                        } else {
-                            // Try non-interactive sudo if no password is available
-                            escalatedCmd = `sudo -n sh -c '${currentCmd.replace(/'/g, "'\\''")}'`;
-                        }
-                        console.warn(`⚠️ [${socket.id}] Listing failed (Code: ${code}). Retrying with escalated command...`);
-                        return runLs(escalatedCmd, true);
-                    }
-                    
-                    const files = parseLsOutput(output);
-                    console.log(`✅ [${socket.id}] Listing found ${files.length} items (Code: ${code}, Output: ${output.length} bytes)`);
-                    socket.emit('sftp:list', { path, files });
+                    let output = '';
+                    let stderr = '';
+                    stream.on('data', (data) => { output += data.toString(); });
+                    stream.stderr.on('data', (data) => { stderr += data.toString(); });
+                    stream.on('close', (code) => {
+                      if (stderr) console.warn(`⚠️ [${socket.id}] Listing stderr (Code: ${code}): ${stderr.trim()}`);
+                      
+                      // Retry with sudo if it failed, even if we don't have a password (might be passwordless sudo)
+                      const canTrySudo = code !== 0 && !isRetry;
+                      
+                      if (canTrySudo) {
+                          let escalatedCmd;
+                          if (connection?.password) {
+                              const b64Pass = Buffer.from(connection.password).toString('base64');
+                              const b64Cmd = Buffer.from(currentCmd).toString('base64');
+                              escalatedCmd = `echo "${b64Pass}" | base64 -d | sudo -S sh -c 'echo "${b64Cmd}" | base64 -d | sh'`;
+                          } else {
+                              // Try non-interactive sudo if no password is available
+                              escalatedCmd = `sudo -n sh -c '${currentCmd.replace(/'/g, "'\\''")}'`;
+                          }
+                          console.warn(`⚠️ [${socket.id}] Listing failed (Code: ${code}). Retrying with escalated command...`);
+                          return runLs(escalatedCmd, true);
+                      }
+                      
+                      const files = parseLsOutput(output);
+                      console.log(`✅ [${socket.id}] Listing found ${files.length} items (Code: ${code}, Output: ${output.length} bytes)`);
+                      socket.emit('sftp:list', { path, files });
+                    });
                   });
-                });
+                } catch (execErr) {
+                  console.warn(`⚠️ [${socket.id}] client.exec failed:`, execErr.message);
+                  socket.emit('sftp:error', { message: 'Listing command failed: ' + execErr.message });
+                }
             };
             
             runLs(cmd);
