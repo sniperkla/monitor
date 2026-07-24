@@ -514,12 +514,6 @@ export default function DesktopEnvironment({ bootPhase }) {
   const openStandaloneTerminal = (conn, sourceStandaloneTermId = null, initialCommand = null, titleOverride = null) => {
     // Use unique ID so multiple standalone windows can coexist for same connection
     const winId = `standalone-term-${conn._id}-${Date.now()}`;
-    
-    // Close existing session in the manager if it exists (not standalone)
-    const existing = appState.activeTerminals.find(t => t.connectionId === conn._id);
-    if (existing) {
-      appDispatch({ type: 'CLOSE_TERMINAL', payload: existing.id });
-    }
 
     openWindow(
       winId,
