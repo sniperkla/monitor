@@ -1269,10 +1269,60 @@ export async function POST(request) {
             ? (rawBranch.startsWith('refs/heads/') ? rawBranch : `refs/heads/${rawBranch}`)
             : null;
 
+          // Helper: send a Telegram warning for non-watched branch pushes
+          const sendBranchMismatchWarning = async (pushedBranch) => {
+            if (!config.telegramNotification || !config.telegramBotToken || !config.telegramChatId) return;
+            try {
+              let botToken;
+              try { botToken = decrypt(config.telegramBotToken); } catch { botToken = config.telegramBotToken; }
+
+              // Extract git info for richer notification
+              let author = null, commitMsg = null, commitId = null;
+              try {
+                if (isGitHub) {
+                  const latestCommit = payload.commits?.[0];
+                  author = payload.pusher?.name || latestCommit?.author?.name || null;
+                  commitMsg = latestCommit?.message || null;
+                  commitId = latestCommit?.id || null;
+                } else if (isBitbucket) {
+                  const change = payload.push?.changes?.[0];
+                  const target = change?.new?.target || {};
+                  author = payload.actor?.display_name || target.author?.raw || null;
+                  commitMsg = target.message || null;
+                  commitId = target.hash || null;
+                }
+              } catch (_) {}
+
+              const projectName = config.name || config.id || 'Default Project';
+              const watchedBranch = rawBranch || '(not set)';
+              const provider = isGitHub ? 'GitHub' : 'Bitbucket';
+
+              let text = `⚠️ <b>Push to Unwatched Branch</b>\n\n`;
+              text += `<b>Project:</b> ${projectName}\n`;
+              text += `<b>Pushed Branch:</b> <code>${pushedBranch}</code>\n`;
+              text += `<b>Watched Branch:</b> <code>${watchedBranch}</code>\n`;
+              text += `<b>Source:</b> ${provider} Webhook\n`;
+              if (author) text += `<b>Pusher:</b> ${author}\n`;
+              if (commitMsg) text += `<b>Commit:</b> <i>${escapeHtml(commitMsg.trim())}</i>\n`;
+              if (commitId) text += `<b>Commit ID:</b> <code>${String(commitId).substring(0, 7)}</code>\n`;
+              text += `\n<i>No deployment was triggered. Push to <code>${watchedBranch}</code> to deploy.</i>`;
+
+              await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ chat_id: config.telegramChatId, text, parse_mode: 'HTML' })
+              });
+            } catch (tgErr) {
+              console.warn(`[webhook] Telegram branch-mismatch warning failed:`, tgErr.message);
+            }
+          };
+
           if (pushRef) {
             console.log(`[webhook] Push ref: ${pushRef}${expectedRef ? `, expected: ${expectedRef}` : ', no branch filter configured'}`);
             if (expectedRef && pushRef !== expectedRef) {
+              const pushedBranch = pushRef.replace('refs/heads/', '');
               console.log(`[webhook] Branch mismatch (${pushRef} vs ${expectedRef}) - skipping deployment without updating status`);
+              await sendBranchMismatchWarning(pushedBranch);
               return NextResponse.json({
                 success: true,
                 message: `Ref ${pushRef} does not match watched branch ${expectedRef}. Skipping deployment.`
@@ -1281,6 +1331,7 @@ export async function POST(request) {
           } else if (expectedRef) {
             // Could not determine the pushed branch from the payload — skip to be safe
             console.log(`[webhook] Could not extract push ref from payload but branch filter is set (${expectedRef}) — skipping deployment`);
+            await sendBranchMismatchWarning('(unknown)');
             return NextResponse.json({
               success: true,
               message: `Could not extract push ref from payload. Expected watched branch ${expectedRef}. Skipping deployment.`
