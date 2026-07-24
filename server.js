@@ -867,6 +867,14 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
 
             socket.emit('ssh:connected');
             socket.emit('ssh:data', '\r\n\x1b[1;32m✓ Reconnected to session (session preserved)\x1b[0m\r\n');
+            // Send a carriage return to the PTY after a short delay so the shell
+            // repaints its prompt. Without this, the terminal appears frozen/blank
+            // after reattachment even though the shell is alive.
+            setTimeout(() => {
+              if (stream && stream.writable) {
+                stream.write('\r');
+              }
+            }, 250);
             return;
           }
           // Stream was dead — fall through to create new connection

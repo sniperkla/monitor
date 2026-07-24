@@ -222,6 +222,8 @@ export default function TerminalView({ connectionId, connectionName, host, color
   const [errorMsg, setErrorMsg] = useState(null);
   const [latency, setLatency] = useState(null);
   const [reconnectNonce, setReconnectNonce] = useState(0);
+  const reconnectNonceRef = useRef(0);
+  useEffect(() => { reconnectNonceRef.current = reconnectNonce; }, [reconnectNonce]);
   const [showReconnect, setShowReconnect] = useState(false);
   const [showTmuxInstallBanner, setShowTmuxInstallBanner] = useState(false);
   const [isInstallingTmux, setIsInstallingTmux] = useState(false);
@@ -1317,11 +1319,20 @@ logstash:
       }
     };
 
-    term.writeln('\x1b[1;36m╔══════════════════════════════════════════╗\x1b[0m');
-    term.writeln(`\x1b[1;36m║\x1b[0m  \x1b[1m${t('terminal.connectingTo')} \x1b[1;33m${propsRef.current.connectionName}\x1b[0m`);
-    term.writeln(`\x1b[1;36m║\x1b[0m  \x1b[90m${propsRef.current.host}\x1b[0m`);
-    term.writeln('\x1b[1;36m╚══════════════════════════════════════════╝\x1b[0m');
-    term.writeln('');
+    const isReconnect = reconnectNonceRef.current > 0;
+
+    if (isReconnect) {
+      // Silent reconnect — only print a compact single-line indicator so
+      // the existing terminal history stays clean and readable.
+      term.writeln(`\x1b[90m── reconnecting to \x1b[33m${propsRef.current.connectionName}\x1b[90m... ──\x1b[0m`);
+    } else {
+      // First-time connection — show the full banner.
+      term.writeln('\x1b[1;36m╔══════════════════════════════════════════╗\x1b[0m');
+      term.writeln(`\x1b[1;36m║\x1b[0m  \x1b[1m${t('terminal.connectingTo')} \x1b[1;33m${propsRef.current.connectionName}\x1b[0m`);
+      term.writeln(`\x1b[1;36m║\x1b[0m  \x1b[90m${propsRef.current.host}\x1b[0m`);
+      term.writeln('\x1b[1;36m╚══════════════════════════════════════════╝\x1b[0m');
+      term.writeln('');
+    }
 
     const socket = io({
       path: '/api/socket',
@@ -1356,14 +1367,19 @@ logstash:
       window.__terminalSockets[propsRef.current.connectionId] = socket;
       idleTimedOutRef.current = false;
       setShowReconnect(false);
-      term.writeln(`\x1b[1;32m✓ ${t('terminal.connectedSuccess')}\x1b[0m\n`);
-      appendOutput(`✓ ${t('terminal.connectedSuccess')}\n`);
-      term.writeln('\r');
+
+      if (reconnectNonceRef.current === 0) {
+        // First-time connection — show success message
+        term.writeln(`\x1b[1;32m✓ ${t('terminal.connectedSuccess')}\x1b[0m\n`);
+        appendOutput(`✓ ${t('terminal.connectedSuccess')}\n`);
+        term.writeln('\r');
+      }
+      // On reconnects: suppress the message — the server-side CR + resize repaint handles it.
       
-      // Secondary dimension sync to ensure precision after handshake
+      // Force dimension sync after handshake — this also triggers ssh:resize → SIGWINCH → prompt repaint
       setTimeout(() => {
         syncTerminalDimensions({ force: true, refresh: true });
-      }, 100);
+      }, 150);
 
       // Detect if initialCommand is a Docker exec (already provides its own shell)
       const isDockerExec = initialCommand && /docker\s+exec/i.test(initialCommand);
