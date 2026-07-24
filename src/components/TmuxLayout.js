@@ -509,14 +509,16 @@ export default function TmuxLayout({ windowId = 'default', isTmuxMode = false })
     setWindows(prev => {
       if (prev.length === 0) return prev;
       const win = prev[activeWindowIndex];
+      if (!win) return prev;
       const paneIds = getAllPaneIds(win.layout);
       
       if (paneIds.length <= 1) {
-        // Last pane in window - remove the window entirely
-        const next = prev.filter((_, i) => i !== activeWindowIndex);
-        if (activeWindowIndex >= next.length && next.length > 0) {
-          setActiveWindowIndex(Math.max(0, next.length - 1));
-        }
+        // Last pane in window - reset termData to null so PaneConnectionPicker (server selection) shows up
+        const next = [...prev];
+        next[activeWindowIndex] = {
+          ...win,
+          layout: updatePaneData(win.layout, targetId, null)
+        };
         return next;
       }
 
@@ -857,15 +859,31 @@ export default function TmuxLayout({ windowId = 'default', isTmuxMode = false })
   // Render
   if (windows.length === 0) {
     return (
-      <div className="h-full flex flex-col items-center justify-center bg-[var(--bg-primary)] backdrop-blur-sm border border-[var(--border-color)] rounded-xl">
-        <div className="p-8 text-center space-y-4">
-          <div className="w-16 h-16 bg-[var(--text-primary)]/5 rounded-full flex items-center justify-center mx-auto border border-[var(--border-color)]/10 animate-pulse">
-             <Terminal size={32} className="text-[var(--text-primary)]/20" />
-          </div>
-          <p className="text-[var(--text-primary)]/30 font-mono text-sm tracking-widest uppercase">No Active Sessions</p>
-          <p className="text-[var(--text-primary)]/10 text-xs max-w-xs mx-auto">Select a connection from the sidebar to start a new tmux workspace.</p>
-        </div>
-      </div>
+      <PaneConnectionPicker 
+        connections={connections} 
+        onSelect={(conn) => {
+          const termId = `term-${conn._id}-${Date.now()}`;
+          const termData = {
+            terminalId: termId,
+            connectionId: conn._id,
+            connectionName: conn.name,
+            host: conn.host,
+            color: conn.color,
+            connection: conn,
+          };
+          handledTermIdsRef.current.add(termId);
+          const newPane = createPane(termData);
+          const newWin = {
+            id: `win-${Date.now()}`,
+            name: conn.name,
+            connectionId: conn._id,
+            layout: assignSplitIds(newPane),
+            activePaneId: newPane.id
+          };
+          setWindows([newWin]);
+          setActiveWindowIndex(0);
+        }} 
+      />
     );
   }
 
