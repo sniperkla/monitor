@@ -3748,9 +3748,17 @@ export default function FileManager({
             <ChevronLeft size={18} />
           </button>
           <div 
-            className="flex items-center gap-2 px-2 lg:px-3 py-1.5 bg-[var(--bg-primary)]/50 rounded-lg border border-[var(--border-color)] w-full min-w-0 max-w-sm group/path cursor-text"
+            className="flex items-center gap-2 px-2 lg:px-3 py-1.5 bg-[var(--bg-primary)]/50 rounded-lg border border-[var(--border-color)] w-full min-w-0 max-w-md group/path cursor-text"
             onClick={() => setIsEditingPath(true)}
           >
+            {connectionName && (
+              <span 
+                className="text-[10px] font-bold px-2 py-0.5 rounded bg-blue-500/15 border border-blue-500/30 text-blue-400 shrink-0 font-mono tracking-wide"
+                title={`Connected SSH: ${connectionName}`}
+              >
+                {connectionName}
+              </span>
+            )}
             <Folder size={14} className="text-blue-400 flex-shrink-0" />
             {isEditingPath ? (
               <input
