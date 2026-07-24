@@ -1230,6 +1230,11 @@ logstash:
 
   const initTerminal = useCallback(async () => {
     if (vaultStatus === 'loading') return;
+    if (vaultStatus === 'locked') {
+      setStatus('error');
+      setErrorMsg('🔒 Vault Locked — Please enter your Master Password to unlock the vault and establish SSH connections.');
+      return;
+    }
 
     // Dynamic imports for xterm (client-side only)
     if (!Terminal) {

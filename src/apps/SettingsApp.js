@@ -162,7 +162,7 @@ function normalizeBitbucketRepo(value) {
   return trimmed;
 }
 
-export default function SettingsApp({ initialTab, deploymentOnly = false }) {
+export default function SettingsApp({ initialTab, deploymentOnly = false, openRelayWizard = false }) {
   const [activeTab, setActiveTab] = useState(initialTab || (deploymentOnly ? 'deployment' : 'appearance'));
   const { data: session } = useSession();
   const { t, i18n } = useTranslation();
@@ -204,7 +204,7 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
   const [relayConnected, setRelayConnected] = useState(false);
   const [relays, setRelays] = useState([]);
   const [relayLoading, setRelayLoading] = useState(false);
-  const [relayModalOpen, setRelayModalOpen] = useState(false);
+  const [relayModalOpen, setRelayModalOpen] = useState(openRelayWizard); // Auto-open if requested
   const [relayWaiting, setRelayWaiting] = useState(false);
   const [relayInstallSuccess, setRelayInstallSuccess] = useState(false);
   // Wizard step: 1 = generate token, 2 = install, 3 = success
@@ -1116,20 +1116,32 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
 
   // Auto-start relay polling when entering step 2 (no manual "I ran it" button needed)
   useEffect(() => {
-    if (relayModalOpen && relayWizardStep >= 2 && !relayWaiting && !relayInstallSuccess) {
+    if (relayModalOpen && !relayWaiting && !relayInstallSuccess) {
       setRelayWaiting(true);
     }
-  }, [relayModalOpen, relayWizardStep, relayWaiting, relayInstallSuccess]);
+  }, [relayModalOpen, relayWaiting, relayInstallSuccess]);
+
+  // Auto-generate token when relay wizard is opened and no token yet
+  useEffect(() => {
+    if (relayModalOpen && !relayToken && !relayLoading) {
+      handleGenerateRelayToken();
+      // Snapshot currently-connected relays so new ones can be detected
+      setExistingRelayIds(new Set(relays.map(r => r.relayId || r.relayName)));
+    }
+    if (!relayModalOpen) {
+      setRelayWaiting(false);
+      setRelayInstallSuccess(false);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [relayModalOpen]);
 
   // Show success screen when a new relay connects during install wizard
   useEffect(() => {
     if (!relayModalOpen) {
-      setRelayWaiting(false);
-      setRelayInstallSuccess(false);
       return;
     }
     const newRelay = relays.find(r => !existingRelayIds.has(r.relayId || r.relayName));
-    if (relayWaiting && newRelay && !relayInstallSuccess && relayWizardStep >= 2) {
+    if (relayWaiting && newRelay && !relayInstallSuccess) {
       setRelayInstallSuccess(true);
       addNotification({ title: 'Relay Connected!', message: 'Your local relay agent is now running.', type: 'success' });
       
@@ -1142,7 +1154,7 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
       localStorage.setItem('ssh_monitor_preferred_relay', relayName);
       setPreferredRelay(relayName);
     }
-  }, [relays, existingRelayIds, relayWaiting, relayModalOpen, relayInstallSuccess, relayWizardStep, addNotification]);
+  }, [relays, existingRelayIds, relayWaiting, relayModalOpen, relayInstallSuccess, addNotification]);
 
   const handleGenerateRelayToken = async () => {
     setRelayLoading(true);
@@ -1164,11 +1176,25 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
     return success;
   };
 
-  const handleDisconnectRelay = async (relayId) => {
+  const handleDisconnectRelay = async (relayId, relayName) => {
+    const targetId = relayId || relayName;
+    if (!targetId) return;
     try {
-      await fetch(`/api/relay/token?relayId=${encodeURIComponent(relayId)}`, { method: 'DELETE', credentials: 'include' });
-      addNotification({ title: 'Relay Disconnected', message: `"${relayId}" has been disconnected.`, type: 'info' });
-    } catch {}
+      await fetch(`/api/relay/token?relayId=${encodeURIComponent(targetId)}`, { method: 'DELETE', credentials: 'include' });
+      setRelays(prev => {
+        const updated = prev.filter(r => (r.relayId || r.relayName) !== targetId);
+        if (updated.length === 0) setRelayConnected(false);
+        return updated;
+      });
+      const currentPref = localStorage.getItem('ssh_monitor_preferred_relay');
+      if (currentPref === targetId) {
+        localStorage.removeItem('ssh_monitor_preferred_relay');
+        setPreferredRelay(null);
+      }
+      addNotification({ title: 'Relay Disconnected', message: `"${targetId}" has been disconnected.`, type: 'info' });
+    } catch (e) {
+      console.error(e);
+    }
   };
 
   const handleRevokeAllRelays = async () => {
@@ -2226,8 +2252,8 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
                             const relayLabel = r.relayName || r.relayId;
                             const isPreferred = preferredRelay === relayLabel;
                             return (
-                              <button
-                                key={r.relayId}
+                              <div
+                                key={r.relayId || r.relayName}
                                 onClick={() => {
                                   localStorage.setItem('ssh_monitor_preferred_relay', relayLabel);
                                   setPreferredRelay(relayLabel);
@@ -2249,16 +2275,17 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
                                   </span>
                                 )}
                                 <button
+                                  type="button"
                                   onClick={async (e) => {
                                     e.stopPropagation();
-                                    await handleDisconnectRelay(r.relayId);
+                                    await handleDisconnectRelay(r.relayId, r.relayName);
                                   }}
-                                  className="p-1 rounded hover:bg-red-500/20 text-[var(--text-muted)] hover:text-red-400 transition-colors shrink-0"
+                                  className="p-1 rounded hover:bg-red-500/20 text-[var(--text-muted)] hover:text-red-400 transition-colors shrink-0 cursor-pointer"
                                   title={`Disconnect ${relayLabel}`}
                                 >
                                   <X size={10} />
                                 </button>
-                              </button>
+                              </div>
                             );
                           })}
                         </div>
@@ -3966,24 +3993,24 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="absolute inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 overflow-y-auto"
+            className="absolute inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4 overflow-y-auto"
             onClick={(e) => { if (e.target === e.currentTarget) setRelayModalOpen(false); }}
           >
             <motion.div
-              initial={{ scale: 0.92, opacity: 0, y: 16 }}
+              initial={{ scale: 0.94, opacity: 0, y: 20 }}
               animate={{ scale: 1, opacity: 1, y: 0 }}
-              exit={{ scale: 0.92, opacity: 0, y: 16 }}
-              transition={{ type: 'spring', damping: 22, stiffness: 300 }}
-              className="w-full max-w-md bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-2xl shadow-2xl flex flex-col overflow-hidden"
+              exit={{ scale: 0.94, opacity: 0, y: 20 }}
+              transition={{ type: 'spring', damping: 24, stiffness: 320 }}
+              className="w-full max-w-lg max-h-[85%] bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-2xl shadow-2xl flex flex-col overflow-hidden"
             >
-              {/* Modal header */}
-              <div className="px-5 py-4 border-b border-[var(--border-color)] flex items-center gap-3">
-                <div className="w-8 h-8 rounded-xl bg-amber-500/15 flex items-center justify-center shrink-0">
-                  <Network size={15} className="text-amber-400" />
+              {/* Header */}
+              <div className="px-6 py-4 border-b border-[var(--border-color)] flex items-center gap-3 bg-gradient-to-r from-amber-500/5 to-transparent shrink-0">
+                <div className="w-9 h-9 rounded-xl bg-amber-500/15 border border-amber-500/25 flex items-center justify-center shrink-0">
+                  <Network size={16} className="text-amber-400" />
                 </div>
                 <div className="flex-1">
-                  <h3 className="text-sm font-bold text-[var(--text-primary)]">Local Relay Agent Setup</h3>
-                  <p className="text-[10px] text-[var(--text-muted)] mt-0.5">Securely access local databases from your machine</p>
+                  <h3 className="text-sm font-bold text-[var(--text-primary)]">Local Relay Agent</h3>
+                  <p className="text-[10px] text-[var(--text-muted)] mt-0.5">Connect to databases & SSH on <code className="text-amber-300">localhost</code></p>
                 </div>
                 <span className={`text-[9px] font-bold px-2 py-0.5 rounded-full border uppercase tracking-wider ${osMeta[detectedOS].badge}`}>
                   {osMeta[detectedOS].label}
@@ -3993,331 +4020,238 @@ export default function SettingsApp({ initialTab, deploymentOnly = false }) {
                 </button>
               </div>
 
-              {/* Step progress bar */}
-              {!relayInstallSuccess && (
-                <div className="px-5 pt-4 pb-2">
-                  <div className="flex items-center gap-2">
-                    {[{n:1,label:'Get Token'},{n:2,label:'Install'},{n:3,label:'Done'}].map(({n, label}, idx, arr) => (
-                      <React.Fragment key={n}>
-                        <div className="flex flex-col items-center gap-1">
-                          <div className={`w-7 h-7 rounded-full flex items-center justify-center text-[11px] font-bold transition-all ${
-                            relayWizardStep > n
-                              ? 'bg-emerald-500 text-white'
-                              : relayWizardStep === n
-                              ? 'bg-amber-500 text-white shadow-md shadow-amber-500/30'
-                              : 'bg-[var(--bg-tertiary)] text-[var(--text-muted)]'
-                          }`}>
-                            {relayWizardStep > n ? <CheckCircle size={13} /> : n}
-                          </div>
-                          <span className={`text-[9px] font-semibold ${
-                            relayWizardStep === n ? 'text-amber-400' : relayWizardStep > n ? 'text-emerald-400' : 'text-[var(--text-muted)]'
-                          }`}>{label}</span>
-                        </div>
-                        {idx < arr.length - 1 && (
-                          <div className={`flex-1 h-0.5 mb-3 rounded-full transition-all ${
-                            relayWizardStep > n ? 'bg-emerald-500/60' : 'bg-[var(--border-color)]'
-                          }`} />
-                        )}
-                      </React.Fragment>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {/* Modal body */}
-              <div className="p-5 overflow-y-auto max-h-[calc(100vh-16rem)]">
+              <div className="p-6 overflow-y-auto flex-1 min-h-0 space-y-5">
 
                 {/* SUCCESS state */}
                 {relayInstallSuccess ? (
-                  <div className="flex flex-col items-center justify-center py-8 text-center gap-5">
+                  <div className="flex flex-col items-center justify-center py-10 text-center gap-5">
                     <motion.div
                       initial={{ scale: 0, opacity: 0 }}
                       animate={{ scale: 1, opacity: 1 }}
                       transition={{ type: 'spring', damping: 14, stiffness: 200 }}
-                      className="w-20 h-20 rounded-full bg-emerald-500/20 border-2 border-emerald-500/30 flex items-center justify-center"
+                      className="relative"
                     >
-                      <CheckCircle size={38} className="text-emerald-400" />
+                      <div className="absolute inset-0 rounded-full bg-emerald-500/20 blur-xl animate-pulse" />
+                      <div className="relative w-20 h-20 rounded-full bg-emerald-500/15 border-2 border-emerald-500/30 flex items-center justify-center">
+                        <CheckCircle size={38} className="text-emerald-400" />
+                      </div>
                     </motion.div>
                     <motion.div
                       initial={{ opacity: 0, y: 10 }}
                       animate={{ opacity: 1, y: 0 }}
-                      transition={{ delay: 0.25 }}
-                      className="space-y-3"
+                      transition={{ delay: 0.2 }}
+                      className="space-y-2"
                     >
-                      <p className="text-base font-bold text-[var(--text-primary)]">Relay Connected!</p>
-                      <p className="text-sm text-emerald-400">Agent is running on your machine</p>
-                      <button
-                        onClick={() => setRelayModalOpen(false)}
-                        className="mt-2 px-6 py-2 bg-emerald-500 hover:bg-emerald-600 active:scale-[0.98] rounded-xl text-white text-[12px] font-bold transition-all shadow-lg shadow-emerald-500/20"
-                      >
-                        Close
-                      </button>
+                      <p className="text-lg font-bold text-[var(--text-primary)]">Relay Connected! 🎉</p>
+                      <p className="text-sm text-emerald-400">Your machine is now reachable from the dashboard</p>
+                      <p className="text-xs text-[var(--text-muted)]">You can now connect to <code className="text-amber-300">localhost</code> databases and SSH hosts</p>
                     </motion.div>
-                  </div>
-
-                ) : relayWizardStep === 1 ? (
-                  /* STEP 1 — Generate Token */
-                  <div className="space-y-4">
-                    <div className="p-4 rounded-xl bg-blue-500/[0.06] border border-blue-500/15 flex gap-3">
-                      <Info size={14} className="shrink-0 text-blue-400 mt-0.5" />
-                      <div className="text-[11px] text-[var(--text-muted)] leading-relaxed space-y-1">
-                        <p><span className="font-semibold text-[var(--text-secondary)]">What is the Relay Agent?</span></p>
-                        <p>A small background service you run on your own desktop computer. It creates a secure tunnel so this dashboard can reach databases on <code className="text-amber-300">localhost</code>.</p>
-                        <p className="text-emerald-400/80 font-medium">✓ Only needed for localhost/127.0.0.1 targets — remote servers work without it</p>
-                        <p className="text-emerald-400/80 font-medium">✓ Nothing is stored on our servers — the connection is end-to-end</p>
-                        <p className="text-blue-400/80 font-medium">✓ Install on your desktop, not on the server</p>
-                      </div>
-                    </div>
-
-                    <div className="space-y-2">
-                      <p className="text-[11px] font-bold text-[var(--text-secondary)]">Step 1 — Generate your unique token</p>
-                      <p className="text-[10px] text-[var(--text-muted)]">A token ties the relay agent running on your machine to your account. You only need to do this once.</p>
-                    </div>
-
-                    {relayToken ? (
-                      <div className="space-y-3">
-                        <div className="p-3 rounded-xl bg-emerald-500/[0.07] border border-emerald-500/20 flex items-center gap-3">
-                          <CheckCircle size={14} className="shrink-0 text-emerald-400" />
-                          <div>
-                            <p className="text-[11px] font-bold text-emerald-300">Token generated</p>
-                            <p className="text-[10px] text-[var(--text-muted)]">Copy the install command below, or click Next.</p>
-                          </div>
-                        </div>
-                        <div className="relative">
-                          <code className="block p-3 pr-10 bg-slate-950 border border-slate-800 rounded-xl text-[10px] font-mono text-amber-300 break-all leading-relaxed">
-                            {getRelayOneLiner('install')}
-                          </code>
-                          <button
-                            onClick={() => {
-                              navigator.clipboard.writeText(getRelayOneLiner('install'));
-                              addNotification({ title: 'Copied!', message: 'Paste in your Terminal and press Enter.', type: 'success' });
-                            }}
-                            className="absolute right-2 top-2 p-1.5 hover:bg-white/10 rounded-lg transition-colors"
-                          >
-                            <Copy size={13} className="text-[var(--text-muted)]" />
-                          </button>
-                        </div>
-                        <button
-                          onClick={handleGenerateRelayToken}
-                          disabled={relayLoading}
-                          className="w-full text-[10px] text-[var(--text-muted)] hover:text-[var(--text-secondary)] transition-colors py-1"
-                        >
-                          {relayLoading ? 'Regenerating…' : 'Regenerate token'}
-                        </button>
-                      </div>
-                    ) : (
-                      <button
-                        onClick={async () => {
-                          const success = await handleGenerateRelayToken();
-                          if (success) setRelayWizardStep(2);
-                        }}
-                        disabled={relayLoading}
-                        className="w-full flex items-center justify-center gap-2 py-3 bg-amber-500 hover:bg-amber-600 disabled:opacity-50 rounded-xl text-white font-bold text-sm transition-all shadow-lg shadow-amber-500/20 active:scale-[0.98]"
-                      >
-                        {relayLoading ? <Loader size={14} className="animate-spin" /> : <Zap size={14} />}
-                        {relayLoading ? 'Generating…' : 'Generate Token'}
-                      </button>
-                    )}
-
                     <button
-                      onClick={() => setRelayWizardStep(2)}
-                      disabled={!relayToken}
-                      className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl font-bold text-[12px] transition-all border disabled:opacity-30 disabled:cursor-not-allowed border-[var(--border-color)] text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)]"
+                      onClick={() => setRelayModalOpen(false)}
+                      className="px-8 py-2.5 bg-emerald-500 hover:bg-emerald-600 active:scale-[0.98] rounded-xl text-white text-sm font-bold transition-all shadow-lg shadow-emerald-500/20"
                     >
-                      Next — Install Agent →
+                      Done ✓
                     </button>
                   </div>
 
-                ) : relayWizardStep === 2 ? (
-                  /* STEP 2 — Install */
-                  <div className="space-y-4">
-                    <div className="flex items-start gap-2.5 p-3 rounded-xl bg-amber-500/[0.06] border border-amber-500/15">
-                      <span className="text-lg shrink-0">💻</span>
-                      <p className="text-[11px] text-[var(--text-muted)] leading-relaxed">
-                        <span className="font-bold text-[var(--text-primary)]">Run this on your own machine</span> — the computer where your local database is running, not on the server.
-                      </p>
+                ) : (
+                  <>
+                    {/* What is it? — concise explanation */}
+                    <div className="flex gap-3 p-3.5 rounded-xl bg-blue-500/[0.06] border border-blue-500/15">
+                      <Info size={14} className="shrink-0 text-blue-400 mt-0.5" />
+                      <div className="text-[11px] text-[var(--text-muted)] leading-relaxed space-y-1.5">
+                        <p className="font-semibold text-[var(--text-secondary)]">What is the Relay Agent?</p>
+                        <p>A small background service you run on <strong className="text-[var(--text-primary)]">your own computer</strong>. It creates a secure tunnel so this dashboard can reach services on <code className="text-amber-300">localhost</code>.</p>
+                        <div className="flex flex-col gap-1 pt-1">
+                          <span className="text-emerald-400/90">✓ Only needed for localhost/127.0.0.1 — remote servers don't need it</span>
+                          <span className="text-emerald-400/90">✓ Nothing stored on our servers — fully end-to-end encrypted</span>
+                          <span className="text-blue-400/80">✓ Install on your desktop machine, not the server</span>
+                        </div>
+                      </div>
                     </div>
 
-                    {/* Unified install section — dynamically adapts per OS */}
-                    {(() => {
-                      const isWin = detectedOS === 'windows';
-                      const isMac = detectedOS === 'macos';
-                      const scriptFilename = getRelayScriptFilename('install');
-                      return (
-                        <div className="space-y-3">
-                          <p className="text-[11px] font-bold text-[var(--text-secondary)]">
-                            Step 2 — {isWin ? 'Download & double-click to install' : 'Copy & paste into Terminal'}
-                          </p>
+                    {/* Install command */}
+                    <div className="space-y-3">
+                      <div className="flex items-center gap-2">
+                        <div className="w-5 h-5 rounded-full bg-amber-500 flex items-center justify-center shrink-0">
+                          <span className="text-[10px] font-bold text-white">1</span>
+                        </div>
+                        <p className="text-xs font-bold text-[var(--text-secondary)]">
+                          {detectedOS === 'windows' ? 'Download & run the installer' : 'Copy & paste into your Terminal'}
+                        </p>
+                      </div>
 
-                          {/* Command block — visible for all platforms */}
-                          <div className="relative">
-                            <code className={`block p-3 pr-10 bg-slate-950 border rounded-xl text-[10px] font-mono break-all leading-relaxed ${
-                              relayToken ? 'border-slate-800 text-amber-300' : 'border-amber-500/30 text-amber-500/60 italic'
-                            }`}>
-                              {getRelayOneLiner('install')}
-                            </code>
+                      {/* Command block */}
+                      <div className="relative rounded-xl overflow-hidden border border-slate-700/60">
+                        <div className="flex items-center gap-2 px-3 py-1.5 bg-slate-900/80 border-b border-slate-700/40">
+                          <div className="flex gap-1.5">
+                            <div className="w-2.5 h-2.5 rounded-full bg-red-500/60" />
+                            <div className="w-2.5 h-2.5 rounded-full bg-amber-500/60" />
+                            <div className="w-2.5 h-2.5 rounded-full bg-emerald-500/60" />
+                          </div>
+                          <span className="text-[9px] text-slate-500 font-mono flex-1">
+                            {detectedOS === 'windows' ? 'PowerShell / CMD' : 'Terminal'}
+                          </span>
+                          {relayToken && (
+                            <button
+                              onClick={() => {
+                                navigator.clipboard.writeText(getRelayOneLiner('install'));
+                                addNotification({ title: 'Copied!', message: detectedOS === 'windows' ? 'Paste in PowerShell or CMD and press Enter.' : 'Open Terminal, paste and press Enter.', type: 'success' });
+                              }}
+                              className="flex items-center gap-1 px-2 py-0.5 rounded-md bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/20 text-amber-400 text-[9px] font-bold transition-colors"
+                            >
+                              <Copy size={9} /> Copy
+                            </button>
+                          )}
+                        </div>
+                        <div className="p-3 bg-slate-950 min-h-[56px] flex items-center">
+                          {relayToken ? (
+                            <code className="text-[10px] font-mono text-amber-300 break-all leading-relaxed">{getRelayOneLiner('install')}</code>
+                          ) : (
+                            <div className="flex items-center gap-2 text-[10px] text-slate-500 italic">
+                              <Loader size={11} className="animate-spin" />
+                              <span>Generating your unique install command…</span>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* CTA buttons */}
+                      <div className="flex gap-2">
+                        {detectedOS === 'windows' ? (
+                          <>
+                            <button
+                              onClick={() => downloadInstallerScript('install')}
+                              disabled={!relayToken}
+                              className="flex-1 flex items-center justify-center gap-2 py-2.5 bg-amber-500 hover:bg-amber-600 active:scale-[0.98] disabled:opacity-40 disabled:cursor-not-allowed rounded-xl text-white font-bold text-xs transition-all shadow-lg shadow-amber-500/25"
+                            >
+                              <Download size={13} /> Download {getRelayScriptFilename('install')}
+                            </button>
                             <button
                               onClick={() => {
                                 if (!relayToken) return;
                                 navigator.clipboard.writeText(getRelayOneLiner('install'));
-                                addNotification({ title: 'Copied!', message: isWin ? 'Paste in PowerShell or CMD and press Enter.' : 'Paste in your Terminal and press Enter.', type: 'success' });
+                                addNotification({ title: 'Copied!', message: 'Paste in PowerShell or CMD and press Enter.', type: 'success' });
                               }}
                               disabled={!relayToken}
-                              className="absolute right-2 top-2 p-1.5 hover:bg-white/10 rounded-lg transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                              className="px-3 py-2.5 bg-[var(--bg-tertiary)] hover:bg-[var(--border-color)] border border-[var(--border-color)] disabled:opacity-40 disabled:cursor-not-allowed rounded-xl text-[var(--text-secondary)] text-xs font-bold transition-colors"
                             >
-                              <Copy size={13} className="text-[var(--text-muted)]" />
+                              <Copy size={13} />
                             </button>
-                          </div>
-
-                          {/* Primary CTA: Download for Windows, Copy for macOS/Linux */}
-                          {isWin ? (
-                            <button
-                              onClick={() => downloadInstallerScript('install')}
-                              disabled={!relayToken}
-                              className="w-full flex items-center gap-3 px-4 py-3.5 bg-amber-500 hover:bg-amber-600 active:scale-[0.98] disabled:opacity-40 disabled:cursor-not-allowed rounded-xl text-white font-bold text-sm transition-all shadow-lg shadow-amber-500/25"
-                            >
-                              <Download size={16} />
-                              <div className="text-left">
-                                <div>Download {scriptFilename}</div>
-                                <div className="text-[10px] font-normal opacity-80">Run as Administrator if prompted</div>
-                              </div>
-                            </button>
-                          ) : (
-                            <button
-                              onClick={() => {
-                                navigator.clipboard.writeText(getRelayOneLiner('install'));
-                                addNotification({ title: 'Copied!', message: 'Open Terminal, paste and press Enter. Connection will be detected automatically.', type: 'success' });
-                              }}
-                              className="w-full flex items-center justify-center gap-2 py-3 bg-amber-500 hover:bg-amber-600 active:scale-[0.98] rounded-xl text-white font-bold text-sm transition-all shadow-lg shadow-amber-500/20"
-                            >
-                              <Copy size={14} /> Copy Install Command
-                            </button>
-                          )}
-
-                          {/* Step hints */}
-                          <div className="grid grid-cols-3 gap-2">
-                            {(isWin
-                              ? ['Download file', 'Double-click it', 'Done!']
-                              : ['Copy command', 'Open Terminal', 'Paste & Enter']
-                            ).map((s, i) => (
-                              <div key={i} className="flex flex-col items-center gap-1.5 p-2.5 rounded-xl bg-[var(--bg-tertiary)]">
-                                <span className="text-amber-400 font-bold text-xs">{i + 1}</span>
-                                <span className="text-[9px] text-[var(--text-muted)] text-center leading-tight">{s}</span>
-                              </div>
-                            ))}
-                          </div>
-
-                          {/* Polling starts automatically on step 2 — see useEffect above */}
-
-                          {/* Secondary option — flipped per OS */}
-                          <details className="group">
-                            <summary className="text-[10px] text-[var(--text-muted)] cursor-pointer select-none hover:text-[var(--text-secondary)] transition-colors py-1 flex items-center gap-1.5">
-                              <ChevronDown size={11} className="group-open:rotate-180 transition-transform" />
-                              {isWin ? 'Or run via PowerShell / CMD instead' : 'Prefer a script file instead?'}
-                            </summary>
-                            <div className="pt-2 space-y-2">
-                              {isWin ? (
-                                <p className="text-[10px] text-blue-300/70 bg-blue-500/5 border border-blue-500/15 rounded-lg px-3 py-2 leading-relaxed">
-                                  Paste the command above into PowerShell or CMD. Requires Node.js and curl in PATH. If curl isn&apos;t available, use the .bat download above.
-                                </p>
-                              ) : (
-                                <>
-                                  <button
-                                    onClick={() => downloadInstallerScript('install')}
-                                    className="w-full flex items-center gap-2 px-4 py-2.5 bg-[var(--bg-tertiary)] hover:bg-[var(--border-color)] rounded-xl text-[var(--text-secondary)] text-[11px] font-bold transition-colors"
-                                  >
-                                    <Download size={13} /> Download {scriptFilename}
-                                  </button>
-                                  {isMac && (
-                                    <p className="text-[10px] text-amber-300/70 bg-amber-500/5 border border-amber-500/15 rounded-lg px-3 py-2 leading-relaxed">
-                                      macOS may block downloaded scripts. If it won&apos;t open, run:<br />
-                                      <code className="text-[9px] break-all">xattr -d com.apple.quarantine ~/Downloads/{scriptFilename}</code>
-                                    </p>
-                                  )}
-                                  {!isMac && (
-                                    <p className="text-[10px] text-[var(--text-muted)] bg-[var(--bg-tertiary)] rounded-lg px-3 py-2">{t('settings_ui.relay.linuxRunHint')}</p>
-                                  )}
-                                </>
-                              )}
-                            </div>
-                          </details>
-                        </div>
-                      );
-                    })()}
-
-                    {/* Waiting indicator */}
-                    <AnimatePresence>
-                      {relayWaiting && (
-                        <motion.div
-                          initial={{ opacity: 0, y: 6 }}
-                          animate={{ opacity: 1, y: 0 }}
-                          exit={{ opacity: 0, y: 6 }}
-                          className="flex items-center gap-2.5 p-3 rounded-xl bg-emerald-500/[0.07] border border-emerald-500/20 text-[10px] text-emerald-300"
-                        >
-                          <Loader size={12} className="shrink-0 text-emerald-400 animate-spin" />
-                          <span>Waiting for relay to connect — this window will close automatically once detected.</span>
-                        </motion.div>
-                      )}
-                    </AnimatePresence>
-
-                    {/* Footer actions */}
-                    <div className="flex items-center justify-between pt-1">
-                      <button
-                        onClick={() => setRelayWizardStep(1)}
-                        className="text-[10px] text-[var(--text-muted)] hover:text-[var(--text-secondary)] transition-colors"
-                      >
-                        ← Back
-                      </button>
-                      <div className="flex items-center gap-3">
-                        {relayConnected && (
+                          </>
+                        ) : (
                           <button
                             onClick={() => {
-                              setRelayInstallSuccess(true);
+                              navigator.clipboard.writeText(getRelayOneLiner('install'));
+                              addNotification({ title: 'Copied!', message: 'Open Terminal, paste and press Enter. Connection will be detected automatically.', type: 'success' });
                             }}
-                            className="px-4 py-2 bg-emerald-500 hover:bg-emerald-600 rounded-xl text-white text-[11px] font-bold transition-all"
+                            disabled={!relayToken}
+                            className="flex-1 flex items-center justify-center gap-2 py-2.5 bg-amber-500 hover:bg-amber-600 active:scale-[0.98] disabled:opacity-40 disabled:cursor-not-allowed rounded-xl text-white font-bold text-xs transition-all shadow-lg shadow-amber-500/20"
                           >
-                            Done ✓
+                            <Copy size={13} /> Copy Install Command
                           </button>
                         )}
-                        {relayConnected && (
+                        {!relayToken && (
                           <button
-                            onClick={handleRevokeAllRelays}
-                            className="text-[10px] text-red-400/60 hover:text-red-400 transition-colors"
+                            onClick={handleGenerateRelayToken}
+                            disabled={relayLoading}
+                            className="px-3 py-2.5 bg-[var(--bg-tertiary)] hover:bg-[var(--border-color)] border border-[var(--border-color)] disabled:opacity-40 rounded-xl text-[var(--text-muted)] hover:text-[var(--text-secondary)] text-xs font-bold transition-colors"
                           >
-                            Revoke all tokens
+                            {relayLoading ? <Loader size={13} className="animate-spin" /> : <RefreshCw size={13} />}
                           </button>
                         )}
                       </div>
                     </div>
 
-                    {/* Uninstall section — collapsible */}
-                    <details className="group border-t border-[var(--border-color)] pt-3 mt-1">
-                      <summary className="text-[10px] text-[var(--text-muted)] cursor-pointer select-none hover:text-red-400 transition-colors flex items-center gap-1.5">
+                    {/* Step 2 — waiting for connection */}
+                    <div className="space-y-2.5">
+                      <div className="flex items-center gap-2">
+                        <div className={`w-5 h-5 rounded-full flex items-center justify-center shrink-0 transition-colors ${relayConnected ? 'bg-emerald-500' : 'bg-[var(--bg-tertiary)] border border-[var(--border-color)]'}`}>
+                          {relayConnected
+                            ? <CheckCircle size={12} className="text-white" />
+                            : <span className="text-[10px] font-bold text-[var(--text-muted)]">2</span>
+                          }
+                        </div>
+                        <p className="text-xs font-bold text-[var(--text-secondary)]">
+                          {relayConnected ? 'Relay detected — you\'re connected!' : 'Waiting for relay to connect…'}
+                        </p>
+                      </div>
+
+                      <AnimatePresence>
+                        {relayConnected ? (
+                          <motion.div
+                            initial={{ opacity: 0, y: 4 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            className="flex items-center gap-3 p-3 rounded-xl bg-emerald-500/[0.08] border border-emerald-500/20"
+                          >
+                            <div className="w-2 h-2 rounded-full bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.7)] animate-pulse shrink-0" />
+                            <div className="flex-1">
+                              <p className="text-[11px] font-bold text-emerald-300">Relay is online</p>
+                              <p className="text-[10px] text-emerald-400/70">Your machine is connected securely</p>
+                            </div>
+                            <button
+                              onClick={() => setRelayInstallSuccess(true)}
+                              className="px-3 py-1.5 bg-emerald-500 hover:bg-emerald-600 rounded-lg text-white text-[10px] font-bold transition-all active:scale-[0.97]"
+                            >
+                              Done ✓
+                            </button>
+                          </motion.div>
+                        ) : (
+                          <motion.div
+                            initial={{ opacity: 0 }}
+                            animate={{ opacity: 1 }}
+                            className="flex items-center gap-2.5 p-3 rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)]"
+                          >
+                            <Loader size={12} className="shrink-0 text-[var(--text-muted)] animate-spin" />
+                            <span className="text-[10px] text-[var(--text-muted)]">After running the command above, your relay will connect here automatically.</span>
+                          </motion.div>
+                        )}
+                      </AnimatePresence>
+                    </div>
+
+                    {/* Collapsible advanced options */}
+                    <details className="group border-t border-[var(--border-color)] pt-3">
+                      <summary className="text-[10px] text-[var(--text-muted)] cursor-pointer select-none hover:text-[var(--text-secondary)] transition-colors flex items-center gap-1.5 py-1">
                         <ChevronDown size={11} className="group-open:rotate-180 transition-transform" />
-                        Uninstall relay agent
+                        Advanced options (uninstall, alternative methods)
                       </summary>
                       <div className="pt-3 space-y-2">
-                        {/* Copy uninstall command — works for all */}
+                        {detectedOS !== 'windows' && (
+                          <button
+                            onClick={() => downloadInstallerScript('install')}
+                            disabled={!relayToken}
+                            className="w-full flex items-center gap-2 px-4 py-2 bg-[var(--bg-tertiary)] hover:bg-[var(--border-color)] rounded-xl text-[var(--text-secondary)] text-[11px] font-bold transition-colors disabled:opacity-40"
+                          >
+                            <Download size={13} /> Download script file instead
+                          </button>
+                        )}
                         <button
                           onClick={() => {
                             navigator.clipboard.writeText(getRelayOneLiner('uninstall'));
                             addNotification({ title: 'Copied!', message: detectedOS === 'windows' ? 'Paste in PowerShell or CMD to uninstall.' : 'Paste in Terminal to uninstall.', type: 'info' });
                           }}
-                          className="w-full flex items-center gap-2 px-4 py-2.5 bg-red-500/10 hover:bg-red-500/20 border border-red-500/20 rounded-xl text-red-400 text-[11px] font-bold transition-all"
+                          className="w-full flex items-center gap-2 px-4 py-2 bg-red-500/10 hover:bg-red-500/15 border border-red-500/20 rounded-xl text-red-400 text-[11px] font-bold transition-all"
                         >
                           <Copy size={12} /> Copy Uninstall Command
                         </button>
-                        {/* Download uninstall script — works for all */}
                         <button
                           onClick={() => downloadInstallerScript('uninstall')}
-                          className="w-full flex items-center gap-2 px-4 py-2.5 bg-[var(--bg-tertiary)] hover:bg-[var(--border-color)] rounded-xl text-[var(--text-secondary)] text-[11px] font-bold transition-colors"
+                          className="w-full flex items-center gap-2 px-4 py-2 bg-[var(--bg-tertiary)] hover:bg-[var(--border-color)] rounded-xl text-[var(--text-secondary)] text-[11px] font-bold transition-colors"
                         >
                           <Download size={12} /> Download {getRelayScriptFilename('uninstall')}
                         </button>
+                        {relayConnected && (
+                          <button
+                            onClick={handleRevokeAllRelays}
+                            className="w-full text-[10px] text-red-400/60 hover:text-red-400 transition-colors py-1 text-center"
+                          >
+                            Revoke all tokens
+                          </button>
+                        )}
                       </div>
                     </details>
-                  </div>
-                ) : null}
+                  </>
+                )}
               </div>
             </motion.div>
           </motion.div>
@@ -4346,3 +4280,4 @@ function PlusIcon({ size, className }) {
     </svg>
   );
 }
+

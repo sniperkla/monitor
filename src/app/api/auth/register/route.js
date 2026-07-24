@@ -1,7 +1,9 @@
 import { NextResponse } from 'next/server';
 import bcrypt from 'bcryptjs';
+import crypto from 'crypto';
 import connectDB from '@/lib/mongodb';
 import User from '@/models/User';
+import { sendVerificationEmail } from '@/lib/resend';
 
 export async function POST(request) {
   try {
@@ -40,19 +42,39 @@ export async function POST(request) {
     const hashedPassword = await bcrypt.hash(password, 10);
     const isAdminEmail = !!process.env.ADMIN_EMAIL && cleanEmail === process.env.ADMIN_EMAIL;
 
+    // Generate 6-digit confirmation code
+    const verifyCode = crypto.randomInt(100000, 999999).toString();
+    const codeHash = crypto.createHash('sha256').update(verifyCode).digest('hex');
+
     const newUser = await User.create({
       name: cleanName,
       email: cleanEmail,
       password: hashedPassword,
       role: isAdminEmail ? 'admin' : 'user',
+      emailVerified: false,
+      emailVerification: {
+        codeHash,
+        expiresAt: new Date(Date.now() + 15 * 60 * 1000),
+        lastRequestAt: new Date(),
+      },
     });
 
     console.log(`🆕 New user registered via Credentials: ${cleanEmail}`);
 
+    // Send confirmation email via Resend
+    try {
+      await sendVerificationEmail({ to: cleanEmail, code: verifyCode });
+      console.log(`[Resend] Verification email sent to ${cleanEmail}`);
+    } catch (resendErr) {
+      console.error('[Resend] Failed to send verification email:', resendErr.message);
+    }
+
     return NextResponse.json({
       success: true,
-      message: 'Account registered successfully! You can now log in.',
+      requiresVerification: true,
+      message: 'Account registered! A verification code has been sent to your email.',
       userId: newUser._id.toString(),
+      email: cleanEmail,
     });
   } catch (error) {
     console.error('❌ Registration error:', error);

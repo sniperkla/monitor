@@ -132,8 +132,11 @@ export default function MasterPasswordModal({ isBooted = true }) {
     }
   }, [isBooted]);
 
-  // Auto-set mode based on vault status
+  // Auto-set mode based on vault status — always clear sensitive fields on transition
   useEffect(() => {
+    setMasterPassword('');
+    setConfirmPassword('');
+    setError('');
     if (vaultStatus === 'setup') {
       setMode('setup');
       if (hasLegacyUri && legacyUri) {
@@ -782,7 +785,10 @@ export default function MasterPasswordModal({ isBooted = true }) {
                     setShowRelayReminder(false);
                     setPendingSetup(null);
                     dismissVault();
-                    window.dispatchEvent(new CustomEvent('open-settings-tab', { detail: 'database' }));
+                    // Small timeout ensures the modal closes before settings opens
+                    setTimeout(() => {
+                      window.dispatchEvent(new CustomEvent('open-relay-wizard'));
+                    }, 50);
                   }}
                   className="flex-1 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-white text-xs font-bold transition-all"
                 >

@@ -72,8 +72,15 @@ export default function DesktopEnvironment({ bootPhase }) {
       const tab = e.detail || 'database';
       openWindowRef.current('settings', t('apps.settings'), <SettingsApp initialTab={tab} />, Settings, { initialWidth: 900, initialHeight: 700 });
     };
+    const handleOpenRelayWizard = () => {
+      openWindowRef.current('settings', t('apps.settings'), <SettingsApp initialTab="database" openRelayWizard={true} />, Settings, { initialWidth: 900, initialHeight: 700 });
+    };
     window.addEventListener('open-settings-tab', handleOpenSettingsTab);
-    return () => window.removeEventListener('open-settings-tab', handleOpenSettingsTab);
+    window.addEventListener('open-relay-wizard', handleOpenRelayWizard);
+    return () => {
+      window.removeEventListener('open-settings-tab', handleOpenSettingsTab);
+      window.removeEventListener('open-relay-wizard', handleOpenRelayWizard);
+    };
   }, []);
 
   // Always track latest icon positions in a ref (avoids stale closure)

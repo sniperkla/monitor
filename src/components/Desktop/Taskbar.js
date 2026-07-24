@@ -339,10 +339,11 @@ export default function Taskbar() {
                         sessionStorage.removeItem('_vault_uri');
                         sessionStorage.removeItem('_vault_tunnel');
                         await signOut({ redirect: false });
-                        window.location.href = '/login'; 
                       }
+                      window.location.href = '/'; 
                     }}
                     className="p-2 rounded-lg hover:bg-[var(--bg-tertiary)] text-[var(--text-muted)] hover:text-red-500 transition-colors"
+                    title={session ? "Sign Out" : "Quit to Reveal Screen"}
                   >
                     <Power size={18} />
                   </button>

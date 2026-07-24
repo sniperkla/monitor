@@ -5,6 +5,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { Terminal, Shield, ChevronRight, Server, Database, Mail, Lock, User as UserIcon, X, Loader, AlertCircle, CheckCircle } from 'lucide-react';
 import { useState, useEffect, useRef } from 'react';
 import { GalaxyBackground, ShootingStars, Nebula, MatrixRain } from './BackgroundEffects';
+import { CinematicAuthModal } from './CinematicAuthModal';
 
 /* ── Render Phase Hook — drives sequential reveal ── */
 function useRenderSequence(totalPhases, phaseGap = 400) {
@@ -482,10 +483,15 @@ export function RevealScreen({ onDismiss }) {
 
   // Email & Password Auth State
   const [showAuthModal, setShowAuthModal] = useState(false);
-  const [authMode, setAuthMode] = useState('signin'); // 'signin' | 'register'
+  const [authMode, setAuthMode] = useState('signin'); // 'signin' | 'register' | 'forgot' | 'verify'
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+
   const [name, setName] = useState('');
+  const [resetCode, setResetCode] = useState('');
+  const [verifyCodeInput, setVerifyCodeInput] = useState('');
   const [authLoading, setAuthLoading] = useState(false);
   const [authError, setAuthError] = useState(null);
   const [authSuccess, setAuthSuccess] = useState(null);
@@ -495,14 +501,20 @@ export function RevealScreen({ onDismiss }) {
     setAuthError(null);
     setAuthSuccess(null);
 
-    if (!email || !password) {
-      setAuthError('Please fill in all required fields.');
-      return;
-    }
-
     setAuthLoading(true);
     try {
       if (authMode === 'register') {
+        if (!email || !password || !confirmPassword) {
+          setAuthError('Please fill in all required fields.');
+          setAuthLoading(false);
+          return;
+        }
+        if (password !== confirmPassword) {
+          setAuthError('Passphrases do not match. Please verify your password.');
+          setAuthLoading(false);
+          return;
+        }
+
         const res = await fetch('/api/auth/register', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -514,7 +526,77 @@ export function RevealScreen({ onDismiss }) {
           setAuthLoading(false);
           return;
         }
-        setAuthSuccess('Account registered! Signing you in...');
+        setAuthSuccess('Account registered! Verification code sent to your email.');
+        setAuthMode('verify');
+        setAuthLoading(false);
+        return;
+      }
+
+      if (authMode === 'verify') {
+        const res = await fetch('/api/auth/verify-email', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'confirm', email: email.trim().toLowerCase(), code: verifyCodeInput }),
+        });
+        const data = await res.json();
+        if (!data.success) {
+          setAuthError(data.error || 'Email verification failed.');
+          setAuthLoading(false);
+          return;
+        }
+        setAuthSuccess('Email verified successfully! You can now sign in.');
+        setAuthMode('signin');
+        setAuthLoading(false);
+        return;
+      }
+
+      if (authMode === 'forgot') {
+        if (!email) {
+          setAuthError('Please enter your email address.');
+          setAuthLoading(false);
+          return;
+        }
+        if (!resetCode) {
+          // Request reset code
+          const res = await fetch('/api/auth/forgot-password', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ email: email.trim().toLowerCase() }),
+          });
+          const data = await res.json();
+          if (!data.success) {
+            setAuthError(data.error || 'Failed to send password reset code.');
+            setAuthLoading(false);
+            return;
+          }
+          setAuthSuccess('Password reset code sent to your email. Please enter it below.');
+          setAuthLoading(false);
+          return;
+        } else {
+          // Confirm reset code & set new password
+          if (!newPassword) {
+            setAuthError('Please enter your new password.');
+            setAuthLoading(false);
+            return;
+          }
+          const res = await fetch('/api/auth/reset-password', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ email: email.trim().toLowerCase(), code: resetCode, newPassword }),
+          });
+          const data = await res.json();
+          if (!data.success) {
+            setAuthError(data.error || 'Failed to reset password.');
+            setAuthLoading(false);
+            return;
+          }
+          setAuthSuccess('Password reset successfully! You can now sign in.');
+          setAuthMode('signin');
+          setResetCode('');
+          setNewPassword('');
+          setAuthLoading(false);
+          return;
+        }
       }
 
       // Perform Credentials Sign In via NextAuth
@@ -570,10 +652,16 @@ export function RevealScreen({ onDismiss }) {
           onMouseLeave={() => setHovered(false)}
         >
           <motion.div
-            initial={{ y: 20, opacity: 0 }}
-            animate={{ y: 0, opacity: 1 }}
-            transition={{ delay: 0.2, type: 'spring', stiffness: 80, damping: 15 }}
+            animate={{
+              y: 0,
+              opacity: showAuthModal ? 0 : 1,
+              scale: showAuthModal ? 0.95 : 1,
+              pointerEvents: showAuthModal ? 'none' : 'auto',
+            }}
+            transition={{ duration: 0.3, ease: 'easeInOut' }}
             className="relative w-full max-w-xl p-10 md:p-12 rounded-[2rem] flex flex-col items-center z-10"
+
+
             style={{
               background: 'rgba(6, 8, 24, 0.6)',
               border: hovered ? '1px solid rgba(74, 222, 128, 0.3)' : '1px solid rgba(99, 102, 241, 0.25)',
@@ -796,141 +884,41 @@ export function RevealScreen({ onDismiss }) {
         </div>
       </div>
 
-      {/* ── Email & Password Authentication Modal ── */}
+      {/* ── Immersive & Cinematic Email & Password Authentication Modal ── */}
       <AnimatePresence>
         {showAuthModal && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md">
-            <motion.div
-              initial={{ opacity: 0, scale: 0.95, y: 15 }}
-              animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.95, y: 15 }}
-              className="relative w-full max-w-md p-6 bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl text-slate-100"
-            >
-              {/* Close Button */}
-              <button
-                onClick={() => setShowAuthModal(false)}
-                className="absolute right-4 top-4 p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
-              >
-                <X size={18} />
-              </button>
+          <CinematicAuthModal
+            isOpen={showAuthModal}
+            onClose={() => setShowAuthModal(false)}
+            authMode={authMode}
+            setAuthMode={setAuthMode}
+            email={email}
+            setEmail={setEmail}
+            password={password}
+            setPassword={setPassword}
+            confirmPassword={confirmPassword}
+            setConfirmPassword={setConfirmPassword}
+            newPassword={newPassword}
 
-              {/* Header */}
-              <div className="flex items-center gap-3 mb-6">
-                <div className="p-2.5 rounded-xl bg-indigo-500/10 border border-indigo-500/20 text-indigo-400">
-                  <Mail size={20} />
-                </div>
-                <div>
-                  <h2 className="text-base font-bold text-white">
-                    {authMode === 'register' ? 'Create Account' : 'Welcome Back'}
-                  </h2>
-                  <p className="text-xs text-slate-400">
-                    {authMode === 'register' ? 'Register with email and password' : 'Sign in to access your connections & vault'}
-                  </p>
-                </div>
-              </div>
+            setNewPassword={setNewPassword}
+            name={name}
+            setName={setName}
+            resetCode={resetCode}
+            setResetCode={setResetCode}
+            verifyCodeInput={verifyCodeInput}
+            setVerifyCodeInput={setVerifyCodeInput}
+            authLoading={authLoading}
+            authError={authError}
+            setAuthError={setAuthError}
+            authSuccess={authSuccess}
+            setAuthSuccess={setAuthSuccess}
+            handleAuthSubmit={handleAuthSubmit}
 
-              {/* Tabs: Sign In vs Register */}
-              <div className="flex p-1 mb-5 rounded-xl bg-slate-950 border border-slate-800/80">
-                <button
-                  type="button"
-                  onClick={() => { setAuthMode('signin'); setAuthError(null); setAuthSuccess(null); }}
-                  className={`flex-1 py-1.5 text-xs font-bold rounded-lg transition-all ${
-                    authMode === 'signin'
-                      ? 'bg-gradient-to-r from-indigo-500 to-cyan-500 text-white shadow-md'
-                      : 'text-slate-400 hover:text-white'
-                  }`}
-                >
-                  Sign In
-                </button>
-                <button
-                  type="button"
-                  onClick={() => { setAuthMode('register'); setAuthError(null); setAuthSuccess(null); }}
-                  className={`flex-1 py-1.5 text-xs font-bold rounded-lg transition-all ${
-                    authMode === 'register'
-                      ? 'bg-gradient-to-r from-indigo-500 to-cyan-500 text-white shadow-md'
-                      : 'text-slate-400 hover:text-white'
-                  }`}
-                >
-                  Create Account
-                </button>
-              </div>
-
-              {/* Alert Messages */}
-              {authError && (
-                <div className="flex items-start gap-2 p-3 mb-4 rounded-xl bg-rose-500/10 border border-rose-500/20 text-rose-400 text-xs">
-                  <AlertCircle size={16} className="shrink-0 mt-0.5" />
-                  <span>{authError}</span>
-                </div>
-              )}
-              {authSuccess && (
-                <div className="flex items-start gap-2 p-3 mb-4 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-xs">
-                  <CheckCircle size={16} className="shrink-0 mt-0.5" />
-                  <span>{authSuccess}</span>
-                </div>
-              )}
-
-              {/* Form */}
-              <form onSubmit={handleAuthSubmit} className="space-y-4">
-                {authMode === 'register' && (
-                  <div>
-                    <label className="block text-[11px] font-bold text-slate-300 mb-1">Display Name</label>
-                    <div className="relative">
-                      <UserIcon size={15} className="absolute left-3 top-3 text-slate-500" />
-                      <input
-                        type="text"
-                        placeholder="John Doe"
-                        value={name}
-                        onChange={(e) => setName(e.target.value)}
-                        className="w-full py-2.5 pl-9 pr-3 text-xs bg-slate-950 border border-slate-800 rounded-xl text-slate-100 placeholder-slate-600 focus:outline-none focus:border-indigo-500 transition-colors"
-                      />
-                    </div>
-                  </div>
-                )}
-
-                <div>
-                  <label className="block text-[11px] font-bold text-slate-300 mb-1">Email Address</label>
-                  <div className="relative">
-                    <Mail size={15} className="absolute left-3 top-3 text-slate-500" />
-                    <input
-                      type="email"
-                      required
-                      placeholder="user@example.com"
-                      value={email}
-                      onChange={(e) => setEmail(e.target.value)}
-                      className="w-full py-2.5 pl-9 pr-3 text-xs bg-slate-950 border border-slate-800 rounded-xl text-slate-100 placeholder-slate-600 focus:outline-none focus:border-indigo-500 transition-colors"
-                    />
-                  </div>
-                </div>
-
-                <div>
-                  <label className="block text-[11px] font-bold text-slate-300 mb-1">Password</label>
-                  <div className="relative">
-                    <Lock size={15} className="absolute left-3 top-3 text-slate-500" />
-                    <input
-                      type="password"
-                      required
-                      minLength={6}
-                      placeholder="••••••••"
-                      value={password}
-                      onChange={(e) => setPassword(e.target.value)}
-                      className="w-full py-2.5 pl-9 pr-3 text-xs bg-slate-950 border border-slate-800 rounded-xl text-slate-100 placeholder-slate-600 focus:outline-none focus:border-indigo-500 transition-colors"
-                    />
-                  </div>
-                </div>
-
-                <button
-                  type="submit"
-                  disabled={authLoading}
-                  className="w-full flex items-center justify-center gap-2 py-3 mt-2 rounded-xl text-xs font-bold text-white transition-all shadow-lg bg-gradient-to-r from-indigo-500 via-cyan-500 to-emerald-500 hover:opacity-95 active:scale-[0.98] disabled:opacity-50 cursor-pointer"
-                >
-                  {authLoading ? <Loader size={16} className="animate-spin" /> : null}
-                  <span>{authLoading ? 'Processing...' : (authMode === 'register' ? 'Register & Sign In' : 'Sign In')}</span>
-                </button>
-              </form>
-            </motion.div>
-          </div>
+          />
         )}
       </AnimatePresence>
+
+
     </motion.div>
   );
 }

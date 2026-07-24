@@ -38,6 +38,22 @@ const UserSchema = new mongoose.Schema({
     isConfigured: { type: Boolean, default: false },
   },
 
+  // === EMAIL VERIFICATION & PASSWORD RESET ===
+  emailVerified: {
+    type: Boolean,
+    default: false,
+  },
+  emailVerification: {
+    codeHash: { type: String, default: '' },
+    expiresAt: { type: Date, default: null },
+    lastRequestAt: { type: Date, default: null },
+  },
+  passwordReset: {
+    codeHash: { type: String, default: '' },
+    expiresAt: { type: Date, default: null },
+    lastRequestAt: { type: Date, default: null },
+  },
+
   // === RECOVERY ===
   // One-time code sent via email to reset the vault (destroys old encrypted data)
   recovery: {

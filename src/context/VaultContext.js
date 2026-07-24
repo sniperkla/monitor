@@ -360,10 +360,9 @@ export function VaultProvider({ children }) {
     sessionStorage.removeItem('_vault_uri');
     sessionStorage.removeItem('_vault_tunnel');
     masterPwdRef.current = null; // Clear cached sync key
-    if (vaultData?.isConfigured) {
-      setVaultStatus('locked');
-    }
-  }, [vaultData]);
+    setIsDismissed(false); // Reset dismissal so MasterPasswordModal pops up immediately
+    setVaultStatus('locked');
+  }, []);
 
   /**
    * Clear vault completely (disconnect)

@@ -126,19 +126,17 @@ export default function TerminalApp({ onEditConnection, initialConnection, initi
       if (!activeTab || !standaloneTerminals.find(t => t.id === activeTab)) {
         setActiveTab(standaloneTerminals[standaloneTerminals.length - 1].id);
       }
+    } else if (standaloneTerminals.length === 0 && !isStandalone) {
+      // All tabs removed externally (e.g. dragged out) — show connection picker
+      setIsSelecting(true);
+      setActiveTab(null);
     }
-  }, [standaloneTerminals, activeTab, isSelecting]);
+  }, [standaloneTerminals, activeTab, isSelecting, isStandalone]);
 
   const handleConnect = (conn) => {
     if (conn.storage === 'manual') {
       onEditConnection(conn);
       return;
-    }
-    
-    // Terminate existing session in the manager
-    const existing = state.activeTerminals.find(t => t.connectionId === conn._id);
-    if (existing) {
-      dispatch({ type: 'CLOSE_TERMINAL', payload: existing.id });
     }
 
     const termId = `term-${conn._id}-${Date.now()}`;

@@ -462,6 +462,11 @@ export default function FileManager({
 
   useEffect(() => {
     if (vaultStatus === 'loading') return;
+    if (vaultStatus === 'locked') {
+      setStatus('error');
+      setError('vault_not_ready');
+      return;
+    }
 
     const poolEntry = _fmSocketPool.get(connectionId);
     const isReused = !!(
