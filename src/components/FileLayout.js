@@ -489,24 +489,26 @@ export default function FileLayout({ managers: propManagers, onCloseFileManager,
     if (!managers || !layout) return;
     const managerIds = new Set(managers.map(m => m.id));
     
-    // Recursive check for panes that no longer have a manager
+    // Recursive check for panes whose manager was moved out or closed
     const validateLayout = (node) => {
       if (node.type === 'pane') {
         if (node.fmData && !managerIds.has(node.fmData.id)) {
-          return { remove: true, id: node.id };
+          return { clear: true, id: node.id };
         }
-        return { remove: false };
+        return { clear: false };
       }
       const c1 = validateLayout(node.children[0]);
       const c2 = validateLayout(node.children[1]);
-      if (c1.remove) return { remove: true, id: c1.id };
-      if (c2.remove) return { remove: true, id: c2.id };
-      return { remove: false };
+      if (c1.clear) return { clear: true, id: c1.id };
+      if (c2.clear) return { clear: true, id: c2.id };
+      return { clear: false };
     };
 
     const result = validateLayout(layout);
-    if (result.remove) {
-      setLayout(prev => removePane(prev, result.id));
+    if (result.clear) {
+      // Instead of destroying the pane, reset fmData to null so ConnectionPicker
+      // (server selection screen) is displayed, allowing the user to select another connection.
+      setLayout(prev => updatePaneData(prev, result.id, null));
     }
   }, [managers, layout]);
 
