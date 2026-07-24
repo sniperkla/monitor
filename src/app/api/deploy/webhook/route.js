@@ -1208,11 +1208,19 @@ export async function POST(request) {
     //   1. application/json          → body is raw JSON (normal)
     //   2. application/x-www-form-urlencoded → body is "payload=%7B%22ref%22..." (URL-encoded JSON)
     // Normalize to raw JSON so all downstream JSON.parse() calls work regardless of content type.
-    if (bodyText && bodyText.startsWith('payload=')) {
+    if (bodyText && (bodyText.startsWith('payload=') || bodyText.includes('payload='))) {
       try {
-        bodyText = decodeURIComponent(bodyText.slice('payload='.length));
+        const params = new URLSearchParams(bodyText);
+        const rawPayload = params.get('payload');
+        if (rawPayload) {
+          bodyText = rawPayload;
+        } else {
+          bodyText = decodeURIComponent(bodyText.replace(/\+/g, ' ').replace(/^payload=/, ''));
+        }
       } catch (_) {
-        // decodeURIComponent failed — leave bodyText as-is so the downstream error is descriptive
+        try {
+          bodyText = decodeURIComponent(bodyText.replace(/\+/g, ' ').replace(/^payload=/, ''));
+        } catch (_) {}
       }
     }
 
