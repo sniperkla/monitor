@@ -1202,7 +1202,19 @@ export async function POST(request) {
       }
     }
 
-    const bodyText = await request.text();
+    let bodyText = await request.text();
+
+    // GitHub supports two webhook content types:
+    //   1. application/json          → body is raw JSON (normal)
+    //   2. application/x-www-form-urlencoded → body is "payload=%7B%22ref%22..." (URL-encoded JSON)
+    // Normalize to raw JSON so all downstream JSON.parse() calls work regardless of content type.
+    if (bodyText && bodyText.startsWith('payload=')) {
+      try {
+        bodyText = decodeURIComponent(bodyText.slice('payload='.length));
+      } catch (_) {
+        // decodeURIComponent failed — leave bodyText as-is so the downstream error is descriptive
+      }
+    }
 
     // 3. Signature verification for webhook calls (when not a manual trigger)
     if (!isManual) {
