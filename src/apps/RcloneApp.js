@@ -5,7 +5,7 @@ import {
   CloudSync, HardDrive, RefreshCw, Terminal, CheckCircle2, AlertTriangle,
   Plus, Trash2, Folder, File, Play, Shield, Settings, Server, Database,
   ArrowRight, Download, Eye, ExternalLink, Cpu, Info, Check, ShieldCheck,
-  Zap, Copy, ArrowLeftRight, Monitor, ChevronRight
+  Zap, Copy, ArrowLeftRight, Monitor, ChevronRight, Link2
 } from 'lucide-react';
 import { useVault } from '@/context/VaultContext';
 import { useApp } from '@/context/AppContext';
