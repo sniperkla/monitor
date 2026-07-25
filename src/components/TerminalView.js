@@ -217,6 +217,15 @@ export default function TerminalView({ connectionId, connectionName, host, color
   const terminalRef = useRef(null);
   const termInstanceRef = useRef(null);
   const socketRef = useRef(null);
+  const rtcPeerRef = useRef(null);
+
+  const sendSshInput = useCallback((data) => {
+    if (rtcPeerRef.current) {
+      rtcPeerRef.current.sendSsh(data);
+    } else if (socketRef.current?.connected) {
+      sendSshInput(data);
+    }
+  }, []);
   const fitAddonRef = useRef(null);
   const lastOutputAtRef = useRef(0);
   const [status, setStatus] = useState('connecting'); // connecting, connected, error, closed
@@ -477,28 +486,28 @@ export default function TerminalView({ connectionId, connectionName, host, color
       // Check for existing Dockerfile
       const dockerfileCheck = await new Promise((resolve) => {
         const cmd = 'cat Dockerfile 2>/dev/null || echo "NOT_FOUND"';
-        socketRef.current?.emit('ssh:input', cmd + '\n');
+        sendSshInput(cmd + '\n');
         setTimeout(() => resolve(true), 500);
       });
       
       // Check for package.json (Node.js project)
       const packageCheck = await new Promise((resolve) => {
         const cmd = 'cat package.json 2>/dev/null | head -50 || echo "NOT_FOUND"';
-        socketRef.current?.emit('ssh:input', cmd + '\n');
+        sendSshInput(cmd + '\n');
         setTimeout(() => resolve(true), 500);
       });
       
       // Check for requirements.txt (Python project)
       const pythonCheck = await new Promise((resolve) => {
         const cmd = 'cat requirements.txt 2>/dev/null | head -30 || echo "NOT_FOUND"';
-        socketRef.current?.emit('ssh:input', cmd + '\n');
+        sendSshInput(cmd + '\n');
         setTimeout(() => resolve(true), 500);
       });
       
       // Check for go.mod (Go project)
       const goCheck = await new Promise((resolve) => {
         const cmd = 'cat go.mod 2>/dev/null | head -20 || echo "NOT_FOUND"';
-        socketRef.current?.emit('ssh:input', cmd + '\n');
+        sendSshInput(cmd + '\n');
         setTimeout(() => resolve(true), 500);
       });
       
@@ -568,7 +577,7 @@ export default function TerminalView({ connectionId, connectionName, host, color
       // Check for .env file for production hints
       const envCheck = await new Promise((resolve) => {
         const cmd = 'cat .env 2>/dev/null | grep -i "redis\\|postgres\\|mongo" || echo "NOT_FOUND"';
-        socketRef.current?.emit('ssh:input', cmd + '\n');
+        sendSshInput(cmd + '\n');
         setTimeout(() => resolve(true), 500);
       });
       
@@ -1217,7 +1226,7 @@ logstash:
     if (!socketRef.current || !socketRef.current.connected) return;
     setIsInstallingTmux(true);
     const script = `if command -v apt-get &>/dev/null; then sudo apt-get update && sudo apt-get install -y tmux; elif command -v yum &>/dev/null; then sudo yum install -y tmux; elif command -v apk &>/dev/null; then sudo apk add tmux; fi\r`;
-    socketRef.current.emit('ssh:input', script);
+    sendSshInput(script);
     setTimeout(() => {
       setShowTmuxInstallBanner(false);
       setIsInstallingTmux(false);
@@ -1370,8 +1379,6 @@ logstash:
     // We then create an RTCPeerConnection and negotiate SDP via Socket.io signaling.
     // On ICE success: all SSH data flows P2P (zero server bandwidth).
     // On ICE timeout: falls back silently to Socket.io relay path.
-    const rtcPeerRef = { current: null }; // local ref, not React state
-
     socket.on('relay:rtc:ready', async ({ connId: relayConnId }) => {
       const sshMode = typeof window !== 'undefined' ? (localStorage.getItem('ssh_monitor_ssh_mode') || 'server') : 'server';
       if (sshMode !== 'local') return; // Only upgrade in relay mode
@@ -1484,13 +1491,13 @@ logstash:
       if (finalCommand) {
         setTimeout(() => {
           if (socket.connected) {
-            socket.emit('ssh:input', finalCommand);
+            sendSshInput(finalCommand);
             
             // Enable tmux mouse scrolling if setting is on
             if (termSettingsRef.current.tmuxMouseScrolling) {
               setTimeout(() => {
                 if (socket.connected) {
-                  socket.emit('ssh:input', 'if command -v tmux >/dev/null 2>&1; then tmux set-option -g mouse on; fi\r');
+                  sendSshInput('if command -v tmux >/dev/null 2>&1; then tmux set-option -g mouse on; fi\r');
                 }
               }, 1200);
             }
@@ -1685,12 +1692,7 @@ logstash:
           setShowScrollHint(false);
           window.__isShowingScrollHint = false;
         }
-        // Use WebRTC DataChannel if P2P is active, otherwise fall through to Socket.io
-        if (rtcPeerRef.current) {
-          rtcPeerRef.current.sendSsh(data);
-        } else {
-          socket.emit('ssh:input', data);
-        }
+        sendSshInput(data);
       }
 
       // Capture user commands (best-effort) for AI context
@@ -3646,7 +3648,7 @@ logstash:
     const v = String(value || '').replace(/[\r\n]+$/g, '');
     if (!v) return;
     if (socketRef.current?.connected) {
-      socketRef.current.emit('ssh:input', `${v}\n`);
+      sendSshInput(`${v}\n`);
       termInstanceRef.current?.focus();
       return;
     }
@@ -3737,7 +3739,7 @@ logstash:
     const lastLine = (recentLines[recentLines.length - 1] || '').trim();
     if (/^>\s*$/.test(lastLine)) {
         console.warn('🛡️ Active Command Syntax Error / Trapped in quote. Send cancel (Ctrl+C).');
-        socketRef.current.emit('ssh:input', '\x03'); // Ctrl+C
+        sendSshInput('\x03'); // Ctrl+C
         await new Promise(r => setTimeout(r, 600));
         snap = getOutputContext();
         setLastResultSnapshot(snap);
@@ -3752,33 +3754,33 @@ logstash:
 
     if (editorType === 'vim') {
       attempted = true;
-      socketRef.current.emit('ssh:input', '\x1b');
+      sendSshInput('\x1b');
       await new Promise(r => setTimeout(r, 120));
-      socketRef.current.emit('ssh:input', ':q!\n');
+      sendSshInput(':q!\n');
       await new Promise(r => setTimeout(r, 700));
       snap = getOutputContext();
 
       if (!looksLikeShellPrompt(snap) && looksLikeEditorOrPager(snap) === 'vim') {
-        socketRef.current.emit('ssh:input', '\x1b');
+        sendSshInput('\x1b');
         await new Promise(r => setTimeout(r, 120));
-        socketRef.current.emit('ssh:input', ':qa!\n');
+        sendSshInput(':qa!\n');
         await new Promise(r => setTimeout(r, 700));
         snap = getOutputContext();
       }
     } else if (editorType === 'nano') {
       attempted = true;
-      socketRef.current.emit('ssh:input', '\x18'); // Ctrl+X
+      sendSshInput('\x18'); // Ctrl+X
       await new Promise(r => setTimeout(r, 350));
       snap = getOutputContext();
 
       if (/save\s+(this\s+)?modified\s+buffer|save\s+buffer|modified buffer/i.test(snap)) {
-        socketRef.current.emit('ssh:input', 'n\n');
+        sendSshInput('n\n');
         await new Promise(r => setTimeout(r, 700));
         snap = getOutputContext();
       }
     } else if (isStdinBlockingCommand(lowerCmd) || isInteractiveReplCommand(lowerCmd)) {
       attempted = true;
-      socketRef.current.emit('ssh:input', '\x03'); // Ctrl+C
+      sendSshInput('\x03'); // Ctrl+C
       await new Promise(r => setTimeout(r, 700));
       snap = getOutputContext();
     }
@@ -4002,7 +4004,7 @@ logstash:
         sendQuickInput('');
         // Need to send just a newline
         if (socketRef.current?.connected) {
-          socketRef.current.emit('ssh:input', '\n');
+          sendSshInput('\n');
         }
         return;
       }
@@ -4075,7 +4077,7 @@ logstash:
         if (/^\[wait\]$/i.test(cmd)) {
           // AI specifically wants to wait for more output from a previous command
         } else if (/^\[?ctrl\+c\]?$|^\^c$/i.test(cmd)) {
-          socketRef.current.emit('ssh:input', '\x03');
+          sendSshInput('\x03');
         } else {
           // Parse special control notations: ^X, ^O, ^R, [ESC]
           let finalInput = cmd;
@@ -4097,7 +4099,7 @@ logstash:
              finalInput += '\n';
           }
 
-          socketRef.current.emit('ssh:input', finalInput);
+          sendSshInput(finalInput);
         }
         termInstanceRef.current?.focus();
         const settled = await waitForCommandSettle(cmd);
@@ -4118,7 +4120,7 @@ logstash:
             const recovery = DYNAMIC_BLOCKER_RECOVERY[prompt?.kind];
             if (recovery) {
               console.log(`[AI Agent] Auto-unblocking "${prompt.kind}": ${recovery.label}`);
-              socketRef.current?.emit('ssh:input', recovery.action);
+              sendSshInput(recovery.action);
               setInteractivePrompt(null);
               await new Promise(r => setTimeout(r, recovery.waitMs));
               const nextSnap = getOutputContext();
@@ -4147,7 +4149,7 @@ logstash:
         if (settled?.reason === 'streaming') {
           if (autoMode) {
             // Auto-send Ctrl+C to exit the streaming command
-            socketRef.current?.emit('ssh:input', '\x03'); // Ctrl+C
+            sendSshInput('\x03'); // Ctrl+C
             await new Promise(r => setTimeout(r, 800));
             const nextSnap = getOutputContext();
             setLastResultSnapshot(nextSnap);
@@ -5202,7 +5204,7 @@ If you cannot produce a patch, explain why and set <done>true</done>.`
       const timeSinceCommand = Date.now() - (lastCommandSentAtRef.current || 0);
       if (idleFor > 2000 || timeSinceCommand > 5000) {
         // Send Ctrl+C to exit the streaming command
-        socketRef.current?.emit('ssh:input', '\x03');
+        sendSshInput('\x03');
         const exitDelay = Math.max((adaptiveWaitRef.current?.avgCommandTime || 0.5) * 800, 300);
         await new Promise(r => setTimeout(r, exitDelay));
         const nextSnap = getOutputContext();
@@ -5237,21 +5239,21 @@ If you cannot produce a patch, explain why and set <done>true</done>.`
           const needsReturn = /press\s+(return|enter)/i.test(currentSnap);
           const baseDelay = Math.max((adaptiveWaitRef.current?.avgCommandTime || 0.5) * 600, 200);
           if (needsReturn) {
-            socketRef.current?.emit('ssh:input', '\r');
+            sendSshInput('\r');
             await new Promise(r => setTimeout(r, baseDelay));
             currentSnap = getOutputContext();
           }
 
           // Step 2: If we're still in the pager (no shell prompt yet), send 'q'
           if (!looksLikeShellPrompt(currentSnap)) {
-            socketRef.current?.emit('ssh:input', 'q');
+            sendSshInput('q');
             await new Promise(r => setTimeout(r, baseDelay + 100));
 
             // Step 3: After 'q', flush any leftover chars with Ctrl+U
             // in case the pager exited before consuming the 'q'
             const snapAfterQ = getOutputContext();
             if (looksLikeShellPrompt(snapAfterQ)) {
-              socketRef.current?.emit('ssh:input', '\x15'); // Ctrl+U — kill line
+              sendSshInput('\x15'); // Ctrl+U — kill line
               await new Promise(r => setTimeout(r, Math.max(baseDelay * 0.3, 100)));
             }
           }
@@ -5320,7 +5322,7 @@ If you cannot produce a patch, explain why and set <done>true</done>.`
             const sudoFailed = preBlocker.kind === 'sudo_password' && autoBlockerRef.current.count > 1;
             if (!sudoFailed) {
               console.log(`[AI Agent] Pre-AI unblock attempt ${autoBlockerRef.current.count}/3: "${preBlocker.kind}" → ${recovery.label}`);
-              socketRef.current?.emit('ssh:input', recovery.action);
+              sendSshInput(recovery.action);
               await new Promise(r => setTimeout(r, recovery.waitMs));
               const unblockSnap = getOutputContext();
               autoRunningRef.current = false;
@@ -6538,7 +6540,7 @@ If this is a deployment task, switch task mode to 'deploy' instead of 'code'.`
     const command = String(cmd || '').replace(/[\r\n]+$/g, '');
     if (!command) return;
     if (socketRef.current?.connected) {
-      socketRef.current.emit('ssh:input', command);
+      sendSshInput(command);
       termInstanceRef.current?.focus();
       return;
     }
@@ -6576,9 +6578,9 @@ If this is a deployment task, switch task mode to 'deploy' instead of 'code'.`
     setLastExecutedCommand(command);
     if (socketRef.current?.connected) {
       if (/^\[?ctrl\+c\]?$|^\^c$/i.test(command)) {
-        socketRef.current.emit('ssh:input', '\x03');
+        sendSshInput('\x03');
       } else {
-        socketRef.current.emit('ssh:input', `${command}\n`);
+        sendSshInput(`${command}\n`);
       }
       termInstanceRef.current?.focus();
       setTimeout(() => {
@@ -8088,7 +8090,7 @@ If this is a deployment task, switch task mode to 'deploy' instead of 'code'.`
 
                     {/* Press ENTER */}
                     {interactivePrompt.kind === 'press_enter' && (
-                      <button onClick={() => { setInteractivePrompt(null); if (socketRef.current?.connected) socketRef.current.emit('ssh:input', '\n'); if (aiMode === 'auto') setAutoMode(true); }} className="w-full py-1.5 rounded bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-medium">Press ENTER</button>
+                      <button onClick={() => { setInteractivePrompt(null); if (socketRef.current?.connected) sendSshInput('\n'); if (aiMode === 'auto') setAutoMode(true); }} className="w-full py-1.5 rounded bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-medium">Press ENTER</button>
                     )}
 
                     {/* Password warning (manual only) */}

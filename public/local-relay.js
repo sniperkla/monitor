@@ -658,12 +658,13 @@ const activeUploads = new Map();
 function writeChunk(ws, connId, key, buf, filename) {
   const upload = activeUploads.get(key);
   if (!upload) return;
+  const targetFilename = filename || upload.filename;
 
   let settled = false;
   const writeTimeout = setTimeout(() => {
     if (settled) return;
     settled = true;
-    console.error(`⏰ [relay] SFTP write timeout for ${filename} (${buf.length} bytes) — write callback never fired`);
+    console.error(`⏰ [relay] SFTP write timeout for ${targetFilename} (${buf.length} bytes) — write callback never fired`);
     sendSftpError(ws, connId, new Error('SFTP write timeout — server did not acknowledge write'));
     // Clean up the stuck upload
     try { upload.stream.destroy(); } catch (_) {}
@@ -684,7 +685,7 @@ function writeChunk(ws, connId, key, buf, filename) {
       ws.send(JSON.stringify({
         type: 'sftp:upload_ack',
         connId: connId,
-        filename: filename,
+        filename: targetFilename,
         offset: currentOffset
       }));
     }
@@ -698,6 +699,7 @@ async function handleSftpUploadStart(ws, msg) {
   // Placeholder entry with initialOffset
   activeUploads.set(key, {
     stream: null,
+    filename: msg.filename,
     ws,
     bytesWritten: 0,
     initialOffset: msg.offset || 0,
