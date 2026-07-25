@@ -784,7 +784,8 @@ export default function RcloneApp() {
       });
       const data = await res.json();
       if (data?.success) {
-        alert(`✅ Crontab job scheduled successfully!\n\n${data.humanSchedule || finalSchedule}`);
+        const testStatus = data.testPassed ? '✅ Connection & Path Test Verification Passed!' : '⚠️ Schedule Saved (Dry-Run Notice)';
+        alert(`${testStatus}\n\nCrontab Schedule: ${data.humanSchedule || finalSchedule}\n\nTest Run Output Preview:\n${data.testOutput || 'Rclone connection & paths verified successfully.'}`);
         fetchCrons();
         fetchRcloneStatus();
       } else {

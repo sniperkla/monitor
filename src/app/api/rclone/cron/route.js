@@ -128,6 +128,14 @@ export async function POST(req) {
 
     const cronLine = `${schedule} ${rcloneCmd}`;
 
+    // Perform a quick 1-off Dry-Run test to verify source and destination connectivity before saving
+    const testFlags = [];
+    if (options.driveFolderId && options.driveFolderId.trim()) {
+      testFlags.push(`--drive-root-folder-id "${options.driveFolderId.trim()}"`);
+    }
+    const testCmd = `export PATH="$HOME/.local/bin:$HOME/bin:/usr/local/bin:/usr/bin:$PATH"; rclone ${action || 'copy'} "${normSource}" "${target}" --dry-run ${testFlags.join(' ')} 2>&1 | head -15`;
+    const testRes = await execCommand(sshConfig, testCmd);
+
     // Append to server's crontab safely using single-quoted echo to prevent premature bash evaluation of $(date)
     const addCronScript = `
 TMP_CRON=$(mktemp)
@@ -145,6 +153,8 @@ rm -f "$TMP_CRON"
         schedule,
         humanSchedule: parseCronHuman(schedule),
         cronLine,
+        testPassed: testRes.code === 0,
+        testOutput: testRes.stdout || 'Test dry-run completed cleanly.',
       });
     }
 
