@@ -76,6 +76,34 @@ echo "$REMOTES"
         .filter(Boolean)
     ));
 
+    // Read config file content / dumpconfig to get full remote details
+    let configDump = '';
+    if (configPath) {
+      const catRes = await execCommand(sshConfig, `cat "${configPath}" 2>/dev/null || sudo cat "${configPath}" 2>/dev/null || true`);
+      configDump = catRes.stdout || '';
+    }
+    if (!configDump) {
+      const dumpRes = await execCommand(sshConfig, `${pathPrefix || ''}rclone config show 2>/dev/null || true`);
+      configDump = dumpRes.stdout || '';
+    }
+
+    // Parse remoteDetails map: { [remoteName]: { type: 'drive', scope: '...', ... } }
+    const remoteDetails = {};
+    let currentRemote = null;
+
+    configDump.split('\n').forEach(line => {
+      const trimmed = line.trim();
+      if (trimmed.startsWith('[') && trimmed.endsWith(']')) {
+        currentRemote = trimmed.slice(1, -1);
+        remoteDetails[currentRemote] = {};
+      } else if (currentRemote && trimmed.includes('=')) {
+        const eqIdx = trimmed.indexOf('=');
+        const key = trimmed.slice(0, eqIdx).trim();
+        const val = trimmed.slice(eqIdx + 1).trim();
+        remoteDetails[currentRemote][key] = val;
+      }
+    });
+
     // Check for any currently running rclone processes
     const psRes = await execCommand(sshConfig, `ps aux 2>/dev/null | grep -i rclone | grep -v grep || true`);
     const runningJobs = psRes.stdout
@@ -94,7 +122,9 @@ echo "$REMOTES"
       installed: true,
       version,
       remotes,
+      remoteDetails,
       configPath,
+      configContent: configDump,
       runningJobs,
     });
   } catch (error) {

@@ -30,6 +30,8 @@ export default function RcloneApp() {
 
   // Remote Builder Modal State
   const [showAddRemoteModal, setShowAddRemoteModal] = useState(false);
+  const [viewingRemoteDetails, setViewingRemoteDetails] = useState(null); // { name, details }
+  const [showRawConfigModal, setShowRawConfigModal] = useState(false);
   const [newRemoteName, setNewRemoteName] = useState('');
   const [newRemoteType, setNewRemoteType] = useState('s3'); // 's3' | 'drive' | 'sftp' | 'webdav'
   const [remoteConfig, setRemoteConfig] = useState({});
@@ -549,48 +551,78 @@ export default function RcloneApp() {
                 <h2 className="text-sm font-bold">Configured Cloud Remotes</h2>
                 <p className="text-xs text-[var(--text-muted)]">Active storage targets on {selectedConn?.name}</p>
               </div>
-              <button
-                onClick={() => setShowAddRemoteModal(true)}
-                className="flex items-center gap-2 px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs transition-colors shadow-lg shadow-indigo-500/20"
-              >
-                <Plus size={14} /> Add Cloud Remote
-              </button>
+              <div className="flex items-center gap-2">
+                {rcloneStatus?.configContent && (
+                  <button
+                    onClick={() => setShowRawConfigModal(true)}
+                    className="flex items-center gap-2 px-3.5 py-2 rounded-xl bg-[var(--bg-tertiary)] hover:bg-[var(--border-color)] text-[var(--text-primary)] font-semibold text-xs transition-colors border border-[var(--border-color)]"
+                  >
+                    <File size={14} className="text-indigo-400" /> View rclone.conf
+                  </button>
+                )}
+                <button
+                  onClick={() => setShowAddRemoteModal(true)}
+                  className="flex items-center gap-2 px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs transition-colors shadow-lg shadow-indigo-500/20 cursor-pointer"
+                >
+                  <Plus size={14} /> Add Cloud Remote
+                </button>
+              </div>
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-              {rcloneStatus?.remotes?.map((remote) => (
-                <div
-                  key={remote}
-                  className="p-4 rounded-2xl bg-[var(--bg-secondary)] border border-[var(--border-color)] flex items-center justify-between"
-                >
-                  <div className="flex items-center gap-3">
-                    <div className="p-2.5 rounded-xl bg-indigo-500/10 text-indigo-400">
-                      <HardDrive size={20} />
+              {rcloneStatus?.remotes?.map((remote) => {
+                const details = rcloneStatus?.remoteDetails?.[remote] || {};
+                const providerType = details.type || 'storage';
+                return (
+                  <div
+                    key={remote}
+                    className="p-4 rounded-2xl bg-[var(--bg-secondary)] border border-[var(--border-color)] flex items-center justify-between"
+                  >
+                    <div className="flex items-center gap-3">
+                      <div className="p-2.5 rounded-xl bg-indigo-500/10 text-indigo-400">
+                        <HardDrive size={20} />
+                      </div>
+                      <div>
+                        <h4 className="text-xs font-bold font-mono">{remote}:</h4>
+                        <div className="flex items-center gap-1.5 mt-0.5">
+                          <span className="text-[10px] font-semibold text-indigo-400 bg-indigo-500/10 px-1.5 py-0.5 rounded uppercase">
+                            {providerType}
+                          </span>
+                          {details.scope && (
+                            <span className="text-[9px] text-[var(--text-muted)] truncate max-w-[100px]">
+                              {details.scope}
+                            </span>
+                          )}
+                        </div>
+                      </div>
                     </div>
-                    <div>
-                      <h4 className="text-xs font-bold font-mono">{remote}:</h4>
-                      <p className="text-[10px] text-[var(--text-muted)]">Remote storage target</p>
-                    </div>
-                  </div>
 
-                  <div className="flex items-center gap-1">
-                    <button
-                      onClick={() => { setTargetPath(`${remote}:backup`); setActiveTab('backup'); }}
-                      className="p-2 text-xs text-indigo-400 hover:bg-indigo-500/10 rounded-xl transition-colors"
-                      title="Use in Backup"
-                    >
-                      <ArrowRight size={16} />
-                    </button>
-                    <button
-                      onClick={() => handleDeleteRemote(remote)}
-                      className="p-2 text-xs text-rose-400 hover:bg-rose-500/10 rounded-xl transition-colors"
-                      title="Delete Remote"
-                    >
-                      <Trash2 size={16} />
-                    </button>
+                    <div className="flex items-center gap-1">
+                      <button
+                        onClick={() => setViewingRemoteDetails({ name: remote, details })}
+                        className="p-2 text-xs text-indigo-400 hover:bg-indigo-500/10 rounded-xl transition-colors cursor-pointer"
+                        title="View Remote Config Parameters"
+                      >
+                        <Eye size={16} />
+                      </button>
+                      <button
+                        onClick={() => { setTargetPath(`${remote}:backup`); setActiveTab('backup'); }}
+                        className="p-2 text-xs text-emerald-400 hover:bg-emerald-500/10 rounded-xl transition-colors cursor-pointer"
+                        title="Use in Backup"
+                      >
+                        <ArrowRight size={16} />
+                      </button>
+                      <button
+                        onClick={() => handleDeleteRemote(remote)}
+                        className="p-2 text-xs text-rose-400 hover:bg-rose-500/10 rounded-xl transition-colors cursor-pointer"
+                        title="Delete Remote"
+                      >
+                        <Trash2 size={16} />
+                      </button>
+                    </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
 
               {(!rcloneStatus?.remotes || rcloneStatus.remotes.length === 0) && (
                 <div className="col-span-full p-8 text-center bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-2xl text-[var(--text-muted)] text-xs">
@@ -877,16 +909,103 @@ export default function RcloneApp() {
             <div className="flex justify-end gap-2 pt-4">
               <button
                 onClick={() => setShowAddRemoteModal(false)}
-                className="px-4 py-2 rounded-xl bg-[var(--bg-tertiary)] text-xs font-semibold hover:bg-[var(--border-color)]"
+                className="px-4 py-2 rounded-xl bg-[var(--bg-tertiary)] text-xs font-semibold hover:bg-[var(--border-color)] cursor-pointer"
               >
                 Cancel
               </button>
               <button
                 onClick={handleSaveRemote}
                 disabled={loading}
-                className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold"
+                className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold cursor-pointer"
               >
                 Save Remote Target
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 🔍 View Specific Remote Configuration Parameters Modal */}
+      {viewingRemoteDetails && (
+        <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+          <div className="w-full max-w-lg bg-[var(--bg-secondary)] rounded-2xl p-6 border border-[var(--border-color)] shadow-2xl space-y-4">
+            <div className="flex items-center justify-between border-b border-[var(--border-color)] pb-3">
+              <div className="flex items-center gap-2">
+                <div className="p-2 rounded-xl bg-indigo-500/10 text-indigo-400">
+                  <HardDrive size={18} />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold font-mono">[{viewingRemoteDetails.name}] Configuration</h3>
+                  <p className="text-[10px] text-[var(--text-muted)]">Active settings stored on {selectedConn?.name}</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setViewingRemoteDetails(null)}
+                className="p-1 rounded-lg text-[var(--text-muted)] hover:bg-[var(--bg-tertiary)] text-xs cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="space-y-2 max-h-80 overflow-y-auto pr-1">
+              {Object.keys(viewingRemoteDetails.details || {}).length > 0 ? (
+                Object.entries(viewingRemoteDetails.details).map(([k, v]) => (
+                  <div key={k} className="p-2.5 rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] flex items-center justify-between font-mono text-xs">
+                    <span className="text-indigo-400 font-semibold">{k}</span>
+                    <span className="text-[var(--text-primary)] truncate max-w-[260px] bg-black/30 px-2 py-0.5 rounded text-[11px]">
+                      {k.includes('secret') || k.includes('token') || k.includes('key') ? '••••••••••••' : String(v)}
+                    </span>
+                  </div>
+                ))
+              ) : (
+                <div className="p-4 text-center text-xs text-[var(--text-muted)]">
+                  No explicit key-value parameters found for this remote.
+                </div>
+              )}
+            </div>
+
+            <div className="flex justify-end pt-2 border-t border-[var(--border-color)]">
+              <button
+                onClick={() => setViewingRemoteDetails(null)}
+                className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold cursor-pointer"
+              >
+                Close Inspector
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 📄 View Raw rclone.conf Modal */}
+      {showRawConfigModal && (
+        <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+          <div className="w-full max-w-2xl bg-[var(--bg-secondary)] rounded-2xl p-6 border border-[var(--border-color)] shadow-2xl space-y-4">
+            <div className="flex items-center justify-between border-b border-[var(--border-color)] pb-3">
+              <div className="flex items-center gap-2">
+                <File size={18} className="text-indigo-400" />
+                <div>
+                  <h3 className="text-sm font-bold">rclone.conf File Inspector</h3>
+                  <p className="text-[10px] font-mono text-indigo-400">{rcloneStatus?.configPath || 'Remote Config File'}</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowRawConfigModal(false)}
+                className="p-1 rounded-lg text-[var(--text-muted)] hover:bg-[var(--bg-tertiary)] text-xs cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+
+            <pre className="p-4 rounded-xl bg-black border border-indigo-500/20 font-mono text-[11px] text-emerald-400 max-h-96 overflow-y-auto whitespace-pre-wrap leading-relaxed">
+              {rcloneStatus?.configContent || '# Config file is empty or unreachable'}
+            </pre>
+
+            <div className="flex justify-end pt-2">
+              <button
+                onClick={() => setShowRawConfigModal(false)}
+                className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold cursor-pointer"
+              >
+                Close File Viewer
               </button>
             </div>
           </div>
