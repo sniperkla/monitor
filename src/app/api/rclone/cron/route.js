@@ -117,8 +117,23 @@ export async function POST(req) {
     const safeLockName = finalProjectName.replace(/[^a-zA-Z0-9_-]/g, '_');
     const lockFile = `/tmp/rclone-lock-${safeLockName}.lock`;
 
+    // Dynamic timestamped log file per execution run so every run is logged in history
+    const logFile = `/tmp/rclone-cron-${safeLockName}-$(date +\\%Y\\%m\\%d_\\%H\\%M\\%S).log`;
+    
+    // Build rclone command flags
+    const flags = [];
+    if (options.dryRun) flags.push('--dry-run');
+    if (options.bwlimit) flags.push(`--bwlimit "${options.bwlimit}"`);
+    if (options.transfers) flags.push(`--transfers ${options.transfers}`);
+    if (options.driveFolderId && options.driveFolderId.trim()) {
+      flags.push(`--drive-root-folder-id "${options.driveFolderId.trim()}"`);
+    }
+    
+    flags.push(`--log-file="${logFile}"`);
+    flags.push(`--log-level INFO`);
+
     const nicePrefix = memMb <= 2048 ? 'nice -n 19 ' : '';
-    let rcloneCmd = `export PATH="$HOME/.local/bin:$HOME/bin:/usr/local/bin:/usr/bin:$PATH"; exec 9>"${lockFile}"; flock -n 9 || { echo "Backup job [${finalProjectName}] is already running. Skipping concurrent run." >> "${logFile}"; exit 0; }; echo "=== Project: ${finalProjectName} | Action: ${action || 'copy'} ===" >> "${logFile}"; ${nicePrefix}rclone ${action || 'copy'} "${normSource}" "${finalTarget}" ${flags.join(' ')}`;
+    let rcloneCmd = `export PATH="$HOME/.local/bin:$HOME/bin:/usr/local/bin:/usr/bin:$PATH"; exec 9>"${lockFile}"; flock -n 9 || { exit 0; }; echo "=== Project: ${finalProjectName} | Action: ${action || 'copy'} ===" >> "${logFile}"; ${nicePrefix}rclone ${action || 'copy'} "${normSource}" "${finalTarget}" ${flags.join(' ')}`;
     
     // Auto Retention Policy: clean old backups older than X days
     if (options.enableRetention && options.retentionDays) {

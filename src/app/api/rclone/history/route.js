@@ -119,7 +119,7 @@ export async function GET(req) {
 
       const errorCount = errorsMatch ? parseInt(errorsMatch[1], 10) : 0;
       const percent = percentMatch ? parseInt(percentMatch[1], 10) : null;
-      const hasActiveTransferring = block.includes('Transferring:') || block.includes('ETA ');
+      const hasActiveTransferring = block.includes('Transferring:') || (block.match(/ETA\s+[1-9]/i) !== null);
       const hasErrors = errorCount > 0;
       const hasFailed = block.includes('Failed to') || block.includes('ERROR');
       
