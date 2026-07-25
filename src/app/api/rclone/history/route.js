@@ -240,3 +240,29 @@ export async function GET(req) {
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   }
 }
+
+export async function DELETE(req) {
+  try {
+    const { searchParams } = new URL(req.url);
+    const connectionId = searchParams.get('connectionId');
+
+    if (!connectionId) {
+      return NextResponse.json({ success: false, error: 'connectionId is required' }, { status: 400 });
+    }
+
+    const sshMode = req.headers.get('x-ssh-mode');
+    const preferredRelay = req.headers.get('x-preferred-relay');
+    const sshConfig = await getSshConfig(connectionId, { sshMode, preferredRelay });
+
+    const clearCmd = `rm -f /tmp/rclone-cron*.log /tmp/rclone-lock-*.lock`;
+    await execCommand(sshConfig, clearCmd);
+
+    return NextResponse.json({
+      success: true,
+      message: 'Successfully cleared all rclone history log files.',
+    });
+  } catch (error) {
+    console.error('[rclone/history/DELETE] error:', error.message);
+    return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+  }
+}

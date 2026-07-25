@@ -866,6 +866,28 @@ export default function RcloneApp() {
     if (!silent) setHistoryLoading(false);
   };
 
+  const handleClearHistory = async () => {
+    if (!selectedConnId) return;
+    if (!confirm('Clear all backup history logs on server?')) return;
+
+    setHistoryLoading(true);
+    try {
+      const res = await apiFetch(`/api/rclone/history?connectionId=${selectedConnId}`, {
+        method: 'DELETE'
+      });
+      const data = await res.json();
+      if (data?.success) {
+        setHistoryRuns([]);
+        setHistoryProjects([]);
+      } else {
+        alert(data?.error || 'Failed to clear logs');
+      }
+    } catch (err) {
+      alert(`Error: ${err.message}`);
+    }
+    setHistoryLoading(false);
+  };
+
   // ⚡ Real-Time Auto-Refresh Effect for Backup History (6s Interval)
   useEffect(() => {
     if (!autoRefreshHistory || !selectedConnId) return;
@@ -1868,6 +1890,15 @@ export default function RcloneApp() {
                 >
                   <RefreshCw size={11} className={historyLoading ? 'animate-spin' : ''} />
                   Refresh Logs
+                </button>
+
+                <button
+                  onClick={handleClearHistory}
+                  disabled={historyLoading}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 text-[11px] font-bold cursor-pointer border border-rose-500/20 disabled:opacity-50 transition-colors"
+                  title="Clear all backup history log files on server"
+                >
+                  🧹 Clear Logs
                 </button>
               </div>
             </div>
