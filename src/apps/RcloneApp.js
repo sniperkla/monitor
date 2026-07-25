@@ -55,6 +55,7 @@ export default function RcloneApp() {
   const [timestampFormat, setTimestampFormat] = useState('YMD_MMM_HM'); // 'YMD_MMM_HM' (2026_Jul_25_22_05) | 'DMY_HM' | 'YMD_HMS'
   const [enableRetention, setEnableRetention] = useState(true); // auto clean old backups
   const [retentionDays, setRetentionDays] = useState('7'); // delete older than X days
+  const [editingCron, setEditingCron] = useState(null); // { rawLine, schedule, action, source, target, options }
   
   // Interactive Path Picker Modal State
   const [pickerMode, setPickerMode] = useState(null); // 'source' | 'target' | null
@@ -306,6 +307,38 @@ export default function RcloneApp() {
         fetchRcloneStatus();
       } else {
         alert(data?.error || 'Failed to add crontab job');
+      }
+    } catch (err) {
+      alert(err.message);
+    }
+    setLoading(false);
+  };
+
+  const handleUpdateCron = async () => {
+    if (!editingCron) return;
+    setLoading(true);
+    try {
+      const res = await apiFetch('/api/rclone/cron', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          connectionId: selectedConnId,
+          oldRawLine: editingCron.rawLine,
+          schedule: editingCron.schedule,
+          action: editingCron.action || 'copy',
+          source: editingCron.source,
+          target: editingCron.target,
+          options: editingCron.options || {},
+        })
+      });
+      const data = await res.json();
+      if (data?.success) {
+        alert('✅ Server crontab task updated successfully!');
+        setEditingCron(null);
+        fetchCrons();
+        fetchRcloneStatus();
+      } else {
+        alert(data?.error || 'Failed to update crontab task');
       }
     } catch (err) {
       alert(err.message);
@@ -1143,13 +1176,40 @@ export default function RcloneApp() {
                           </p>
                         </div>
 
-                        <button
-                          onClick={() => handleDeleteCron(cron.raw)}
-                          className="p-1.5 text-rose-400 hover:bg-rose-500/10 rounded-lg transition-colors shrink-0 cursor-pointer"
-                          title="Delete Crontab Task from Server"
-                        >
-                          <Trash2 size={15} />
-                        </button>
+                        <div className="flex items-center gap-1 shrink-0">
+                          <button
+                            onClick={() => {
+                              const matches = cron.raw.match(/"([^"]+)"/g) || [];
+                              const src = matches[0] ? matches[0].replace(/"/g, '') : '/var/www';
+                              const tgt = matches[1] ? matches[1].replace(/"/g, '') : 'gdrive:';
+                              const retentionMatch = cron.raw.match(/--min-age\s+(\d+)d/);
+                              setEditingCron({
+                                rawLine: cron.raw,
+                                schedule: cron.schedule,
+                                action: cron.raw.includes(' sync ') ? 'sync' : 'copy',
+                                source: src,
+                                target: tgt,
+                                options: {
+                                  useTimestampFolder: cron.raw.includes('$(date'),
+                                  timestampFormat: cron.raw.includes('%b') ? 'YMD_MMM_HM' : 'YMD_HMS',
+                                  enableRetention: !!retentionMatch,
+                                  retentionDays: retentionMatch ? retentionMatch[1] : '7',
+                                }
+                              });
+                            }}
+                            className="p-1.5 text-indigo-400 hover:bg-indigo-500/10 rounded-lg transition-colors cursor-pointer"
+                            title="Edit & Adjust Crontab Task"
+                          >
+                            <Settings size={15} />
+                          </button>
+                          <button
+                            onClick={() => handleDeleteCron(cron.raw)}
+                            className="p-1.5 text-rose-400 hover:bg-rose-500/10 rounded-lg transition-colors cursor-pointer"
+                            title="Delete Crontab Task from Server"
+                          >
+                            <Trash2 size={15} />
+                          </button>
+                        </div>
                       </div>
                     ))}
 
@@ -1661,6 +1721,135 @@ export default function RcloneApp() {
                   ✓ Select This Directory
                 </button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ✏️ Adjust Server Crontab Schedule Modal */}
+      {editingCron && (
+        <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+          <div className="w-full max-w-lg bg-[var(--bg-secondary)] rounded-2xl p-6 border border-[var(--border-color)] shadow-2xl space-y-4">
+            <div className="flex items-center justify-between border-b border-[var(--border-color)] pb-3">
+              <div className="flex items-center gap-2">
+                <Settings size={18} className="text-indigo-400" />
+                <div>
+                  <h3 className="text-sm font-bold">Adjust Server Crontab Task</h3>
+                  <p className="text-[10px] text-[var(--text-muted)]">{selectedConn?.name}</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setEditingCron(null)}
+                className="p-1 rounded-lg text-[var(--text-muted)] hover:bg-[var(--bg-tertiary)] text-xs cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="space-y-3 text-xs">
+              <div>
+                <label className="text-xs font-semibold text-[var(--text-muted)] block mb-1">Crontab Schedule Frequency:</label>
+                <select
+                  value={['0 0 * * *', '0 2 * * *', '0 * * * *', '*/30 * * * *', '*/15 * * * *', '0 0 * * 0', '0 0 1 * *'].includes(editingCron.schedule) ? editingCron.schedule : 'custom'}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    if (val !== 'custom') {
+                      setEditingCron({ ...editingCron, schedule: val });
+                    }
+                  }}
+                  className="w-full px-3.5 py-2 text-xs rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] text-[var(--text-primary)]"
+                >
+                  <option value="0 0 * * *">Every Day at Midnight (0 0 * * *)</option>
+                  <option value="0 2 * * *">Every Day at 02:00 AM (0 2 * * *)</option>
+                  <option value="0 * * * *">Every Hour (0 * * * *)</option>
+                  <option value="*/30 * * * *">Every 30 Minutes (*/30 * * * *)</option>
+                  <option value="*/15 * * * *">Every 15 Minutes (*/15 * * * *)</option>
+                  <option value="0 0 * * 0">Every Sunday at Midnight (0 0 * * 0)</option>
+                  <option value="0 0 1 * *">1st Day of Every Month (0 0 1 * *)</option>
+                  <option value="custom">Custom Cron Expression...</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="text-xs font-semibold text-[var(--text-muted)] block mb-1">Cron Expression:</label>
+                <input
+                  type="text"
+                  value={editingCron.schedule}
+                  onChange={(e) => setEditingCron({ ...editingCron, schedule: e.target.value })}
+                  placeholder="e.g. 0 4 * * 1-5"
+                  className="w-full px-3.5 py-1.5 text-xs rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] font-mono text-[var(--text-primary)]"
+                />
+              </div>
+
+              <div>
+                <label className="text-xs font-semibold text-[var(--text-muted)] block mb-1">Source Path:</label>
+                <input
+                  type="text"
+                  value={editingCron.source}
+                  onChange={(e) => setEditingCron({ ...editingCron, source: e.target.value })}
+                  className="w-full px-3.5 py-1.5 text-xs rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] font-mono text-[var(--text-primary)]"
+                />
+              </div>
+
+              <div>
+                <label className="text-xs font-semibold text-[var(--text-muted)] block mb-1">Destination Path:</label>
+                <input
+                  type="text"
+                  value={editingCron.target}
+                  onChange={(e) => setEditingCron({ ...editingCron, target: e.target.value })}
+                  className="w-full px-3.5 py-1.5 text-xs rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] font-mono text-[var(--text-primary)]"
+                />
+              </div>
+
+              <div className="p-3 rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] space-y-2">
+                <label className="flex items-center gap-2 font-bold text-amber-400 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={editingCron.options?.enableRetention ?? true}
+                    onChange={(e) => setEditingCron({
+                      ...editingCron,
+                      options: { ...editingCron.options, enableRetention: e.target.checked }
+                    })}
+                    className="rounded border-[var(--border-color)] text-amber-500 focus:ring-0"
+                  />
+                  <span>🧹 Auto Retention Cleanup (Delete older than X days)</span>
+                </label>
+                {editingCron.options?.enableRetention && (
+                  <div className="flex items-center gap-2 pl-6">
+                    <span className="text-[11px] text-[var(--text-muted)]">Retention Days:</span>
+                    <select
+                      value={editingCron.options?.retentionDays || '7'}
+                      onChange={(e) => setEditingCron({
+                        ...editingCron,
+                        options: { ...editingCron.options, retentionDays: e.target.value }
+                      })}
+                      className="px-2.5 py-1 text-xs rounded-lg bg-[var(--bg-secondary)] border border-[var(--border-color)] text-amber-400 font-mono"
+                    >
+                      <option value="3">3 Days</option>
+                      <option value="7">7 Days</option>
+                      <option value="14">14 Days</option>
+                      <option value="30">30 Days</option>
+                      <option value="90">90 Days</option>
+                    </select>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-2 pt-3 border-t border-[var(--border-color)]">
+              <button
+                onClick={() => setEditingCron(null)}
+                className="px-4 py-2 rounded-xl bg-[var(--bg-tertiary)] text-xs font-semibold hover:bg-[var(--border-color)] cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleUpdateCron}
+                disabled={loading}
+                className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold cursor-pointer shadow-lg shadow-indigo-600/20 flex items-center gap-1.5"
+              >
+                {loading ? <RefreshCw size={14} className="animate-spin" /> : '✓ Save Changes to Crontab'}
+              </button>
             </div>
           </div>
         </div>

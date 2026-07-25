@@ -142,6 +142,82 @@ export async function POST(req) {
   }
 }
 
+export async function PUT(req) {
+  try {
+    const { connectionId, oldRawLine, schedule, action, source, target, options = {} } = await req.json();
+
+    if (!connectionId || !oldRawLine || !schedule || !source || !target) {
+      return NextResponse.json({ success: false, error: 'connectionId, oldRawLine, schedule, source, and target are required' }, { status: 400 });
+    }
+
+    const sshMode = req.headers.get('x-ssh-mode');
+    const preferredRelay = req.headers.get('x-preferred-relay');
+
+    const sshConfig = await getSshConfig(connectionId, { sshMode, preferredRelay });
+
+    // Build rclone command flags
+    const flags = [];
+    if (options.dryRun) flags.push('--dry-run');
+    if (options.bwlimit) flags.push(`--bwlimit "${options.bwlimit}"`);
+    if (options.transfers) flags.push(`--transfers ${options.transfers}`);
+    if (options.driveFolderId && options.driveFolderId.trim()) {
+      flags.push(`--drive-root-folder-id "${options.driveFolderId.trim()}"`);
+    }
+    
+    const logFile = `/tmp/rclone-cron-${Date.now()}.log`;
+    flags.push(`--log-file="${logFile}"`);
+    flags.push(`--log-level INFO`);
+
+    let finalTarget = target;
+    if (options.useTimestampFolder) {
+      let format = '\\%Y-\\%m-\\%d_\\%H-\\%M-\\%S';
+      if (options.timestampFormat === 'YMD_MMM_HM') {
+        format = '\\%Y_\\%b_\\%d_\\%H_\\%M';
+      } else if (options.timestampFormat === 'DMY_HM') {
+        format = '\\%d-\\%m-\\%Y_\\%H-\\%M';
+      }
+      const cleanTarget = target.replace(/\/$/, '');
+      finalTarget = `${cleanTarget}/$(date +${format})`;
+    }
+
+    let rcloneCmd = `export PATH="$HOME/.local/bin:$HOME/bin:/usr/local/bin:/usr/bin:$PATH"; rclone ${action || 'copy'} "${source}" "${finalTarget}" ${flags.join(' ')}`;
+    
+    if (options.enableRetention && options.retentionDays) {
+      const days = parseInt(options.retentionDays, 10) || 7;
+      let cleanupTarget = target;
+      if (options.driveFolderId && options.driveFolderId.trim()) {
+        rcloneCmd += `; rclone delete --min-age ${days}d "${cleanupTarget}" --drive-root-folder-id "${options.driveFolderId.trim()}" --rmdirs 2>/dev/null || true`;
+      } else {
+        rcloneCmd += `; rclone delete --min-age ${days}d "${cleanupTarget}" --rmdirs 2>/dev/null || true`;
+      }
+    }
+
+    const cronLine = `${schedule} ${rcloneCmd}`;
+
+    // Remove old cron line and append new cron line
+    const updateCronScript = `
+(crontab -l 2>/dev/null | grep -F -v '${oldRawLine.replace(/'/g, `'\\''`)}' ; echo "${cronLine.replace(/"/g, '\\"')}") | crontab -
+`;
+    const updateRes = await execCommand(sshConfig, updateCronScript);
+
+    if (updateRes.code === 0) {
+      return NextResponse.json({
+        success: true,
+        message: 'Crontab job updated successfully!',
+        schedule,
+        humanSchedule: parseCronHuman(schedule),
+        cronLine,
+      });
+    }
+
+    return NextResponse.json({ success: false, error: updateRes.stderr || 'Failed to update crontab job' }, { status: 500 });
+
+  } catch (error) {
+    console.error('[rclone/cron PUT] error:', error.message);
+    return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+  }
+}
+
 export async function DELETE(req) {
   try {
     const { searchParams } = new URL(req.url);
