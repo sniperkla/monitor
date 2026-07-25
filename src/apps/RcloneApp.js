@@ -67,7 +67,8 @@ export default function RcloneApp() {
       if (!list || list.length === 0) {
         try {
           const res = await apiFetch('/api/connections');
-          if (res?.success && Array.isArray(res.connections)) list = res.connections;
+          const data = await res.json();
+          if (data?.success && Array.isArray(data.connections)) list = data.connections;
         } catch (_) {}
       }
 
@@ -111,10 +112,11 @@ export default function RcloneApp() {
       interval = setInterval(async () => {
         try {
           const res = await apiFetch(`/api/rclone/install?connectionId=${selectedConnId}&logFile=${encodeURIComponent(installJob.logFile)}&sessionName=${encodeURIComponent(installJob.sessionName || '')}&pid=${installJob.pid || ''}`);
-          if (res?.success) {
-            setInstallLog(res.log || '');
-            setIsInstalling(res.running);
-            if (!res.running) {
+          const data = await res.json();
+          if (data?.success) {
+            setInstallLog(data.log || '');
+            setIsInstalling(data.running);
+            if (!data.running) {
               fetchRcloneStatus();
             }
           }
@@ -131,9 +133,10 @@ export default function RcloneApp() {
       interval = setInterval(async () => {
         try {
           const res = await apiFetch(`/api/rclone/exec?connectionId=${selectedConnId}&logFile=${encodeURIComponent(activeJob.logFile)}&sessionName=${encodeURIComponent(activeJob.sessionName || '')}&pid=${activeJob.pid || ''}`);
-          if (res?.success) {
-            setJobLog(res.log || '');
-            setIsJobRunning(res.running);
+          const data = await res.json();
+          if (data?.success) {
+            setJobLog(data.log || '');
+            setIsJobRunning(data.running);
           }
         } catch (_) {}
       }, 1500);
@@ -148,11 +151,12 @@ export default function RcloneApp() {
     setLoading(true);
     try {
       const res = await apiFetch(`/api/rclone/status?connectionId=${selectedConnId}`);
-      if (res?.success) {
-        setRcloneStatus(res);
-        if (res.remotes && res.remotes.length > 0 && !targetPath) {
-          setTargetPath(`${res.remotes[0]}:backup`);
-          setBrowseRemote(`${res.remotes[0]}:`);
+      const data = await res.json();
+      if (data?.success) {
+        setRcloneStatus(data);
+        if (data.remotes && data.remotes.length > 0 && !targetPath) {
+          setTargetPath(`${data.remotes[0]}:backup`);
+          setBrowseRemote(`${data.remotes[0]}:`);
         }
       }
     } catch (err) {
@@ -167,19 +171,21 @@ export default function RcloneApp() {
     try {
       const res = await apiFetch('/api/rclone/install', {
         method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ connectionId: selectedConnId })
       });
-      if (res?.success) {
-        if (res.logFile) {
-          setInstallJob(res);
+      const data = await res.json();
+      if (data?.success) {
+        if (data.logFile) {
+          setInstallJob(data);
         } else {
           setIsInstalling(false);
-          setInstallLog(res.output || '✅ Rclone installed successfully!');
+          setInstallLog(data.output || '✅ Rclone installed successfully!');
           fetchRcloneStatus();
         }
       } else {
         setIsInstalling(false);
-        setInstallLog(`❌ Failed to launch installer:\n${res?.error || res?.details || 'Unknown error'}`);
+        setInstallLog(`❌ Failed to launch installer:\n${data?.error || data?.details || 'Unknown error'}`);
       }
     } catch (err) {
       setIsInstalling(false);
@@ -196,6 +202,7 @@ export default function RcloneApp() {
     try {
       const res = await apiFetch('/api/rclone/remote', {
         method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           connectionId: selectedConnId,
           name: newRemoteName,
@@ -203,13 +210,14 @@ export default function RcloneApp() {
           config: remoteConfig,
         })
       });
-      if (res?.success) {
+      const data = await res.json();
+      if (data?.success) {
         setShowAddRemoteModal(false);
         setNewRemoteName('');
         setRemoteConfig({});
         fetchRcloneStatus();
       } else {
-        alert(res?.error || 'Failed to add remote');
+        alert(data?.error || 'Failed to add remote');
       }
     } catch (err) {
       alert(err.message);
@@ -223,10 +231,11 @@ export default function RcloneApp() {
       const res = await apiFetch(`/api/rclone/remote?connectionId=${selectedConnId}&name=${encodeURIComponent(name)}`, {
         method: 'DELETE',
       });
-      if (res?.success) {
+      const data = await res.json();
+      if (data?.success) {
         fetchRcloneStatus();
       } else {
-        alert(res?.error || 'Failed to delete remote');
+        alert(data?.error || 'Failed to delete remote');
       }
     } catch (err) {
       alert(err.message);
@@ -243,6 +252,7 @@ export default function RcloneApp() {
     try {
       const res = await apiFetch('/api/rclone/exec', {
         method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           connectionId: selectedConnId,
           action,
@@ -255,11 +265,12 @@ export default function RcloneApp() {
           }
         })
       });
-      if (res?.success) {
-        setActiveJob(res);
+      const data = await res.json();
+      if (data?.success) {
+        setActiveJob(data);
       } else {
         setIsJobRunning(false);
-        alert(res?.error || 'Failed to start Rclone job');
+        alert(data?.error || 'Failed to start Rclone job');
       }
     } catch (err) {
       setIsJobRunning(false);
@@ -272,8 +283,9 @@ export default function RcloneApp() {
     setBrowseLoading(true);
     try {
       const res = await apiFetch(`/api/rclone/browse?connectionId=${selectedConnId}&remote=${encodeURIComponent(targetRemote)}&path=${encodeURIComponent(subPath)}`);
-      if (res?.success) {
-        setRemoteItems(res.items || []);
+      const data = await res.json();
+      if (data?.success) {
+        setRemoteItems(data.items || []);
       }
     } catch (err) {
       console.error(err);
