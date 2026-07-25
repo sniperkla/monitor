@@ -30,134 +30,139 @@ export async function GET(req) {
       if (firstLineEnd === -1) continue;
 
       const filePath = rawBlock.slice(0, firstLineEnd).replace(/===/g, '').trim();
-      const block = rawBlock.slice(firstLineEnd + 1).trim();
+      const fileContent = rawBlock.slice(firstLineEnd + 1).trim();
 
-      if (!block) continue;
+      if (!fileContent) continue;
 
-      let action = 'copy';
-      let source = '';
-      let targetFolder = '';
-      let customProjectName = '';
+      // Split file into individual run sessions if multiple runs exist in the same log file
+      const runBlocks = fileContent.split(/(?===\s*Project:)/i).filter(b => b.trim());
 
-      // Check header marker: === Project: NAME | Action: sync ===
-      const projMatch = block.match(/===\s*Project:\s*(.*?)(?:\s*\|\s*Action:\s*(\w+))?\s*===/i);
-      if (projMatch) {
-        customProjectName = projMatch[1].trim();
-        if (projMatch[2]) {
-          action = projMatch[2].toLowerCase();
+      for (const block of runBlocks) {
+        let action = 'copy';
+        let source = '';
+        let targetFolder = '';
+        let customProjectName = '';
+
+        // Check header marker: === Project: NAME | Action: sync ===
+        const projMatch = block.match(/===\s*Project:\s*(.*?)(?:\s*\|\s*Action:\s*(\w+))?\s*===/i);
+        if (projMatch) {
+          customProjectName = projMatch[1].trim();
+          if (projMatch[2]) {
+            action = projMatch[2].toLowerCase();
+          }
         }
-      }
 
-      // Check parameters or commands
-      const paramMatch = block.match(/parameters\s+\[(.*?)\]/s);
-      if (paramMatch) {
-        const tokens = paramMatch[1].split(/\s+/).map(t => t.replace(/^"/, '').replace(/"$/, ''));
-        const rIdx = tokens.indexOf('rclone');
-        if (rIdx !== -1 && tokens[rIdx + 1]) {
-          if (!projMatch) action = tokens[rIdx + 1].toLowerCase();
-          source = tokens[rIdx + 2] || '';
-          targetFolder = tokens[rIdx + 3] || '';
+        // Check parameters or commands
+        const paramMatch = block.match(/parameters\s+\[(.*?)\]/s);
+        if (paramMatch) {
+          const tokens = paramMatch[1].split(/\s+/).map(t => t.replace(/^"/, '').replace(/"$/, ''));
+          const rIdx = tokens.indexOf('rclone');
+          if (rIdx !== -1 && tokens[rIdx + 1]) {
+            if (!projMatch) action = tokens[rIdx + 1].toLowerCase();
+            source = tokens[rIdx + 2] || '';
+            targetFolder = tokens[rIdx + 3] || '';
+          }
         }
-      }
 
-      if (!source) {
-        const fallbackMatch = block.match(/rclone\s+(copy|sync|move|check|delete|purge)\s+(\S+)(?:\s+(\S+))?/i);
-        if (fallbackMatch) {
-          if (!projMatch) action = fallbackMatch[1].toLowerCase();
-          source = fallbackMatch[2].replace(/"/g, '');
-          targetFolder = (fallbackMatch[3] || '').replace(/"/g, '');
+        if (!source) {
+          const fallbackMatch = block.match(/rclone\s+(copy|sync|move|check|delete|purge)\s+(\S+)(?:\s+(\S+))?/i);
+          if (fallbackMatch) {
+            if (!projMatch) action = fallbackMatch[1].toLowerCase();
+            source = fallbackMatch[2].replace(/"/g, '');
+            targetFolder = (fallbackMatch[3] || '').replace(/"/g, '');
+          }
         }
-      }
 
-      // If source still empty, try to detect from log lines (e.g. buildx/foo or backup.log)
-      if (!source) {
-        const firstCopyMatch = block.match(/INFO\s*:\s*([^:\s\/]+)(?:\/|\:)/i);
-        if (firstCopyMatch) {
-          source = firstCopyMatch[1].trim();
+        // If source still empty, try to detect from log lines (e.g. buildx/foo or backup.log)
+        if (!source) {
+          const firstCopyMatch = block.match(/INFO\s*:\s*([^:\s\/]+)(?:\/|\:)/i);
+          if (firstCopyMatch) {
+            source = firstCopyMatch[1].trim();
+          }
         }
-      }
 
-      // If source still empty, check filename e.g. /tmp/rclone-cron-TaskName-123.log
-      if (!source && filePath.includes('/tmp/rclone-cron-')) {
-        const fname = filePath.replace('/tmp/rclone-cron-', '').replace(/\.log$/, '');
-        const parts = fname.split('-');
-        if (parts.length > 1) {
-          source = parts.slice(0, -1).join('-');
+        // If source still empty, check filename e.g. /tmp/rclone-cron-TaskName-123.log
+        if (!source && filePath.includes('/tmp/rclone-cron-')) {
+          const fname = filePath.replace('/tmp/rclone-cron-', '').replace(/\.log$/, '');
+          const parts = fname.split('-');
+          if (parts.length > 1) {
+            source = parts.slice(0, -1).join('-');
+          }
         }
+
+        if (block.includes('rclone delete') || action === 'delete' || action === 'purge') {
+          action = 'cleanup';
+        }
+
+        // Format Project / Task Name
+        const cleanSource = source ? (source.split('/').filter(Boolean).pop() || source) : '';
+        const cleanTarget = targetFolder ? targetFolder.split('/')[0] : '';
+        
+        let jobName = customProjectName;
+        if (!jobName) {
+          if (cleanSource && cleanTarget) jobName = `${cleanSource} ➔ ${cleanTarget}`;
+          else if (cleanSource) jobName = cleanSource;
+          else jobName = 'Scheduled Backup Task';
+        }
+
+        // 🎯 Match LAST (LATEST) occurrence of progress metrics in this run block
+        const allTransferred = [...block.matchAll(/Transferred:\s+(\d+)\s*\/\s*(\d+)/g)];
+        const transferredMatch = allTransferred.length > 0 ? allTransferred[allTransferred.length - 1] : null;
+
+        const allSizes = [...block.matchAll(/Transferred:\s+([\d.]+\s*[kMGTP]?i?B)\s*\//gi)];
+        const sizeMatch = allSizes.length > 0 ? allSizes[allSizes.length - 1] : null;
+
+        const allElapsed = [...block.matchAll(/Elapsed time:\s*([\dhmins.]+)/gi)];
+        const elapsedMatch = allElapsed.length > 0 ? allElapsed[allElapsed.length - 1] : null;
+
+        const allErrors = [...block.matchAll(/Errors:\s*(\d+)/gi)];
+        const errorsMatch = allErrors.length > 0 ? allErrors[allErrors.length - 1] : null;
+
+        const allPercents = [...block.matchAll(/Transferred:.*,\s*(\d+)%/gi)];
+        const percentMatch = allPercents.length > 0 ? allPercents[allPercents.length - 1] : null;
+
+        const errorCount = errorsMatch ? parseInt(errorsMatch[1], 10) : 0;
+        const percent = percentMatch ? parseInt(percentMatch[1], 10) : null;
+        const hasActiveTransferring = block.includes('Transferring:') || (block.match(/ETA\s+[1-9]/i) !== null);
+        const hasErrors = errorCount > 0;
+        const hasFailed = block.includes('Failed to') || block.includes('ERROR');
+        
+        const filesDone = transferredMatch ? parseInt(transferredMatch[1], 10) : 0;
+        const filesTotal = transferredMatch ? parseInt(transferredMatch[2], 10) : 0;
+        const is100Percent = (percent === 100) || (filesTotal > 0 && filesDone >= filesTotal);
+
+        const isAborted = block.includes('ABORTED BY USER') || block.includes('aborted by user');
+
+        let status = 'running';
+        if (isAborted) {
+          status = 'aborted';
+        } else if (is100Percent && !hasErrors && !hasFailed && !hasActiveTransferring) {
+          status = 'success';
+        } else if (hasFailed && !hasActiveTransferring) {
+          status = 'failed';
+        } else if (hasErrors && !hasActiveTransferring) {
+          status = 'warning';
+        } else {
+          status = 'running';
+        }
+
+        const firstTimeMatch = block.match(/(\d{4}\/\d{2}\/\d{2}\s+\d{2}:\d{2}:\d{2})/);
+
+        runs.push({
+          jobName,
+          action,
+          source,
+          targetFolder,
+          startTime: firstTimeMatch ? firstTimeMatch[1] : null,
+          status,
+          errors: errorCount,
+          filesTransferred: transferredMatch ? `${transferredMatch[1]}/${transferredMatch[2]}` : null,
+          sizeTransferred: sizeMatch ? sizeMatch[1].trim() : null,
+          elapsed: elapsedMatch ? elapsedMatch[1] : null,
+          logFile: filePath,
+          logPreview: block.trim(),
+        });
       }
-
-      if (block.includes('rclone delete') || action === 'delete' || action === 'purge') {
-        action = 'cleanup';
-      }
-
-      // Format Project / Task Name
-      const cleanSource = source ? (source.split('/').filter(Boolean).pop() || source) : '';
-      const cleanTarget = targetFolder ? targetFolder.split('/')[0] : '';
-      
-      let jobName = customProjectName;
-      if (!jobName) {
-        if (cleanSource && cleanTarget) jobName = `${cleanSource} ➔ ${cleanTarget}`;
-        else if (cleanSource) jobName = cleanSource;
-        else jobName = 'Scheduled Backup Task';
-      }
-
-      // 🎯 Match LAST (LATEST) occurrence of progress metrics in the log file
-      const allTransferred = [...block.matchAll(/Transferred:\s+(\d+)\s*\/\s*(\d+)/g)];
-      const transferredMatch = allTransferred.length > 0 ? allTransferred[allTransferred.length - 1] : null;
-
-      const allSizes = [...block.matchAll(/Transferred:\s+([\d.]+\s*[kMGTP]?i?B)\s*\//gi)];
-      const sizeMatch = allSizes.length > 0 ? allSizes[allSizes.length - 1] : null;
-
-      const allElapsed = [...block.matchAll(/Elapsed time:\s*([\dhmins.]+)/gi)];
-      const elapsedMatch = allElapsed.length > 0 ? allElapsed[allElapsed.length - 1] : null;
-
-      const allErrors = [...block.matchAll(/Errors:\s*(\d+)/gi)];
-      const errorsMatch = allErrors.length > 0 ? allErrors[allErrors.length - 1] : null;
-
-      const allPercents = [...block.matchAll(/Transferred:.*,\s*(\d+)%/gi)];
-      const percentMatch = allPercents.length > 0 ? allPercents[allPercents.length - 1] : null;
-
-      const errorCount = errorsMatch ? parseInt(errorsMatch[1], 10) : 0;
-      const percent = percentMatch ? parseInt(percentMatch[1], 10) : null;
-      const hasActiveTransferring = block.includes('Transferring:') || (block.match(/ETA\s+[1-9]/i) !== null);
-      const hasErrors = errorCount > 0;
-      const hasFailed = block.includes('Failed to') || block.includes('ERROR');
-      
-      const filesDone = transferredMatch ? parseInt(transferredMatch[1], 10) : 0;
-      const filesTotal = transferredMatch ? parseInt(transferredMatch[2], 10) : 0;
-      const is100Percent = (percent === 100) || (filesTotal > 0 && filesDone >= filesTotal);
-
-      const isAborted = block.includes('ABORTED BY USER') || block.includes('aborted by user');
-
-      let status = 'running';
-      if (isAborted) {
-        status = 'aborted';
-      } else if (is100Percent && !hasErrors && !hasFailed && !hasActiveTransferring) {
-        status = 'success';
-      } else if (hasFailed && !hasActiveTransferring) {
-        status = 'failed';
-      } else if (hasErrors && !hasActiveTransferring) {
-        status = 'warning';
-      } else {
-        status = 'running';
-      }
-
-      const firstTimeMatch = block.match(/(\d{4}\/\d{2}\/\d{2}\s+\d{2}:\d{2}:\d{2})/);
-
-      runs.push({
-        jobName,
-        action,
-        source,
-        targetFolder,
-        startTime: firstTimeMatch ? firstTimeMatch[1] : null,
-        status,
-        errors: errorCount,
-        filesTransferred: transferredMatch ? `${transferredMatch[1]}/${transferredMatch[2]}` : null,
-        sizeTransferred: sizeMatch ? sizeMatch[1].trim() : null,
-        elapsed: elapsedMatch ? elapsedMatch[1] : null,
-        logFile: filePath,
-        logPreview: block.trim(),
-      });
     }
 
     // Sort newest runs first
