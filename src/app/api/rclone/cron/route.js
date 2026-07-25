@@ -95,6 +95,15 @@ export async function POST(req) {
       memMb = parseInt((memRes.stdout || '').trim(), 10) || 2048;
     } catch (_) {}
 
+    // Build rclone command flags
+    const flags = [];
+    if (options.dryRun) flags.push('--dry-run');
+    if (options.bwlimit) flags.push(`--bwlimit "${options.bwlimit}"`);
+    if (options.transfers) flags.push(`--transfers ${options.transfers}`);
+    if (options.driveFolderId && options.driveFolderId.trim()) {
+      flags.push(`--drive-root-folder-id "${options.driveFolderId.trim()}"`);
+    }
+
     if (!options.transfers) {
       if (memMb <= 2048) flags.push('--transfers 1 --checkers 2');
       else if (memMb <= 8192) flags.push('--transfers 2 --checkers 4');
@@ -119,15 +128,6 @@ export async function POST(req) {
 
     // Dynamic timestamped log file per execution run so every run is logged in history
     const logFile = `/tmp/rclone-cron-${safeLockName}-$(date +\\%Y\\%m\\%d_\\%H\\%M\\%S).log`;
-    
-    // Build rclone command flags
-    const flags = [];
-    if (options.dryRun) flags.push('--dry-run');
-    if (options.bwlimit) flags.push(`--bwlimit "${options.bwlimit}"`);
-    if (options.transfers) flags.push(`--transfers ${options.transfers}`);
-    if (options.driveFolderId && options.driveFolderId.trim()) {
-      flags.push(`--drive-root-folder-id "${options.driveFolderId.trim()}"`);
-    }
     
     flags.push(`--log-file="${logFile}"`);
     flags.push(`--log-level INFO`);
