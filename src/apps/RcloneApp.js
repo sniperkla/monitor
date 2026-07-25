@@ -447,16 +447,33 @@ export default function RcloneApp() {
                   </div>
                 </div>
 
-                {!rcloneStatus?.installed && (
+                <div className="flex items-center gap-2">
                   <button
                     onClick={handleInstallRclone}
                     disabled={isInstalling}
                     className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs transition-colors shadow-lg shadow-indigo-500/20 cursor-pointer"
                   >
-                    <Download size={14} /> {isInstalling ? 'Installing...' : '1-Click Initialize Rclone'}
+                    <Download size={14} /> {isInstalling ? 'Installing...' : rcloneStatus?.installed ? 'Re-Initialize Rclone' : '1-Click Initialize Rclone'}
                   </button>
-                )}
+                </div>
               </div>
+
+              {/* Active Background Jobs Banner */}
+              {rcloneStatus?.runningJobs && rcloneStatus.runningJobs.length > 0 && (
+                <div className="mt-4 p-3 rounded-xl bg-indigo-500/10 border border-indigo-500/20 text-xs">
+                  <div className="font-bold text-indigo-400 flex items-center gap-2 mb-1.5">
+                    <RefreshCw size={14} className="animate-spin" /> Active Rclone Tasks Running on Server ({rcloneStatus.runningJobs.length}):
+                  </div>
+                  <div className="space-y-1 font-mono text-[11px]">
+                    {rcloneStatus.runningJobs.map((job, idx) => (
+                      <div key={idx} className="flex items-center justify-between text-[var(--text-muted)] bg-[var(--bg-tertiary)] px-2.5 py-1 rounded-lg">
+                        <span className="truncate max-w-lg">PID {job.pid}: {job.cmd}</span>
+                        <span className="text-emerald-400 font-semibold shrink-0">RUNNING</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
 
               {rcloneStatus?.configPath && (
                 <div className="mt-6 pt-4 border-t border-[var(--border-color)] text-xs font-mono text-[var(--text-muted)] flex items-center justify-between">
@@ -799,6 +816,44 @@ export default function RcloneApp() {
                   onChange={(e) => setRemoteConfig({ ...remoteConfig, endpoint: e.target.value })}
                   className="w-full px-3.5 py-1.5 text-xs rounded-lg bg-[var(--bg-tertiary)] border border-[var(--border-color)] font-mono"
                 />
+              </div>
+            )}
+
+            {newRemoteType === 'drive' && (
+              <div className="space-y-2 pt-2 border-t border-[var(--border-color)]">
+                <p className="text-[11px] text-[var(--text-muted)]">
+                  Enter Google OAuth Client credentials or Service Account details below.
+                </p>
+                <input
+                  type="text"
+                  placeholder="Client ID (e.g. xxxx.apps.googleusercontent.com)"
+                  value={remoteConfig.client_id || ''}
+                  onChange={(e) => setRemoteConfig({ ...remoteConfig, client_id: e.target.value })}
+                  className="w-full px-3.5 py-1.5 text-xs rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] font-mono text-[var(--text-primary)]"
+                />
+                <input
+                  type="password"
+                  placeholder="Client Secret"
+                  value={remoteConfig.client_secret || ''}
+                  onChange={(e) => setRemoteConfig({ ...remoteConfig, client_secret: e.target.value })}
+                  className="w-full px-3.5 py-1.5 text-xs rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] font-mono text-[var(--text-primary)]"
+                />
+                <input
+                  type="text"
+                  placeholder="Service Account Credentials File Path (e.g. /etc/rclone/sa.json)"
+                  value={remoteConfig.service_account_file || ''}
+                  onChange={(e) => setRemoteConfig({ ...remoteConfig, service_account_file: e.target.value })}
+                  className="w-full px-3.5 py-1.5 text-xs rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] font-mono text-[var(--text-primary)]"
+                />
+                <select
+                  value={remoteConfig.scope || 'drive'}
+                  onChange={(e) => setRemoteConfig({ ...remoteConfig, scope: e.target.value })}
+                  className="w-full px-3.5 py-1.5 text-xs rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] text-[var(--text-primary)]"
+                >
+                  <option value="drive">Full Access (drive)</option>
+                  <option value="drive.readonly">Read-Only (drive.readonly)</option>
+                  <option value="drive.file">Application Data Only (drive.file)</option>
+                </select>
               </div>
             )}
 

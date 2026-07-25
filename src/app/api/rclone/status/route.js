@@ -44,12 +44,26 @@ export async function GET(req) {
 
     const configPath = configPathRes.stdout.trim();
 
+    // Check for any currently running rclone processes
+    const psRes = await execCommand(sshConfig, `ps aux 2>/dev/null | grep -i rclone | grep -v grep || true`);
+    const runningJobs = psRes.stdout
+      .split('\n')
+      .map(l => l.trim())
+      .filter(Boolean)
+      .map(line => {
+        const parts = line.split(/\s+/);
+        const pid = parts[1];
+        const cmd = parts.slice(10).join(' ');
+        return { pid, cmd };
+      });
+
     return NextResponse.json({
       success: true,
       installed: true,
       version,
       remotes,
       configPath,
+      runningJobs,
     });
   } catch (error) {
     console.error('[rclone/status] error:', error.message);
