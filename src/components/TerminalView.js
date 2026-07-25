@@ -251,7 +251,19 @@ export default function TerminalView({ connectionId, connectionName, host, color
   useEffect(() => {
     const handleModeChange = () => {
       const newMode = localStorage.getItem('ssh_monitor_ssh_mode') || 'server';
-      console.log(`🔄 [TerminalView] SSH mode changed to "${newMode}" — reconnecting terminal`);
+      console.log(`🔄 [TerminalView] SSH mode changed to "${newMode}" — disconnecting active session & reconnecting`);
+      if (rtcPeerRef.current) {
+        try { rtcPeerRef.current.close(); } catch (_) {}
+        rtcPeerRef.current = null;
+      }
+      if (socketRef.current) {
+        try {
+          socketRef.current.__rtcConnected = false;
+          socketRef.current.emit('ssh:disconnect');
+          socketRef.current.disconnect();
+        } catch (_) {}
+        socketRef.current = null;
+      }
       setReconnectNonce(n => n + 1);
     };
     window.addEventListener('ssh-mode-changed', handleModeChange);

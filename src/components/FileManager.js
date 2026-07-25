@@ -447,18 +447,33 @@ export default function FileManager({
   }, [appState.dbConfig?.uri]);
 
   // Real-time mode switching: when the user swaps Server ↔ Local Relay in Settings,
-  // immediately reconnect the SSH session so the new mode takes effect without a page refresh.
+  // immediately disconnect and purge pooled socket so the new mode takes effect cleanly.
   useEffect(() => {
     const handleModeChange = () => {
       const newMode = localStorage.getItem('ssh_monitor_ssh_mode') || 'server';
-      console.log(`🔄 [FileManager] SSH mode changed to "${newMode}" — reconnecting session`);
+      console.log(`🔄 [FileManager] SSH mode changed to "${newMode}" — purging pooled socket & reconnecting`);
+      const poolEntry = _fmSocketPool.get(connectionId);
+      if (poolEntry?.socket) {
+        try {
+          poolEntry.socket.emit('ssh:disconnect');
+          poolEntry.socket.disconnect();
+        } catch (_) {}
+        _fmSocketPool.delete(connectionId);
+      }
+      if (socketRef.current) {
+        try {
+          socketRef.current.emit('ssh:disconnect');
+          socketRef.current.disconnect();
+        } catch (_) {}
+        socketRef.current = null;
+      }
       reconnectAttemptsRef.current = 0;
       setReconnectAlert(null);
       setReconnectNonce(n => n + 1);
     };
     window.addEventListener('ssh-mode-changed', handleModeChange);
     return () => window.removeEventListener('ssh-mode-changed', handleModeChange);
-  }, []);
+  }, [connectionId]);
 
   useEffect(() => {
     if (vaultStatus === 'loading') return;
