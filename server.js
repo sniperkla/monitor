@@ -787,6 +787,7 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
           if (pending.relayMode) {
             const relayConnId = pending.relayConnId;
             console.log(`⚡ [REATTACH] Reattaching Relay mode session for socket ${socket.id} (connId: ${relayConnId})`);
+            global.__relayConnMap.set(relayConnId, socket.id);
 
             socket.removeAllListeners('ssh:input');
             socket.removeAllListeners('ssh:resize');
