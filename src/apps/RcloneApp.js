@@ -684,17 +684,15 @@ export default function RcloneApp() {
   }, [selectedConnId, vaultStatus]);
 
   // 🛑 Abort / Terminate Running Rclone Process
-  const handleKillProcess = async (pid = null) => {
+  const handleKillProcess = async (pid = null, logFile = null) => {
     if (!selectedConnId) return;
-    const confirmMsg = pid ? `Abort running Rclone process (PID ${pid})?` : 'Abort active Rclone processes on server?';
-    if (!confirm(confirmMsg)) return;
 
     setLoading(true);
     try {
       const res = await apiFetch('/api/rclone/kill', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ connectionId: selectedConnId, pid })
+        body: JSON.stringify({ connectionId: selectedConnId, pid, logFile })
       });
       const data = await res.json();
       if (data?.success) {
@@ -1984,7 +1982,11 @@ export default function RcloneApp() {
                                             ● EXECUTING
                                           </span>
                                           <button
-                                            onClick={() => handleKillProcess(null)}
+                                            onClick={(e) => {
+                                              e.stopPropagation();
+                                              e.preventDefault();
+                                              handleKillProcess(null, run.logFile);
+                                            }}
                                             className="px-2 py-0.5 rounded-full bg-rose-500/15 hover:bg-rose-500/30 text-rose-400 font-bold text-[10px] border border-rose-500/30 cursor-pointer transition-colors"
                                             title="Abort running process"
                                           >
