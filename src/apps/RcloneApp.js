@@ -866,16 +866,21 @@ export default function RcloneApp() {
 
   const openPathPicker = (mode) => {
     setPickerMode(mode);
+    const activeSrc = editingCron ? editingCron.source : sourcePath;
+    const activeTgt = editingCron ? editingCron.target : targetPath;
+
     if (mode === 'source') {
       setPickerTargetType('local');
-      const initialPath = sourcePath && sourcePath.startsWith('/') ? sourcePath : '/';
+      const initialPath = activeSrc && activeSrc.startsWith('/') ? activeSrc : '/';
       setPickerCurrentPath(initialPath);
       fetchPickerItems('local', initialPath);
     } else {
       const defaultRemote = rcloneStatus?.remotes?.[0] ? `${rcloneStatus.remotes[0]}:` : 'gdrive:';
-      setPickerTargetType(defaultRemote);
-      setPickerCurrentPath('');
-      fetchPickerItems(defaultRemote, '');
+      const targetRemote = activeTgt && activeTgt.includes(':') ? activeTgt.split(':')[0] + ':' : defaultRemote;
+      const subPath = activeTgt && activeTgt.includes(':') ? activeTgt.split(':').slice(1).join(':') : '';
+      setPickerTargetType(targetRemote);
+      setPickerCurrentPath(subPath);
+      fetchPickerItems(targetRemote, subPath);
     }
   };
 
@@ -902,10 +907,18 @@ export default function RcloneApp() {
       fullPath = pickerCurrentPath ? `${remoteBase}${pickerCurrentPath}` : remoteBase;
     }
 
-    if (pickerMode === 'source') {
-      setSourcePath(fullPath);
+    if (editingCron) {
+      if (pickerMode === 'source') {
+        setEditingCron({ ...editingCron, source: fullPath });
+      } else {
+        setEditingCron({ ...editingCron, target: fullPath });
+      }
     } else {
-      setTargetPath(fullPath);
+      if (pickerMode === 'source') {
+        setSourcePath(fullPath);
+      } else {
+        setTargetPath(fullPath);
+      }
     }
     setPickerMode(null);
   };
@@ -1789,7 +1802,7 @@ export default function RcloneApp() {
       {/* ════ EDIT CRONTAB MODAL ════ */}
       {editingCron && (
         <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
-          <div className="w-full max-w-lg bg-[var(--bg-secondary)] rounded-2xl border border-[var(--border-color)] shadow-2xl overflow-hidden">
+          <div className="w-full max-w-lg bg-[var(--bg-secondary)] rounded-2xl border border-[var(--border-color)] shadow-2xl relative">
             <div className="flex items-center justify-between px-5 py-4 border-b border-[var(--border-color)]">
               <div className="flex items-center gap-2">
                 <Settings size={16} className="text-indigo-400" />
@@ -1809,7 +1822,12 @@ export default function RcloneApp() {
               </div>
               <div className="grid grid-cols-2 gap-2">
                 <div>
-                  <label className="text-[11px] font-semibold text-[var(--text-muted)] block mb-1">Source Path</label>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="text-[11px] font-semibold text-[var(--text-muted)]">Source Path</label>
+                    <button onClick={() => openPathPicker('source')} className="text-[10px] text-indigo-400 hover:text-indigo-300 font-bold flex items-center gap-0.5 cursor-pointer bg-indigo-500/10 hover:bg-indigo-500/20 px-1.5 py-0.5 rounded border border-indigo-500/20 transition-colors">
+                      <Folder size={10} /> Browse...
+                    </button>
+                  </div>
                   <PathInputWithAutocomplete
                     value={editingCron.source}
                     onChange={(val) => setEditingCron({ ...editingCron, source: val })}
@@ -1818,11 +1836,16 @@ export default function RcloneApp() {
                     apiFetch={apiFetch}
                     remotes={rcloneStatus?.remotes || []}
                     accentColor="indigo"
-                    className="w-full px-3.5 py-1.5 text-xs rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] font-mono text-[var(--text-primary)] focus:outline-none"
+                    className="w-full px-3 py-1.5 text-xs rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] font-mono text-[var(--text-primary)] focus:outline-none"
                   />
                 </div>
                 <div>
-                  <label className="text-[11px] font-semibold text-[var(--text-muted)] block mb-1">Destination</label>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="text-[11px] font-semibold text-[var(--text-muted)]">Destination</label>
+                    <button onClick={() => openPathPicker('target')} className="text-[10px] text-emerald-400 hover:text-emerald-300 font-bold flex items-center gap-0.5 cursor-pointer bg-emerald-500/10 hover:bg-emerald-500/20 px-1.5 py-0.5 rounded border border-emerald-500/20 transition-colors">
+                      <HardDrive size={10} /> Browse...
+                    </button>
+                  </div>
                   <PathInputWithAutocomplete
                     value={editingCron.target}
                     onChange={(val) => setEditingCron({ ...editingCron, target: val })}
@@ -1831,7 +1854,7 @@ export default function RcloneApp() {
                     apiFetch={apiFetch}
                     remotes={rcloneStatus?.remotes || []}
                     accentColor="emerald"
-                    className="w-full px-3.5 py-1.5 text-xs rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] font-mono text-[var(--text-primary)] focus:outline-none"
+                    className="w-full px-3 py-1.5 text-xs rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] font-mono text-[var(--text-primary)] focus:outline-none"
                   />
                 </div>
               </div>
