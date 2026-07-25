@@ -2648,6 +2648,12 @@ export default function FileManager({
         const targetSet = new Set(targets);
         setDeletingFiles(prev => new Set([...prev, ...targetSet]));
         
+        // Purge any deleted items from uploadQueue so re-pasted uploads start cleanly from 0%
+        setUploadQueue(prev => prev.filter(item => {
+          const itemFilename = item.path ? item.path.split('/').pop() : item.displayName;
+          return !targetSet.has(itemFilename) && !targetSet.has(item.path);
+        }));
+
         targets.forEach(filename => {
            const path = currentPath === '.' ? filename : `${currentPath}/${filename}`;
            socket.emit('sftp:delete', path);

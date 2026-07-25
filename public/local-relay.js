@@ -716,12 +716,35 @@ async function handleSftpUploadStart(ws, msg) {
       new Promise((_, reject) => setTimeout(() => reject(new Error('SFTP channel open timeout')), 15000)),
     ]);
     console.log(`📤 [relay] SFTP client obtained, creating write stream for ${msg.remotePath}`);
-    const offset = msg.offset || 0;
+    let offset = msg.offset || 0;
     const flags = offset > 0 ? 'r+' : 'w';
-    const stream = sftp.createWriteStream(msg.remotePath, { flags, start: offset, autoClose: true });
+    let stream;
+    try {
+      stream = sftp.createWriteStream(msg.remotePath, { flags, start: offset, autoClose: true });
+    } catch (_) {
+      offset = 0;
+      stream = sftp.createWriteStream(msg.remotePath, { flags: 'w', start: 0, autoClose: true });
+    }
+
     console.log(`📤 [relay] write stream created for ${msg.remotePath}, waiting for 'open' event...`);
 
     stream.on('error', (err) => {
+      if (offset > 0 && (err?.code === 'ENOENT' || err?.code === 2 || err?.message?.toLowerCase().includes('no such file'))) {
+        console.warn(`⚠️ [relay] Resume target gone for ${msg.remotePath}, restarting write from byte 0`);
+        offset = 0;
+        try {
+          const freshStream = sftp.createWriteStream(msg.remotePath, { flags: 'w', start: 0, autoClose: true });
+          const entry = activeUploads.get(key);
+          if (entry) {
+            entry.stream = freshStream;
+            entry.initialOffset = 0;
+          }
+          if (ws.readyState === 1) {
+            ws.send(JSON.stringify({ type: 'sftp:can_upload', connId: msg.connId, filename: msg.filename, offset: 0 }));
+          }
+          return;
+        } catch (_) {}
+      }
       console.error(`Upload stream error for ${msg.remotePath}:`, err.message);
       activeUploads.delete(key);
       sendSftpError(ws, msg.connId, err);
