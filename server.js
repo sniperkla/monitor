@@ -783,6 +783,67 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
           };
           ensureIdleWatcher();
 
+          // If this is a Relay Mode session, re-bind relay signaling and event listeners
+          if (pending.relayMode) {
+            const relayConnId = pending.relayConnId;
+            console.log(`⚡ [REATTACH] Reattaching Relay mode session for socket ${socket.id} (connId: ${relayConnId})`);
+
+            socket.removeAllListeners('ssh:input');
+            socket.removeAllListeners('ssh:resize');
+            socket.on('ssh:input', (inputData) => {
+              if (socket.__rtcConnected) return;
+              sendToRelay({ type: 'ssh:input', connId: relayConnId, data: inputData });
+            });
+            socket.on('ssh:resize', ({ cols: c, rows: r }) => {
+              if (socket.__rtcConnected) return;
+              sendToRelay({ type: 'ssh:resize', connId: relayConnId, cols: c, rows: r });
+            });
+
+            const sftpSimpleEvents = [
+              'sftp:list', 'sftp:mkdir', 'sftp:delete', 'sftp:readFile', 'sftp:readFileBase64',
+              'sftp:writeFile', 'sftp:download', 'sftp:download_folder',
+              'sftp:search', 'sftp:getSize', 'sftp:copy', 'sftp:move', 'sftp:extract',
+            ];
+            sftpSimpleEvents.forEach(ev => {
+              socket.removeAllListeners(ev);
+              socket.on(ev, (payload) => {
+                const msg = typeof payload === 'string'
+                  ? { type: ev, connId: relayConnId, path: payload }
+                  : { connId: relayConnId, ...payload, type: ev, archiveType: payload.type };
+                forwardOrQueue(msg);
+              });
+            });
+
+            socket.removeAllListeners('sftp:upload');
+            socket.on('sftp:upload', ({ filename, path: destPath, size, offset = 0 }) => {
+              let aborted = false;
+              const delivered = forwardOrQueue({ type: 'sftp:upload_start', connId: relayConnId, remotePath: destPath, filename, size, offset });
+              if (!delivered) { socket.emit('sftp:error', { message: 'Relay not ready', recoverable: true }); return; }
+              socket.emit('sftp:can_upload', { filename, offset, ready: true });
+              socket.on(`sftp:upload_chunk:${filename}`, (chunk) => {
+                if (aborted) return;
+                const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+                const sent = sendToRelay({ type: 'sftp:upload_chunk', connId: relayConnId, remotePath: destPath, filename, data: buf.toString('base64') });
+                if (!sent) { socket.emit('sftp:error', { message: 'Relay disconnected', recoverable: true }); }
+                offset += buf.length;
+              });
+              socket.once(`sftp:upload_done:${filename}`, () => {
+                if (aborted) return;
+                socket.removeAllListeners(`sftp:upload_chunk:${filename}`);
+                forwardOrQueue({ type: 'sftp:upload_done', connId: relayConnId, remotePath: destPath, filename });
+              });
+              socket.once(`sftp:upload_abort:${filename}`, () => {
+                aborted = true;
+                socket.removeAllListeners(`sftp:upload_chunk:${filename}`);
+                sendToRelay({ type: 'sftp:upload_abort', connId: relayConnId, remotePath: destPath, filename });
+              });
+            });
+
+            socket.emit('ssh:connected');
+            socket.emit('relay:rtc:ready', { connId: relayConnId });
+            return;
+          }
+
           // Clear old listeners before re-registering
           const sftpEvents = [
             'sftp:list', 'sftp:mkdir', 'sftp:delete', 'sftp:readFile',
@@ -860,6 +921,47 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
               sftp.readdir(targetPath, (err, list) => {
                 if (err) return fallbackFileListing(socket, sc, path);
                 socket.emit('sftp:list', { path, files: list });
+              });
+            });
+          });
+
+          socket.on('sftp:delete', (path) => {
+            console.log(`🗑️ [${socket.id}] [REATTACHED] SFTP DELETE: ${path}`);
+            const sc = pending.sshClient;
+            if (!sc || sc._state === 'closed') return socket.emit('sftp:error', { message: 'SSH Connection Closed' });
+            const cmd = `rm -rf "${path.replace(/"/g, '\\"')}"`;
+            sc.exec(cmd, (err, execStream) => {
+              if (err) return socket.emit('sftp:error', { message: 'Delete failed' });
+              let stderr = '';
+              execStream.on('data', () => {});
+              execStream.stderr.on('data', d => stderr += d.toString());
+              execStream.on('close', (code) => {
+                if (code === 0) socket.emit('sftp:action_success', { action: 'delete', path });
+                else socket.emit('sftp:error', { message: stderr.trim() || `Exit code ${code}` });
+              });
+            });
+          });
+
+          socket.on('sftp:upload', ({ filename, path: destPath, size, offset = 0 }) => {
+            console.log(`📤 [${socket.id}] [REATTACHED] SFTP UPLOAD START: ${filename} (${destPath})`);
+            reattachSftp((err, sftp) => {
+              if (err) return socket.emit('sftp:error', { message: err.message });
+              const flags = offset > 0 ? 'r+' : 'w';
+              const wStream = sftp.createWriteStream(destPath, { flags, start: offset });
+              socket.emit('sftp:can_upload', { filename, offset, ready: true });
+              socket.on(`sftp:upload_chunk:${filename}`, (chunk) => {
+                const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+                wStream.write(buf, (wErr) => {
+                  if (wErr) return socket.emit('sftp:error', { message: wErr.message });
+                  offset += buf.length;
+                  socket.emit(`sftp:upload_ack:${filename}`, { totalTransferred: offset, ready: true });
+                });
+              });
+              socket.once(`sftp:upload_done:${filename}`, () => {
+                socket.removeAllListeners(`sftp:upload_chunk:${filename}`);
+                wStream.end(() => {
+                  socket.emit('sftp:action_success', { action: 'upload', path: destPath });
+                });
               });
             });
           });
