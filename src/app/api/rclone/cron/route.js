@@ -114,9 +114,11 @@ export async function POST(req) {
     const cleanSourceLabel = normSource ? (normSource.split('/').filter(Boolean).pop() || normSource) : 'Source';
     const cleanTargetLabel = target ? target.split('/')[0] : 'Destination';
     const finalProjectName = reqProjectName.trim() ? reqProjectName.trim().replace(/"/g, '') : `${cleanSourceLabel} ➔ ${cleanTargetLabel}`;
+    const safeLockName = finalProjectName.replace(/[^a-zA-Z0-9_-]/g, '_');
+    const lockFile = `/tmp/rclone-lock-${safeLockName}.lock`;
 
     const nicePrefix = memMb <= 2048 ? 'nice -n 19 ' : '';
-    let rcloneCmd = `export PATH="$HOME/.local/bin:$HOME/bin:/usr/local/bin:/usr/bin:$PATH"; echo "=== Project: ${finalProjectName} | Action: ${action || 'copy'} ===" >> "${logFile}"; ${nicePrefix}rclone ${action || 'copy'} "${normSource}" "${finalTarget}" ${flags.join(' ')}`;
+    let rcloneCmd = `export PATH="$HOME/.local/bin:$HOME/bin:/usr/local/bin:/usr/bin:$PATH"; exec 9>"${lockFile}"; flock -n 9 || { echo "Backup job [${finalProjectName}] is already running. Skipping concurrent run." >> "${logFile}"; exit 0; }; echo "=== Project: ${finalProjectName} | Action: ${action || 'copy'} ===" >> "${logFile}"; ${nicePrefix}rclone ${action || 'copy'} "${normSource}" "${finalTarget}" ${flags.join(' ')}`;
     
     // Auto Retention Policy: clean old backups older than X days
     if (options.enableRetention && options.retentionDays) {
