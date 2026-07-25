@@ -12,6 +12,59 @@ import { useApp } from '@/context/AppContext';
 import MasterPasswordModal from '@/components/MasterPasswordModal';
 import { getLocalConnections } from '@/utils/localConnections';
 
+// 🎨 Custom Styled Popover Select Component
+function CustomSelect({ value, onChange, options = [], className = '', textClass = '' }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef(null);
+
+  useEffect(() => {
+    const handleClick = (e) => {
+      if (ref.current && !ref.current.contains(e.target)) setOpen(false);
+    };
+    document.addEventListener('mousedown', handleClick);
+    return () => document.removeEventListener('mousedown', handleClick);
+  }, []);
+
+  const selectedOpt = options.find(o => String(o.value) === String(value)) || options[0];
+
+  return (
+    <div className="relative inline-block w-full" ref={ref}>
+      <button
+        type="button"
+        onClick={() => setOpen(!open)}
+        className={`w-full px-3 py-1.5 text-xs rounded-xl bg-[var(--bg-secondary)] border border-[var(--border-color)] text-[var(--text-primary)] font-mono flex items-center justify-between gap-2 cursor-pointer hover:border-indigo-500/50 transition-all ${className}`}
+      >
+        <span className={`truncate ${textClass}`}>{selectedOpt?.label || value}</span>
+        <ChevronDown size={12} className={`text-[var(--text-muted)] transition-transform shrink-0 ${open ? 'rotate-180' : ''}`} />
+      </button>
+
+      {open && (
+        <div className="absolute top-full left-0 right-0 mt-1 bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-xl shadow-2xl z-[9999] overflow-hidden max-h-56 overflow-y-auto divide-y divide-[var(--border-color)]">
+          {options.map((opt) => {
+            const isSelected = String(opt.value) === String(value);
+            return (
+              <button
+                key={opt.value}
+                type="button"
+                onClick={() => {
+                  onChange(opt.value);
+                  setOpen(false);
+                }}
+                className={`w-full px-3 py-2 text-left text-xs font-mono flex items-center justify-between transition-colors cursor-pointer ${
+                  isSelected ? 'bg-indigo-500/15 text-indigo-400 font-bold' : 'hover:bg-[var(--bg-tertiary)] text-[var(--text-primary)]'
+                }`}
+              >
+                <span className="truncate">{opt.label}</span>
+                {isSelected && <Check size={12} className="text-indigo-400 shrink-0 ml-1" />}
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // 💡 Path Input with Autocomplete & Tab Completion
 function PathInputWithAutocomplete({
   value,
@@ -401,22 +454,22 @@ function DynamicCronPicker({ value, onChange }) {
                 <label className="text-[10px] font-semibold text-[var(--text-muted)] block mb-1">
                   Day of Week:
                 </label>
-                <select
+                <CustomSelect
                   value={weekDay}
-                  onChange={(e) => {
-                    setWeekDay(e.target.value);
-                    updateCron(mode, time, e.target.value, monthDay, intervalVal, customVal);
+                  onChange={(val) => {
+                    setWeekDay(val);
+                    updateCron(mode, time, val, monthDay, intervalVal, customVal);
                   }}
-                  className="w-full px-3 py-1.5 text-xs rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] text-[var(--text-primary)] focus:outline-none cursor-pointer"
-                >
-                  <option value="1">Every Monday</option>
-                  <option value="2">Every Tuesday</option>
-                  <option value="3">Every Wednesday</option>
-                  <option value="4">Every Thursday</option>
-                  <option value="5">Every Friday</option>
-                  <option value="6">Every Saturday</option>
-                  <option value="0">Every Sunday</option>
-                </select>
+                  options={[
+                    { value: '1', label: 'Every Monday' },
+                    { value: '2', label: 'Every Tuesday' },
+                    { value: '3', label: 'Every Wednesday' },
+                    { value: '4', label: 'Every Thursday' },
+                    { value: '5', label: 'Every Friday' },
+                    { value: '6', label: 'Every Saturday' },
+                    { value: '0', label: 'Every Sunday' },
+                  ]}
+                />
               </div>
             )}
 
@@ -425,20 +478,14 @@ function DynamicCronPicker({ value, onChange }) {
                 <label className="text-[10px] font-semibold text-[var(--text-muted)] block mb-1">
                   Day of Month (1-31):
                 </label>
-                <select
+                <CustomSelect
                   value={monthDay}
-                  onChange={(e) => {
-                    setMonthDay(e.target.value);
-                    updateCron(mode, time, weekDay, e.target.value, intervalVal, customVal);
+                  onChange={(val) => {
+                    setMonthDay(val);
+                    updateCron(mode, time, weekDay, val, intervalVal, customVal);
                   }}
-                  className="w-full px-3 py-1.5 text-xs rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] font-mono text-[var(--text-primary)] focus:outline-none cursor-pointer"
-                >
-                  {Array.from({ length: 31 }, (_, i) => i + 1).map((d) => (
-                    <option key={d} value={String(d)}>
-                      Day {d} of month
-                    </option>
-                  ))}
-                </select>
+                  options={Array.from({ length: 31 }, (_, i) => ({ value: String(i + 1), label: `Day ${i + 1} of month` }))}
+                />
               </div>
             )}
           </div>
@@ -449,22 +496,22 @@ function DynamicCronPicker({ value, onChange }) {
             <label className="text-[10px] font-semibold text-[var(--text-muted)] block mb-1">
               Select Recurrence Interval:
             </label>
-            <select
+            <CustomSelect
               value={intervalVal}
-              onChange={(e) => {
-                setIntervalVal(e.target.value);
-                updateCron(mode, time, weekDay, monthDay, e.target.value, customVal);
+              onChange={(val) => {
+                setIntervalVal(val);
+                updateCron(mode, time, weekDay, monthDay, val, customVal);
               }}
-              className="w-full px-3 py-2 text-xs rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] text-[var(--text-primary)] focus:outline-none cursor-pointer"
-            >
-              <option value="*/5 * * * *">Every 5 Minutes (*/5 * * * *)</option>
-              <option value="*/15 * * * *">Every 15 Minutes (*/15 * * * *)</option>
-              <option value="*/30 * * * *">Every 30 Minutes (*/30 * * * *)</option>
-              <option value="0 * * * *">Every Hour (0 * * * *)</option>
-              <option value="0 */2 * * *">Every 2 Hours (0 */2 * * *)</option>
-              <option value="0 */6 * * *">Every 6 Hours (0 */6 * * *)</option>
-              <option value="0 */12 * * *">Every 12 Hours (0 */12 * * *)</option>
-            </select>
+              options={[
+                { value: '*/5 * * * *', label: 'Every 5 Minutes (*/5 * * * *)' },
+                { value: '*/15 * * * *', label: 'Every 15 Minutes (*/15 * * * *)' },
+                { value: '*/30 * * * *', label: 'Every 30 Minutes (*/30 * * * *)' },
+                { value: '0 * * * *', label: 'Every Hour (0 * * * *)' },
+                { value: '0 */2 * * *', label: 'Every 2 Hours (0 */2 * * *)' },
+                { value: '0 */6 * * *', label: 'Every 6 Hours (0 */6 * * *)' },
+                { value: '0 */12 * * *', label: 'Every 12 Hours (0 */12 * * *)' },
+              ]}
+            />
           </div>
         )}
 
@@ -1462,11 +1509,16 @@ export default function RcloneApp() {
                 </label>
                 {useTimestampFolder && (
                   <div className="space-y-1.5 pl-5">
-                    <select value={timestampFormat} onChange={(e) => setTimestampFormat(e.target.value)} className="w-full px-2.5 py-1.5 text-[11px] rounded-lg bg-[var(--bg-secondary)] border border-[var(--border-color)] text-indigo-400 font-mono">
-                      <option value="YMD_MMM_HM">2026_Jul_25_22_05</option>
-                      <option value="DMY_HM">25-07-2026_22-03</option>
-                      <option value="YMD_HMS">2026-07-25_22-03-41</option>
-                    </select>
+                    <CustomSelect
+                      value={timestampFormat}
+                      onChange={setTimestampFormat}
+                      textClass="text-indigo-400 font-mono font-semibold"
+                      options={[
+                        { value: 'YMD_MMM_HM', label: '2026_Jul_25_22_05' },
+                        { value: 'DMY_HM', label: '25-07-2026_22-03' },
+                        { value: 'YMD_HMS', label: '2026-07-25_22-03-41' },
+                      ]}
+                    />
                     <p className="text-[10px] text-indigo-300 font-mono">
                       → {targetPath || 'gdrive:'}/{timestampFormat === 'YMD_MMM_HM' ? '2026_Jul_25_22_05' : timestampFormat === 'DMY_HM' ? '25-07-2026_22-03' : '2026-07-25_22-03-41'}/
                     </p>
@@ -1482,13 +1534,18 @@ export default function RcloneApp() {
                 </label>
                 {enableRetention && (
                   <div className="space-y-1.5 pl-5">
-                    <select value={retentionDays} onChange={(e) => setRetentionDays(e.target.value)} className="w-full px-2.5 py-1.5 text-[11px] rounded-lg bg-[var(--bg-secondary)] border border-[var(--border-color)] text-amber-400 font-mono">
-                      <option value="3">3 Days</option>
-                      <option value="7">7 Days (Default)</option>
-                      <option value="14">14 Days</option>
-                      <option value="30">30 Days</option>
-                      <option value="90">90 Days</option>
-                    </select>
+                    <CustomSelect
+                      value={retentionDays}
+                      onChange={setRetentionDays}
+                      textClass="text-amber-400 font-mono font-semibold"
+                      options={[
+                        { value: '3', label: '3 Days' },
+                        { value: '7', label: '7 Days (Default)' },
+                        { value: '14', label: '14 Days' },
+                        { value: '30', label: '30 Days' },
+                        { value: '90', label: '90 Days' },
+                      ]}
+                    />
                     <p className="text-[10px] text-amber-300">Delete folders older than {retentionDays} days automatically</p>
                   </div>
                 )}
@@ -1926,12 +1983,16 @@ export default function RcloneApp() {
               </div>
               <div>
                 <label className="text-[11px] font-semibold text-[var(--text-muted)] block mb-1">Storage Provider</label>
-                <select value={newRemoteType} onChange={(e) => setNewRemoteType(e.target.value)} className="w-full px-3.5 py-2 text-xs rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] text-[var(--text-primary)] focus:border-indigo-500 focus:outline-none">
-                  <option value="s3">AWS S3 / Cloudflare R2 / MinIO / Wasabi / B2</option>
-                  <option value="drive">Google Drive</option>
-                  <option value="sftp">SFTP / SSH Server</option>
-                  <option value="webdav">WebDAV / Nextcloud</option>
-                </select>
+                <CustomSelect
+                  value={newRemoteType}
+                  onChange={setNewRemoteType}
+                  options={[
+                    { value: 's3', label: 'AWS S3 / Cloudflare R2 / MinIO / Wasabi / B2' },
+                    { value: 'drive', label: 'Google Drive' },
+                    { value: 'sftp', label: 'SFTP / SSH Server' },
+                    { value: 'webdav', label: 'WebDAV / Nextcloud' },
+                  ]}
+                />
               </div>
 
               {newRemoteType === 's3' && (
@@ -2182,14 +2243,19 @@ export default function RcloneApp() {
                 </label>
                 {editingCron.options?.enableRetention && (
                   <div className="flex items-center gap-2 pl-5">
-                    <span className="text-[11px] text-[var(--text-muted)]">Delete older than:</span>
-                    <select value={editingCron.options?.retentionDays || '7'} onChange={(e) => setEditingCron({ ...editingCron, options: { ...editingCron.options, retentionDays: e.target.value } })} className="px-2.5 py-1 text-xs rounded-lg bg-[var(--bg-secondary)] border border-[var(--border-color)] text-amber-400 font-mono focus:outline-none">
-                      <option value="3">3 Days</option>
-                      <option value="7">7 Days</option>
-                      <option value="14">14 Days</option>
-                      <option value="30">30 Days</option>
-                      <option value="90">90 Days</option>
-                    </select>
+                    <span className="text-[11px] text-[var(--text-muted)] shrink-0">Delete older than:</span>
+                    <CustomSelect
+                      value={editingCron.options?.retentionDays || '7'}
+                      onChange={(val) => setEditingCron({ ...editingCron, options: { ...editingCron.options, retentionDays: val } })}
+                      textClass="text-amber-400 font-mono font-semibold"
+                      options={[
+                        { value: '3', label: '3 Days' },
+                        { value: '7', label: '7 Days' },
+                        { value: '14', label: '14 Days' },
+                        { value: '30', label: '30 Days' },
+                        { value: '90', label: '90 Days' },
+                      ]}
+                    />
                   </div>
                 )}
               </div>
