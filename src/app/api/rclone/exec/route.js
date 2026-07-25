@@ -57,7 +57,17 @@ export async function POST(req) {
       finalTarget = `${cleanTarget}/${subFolder}`;
     }
 
-    const cmd = `${pathPrefix}rclone ${action} ${quote(source)} ${quote(finalTarget)} ${flags.join(' ')}`;
+    let cmd = `${pathPrefix}rclone ${action} ${quote(source)} ${quote(finalTarget)} ${flags.join(' ')}`;
+    
+    // Auto Retention Policy: clean old backups older than X days
+    if (options.enableRetention && options.retentionDays) {
+      const days = parseInt(options.retentionDays, 10) || 7;
+      let driveFlag = '';
+      if (options.driveFolderId && options.driveFolderId.trim()) {
+        driveFlag = `--drive-root-folder-id=${quote(options.driveFolderId.trim())} `;
+      }
+      cmd += `; ${pathPrefix}rclone delete --min-age ${days}d ${quote(target)} ${driveFlag}--rmdirs 2>/dev/null || true`;
+    }
 
     const b64Script = Buffer.from(`${cmd}`).toString('base64');
 

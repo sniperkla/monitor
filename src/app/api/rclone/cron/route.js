@@ -103,7 +103,19 @@ export async function POST(req) {
       finalTarget = `${cleanTarget}/$(date +${format})`;
     }
 
-    const rcloneCmd = `export PATH="$HOME/.local/bin:$HOME/bin:/usr/local/bin:/usr/bin:$PATH"; rclone ${action || 'copy'} "${source}" "${finalTarget}" ${flags.join(' ')}`;
+    let rcloneCmd = `export PATH="$HOME/.local/bin:$HOME/bin:/usr/local/bin:/usr/bin:$PATH"; rclone ${action || 'copy'} "${source}" "${finalTarget}" ${flags.join(' ')}`;
+    
+    // Auto Retention Policy: clean old backups older than X days
+    if (options.enableRetention && options.retentionDays) {
+      const days = parseInt(options.retentionDays, 10) || 7;
+      let cleanupTarget = target;
+      if (options.driveFolderId && options.driveFolderId.trim()) {
+        rcloneCmd += `; rclone delete --min-age ${days}d "${cleanupTarget}" --drive-root-folder-id "${options.driveFolderId.trim()}" --rmdirs 2>/dev/null || true`;
+      } else {
+        rcloneCmd += `; rclone delete --min-age ${days}d "${cleanupTarget}" --rmdirs 2>/dev/null || true`;
+      }
+    }
+
     const cronLine = `${schedule} ${rcloneCmd}`;
 
     // Append to server's crontab safely

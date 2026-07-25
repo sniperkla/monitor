@@ -53,6 +53,8 @@ export default function RcloneApp() {
   const [driveFolderUrl, setDriveFolderUrl] = useState(''); // raw pasted URL
   const [useTimestampFolder, setUseTimestampFolder] = useState(true); // create timestamped folder
   const [timestampFormat, setTimestampFormat] = useState('YMD_MMM_HM'); // 'YMD_MMM_HM' (2026_Jul_25_22_05) | 'DMY_HM' | 'YMD_HMS'
+  const [enableRetention, setEnableRetention] = useState(true); // auto clean old backups
+  const [retentionDays, setRetentionDays] = useState('7'); // delete older than X days
   
   // Interactive Path Picker Modal State
   const [pickerMode, setPickerMode] = useState(null); // 'source' | 'target' | null
@@ -292,6 +294,8 @@ export default function RcloneApp() {
             driveFolderId: driveFolderId || '',
             useTimestampFolder,
             timestampFormat,
+            enableRetention,
+            retentionDays,
           },
         })
       });
@@ -413,6 +417,8 @@ export default function RcloneApp() {
             driveFolderId: driveFolderId || '',
             useTimestampFolder,
             timestampFormat,
+            enableRetention,
+            retentionDays,
           }
         })
       });
@@ -983,6 +989,40 @@ export default function RcloneApp() {
                       </div>
                       <p className="font-mono text-emerald-400 text-[10px]">
                         → Each backup run creates a new folder: <code className="bg-black/30 px-1 py-0.5 rounded text-white">{targetPath || 'gdrive:'}/{timestampFormat === 'YMD_MMM_HM' ? '2026_Jul_25_22_05' : timestampFormat === 'DMY_HM' ? '25-07-2026_22-03' : '2026-07-25_22-03-41'}/</code>
+                      </p>
+                    </div>
+                  )}
+                </div>
+
+                {/* 🧹 Auto Retention Policy (Storage Cleanup) */}
+                <div className="p-3.5 rounded-xl bg-amber-500/10 border border-amber-500/20 space-y-2 text-xs">
+                  <label className="flex items-center gap-2 font-bold text-amber-400 cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      checked={enableRetention}
+                      onChange={(e) => setEnableRetention(e.target.checked)}
+                      className="rounded border-[var(--border-color)] text-amber-500 focus:ring-0"
+                    />
+                    <span>🧹 Auto Clean Old Backups (Prevent Storage Overflow)</span>
+                  </label>
+                  {enableRetention && (
+                    <div className="pl-6 space-y-1.5 text-[11px] text-[var(--text-muted)]">
+                      <div className="flex items-center gap-2">
+                        <span>Delete files/folders older than:</span>
+                        <select
+                          value={retentionDays}
+                          onChange={(e) => setRetentionDays(e.target.value)}
+                          className="px-2.5 py-1 text-xs rounded-lg bg-[var(--bg-secondary)] border border-[var(--border-color)] text-amber-400 font-mono"
+                        >
+                          <option value="3">3 Days</option>
+                          <option value="7">7 Days (Default)</option>
+                          <option value="14">14 Days (2 Weeks)</option>
+                          <option value="30">30 Days (1 Month)</option>
+                          <option value="90">90 Days (3 Months)</option>
+                        </select>
+                      </div>
+                      <p className="text-[10px] text-amber-300">
+                        ✓ Automatically deletes backup folders older than {retentionDays} days to save Google Drive disk space.
                       </p>
                     </div>
                   )}
