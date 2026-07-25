@@ -81,13 +81,11 @@ export async function GET(req) {
           }
         }
 
-        // If source still empty, check filename e.g. /tmp/rclone-cron-TaskName-123.log
-        if (!source && filePath.includes('/tmp/rclone-cron-')) {
+        // If customProjectName still empty, derive clean project name from log file path
+        if (!customProjectName && filePath.includes('/tmp/rclone-cron-')) {
           const fname = filePath.replace('/tmp/rclone-cron-', '').replace(/\.log$/, '');
-          const parts = fname.split('-');
-          if (parts.length > 1) {
-            source = parts.slice(0, -1).join('-');
-          }
+          const cleanName = fname.replace(/-\d{8}_\d{6}$/, '').replace(/-\d{10,}$/, '');
+          if (cleanName) customProjectName = cleanName;
         }
 
         if (block.includes('rclone delete') || action === 'delete' || action === 'purge') {
