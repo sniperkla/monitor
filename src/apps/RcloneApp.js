@@ -38,7 +38,7 @@ export default function RcloneApp() {
 
   // Backup Execution State
   const [action, setAction] = useState('copy'); // 'copy' | 'sync' | 'move' | 'check'
-  const [sourcePath, setSourcePath] = useState('/var/www/html');
+  const [sourcePath, setSourcePath] = useState('/');
   const [targetPath, setTargetPath] = useState('');
   const [dryRun, setDryRun] = useState(false);
   const [bwlimit, setBwlimit] = useState('');
@@ -60,7 +60,7 @@ export default function RcloneApp() {
   // Interactive Path Picker Modal State
   const [pickerMode, setPickerMode] = useState(null); // 'source' | 'target' | null
   const [pickerTargetType, setPickerTargetType] = useState('local'); // 'local' | 'gdrive:' etc.
-  const [pickerCurrentPath, setPickerCurrentPath] = useState('/var/www');
+  const [pickerCurrentPath, setPickerCurrentPath] = useState('/');
   const [pickerItems, setPickerItems] = useState([]);
   const [pickerLoading, setPickerLoading] = useState(false);
 
@@ -385,7 +385,7 @@ export default function RcloneApp() {
     setPickerMode(mode);
     if (mode === 'source') {
       setPickerTargetType('local');
-      const initialPath = sourcePath && sourcePath.startsWith('/') ? sourcePath : '/var/www';
+      const initialPath = sourcePath && sourcePath.startsWith('/') ? sourcePath : '/';
       setPickerCurrentPath(initialPath);
       fetchPickerItems('local', initialPath);
     } else {
@@ -1221,7 +1221,7 @@ export default function RcloneApp() {
               {/* Source type buttons */}
               <div className="flex items-center gap-2 overflow-x-auto pb-1">
                 <button
-                  onClick={() => { setPickerTargetType('local'); setPickerCurrentPath('/var/www'); fetchPickerItems('local', '/var/www'); }}
+                  onClick={() => { setPickerTargetType('local'); setPickerCurrentPath('/'); fetchPickerItems('local', '/'); }}
                   className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 shrink-0 ${pickerTargetType === 'local' ? 'bg-indigo-600 text-white' : 'bg-[var(--bg-tertiary)] text-[var(--text-muted)] border border-[var(--border-color)]'}`}
                 >
                   <Server size={12} /> Local Server
