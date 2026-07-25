@@ -14,13 +14,44 @@ export async function GET(req) {
     const preferredRelay = req.headers.get('x-preferred-relay');
 
     const sshConfig = await getSshConfig(connectionId, { sshMode, preferredRelay });
-    const pathPrefix = 'export PATH="$HOME/.local/bin:$HOME/bin:/usr/local/bin:$PATH"; ';
+    const detectScript = `
+export PATH="$HOME/.local/bin:$HOME/bin:/usr/local/bin:/usr/bin:/snap/bin:$PATH"
+RCLONE_CMD="$(command -v rclone 2>/dev/null || which rclone 2>/dev/null || echo "$HOME/.local/bin/rclone")"
+if [ ! -x "$RCLONE_CMD" ] && ! command -v rclone >/dev/null 2>&1; then
+  echo "NOT_INSTALLED"
+  exit 0
+fi
 
-    // Check if rclone binary exists
-    const checkRes = await execCommand(sshConfig, `${pathPrefix}command -v rclone`);
-    const isInstalled = checkRes.code === 0 && checkRes.stdout.trim().length > 0;
+VERSION="$($RCLONE_CMD version 2>/dev/null | head -n 2)"
+CONFIG_PATH="$($RCLONE_CMD config file 2>/dev/null | grep -i "\.conf" | tail -n 1)"
+if [ -z "$CONFIG_PATH" ]; then
+  if [ -f "$HOME/.config/rclone/rclone.conf" ]; then CONFIG_PATH="$HOME/.config/rclone/rclone.conf"
+  elif [ -f "/root/.config/rclone/rclone.conf" ]; then CONFIG_PATH="/root/.config/rclone/rclone.conf"
+  elif [ -f "/etc/rclone/rclone.conf" ]; then CONFIG_PATH="/etc/rclone/rclone.conf"
+  fi
+fi
 
-    if (!isInstalled) {
+REMOTES="$($RCLONE_CMD listremotes 2>/dev/null)"
+if [ -z "$REMOTES" ] && [ "$(id -u)" != "0" ] && sudo -n true 2>/dev/null; then
+  REMOTES="$(sudo $RCLONE_CMD listremotes 2>/dev/null || true)"
+fi
+
+if [ -z "$REMOTES" ]; then
+  REMOTES="$(grep -h -E '^\\[.+\\]' "$HOME/.config/rclone/rclone.conf" "/root/.config/rclone/rclone.conf" "/etc/rclone/rclone.conf" 2>/dev/null | tr -d '[]:' || true)"
+fi
+
+echo "===VERSION==="
+echo "$VERSION"
+echo "===CONFIG_PATH==="
+echo "$CONFIG_PATH"
+echo "===REMOTES==="
+echo "$REMOTES"
+`;
+
+    const detectRes = await execCommand(sshConfig, detectScript);
+    const output = detectRes.stdout || '';
+
+    if (output.includes('NOT_INSTALLED')) {
       return NextResponse.json({
         success: true,
         installed: false,
@@ -30,19 +61,20 @@ export async function GET(req) {
       });
     }
 
-    // Get rclone version & remotes
-    const versionRes = await execCommand(sshConfig, `${pathPrefix}rclone version 2>/dev/null | head -n 2`);
-    const remotesRes = await execCommand(sshConfig, `${pathPrefix}rclone listremotes 2>/dev/null`);
-    const configPathRes = await execCommand(sshConfig, `${pathPrefix}rclone config file 2>/dev/null | tail -n 1`);
+    const versionMatch = output.match(/===VERSION===\n([\s\S]*?)(?====CONFIG_PATH===|$)/);
+    const configPathMatch = output.match(/===CONFIG_PATH===\n([\s\S]*?)(?====REMOTES===|$)/);
+    const remotesMatch = output.match(/===REMOTES===\n([\s\S]*?)(?=$)/);
 
-    const version = versionRes.stdout.trim();
-    const remotes = remotesRes.stdout
-      .split('\n')
-      .map(r => r.trim())
-      .filter(Boolean)
-      .map(r => r.replace(/:$/, ''));
+    const version = versionMatch ? versionMatch[1].trim() : 'rclone installed';
+    const configPath = configPathMatch ? configPathMatch[1].trim() : null;
+    const rawRemotes = remotesMatch ? remotesMatch[1].trim() : '';
 
-    const configPath = configPathRes.stdout.trim();
+    const remotes = Array.from(new Set(
+      rawRemotes
+        .split('\n')
+        .map(r => r.trim().replace(/:$/, '').replace(/^\[/, '').replace(/\]$/, ''))
+        .filter(Boolean)
+    ));
 
     // Check for any currently running rclone processes
     const psRes = await execCommand(sshConfig, `ps aux 2>/dev/null | grep -i rclone | grep -v grep || true`);
