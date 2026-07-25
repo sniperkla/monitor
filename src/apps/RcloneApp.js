@@ -52,6 +52,13 @@ export default function RcloneApp() {
   const [driveFolderId, setDriveFolderId] = useState(''); // Google Drive folder ID for --drive-root-folder-id
   const [driveFolderUrl, setDriveFolderUrl] = useState(''); // raw pasted URL
   
+  // Interactive Path Picker Modal State
+  const [pickerMode, setPickerMode] = useState(null); // 'source' | 'target' | null
+  const [pickerTargetType, setPickerTargetType] = useState('local'); // 'local' | 'gdrive:' etc.
+  const [pickerCurrentPath, setPickerCurrentPath] = useState('/var/www');
+  const [pickerItems, setPickerItems] = useState([]);
+  const [pickerLoading, setPickerLoading] = useState(false);
+
   // Job Execution & Logs
   const [activeJob, setActiveJob] = useState(null);
   const [jobLog, setJobLog] = useState('');
@@ -326,6 +333,52 @@ export default function RcloneApp() {
     } catch (err) {
       alert(err.message);
     }
+  };
+
+  const openPathPicker = (mode) => {
+    setPickerMode(mode);
+    if (mode === 'source') {
+      setPickerTargetType('local');
+      const initialPath = sourcePath || '/var/www';
+      setPickerCurrentPath(initialPath);
+      fetchPickerItems('local', initialPath);
+    } else {
+      const defaultRemote = rcloneStatus?.remotes?.[0] ? `${rcloneStatus.remotes[0]}:` : 'gdrive:';
+      setPickerTargetType(defaultRemote);
+      setPickerCurrentPath('');
+      fetchPickerItems(defaultRemote, '');
+    }
+  };
+
+  const fetchPickerItems = async (targetType, subPath) => {
+    if (!selectedConnId) return;
+    setPickerLoading(true);
+    try {
+      const remote = targetType === 'local' ? 'local' : targetType;
+      const res = await apiFetch(`/api/rclone/browse?connectionId=${selectedConnId}&remote=${encodeURIComponent(remote)}&path=${encodeURIComponent(subPath)}`);
+      const data = await res.json();
+      if (data?.success) {
+        setPickerItems(data.items || []);
+      }
+    } catch (_) {}
+    setPickerLoading(false);
+  };
+
+  const selectPickerFolder = () => {
+    let fullPath = '';
+    if (pickerTargetType === 'local') {
+      fullPath = pickerCurrentPath.startsWith('/') ? pickerCurrentPath : `/${pickerCurrentPath}`;
+    } else {
+      const remoteBase = pickerTargetType.endsWith(':') ? pickerTargetType : `${pickerTargetType}:`;
+      fullPath = pickerCurrentPath ? `${remoteBase}${pickerCurrentPath}` : remoteBase;
+    }
+
+    if (pickerMode === 'source') {
+      setSourcePath(fullPath);
+    } else {
+      setTargetPath(fullPath);
+    }
+    setPickerMode(null);
   };
 
   const handleStartBackupJob = async () => {
@@ -815,7 +868,15 @@ export default function RcloneApp() {
                 </div>
 
                 <div>
-                  <label className="text-xs font-semibold text-[var(--text-muted)] block mb-1">Source Path (Local or Remote):</label>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="text-xs font-semibold text-[var(--text-muted)]">Source Path (Local or Remote):</label>
+                    <button
+                      onClick={() => openPathPicker('source')}
+                      className="text-[11px] text-indigo-400 hover:text-indigo-300 font-bold flex items-center gap-1 cursor-pointer bg-indigo-500/10 hover:bg-indigo-500/20 px-2 py-0.5 rounded-lg border border-indigo-500/20 transition-colors"
+                    >
+                      <Folder size={12} /> Browse Server...
+                    </button>
+                  </div>
                   <input
                     type="text"
                     value={sourcePath}
@@ -826,7 +887,15 @@ export default function RcloneApp() {
                 </div>
 
                 <div>
-                  <label className="text-xs font-semibold text-[var(--text-muted)] block mb-1">Destination Target Path:</label>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="text-xs font-semibold text-[var(--text-muted)]">Destination Target Path:</label>
+                    <button
+                      onClick={() => openPathPicker('target')}
+                      className="text-[11px] text-emerald-400 hover:text-emerald-300 font-bold flex items-center gap-1 cursor-pointer bg-emerald-500/10 hover:bg-emerald-500/20 px-2 py-0.5 rounded-lg border border-emerald-500/20 transition-colors"
+                    >
+                      <HardDrive size={12} /> Browse Cloud Remotes...
+                    </button>
+                  </div>
                   <input
                     type="text"
                     value={targetPath}
@@ -1327,6 +1396,160 @@ export default function RcloneApp() {
               >
                 Close File Viewer
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 📁 Interactive Server & Cloud Path Picker Modal */}
+      {pickerMode && (
+        <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+          <div className="w-full max-w-2xl bg-[var(--bg-secondary)] rounded-2xl p-6 border border-[var(--border-color)] shadow-2xl space-y-4">
+            <div className="flex items-center justify-between border-b border-[var(--border-color)] pb-3">
+              <div className="flex items-center gap-2">
+                <Folder size={20} className="text-indigo-400" />
+                <div>
+                  <h3 className="text-sm font-bold">
+                    Select {pickerMode === 'source' ? 'Source Directory (Server Filesystem)' : 'Destination Directory (Cloud Target)'}
+                  </h3>
+                  <p className="text-[10px] text-[var(--text-muted)]">Target Server: {selectedConn?.name}</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setPickerMode(null)}
+                className="p-1 rounded-lg text-[var(--text-muted)] hover:bg-[var(--bg-tertiary)] text-xs cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Target Type Picker Selector */}
+            <div className="flex items-center gap-2 overflow-x-auto pb-1">
+              <button
+                onClick={() => {
+                  setPickerTargetType('local');
+                  setPickerCurrentPath('/var/www');
+                  fetchPickerItems('local', '/var/www');
+                }}
+                className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 shrink-0 ${
+                  pickerTargetType === 'local'
+                    ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/20'
+                    : 'bg-[var(--bg-tertiary)] text-[var(--text-muted)] hover:text-[var(--text-primary)] border border-[var(--border-color)]'
+                }`}
+              >
+                <Server size={13} /> Local Server (/var/www, /home, etc.)
+              </button>
+
+              {rcloneStatus?.remotes?.map(rem => {
+                const remName = `${rem}:`;
+                return (
+                  <button
+                    key={rem}
+                    onClick={() => {
+                      setPickerTargetType(remName);
+                      setPickerCurrentPath('');
+                      fetchPickerItems(remName, '');
+                    }}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 shrink-0 ${
+                      pickerTargetType === remName
+                        ? 'bg-emerald-600 text-white shadow-md shadow-emerald-600/20'
+                        : 'bg-[var(--bg-tertiary)] text-[var(--text-muted)] hover:text-[var(--text-primary)] border border-[var(--border-color)]'
+                    }`}
+                  >
+                    <HardDrive size={13} /> {rem}:
+                  </button>
+                );
+              })}
+            </div>
+
+            {/* Path Breadcrumb & Direct Jump */}
+            <div className="flex items-center gap-2 bg-[var(--bg-tertiary)] p-2 rounded-xl border border-[var(--border-color)] text-xs font-mono">
+              <span className="text-indigo-400 font-bold shrink-0">{pickerTargetType}</span>
+              <input
+                type="text"
+                value={pickerCurrentPath}
+                onChange={(e) => setPickerCurrentPath(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') fetchPickerItems(pickerTargetType, pickerCurrentPath);
+                }}
+                className="flex-1 bg-transparent text-[var(--text-primary)] focus:outline-none"
+                placeholder="Current folder path"
+              />
+              <button
+                onClick={() => fetchPickerItems(pickerTargetType, pickerCurrentPath)}
+                className="px-2.5 py-1 bg-indigo-600 hover:bg-indigo-500 text-white text-[10px] font-bold rounded-lg cursor-pointer"
+              >
+                Go
+              </button>
+            </div>
+
+            {/* Folder & File List */}
+            <div className="space-y-1 max-h-72 overflow-y-auto pr-1">
+              {pickerLoading ? (
+                <div className="p-8 text-center text-xs text-[var(--text-muted)] flex items-center justify-center gap-2">
+                  <RefreshCw size={14} className="animate-spin text-indigo-400" /> Scanning directory contents...
+                </div>
+              ) : pickerItems.length > 0 ? (
+                pickerItems.map((item, idx) => (
+                  <div
+                    key={idx}
+                    onClick={() => {
+                      if (item.IsDir) {
+                        const newSub = pickerCurrentPath
+                          ? `${pickerCurrentPath.replace(/\/$/, '')}/${item.Name}`
+                          : item.Name;
+                        setPickerCurrentPath(newSub);
+                        fetchPickerItems(pickerTargetType, newSub);
+                      }
+                    }}
+                    className={`p-2.5 rounded-xl border border-[var(--border-color)] flex items-center justify-between font-mono text-xs transition-colors ${
+                      item.IsDir
+                        ? 'bg-[var(--bg-tertiary)] hover:bg-indigo-500/10 hover:border-indigo-500/30 cursor-pointer'
+                        : 'bg-black/20 text-[var(--text-muted)]'
+                    }`}
+                  >
+                    <div className="flex items-center gap-2.5 truncate">
+                      {item.IsDir ? (
+                        <Folder size={16} className="text-amber-400 shrink-0" />
+                      ) : (
+                        <File size={16} className="text-indigo-400 shrink-0" />
+                      )}
+                      <span className={item.IsDir ? 'text-[var(--text-primary)] font-semibold' : ''}>
+                        {item.Name}
+                      </span>
+                    </div>
+                    {item.IsDir && (
+                      <span className="text-[10px] text-indigo-400 bg-indigo-500/10 px-2 py-0.5 rounded font-sans font-semibold">
+                        Folder ↵
+                      </span>
+                    )}
+                  </div>
+                ))
+              ) : (
+                <div className="p-8 text-center text-xs text-[var(--text-muted)]">
+                  Directory is empty or no subfolders found.
+                </div>
+              )}
+            </div>
+
+            <div className="flex items-center justify-between pt-3 border-t border-[var(--border-color)]">
+              <span className="text-xs font-mono text-[var(--text-muted)] truncate max-w-sm">
+                Selected: <strong className="text-indigo-400">{pickerTargetType}{pickerCurrentPath}</strong>
+              </span>
+              <div className="flex gap-2">
+                <button
+                  onClick={() => setPickerMode(null)}
+                  className="px-4 py-2 rounded-xl bg-[var(--bg-tertiary)] text-xs font-semibold hover:bg-[var(--border-color)] cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={selectPickerFolder}
+                  className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold cursor-pointer shadow-lg shadow-indigo-600/20"
+                >
+                  ✓ Select This Directory
+                </button>
+              </div>
             </div>
           </div>
         </div>

@@ -22,10 +22,17 @@ export async function GET(req) {
     const sshConfig = await getSshConfig(connectionId, { sshMode, preferredRelay });
     const pathPrefix = 'export PATH="$HOME/.local/bin:$HOME/bin:/usr/local/bin:$PATH"; ';
     
-    // Construct rclone target e.g. "gdrive:myfolder" or "s3remote:mybucket/sub"
-    const target = remote ? (remote.endsWith(':') ? `${remote}${path}` : `${remote}:${path}`) : path;
-    const cmd = `${pathPrefix}rclone lsjson ${quote(target)} --stat 2>/dev/null || ${pathPrefix}rclone lsjson ${quote(target)} 2>/dev/null`;
+    let target = '';
+    let isLocal = false;
 
+    if (!remote || remote === 'local' || path.startsWith('/')) {
+      isLocal = true;
+      target = path || '/';
+    } else {
+      target = remote.endsWith(':') ? `${remote}${path}` : `${remote}:${path}`;
+    }
+
+    const cmd = `${pathPrefix}rclone lsjson ${quote(target)} 2>/dev/null`;
     const result = await execCommand(sshConfig, cmd);
 
     if (result.code === 0 && result.stdout.trim()) {
@@ -38,13 +45,45 @@ export async function GET(req) {
       return NextResponse.json({
         success: true,
         target,
+        isLocal,
         items: Array.isArray(items) ? items : [items],
       });
+    }
+
+    // Fallback for local server directory browsing if rclone lsjson is empty
+    if (isLocal) {
+      const lsCmd = `ls -la --time-style=long-iso ${quote(target)} 2>/dev/null || ls -la ${quote(target)} 2>/dev/null`;
+      const lsRes = await execCommand(sshConfig, lsCmd);
+      if (lsRes.code === 0 && lsRes.stdout.trim()) {
+        const lines = lsRes.stdout.split('\n').slice(1);
+        const items = lines.map(line => {
+          const parts = line.trim().split(/\s+/);
+          if (parts.length < 8) return null;
+          const isDir = parts[0].startsWith('d');
+          const name = parts.slice(8).join(' ');
+          if (name === '.' || name === '..') return null;
+          return {
+            Path: name,
+            Name: name,
+            IsDir: isDir,
+            Size: parseInt(parts[4], 10) || 0,
+            MimeType: isDir ? 'inode/directory' : 'application/octet-stream',
+          };
+        }).filter(Boolean);
+
+        return NextResponse.json({
+          success: true,
+          target,
+          isLocal: true,
+          items,
+        });
+      }
     }
 
     return NextResponse.json({
       success: true,
       target,
+      isLocal,
       items: [],
     });
 
