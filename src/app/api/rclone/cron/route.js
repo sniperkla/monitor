@@ -64,6 +64,10 @@ export async function GET(req) {
   }
 }
 
+function bashSingleQuote(str) {
+  return `'${String(str).replace(/'/g, `'\\''`)}'`;
+}
+
 export async function POST(req) {
   try {
     const { connectionId, schedule, action, source, target, options = {} } = await req.json();
@@ -76,6 +80,12 @@ export async function POST(req) {
     const preferredRelay = req.headers.get('x-preferred-relay');
 
     const sshConfig = await getSshConfig(connectionId, { sshMode, preferredRelay });
+
+    // Normalize source path: if relative, make absolute via $HOME/
+    let normSource = source.trim();
+    if (!normSource.includes(':') && !normSource.startsWith('/')) {
+      normSource = normSource.startsWith('./') ? `$HOME/${normSource.slice(2)}` : `$HOME/${normSource}`;
+    }
 
     // Build rclone command flags
     const flags = [];
@@ -103,7 +113,7 @@ export async function POST(req) {
       finalTarget = `${cleanTarget}/$(date +${format})`;
     }
 
-    let rcloneCmd = `export PATH="$HOME/.local/bin:$HOME/bin:/usr/local/bin:/usr/bin:$PATH"; rclone ${action || 'copy'} "${source}" "${finalTarget}" ${flags.join(' ')}`;
+    let rcloneCmd = `export PATH="$HOME/.local/bin:$HOME/bin:/usr/local/bin:/usr/bin:$PATH"; rclone ${action || 'copy'} "${normSource}" "${finalTarget}" ${flags.join(' ')}`;
     
     // Auto Retention Policy: clean old backups older than X days
     if (options.enableRetention && options.retentionDays) {
@@ -118,9 +128,13 @@ export async function POST(req) {
 
     const cronLine = `${schedule} ${rcloneCmd}`;
 
-    // Append to server's crontab safely
+    // Append to server's crontab safely using single-quoted echo to prevent premature bash evaluation of $(date)
     const addCronScript = `
-(crontab -l 2>/dev/null | grep -v "${rcloneCmd.replace(/"/g, '\\"')}" ; echo "${cronLine.replace(/"/g, '\\"')}") | crontab -
+TMP_CRON=$(mktemp)
+crontab -l 2>/dev/null | grep -F -v ${bashSingleQuote(rcloneCmd)} > "$TMP_CRON" || true
+echo ${bashSingleQuote(cronLine)} >> "$TMP_CRON"
+crontab "$TMP_CRON"
+rm -f "$TMP_CRON"
 `;
     const addRes = await execCommand(sshConfig, addCronScript);
 
@@ -155,6 +169,12 @@ export async function PUT(req) {
 
     const sshConfig = await getSshConfig(connectionId, { sshMode, preferredRelay });
 
+    // Normalize source path: if relative, make absolute via $HOME/
+    let normSource = source.trim();
+    if (!normSource.includes(':') && !normSource.startsWith('/')) {
+      normSource = normSource.startsWith('./') ? `$HOME/${normSource.slice(2)}` : `$HOME/${normSource}`;
+    }
+
     // Build rclone command flags
     const flags = [];
     if (options.dryRun) flags.push('--dry-run');
@@ -180,7 +200,7 @@ export async function PUT(req) {
       finalTarget = `${cleanTarget}/$(date +${format})`;
     }
 
-    let rcloneCmd = `export PATH="$HOME/.local/bin:$HOME/bin:/usr/local/bin:/usr/bin:$PATH"; rclone ${action || 'copy'} "${source}" "${finalTarget}" ${flags.join(' ')}`;
+    let rcloneCmd = `export PATH="$HOME/.local/bin:$HOME/bin:/usr/local/bin:/usr/bin:$PATH"; rclone ${action || 'copy'} "${normSource}" "${finalTarget}" ${flags.join(' ')}`;
     
     if (options.enableRetention && options.retentionDays) {
       const days = parseInt(options.retentionDays, 10) || 7;
@@ -194,9 +214,13 @@ export async function PUT(req) {
 
     const cronLine = `${schedule} ${rcloneCmd}`;
 
-    // Remove old cron line and append new cron line
+    // Remove old cron line and append new cron line safely
     const updateCronScript = `
-(crontab -l 2>/dev/null | grep -F -v '${oldRawLine.replace(/'/g, `'\\''`)}' ; echo "${cronLine.replace(/"/g, '\\"')}") | crontab -
+TMP_CRON=$(mktemp)
+crontab -l 2>/dev/null | grep -F -v ${bashSingleQuote(oldRawLine)} > "$TMP_CRON" || true
+echo ${bashSingleQuote(cronLine)} >> "$TMP_CRON"
+crontab "$TMP_CRON"
+rm -f "$TMP_CRON"
 `;
     const updateRes = await execCommand(sshConfig, updateCronScript);
 
