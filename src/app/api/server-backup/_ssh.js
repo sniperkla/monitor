@@ -58,10 +58,11 @@ export async function resolveSshConfig(baseConfig, options = {}) {
       relay.ws.off('message', messageHandler);
     });
 
-    // Tell the relay agent to open the SSH connection
+    // Tell the relay agent to open an outbound TCP connection to the actual SSH target.
+    // The relay agent (local-relay.js) runs on the user's local machine and will connect
+    // FROM there TO the target server's SSH port — so we send the real hostname/IP.
     if (relay.ws.readyState === 1) {
-      const targetHost = relay.targetHost && relay.targetHost !== 'localhost' ? relay.targetHost : '127.0.0.1';
-      relay.ws.send(JSON.stringify({ type: 'open', connId, host: targetHost, port: sshConfig.port || 22 }));
+      relay.ws.send(JSON.stringify({ type: 'open', connId, host: sshConfig.host, port: sshConfig.port || 22 }));
     }
 
     // Set ssh2 client to use our custom socket stream instead of host/port
