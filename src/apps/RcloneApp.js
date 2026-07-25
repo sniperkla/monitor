@@ -5,7 +5,7 @@ import {
   CloudSync, HardDrive, RefreshCw, Terminal, CheckCircle2, AlertTriangle,
   Plus, Trash2, Folder, File, Play, Shield, Settings, Server, Database,
   ArrowRight, Download, Eye, ExternalLink, Cpu, Info, Check, ShieldCheck,
-  Zap, Copy, ArrowLeftRight, Monitor, ChevronRight, Link2, ChevronDown, Search, X
+  Zap, Copy, ArrowLeftRight, Monitor, ChevronRight, Link2, ChevronDown, Search, X, Clock
 } from 'lucide-react';
 import { useVault } from '@/context/VaultContext';
 import { useApp } from '@/context/AppContext';
@@ -1242,6 +1242,7 @@ export default function RcloneApp() {
           { id: 'setup',   icon: <Settings size={13} />,   label: 'Setup' },
           { id: 'remotes', icon: <HardDrive size={13} />,  label: `Remotes (${rcloneStatus?.remotes?.length || 0})` },
           { id: 'backup',  icon: <Play size={13} />,       label: 'Sync & Backup' },
+          { id: 'crons',   icon: <Clock size={13} />,      label: `Schedules (${serverCrons.length})` },
           { id: 'history', icon: <Database size={13} />,   label: `History (${historyProjects.length})` },
           { id: 'browser', icon: <Eye size={13} />,        label: 'Cloud Explorer' },
         ].map((tab) => (
@@ -1729,36 +1730,64 @@ export default function RcloneApp() {
                 {jobLog || 'Run a backup task above to see live output here...'}
               </pre>
             </div>
+          </div>
+        )}
 
-            {/* ─ Active Crontab Tasks ─ */}
-            <div className="rounded-2xl bg-[var(--bg-secondary)] border border-[var(--border-color)] overflow-hidden">
-              <div className="px-4 py-3 border-b border-[var(--border-color)] flex items-center justify-between">
-                <h4 className="text-xs font-bold flex items-center gap-2">
-                  <Terminal size={13} className="text-indigo-400" />
-                  Active Server Crontab Tasks
-                  <span className="px-1.5 py-0.5 rounded-full bg-indigo-500/15 text-indigo-400 text-[10px] font-mono">{serverCrons.length}</span>
-                </h4>
-                <button onClick={fetchCrons} className="flex items-center gap-1 text-[10px] text-indigo-400 hover:underline cursor-pointer">
-                  <RefreshCw size={10} /> Refresh
+        {/* ── 4. Schedules / Crontab Tab ── */}
+        {activeTab === 'crons' && (
+          <div className="p-6 space-y-6 max-w-6xl mx-auto">
+            <div className="flex items-center justify-between">
+              <div>
+                <h3 className="text-base font-bold flex items-center gap-2">
+                  <Clock className="text-indigo-400" size={18} />
+                  Active Server Crontab Schedules
+                </h3>
+                <p className="text-xs text-[var(--text-muted)] mt-0.5">
+                  Automated rclone backup schedules configured on {selectedConn?.name}
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => setActiveTab('backup')}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold transition-all shadow-md cursor-pointer"
+                >
+                  <Plus size={13} /> Add New Schedule
+                </button>
+                <button
+                  onClick={fetchCrons}
+                  disabled={loading}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-[var(--bg-secondary)] hover:bg-[var(--border-color)] text-[var(--text-muted)] hover:text-[var(--text-primary)] text-xs font-bold border border-[var(--border-color)] transition-colors cursor-pointer"
+                >
+                  <RefreshCw size={12} className={loading ? 'animate-spin' : ''} /> Refresh
                 </button>
               </div>
+            </div>
 
+            {/* ─ Active Crontab Tasks Card ─ */}
+            <div className="rounded-2xl bg-[var(--bg-secondary)] border border-[var(--border-color)] overflow-hidden">
               <div className="divide-y divide-[var(--border-color)]">
                 {serverCrons.length === 0 ? (
-                  <div className="p-8 text-center text-xs text-[var(--text-muted)]">
-                    No crontab tasks on {selectedConn?.name}. Switch to "Schedule" mode above and add one!
+                  <div className="p-12 text-center space-y-3">
+                    <Clock size={32} className="text-[var(--text-muted)] mx-auto opacity-40" />
+                    <p className="text-xs text-[var(--text-muted)]">No active crontab schedules configured on {selectedConn?.name}.</p>
+                    <button
+                      onClick={() => setActiveTab('backup')}
+                      className="px-3.5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold transition-all shadow-md cursor-pointer inline-flex items-center gap-1.5"
+                    >
+                      <Plus size={13} /> Create Backup Schedule
+                    </button>
                   </div>
                 ) : (
                   serverCrons.map((cron) => (
                     <div key={cron.id} className="group">
                       {/* Task Header */}
-                      <div className="flex items-center justify-between gap-3 px-4 py-2.5 bg-[var(--bg-tertiary)] group-hover:bg-[var(--bg-tertiary)]/80">
+                      <div className="flex items-center justify-between gap-3 px-4 py-3 bg-[var(--bg-tertiary)] group-hover:bg-[var(--bg-tertiary)]/80">
                         <div className="flex items-center gap-2 min-w-0">
-                          <span className="px-2 py-0.5 rounded-full bg-indigo-500/15 text-indigo-400 font-bold text-[10px] shrink-0">{cron.humanSchedule}</span>
+                          <span className="px-2.5 py-0.5 rounded-full bg-indigo-500/15 text-indigo-400 font-bold text-[10px] shrink-0">{cron.humanSchedule}</span>
                           <span className="text-[10px] font-mono text-[var(--text-muted)] shrink-0">{cron.schedule}</span>
                         </div>
-                        <div className="flex items-center gap-1 shrink-0">
-                          <button onClick={() => navigator.clipboard.writeText(cron.raw)} className="p-1 text-[var(--text-muted)] hover:text-emerald-400 hover:bg-emerald-500/10 rounded-lg transition-colors cursor-pointer" title="Copy"><Copy size={12} /></button>
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          <button onClick={() => navigator.clipboard.writeText(cron.raw)} className="p-1.5 text-[var(--text-muted)] hover:text-emerald-400 hover:bg-emerald-500/10 rounded-lg transition-colors cursor-pointer" title="Copy Command"><Copy size={12} /></button>
                           <button
                             onClick={() => {
                               const rcloneMatch = cron.raw.match(/rclone\s+(copy|sync|move|check)\s+(?:"([^"]+)"|'([^']+)'|(\S+))\s+(?:"([^"]+)"|'([^']+)'|(\S+))/i);
@@ -1788,12 +1817,13 @@ export default function RcloneApp() {
                                   retentionDays: retMatch ? retMatch[1] : '7',
                                 }
                               });
+                              setActiveTab('backup');
                             }}
-                            className="p-1 text-indigo-400 hover:bg-indigo-500/10 rounded-lg transition-colors cursor-pointer" title="Edit"
+                            className="p-1.5 text-indigo-400 hover:bg-indigo-500/10 rounded-lg transition-colors cursor-pointer" title="Edit Schedule"
                           >
                             <Settings size={12} />
                           </button>
-                          <button onClick={() => handleDeleteCron(cron.raw)} className="p-1 text-rose-400 hover:bg-rose-500/10 rounded-lg transition-colors cursor-pointer" title="Delete"><Trash2 size={12} /></button>
+                          <button onClick={() => handleDeleteCron(cron.raw)} className="p-1.5 text-rose-400 hover:bg-rose-500/10 rounded-lg transition-colors cursor-pointer" title="Delete Schedule"><Trash2 size={12} /></button>
                         </div>
                       </div>
                       {/* Code Block */}
