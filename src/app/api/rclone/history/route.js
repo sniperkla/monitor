@@ -134,7 +134,9 @@ export async function GET(req) {
         
         const filesDone = transferredMatch ? parseInt(transferredMatch[1], 10) : 0;
         const filesTotal = transferredMatch ? parseInt(transferredMatch[2], 10) : 0;
-        const is100Percent = (percent === 100) || (filesTotal > 0 && filesDone >= filesTotal);
+        
+        const isNothingToTransfer = block.includes('nothing to transfer') || block.includes('0 / 0') || (transferredMatch && transferredMatch[1] === '0' && transferredMatch[2] === '0');
+        const is100Percent = (percent === 100) || (filesTotal > 0 && filesDone >= filesTotal) || isNothingToTransfer;
 
         const isAborted = block.includes('ABORTED BY USER') || block.includes('aborted by user');
 
@@ -152,17 +154,26 @@ export async function GET(req) {
         }
 
         const firstTimeMatch = block.match(/(\d{4}\/\d{2}\/\d{2}\s+\d{2}:\d{2}:\d{2})/);
+        let startTime = firstTimeMatch ? firstTimeMatch[1] : null;
+        if (!startTime) {
+          const timeMatch = filePath.match(/-(\d{10})\.log$/);
+          if (timeMatch) {
+            const d = new Date(parseInt(timeMatch[1], 10) * 1000);
+            const pad = (n) => String(n).padStart(2, '0');
+            startTime = `${d.getFullYear()}/${pad(d.getMonth() + 1)}/${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+          }
+        }
 
         runs.push({
           jobName,
           action,
           source,
           targetFolder,
-          startTime: firstTimeMatch ? firstTimeMatch[1] : null,
+          startTime,
           status,
           errors: errorCount,
-          filesTransferred: transferredMatch ? `${transferredMatch[1]}/${transferredMatch[2]}` : null,
-          sizeTransferred: sizeMatch ? sizeMatch[1].trim() : null,
+          filesTransferred: transferredMatch ? `${transferredMatch[1]}/${transferredMatch[2]}` : (isNothingToTransfer ? '0/0' : null),
+          sizeTransferred: sizeMatch ? sizeMatch[1].trim() : (isNothingToTransfer ? '0 B' : null),
           elapsed: elapsedMatch ? elapsedMatch[1] : null,
           logFile: filePath,
           logPreview: block.trim(),
