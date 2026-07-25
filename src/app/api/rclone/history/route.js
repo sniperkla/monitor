@@ -23,19 +23,45 @@ export async function GET(req) {
 
     const runs = [];
     for (const logFile of logFiles.slice(0, 10)) {
-      // Extract timestamp from filename: rclone-cron-1785016342579.log
       const tsMatch = logFile.match(/rclone-cron-(\d+)\.log/);
       const createdTs = tsMatch ? parseInt(tsMatch[1], 10) : 0;
 
-      // Read last 30 lines of each log for summary
-      const readCmd = `wc -l < "${logFile}" 2>/dev/null; tail -30 "${logFile}" 2>/dev/null; stat -c '%Y' "${logFile}" 2>/dev/null || stat -f '%m' "${logFile}" 2>/dev/null`;
+      // Read top 10 lines for parameters, bottom 30 lines for stats/summary
+      const readCmd = `head -10 "${logFile}" 2>/dev/null; echo "===SPLIT==="; tail -30 "${logFile}" 2>/dev/null; echo "===STAT==="; stat -c '%Y' "${logFile}" 2>/dev/null || stat -f '%m' "${logFile}" 2>/dev/null`;
       const readRes = await execCommand(sshConfig, readCmd);
       const output = readRes.stdout || '';
-      const lines = output.split('\n');
 
-      // Parse log content
-      const totalLines = parseInt(lines[0], 10) || 0;
-      const logContent = lines.slice(1).join('\n');
+      const [headPart, restPart] = output.split('===SPLIT===');
+      const [tailPart, statPart] = (restPart || '').split('===STAT===');
+
+      const logHeader = headPart || '';
+      const logContent = tailPart || '';
+
+      // Parse parameters from log header: parameters ["rclone" "copy" "/src" "gdrive:target" ...]
+      let action = 'copy';
+      let source = '';
+      let targetFolder = '';
+
+      const paramMatch = logHeader.match(/parameters\s+\[(.*?)\]/s) || output.match(/parameters\s+\[(.*?)\]/s);
+      if (paramMatch) {
+        const tokens = paramMatch[1].split(/\s+/).map(t => t.replace(/^"/, '').replace(/"$/, ''));
+        const rIdx = tokens.indexOf('rclone');
+        if (rIdx !== -1 && tokens[rIdx + 1]) {
+          action = tokens[rIdx + 1];
+          source = tokens[rIdx + 2] || '';
+          targetFolder = tokens[rIdx + 3] || '';
+        }
+      }
+
+      // If no params match, attempt fallback parse
+      if (!source) {
+        const fallbackMatch = output.match(/rclone\s+(copy|sync|move|check)\s+(\S+)\s+(\S+)/i);
+        if (fallbackMatch) {
+          action = fallbackMatch[1];
+          source = fallbackMatch[2].replace(/"/g, '');
+          targetFolder = fallbackMatch[3].replace(/"/g, '');
+        }
+      }
 
       // Extract stats from rclone log
       const transferredMatch = logContent.match(/Transferred:\s+(\d+)\s*\/\s*(\d+)/);
@@ -54,21 +80,22 @@ export async function GET(req) {
       if (hasCompleted && !hasErrors && !hasFailed) status = 'success';
       else if (hasCompleted && (hasErrors || hasFailed)) status = 'warning';
       else if (hasFailed && !hasCompleted) status = 'failed';
-      else if (totalLines > 0) status = 'running';
+      else if (logContent.trim().length > 0) status = 'running';
 
-      // Get last modified time of log file (actual run time)
-      const lastLine = lines[lines.length - 1]?.trim();
+      // Last modified timestamp
+      const lastLine = (statPart || '').trim();
       const modifiedTs = lastLine && /^\d+$/.test(lastLine) ? parseInt(lastLine, 10) * 1000 : createdTs;
 
-      // Extract the first timestamp from log lines (actual start time)
-      const firstTimeMatch = logContent.match(/(\d{4}\/\d{2}\/\d{2}\s+\d{2}:\d{2}:\d{2})/);
-      const lastTimeMatch = logContent.match(/(\d{4}\/\d{2}\/\d{2}\s+\d{2}:\d{2}:\d{2})(?!.*\d{4}\/\d{2}\/\d{2}\s+\d{2}:\d{2}:\d{2})/s);
+      // Extract start timestamp from log: e.g. 2026/07/26 05:05:42
+      const firstTimeMatch = (logHeader + logContent).match(/(\d{4}\/\d{2}\/\d{2}\s+\d{2}:\d{2}:\d{2})/);
 
       runs.push({
         logFile,
+        action,
+        source,
+        targetFolder,
         createdAt: createdTs ? new Date(createdTs).toISOString() : null,
         startTime: firstTimeMatch ? firstTimeMatch[1] : null,
-        endTime: lastTimeMatch ? lastTimeMatch[1] : null,
         modifiedAt: modifiedTs ? new Date(modifiedTs).toISOString() : null,
         status,
         errors: errorCount,
@@ -76,8 +103,7 @@ export async function GET(req) {
         sizeTransferred: sizeMatch ? sizeMatch[1].trim() : null,
         elapsed: elapsedMatch ? elapsedMatch[1] : null,
         checks: checksMatch ? parseInt(checksMatch[1], 10) : null,
-        totalLogLines: totalLines,
-        logPreview: logContent.slice(-500),
+        logPreview: (logHeader + '\n---\n' + logContent).slice(-700),
       });
     }
 

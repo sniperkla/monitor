@@ -1627,14 +1627,23 @@ export default function RcloneApp() {
                               </span>
                             )}
 
-                            {/* Timestamp & Info */}
-                            <div className="truncate">
-                              <div className="text-xs font-semibold text-[var(--text-primary)] flex items-center gap-2 font-mono">
-                                <span>{run.startTime || (run.modifiedAt ? new Date(run.modifiedAt).toLocaleString() : 'Recent Run')}</span>
-                                {run.elapsed && <span className="text-[10px] text-[var(--text-muted)] font-normal">⏱️ {run.elapsed}</span>}
-                              </div>
-                              <div className="text-[10px] text-[var(--text-muted)] font-mono truncate">
-                                Log File: {run.logFile}
+                            {/* Path Transfer & Formatted Timestamp */}
+                            <div className="truncate space-y-0.5">
+                              {(run.source || run.targetFolder) ? (
+                                <div className="text-xs font-bold text-[var(--text-primary)] font-mono flex items-center gap-1.5 truncate">
+                                  <span className="text-indigo-400 truncate">{run.source || 'Source'}</span>
+                                  <ArrowRight size={11} className="text-[var(--text-muted)] shrink-0" />
+                                  <span className="text-emerald-400 truncate">{run.targetFolder || 'Destination'}</span>
+                                </div>
+                              ) : (
+                                <div className="text-xs font-bold text-[var(--text-primary)] font-mono">
+                                  Scheduled Backup Execution
+                                </div>
+                              )}
+                              
+                              <div className="text-[10px] text-[var(--text-muted)] font-mono flex items-center gap-2">
+                                <span>📅 Run Executed: <strong className="text-[var(--text-primary)]">{run.startTime || (run.modifiedAt ? new Date(run.modifiedAt).toLocaleString() : 'Recent')}</strong></span>
+                                {run.elapsed && <span className="text-indigo-300 font-semibold">⏱️ {run.elapsed}</span>}
                               </div>
                             </div>
                           </div>
