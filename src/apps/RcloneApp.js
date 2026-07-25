@@ -1183,7 +1183,27 @@ export default function RcloneApp() {
               </button>
             </div>
 
-            <div className="space-y-2 max-h-80 overflow-y-auto pr-1">
+            <div className="space-y-3 max-h-80 overflow-y-auto pr-1">
+              {/* How to use Destination Helper Box */}
+              <div className="p-3 rounded-xl bg-indigo-500/10 border border-indigo-500/20 text-xs space-y-1">
+                <div className="font-bold text-indigo-400 flex items-center gap-1.5">
+                  <Info size={14} /> Usage & Destination Syntax:
+                </div>
+                <p className="text-[11px] text-[var(--text-muted)] leading-relaxed">
+                  Use <code className="text-emerald-400 bg-black/40 px-1.5 py-0.5 rounded font-mono font-bold">{viewingRemoteDetails.name}:folder_name</code> as your destination in Tab 3 or Cloud Explorer.
+                </p>
+                {viewingRemoteDetails.details?.token && (
+                  <p className="text-[10px] text-emerald-400 font-medium">
+                    ✓ Authenticated via Google OAuth Token (User Account)
+                  </p>
+                )}
+                {viewingRemoteDetails.details?.service_account_file && (
+                  <p className="text-[10px] text-amber-400 font-medium">
+                    🔑 Authenticated via Service Account File: {viewingRemoteDetails.details.service_account_file}
+                  </p>
+                )}
+              </div>
+
               {Object.keys(viewingRemoteDetails.details || {}).length > 0 ? (
                 Object.entries(viewingRemoteDetails.details).map(([k, v]) => (
                   <div key={k} className="p-2.5 rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] flex items-center justify-between font-mono text-xs">
