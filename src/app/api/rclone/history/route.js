@@ -16,52 +16,45 @@ export async function GET(req) {
     const sshConfig = await getSshConfig(connectionId, { sshMode, preferredRelay });
     const pathPrefix = 'export PATH="$HOME/.local/bin:$HOME/bin:/usr/local/bin:/usr/bin:$PATH"; ';
 
-    // ── 1. Read all rclone cron log files from /tmp/ ──
-    const logsCmd = `cat /tmp/rclone-cron*.log 2>/dev/null | tail -1500`;
+    // ── 1. Read all rclone cron log files from /tmp/ with file markers ──
+    const logsCmd = `for f in $(ls -1t /tmp/rclone-cron*.log 2>/dev/null | head -60); do echo "=== RCLONE_FILE: $f ==="; cat "$f"; echo ""; done`;
     const logsRes = await execCommand(sshConfig, logsCmd);
     const rawLogs = logsRes.stdout || '';
 
-    // Split log text into individual run blocks
-    const lines = rawLogs.split('\n');
-    const blocks = [];
-    let currentBlock = [];
-
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i];
-      const isNewRunStart = line.includes('starting with parameters') || line.includes('rclone: Version');
-      
-      if (isNewRunStart && currentBlock.length > 0) {
-        blocks.push(currentBlock.join('\n'));
-        currentBlock = [];
-      }
-      
-      currentBlock.push(line);
-
-      if (line.includes('Elapsed time:')) {
-        blocks.push(currentBlock.join('\n'));
-        currentBlock = [];
-      }
-    }
-
-    if (currentBlock.length > 0 && currentBlock.some(l => l.trim())) {
-      blocks.push(currentBlock.join('\n'));
-    }
-
+    // Split log text into individual run blocks per file
+    const fileBlocks = rawLogs.split('=== RCLONE_FILE: ').filter(b => b.trim());
     const runs = [];
-    for (const block of blocks) {
-      if (!block.trim()) continue;
+
+    for (const rawBlock of fileBlocks) {
+      const firstLineEnd = rawBlock.indexOf('\n');
+      if (firstLineEnd === -1) continue;
+
+      const filePath = rawBlock.slice(0, firstLineEnd).trim();
+      const block = rawBlock.slice(firstLineEnd + 1).trim();
+
+      if (!block) continue;
 
       let action = 'copy';
       let source = '';
       let targetFolder = '';
-      let jobName = '';
+      let customProjectName = '';
 
+      // Check header marker: === Project: NAME | Action: sync ===
+      const projMatch = block.match(/===\s*Project:\s*(.*?)(?:\s*\|\s*Action:\s*(\w+))?\s*===/i);
+      if (projMatch) {
+        customProjectName = projMatch[1].trim();
+        if (projMatch[2]) {
+          action = projMatch[2].toLowerCase();
+        }
+      }
+
+      // Check parameters or commands
       const paramMatch = block.match(/parameters\s+\[(.*?)\]/s);
       if (paramMatch) {
         const tokens = paramMatch[1].split(/\s+/).map(t => t.replace(/^"/, '').replace(/"$/, ''));
         const rIdx = tokens.indexOf('rclone');
         if (rIdx !== -1 && tokens[rIdx + 1]) {
-          action = tokens[rIdx + 1];
+          if (!projMatch) action = tokens[rIdx + 1].toLowerCase();
           source = tokens[rIdx + 2] || '';
           targetFolder = tokens[rIdx + 3] || '';
         }
@@ -70,9 +63,26 @@ export async function GET(req) {
       if (!source) {
         const fallbackMatch = block.match(/rclone\s+(copy|sync|move|check|delete|purge)\s+(\S+)(?:\s+(\S+))?/i);
         if (fallbackMatch) {
-          action = fallbackMatch[1].toLowerCase();
+          if (!projMatch) action = fallbackMatch[1].toLowerCase();
           source = fallbackMatch[2].replace(/"/g, '');
           targetFolder = (fallbackMatch[3] || '').replace(/"/g, '');
+        }
+      }
+
+      // If source still empty, try to detect from log lines (e.g. buildx/foo or backup.log)
+      if (!source) {
+        const firstCopyMatch = block.match(/INFO\s*:\s*([^:\s\/]+)(?:\/|\:)/i);
+        if (firstCopyMatch) {
+          source = firstCopyMatch[1].trim();
+        }
+      }
+
+      // If source still empty, check filename e.g. /tmp/rclone-cron-TaskName-123.log
+      if (!source && filePath.includes('/tmp/rclone-cron-')) {
+        const fname = filePath.replace('/tmp/rclone-cron-', '').replace(/\.log$/, '');
+        const parts = fname.split('-');
+        if (parts.length > 1) {
+          source = parts.slice(0, -1).join('-');
         }
       }
 
@@ -81,19 +91,15 @@ export async function GET(req) {
       }
 
       // Format Project / Task Name
-      const cleanSource = source ? (source.split('/').filter(Boolean).pop() || source) : 'Source';
-      const cleanTarget = targetFolder ? targetFolder.split('/')[0] : 'Destination';
+      const cleanSource = source ? (source.split('/').filter(Boolean).pop() || source) : '';
+      const cleanTarget = targetFolder ? targetFolder.split('/')[0] : '';
       
-      let customProjectName = '';
-      const projMatch = block.match(/===\s*Project:\s*(.*?)(?:\s*\|\s*Action:\s*(\w+))?\s*===/i);
-      if (projMatch) {
-        customProjectName = projMatch[1].trim();
-        if (projMatch[2]) {
-          action = projMatch[2].toLowerCase();
-        }
+      let jobName = customProjectName;
+      if (!jobName) {
+        if (cleanSource && cleanTarget) jobName = `${cleanSource} ➔ ${cleanTarget}`;
+        else if (cleanSource) jobName = cleanSource;
+        else jobName = 'Scheduled Backup Task';
       }
-      
-      jobName = customProjectName || ((source && targetFolder) ? `${cleanSource} ➔ ${cleanTarget}` : 'Scheduled Backup Task');
 
       const transferredMatch = block.match(/Transferred:\s+(\d+)\s*\/\s*(\d+)/);
       const sizeMatch = block.match(/Transferred:\s+([\d.]+\s*\w+)\s*\//);
@@ -124,6 +130,7 @@ export async function GET(req) {
         filesTransferred: transferredMatch ? `${transferredMatch[1]}/${transferredMatch[2]}` : null,
         sizeTransferred: sizeMatch ? sizeMatch[1].trim() : null,
         elapsed: elapsedMatch ? elapsedMatch[1] : null,
+        logFile: filePath,
         logPreview: block.trim(),
       });
     }
