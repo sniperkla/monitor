@@ -116,7 +116,7 @@ export async function POST(req) {
     const finalProjectName = reqProjectName.trim() ? reqProjectName.trim().replace(/"/g, '') : `${cleanSourceLabel} ➔ ${cleanTargetLabel}`;
 
     const nicePrefix = memMb <= 2048 ? 'nice -n 19 ' : '';
-    let rcloneCmd = `export PATH="$HOME/.local/bin:$HOME/bin:/usr/local/bin:/usr/bin:$PATH"; echo "=== Project: ${finalProjectName} ===" >> "${logFile}"; ${nicePrefix}rclone ${action || 'copy'} "${normSource}" "${finalTarget}" ${flags.join(' ')}`;
+    let rcloneCmd = `export PATH="$HOME/.local/bin:$HOME/bin:/usr/local/bin:/usr/bin:$PATH"; echo "=== Project: ${finalProjectName} | Action: ${action || 'copy'} ===" >> "${logFile}"; ${nicePrefix}rclone ${action || 'copy'} "${normSource}" "${finalTarget}" ${flags.join(' ')}`;
     
     // Auto Retention Policy: clean old backups older than X days
     if (options.enableRetention && options.retentionDays) {

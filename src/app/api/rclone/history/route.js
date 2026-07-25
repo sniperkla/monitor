@@ -85,9 +85,12 @@ export async function GET(req) {
       const cleanTarget = targetFolder ? targetFolder.split('/')[0] : 'Destination';
       
       let customProjectName = '';
-      const projMatch = block.match(/===\s*Project:\s*(.*?)\s*===/);
+      const projMatch = block.match(/===\s*Project:\s*(.*?)(?:\s*\|\s*Action:\s*(\w+))?\s*===/i);
       if (projMatch) {
         customProjectName = projMatch[1].trim();
+        if (projMatch[2]) {
+          action = projMatch[2].toLowerCase();
+        }
       }
       
       jobName = customProjectName || ((source && targetFolder) ? `${cleanSource} ➔ ${cleanTarget}` : 'Scheduled Backup Task');
