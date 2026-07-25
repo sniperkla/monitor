@@ -43,7 +43,7 @@ export async function POST(req) {
       `if command -v tmux >/dev/null 2>&1; then`,
       `  tmux kill-session -t "${sessionName}" 2>/dev/null || true`,
       `  tmux new-session -d -s "${sessionName}"`,
-      `  tmux send-keys -t "${sessionName}" "echo ${b64Script} | base64 -d > /tmp/${sessionName}.sh && bash /tmp/${sessionName}.sh 2>&1 | tee ${logFile}" Enter`,
+      `  tmux send-keys -t "${sessionName}" "echo ${b64Script} | base64 -d > /tmp/${sessionName}.sh && bash /tmp/${sessionName}.sh 2>&1 | tee ${logFile}; exit" Enter`,
       `  echo "TMUX_SESSION=${sessionName}"`,
       `else`,
       `  echo ${b64Script} | base64 -d > /tmp/${sessionName}.sh`,
