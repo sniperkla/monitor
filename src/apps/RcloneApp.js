@@ -1065,6 +1065,7 @@ export default function RcloneApp() {
           { id: 'setup',   icon: <Settings size={13} />,   label: 'Setup' },
           { id: 'remotes', icon: <HardDrive size={13} />,  label: `Remotes (${rcloneStatus?.remotes?.length || 0})` },
           { id: 'backup',  icon: <Play size={13} />,       label: 'Sync & Backup' },
+          { id: 'history', icon: <Database size={13} />,   label: `History (${historyProjects.length})` },
           { id: 'browser', icon: <Eye size={13} />,        label: 'Cloud Explorer' },
         ].map((tab) => (
           <button
@@ -1581,143 +1582,144 @@ export default function RcloneApp() {
                 )}
               </div>
             </div>
+          </div>
+        )}
 
-            {/* ─ Backup Execution History & Log Tracker ─ */}
-            <div className="rounded-2xl bg-[var(--bg-secondary)] border border-[var(--border-color)] overflow-hidden space-y-0">
-              <div className="px-4 py-3 border-b border-[var(--border-color)] flex items-center justify-between">
-                <div className="flex items-center gap-2">
+        {/* ════════════════════ TAB 4: HISTORY ════════════════════ */}
+        {activeTab === 'history' && (
+          <div className="p-5 max-w-3xl space-y-4">
+
+            {/* Header */}
+            <div className="flex items-center justify-between">
+              <div>
+                <h3 className="text-sm font-bold flex items-center gap-2">
                   <Database size={15} className="text-emerald-400" />
-                  <h4 className="text-xs font-bold">
-                    Backup Execution History & Remote Snapshots
-                  </h4>
-                  <span className="px-1.5 py-0.5 rounded-full bg-emerald-500/15 text-emerald-400 text-[10px] font-mono">
-                    {historyProjects.length} Projects Logged
-                  </span>
-                </div>
-                <button
-                  onClick={fetchHistory}
-                  disabled={historyLoading}
-                  className="flex items-center gap-1 text-[10px] text-emerald-400 hover:underline cursor-pointer disabled:opacity-50"
-                >
-                  <RefreshCw size={10} className={historyLoading ? 'animate-spin' : ''} />
-                  Refresh Logs
-                </button>
+                  Backup Execution History
+                </h3>
+                <p className="text-[11px] text-[var(--text-muted)] mt-0.5">
+                  Logs from scheduled rclone cron jobs on {selectedConn?.name}
+                </p>
               </div>
+              <button
+                onClick={fetchHistory}
+                disabled={historyLoading}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-400 text-[11px] font-bold cursor-pointer border border-emerald-500/30 disabled:opacity-50 transition-colors"
+              >
+                <RefreshCw size={11} className={historyLoading ? 'animate-spin' : ''} />
+                Refresh Logs
+              </button>
+            </div>
 
+            {/* Project Groups */}
+            <div className="rounded-2xl bg-[var(--bg-secondary)] border border-[var(--border-color)] overflow-hidden">
               <div className="divide-y divide-[var(--border-color)]">
                 {historyLoading && historyProjects.length === 0 ? (
-                  <div className="p-8 text-center text-xs text-[var(--text-muted)] flex items-center justify-center gap-2">
+                  <div className="p-10 text-center text-xs text-[var(--text-muted)] flex items-center justify-center gap-2">
                     <RefreshCw size={14} className="animate-spin text-emerald-400" />
                     Fetching backup history logs from {selectedConn?.name}...
                   </div>
                 ) : historyProjects.length === 0 ? (
-                  <div className="p-8 text-center text-xs text-[var(--text-muted)]">
-                    No crontab backup execution logs found on {selectedConn?.name} yet.
-                    <p className="text-[10px] text-[var(--text-muted)] mt-1">Logs are automatically recorded in <code>/tmp/rclone-cron-*.log</code> when scheduled tasks run.</p>
+                  <div className="p-10 text-center space-y-2">
+                    <Database size={28} className="text-[var(--text-muted)] mx-auto opacity-40" />
+                    <p className="text-xs text-[var(--text-muted)]">No backup execution logs found on {selectedConn?.name} yet.</p>
+                    <p className="text-[10px] text-[var(--text-muted)] opacity-70">Logs appear in <code>/tmp/rclone-cron-*.log</code> after cron tasks run.</p>
                   </div>
                 ) : (
                   historyProjects.map((project, pIdx) => {
-                    const isCollapsed = collapsedProjects[pIdx] !== false; // default collapsed=false (expanded)
+                    const isCollapsed = collapsedProjects[pIdx] !== false;
                     return (
-                    <div key={pIdx} className="border-b border-[var(--border-color)] last:border-b-0">
-                      <button
-                        onClick={() => setCollapsedProjects(prev => ({ ...prev, [pIdx]: !isCollapsed }))}
-                        className="w-full px-4 py-2.5 bg-[var(--bg-tertiary)]/50 flex items-center justify-between border-b border-[var(--border-color)] hover:bg-[var(--bg-tertiary)] transition-colors cursor-pointer"
-                      >
-                        <div className="text-xs font-bold text-indigo-400 font-mono flex items-center gap-2">
-                          <Folder size={12} />
-                          <span>{project.name}</span>
-                        </div>
-                        <div className="flex items-center gap-2">
-                          <span className="text-[10px] text-[var(--text-muted)] font-semibold bg-black/20 px-2 py-0.5 rounded">
-                            {project.runs.length} Runs
-                          </span>
-                          <span className="text-[var(--text-muted)] text-[10px]">{isCollapsed ? '▸' : '▾'}</span>
-                        </div>
-                      </button>
-                      {!isCollapsed && (
-                      <div className="divide-y divide-[var(--border-color)]">
-                        {project.runs.map((run, idx) => {
-                          const expandedId = `${pIdx}-${idx}`;
-                          const isExpanded = expandedLogIdx === expandedId;
-                          const isSuccess = run.status === 'success';
-                          const isWarning = run.status === 'warning';
-                          const isFailed = run.status === 'failed';
+                      <div key={pIdx} className="border-b border-[var(--border-color)] last:border-b-0">
+                        <button
+                          onClick={() => setCollapsedProjects(prev => ({ ...prev, [pIdx]: !isCollapsed }))}
+                          className="w-full px-4 py-3 bg-[var(--bg-tertiary)]/50 flex items-center justify-between hover:bg-[var(--bg-tertiary)] transition-colors cursor-pointer"
+                        >
+                          <div className="flex items-center gap-2 text-xs font-bold text-indigo-400 font-mono">
+                            <Folder size={13} />
+                            <span>{project.name}</span>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <span className="text-[10px] text-[var(--text-muted)] font-semibold bg-black/20 px-2 py-0.5 rounded">
+                              {project.runs.length} Runs
+                            </span>
+                            <span className="text-[var(--text-muted)] text-[10px]">{isCollapsed ? '▸' : '▾'}</span>
+                          </div>
+                        </button>
+                        {!isCollapsed && (
+                          <div className="divide-y divide-[var(--border-color)]">
+                            {project.runs.map((run, idx) => {
+                              const expandedId = `${pIdx}-${idx}`;
+                              const isExpanded = expandedLogIdx === expandedId;
+                              const isSuccess = run.status === 'success';
+                              const isWarning = run.status === 'warning';
+                              const isFailed = run.status === 'failed';
 
-                          return (
-                            <div key={idx} className="p-3.5 hover:bg-[var(--bg-tertiary)]/30 transition-colors">
-                              <div className="flex items-center justify-between gap-3">
-                                <div className="flex items-center gap-2.5 min-w-0">
-                                  {/* Status Badge */}
-                                  {isSuccess && (
-                                    <span className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-400 font-bold text-[10px] border border-emerald-500/30 shrink-0">
-                                      <CheckCircle2 size={11} /> SUCCESS
-                                    </span>
-                                  )}
-                                  {isWarning && (
-                                    <span className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-400 font-bold text-[10px] border border-amber-500/30 shrink-0">
-                                      <AlertTriangle size={11} /> WARNING ({run.errors} err)
-                                    </span>
-                                  )}
-                                  {isFailed && (
-                                    <span className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-rose-500/15 text-rose-400 font-bold text-[10px] border border-rose-500/30 shrink-0">
-                                      <AlertTriangle size={11} /> FAILED
-                                    </span>
-                                  )}
-                                  {!isSuccess && !isWarning && !isFailed && (
-                                    <span className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-indigo-500/15 text-indigo-400 font-bold text-[10px] border border-indigo-500/30 shrink-0">
-                                      ● EXECUTING
-                                    </span>
-                                  )}
-
-                                  {/* Formatted Timestamp */}
-                                  <div className="truncate space-y-0.5">
-                                    <div className="text-[10px] text-[var(--text-muted)] font-mono flex items-center gap-2">
-                                      <span>📅 Run Executed: <strong className="text-[var(--text-primary)]">{run.startTime || (run.modifiedAt ? new Date(run.modifiedAt).toLocaleString() : 'Recent')}</strong></span>
-                                      {run.elapsed && <span className="text-indigo-300 font-semibold">⏱️ {run.elapsed}</span>}
+                              return (
+                                <div key={idx} className="p-4 hover:bg-[var(--bg-tertiary)]/30 transition-colors">
+                                  <div className="flex items-center justify-between gap-3">
+                                    <div className="flex items-center gap-2.5 min-w-0">
+                                      {isSuccess && (
+                                        <span className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-400 font-bold text-[10px] border border-emerald-500/30 shrink-0">
+                                          <CheckCircle2 size={11} /> SUCCESS
+                                        </span>
+                                      )}
+                                      {isWarning && (
+                                        <span className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-400 font-bold text-[10px] border border-amber-500/30 shrink-0">
+                                          <AlertTriangle size={11} /> WARNING ({run.errors} err)
+                                        </span>
+                                      )}
+                                      {isFailed && (
+                                        <span className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-rose-500/15 text-rose-400 font-bold text-[10px] border border-rose-500/30 shrink-0">
+                                          <AlertTriangle size={11} /> FAILED
+                                        </span>
+                                      )}
+                                      {!isSuccess && !isWarning && !isFailed && (
+                                        <span className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-indigo-500/15 text-indigo-400 font-bold text-[10px] border border-indigo-500/30 shrink-0">
+                                          ● EXECUTING
+                                        </span>
+                                      )}
+                                      <div className="truncate space-y-0.5">
+                                        <div className="text-[10px] text-[var(--text-muted)] font-mono flex items-center gap-2">
+                                          <span>📅 <strong className="text-[var(--text-primary)]">{run.startTime || 'Recent'}</strong></span>
+                                          {run.elapsed && <span className="text-indigo-300 font-semibold">⏱️ {run.elapsed}</span>}
+                                        </div>
+                                      </div>
+                                    </div>
+                                    <div className="flex items-center gap-2 shrink-0">
+                                      {run.sizeTransferred && (
+                                        <span className="px-2 py-0.5 rounded bg-[var(--bg-tertiary)] border border-[var(--border-color)] text-[10px] font-mono text-cyan-400 font-bold">
+                                          📦 {run.sizeTransferred}
+                                        </span>
+                                      )}
+                                      {run.filesTransferred && (
+                                        <span className="px-2 py-0.5 rounded bg-[var(--bg-tertiary)] border border-[var(--border-color)] text-[10px] font-mono text-indigo-300">
+                                          📄 {run.filesTransferred} files
+                                        </span>
+                                      )}
+                                      <button
+                                        onClick={() => setExpandedLogIdx(isExpanded ? null : expandedId)}
+                                        className="px-2.5 py-1 rounded-lg bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-400 text-[10px] font-bold cursor-pointer border border-indigo-500/20 transition-colors flex items-center gap-1"
+                                      >
+                                        <Terminal size={10} /> {isExpanded ? 'Hide Log' : 'View Log'}
+                                      </button>
                                     </div>
                                   </div>
-                                </div>
-
-                                {/* Stats Pills */}
-                                <div className="flex items-center gap-2 shrink-0">
-                                  {run.sizeTransferred && (
-                                    <span className="px-2 py-0.5 rounded bg-[var(--bg-tertiary)] border border-[var(--border-color)] text-[10px] font-mono text-cyan-400 font-bold">
-                                      📦 {run.sizeTransferred}
-                                    </span>
+                                  {isExpanded && (
+                                    <div className="mt-3 rounded-xl bg-black border border-[var(--border-color)] overflow-hidden">
+                                      <div className="px-3 py-1 bg-[var(--bg-tertiary)] text-[10px] font-mono text-[var(--text-muted)] flex items-center justify-between border-b border-[var(--border-color)]">
+                                        <span>Terminal Log Output</span>
+                                        <span className="text-emerald-400">{run.logFile}</span>
+                                      </div>
+                                      <div className="p-3 max-h-64 overflow-y-auto text-[10px] font-mono text-gray-300 whitespace-pre-wrap leading-relaxed">
+                                        {run.logPreview || 'No additional logs available.'}
+                                      </div>
+                                    </div>
                                   )}
-                                  {run.filesTransferred && (
-                                    <span className="px-2 py-0.5 rounded bg-[var(--bg-tertiary)] border border-[var(--border-color)] text-[10px] font-mono text-indigo-300">
-                                      📄 {run.filesTransferred} files
-                                    </span>
-                                  )}
-                                  <button
-                                    onClick={() => setExpandedLogIdx(isExpanded ? null : expandedId)}
-                                    className="px-2.5 py-1 rounded-lg bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-400 text-[10px] font-bold cursor-pointer border border-indigo-500/20 transition-colors flex items-center gap-1"
-                                  >
-                                    <Terminal size={10} /> {isExpanded ? 'Hide Log' : 'View Log'}
-                                  </button>
                                 </div>
-                              </div>
-
-                              {/* Log Drawer Preview */}
-                              {isExpanded && (
-                                <div className="mt-3 rounded-xl bg-black border border-[var(--border-color)] overflow-hidden">
-                                  <div className="px-3 py-1 bg-[var(--bg-tertiary)] text-[10px] font-mono text-[var(--text-muted)] flex items-center justify-between border-b border-[var(--border-color)]">
-                                    <span>Terminal Log Output</span>
-                                    <span className="text-emerald-400">{run.logFile}</span>
-                                  </div>
-                                  <div className="p-3 max-h-64 overflow-y-auto text-[10px] font-mono text-gray-300 whitespace-pre-wrap leading-relaxed">
-                                    {run.logPreview || 'No additional logs available.'}
-                                  </div>
-                                </div>
-                              )}
-                            </div>
-                          );
-                        })}
+                              );
+                            })}
+                          </div>
+                        )}
                       </div>
-                      )}
-                    </div>
                     );
                   })
                 )}
