@@ -614,6 +614,7 @@ export default function RcloneApp() {
   const [expandedLogIdx, setExpandedLogIdx] = useState(null);
   const [collapsedProjects, setCollapsedProjects] = useState({}); // track which project groups are collapsed
   const [historyFilter, setHistoryFilter] = useState('all'); // 'all' | 'backup' | 'cleanup'
+  const [autoRefreshHistory, setAutoRefreshHistory] = useState(true); // real-time history polling
 
   // Custom Connection Dropdown State (matching AutoDeploy App)
   const [connDropdownOpen, setConnDropdownOpen] = useState(false);
@@ -826,9 +827,9 @@ export default function RcloneApp() {
     } catch (_) {}
   };
 
-  const fetchHistory = async () => {
+  const fetchHistory = async (silent = false) => {
     if (!selectedConnId) return;
-    setHistoryLoading(true);
+    if (!silent) setHistoryLoading(true);
     try {
       const res = await apiFetch(`/api/rclone/history?connectionId=${selectedConnId}&target=${encodeURIComponent(targetPath || '')}`);
       const data = await res.json();
@@ -838,8 +839,21 @@ export default function RcloneApp() {
         setHistoryFolders(data.backupFolders || []);
       }
     } catch (_) {}
-    setHistoryLoading(false);
+    if (!silent) setHistoryLoading(false);
   };
+
+  // ⚡ Real-Time Auto-Refresh Effect for Backup History (6s Interval)
+  useEffect(() => {
+    if (!autoRefreshHistory || !selectedConnId) return;
+
+    const interval = setInterval(() => {
+      if (activeTab === 'history' || activeTab === 'backup') {
+        fetchHistory(true);
+      }
+    }, 6000);
+
+    return () => clearInterval(interval);
+  }, [autoRefreshHistory, selectedConnId, activeTab, targetPath]);
 
   const handleSaveCron = async () => {
     if (!sourcePath || !targetPath) {
@@ -1796,8 +1810,22 @@ export default function RcloneApp() {
                   </button>
                 </div>
 
+                {/* Auto-Refresh Toggle Button */}
                 <button
-                  onClick={fetchHistory}
+                  onClick={() => setAutoRefreshHistory(!autoRefreshHistory)}
+                  className={`flex items-center gap-1.5 px-2.5 py-1 rounded-xl font-bold text-[10px] cursor-pointer border transition-colors ${
+                    autoRefreshHistory 
+                      ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400' 
+                      : 'bg-[var(--bg-secondary)] border-[var(--border-color)] text-[var(--text-muted)]'
+                  }`}
+                  title="Toggle 6-second real-time history refresh"
+                >
+                  <span className={`w-1.5 h-1.5 rounded-full ${autoRefreshHistory ? 'bg-emerald-400 animate-pulse' : 'bg-gray-500'}`} />
+                  {autoRefreshHistory ? 'Realtime 6s' : 'Paused'}
+                </button>
+
+                <button
+                  onClick={() => fetchHistory(false)}
                   disabled={historyLoading}
                   className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-400 text-[11px] font-bold cursor-pointer border border-emerald-500/30 disabled:opacity-50 transition-colors"
                 >
