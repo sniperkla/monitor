@@ -822,11 +822,11 @@ function handleSftpUploadDone(ws, msg) {
 }
 
 function handleSftpUploadAbort(ws, msg) {
-  const key = `${msg.connId}:${msg.remotePath}`;
-  const upload = activeUploads.get(key);
+  const { key, upload } = getUploadEntry(msg.connId, msg.remotePath);
   if (upload) {
-    upload.stream.destroy();
+    if (upload.stream) try { upload.stream.destroy(); } catch (_) {}
     activeUploads.delete(key);
+    console.log(`🛑 [relay] Upload aborted and stream destroyed for ${msg.remotePath}`);
   }
 }
 
