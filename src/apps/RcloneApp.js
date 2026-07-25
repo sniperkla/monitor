@@ -179,7 +179,7 @@ function PathInputWithAutocomplete({
   }, []);
 
   return (
-    <div ref={wrapperRef} className="relative w-full">
+    <div ref={wrapperRef} className={`relative w-full ${isOpen ? 'z-[990]' : 'z-10'}`}>
       <div className="relative flex items-center">
         <input
           type="text"
@@ -193,14 +193,14 @@ function PathInputWithAutocomplete({
           className={className}
         />
         {loading && (
-          <div className="absolute right-3 top-1/2 -translate-y-1/2">
+          <div className="absolute right-3 top-1/2 -translate-y-1/2 z-10">
             <RefreshCw size={12} className="animate-spin text-[var(--text-muted)]" />
           </div>
         )}
       </div>
 
       {isOpen && suggestions.length > 0 && (
-        <div className="absolute left-0 right-0 top-full mt-1.5 z-50 bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-xl shadow-2xl overflow-hidden max-h-56 overflow-y-auto divide-y divide-[var(--border-color)]">
+        <div className="absolute left-0 right-0 top-full mt-1.5 z-[999] bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-xl shadow-2xl overflow-hidden max-h-56 overflow-y-auto divide-y divide-[var(--border-color)]">
           <div className="px-3 py-1 bg-[var(--bg-tertiary)] flex items-center justify-between text-[10px] text-[var(--text-muted)] font-mono">
             <span>Suggestions ({suggestions.length})</span>
             <span className="text-indigo-400 font-semibold">Press <kbd className="bg-black/40 px-1 py-0.5 rounded text-white border border-[var(--border-color)]">Tab ⇥</kbd> or <kbd className="bg-black/40 px-1 py-0.5 rounded text-white border border-[var(--border-color)]">↵</kbd></span>
