@@ -137,12 +137,14 @@ export default function RcloneApp() {
         body: JSON.stringify({ connectionId: selectedConnId })
       });
       if (res?.success) {
+        alert(`✅ ${res.output || 'Rclone installed successfully!'}`);
         fetchRcloneStatus();
       } else {
-        alert(res?.error || 'Failed to install Rclone');
+        const errorMsg = res?.details || res?.error || 'Failed to install Rclone';
+        alert(`❌ Installation Failed:\n\n${errorMsg}`);
       }
     } catch (err) {
-      alert(err.message);
+      alert(`❌ Error: ${err.message}`);
     }
     setLoading(false);
   };

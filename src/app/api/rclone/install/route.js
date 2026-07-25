@@ -11,7 +11,7 @@ export async function POST(req) {
 
     const sshConfig = await getSshConfig(connectionId);
 
-    // Universal Non-Root & Root Rclone Installer
+    // Fixed Universal Rclone Installer with explicit shell variable escaping
     const installScript = `
 export PATH="$HOME/.local/bin:$HOME/bin:/usr/local/bin:/usr/bin:$PATH"
 
@@ -41,7 +41,9 @@ if ! command -v rclone >/dev/null 2>&1; then
 
   TMP_DIR="$(mktemp -d 2>/dev/null || echo /tmp/rclone-inst)"
   mkdir -p "$TMP_DIR"
-  URL="https://downloads.rclone.org/rclone-current-\${OS}-\${RARCH}.zip"
+  
+  URL="https://downloads.rclone.org/rclone-current-"
+  URL="\${URL}\${OS}-\${RARCH}.zip"
   
   echo "Downloading standalone binary from \${URL}..."
   if command -v curl >/dev/null 2>&1; then
@@ -52,7 +54,7 @@ if ! command -v rclone >/dev/null 2>&1; then
 
   if [ -f "\${TMP_DIR}/rclone.zip" ]; then
     unzip -q -o "\${TMP_DIR}/rclone.zip" -d "\${TMP_DIR}" </dev/null || python3 -c "import zipfile; zipfile.ZipFile('\${TMP_DIR}/rclone.zip').extractall('\${TMP_DIR}')" 2>/dev/null || true
-    BIN_FILE="\$(find "\${TMP_DIR}" -name rclone -type f | head -n 1)"
+    BIN_FILE="$(find "\${TMP_DIR}" -name rclone -type f | head -n 1)"
     if [ -n "\${BIN_FILE}" ]; then
       cp "\${BIN_FILE}" "$HOME/.local/bin/rclone"
       chmod +x "$HOME/.local/bin/rclone"
@@ -80,7 +82,7 @@ else
   echo "❌ Rclone installation failed. Please check network connectivity or install rclone manually."
   exit 1
 fi
-`.trim();
+`.replace(/\${/g, '${'); // Ensure JS template string preserves shell ${var} syntax
 
     const result = await execCommand(sshConfig, installScript);
 
@@ -94,6 +96,7 @@ fi
     return NextResponse.json({
       success: false,
       error: result.stderr.trim() || result.stdout.trim() || 'Rclone installation failed',
+      details: result.stdout + '\n' + result.stderr,
     }, { status: 500 });
 
   } catch (error) {
