@@ -105,17 +105,28 @@ export async function GET(req) {
       const sizeMatch = block.match(/Transferred:\s+([\d.]+\s*\w+)\s*\//);
       const elapsedMatch = block.match(/Elapsed time:\s*([\dhmins.]+)/);
       const errorsMatch = block.match(/Errors:\s*(\d+)/);
+      const percentMatch = block.match(/Transferred:.*,\s*(\d+)%/);
 
       const errorCount = errorsMatch ? parseInt(errorsMatch[1], 10) : 0;
+      const percent = percentMatch ? parseInt(percentMatch[1], 10) : null;
+      const hasActiveTransferring = block.includes('Transferring:') || block.includes('ETA ');
       const hasErrors = errorCount > 0;
       const hasFailed = block.includes('Failed to') || block.includes('ERROR');
-      const hasCompleted = block.includes('Transferred:') || block.includes('Elapsed time:');
+      
+      const filesDone = transferredMatch ? parseInt(transferredMatch[1], 10) : 0;
+      const filesTotal = transferredMatch ? parseInt(transferredMatch[2], 10) : 0;
+      const is100Percent = (percent === 100) || (filesTotal > 0 && filesDone >= filesTotal);
 
-      let status = 'unknown';
-      if (hasCompleted && !hasErrors && !hasFailed) status = 'success';
-      else if (hasCompleted && (hasErrors || hasFailed)) status = 'warning';
-      else if (hasFailed && !hasCompleted) status = 'failed';
-      else if (block.trim().length > 0) status = 'running';
+      let status = 'running';
+      if (is100Percent && !hasErrors && !hasFailed && !hasActiveTransferring) {
+        status = 'success';
+      } else if (hasFailed && !hasActiveTransferring) {
+        status = 'failed';
+      } else if (hasErrors && !hasActiveTransferring) {
+        status = 'warning';
+      } else {
+        status = 'running';
+      }
 
       const firstTimeMatch = block.match(/(\d{4}\/\d{2}\/\d{2}\s+\d{2}:\d{2}:\d{2})/);
 
