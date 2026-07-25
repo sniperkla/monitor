@@ -223,7 +223,7 @@ export default function TerminalView({ connectionId, connectionName, host, color
     if (rtcPeerRef.current) {
       rtcPeerRef.current.sendSsh(data);
     } else if (socketRef.current?.connected) {
-      sendSshInput(data);
+      socketRef.current.emit('ssh:input', data);
     }
   }, []);
   const fitAddonRef = useRef(null);
