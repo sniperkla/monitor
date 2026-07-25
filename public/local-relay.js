@@ -731,11 +731,10 @@ async function handleSftpUploadStart(ws, msg) {
     const sendCompletion = () => {
       if (completionSent) return;
       completionSent = true;
-      if (!activeUploads.has(key)) {
-        console.log(`⚠️ [relay] Upload completion skipped - entry not found for: ${msg.remotePath}`);
-        return;
+      const currentEntry = activeUploads.get(key);
+      if (currentEntry && (currentEntry.stream === stream || !currentEntry.stream)) {
+        activeUploads.delete(key);
       }
-      activeUploads.delete(key);
       if (ws.readyState === 1) {
         console.log(`📤 [relay] Sending sftp:upload_complete for: ${msg.remotePath}`);
         ws.send(JSON.stringify({ type: 'sftp:upload_complete', connId: msg.connId, path: msg.remotePath }));
@@ -748,19 +747,10 @@ async function handleSftpUploadStart(ws, msg) {
       console.log(`📤 [relay] Stream close event for: ${msg.remotePath}`);
       sendCompletion();
     });
-    // Fallback: 'finish' fires when stream.end() flushes all data to the SFTP subsystem.
-    // In production, the 'close' event (file-handle release) can be delayed or lost;
-    // 'finish' is reliable and sufficient for upload completion.
+
     stream.on('finish', () => {
-      console.log(`📤 [relay] Stream finish event for: ${msg.remotePath} (completionSent: ${completionSent})`);
-      if (!completionSent) {
-        setTimeout(() => {
-          if (!completionSent) {
-            console.log(`📤 [relay] Finish fallback (2s) - sending completion for: ${msg.remotePath}`);
-            sendCompletion();
-          }
-        }, 2000);
-      }
+      console.log(`📤 [relay] Stream finish event for: ${msg.remotePath}`);
+      sendCompletion();
     });
 
     const entry = activeUploads.get(key);
