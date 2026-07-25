@@ -242,6 +242,258 @@ function PathInputWithAutocomplete({
   );
 }
 
+// ⏰ Dynamic Cron Schedule & Clock Picker Component
+function DynamicCronPicker({ value, onChange }) {
+  const parseCron = (str) => {
+    if (!str) return { mode: 'everyday', time: '00:00', weekDay: '1', monthDay: '1', intervalVal: '*/30 * * * *', customVal: '0 0 * * *' };
+    const parts = str.trim().split(/\s+/);
+    if (parts.length !== 5) return { mode: 'custom', time: '00:00', weekDay: '1', monthDay: '1', intervalVal: '*/30 * * * *', customVal: str };
+
+    const [min, hr, dom, mth, dow] = parts;
+
+    if (min.startsWith('*/') || hr.startsWith('*/') || str === '0 * * * *') {
+      return { mode: 'interval', time: '00:00', weekDay: '1', monthDay: '1', intervalVal: str, customVal: str };
+    }
+
+    const pad = (n) => String(n).padStart(2, '0');
+    const isValidNum = (n) => !isNaN(parseInt(n, 10)) && !n.includes('*');
+
+    if (isValidNum(min) && isValidNum(hr)) {
+      const timeStr = `${pad(parseInt(hr, 10))}:${pad(parseInt(min, 10))}`;
+
+      if (dom === '*' && mth === '*' && dow === '*') {
+        return { mode: 'everyday', time: timeStr, weekDay: '1', monthDay: '1', intervalVal: '*/30 * * * *', customVal: str };
+      }
+      if (dom === '*' && mth === '*' && dow !== '*') {
+        return { mode: 'weekly', time: timeStr, weekDay: dow, monthDay: '1', intervalVal: '*/30 * * * *', customVal: str };
+      }
+      if (dom !== '*' && mth === '*' && dow === '*') {
+        return { mode: 'monthly', time: timeStr, weekDay: '1', monthDay: dom, intervalVal: '*/30 * * * *', customVal: str };
+      }
+    }
+
+    return { mode: 'custom', time: '00:00', weekDay: '1', monthDay: '1', intervalVal: '*/30 * * * *', customVal: str };
+  };
+
+  const parsed = parseCron(value);
+  const [mode, setMode] = useState(parsed.mode);
+  const [time, setTime] = useState(parsed.time);
+  const [weekDay, setWeekDay] = useState(parsed.weekDay);
+  const [monthDay, setMonthDay] = useState(parsed.monthDay);
+  const [intervalVal, setIntervalVal] = useState(parsed.intervalVal);
+  const [customVal, setCustomVal] = useState(parsed.customVal);
+
+  useEffect(() => {
+    const p = parseCron(value);
+    setMode(p.mode);
+    setTime(p.time);
+    setWeekDay(p.weekDay);
+    setMonthDay(p.monthDay);
+    setIntervalVal(p.intervalVal);
+    setCustomVal(p.customVal);
+  }, [value]);
+
+  const updateCron = (newMode, newTime, newWeekDay, newMonthDay, newInterval, newCustom) => {
+    let cron = '0 0 * * *';
+    const [hrStr, minStr] = (newTime || '00:00').split(':');
+    const hr = parseInt(hrStr || '0', 10);
+    const min = parseInt(minStr || '0', 10);
+
+    if (newMode === 'everyday') {
+      cron = `${min} ${hr} * * *`;
+    } else if (newMode === 'weekly') {
+      cron = `${min} ${hr} * * ${newWeekDay}`;
+    } else if (newMode === 'monthly') {
+      cron = `${min} ${hr} ${newMonthDay} * *`;
+    } else if (newMode === 'interval') {
+      cron = newInterval;
+    } else if (newMode === 'custom') {
+      cron = newCustom;
+    }
+
+    onChange(cron);
+  };
+
+  const getHumanReadable = () => {
+    const [hrStr, minStr] = (time || '00:00').split(':');
+    const hr = parseInt(hrStr || '0', 10);
+    const min = parseInt(minStr || '0', 10);
+    const ampm = hr >= 12 ? 'PM' : 'AM';
+    const hr12 = hr % 12 === 0 ? 12 : hr % 12;
+    const timeFormatted = `${String(hr12).padStart(2, '0')}:${String(min).padStart(2, '0')} ${ampm}`;
+
+    const daysMap = { '0': 'Sunday', '1': 'Monday', '2': 'Tuesday', '3': 'Wednesday', '4': 'Thursday', '5': 'Friday', '6': 'Saturday' };
+
+    if (mode === 'everyday') return `Runs every day at ${timeFormatted} (${time} server time)`;
+    if (mode === 'weekly') return `Runs every ${daysMap[weekDay] || 'day'} at ${timeFormatted}`;
+    if (mode === 'monthly') return `Runs on day ${monthDay} of every month at ${timeFormatted}`;
+    if (mode === 'interval') {
+      if (intervalVal === '*/5 * * * *') return 'Runs every 5 minutes';
+      if (intervalVal === '*/15 * * * *') return 'Runs every 15 minutes';
+      if (intervalVal === '*/30 * * * *') return 'Runs every 30 minutes';
+      if (intervalVal === '0 * * * *') return 'Runs every hour (at :00)';
+      if (intervalVal === '0 */2 * * *') return 'Runs every 2 hours';
+      if (intervalVal === '0 */6 * * *') return 'Runs every 6 hours';
+      if (intervalVal === '0 */12 * * *') return 'Runs every 12 hours';
+      return `Runs interval schedule: ${intervalVal}`;
+    }
+    return `Custom cron expression: ${customVal}`;
+  };
+
+  return (
+    <div className="p-3.5 rounded-xl bg-indigo-500/10 border border-indigo-500/20 space-y-3">
+      <div className="flex items-center justify-between">
+        <label className="text-xs font-bold text-indigo-400 flex items-center gap-1.5">
+          ⏰ Dynamic Schedule & Clock Picker
+        </label>
+        <span className="text-[10px] font-mono text-indigo-300 bg-indigo-500/20 px-2 py-0.5 rounded font-bold">
+          {value}
+        </span>
+      </div>
+
+      <div className="grid grid-cols-5 gap-1.5">
+        {[
+          { id: 'everyday', label: 'Every Day' },
+          { id: 'weekly',   label: 'Weekly' },
+          { id: 'monthly',  label: 'Monthly' },
+          { id: 'interval', label: 'Interval' },
+          { id: 'custom',   label: 'Custom' },
+        ].map((m) => (
+          <button
+            key={m.id}
+            type="button"
+            onClick={() => {
+              setMode(m.id);
+              updateCron(m.id, time, weekDay, monthDay, intervalVal, customVal);
+            }}
+            className={`py-1.5 px-1.5 text-center rounded-lg border text-[11px] font-bold transition-all cursor-pointer ${
+              mode === m.id
+                ? 'bg-indigo-600 border-indigo-500 text-white shadow-md shadow-indigo-600/20'
+                : 'bg-[var(--bg-tertiary)] border-[var(--border-color)] text-[var(--text-muted)] hover:text-[var(--text-primary)]'
+            }`}
+          >
+            {m.label}
+          </button>
+        ))}
+      </div>
+
+      <div className="pt-2 border-t border-[var(--border-color)] space-y-2">
+        {(mode === 'everyday' || mode === 'weekly' || mode === 'monthly') && (
+          <div className="grid grid-cols-2 gap-3 items-center">
+            <div>
+              <label className="text-[10px] font-semibold text-[var(--text-muted)] block mb-1">
+                Execution Time (HH:MM Clock):
+              </label>
+              <input
+                type="time"
+                value={time}
+                onChange={(e) => {
+                  const newT = e.target.value || '00:00';
+                  setTime(newT);
+                  updateCron(mode, newT, weekDay, monthDay, intervalVal, customVal);
+                }}
+                className="w-full px-3 py-1.5 text-xs rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] font-mono text-[var(--text-primary)] focus:border-indigo-500 focus:outline-none cursor-pointer"
+              />
+            </div>
+
+            {mode === 'weekly' && (
+              <div>
+                <label className="text-[10px] font-semibold text-[var(--text-muted)] block mb-1">
+                  Day of Week:
+                </label>
+                <select
+                  value={weekDay}
+                  onChange={(e) => {
+                    setWeekDay(e.target.value);
+                    updateCron(mode, time, e.target.value, monthDay, intervalVal, customVal);
+                  }}
+                  className="w-full px-3 py-1.5 text-xs rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] text-[var(--text-primary)] focus:outline-none cursor-pointer"
+                >
+                  <option value="1">Every Monday</option>
+                  <option value="2">Every Tuesday</option>
+                  <option value="3">Every Wednesday</option>
+                  <option value="4">Every Thursday</option>
+                  <option value="5">Every Friday</option>
+                  <option value="6">Every Saturday</option>
+                  <option value="0">Every Sunday</option>
+                </select>
+              </div>
+            )}
+
+            {mode === 'monthly' && (
+              <div>
+                <label className="text-[10px] font-semibold text-[var(--text-muted)] block mb-1">
+                  Day of Month (1-31):
+                </label>
+                <select
+                  value={monthDay}
+                  onChange={(e) => {
+                    setMonthDay(e.target.value);
+                    updateCron(mode, time, weekDay, e.target.value, intervalVal, customVal);
+                  }}
+                  className="w-full px-3 py-1.5 text-xs rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] font-mono text-[var(--text-primary)] focus:outline-none cursor-pointer"
+                >
+                  {Array.from({ length: 31 }, (_, i) => i + 1).map((d) => (
+                    <option key={d} value={String(d)}>
+                      Day {d} of month
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+          </div>
+        )}
+
+        {mode === 'interval' && (
+          <div>
+            <label className="text-[10px] font-semibold text-[var(--text-muted)] block mb-1">
+              Select Recurrence Interval:
+            </label>
+            <select
+              value={intervalVal}
+              onChange={(e) => {
+                setIntervalVal(e.target.value);
+                updateCron(mode, time, weekDay, monthDay, e.target.value, customVal);
+              }}
+              className="w-full px-3 py-2 text-xs rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] text-[var(--text-primary)] focus:outline-none cursor-pointer"
+            >
+              <option value="*/5 * * * *">Every 5 Minutes (*/5 * * * *)</option>
+              <option value="*/15 * * * *">Every 15 Minutes (*/15 * * * *)</option>
+              <option value="*/30 * * * *">Every 30 Minutes (*/30 * * * *)</option>
+              <option value="0 * * * *">Every Hour (0 * * * *)</option>
+              <option value="0 */2 * * *">Every 2 Hours (0 */2 * * *)</option>
+              <option value="0 */6 * * *">Every 6 Hours (0 */6 * * *)</option>
+              <option value="0 */12 * * *">Every 12 Hours (0 */12 * * *)</option>
+            </select>
+          </div>
+        )}
+
+        {mode === 'custom' && (
+          <div>
+            <label className="text-[10px] font-semibold text-[var(--text-muted)] block mb-1">
+              Custom Cron Expression (5 Fields):
+            </label>
+            <input
+              type="text"
+              value={customVal}
+              onChange={(e) => {
+                setCustomVal(e.target.value);
+                updateCron(mode, time, weekDay, monthDay, intervalVal, e.target.value);
+              }}
+              placeholder="e.g. 0 4 * * 1-5"
+              className="w-full px-3.5 py-1.5 text-xs rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] font-mono text-[var(--text-primary)] focus:outline-none"
+            />
+          </div>
+        )}
+
+        <div className="p-2.5 rounded-lg bg-black/40 border border-indigo-500/20 text-[11px] font-mono text-emerald-400 flex items-center justify-between">
+          <span>📅 {getHumanReadable()}</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function RcloneApp() {
   const { vaultStatus } = useVault();
   const { state: appState, apiFetch } = useApp();
@@ -1140,20 +1392,10 @@ export default function RcloneApp() {
               {/* Cron Schedule (only in cron mode) */}
               {execMode === 'cron' && (
                 <div className="pt-2 border-t border-[var(--border-color)] space-y-2">
-                  <label className="text-[10px] font-bold text-indigo-400 uppercase tracking-wide block">Crontab Schedule</label>
-                  <select value={cronSchedule} onChange={(e) => setCronSchedule(e.target.value)} className="w-full px-3.5 py-2 text-xs rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] text-[var(--text-primary)] focus:border-indigo-500 focus:outline-none">
-                    <option value="0 0 * * *">Every Day at Midnight</option>
-                    <option value="0 2 * * *">Every Day at 02:00 AM</option>
-                    <option value="0 * * * *">Every Hour</option>
-                    <option value="*/30 * * * *">Every 30 Minutes</option>
-                    <option value="*/15 * * * *">Every 15 Minutes</option>
-                    <option value="0 0 * * 0">Every Sunday at Midnight</option>
-                    <option value="0 0 1 * *">1st Day of Every Month</option>
-                    <option value="custom">Custom Expression...</option>
-                  </select>
-                  {cronSchedule === 'custom' && (
-                    <input type="text" value={customCron} onChange={(e) => setCustomCron(e.target.value)} placeholder="e.g. 0 4 * * 1-5" className="w-full px-3.5 py-1.5 text-xs rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] font-mono text-[var(--text-primary)] focus:outline-none" />
-                  )}
+                  <DynamicCronPicker
+                    value={cronSchedule}
+                    onChange={setCronSchedule}
+                  />
                 </div>
               )}
             </div>
@@ -1542,21 +1784,10 @@ export default function RcloneApp() {
             </div>
             <div className="p-5 space-y-3">
               <div>
-                <label className="text-[11px] font-semibold text-[var(--text-muted)] block mb-1">Schedule Preset</label>
-                <select value={['0 0 * * *','0 2 * * *','0 * * * *','*/30 * * * *','*/15 * * * *','0 0 * * 0','0 0 1 * *'].includes(editingCron.schedule) ? editingCron.schedule : 'custom'} onChange={(e) => { if (e.target.value !== 'custom') setEditingCron({ ...editingCron, schedule: e.target.value }); }} className="w-full px-3.5 py-2 text-xs rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] text-[var(--text-primary)] focus:outline-none">
-                  <option value="0 0 * * *">Every Day at Midnight</option>
-                  <option value="0 2 * * *">Every Day at 02:00 AM</option>
-                  <option value="0 * * * *">Every Hour</option>
-                  <option value="*/30 * * * *">Every 30 Minutes</option>
-                  <option value="*/15 * * * *">Every 15 Minutes</option>
-                  <option value="0 0 * * 0">Every Sunday at Midnight</option>
-                  <option value="0 0 1 * *">1st of Every Month</option>
-                  <option value="custom">Custom...</option>
-                </select>
-              </div>
-              <div>
-                <label className="text-[11px] font-semibold text-[var(--text-muted)] block mb-1">Cron Expression</label>
-                <input type="text" value={editingCron.schedule} onChange={(e) => setEditingCron({ ...editingCron, schedule: e.target.value })} className="w-full px-3.5 py-1.5 text-xs rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] font-mono text-[var(--text-primary)] focus:border-indigo-500 focus:outline-none" />
+                <DynamicCronPicker
+                  value={editingCron.schedule}
+                  onChange={(val) => setEditingCron({ ...editingCron, schedule: val })}
+                />
               </div>
               <div className="grid grid-cols-2 gap-2">
                 <div>
