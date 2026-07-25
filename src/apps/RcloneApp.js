@@ -44,6 +44,12 @@ export default function RcloneApp() {
   const [bwlimit, setBwlimit] = useState('');
   const [transfers, setTransfers] = useState('4');
   
+  // Execution Mode & Crontab Scheduler State
+  const [execMode, setExecMode] = useState('now'); // 'now' | 'cron'
+  const [cronSchedule, setCronSchedule] = useState('0 0 * * *');
+  const [customCron, setCustomCron] = useState('0 0 * * *');
+  const [serverCrons, setServerCrons] = useState([]);
+  
   // Job Execution & Logs
   const [activeJob, setActiveJob] = useState(null);
   const [jobLog, setJobLog] = useState('');
@@ -101,7 +107,9 @@ export default function RcloneApp() {
       setBrowseRemote('');
       setBrowsePath('');
       setTargetPath('');
+      setServerCrons([]);
       fetchRcloneStatus();
+      fetchCrons();
     }
   }, [selectedConnId, vaultStatus]);
 
@@ -236,6 +244,69 @@ export default function RcloneApp() {
       alert(err.message);
     }
     setLoading(false);
+  };
+
+  const fetchCrons = async () => {
+    if (!selectedConnId) return;
+    try {
+      const res = await apiFetch(`/api/rclone/cron?connectionId=${selectedConnId}`);
+      const data = await res.json();
+      if (data?.success) {
+        setServerCrons(data.jobs || []);
+      }
+    } catch (_) {}
+  };
+
+  const handleSaveCron = async () => {
+    if (!sourcePath || !targetPath) {
+      alert('Please specify source and target paths');
+      return;
+    }
+    const finalSchedule = cronSchedule === 'custom' ? customCron : cronSchedule;
+    setLoading(true);
+    try {
+      const res = await apiFetch('/api/rclone/cron', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          connectionId: selectedConnId,
+          schedule: finalSchedule,
+          action,
+          source: sourcePath,
+          target: targetPath,
+          options: { dryRun, bwlimit, transfers },
+        })
+      });
+      const data = await res.json();
+      if (data?.success) {
+        alert(`✅ Crontab job scheduled successfully!\n\n${data.humanSchedule || finalSchedule}`);
+        fetchCrons();
+        fetchRcloneStatus();
+      } else {
+        alert(data?.error || 'Failed to add crontab job');
+      }
+    } catch (err) {
+      alert(err.message);
+    }
+    setLoading(false);
+  };
+
+  const handleDeleteCron = async (rawLine) => {
+    if (!confirm('Remove this crontab schedule from server?')) return;
+    try {
+      const res = await apiFetch(`/api/rclone/cron?connectionId=${selectedConnId}&rawLine=${encodeURIComponent(rawLine)}`, {
+        method: 'DELETE',
+      });
+      const data = await res.json();
+      if (data?.success) {
+        fetchCrons();
+        fetchRcloneStatus();
+      } else {
+        alert(data?.error || 'Failed to remove crontab job');
+      }
+    } catch (err) {
+      alert(err.message);
+    }
   };
 
   const handleDeleteRemote = async (name) => {
@@ -680,7 +751,40 @@ export default function RcloneApp() {
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
               {/* Form Controls */}
               <div className="p-6 rounded-2xl bg-[var(--bg-secondary)] border border-[var(--border-color)] space-y-4">
-                <h3 className="text-sm font-bold mb-2">Configure Backup Action for {selectedConn?.name}</h3>
+                <div className="flex items-center justify-between">
+                  <h3 className="text-sm font-bold">Configure Backup Action</h3>
+                  <span className="text-[10px] font-mono text-indigo-400 bg-indigo-500/10 px-2 py-0.5 rounded">
+                    {selectedConn?.name}
+                  </span>
+                </div>
+
+                {/* Execution Mode Selector */}
+                <div>
+                  <label className="text-xs font-semibold text-[var(--text-muted)] block mb-1.5">Execution Method:</label>
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      onClick={() => setExecMode('now')}
+                      className={`py-2 px-3 text-center rounded-xl border text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-2 ${
+                        execMode === 'now'
+                          ? 'bg-emerald-600 border-emerald-500 text-white shadow-md shadow-emerald-600/20'
+                          : 'bg-[var(--bg-tertiary)] border-[var(--border-color)] text-[var(--text-muted)] hover:border-[var(--text-primary)]'
+                      }`}
+                    >
+                      <Zap size={14} /> ⚡ Run Instant (One-Off)
+                    </button>
+
+                    <button
+                      onClick={() => setExecMode('cron')}
+                      className={`py-2 px-3 text-center rounded-xl border text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-2 ${
+                        execMode === 'cron'
+                          ? 'bg-indigo-600 border-indigo-500 text-white shadow-md shadow-indigo-600/20'
+                          : 'bg-[var(--bg-tertiary)] border-[var(--border-color)] text-[var(--text-muted)] hover:border-[var(--text-primary)]'
+                      }`}
+                    >
+                      <Terminal size={14} /> ⏰ Schedule Server Cron
+                    </button>
+                  </div>
+                </div>
 
                 <div>
                   <label className="text-xs font-semibold text-[var(--text-muted)] block mb-1">Select Transfer Type:</label>
@@ -694,7 +798,7 @@ export default function RcloneApp() {
                       <button
                         key={act.id}
                         onClick={() => setAction(act.id)}
-                        className={`py-2 px-1 text-center rounded-xl border transition-all ${
+                        className={`py-2 px-1 text-center rounded-xl border transition-all cursor-pointer ${
                           action === act.id
                             ? 'bg-indigo-600 border-indigo-500 text-white font-bold shadow-md shadow-indigo-500/20'
                             : 'bg-[var(--bg-tertiary)] border-[var(--border-color)] text-[var(--text-muted)] hover:border-[var(--text-muted)]'
@@ -724,10 +828,41 @@ export default function RcloneApp() {
                     type="text"
                     value={targetPath}
                     onChange={(e) => setTargetPath(e.target.value)}
-                    placeholder="s3_remote:bucket/backups"
+                    placeholder="gdrive:backup or s3_remote:bucket/backups"
                     className="w-full px-3.5 py-2 text-xs rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] font-mono text-[var(--text-primary)] focus:border-indigo-500 focus:outline-none"
                   />
                 </div>
+
+                {/* Crontab Frequency Controls */}
+                {execMode === 'cron' && (
+                  <div className="p-3 rounded-xl bg-indigo-500/10 border border-indigo-500/20 space-y-2.5">
+                    <label className="text-xs font-bold text-indigo-400 block">Crontab Schedule Frequency:</label>
+                    <select
+                      value={cronSchedule}
+                      onChange={(e) => setCronSchedule(e.target.value)}
+                      className="w-full px-3.5 py-2 text-xs rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] text-[var(--text-primary)]"
+                    >
+                      <option value="0 0 * * *">Every Day at Midnight (0 0 * * *)</option>
+                      <option value="0 2 * * *">Every Day at 02:00 AM (0 2 * * *)</option>
+                      <option value="0 * * * *">Every Hour (0 * * * *)</option>
+                      <option value="*/30 * * * *">Every 30 Minutes (*/30 * * * *)</option>
+                      <option value="*/15 * * * *">Every 15 Minutes (*/15 * * * *)</option>
+                      <option value="0 0 * * 0">Every Sunday at Midnight (0 0 * * 0)</option>
+                      <option value="0 0 1 * *">1st Day of Every Month (0 0 1 * *)</option>
+                      <option value="custom">Custom Cron Expression...</option>
+                    </select>
+
+                    {cronSchedule === 'custom' && (
+                      <input
+                        type="text"
+                        value={customCron}
+                        onChange={(e) => setCustomCron(e.target.value)}
+                        placeholder="e.g. 0 4 * * 1-5"
+                        className="w-full px-3.5 py-1.5 text-xs rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] font-mono text-[var(--text-primary)]"
+                      />
+                    )}
+                  </div>
+                )}
 
                 <div className="grid grid-cols-2 gap-4 pt-2 border-t border-[var(--border-color)]">
                   <div>
@@ -759,33 +894,93 @@ export default function RcloneApp() {
                       onChange={(e) => setDryRun(e.target.checked)}
                       className="rounded border-[var(--border-color)] text-indigo-600 focus:ring-0"
                     />
-                    Dry Run (Test Simulation)
+                    Dry Run (Simulation)
                   </label>
 
-                  <button
-                    onClick={handleStartBackupJob}
-                    disabled={isJobRunning}
-                    className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs transition-colors shadow-lg shadow-emerald-600/20"
-                  >
-                    <Play size={14} /> Execute Rclone {action.toUpperCase()}
-                  </button>
+                  {execMode === 'cron' ? (
+                    <button
+                      onClick={handleSaveCron}
+                      disabled={loading}
+                      className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs transition-colors shadow-lg shadow-indigo-600/20 cursor-pointer"
+                    >
+                      <Terminal size={14} /> Add Task to Server Crontab
+                    </button>
+                  ) : (
+                    <button
+                      onClick={handleStartBackupJob}
+                      disabled={isJobRunning}
+                      className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs transition-colors shadow-lg shadow-emerald-600/20 cursor-pointer"
+                    >
+                      <Play size={14} /> Execute Instant {action.toUpperCase()}
+                    </button>
+                  )}
                 </div>
               </div>
 
-              {/* Terminal Log Output */}
-              <div className="flex flex-col rounded-2xl bg-black border border-[var(--border-color)] overflow-hidden h-[380px]">
-                <div className="px-4 py-2.5 bg-[var(--bg-secondary)] border-b border-[var(--border-color)] flex items-center justify-between text-xs font-bold text-[var(--text-muted)]">
-                  <span className="flex items-center gap-2">
-                    <Terminal size={14} /> Live Rclone Terminal Logs ({selectedConn?.name})
-                  </span>
-                  {isJobRunning && <span className="text-emerald-400 animate-pulse font-mono">● RUNNING</span>}
+              {/* Right Column: Terminal Logs or Active Server Crontab Manager */}
+              <div className="space-y-4">
+                {/* Crontab Schedule Manager Panel */}
+                <div className="p-5 rounded-2xl bg-[var(--bg-secondary)] border border-[var(--border-color)] space-y-3">
+                  <div className="flex items-center justify-between border-b border-[var(--border-color)] pb-2.5">
+                    <h4 className="text-xs font-bold flex items-center gap-2">
+                      <Terminal size={15} className="text-indigo-400" /> Active Server Crontab Tasks ({serverCrons.length})
+                    </h4>
+                    <button
+                      onClick={fetchCrons}
+                      className="text-[10px] text-indigo-400 hover:underline flex items-center gap-1 cursor-pointer"
+                    >
+                      <RefreshCw size={10} /> Refresh Crontabs
+                    </button>
+                  </div>
+
+                  <div className="space-y-2 max-h-60 overflow-y-auto pr-1">
+                    {serverCrons.map((cron) => (
+                      <div key={cron.id} className="p-3 rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] flex items-start justify-between gap-3 text-xs">
+                        <div className="space-y-1 truncate">
+                          <div className="flex items-center gap-2">
+                            <span className="px-2 py-0.5 rounded-full bg-indigo-500/15 text-indigo-400 font-bold text-[10px] font-mono">
+                              {cron.humanSchedule}
+                            </span>
+                            <span className="text-[10px] font-mono text-[var(--text-muted)]">[{cron.schedule}]</span>
+                          </div>
+                          <p className="font-mono text-[11px] text-[var(--text-primary)] truncate" title={cron.command}>
+                            {cron.command}
+                          </p>
+                        </div>
+
+                        <button
+                          onClick={() => handleDeleteCron(cron.raw)}
+                          className="p-1.5 text-rose-400 hover:bg-rose-500/10 rounded-lg transition-colors shrink-0 cursor-pointer"
+                          title="Delete Crontab Task from Server"
+                        >
+                          <Trash2 size={15} />
+                        </button>
+                      </div>
+                    ))}
+
+                    {serverCrons.length === 0 && (
+                      <div className="p-6 text-center text-xs text-[var(--text-muted)]">
+                        No crontab schedule tasks found on {selectedConn?.name}. Select "Schedule Server Cron" above to create an automated schedule!
+                      </div>
+                    )}
+                  </div>
                 </div>
-                <pre
-                  ref={logTerminalRef}
-                  className="flex-1 p-4 font-mono text-[11px] text-emerald-400 overflow-y-auto whitespace-pre-wrap leading-relaxed"
-                >
-                  {jobLog || 'Select source and destination, then click Execute Rclone.'}
-                </pre>
+
+                {/* Terminal Log Output */}
+                <div className="flex flex-col rounded-2xl bg-black border border-[var(--border-color)] overflow-hidden h-[240px]">
+                  <div className="px-4 py-2 bg-[var(--bg-secondary)] border-b border-[var(--border-color)] flex items-center justify-between text-xs font-bold text-[var(--text-muted)]">
+                    <span className="flex items-center gap-2">
+                      <Terminal size={14} /> Instant Execution Logs ({selectedConn?.name})
+                    </span>
+                    {isJobRunning && <span className="text-emerald-400 animate-pulse font-mono">● RUNNING</span>}
+                  </div>
+                  <pre
+                    ref={logTerminalRef}
+                    className="flex-1 p-3 font-mono text-[11px] text-emerald-400 overflow-y-auto whitespace-pre-wrap leading-relaxed"
+                  >
+                    {jobLog || 'Click "Execute Instant" to run a one-off backup task with live logs.'}
+                  </pre>
+                </div>
               </div>
             </div>
           </div>
