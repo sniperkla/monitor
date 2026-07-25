@@ -1,6 +1,10 @@
 import { NextResponse } from 'next/server';
 import { getSshConfig, execCommand } from '@/app/api/server-backup/_ssh';
 
+function quote(str) {
+  return `'${String(str).replace(/'/g, `'\\''`)}'`;
+}
+
 export async function POST(req) {
   try {
     const { connectionId } = await req.json();
@@ -10,29 +14,29 @@ export async function POST(req) {
     }
 
     const sshConfig = await getSshConfig(connectionId);
+    const logFile = `/tmp/rclone_install_${Date.now()}.log`;
 
-    // Array-joined shell script to prevent JS template literal interpolation bugs
+    // Installer script outputting live step-by-step progress
     const installScript = [
       'export PATH="$HOME/.local/bin:$HOME/bin:/usr/local/bin:/usr/bin:$PATH"',
-      '',
+      'echo "🚀 [1/4] Starting Rclone Installation on $(hostname)..."',
+      'echo "--------------------------------------------------"',
       'if command -v rclone >/dev/null 2>&1; then',
-      '  echo "✅ Rclone is already installed."',
+      '  echo "✅ Rclone is already installed on this server!"',
       '  rclone version',
       '  exit 0',
       'fi',
-      '',
-      'echo "🚀 Installing Rclone..."',
-      '',
-      '# 1. Try official installer if root or passwordless sudo',
+      'echo "📦 [2/4] Detecting server OS & Architecture..."',
+      'ARCH="$(uname -m)"',
+      'OS="$(uname -s | tr \'[:upper:]\' \'[:lower:]\')"',
+      'echo "    Detected OS: ${OS}, Arch: ${ARCH}"',
       'if [ "$(id -u)" = "0" ] || sudo -n true 2>/dev/null; then',
-      '  curl -fsSL https://rclone.org/install.sh | sudo bash 2>/dev/null || true',
+      '  echo "🔑 Running official system installer with sudo..."',
+      '  curl -fsSL https://rclone.org/install.sh | sudo bash || true',
       'fi',
-      '',
-      '# 2. Portable Standalone Binary Fallback (No root / sudo required!)',
       'if ! command -v rclone >/dev/null 2>&1; then',
+      '  echo "⬇️ [3/4] Running standalone non-root binary installer..."',
       '  mkdir -p "$HOME/.local/bin"',
-      '  ARCH="$(uname -m)"',
-      '  OS="$(uname -s | tr \'[:upper:]\' \'[:lower:]\')"',
       '  if [ "$ARCH" = "x86_64" ]; then RARCH="amd64"',
       '  elif [ "$ARCH" = "aarch64" ] || [ "$ARCH" = "arm64" ]; then RARCH="arm64"',
       '  elif [ "$ARCH" = "armv7l" ]; then RARCH="arm-v7"',
@@ -40,62 +44,86 @@ export async function POST(req) {
       '  TMP_DIR="$(mktemp -d 2>/dev/null || echo /tmp/rclone-inst)"',
       '  mkdir -p "$TMP_DIR"',
       '  URL="https://downloads.rclone.org/rclone-current-${OS}-${RARCH}.zip"',
-      '  echo "Downloading standalone binary from ${URL}..."',
+      '  echo "    Fetching package: ${URL}"',
       '  if command -v curl >/dev/null 2>&1; then',
       '    curl -fsSL "${URL}" -o "${TMP_DIR}/rclone.zip"',
       '  elif command -v wget >/dev/null 2>&1; then',
       '    wget -qO "${TMP_DIR}/rclone.zip" "${URL}"',
       '  fi',
       '  if [ -f "${TMP_DIR}/rclone.zip" ]; then',
+      '    echo "    Extracting binary into $HOME/.local/bin..."',
       '    unzip -q -o "${TMP_DIR}/rclone.zip" -d "${TMP_DIR}" </dev/null || python3 -c "import zipfile; zipfile.ZipFile(\'${TMP_DIR}/rclone.zip\').extractall(\'${TMP_DIR}\')" 2>/dev/null || true',
       '    BIN_FILE="$(find "${TMP_DIR}" -name rclone -type f | head -n 1)"',
       '    if [ -n "${BIN_FILE}" ]; then',
       '      cp "${BIN_FILE}" "$HOME/.local/bin/rclone"',
       '      chmod +x "$HOME/.local/bin/rclone"',
-      '      echo "✅ Rclone binary placed in $HOME/.local/bin/rclone"',
+      '      echo "✅ Rclone executable installed to $HOME/.local/bin/rclone"',
       '    fi',
       '    rm -rf "${TMP_DIR}"',
       '  fi',
       'fi',
-      '',
-      '# 3. System package manager fallback',
-      'if ! command -v rclone >/dev/null 2>&1 && ! [ -x "$HOME/.local/bin/rclone" ]; then',
-      '  if command -v apt-get >/dev/null 2>&1; then',
-      '    sudo -n apt-get update -qq && sudo -n apt-get install -y rclone || true',
-      '  elif command -v yum >/dev/null 2>&1; then',
-      '    sudo -n yum install -y rclone || true',
-      '  fi',
-      'fi',
-      '',
-      '# Final Verification',
+      'echo "🎉 [4/4] Verifying installation..."',
       'if command -v rclone >/dev/null 2>&1 || [ -x "$HOME/.local/bin/rclone" ]; then',
-      '  echo "✅ Rclone installed successfully!"',
+      '  echo "✅ SUCCESS! Rclone installed and ready for cloud backup!"',
       '  "$HOME/.local/bin/rclone" version 2>/dev/null || rclone version',
       '  exit 0',
       'else',
-      '  echo "❌ Rclone installation failed."',
+      '  echo "❌ Installation failed. Please check internet connection on server."',
       '  exit 1',
       'fi'
     ].join('\n');
 
-    const result = await execCommand(sshConfig, installScript);
+    // Run script in background writing to logFile
+    const fullCmd = `stdbuf -i0 -o0 -e0 bash -c ${quote(installScript)} > ${logFile} 2>&1 & echo $!`;
+    const result = await execCommand(sshConfig, fullCmd);
 
     if (result.code === 0) {
       return NextResponse.json({
         success: true,
-        output: result.stdout || 'Installation completed',
+        logFile,
+        pid: result.stdout.trim(),
       });
     }
 
-    const logDetails = `Exit Code: ${result.code}\n\nSTDOUT:\n${result.stdout}\n\nSTDERR:\n${result.stderr}`;
     return NextResponse.json({
       success: false,
-      error: result.stderr.trim() || result.stdout.trim() || 'Rclone installation failed',
-      details: logDetails,
+      error: result.stderr.trim() || result.stdout.trim() || 'Failed to launch installer process',
     }, { status: 500 });
 
   } catch (error) {
-    console.error('[rclone/install] error:', error.message);
-    return NextResponse.json({ success: false, error: error.message, details: error.stack }, { status: 500 });
+    console.error('[rclone/install POST] error:', error.message);
+    return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+  }
+}
+
+export async function GET(req) {
+  try {
+    const { searchParams } = new URL(req.url);
+    const connectionId = searchParams.get('connectionId');
+    const logFile = searchParams.get('logFile');
+    const pid = searchParams.get('pid');
+
+    if (!connectionId || !logFile) {
+      return NextResponse.json({ success: false, error: 'connectionId and logFile are required' }, { status: 400 });
+    }
+
+    const sshConfig = await getSshConfig(connectionId);
+    const logRes = await execCommand(sshConfig, `cat "${logFile}" 2>/dev/null || echo "Initializing installer log..."`);
+    
+    let isRunning = false;
+    if (pid) {
+      const psRes = await execCommand(sshConfig, `ps -p ${pid} 2>/dev/null | grep ${pid}`);
+      isRunning = psRes.code === 0;
+    }
+
+    return NextResponse.json({
+      success: true,
+      log: logRes.stdout || '',
+      running: isRunning,
+    });
+
+  } catch (error) {
+    console.error('[rclone/install GET] error:', error.message);
+    return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   }
 }

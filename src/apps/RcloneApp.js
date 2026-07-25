@@ -22,6 +22,12 @@ export default function RcloneApp() {
   const [loading, setLoading] = useState(false);
   const [rcloneStatus, setRcloneStatus] = useState(null); // { installed, version, remotes, configPath }
   
+  // Installation Live Terminal Preview State
+  const [installJob, setInstallJob] = useState(null); // { logFile, pid }
+  const [installLog, setInstallLog] = useState('');
+  const [isInstalling, setIsInstalling] = useState(false);
+  const installTerminalRef = useRef(null);
+
   // Remote Builder Modal State
   const [showAddRemoteModal, setShowAddRemoteModal] = useState(false);
   const [newRemoteName, setNewRemoteName] = useState('');
@@ -85,14 +91,40 @@ export default function RcloneApp() {
     }
   }, [selectedConnId, vaultStatus]);
 
-  // Auto-scroll log terminal
+  // Auto-scroll log terminals
   useEffect(() => {
     if (logTerminalRef.current) {
       logTerminalRef.current.scrollTop = logTerminalRef.current.scrollHeight;
     }
   }, [jobLog]);
 
-  // Poll active job status
+  useEffect(() => {
+    if (installTerminalRef.current) {
+      installTerminalRef.current.scrollTop = installTerminalRef.current.scrollHeight;
+    }
+  }, [installLog]);
+
+  // Poll installation live terminal logs
+  useEffect(() => {
+    let interval = null;
+    if (installJob && isInstalling) {
+      interval = setInterval(async () => {
+        try {
+          const res = await apiFetch(`/api/rclone/install?connectionId=${selectedConnId}&logFile=${encodeURIComponent(installJob.logFile)}&pid=${installJob.pid || ''}`);
+          if (res?.success) {
+            setInstallLog(res.log || '');
+            setIsInstalling(res.running);
+            if (!res.running) {
+              fetchRcloneStatus();
+            }
+          }
+        } catch (_) {}
+      }, 1000);
+    }
+    return () => { if (interval) clearInterval(interval); };
+  }, [installJob, isInstalling, selectedConnId, apiFetch]);
+
+  // Poll active backup job status
   useEffect(() => {
     let interval = null;
     if (activeJob && isJobRunning) {
@@ -130,23 +162,23 @@ export default function RcloneApp() {
   };
 
   const handleInstallRclone = async () => {
-    setLoading(true);
+    setIsInstalling(true);
+    setInstallLog('🚀 Initializing Rclone installer preview...');
     try {
       const res = await apiFetch('/api/rclone/install', {
         method: 'POST',
         body: JSON.stringify({ connectionId: selectedConnId })
       });
       if (res?.success) {
-        alert(`✅ ${res.output || 'Rclone installed successfully!'}`);
-        fetchRcloneStatus();
+        setInstallJob(res);
       } else {
-        const errorMsg = res?.details || res?.error || 'Failed to install Rclone';
-        alert(`❌ Installation Failed:\n\n${errorMsg}`);
+        setIsInstalling(false);
+        setInstallLog(`❌ Failed to launch installer: ${res?.error || 'Unknown error'}`);
       }
     } catch (err) {
-      alert(`❌ Error: ${err.message}`);
+      setIsInstalling(false);
+      setInstallLog(`❌ Error: ${err.message}`);
     }
-    setLoading(false);
   };
 
   const handleSaveRemote = async () => {
@@ -400,10 +432,10 @@ export default function RcloneApp() {
                 {!rcloneStatus?.installed && (
                   <button
                     onClick={handleInstallRclone}
-                    disabled={loading}
+                    disabled={isInstalling}
                     className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs transition-colors shadow-lg shadow-indigo-500/20 cursor-pointer"
                   >
-                    <Download size={14} /> 1-Click Initialize Rclone
+                    <Download size={14} /> {isInstalling ? 'Installing...' : '1-Click Initialize Rclone'}
                   </button>
                 )}
               </div>
@@ -420,6 +452,30 @@ export default function RcloneApp() {
                 </div>
               )}
             </div>
+
+            {/* 🖥️ LIVE INSTALLATION TERMINAL PREVIEW CARD */}
+            {(isInstalling || installLog) && (
+              <div className="flex flex-col rounded-2xl bg-black border border-indigo-500/30 overflow-hidden shadow-xl">
+                <div className="px-4 py-2.5 bg-[var(--bg-secondary)] border-b border-[var(--border-color)] flex items-center justify-between text-xs font-bold text-[var(--text-muted)]">
+                  <span className="flex items-center gap-2 text-indigo-400">
+                    <Terminal size={14} /> Live Installation Preview ({selectedConn?.name})
+                  </span>
+                  {isInstalling ? (
+                    <span className="text-amber-400 animate-pulse font-mono text-[11px] flex items-center gap-1.5">
+                      <RefreshCw size={12} className="animate-spin" /> INSTALLING...
+                    </span>
+                  ) : (
+                    <span className="text-emerald-400 font-mono text-[11px]">● COMPLETED</span>
+                  )}
+                </div>
+                <pre
+                  ref={installTerminalRef}
+                  className="p-4 font-mono text-[11px] text-emerald-400 bg-black max-h-60 overflow-y-auto whitespace-pre-wrap leading-relaxed"
+                >
+                  {installLog || 'Initializing terminal stream...'}
+                </pre>
+              </div>
+            )}
 
             {/* Visual Feature Cards */}
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
