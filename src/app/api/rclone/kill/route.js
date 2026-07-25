@@ -13,9 +13,11 @@ export async function POST(req) {
     const preferredRelay = req.headers.get('x-preferred-relay');
     const sshConfig = await getSshConfig(connectionId, { sshMode, preferredRelay });
 
+    const cleanLogFile = logFile ? String(logFile).replace(/===/g, '').trim() : '';
+
     let targetLogCmd = '';
-    if (logFile) {
-      targetLogCmd = `if [ -f "${logFile}" ]; then echo -e "\\n=== ABORTED BY USER ===\\nERROR: Transfer aborted by user." >> "${logFile}"; fi; `;
+    if (cleanLogFile) {
+      targetLogCmd = `echo -e "\\n=== ABORTED BY USER ===\\nERROR: Transfer aborted by user." >> "${cleanLogFile}"; `;
     }
 
     let killScript = '';
@@ -24,7 +26,7 @@ export async function POST(req) {
       killScript = `
 ${targetLogCmd}kill -9 ${cleanPid} 2>/dev/null || true
 if [ "$(id -u)" != "0" ] && sudo -n true 2>/dev/null; then sudo kill -9 ${cleanPid} 2>/dev/null || true; fi
-for f in $(ls -1t /tmp/rclone-cron*.log 2>/dev/null | head -5); do
+for f in $(ls -1t /tmp/rclone-cron*.log 2>/dev/null | head -10); do
   echo -e "\n=== ABORTED BY USER ===\nERROR: Transfer aborted by user." >> "$f"
 done
 rm -f /tmp/rclone-lock-*.lock
@@ -32,12 +34,13 @@ rm -f /tmp/rclone-lock-*.lock
     } else {
       killScript = `
 ${targetLogCmd}pkill -9 -f rclone 2>/dev/null || true
+pkill -9 -u $(whoami) rclone 2>/dev/null || true
 killall -9 rclone 2>/dev/null || true
 if [ "$(id -u)" != "0" ] && sudo -n true 2>/dev/null; then
   sudo pkill -9 -f rclone 2>/dev/null || true
   sudo killall -9 rclone 2>/dev/null || true
 fi
-for f in $(ls -1t /tmp/rclone-cron*.log 2>/dev/null | head -10); do
+for f in $(ls -1t /tmp/rclone-cron*.log 2>/dev/null | head -20); do
   echo -e "\n=== ABORTED BY USER ===\nERROR: Transfer aborted by user." >> "$f"
 done
 rm -f /tmp/rclone-lock-*.lock

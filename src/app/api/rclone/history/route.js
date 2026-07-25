@@ -29,7 +29,7 @@ export async function GET(req) {
       const firstLineEnd = rawBlock.indexOf('\n');
       if (firstLineEnd === -1) continue;
 
-      const filePath = rawBlock.slice(0, firstLineEnd).trim();
+      const filePath = rawBlock.slice(0, firstLineEnd).replace(/===/g, '').trim();
       const block = rawBlock.slice(firstLineEnd + 1).trim();
 
       if (!block) continue;
