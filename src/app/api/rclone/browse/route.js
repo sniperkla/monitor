@@ -2,7 +2,11 @@ import { NextResponse } from 'next/server';
 import { getSshConfig, execCommand } from '@/app/api/server-backup/_ssh';
 
 function quote(str) {
-  return `'${String(str).replace(/'/g, `'\\''`)}'`;
+  const s = String(str);
+  if (s.includes('$HOME') || s.startsWith('~')) {
+    return `"${s.replace(/"/g, '\\"')}"`;
+  }
+  return `'${s.replace(/'/g, `'\\''`)}'`;
 }
 
 export async function GET(req) {
@@ -25,7 +29,7 @@ export async function GET(req) {
     let target = '';
     let isLocal = false;
 
-    if (!remote || remote === 'local' || path.startsWith('/')) {
+    if (!remote || remote === 'local' || path.startsWith('/') || path.startsWith('$HOME') || path.startsWith('~')) {
       isLocal = true;
       target = path || '/';
     } else {

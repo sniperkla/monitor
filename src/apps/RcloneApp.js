@@ -60,7 +60,7 @@ function PathInputWithAutocomplete({
   const fetchItems = async (val) => {
     if (!selectedConnId) return;
 
-    if (!val.includes(':') && !val.startsWith('/')) {
+    if (!val.includes(':') && !val.startsWith('/') && !val.startsWith('$') && !val.startsWith('~')) {
       const matchingRemotes = remotes
         .filter(r => r.toLowerCase().startsWith(val.toLowerCase()))
         .map(r => ({ Name: `${r}:`, IsDir: true, isRemoteName: true }));
