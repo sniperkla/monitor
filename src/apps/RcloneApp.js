@@ -5,7 +5,7 @@ import {
   CloudSync, HardDrive, RefreshCw, Terminal, CheckCircle2, AlertTriangle,
   Plus, Trash2, Folder, File, Play, Shield, Settings, Server, Database,
   ArrowRight, Download, Eye, ExternalLink, Cpu, Info, Check, ShieldCheck,
-  Zap, Copy, ArrowLeftRight, Monitor, ChevronRight, Link2
+  Zap, Copy, ArrowLeftRight, Monitor, ChevronRight, Link2, ChevronDown, Search, X
 } from 'lucide-react';
 import { useVault } from '@/context/VaultContext';
 import { useApp } from '@/context/AppContext';
@@ -568,6 +568,21 @@ export default function RcloneApp() {
   const [collapsedProjects, setCollapsedProjects] = useState({}); // track which project groups are collapsed
   const [historyFilter, setHistoryFilter] = useState('all'); // 'all' | 'backup' | 'cleanup'
 
+  // Custom Connection Dropdown State (matching AutoDeploy App)
+  const [connDropdownOpen, setConnDropdownOpen] = useState(false);
+  const [connSearch, setConnSearch] = useState('');
+  const connDropdownRef = useRef(null);
+
+  useEffect(() => {
+    const handleClickOutside = (e) => {
+      if (connDropdownRef.current && !connDropdownRef.current.contains(e.target)) {
+        setConnDropdownOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
   // Load SSH connections from app state, local encrypted storage, or API
   useEffect(() => {
     const loadConnections = async () => {
@@ -1023,28 +1038,84 @@ export default function RcloneApp() {
           <p className="text-[10px] text-[var(--text-muted)] mt-0.5">Manage backups & cloud transfers via SSH</p>
         </div>
 
-        {/* Server Selector */}
-        <div className="flex items-center gap-2 shrink-0">
-          <Server size={14} className="text-[var(--text-muted)] shrink-0" />
-          <select
-            value={selectedConnId}
-            onChange={(e) => setSelectedConnId(e.target.value)}
-            className="bg-[var(--bg-primary)] border border-[var(--border-color)] rounded-xl px-3 py-1.5 text-xs text-[var(--text-primary)] focus:outline-none focus:border-indigo-500 transition-colors shadow-sm cursor-pointer min-w-[200px]"
+        {/* Server Selector Dropdown (Matching AutoDeploy App) */}
+        <div className="relative shrink-0" ref={connDropdownRef} style={{ zIndex: 9999 }}>
+          <button
+            type="button"
+            onClick={() => { setConnDropdownOpen(!connDropdownOpen); setConnSearch(''); }}
+            className="bg-[var(--bg-primary)] border border-[var(--border-color)] rounded-xl px-3 py-1.5 text-xs text-[var(--text-primary)] font-bold focus:outline-none focus:border-indigo-500 min-w-[200px] max-w-[280px] flex items-center justify-between gap-2 cursor-pointer hover:border-indigo-500/50 transition-colors shadow-sm"
           >
-            <option value="">-- Select SSH Connection --</option>
-            {connections?.map((c) => {
-              const id = c.id || c._id;
-              return (
-                <option key={id} value={id}>
-                  {c.name} ({c.host})
-                </option>
-              );
-            })}
-          </select>
-          {selectedConn && (
-            <span className="text-[10px] font-mono text-emerald-400 bg-emerald-500/10 px-2 py-1 rounded-lg border border-emerald-500/20 shrink-0 hidden sm:block">
-              ● Connected
+            <span className="truncate flex items-center gap-1.5">
+              <Server size={13} className="text-indigo-400 shrink-0" />
+              {selectedConn ? (
+                <span className="truncate font-mono">{selectedConn.name} <span className="text-[var(--text-muted)] font-normal">({selectedConn.host})</span></span>
+              ) : (
+                <span className="text-[var(--text-muted)] font-normal">-- Select SSH Connection --</span>
+              )}
             </span>
+            <ChevronDown size={12} className={`text-[var(--text-muted)] transition-transform shrink-0 ${connDropdownOpen ? 'rotate-180' : ''}`} />
+          </button>
+
+          {connDropdownOpen && (
+            <div className="absolute top-full right-0 mt-1.5 w-[280px] bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-xl shadow-2xl overflow-hidden divide-y divide-[var(--border-color)]">
+              <div className="p-2 bg-[var(--bg-tertiary)]">
+                <div className="flex items-center gap-2 bg-[var(--bg-primary)] rounded-lg px-2.5 py-1.5 border border-[var(--border-color)]">
+                  <Search size={12} className="text-[var(--text-muted)] shrink-0" />
+                  <input
+                    type="text"
+                    value={connSearch}
+                    onChange={(e) => setConnSearch(e.target.value)}
+                    placeholder="Search SSH connections..."
+                    className="bg-transparent text-xs text-[var(--text-primary)] outline-none w-full placeholder:text-[var(--text-muted)]"
+                    autoFocus
+                  />
+                  {connSearch && (
+                    <button onClick={() => setConnSearch('')} className="text-[var(--text-muted)] hover:text-[var(--text-primary)] cursor-pointer">
+                      <X size={10} />
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              <div className="max-h-60 overflow-y-auto py-1">
+                {(!connections || connections.length === 0) ? (
+                  <div className="px-3 py-4 text-xs text-[var(--text-muted)] text-center">No SSH connections found</div>
+                ) : (() => {
+                  const filtered = connections.filter(c => 
+                    c.name?.toLowerCase().includes(connSearch.toLowerCase()) || 
+                    c.host?.toLowerCase().includes(connSearch.toLowerCase())
+                  );
+                  if (filtered.length === 0) {
+                    return <div className="px-3 py-4 text-xs text-[var(--text-muted)] text-center">No matching connections</div>;
+                  }
+                  return filtered.map((c) => {
+                    const id = c.id || c._id;
+                    const isSelected = id === selectedConnId;
+                    return (
+                      <button
+                        key={id}
+                        type="button"
+                        onClick={() => {
+                          setSelectedConnId(id);
+                          setConnDropdownOpen(false);
+                          setConnSearch('');
+                        }}
+                        className={`w-full px-3 py-2 text-left text-xs font-mono flex items-center justify-between transition-colors cursor-pointer ${
+                          isSelected ? 'bg-indigo-500/15 text-indigo-400 font-bold' : 'hover:bg-[var(--bg-tertiary)] text-[var(--text-primary)]'
+                        }`}
+                      >
+                        <div className="truncate flex items-center gap-2">
+                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shrink-0" />
+                          <span className="truncate">{c.name}</span>
+                          <span className="text-[10px] text-[var(--text-muted)] font-normal truncate">({c.host})</span>
+                        </div>
+                        {isSelected && <Check size={13} className="text-indigo-400 shrink-0 ml-1" />}
+                      </button>
+                    );
+                  });
+                })()}
+              </div>
+            </div>
           )}
         </div>
 
