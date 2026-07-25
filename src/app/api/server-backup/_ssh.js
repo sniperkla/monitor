@@ -15,10 +15,10 @@ function findActiveRelay() {
   return userRelays && !(userRelays instanceof Map) ? userRelays : null;
 }
 
-export async function resolveSshConfig(baseConfig) {
+export async function resolveSshConfig(baseConfig, options = {}) {
   const sshConfig = { ...baseConfig };
 
-  if (isLocalhost(sshConfig.host)) {
+  if (isLocalhost(sshConfig.host) || options.sshMode === 'local') {
     const relay = findActiveRelay();
     if (!relay) {
       throw new Error('Local Relay Agent is not connected. Please start local-relay.js on your target machine.');
@@ -32,7 +32,7 @@ export async function resolveSshConfig(baseConfig) {
   return sshConfig;
 }
 
-export async function getSshConfig(connectionId) {
+export async function getSshConfig(connectionId, options = {}) {
   const db = await connectDB();
   const repo = new ConnectionRepository(db);
   await repo.init();
@@ -62,7 +62,7 @@ export async function getSshConfig(connectionId) {
     }
   }
 
-  return resolveSshConfig(baseConfig);
+  return resolveSshConfig(baseConfig, options);
 }
 
 export function execCommand(sshConfig, command) {

@@ -13,7 +13,10 @@ export async function POST(req) {
       return NextResponse.json({ success: false, error: 'connectionId, name, and type are required' }, { status: 400 });
     }
 
-    const sshConfig = await getSshConfig(connectionId);
+    const sshMode = req.headers.get('x-ssh-mode');
+    const preferredRelay = req.headers.get('x-preferred-relay');
+
+    const sshConfig = await getSshConfig(connectionId, { sshMode, preferredRelay });
     const cleanName = name.replace(/[^a-zA-Z0-9_\-]/g, '');
     const pathPrefix = 'export PATH="$HOME/.local/bin:$HOME/bin:/usr/local/bin:$PATH"; ';
 
@@ -73,7 +76,10 @@ export async function DELETE(req) {
       return NextResponse.json({ success: false, error: 'connectionId and name are required' }, { status: 400 });
     }
 
-    const sshConfig = await getSshConfig(connectionId);
+    const sshMode = req.headers.get('x-ssh-mode');
+    const preferredRelay = req.headers.get('x-preferred-relay');
+
+    const sshConfig = await getSshConfig(connectionId, { sshMode, preferredRelay });
     const cleanName = name.replace(/[^a-zA-Z0-9_\-]/g, '');
     const pathPrefix = 'export PATH="$HOME/.local/bin:$HOME/bin:/usr/local/bin:$PATH"; ';
 

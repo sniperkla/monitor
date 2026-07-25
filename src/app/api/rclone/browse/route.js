@@ -16,7 +16,10 @@ export async function GET(req) {
       return NextResponse.json({ success: false, error: 'connectionId is required' }, { status: 400 });
     }
 
-    const sshConfig = await getSshConfig(connectionId);
+    const sshMode = req.headers.get('x-ssh-mode');
+    const preferredRelay = req.headers.get('x-preferred-relay');
+
+    const sshConfig = await getSshConfig(connectionId, { sshMode, preferredRelay });
     const pathPrefix = 'export PATH="$HOME/.local/bin:$HOME/bin:/usr/local/bin:$PATH"; ';
     
     // Construct rclone target e.g. "gdrive:myfolder" or "s3remote:mybucket/sub"

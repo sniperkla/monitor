@@ -236,6 +236,10 @@ export function AppProvider({ children }) {
       if (preferredRelay) {
         headers['x-preferred-relay'] = preferredRelay;
       }
+      const sshMode = localStorage.getItem('ssh_monitor_ssh_mode');
+      if (sshMode) {
+        headers['x-ssh-mode'] = sshMode;
+      }
     }
     const res = await fetch(url, { ...options, headers, credentials: 'include' });
     

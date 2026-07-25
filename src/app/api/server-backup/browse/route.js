@@ -19,7 +19,9 @@ export async function GET(request) {
     // Sanitize path
     const safePath = path.replace(/[`$]/g, '').replace(/\.\./g, '');
 
-    const sshConfig = await getSshConfig(connectionId);
+    const sshMode = request.headers.get('x-ssh-mode');
+    const preferredRelay = request.headers.get('x-preferred-relay');
+    const sshConfig = await getSshConfig(connectionId, { sshMode, preferredRelay });
     // List directories and files with type indicator, sorted dirs first
     const cmd = `ls -1ap --group-directories-first '${safePath}' 2>/dev/null | head -200`;
     const result = await execCommand(sshConfig, cmd);
