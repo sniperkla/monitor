@@ -1923,6 +1923,7 @@ export default function RcloneApp() {
                               const isSuccess = run.status === 'success';
                               const isWarning = run.status === 'warning';
                               const isFailed = run.status === 'failed';
+                              const isAborted = run.status === 'aborted';
                               const act = (run.action || 'copy').toLowerCase();
 
                               return (
@@ -1957,6 +1958,11 @@ export default function RcloneApp() {
                                       )}
 
                                       {/* Status Badge */}
+                                      {isAborted && (
+                                        <span className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-rose-500/15 text-rose-400 font-bold text-[10px] border border-rose-500/30 shrink-0">
+                                          🛑 ABORTED
+                                        </span>
+                                      )}
                                       {isSuccess && (
                                         <span className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-400 font-bold text-[10px] border border-emerald-500/30 shrink-0">
                                           <CheckCircle2 size={11} /> SUCCESS
@@ -1972,7 +1978,7 @@ export default function RcloneApp() {
                                           <AlertTriangle size={11} /> FAILED
                                         </span>
                                       )}
-                                      {!isSuccess && !isWarning && !isFailed && (
+                                      {!isSuccess && !isWarning && !isFailed && !isAborted && (
                                         <div className="flex items-center gap-1.5 shrink-0">
                                           <span className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-indigo-500/15 text-indigo-400 font-bold text-[10px] border border-indigo-500/30">
                                             ● EXECUTING

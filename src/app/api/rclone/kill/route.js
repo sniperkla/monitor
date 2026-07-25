@@ -16,9 +16,27 @@ export async function POST(req) {
     let killScript = '';
     if (pid && pid !== 'all') {
       const cleanPid = String(pid).replace(/[^0-9]/g, '');
-      killScript = `kill -15 ${cleanPid} 2>/dev/null || kill -9 ${cleanPid} 2>/dev/null || sudo kill -9 ${cleanPid} 2>/dev/null || true`;
+      killScript = `
+kill -9 ${cleanPid} 2>/dev/null || true
+if [ "$(id -u)" != "0" ] && sudo -n true 2>/dev/null; then sudo kill -9 ${cleanPid} 2>/dev/null || true; fi
+for f in $(ls -1t /tmp/rclone-cron*.log 2>/dev/null | head -5); do
+  echo -e "\n=== ABORTED BY USER ===\nERROR: Transfer aborted by user." >> "$f"
+done
+rm -f /tmp/rclone-lock-*.lock
+`;
     } else {
-      killScript = `pkill -15 -f rclone 2>/dev/null || pkill -9 -f rclone 2>/dev/null || sudo pkill -9 -f rclone 2>/dev/null || true`;
+      killScript = `
+pkill -9 -f rclone 2>/dev/null || true
+killall -9 rclone 2>/dev/null || true
+if [ "$(id -u)" != "0" ] && sudo -n true 2>/dev/null; then
+  sudo pkill -9 -f rclone 2>/dev/null || true
+  sudo killall -9 rclone 2>/dev/null || true
+fi
+for f in $(ls -1t /tmp/rclone-cron*.log 2>/dev/null | head -10); do
+  echo -e "\n=== ABORTED BY USER ===\nERROR: Transfer aborted by user." >> "$f"
+done
+rm -f /tmp/rclone-lock-*.lock
+`;
     }
 
     const killRes = await execCommand(sshConfig, killScript);

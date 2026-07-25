@@ -127,8 +127,12 @@ export async function GET(req) {
       const filesTotal = transferredMatch ? parseInt(transferredMatch[2], 10) : 0;
       const is100Percent = (percent === 100) || (filesTotal > 0 && filesDone >= filesTotal);
 
+      const isAborted = block.includes('ABORTED BY USER') || block.includes('aborted by user');
+
       let status = 'running';
-      if (is100Percent && !hasErrors && !hasFailed && !hasActiveTransferring) {
+      if (isAborted) {
+        status = 'aborted';
+      } else if (is100Percent && !hasErrors && !hasFailed && !hasActiveTransferring) {
         status = 'success';
       } else if (hasFailed && !hasActiveTransferring) {
         status = 'failed';
