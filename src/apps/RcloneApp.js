@@ -1959,8 +1959,8 @@ export default function RcloneApp() {
                   onChange={(val) => setEditingCron({ ...editingCron, schedule: val })}
                 />
               </div>
-              <div className="grid grid-cols-2 gap-2">
-                <div>
+              <div className="grid grid-cols-2 gap-2 relative z-30">
+                <div className="relative z-20">
                   <div className="flex items-center justify-between mb-1">
                     <label className="text-[11px] font-semibold text-[var(--text-muted)]">Source Path</label>
                     <button onClick={() => openPathPicker('source')} className="text-[10px] text-indigo-400 hover:text-indigo-300 font-bold flex items-center gap-0.5 cursor-pointer bg-indigo-500/10 hover:bg-indigo-500/20 px-1.5 py-0.5 rounded border border-indigo-500/20 transition-colors">
@@ -1978,7 +1978,7 @@ export default function RcloneApp() {
                     className="w-full px-3 py-1.5 text-xs rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] font-mono text-[var(--text-primary)] focus:outline-none"
                   />
                 </div>
-                <div>
+                <div className="relative z-10">
                   <div className="flex items-center justify-between mb-1">
                     <label className="text-[11px] font-semibold text-[var(--text-muted)]">Destination</label>
                     <button onClick={() => openPathPicker('target')} className="text-[10px] text-emerald-400 hover:text-emerald-300 font-bold flex items-center gap-0.5 cursor-pointer bg-emerald-500/10 hover:bg-emerald-500/20 px-1.5 py-0.5 rounded border border-emerald-500/20 transition-colors">
@@ -1997,7 +1997,7 @@ export default function RcloneApp() {
                   />
                 </div>
               </div>
-              <div className="p-3 rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] space-y-2">
+              <div className="p-3 rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] space-y-2 relative z-0">
                 <label className="flex items-center gap-2 text-xs font-bold text-amber-400 cursor-pointer select-none">
                   <input type="checkbox" checked={editingCron.options?.enableRetention ?? true} onChange={(e) => setEditingCron({ ...editingCron, options: { ...editingCron.options, enableRetention: e.target.checked } })} className="rounded border-[var(--border-color)] text-amber-500 focus:ring-0" />
                   🧹 Auto Retention Cleanup
