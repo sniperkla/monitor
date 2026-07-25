@@ -572,9 +572,7 @@ app.prepare().then(async () => {
   const io = new Server(server, {
     maxHttpBufferSize: 10 * 1024 * 1024, // 10MB limit for high-speed file transfers & base64 previews
     cors: {
-      origin: process.env.NODE_ENV === 'production'
-        ? (process.env.NEXT_PUBLIC_APP_URL || process.env.NEXTAUTH_URL || true)
-        : '*',
+      origin: true,
       methods: ['GET', 'POST'],
       credentials: true
     },
