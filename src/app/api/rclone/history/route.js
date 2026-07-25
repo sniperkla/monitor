@@ -54,6 +54,7 @@ export async function GET(req) {
       let action = 'copy';
       let source = '';
       let targetFolder = '';
+      let jobName = '';
 
       const paramMatch = block.match(/parameters\s+\[(.*?)\]/s);
       if (paramMatch) {
@@ -75,6 +76,11 @@ export async function GET(req) {
         }
       }
 
+      // Format Project / Task Name
+      const cleanSource = source ? (source.split('/').filter(Boolean).pop() || source) : 'Source';
+      const cleanTarget = targetFolder ? targetFolder.split('/')[0] : 'Destination';
+      jobName = (source && targetFolder) ? `${cleanSource} ➔ ${cleanTarget}` : 'Scheduled Backup Task';
+
       const transferredMatch = block.match(/Transferred:\s+(\d+)\s*\/\s*(\d+)/);
       const sizeMatch = block.match(/Transferred:\s+([\d.]+\s*\w+)\s*\//);
       const elapsedMatch = block.match(/Elapsed time:\s*([\dhmins.]+)/);
@@ -94,6 +100,7 @@ export async function GET(req) {
       const firstTimeMatch = block.match(/(\d{4}\/\d{2}\/\d{2}\s+\d{2}:\d{2}:\d{2})/);
 
       runs.push({
+        jobName,
         action,
         source,
         targetFolder,
@@ -109,6 +116,24 @@ export async function GET(req) {
 
     // Sort newest runs first
     runs.reverse();
+
+    // Group runs by Project / Task
+    const projectGroups = {};
+    for (const run of runs) {
+      const pName = run.jobName;
+      if (!projectGroups[pName]) {
+        projectGroups[pName] = {
+          name: pName,
+          source: run.source,
+          target: run.targetFolder,
+          action: run.action,
+          runs: [],
+        };
+      }
+      projectGroups[pName].runs.push(run);
+    }
+
+    const projects = Object.values(projectGroups);
 
     // ── 2. List timestamped backup folders on the remote target ──
     let backupFolders = [];
@@ -133,6 +158,7 @@ export async function GET(req) {
     return NextResponse.json({
       success: true,
       runs,
+      projects,
       backupFolders,
     });
 

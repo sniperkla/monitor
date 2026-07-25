@@ -200,7 +200,7 @@ function PathInputWithAutocomplete({
       </div>
 
       {isOpen && suggestions.length > 0 && (
-        <div className="absolute left-0 right-0 top-full mt-1.5 z-[999] bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-xl shadow-2xl overflow-hidden max-h-56 overflow-y-auto divide-y divide-[var(--border-color)]">
+        <div style={{ zIndex: 10000 }} className="absolute left-0 right-0 top-full mt-1.5 bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-xl shadow-2xl overflow-hidden max-h-56 overflow-y-auto divide-y divide-[var(--border-color)]">
           <div className="px-3 py-1 bg-[var(--bg-tertiary)] flex items-center justify-between text-[10px] text-[var(--text-muted)] font-mono">
             <span>Suggestions ({suggestions.length})</span>
             <span className="text-indigo-400 font-semibold">Press <kbd className="bg-black/40 px-1 py-0.5 rounded text-white border border-[var(--border-color)]">Tab ⇥</kbd> or <kbd className="bg-black/40 px-1 py-0.5 rounded text-white border border-[var(--border-color)]">↵</kbd></span>
@@ -560,6 +560,7 @@ export default function RcloneApp() {
 
   // Backup History State
   const [historyRuns, setHistoryRuns] = useState([]);
+  const [historyProjects, setHistoryProjects] = useState([]);
   const [historyFolders, setHistoryFolders] = useState([]);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [expandedLogIdx, setExpandedLogIdx] = useState(null);
@@ -768,6 +769,7 @@ export default function RcloneApp() {
       const data = await res.json();
       if (data?.success) {
         setHistoryRuns(data.runs || []);
+        setHistoryProjects(data.projects || []);
         setHistoryFolders(data.backupFolders || []);
       }
     } catch (_) {}
@@ -1567,10 +1569,10 @@ export default function RcloneApp() {
                 <div className="flex items-center gap-2">
                   <Database size={15} className="text-emerald-400" />
                   <h4 className="text-xs font-bold">
-                    Backup Execution History & Log Tracker
+                    Backup Execution History & Remote Snapshots
                   </h4>
                   <span className="px-1.5 py-0.5 rounded-full bg-emerald-500/15 text-emerald-400 text-[10px] font-mono">
-                    {historyRuns.length} Runs Logged
+                    {historyProjects.length} Projects Logged
                   </span>
                 </div>
                 <button
@@ -1584,104 +1586,90 @@ export default function RcloneApp() {
               </div>
 
               <div className="divide-y divide-[var(--border-color)]">
-                {historyLoading && historyRuns.length === 0 ? (
+                {historyLoading && historyProjects.length === 0 ? (
                   <div className="p-8 text-center text-xs text-[var(--text-muted)] flex items-center justify-center gap-2">
                     <RefreshCw size={14} className="animate-spin text-emerald-400" />
                     Fetching backup history logs from {selectedConn?.name}...
                   </div>
-                ) : historyRuns.length === 0 ? (
+                ) : historyProjects.length === 0 ? (
                   <div className="p-8 text-center text-xs text-[var(--text-muted)]">
                     No crontab backup execution logs found on {selectedConn?.name} yet.
                     <p className="text-[10px] text-[var(--text-muted)] mt-1">Logs are automatically recorded in <code>/tmp/rclone-cron-*.log</code> when scheduled tasks run.</p>
                   </div>
                 ) : (
-                  historyRuns.map((run, idx) => {
-                    const isExpanded = expandedLogIdx === idx;
-                    const isSuccess = run.status === 'success';
-                    const isWarning = run.status === 'warning';
-                    const isFailed = run.status === 'failed';
-
-                    return (
-                      <div key={idx} className="p-3.5 hover:bg-[var(--bg-tertiary)]/50 transition-colors">
-                        <div className="flex items-center justify-between gap-3">
-                          <div className="flex items-center gap-2.5 min-w-0">
-                            {/* Status Badge */}
-                            {isSuccess && (
-                              <span className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-400 font-bold text-[10px] border border-emerald-500/30 shrink-0">
-                                <CheckCircle2 size={11} /> SUCCESS
-                              </span>
-                            )}
-                            {isWarning && (
-                              <span className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-400 font-bold text-[10px] border border-amber-500/30 shrink-0">
-                                <AlertTriangle size={11} /> WARNING ({run.errors} err)
-                              </span>
-                            )}
-                            {isFailed && (
-                              <span className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-rose-500/15 text-rose-400 font-bold text-[10px] border border-rose-500/30 shrink-0">
-                                <AlertTriangle size={11} /> FAILED
-                              </span>
-                            )}
-                            {!isSuccess && !isWarning && !isFailed && (
-                              <span className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-indigo-500/15 text-indigo-400 font-bold text-[10px] border border-indigo-500/30 shrink-0">
-                                ● EXECUTING
-                              </span>
-                            )}
-
-                            {/* Path Transfer & Formatted Timestamp */}
-                            <div className="truncate space-y-0.5">
-                              {(run.source || run.targetFolder) ? (
-                                <div className="text-xs font-bold text-[var(--text-primary)] font-mono flex items-center gap-1.5 truncate">
-                                  <span className="text-indigo-400 truncate">{run.source || 'Source'}</span>
-                                  <ArrowRight size={11} className="text-[var(--text-muted)] shrink-0" />
-                                  <span className="text-emerald-400 truncate">{run.targetFolder || 'Destination'}</span>
-                                </div>
-                              ) : (
-                                <div className="text-xs font-bold text-[var(--text-primary)] font-mono">
-                                  Scheduled Backup Execution
-                                </div>
-                              )}
-                              
-                              <div className="text-[10px] text-[var(--text-muted)] font-mono flex items-center gap-2">
-                                <span>📅 Run Executed: <strong className="text-[var(--text-primary)]">{run.startTime || (run.modifiedAt ? new Date(run.modifiedAt).toLocaleString() : 'Recent')}</strong></span>
-                                {run.elapsed && <span className="text-indigo-300 font-semibold">⏱️ {run.elapsed}</span>}
-                              </div>
-                            </div>
-                          </div>
-
-                          {/* Stats Pills */}
-                          <div className="flex items-center gap-2 shrink-0">
-                            {run.sizeTransferred && (
-                              <span className="px-2 py-0.5 rounded bg-[var(--bg-tertiary)] border border-[var(--border-color)] text-[10px] font-mono text-cyan-400 font-bold">
-                                📦 {run.sizeTransferred}
-                              </span>
-                            )}
-                            {run.filesTransferred && (
-                              <span className="px-2 py-0.5 rounded bg-[var(--bg-tertiary)] border border-[var(--border-color)] text-[10px] font-mono text-indigo-300">
-                                📄 {run.filesTransferred} files
-                              </span>
-                            )}
-                            <button
-                              onClick={() => setExpandedLogIdx(isExpanded ? null : idx)}
-                              className="px-2.5 py-1 rounded-lg bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-400 text-[10px] font-bold cursor-pointer border border-indigo-500/20 transition-colors flex items-center gap-1"
-                            >
-                              <Terminal size={10} /> {isExpanded ? 'Hide Log' : 'View Log'}
-                            </button>
-                          </div>
+                  historyProjects.map((project, pIdx) => (
+                    <div key={pIdx} className="border-b border-[var(--border-color)] last:border-b-0">
+                      <div className="px-4 py-2 bg-[var(--bg-tertiary)]/50 flex items-center justify-between border-b border-[var(--border-color)]">
+                        <div className="text-xs font-bold text-indigo-400 font-mono flex items-center gap-2">
+                          <Folder size={12} /> Project: {project.name}
                         </div>
-
-                        {/* Log Drawer Preview */}
-                        {isExpanded && (
-                          <div className="mt-3 rounded-xl bg-black border border-[var(--border-color)] overflow-hidden">
-                            <div className="px-3 py-1 bg-[var(--bg-tertiary)] text-[10px] font-mono text-[var(--text-muted)] flex items-center justify-between border-b border-[var(--border-color)]">
-                              <span>Terminal Log Output ({run.totalLogLines} lines)</span>
-                              <span className="text-emerald-400">{run.logFile}</span>
-                            </div>
-                            <pre className="p-3 font-mono text-[10px] text-emerald-400 max-h-48 overflow-y-auto whitespace-pre-wrap leading-relaxed">
-                              {run.logPreview || 'No log details available.'}
-                            </pre>
-                          </div>
-                        )}
+                        <div className="text-[10px] text-[var(--text-muted)] font-semibold bg-black/20 px-2 py-0.5 rounded">
+                          {project.runs.length} Runs
+                        </div>
                       </div>
+                      <div className="divide-y divide-[var(--border-color)]">
+                        {project.runs.map((run, idx) => {
+                          const expandedId = `${pIdx}-${idx}`;
+                          const isExpanded = expandedLogIdx === expandedId;
+                          const isSuccess = run.status === 'success';
+                          const isWarning = run.status === 'warning';
+                          const isFailed = run.status === 'failed';
+
+                          return (
+                            <div key={idx} className="p-3.5 hover:bg-[var(--bg-tertiary)]/30 transition-colors">
+                              <div className="flex items-center justify-between gap-3">
+                                <div className="flex items-center gap-2.5 min-w-0">
+                                  {/* Status Badge */}
+                                  {isSuccess && (
+                                    <span className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-400 font-bold text-[10px] border border-emerald-500/30 shrink-0">
+                                      <CheckCircle2 size={11} /> SUCCESS
+                                    </span>
+                                  )}
+                                  {isWarning && (
+                                    <span className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-400 font-bold text-[10px] border border-amber-500/30 shrink-0">
+                                      <AlertTriangle size={11} /> WARNING ({run.errors} err)
+                                    </span>
+                                  )}
+                                  {isFailed && (
+                                    <span className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-rose-500/15 text-rose-400 font-bold text-[10px] border border-rose-500/30 shrink-0">
+                                      <AlertTriangle size={11} /> FAILED
+                                    </span>
+                                  )}
+                                  {!isSuccess && !isWarning && !isFailed && (
+                                    <span className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-indigo-500/15 text-indigo-400 font-bold text-[10px] border border-indigo-500/30 shrink-0">
+                                      ● EXECUTING
+                                    </span>
+                                  )}
+
+                                  {/* Formatted Timestamp */}
+                                  <div className="truncate space-y-0.5">
+                                    <div className="text-[10px] text-[var(--text-muted)] font-mono flex items-center gap-2">
+                                      <span>📅 Run Executed: <strong className="text-[var(--text-primary)]">{run.startTime || (run.modifiedAt ? new Date(run.modifiedAt).toLocaleString() : 'Recent')}</strong></span>
+                                      {run.elapsed && <span className="text-indigo-300 font-semibold">⏱️ {run.elapsed}</span>}
+                                    </div>
+                                  </div>
+                                </div>
+
+                                {/* Stats Pills */}
+                                <div className="flex items-center gap-2 shrink-0">
+                                  {run.sizeTransferred && (
+                                    <span className="px-2 py-0.5 rounded bg-[var(--bg-tertiary)] border border-[var(--border-color)] text-[10px] font-mono text-cyan-400 font-bold">
+                                      📦 {run.sizeTransferred}
+                                    </span>
+                                  )}
+                                  {run.filesTransferred && (
+                                    <span className="px-2 py-0.5 rounded bg-[var(--bg-tertiary)] border border-[var(--border-color)] text-[10px] font-mono text-indigo-300">
+                                      📄 {run.filesTransferred} files
+                                    </span>
+                                  )}
+                                  <button
+                                    onClick={() => setExpandedLogIdx(isExpanded ? null : expandedId)}
+                                    className="px-2.5 py-1 rounded-lg bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-400 text-[10px] font-bold cursor-pointer border border-indigo-500/20 transition-colors flex items-center gap-1"
+                                  >
+                                    <Terminal size={10} /> {isExpanded ? 'Hide Log' : 'View Log'}
+                                  </button>
+                                </div>
+                              </div>
                     );
                   })
                 )}
@@ -1871,7 +1859,7 @@ export default function RcloneApp() {
 
       {/* ════ PATH PICKER MODAL ════ */}
       {pickerMode && (
-        <div className="fixed inset-0 z-[300] flex items-center justify-center bg-black/70 backdrop-blur-md p-4">
+        <div style={{ zIndex: 9999 }} className="fixed inset-0 flex items-center justify-center bg-black/70 backdrop-blur-md p-4">
           <div className="w-full max-w-2xl bg-[var(--bg-secondary)] rounded-2xl border border-[var(--border-color)] shadow-2xl overflow-hidden">
             <div className="flex items-center justify-between px-5 py-4 border-b border-[var(--border-color)]">
               <div className="flex items-center gap-2">
@@ -1949,7 +1937,7 @@ export default function RcloneApp() {
 
       {/* ════ EDIT CRONTAB MODAL ════ */}
       {editingCron && (
-        <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+        <div style={{ zIndex: 9998 }} className="fixed inset-0 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
           <div className="w-full max-w-lg bg-[var(--bg-secondary)] rounded-2xl border border-[var(--border-color)] shadow-2xl relative">
             <div className="flex items-center justify-between px-5 py-4 border-b border-[var(--border-color)]">
               <div className="flex items-center gap-2">
