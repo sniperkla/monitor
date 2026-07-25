@@ -1638,6 +1638,8 @@ export default function FileManager({
       type: 'loading',
       duration: 0,
     });
+    toastRef.current = uploadNotifId;
+    transferObj.toastId = uploadNotifId;
 
     activeHandshakeCleanupRef.current = null;
     const waitForUploadHandshake = (expectedOffset) => new Promise(resolve => {
@@ -3136,6 +3138,11 @@ export default function FileManager({
                     // no need to wait 15 seconds for the promise to time out.
                     if (activeAckCleanupRef.current) { activeAckCleanupRef.current(); activeAckCleanupRef.current = null; }
                     if (activeHandshakeCleanupRef.current) { activeHandshakeCleanupRef.current(); activeHandshakeCleanupRef.current = null; }
+                    const notifIdToDismiss = transfer?.toastId || toastRef.current;
+                    if (notifIdToDismiss) {
+                      removeNotification(notifIdToDismiss);
+                      toastRef.current = null;
+                    }
                     setTransfer(null);
                     transferRef.current = null;
                     if (socket) {
