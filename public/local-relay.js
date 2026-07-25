@@ -110,12 +110,14 @@ if (args.install) {
   ensureInstalledScript();
   if (PLATFORM === 'darwin') installMacOS();
   else if (PLATFORM === 'linux') installLinux();
+  else if (PLATFORM === 'win32') installWindows();
   console.log('✅ Relay agent installed as service');
   process.exit(0);
 }
 if (args.uninstall) {
   if (PLATFORM === 'darwin') uninstallMacOS();
   else if (PLATFORM === 'linux') uninstallLinux();
+  else if (PLATFORM === 'win32') uninstallWindows();
   try { fs.unlinkSync(CONFIG_PATH); } catch {}
   console.log('✅ Uninstalled');
   process.exit(0);
@@ -2299,13 +2301,43 @@ function installLinux() {
   console.log('✅ Installed as systemd user service');
 }
 
-function uninstallLinux() {
-  const unitPath = path.join(os.homedir(), '.config', 'systemd', 'user', SVC_ID + '.service');
-  if (fs.existsSync(unitPath)) {
-    spawnSync('systemctl', ['--user', 'disable', '--now', SVC_ID + '.service'], { stdio: 'ignore' });
-    fs.unlinkSync(unitPath);
-    console.log('✅ Removed systemd service');
+function installWindows() {
+  const startupDir = path.join(process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming'), 'Microsoft', 'Windows', 'Start Menu', 'Programs', 'Startup');
+  const batPath = path.join(startupDir, 'ssh-monitor-relay.bat');
+  const vbsPath = path.join(startupDir, 'ssh-monitor-relay.vbs');
+  
+  // Kill any existing background relay processes on Windows
+  try {
+    spawnSync('powershell', ['-Command', "Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like '*local-relay.js*' -and $_.ProcessId -ne " + process.pid + " } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }"], { stdio: 'ignore' });
+  } catch (_) {}
+
+  const vbsContent = [
+    'Set WshShell = CreateObject("WScript.Shell")',
+    `WshShell.Run """" & "${NODE_BIN.replace(/"/g, '""')}" & """ """" & "${INSTALLED_SCRIPT.replace(/"/g, '""')}" & """ --server """ & "${SERVER.replace(/"/g, '""')}" & """ --token """ & "${TOKEN.replace(/"/g, '""')}" & """", 0, False`,
+  ].join('\r\n');
+
+  try {
+    fs.mkdirSync(startupDir, { recursive: true });
+    if (fs.existsSync(batPath)) try { fs.unlinkSync(batPath); } catch (_) {}
+    fs.writeFileSync(vbsPath, vbsContent);
+    console.log('✅ Installed as Windows Startup background task');
+  } catch (e) {
+    console.warn('⚠️ Could not write to Startup folder:', e.message);
   }
+}
+
+function uninstallWindows() {
+  const startupDir = path.join(process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming'), 'Microsoft', 'Windows', 'Start Menu', 'Programs', 'Startup');
+  const batPath = path.join(startupDir, 'ssh-monitor-relay.bat');
+  const vbsPath = path.join(startupDir, 'ssh-monitor-relay.vbs');
+  
+  try {
+    spawnSync('powershell', ['-Command', "Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like '*local-relay.js*' -and $_.ProcessId -ne " + process.pid + " } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }"], { stdio: 'ignore' });
+  } catch (_) {}
+
+  if (fs.existsSync(batPath)) try { fs.unlinkSync(batPath); } catch (_) {}
+  if (fs.existsSync(vbsPath)) try { fs.unlinkSync(vbsPath); } catch (_) {}
+  console.log('✅ Removed Windows Startup task');
 }
 
 // ── Start ─────────────────────────────────────────────────────────────────
