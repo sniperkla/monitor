@@ -683,6 +683,32 @@ export default function RcloneApp() {
     }
   }, [selectedConnId, vaultStatus]);
 
+  // 🛑 Abort / Terminate Running Rclone Process
+  const handleKillProcess = async (pid = null) => {
+    if (!selectedConnId) return;
+    const confirmMsg = pid ? `Abort running Rclone process (PID ${pid})?` : 'Abort active Rclone processes on server?';
+    if (!confirm(confirmMsg)) return;
+
+    setLoading(true);
+    try {
+      const res = await apiFetch('/api/rclone/kill', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ connectionId: selectedConnId, pid })
+      });
+      const data = await res.json();
+      if (data?.success) {
+        fetchRcloneStatus();
+        fetchHistory(false);
+      } else {
+        alert(data?.error || 'Failed to kill process');
+      }
+    } catch (err) {
+      alert(`Error: ${err.message}`);
+    }
+    setLoading(false);
+  };
+
   // Auto-scroll log terminals
   useEffect(() => {
     if (logTerminalRef.current) {
@@ -1295,12 +1321,20 @@ export default function RcloneApp() {
               </div>
             )}
 
-            {/* Active Running Jobs */}
+            {/* Active Running Jobs Banner with Abort Buttons */}
             {rcloneStatus?.runningJobs && rcloneStatus.runningJobs.length > 0 && (
-              <div className="p-4 rounded-2xl bg-[var(--bg-secondary)] border border-[var(--border-color)] space-y-2">
-                <div className="flex items-center gap-2 text-xs font-bold text-emerald-400">
-                  <RefreshCw size={13} className="animate-spin" />
-                  Active Rclone Processes ({rcloneStatus.runningJobs.length})
+              <div className="p-4 rounded-2xl bg-rose-500/5 border border-rose-500/20 space-y-2">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2 text-xs font-bold text-rose-400">
+                    <RefreshCw size={13} className="animate-spin" />
+                    Active Rclone Backup Processes ({rcloneStatus.runningJobs.length})
+                  </div>
+                  <button
+                    onClick={() => handleKillProcess(null)}
+                    className="px-2.5 py-1 rounded-lg bg-rose-600 hover:bg-rose-500 text-white font-bold text-[10px] cursor-pointer transition-colors shadow-sm flex items-center gap-1"
+                  >
+                    🛑 Abort All Processes
+                  </button>
                 </div>
                 <div className="space-y-1.5">
                   {rcloneStatus.runningJobs.map((job, idx) => (
@@ -1313,7 +1347,12 @@ export default function RcloneApp() {
                         {job.cpu && <span>CPU {job.cpu}%</span>}
                         {job.mem && <span>RAM {job.mem}%</span>}
                         {job.etime && <span className="text-indigo-400">{job.etime}</span>}
-                        <span className="text-emerald-400 font-bold">● LIVE</span>
+                        <button
+                          onClick={() => handleKillProcess(job.pid)}
+                          className="px-2 py-0.5 rounded bg-rose-500/15 hover:bg-rose-500/30 text-rose-400 font-bold border border-rose-500/30 cursor-pointer transition-colors"
+                        >
+                          🛑 Abort
+                        </button>
                       </div>
                     </div>
                   ))}
@@ -1934,9 +1973,18 @@ export default function RcloneApp() {
                                         </span>
                                       )}
                                       {!isSuccess && !isWarning && !isFailed && (
-                                        <span className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-indigo-500/15 text-indigo-400 font-bold text-[10px] border border-indigo-500/30 shrink-0">
-                                          ● EXECUTING
-                                        </span>
+                                        <div className="flex items-center gap-1.5 shrink-0">
+                                          <span className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-indigo-500/15 text-indigo-400 font-bold text-[10px] border border-indigo-500/30">
+                                            ● EXECUTING
+                                          </span>
+                                          <button
+                                            onClick={() => handleKillProcess(null)}
+                                            className="px-2 py-0.5 rounded-full bg-rose-500/15 hover:bg-rose-500/30 text-rose-400 font-bold text-[10px] border border-rose-500/30 cursor-pointer transition-colors"
+                                            title="Abort running process"
+                                          >
+                                            🛑 Abort
+                                          </button>
+                                        </div>
                                       )}
                                       <div className="truncate space-y-0.5">
                                         <div className="text-[10px] text-[var(--text-muted)] font-mono flex items-center gap-2">
