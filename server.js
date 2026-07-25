@@ -3371,9 +3371,11 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
            return socket.emit('ssh:error', { message });
         }
 
-        // ── RELAY SSH: Forward SSH through user's local relay agent (AFTER credential decryption) ──
-        // sshConfig now has plaintext password/privateKey. Send to relay so SSH originates from user's machine.
-        // Only route through relay when user explicitly selected "local" mode (sshMode === 'local')
+        // ── RELAY SSH (WebRTC P2P): Pre-provision credentials → relay, then signal WebRTC ──
+        // Architecture: server never relays SSH/SFTP data. It only:
+        //   1. Pre-provisions decrypted SSH credentials to the relay via /relay-ws (ssh:prepare)
+        //   2. Forwards WebRTC SDP offer/answer and ICE candidates between browser and relay
+        //   3. Keeps WebSocket relay as fallback when relay agent has no node-datachannel
         // Fresh lookup: userRelay captured earlier may have stale ws if relay reconnected during credential decryption
         if (sshMode === 'local') {
           const freshRelays = userId ? global.__activeRelays?.get(userId) : null;
@@ -3384,79 +3386,87 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
         if (sshMode === 'local' && userRelay?.ws && userRelay.ws.readyState === 1 /* WS OPEN */ && userRelay.capabilities?.ssh) {
           const relayConnId = Math.random().toString(36).slice(2, 12);
           global.__relayConnMap.set(relayConnId, socket.id);
-          console.log(`🏠 [Relay SSH] Routing ${sshConfig.host}:${sshConfig.port} through relay agent (connId: ${relayConnId})`);
+          console.log(`🏠 [Relay SSH P2P] Signaling ${sshConfig.host}:${sshConfig.port} → relay agent (connId: ${relayConnId})`);
 
-          // ── Relay-ready gate ─────────────────────────────────────────────
-          // SFTP events can arrive from the browser immediately on mount, but the relay
-          // SSH session isn't established yet. Queue them and flush once ssh:connected.
-          let relayReady = false;
-          const sftpQueue = []; // { type, payload }
-
+          // ── sendToRelay: sends a message to the relay agent's /relay-ws WebSocket ──
+          // Used for signaling (offer/answer/ICE) and WebSocket-fallback data relay
           function sendToRelay(msgObj) {
-            // Fresh lookup: userRelay.ws may be stale if relay agent reconnected
             const relays = userId ? global.__activeRelays?.get(userId) : null;
             const freshRelay = relays instanceof Map
               ? (relays.get(preferredRelay) || relays.values().next().value)
               : null;
             const ws = freshRelay?.ws;
-            const readyState = ws?.readyState;
-            if (readyState === 1) {
-              ws.send(JSON.stringify(msgObj));
-              return true;
-            }
-            if (msgObj.type === 'sftp:upload_chunk' || msgObj.type === 'sftp:upload_start' || msgObj.type === 'sftp:upload_done') {
-              console.warn(`📤 [relay] sendToRelay DROP: ${msgObj.type} — ws.readyState=${readyState}, relayExists=${!!freshRelay}`);
-            }
+            if (ws?.readyState === 1) { ws.send(JSON.stringify(msgObj)); return true; }
             return false;
           }
 
-          function flushSftpQueue() {
-            while (sftpQueue.length > 0) {
-              const item = sftpQueue.shift();
-              sendToRelay(item);
-            }
-          }
-
-          function forwardOrQueue(msgObj) {
-            if (relayReady) {
-              return sendToRelay(msgObj);
-            } else {
-              if (sftpQueue.length < 20) { sftpQueue.push(msgObj); return true; } // bounded queue
-              return false;
-            }
-          }
-          // ────────────────────────────────────────────────────────────────
-
-          // Register ssh:input, ssh:resize forwarding to relay
-          socket.removeAllListeners('ssh:input');
-          socket.removeAllListeners('ssh:resize');
-          socket.on('ssh:input', (inputData) => {
-            sendToRelay({ type: 'ssh:input', connId: relayConnId, data: inputData });
-          });
-          socket.on('ssh:resize', ({ cols: c, rows: r }) => {
-            sendToRelay({ type: 'ssh:resize', connId: relayConnId, cols: c, rows: r });
+          // ── Step 1: Pre-provision plaintext SSH credentials to relay ──
+          // Credentials never go to the browser — they're sent relay-side before WebRTC connects
+          sendToRelay({
+            type: 'ssh:prepare',
+            connId: relayConnId,
+            sshConfig: {
+              host:       sshConfig.host,
+              port:       sshConfig.port || 22,
+              username:   sshConfig.username,
+              password:   sshConfig.password,
+              privateKey: sshConfig.privateKey,
+              passphrase: sshConfig.passphrase,
+              cols:       cols || 120,
+              rows:       rows || 30,
+            },
           });
 
-          // Register WebRTC P2P signaling handlers
+          // ── Step 2: Register WebRTC signaling forwarding (browser ↔ relay via server) ──
           socket.removeAllListeners('webrtc:offer');
           socket.removeAllListeners('webrtc:ice-candidate');
-          socket.on('webrtc:offer', ({ sdp }) => {
+          socket.on('webrtc:offer', ({ connId: cid, sdp }) => {
+            if (cid !== relayConnId) return;
             sendToRelay({ type: 'webrtc:offer', connId: relayConnId, sdp });
           });
-          socket.on('webrtc:ice-candidate', ({ candidate }) => {
+          socket.on('webrtc:ice-candidate', ({ connId: cid, candidate }) => {
+            if (cid !== relayConnId) return;
             sendToRelay({ type: 'webrtc:ice-candidate', connId: relayConnId, candidate });
           });
 
-          // Forward simple SFTP events to relay (queued until ssh:connected)
+          // ── Step 3: WebSocket relay fallback ──
+          // If relay agent doesn't have node-datachannel (WebRTC stub returns early),
+          // the browser will time out on ICE and fall back to socket.io ssh:input/resize events.
+          // We register those handlers so the fallback path still works transparently.
+          let relayReady = false;
+          const sftpQueue = [];
+
+          function flushSftpQueue() {
+            while (sftpQueue.length > 0) sendToRelay(sftpQueue.shift());
+          }
+          function forwardOrQueue(msgObj) {
+            if (relayReady) return sendToRelay(msgObj);
+            if (sftpQueue.length < 20) { sftpQueue.push(msgObj); return true; }
+            return false;
+          }
+
+          socket.removeAllListeners('ssh:input');
+          socket.removeAllListeners('ssh:resize');
+          socket.on('ssh:input', (inputData) => {
+            // Only forward via WebSocket if WebRTC hasn't taken over (fallback path)
+            if (socket.__rtcConnected) return;
+            sendToRelay({ type: 'ssh:input', connId: relayConnId, data: inputData });
+          });
+          socket.on('ssh:resize', ({ cols: c, rows: r }) => {
+            if (socket.__rtcConnected) return;
+            sendToRelay({ type: 'ssh:resize', connId: relayConnId, cols: c, rows: r });
+          });
+
+          // SFTP fallback (WebSocket path)
           const sftpSimpleEvents = [
             'sftp:list', 'sftp:mkdir', 'sftp:delete', 'sftp:readFile', 'sftp:readFileBase64',
             'sftp:writeFile', 'sftp:download', 'sftp:download_folder',
-            'sftp:search', 'sftp:getSize', 'sftp:copy', 'sftp:move',
-            'sftp:extract',
+            'sftp:search', 'sftp:getSize', 'sftp:copy', 'sftp:move', 'sftp:extract',
           ];
           sftpSimpleEvents.forEach(ev => {
             socket.removeAllListeners(ev);
             socket.on(ev, (payload) => {
+              if (socket.__rtcConnected) return; // WebRTC path handles it
               const msg = typeof payload === 'string'
                 ? { type: ev, connId: relayConnId, path: payload }
                 : { connId: relayConnId, ...payload, type: ev, archiveType: payload.type };
@@ -3464,107 +3474,32 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
             });
           });
 
-          // Chunked upload in relay mode: stream each browser chunk directly to the relay
-          // as it arrives — do NOT buffer everything in RAM and wait for done.
-          //
-          // Old approach (broken on WAN):
-          //   Browser chunks → server buffers all → sftp:upload_done → server sends bulk to relay
-          //   Problem: relay completion round-trip exceeds 20s timeout on high-latency links
-          //
-          // New approach (streaming):
-          //   Browser chunk → server forwards immediately to relay → ACK back to browser
-          //   sftp:upload_done → server forwards done to relay → relay sends sftp:upload_complete
-          //   Result: relay writes happen concurrently with browser sending → no latency pile-up
-           socket.removeAllListeners('sftp:upload');
+          socket.removeAllListeners('sftp:upload');
           socket.on('sftp:upload', ({ filename, path: destPath, size, offset = 0 }) => {
-            console.log(`📤 [relay] sftp:upload received: ${filename} (relayReady=${relayReady}, connId=${relayConnId})`);
+            if (socket.__rtcConnected) return; // WebRTC path handles it
             let aborted = false;
-
-            // Tell relay to open the write stream
-            const delivered = forwardOrQueue({
-              type: 'sftp:upload_start',
-              connId: relayConnId,
-              remotePath: destPath,
-              filename,
-              size,
-              offset,
-            });
-            console.log(`📤 [relay] sftp:upload_start forwarded/queued (relayReady=${relayReady}, delivered=${delivered})`);
-
-            // If the relay is unreachable, don't tell the browser to start sending chunks
-            if (!delivered) {
-              console.warn(`📤 [relay] Cannot reach relay agent — aborting upload for ${filename}`);
-              socket.emit('sftp:error', { message: 'Relay agent is not connected. Please check your local relay.', recoverable: true });
-              return;
-            }
-
-            // Ack the upload start so the browser starts sending chunks immediately
+            const delivered = forwardOrQueue({ type: 'sftp:upload_start', connId: relayConnId, remotePath: destPath, filename, size, offset });
+            if (!delivered) { socket.emit('sftp:error', { message: 'Relay not ready', recoverable: true }); return; }
             socket.emit('sftp:can_upload', { filename, offset, ready: true });
-            console.log(`📤 [relay] sftp:can_upload emitted to browser for ${filename}`);
-
-            let chunkCount = 0;
-            let relayLost = false;
-            const chunkHandler = (chunk) => {
-              if (aborted || relayLost) return;
+            socket.on(`sftp:upload_chunk:${filename}`, (chunk) => {
+              if (aborted) return;
               const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-              chunkCount++;
-              if (chunkCount <= 3) console.log(`📤 [relay] chunk #${chunkCount} received (${buf.length} bytes)`);
-
-              // Forward chunk to relay immediately (no buffering)
-              const sent = sendToRelay({
-                type: 'sftp:upload_chunk',
-                connId: relayConnId,
-                remotePath: destPath,
-                filename,
-                data: buf.toString('base64'),
-              });
-
-              if (!sent && !relayLost) {
-                relayLost = true;
-                console.warn(`📤 [relay] relay unreachable on chunk #${chunkCount} — notifying browser`);
-                socket.emit('sftp:error', { message: 'Relay agent disconnected during upload', recoverable: true });
-              }
-
-              // Do NOT ACK the browser here — the relay will send sftp:upload_ack
-              // after the SFTP write callback confirms the chunk was written.
-              // This provides proper flow control so the browser doesn't outrun the relay.
+              const sent = sendToRelay({ type: 'sftp:upload_chunk', connId: relayConnId, remotePath: destPath, filename, data: buf.toString('base64') });
+              if (!sent) { socket.emit('sftp:error', { message: 'Relay disconnected', recoverable: true }); }
               offset += buf.length;
-            };
-
-            const doneHandler = () => {
+            });
+            socket.once(`sftp:upload_done:${filename}`, () => {
               if (aborted) return;
               socket.removeAllListeners(`sftp:upload_chunk:${filename}`);
-              // Tell relay the file is fully sent
-              forwardOrQueue({
-                type: 'sftp:upload_done',
-                connId: relayConnId,
-                remotePath: destPath,
-                filename,
-              });
-            };
-
-            const abortHandler = () => {
+              forwardOrQueue({ type: 'sftp:upload_done', connId: relayConnId, remotePath: destPath, filename });
+            });
+            socket.once(`sftp:upload_abort:${filename}`, () => {
               aborted = true;
               socket.removeAllListeners(`sftp:upload_chunk:${filename}`);
-              socket.removeAllListeners(`sftp:upload_done:${filename}`);
-              // Tell relay to abort and discard the partial write
-              sendToRelay({
-                type: 'sftp:upload_abort',
-                connId: relayConnId,
-                remotePath: destPath,
-                filename,
-              });
-            };
-
-            socket.removeAllListeners(`sftp:upload_chunk:${filename}`);
-            socket.removeAllListeners(`sftp:upload_done:${filename}`);
-            socket.removeAllListeners(`sftp:upload_abort:${filename}`);
-            socket.on(`sftp:upload_chunk:${filename}`, chunkHandler);
-            socket.once(`sftp:upload_done:${filename}`, doneHandler);
-            socket.once(`sftp:upload_abort:${filename}`, abortHandler);
+              sendToRelay({ type: 'sftp:upload_abort', connId: relayConnId, remotePath: destPath, filename });
+            });
           });
 
-          // Forward ssh:exec and docker:command
           socket.removeAllListeners('ssh:exec');
           socket.on('ssh:exec', ({ command }) => {
             sendToRelay({ type: 'ssh:exec', connId: relayConnId, command });
@@ -3574,10 +3509,7 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
             sendToRelay({ type: 'docker:command', connId: relayConnId, ...payload });
           });
 
-          // Mark relay as ready when ssh:connected arrives and flush the SFTP queue
-          // (this is called from the relay-ws response handler in the WS section below)
-          global.__relayConnMap.set(relayConnId, socket.id);
-          // Store the flush callback so the relay-ws handler can call it
+          // When relay signals ssh:connected (WebSocket fallback path), flush SFTP queue
           if (!global.__relayReadyCallbacks) global.__relayReadyCallbacks = new Map();
           global.__relayReadyCallbacks.set(relayConnId, () => {
             relayReady = true;
@@ -3602,28 +3534,14 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
             global.__relayReadyCallbacks?.delete(relayConnId);
           });
 
-          // Send ssh:connect with PLAINTEXT credentials to relay agent
-          sendToRelay({
-            type: 'ssh:connect',
-            connId: relayConnId,
-            connection: {
-              host: sshConfig.host,
-              port: sshConfig.port || 22,
-              username: sshConfig.username,
-              password: sshConfig.password,
-              privateKey: sshConfig.privateKey,
-              passphrase: sshConfig.passphrase,
-            },
-            cols: cols || 120,
-            rows: rows || 30,
-          });
+          // Tell the browser the relay is ready to begin WebRTC signaling
+          // (browser will create RTCPeerConnection, send offer, and on ICE timeout fall back to ws relay)
+          socket.emit('ssh:connected');
+          socket.emit('relay:rtc:ready', { connId: relayConnId });
 
-          return; // Don't create a server-side ssh2 client
         }
         
-        // dockerContainerId mode will implicitly proxy down. 
-        // Wait, NO! If dockerContainerId is active but we don't have keys, sshClient can NEVER connect!
-        // Because node.js is opening a TCP socket to the host!
+        // Non-relay or relay unavailable: connect server-side ssh2 client directly
         sshClient.connect(sshConfig);
       } catch (err) {
         console.error('SSH connect error:', err);
@@ -4050,9 +3968,9 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
                     targetSocket.emit('ssh:error', { message: msg.error || msg.message || 'Relay SSH error' });
                     global.__relayConnMap.delete(msg.connId);
                   } else if (msg.type === 'webrtc:answer') {
-                    targetSocket.emit('webrtc:answer', { sdp: msg.sdp });
+                    targetSocket.emit('webrtc:answer', { connId: msg.connId, sdp: msg.sdp });
                   } else if (msg.type === 'webrtc:ice-candidate') {
-                    targetSocket.emit('webrtc:ice-candidate', { candidate: msg.candidate });
+                    targetSocket.emit('webrtc:ice-candidate', { connId: msg.connId, candidate: msg.candidate });
                   } else if (msg.type === 'ssh:exec_result') {
                     targetSocket.emit('ssh:exec_result', { stdout: msg.stdout, stderr: msg.stderr, code: msg.code });
                   } else if (msg.type === 'sftp:list') {

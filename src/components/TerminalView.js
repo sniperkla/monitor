@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { createRelayPeer, DC } from '@/lib/webrtc-relay';
 import { createPortal } from 'react-dom';
 import { Rnd } from 'react-rnd';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -1364,6 +1365,66 @@ logstash:
       setLatency(now - sentTimestamp);
     });
 
+    // ── WebRTC P2P: upgrade SSH I/O from Socket.io to DataChannel when relay is available ──
+    // Server emits relay:rtc:ready once credentials are pre-provisioned to the relay agent.
+    // We then create an RTCPeerConnection and negotiate SDP via Socket.io signaling.
+    // On ICE success: all SSH data flows P2P (zero server bandwidth).
+    // On ICE timeout: falls back silently to Socket.io relay path.
+    const rtcPeerRef = { current: null }; // local ref, not React state
+
+    socket.on('relay:rtc:ready', async ({ connId: relayConnId }) => {
+      const sshMode = typeof window !== 'undefined' ? (localStorage.getItem('ssh_monitor_ssh_mode') || 'server') : 'server';
+      if (sshMode !== 'local') return; // Only upgrade in relay mode
+
+      try {
+        const peer = await createRelayPeer({ socket, relayConnId });
+        rtcPeerRef.current = peer;
+        socket.__rtcConnected = true; // Suppress WebSocket fallback handlers in server.js
+        console.log('[WebRTC] P2P DataChannels open — SSH I/O now flows directly to relay agent');
+
+        // Wire SSH DataChannel output → xterm display
+        const sshDc = peer.channel(DC.SSH);
+        sshDc.onmessage = (evt) => {
+          const data = typeof evt.data === 'string' ? evt.data : new TextDecoder().decode(evt.data);
+          term.write(data);
+          appendOutput(data);
+          lastOutputAtRef.current = Date.now();
+        };
+
+        // Listen for SSH lifecycle events on control channel
+        peer.onControl((msg) => {
+          if (msg.type === 'ssh:closed') {
+            setStatus('closed');
+            updateConnectionStatus('offline');
+            setShowReconnect(true);
+            term.writeln(`\n\x1b[1;33m⚠ ${t('terminal.connectionClosed')}\x1b[0m`);
+            rtcPeerRef.current = null;
+            socket.__rtcConnected = false;
+          }
+          if (msg.type === 'ssh:error') {
+            term.writeln(`\n\x1b[1;31m✗ ${t('terminal.errorPrefix')} ${msg.error}\x1b[0m`);
+          }
+        });
+
+        // Start SSH on relay now that DataChannels are open
+        peer.sendControl({ type: 'ssh:start', connId: relayConnId });
+
+      } catch (err) {
+        // ICE timeout or WebRTC failure — fall back to WebSocket relay (already registered)
+        console.log('[WebRTC] P2P unavailable, using WebSocket relay fallback:', err.message);
+        socket.__rtcConnected = false;
+      }
+    });
+
+    // Cleanup WebRTC peer on socket disconnect/unmount
+    const cleanupRtcPeer = () => {
+      if (rtcPeerRef.current) {
+        rtcPeerRef.current.close();
+        rtcPeerRef.current = null;
+      }
+      if (socket) socket.__rtcConnected = false;
+    };
+
     socket.on('ssh:connected', () => {
       setStatus('connected');
       updateConnectionStatus('online'); // Update global state
@@ -1624,7 +1685,12 @@ logstash:
           setShowScrollHint(false);
           window.__isShowingScrollHint = false;
         }
-        socket.emit('ssh:input', data);
+        // Use WebRTC DataChannel if P2P is active, otherwise fall through to Socket.io
+        if (rtcPeerRef.current) {
+          rtcPeerRef.current.sendSsh(data);
+        } else {
+          socket.emit('ssh:input', data);
+        }
       }
 
       // Capture user commands (best-effort) for AI context
@@ -1649,7 +1715,10 @@ logstash:
 
     term.onResize(({ cols, rows }) => {
       lastSyncedDimsRef.current = { cols, rows };
-      if (socket.connected) {
+      if (rtcPeerRef.current) {
+        // WebRTC path: send resize via control channel
+        rtcPeerRef.current.sendControl({ type: 'ssh:resize', cols, rows });
+      } else if (socket.connected) {
         socket.emit('ssh:resize', { cols, rows });
       }
     });

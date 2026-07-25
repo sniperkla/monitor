@@ -34,6 +34,25 @@ try {
   console.log('   Falling back to TCP relay mode only');
 }
 
+// -- Try to load node-datachannel (WebRTC, optional) --
+let ndc = null;
+try {
+  ndc = require(require.resolve('node-datachannel', { paths: [__dirname, ...module.paths] }));
+  ndc.initLogger('Error');
+  console.log('✅ node-datachannel loaded — WebRTC P2P enabled');
+} catch {
+  console.log('ℹ️  node-datachannel not found — relay will operate in WebSocket-proxy mode');
+  console.log('   For P2P mode: npm install node-datachannel  (in relay directory)');
+}
+
+// crypto is built-in since Node 18
+const crypto = require('crypto');
+
+// Map: relayConnId → pre-provisioned SSH config (sent by server before WebRTC peer connects)
+const preparedSessions = new Map();
+// Map: relayConnId → active WebRTC peer
+const activeRtcPeers   = new Map();
+
 // -- Try to load ws --
 let WS;
 try {
@@ -110,9 +129,9 @@ function ensureInstalledScript() {
       if (PLATFORM !== 'win32') try { fs.chmodSync(INSTALLED_SCRIPT, 0o755); } catch {}
     }
     
-    // Automatically initialize package.json and install ssh2 + ws in the installation folder
+    // Automatically initialize package.json and install ssh2, ws, node-datachannel in the installation folder
     try {
-      console.log('📦 Installing dependencies (ssh2, ws) for relay agent service...');
+      console.log('📦 Installing dependencies (ssh2, ws, node-datachannel) for relay agent service...');
       if (!fs.existsSync(path.join(INSTALL_DIR, 'package.json'))) {
         fs.writeFileSync(path.join(INSTALL_DIR, 'package.json'), JSON.stringify({
           name: 'ssh-monitor-relay-agent',
@@ -126,16 +145,16 @@ function ensureInstalledScript() {
       const result = spawnSync(npmCmd, [
         'install', '--no-audit', '--no-fund', '--prefer-offline',
         '--cache', localCache,
-        'ssh2', 'ws'
+        'ssh2', 'ws', 'node-datachannel'
       ], { cwd: INSTALL_DIR, stdio: 'inherit' });
       if (result.status === 0) {
         console.log('✅ Dependencies installed successfully.');
       } else {
-        console.warn('⚠️  npm install returned non-zero status code. Some features might not be available.');
+        console.warn('⚠️  npm install returned non-zero status code. WebRTC P2P fallback to WebSocket mode will be used.');
       }
     } catch (npmErr) {
       console.warn('⚠️  Could not automatically install dependencies:', npmErr.message);
-      console.warn('   You can install them manually by running: cd ' + INSTALL_DIR + ' && npm install ssh2 ws');
+      console.warn('   You can install them manually by running: cd ' + INSTALL_DIR + ' && npm install ssh2 ws node-datachannel');
     }
 
     return INSTALLED_SCRIPT;
@@ -294,6 +313,12 @@ function connect() {
       case 'sftp:extract':        handleSftpExtract(ws, msg);        break;
 
       // ── WebRTC Signaling ──
+      // ssh:prepare: server sends plaintext SSH config before WebRTC offer arrives
+      case 'ssh:prepare': {
+        preparedSessions.set(msg.connId, msg.sshConfig);
+        console.log(`🔐 [WebRTC] SSH config pre-provisioned for connId=${msg.connId}`);
+        break;
+      }
       case 'webrtc:offer':         handleWebRtcOffer(ws, msg);         break;
       case 'webrtc:ice-candidate': handleWebRtcCandidate(ws, msg);     break;
 
@@ -1361,31 +1386,504 @@ async function handleSftpExtract(ws, msg) {
 }
 
 // ── WebRTC Signaling & P2P Handlers ─────────────────────────────────────
-const activeRtcPeers = new Map();
+// ── WebRTC P2P handlers ──────────────────────────────────────────────────
 
 function handleWebRtcOffer(ws, msg) {
+  if (!ndc) {
+    console.log('ℹ️ [WebRTC] node-datachannel not available — WebSocket relay transport will be used');
+    return;
+  }
+  const { connId, sdp } = msg;
+  console.log(`📡 [WebRTC] Received P2P offer for connId=${connId}`);
+
   try {
-    let wrtc;
-    try { wrtc = require('node-datachannel'); } catch {
-      try { wrtc = require('@koush/wrtc'); } catch {}
-    }
+    const peer = new ndc.PeerConnection(connId, {
+      iceServers: [
+        { hostname: 'stun.l.google.com',  port: 19302 },
+        { hostname: 'stun1.l.google.com', port: 19302 },
+      ],
+    });
 
-    if (!wrtc) {
-      console.log('ℹ️ node-datachannel not installed on relay host — using WebSocket relay transport');
-      return;
-    }
+    activeRtcPeers.set(connId, peer);
 
-    console.log(`📡 [WebRTC] Received P2P offer for connId=${msg.connId}`);
+    // Relay → browser: forward local SDP (answer) via server WebSocket
+    peer.onLocalDescription((localSdp, type) => {
+      try {
+        ws.send(JSON.stringify({ type: 'webrtc:answer', connId, sdp: { type, sdp: localSdp } }));
+        console.log(`📡 [WebRTC] Sent answer for connId=${connId}`);
+      } catch {}
+    });
+
+    // Relay → browser: forward ICE candidates via server WebSocket
+    peer.onLocalCandidate((candidate, sdpMid) => {
+      try {
+        ws.send(JSON.stringify({ type: 'webrtc:ice-candidate', connId, candidate: { candidate, sdpMid, sdpMLineIndex: 0 } }));
+      } catch {}
+    });
+
+    // Handle DataChannels opened by the browser
+    peer.onDataChannel((dc) => {
+      const label = dc.getLabel();
+      console.log(`📡 [WebRTC] DataChannel opened: '${label}' for connId=${connId}`);
+      if      (label === 'control') setupControlChannel(ws, connId, peer, dc);
+      else if (label === 'ssh')     setupSshChannel(connId, dc);
+      else if (label === 'sftp')    setupSftpChannel(connId, dc);
+      else if (label === 'file')    setupFileChannel(connId, dc);
+    });
+
+    // Set remote offer — triggers local answer generation
+    peer.setRemoteDescription(sdp.sdp, sdp.type);
+
   } catch (err) {
-    console.warn('⚠️ WebRTC offer error:', err.message);
+    console.error(`❌ [WebRTC] handleWebRtcOffer error: ${err.message}`);
+    // Notify browser to fallback
+    try { ws.send(JSON.stringify({ type: 'webrtc:answer', connId, error: err.message })); } catch {}
   }
 }
 
 function handleWebRtcCandidate(ws, msg) {
   const peer = activeRtcPeers.get(msg.connId);
-  if (peer && msg.candidate && typeof peer.addIceCandidate === 'function') {
-    try { peer.addIceCandidate(msg.candidate); } catch (_) {}
+  if (!peer) return;
+  try {
+    const c = msg.candidate;
+    if (c?.candidate) {
+      peer.addRemoteCandidate(c.candidate, c.sdpMid || '0');
+    }
+  } catch (err) {
+    console.warn(`⚠️ [WebRTC] addRemoteCandidate error: ${err.message}`);
   }
+}
+
+// ── Control DataChannel ───────────────────────────────────────────────────
+function setupControlChannel(ws, connId, peer, dc) {
+  const sendControl = (obj) => {
+    try { if (dc.isOpen()) dc.sendMessage(JSON.stringify(obj)); } catch {}
+  };
+
+  dc.onMessage((raw) => {
+    let msg;
+    try { msg = JSON.parse(typeof raw === 'string' ? raw : raw.toString()); } catch { return; }
+
+    switch (msg.type) {
+      case 'ssh:start': {
+        // Use pre-provisioned SSH config (credentials never sent over DataChannel)
+        const sshConfig = preparedSessions.get(connId) || msg.sshConfig;
+        if (!sshConfig) {
+          sendControl({ type: 'ssh:error', connId, error: 'No SSH config provisioned for this session' });
+          return;
+        }
+        preparedSessions.delete(connId);
+        startSshP2P(connId, sshConfig, sendControl);
+        break;
+      }
+      case 'ssh:resize': {
+        const session = sshSessions.get(connId);
+        if (session?.stream) {
+          try { session.stream.setWindow(msg.rows || 24, msg.cols || 80, 0, 0); } catch {}
+        }
+        break;
+      }
+      case 'ssh:disconnect': {
+        cleanupSsh(connId);
+        break;
+      }
+      case 'sftp:cmd': {
+        // Route SFTP command to the SFTP session for this connId
+        handleSftpP2PCommand(connId, msg, sendControl);
+        break;
+      }
+      case 'docker:command': {
+        handleDockerCommand({ send: (dataStr) => {
+          try {
+            const parsed = JSON.parse(dataStr);
+            sendControl(parsed);
+          } catch {}
+        }}, { ...msg, connId });
+        break;
+      }
+      case 'file:upload:start': {
+        handleFileUploadStart(connId, msg, sendControl);
+        break;
+      }
+      case 'file:upload:done': {
+        handleFileUploadDone(connId, msg, sendControl);
+        break;
+      }
+      case 'file:upload:cancel': {
+        const up = activeUploads.get(`rtc:${connId}`);
+        if (up) { try { up.stream.destroy(); } catch {} activeUploads.delete(`rtc:${connId}`); }
+        break;
+      }
+      case 'file:download:start': {
+        handleFileDownloadStart(connId, msg, sendControl);
+        break;
+      }
+      case 'file:download:cancel': {
+        const dl = activeDownloads.get(`rtc:${connId}`);
+        if (dl) { try { dl.stream.destroy(); } catch {} activeDownloads.delete(`rtc:${connId}`); }
+        break;
+      }
+    }
+  });
+
+  dc.onClosed(() => {
+    console.log(`📡 [WebRTC] control channel closed for connId=${connId}`);
+    cleanupSsh(connId);
+    const rtcPeer = activeRtcPeers.get(connId);
+    if (rtcPeer) { try { rtcPeer.close(); } catch {} activeRtcPeers.delete(connId); }
+    preparedSessions.delete(connId);
+  });
+}
+
+// ── SSH DataChannel ───────────────────────────────────────────────────────
+function setupSshChannel(connId, dc) {
+  const rtcPeer = activeRtcPeers.get(connId);
+  if (rtcPeer) rtcPeer._sshDc = dc;
+
+  // SSH channel carries raw terminal I/O
+  dc.onMessage((raw) => {
+    const session = sshSessions.get(connId);
+    if (session?.stream?.writable) {
+      const data = typeof raw === 'string' ? raw : raw.toString('utf-8');
+      session.stream.write(data);
+    }
+  });
+
+  dc.onClosed(() => {
+    console.log(`📡 [WebRTC] ssh channel closed for connId=${connId}`);
+  });
+
+  // Attach this DataChannel as output target for SSH data from remote if session already exists
+  const session = sshSessions.get(connId);
+  if (session) session.rtcSshDc = dc;
+}
+
+// Start SSH session that writes output to WebRTC DataChannel instead of WebSocket
+function startSshP2P(connId, connection, sendControl) {
+  if (!ssh2) {
+    sendControl({ type: 'ssh:error', connId, error: 'ssh2 not installed on relay agent' });
+    return;
+  }
+
+  const config = {
+    host:              connection.host,
+    port:              connection.port || 22,
+    username:          connection.username || 'root',
+    readyTimeout:      15000,
+    keepaliveInterval: 10000,
+  };
+  if (connection.password)   config.password   = connection.password;
+  if (connection.privateKey) config.privateKey = connection.privateKey;
+  if (connection.passphrase) config.passphrase = connection.passphrase;
+
+  const sshClient = new ssh2.Client();
+
+  sshClient.on('ready', () => {
+    console.log(`✅ [P2P SSH][${connId}] Connected to ${config.host}:${config.port}`);
+
+    sshClient.shell(
+      { term: 'xterm-256color', cols: connection.cols || 80, rows: connection.rows || 24 },
+      (err, stream) => {
+        if (err) {
+          sendControl({ type: 'ssh:error', connId, error: err.message });
+          return;
+        }
+
+        const rtcPeer = activeRtcPeers.get(connId);
+        // Store session (same map as WebSocket path)
+        sshSessions.set(connId, { sshClient, stream, connection, rtcSshDc: rtcPeer?._sshDc || null });
+        sendControl({ type: 'ssh:connected', connId });
+
+        // SSH output → WebRTC ssh DataChannel
+        const writeToRtc = (data) => {
+          const session = sshSessions.get(connId);
+          const dc = session?.rtcSshDc;
+          if (dc && dc.isOpen()) {
+            try { dc.sendMessage(typeof data === 'string' ? data : data.toString('utf-8')); } catch {}
+          }
+        };
+
+        stream.on('data', writeToRtc);
+        stream.stderr.on('data', writeToRtc);
+        stream.on('close', () => {
+          sendControl({ type: 'ssh:closed', connId });
+          cleanupSsh(connId);
+        });
+      }
+    );
+  });
+
+  sshClient.on('error', (err) => {
+    console.error(`✗ [P2P SSH][${connId}] Error: ${err.message}`);
+    sendControl({ type: 'ssh:error', connId, error: err.message });
+    cleanupSsh(connId);
+  });
+
+  sshClient.on('close', () => cleanupSsh(connId));
+  sshClient.connect(config);
+}
+
+// ── SFTP DataChannel ──────────────────────────────────────────────────────
+// Map: connId → { sftp, sshClient }
+const sftpP2PSessions = new Map();
+
+function setupSftpChannel(connId, dc) {
+  // SFTP channel carries JSON request/response
+  dc.onMessage((raw) => {
+    let msg;
+    try { msg = JSON.parse(typeof raw === 'string' ? raw : raw.toString()); } catch { return; }
+    handleSftpP2PCommand(connId, msg, (resp) => {
+      try { if (dc.isOpen()) dc.sendMessage(JSON.stringify(resp)); } catch {}
+    });
+  });
+}
+
+function handleSftpP2PCommand(connId, msg, reply) {
+  // Reuse existing SSH session's SFTP subsystem
+  const session = sshSessions.get(connId);
+  if (!session?.sshClient) {
+    reply({ type: 'sftp:error', connId, id: msg.id, error: 'SSH not connected' });
+    return;
+  }
+
+  const sftpCached = sftpP2PSessions.get(connId);
+  const doSftp = (sftp) => {
+    const { id, cmd } = msg;
+    switch (cmd) {
+      case 'list':
+        sftp.readdir(msg.path || '.', (err, list) => {
+          if (err) { reply({ type: 'sftp:error', connId, id, error: err.message }); return; }
+          const files = list.map(f => ({
+            filename: f.filename,
+            longname: f.longname,
+            attrs: f.attrs,
+          }));
+          reply({ type: 'sftp:result', connId, id, cmd, data: { path: msg.path, files } });
+        });
+        break;
+      case 'readFile':
+        sftp.readFile(msg.path, (err, data) => {
+          if (err) { reply({ type: 'sftp:error', connId, id, error: err.message }); return; }
+          reply({ type: 'sftp:result', connId, id, cmd, data: { path: msg.path, content: data.toString('utf-8') } });
+        });
+        break;
+      case 'writeFile':
+        sftp.writeFile(msg.path, Buffer.from(msg.content || ''), (err) => {
+          if (err) { reply({ type: 'sftp:error', connId, id, error: err.message }); return; }
+          reply({ type: 'sftp:result', connId, id, cmd, data: { path: msg.path } });
+        });
+        break;
+      case 'mkdir':
+        sftp.mkdir(msg.path, (err) => {
+          if (err && err.code !== 4 /* FAILURE = already exists */) {
+            reply({ type: 'sftp:error', connId, id, error: err.message }); return;
+          }
+          reply({ type: 'sftp:result', connId, id, cmd, data: { path: msg.path } });
+        });
+        break;
+      case 'delete':
+        sftp.unlink(msg.path, (err) => {
+          if (err) sftp.rmdir(msg.path, (e2) => {
+            if (e2) { reply({ type: 'sftp:error', connId, id, error: err.message }); return; }
+            reply({ type: 'sftp:result', connId, id, cmd, data: { path: msg.path } });
+          }); else
+          reply({ type: 'sftp:result', connId, id, cmd, data: { path: msg.path } });
+        });
+        break;
+      case 'rename':
+        sftp.rename(msg.src, msg.dest, (err) => {
+          if (err) { reply({ type: 'sftp:error', connId, id, error: err.message }); return; }
+          reply({ type: 'sftp:result', connId, id, cmd, data: { src: msg.src, dest: msg.dest } });
+        });
+        break;
+      case 'stat':
+        sftp.stat(msg.path, (err, attrs) => {
+          if (err) { reply({ type: 'sftp:error', connId, id, error: err.message }); return; }
+          reply({ type: 'sftp:result', connId, id, cmd, data: { path: msg.path, attrs } });
+        });
+        break;
+      default:
+        reply({ type: 'sftp:error', connId, id, error: `Unknown SFTP command: ${cmd}` });
+    }
+  };
+
+  if (sftpCached) {
+    doSftp(sftpCached);
+  } else {
+    session.sshClient.sftp((err, sftp) => {
+      if (err) { reply({ type: 'sftp:error', connId, id: msg.id, error: err.message }); return; }
+      sftpP2PSessions.set(connId, sftp);
+      sftp.on('close', () => sftpP2PSessions.delete(connId));
+      doSftp(sftp);
+    });
+  }
+}
+
+// ── File DataChannel ──────────────────────────────────────────────────────
+// Map: rtc:connId → { writeStream, hash, filename, destPath, received }
+const activeDownloads = activeUploads instanceof Map ? new Map() : new Map(); // separate from sftp uploads
+// (activeUploads is already declared above for WebSocket uploads)
+
+function setupFileChannel(connId, dc) {
+  // File channel carries raw binary upload chunks from browser
+  // Store reference on peer so downloads can write back via this channel
+  const rtcPeer = activeRtcPeers.get(connId);
+  if (rtcPeer) rtcPeer._fileDc = dc;
+  dc.onMessage((raw) => {
+    const upload = activeUploads.get(`rtc:${connId}`);
+    if (!upload) return; // no active upload for this connId
+
+    const chunk = Buffer.isBuffer(raw) ? raw : Buffer.from(
+      raw instanceof ArrayBuffer ? new Uint8Array(raw) :
+      typeof raw === 'string'     ? raw : new Uint8Array(raw)
+    );
+
+    upload.stream.write(chunk);
+    upload.hash.update(chunk);
+    upload.received += chunk.length;
+
+    // Acknowledge progress back over control channel
+    if (upload.sendControl) {
+      upload.sendControl({
+        type: 'file:upload:progress',
+        connId,
+        filename: upload.filename,
+        received: upload.received,
+        total: upload.size,
+      });
+    }
+  });
+
+  dc.onClosed(() => {
+    console.log(`📡 [WebRTC] file channel closed for connId=${connId}`);
+    const upload = activeUploads.get(`rtc:${connId}`);
+    if (upload) { try { upload.stream.destroy(); } catch {} activeUploads.delete(`rtc:${connId}`); }
+  });
+}
+
+function handleFileUploadStart(connId, msg, sendControl) {
+  const { filename, destPath, size, offset = 0 } = msg;
+  console.log(`📤 [P2P] Upload start: ${filename} → ${destPath} (${size} bytes, offset=${offset})`);
+
+  // Clean up any previous upload for this connId
+  const prev = activeUploads.get(`rtc:${connId}`);
+  if (prev) { try { prev.stream.destroy(); } catch {} }
+
+  let writeStream;
+  try {
+    // Ensure directory exists
+    const dir = require('path').dirname(destPath);
+    require('fs').mkdirSync(dir, { recursive: true });
+    writeStream = require('fs').createWriteStream(destPath, { flags: offset > 0 ? 'r+' : 'w', start: offset });
+  } catch (err) {
+    sendControl({ type: 'file:upload:error', connId, filename, error: err.message });
+    return;
+  }
+
+  const hash = crypto.createHash('sha256');
+  activeUploads.set(`rtc:${connId}`, { stream: writeStream, hash, filename, destPath, size, received: offset, sendControl });
+
+  writeStream.on('error', (err) => {
+    sendControl({ type: 'file:upload:error', connId, filename, error: err.message });
+    activeUploads.delete(`rtc:${connId}`);
+  });
+
+  sendControl({ type: 'file:upload:ready', connId, filename, offset });
+}
+
+function handleFileUploadDone(connId, msg, sendControl) {
+  const upload = activeUploads.get(`rtc:${connId}`);
+  if (!upload) {
+    sendControl({ type: 'file:upload:error', connId, filename: msg.filename, error: 'No active upload' });
+    return;
+  }
+
+  upload.stream.end(() => {
+    const sha256 = upload.hash.digest('hex');
+    console.log(`✅ [P2P] Upload complete: ${upload.filename} sha256=${sha256}`);
+    sendControl({ type: 'file:upload:complete', connId, filename: upload.filename, sha256 });
+    activeUploads.delete(`rtc:${connId}`);
+  });
+}
+
+function handleFileDownloadStart(connId, msg, sendControl) {
+  const { path: remotePath } = msg;
+  console.log(`📥 [P2P] Download start: ${remotePath}`);
+
+  // We need the ssh/sftp DataChannel to write binary to — get it from the peer
+  const rtcPeer = activeRtcPeers.get(connId);
+  if (!rtcPeer) {
+    sendControl({ type: 'file:download:error', connId, error: 'No active WebRTC peer' });
+    return;
+  }
+
+  let fileStat;
+  try { fileStat = require('fs').statSync(remotePath); } catch {
+    // Try SFTP session path
+    const sftpSession = sftpP2PSessions.get(connId);
+    if (sftpSession) {
+      sftpSession.stat(remotePath, (err, attrs) => {
+        if (err) { sendControl({ type: 'file:download:error', connId, error: err.message }); return; }
+        const size = attrs.size;
+        const filename = require('path').basename(remotePath);
+        sendControl({ type: 'file:download:meta', connId, path: remotePath, filename, size });
+        streamFileToRtcPeer(connId, remotePath, size, rtcPeer, sendControl, sftpSession);
+      });
+    } else {
+      sendControl({ type: 'file:download:error', connId, error: `Cannot stat: ${remotePath}` });
+    }
+    return;
+  }
+
+  const size = fileStat.size;
+  const filename = require('path').basename(remotePath);
+  sendControl({ type: 'file:download:meta', connId, path: remotePath, filename, size });
+  streamFileToRtcPeer(connId, remotePath, size, rtcPeer, sendControl, null);
+}
+
+function streamFileToRtcPeer(connId, remotePath, size, rtcPeer, sendControl, sftpSession) {
+  const hash = crypto.createHash('sha256');
+  let sent = 0;
+
+  // Get the file DataChannel from the peer
+  // node-datachannel doesn't expose channels by label after creation,
+  // so we store a reference when setupFileChannel is called
+  // Instead, we use a stored reference in rtcPeer._fileDc set by setupFileChannel
+  const fileDc = rtcPeer._fileDc;
+  if (!fileDc || !fileDc.isOpen()) {
+    sendControl({ type: 'file:download:error', connId, error: 'File DataChannel not open' });
+    return;
+  }
+
+  const readStream = sftpSession
+    ? sftpSession.createReadStream(remotePath, { highWaterMark: 512 * 1024 })
+    : require('fs').createReadStream(remotePath, { highWaterMark: 512 * 1024 });
+
+  activeDownloads.set(`rtc:${connId}`, { stream: readStream });
+
+  readStream.on('data', (chunk) => {
+    hash.update(chunk);
+    sent += chunk.length;
+    // Backpressure: if buffered amount is high, pause and wait
+    try {
+      fileDc.sendMessageBinary(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    } catch (err) {
+      console.error(`❌ [P2P] file download send error: ${err.message}`);
+      readStream.destroy();
+    }
+  });
+
+  readStream.on('end', () => {
+    const sha256 = hash.digest('hex');
+    console.log(`✅ [P2P] Download complete: ${remotePath} sha256=${sha256}`);
+    sendControl({ type: 'file:download:done', connId, path: remotePath, sha256 });
+    activeDownloads.delete(`rtc:${connId}`);
+  });
+
+  readStream.on('error', (err) => {
+    sendControl({ type: 'file:download:error', connId, error: err.message });
+    activeDownloads.delete(`rtc:${connId}`);
+  });
 }
 
 // ── Docker handlers ───────────────────────────────────────────────────────
