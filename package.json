@@ -4,7 +4,8 @@
   "private": true,
   "scripts": {
     "dev": "NODE_OPTIONS='--dns-result-order=ipv4first' node server.js",
-    "build": "next build",
+    "build:relay": "npx javascript-obfuscator public/local-relay.js --output public/local-relay.min.js --compact true --string-array true --target node",
+    "build": "npm run build:relay && next build",
     "start": "NODE_ENV=production NODE_OPTIONS='--dns-result-order=ipv4first' node server.js",
     "lint": "eslint"
   },

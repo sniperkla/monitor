@@ -524,7 +524,9 @@ app.prepare().then(async () => {
       // Serve local-relay.js as a public static file — bypass Next.js/auth entirely
       // so unauthenticated curl downloads work (e.g. one-liner installer)
       if (req.url === '/local-relay.js') {
-        const scriptPath = path.join(__dirname, 'public', 'local-relay.js');
+        const minifiedPath = path.join(__dirname, 'public', 'local-relay.min.js');
+        const sourcePath   = path.join(__dirname, 'public', 'local-relay.js');
+        const scriptPath   = fs.existsSync(minifiedPath) ? minifiedPath : sourcePath;
         res.setHeader('Content-Type', 'application/javascript; charset=utf-8');
         res.setHeader('Cache-Control', 'no-store, no-cache');
         res.setHeader('X-Content-Type-Options', 'nosniff');
