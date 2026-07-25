@@ -163,17 +163,23 @@ export default function RcloneApp() {
 
   const handleInstallRclone = async () => {
     setIsInstalling(true);
-    setInstallLog('🚀 Initializing Rclone installer preview...');
+    setInstallLog('🚀 Initializing Rclone installer preview...\n--------------------------------------------------');
     try {
       const res = await apiFetch('/api/rclone/install', {
         method: 'POST',
         body: JSON.stringify({ connectionId: selectedConnId })
       });
       if (res?.success) {
-        setInstallJob(res);
+        if (res.logFile) {
+          setInstallJob(res);
+        } else {
+          setIsInstalling(false);
+          setInstallLog(res.output || '✅ Rclone installed successfully!');
+          fetchRcloneStatus();
+        }
       } else {
         setIsInstalling(false);
-        setInstallLog(`❌ Failed to launch installer: ${res?.error || 'Unknown error'}`);
+        setInstallLog(`❌ Failed to launch installer:\n${res?.error || res?.details || 'Unknown error'}`);
       }
     } catch (err) {
       setIsInstalling(false);

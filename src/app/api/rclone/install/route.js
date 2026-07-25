@@ -16,7 +16,7 @@ export async function POST(req) {
     const sshConfig = await getSshConfig(connectionId);
     const logFile = `/tmp/rclone_install_${Date.now()}.log`;
 
-    // Installer script outputting live step-by-step progress
+    // Universal installer script outputting live step-by-step progress
     const installScript = [
       'export PATH="$HOME/.local/bin:$HOME/bin:/usr/local/bin:/usr/bin:$PATH"',
       'echo "🚀 [1/4] Starting Rclone Installation on $(hostname)..."',
@@ -73,11 +73,11 @@ export async function POST(req) {
       'fi'
     ].join('\n');
 
-    // Run script in background writing to logFile
-    const fullCmd = `stdbuf -i0 -o0 -e0 bash -c ${quote(installScript)} > ${logFile} 2>&1 & echo $!`;
+    // Run script directly in background without depending on stdbuf binary
+    const fullCmd = `bash -c ${quote(installScript)} > ${logFile} 2>&1 & echo $!`;
     const result = await execCommand(sshConfig, fullCmd);
 
-    if (result.code === 0) {
+    if (result.code === 0 && result.stdout.trim()) {
       return NextResponse.json({
         success: true,
         logFile,
@@ -85,10 +85,13 @@ export async function POST(req) {
       });
     }
 
+    // Fallback: synchronous execution if background process launch failed
+    const syncRes = await execCommand(sshConfig, installScript);
     return NextResponse.json({
-      success: false,
-      error: result.stderr.trim() || result.stdout.trim() || 'Failed to launch installer process',
-    }, { status: 500 });
+      success: syncRes.code === 0,
+      output: syncRes.stdout || syncRes.stderr,
+      error: syncRes.code !== 0 ? (syncRes.stderr.trim() || syncRes.stdout.trim() || 'Failed to install Rclone') : null,
+    });
 
   } catch (error) {
     console.error('[rclone/install POST] error:', error.message);
