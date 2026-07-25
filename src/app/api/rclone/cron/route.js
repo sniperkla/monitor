@@ -91,7 +91,14 @@ export async function POST(req) {
     flags.push(`--log-file="${logFile}"`);
     flags.push(`--log-level INFO`);
 
-    const rcloneCmd = `export PATH="$HOME/.local/bin:$HOME/bin:/usr/local/bin:/usr/bin:$PATH"; rclone ${action || 'copy'} "${source}" "${target}" ${flags.join(' ')}`;
+    let finalTarget = target;
+    if (options.useTimestampFolder) {
+      const format = options.timestampFormat === 'DMY_HM' ? '\\%d-\\%m-\\%Y_\\%H-\\%M' : '\\%Y-\\%m-\\%d_\\%H-\\%M-\\%S';
+      const cleanTarget = target.replace(/\/$/, '');
+      finalTarget = `${cleanTarget}/$(date +${format})`;
+    }
+
+    const rcloneCmd = `export PATH="$HOME/.local/bin:$HOME/bin:/usr/local/bin:/usr/bin:$PATH"; rclone ${action || 'copy'} "${source}" "${finalTarget}" ${flags.join(' ')}`;
     const cronLine = `${schedule} ${rcloneCmd}`;
 
     // Append to server's crontab safely

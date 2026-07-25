@@ -37,7 +37,18 @@ export async function POST(req) {
       flags.push(`--drive-root-folder-id=${quote(options.driveFolderId.trim())}`);
     }
 
-    const cmd = `${pathPrefix}rclone ${action} ${quote(source)} ${quote(target)} ${flags.join(' ')}`;
+    let finalTarget = target;
+    if (options.useTimestampFolder) {
+      const now = new Date();
+      const pad = (n) => String(n).padStart(2, '0');
+      const dmy = `${pad(now.getDate())}-${pad(now.getMonth() + 1)}-${now.getFullYear()}_${pad(now.getHours())}-${pad(now.getMinutes())}`;
+      const ymd = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}_${pad(now.getHours())}-${pad(now.getMinutes())}-${pad(now.getSeconds())}`;
+      const subFolder = options.timestampFormat === 'DMY_HM' ? dmy : ymd;
+      const cleanTarget = target.replace(/\/$/, '');
+      finalTarget = `${cleanTarget}/${subFolder}`;
+    }
+
+    const cmd = `${pathPrefix}rclone ${action} ${quote(source)} ${quote(finalTarget)} ${flags.join(' ')}`;
 
     const b64Script = Buffer.from(`${cmd}`).toString('base64');
 
