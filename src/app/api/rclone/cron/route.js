@@ -133,7 +133,7 @@ export async function POST(req) {
     flags.push(`--log-level INFO`);
 
     const nicePrefix = memMb <= 2048 ? 'nice -n 19 ' : '';
-    let rcloneCmd = `export PATH="$HOME/.local/bin:$HOME/bin:/usr/local/bin:/usr/bin:$PATH"; exec 9>"${lockFile}"; flock -n 9 || { exit 0; }; echo "=== Project: ${finalProjectName} | Action: ${action || 'copy'} ===" >> "${logFile}"; ${nicePrefix}rclone ${action || 'copy'} "${normSource}" "${finalTarget}" ${flags.join(' ')}`;
+    let rcloneCmd = `export PATH="$HOME/.local/bin:$HOME/bin:/usr/local/bin:/usr/bin:$PATH"; exec 9>"${lockFile}"; flock -n 9 || { exit 0; }; echo "=== Project: ${finalProjectName} | Action: ${action || 'copy'} ===" >> "${logFile}"; ${nicePrefix}rclone ${action || 'copy'} "${normSource}" "${target}" ${flags.join(' ')}`;
     
     // Auto Retention Policy: clean old backups older than X days
     if (options.enableRetention && options.retentionDays) {
