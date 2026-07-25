@@ -12,6 +12,236 @@ import { useApp } from '@/context/AppContext';
 import MasterPasswordModal from '@/components/MasterPasswordModal';
 import { getLocalConnections } from '@/utils/localConnections';
 
+// 💡 Path Input with Autocomplete & Tab Completion
+function PathInputWithAutocomplete({
+  value,
+  onChange,
+  placeholder,
+  selectedConnId,
+  apiFetch,
+  remotes = [],
+  accentColor = 'indigo',
+  className = '',
+}) {
+  const [suggestions, setSuggestions] = useState([]);
+  const [isOpen, setIsOpen] = useState(false);
+  const [selectedIndex, setSelectedIndex] = useState(-1);
+  const [loading, setLoading] = useState(false);
+  const wrapperRef = useRef(null);
+  const debounceTimer = useRef(null);
+
+  const parsePath = (val) => {
+    if (!val) return { targetType: 'local', dir: '/', prefix: '' };
+    
+    const colonIdx = val.indexOf(':');
+    if (colonIdx !== -1) {
+      const targetType = val.slice(0, colonIdx + 1);
+      const rest = val.slice(colonIdx + 1);
+      const lastSlashIdx = rest.lastIndexOf('/');
+      if (lastSlashIdx === -1) {
+        return { targetType, dir: '', prefix: rest };
+      }
+      return {
+        targetType,
+        dir: rest.slice(0, lastSlashIdx),
+        prefix: rest.slice(lastSlashIdx + 1)
+      };
+    }
+
+    const lastSlashIdx = val.lastIndexOf('/');
+    if (lastSlashIdx === -1) {
+      return { targetType: 'local', dir: '/', prefix: val };
+    }
+    const dir = val.slice(0, lastSlashIdx) || '/';
+    const prefix = val.slice(lastSlashIdx + 1);
+    return { targetType: 'local', dir, prefix };
+  };
+
+  const fetchItems = async (val) => {
+    if (!selectedConnId) return;
+
+    if (!val.includes(':') && !val.startsWith('/')) {
+      const matchingRemotes = remotes
+        .filter(r => r.toLowerCase().startsWith(val.toLowerCase()))
+        .map(r => ({ Name: `${r}:`, IsDir: true, isRemoteName: true }));
+      
+      if (matchingRemotes.length > 0) {
+        setSuggestions(matchingRemotes);
+        setIsOpen(true);
+        setSelectedIndex(0);
+        return;
+      }
+    }
+
+    const { targetType, dir, prefix } = parsePath(val);
+    setLoading(true);
+
+    try {
+      const res = await apiFetch(`/api/rclone/browse?connectionId=${selectedConnId}&remote=${encodeURIComponent(targetType)}&path=${encodeURIComponent(dir)}`);
+      const data = await res.json();
+      if (data?.success && Array.isArray(data.items)) {
+        const filtered = data.items.filter(item =>
+          item.Name && item.Name.toLowerCase().startsWith(prefix.toLowerCase())
+        );
+        setSuggestions(filtered);
+        setIsOpen(filtered.length > 0);
+        setSelectedIndex(filtered.length > 0 ? 0 : -1);
+      } else {
+        setSuggestions([]);
+        setIsOpen(false);
+      }
+    } catch (_) {
+      setSuggestions([]);
+      setIsOpen(false);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleChange = (e) => {
+    const newVal = e.target.value;
+    onChange(newVal);
+    
+    if (debounceTimer.current) clearTimeout(debounceTimer.current);
+    debounceTimer.current = setTimeout(() => {
+      fetchItems(newVal);
+    }, 200);
+  };
+
+  const applySuggestion = (item) => {
+    if (item.isRemoteName) {
+      onChange(item.Name);
+      fetchItems(item.Name);
+      return;
+    }
+
+    const { targetType, dir } = parsePath(value);
+    let newPath = '';
+
+    if (targetType === 'local') {
+      const cleanDir = dir.endsWith('/') ? dir : `${dir}/`;
+      newPath = `${cleanDir}${item.Name}${item.IsDir ? '/' : ''}`;
+    } else {
+      const cleanDir = dir ? (dir.endsWith('/') ? dir : `${dir}/`) : '';
+      newPath = `${targetType}${cleanDir}${item.Name}${item.IsDir ? '/' : ''}`;
+    }
+
+    onChange(newPath);
+    setIsOpen(false);
+    setSelectedIndex(-1);
+
+    if (item.IsDir) {
+      if (debounceTimer.current) clearTimeout(debounceTimer.current);
+      debounceTimer.current = setTimeout(() => {
+        fetchItems(newPath);
+      }, 150);
+    }
+  };
+
+  const handleKeyDown = (e) => {
+    if (!isOpen || suggestions.length === 0) {
+      if (e.key === 'ArrowDown' || (e.key === 'Tab' && !e.shiftKey)) {
+        fetchItems(value);
+      }
+      return;
+    }
+
+    if (e.key === 'Tab') {
+      e.preventDefault();
+      const idxToUse = selectedIndex >= 0 ? selectedIndex : 0;
+      if (suggestions[idxToUse]) {
+        applySuggestion(suggestions[idxToUse]);
+      }
+    } else if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      setSelectedIndex(prev => (prev < suggestions.length - 1 ? prev + 1 : 0));
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      setSelectedIndex(prev => (prev > 0 ? prev - 1 : suggestions.length - 1));
+    } else if (e.key === 'Enter') {
+      if (selectedIndex >= 0 && suggestions[selectedIndex]) {
+        e.preventDefault();
+        applySuggestion(suggestions[selectedIndex]);
+      }
+    } else if (e.key === 'Escape') {
+      setIsOpen(false);
+    }
+  };
+
+  useEffect(() => {
+    const handleClickOutside = (e) => {
+      if (wrapperRef.current && !wrapperRef.current.contains(e.target)) {
+        setIsOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  return (
+    <div ref={wrapperRef} className="relative w-full">
+      <div className="relative flex items-center">
+        <input
+          type="text"
+          value={value}
+          onChange={handleChange}
+          onFocus={() => {
+            if (value) fetchItems(value);
+          }}
+          onKeyDown={handleKeyDown}
+          placeholder={placeholder}
+          className={className}
+        />
+        {loading && (
+          <div className="absolute right-3 top-1/2 -translate-y-1/2">
+            <RefreshCw size={12} className="animate-spin text-[var(--text-muted)]" />
+          </div>
+        )}
+      </div>
+
+      {isOpen && suggestions.length > 0 && (
+        <div className="absolute left-0 right-0 top-full mt-1.5 z-50 bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-xl shadow-2xl overflow-hidden max-h-56 overflow-y-auto divide-y divide-[var(--border-color)]">
+          <div className="px-3 py-1 bg-[var(--bg-tertiary)] flex items-center justify-between text-[10px] text-[var(--text-muted)] font-mono">
+            <span>Suggestions ({suggestions.length})</span>
+            <span className="text-indigo-400 font-semibold">Press <kbd className="bg-black/40 px-1 py-0.5 rounded text-white border border-[var(--border-color)]">Tab ⇥</kbd> or <kbd className="bg-black/40 px-1 py-0.5 rounded text-white border border-[var(--border-color)]">↵</kbd></span>
+          </div>
+          {suggestions.map((item, idx) => {
+            const isSelected = idx === selectedIndex;
+            return (
+              <div
+                key={idx}
+                onClick={() => applySuggestion(item)}
+                onMouseEnter={() => setSelectedIndex(idx)}
+                className={`px-3 py-2 flex items-center justify-between font-mono text-xs cursor-pointer transition-colors ${
+                  isSelected
+                    ? accentColor === 'emerald'
+                      ? 'bg-emerald-500/15 text-emerald-400 font-bold'
+                      : 'bg-indigo-500/15 text-indigo-400 font-bold'
+                    : 'hover:bg-[var(--bg-tertiary)] text-[var(--text-primary)]'
+                }`}
+              >
+                <div className="flex items-center gap-2 truncate">
+                  {item.IsDir ? (
+                    <Folder size={13} className="text-amber-400 shrink-0" />
+                  ) : (
+                    <File size={13} className="text-indigo-400 shrink-0" />
+                  )}
+                  <span className="truncate">{item.Name}</span>
+                </div>
+                {item.IsDir && (
+                  <span className="text-[9px] text-[var(--text-muted)] opacity-70 shrink-0 ml-2 font-sans">
+                    /
+                  </span>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function RcloneApp() {
   const { vaultStatus } = useVault();
   const { state: appState, apiFetch } = useApp();
@@ -775,7 +1005,16 @@ export default function RcloneApp() {
                       <Folder size={11} /> Browse...
                     </button>
                   </div>
-                  <input type="text" value={sourcePath} onChange={(e) => setSourcePath(e.target.value)} placeholder="/var/www/html" className="w-full px-3 py-2 text-xs rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] font-mono text-[var(--text-primary)] focus:border-indigo-500 focus:outline-none" />
+                  <PathInputWithAutocomplete
+                    value={sourcePath}
+                    onChange={setSourcePath}
+                    placeholder="/var/www/html or /home"
+                    selectedConnId={selectedConnId}
+                    apiFetch={apiFetch}
+                    remotes={rcloneStatus?.remotes || []}
+                    accentColor="indigo"
+                    className="w-full px-3 py-2 text-xs rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] font-mono text-[var(--text-primary)] focus:border-indigo-500 focus:outline-none"
+                  />
                 </div>
 
                 {/* Arrow divider */}
@@ -797,7 +1036,16 @@ export default function RcloneApp() {
                       <HardDrive size={11} /> Browse Cloud...
                     </button>
                   </div>
-                  <input type="text" value={targetPath} onChange={(e) => setTargetPath(e.target.value)} placeholder="gdrive:backup or s3remote:bucket/backups" className="w-full px-3 py-2 text-xs rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] font-mono text-[var(--text-primary)] focus:border-emerald-500 focus:outline-none" />
+                  <PathInputWithAutocomplete
+                    value={targetPath}
+                    onChange={setTargetPath}
+                    placeholder="gdrive:backup or s3remote:bucket/backups"
+                    selectedConnId={selectedConnId}
+                    apiFetch={apiFetch}
+                    remotes={rcloneStatus?.remotes || []}
+                    accentColor="emerald"
+                    className="w-full px-3 py-2 text-xs rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] font-mono text-[var(--text-primary)] focus:border-emerald-500 focus:outline-none"
+                  />
                 </div>
               </div>
 
@@ -1313,11 +1561,29 @@ export default function RcloneApp() {
               <div className="grid grid-cols-2 gap-2">
                 <div>
                   <label className="text-[11px] font-semibold text-[var(--text-muted)] block mb-1">Source Path</label>
-                  <input type="text" value={editingCron.source} onChange={(e) => setEditingCron({ ...editingCron, source: e.target.value })} className="w-full px-3.5 py-1.5 text-xs rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] font-mono text-[var(--text-primary)] focus:outline-none" />
+                  <PathInputWithAutocomplete
+                    value={editingCron.source}
+                    onChange={(val) => setEditingCron({ ...editingCron, source: val })}
+                    placeholder="/var/www/html"
+                    selectedConnId={selectedConnId}
+                    apiFetch={apiFetch}
+                    remotes={rcloneStatus?.remotes || []}
+                    accentColor="indigo"
+                    className="w-full px-3.5 py-1.5 text-xs rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] font-mono text-[var(--text-primary)] focus:outline-none"
+                  />
                 </div>
                 <div>
                   <label className="text-[11px] font-semibold text-[var(--text-muted)] block mb-1">Destination</label>
-                  <input type="text" value={editingCron.target} onChange={(e) => setEditingCron({ ...editingCron, target: e.target.value })} className="w-full px-3.5 py-1.5 text-xs rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] font-mono text-[var(--text-primary)] focus:outline-none" />
+                  <PathInputWithAutocomplete
+                    value={editingCron.target}
+                    onChange={(val) => setEditingCron({ ...editingCron, target: val })}
+                    placeholder="gdrive:backup"
+                    selectedConnId={selectedConnId}
+                    apiFetch={apiFetch}
+                    remotes={rcloneStatus?.remotes || []}
+                    accentColor="emerald"
+                    className="w-full px-3.5 py-1.5 text-xs rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] font-mono text-[var(--text-primary)] focus:outline-none"
+                  />
                 </div>
               </div>
               <div className="p-3 rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] space-y-2">
