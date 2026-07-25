@@ -124,10 +124,15 @@ if (args.uninstall) {
 function ensureInstalledScript() {
   try {
     fs.mkdirSync(INSTALL_DIR, { recursive: true });
-    if (path.resolve(SCRIPT) !== path.resolve(INSTALLED_SCRIPT)) {
-      fs.copyFileSync(SCRIPT, INSTALLED_SCRIPT);
-      if (PLATFORM !== 'win32') try { fs.chmodSync(INSTALLED_SCRIPT, 0o755); } catch {}
+    // Always copy latest script over INSTALLED_SCRIPT to overwrite old versions
+    try {
+      if (path.resolve(SCRIPT) !== path.resolve(INSTALLED_SCRIPT)) {
+        fs.copyFileSync(SCRIPT, INSTALLED_SCRIPT);
+      }
+    } catch (_) {
+      try { fs.writeFileSync(INSTALLED_SCRIPT, fs.readFileSync(SCRIPT)); } catch (_) {}
     }
+    if (PLATFORM !== 'win32') try { fs.chmodSync(INSTALLED_SCRIPT, 0o755); } catch {}
     
     // Automatically initialize package.json and install ssh2, ws, node-datachannel in the installation folder
     try {
@@ -2254,7 +2259,11 @@ function installMacOS() {
     `${LT}/dict${GT}${LT}/plist${GT}`,
   ].join('\n');
   fs.writeFileSync(plistPath, xml);
+  // Kill any running old background process and reload launchctl daemon
+  const uid = typeof process.getuid === 'function' ? process.getuid() : 501;
+  spawnSync('launchctl', ['bootout', `gui/${uid}`, plistPath], { stdio: 'ignore' });
   spawnSync('launchctl', ['unload', plistPath], { stdio: 'ignore' });
+  spawnSync('pkill', ['-f', 'local-relay.js'], { stdio: 'ignore' });
   spawnSync('launchctl', ['load', '-w', plistPath], { stdio: 'inherit' });
   console.log(`✅ Installed as macOS LaunchAgent. Logs: tail -f "${logFile}"`);
 }
@@ -2262,7 +2271,10 @@ function installMacOS() {
 function uninstallMacOS() {
   const plistPath = path.join(os.homedir(), 'Library', 'LaunchAgents', SVC_ID + '.plist');
   if (fs.existsSync(plistPath)) {
+    const uid = typeof process.getuid === 'function' ? process.getuid() : 501;
+    spawnSync('launchctl', ['bootout', `gui/${uid}`, plistPath], { stdio: 'ignore' });
     spawnSync('launchctl', ['unload', plistPath], { stdio: 'ignore' });
+    spawnSync('pkill', ['-f', 'local-relay.js'], { stdio: 'ignore' });
     fs.unlinkSync(plistPath);
     console.log('✅ Removed macOS LaunchAgent');
   }
@@ -2280,6 +2292,8 @@ function installLinux() {
     '[Install]', 'WantedBy=default.target',
   ].join('\n') + '\n';
   fs.writeFileSync(unitPath, unit);
+  spawnSync('systemctl', ['--user', 'stop', SVC_ID + '.service'], { stdio: 'ignore' });
+  spawnSync('pkill', ['-f', 'local-relay.js'], { stdio: 'ignore' });
   spawnSync('systemctl', ['--user', 'daemon-reload'], { stdio: 'inherit' });
   spawnSync('systemctl', ['--user', 'enable', '--now', SVC_ID + '.service'], { stdio: 'inherit' });
   console.log('✅ Installed as systemd user service');
