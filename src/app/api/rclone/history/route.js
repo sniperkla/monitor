@@ -17,9 +17,16 @@ export async function GET(req) {
     const pathPrefix = 'export PATH="$HOME/.local/bin:$HOME/bin:/usr/local/bin:/usr/bin:$PATH"; ';
 
     // ── 1. Read all rclone cron log files from /tmp/ with file markers ──
-    const logsCmd = `for f in $(ls -1t /tmp/rclone-cron*.log 2>/dev/null | head -60); do echo "=== RCLONE_FILE: $f ==="; cat "$f"; echo ""; done`;
+    const logsCmd = `pgrep -f rclone 2>/dev/null || true; echo "=== RCLONE_PROCESSES_END ==="; for f in $(ls -1t /tmp/rclone-cron*.log 2>/dev/null | head -60); do echo "=== RCLONE_FILE: $f ==="; cat "$f"; echo ""; done`;
     const logsRes = await execCommand(sshConfig, logsCmd);
-    const rawLogs = logsRes.stdout || '';
+    const rawOutput = logsRes.stdout || '';
+
+    const parts = rawOutput.split('=== RCLONE_PROCESSES_END ===');
+    const activePidsText = parts[0] || '';
+    const rawLogs = parts.slice(1).join('=== RCLONE_PROCESSES_END ===');
+
+    const activePids = activePidsText.split('\n').map(p => p.trim()).filter(Boolean);
+    const isServerRcloneActive = activePids.length > 0;
 
     // Split log text into individual run blocks per file
     const fileBlocks = rawLogs.split('=== RCLONE_FILE: ').filter(b => b.trim());
@@ -165,6 +172,19 @@ export async function GET(req) {
 
     // Sort newest runs first
     runs.reverse();
+
+    // 🎯 Post-process runs: Only the single newest run can remain 'running' if server process is active.
+    // All older incomplete runs whose processes are dead MUST be marked as 'aborted'!
+    let foundActiveRun = false;
+    runs.forEach(run => {
+      if (run.status === 'running') {
+        if (!isServerRcloneActive || foundActiveRun) {
+          run.status = 'aborted';
+        } else {
+          foundActiveRun = true;
+        }
+      }
+    });
 
     // Group runs by Project / Task
     const projectGroups = {};
