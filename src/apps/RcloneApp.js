@@ -87,9 +87,20 @@ export default function RcloneApp() {
     loadConnections();
   }, [appState?.connections, selectedConnId, apiFetch]);
 
-  // Fetch Rclone status whenever selected connection changes
+  // Fetch Rclone status whenever selected connection changes & clear stale data
   useEffect(() => {
     if (selectedConnId && vaultStatus === 'unlocked') {
+      setRcloneStatus(null);
+      setInstallJob(null);
+      setInstallLog('');
+      setIsInstalling(false);
+      setActiveJob(null);
+      setJobLog('');
+      setIsJobRunning(false);
+      setRemoteItems([]);
+      setBrowseRemote('');
+      setBrowsePath('');
+      setTargetPath('');
       fetchRcloneStatus();
     }
   }, [selectedConnId, vaultStatus]);
