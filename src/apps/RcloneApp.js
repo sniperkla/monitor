@@ -1460,15 +1460,32 @@ export default function RcloneApp() {
                           <button onClick={() => navigator.clipboard.writeText(cron.raw)} className="p-1 text-[var(--text-muted)] hover:text-emerald-400 hover:bg-emerald-500/10 rounded-lg transition-colors cursor-pointer" title="Copy"><Copy size={12} /></button>
                           <button
                             onClick={() => {
-                              const matches = cron.raw.match(/"([^"]+)"/g) || [];
-                              const src = matches[0] ? matches[0].replace(/"/g, '') : '/var/www';
-                              const tgt = matches[1] ? matches[1].replace(/"/g, '') : 'gdrive:';
+                              const rcloneMatch = cron.raw.match(/rclone\s+(copy|sync|move|check)\s+(?:"([^"]+)"|'([^']+)'|(\S+))\s+(?:"([^"]+)"|'([^']+)'|(\S+))/i);
+                              let src = '/';
+                              let tgt = 'gdrive:';
+                              let act = 'copy';
+
+                              if (rcloneMatch) {
+                                act = rcloneMatch[1] ? rcloneMatch[1].toLowerCase() : 'copy';
+                                src = rcloneMatch[2] || rcloneMatch[3] || rcloneMatch[4] || '/';
+                                tgt = rcloneMatch[5] || rcloneMatch[6] || rcloneMatch[7] || 'gdrive:';
+                                tgt = tgt.replace(/\/+\$\(date[^)]+\)/g, '').replace(/\/+$/, '');
+                              }
+
                               const retMatch = cron.raw.match(/--min-age\s+(\d+)d/);
+
                               setEditingCron({
-                                rawLine: cron.raw, schedule: cron.schedule,
-                                action: cron.raw.includes(' sync ') ? 'sync' : 'copy',
-                                source: src, target: tgt,
-                                options: { useTimestampFolder: cron.raw.includes('$(date'), timestampFormat: cron.raw.includes('%b') ? 'YMD_MMM_HM' : 'YMD_HMS', enableRetention: !!retMatch, retentionDays: retMatch ? retMatch[1] : '7' }
+                                rawLine: cron.raw,
+                                schedule: cron.schedule,
+                                action: act,
+                                source: src,
+                                target: tgt,
+                                options: {
+                                  useTimestampFolder: cron.raw.includes('$(date'),
+                                  timestampFormat: cron.raw.includes('%b') ? 'YMD_MMM_HM' : cron.raw.includes('%d-%m-%Y') ? 'DMY_HM' : 'YMD_HMS',
+                                  enableRetention: !!retMatch,
+                                  retentionDays: retMatch ? retMatch[1] : '7',
+                                }
                               });
                             }}
                             className="p-1 text-indigo-400 hover:bg-indigo-500/10 rounded-lg transition-colors cursor-pointer" title="Edit"
