@@ -566,6 +566,7 @@ export default function RcloneApp() {
   const [historyLoading, setHistoryLoading] = useState(false);
   const [expandedLogIdx, setExpandedLogIdx] = useState(null);
   const [collapsedProjects, setCollapsedProjects] = useState({}); // track which project groups are collapsed
+  const [historyFilter, setHistoryFilter] = useState('all'); // 'all' | 'backup' | 'cleanup'
 
   // Load SSH connections from app state, local encrypted storage, or API
   useEffect(() => {
@@ -1589,8 +1590,8 @@ export default function RcloneApp() {
         {activeTab === 'history' && (
           <div className="p-5 max-w-3xl space-y-4">
 
-            {/* Header */}
-            <div className="flex items-center justify-between">
+            {/* Header & Filter Controls */}
+            <div className="flex items-center justify-between flex-wrap gap-2">
               <div>
                 <h3 className="text-sm font-bold flex items-center gap-2">
                   <Database size={15} className="text-emerald-400" />
@@ -1600,14 +1601,39 @@ export default function RcloneApp() {
                   Logs from scheduled rclone cron jobs on {selectedConn?.name}
                 </p>
               </div>
-              <button
-                onClick={fetchHistory}
-                disabled={historyLoading}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-400 text-[11px] font-bold cursor-pointer border border-emerald-500/30 disabled:opacity-50 transition-colors"
-              >
-                <RefreshCw size={11} className={historyLoading ? 'animate-spin' : ''} />
-                Refresh Logs
-              </button>
+
+              <div className="flex items-center gap-2">
+                {/* Filter Pills */}
+                <div className="flex items-center bg-[var(--bg-secondary)] p-1 rounded-xl border border-[var(--border-color)] text-[10px]">
+                  <button
+                    onClick={() => setHistoryFilter('all')}
+                    className={`px-2.5 py-1 rounded-lg font-bold transition-all cursor-pointer ${historyFilter === 'all' ? 'bg-indigo-600 text-white' : 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'}`}
+                  >
+                    All
+                  </button>
+                  <button
+                    onClick={() => setHistoryFilter('backup')}
+                    className={`px-2.5 py-1 rounded-lg font-bold transition-all cursor-pointer ${historyFilter === 'backup' ? 'bg-indigo-600 text-white' : 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'}`}
+                  >
+                    📋 Backup
+                  </button>
+                  <button
+                    onClick={() => setHistoryFilter('cleanup')}
+                    className={`px-2.5 py-1 rounded-lg font-bold transition-all cursor-pointer ${historyFilter === 'cleanup' ? 'bg-indigo-600 text-white' : 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'}`}
+                  >
+                    🧹 Cleanup
+                  </button>
+                </div>
+
+                <button
+                  onClick={fetchHistory}
+                  disabled={historyLoading}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-400 text-[11px] font-bold cursor-pointer border border-emerald-500/30 disabled:opacity-50 transition-colors"
+                >
+                  <RefreshCw size={11} className={historyLoading ? 'animate-spin' : ''} />
+                  Refresh Logs
+                </button>
+              </div>
             </div>
 
             {/* Project Groups */}
@@ -1627,6 +1653,13 @@ export default function RcloneApp() {
                 ) : (
                   historyProjects.map((project, pIdx) => {
                     const isCollapsed = collapsedProjects[pIdx] !== false;
+                    const runsToDisplay = project.runs.filter(run => {
+                      if (historyFilter === 'backup') return run.action !== 'cleanup';
+                      if (historyFilter === 'cleanup') return run.action === 'cleanup';
+                      return true;
+                    });
+                    if (runsToDisplay.length === 0) return null;
+
                     return (
                       <div key={pIdx} className="border-b border-[var(--border-color)] last:border-b-0">
                         <button
@@ -1639,24 +1672,53 @@ export default function RcloneApp() {
                           </div>
                           <div className="flex items-center gap-2">
                             <span className="text-[10px] text-[var(--text-muted)] font-semibold bg-black/20 px-2 py-0.5 rounded">
-                              {project.runs.length} Runs
+                              {runsToDisplay.length} Runs
                             </span>
                             <span className="text-[var(--text-muted)] text-[10px]">{isCollapsed ? '▸' : '▾'}</span>
                           </div>
                         </button>
                         {!isCollapsed && (
                           <div className="divide-y divide-[var(--border-color)]">
-                            {project.runs.map((run, idx) => {
+                            {runsToDisplay.map((run, idx) => {
                               const expandedId = `${pIdx}-${idx}`;
                               const isExpanded = expandedLogIdx === expandedId;
                               const isSuccess = run.status === 'success';
                               const isWarning = run.status === 'warning';
                               const isFailed = run.status === 'failed';
+                              const act = (run.action || 'copy').toLowerCase();
 
                               return (
                                 <div key={idx} className="p-4 hover:bg-[var(--bg-tertiary)]/30 transition-colors">
                                   <div className="flex items-center justify-between gap-3">
-                                    <div className="flex items-center gap-2.5 min-w-0">
+                                    <div className="flex items-center gap-2 min-w-0 flex-wrap">
+                                      {/* Action Tag */}
+                                      {act === 'cleanup' && (
+                                        <span className="px-2 py-0.5 rounded bg-amber-500/15 text-amber-400 font-bold text-[10px] border border-amber-500/30 shrink-0">
+                                          🧹 CLEANUP
+                                        </span>
+                                      )}
+                                      {act === 'sync' && (
+                                        <span className="px-2 py-0.5 rounded bg-purple-500/15 text-purple-400 font-bold text-[10px] border border-purple-500/30 shrink-0">
+                                          🔄 SYNC
+                                        </span>
+                                      )}
+                                      {act === 'move' && (
+                                        <span className="px-2 py-0.5 rounded bg-cyan-500/15 text-cyan-400 font-bold text-[10px] border border-cyan-500/30 shrink-0">
+                                          📦 MOVE
+                                        </span>
+                                      )}
+                                      {act === 'check' && (
+                                        <span className="px-2 py-0.5 rounded bg-indigo-500/15 text-indigo-400 font-bold text-[10px] border border-indigo-500/30 shrink-0">
+                                          🔍 CHECK
+                                        </span>
+                                      )}
+                                      {act === 'copy' && (
+                                        <span className="px-2 py-0.5 rounded bg-blue-500/15 text-blue-400 font-bold text-[10px] border border-blue-500/30 shrink-0">
+                                          📋 COPY
+                                        </span>
+                                      )}
+
+                                      {/* Status Badge */}
                                       {isSuccess && (
                                         <span className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-400 font-bold text-[10px] border border-emerald-500/30 shrink-0">
                                           <CheckCircle2 size={11} /> SUCCESS

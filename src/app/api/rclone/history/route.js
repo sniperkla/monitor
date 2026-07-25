@@ -68,12 +68,16 @@ export async function GET(req) {
       }
 
       if (!source) {
-        const fallbackMatch = block.match(/rclone\s+(copy|sync|move|check)\s+(\S+)\s+(\S+)/i);
+        const fallbackMatch = block.match(/rclone\s+(copy|sync|move|check|delete|purge)\s+(\S+)(?:\s+(\S+))?/i);
         if (fallbackMatch) {
-          action = fallbackMatch[1];
+          action = fallbackMatch[1].toLowerCase();
           source = fallbackMatch[2].replace(/"/g, '');
-          targetFolder = fallbackMatch[3].replace(/"/g, '');
+          targetFolder = (fallbackMatch[3] || '').replace(/"/g, '');
         }
+      }
+
+      if (block.includes('rclone delete') || action === 'delete' || action === 'purge') {
+        action = 'cleanup';
       }
 
       // Format Project / Task Name
