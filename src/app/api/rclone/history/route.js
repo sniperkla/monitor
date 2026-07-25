@@ -101,11 +101,21 @@ export async function GET(req) {
         else jobName = 'Scheduled Backup Task';
       }
 
-      const transferredMatch = block.match(/Transferred:\s+(\d+)\s*\/\s*(\d+)/);
-      const sizeMatch = block.match(/Transferred:\s+([\d.]+\s*\w+)\s*\//);
-      const elapsedMatch = block.match(/Elapsed time:\s*([\dhmins.]+)/);
-      const errorsMatch = block.match(/Errors:\s*(\d+)/);
-      const percentMatch = block.match(/Transferred:.*,\s*(\d+)%/);
+      // 🎯 Match LAST (LATEST) occurrence of progress metrics in the log file
+      const allTransferred = [...block.matchAll(/Transferred:\s+(\d+)\s*\/\s*(\d+)/g)];
+      const transferredMatch = allTransferred.length > 0 ? allTransferred[allTransferred.length - 1] : null;
+
+      const allSizes = [...block.matchAll(/Transferred:\s+([\d.]+\s*[kMGTP]?i?B)\s*\//gi)];
+      const sizeMatch = allSizes.length > 0 ? allSizes[allSizes.length - 1] : null;
+
+      const allElapsed = [...block.matchAll(/Elapsed time:\s*([\dhmins.]+)/gi)];
+      const elapsedMatch = allElapsed.length > 0 ? allElapsed[allElapsed.length - 1] : null;
+
+      const allErrors = [...block.matchAll(/Errors:\s*(\d+)/gi)];
+      const errorsMatch = allErrors.length > 0 ? allErrors[allErrors.length - 1] : null;
+
+      const allPercents = [...block.matchAll(/Transferred:.*,\s*(\d+)%/gi)];
+      const percentMatch = allPercents.length > 0 ? allPercents[allPercents.length - 1] : null;
 
       const errorCount = errorsMatch ? parseInt(errorsMatch[1], 10) : 0;
       const percent = percentMatch ? parseInt(percentMatch[1], 10) : null;
