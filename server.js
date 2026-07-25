@@ -2781,18 +2781,18 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
               }
             };
 
-            // Build the single command that performs detection, execution, and fallbacks at shell level
-            let extractCmd;
-            if (type === 'zip') {
-              extractCmd = `if command -v unzip >/dev/null; then unzip -o "${archivePath}" -d "${targetDir}"; elif command -v python3 >/dev/null; then python3 -c "import zipfile; zipfile.ZipFile('${archivePath}').extractall('${targetDir}')"; else echo "Neither 'unzip' nor 'python3' command found on the remote server." >&2; exit 127; fi`;
-            } else {
-              const isGzip = archivePath.endsWith('.gz') || archivePath.endsWith('.tgz');
-              extractCmd = `if command -v tar >/dev/null; then tar -xv${isGzip ? 'z' : ''}f "${archivePath}" -C "${targetDir}"; else echo "'tar' command not found on the remote server." >&2; exit 127; fi`;
-            }
-
-            socket.emit('sftp:progress', { action: 'extract', filename, progress: -1, status: 'Starting extraction...' });
-
             const runExtraction = (attempt = 1) => {
+              // Non-blocking extraction using </dev/null so unzip/tar never hangs on user prompts
+              let extractCmd;
+              if (type === 'zip') {
+                extractCmd = `if command -v unzip >/dev/null; then unzip -o "${archivePath}" -d "${targetDir}" </dev/null; elif command -v python3 >/dev/null; then python3 -c "import zipfile; zipfile.ZipFile('${archivePath}').extractall('${targetDir}')"; else echo "Neither 'unzip' nor 'python3' command found on the remote server." >&2; exit 127; fi`;
+              } else {
+                const isGzip = archivePath.endsWith('.gz') || archivePath.endsWith('.tgz');
+                extractCmd = `if command -v tar >/dev/null; then tar -xv${isGzip ? 'z' : ''}f "${archivePath}" -C "${targetDir}" </dev/null; else echo "'tar' command not found on the remote server." >&2; exit 127; fi`;
+              }
+
+              socket.emit('sftp:progress', { action: 'extract', filename, progress: -1, status: 'Starting extraction...' });
+
               sshClient.exec(extractCmd, (err, stream) => {
                 if (err) return emitSftpError(err, 'Extract failed');
                 
@@ -2812,7 +2812,7 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
                     const currentFile = lastLine.replace(/^(extracting:|  inflating:|inflating:|creating:|  creating:)/i, '').trim();
                     
                     const now = Date.now();
-                    if (now - lastEmitTime > 250) {
+                    if (now - lastEmitTime > 200) {
                       socket.emit('sftp:progress', { 
                         action: 'extract', 
                         filename, 
@@ -2828,8 +2828,6 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
                 stream.stderr.on('data', (d) => extractError += d.toString());
 
                 stream.on('close', (code) => {
-                  // Exit code 0, 1, or 2 are treated as success if stdout was produced (indicating some extraction happened)
-                  // unzip returns 1 for warnings (e.g. success with minor warnings). tar returns 1 or 2 on some warnings.
                   const wasSuccessful = code === 0 || ((code === 1 || code === 2) && extractedCount > 0);
                   
                   if (!wasSuccessful && attempt === 1) {

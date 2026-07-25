@@ -1308,10 +1308,10 @@ async function handleSftpExtract(ws, msg) {
     // Build the single command that performs detection, execution, and fallbacks at shell level
     let extractCmd;
     if (type === 'zip') {
-      extractCmd = `if command -v unzip >/dev/null; then unzip -o "${archivePath}" -d "${targetDir}"; elif command -v python3 >/dev/null; then python3 -c "import zipfile; zipfile.ZipFile('${archivePath}').extractall('${targetDir}')"; else echo "Neither 'unzip' nor 'python3' command found on the remote server." >&2; exit 127; fi`;
+      extractCmd = `if command -v unzip >/dev/null; then unzip -o "${archivePath}" -d "${targetDir}" </dev/null; elif command -v python3 >/dev/null; then python3 -c "import zipfile; zipfile.ZipFile('${archivePath}').extractall('${targetDir}')"; else echo "Neither 'unzip' nor 'python3' command found on the remote server." >&2; exit 127; fi`;
     } else {
       const isGzip = archivePath.endsWith('.gz') || archivePath.endsWith('.tgz');
-      extractCmd = `if command -v tar >/dev/null; then tar -xv${isGzip ? 'z' : ''}f "${archivePath}" -C "${targetDir}"; else echo "'tar' command not found on the remote server." >&2; exit 127; fi`;
+      extractCmd = `if command -v tar >/dev/null; then tar -xv${isGzip ? 'z' : ''}f "${archivePath}" -C "${targetDir}" </dev/null; else echo "'tar' command not found on the remote server." >&2; exit 127; fi`;
     }
 
     // Start progress
