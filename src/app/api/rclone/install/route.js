@@ -14,7 +14,8 @@ export async function POST(req) {
     }
 
     const sshConfig = await getSshConfig(connectionId);
-    const logFile = `/tmp/rclone_install_${Date.now()}.log`;
+    const sessionName = `rclone-install-${Date.now()}`;
+    const logFile = `/tmp/${sessionName}.log`;
 
     // Installer script writing output to logFile
     const installScript = [
@@ -73,22 +74,34 @@ export async function POST(req) {
       'fi'
     ].join('\n');
 
-    // Run using nohup to detach cleanly from SSH session and prevent SIGHUP termination
-    const fullCmd = `nohup bash -c ${quote(installScript)} > ${logFile} 2>&1 & echo "PID=$!"`;
-    const result = await execCommand(sshConfig, fullCmd);
+    // Run inside tmux session if available, fallback to nohup
+    const runnerCmd = [
+      `if command -v tmux >/dev/null 2>&1; then`,
+      `  tmux kill-session -t "${sessionName}" 2>/dev/null || true`,
+      `  tmux new-session -d -s "${sessionName}"`,
+      `  tmux send-keys -t "${sessionName}" "bash -c ${quote(installScript)} 2>&1 | tee ${logFile}" Enter`,
+      `  echo "TMUX_SESSION=${sessionName}"`,
+      `else`,
+      `  nohup bash -c ${quote(installScript)} > ${logFile} 2>&1 & echo "PID=$!"`,
+      `fi`
+    ].join('\n');
+
+    const result = await execCommand(sshConfig, runnerCmd);
 
     const pidMatch = result.stdout?.match(/PID=(\d+)/);
     const pid = pidMatch ? pidMatch[1] : null;
 
-    if (result.code === 0 && logFile) {
+    if (result.code === 0) {
       return NextResponse.json({
         success: true,
+        sessionName,
         logFile,
         pid,
+        tmux: result.stdout.includes('TMUX_SESSION='),
       });
     }
 
-    // Fallback synchronous execution if nohup failed
+    // Fallback synchronous execution if background launch failed
     const syncRes = await execCommand(sshConfig, installScript);
     return NextResponse.json({
       success: syncRes.code === 0,
@@ -107,6 +120,7 @@ export async function GET(req) {
     const { searchParams } = new URL(req.url);
     const connectionId = searchParams.get('connectionId');
     const logFile = searchParams.get('logFile');
+    const sessionName = searchParams.get('sessionName');
     const pid = searchParams.get('pid');
 
     if (!connectionId || !logFile) {
@@ -114,10 +128,13 @@ export async function GET(req) {
     }
 
     const sshConfig = await getSshConfig(connectionId);
-    const logRes = await execCommand(sshConfig, `cat "${logFile}" 2>/dev/null || echo "Initializing installer log..."`);
+    const logRes = await execCommand(sshConfig, `cat "${logFile}" 2>/dev/null || echo "Initializing tmux terminal log..."`);
     
     let isRunning = false;
-    if (pid) {
+    if (sessionName) {
+      const tmuxCheck = await execCommand(sshConfig, `tmux has-session -t "${sessionName}" 2>/dev/null`);
+      isRunning = tmuxCheck.code === 0;
+    } else if (pid) {
       const psRes = await execCommand(sshConfig, `ps -p ${pid} 2>/dev/null | grep ${pid}`);
       isRunning = psRes.code === 0;
     }
@@ -126,6 +143,7 @@ export async function GET(req) {
       success: true,
       log: logRes.stdout || '',
       running: isRunning,
+      sessionName,
     });
 
   } catch (error) {

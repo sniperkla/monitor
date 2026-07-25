@@ -110,7 +110,7 @@ export default function RcloneApp() {
     if (installJob && isInstalling) {
       interval = setInterval(async () => {
         try {
-          const res = await apiFetch(`/api/rclone/install?connectionId=${selectedConnId}&logFile=${encodeURIComponent(installJob.logFile)}&pid=${installJob.pid || ''}`);
+          const res = await apiFetch(`/api/rclone/install?connectionId=${selectedConnId}&logFile=${encodeURIComponent(installJob.logFile)}&sessionName=${encodeURIComponent(installJob.sessionName || '')}&pid=${installJob.pid || ''}`);
           if (res?.success) {
             setInstallLog(res.log || '');
             setIsInstalling(res.running);
@@ -130,7 +130,7 @@ export default function RcloneApp() {
     if (activeJob && isJobRunning) {
       interval = setInterval(async () => {
         try {
-          const res = await apiFetch(`/api/rclone/exec?connectionId=${selectedConnId}&logFile=${encodeURIComponent(activeJob.logFile)}&pid=${activeJob.pid || ''}`);
+          const res = await apiFetch(`/api/rclone/exec?connectionId=${selectedConnId}&logFile=${encodeURIComponent(activeJob.logFile)}&sessionName=${encodeURIComponent(activeJob.sessionName || '')}&pid=${activeJob.pid || ''}`);
           if (res?.success) {
             setJobLog(res.log || '');
             setIsJobRunning(res.running);

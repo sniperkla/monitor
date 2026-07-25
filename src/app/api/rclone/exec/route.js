@@ -20,6 +20,8 @@ export async function POST(req) {
     }
 
     const sshConfig = await getSshConfig(connectionId);
+    const sessionName = `rclone-${action}-${Date.now()}`;
+    const logFile = `/tmp/${sessionName}.log`;
     const pathPrefix = 'export PATH="$HOME/.local/bin:$HOME/bin:/usr/local/bin:$PATH"; ';
 
     // Build flags
@@ -31,22 +33,32 @@ export async function POST(req) {
 
     const cmd = `${pathPrefix}rclone ${action} ${quote(source)} ${quote(target)} ${flags.join(' ')}`;
 
-    // Create unique log file
-    const logId = `rclone_${Date.now()}`;
-    const logFile = `/tmp/${logId}.log`;
-    const fullCmd = `stdbuf -i0 -o0 -e0 ${cmd} > ${logFile} 2>&1 & echo $!`;
+    // Wrap execution inside tmux session if tmux is installed, fallback to nohup
+    const runnerCmd = [
+      `if command -v tmux >/dev/null 2>&1; then`,
+      `  tmux kill-session -t "${sessionName}" 2>/dev/null || true`,
+      `  tmux new-session -d -s "${sessionName}"`,
+      `  tmux send-keys -t "${sessionName}" "${cmd} 2>&1 | tee ${logFile}" Enter`,
+      `  echo "TMUX_SESSION=${sessionName}"`,
+      `else`,
+      `  nohup bash -c ${quote(cmd)} > ${logFile} 2>&1 & echo "PID=$!"`,
+      `fi`
+    ].join('\n');
 
-    const result = await execCommand(sshConfig, fullCmd);
+    const result = await execCommand(sshConfig, runnerCmd);
+
+    const pidMatch = result.stdout?.match(/PID=(\d+)/);
+    const pid = pidMatch ? pidMatch[1] : null;
 
     if (result.code === 0) {
-      const pid = result.stdout.trim();
       return NextResponse.json({
         success: true,
-        logId,
+        sessionName,
         logFile,
         pid,
         command: cmd,
-        message: `Rclone ${action} started!`,
+        tmux: result.stdout.includes('TMUX_SESSION='),
+        message: `Rclone ${action} launched in ${result.stdout.includes('TMUX_SESSION=') ? 'tmux session' : 'background'}!`,
       });
     }
 
@@ -66,6 +78,7 @@ export async function GET(req) {
     const { searchParams } = new URL(req.url);
     const connectionId = searchParams.get('connectionId');
     const logFile = searchParams.get('logFile');
+    const sessionName = searchParams.get('sessionName');
     const pid = searchParams.get('pid');
 
     if (!connectionId || !logFile) {
@@ -75,11 +88,14 @@ export async function GET(req) {
     const sshConfig = await getSshConfig(connectionId);
 
     // Read latest log output
-    const logRes = await execCommand(sshConfig, `tail -n 100 "${logFile}" 2>/dev/null || echo "Log not ready..."`);
+    const logRes = await execCommand(sshConfig, `cat "${logFile}" 2>/dev/null || echo "Log initializing in tmux..."`);
     
-    // Check if process is still running
+    // Check if tmux session or process is still running
     let isRunning = false;
-    if (pid) {
+    if (sessionName) {
+      const tmuxCheck = await execCommand(sshConfig, `tmux has-session -t "${sessionName}" 2>/dev/null`);
+      isRunning = tmuxCheck.code === 0;
+    } else if (pid) {
       const psRes = await execCommand(sshConfig, `ps -p ${pid} 2>/dev/null | grep ${pid}`);
       isRunning = psRes.code === 0;
     }
@@ -88,6 +104,7 @@ export async function GET(req) {
       success: true,
       log: logRes.stdout || '',
       running: isRunning,
+      sessionName,
     });
 
   } catch (error) {
