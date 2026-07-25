@@ -79,7 +79,14 @@ export async function GET(req) {
       // Format Project / Task Name
       const cleanSource = source ? (source.split('/').filter(Boolean).pop() || source) : 'Source';
       const cleanTarget = targetFolder ? targetFolder.split('/')[0] : 'Destination';
-      jobName = (source && targetFolder) ? `${cleanSource} ➔ ${cleanTarget}` : 'Scheduled Backup Task';
+      
+      let customProjectName = '';
+      const projMatch = block.match(/===\s*Project:\s*(.*?)\s*===/);
+      if (projMatch) {
+        customProjectName = projMatch[1].trim();
+      }
+      
+      jobName = customProjectName || ((source && targetFolder) ? `${cleanSource} ➔ ${cleanTarget}` : 'Scheduled Backup Task');
 
       const transferredMatch = block.match(/Transferred:\s+(\d+)\s*\/\s*(\d+)/);
       const sizeMatch = block.match(/Transferred:\s+([\d.]+\s*\w+)\s*\//);

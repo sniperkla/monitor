@@ -70,7 +70,8 @@ function bashSingleQuote(str) {
 
 export async function POST(req) {
   try {
-    const { connectionId, schedule, action, source, target, options = {} } = await req.json();
+    const { connectionId, schedule, action, source, target, projectName, options = {} } = await req.json();
+    const reqProjectName = projectName || '';
 
     if (!connectionId || !schedule || !source || !target) {
       return NextResponse.json({ success: false, error: 'connectionId, schedule, source, and target are required' }, { status: 400 });
@@ -113,7 +114,11 @@ export async function POST(req) {
       finalTarget = `${cleanTarget}/$(date +${format})`;
     }
 
-    let rcloneCmd = `export PATH="$HOME/.local/bin:$HOME/bin:/usr/local/bin:/usr/bin:$PATH"; rclone ${action || 'copy'} "${normSource}" "${finalTarget}" ${flags.join(' ')}`;
+    const cleanSourceLabel = normSource ? (normSource.split('/').filter(Boolean).pop() || normSource) : 'Source';
+    const cleanTargetLabel = target ? target.split('/')[0] : 'Destination';
+    const finalProjectName = reqProjectName.trim() ? reqProjectName.trim().replace(/"/g, '') : `${cleanSourceLabel} ➔ ${cleanTargetLabel}`;
+
+    let rcloneCmd = `export PATH="$HOME/.local/bin:$HOME/bin:/usr/local/bin:/usr/bin:$PATH"; echo "=== Project: ${finalProjectName} ===" >> "${logFile}"; rclone ${action || 'copy'} "${normSource}" "${finalTarget}" ${flags.join(' ')}`;
     
     // Auto Retention Policy: clean old backups older than X days
     if (options.enableRetention && options.retentionDays) {

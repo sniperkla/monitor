@@ -520,6 +520,7 @@ export default function RcloneApp() {
 
   // Backup Execution State
   const [action, setAction] = useState('copy'); // 'copy' | 'sync' | 'move' | 'check'
+  const [projectName, setProjectName] = useState(''); // Optional project/task name
   const [sourcePath, setSourcePath] = useState('/');
   const [targetPath, setTargetPath] = useState('');
   const [dryRun, setDryRun] = useState(false);
@@ -564,6 +565,7 @@ export default function RcloneApp() {
   const [historyFolders, setHistoryFolders] = useState([]);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [expandedLogIdx, setExpandedLogIdx] = useState(null);
+  const [collapsedProjects, setCollapsedProjects] = useState({}); // track which project groups are collapsed
 
   // Load SSH connections from app state, local encrypted storage, or API
   useEffect(() => {
@@ -790,6 +792,7 @@ export default function RcloneApp() {
         body: JSON.stringify({
           connectionId: selectedConnId,
           schedule: finalSchedule,
+          projectName: projectName,
           action,
           source: sourcePath,
           target: targetPath,
@@ -1281,7 +1284,23 @@ export default function RcloneApp() {
 
             {/* ─ Row 2: Source & Target Paths ─ */}
             <div className="p-4 rounded-2xl bg-[var(--bg-secondary)] border border-[var(--border-color)] space-y-3">
-              <label className="text-[10px] font-bold text-[var(--text-muted)] uppercase tracking-wide block">Paths</label>
+              <div className="flex items-center justify-between">
+                <label className="text-[10px] font-bold text-[var(--text-muted)] uppercase tracking-wide block">Backup Paths & Identity</label>
+              </div>
+
+              {/* Project Name (Optional) */}
+              <div className="mb-3">
+                <label className="text-xs font-semibold text-[var(--text-muted)] flex items-center gap-1.5 mb-1">
+                  <Database size={11} className="text-cyan-400" /> Project / Task Name <span className="text-[9px] font-normal opacity-70">(Optional)</span>
+                </label>
+                <input
+                  type="text"
+                  value={projectName}
+                  onChange={(e) => setProjectName(e.target.value)}
+                  placeholder="e.g., Database Backup, Assets Sync"
+                  className="w-full px-3 py-1.5 text-xs rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] text-[var(--text-primary)] focus:border-cyan-500 focus:outline-none"
+                />
+              </div>
 
               <div className="grid grid-cols-1 gap-2.5">
                 {/* Source */}
@@ -1597,16 +1616,26 @@ export default function RcloneApp() {
                     <p className="text-[10px] text-[var(--text-muted)] mt-1">Logs are automatically recorded in <code>/tmp/rclone-cron-*.log</code> when scheduled tasks run.</p>
                   </div>
                 ) : (
-                  historyProjects.map((project, pIdx) => (
+                  historyProjects.map((project, pIdx) => {
+                    const isCollapsed = collapsedProjects[pIdx] !== false; // default collapsed=false (expanded)
+                    return (
                     <div key={pIdx} className="border-b border-[var(--border-color)] last:border-b-0">
-                      <div className="px-4 py-2 bg-[var(--bg-tertiary)]/50 flex items-center justify-between border-b border-[var(--border-color)]">
+                      <button
+                        onClick={() => setCollapsedProjects(prev => ({ ...prev, [pIdx]: !isCollapsed }))}
+                        className="w-full px-4 py-2.5 bg-[var(--bg-tertiary)]/50 flex items-center justify-between border-b border-[var(--border-color)] hover:bg-[var(--bg-tertiary)] transition-colors cursor-pointer"
+                      >
                         <div className="text-xs font-bold text-indigo-400 font-mono flex items-center gap-2">
-                          <Folder size={12} /> Project: {project.name}
+                          <Folder size={12} />
+                          <span>{project.name}</span>
                         </div>
-                        <div className="text-[10px] text-[var(--text-muted)] font-semibold bg-black/20 px-2 py-0.5 rounded">
-                          {project.runs.length} Runs
+                        <div className="flex items-center gap-2">
+                          <span className="text-[10px] text-[var(--text-muted)] font-semibold bg-black/20 px-2 py-0.5 rounded">
+                            {project.runs.length} Runs
+                          </span>
+                          <span className="text-[var(--text-muted)] text-[10px]">{isCollapsed ? '▸' : '▾'}</span>
                         </div>
-                      </div>
+                      </button>
+                      {!isCollapsed && (
                       <div className="divide-y divide-[var(--border-color)]">
                         {project.runs.map((run, idx) => {
                           const expandedId = `${pIdx}-${idx}`;
@@ -1687,8 +1716,10 @@ export default function RcloneApp() {
                           );
                         })}
                       </div>
+                      )}
                     </div>
-                  ))
+                    );
+                  })
                 )}
               </div>
             </div>
