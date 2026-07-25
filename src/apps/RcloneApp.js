@@ -1670,8 +1670,25 @@ export default function RcloneApp() {
                                   </button>
                                 </div>
                               </div>
-                    );
-                  })
+
+                              {/* Log Drawer Preview */}
+                              {isExpanded && (
+                                <div className="mt-3 rounded-xl bg-black border border-[var(--border-color)] overflow-hidden">
+                                  <div className="px-3 py-1 bg-[var(--bg-tertiary)] text-[10px] font-mono text-[var(--text-muted)] flex items-center justify-between border-b border-[var(--border-color)]">
+                                    <span>Terminal Log Output</span>
+                                    <span className="text-emerald-400">{run.logFile}</span>
+                                  </div>
+                                  <div className="p-3 max-h-64 overflow-y-auto text-[10px] font-mono text-gray-300 whitespace-pre-wrap leading-relaxed">
+                                    {run.logPreview || 'No additional logs available.'}
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  ))
                 )}
               </div>
             </div>
