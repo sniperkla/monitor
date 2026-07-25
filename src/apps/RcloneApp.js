@@ -339,7 +339,7 @@ export default function RcloneApp() {
     setPickerMode(mode);
     if (mode === 'source') {
       setPickerTargetType('local');
-      const initialPath = sourcePath || '/var/www';
+      const initialPath = sourcePath && sourcePath.startsWith('/') ? sourcePath : '/var/www';
       setPickerCurrentPath(initialPath);
       fetchPickerItems('local', initialPath);
     } else {
@@ -1464,6 +1464,28 @@ export default function RcloneApp() {
 
             {/* Path Breadcrumb & Direct Jump */}
             <div className="flex items-center gap-2 bg-[var(--bg-tertiary)] p-2 rounded-xl border border-[var(--border-color)] text-xs font-mono">
+              {/* Parent Directory Button */}
+              <button
+                onClick={() => {
+                  let parent = '';
+                  if (pickerTargetType === 'local') {
+                    const parts = pickerCurrentPath.split('/').filter(Boolean);
+                    parts.pop();
+                    parent = parts.length > 0 ? `/${parts.join('/')}` : '/';
+                  } else {
+                    const parts = pickerCurrentPath.split('/').filter(Boolean);
+                    parts.pop();
+                    parent = parts.join('/');
+                  }
+                  setPickerCurrentPath(parent);
+                  fetchPickerItems(pickerTargetType, parent);
+                }}
+                className="px-2 py-1 bg-[var(--bg-secondary)] hover:bg-[var(--border-color)] text-[var(--text-primary)] font-bold text-[11px] rounded-lg border border-[var(--border-color)] flex items-center gap-1 cursor-pointer shrink-0"
+                title="Go to Parent Folder"
+              >
+                ⬆ Up
+              </button>
+
               <span className="text-indigo-400 font-bold shrink-0">{pickerTargetType}</span>
               <input
                 type="text"
@@ -1477,7 +1499,7 @@ export default function RcloneApp() {
               />
               <button
                 onClick={() => fetchPickerItems(pickerTargetType, pickerCurrentPath)}
-                className="px-2.5 py-1 bg-indigo-600 hover:bg-indigo-500 text-white text-[10px] font-bold rounded-lg cursor-pointer"
+                className="px-2.5 py-1 bg-indigo-600 hover:bg-indigo-500 text-white text-[10px] font-bold rounded-lg cursor-pointer shrink-0"
               >
                 Go
               </button>
@@ -1495,9 +1517,15 @@ export default function RcloneApp() {
                     key={idx}
                     onClick={() => {
                       if (item.IsDir) {
-                        const newSub = pickerCurrentPath
-                          ? `${pickerCurrentPath.replace(/\/$/, '')}/${item.Name}`
-                          : item.Name;
+                        let newSub = '';
+                        if (pickerTargetType === 'local') {
+                          const base = pickerCurrentPath.replace(/\/+$/, '');
+                          newSub = `${base}/${item.Name}`;
+                        } else {
+                          newSub = pickerCurrentPath
+                            ? `${pickerCurrentPath.replace(/\/+$/, '')}/${item.Name}`
+                            : item.Name;
+                        }
                         setPickerCurrentPath(newSub);
                         fetchPickerItems(pickerTargetType, newSub);
                       }
