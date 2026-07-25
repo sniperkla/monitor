@@ -1161,54 +1161,90 @@ export default function RcloneApp() {
                     </button>
                   </div>
 
-                  <div className="space-y-2 max-h-60 overflow-y-auto pr-1">
+                  <div className="space-y-2 max-h-[480px] overflow-y-auto pr-1">
                     {serverCrons.map((cron) => (
-                      <div key={cron.id} className="p-3 rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] flex items-start justify-between gap-3 text-xs">
-                        <div className="space-y-1 truncate">
-                          <div className="flex items-center gap-2">
-                            <span className="px-2 py-0.5 rounded-full bg-indigo-500/15 text-indigo-400 font-bold text-[10px] font-mono">
+                      <div key={cron.id} className="rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] overflow-hidden text-xs">
+                        {/* Header Row */}
+                        <div className="flex items-center justify-between gap-3 px-3 py-2.5 border-b border-[var(--border-color)]">
+                          <div className="flex items-center gap-2 min-w-0">
+                            <span className="px-2 py-0.5 rounded-full bg-indigo-500/15 text-indigo-400 font-bold text-[10px] font-mono shrink-0">
                               {cron.humanSchedule}
                             </span>
-                            <span className="text-[10px] font-mono text-[var(--text-muted)]">[{cron.schedule}]</span>
+                            <span className="text-[10px] font-mono text-[var(--text-muted)] shrink-0">[{cron.schedule}]</span>
                           </div>
-                          <p className="font-mono text-[11px] text-[var(--text-primary)] truncate" title={cron.command}>
-                            {cron.command}
-                          </p>
+                          <div className="flex items-center gap-1 shrink-0">
+                            <button
+                              onClick={() => navigator.clipboard.writeText(cron.raw)}
+                              className="p-1.5 text-[var(--text-muted)] hover:text-emerald-400 hover:bg-emerald-500/10 rounded-lg transition-colors cursor-pointer"
+                              title="Copy Full Crontab Line"
+                            >
+                              <Copy size={14} />
+                            </button>
+                            <button
+                              onClick={() => {
+                                const matches = cron.raw.match(/"([^"]+)"/g) || [];
+                                const src = matches[0] ? matches[0].replace(/"/g, '') : '/var/www';
+                                const tgt = matches[1] ? matches[1].replace(/"/g, '') : 'gdrive:';
+                                const retentionMatch = cron.raw.match(/--min-age\s+(\d+)d/);
+                                setEditingCron({
+                                  rawLine: cron.raw,
+                                  schedule: cron.schedule,
+                                  action: cron.raw.includes(' sync ') ? 'sync' : 'copy',
+                                  source: src,
+                                  target: tgt,
+                                  options: {
+                                    useTimestampFolder: cron.raw.includes('$(date'),
+                                    timestampFormat: cron.raw.includes('%b') ? 'YMD_MMM_HM' : 'YMD_HMS',
+                                    enableRetention: !!retentionMatch,
+                                    retentionDays: retentionMatch ? retentionMatch[1] : '7',
+                                  }
+                                });
+                              }}
+                              className="p-1.5 text-indigo-400 hover:bg-indigo-500/10 rounded-lg transition-colors cursor-pointer"
+                              title="Edit & Adjust Crontab Task"
+                            >
+                              <Settings size={14} />
+                            </button>
+                            <button
+                              onClick={() => handleDeleteCron(cron.raw)}
+                              className="p-1.5 text-rose-400 hover:bg-rose-500/10 rounded-lg transition-colors cursor-pointer"
+                              title="Delete Crontab Task from Server"
+                            >
+                              <Trash2 size={14} />
+                            </button>
+                          </div>
                         </div>
 
-                        <div className="flex items-center gap-1 shrink-0">
-                          <button
-                            onClick={() => {
-                              const matches = cron.raw.match(/"([^"]+)"/g) || [];
-                              const src = matches[0] ? matches[0].replace(/"/g, '') : '/var/www';
-                              const tgt = matches[1] ? matches[1].replace(/"/g, '') : 'gdrive:';
-                              const retentionMatch = cron.raw.match(/--min-age\s+(\d+)d/);
-                              setEditingCron({
-                                rawLine: cron.raw,
-                                schedule: cron.schedule,
-                                action: cron.raw.includes(' sync ') ? 'sync' : 'copy',
-                                source: src,
-                                target: tgt,
-                                options: {
-                                  useTimestampFolder: cron.raw.includes('$(date'),
-                                  timestampFormat: cron.raw.includes('%b') ? 'YMD_MMM_HM' : 'YMD_HMS',
-                                  enableRetention: !!retentionMatch,
-                                  retentionDays: retentionMatch ? retentionMatch[1] : '7',
-                                }
-                              });
-                            }}
-                            className="p-1.5 text-indigo-400 hover:bg-indigo-500/10 rounded-lg transition-colors cursor-pointer"
-                            title="Edit & Adjust Crontab Task"
-                          >
-                            <Settings size={15} />
-                          </button>
-                          <button
-                            onClick={() => handleDeleteCron(cron.raw)}
-                            className="p-1.5 text-rose-400 hover:bg-rose-500/10 rounded-lg transition-colors cursor-pointer"
-                            title="Delete Crontab Task from Server"
-                          >
-                            <Trash2 size={15} />
-                          </button>
+                        {/* Full Raw Crontab Code Block */}
+                        <div className="bg-black/40 p-3 overflow-x-auto">
+                          <pre className="font-mono text-[10px] leading-relaxed whitespace-pre-wrap break-all">
+                            <span className="text-amber-400 font-bold select-none">{cron.schedule} </span>
+                            {cron.raw.slice(cron.schedule.length + 1).split('; ').map((part, i, arr) => (
+                              <span key={i}>
+                                {i > 0 && <span className="text-indigo-400 font-bold">; </span>}
+                                {part.startsWith('export') && (
+                                  <span>
+                                    <span className="text-emerald-400">export</span>
+                                    <span className="text-[var(--text-muted)]">{part.slice(6)}</span>
+                                  </span>
+                                )}
+                                {part.startsWith('rclone') && (
+                                  <span>
+                                    <span className="text-cyan-400 font-bold">rclone</span>
+                                    {part.slice(6).split(' ').map((token, ti) => {
+                                      if (token.startsWith('--')) return <span key={ti} className="text-yellow-400"> {token}</span>;
+                                      if (token.startsWith('"') || token.startsWith("'")) return <span key={ti} className="text-emerald-300"> {token}</span>;
+                                      if (['sync','copy','move','check','delete'].includes(token)) return <span key={ti} className="text-purple-400 font-semibold"> {token}</span>;
+                                      return <span key={ti} className="text-[var(--text-primary)]"> {token}</span>;
+                                    })}
+                                  </span>
+                                )}
+                                {!part.startsWith('export') && !part.startsWith('rclone') && (
+                                  <span className="text-[var(--text-muted)]">{part}</span>
+                                )}
+                              </span>
+                            ))}
+                          </pre>
                         </div>
                       </div>
                     ))}
