@@ -558,6 +558,12 @@ export default function RcloneApp() {
   const [remoteItems, setRemoteItems] = useState([]);
   const [browseLoading, setBrowseLoading] = useState(false);
 
+  // Backup History State
+  const [historyRuns, setHistoryRuns] = useState([]);
+  const [historyFolders, setHistoryFolders] = useState([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [expandedLogIdx, setExpandedLogIdx] = useState(null);
+
   // Load SSH connections from app state, local encrypted storage, or API
   useEffect(() => {
     const loadConnections = async () => {
@@ -606,6 +612,7 @@ export default function RcloneApp() {
       setServerCrons([]);
       fetchRcloneStatus();
       fetchCrons();
+      fetchHistory();
     }
   }, [selectedConnId, vaultStatus]);
 
@@ -751,6 +758,20 @@ export default function RcloneApp() {
         setServerCrons(data.jobs || []);
       }
     } catch (_) {}
+  };
+
+  const fetchHistory = async () => {
+    if (!selectedConnId) return;
+    setHistoryLoading(true);
+    try {
+      const res = await apiFetch(`/api/rclone/history?connectionId=${selectedConnId}&target=${encodeURIComponent(targetPath || '')}`);
+      const data = await res.json();
+      if (data?.success) {
+        setHistoryRuns(data.runs || []);
+        setHistoryFolders(data.backupFolders || []);
+      }
+    } catch (_) {}
+    setHistoryLoading(false);
   };
 
   const handleSaveCron = async () => {
@@ -1536,6 +1557,124 @@ export default function RcloneApp() {
                       </div>
                     </div>
                   ))
+                )}
+              </div>
+            </div>
+
+            {/* ─ Backup Execution History & Log Tracker ─ */}
+            <div className="rounded-2xl bg-[var(--bg-secondary)] border border-[var(--border-color)] overflow-hidden space-y-0">
+              <div className="px-4 py-3 border-b border-[var(--border-color)] flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Database size={15} className="text-emerald-400" />
+                  <h4 className="text-xs font-bold">
+                    Backup Execution History & Log Tracker
+                  </h4>
+                  <span className="px-1.5 py-0.5 rounded-full bg-emerald-500/15 text-emerald-400 text-[10px] font-mono">
+                    {historyRuns.length} Runs Logged
+                  </span>
+                </div>
+                <button
+                  onClick={fetchHistory}
+                  disabled={historyLoading}
+                  className="flex items-center gap-1 text-[10px] text-emerald-400 hover:underline cursor-pointer disabled:opacity-50"
+                >
+                  <RefreshCw size={10} className={historyLoading ? 'animate-spin' : ''} />
+                  Refresh Logs
+                </button>
+              </div>
+
+              <div className="divide-y divide-[var(--border-color)]">
+                {historyLoading && historyRuns.length === 0 ? (
+                  <div className="p-8 text-center text-xs text-[var(--text-muted)] flex items-center justify-center gap-2">
+                    <RefreshCw size={14} className="animate-spin text-emerald-400" />
+                    Fetching backup history logs from {selectedConn?.name}...
+                  </div>
+                ) : historyRuns.length === 0 ? (
+                  <div className="p-8 text-center text-xs text-[var(--text-muted)]">
+                    No crontab backup execution logs found on {selectedConn?.name} yet.
+                    <p className="text-[10px] text-[var(--text-muted)] mt-1">Logs are automatically recorded in <code>/tmp/rclone-cron-*.log</code> when scheduled tasks run.</p>
+                  </div>
+                ) : (
+                  historyRuns.map((run, idx) => {
+                    const isExpanded = expandedLogIdx === idx;
+                    const isSuccess = run.status === 'success';
+                    const isWarning = run.status === 'warning';
+                    const isFailed = run.status === 'failed';
+
+                    return (
+                      <div key={idx} className="p-3.5 hover:bg-[var(--bg-tertiary)]/50 transition-colors">
+                        <div className="flex items-center justify-between gap-3">
+                          <div className="flex items-center gap-2.5 min-w-0">
+                            {/* Status Badge */}
+                            {isSuccess && (
+                              <span className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-400 font-bold text-[10px] border border-emerald-500/30 shrink-0">
+                                <CheckCircle2 size={11} /> SUCCESS
+                              </span>
+                            )}
+                            {isWarning && (
+                              <span className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-400 font-bold text-[10px] border border-amber-500/30 shrink-0">
+                                <AlertTriangle size={11} /> WARNING ({run.errors} err)
+                              </span>
+                            )}
+                            {isFailed && (
+                              <span className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-rose-500/15 text-rose-400 font-bold text-[10px] border border-rose-500/30 shrink-0">
+                                <AlertTriangle size={11} /> FAILED
+                              </span>
+                            )}
+                            {!isSuccess && !isWarning && !isFailed && (
+                              <span className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-indigo-500/15 text-indigo-400 font-bold text-[10px] border border-indigo-500/30 shrink-0">
+                                ● EXECUTING
+                              </span>
+                            )}
+
+                            {/* Timestamp & Info */}
+                            <div className="truncate">
+                              <div className="text-xs font-semibold text-[var(--text-primary)] flex items-center gap-2 font-mono">
+                                <span>{run.startTime || (run.modifiedAt ? new Date(run.modifiedAt).toLocaleString() : 'Recent Run')}</span>
+                                {run.elapsed && <span className="text-[10px] text-[var(--text-muted)] font-normal">⏱️ {run.elapsed}</span>}
+                              </div>
+                              <div className="text-[10px] text-[var(--text-muted)] font-mono truncate">
+                                Log File: {run.logFile}
+                              </div>
+                            </div>
+                          </div>
+
+                          {/* Stats Pills */}
+                          <div className="flex items-center gap-2 shrink-0">
+                            {run.sizeTransferred && (
+                              <span className="px-2 py-0.5 rounded bg-[var(--bg-tertiary)] border border-[var(--border-color)] text-[10px] font-mono text-cyan-400 font-bold">
+                                📦 {run.sizeTransferred}
+                              </span>
+                            )}
+                            {run.filesTransferred && (
+                              <span className="px-2 py-0.5 rounded bg-[var(--bg-tertiary)] border border-[var(--border-color)] text-[10px] font-mono text-indigo-300">
+                                📄 {run.filesTransferred} files
+                              </span>
+                            )}
+                            <button
+                              onClick={() => setExpandedLogIdx(isExpanded ? null : idx)}
+                              className="px-2.5 py-1 rounded-lg bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-400 text-[10px] font-bold cursor-pointer border border-indigo-500/20 transition-colors flex items-center gap-1"
+                            >
+                              <Terminal size={10} /> {isExpanded ? 'Hide Log' : 'View Log'}
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* Log Drawer Preview */}
+                        {isExpanded && (
+                          <div className="mt-3 rounded-xl bg-black border border-[var(--border-color)] overflow-hidden">
+                            <div className="px-3 py-1 bg-[var(--bg-tertiary)] text-[10px] font-mono text-[var(--text-muted)] flex items-center justify-between border-b border-[var(--border-color)]">
+                              <span>Terminal Log Output ({run.totalLogLines} lines)</span>
+                              <span className="text-emerald-400">{run.logFile}</span>
+                            </div>
+                            <pre className="p-3 font-mono text-[10px] text-emerald-400 max-h-48 overflow-y-auto whitespace-pre-wrap leading-relaxed">
+                              {run.logPreview || 'No log details available.'}
+                            </pre>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })
                 )}
               </div>
             </div>
