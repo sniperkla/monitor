@@ -20,13 +20,36 @@ export async function resolveSshConfig(baseConfig, options = {}) {
 
   if (isLocalhost(sshConfig.host) || options.sshMode === 'local') {
     const relay = findActiveRelay();
-    if (!relay) {
+    if (!relay || !relay.ws) {
       throw new Error('Local Relay Agent is not connected. Please start local-relay.js on your target machine.');
     }
-    relay.targetHost = sshConfig.host;
-    relay.targetPort = sshConfig.port || 22;
-    sshConfig.host = '127.0.0.1';
-    sshConfig.port = relay.localPort;
+    
+    // Instead of connecting to localhost TCP port (which clashes with MongoDB), we use a custom stream
+    const { Duplex } = require('stream');
+    const connId = Math.random().toString(36).slice(2, 10);
+    const duplex = new Duplex({
+      write(chunk, encoding, callback) {
+        if (relay.ws.readyState === 1) {
+          relay.ws.send(JSON.stringify({ type: 'data', connId, data: chunk.toString('base64') }));
+        }
+        callback();
+      },
+      read(size) {}
+    });
+    duplex.isCustomRelayStream = true;
+
+    // Register stream with server.js so it routes incoming data from relay agent to this stream
+    if (relay.ws.__tcpSockets) {
+      relay.ws.__tcpSockets.set(connId, duplex);
+    }
+
+    // Tell the relay agent to open the SSH connection
+    if (relay.ws.readyState === 1) {
+      relay.ws.send(JSON.stringify({ type: 'open', connId, host: sshConfig.host, port: sshConfig.port || 22 }));
+    }
+
+    // Set ssh2 client to use our custom socket stream instead of host/port
+    sshConfig.sock = duplex;
   }
 
   return sshConfig;

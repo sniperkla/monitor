@@ -3933,6 +3933,7 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
 
         const { userId } = entry;
         const tcpSockets = new Map(); // connId → tcp socket (MongoDB driver side)
+        ws.__tcpSockets = tcpSockets;
 
         // Local TCP server — Mongoose driver connects here; we proxy to relay agent
         const netServer = net.createServer((tcpSock) => {
@@ -4023,12 +4024,21 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
             }
             // ── TCP relay (MongoDB) ──
             if (msg.type === 'data') {
-              const s = tcpSockets.get(msg.connId);
-              if (s && !s.destroyed) s.write(Buffer.from(msg.data, 'base64'));
+              const sock = tcpSockets.get(msg.connId);
+              if (sock) {
+                if (sock.isCustomRelayStream) sock.push(Buffer.from(msg.data, 'base64'));
+                else sock.write(Buffer.from(msg.data, 'base64'));
+              }
+              return;
             }
             if (msg.type === 'close') {
-              const s = tcpSockets.get(msg.connId);
-              if (s) { s.destroy(); tcpSockets.delete(msg.connId); }
+              const sock = tcpSockets.get(msg.connId);
+              if (sock) {
+                if (sock.isCustomRelayStream) sock.push(null);
+                else sock.destroy();
+                tcpSockets.delete(msg.connId);
+              }
+              return;
             }
             // ── SSH/SFTP relay: forward relay agent responses back to browser socket ──
             const sshSftpTypes = [
