@@ -1029,8 +1029,9 @@ export default function RcloneApp() {
           <select
             value={selectedConnId}
             onChange={(e) => setSelectedConnId(e.target.value)}
-            className="px-3 py-1.5 text-xs rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] text-[var(--text-primary)] font-mono max-w-[220px] cursor-pointer focus:border-indigo-500 focus:outline-none"
+            className="bg-[var(--bg-primary)] border border-[var(--border-color)] rounded-xl px-3 py-1.5 text-xs text-[var(--text-primary)] focus:outline-none focus:border-indigo-500 transition-colors shadow-sm cursor-pointer min-w-[200px]"
           >
+            <option value="">-- Select SSH Connection --</option>
             {connections?.map((c) => {
               const id = c.id || c._id;
               return (
@@ -1039,9 +1040,6 @@ export default function RcloneApp() {
                 </option>
               );
             })}
-            {(!connections || connections.length === 0) && (
-              <option disabled value="">No SSH connections found</option>
-            )}
           </select>
           {selectedConn && (
             <span className="text-[10px] font-mono text-emerald-400 bg-emerald-500/10 px-2 py-1 rounded-lg border border-emerald-500/20 shrink-0 hidden sm:block">
