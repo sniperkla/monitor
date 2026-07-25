@@ -93,7 +93,12 @@ export async function POST(req) {
 
     let finalTarget = target;
     if (options.useTimestampFolder) {
-      const format = options.timestampFormat === 'DMY_HM' ? '\\%d-\\%m-\\%Y_\\%H-\\%M' : '\\%Y-\\%m-\\%d_\\%H-\\%M-\\%S';
+      let format = '\\%Y-\\%m-\\%d_\\%H-\\%M-\\%S';
+      if (options.timestampFormat === 'YMD_MMM_HM') {
+        format = '\\%Y_\\%b_\\%d_\\%H_\\%M';
+      } else if (options.timestampFormat === 'DMY_HM') {
+        format = '\\%d-\\%m-\\%Y_\\%H-\\%M';
+      }
       const cleanTarget = target.replace(/\/$/, '');
       finalTarget = `${cleanTarget}/$(date +${format})`;
     }

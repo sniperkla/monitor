@@ -52,7 +52,7 @@ export default function RcloneApp() {
   const [driveFolderId, setDriveFolderId] = useState(''); // Google Drive folder ID for --drive-root-folder-id
   const [driveFolderUrl, setDriveFolderUrl] = useState(''); // raw pasted URL
   const [useTimestampFolder, setUseTimestampFolder] = useState(true); // create timestamped folder
-  const [timestampFormat, setTimestampFormat] = useState('DMY_HM'); // 'DMY_HM' (25-07-2026_22-03) | 'YMD_HMS' (2026-07-25_22-03-41)
+  const [timestampFormat, setTimestampFormat] = useState('YMD_MMM_HM'); // 'YMD_MMM_HM' (2026_Jul_25_22_05) | 'DMY_HM' | 'YMD_HMS'
   
   // Interactive Path Picker Modal State
   const [pickerMode, setPickerMode] = useState(null); // 'source' | 'target' | null
@@ -976,12 +976,13 @@ export default function RcloneApp() {
                           onChange={(e) => setTimestampFormat(e.target.value)}
                           className="px-2.5 py-1 text-xs rounded-lg bg-[var(--bg-secondary)] border border-[var(--border-color)] text-indigo-400 font-mono"
                         >
+                          <option value="YMD_MMM_HM">2026_Jul_25_22_05 (YYYY_MMM_DD_HH_MM)</option>
                           <option value="DMY_HM">25-07-2026_22-03 (DD-MM-YYYY_HH-mm)</option>
                           <option value="YMD_HMS">2026-07-25_22-03-41 (YYYY-MM-DD_HH-mm-ss)</option>
                         </select>
                       </div>
                       <p className="font-mono text-emerald-400 text-[10px]">
-                        → Each backup run creates a new folder: <code className="bg-black/30 px-1 py-0.5 rounded text-white">{targetPath || 'gdrive:'}/{timestampFormat === 'DMY_HM' ? '25-07-2026_22-03' : '2026-07-25_22-03-41'}/</code>
+                        → Each backup run creates a new folder: <code className="bg-black/30 px-1 py-0.5 rounded text-white">{targetPath || 'gdrive:'}/{timestampFormat === 'YMD_MMM_HM' ? '2026_Jul_25_22_05' : timestampFormat === 'DMY_HM' ? '25-07-2026_22-03' : '2026-07-25_22-03-41'}/</code>
                       </p>
                     </div>
                   )}

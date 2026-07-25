@@ -41,9 +41,18 @@ export async function POST(req) {
     if (options.useTimestampFolder) {
       const now = new Date();
       const pad = (n) => String(n).padStart(2, '0');
+      const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+      const mmm = months[now.getMonth()];
       const dmy = `${pad(now.getDate())}-${pad(now.getMonth() + 1)}-${now.getFullYear()}_${pad(now.getHours())}-${pad(now.getMinutes())}`;
       const ymd = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}_${pad(now.getHours())}-${pad(now.getMinutes())}-${pad(now.getSeconds())}`;
-      const subFolder = options.timestampFormat === 'DMY_HM' ? dmy : ymd;
+      const ymdMmmHm = `${now.getFullYear()}_${mmm}_${pad(now.getDate())}_${pad(now.getHours())}_${pad(now.getMinutes())}`;
+      
+      let subFolder = ymd;
+      if (options.timestampFormat === 'YMD_MMM_HM') {
+        subFolder = ymdMmmHm;
+      } else if (options.timestampFormat === 'DMY_HM') {
+        subFolder = dmy;
+      }
       const cleanTarget = target.replace(/\/$/, '');
       finalTarget = `${cleanTarget}/${subFolder}`;
     }
