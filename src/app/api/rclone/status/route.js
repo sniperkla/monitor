@@ -11,9 +11,10 @@ export async function GET(req) {
     }
 
     const sshConfig = await getSshConfig(connectionId);
+    const pathPrefix = 'export PATH="$HOME/.local/bin:$HOME/bin:/usr/local/bin:$PATH"; ';
 
     // Check if rclone binary exists
-    const checkRes = await execCommand(sshConfig, 'command -v rclone');
+    const checkRes = await execCommand(sshConfig, `${pathPrefix}command -v rclone`);
     const isInstalled = checkRes.code === 0 && checkRes.stdout.trim().length > 0;
 
     if (!isInstalled) {
@@ -27,9 +28,9 @@ export async function GET(req) {
     }
 
     // Get rclone version & remotes
-    const versionRes = await execCommand(sshConfig, 'rclone version 2>/dev/null | head -n 2');
-    const remotesRes = await execCommand(sshConfig, 'rclone listremotes 2>/dev/null');
-    const configPathRes = await execCommand(sshConfig, 'rclone config file 2>/dev/null | tail -n 1');
+    const versionRes = await execCommand(sshConfig, `${pathPrefix}rclone version 2>/dev/null | head -n 2`);
+    const remotesRes = await execCommand(sshConfig, `${pathPrefix}rclone listremotes 2>/dev/null`);
+    const configPathRes = await execCommand(sshConfig, `${pathPrefix}rclone config file 2>/dev/null | tail -n 1`);
 
     const version = versionRes.stdout.trim();
     const remotes = remotesRes.stdout

@@ -1,7 +1,6 @@
 import { NextResponse } from 'next/server';
 import { getSshConfig, execCommand } from '@/app/api/server-backup/_ssh';
 
-// Shell quote helper
 function quote(str) {
   return `'${String(str).replace(/'/g, `'\\''`)}'`;
 }
@@ -16,15 +15,14 @@ export async function POST(req) {
 
     const sshConfig = await getSshConfig(connectionId);
     const cleanName = name.replace(/[^a-zA-Z0-9_\-]/g, '');
+    const pathPrefix = 'export PATH="$HOME/.local/bin:$HOME/bin:/usr/local/bin:$PATH"; ';
 
-    // Build rclone config create command
-    // rclone config create <name> <type> [key=value ...]
     const args = Object.entries(config || {})
       .filter(([_, val]) => val !== undefined && val !== null && String(val).trim() !== '')
       .map(([key, val]) => `${quote(key)}=${quote(val)}`)
       .join(' ');
 
-    const cmd = `rclone config create ${quote(cleanName)} ${quote(type)} ${args} non_interactive=true`;
+    const cmd = `${pathPrefix}rclone config create ${quote(cleanName)} ${quote(type)} ${args} non_interactive=true`;
 
     const result = await execCommand(sshConfig, cmd);
 
@@ -77,8 +75,9 @@ export async function DELETE(req) {
 
     const sshConfig = await getSshConfig(connectionId);
     const cleanName = name.replace(/[^a-zA-Z0-9_\-]/g, '');
+    const pathPrefix = 'export PATH="$HOME/.local/bin:$HOME/bin:/usr/local/bin:$PATH"; ';
 
-    const cmd = `rclone config delete ${quote(cleanName)}`;
+    const cmd = `${pathPrefix}rclone config delete ${quote(cleanName)}`;
     const result = await execCommand(sshConfig, cmd);
 
     if (result.code === 0) {

@@ -20,6 +20,7 @@ export async function POST(req) {
     }
 
     const sshConfig = await getSshConfig(connectionId);
+    const pathPrefix = 'export PATH="$HOME/.local/bin:$HOME/bin:/usr/local/bin:$PATH"; ';
 
     // Build flags
     const flags = ['--progress', '-v', '--stats=1s'];
@@ -28,7 +29,7 @@ export async function POST(req) {
     if (options.bwlimit) flags.push(`--bwlimit=${quote(options.bwlimit)}`);
     if (options.deleteBefore) flags.push('--delete-before');
 
-    const cmd = `rclone ${action} ${quote(source)} ${quote(target)} ${flags.join(' ')}`;
+    const cmd = `${pathPrefix}rclone ${action} ${quote(source)} ${quote(target)} ${flags.join(' ')}`;
 
     // Create unique log file
     const logId = `rclone_${Date.now()}`;

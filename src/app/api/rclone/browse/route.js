@@ -17,10 +17,11 @@ export async function GET(req) {
     }
 
     const sshConfig = await getSshConfig(connectionId);
+    const pathPrefix = 'export PATH="$HOME/.local/bin:$HOME/bin:/usr/local/bin:$PATH"; ';
     
     // Construct rclone target e.g. "gdrive:myfolder" or "s3remote:mybucket/sub"
     const target = remote ? (remote.endsWith(':') ? `${remote}${path}` : `${remote}:${path}`) : path;
-    const cmd = `rclone lsjson ${quote(target)} --stat 2>/dev/null || rclone lsjson ${quote(target)} 2>/dev/null`;
+    const cmd = `${pathPrefix}rclone lsjson ${quote(target)} --stat 2>/dev/null || ${pathPrefix}rclone lsjson ${quote(target)} 2>/dev/null`;
 
     const result = await execCommand(sshConfig, cmd);
 
