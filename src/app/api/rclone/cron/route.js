@@ -82,6 +82,9 @@ export async function POST(req) {
     if (options.dryRun) flags.push('--dry-run');
     if (options.bwlimit) flags.push(`--bwlimit "${options.bwlimit}"`);
     if (options.transfers) flags.push(`--transfers ${options.transfers}`);
+    if (options.driveFolderId && options.driveFolderId.trim()) {
+      flags.push(`--drive-root-folder-id "${options.driveFolderId.trim()}"`);
+    }
     
     // Log file path for crontab run
     const logFile = `/tmp/rclone-cron-${Date.now()}.log`;

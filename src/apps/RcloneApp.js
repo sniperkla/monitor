@@ -49,6 +49,8 @@ export default function RcloneApp() {
   const [cronSchedule, setCronSchedule] = useState('0 0 * * *');
   const [customCron, setCustomCron] = useState('0 0 * * *');
   const [serverCrons, setServerCrons] = useState([]);
+  const [driveFolderId, setDriveFolderId] = useState(''); // Google Drive folder ID for --drive-root-folder-id
+  const [driveFolderUrl, setDriveFolderUrl] = useState(''); // raw pasted URL
   
   // Job Execution & Logs
   const [activeJob, setActiveJob] = useState(null);
@@ -274,7 +276,7 @@ export default function RcloneApp() {
           action,
           source: sourcePath,
           target: targetPath,
-          options: { dryRun, bwlimit, transfers },
+          options: { dryRun, bwlimit, transfers, driveFolderId: driveFolderId || '' },
         })
       });
       const data = await res.json();
@@ -346,6 +348,7 @@ export default function RcloneApp() {
             dryRun,
             bwlimit,
             transfers,
+            driveFolderId: driveFolderId || '',
           }
         })
       });
@@ -828,9 +831,49 @@ export default function RcloneApp() {
                     type="text"
                     value={targetPath}
                     onChange={(e) => setTargetPath(e.target.value)}
-                    placeholder="gdrive:backup or s3_remote:bucket/backups"
+                    placeholder="gdrive: or gdrive:subfolder or s3_remote:bucket/backups"
                     className="w-full px-3.5 py-2 text-xs rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] font-mono text-[var(--text-primary)] focus:border-indigo-500 focus:outline-none"
                   />
+                </div>
+
+                {/* 📂 Google Drive Folder ID Helper */}
+                <div className="p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/20 space-y-2">
+                  <label className="text-xs font-bold text-emerald-400 flex items-center gap-1.5">
+                    <Link2 size={13} /> Google Drive: Paste Folder URL or ID
+                  </label>
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      value={driveFolderUrl}
+                      onChange={(e) => {
+                        const raw = e.target.value;
+                        setDriveFolderUrl(raw);
+                        // Extract folder ID from full URL or use as-is if it looks like an ID
+                        const match = raw.match(/\/folders\/([a-zA-Z0-9_-]{15,})/);
+                        const id = match ? match[1] : raw.trim();
+                        setDriveFolderId(id);
+                      }}
+                      placeholder="https://drive.google.com/drive/folders/1jIhZ9U02TdH... or just folder ID"
+                      className="flex-1 px-3 py-1.5 text-xs rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] font-mono text-[var(--text-primary)] focus:border-emerald-500 focus:outline-none"
+                    />
+                    <button
+                      onClick={() => {
+                        if (driveFolderId) {
+                          setTargetPath('gdrive:');
+                        }
+                      }}
+                      disabled={!driveFolderId}
+                      className="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white text-xs font-bold cursor-pointer"
+                    >
+                      Use
+                    </button>
+                  </div>
+                  {driveFolderId && (
+                    <div className="text-[10px] font-mono space-y-0.5">
+                      <div className="text-emerald-400">✓ Folder ID: <span className="font-bold">{driveFolderId}</span></div>
+                      <div className="text-[var(--text-muted)]">→ Will upload directly into this specific folder using <code className="text-emerald-400">--drive-root-folder-id</code></div>
+                    </div>
+                  )}
                 </div>
 
                 {/* Crontab Frequency Controls */}
@@ -1113,6 +1156,27 @@ export default function RcloneApp() {
                   onChange={(e) => setRemoteConfig({ ...remoteConfig, service_account_file: e.target.value })}
                   className="w-full px-3.5 py-1.5 text-xs rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] font-mono text-[var(--text-primary)]"
                 />
+
+                {/* Root Folder ID — lock remote to a specific Drive folder */}
+                <div className="space-y-1">
+                  <label className="text-[10px] font-semibold text-emerald-400">📂 Lock to Specific Google Drive Folder (Optional):</label>
+                  <input
+                    type="text"
+                    placeholder="Paste Google Drive URL or Folder ID (e.g. 1jIhZ9U02TdHel_5fCsAUlws7YOjjCrFO)"
+                    value={remoteConfig._drive_url || ''}
+                    onChange={(e) => {
+                      const raw = e.target.value;
+                      const match = raw.match(/\/folders\/([a-zA-Z0-9_-]{15,})/);
+                      const id = match ? match[1] : raw.trim();
+                      setRemoteConfig({ ...remoteConfig, _drive_url: raw, root_folder_id: id || '' });
+                    }}
+                    className="w-full px-3.5 py-1.5 text-xs rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] font-mono text-[var(--text-primary)]"
+                  />
+                  {remoteConfig.root_folder_id && (
+                    <p className="text-[10px] text-emerald-400 font-mono">✓ Folder ID: {remoteConfig.root_folder_id}</p>
+                  )}
+                </div>
+
                 <select
                   value={remoteConfig.scope || 'drive'}
                   onChange={(e) => setRemoteConfig({ ...remoteConfig, scope: e.target.value })}

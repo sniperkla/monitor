@@ -33,6 +33,9 @@ export async function POST(req) {
     if (options.transfers) flags.push(`--transfers=${parseInt(options.transfers, 10)}`);
     if (options.bwlimit) flags.push(`--bwlimit=${quote(options.bwlimit)}`);
     if (options.deleteBefore) flags.push('--delete-before');
+    if (options.driveFolderId && options.driveFolderId.trim()) {
+      flags.push(`--drive-root-folder-id=${quote(options.driveFolderId.trim())}`);
+    }
 
     const cmd = `${pathPrefix}rclone ${action} ${quote(source)} ${quote(target)} ${flags.join(' ')}`;
 
