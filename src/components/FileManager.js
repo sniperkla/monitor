@@ -1741,7 +1741,10 @@ export default function FileManager({
         if (data?.action !== 'upload') return;
         const matchPath = normalizePath(data?.path);
         const targetPath = normalizePath(path);
-        if (matchPath !== targetPath && !matchPath.endsWith(`/${targetPath}`)) {
+        const matchFilename = matchPath.split('/').pop();
+        const targetFilename = targetPath.split('/').pop();
+        const isMatch = matchFilename === targetFilename || matchPath === targetPath || matchPath.endsWith(`/${targetPath}`) || targetPath.endsWith(`/${matchPath}`);
+        if (!isMatch) {
           console.log(`📤 Ignoring sftp:action_success for different upload: ${data?.action} ${data?.path} (expecting ${path})`);
           return;
         }
@@ -3142,9 +3145,9 @@ export default function FileManager({
                 </div>
                 <div className="flex-1 min-w-0">
                   <h3 className="text-sm font-bold text-[var(--text-primary)] truncate">{transfer.filename}</h3>
-                  <p className="text-xs text-[var(--text-muted)]">
+                  <p className="text-xs text-[var(--text-muted)] truncate max-w-[200px]" title={typeof transfer.status === 'string' ? transfer.status : ''}>
                     {transfer.status ? (
-                        <span className="text-blue-400 font-medium">{transfer.status}</span>
+                        <span className="text-blue-400 font-medium truncate block">{transfer.status}</span>
                     ) : transfer.reconnecting ? (
                         <span className="text-[var(--accent-amber)] font-bold">{t('files.status.reconnecting') || 'Reconnecting...'}</span>
                     ) : transfer.waiting ? (
@@ -3205,9 +3208,11 @@ export default function FileManager({
               </div>
               <div className="flex justify-between items-center text-[10px] font-mono text-[var(--text-muted)]">
                 <span>
-                  {transfer.progress < 0
-                    ? `${((transfer.bytes || 0) / 1024 / 1024).toFixed(1)} MB`
-                    : `${transfer.progress}%`}
+                  {transfer.action === 'extract'
+                    ? (transfer.progress === 100 ? '100%' : 'Extracting...')
+                    : transfer.progress < 0
+                      ? `${((transfer.bytes || 0) / 1024 / 1024).toFixed(1)} MB`
+                      : `${transfer.progress}%`}
                 </span>
                 <div className="flex items-center gap-2">
                    {transfer.waiting && (
