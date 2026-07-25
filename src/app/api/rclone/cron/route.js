@@ -127,7 +127,7 @@ export async function POST(req) {
     const lockFile = `/tmp/rclone-lock-${safeLockName}.lock`;
 
     // Dynamic timestamped log file per execution run so every run is logged in history
-    const logFile = `/tmp/rclone-cron-${safeLockName}-$(date +\\%Y\\%m\\%d_\\%H\\%M\\%S).log`;
+    const logFile = `/tmp/rclone-cron-${safeLockName}-$(date +\\%s).log`;
     
     flags.push(`--log-file="${logFile}"`);
     flags.push(`--log-level INFO`);
