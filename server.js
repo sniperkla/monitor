@@ -3457,7 +3457,7 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
             sendToRelay({ type: 'ssh:resize', connId: relayConnId, cols: c, rows: r });
           });
 
-          // SFTP fallback (WebSocket path)
+          // SFTP events (WebSocket / Relay path)
           const sftpSimpleEvents = [
             'sftp:list', 'sftp:mkdir', 'sftp:delete', 'sftp:readFile', 'sftp:readFileBase64',
             'sftp:writeFile', 'sftp:download', 'sftp:download_folder',
@@ -3466,7 +3466,6 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
           sftpSimpleEvents.forEach(ev => {
             socket.removeAllListeners(ev);
             socket.on(ev, (payload) => {
-              if (socket.__rtcConnected) return; // WebRTC path handles it
               const msg = typeof payload === 'string'
                 ? { type: ev, connId: relayConnId, path: payload }
                 : { connId: relayConnId, ...payload, type: ev, archiveType: payload.type };
@@ -3476,7 +3475,6 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
 
           socket.removeAllListeners('sftp:upload');
           socket.on('sftp:upload', ({ filename, path: destPath, size, offset = 0 }) => {
-            if (socket.__rtcConnected) return; // WebRTC path handles it
             let aborted = false;
             const delivered = forwardOrQueue({ type: 'sftp:upload_start', connId: relayConnId, remotePath: destPath, filename, size, offset });
             if (!delivered) { socket.emit('sftp:error', { message: 'Relay not ready', recoverable: true }); return; }
