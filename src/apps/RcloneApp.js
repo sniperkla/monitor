@@ -462,15 +462,45 @@ export default function RcloneApp() {
 
               {/* Active Background Jobs Banner */}
               {rcloneStatus?.runningJobs && rcloneStatus.runningJobs.length > 0 && (
-                <div className="mt-4 p-3 rounded-xl bg-indigo-500/10 border border-indigo-500/20 text-xs">
-                  <div className="font-bold text-indigo-400 flex items-center gap-2 mb-1.5">
-                    <RefreshCw size={14} className="animate-spin" /> Active Rclone Tasks Running on Server ({rcloneStatus.runningJobs.length}):
+                <div className="mt-4 p-4 rounded-xl bg-indigo-500/10 border border-indigo-500/20 text-xs space-y-2">
+                  <div className="font-bold text-indigo-400 flex items-center justify-between">
+                    <span className="flex items-center gap-2">
+                      <RefreshCw size={14} className="animate-spin text-emerald-400" /> Active Rclone Backup Tasks Running on Server ({rcloneStatus.runningJobs.length})
+                    </span>
+                    <span className="text-[10px] bg-emerald-500/15 text-emerald-400 px-2 py-0.5 rounded font-mono font-semibold">
+                      CRON / BACKGROUND
+                    </span>
+                  </div>
+                  <div className="space-y-1.5 font-mono text-[11px]">
+                    {rcloneStatus.runningJobs.map((job, idx) => (
+                      <div key={idx} className="flex flex-col md:flex-row md:items-center justify-between text-[var(--text-muted)] bg-[var(--bg-tertiary)] p-2 rounded-lg border border-[var(--border-color)] gap-2">
+                        <div className="flex items-center gap-2 truncate">
+                          <span className="text-emerald-400 font-bold text-[10px] bg-emerald-500/10 px-1.5 py-0.5 rounded">PID {job.pid}</span>
+                          {job.user && <span className="text-indigo-400 text-[10px]">[{job.user}]</span>}
+                          <span className="truncate text-[var(--text-primary)] font-semibold">{job.cmd}</span>
+                        </div>
+                        <div className="flex items-center gap-2 text-[10px] text-[var(--text-muted)] shrink-0">
+                          {job.cpu && <span>CPU: {job.cpu}%</span>}
+                          {job.mem && <span>RAM: {job.mem}%</span>}
+                          {job.etime && <span className="text-indigo-400">Time: {job.etime}</span>}
+                          <span className="text-emerald-400 font-bold">● ACTIVE</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* System Crontab Schedules List */}
+              {rcloneStatus?.cronJobs && rcloneStatus.cronJobs.length > 0 && (
+                <div className="mt-3 p-3.5 rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] text-xs space-y-1.5">
+                  <div className="font-bold text-[var(--text-primary)] flex items-center gap-2">
+                    <Terminal size={14} className="text-indigo-400" /> System Crontab Backup Schedules ({rcloneStatus.cronJobs.length}):
                   </div>
                   <div className="space-y-1 font-mono text-[11px]">
-                    {rcloneStatus.runningJobs.map((job, idx) => (
-                      <div key={idx} className="flex items-center justify-between text-[var(--text-muted)] bg-[var(--bg-tertiary)] px-2.5 py-1 rounded-lg">
-                        <span className="truncate max-w-lg">PID {job.pid}: {job.cmd}</span>
-                        <span className="text-emerald-400 font-semibold shrink-0">RUNNING</span>
+                    {rcloneStatus.cronJobs.map((cron, idx) => (
+                      <div key={idx} className="px-2.5 py-1 rounded bg-[var(--bg-secondary)] text-indigo-300 border border-[var(--border-color)] truncate">
+                        {cron}
                       </div>
                     ))}
                   </div>

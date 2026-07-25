@@ -104,18 +104,54 @@ echo "$REMOTES"
       }
     });
 
-    // Check for any currently running rclone processes
-    const psRes = await execCommand(sshConfig, `ps aux 2>/dev/null | grep -i rclone | grep -v grep || true`);
-    const runningJobs = psRes.stdout
+    // Detect all running rclone processes (user + root) with CPU, MEM, ETIME details
+    const psScript = `
+PS_CMD="ps -eo pid,user,%cpu,%mem,etime,args 2>/dev/null || ps aux 2>/dev/null"
+RAW_PS="$($PS_CMD | grep -i rclone | grep -v grep || true)"
+if [ "$(id -u)" != "0" ] && sudo -n true 2>/dev/null; then
+  ROOT_PS="$(sudo $PS_CMD | grep -i rclone | grep -v grep || true)"
+  if [ -n "$ROOT_PS" ]; then
+    RAW_PS="$RAW_PS\n$ROOT_PS"
+  fi
+fi
+echo "$RAW_PS"
+`;
+    const psRes = await execCommand(sshConfig, psScript);
+    const seenPids = new Set();
+    const runningJobs = (psRes.stdout || '')
       .split('\n')
       .map(l => l.trim())
       .filter(Boolean)
       .map(line => {
         const parts = line.split(/\s+/);
-        const pid = parts[1];
-        const cmd = parts.slice(10).join(' ');
-        return { pid, cmd };
-      });
+        if (parts.length < 6) return null;
+        const pid = parts[0];
+        if (seenPids.has(pid)) return null;
+        seenPids.add(pid);
+        const user = parts[1];
+        const cpu = parts[2];
+        const mem = parts[3];
+        const etime = parts[4];
+        const cmd = parts.slice(5).join(' ');
+        const isCron = cmd.includes('cron') || cmd.includes('/etc/cron') || cmd.includes('anacron');
+        return { pid, user, cpu, mem, etime, cmd, isCron };
+      })
+      .filter(Boolean);
+
+    // Detect Crontab entries (user & root)
+    const cronScript = `
+if command -v crontab >/dev/null 2>&1; then
+  crontab -l 2>/dev/null | grep -v '^#' | grep -v '^$' || true
+fi
+if [ "$(id -u)" != "0" ] && sudo -n true 2>/dev/null; then
+  sudo crontab -l 2>/dev/null | grep -v '^#' | grep -v '^$' | sed 's/^/[root] /' || true
+fi
+`;
+    const cronRes = await execCommand(sshConfig, cronScript);
+    const cronJobs = (cronRes.stdout || '')
+      .split('\n')
+      .map(l => l.trim())
+      .filter(Boolean);
 
     return NextResponse.json({
       success: true,
@@ -126,6 +162,7 @@ echo "$REMOTES"
       configPath,
       configContent: configDump,
       runningJobs,
+      cronJobs,
     });
   } catch (error) {
     console.error('[rclone/status] error:', error.message);
