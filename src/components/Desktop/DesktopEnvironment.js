@@ -43,6 +43,10 @@ const ServerBackupApp = dynamic(() => import('@/apps/ServerBackupApp'), {
   ssr: false,
 });
 
+const RcloneApp = dynamic(() => import('@/apps/RcloneApp'), {
+  ssr: false,
+});
+
 export default function DesktopEnvironment({ bootPhase }) {
   const { t } = useTranslation();
   const isMobile = useIsMobile();
@@ -317,6 +321,7 @@ export default function DesktopEnvironment({ bootPhase }) {
     { id: 'auto-deploy', title: 'Auto Deploy', icon: Rocket, component: <AutoDeployApp />, type: 'app', initialWidth: 1100, initialHeight: 760 },
     { id: 'tmux', title: t('apps.tmux'), icon: MonitorPlay, component: <TmuxApp />, type: 'app', initialWidth: 1000, initialHeight: 650 },
     { id: 'mongo-backup', title: 'Mongo Sync', icon: CloudSync, component: <MongoBackupApp />, type: 'app', initialWidth: 1050, initialHeight: 680 },
+    { id: 'rclone', title: 'Rclone Sync', icon: CloudSync, component: <RcloneApp />, type: 'app', initialWidth: 1100, initialHeight: 720 },
     { id: 'server-backup', title: 'Server Backup', icon: HardDrive, component: <ServerBackupApp />, type: 'app', initialWidth: 1200, initialHeight: 780 },
     { id: 'settings', title: t('apps.settings'), icon: Settings, component: <SettingsApp />, type: 'app', initialWidth: 700, initialHeight: 500 },
   ];

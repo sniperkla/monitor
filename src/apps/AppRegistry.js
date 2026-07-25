@@ -13,9 +13,20 @@ import DockerLogApp from '@/apps/DockerLogApp';
 import DatabaseBrowser from '@/components/DatabaseBrowser';
 import MongoBackupApp from '@/apps/MongoBackupApp';
 import ServerBackupApp from '@/apps/ServerBackupApp';
- 
+import RcloneApp from '@/apps/RcloneApp';
+
 // Add other apps here as needed
 export const AppRegistry = {
+  'rclone': {
+    component: RcloneApp,
+    icon: CloudSync,
+    defaultTitle: 'Rclone Cloud Sync'
+  },
+  'rclone-backup': {
+    component: RcloneApp,
+    icon: CloudSync,
+    defaultTitle: 'Rclone Cloud Sync'
+  },
   'server-backup': {
     component: ServerBackupApp,
     icon: HardDrive,
