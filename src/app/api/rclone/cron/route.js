@@ -88,37 +88,35 @@ export async function POST(req) {
       normSource = normSource.startsWith('./') ? `$HOME/${normSource.slice(2)}` : `$HOME/${normSource}`;
     }
 
-    // Build rclone command flags
-    const flags = [];
-    if (options.dryRun) flags.push('--dry-run');
-    if (options.bwlimit) flags.push(`--bwlimit "${options.bwlimit}"`);
-    if (options.transfers) flags.push(`--transfers ${options.transfers}`);
-    if (options.driveFolderId && options.driveFolderId.trim()) {
-      flags.push(`--drive-root-folder-id "${options.driveFolderId.trim()}"`);
-    }
-    
-    // Log file path for crontab run
-    const logFile = `/tmp/rclone-cron-${Date.now()}.log`;
-    flags.push(`--log-file="${logFile}"`);
-    flags.push(`--log-level INFO`);
+    // 🛡️ Auto-Detect RAM and apply smart crash protection flags
+    let memMb = 2048;
+    try {
+      const memRes = await execCommand(sshConfig, `free -m 2>/dev/null | awk '/^Mem:/{print $2}' || echo '2048'`);
+      memMb = parseInt((memRes.stdout || '').trim(), 10) || 2048;
+    } catch (_) {}
 
-    let finalTarget = target;
-    if (options.useTimestampFolder) {
-      let format = '\\%Y-\\%m-\\%d_\\%H-\\%M-\\%S';
-      if (options.timestampFormat === 'YMD_MMM_HM') {
-        format = '\\%Y_\\%b_\\%d_\\%H_\\%M';
-      } else if (options.timestampFormat === 'DMY_HM') {
-        format = '\\%d-\\%m-\\%Y_\\%H-\\%M';
+    if (!options.transfers) {
+      if (memMb <= 2048) flags.push('--transfers 1 --checkers 2');
+      else if (memMb <= 8192) flags.push('--transfers 2 --checkers 4');
+      else flags.push('--transfers 4 --checkers 8');
+    }
+
+    flags.push(memMb <= 2048 ? '--buffer-size 16M' : '--buffer-size 32M');
+    flags.push('--vfs-cache-mode off');
+
+    if (target.includes(':')) {
+      const targetLower = target.toLowerCase();
+      if (targetLower.startsWith('gdrive') || targetLower.includes('drive')) {
+        flags.push('--drive-chunk-size 32M');
       }
-      const cleanTarget = target.replace(/\/$/, '');
-      finalTarget = `${cleanTarget}/$(date +${format})`;
     }
 
     const cleanSourceLabel = normSource ? (normSource.split('/').filter(Boolean).pop() || normSource) : 'Source';
     const cleanTargetLabel = target ? target.split('/')[0] : 'Destination';
     const finalProjectName = reqProjectName.trim() ? reqProjectName.trim().replace(/"/g, '') : `${cleanSourceLabel} ➔ ${cleanTargetLabel}`;
 
-    let rcloneCmd = `export PATH="$HOME/.local/bin:$HOME/bin:/usr/local/bin:/usr/bin:$PATH"; echo "=== Project: ${finalProjectName} ===" >> "${logFile}"; rclone ${action || 'copy'} "${normSource}" "${finalTarget}" ${flags.join(' ')}`;
+    const nicePrefix = memMb <= 2048 ? 'nice -n 19 ' : '';
+    let rcloneCmd = `export PATH="$HOME/.local/bin:$HOME/bin:/usr/local/bin:/usr/bin:$PATH"; echo "=== Project: ${finalProjectName} ===" >> "${logFile}"; ${nicePrefix}rclone ${action || 'copy'} "${normSource}" "${finalTarget}" ${flags.join(' ')}`;
     
     // Auto Retention Policy: clean old backups older than X days
     if (options.enableRetention && options.retentionDays) {

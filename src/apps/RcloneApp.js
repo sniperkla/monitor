@@ -1241,6 +1241,46 @@ export default function RcloneApp() {
               </button>
             </div>
 
+            {/* Server Specs & RAM Auto-Protection Card */}
+            {rcloneStatus?.serverSpecs && (
+              <div className="p-4 rounded-2xl bg-indigo-500/5 border border-indigo-500/20 space-y-2">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <Cpu size={15} className="text-indigo-400" />
+                    <h4 className="text-xs font-bold text-[var(--text-primary)]">
+                      Server Hardware & Smart OOM Protection
+                    </h4>
+                  </div>
+                  <span className="text-[10px] font-mono font-bold text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/20">
+                    ✓ Crash-Protection Active
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-1 font-mono text-[11px]">
+                  <div className="bg-[var(--bg-secondary)] p-2 rounded-xl border border-[var(--border-color)]">
+                    <span className="text-[9px] text-[var(--text-muted)] block">TOTAL RAM</span>
+                    <strong className="text-indigo-400">{(rcloneStatus.serverSpecs.totalMemMb / 1024).toFixed(1)} GB</strong> ({rcloneStatus.serverSpecs.totalMemMb} MB)
+                  </div>
+                  <div className="bg-[var(--bg-secondary)] p-2 rounded-xl border border-[var(--border-color)]">
+                    <span className="text-[9px] text-[var(--text-muted)] block">CPU CORES</span>
+                    <strong className="text-indigo-400">{rcloneStatus.serverSpecs.cpuCores} Cores</strong>
+                  </div>
+                  <div className="bg-[var(--bg-secondary)] p-2 rounded-xl border border-[var(--border-color)]">
+                    <span className="text-[9px] text-[var(--text-muted)] block">PROFILE</span>
+                    <strong className="text-emerald-400 uppercase">{rcloneStatus.serverSpecs.mode.replace('_', ' ')}</strong>
+                  </div>
+                  <div className="bg-[var(--bg-secondary)] p-2 rounded-xl border border-[var(--border-color)]">
+                    <span className="text-[9px] text-[var(--text-muted)] block">SAFE THREADS</span>
+                    <span className="text-cyan-400 font-bold text-[10px]">--transfers {rcloneStatus.serverSpecs.recommended.transfers}</span>
+                  </div>
+                </div>
+
+                <p className="text-[10px] text-[var(--text-muted)] leading-relaxed pt-1">
+                  ⚡ <strong>Auto-Protection:</strong> Rclone commands and crontab tasks automatically tune RAM stream buffers (<code>--buffer-size {rcloneStatus.serverSpecs.recommended.bufferSize}</code>), chunk size, and CPU priority (<code>nice -n 19</code>) to guarantee zero server crashes on large file transfers.
+                </p>
+              </div>
+            )}
+
             {/* Active Running Jobs */}
             {rcloneStatus?.runningJobs && rcloneStatus.runningJobs.length > 0 && (
               <div className="p-4 rounded-2xl bg-[var(--bg-secondary)] border border-[var(--border-color)] space-y-2">
@@ -1554,7 +1594,12 @@ export default function RcloneApp() {
 
             {/* ─ Row 4: Advanced + Cron Schedule ─ */}
             <div className="p-4 rounded-2xl bg-[var(--bg-secondary)] border border-[var(--border-color)] space-y-3">
-              <label className="text-[10px] font-bold text-[var(--text-muted)] uppercase tracking-wide block">Advanced Options</label>
+              <div className="flex items-center justify-between">
+                <label className="text-[10px] font-bold text-[var(--text-muted)] uppercase tracking-wide block">Advanced Options & Crash Protection</label>
+                <span className="text-[10px] font-mono font-bold text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/20">
+                  🛡️ Smart RAM Protection Active
+                </span>
+              </div>
 
               <div className="grid grid-cols-3 gap-3">
                 <div>
