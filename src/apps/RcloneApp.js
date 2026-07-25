@@ -1896,6 +1896,8 @@ export default function RcloneApp() {
                     });
                     if (runsToDisplay.length === 0) return null;
 
+                    const hasActiveProjectRun = runsToDisplay.some(r => r.status === 'running');
+
                     return (
                       <div key={pIdx} className="border-b border-[var(--border-color)] last:border-b-0">
                         <button
@@ -1907,6 +1909,19 @@ export default function RcloneApp() {
                             <span>{project.name}</span>
                           </div>
                           <div className="flex items-center gap-2">
+                            {hasActiveProjectRun && (
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  e.preventDefault();
+                                  handleKillProcess(null, null);
+                                }}
+                                className="px-2.5 py-1 rounded-lg bg-rose-600 hover:bg-rose-500 text-white font-bold text-[10px] cursor-pointer transition-colors shadow-sm flex items-center gap-1 shrink-0"
+                                title="Abort all active transfers in this project at once"
+                              >
+                                🛑 Abort Whole Project
+                              </button>
+                            )}
                             <span className="text-[10px] text-[var(--text-muted)] font-semibold bg-black/20 px-2 py-0.5 rounded">
                               {runsToDisplay.length} Runs
                             </span>
