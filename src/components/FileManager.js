@@ -1736,9 +1736,13 @@ export default function FileManager({
         activeCompletionCleanup = null;
       };
 
+      const normalizePath = (p) => p ? p.replace(/\/+/g, '/').replace(/^\.\//, '') : '';
       const successHandler = (data) => {
-        if (data?.action !== 'upload' || data?.path !== path) {
-          console.log(`📤 Ignoring sftp:action_success for different upload: ${data?.action} ${data?.path} (expecting upload ${path})`);
+        if (data?.action !== 'upload') return;
+        const matchPath = normalizePath(data?.path);
+        const targetPath = normalizePath(path);
+        if (matchPath !== targetPath && !matchPath.endsWith(`/${targetPath}`)) {
+          console.log(`📤 Ignoring sftp:action_success for different upload: ${data?.action} ${data?.path} (expecting ${path})`);
           return;
         }
         console.log(`✅ Received sftp:action_success for upload: ${path}`);
@@ -2068,6 +2072,8 @@ export default function FileManager({
           setTransfer(null);
           transferRef.current = null;
           if (e) e.target.value = null; // Reset input if it was from event
+          // Auto-refresh file list so newly uploaded file appears instantly
+          getSocket()?.emit('sftp:list', currentPathRef.current || '.');
           return { path };
         }
       }
