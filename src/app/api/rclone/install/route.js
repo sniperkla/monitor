@@ -16,14 +16,14 @@ export async function POST(req) {
     const sshConfig = await getSshConfig(connectionId);
     const logFile = `/tmp/rclone_install_${Date.now()}.log`;
 
-    // Universal installer script outputting live step-by-step progress
+    // Installer script writing output to logFile
     const installScript = [
       'export PATH="$HOME/.local/bin:$HOME/bin:/usr/local/bin:/usr/bin:$PATH"',
       'echo "🚀 [1/4] Starting Rclone Installation on $(hostname)..."',
       'echo "--------------------------------------------------"',
-      'if command -v rclone >/dev/null 2>&1; then',
+      'if command -v rclone >/dev/null 2>&1 || [ -x "$HOME/.local/bin/rclone" ]; then',
       '  echo "✅ Rclone is already installed on this server!"',
-      '  rclone version',
+      '  rclone version 2>/dev/null || "$HOME/.local/bin/rclone" version',
       '  exit 0',
       'fi',
       'echo "📦 [2/4] Detecting server OS & Architecture..."',
@@ -73,19 +73,22 @@ export async function POST(req) {
       'fi'
     ].join('\n');
 
-    // Run script directly in background without depending on stdbuf binary
-    const fullCmd = `bash -c ${quote(installScript)} > ${logFile} 2>&1 & echo $!`;
+    // Run using nohup to detach cleanly from SSH session and prevent SIGHUP termination
+    const fullCmd = `nohup bash -c ${quote(installScript)} > ${logFile} 2>&1 & echo "PID=$!"`;
     const result = await execCommand(sshConfig, fullCmd);
 
-    if (result.code === 0 && result.stdout.trim()) {
+    const pidMatch = result.stdout?.match(/PID=(\d+)/);
+    const pid = pidMatch ? pidMatch[1] : null;
+
+    if (result.code === 0 && logFile) {
       return NextResponse.json({
         success: true,
         logFile,
-        pid: result.stdout.trim(),
+        pid,
       });
     }
 
-    // Fallback: synchronous execution if background process launch failed
+    // Fallback synchronous execution if nohup failed
     const syncRes = await execCommand(sshConfig, installScript);
     return NextResponse.json({
       success: syncRes.code === 0,
