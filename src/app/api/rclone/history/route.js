@@ -17,7 +17,7 @@ export async function GET(req) {
     const pathPrefix = 'export PATH="$HOME/.local/bin:$HOME/bin:/usr/local/bin:/usr/bin:$PATH"; ';
 
     // ── 1. Read all rclone cron log files from /tmp/ with file markers ──
-    const logsCmd = `pgrep -f rclone 2>/dev/null || true; echo "=== RCLONE_PROCESSES_END ==="; for f in $(ls -1t /tmp/rclone-cron*.log 2>/dev/null | head -60); do echo "=== RCLONE_FILE: $f ==="; cat "$f"; echo ""; done`;
+    const logsCmd = `ps aux | grep '[r]clone ' | grep -v 'grep' | awk '{print $2}' 2>/dev/null || true; echo "=== RCLONE_PROCESSES_END ==="; for f in $(ls -1t /tmp/rclone-cron*.log 2>/dev/null | head -60); do echo "=== RCLONE_FILE: $f ==="; cat "$f"; echo ""; done`;
     const logsRes = await execCommand(sshConfig, logsCmd);
     const rawOutput = logsRes.stdout || '';
 
@@ -170,10 +170,14 @@ export async function GET(req) {
       }
     }
 
-    // Sort newest runs first
-    runs.reverse();
+    // Sort newest runs first (by startTime if available)
+    runs.sort((a, b) => {
+      if (!a.startTime) return 1;
+      if (!b.startTime) return -1;
+      return b.startTime.localeCompare(a.startTime);
+    });
 
-    // 🎯 Post-process runs: Only the single newest run can remain 'running' if server process is active.
+    // 🎯 Post-process runs: Only the single newest run across all projects can be 'running' if server process is active.
     // All older incomplete runs whose processes are dead MUST be marked as 'aborted'!
     let foundActiveRun = false;
     runs.forEach(run => {
