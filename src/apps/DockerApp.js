@@ -1983,8 +1983,9 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
                     {activeTab === 'swarm' && (
                       <div className="flex flex-col gap-5">
                         <div className="flex gap-3 flex-wrap">
-                          <StatCard icon={Zap} label="Swarm Services" value={swarmServices.length} color="violet" sub="Rolling Updates Active" />
-                          <StatCard icon={Cpu} label="Swarm Nodes" value={swarmNodes.length || 1} color="sky" sub="Swarm Cluster" />
+                          <StatCard icon={Zap} label="Swarm Services" value={swarmServices.length} color="violet" sub="Zero-Downtime Active" />
+                          <StatCard icon={Cpu} label="Cluster Nodes" value={swarmNodes.length || 1} color="sky" sub={swarmNodes[0]?.ManagerStatus || 'Manager (Leader)'} />
+                          <StatCard icon={Shield} label="Swarm Status" value="ACTIVE" color="emerald" sub="--update-order start-first" />
                         </div>
 
                         {swarmServices.length === 0 ? (
@@ -2021,22 +2022,27 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
                           </div>
                         ) : (
                           <div className="flex flex-col gap-3">
-                            <h3 className="text-xs font-bold text-purple-400 tracking-wider flex items-center gap-2">
-                              <Zap size={14} />
-                              ACTIVE SWARM SERVICES ({swarmServices.length})
-                            </h3>
-                            <button
-                              onClick={() => setCreateServiceModal({ isOpen: true, name: '', image: '', replicas: 2, port: '' })}
-                              className="ml-auto px-3 py-1.5 bg-purple-500/20 hover:bg-purple-500/30 border border-purple-500/30 text-purple-300 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer"
-                            >
-                              <Plus size={12} /> New Service
-                            </button>
+                            <div className="flex items-center justify-between">
+                              <h3 className="text-xs font-bold text-purple-400 tracking-wider flex items-center gap-2">
+                                <Zap size={14} />
+                                ACTIVE SWARM SERVICES ({swarmServices.length})
+                              </h3>
+                              <button
+                                onClick={() => setCreateServiceModal({ isOpen: true, name: '', image: '', replicas: 2, port: '' })}
+                                className="px-3 py-1.5 bg-purple-500/20 hover:bg-purple-500/30 border border-purple-500/30 text-purple-300 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer"
+                              >
+                                <Plus size={12} /> New Service
+                              </button>
+                            </div>
                             <div className="grid grid-cols-1 xl:grid-cols-2 gap-3">
                               {swarmServices.map((svc, idx) => {
                                 const svcName = svc.Name || svc.name || 'unnamed-service';
                                 const svcImage = svc.Image || svc.image || '-';
                                 const svcReplicas = svc.Replicas || svc.replicas || svc.Mode || '1/1';
                                 const svcPorts = svc.Ports || svc.ports || '-';
+                                const svcId = svc.ID || svc.id || '';
+                                const isHealthy = !svcReplicas.startsWith('0/');
+
                                 return (
                                   <div key={idx} className="p-4 rounded-2xl border border-purple-500/20 bg-[var(--bg-card)] hover:border-purple-500/40 transition-all flex flex-col justify-between gap-3">
                                     <div className="flex items-start justify-between">
@@ -2059,9 +2065,15 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
                                           )}
                                         </div>
                                       </div>
-                                      <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-purple-500/15 text-purple-300 shrink-0">
-                                        {svcReplicas}
-                                      </span>
+                                      <div className="flex flex-col items-end gap-1 shrink-0">
+                                        <span className={`text-[10px] font-bold px-2.5 py-0.5 rounded-full flex items-center gap-1 ${
+                                          isHealthy ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30' : 'bg-amber-500/15 text-amber-400 border border-amber-500/30'
+                                        }`}>
+                                          <span className="w-1.5 h-1.5 rounded-full bg-current animate-pulse" />
+                                          {svcReplicas} Replicas
+                                        </span>
+                                        {svcId && <span className="text-[9px] font-mono text-[var(--text-muted)]">ID: {svcId.substring(0, 10)}</span>}
+                                      </div>
                                     </div>
 
                                     <div className="flex items-center gap-2 pt-1 border-t border-white/5">
@@ -2108,20 +2120,34 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
                               SWARM CLUSTER NODES ({swarmNodes.length})
                             </h3>
                             <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                              {swarmNodes.map((node, i) => (
-                                <div key={i} className="p-3 rounded-xl border border-[var(--border-color)] bg-[var(--bg-card)] flex items-center justify-between text-xs">
-                                  <div className="flex items-center gap-2 min-w-0">
-                                    <Laptop size={14} className="text-sky-400 shrink-0" />
-                                    <div className="min-w-0">
-                                      <p className="font-bold truncate">{node.Hostname || node.hostname || 'node'}</p>
-                                      <p className="text-[9px] text-[var(--text-muted)]">{node.ManagerStatus || node.Role || 'worker'}</p>
+                              {swarmNodes.map((node, i) => {
+                                const hostname = node.Hostname || node.hostname || 'node';
+                                const role = node.ManagerStatus || node.Role || 'Worker';
+                                const status = node.Status || node.status || 'Ready';
+                                const availability = node.Availability || node.availability || 'Active';
+                                const isLeader = role.toLowerCase().includes('leader');
+
+                                return (
+                                  <div key={i} className="p-3.5 rounded-xl border border-sky-500/20 bg-[var(--bg-card)] flex items-center justify-between text-xs">
+                                    <div className="flex items-center gap-3 min-w-0">
+                                      <div className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 ${isLeader ? 'bg-sky-500/20 text-sky-400 border border-sky-500/30' : 'bg-white/5 text-[var(--text-muted)]'}`}>
+                                        <Laptop size={14} />
+                                      </div>
+                                      <div className="min-w-0">
+                                        <p className="font-bold truncate flex items-center gap-1.5">
+                                          <span>{hostname}</span>
+                                          {isLeader && <span className="text-[8px] bg-sky-500/20 text-sky-300 font-bold px-1 rounded">LEADER</span>}
+                                        </p>
+                                        <p className="text-[10px] text-[var(--text-muted)] mt-0.5">{role} · {availability}</p>
+                                      </div>
                                     </div>
+                                    <span className="text-[9px] font-bold text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 px-2 py-0.5 rounded-full flex items-center gap-1 shrink-0">
+                                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                                      {status}
+                                    </span>
                                   </div>
-                                  <span className="text-[9px] font-bold text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded-full">
-                                    {node.Status || 'Ready'}
-                                  </span>
-                                </div>
-                              ))}
+                                );
+                              })}
                             </div>
                           </div>
                         )}
