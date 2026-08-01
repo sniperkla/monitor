@@ -189,6 +189,10 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
   const [images, setImages] = useState([]);
   const [volumes, setVolumes] = useState([]);
   const [networks, setNetworks] = useState([]);
+  const [swarmServices, setSwarmServices] = useState([]);
+  const [swarmNodes, setSwarmNodes] = useState([]);
+  const [scaleModal, setScaleModal] = useState({ isOpen: false, serviceName: '', count: 1 });
+  const [swarmUpdateModal, setSwarmUpdateModal] = useState({ isOpen: false, serviceName: '', currentImage: '', newImage: '' });
   const [searchResults, setSearchResults] = useState([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [pullingTasks, setPullingTasks] = useState({});
@@ -286,6 +290,8 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
     socketRef.current.emit('docker:command', { action: 'volumes' });
     socketRef.current.emit('docker:command', { action: 'networks' });
     socketRef.current.emit('docker:command', { action: 'vol-assoc' });
+    socketRef.current.emit('docker:command', { action: 'swarm:services' });
+    socketRef.current.emit('docker:command', { action: 'swarm:nodes' });
   }, []);
 
   useEffect(() => {
@@ -453,6 +459,18 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
           const parsed = lines.map(line => JSON.parse(line));
           setNetworks(parsed);
         } catch (e) { /* networks may not be supported */ }
+      } else if (action === 'swarm:services') {
+        try {
+          const lines = output.split('\n').filter(l => l.trim());
+          const parsed = lines.map(line => JSON.parse(line));
+          setSwarmServices(parsed);
+        } catch (e) { setSwarmServices([]); }
+      } else if (action === 'swarm:nodes') {
+        try {
+          const lines = output.split('\n').filter(l => l.trim());
+          const parsed = lines.map(line => JSON.parse(line));
+          setSwarmNodes(parsed);
+        } catch (e) { setSwarmNodes([]); }
       } else if (action === 'search') {
         setIsSearching(false);
         try {
@@ -1105,12 +1123,13 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
   // ── Tab config ──
   const tabs = [
     { id: 'containers', label: 'CONTAINERS', count: containers.length, color: 'sky' },
+    { id: 'swarm', label: 'SWARM SERVICES', count: swarmServices.length, color: 'purple' },
     { id: 'images', label: 'IMAGES', count: images.length, color: 'emerald' },
     { id: 'volumes', label: 'VOLUMES', count: volumes.length, color: 'violet' },
     { id: 'networks', label: 'NETWORKS', count: networks.length, color: 'amber' },
   ];
 
-  const tabColors = { sky: 'bg-sky-500', emerald: 'bg-emerald-500', violet: 'bg-violet-500', amber: 'bg-amber-500' };
+  const tabColors = { sky: 'bg-sky-500', purple: 'bg-purple-500', emerald: 'bg-emerald-500', violet: 'bg-violet-500', amber: 'bg-amber-500' };
 
   return (
     <div className="flex flex-col h-full bg-transparent text-[var(--text-primary)]">
@@ -1859,6 +1878,139 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
                             ))}
                           </div>
                         )}
+                    {/* ── SWARM SERVICES TAB ── */}
+                    {activeTab === 'swarm' && (
+                      <div className="flex flex-col gap-5">
+                        <div className="flex gap-3 flex-wrap">
+                          <StatCard icon={Zap} label="Swarm Services" value={swarmServices.length} color="violet" sub="Rolling Updates Active" />
+                          <StatCard icon={Cpu} label="Swarm Nodes" value={swarmNodes.length || 1} color="sky" sub="Swarm Cluster" />
+                        </div>
+
+                        {swarmServices.length === 0 ? (
+                          <div className="p-8 rounded-2xl border border-[var(--border-color)] bg-[var(--bg-card)] text-center space-y-4">
+                            <div className="w-14 h-14 rounded-2xl bg-purple-500/10 text-purple-400 flex items-center justify-center mx-auto">
+                              <Zap size={28} />
+                            </div>
+                            <div>
+                              <h3 className="font-bold text-base">Docker Swarm Zero-Downtime Mode</h3>
+                              <p className="text-xs text-[var(--text-muted)] max-w-md mx-auto mt-1">
+                                Swarm mode enables zero-downtime rolling updates (<code className="text-emerald-400">--update-order start-first</code>). New containers start before old ones stop so your website never drops a single request.
+                              </p>
+                            </div>
+                            <div className="flex justify-center gap-3 pt-2">
+                              <button
+                                onClick={() => {
+                                  setIsLoading(true);
+                                  socketRef.current.emit('docker:command', { action: 'swarm:init' });
+                                  setTimeout(() => emitDockerLs(), 1500);
+                                }}
+                                className="px-4 py-2 bg-purple-500 hover:bg-purple-600 text-white rounded-xl text-xs font-bold transition-all shadow-lg flex items-center gap-1.5 cursor-pointer"
+                              >
+                                <Zap size={14} />
+                                Initialize Docker Swarm
+                              </button>
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="flex flex-col gap-3">
+                            <h3 className="text-xs font-bold text-purple-400 tracking-wider flex items-center gap-2">
+                              <Zap size={14} />
+                              ACTIVE SWARM SERVICES ({swarmServices.length})
+                            </h3>
+                            <div className="grid grid-cols-1 xl:grid-cols-2 gap-3">
+                              {swarmServices.map((svc, idx) => {
+                                const svcName = svc.Name || svc.name || 'unnamed-service';
+                                const svcImage = svc.Image || svc.image || '-';
+                                const svcReplicas = svc.Replicas || svc.replicas || svc.Mode || '1/1';
+                                const svcPorts = svc.Ports || svc.ports || '-';
+                                return (
+                                  <div key={idx} className="p-4 rounded-2xl border border-purple-500/20 bg-[var(--bg-card)] hover:border-purple-500/40 transition-all flex flex-col justify-between gap-3">
+                                    <div className="flex items-start justify-between">
+                                      <div className="flex items-center gap-3 min-w-0">
+                                        <div className="w-10 h-10 rounded-xl bg-purple-500/10 text-purple-400 flex items-center justify-center shrink-0">
+                                          <Zap size={18} />
+                                        </div>
+                                        <div className="min-w-0">
+                                          <h4 className="font-bold text-sm truncate flex items-center gap-2">
+                                            <span>{svcName}</span>
+                                            <span className="px-1.5 py-0.5 text-[8px] bg-emerald-500/15 text-emerald-400 font-bold uppercase rounded border border-emerald-500/30">
+                                              ⚡ ZERO DOWNTIME
+                                            </span>
+                                          </h4>
+                                          <p className="text-[10px] font-mono text-[var(--text-muted)] truncate">{svcImage}</p>
+                                          {svcPorts !== '-' && (
+                                            <p className="text-[9px] font-mono text-purple-400/80 flex items-center gap-1 mt-0.5 truncate">
+                                              <ExternalLink size={8} className="shrink-0" /> {svcPorts}
+                                            </p>
+                                          )}
+                                        </div>
+                                      </div>
+                                      <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-purple-500/15 text-purple-300 shrink-0">
+                                        {svcReplicas}
+                                      </span>
+                                    </div>
+
+                                    <div className="flex items-center gap-2 pt-1 border-t border-white/5">
+                                      <button
+                                        onClick={() => {
+                                          setSwarmUpdateModal({
+                                            isOpen: true,
+                                            serviceName: svcName,
+                                            currentImage: svcImage,
+                                            newImage: svcImage
+                                          });
+                                        }}
+                                        className="flex-1 py-1.5 px-3 rounded-lg bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/20 text-emerald-400 text-[10px] font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer"
+                                      >
+                                        <Zap size={11} />
+                                        Zero-Downtime Update
+                                      </button>
+                                      <button
+                                        onClick={() => {
+                                          const currentCount = parseInt((svcReplicas.split('/')[1] || '1'), 10) || 1;
+                                          setScaleModal({
+                                            isOpen: true,
+                                            serviceName: svcName,
+                                            count: currentCount
+                                          });
+                                        }}
+                                        className="py-1.5 px-3 rounded-lg bg-purple-500/10 hover:bg-purple-500/20 border border-purple-500/20 text-purple-300 text-[10px] font-bold transition-all flex items-center gap-1.5 cursor-pointer"
+                                      >
+                                        <Layers size={11} />
+                                        Scale
+                                      </button>
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        )}
+
+                        {swarmNodes.length > 0 && (
+                          <div className="flex flex-col gap-3 mt-4">
+                            <h3 className="text-xs font-bold text-sky-400 tracking-wider flex items-center gap-2">
+                              <Cpu size={14} />
+                              SWARM CLUSTER NODES ({swarmNodes.length})
+                            </h3>
+                            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                              {swarmNodes.map((node, i) => (
+                                <div key={i} className="p-3 rounded-xl border border-[var(--border-color)] bg-[var(--bg-card)] flex items-center justify-between text-xs">
+                                  <div className="flex items-center gap-2 min-w-0">
+                                    <Laptop size={14} className="text-sky-400 shrink-0" />
+                                    <div className="min-w-0">
+                                      <p className="font-bold truncate">{node.Hostname || node.hostname || 'node'}</p>
+                                      <p className="text-[9px] text-[var(--text-muted)]">{node.ManagerStatus || node.Role || 'worker'}</p>
+                                    </div>
+                                  </div>
+                                  <span className="text-[9px] font-bold text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded-full">
+                                    {node.Status || 'Ready'}
+                                  </span>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
                       </div>
                     )}
                 </>
@@ -2468,6 +2620,113 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
               </div>
             </div>
           </MacOSModalWindow>
+        )}
+
+        {/* Scale Swarm Service Modal */}
+        {scaleModal.isOpen && createPortal(
+          <MacOSModalWindow
+            isOpen={scaleModal.isOpen}
+            onClose={() => setScaleModal({ isOpen: false, serviceName: '', count: 1 })}
+            title={`Scale Service: ${scaleModal.serviceName}`}
+            icon={Layers}
+            defaultWidth={400}
+            defaultHeight={260}
+            enableMaximize={false}
+            enableMinimize={false}
+          >
+            <div className="p-6 space-y-4">
+              <p className="text-xs text-[var(--text-muted)]">
+                Adjust replica count for <strong className="text-purple-400">{scaleModal.serviceName}</strong>. Swarm will spin up or tear down containers seamlessly.
+              </p>
+              <div>
+                <label className="text-[10px] font-bold uppercase text-[var(--text-muted)] tracking-wider block mb-1">
+                  Number of Replicas
+                </label>
+                <input
+                  type="number"
+                  min="1"
+                  max="50"
+                  value={scaleModal.count}
+                  onChange={(e) => setScaleModal(prev => ({ ...prev, count: parseInt(e.target.value, 10) || 1 }))}
+                  className="w-full bg-slate-950 border border-[var(--border-color)] rounded-xl p-3 text-sm font-mono font-bold text-purple-400 focus:outline-none focus:border-purple-500/50"
+                />
+              </div>
+              <div className="flex justify-end gap-2 pt-2">
+                <button
+                  onClick={() => setScaleModal({ isOpen: false, serviceName: '', count: 1 })}
+                  className="px-4 py-2 rounded-xl text-xs font-bold border border-[var(--border-color)] hover:bg-white/5 transition-all cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={() => {
+                    setIsLoading(true);
+                    socketRef.current.emit('docker:command', { action: 'swarm:scale', args: [scaleModal.serviceName, scaleModal.count] });
+                    setScaleModal({ isOpen: false, serviceName: '', count: 1 });
+                    setTimeout(() => emitDockerLs(), 1500);
+                  }}
+                  className="px-4 py-2 rounded-xl text-xs font-bold bg-purple-500 hover:bg-purple-600 text-white transition-all shadow-lg cursor-pointer"
+                >
+                  Apply Scale
+                </button>
+              </div>
+            </div>
+          </MacOSModalWindow>,
+          document.body
+        )}
+
+        {/* Zero-Downtime Swarm Update Modal */}
+        {swarmUpdateModal.isOpen && createPortal(
+          <MacOSModalWindow
+            isOpen={swarmUpdateModal.isOpen}
+            onClose={() => setSwarmUpdateModal({ isOpen: false, serviceName: '', currentImage: '', newImage: '' })}
+            title={`Zero-Downtime Update: ${swarmUpdateModal.serviceName}`}
+            icon={Zap}
+            defaultWidth={460}
+            defaultHeight={320}
+            enableMaximize={false}
+            enableMinimize={false}
+          >
+            <div className="p-6 space-y-4">
+              <div className="p-3 bg-emerald-500/10 border border-emerald-500/20 rounded-xl text-xs text-emerald-300">
+                ⚡ <strong>Zero-Downtime Enabled</strong> (<code className="text-white">--update-order start-first</code>). Swarm will start new containers and verify health before stopping old ones.
+              </div>
+              <div>
+                <label className="text-[10px] font-bold uppercase text-[var(--text-muted)] tracking-wider block mb-1">
+                  Target Docker Image & Tag
+                </label>
+                <input
+                  type="text"
+                  value={swarmUpdateModal.newImage}
+                  onChange={(e) => setSwarmUpdateModal(prev => ({ ...prev, newImage: e.target.value }))}
+                  placeholder="e.g. myapp:latest or nginx:alpine"
+                  className="w-full bg-slate-950 border border-[var(--border-color)] rounded-xl p-3 text-xs font-mono text-emerald-400 focus:outline-none focus:border-emerald-500/50"
+                />
+              </div>
+              <div className="flex justify-end gap-2 pt-2">
+                <button
+                  onClick={() => setSwarmUpdateModal({ isOpen: false, serviceName: '', currentImage: '', newImage: '' })}
+                  className="px-4 py-2 rounded-xl text-xs font-bold border border-[var(--border-color)] hover:bg-white/5 transition-all cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={() => {
+                    if (!swarmUpdateModal.newImage.trim()) return;
+                    setIsLoading(true);
+                    socketRef.current.emit('docker:command', { action: 'swarm:update', args: [swarmUpdateModal.serviceName, swarmUpdateModal.newImage.trim()] });
+                    setSwarmUpdateModal({ isOpen: false, serviceName: '', currentImage: '', newImage: '' });
+                    setTimeout(() => emitDockerLs(), 2000);
+                  }}
+                  className="px-4 py-2 rounded-xl text-xs font-bold bg-emerald-500 hover:bg-emerald-600 text-white transition-all shadow-lg flex items-center gap-1.5 cursor-pointer"
+                >
+                  <Zap size={13} />
+                  Trigger Rolling Update
+                </button>
+              </div>
+            </div>
+          </MacOSModalWindow>,
+          document.body
         )}
 
         <style jsx>{`

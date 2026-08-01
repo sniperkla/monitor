@@ -3260,28 +3260,66 @@ export default function SettingsApp({ initialTab, deploymentOnly = false, openRe
                           placeholder={t('deploy.deployCommandPlaceholder', '# Enter shell script to run on deploy event')}
                           className="w-full bg-slate-950 border border-[var(--border-color)] rounded-xl p-4 text-xs font-mono text-emerald-400 focus:outline-none focus:border-indigo-500/50 shadow-inner"
                         />
-                        {/* Docker prune helper */}
-                        <div className="flex items-center justify-between">
-                          <span className="text-[9px] text-[var(--text-muted)]">
-                            {t('deploy.dockerPruneHint', 'Recommended for Docker projects: prevents disk from filling with old images.')}
-                          </span>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              const pruneCmd = '\n\n# Clean up dangling Docker images to free disk space\ndocker image prune -f';
-                              const current = deployConfig.deployCommand || '';
-                              if (!current.includes('docker image prune')) {
-                                setDeployConfig(p => ({ ...p, deployCommand: current + pruneCmd }));
-                                addNotification({ title: '🐳 Prune Added', message: 'docker image prune -f appended to deploy command.', type: 'success' });
-                              } else {
-                                addNotification({ title: 'Already Added', message: 'docker image prune is already in the deploy command.', type: 'info' });
-                              }
-                            }}
-                            className="shrink-0 ml-3 px-2.5 py-1 bg-blue-500/10 hover:bg-blue-500/20 border border-blue-500/30 hover:border-blue-400/50 text-blue-300 rounded-lg text-[10px] font-bold transition-all flex items-center gap-1.5 cursor-pointer"
-                          >
-                            <Trash2 size={11} />
-                            {t('deploy.addDockerPrune', '+ Docker Prune')}
-                          </button>
+                        {/* Docker prune & Swarm helpers */}
+                        <div className="flex flex-col gap-2 pt-1">
+                          <div className="flex items-center justify-between flex-wrap gap-2">
+                            <span className="text-[9px] text-[var(--text-muted)]">
+                              {t('deploy.dockerPruneHint', 'Zero-downtime Docker Swarm presets & cleanup helpers:')}
+                            </span>
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const swarmCmd = '\n\n# 🐝 Zero-Downtime Docker Swarm Rolling Update\n# Step 1: Pull / Build new image\ndocker build -t myapp:latest .\n\n# Step 2: Zero-downtime rolling update (start-first keeps app online)\ndocker service update --image myapp:latest --update-order start-first --update-delay 5s myapp_service\n\n# Step 3: Cleanup old images\ndocker image prune -f';
+                                  const current = deployConfig.deployCommand || '';
+                                  if (!current.includes('docker service update')) {
+                                    setDeployConfig(p => ({ ...p, deployCommand: current + swarmCmd }));
+                                    addNotification({ title: '🐝 Swarm Preset Added', message: 'Zero-downtime Docker Swarm rolling update template appended.', type: 'success' });
+                                  } else {
+                                    addNotification({ title: 'Already Added', message: 'docker service update is already in the deploy command.', type: 'info' });
+                                  }
+                                }}
+                                className="px-2.5 py-1 bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 hover:border-amber-400/50 text-amber-300 rounded-lg text-[10px] font-bold transition-all flex items-center gap-1 cursor-pointer"
+                              >
+                                <Zap size={11} />
+                                + Swarm Rolling Update
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const stackCmd = '\n\n# 🐝 Zero-Downtime Docker Stack Deploy\ndocker compose build\ndocker stack deploy -c docker-compose.yml --with-registry-auth --prune myapp_stack\ndocker image prune -f';
+                                  const current = deployConfig.deployCommand || '';
+                                  if (!current.includes('docker stack deploy')) {
+                                    setDeployConfig(p => ({ ...p, deployCommand: current + stackCmd }));
+                                    addNotification({ title: '🐝 Stack Deploy Added', message: 'Docker Stack zero-downtime template appended.', type: 'success' });
+                                  } else {
+                                    addNotification({ title: 'Already Added', message: 'docker stack deploy is already in the deploy command.', type: 'info' });
+                                  }
+                                }}
+                                className="px-2.5 py-1 bg-purple-500/10 hover:bg-purple-500/20 border border-purple-500/30 hover:border-purple-400/50 text-purple-300 rounded-lg text-[10px] font-bold transition-all flex items-center gap-1 cursor-pointer"
+                              >
+                                <Box size={11} />
+                                + Swarm Stack
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const pruneCmd = '\n\n# Clean up dangling Docker images to free disk space\ndocker image prune -f';
+                                  const current = deployConfig.deployCommand || '';
+                                  if (!current.includes('docker image prune')) {
+                                    setDeployConfig(p => ({ ...p, deployCommand: current + pruneCmd }));
+                                    addNotification({ title: '🐳 Prune Added', message: 'docker image prune -f appended to deploy command.', type: 'success' });
+                                  } else {
+                                    addNotification({ title: 'Already Added', message: 'docker image prune is already in the deploy command.', type: 'info' });
+                                  }
+                                }}
+                                className="px-2.5 py-1 bg-blue-500/10 hover:bg-blue-500/20 border border-blue-500/30 hover:border-blue-400/50 text-blue-300 rounded-lg text-[10px] font-bold transition-all flex items-center gap-1.5 cursor-pointer"
+                              >
+                                <Trash2 size={11} />
+                                {t('deploy.addDockerPrune', '+ Docker Prune')}
+                              </button>
+                            </div>
+                          </div>
                         </div>
                       </div>
                       {commandChanged && (
