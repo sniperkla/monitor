@@ -3270,6 +3270,49 @@ export default function SettingsApp({ initialTab, deploymentOnly = false, openRe
                               <button
                                 type="button"
                                 onClick={() => {
+                                  const current = deployConfig.deployCommand || '';
+                                  // Extract project or container name if possible
+                                  let nameHint = (deployConfig.name || 'myapp').toLowerCase().replace(/[^a-z0-9_-]/g, '');
+                                  if (!nameHint) nameHint = 'myapp';
+
+                                  const smartSwarmScript = `#!/bin/bash
+set -e
+
+# 🐝 Swarm-Aware Zero-Downtime Deployment
+# Auto-detects if Swarm Service exists; falls back to standard deploy if not.
+SERVICE_NAME="${nameHint}_service"
+IMAGE_NAME="${nameHint}:latest"
+
+git pull origin ${deployConfig.branch || 'main'}
+
+echo "🔨 Building Docker image..."
+docker build -t $IMAGE_NAME .
+
+if docker service inspect $SERVICE_NAME >/dev/null 2>&1; then
+  echo "🐝 Swarm Service detected! Triggering Zero-Downtime Rolling Update..."
+  docker service update --image $IMAGE_NAME --update-order start-first --update-delay 5s $SERVICE_NAME
+else
+  echo "📦 Swarm Service not found. Running container deployment..."
+  docker stop ${nameHint} 2>/dev/null || true
+  docker rm ${nameHint} 2>/dev/null || true
+  docker run -d --name ${nameHint} $IMAGE_NAME
+fi
+
+echo "🧹 Cleaning up dangling images..."
+docker image prune -f
+`;
+                                  setDeployConfig(p => ({ ...p, deployCommand: smartSwarmScript }));
+                                  addNotification({ title: '🐝 Swarm Auto-Detect Script Set', message: 'Script converted to Swarm-aware zero-downtime deployment format.', type: 'success' });
+                                }}
+                                className="px-2.5 py-1 bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/30 hover:border-emerald-400/50 text-emerald-300 rounded-lg text-[10px] font-bold transition-all flex items-center gap-1 cursor-pointer"
+                                title="Converts deploy script to auto-detect Docker Swarm for zero-downtime updates"
+                              >
+                                <Zap size={11} />
+                                ⚡ Smart Swarm Auto-Detect
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
                                   const swarmCmd = '\n\n# 🐝 Zero-Downtime Docker Swarm Rolling Update\n# Step 1: Pull / Build new image\ndocker build -t myapp:latest .\n\n# Step 2: Zero-downtime rolling update (start-first keeps app online)\ndocker service update --image myapp:latest --update-order start-first --update-delay 5s myapp_service\n\n# Step 3: Cleanup old images\ndocker image prune -f';
                                   const current = deployConfig.deployCommand || '';
                                   if (!current.includes('docker service update')) {
@@ -3282,7 +3325,7 @@ export default function SettingsApp({ initialTab, deploymentOnly = false, openRe
                                 className="px-2.5 py-1 bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 hover:border-amber-400/50 text-amber-300 rounded-lg text-[10px] font-bold transition-all flex items-center gap-1 cursor-pointer"
                               >
                                 <Zap size={11} />
-                                + Swarm Rolling Update
+                                + Swarm Preset
                               </button>
                               <button
                                 type="button"
