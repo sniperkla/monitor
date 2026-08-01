@@ -2080,6 +2080,22 @@ function handleDockerCommand(ws, msg) {
       cmdSuffix = `volume ls --format "{{json .}}"`;
     } else if (action === 'networks') {
       cmdSuffix = `network ls --format "{{json .}}"`;
+    } else if (action === 'swarm:services') {
+      cmdSuffix = `service ls --format "{{json .}}"`;
+    } else if (action === 'swarm:nodes') {
+      cmdSuffix = `node ls --format "{{json .}}"`;
+    } else if (action === 'swarm:init') {
+      cmdSuffix = `swarm init 2>&1 || exit 0`;
+    } else if (action === 'swarm:update' && args.length >= 2) {
+      const serviceName = String(args[0] || '').replace(/[^a-zA-Z0-9._-]/g, '');
+      const image = String(args[1] || '').replace(/[^a-zA-Z0-9.@/:-]/g, '');
+      if (!serviceName || !image) return ws.send(JSON.stringify({ type: 'docker:error', connId, error: 'Invalid Swarm Service or Image' }));
+      cmdSuffix = `service update --image ${image} --update-order start-first --update-delay 5s ${serviceName}`;
+    } else if (action === 'swarm:scale' && args.length >= 2) {
+      const serviceName = String(args[0] || '').replace(/[^a-zA-Z0-9._-]/g, '');
+      const count = parseInt(args[1], 10);
+      if (!serviceName || isNaN(count) || count < 0) return ws.send(JSON.stringify({ type: 'docker:error', connId, error: 'Invalid Scale Parameters' }));
+      cmdSuffix = `service scale ${serviceName}=${count}`;
     } else if (action === 'rmi' && args.length > 0) {
       const targetId = String(args[0] || '').replace(/[^a-zA-Z0-9._/:-]/g, '');
       if (!targetId) return ws.send(JSON.stringify({ type: 'docker:error', connId, error: 'Invalid Image ID' }));
