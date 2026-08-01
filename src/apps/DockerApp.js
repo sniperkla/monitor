@@ -193,7 +193,7 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
   const [swarmNodes, setSwarmNodes] = useState([]);
   const [scaleModal, setScaleModal] = useState({ isOpen: false, serviceName: '', count: 1 });
   const [swarmUpdateModal, setSwarmUpdateModal] = useState({ isOpen: false, serviceName: '', currentImage: '', newImage: '' });
-  const [createServiceModal, setCreateServiceModal] = useState({ isOpen: false, name: '', image: '', replicas: 2, port: '' });
+  const [createServiceModal, setCreateServiceModal] = useState({ isOpen: false, name: '', image: '', replicas: 2, port: '', oldContainerId: '', oldContainerName: '', stopOld: true });
   const [searchResults, setSearchResults] = useState([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [pullingTasks, setPullingTasks] = useState({});
@@ -1456,6 +1456,28 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
                                           <button onClick={(e) => { e.stopPropagation(); handleExportProject(c); }} className="flex items-center gap-1 px-2 py-1.5 rounded-md text-cyan-400 text-[10px] font-medium hover:bg-cyan-500/10 transition-all" title="Export Configuration">
                                             <Share2 size={10} />
                                             <span>Export</span>
+                                          </button>
+                                          <button onClick={(e) => {
+                                            e.stopPropagation();
+                                            let mappedPort = '';
+                                            if (typeof c.ports === 'string') {
+                                              const match = c.ports.match(/(\d+)->(\d+)/);
+                                              if (match) mappedPort = `${match[1]}:${match[2]}`;
+                                            }
+                                            const cleanName = (c.name || 'app').replace(/^\//, '').replace(/[^a-zA-Z0-9._-]/g, '');
+                                            setCreateServiceModal({
+                                              isOpen: true,
+                                              name: cleanName + '_service',
+                                              image: c.image || '',
+                                              replicas: 2,
+                                              port: mappedPort,
+                                              oldContainerId: c.id,
+                                              oldContainerName: c.name,
+                                              stopOld: true
+                                            });
+                                          }} className="flex items-center gap-1 px-2 py-1.5 rounded-md text-purple-400 bg-purple-500/10 hover:bg-purple-500/20 text-[10px] font-bold transition-all border border-purple-500/20" title="Convert running container to Docker Swarm zero-downtime service">
+                                            <Zap size={10} />
+                                            <span>To Swarm</span>
                                           </button>
                                         </div>
 
@@ -2785,9 +2807,23 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
                 --update-order start-first --update-delay 5s{' '}
                 <span className="text-emerald-400">{createServiceModal.image || '<image>'}</span>
               </div>
+              {createServiceModal.oldContainerId && (
+                <div className="p-3 bg-amber-500/10 border border-amber-500/20 rounded-xl flex items-center justify-between text-xs text-amber-300">
+                  <span className="truncate mr-2">Migrating container <strong>{createServiceModal.oldContainerName}</strong></span>
+                  <label className="flex items-center gap-1.5 cursor-pointer shrink-0">
+                    <input
+                      type="checkbox"
+                      checked={createServiceModal.stopOld}
+                      onChange={(e) => setCreateServiceModal(prev => ({ ...prev, stopOld: e.target.checked }))}
+                      className="rounded border-amber-500/30 text-purple-500 focus:ring-purple-500"
+                    />
+                    <span className="text-[10px]">Stop old container</span>
+                  </label>
+                </div>
+              )}
               <div className="flex justify-end gap-2 pt-1">
                 <button
-                  onClick={() => setCreateServiceModal({ isOpen: false, name: '', image: '', replicas: 2, port: '' })}
+                  onClick={() => setCreateServiceModal({ isOpen: false, name: '', image: '', replicas: 2, port: '', oldContainerId: '', oldContainerName: '', stopOld: true })}
                   className="px-4 py-2 rounded-xl text-xs font-bold border border-[var(--border-color)] hover:bg-white/5 transition-all cursor-pointer"
                 >
                   Cancel
@@ -2796,11 +2832,14 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
                   onClick={() => {
                     if (!createServiceModal.name.trim() || !createServiceModal.image.trim()) return;
                     setIsLoading(true);
+                    if (createServiceModal.oldContainerId && createServiceModal.stopOld) {
+                      handleContainerAction(createServiceModal.oldContainerId, 'stop');
+                    }
                     socketRef.current.emit('docker:command', {
                       action: 'swarm:create',
                       args: [createServiceModal.name.trim(), createServiceModal.image.trim(), createServiceModal.replicas, createServiceModal.port.trim()]
                     });
-                    setCreateServiceModal({ isOpen: false, name: '', image: '', replicas: 2, port: '' });
+                    setCreateServiceModal({ isOpen: false, name: '', image: '', replicas: 2, port: '', oldContainerId: '', oldContainerName: '', stopOld: true });
                   }}
                   disabled={!createServiceModal.name.trim() || !createServiceModal.image.trim()}
                   className="px-4 py-2 rounded-xl text-xs font-bold bg-purple-500 hover:bg-purple-600 disabled:opacity-40 disabled:cursor-not-allowed text-white transition-all shadow-lg flex items-center gap-1.5 cursor-pointer"
