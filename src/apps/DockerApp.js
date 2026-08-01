@@ -501,11 +501,18 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
         });
       } else if (action === 'swarm:create') {
         setIsLoading(false);
-        setTimeout(() => {
+        // Switch to Swarm Services tab so user sees the result
+        setActiveTab('swarm');
+        // Refresh at 1s, 3s, and 6s to catch slow swarm scheduling
+        const refreshSwarm = () => {
           if (socketRef.current) {
             socketRef.current.emit('docker:command', { action: 'swarm:services' });
+            socketRef.current.emit('docker:command', { action: 'swarm:nodes' });
           }
-        }, 1000);
+        };
+        setTimeout(refreshSwarm, 1000);
+        setTimeout(refreshSwarm, 3000);
+        setTimeout(refreshSwarm, 6000);
         addNotification({
           title: '🐝 Service Created!',
           message: `Swarm service is now running with rolling update enabled.`,
