@@ -86,6 +86,7 @@ export async function POST(req) {
     }
 
     const b64Script = Buffer.from(`${cmd}`).toString('base64');
+    const decodeCmd = `(base64 -d 2>/dev/null || base64 -D 2>/dev/null || base64 --decode 2>/dev/null || openssl base64 -d 2>/dev/null)`;
 
     // Wrap execution inside tmux session if tmux is installed, fallback to nohup
     // Tee output to both persistent logs directory and /tmp for log compatibility
@@ -93,10 +94,10 @@ export async function POST(req) {
       `if command -v tmux >/dev/null 2>&1; then`,
       `  tmux kill-session -t "${sessionName}" 2>/dev/null || true`,
       `  tmux new-session -d -s "${sessionName}"`,
-      `  tmux send-keys -t "${sessionName}" "echo ${b64Script} | base64 -d > /tmp/${sessionName}.sh && bash /tmp/${sessionName}.sh 2>&1 | tee -a ${quote(permLogFile)} >> ${quote(tmpLogFile)}; exit" Enter`,
+      `  tmux send-keys -t "${sessionName}" "echo ${b64Script} | ${decodeCmd} > /tmp/${sessionName}.sh && bash /tmp/${sessionName}.sh 2>&1 | tee -a ${quote(permLogFile)} >> ${quote(tmpLogFile)}; exit" Enter`,
       `  echo "TMUX_SESSION=${sessionName}"`,
       `else`,
-      `  echo ${b64Script} | base64 -d > /tmp/${sessionName}.sh`,
+      `  echo ${b64Script} | ${decodeCmd} > /tmp/${sessionName}.sh`,
       `  nohup bash /tmp/${sessionName}.sh 2>&1 | tee -a ${quote(permLogFile)} >> ${quote(tmpLogFile)} & echo "PID=$!"`,
       `fi`
     ].join('\n');

@@ -769,7 +769,9 @@ export default function RcloneApp() {
           const res = await apiFetch(`/api/rclone/install?connectionId=${selectedConnId}&logFile=${encodeURIComponent(installJob.logFile)}&sessionName=${encodeURIComponent(installJob.sessionName || '')}&pid=${installJob.pid || ''}`);
           const data = await res.json();
           if (data?.success) {
-            setInstallLog(data.log || '');
+            if (data.log && data.log.trim()) {
+              setInstallLog(data.log);
+            }
             setIsInstalling(data.running);
             if (!data.running) {
               fetchRcloneStatus();

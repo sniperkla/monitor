@@ -82,17 +82,22 @@ export async function POST(req) {
     ].join('\n');
 
     const b64Script = Buffer.from(installScript).toString('base64');
+    const decodeCmd = `(base64 -d 2>/dev/null || base64 -D 2>/dev/null || base64 --decode 2>/dev/null || openssl base64 -d 2>/dev/null)`;
+
+    // Ensure log file exists with initial header so polling shows progress immediately
+    const initCmd = `echo ${quote("🚀 Initializing Rclone installer...\n--------------------------------------------------")} > ${quote(logFile)}`;
+    await execCommand(sshConfig, initCmd);
 
     // Run inside tmux session if available, fallback to nohup
     const runnerCmd = [
       `if command -v tmux >/dev/null 2>&1; then`,
       `  tmux kill-session -t "${sessionName}" 2>/dev/null || true`,
       `  tmux new-session -d -s "${sessionName}"`,
-      `  tmux send-keys -t "${sessionName}" "echo ${b64Script} | base64 -d > /tmp/${sessionName}.sh && bash /tmp/${sessionName}.sh 2>&1 | tee ${logFile}; exit" Enter`,
+      `  tmux send-keys -t "${sessionName}" "echo ${b64Script} | ${decodeCmd} > /tmp/${sessionName}.sh && bash /tmp/${sessionName}.sh 2>&1 | tee -a ${logFile}; exit" Enter`,
       `  echo "TMUX_SESSION=${sessionName}"`,
       `else`,
-      `  echo ${b64Script} | base64 -d > /tmp/${sessionName}.sh`,
-      `  nohup bash /tmp/${sessionName}.sh > ${logFile} 2>&1 & echo "PID=$!"`,
+      `  echo ${b64Script} | ${decodeCmd} > /tmp/${sessionName}.sh`,
+      `  nohup bash /tmp/${sessionName}.sh >> ${logFile} 2>&1 & echo "PID=$!"`,
       `fi`
     ].join('\n');
 
