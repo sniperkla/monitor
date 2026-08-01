@@ -123,23 +123,30 @@ export async function POST(request) {
       apiKey = keysSetting.value.keys[idx] || keysSetting.value.keys[0];
     }
 
-    let aiEndpoint = 'https://api.groq.com/openai/v1/chat/completions';
-    let modelName = configSetting?.value?.model || FALLBACK_MODEL;
+    // Prefer request-body values first, then fall back to saved DB prefs
     const effectiveAiModel = aiModel || projectAiPrefs.aiModel;
     const effectiveAiCustomModel = aiCustomModel || projectAiPrefs.aiCustomModel;
-    const effectiveAiEndpoint = aiEndpointBody || projectAiPrefs.aiEndpoint;
-    const effectiveAiApiKey = aiApiKeyBody || projectAiPrefs.aiApiKey;
+    const effectiveAiEndpoint = (aiEndpointBody && aiEndpointBody.trim()) ? aiEndpointBody.trim() : (projectAiPrefs.aiEndpoint || '');
+    const effectiveAiApiKey = (aiApiKeyBody && aiApiKeyBody.trim()) ? aiApiKeyBody.trim() : (projectAiPrefs.aiApiKey || '');
 
-    if (effectiveAiModel === 'manual') {
+    let aiEndpoint = 'https://api.groq.com/openai/v1/chat/completions';
+    let modelName = configSetting?.value?.model || FALLBACK_MODEL;
+
+    if (effectiveAiModel === 'manual' || (effectiveAiEndpoint && effectiveAiApiKey)) {
+      // Custom endpoint mode: use whatever endpoint and key the user provided
       aiEndpoint = effectiveAiEndpoint || 'https://api.openai.com/v1/chat/completions';
       modelName = effectiveAiCustomModel || 'gpt-3.5-turbo';
       apiKey = effectiveAiApiKey || apiKey;
+
+      if (!apiKey) {
+        return NextResponse.json({ success: false, error: 'Custom AI API Key is required. Enter your API key in the Auto Deploy → AI Settings section.' }, { status: 400 });
+      }
     } else if (effectiveAiModel && effectiveAiModel !== 'auto') {
       modelName = effectiveAiModel;
     }
 
     if (!apiKey) {
-      return NextResponse.json({ success: false, error: 'AI Service API Key is not configured. Enter a custom API key or ensure your global Groq key is set.' }, { status: 400 });
+      return NextResponse.json({ success: false, error: 'AI API Key is not configured. Please add a Groq API key in the global AI settings, or switch to Manual mode and enter a custom API key in the Auto Deploy settings.' }, { status: 400 });
     }
 
     const aiConfig = {
