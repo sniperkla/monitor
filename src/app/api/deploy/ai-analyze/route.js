@@ -37,8 +37,38 @@ export async function POST(request) {
     }
 
     if (targetType === 'local') {
-      // Local Host listing
       const cmd = `cd "${resolvedPath}" && ls -la && cat package.json 2>/dev/null && cat docker-compose.yml 2>/dev/null && cat Dockerfile 2>/dev/null && cat requirements.txt 2>/dev/null && cat pyproject.toml 2>/dev/null && cat pom.xml 2>/dev/null && cat build.gradle 2>/dev/null && echo "=== DOCKER COMPOSE VERSION ===" && (docker compose version 2>/dev/null || docker-compose --version 2>/dev/null)`;
+      filesListing = await new Promise((resolve) => {
+        exec(cmd, { timeout: 30000 }, (error, stdout, stderr) => {
+          resolve((stdout || stderr || error?.message || '').toString());
+        });
+      });
+    } else if (targetType === 'ssh') {
+      if (!connectionId) {
+        return NextResponse.json({ success: false, error: 'Connection ID is required for SSH target' }, { status: 400 });
+      }
+      await connectDB(process.env.MONGODB_URI, true);
+      const connection = await ConnectionRepository.findById(connectionId);
+      if (!connection) {
+        return NextResponse.json({ success: false, error: 'SSH Connection not found' }, { status: 404 });
+      }
+
+      const sshConfig = {
+        host: connection.host,
+        port: connection.port || 22,
+        username: connection.username,
+        readyTimeout: 20000,
+      };
+
+      if (connection.authType === 'password') {
+        try { sshConfig.password = decrypt(connection.password); } catch (_) { sshConfig.password = connection.password; }
+      } else if (connection.privateKey) {
+        try { sshConfig.privateKey = decrypt(connection.privateKey); } catch (_) { sshConfig.privateKey = connection.privateKey; }
+        if (connection.passphrase) {
+          try { sshConfig.passphrase = decrypt(connection.passphrase); } catch (_) { sshConfig.passphrase = connection.passphrase; }
+        }
+      }
+
       filesListing = await new Promise((resolve) => {
         const conn = new Client();
         const sshTimeout = setTimeout(() => {
@@ -70,6 +100,7 @@ export async function POST(request) {
         });
 
         conn.on('error', (err) => {
+          clearTimeout(sshTimeout);
           resolve(`SSH Connection Error: ${err.message}`);
         });
 
