@@ -256,26 +256,38 @@ export async function sendTelegramNotification(config, status, extra = {}) {
     }
   }
 
-  try {
-    const url = `https://api.telegram.org/bot${botToken}/sendMessage`;
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        chat_id: config.telegramChatId,
-        text: text,
-        parse_mode: 'HTML'
-      })
-    });
-    if (!response.ok) {
-      const errText = await response.text();
-      console.error(`[Telegram] Error response: ${errText}`);
-    }
-  } catch (err) {
-    console.error(`[Telegram] Failed to send notification:`, err.message);
-  }
+  const chatIds = String(config.telegramChatId || '')
+    .split(/[\s,]+/)
+    .map(id => id.trim())
+    .filter(Boolean);
+
+  if (chatIds.length === 0) return;
+
+  const url = `https://api.telegram.org/bot${botToken}/sendMessage`;
+
+  await Promise.allSettled(
+    chatIds.map(async (cid) => {
+      try {
+        const response = await fetch(url, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            chat_id: cid,
+            text: text,
+            parse_mode: 'HTML'
+          })
+        });
+        if (!response.ok) {
+          const errText = await response.text();
+          console.error(`[Telegram] Error sending to chat ${cid}: ${errText}`);
+        }
+      } catch (err) {
+        console.error(`[Telegram] Failed to send notification to chat ${cid}:`, err.message);
+      }
+    })
+  );
 }
 
 // Reconnect to a remote server after SSH drops and monitor a tmux session to completion.

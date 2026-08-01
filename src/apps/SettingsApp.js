@@ -276,6 +276,14 @@ export default function SettingsApp({ initialTab, deploymentOnly = false, openRe
   const [logSearchIndex, setLogSearchIndex] = useState(0);
   const logContainerRef = useRef(null);
 
+  // Telegram auto-fetch & test notification states
+  const [telegramLoadingChats, setTelegramLoadingChats] = useState(false);
+  const [telegramChats, setTelegramChats] = useState([]);
+  const [telegramBotInfo, setTelegramBotInfo] = useState(null);
+  const [telegramFetchError, setTelegramFetchError] = useState('');
+  const [telegramTesting, setTelegramTesting] = useState(false);
+  const [telegramTestStatus, setTelegramTestStatus] = useState(null);
+
   // Filtered projects for searchable dropdown
   const filteredProjects = useMemo(() => {
     const q = projectSearch.toLowerCase().trim();
@@ -989,6 +997,59 @@ export default function SettingsApp({ initialTab, deploymentOnly = false, openRe
       addNotification({ title: 'Error', message: 'Failed to communicate with AI analysis endpoint.', type: 'error' });
     }
     setAiAnalyzing(false);
+  };
+
+  const handleFetchTelegramChats = async () => {
+    setTelegramLoadingChats(true);
+    setTelegramFetchError('');
+    try {
+      const params = new URLSearchParams();
+      params.set('project', selectedProjectId || 'default');
+      if (deployConfig.telegramBotToken) {
+        params.set('botToken', deployConfig.telegramBotToken);
+      }
+      const res = await apiFetch(`/api/deploy/telegram?${params.toString()}`);
+      const data = await res.json();
+      if (data.success) {
+        setTelegramChats(data.chats || []);
+        setTelegramBotInfo(data.bot || null);
+        if (data.chats && data.chats.length === 0) {
+          setTelegramFetchError('No recent chats found. Send a message (e.g. /start) to your bot on Telegram, then click Fetch Chats again.');
+        }
+      } else {
+        setTelegramFetchError(data.error || 'Failed to fetch Telegram chats');
+      }
+    } catch (err) {
+      setTelegramFetchError(err.message);
+    } finally {
+      setTelegramLoadingChats(false);
+    }
+  };
+
+  const handleTestTelegramNotification = async () => {
+    setTelegramTesting(true);
+    setTelegramTestStatus(null);
+    try {
+      const res = await apiFetch('/api/deploy/telegram', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          projectId: selectedProjectId || 'default',
+          botToken: deployConfig.telegramBotToken,
+          chatId: deployConfig.telegramChatId
+        })
+      });
+      const data = await res.json();
+      if (data.success) {
+        setTelegramTestStatus({ success: true, message: data.message || 'Test notification sent!' });
+      } else {
+        setTelegramTestStatus({ success: false, message: data.error || 'Failed to send test notification' });
+      }
+    } catch (err) {
+      setTelegramTestStatus({ success: false, message: err.message });
+    } finally {
+      setTelegramTesting(false);
+    }
   };
 
   // Auto-detect user's OS from browser (for relay install hint)
@@ -3354,27 +3415,171 @@ export default function SettingsApp({ initialTab, deploymentOnly = false, openRe
                       </div>
 
                       {deployConfig.telegramNotification && (
-                        <div className="space-y-3 pt-2 border-t border-[var(--border-color)]/60 animate-in fade-in duration-200">
+                        <div className="space-y-4 pt-3 border-t border-[var(--border-color)]/60 animate-in fade-in duration-200">
+                          {/* Bot Token field + Fetch button */}
                           <div>
-                            <label className="block text-[10px] font-bold text-[var(--text-secondary)] uppercase tracking-wider mb-1">{t('deploy.telegramBotToken', 'Telegram Bot Token')}</label>
-                            <input
-                              type="password"
-                              value={deployConfig.telegramBotToken || ''}
-                              onChange={(e) => setDeployConfig(p => ({ ...p, telegramBotToken: e.target.value }))}
-                              placeholder="e.g. 123456789:ABCdefGhI..."
-                              className="w-full bg-[var(--bg-primary)] border border-[var(--border-color)] rounded-xl px-3 py-2 text-xs text-[var(--text-primary)] focus:outline-none focus:border-indigo-500"
-                            />
+                            <div className="flex items-center justify-between mb-1">
+                              <label className="block text-[10px] font-bold text-[var(--text-secondary)] uppercase tracking-wider">
+                                {t('deploy.telegramBotToken', 'Telegram Bot Token')}
+                              </label>
+                              {telegramBotInfo && (
+                                <span className="text-[10px] text-emerald-400 font-semibold flex items-center gap-1">
+                                  <CheckCircle size={11} />
+                                  🤖 {telegramBotInfo.first_name} (@{telegramBotInfo.username})
+                                </span>
+                              )}
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <input
+                                type="password"
+                                value={deployConfig.telegramBotToken || ''}
+                                onChange={(e) => setDeployConfig(p => ({ ...p, telegramBotToken: e.target.value }))}
+                                placeholder="e.g. 123456789:ABCdefGhI..."
+                                className="flex-1 bg-[var(--bg-primary)] border border-[var(--border-color)] rounded-xl px-3 py-2 text-xs text-[var(--text-primary)] focus:outline-none focus:border-indigo-500"
+                              />
+                              <button
+                                type="button"
+                                onClick={handleFetchTelegramChats}
+                                disabled={telegramLoadingChats || (!deployConfig.telegramBotToken && !telegramBotInfo)}
+                                className="px-3 py-2 rounded-xl bg-sky-500/10 hover:bg-sky-500/20 border border-sky-500/30 text-sky-400 hover:text-sky-300 text-xs font-semibold flex items-center gap-1.5 transition-colors disabled:opacity-50 disabled:cursor-not-allowed shrink-0"
+                              >
+                                {telegramLoadingChats ? <Loader size={13} className="animate-spin" /> : <RefreshCw size={13} />}
+                                Fetch Chats
+                              </button>
+                            </div>
                           </div>
+
+                          {/* Error message or info hint */}
+                          {telegramFetchError && (
+                            <div className="px-3 py-2 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-400 text-[11px] flex items-start gap-2">
+                              <AlertCircle size={14} className="shrink-0 mt-0.5" />
+                              <div>
+                                <span>{telegramFetchError}</span>
+                                <p className="text-[10px] text-rose-400/80 mt-0.5">
+                                  💡 <strong>Tip:</strong> Open Telegram, search for your bot, send a message (like <code>/start</code>), then click <strong>Fetch Chats</strong> again.
+                                </p>
+                              </div>
+                            </div>
+                          )}
+
+                          {/* Dropdown selector if chats were fetched */}
+                          {telegramChats.length > 0 && (
+                            <div>
+                              <label className="block text-[10px] font-bold text-[var(--text-secondary)] uppercase tracking-wider mb-1">
+                                Add Chat / Group to Recipients
+                              </label>
+                              <select
+                                value=""
+                                onChange={(e) => {
+                                  if (e.target.value) {
+                                    const selectedId = e.target.value;
+                                    const currentIds = String(deployConfig.telegramChatId || '')
+                                      .split(/[\s,]+/)
+                                      .map(id => id.trim())
+                                      .filter(Boolean);
+                                    if (!currentIds.includes(selectedId)) {
+                                      const updated = [...currentIds, selectedId].join(', ');
+                                      setDeployConfig(p => ({ ...p, telegramChatId: updated }));
+                                    }
+                                  }
+                                }}
+                                className="w-full bg-[var(--bg-primary)] border border-[var(--border-color)] rounded-xl px-3 py-2 text-xs text-[var(--text-primary)] focus:outline-none focus:border-indigo-500"
+                              >
+                                <option value="">+ Select a chat to add to notification list...</option>
+                                {telegramChats.map(c => {
+                                  const currentIds = String(deployConfig.telegramChatId || '')
+                                    .split(/[\s,]+/)
+                                    .map(id => id.trim())
+                                    .filter(Boolean);
+                                  const isSelected = currentIds.includes(c.id);
+                                  return (
+                                    <option key={c.id} value={c.id} disabled={isSelected}>
+                                      {isSelected ? '✓ ' : ''}{c.title} ({c.type}) — ID: {c.id}
+                                    </option>
+                                  );
+                                })}
+                              </select>
+                            </div>
+                          )}
+
+                          {/* Selected Chat Badges / Chips */}
+                          {(() => {
+                            const chatIds = String(deployConfig.telegramChatId || '')
+                              .split(/[\s,]+/)
+                              .map(id => id.trim())
+                              .filter(Boolean);
+                            if (chatIds.length === 0) return null;
+                            return (
+                              <div className="space-y-1.5">
+                                <label className="block text-[10px] font-bold text-[var(--text-secondary)] uppercase tracking-wider">
+                                  Selected Recipients ({chatIds.length})
+                                </label>
+                                <div className="flex flex-wrap gap-1.5">
+                                  {chatIds.map(id => {
+                                    const match = telegramChats.find(c => c.id === id);
+                                    const label = match ? `${match.title}` : `ID: ${id}`;
+                                    return (
+                                      <span
+                                        key={id}
+                                        className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-sky-500/10 border border-sky-500/30 text-sky-300 text-xs font-medium"
+                                      >
+                                        <span>{label}</span>
+                                        <span className="text-[10px] text-sky-400/60 font-mono">({id})</span>
+                                        <button
+                                          type="button"
+                                          onClick={() => {
+                                            const updated = chatIds.filter(c => c !== id).join(', ');
+                                            setDeployConfig(p => ({ ...p, telegramChatId: updated }));
+                                          }}
+                                          className="hover:text-rose-400 transition-colors p-0.5 rounded"
+                                          title="Remove recipient"
+                                        >
+                                          <X size={12} />
+                                        </button>
+                                      </span>
+                                    );
+                                  })}
+                                </div>
+                              </div>
+                            );
+                          })()}
+
+                          {/* Chat ID Input field */}
                           <div>
-                            <label className="block text-[10px] font-bold text-[var(--text-secondary)] uppercase tracking-wider mb-1">{t('deploy.telegramChatId', 'Telegram Chat ID')}</label>
-                            <input
-                              type="text"
-                              value={deployConfig.telegramChatId || ''}
-                              onChange={(e) => setDeployConfig(p => ({ ...p, telegramChatId: e.target.value }))}
-                              placeholder="e.g. -100123456789 or 987654321"
-                              className="w-full bg-[var(--bg-primary)] border border-[var(--border-color)] rounded-xl px-3 py-2 text-xs text-[var(--text-primary)] focus:outline-none focus:border-indigo-500"
-                            />
+                            <label className="block text-[10px] font-bold text-[var(--text-secondary)] uppercase tracking-wider mb-1">
+                              {t('deploy.telegramChatId', 'Telegram Chat IDs (comma-separated)')}
+                            </label>
+                            <div className="flex items-center gap-2">
+                              <input
+                                type="text"
+                                value={deployConfig.telegramChatId || ''}
+                                onChange={(e) => setDeployConfig(p => ({ ...p, telegramChatId: e.target.value }))}
+                                placeholder="e.g. 123456789, -100123456789"
+                                className="flex-1 bg-[var(--bg-primary)] border border-[var(--border-color)] rounded-xl px-3 py-2 text-xs text-[var(--text-primary)] focus:outline-none focus:border-indigo-500"
+                              />
+                              <button
+                                type="button"
+                                onClick={handleTestTelegramNotification}
+                                disabled={telegramTesting || !deployConfig.telegramChatId}
+                                className="px-3 py-2 rounded-xl bg-indigo-500/10 hover:bg-indigo-500/20 border border-indigo-500/30 text-indigo-400 hover:text-indigo-300 text-xs font-semibold flex items-center gap-1.5 transition-colors disabled:opacity-50 disabled:cursor-not-allowed shrink-0"
+                              >
+                                {telegramTesting ? <Loader size={13} className="animate-spin" /> : <Send size={13} />}
+                                Test Alert
+                              </button>
+                            </div>
                           </div>
+
+                          {/* Test status alert */}
+                          {telegramTestStatus && (
+                            <div className={`px-3 py-2 rounded-xl border text-[11px] flex items-center gap-2 ${
+                              telegramTestStatus.success 
+                                ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400' 
+                                : 'bg-rose-500/10 border-rose-500/30 text-rose-400'
+                            }`}>
+                              {telegramTestStatus.success ? <CheckCircle size={14} /> : <AlertCircle size={14} />}
+                              <span>{telegramTestStatus.message}</span>
+                            </div>
+                          )}
                         </div>
                       )}
                       {telegramChanged && (
