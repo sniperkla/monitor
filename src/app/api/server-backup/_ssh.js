@@ -23,104 +23,15 @@ export async function resolveSshConfig(baseConfig, options = {}) {
     if (!relay || !relay.ws) {
       throw new Error('Local Relay Agent is not connected. Please start local-relay.js on your target machine.');
     }
-    
-    // Instead of connecting to localhost TCP port (which clashes with MongoDB), we use a custom stream
-    const { Duplex } = require('stream');
-    const connId = Math.random().toString(36).slice(2, 10);
-    const duplex = new Duplex({
-      write(chunk, encoding, callback) {
-        if (relay.ws.readyState === 1) {
-          relay.ws.send(JSON.stringify({ type: 'data', connId, data: chunk.toString('base64') }));
-        }
-        callback();
-      },
-      read(size) {}
-    });
-    duplex.isCustomRelayStream = true;
 
-    // Wait for the relay agent to confirm the TCP connection is open before returning duplex
-    await new Promise((resolve, reject) => {
-      let isResolved = false;
+    // Set the target host and port on the active relay instance
+    relay.targetHost = (sshConfig.host && !isLocalhost(sshConfig.host)) ? sshConfig.host : 'localhost';
+    relay.targetPort = parseInt(sshConfig.port, 10) || 22;
 
-      // 5-second fallback for older relay agents that don't send 'connected'
-      const fallbackTimer = setTimeout(() => {
-        if (!isResolved) {
-          isResolved = true;
-          relay.ws.off('message', messageHandler);
-          relay.ws.on('message', dataHandler);
-          resolve();
-        }
-      }, 600);
-
-      const connTimeout = setTimeout(() => {
-        if (!isResolved) {
-          isResolved = true;
-          clearTimeout(fallbackTimer);
-          relay.ws.off('message', messageHandler);
-          reject(new Error(`Local Relay Agent failed to connect to ${sshConfig.host}:${sshConfig.port || 22} (timeout)`));
-        }
-      }, 10000);
-
-      const messageHandler = (raw) => {
-        try {
-          const msg = JSON.parse(raw.toString());
-          if (msg.connId !== connId) return;
-
-          if (msg.type === 'connected') {
-            if (!isResolved) {
-              isResolved = true;
-              clearTimeout(fallbackTimer);
-              clearTimeout(connTimeout);
-              relay.ws.off('message', messageHandler);
-              relay.ws.on('message', dataHandler);
-              resolve();
-            }
-          } else if (msg.type === 'close') {
-            if (!isResolved) {
-              isResolved = true;
-              clearTimeout(fallbackTimer);
-              clearTimeout(connTimeout);
-              relay.ws.off('message', messageHandler);
-              reject(new Error(`Local Relay Agent failed to connect to ${sshConfig.host}:${sshConfig.port || 22} (connection closed)`));
-            }
-          }
-        } catch (err) {}
-      };
-
-      const dataHandler = (raw) => {
-        try {
-          const msg = JSON.parse(raw.toString());
-          if (msg.connId !== connId) return;
-
-          if (msg.type === 'data') {
-            duplex.push(Buffer.from(msg.data, 'base64'));
-          } else if (msg.type === 'close') {
-            duplex.push(null); // End of stream
-            relay.ws.off('message', dataHandler);
-          }
-        } catch (err) {}
-      };
-
-      relay.ws.on('message', messageHandler);
-
-      duplex.on('close', () => {
-        clearTimeout(fallbackTimer);
-        clearTimeout(connTimeout);
-        relay.ws.off('message', messageHandler);
-        relay.ws.off('message', dataHandler);
-        if (relay.ws.readyState === 1) relay.ws.send(JSON.stringify({ type: 'close', connId }));
-      });
-
-      if (relay.ws.readyState === 1) {
-        relay.ws.send(JSON.stringify({ type: 'open', connId, host: sshConfig.host, port: sshConfig.port || 22 }));
-      } else {
-        clearTimeout(fallbackTimer);
-        clearTimeout(connTimeout);
-        reject(new Error('Local Relay Agent WebSocket connection is not ready.'));
-      }
-    });
-
-    sshConfig.sock = duplex;
+    // Connect ssh2 through local TCP proxy port managed by server's netServer
+    sshConfig.host = '127.0.0.1';
+    sshConfig.port = relay.localPort;
+    delete sshConfig.sock;
   }
 
   return sshConfig;
