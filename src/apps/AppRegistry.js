@@ -1,4 +1,4 @@
-import { Terminal, Settings, Monitor, Database, Folder, AlertCircle, StickyNote, Book, MonitorPlay, Server, FileText, GitBranch, CloudSync, Rocket, HardDrive } from 'lucide-react';
+import { Terminal, Settings, Monitor, Database, Folder, AlertCircle, StickyNote, Book, MonitorPlay, Server, FileText, GitBranch, CloudSync, Rocket, HardDrive, CloudCog, ShieldCheck } from 'lucide-react';
 
 import TerminalApp from '@/apps/TerminalApp';
 import SettingsApp from '@/apps/SettingsApp';
@@ -19,22 +19,22 @@ import RcloneApp from '@/apps/RcloneApp';
 export const AppRegistry = {
   'rclone': {
     component: RcloneApp,
-    icon: CloudSync,
+    icon: CloudCog,
     defaultTitle: 'Rclone Cloud Sync'
   },
   'rclone-backup': {
     component: RcloneApp,
-    icon: CloudSync,
+    icon: CloudCog,
     defaultTitle: 'Rclone Cloud Sync'
   },
   'server-backup': {
     component: ServerBackupApp,
-    icon: HardDrive,
+    icon: ShieldCheck,
     defaultTitle: 'Server Backup'
   },
   'mongo-backup': {
     component: MongoBackupApp,
-    icon: CloudSync,
+    icon: Database,
     defaultTitle: 'Mongo Sync & Backup'
   },
   'database-browser': {

@@ -10,6 +10,7 @@ import {
 import { useVault } from '@/context/VaultContext';
 import { useApp } from '@/context/AppContext';
 import MasterPasswordModal from '@/components/MasterPasswordModal';
+import MacOSModalWindow from '@/components/MacOSModalWindow';
 import { getLocalConnections } from '@/utils/localConnections';
 
 // 🎨 Custom Styled Popover Select Component
@@ -82,6 +83,8 @@ function PathInputWithAutocomplete({
   const [loading, setLoading] = useState(false);
   const wrapperRef = useRef(null);
   const debounceTimer = useRef(null);
+  const justSelectedRef = useRef(false);
+  const cacheRef = useRef({});
 
   const parsePath = (val) => {
     if (!val) return { targetType: 'local', dir: '/', prefix: '' };
@@ -127,12 +130,25 @@ function PathInputWithAutocomplete({
     }
 
     const { targetType, dir, prefix } = parsePath(val);
+    const cacheKey = `${selectedConnId}:${targetType}:${dir}`;
+    
+    if (cacheRef.current[cacheKey]) {
+      const filtered = cacheRef.current[cacheKey].filter(item =>
+        item.Name && item.Name.toLowerCase().startsWith(prefix.toLowerCase())
+      );
+      setSuggestions(filtered);
+      setIsOpen(filtered.length > 0);
+      setSelectedIndex(filtered.length > 0 ? 0 : -1);
+      return;
+    }
+
     setLoading(true);
 
     try {
       const res = await apiFetch(`/api/rclone/browse?connectionId=${selectedConnId}&remote=${encodeURIComponent(targetType)}&path=${encodeURIComponent(dir)}`);
       const data = await res.json();
       if (data?.success && Array.isArray(data.items)) {
+        cacheRef.current[cacheKey] = data.items;
         const filtered = data.items.filter(item =>
           item.Name && item.Name.toLowerCase().startsWith(prefix.toLowerCase())
         );
@@ -154,17 +170,19 @@ function PathInputWithAutocomplete({
   const handleChange = (e) => {
     const newVal = e.target.value;
     onChange(newVal);
+    justSelectedRef.current = false;
     
     if (debounceTimer.current) clearTimeout(debounceTimer.current);
     debounceTimer.current = setTimeout(() => {
       fetchItems(newVal);
-    }, 200);
+    }, 150);
   };
 
   const applySuggestion = (item) => {
     if (item.isRemoteName) {
       onChange(item.Name);
-      fetchItems(item.Name);
+      if (debounceTimer.current) clearTimeout(debounceTimer.current);
+      debounceTimer.current = setTimeout(() => fetchItems(item.Name), 150);
       return;
     }
 
@@ -179,16 +197,11 @@ function PathInputWithAutocomplete({
       newPath = `${targetType}${cleanDir}${item.Name}${item.IsDir ? '/' : ''}`;
     }
 
+    justSelectedRef.current = true;
     onChange(newPath);
     setIsOpen(false);
     setSelectedIndex(-1);
-
-    if (item.IsDir) {
-      if (debounceTimer.current) clearTimeout(debounceTimer.current);
-      debounceTimer.current = setTimeout(() => {
-        fetchItems(newPath);
-      }, 150);
-    }
+    setSuggestions([]);
   };
 
   const handleKeyDown = (e) => {
@@ -225,11 +238,16 @@ function PathInputWithAutocomplete({
     const handleClickOutside = (e) => {
       if (wrapperRef.current && !wrapperRef.current.contains(e.target)) {
         setIsOpen(false);
+        setSuggestions([]);
       }
     };
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
+
+  useEffect(() => {
+    cacheRef.current = {};
+  }, [selectedConnId]);
 
   return (
     <div ref={wrapperRef} className={`relative w-full ${isOpen ? 'z-[990]' : 'z-10'}`}>
@@ -239,6 +257,10 @@ function PathInputWithAutocomplete({
           value={value}
           onChange={handleChange}
           onFocus={() => {
+            if (justSelectedRef.current) {
+              justSelectedRef.current = false;
+              return;
+            }
             if (value) fetchItems(value);
           }}
           onKeyDown={handleKeyDown}
@@ -600,6 +622,12 @@ export default function RcloneApp() {
   const [isJobRunning, setIsJobRunning] = useState(false);
   const logTerminalRef = useRef(null);
 
+  // Cron Live Log (scheduled + manual — shown in Schedules tab)
+  const [cronLiveLog, setCronLiveLog] = useState('');
+  const [cronLiveLogRunning, setCronLiveLogRunning] = useState(false);
+  const [cronLiveLogFile, setCronLiveLogFile] = useState('');
+  const cronLiveLogRef = useRef(null);
+
   // File Browser State
   const [browseRemote, setBrowseRemote] = useState('');
   const [browsePath, setBrowsePath] = useState('');
@@ -615,6 +643,9 @@ export default function RcloneApp() {
   const [collapsedProjects, setCollapsedProjects] = useState({}); // track which project groups are collapsed
   const [historyFilter, setHistoryFilter] = useState('all'); // 'all' | 'backup' | 'cleanup'
   const [autoRefreshHistory, setAutoRefreshHistory] = useState(true); // real-time history polling
+
+  // Cron Schedule Result Modal State
+  const [cronResult, setCronResult] = useState(null); // { testPassed, testStatus, humanSchedule, testOutput, finalSchedule }
 
   // Custom Connection Dropdown State (matching AutoDeploy App)
   const [connDropdownOpen, setConnDropdownOpen] = useState(false);
@@ -677,6 +708,9 @@ export default function RcloneApp() {
       setBrowsePath('');
       setTargetPath('');
       setServerCrons([]);
+      setCollapsedProjects({});
+      setExpandedLogIdx(null);
+      setHistoryFilter('all');
       fetchRcloneStatus();
       fetchCrons();
       fetchHistory();
@@ -715,6 +749,12 @@ export default function RcloneApp() {
   }, [jobLog]);
 
   useEffect(() => {
+    if (cronLiveLogRef.current) {
+      cronLiveLogRef.current.scrollTop = cronLiveLogRef.current.scrollHeight;
+    }
+  }, [cronLiveLog]);
+
+  useEffect(() => {
     if (installTerminalRef.current) {
       installTerminalRef.current.scrollTop = installTerminalRef.current.scrollHeight;
     }
@@ -741,7 +781,7 @@ export default function RcloneApp() {
     return () => { if (interval) clearInterval(interval); };
   }, [installJob, isInstalling, selectedConnId, apiFetch]);
 
-  // Poll active backup job status
+  // Poll active backup job status (backup tab)
   useEffect(() => {
     let interval = null;
     if (activeJob && isJobRunning) {
@@ -752,12 +792,39 @@ export default function RcloneApp() {
           if (data?.success) {
             setJobLog(data.log || '');
             setIsJobRunning(data.running);
+            // Mirror to cron live log as well so crons tab stays in sync
+            setCronLiveLog(data.log || '');
+            setCronLiveLogRunning(data.running);
+            if (activeJob.logFile) setCronLiveLogFile(activeJob.logFile);
           }
         } catch (_) {}
       }, 1500);
     }
     return () => { if (interval) clearInterval(interval); };
   }, [activeJob, isJobRunning, selectedConnId, apiFetch]);
+
+  // Poll most-recently-modified rclone log for Schedules tab (covers cron-triggered jobs)
+  useEffect(() => {
+    if (!selectedConnId || activeTab !== 'crons') return;
+    // If a manual job is already feeding cronLiveLog via the effect above, skip independent polling
+    let interval = null;
+    interval = setInterval(async () => {
+      try {
+        // Find the latest modified rclone cron log across persistent and /tmp paths
+        const res = await apiFetch(
+          `/api/rclone/history?connectionId=${selectedConnId}&latestLog=1&target=${encodeURIComponent(targetPath || '')}`,
+        );
+        const data = await res.json();
+        if (data?.success && data.latestLog) {
+          // latestLog contains { logFile, content, running }
+          setCronLiveLog(data.latestLog.content || '');
+          setCronLiveLogRunning(!!data.latestLog.running);
+          setCronLiveLogFile(data.latestLog.logFile || '');
+        }
+      } catch (_) {}
+    }, 3000);
+    return () => { if (interval) clearInterval(interval); };
+  }, [selectedConnId, activeTab, apiFetch, targetPath]);
 
   const selectedConn = connections?.find(c => (c.id || c._id) === selectedConnId);
 
@@ -933,8 +1000,13 @@ export default function RcloneApp() {
       });
       const data = await res.json();
       if (data?.success) {
-        const testStatus = data.testPassed ? '✅ Connection & Path Test Verification Passed!' : '⚠️ Schedule Saved (Dry-Run Notice)';
-        alert(`${testStatus}\n\nCrontab Schedule: ${data.humanSchedule || finalSchedule}\n\nTest Run Output Preview:\n${data.testOutput || 'Rclone connection & paths verified successfully.'}`);
+        const testStatus = data.testPassed ? 'Connection & Path Test Verification Passed!' : 'Schedule Saved (Dry-Run Notice)';
+        setCronResult({
+          testPassed: data.testPassed,
+          testStatus,
+          humanSchedule: data.humanSchedule || finalSchedule,
+          testOutput: data.testOutput || 'Rclone connection & paths verified successfully.',
+        });
         fetchCrons();
         fetchRcloneStatus();
       } else {
@@ -978,15 +1050,32 @@ export default function RcloneApp() {
     setLoading(false);
   };
 
-  const handleDeleteCron = async (rawLine) => {
-    if (!confirm('Remove this crontab schedule from server?')) return;
+  const handleDeleteCron = async (cronItem) => {
+    const rawLine = typeof cronItem === 'string' ? cronItem : cronItem?.raw;
+    const taskName = cronItem?.projectName || (cronItem?.source && cronItem?.target ? `${cronItem.source} ➔ ${cronItem.target}` : 'this schedule');
+
+    if (!confirm(`Remove the schedule for "${taskName}" from server crontab?`)) return;
+
+    const warnMsg =
+      `⚠️ DELETE TASK FILES CONFIRMATION\n\n` +
+      `Do you also want to delete all associated script & log files for "${taskName}" on the server?\n\n` +
+      `• Click OK to DELETE ALL:\n` +
+      `  1. Crontab schedule entry\n` +
+      `  2. Shell script file (.sh)\n` +
+      `  3. All execution log files (.log)\n` +
+      `  4. Task lock files (.lock)\n\n` +
+      `• Click Cancel to ONLY remove schedule from crontab (keep .sh script & log history).`;
+
+    const removeScript = confirm(warnMsg);
+
     try {
-      const res = await apiFetch(`/api/rclone/cron?connectionId=${selectedConnId}&rawLine=${encodeURIComponent(rawLine)}`, {
+      const res = await apiFetch(`/api/rclone/cron?connectionId=${selectedConnId}&rawLine=${encodeURIComponent(rawLine)}&removeScript=${removeScript}`, {
         method: 'DELETE',
       });
       const data = await res.json();
       if (data?.success) {
         fetchCrons();
+        fetchHistory(true);
         fetchRcloneStatus();
       } else {
         alert(data?.error || 'Failed to remove crontab job');
@@ -1056,17 +1145,18 @@ export default function RcloneApp() {
       fullPath = pickerCurrentPath ? `${remoteBase}${pickerCurrentPath}` : remoteBase;
     }
 
+    const cleanPath = fullPath.replace(/\/+$/, '');
     if (editingCron) {
       if (pickerMode === 'source') {
-        setEditingCron({ ...editingCron, source: fullPath });
+        setEditingCron({ ...editingCron, source: cleanPath });
       } else {
-        setEditingCron({ ...editingCron, target: fullPath });
+        setEditingCron({ ...editingCron, target: cleanPath });
       }
     } else {
       if (pickerMode === 'source') {
-        setSourcePath(fullPath);
+        setSourcePath(cleanPath);
       } else {
-        setTargetPath(fullPath);
+        setTargetPath(cleanPath);
       }
     }
     setPickerMode(null);
@@ -1088,6 +1178,7 @@ export default function RcloneApp() {
           action,
           source: sourcePath,
           target: targetPath,
+          projectName,
           options: {
             dryRun,
             bwlimit,
@@ -1480,38 +1571,42 @@ export default function RcloneApp() {
         {activeTab === 'backup' && (
           <div className="p-5 max-w-3xl space-y-4">
 
-            {/* ─ Row 1: Execution Mode + Action Type ─ */}
-            <div className="grid grid-cols-2 gap-3">
-              {/* Execution Mode */}
-              <div className="p-4 rounded-2xl bg-[var(--bg-secondary)] border border-[var(--border-color)] space-y-2">
-                <label className="text-[10px] font-bold text-[var(--text-muted)] uppercase tracking-wide block">Execution Mode</label>
-                <div className="grid grid-cols-2 gap-2">
-                  <button onClick={() => setExecMode('now')} className={`py-2 px-2 rounded-xl border text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-1.5 ${execMode === 'now' ? 'bg-emerald-600 border-emerald-500 text-white shadow-md shadow-emerald-600/20' : 'bg-[var(--bg-tertiary)] border-[var(--border-color)] text-[var(--text-muted)]'}`}>
-                    <Zap size={12} /> Run Now
-                  </button>
-                  <button onClick={() => setExecMode('cron')} className={`py-2 px-2 rounded-xl border text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-1.5 ${execMode === 'cron' ? 'bg-indigo-600 border-indigo-500 text-white shadow-md shadow-indigo-600/20' : 'bg-[var(--bg-tertiary)] border-[var(--border-color)] text-[var(--text-muted)]'}`}>
-                    <Terminal size={12} /> Schedule
-                  </button>
-                </div>
+            {/* ─ Row 1: Mode + Action ─ */}
+            <div className="flex flex-wrap items-center gap-2">
+              {/* Execution Mode Pills */}
+              <div className="flex items-center gap-1 p-1 rounded-xl bg-[var(--bg-secondary)] border border-[var(--border-color)]">
+                <button onClick={() => setExecMode('now')} className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${execMode === 'now' ? 'bg-emerald-600 text-white shadow-sm' : 'text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)]'}`}>
+                  <Zap size={12} /> Run Now
+                </button>
+                <button onClick={() => setExecMode('cron')} className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${execMode === 'cron' ? 'bg-indigo-600 text-white shadow-sm' : 'text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)]'}`}>
+                  <Clock size={12} /> Schedule
+                </button>
               </div>
 
-              {/* Action Type */}
-              <div className="p-4 rounded-2xl bg-[var(--bg-secondary)] border border-[var(--border-color)] space-y-2">
-                <label className="text-[10px] font-bold text-[var(--text-muted)] uppercase tracking-wide block">Transfer Type</label>
-                <div className="grid grid-cols-4 gap-1.5">
-                  {[
-                    { id: 'copy',  label: 'Copy',  sub: 'Add new' },
-                    { id: 'sync',  label: 'Sync',  sub: 'Mirror' },
-                    { id: 'move',  label: 'Move',  sub: '& Delete' },
-                    { id: 'check', label: 'Check', sub: 'Verify' },
-                  ].map((act) => (
-                    <button key={act.id} onClick={() => setAction(act.id)} className={`py-2 text-center rounded-xl border transition-all cursor-pointer ${action === act.id ? 'bg-indigo-600 border-indigo-500 text-white shadow-md shadow-indigo-500/20' : 'bg-[var(--bg-tertiary)] border-[var(--border-color)] text-[var(--text-muted)]'}`}>
-                      <div className="text-[11px] font-bold">{act.label}</div>
-                      <div className="text-[9px] opacity-70">{act.sub}</div>
-                    </button>
-                  ))}
-                </div>
+              <div className="h-6 w-px bg-[var(--border-color)]" />
+
+              {/* Transfer Type Pills */}
+              <div className="flex items-center gap-1 p-1 rounded-xl bg-[var(--bg-secondary)] border border-[var(--border-color)]">
+                {[
+                  { id: 'copy',  label: 'Copy',  icon: Copy, tip: 'Add new files' },
+                  { id: 'sync',  label: 'Sync',  icon: RefreshCw, tip: 'Mirror source' },
+                  { id: 'move',  label: 'Move',  icon: ArrowLeftRight, tip: 'Move & delete source' },
+                  { id: 'check', label: 'Check', icon: CheckCircle2, tip: 'Verify only' },
+                ].map((act) => (
+                  <button
+                    key={act.id}
+                    onClick={() => setAction(act.id)}
+                    title={act.tip}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${action === act.id ? 'bg-indigo-600 text-white shadow-sm' : 'text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)]'}`}
+                  >
+                    <act.icon size={12} /> {act.label}
+                  </button>
+                ))}
               </div>
+
+              {execMode === 'cron' && (
+                <span className="text-[10px] text-indigo-400 font-semibold ml-1">Schedule settings below</span>
+              )}
             </div>
 
             {/* ─ Row 2: Source & Target Paths ─ */}
@@ -1634,7 +1729,7 @@ export default function RcloneApp() {
                       ]}
                     />
                     <p className="text-[10px] text-indigo-300 font-mono">
-                      → {targetPath || 'gdrive:'}/{timestampFormat === 'YMD_MMM_HM' ? '2026_Jul_25_22_05' : timestampFormat === 'DMY_HM' ? '25-07-2026_22-03' : '2026-07-25_22-03-41'}/
+                      → {((targetPath || 'gdrive:').replace(/\/+$/, ''))}/{timestampFormat === 'YMD_MMM_HM' ? '2026_Jul_25_22_05' : timestampFormat === 'DMY_HM' ? '25-07-2026_22-03' : '2026-07-25_22-03-41'}/
                     </p>
                   </div>
                 )}
@@ -1718,18 +1813,7 @@ export default function RcloneApp() {
               )}
             </div>
 
-            {/* ─ Execution Log Terminal ─ */}
-            <div className="rounded-2xl bg-black border border-[var(--border-color)] overflow-hidden">
-              <div className="px-4 py-2 bg-[var(--bg-secondary)] border-b border-[var(--border-color)] flex items-center justify-between text-xs">
-                <span className="flex items-center gap-2 font-semibold text-[var(--text-muted)]">
-                  <Terminal size={12} /> Execution Log — {selectedConn?.name}
-                </span>
-                {isJobRunning && <span className="text-emerald-400 animate-pulse font-mono text-[10px]">● RUNNING</span>}
-              </div>
-              <pre ref={logTerminalRef} className="p-4 font-mono text-[11px] text-emerald-400 h-40 overflow-y-auto whitespace-pre-wrap leading-relaxed">
-                {jobLog || 'Run a backup task above to see live output here...'}
-              </pre>
-            </div>
+            {/* Execution log moved to Schedules tab — nothing here */}
           </div>
         )}
 
@@ -1790,40 +1874,25 @@ export default function RcloneApp() {
                           <button onClick={() => navigator.clipboard.writeText(cron.raw)} className="p-1.5 text-[var(--text-muted)] hover:text-emerald-400 hover:bg-emerald-500/10 rounded-lg transition-colors cursor-pointer" title="Copy Command"><Copy size={12} /></button>
                           <button
                             onClick={() => {
-                              const rcloneMatch = cron.raw.match(/rclone\s+(copy|sync|move|check)\s+(?:"([^"]+)"|'([^']+)'|(\S+))\s+(?:"([^"]+)"|'([^']+)'|(\S+))/i);
-                              let src = '/';
-                              let tgt = 'gdrive:';
-                              let act = 'copy';
-
-                              if (rcloneMatch) {
-                                act = rcloneMatch[1] ? rcloneMatch[1].toLowerCase() : 'copy';
-                                src = rcloneMatch[2] || rcloneMatch[3] || rcloneMatch[4] || '/';
-                                tgt = rcloneMatch[5] || rcloneMatch[6] || rcloneMatch[7] || 'gdrive:';
-                                tgt = tgt.replace(/\/+\$\(date[^)]+\)/g, '').replace(/\/+$/, '');
-                              }
-
-                              const retMatch = cron.raw.match(/--min-age\s+(\d+)d/);
-
                               setEditingCron({
                                 rawLine: cron.raw,
                                 schedule: cron.schedule,
-                                action: act,
-                                source: src,
-                                target: tgt,
+                                action: cron.action || 'copy',
+                                source: cron.source || '/',
+                                target: cron.target || 'gdrive:',
                                 options: {
-                                  useTimestampFolder: cron.raw.includes('$(date'),
-                                  timestampFormat: cron.raw.includes('%b') ? 'YMD_MMM_HM' : cron.raw.includes('%d-%m-%Y') ? 'DMY_HM' : 'YMD_HMS',
-                                  enableRetention: !!retMatch,
-                                  retentionDays: retMatch ? retMatch[1] : '7',
+                                  useTimestampFolder: cron.options?.useTimestampFolder ?? true,
+                                  timestampFormat: cron.options?.timestampFormat || 'YMD_HMS',
+                                  enableRetention: cron.options?.enableRetention ?? false,
+                                  retentionDays: cron.options?.retentionDays || '7',
                                 }
                               });
-                              setActiveTab('backup');
                             }}
                             className="p-1.5 text-indigo-400 hover:bg-indigo-500/10 rounded-lg transition-colors cursor-pointer" title="Edit Schedule"
                           >
                             <Settings size={12} />
                           </button>
-                          <button onClick={() => handleDeleteCron(cron.raw)} className="p-1.5 text-rose-400 hover:bg-rose-500/10 rounded-lg transition-colors cursor-pointer" title="Delete Schedule"><Trash2 size={12} /></button>
+                          <button onClick={() => handleDeleteCron(cron)} className="p-1.5 text-rose-400 hover:bg-rose-500/10 rounded-lg transition-colors cursor-pointer" title="Delete Schedule"><Trash2 size={12} /></button>
                         </div>
                       </div>
                       {/* Code Block */}
@@ -1857,6 +1926,49 @@ export default function RcloneApp() {
                 )}
               </div>
             </div>
+
+            {/* ─ Live Execution Log ─ */}
+            <div className="rounded-2xl bg-black border border-[var(--border-color)] overflow-hidden">
+              <div className="px-4 py-2.5 bg-[var(--bg-secondary)] border-b border-[var(--border-color)] flex items-center justify-between">
+                <span className="flex items-center gap-2 text-xs font-semibold text-[var(--text-muted)]">
+                  <Terminal size={12} />
+                  Live Execution Log
+                  {cronLiveLogFile && (
+                    <span className="font-mono text-[9px] text-[var(--text-muted)] opacity-60 ml-1 truncate max-w-[240px]" title={cronLiveLogFile}>
+                      {cronLiveLogFile.split('/').pop()}
+                    </span>
+                  )}
+                </span>
+                <div className="flex items-center gap-2">
+                  {cronLiveLogRunning && (
+                    <span className="text-emerald-400 font-mono text-[10px] flex items-center gap-1.5">
+                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 inline-block animate-pulse" />
+                      RUNNING
+                    </span>
+                  )}
+                  {cronLiveLog && !cronLiveLogRunning && (
+                    <span className="text-slate-500 font-mono text-[10px]">● IDLE</span>
+                  )}
+                  <button
+                    onClick={() => { setCronLiveLog(''); setCronLiveLogFile(''); setCronLiveLogRunning(false); }}
+                    className="text-[10px] text-[var(--text-muted)] hover:text-rose-400 px-2 py-0.5 rounded-lg hover:bg-rose-500/10 transition-colors cursor-pointer"
+                    title="Clear log view"
+                  >
+                    Clear
+                  </button>
+                </div>
+              </div>
+              <pre
+                ref={cronLiveLogRef}
+                className="p-4 font-mono text-[11px] text-emerald-400 h-56 overflow-y-auto whitespace-pre-wrap leading-relaxed"
+              >
+                {cronLiveLog || (
+                  <span className="text-[var(--text-muted)] opacity-50">
+                    Waiting for process output... Run a backup task or wait for a scheduled job to fire.
+                  </span>
+                )}
+              </pre>
+            </div>
           </div>
         )}
 
@@ -1864,7 +1976,7 @@ export default function RcloneApp() {
         {activeTab === 'history' && (
           <div className="p-5 max-w-3xl space-y-4">
 
-            {/* Header & Filter Controls */}
+            {/* Header & Controls */}
             <div className="flex items-center justify-between flex-wrap gap-2">
               <div>
                 <h3 className="text-sm font-bold flex items-center gap-2">
@@ -1876,248 +1988,187 @@ export default function RcloneApp() {
                 </p>
               </div>
 
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 flex-wrap">
                 {/* Filter Pills */}
                 <div className="flex items-center bg-[var(--bg-secondary)] p-1 rounded-xl border border-[var(--border-color)] text-[10px]">
-                  <button
-                    onClick={() => setHistoryFilter('all')}
-                    className={`px-2.5 py-1 rounded-lg font-bold transition-all cursor-pointer ${historyFilter === 'all' ? 'bg-indigo-600 text-white' : 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'}`}
-                  >
-                    All
-                  </button>
-                  <button
-                    onClick={() => setHistoryFilter('backup')}
-                    className={`px-2.5 py-1 rounded-lg font-bold transition-all cursor-pointer ${historyFilter === 'backup' ? 'bg-indigo-600 text-white' : 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'}`}
-                  >
-                    📋 Backup
-                  </button>
-                  <button
-                    onClick={() => setHistoryFilter('cleanup')}
-                    className={`px-2.5 py-1 rounded-lg font-bold transition-all cursor-pointer ${historyFilter === 'cleanup' ? 'bg-indigo-600 text-white' : 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'}`}
-                  >
-                    🧹 Cleanup
-                  </button>
+                  <button onClick={() => setHistoryFilter('all')} className={`px-2.5 py-1 rounded-lg font-bold transition-all cursor-pointer ${historyFilter === 'all' ? 'bg-indigo-600 text-white' : 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'}`}>All</button>
+                  <button onClick={() => setHistoryFilter('backup')} className={`px-2.5 py-1 rounded-lg font-bold transition-all cursor-pointer ${historyFilter === 'backup' ? 'bg-indigo-600 text-white' : 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'}`}>📋 Backup</button>
+                  <button onClick={() => setHistoryFilter('cleanup')} className={`px-2.5 py-1 rounded-lg font-bold transition-all cursor-pointer ${historyFilter === 'cleanup' ? 'bg-indigo-600 text-white' : 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'}`}>🧹 Cleanup</button>
                 </div>
-
-                {/* Auto-Refresh Toggle Button */}
                 <button
                   onClick={() => setAutoRefreshHistory(!autoRefreshHistory)}
-                  className={`flex items-center gap-1.5 px-2.5 py-1 rounded-xl font-bold text-[10px] cursor-pointer border transition-colors ${
-                    autoRefreshHistory 
-                      ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400' 
-                      : 'bg-[var(--bg-secondary)] border-[var(--border-color)] text-[var(--text-muted)]'
-                  }`}
+                  className={`flex items-center gap-1.5 px-2.5 py-1 rounded-xl font-bold text-[10px] cursor-pointer border transition-colors ${autoRefreshHistory ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400' : 'bg-[var(--bg-secondary)] border-[var(--border-color)] text-[var(--text-muted)]'}`}
                   title="Toggle 6-second real-time history refresh"
                 >
                   <span className={`w-1.5 h-1.5 rounded-full ${autoRefreshHistory ? 'bg-emerald-400 animate-pulse' : 'bg-gray-500'}`} />
                   {autoRefreshHistory ? 'Realtime 6s' : 'Paused'}
                 </button>
-
-                <button
-                  onClick={() => fetchHistory(false)}
-                  disabled={historyLoading}
-                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-400 text-[11px] font-bold cursor-pointer border border-emerald-500/30 disabled:opacity-50 transition-colors"
-                >
-                  <RefreshCw size={11} className={historyLoading ? 'animate-spin' : ''} />
-                  Refresh Logs
+                <button onClick={() => fetchHistory(false)} disabled={historyLoading} className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-400 text-[11px] font-bold cursor-pointer border border-emerald-500/30 disabled:opacity-50 transition-colors">
+                  <RefreshCw size={11} className={historyLoading ? 'animate-spin' : ''} /> Refresh
                 </button>
-
-                <button
-                  onClick={handleClearHistory}
-                  disabled={historyLoading}
-                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 text-[11px] font-bold cursor-pointer border border-rose-500/20 disabled:opacity-50 transition-colors"
-                  title="Clear all backup history log files on server"
-                >
-                  🧹 Clear Logs
+                <button onClick={handleClearHistory} disabled={historyLoading} className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 text-[11px] font-bold cursor-pointer border border-rose-500/20 disabled:opacity-50 transition-colors" title="Clear all backup history log files on server">
+                  🧹 Clear
                 </button>
               </div>
             </div>
 
-            {/* Project Groups */}
-            <div className="rounded-2xl bg-[var(--bg-secondary)] border border-[var(--border-color)] overflow-hidden">
-              <div className="divide-y divide-[var(--border-color)]">
-                {historyLoading && historyProjects.length === 0 ? (
-                  <div className="p-10 text-center text-xs text-[var(--text-muted)] flex items-center justify-center gap-2">
-                    <RefreshCw size={14} className="animate-spin text-emerald-400" />
-                    Fetching backup history logs from {selectedConn?.name}...
-                  </div>
-                ) : historyProjects.length === 0 ? (
-                  <div className="p-10 text-center space-y-2">
-                    <Database size={28} className="text-[var(--text-muted)] mx-auto opacity-40" />
-                    <p className="text-xs text-[var(--text-muted)]">No backup execution logs found on {selectedConn?.name} yet.</p>
-                    <p className="text-[10px] text-[var(--text-muted)] opacity-70">Logs appear in <code>/tmp/rclone-cron-*.log</code> after cron tasks run.</p>
-                  </div>
-                ) : (
-                  historyProjects.map((project, pIdx) => {
-                    const isCollapsed = collapsedProjects[pIdx] !== false;
-                    const runsToDisplay = project.runs.filter(run => {
-                      if (historyFilter === 'backup') return run.action !== 'cleanup';
-                      if (historyFilter === 'cleanup') return run.action === 'cleanup';
-                      return true;
-                    });
-                    if (runsToDisplay.length === 0) return null;
+            {/* Project Cards — one card per project name */}
+            {historyLoading && historyProjects.length === 0 ? (
+              <div className="p-10 text-center text-xs text-[var(--text-muted)] flex items-center justify-center gap-2 rounded-2xl bg-[var(--bg-secondary)] border border-[var(--border-color)]">
+                <RefreshCw size={14} className="animate-spin text-emerald-400" />
+                Fetching backup history from {selectedConn?.name}...
+              </div>
+            ) : historyProjects.length === 0 ? (
+              <div className="p-10 text-center space-y-2 rounded-2xl bg-[var(--bg-secondary)] border border-[var(--border-color)]">
+                <Database size={28} className="text-[var(--text-muted)] mx-auto opacity-40" />
+                <p className="text-xs text-[var(--text-muted)]">No backup execution logs found on {selectedConn?.name} yet.</p>
+                <p className="text-[10px] text-[var(--text-muted)] opacity-70">Logs appear in <code>/tmp/rclone-cron-*.log</code> after cron tasks run.</p>
+              </div>
+            ) : (
+              <div className="space-y-2">
+                {historyProjects.map((project, pIdx) => {
+                  const projKey = project.name || `__proj_${pIdx}`;
+                  // Default collapsed — expanded when collapsedProjects[projKey] === true
+                  const isExpanded = collapsedProjects[projKey] === true;
 
-                    const hasActiveProjectRun = runsToDisplay.some(r => r.status === 'running');
+                  const runsToDisplay = project.runs.filter(run => {
+                    if (historyFilter === 'backup') return run.action !== 'cleanup';
+                    if (historyFilter === 'cleanup') return run.action === 'cleanup';
+                    return true;
+                  });
+                  if (runsToDisplay.length === 0) return null;
 
-                    return (
-                      <div key={pIdx} className="border-b border-[var(--border-color)] last:border-b-0">
-                        <button
-                          onClick={() => setCollapsedProjects(prev => ({ ...prev, [pIdx]: !isCollapsed }))}
-                          className="w-full px-4 py-3 bg-[var(--bg-tertiary)]/50 flex items-center justify-between hover:bg-[var(--bg-tertiary)] transition-colors cursor-pointer"
-                        >
-                          <div className="flex items-center gap-2 text-xs font-bold text-indigo-400 font-mono">
-                            <Folder size={13} />
-                            <span>{project.name}</span>
-                          </div>
-                          <div className="flex items-center gap-2">
-                            {hasActiveProjectRun && (
-                              <button
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  e.preventDefault();
-                                  handleKillProcess(null, null);
-                                }}
-                                className="px-2.5 py-1 rounded-lg bg-rose-600 hover:bg-rose-500 text-white font-bold text-[10px] cursor-pointer transition-colors shadow-sm flex items-center gap-1 shrink-0"
-                                title="Abort all active transfers in this project at once"
-                              >
-                                🛑 Abort Whole Project
-                              </button>
-                            )}
-                            <span className="text-[10px] text-[var(--text-muted)] font-semibold bg-black/20 px-2 py-0.5 rounded">
-                              {runsToDisplay.length} Runs
-                            </span>
-                            <span className="text-[var(--text-muted)] text-[10px]">{isCollapsed ? '▸' : '▾'}</span>
-                          </div>
-                        </button>
-                        {!isCollapsed && (
-                          <div className="divide-y divide-[var(--border-color)]">
-                            {runsToDisplay.map((run, idx) => {
-                              const expandedId = `${pIdx}-${idx}`;
-                              const isExpanded = expandedLogIdx === expandedId;
-                              const isSuccess = run.status === 'success';
-                              const isWarning = run.status === 'warning';
-                              const isFailed = run.status === 'failed';
-                              const isAborted = run.status === 'aborted';
-                              const act = (run.action || 'copy').toLowerCase();
+                  const hasActiveRun = runsToDisplay.some(r => r.status === 'running');
+                  const lastStatus = runsToDisplay[0]?.status;
+                  const statusDotCls = lastStatus === 'success' ? 'bg-emerald-400'
+                    : lastStatus === 'failed'  ? 'bg-rose-400'
+                    : lastStatus === 'warning' ? 'bg-amber-400'
+                    : lastStatus === 'aborted' ? 'bg-rose-400'
+                    : hasActiveRun             ? 'bg-indigo-400 animate-pulse'
+                    : 'bg-gray-500';
 
-                              return (
-                                <div key={idx} className="p-4 hover:bg-[var(--bg-tertiary)]/30 transition-colors">
-                                  <div className="flex items-center justify-between gap-3">
-                                    <div className="flex items-center gap-2 min-w-0 flex-wrap">
-                                      {/* Action Tag */}
-                                      {act === 'cleanup' && (
-                                        <span className="px-2 py-0.5 rounded bg-amber-500/15 text-amber-400 font-bold text-[10px] border border-amber-500/30 shrink-0">
-                                          🧹 CLEANUP
-                                        </span>
-                                      )}
-                                      {act === 'sync' && (
-                                        <span className="px-2 py-0.5 rounded bg-purple-500/15 text-purple-400 font-bold text-[10px] border border-purple-500/30 shrink-0">
-                                          🔄 SYNC
-                                        </span>
-                                      )}
-                                      {act === 'move' && (
-                                        <span className="px-2 py-0.5 rounded bg-cyan-500/15 text-cyan-400 font-bold text-[10px] border border-cyan-500/30 shrink-0">
-                                          📦 MOVE
-                                        </span>
-                                      )}
-                                      {act === 'check' && (
-                                        <span className="px-2 py-0.5 rounded bg-indigo-500/15 text-indigo-400 font-bold text-[10px] border border-indigo-500/30 shrink-0">
-                                          🔍 CHECK
-                                        </span>
-                                      )}
-                                      {act === 'copy' && (
-                                        <span className="px-2 py-0.5 rounded bg-blue-500/15 text-blue-400 font-bold text-[10px] border border-blue-500/30 shrink-0">
-                                          📋 COPY
-                                        </span>
-                                      )}
+                  return (
+                    <div key={projKey} className="rounded-2xl bg-[var(--bg-secondary)] border border-[var(--border-color)] overflow-hidden">
 
-                                      {/* Status Badge */}
-                                      {isAborted && (
-                                        <span className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-rose-500/15 text-rose-400 font-bold text-[10px] border border-rose-500/30 shrink-0">
-                                          🛑 ABORTED
-                                        </span>
-                                      )}
-                                      {isSuccess && (
-                                        <span className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-400 font-bold text-[10px] border border-emerald-500/30 shrink-0">
-                                          <CheckCircle2 size={11} /> SUCCESS
-                                        </span>
-                                      )}
-                                      {isWarning && (
-                                        <span className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-400 font-bold text-[10px] border border-amber-500/30 shrink-0">
-                                          <AlertTriangle size={11} /> WARNING ({run.errors} err)
-                                        </span>
-                                      )}
-                                      {isFailed && (
-                                        <span className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-rose-500/15 text-rose-400 font-bold text-[10px] border border-rose-500/30 shrink-0">
-                                          <AlertTriangle size={11} /> FAILED
-                                        </span>
-                                      )}
-                                      {!isSuccess && !isWarning && !isFailed && !isAborted && (
-                                        <div className="flex items-center gap-1.5 shrink-0">
-                                          <span className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-indigo-500/15 text-indigo-400 font-bold text-[10px] border border-indigo-500/30">
-                                            ● EXECUTING
-                                          </span>
-                                          <button
-                                            onClick={(e) => {
-                                              e.stopPropagation();
-                                              e.preventDefault();
-                                              handleKillProcess(null, run.logFile);
-                                            }}
-                                            className="px-2 py-0.5 rounded-full bg-rose-500/15 hover:bg-rose-500/30 text-rose-400 font-bold text-[10px] border border-rose-500/30 cursor-pointer transition-colors"
-                                            title="Abort running process"
-                                          >
-                                            🛑 Abort
-                                          </button>
-                                        </div>
-                                      )}
-                                      <div className="truncate space-y-0.5">
-                                        <div className="text-[10px] text-[var(--text-muted)] font-mono flex items-center gap-2">
-                                          <span>📅 <strong className="text-[var(--text-primary)]">{run.startTime || 'Recent'}</strong></span>
-                                          {run.elapsed && <span className="text-indigo-300 font-semibold">⏱️ {run.elapsed}</span>}
-                                        </div>
-                                      </div>
-                                    </div>
-                                    <div className="flex items-center gap-2 shrink-0">
-                                      {run.sizeTransferred && (
-                                        <span className="px-2 py-0.5 rounded bg-[var(--bg-tertiary)] border border-[var(--border-color)] text-[10px] font-mono text-cyan-400 font-bold">
-                                          📦 {run.sizeTransferred}
-                                        </span>
-                                      )}
-                                      {run.filesTransferred && (
-                                        <span className="px-2 py-0.5 rounded bg-[var(--bg-tertiary)] border border-[var(--border-color)] text-[10px] font-mono text-indigo-300">
-                                          📄 {run.filesTransferred} files
-                                        </span>
-                                      )}
+                      {/* ── Project header (click to expand/collapse) ── */}
+                      <div
+                        role="button"
+                        tabIndex={0}
+                        onClick={() => setCollapsedProjects(prev => ({ ...prev, [projKey]: !isExpanded }))}
+                        onKeyDown={(e) => e.key === 'Enter' && setCollapsedProjects(prev => ({ ...prev, [projKey]: !isExpanded }))}
+                        className="w-full px-4 py-3 flex items-center justify-between hover:bg-[var(--bg-tertiary)]/60 transition-colors cursor-pointer select-none"
+                      >
+                        <div className="flex items-center gap-2.5 min-w-0 pointer-events-none">
+                          <span className={`w-2 h-2 rounded-full shrink-0 ${statusDotCls}`} />
+                          <Folder size={13} className="text-indigo-400 shrink-0" />
+                          <span className="text-xs font-bold text-[var(--text-primary)] truncate">{project.name}</span>
+                          {hasActiveRun && (
+                            <span className="px-1.5 py-0.5 rounded-full bg-indigo-500/15 border border-indigo-500/30 text-indigo-400 text-[10px] font-bold animate-pulse shrink-0">● RUNNING</span>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-2 shrink-0">
+                          {hasActiveRun && (
+                            <button
+                              onClick={(e) => { e.stopPropagation(); handleKillProcess(null, null); }}
+                              className="px-2 py-0.5 rounded-lg bg-rose-600 hover:bg-rose-500 text-white font-bold text-[10px] cursor-pointer transition-colors flex items-center gap-1"
+                              title="Abort all active transfers in this project"
+                            >🛑 Abort</button>
+                          )}
+                          <span className="text-[10px] text-[var(--text-muted)] bg-black/20 px-2 py-0.5 rounded font-semibold">
+                            {runsToDisplay.length} backup{runsToDisplay.length !== 1 ? 's' : ''}
+                          </span>
+                          <span className={`text-[var(--text-muted)] text-xs transition-transform duration-200 inline-block ${isExpanded ? 'rotate-90' : ''}`}>▸</span>
+                        </div>
+                      </div>
+
+                      {/* ── Backup entries (one per run) ── */}
+                      {isExpanded && (
+                        <div className="border-t border-[var(--border-color)] divide-y divide-[var(--border-color)]">
+                          {runsToDisplay.map((run, idx) => {
+                            const expandedId = `${pIdx}-${idx}`;
+                            const isLogExpanded = expandedLogIdx === expandedId;
+                            const act = (run.action || 'copy').toLowerCase();
+                            const isSuccess = run.status === 'success';
+                            const isWarning = run.status === 'warning';
+                            const isFailed  = run.status === 'failed';
+                            const isAborted = run.status === 'aborted';
+                            const isRunning = !isSuccess && !isWarning && !isFailed && !isAborted;
+
+                            const ACTION_BADGES = {
+                              cleanup: { label: '🧹 CLEANUP', cls: 'bg-amber-500/15 text-amber-400 border-amber-500/30' },
+                              sync:    { label: '🔄 SYNC',    cls: 'bg-purple-500/15 text-purple-400 border-purple-500/30' },
+                              move:    { label: '📦 MOVE',    cls: 'bg-cyan-500/15 text-cyan-400 border-cyan-500/30' },
+                              check:   { label: '🔍 CHECK',   cls: 'bg-indigo-500/15 text-indigo-400 border-indigo-500/30' },
+                              copy:    { label: '📋 COPY',    cls: 'bg-blue-500/15 text-blue-400 border-blue-500/30' },
+                            };
+                            const badge = ACTION_BADGES[act] || { label: act.toUpperCase(), cls: 'bg-gray-500/15 text-gray-400 border-gray-500/30' };
+
+                            return (
+                              <div key={idx} className="px-4 py-3 hover:bg-[var(--bg-tertiary)]/20 transition-colors">
+                                {/* Single backup row */}
+                                <div className="flex items-center justify-between gap-2 flex-wrap">
+                                  <div className="flex items-center gap-2 flex-wrap min-w-0">
+                                    {/* Action */}
+                                    <span className={`px-2 py-0.5 rounded text-[10px] font-bold border shrink-0 ${badge.cls}`}>{badge.label}</span>
+                                    {/* Status */}
+                                    {isAborted && <span className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-rose-500/15 text-rose-400 font-bold text-[10px] border border-rose-500/30 shrink-0">🛑 ABORTED</span>}
+                                    {isSuccess  && <span className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-400 font-bold text-[10px] border border-emerald-500/30 shrink-0"><CheckCircle2 size={10} /> SUCCESS</span>}
+                                    {isWarning  && <span className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-400 font-bold text-[10px] border border-amber-500/30 shrink-0"><AlertTriangle size={10} /> WARNING ({run.errors} err)</span>}
+                                    {isFailed   && <span className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-rose-500/15 text-rose-400 font-bold text-[10px] border border-rose-500/30 shrink-0"><AlertTriangle size={10} /> FAILED</span>}
+                                    {isRunning  && <span className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-indigo-500/15 text-indigo-400 font-bold text-[10px] border border-indigo-500/30 shrink-0 animate-pulse">● EXECUTING</span>}
+                                    {/* Timestamp & elapsed */}
+                                    <span className="text-[10px] text-[var(--text-muted)] font-mono shrink-0">
+                                      📅 <strong className="text-[var(--text-primary)]">{run.startTime || 'Recent'}</strong>
+                                      {run.elapsed && <span className="ml-1.5 text-indigo-300">⏱ {run.elapsed}</span>}
+                                    </span>
+                                  </div>
+
+                                  {/* Right: stats + log button */}
+                                  <div className="flex items-center gap-1.5 shrink-0">
+                                    {run.sizeTransferred && (
+                                      <span className="px-2 py-0.5 rounded bg-[var(--bg-tertiary)] border border-[var(--border-color)] text-[10px] font-mono text-cyan-400 font-bold">{run.sizeTransferred}</span>
+                                    )}
+                                    {run.filesTransferred && (
+                                      <span className="px-2 py-0.5 rounded bg-[var(--bg-tertiary)] border border-[var(--border-color)] text-[10px] font-mono text-indigo-300">{run.filesTransferred} files</span>
+                                    )}
+                                    {isRunning && (
                                       <button
-                                        onClick={() => setExpandedLogIdx(isExpanded ? null : expandedId)}
-                                        className="px-2.5 py-1 rounded-lg bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-400 text-[10px] font-bold cursor-pointer border border-indigo-500/20 transition-colors flex items-center gap-1"
-                                      >
-                                        <Terminal size={10} /> {isExpanded ? 'Hide Log' : 'View Log'}
-                                      </button>
+                                        onClick={(e) => { e.stopPropagation(); handleKillProcess(null, run.logFile); }}
+                                        className="px-2 py-0.5 rounded-full bg-rose-500/15 hover:bg-rose-500/30 text-rose-400 font-bold text-[10px] border border-rose-500/30 cursor-pointer transition-colors"
+                                        title="Abort this running process"
+                                      >🛑 Abort</button>
+                                    )}
+                                    <button
+                                      onClick={() => setExpandedLogIdx(isLogExpanded ? null : expandedId)}
+                                      className="px-2.5 py-1 rounded-lg bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-400 text-[10px] font-bold cursor-pointer border border-indigo-500/20 transition-colors flex items-center gap-1"
+                                    >
+                                      <Terminal size={10} /> {isLogExpanded ? 'Hide' : 'Log'}
+                                    </button>
+                                  </div>
+                                </div>
+
+                                {/* Log output panel */}
+                                {isLogExpanded && (
+                                  <div className="mt-2.5 rounded-xl bg-black border border-[var(--border-color)] overflow-hidden">
+                                    <div className="px-3 py-1 bg-[var(--bg-tertiary)] text-[10px] font-mono text-[var(--text-muted)] flex items-center justify-between border-b border-[var(--border-color)]">
+                                      <span>Terminal Log</span>
+                                      <span className="text-emerald-400 truncate max-w-[200px]" title={run.logFile}>{run.logFile?.split('/').pop()}</span>
+                                    </div>
+                                    <div className="p-3 max-h-64 overflow-y-auto text-[10px] font-mono text-gray-300 whitespace-pre-wrap leading-relaxed">
+                                      {run.logPreview || 'No log content available. The backup task may still be starting or the log file is empty.'}
                                     </div>
                                   </div>
-                                  {isExpanded && (
-                                    <div className="mt-3 rounded-xl bg-black border border-[var(--border-color)] overflow-hidden">
-                                      <div className="px-3 py-1 bg-[var(--bg-tertiary)] text-[10px] font-mono text-[var(--text-muted)] flex items-center justify-between border-b border-[var(--border-color)]">
-                                        <span>Terminal Log Output</span>
-                                        <span className="text-emerald-400">{run.logFile}</span>
-                                      </div>
-                                      <div className="p-3 max-h-64 overflow-y-auto text-[10px] font-mono text-gray-300 whitespace-pre-wrap leading-relaxed">
-                                        {run.logPreview || 'No additional logs available.'}
-                                      </div>
-                                    </div>
-                                  )}
-                                </div>
-                              );
-                            })}
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })
-                )}
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
-            </div>
+            )}
           </div>
         )}
 
@@ -2441,28 +2492,75 @@ export default function RcloneApp() {
                   />
                 </div>
               </div>
-              <div className="p-3 rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] space-y-2 relative z-0">
-                <label className="flex items-center gap-2 text-xs font-bold text-amber-400 cursor-pointer select-none">
-                  <input type="checkbox" checked={editingCron.options?.enableRetention ?? true} onChange={(e) => setEditingCron({ ...editingCron, options: { ...editingCron.options, enableRetention: e.target.checked } })} className="rounded border-[var(--border-color)] text-amber-500 focus:ring-0" />
-                  🧹 Auto Retention Cleanup
-                </label>
-                {editingCron.options?.enableRetention && (
-                  <div className="flex items-center gap-2 pl-5">
-                    <span className="text-[11px] text-[var(--text-muted)] shrink-0">Delete older than:</span>
-                    <CustomSelect
-                      value={editingCron.options?.retentionDays || '7'}
-                      onChange={(val) => setEditingCron({ ...editingCron, options: { ...editingCron.options, retentionDays: val } })}
-                      textClass="text-amber-400 font-mono font-semibold"
-                      options={[
-                        { value: '3', label: '3 Days' },
-                        { value: '7', label: '7 Days' },
-                        { value: '14', label: '14 Days' },
-                        { value: '30', label: '30 Days' },
-                        { value: '90', label: '90 Days' },
-                      ]}
+              {/* Options Grid inside Edit Modal */}
+              <div className="grid grid-cols-2 gap-2 relative z-0">
+                {/* Timestamp Folders Option */}
+                <div className="p-3 rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] space-y-2">
+                  <label className="flex items-center gap-2 text-xs font-bold text-indigo-400 cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      checked={editingCron.options?.useTimestampFolder ?? true}
+                      onChange={(e) => setEditingCron({
+                        ...editingCron,
+                        options: { ...editingCron.options, useTimestampFolder: e.target.checked }
+                      })}
+                      className="rounded border-[var(--border-color)] text-indigo-600 focus:ring-0"
                     />
-                  </div>
-                )}
+                    <span>📅 Timestamp Folder</span>
+                  </label>
+                  {(editingCron.options?.useTimestampFolder ?? true) && (
+                    <div className="space-y-1 pl-5">
+                      <CustomSelect
+                        value={editingCron.options?.timestampFormat || 'YMD_HMS'}
+                        onChange={(val) => setEditingCron({
+                          ...editingCron,
+                          options: { ...editingCron.options, timestampFormat: val }
+                        })}
+                        textClass="text-indigo-400 font-mono font-semibold"
+                        options={[
+                          { value: 'YMD_MMM_HM', label: '2026_Jul_25_22_05' },
+                          { value: 'DMY_HM', label: '25-07-2026_22-03' },
+                          { value: 'YMD_HMS', label: '2026-07-25_22-03-41' },
+                        ]}
+                      />
+                    </div>
+                  )}
+                </div>
+
+                {/* Auto Retention Option */}
+                <div className="p-3 rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] space-y-2">
+                  <label className="flex items-center gap-2 text-xs font-bold text-amber-400 cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      checked={editingCron.options?.enableRetention ?? false}
+                      onChange={(e) => setEditingCron({
+                        ...editingCron,
+                        options: { ...editingCron.options, enableRetention: e.target.checked }
+                      })}
+                      className="rounded border-[var(--border-color)] text-amber-500 focus:ring-0"
+                    />
+                    <span>🧹 Retention Cleanup</span>
+                  </label>
+                  {editingCron.options?.enableRetention && (
+                    <div className="space-y-1 pl-5">
+                      <CustomSelect
+                        value={editingCron.options?.retentionDays || '7'}
+                        onChange={(val) => setEditingCron({
+                          ...editingCron,
+                          options: { ...editingCron.options, retentionDays: val }
+                        })}
+                        textClass="text-amber-400 font-mono font-semibold"
+                        options={[
+                          { value: '3', label: '3 Days' },
+                          { value: '7', label: '7 Days' },
+                          { value: '14', label: '14 Days' },
+                          { value: '30', label: '30 Days' },
+                          { value: '90', label: '90 Days' },
+                        ]}
+                      />
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
             <div className="flex justify-end gap-2 px-5 py-4 border-t border-[var(--border-color)]">
@@ -2474,6 +2572,65 @@ export default function RcloneApp() {
           </div>
         </div>
       )}
+      {/* ═══════ macOS-Style Cron Schedule Result Modal ═══════ */}
+      <MacOSModalWindow
+        isOpen={!!cronResult}
+        onClose={() => setCronResult(null)}
+        title={cronResult?.testPassed ? 'Schedule Created' : 'Dry-Run Notice'}
+        icon={cronResult?.testPassed ? CheckCircle2 : AlertTriangle}
+        defaultWidth={520}
+        defaultHeight={420}
+        closeOnOverlayClick={true}
+        maxWidthClassName="max-w-[calc(100vw-40px)] sm:max-w-lg"
+        contentClassName="p-0"
+      >
+        {cronResult && (
+          <div className="flex flex-col">
+            <div className={`px-6 py-4 ${cronResult.testPassed ? 'bg-emerald-500/10 border-b border-emerald-500/20' : 'bg-amber-500/10 border-b border-amber-500/20'}`}>
+              <div className="flex items-center gap-3">
+                <div className={`p-2 rounded-full ${cronResult.testPassed ? 'bg-emerald-500/20 text-emerald-400' : 'bg-amber-500/20 text-amber-400'}`}>
+                  {cronResult.testPassed ? <CheckCircle2 size={22} /> : <AlertTriangle size={22} />}
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-[var(--text-primary)]">
+                    {cronResult.testPassed ? '✅ ' : '⚠️ '}{cronResult.testStatus}
+                  </h3>
+                  <p className="text-[11px] text-[var(--text-muted)] mt-0.5">
+                    Schedule: <span className="font-mono text-indigo-400 font-semibold">{cronResult.humanSchedule}</span>
+                  </p>
+                </div>
+              </div>
+            </div>
+            <div className="px-6 py-4 space-y-3">
+              <div className="flex items-center gap-2">
+                <Terminal size={14} className="text-indigo-400" />
+                <span className="text-xs font-bold text-[var(--text-primary)]">Connection & Path Test Output</span>
+              </div>
+              <pre className="w-full max-h-48 overflow-y-auto p-3 rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] font-mono text-[11px] text-emerald-400 leading-relaxed whitespace-pre-wrap custom-scrollbar">
+                {cronResult.testOutput}
+              </pre>
+            </div>
+            <div className="px-6 py-4 border-t border-[var(--border-color)] flex items-center justify-between gap-3 bg-[var(--bg-secondary)]/50">
+              <span className="text-[10px] text-[var(--text-muted)]">
+                {cronResult.testPassed
+                  ? 'The schedule has been saved on your server and verified successfully.'
+                  : 'Schedule saved. Check the rclone remote configuration if the dry-run shows issues.'
+                }
+              </span>
+              <button
+                onClick={() => setCronResult(null)}
+                className={`shrink-0 px-4 py-2 rounded-xl text-xs font-bold transition-colors shadow-sm cursor-pointer ${
+                  cronResult.testPassed
+                    ? 'bg-emerald-600 hover:bg-emerald-500 text-white'
+                    : 'bg-amber-600 hover:bg-amber-500 text-white'
+                }`}
+              >
+                Done
+              </button>
+            </div>
+          </div>
+        )}
+      </MacOSModalWindow>
     </div>
   );
 }

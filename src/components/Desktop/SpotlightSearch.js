@@ -5,7 +5,7 @@ import { createPortal } from 'react-dom';
 import {
   Search, Terminal, Settings, Monitor, StickyNote, Book, Folder,
   ArrowRight, Command, CornerDownLeft, ChevronUp, ChevronDown,
-  Hash, FileText, Server, Globe, Database, Shield, Layers, X, GitBranch, CloudSync, Rocket
+  Hash, FileText, Server, Globe, Database, Shield, Layers, X, GitBranch, CloudSync, Rocket, CloudCog, ShieldCheck
 } from 'lucide-react';
 import { useOS } from '@/context/OSContext';
 import { useApp } from '@/context/AppContext';
@@ -28,7 +28,7 @@ const MongoBackupApp = dynamic(() => import('@/apps/MongoBackupApp'), {
 const SYSTEM_APPS = [
   { id: 'ssh-manager', titleKey: 'ssh.manager', fallback: 'SSH Manager', icon: Monitor, component: <SSHApp />, category: 'app', initialWidth: 1200, initialHeight: 800 },
   { id: 'auto-deploy', titleKey: null, fallback: 'Auto Deploy', icon: Rocket, component: <AutoDeployApp />, category: 'app', initialWidth: 1100, initialHeight: 760 },
-  { id: 'mongo-backup', titleKey: null, fallback: 'Mongo Sync', icon: CloudSync, component: <MongoBackupApp />, category: 'app', initialWidth: 1050, initialHeight: 680 },
+  { id: 'mongo-backup', titleKey: null, fallback: 'Mongo Sync', icon: Database, component: <MongoBackupApp />, category: 'app', initialWidth: 1050, initialHeight: 680 },
   { id: 'settings', titleKey: 'common.settings', fallback: 'Settings', icon: Settings, component: <SettingsApp />, category: 'app', initialWidth: 800, initialHeight: 600 },
   { id: 'notepad', titleKey: null, fallback: 'Notepad', icon: StickyNote, component: <NotepadApp />, category: 'app', initialWidth: 800, initialHeight: 600 },
   { id: 'files-app', titleKey: null, fallback: 'Files', icon: Folder, component: <FilesApp />, category: 'app', initialWidth: 1000, initialHeight: 650 },

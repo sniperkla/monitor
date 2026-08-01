@@ -1,5 +1,5 @@
 import React from 'react';
-import { Terminal, Settings, Monitor, Database, Folder, MonitorPlay, Server, FileText, Globe, StickyNote, Book, BookOpen, Shield, Radio, Radiation, Cpu, HardDrive, Wrench, Archive, CloudSync, Rocket } from 'lucide-react';
+import { Terminal, Settings, Monitor, Database, Folder, MonitorPlay, Server, FileText, Globe, StickyNote, Book, BookOpen, Shield, Radio, Radiation, Cpu, HardDrive, Wrench, Archive, CloudSync, Rocket, CloudCog, ShieldCheck } from 'lucide-react';
 
 const AppIcon = ({ id, size = 32, className = "", theme = "dark", iconStyle = "glass", isDesktop = false }) => {
   const iconId = id?.split('-')[0] || id;
@@ -44,6 +44,8 @@ const AppIcon = ({ id, size = 32, className = "", theme = "dark", iconStyle = "g
           notepad:   { primary: '#fca311', glow: 'rgba(252,163,17,0.35)', accent: '#fdb544' },
           'docker-logs': { primary: '#e63946', glow: 'rgba(230,57,70,0.3)', accent: '#eb636e' },
           mongo:     { primary: '#10b981', glow: 'rgba(16,185,129,0.35)', accent: '#34d399' },
+          rclone:    { primary: '#8b5cf6', glow: 'rgba(139,92,246,0.4)', accent: '#a78bfa' },
+          server:    { primary: '#f59e0b', glow: 'rgba(245,158,11,0.4)', accent: '#fbbf24' },
           auto:      { primary: '#ff5500', glow: 'rgba(255,85,0,0.35)', accent: '#ff7733' },
         };
         const pal = falloutPalette[iconId] || falloutPalette.terminal;
@@ -107,6 +109,23 @@ const AppIcon = ({ id, size = 32, className = "", theme = "dark", iconStyle = "g
                 <div className="absolute inset-0 pointer-events-none animate-[spin_4s_linear_infinite]">
                   <div className="absolute w-[4px] h-[4px] rounded-full top-[15%] left-1/2 -translate-x-1/2" style={{ backgroundColor: pal.primary, boxShadow: `0 0 5px ${pal.glow}` }} />
                   <div className="absolute w-[4px] h-[4px] rounded-full bottom-[15%] left-1/2 -translate-x-1/2" style={{ backgroundColor: pal.primary, boxShadow: `0 0 5px ${pal.glow}` }} />
+                </div>
+              );
+            case 'rclone':
+              // Cloud sync arrows
+              return (
+                <div className="absolute inset-0 pointer-events-none">
+                  <div className="absolute top-[5px] right-[5px] w-[8px] h-[1px]" style={{ backgroundColor: `${pal.primary}60` }} />
+                  <div className="absolute top-[5px] right-[5px] w-[1px] h-[8px]" style={{ backgroundColor: `${pal.primary}60` }} />
+                  <div className="absolute bottom-[5px] left-[5px] w-[8px] h-[1px]" style={{ backgroundColor: `${pal.primary}60` }} />
+                  <div className="absolute bottom-[5px] left-[5px] w-[1px] h-[8px]" style={{ backgroundColor: `${pal.primary}60` }} />
+                </div>
+              );
+            case 'server':
+              // Shield protection pulse
+              return (
+                <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                  <div className="absolute w-[60%] h-[60%] rounded-full border animate-ping" style={{ borderColor: `${pal.primary}20`, animationDuration: '2s' }} />
                 </div>
               );
             case 'auto':
@@ -177,6 +196,8 @@ const AppIcon = ({ id, size = 32, className = "", theme = "dark", iconStyle = "g
           notepad:   { primary: '#ff8c00', secondary: '#da70d6', glow: 'rgba(255,140,0,0.3)' },
           'docker-logs': { primary: '#ff1493', secondary: '#00ffff', glow: 'rgba(255,20,147,0.3)' },
           mongo:     { primary: '#00ff66', secondary: '#ffd700', glow: 'rgba(0,255,102,0.3)' },
+          rclone:    { primary: '#bf5fff', secondary: '#00d4ff', glow: 'rgba(191,95,255,0.35)' },
+          server:    { primary: '#ffb800', secondary: '#ff6ec7', glow: 'rgba(255,184,0,0.35)' },
           auto:      { primary: '#ff0055', secondary: '#00ffff', glow: 'rgba(255,0,85,0.3)' },
         };
         const cp = cpPalette[iconId] || cpPalette.terminal;
@@ -259,6 +280,24 @@ const AppIcon = ({ id, size = 32, className = "", theme = "dark", iconStyle = "g
                   </svg>
                 </div>
               );
+            case 'rclone':
+              // Digital cloud stream
+              return (
+                <div className="absolute inset-0 pointer-events-none overflow-hidden">
+                  {[20, 45, 70].map((x, i) => (
+                    <div key={i} className="absolute w-[1px] animate-pulse" style={{ left: `${x}%`, top: '15%', height: '25%', background: `linear-gradient(180deg, transparent, ${cp.primary}40)`, animationDelay: `${i * 0.3}s` }} />
+                  ))}
+                </div>
+              );
+            case 'server':
+              // Hexagonal shield pattern
+              return (
+                <div className="absolute inset-0 flex items-center justify-center pointer-events-none opacity-[0.15]">
+                  <svg width="60%" height="60%" viewBox="0 0 40 40">
+                    <polygon points="20,2 34,10 34,26 20,34 6,26 6,10" fill="none" stroke={cp.primary} strokeWidth="0.8" />
+                  </svg>
+                </div>
+              );
             case 'auto':
               // Upward pipeline chevron flow
               return (
@@ -327,6 +366,8 @@ const AppIcon = ({ id, size = 32, className = "", theme = "dark", iconStyle = "g
           notepad:   { primary: '#ffb800', secondary: '#bf5fff', glow: 'rgba(255,184,0,0.3)' },
           'docker-logs': { primary: '#ff2d96', secondary: '#0affcd', glow: 'rgba(255,45,150,0.3)' },
           mongo:     { primary: '#0affcd', secondary: '#bf5fff', glow: 'rgba(10,255,205,0.3)' },
+          rclone:    { primary: '#bf5fff', secondary: '#0affcd', glow: 'rgba(191,95,255,0.35)' },
+          server:    { primary: '#ffb800', secondary: '#ff2d96', glow: 'rgba(255,184,0,0.35)' },
           auto:      { primary: '#ff2d96', secondary: '#ffb800', glow: 'rgba(255,45,150,0.35)' },
         };
         const sw = swPalette[iconId] || swPalette.terminal;
@@ -377,6 +418,22 @@ const AppIcon = ({ id, size = 32, className = "", theme = "dark", iconStyle = "g
                 <div className="absolute inset-0 pointer-events-none animate-[spin_3s_linear_infinite]">
                   <div className="absolute w-[5px] h-[5px] rounded-full top-[10%] left-1/2 -translate-x-1/2" style={{ backgroundColor: sw.primary, boxShadow: `0 0 8px ${sw.glow}` }} />
                   <div className="absolute w-[3px] h-[3px] rounded-full bottom-[10%] left-1/2 -translate-x-1/2" style={{ backgroundColor: sw.secondary, boxShadow: `0 0 5px rgba(10,255,205,0.5)` }} />
+                </div>
+              );
+            case 'rclone':
+              // Pulsing cloud waves
+              return (
+                <div className="absolute inset-0 pointer-events-none">
+                  {[25, 50, 75].map((y, i) => (
+                    <div key={i} className="absolute h-[1px] animate-pulse" style={{ top: `${y}%`, left: '20%', width: '60%', background: `linear-gradient(90deg, transparent, ${sw.primary}30, transparent)`, animationDelay: `${i * 0.4}s` }} />
+                  ))}
+                </div>
+              );
+            case 'server':
+              // Shield glow pulse
+              return (
+                <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                  <div className="absolute w-[50%] h-[50%] rounded-full animate-ping" style={{ backgroundColor: `${sw.primary}10`, animationDuration: '2.5s' }} />
                 </div>
               );
             case 'auto':
@@ -569,7 +626,9 @@ const AppIcon = ({ id, size = 32, className = "", theme = "dark", iconStyle = "g
     'docker-logs': FileText,
     wiki: BookOpen,
     notepad: FileText,
-    mongo: CloudSync,
+    mongo: Database,
+    rclone: CloudCog,
+    server: ShieldCheck,
     auto: Rocket,
   }[iconId] || Globe;
 

@@ -6,6 +6,7 @@ export async function GET(req) {
     const { searchParams } = new URL(req.url);
     const connectionId = searchParams.get('connectionId');
     const target = searchParams.get('target') || '';
+    const latestLogOnly = searchParams.get('latestLog') === '1';
 
     if (!connectionId) {
       return NextResponse.json({ success: false, error: 'connectionId is required' }, { status: 400 });
@@ -16,8 +17,38 @@ export async function GET(req) {
     const sshConfig = await getSshConfig(connectionId, { sshMode, preferredRelay });
     const pathPrefix = 'export PATH="$HOME/.local/bin:$HOME/bin:/usr/local/bin:/usr/bin:$PATH"; ';
 
-    // ── 1. Read all rclone cron log files from /tmp/ with file markers ──
-    const logsCmd = `ps aux | grep '[r]clone ' | grep -v 'grep' | awk '{print $2}' 2>/dev/null || true; echo "=== RCLONE_PROCESSES_END ==="; for f in $(ls -1t /tmp/rclone-cron*.log 2>/dev/null | head -60); do echo "=== RCLONE_FILE: $f ==="; cat "$f"; echo ""; done`;
+    // ── Fast path: return only the most recently modified log + running status ──
+    if (latestLogOnly) {
+      const fastCmd = [
+        // Get the most recently touched rclone cron log
+        `LATEST=$(ls -1t $HOME/.rclone-scripts/logs/rclone-cron*.log 2>/dev/null | head -1)`,
+        `if [ -z "$LATEST" ]; then LATEST=$(ls -1t /tmp/rclone-cron*.log 2>/dev/null | head -1); fi`,
+        `if [ -n "$LATEST" ]; then`,
+        `  echo "=== LOG_FILE: $LATEST ==="`,
+        `  tail -c 32768 "$LATEST" 2>/dev/null`,
+        `  echo ""`,
+        `  echo "=== PIDS ==="`,
+        `  ps aux | grep '[r]clone ' | grep -v grep | awk '{print $2}' 2>/dev/null || true`,
+        `fi`,
+      ].join('\n');
+      const fastRes = await execCommand(sshConfig, fastCmd);
+      const fastOut = fastRes.stdout || '';
+
+      const fileMatch = fastOut.match(/=== LOG_FILE: (.+?) ===/);
+      const logFile = fileMatch ? fileMatch[1].trim() : '';
+      const afterHeader = fileMatch
+        ? fastOut.slice(fastOut.indexOf(fileMatch[0]) + fileMatch[0].length)
+        : '';
+      const pidsIdx = afterHeader.indexOf('=== PIDS ===');
+      const content = pidsIdx >= 0 ? afterHeader.slice(0, pidsIdx).trim() : afterHeader.trim();
+      const pidsText = pidsIdx >= 0 ? afterHeader.slice(pidsIdx + '=== PIDS ==='.length) : '';
+      const running = pidsText.split('\n').map(p => p.trim()).filter(Boolean).length > 0;
+
+      return NextResponse.json({ success: true, latestLog: logFile ? { logFile, content, running } : null });
+    }
+
+    // ── 1. Read all rclone cron log files from persistent storage (fallback to /tmp if persistent is empty) ──
+    const logsCmd = `ps aux | grep '[r]clone ' | grep -v 'grep' | awk '{print $2}' 2>/dev/null || true; echo "=== RCLONE_PROCESSES_END ==="; FILES=$(ls -1t $HOME/.rclone-scripts/logs/rclone-cron*.log 2>/dev/null | head -60); if [ -z "$FILES" ]; then FILES=$(ls -1t /tmp/rclone-cron*.log 2>/dev/null | head -60); fi; for f in $FILES; do echo "=== RCLONE_FILE: $f ==="; cat "$f"; echo ""; done`;
     const logsRes = await execCommand(sshConfig, logsCmd);
     const rawOutput = logsRes.stdout || '';
 
@@ -31,12 +62,17 @@ export async function GET(req) {
     // Split log text into individual run blocks per file
     const fileBlocks = rawLogs.split('=== RCLONE_FILE: ').filter(b => b.trim());
     const runs = [];
+    const seenBaseNames = new Set();
 
     for (const rawBlock of fileBlocks) {
       const firstLineEnd = rawBlock.indexOf('\n');
       if (firstLineEnd === -1) continue;
 
       const filePath = rawBlock.slice(0, firstLineEnd).replace(/===/g, '').trim();
+      const baseName = filePath.split('/').pop();
+      if (seenBaseNames.has(baseName)) continue;
+      seenBaseNames.add(baseName);
+
       const fileContent = rawBlock.slice(firstLineEnd + 1).trim();
 
       if (!fileContent) continue;
@@ -51,9 +87,20 @@ export async function GET(req) {
         let customProjectName = '';
 
         // Check header marker: === Project: NAME | Action: sync ===
-        const projMatch = block.match(/===\s*Project:\s*(.*?)(?:\s*\|\s*Action:\s*(\w+))?\s*===/i);
+        const projMatch = block.match(/===\s*Project:\s*([^|\n]+)(?:\s*\|\s*Action:\s*(\w+))?\s*===/i);
         if (projMatch) {
-          customProjectName = projMatch[1].trim();
+          // Sanitize: strip .sh / _sh / dashes-underscores, title-case
+          let rawName = projMatch[1].trim();
+          rawName = rawName
+            .replace(/\.sh$/i, '')      // strip .sh extension
+            .replace(/_sh$/i, '')       // strip _sh suffix
+            .replace(/_+/g, ' ')        // underscores → spaces
+            .replace(/-+/g, ' ')        // dashes → spaces
+            .trim();
+          customProjectName = rawName
+            .split(' ')
+            .map(w => w.charAt(0).toUpperCase() + w.slice(1))
+            .join(' ');
           if (projMatch[2]) {
             action = projMatch[2].toLowerCase();
           }
@@ -65,7 +112,7 @@ export async function GET(req) {
           const tokens = paramMatch[1].split(/\s+/).map(t => t.replace(/^"/, '').replace(/"$/, ''));
           const rIdx = tokens.indexOf('rclone');
           if (rIdx !== -1 && tokens[rIdx + 1]) {
-            if (!projMatch) action = tokens[rIdx + 1].toLowerCase();
+            if (!projMatch || !projMatch[2]) action = tokens[rIdx + 1].toLowerCase();
             source = tokens[rIdx + 2] || '';
             targetFolder = tokens[rIdx + 3] || '';
           }
@@ -74,40 +121,70 @@ export async function GET(req) {
         if (!source) {
           const fallbackMatch = block.match(/rclone\s+(copy|sync|move|check|delete|purge)\s+(\S+)(?:\s+(\S+))?/i);
           if (fallbackMatch) {
-            if (!projMatch) action = fallbackMatch[1].toLowerCase();
+            if (!projMatch || !projMatch[2]) action = fallbackMatch[1].toLowerCase();
             source = fallbackMatch[2].replace(/"/g, '');
             targetFolder = (fallbackMatch[3] || '').replace(/"/g, '');
           }
         }
 
-        // If source still empty, try to detect from log lines (e.g. buildx/foo or backup.log)
+        // If source still empty, try to detect from log lines — skip macOS/system hidden files
         if (!source) {
-          const firstCopyMatch = block.match(/INFO\s*:\s*([^:\s\/]+)(?:\/|\:)/i);
-          if (firstCopyMatch) {
-            source = firstCopyMatch[1].trim();
+          // Scan all INFO lines and pick the first that isn't a dotfile (.DS_Store, .git, etc.)
+          const infoMatches = [...block.matchAll(/INFO\s*:\s*([^:\s\/]+)(?:\/|:)/gi)];
+          for (const m of infoMatches) {
+            const candidate = m[1].trim();
+            if (candidate && !candidate.startsWith('.')) {
+              source = candidate;
+              break;
+            }
           }
         }
 
+
         // If customProjectName still empty, derive clean project name from log file path
-        if (!customProjectName && filePath.includes('/tmp/rclone-cron-')) {
-          const fname = filePath.replace('/tmp/rclone-cron-', '').replace(/\.log$/, '');
-          const cleanName = fname.replace(/-\d{8}_\d{6}$/, '').replace(/-\d{10,}$/, '');
-          if (cleanName) customProjectName = cleanName;
+        if (!customProjectName) {
+          let fname = '';
+          if (filePath.includes('/tmp/rclone-cron-')) {
+            fname = filePath.replace('/tmp/rclone-cron-', '').replace(/\.log$/, '');
+          } else if (filePath.includes('/rclone-scripts/logs/rclone-cron-')) {
+            fname = filePath.replace(/.*\/rclone-cron-/, '').replace(/\.log$/, '');
+          }
+          if (fname) {
+            // Strip trailing unix timestamp or date suffix, then clean up script name artifacts
+            let cleanName = fname
+              .replace(/-\d{10,}$/, '')    // unix timestamp suffix like -1721234567
+              .replace(/-\d{8}_\d{6}$/, '') // date suffix like -20240726_103000
+              .replace(/_sh$/, '')           // leftover _sh from .sh filename
+              .replace(/\.sh$/, '')          // .sh extension
+              .replace(/_+/g, ' ')           // underscores → spaces
+              .replace(/-+/g, ' ')           // dashes → spaces
+              .trim();
+            // Title-case each word
+            if (cleanName) {
+              customProjectName = cleanName
+                .split(' ')
+                .map(w => w.charAt(0).toUpperCase() + w.slice(1))
+                .join(' ');
+            }
+          }
         }
+
 
         if (block.includes('rclone delete') || action === 'delete' || action === 'purge') {
           action = 'cleanup';
         }
 
-        // Format Project / Task Name
-        const cleanSource = source ? (source.split('/').filter(Boolean).pop() || source) : '';
+        // Format Project / Task Name — skip dotfiles/system files as source name
+        const rawSourcePart = source ? (source.split('/').filter(Boolean).pop() || source) : '';
+        const cleanSource = rawSourcePart.startsWith('.') ? '' : rawSourcePart;
         const cleanTarget = targetFolder ? targetFolder.split('/')[0] : '';
+
         
         let jobName = customProjectName;
         if (!jobName) {
           if (cleanSource && cleanTarget) jobName = `${cleanSource} ➔ ${cleanTarget}`;
           else if (cleanSource) jobName = cleanSource;
-          else jobName = 'Scheduled Backup Task';
+          else continue; // Skip: no project name, no source — nothing useful to show
         }
 
         // 🎯 Match LAST (LATEST) occurrence of progress metrics in this run block
@@ -130,7 +207,7 @@ export async function GET(req) {
         const percent = percentMatch ? parseInt(percentMatch[1], 10) : null;
         const hasActiveTransferring = block.includes('Transferring:') || (block.match(/ETA\s+[1-9]/i) !== null);
         const hasErrors = errorCount > 0;
-        const hasFailed = block.includes('Failed to') || block.includes('ERROR');
+        const hasFailed = block.includes('Fatal error:') || block.includes('ERROR :') || block.includes('Failed to ');
         
         const filesDone = transferredMatch ? parseInt(transferredMatch[1], 10) : 0;
         const filesTotal = transferredMatch ? parseInt(transferredMatch[2], 10) : 0;
@@ -143,12 +220,14 @@ export async function GET(req) {
         let status = 'running';
         if (isAborted) {
           status = 'aborted';
-        } else if (is100Percent && !hasErrors && !hasFailed && !hasActiveTransferring) {
+        } else if (is100Percent && !hasFailed) {
           status = 'success';
         } else if (hasFailed && !hasActiveTransferring) {
           status = 'failed';
         } else if (hasErrors && !hasActiveTransferring) {
           status = 'warning';
+        } else if (!hasActiveTransferring && (filesDone > 0 || is100Percent)) {
+          status = 'success';
         } else {
           status = 'running';
         }
@@ -164,8 +243,17 @@ export async function GET(req) {
           }
         }
 
+        // Extract a stable log-file key (filename without timestamp) to group runs from the same cron job
+        const logBaseName = filePath.split('/').pop() || '';
+        // e.g. rclone-cron-myproject-1753619744.log → rclone-cron-myproject
+        const logFileKey = logBaseName
+          .replace(/\.log$/, '')
+          .replace(/-\d{10,}$/, '')    // strip unix timestamp
+          .replace(/-\d{8}_\d{6}$/, ''); // strip date suffix
+
         runs.push({
           jobName,
+          logFileKey,
           action,
           source,
           targetFolder,
@@ -176,7 +264,7 @@ export async function GET(req) {
           sizeTransferred: sizeMatch ? sizeMatch[1].trim() : (isNothingToTransfer ? '0 B' : null),
           elapsed: elapsedMatch ? elapsedMatch[1] : null,
           logFile: filePath,
-          logPreview: block.trim(),
+          logPreview: block.trim() || `Log file: ${filePath}\n\nNo log content available. The backup task may still be starting or the log file is empty.`,
         });
       }
     }
@@ -201,20 +289,40 @@ export async function GET(req) {
       }
     });
 
-    // Group runs by Project / Task
+    // Group runs by stable log-file key (filename prefix without timestamp)
+    // This ensures all runs from the same cron job land in one project card,
+    // regardless of which file the INFO-line fallback happened to detect as "source".
     const projectGroups = {};
     for (const run of runs) {
-      const pName = run.jobName;
-      if (!projectGroups[pName]) {
-        projectGroups[pName] = {
-          name: pName,
+      // Primary key: log file prefix (most reliable — same for all runs of a cron job)
+      // Secondary key: target path (groups manual runs with same destination)
+      // Tertiary key: job name
+      const groupKey = run.logFileKey || run.targetFolder || run.jobName;
+
+      if (!projectGroups[groupKey]) {
+        projectGroups[groupKey] = {
+          name: run.jobName,
           source: run.source,
           target: run.targetFolder,
           action: run.action,
           runs: [],
         };
       }
-      projectGroups[pName].runs.push(run);
+
+      // Prefer the most descriptive project name within the group:
+      // A longer name is usually better (more specific than a single filename)
+      const existing = projectGroups[groupKey].name;
+      const candidate = run.jobName;
+      if (
+        candidate &&
+        !candidate.endsWith('.sh') &&
+        !candidate.endsWith('.log') &&
+        candidate.length > existing.length
+      ) {
+        projectGroups[groupKey].name = candidate;
+      }
+
+      projectGroups[groupKey].runs.push(run);
     }
 
     const projects = Object.values(projectGroups);
@@ -265,7 +373,7 @@ export async function DELETE(req) {
     const preferredRelay = req.headers.get('x-preferred-relay');
     const sshConfig = await getSshConfig(connectionId, { sshMode, preferredRelay });
 
-    const clearCmd = `rm -f /tmp/rclone-cron*.log /tmp/rclone-lock-*.lock`;
+    const clearCmd = `rm -f $HOME/.rclone-scripts/logs/rclone-cron*.log $HOME/.rclone-scripts/rclone-lock-*.lock /tmp/rclone-cron*.log /tmp/rclone-lock-*.lock`;
     await execCommand(sshConfig, clearCmd);
 
     return NextResponse.json({

@@ -12,6 +12,7 @@ export async function POST(req) {
       action = 'copy', // sync | copy | move | check
       source,
       target,
+      projectName: reqProjectName = '',
       options = {},
     } = await req.json();
 
@@ -23,9 +24,24 @@ export async function POST(req) {
     const preferredRelay = req.headers.get('x-preferred-relay');
 
     const sshConfig = await getSshConfig(connectionId, { sshMode, preferredRelay });
-    const sessionName = `rclone-${action}-${Date.now()}`;
-    const logFile = `/tmp/${sessionName}.log`;
-    const pathPrefix = 'export PATH="$HOME/.local/bin:$HOME/bin:/usr/local/bin:$PATH"; ';
+    const envPrefix = 'export PATH="$HOME/.local/bin:$HOME/bin:/usr/local/bin:/usr/bin:/usr/sbin:/sbin:/snap/bin:$PATH"; RCLONE_BIN="$(command -v rclone 2>/dev/null || which rclone 2>/dev/null || echo "rclone")"; ';
+
+    // Derive project name and safe lock name (mirrors cron route logic)
+    const cleanSourceLabel = source ? (source.split('/').filter(Boolean).pop() || source) : 'Source';
+    const cleanTargetLabel = target ? target.split('/')[0] : 'Destination';
+    const finalProjectName = reqProjectName.trim() ? reqProjectName.trim().replace(/"/g, '') : `${cleanSourceLabel} ➔ ${cleanTargetLabel}`;
+    const safeLockName = finalProjectName.replace(/[^a-zA-Z0-9_-]/g, '_');
+
+    // Use rclone-cron-* log pattern in both persistent dir and /tmp
+    const timestamp = Date.now();
+    const sessionName = `rclone-${action}-${timestamp}`;
+    const permLogFile = `$HOME/.rclone-scripts/logs/rclone-cron-${safeLockName}-${timestamp}.log`;
+    const tmpLogFile = `/tmp/rclone-cron-${safeLockName}-${timestamp}.log`;
+    const logFile = permLogFile;
+
+    // Ensure log directory exists and write project header marker
+    const headerCmd = `mkdir -p "$HOME/.rclone-scripts/logs"; echo ${quote(`=== Project: ${finalProjectName} | Action: ${action} ===`)} | tee ${quote(tmpLogFile)} > ${quote(permLogFile)}`;
+    await execCommand(sshConfig, headerCmd);
 
     // Build flags
     const flags = ['--progress', '-v', '--stats=1s'];
@@ -54,10 +70,10 @@ export async function POST(req) {
         subFolder = dmy;
       }
       const cleanTarget = target.replace(/\/$/, '');
-      finalTarget = `${cleanTarget}/${subFolder}`;
+      finalTarget = `${cleanTarget}/${subFolder}/`;
     }
 
-    let cmd = `${pathPrefix}rclone ${action} ${quote(source)} ${quote(finalTarget)} ${flags.join(' ')}`;
+    let cmd = `${envPrefix}"$RCLONE_BIN" ${action} ${quote(source)} ${quote(finalTarget)} ${flags.join(' ')}`;
     
     // Auto Retention Policy: clean old backups older than X days
     if (options.enableRetention && options.retentionDays) {
@@ -66,21 +82,22 @@ export async function POST(req) {
       if (options.driveFolderId && options.driveFolderId.trim()) {
         driveFlag = `--drive-root-folder-id=${quote(options.driveFolderId.trim())} `;
       }
-      cmd += `; ${pathPrefix}rclone delete --min-age ${days}d ${quote(target)} ${driveFlag}--rmdirs 2>/dev/null || true`;
+      cmd += `; ${envPrefix}"$RCLONE_BIN" delete --min-age ${days}d ${quote(target)} ${driveFlag}--rmdirs 2>/dev/null || true`;
     }
 
     const b64Script = Buffer.from(`${cmd}`).toString('base64');
 
     // Wrap execution inside tmux session if tmux is installed, fallback to nohup
+    // Tee output to both persistent logs directory and /tmp for log compatibility
     const runnerCmd = [
       `if command -v tmux >/dev/null 2>&1; then`,
       `  tmux kill-session -t "${sessionName}" 2>/dev/null || true`,
       `  tmux new-session -d -s "${sessionName}"`,
-      `  tmux send-keys -t "${sessionName}" "echo ${b64Script} | base64 -d > /tmp/${sessionName}.sh && bash /tmp/${sessionName}.sh 2>&1 | tee ${logFile}; exit" Enter`,
+      `  tmux send-keys -t "${sessionName}" "echo ${b64Script} | base64 -d > /tmp/${sessionName}.sh && bash /tmp/${sessionName}.sh 2>&1 | tee -a ${quote(permLogFile)} >> ${quote(tmpLogFile)}; exit" Enter`,
       `  echo "TMUX_SESSION=${sessionName}"`,
       `else`,
       `  echo ${b64Script} | base64 -d > /tmp/${sessionName}.sh`,
-      `  nohup bash /tmp/${sessionName}.sh > ${logFile} 2>&1 & echo "PID=$!"`,
+      `  nohup bash /tmp/${sessionName}.sh 2>&1 | tee -a ${quote(permLogFile)} >> ${quote(tmpLogFile)} & echo "PID=$!"`,
       `fi`
     ].join('\n');
 

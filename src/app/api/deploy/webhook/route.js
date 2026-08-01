@@ -555,6 +555,20 @@ export async function runDeployment(config, runMeta = {}) {
       'echo "[deploy] Working directory: $(pwd)"',
       'set -e',
       'set -o pipefail',
+      // ── Self-healing: stash local changes before pull to prevent collision ──
+      'STASH_MADE=0',
+      'if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then',
+      '  DIRTY=$(git status --porcelain 2>/dev/null)',
+      '  if [ -n "$DIRTY" ]; then',
+      '    echo "[deploy] ⚠️  Local changes detected — stashing before pull to prevent collision..."',
+      '    git stash push -u -m "autodeploy-self-heal-$(date +%s)" && STASH_MADE=1 || true',
+      '    if [ "$STASH_MADE" = "1" ]; then',
+      '      echo "[deploy] ✅ Stashed local changes. Will clean up after deploy."',
+      '    else',
+      '      echo "[deploy] ⚠️  Could not stash local changes — attempting deploy anyway."',
+      '    fi',
+      '  fi',
+      'fi',
     ];
     // Temporarily write Bitbucket/GitHub credentials depending on provider
     if (config.bitbucketConnected && (config.bitbucketUser || config.bitbucketUsername) && config.bitbucketAppPassword) {
@@ -597,6 +611,12 @@ export async function runDeployment(config, runMeta = {}) {
       scriptLines.push(`cd "${cwdPath}" || true`);
       scriptLines.push('git config --unset http.extraHeader || true');
     }
+    // ── Self-healing: drop stash after deploy (stash was only a collision fix) ──
+    scriptLines.push('if [ "$STASH_MADE" = "1" ]; then');
+    scriptLines.push('  echo "[deploy] 🧹 Dropping auto-stash (local changes were saved as a temporary fix)..."');
+    scriptLines.push('  git stash drop 2>/dev/null || true');
+    scriptLines.push('  echo "[deploy] ✅ Stash dropped. Local changes discarded (they were only stashed to unblock the pull)."');
+    scriptLines.push('fi');
     scriptLines.push('echo "[deploy] Deploy command finished successfully"');
     const script = scriptLines.join('\n');
 
@@ -852,6 +872,20 @@ export async function runDeployment(config, runMeta = {}) {
             'echo "[deploy] Now in: $(pwd)"',
             'set -e',
             'set -o pipefail',
+            // ── Self-healing: stash local changes before fetch/pull to prevent collision ──
+            'STASH_MADE=0',
+            'if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then',
+            '  DIRTY=$(git status --porcelain 2>/dev/null)',
+            '  if [ -n "$DIRTY" ]; then',
+            '    echo "[deploy] ⚠️  Local changes detected — stashing before pull to prevent collision..."',
+            '    git stash push -u -m "autodeploy-self-heal-$(date +%s)" && STASH_MADE=1 || true',
+            '    if [ "$STASH_MADE" = "1" ]; then',
+            '      echo "[deploy] ✅ Stashed local changes. Will clean up after deploy."',
+            '    else',
+            '      echo "[deploy] ⚠️  Could not stash local changes — attempting deploy anyway."',
+            '    fi',
+            '  fi',
+            'fi',
           ];
           const targetBranch = (config.branch || 'main').replace('refs/heads/', '');
 
@@ -928,6 +962,12 @@ export async function runDeployment(config, runMeta = {}) {
             scriptLines.push(`cd "${resolvedPath}" || true`);
             scriptLines.push('git config --unset http.extraHeader || true');
           }
+          // ── Self-healing: drop stash after deploy (stash was only a collision fix) ──
+          scriptLines.push('if [ "$STASH_MADE" = "1" ]; then');
+          scriptLines.push('  echo "[deploy] 🧹 Dropping auto-stash (local changes were saved as a temporary fix)..."');
+          scriptLines.push('  git stash drop 2>/dev/null || true');
+          scriptLines.push('  echo "[deploy] ✅ Stash dropped. Local changes discarded (they were only stashed to unblock the pull)."');
+          scriptLines.push('fi');
           scriptLines.push('echo "[deploy] Deploy command finished successfully"');
           const deployScript = scriptLines.join('\n') + '\n';
 

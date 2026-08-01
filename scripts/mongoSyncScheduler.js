@@ -191,13 +191,26 @@ async function tick() {
 
       const lastRun = job.lastRun || 0;
       const timeDiff = now - lastRun;
+      const scheduleStr = String(job.schedule || '').toLowerCase().trim();
+
       const intervals = {
-        hourly: 60 * 60 * 1000,
-        daily: 24 * 60 * 60 * 1000,
-        weekly: 7 * 24 * 60 * 60 * 1000,
+        'every_15_min': 15 * 60 * 1000,
+        'every_30_min': 30 * 60 * 1000,
+        'hourly': 60 * 60 * 1000,
+        'daily': 24 * 60 * 60 * 1000,
+        'weekly': 7 * 24 * 60 * 60 * 1000,
       };
 
-      if (intervals[job.schedule] && timeDiff >= intervals[job.schedule]) {
+      let targetInterval = intervals[scheduleStr];
+      if (!targetInterval) {
+        if (scheduleStr.includes('15')) targetInterval = 15 * 60 * 1000;
+        else if (scheduleStr.includes('30')) targetInterval = 30 * 60 * 1000;
+        else if (scheduleStr.includes('hour')) targetInterval = 60 * 60 * 1000;
+        else if (scheduleStr.includes('week')) targetInterval = 7 * 24 * 60 * 60 * 1000;
+        else targetInterval = 24 * 60 * 60 * 1000; // default to daily
+      }
+
+      if (timeDiff >= targetInterval) {
         await runJob(job, driveConfig);
       }
     }

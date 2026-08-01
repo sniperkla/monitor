@@ -8,7 +8,7 @@ import SSHApp from '@/apps/SSHApp';
 import SettingsApp from '@/apps/SettingsApp';
 import { Terminal, Settings, FolderClosed, Monitor, RefreshCw, Plus, 
   Image as ImageIcon, Layout, Grid, List, AlignLeft, SortAsc, Server,
-  ChevronRight, Type, Calendar, HardDrive, Palette, MonitorCog, Globe, Maximize, Minimize, Database, Check, MonitorPlay, GitBranch, CloudSync, Rocket
+  ChevronRight, Type, Calendar, HardDrive, Palette, MonitorCog, Globe, Maximize, Minimize, Database, Check, MonitorPlay, GitBranch, CloudSync, Rocket, CloudCog, ShieldCheck
 } from 'lucide-react';
 import NotificationCenter from '@/components/Desktop/NotificationCenter';
 import AutoDeployApp from '@/apps/AutoDeployApp';
@@ -320,9 +320,9 @@ export default function DesktopEnvironment({ bootPhase }) {
     { id: 'docker', title: 'Docker', icon: Server, component: <DockerApp />, type: 'app', initialWidth: 1000, initialHeight: 700 },
     { id: 'auto-deploy', title: 'Auto Deploy', icon: Rocket, component: <AutoDeployApp />, type: 'app', initialWidth: 1100, initialHeight: 760 },
     { id: 'tmux', title: t('apps.tmux'), icon: MonitorPlay, component: <TmuxApp />, type: 'app', initialWidth: 1000, initialHeight: 650 },
-    { id: 'mongo-backup', title: 'Mongo Sync', icon: CloudSync, component: <MongoBackupApp />, type: 'app', initialWidth: 1050, initialHeight: 680 },
-    { id: 'rclone', title: 'Rclone Sync', icon: CloudSync, component: <RcloneApp />, type: 'app', initialWidth: 1100, initialHeight: 720 },
-    { id: 'server-backup', title: 'Server Backup', icon: HardDrive, component: <ServerBackupApp />, type: 'app', initialWidth: 1200, initialHeight: 780 },
+    { id: 'mongo-backup', title: 'Mongo Sync', icon: Database, component: <MongoBackupApp />, type: 'app', initialWidth: 1050, initialHeight: 680 },
+    { id: 'rclone', title: 'Rclone Sync', icon: CloudCog, component: <RcloneApp />, type: 'app', initialWidth: 1100, initialHeight: 720 },
+    { id: 'server-backup', title: 'Server Backup', icon: ShieldCheck, component: <ServerBackupApp />, type: 'app', initialWidth: 1200, initialHeight: 780 },
     { id: 'settings', title: t('apps.settings'), icon: Settings, component: <SettingsApp />, type: 'app', initialWidth: 700, initialHeight: 500 },
   ];
 
