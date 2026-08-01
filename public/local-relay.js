@@ -2087,13 +2087,13 @@ function handleDockerCommand(ws, msg) {
     } else if (action === 'swarm:init') {
       // Use sh -c so shell operators work; always exits 0 (already-in-swarm is OK)
       return runRawCmd(`sh -c 'docker swarm init 2>&1; exit 0'`);
-    } else if (action === 'swarm:create' && args.length >= 3) {
+    } else if (action === 'swarm:create') {
       const svcName  = String(args[0] || '').replace(/[^a-zA-Z0-9._-]/g, '');
       const image    = String(args[1] || '').replace(/[^a-zA-Z0-9.@/:-]/g, '');
-      const replicas = parseInt(args[2], 10);
+      const replicas = parseInt(args[2], 10) || 2;
       const port     = String(args[3] || '').replace(/[^0-9:]/g, '');
-      if (!svcName || !image || isNaN(replicas) || replicas < 1)
-        return ws.send(JSON.stringify({ type: 'docker:error', connId, error: 'Invalid service create parameters' }));
+      if (!svcName || !image)
+        return ws.send(JSON.stringify({ type: 'docker:error', connId, error: 'Invalid service name or image' }));
       const portFlag = port ? `--publish ${port.includes(':') ? port : `${port}:${port}`}` : '';
       cmdSuffix = `service create --name ${svcName} --replicas ${replicas} ${portFlag} --update-order start-first --update-delay 5s ${image}`;
     } else if (action === 'swarm:update' && args.length >= 2) {
