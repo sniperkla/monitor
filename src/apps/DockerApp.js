@@ -1392,8 +1392,12 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
                                                 <Box size={18} />
                                             </div>
                                             <div className="min-w-0">
-                                                <h3 className="font-bold text-sm truncate flex items-center gap-1.5 flex-wrap">
-                                                  <span>{c.name}</span>
+                                                <h3 className="font-bold text-sm truncate flex items-center gap-1.5 flex-wrap" title={c.name}>
+                                                  <span>
+                                                    {c.swarmService && c.name.includes('.') 
+                                                      ? `${c.swarmService} #${c.name.split('.')[1] || '1'}` 
+                                                      : c.name}
+                                                  </span>
                                                   {c.stack && (
                                                     <span className="px-1.5 py-0.5 text-[8px] bg-purple-500/10 text-purple-400 font-bold uppercase rounded-lg border border-purple-500/20 shadow-sm align-middle">
                                                       ★ {c.stack}
