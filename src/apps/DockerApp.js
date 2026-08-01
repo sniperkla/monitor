@@ -474,16 +474,16 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
         } catch (e) { /* networks may not be supported */ }
       } else if (action === 'swarm:services') {
         try {
-          const lines = output.split('\n').filter(l => l.trim());
+          const lines = output.split('\n').filter(l => l.trim() && l.trim().startsWith('{'));
           const parsed = lines.map(line => JSON.parse(line));
           setSwarmServices(parsed);
-        } catch (e) { setSwarmServices([]); }
+        } catch (e) { console.error('swarm:services parse error:', e); }
       } else if (action === 'swarm:nodes') {
         try {
-          const lines = output.split('\n').filter(l => l.trim());
+          const lines = output.split('\n').filter(l => l.trim() && l.trim().startsWith('{'));
           const parsed = lines.map(line => JSON.parse(line));
           setSwarmNodes(parsed);
-        } catch (e) { setSwarmNodes([]); }
+        } catch (e) { console.error('swarm:nodes parse error:', e); }
       } else if (action === 'swarm:init') {
         // After init (or already-init), refresh swarm services + nodes
         setIsLoading(false);
