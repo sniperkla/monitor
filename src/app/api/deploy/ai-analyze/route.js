@@ -123,8 +123,16 @@ export async function POST(request) {
 2. Key technologies, dependencies, and frameworks used
 3. An optimized shell/bash deployment script/command suitable for a production build & run (e.g., git pull && npm run build && pm2 restart app). Include steps like downloading dependencies, running builds, restarting processes/services, or running Docker containers. Include comments explaining key steps. Crucially, always write bash/shell commands safely (e.g. start bash scripts with '#!/bin/bash\nset -e\n' or chain sequential commands with '&&') to ensure that if any intermediate command fails (like a build), the script immediately stops and returns a non-zero exit status to fail the deployment.
    IMPORTANT FOR DOCKER PROJECTS: If the project uses Docker (docker compose, docker-compose, or Dockerfile), follow these rules strictly:
-   a) Use 'docker compose' (not 'docker-compose') unless a docker-compose binary is detected.
-   b) After 'docker compose up -d', ALWAYS add a verification step using this exact pattern to wait for containers to stabilize before checking status:
+   a) ALWAYS check if a Swarm service exists first before falling back to compose/docker run:
+      if docker service inspect ${serviceName} >/dev/null 2>&1; then
+        echo "🐝 Swarm service detected! Triggering zero-downtime rolling update..."
+        docker build -t ${imageName}:latest .
+        docker service update --image ${imageName}:latest --update-order start-first --update-delay 5s ${serviceName}
+      else
+        # Standard compose / docker run fallback
+      fi
+   b) Use 'docker compose' (not 'docker-compose') unless a docker-compose binary is detected.
+   c) After 'docker compose up -d', ALWAYS add a verification step using this exact pattern:
       sleep 3
       if docker compose ps | grep -E "Up|running|healthy"; then
         echo "Deployment successful: containers are running"
@@ -133,8 +141,7 @@ export async function POST(request) {
         docker compose logs --tail=50
         exit 1
       fi
-   c) Do NOT use 'docker ps | grep <name>' for verification because it is fragile. Always use 'docker compose ps' instead.
-   d) After successful verification, append the following cleanup step to prevent disk from filling up with dangling images:
+   d) After successful verification, append cleanup step:
       docker image prune -f
 4. A concise summary of why you recommended this configuration.
 
