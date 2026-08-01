@@ -350,11 +350,19 @@ function connect() {
       case 'sftp:readFileBase64': handleSftpReadBase64(ws, msg);     break;
       case 'sftp:extract':        handleSftpExtract(ws, msg);        break;
 
-      // ── WebRTC Signaling ──
-      // ssh:prepare: server sends plaintext SSH config before WebRTC offer arrives
+      // ── WebRTC Signaling & Relay SSH Provisioning ──
+      // ssh:prepare: server sends plaintext SSH config before WebRTC offer arrives or for WebSocket relay apps
       case 'ssh:prepare': {
         preparedSessions.set(msg.connId, msg.sshConfig);
-        console.log(`🔐 [WebRTC] SSH config pre-provisioned for connId=${msg.connId}`);
+        console.log(`🔐 [Relay SSH] SSH config pre-provisioned for connId=${msg.connId}`);
+        if (msg.connId && msg.sshConfig && !sshSessions.has(msg.connId)) {
+          handleSshConnect(ws, {
+            connId: msg.connId,
+            connection: msg.sshConfig,
+            cols: msg.sshConfig.cols,
+            rows: msg.sshConfig.rows
+          });
+        }
         break;
       }
       case 'webrtc:offer':         handleWebRtcOffer(ws, msg);         break;
