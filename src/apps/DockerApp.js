@@ -313,14 +313,26 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
       });
     });
 
-    // Background Polling logic to keep list fresh if changed externally
+    socketRef.current.on('disconnect', (reason) => {
+      setIsLoading(false);
+      console.warn('⚡ Docker Socket disconnected:', reason);
+    });
+
+    socketRef.current.on('connect_error', (err) => {
+      setIsLoading(false);
+      console.error('⚡ Docker Socket connect error:', err);
+    });
+
+    // Background Polling logic with guard to prevent SSH stream flooding
+    let isPollingBusy = false;
     const pollInterval = setInterval(() => {
-      if (socketRef.current && socketRef.current.connected) {
-         // Background refresh without triggering global loading state
+      if (socketRef.current && socketRef.current.connected && !isPollingBusy) {
+         isPollingBusy = true;
          socketRef.current.emit('docker:command', { action: 'list' });
          socketRef.current.emit('docker:command', { action: 'images' });
          socketRef.current.emit('docker:command', { action: 'volumes' });
          socketRef.current.emit('docker:command', { action: 'networks' });
+         setTimeout(() => { isPollingBusy = false; }, 8000);
       }
     }, 15000); // 15s is standard for decent balance between freshness and overhead
 
