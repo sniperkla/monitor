@@ -3636,6 +3636,7 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
           // Tell the browser the relay is ready to begin WebRTC signaling
           // (browser will create RTCPeerConnection, send offer, and on ICE timeout fall back to ws relay)
           socket.emit('relay:rtc:ready', { connId: relayConnId });
+          return;
 
         }
         
