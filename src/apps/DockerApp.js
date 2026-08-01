@@ -193,7 +193,8 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
   const [swarmNodes, setSwarmNodes] = useState([]);
   const [scaleModal, setScaleModal] = useState({ isOpen: false, serviceName: '', count: 1 });
   const [swarmUpdateModal, setSwarmUpdateModal] = useState({ isOpen: false, serviceName: '', currentImage: '', newImage: '' });
-  const [createServiceModal, setCreateServiceModal] = useState({ isOpen: false, name: '', image: '', replicas: 2, port: '', oldContainerId: '', oldContainerName: '', stopOld: true });
+  const [createServiceModal, setCreateServiceModal] = useState({ isOpen: false, name: '', image: '', replicas: 2, port: '', network: '', mounts: '', env: '', oldContainerId: '', oldContainerName: '', stopOld: true });
+
   const [searchResults, setSearchResults] = useState([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [pullingTasks, setPullingTasks] = useState({});
@@ -1519,11 +1520,15 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
                                               image: c.image || '',
                                               replicas: 2,
                                               port: mappedPort,
+                                              network: c.networks || '',
+                                              mounts: c.mounts || '',
+                                              env: '',
                                               oldContainerId: c.id,
                                               oldContainerName: c.name,
                                               stopOld: true
                                             });
                                           }} className="flex items-center gap-1 px-2 py-1.5 rounded-md text-purple-400 bg-purple-500/10 hover:bg-purple-500/20 text-[10px] font-bold transition-all border border-purple-500/20" title="Convert running container to Docker Swarm zero-downtime service">
+
                                             <Zap size={10} />
                                             <span>To Swarm</span>
                                           </button>
@@ -2873,13 +2878,39 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
                   className="w-full bg-slate-950 border border-[var(--border-color)] rounded-xl p-2.5 text-xs font-mono focus:outline-none focus:border-sky-500/50"
                 />
               </div>
-              <div className="p-3 bg-slate-800/50 rounded-xl text-[10px] font-mono text-slate-400 break-all">
-                <span className="text-purple-400">$ </span>
-                docker service create --name <span className="text-emerald-400">{createServiceModal.name || '<name>'}</span>{' '}
-                --replicas <span className="text-sky-400">{createServiceModal.replicas}</span>{' '}
-                {createServiceModal.port && <><span className="text-amber-400">--publish {createServiceModal.port}</span>{' '}</>}
-                --update-order start-first --update-delay 5s{' '}
-                <span className="text-emerald-400">{createServiceModal.image || '<image>'}</span>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-[10px] font-bold uppercase text-[var(--text-muted)] tracking-wider block mb-1">Network <span className="text-[var(--text-muted)] normal-case font-normal">(e.g. proxy-net)</span></label>
+                  <input
+                    type="text"
+                    value={createServiceModal.network}
+                    onChange={(e) => setCreateServiceModal(prev => ({ ...prev, network: e.target.value }))}
+                    placeholder="e.g. proxy-net or bridge"
+                    className="w-full bg-slate-950 border border-[var(--border-color)] rounded-xl p-2.5 text-xs font-mono focus:outline-none focus:border-amber-500/50"
+                  />
+                </div>
+                <div>
+                  <label className="text-[10px] font-bold uppercase text-[var(--text-muted)] tracking-wider block mb-1">Volume Mounts <span className="text-[var(--text-muted)] normal-case font-normal">(host:container)</span></label>
+                  <input
+                    type="text"
+                    value={createServiceModal.mounts}
+                    onChange={(e) => setCreateServiceModal(prev => ({ ...prev, mounts: e.target.value }))}
+                    placeholder="e.g. /data:/data"
+                    className="w-full bg-slate-950 border border-[var(--border-color)] rounded-xl p-2.5 text-xs font-mono focus:outline-none focus:border-purple-500/50"
+                  />
+                </div>
+              </div>
+              <div className="p-3 bg-slate-800/50 rounded-xl text-[10px] font-mono text-slate-400 break-all space-y-1">
+                <div>
+                  <span className="text-purple-400">$ </span>
+                  docker service create --name <span className="text-emerald-400">{createServiceModal.name || '<name>'}</span>{' '}
+                  --replicas <span className="text-sky-400">{createServiceModal.replicas}</span>{' '}
+                  {createServiceModal.port && <><span className="text-amber-400">--publish {createServiceModal.port}</span>{' '}</>}
+                  {createServiceModal.network && <><span className="text-purple-400">--network {createServiceModal.network}</span>{' '}</>}
+                  {createServiceModal.mounts && <><span className="text-cyan-400">--mount {createServiceModal.mounts}</span>{' '}</>}
+                  --update-order start-first --update-delay 5s{' '}
+                  <span className="text-emerald-400">{createServiceModal.image || '<image>'}</span>
+                </div>
               </div>
               {createServiceModal.oldContainerId && (
                 <div className="p-3 bg-amber-500/10 border border-amber-500/20 rounded-xl flex items-center justify-between text-xs text-amber-300">
@@ -2897,7 +2928,7 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
               )}
               <div className="flex justify-end gap-2 pt-1">
                 <button
-                  onClick={() => setCreateServiceModal({ isOpen: false, name: '', image: '', replicas: 2, port: '', oldContainerId: '', oldContainerName: '', stopOld: true })}
+                  onClick={() => setCreateServiceModal({ isOpen: false, name: '', image: '', replicas: 2, port: '', network: '', mounts: '', env: '', oldContainerId: '', oldContainerName: '', stopOld: true })}
                   className="px-4 py-2 rounded-xl text-xs font-bold border border-[var(--border-color)] hover:bg-white/5 transition-all cursor-pointer"
                 >
                   Cancel
@@ -2911,9 +2942,17 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
                     }
                     socketRef.current.emit('docker:command', {
                       action: 'swarm:create',
-                      args: [createServiceModal.name.trim(), createServiceModal.image.trim(), createServiceModal.replicas, createServiceModal.port.trim()]
+                      args: [
+                        createServiceModal.name.trim(),
+                        createServiceModal.image.trim(),
+                        createServiceModal.replicas,
+                        createServiceModal.port.trim(),
+                        createServiceModal.network.trim(),
+                        createServiceModal.env.trim(),
+                        createServiceModal.mounts.trim()
+                      ]
                     });
-                    setCreateServiceModal({ isOpen: false, name: '', image: '', replicas: 2, port: '', oldContainerId: '', oldContainerName: '', stopOld: true });
+                    setCreateServiceModal({ isOpen: false, name: '', image: '', replicas: 2, port: '', network: '', mounts: '', env: '', oldContainerId: '', oldContainerName: '', stopOld: true });
                   }}
                   disabled={!createServiceModal.name.trim() || !createServiceModal.image.trim()}
                   className="px-4 py-2 rounded-xl text-xs font-bold bg-purple-500 hover:bg-purple-600 disabled:opacity-40 disabled:cursor-not-allowed text-white transition-all shadow-lg flex items-center gap-1.5 cursor-pointer"

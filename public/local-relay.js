@@ -2088,14 +2088,44 @@ function handleDockerCommand(ws, msg) {
       // Use sh -c so shell operators work; always exits 0 (already-in-swarm is OK)
       return runRawCmd(`sh -c 'docker swarm init 2>&1; exit 0'`);
     } else if (action === 'swarm:create') {
-      const svcName  = String(args[0] || '').replace(/[^a-zA-Z0-9._-]/g, '');
-      const image    = String(args[1] || '').replace(/[^a-zA-Z0-9.@/:-]/g, '');
-      const replicas = parseInt(args[2], 10) || 2;
-      const port     = String(args[3] || '').replace(/[^0-9:]/g, '');
+      const svcName   = String(args[0] || '').replace(/[^a-zA-Z0-9._-]/g, '');
+      const image     = String(args[1] || '').replace(/[^a-zA-Z0-9.@/:-]/g, '');
+      const replicas  = parseInt(args[2], 10) || 2;
+      const port      = String(args[3] || '').replace(/[^0-9:]/g, '');
+      const network   = String(args[4] || '').replace(/[^a-zA-Z0-9._-]/g, '');
+      const rawEnv    = String(args[5] || '');
+      const rawMounts = String(args[6] || '');
       if (!svcName || !image)
         return ws.send(JSON.stringify({ type: 'docker:error', connId, error: 'Invalid service name or image' }));
-      const portFlag = port ? `--publish ${port.includes(':') ? port : `${port}:${port}`}` : '';
-      cmdSuffix = `service create --name ${svcName} --replicas ${replicas} ${portFlag} --update-order start-first --update-delay 5s ${image}`;
+
+      let flags = [`--name ${svcName}`, `--replicas ${replicas}`, `--update-order start-first`, `--update-delay 5s`];
+      if (port) {
+        const p = port.includes(':') ? port : `${port}:${port}`;
+        flags.push(`--publish ${p}`);
+      }
+      if (network) {
+        flags.push(`--network ${network}`);
+      }
+      if (rawEnv) {
+        rawEnv.split(',').forEach(e => {
+          const kv = e.trim().replace(/[^a-zA-Z0-9._=\-]/g, '');
+          if (kv.includes('=')) flags.push(`--env "${kv}"`);
+        });
+      }
+      if (rawMounts) {
+        rawMounts.split(',').forEach(m => {
+          const parts = m.trim().split(':');
+          if (parts.length >= 2) {
+            const src = parts[0].trim().replace(/[^a-zA-Z0-9._/:-]/g, '');
+            const target = parts[1].trim().replace(/[^a-zA-Z0-9._/:-]/g, '');
+            if (src && target) {
+              const type = src.startsWith('/') ? 'bind' : 'volume';
+              flags.push(`--mount type=${type},source=${src},target=${target}`);
+            }
+          }
+        });
+      }
+      cmdSuffix = `service create ${flags.join(' ')} ${image}`;
     } else if (action === 'swarm:update' && args.length >= 2) {
 
       const serviceName = String(args[0] || '').replace(/[^a-zA-Z0-9._-]/g, '');
