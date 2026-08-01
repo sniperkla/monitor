@@ -61,6 +61,7 @@ export default function RelayTerminalView({
   const termInstanceRef = useRef(null);
   const fitAddonRef = useRef(null);
   const relayRef = useRef(null);
+  const hasEmittedConnectedBannerRef = useRef(false);
   const propsRef = useRef({ connectionId, connection, connectionName, host, initialCommand, dbUri });
   const osStateRef = useRef(osState);
 
@@ -175,8 +176,11 @@ export default function RelayTerminalView({
       setStatus('connected');
       updateConnectionStatus('online');
       setShowReconnect(false);
-      term.writeln(`\x1b[1;32m✓ Connected via relay\x1b[0m\n`);
-      term.writeln('\r');
+      if (!hasEmittedConnectedBannerRef.current) {
+        hasEmittedConnectedBannerRef.current = true;
+        term.writeln(`\x1b[1;32m✓ Connected via relay\x1b[0m\n`);
+        term.writeln('\r');
+      }
       term.focus();
 
       // Heartbeat loop for latency monitoring

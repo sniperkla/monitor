@@ -1294,7 +1294,8 @@ export default function SettingsApp({ initialTab, deploymentOnly = false, openRe
   // Generate & download a platform-specific install/uninstall script
   const downloadInstallerScript = (mode) => {
     const server = window.location.origin;
-    const scriptUrl = `${server}/local-relay.js`;
+    // Cache-busting: append timestamp to URL so curl never reuses a stale cached copy
+    const scriptUrl = `${server}/local-relay.js?v=${Date.now()}`;
     const cmd = getRelayCommand(mode);
 
     let content, filename;
@@ -1302,11 +1303,13 @@ export default function SettingsApp({ initialTab, deploymentOnly = false, openRe
       content = [
         '@echo off',
         'setlocal',
-        `cd /d "%USERPROFILE%\\Downloads"`,
+        `cd /d "%~dp0"`,
+        `if exist local-relay.js del /f /q local-relay.js`,
         `echo Downloading latest local-relay.js...`,
-        `curl -fsSL "${scriptUrl}" -o local-relay.js`,
+        `curl -fsSL -H "Cache-Control: no-cache" "${scriptUrl}" -o local-relay.js`,
         `echo Running: ${cmd}`,
         cmd,
+        `if exist local-relay.js del /f /q local-relay.js`,
         'echo.',
         'echo Done! Press any key to close...',
         'pause > nul',
@@ -1316,9 +1319,11 @@ export default function SettingsApp({ initialTab, deploymentOnly = false, openRe
       const lines = [
         '#!/bin/bash',
         'set -e',
-        'cd ~/Downloads',
+        'cd "$(dirname "$0")"',
         `echo "Downloading latest local-relay.js..."`,
-        `curl -fsSL "${scriptUrl}" -o local-relay.js`,
+        // Remove old file first to guarantee we never run a stale copy if curl fails
+        'rm -f local-relay.js',
+        `curl -fsSL -H 'Cache-Control: no-cache' "${scriptUrl}" -o local-relay.js`,
         `echo "Running: ${cmd}"`,
         cmd,
         'echo ""',
@@ -1346,13 +1351,14 @@ export default function SettingsApp({ initialTab, deploymentOnly = false, openRe
   // Self-contained one-liner for macOS/Linux (curl download + node run in one paste)
   const getRelayOneLiner = (mode) => {
     const server = window.location.origin;
-    const scriptUrl = `${server}/local-relay.js`;
-    const targetPath = '~/Downloads/local-relay.js';
+    // Cache-busting: append timestamp so the one-liner always fetches the latest version
+    const targetPath = './local-relay.js';
+    const scriptUrl = `${server}/local-relay.js?v=${Date.now()}`;
     if (mode === 'uninstall') {
-      return `curl -fsSL "${scriptUrl}" -o ${targetPath} && node ${targetPath} --uninstall`;
+      return `rm -f ${targetPath} && curl -fsSL -H 'Cache-Control: no-cache' "${scriptUrl}" -o ${targetPath} && node ${targetPath} --uninstall && rm -f ${targetPath}`;
     }
     if (!relayToken) return '⚠ Token not yet generated — click Generate Token first';
-    return `curl -fsSL "${scriptUrl}" -o ${targetPath} && node ${targetPath} --install --server ${quotePosixArg(server)} --token ${quotePosixArg(relayToken)}`;
+    return `rm -f ${targetPath} && curl -fsSL -H 'Cache-Control: no-cache' "${scriptUrl}" -o ${targetPath} && node ${targetPath} --install --server ${quotePosixArg(server)} --token ${quotePosixArg(relayToken)} && rm -f ${targetPath}`;
   };
 
   const setVaultPreset = (uri) => {

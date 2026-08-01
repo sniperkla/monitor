@@ -216,6 +216,8 @@ export default function TerminalView({ connectionId, connectionName, host, color
   const { t, i18n } = useTranslation();
   const terminalRef = useRef(null);
   const termInstanceRef = useRef(null);
+  const isInitializingRef = useRef(false); // Prevents concurrent initTerminal calls during async boot
+  const hasEmittedConnectedBannerRef = useRef(false); // Prevents duplicate success banner / SIGWINCH double-prompt
   const socketRef = useRef(null);
   const rtcPeerRef = useRef(null);
 
@@ -1269,7 +1271,10 @@ logstash:
       await import('@xterm/xterm/css/xterm.css');
     }
 
-    if (!terminalRef.current || termInstanceRef.current) return;
+    // Guard: abort if already initialized or another initTerminal call is in progress
+    if (!terminalRef.current || termInstanceRef.current || isInitializingRef.current) return;
+    isInitializingRef.current = true;
+    hasEmittedConnectedBannerRef.current = false;
 
     const fitAddon = new FitAddon();
     const webLinksAddon = new WebLinksAddon();
@@ -1324,6 +1329,7 @@ logstash:
     } catch (e) {}
 
     termInstanceRef.current = term;
+    isInitializingRef.current = false; // Guard can be released — termInstanceRef is now the lock
 
     const stripAnsi = (s) => String(s || '')
       .replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '')
@@ -1453,7 +1459,8 @@ logstash:
       idleTimedOutRef.current = false;
       setShowReconnect(false);
 
-      if (reconnectNonceRef.current === 0) {
+      if (reconnectNonceRef.current === 0 && !hasEmittedConnectedBannerRef.current) {
+        hasEmittedConnectedBannerRef.current = true;
         // First-time connection — show success message
         term.writeln(`\x1b[1;32m✓ ${t('terminal.connectedSuccess')}\x1b[0m\n`);
         appendOutput(`✓ ${t('terminal.connectedSuccess')}\n`);
@@ -6614,12 +6621,15 @@ If this is a deployment task, switch task mode to 'deploy' instead of 'code'.`
   };
 
   // Auto-reconnect when vault unlocks (dbUri goes from empty → populated)
+  // Only trigger if the terminal hasn't started initializing yet — the useCallback
+  // dep change on vaultStatus already causes initTerminal to re-run via the main useEffect.
   useEffect(() => {
     const newUri = appState.dbConfig?.uri || '';
     const prevUri = termDbUriRef.current;
     termDbUriRef.current = newUri;
-    if (newUri && !prevUri && (termStatusRef.current === 'error' || termStatusRef.current === 'connecting')) {
-      console.log('🔓 Vault unlocked — retrying SSH terminal connection');
+    if (newUri && !prevUri && !termInstanceRef.current && !isInitializingRef.current &&
+        (termStatusRef.current === 'error')) {
+      console.log('🔓 Vault unlocked — retrying SSH terminal connection (error state)');
       setReconnectNonce(n => n + 1);
     }
   }, [appState.dbConfig?.uri]);
@@ -6641,6 +6651,7 @@ If this is a deployment task, switch task mode to 'deploy' instead of 'code'.`
         termInstanceRef.current.dispose();
         termInstanceRef.current = null;
       }
+      isInitializingRef.current = false; // Reset so next reconnect can proceed
     };
   }, [initTerminal, reconnectNonce]);
 

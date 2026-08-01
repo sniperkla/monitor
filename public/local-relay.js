@@ -23,11 +23,25 @@ const http = require('http');
 const net  = require('net');
 const { spawnSync, exec } = require('child_process');
 
+const PLATFORM = os.platform();
+const INSTALL_DIR = PLATFORM === 'win32'
+  ? path.join(process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming'), 'SSH Monitor Relay')
+  : path.join(os.homedir(), '.ssh-monitor-relay');
+const searchPaths = [__dirname, INSTALL_DIR, path.join(INSTALL_DIR, 'node_modules'), ...module.paths];
+
+function tryRequire(moduleName) {
+  try { return require(moduleName); } catch (_) {}
+  try { return require(path.join(INSTALL_DIR, 'node_modules', moduleName)); } catch (_) {}
+  for (const p of searchPaths) {
+    try { return require(require.resolve(moduleName, { paths: [p] })); } catch (_) {}
+  }
+  throw new Error(`Module ${moduleName} not found`);
+}
+
 // -- Try to load ssh2 (optional dependency) --
-// Resolve from script's own directory first (handles tmux/installed-service cwd mismatch)
 let ssh2;
 try {
-  ssh2 = require(require.resolve('ssh2', { paths: [__dirname, ...module.paths] }));
+  ssh2 = tryRequire('ssh2');
   console.log('✅ ssh2 loaded — SSH/SFTP will run locally');
 } catch {
   console.log('ℹ️  ssh2 not found — install with: npm install ssh2');
@@ -37,7 +51,7 @@ try {
 // -- Try to load node-datachannel (WebRTC, optional) --
 let ndc = null;
 try {
-  ndc = require(require.resolve('node-datachannel', { paths: [__dirname, ...module.paths] }));
+  ndc = tryRequire('node-datachannel');
   ndc.initLogger('Error');
   console.log('✅ node-datachannel loaded — WebRTC P2P enabled');
 } catch {
@@ -56,7 +70,7 @@ const activeRtcPeers   = new Map();
 // -- Try to load ws --
 let WS;
 try {
-  WS = require(require.resolve('ws', { paths: [__dirname, ...module.paths] }));
+  WS = tryRequire('ws');
 } catch {
   try {
     WS = globalThis.WebSocket;
@@ -96,12 +110,8 @@ const RELAY_NAME = args.name || savedConfig.name || os.hostname();
 // -- Install/uninstall handling (unchanged from original) --
 const SVC_ID = 'com.ssh-monitor.relay';
 const SVC_NAME = 'SSH Monitor Local Relay';
-const PLATFORM = os.platform();
 const NODE_BIN = process.execPath;
 const SCRIPT = path.resolve(__filename);
-const INSTALL_DIR = PLATFORM === 'win32'
-  ? path.join(process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming'), 'SSH Monitor Relay')
-  : path.join(os.homedir(), '.ssh-monitor-relay');
 const INSTALLED_SCRIPT = path.join(INSTALL_DIR, 'local-relay.js');
 
 if (args.install) {
@@ -112,6 +122,14 @@ if (args.install) {
   else if (PLATFORM === 'linux') installLinux();
   else if (PLATFORM === 'win32') installWindows();
   console.log('✅ Relay agent installed as service');
+
+  // Self-cleanup: remove temporary installer script if running outside INSTALL_DIR
+  try {
+    if (path.resolve(SCRIPT) !== path.resolve(INSTALLED_SCRIPT) && fs.existsSync(SCRIPT)) {
+      fs.unlinkSync(SCRIPT);
+    }
+  } catch (_) {}
+
   process.exit(0);
 }
 if (args.uninstall) {
@@ -120,6 +138,14 @@ if (args.uninstall) {
   else if (PLATFORM === 'win32') uninstallWindows();
   try { fs.unlinkSync(CONFIG_PATH); } catch {}
   console.log('✅ Uninstalled');
+
+  // Self-cleanup temporary script if running outside INSTALL_DIR
+  try {
+    if (path.resolve(SCRIPT) !== path.resolve(INSTALLED_SCRIPT) && fs.existsSync(SCRIPT)) {
+      fs.unlinkSync(SCRIPT);
+    }
+  } catch (_) {}
+
   process.exit(0);
 }
 

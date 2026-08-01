@@ -523,7 +523,7 @@ app.prepare().then(async () => {
     try {
       // Serve local-relay.js as a public static file — bypass Next.js/auth entirely
       // so unauthenticated curl downloads work (e.g. one-liner installer)
-      if (req.url === '/local-relay.js') {
+      if (req.url === '/local-relay.js' || req.url.startsWith('/local-relay.js?')) {
         const minifiedPath = path.join(__dirname, 'public', 'local-relay.min.js');
         const sourcePath   = path.join(__dirname, 'public', 'local-relay.js');
         const scriptPath   = fs.existsSync(minifiedPath) ? minifiedPath : sourcePath;
@@ -3635,7 +3635,6 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
 
           // Tell the browser the relay is ready to begin WebRTC signaling
           // (browser will create RTCPeerConnection, send offer, and on ICE timeout fall back to ws relay)
-          socket.emit('ssh:connected');
           socket.emit('relay:rtc:ready', { connId: relayConnId });
 
         }

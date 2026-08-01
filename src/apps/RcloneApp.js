@@ -11,7 +11,6 @@ import { useVault } from '@/context/VaultContext';
 import { useApp } from '@/context/AppContext';
 import MasterPasswordModal from '@/components/MasterPasswordModal';
 import MacOSModalWindow from '@/components/MacOSModalWindow';
-import { getLocalConnections } from '@/utils/localConnections';
 
 // 🎨 Custom Styled Popover Select Component
 function CustomSelect({ value, onChange, options = [], className = '', textClass = '' }) {
@@ -567,7 +566,8 @@ export default function RcloneApp() {
   const { vaultStatus } = useVault();
   const { state: appState, apiFetch } = useApp();
   
-  const [connections, setConnections] = useState([]);
+  // Read connections directly from AppContext so all apps share the same source of truth
+  const connections = (appState?.connections || []).filter(c => c.type !== 'database');
   const [selectedConnId, setSelectedConnId] = useState('');
   const [activeTab, setActiveTab] = useState('setup'); // 'setup' | 'remotes' | 'backup' | 'browser'
   const [loading, setLoading] = useState(false);
@@ -662,36 +662,13 @@ export default function RcloneApp() {
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
-  // Load SSH connections from app state, local encrypted storage, or API
+  // Auto-select first connection whenever the connections list changes and none is selected yet
   useEffect(() => {
-    const loadConnections = async () => {
-      let list = appState?.connections || [];
-      if (!list || list.length === 0) {
-        try {
-          const local = await getLocalConnections();
-          if (Array.isArray(local) && local.length > 0) list = local;
-        } catch (_) {}
-      }
-      if (!list || list.length === 0) {
-        try {
-          const res = await apiFetch('/api/connections');
-          const data = await res.json();
-          if (data?.success && Array.isArray(data.connections)) list = data.connections;
-        } catch (_) {}
-      }
-
-      // Filter SSH / Server connections (exclude database-only connections)
-      const sshOnly = (list || []).filter(c => c.type !== 'database');
-      setConnections(sshOnly);
-
-      if (sshOnly.length > 0 && !selectedConnId) {
-        const firstId = sshOnly[0].id || sshOnly[0]._id;
-        setSelectedConnId(firstId);
-      }
-    };
-
-    loadConnections();
-  }, [appState?.connections, selectedConnId, apiFetch]);
+    if (connections.length > 0 && !selectedConnId) {
+      const firstId = connections[0].id || connections[0]._id;
+      setSelectedConnId(firstId);
+    }
+  }, [connections, selectedConnId]);
 
   // Fetch Rclone status whenever selected connection changes & clear stale data
   useEffect(() => {
