@@ -3270,45 +3270,44 @@ export default function SettingsApp({ initialTab, deploymentOnly = false, openRe
                               <button
                                 type="button"
                                 onClick={() => {
-                                  const current = deployConfig.deployCommand || '';
-                                  // Extract project or container name if possible
-                                  let nameHint = (deployConfig.name || 'myapp').toLowerCase().replace(/[^a-z0-9_-]/g, '');
-                                  if (!nameHint) nameHint = 'myapp';
+                                  const current = (deployConfig.deployCommand || '').trim();
+                                  
+                                  // Parse container name from user's current command
+                                  const nameMatch = current.match(/--name\s+([a-zA-Z0-9._-]+)/);
+                                  let containerName = nameMatch ? nameMatch[1] : (deployConfig.name || 'myapp').toLowerCase().replace(/[^a-z0-9_-]/g, '');
+                                  if (!containerName) containerName = 'myapp';
 
-                                  const smartSwarmScript = `#!/bin/bash
+                                  const serviceName = `${containerName}_service`;
+
+                                  // Parse image name from user's current command
+                                  const imageMatch = current.match(/-t\s+([a-zA-Z0-9.@/:-]+)/) || current.match(/--image\s+([a-zA-Z0-9.@/:-]+)/);
+                                  let imageName = imageMatch ? imageMatch[1] : `${containerName}:latest`;
+
+                                  const convertedScript = `#!/bin/bash
 set -e
 
-# 🐝 Swarm-Aware Zero-Downtime Deployment
-# Auto-detects if Swarm Service exists; falls back to standard deploy if not.
-SERVICE_NAME="${nameHint}_service"
-IMAGE_NAME="${nameHint}:latest"
-
-git pull origin ${deployConfig.branch || 'main'}
-
-echo "🔨 Building Docker image..."
-docker build -t $IMAGE_NAME .
+# 🐝 Swarm-Aware Zero-Downtime Deployment (Wrapped from your existing command)
+SERVICE_NAME="${serviceName}"
+IMAGE_NAME="${imageName}"
 
 if docker service inspect $SERVICE_NAME >/dev/null 2>&1; then
-  echo "🐝 Swarm Service detected! Triggering Zero-Downtime Rolling Update..."
+  echo "🐝 Docker Swarm detected! Updating $SERVICE_NAME with zero-downtime..."
+  docker build -t $IMAGE_NAME . 2>/dev/null || true
   docker service update --image $IMAGE_NAME --update-order start-first --update-delay 5s $SERVICE_NAME
 else
-  echo "📦 Swarm Service not found. Running container deployment..."
-  docker stop ${nameHint} 2>/dev/null || true
-  docker rm ${nameHint} 2>/dev/null || true
-  docker run -d --name ${nameHint} $IMAGE_NAME
+  echo "📦 Swarm Service not found. Running your original deployment command..."
+${current ? current.split('\n').map(l => '  ' + l).join('\n') : `  docker run -d --name ${containerName} ${imageName}`}
 fi
-
-echo "🧹 Cleaning up dangling images..."
 docker image prune -f
 `;
-                                  setDeployConfig(p => ({ ...p, deployCommand: smartSwarmScript }));
-                                  addNotification({ title: '🐝 Swarm Auto-Detect Script Set', message: 'Script converted to Swarm-aware zero-downtime deployment format.', type: 'success' });
+                                  setDeployConfig(p => ({ ...p, deployCommand: convertedScript }));
+                                  addNotification({ title: '🐝 Converted Current Command', message: 'Wrapped your current deployment script with Swarm zero-downtime detection.', type: 'success' });
                                 }}
                                 className="px-2.5 py-1 bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/30 hover:border-emerald-400/50 text-emerald-300 rounded-lg text-[10px] font-bold transition-all flex items-center gap-1 cursor-pointer"
-                                title="Converts deploy script to auto-detect Docker Swarm for zero-downtime updates"
+                                title="Wraps your existing deploy command with Docker Swarm zero-downtime auto-detection"
                               >
                                 <Zap size={11} />
-                                ⚡ Smart Swarm Auto-Detect
+                                ⚡ Convert Current Command to Swarm
                               </button>
                               <button
                                 type="button"
