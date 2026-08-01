@@ -244,6 +244,11 @@ function connect() {
         const tcpHost = msg.host || 'localhost';
         const tcpPort = Number(msg.port) || 22;
         const tcp = net.connect(tcpPort, tcpHost);
+        tcp.on('connect', () => {
+          if (ws.readyState === 1) {
+            ws.send(JSON.stringify({ type: 'connected', connId }));
+          }
+        });
         tcp.on('data', (chunk) => {
           if (ws.readyState !== 1) return;
           ws.send(JSON.stringify({ type: 'data', connId, data: chunk.toString('base64') }), (err) => {

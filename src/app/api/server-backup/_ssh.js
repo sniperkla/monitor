@@ -38,34 +38,88 @@ export async function resolveSshConfig(baseConfig, options = {}) {
     });
     duplex.isCustomRelayStream = true;
 
-    // Listen for data coming back from the relay agent for this specific connection
-    const messageHandler = (raw) => {
-      try {
-        const msg = JSON.parse(raw.toString());
-        if (msg.connId !== connId) return;
-        
-        if (msg.type === 'data') {
-          duplex.push(Buffer.from(msg.data, 'base64'));
-        } else if (msg.type === 'close') {
-          duplex.push(null); // End of stream
+    // Wait for the relay agent to confirm the TCP connection is open before returning duplex
+    await new Promise((resolve, reject) => {
+      let isResolved = false;
+
+      // 5-second fallback for older relay agents that don't send 'connected'
+      const fallbackTimer = setTimeout(() => {
+        if (!isResolved) {
+          isResolved = true;
           relay.ws.off('message', messageHandler);
+          relay.ws.on('message', dataHandler);
+          resolve();
         }
-      } catch (err) {}
-    };
-    relay.ws.on('message', messageHandler);
-    duplex.on('close', () => {
-      if (relay.ws.readyState === 1) relay.ws.send(JSON.stringify({ type: 'close', connId }));
-      relay.ws.off('message', messageHandler);
+      }, 600);
+
+      const connTimeout = setTimeout(() => {
+        if (!isResolved) {
+          isResolved = true;
+          clearTimeout(fallbackTimer);
+          relay.ws.off('message', messageHandler);
+          reject(new Error(`Local Relay Agent failed to connect to ${sshConfig.host}:${sshConfig.port || 22} (timeout)`));
+        }
+      }, 10000);
+
+      const messageHandler = (raw) => {
+        try {
+          const msg = JSON.parse(raw.toString());
+          if (msg.connId !== connId) return;
+
+          if (msg.type === 'connected') {
+            if (!isResolved) {
+              isResolved = true;
+              clearTimeout(fallbackTimer);
+              clearTimeout(connTimeout);
+              relay.ws.off('message', messageHandler);
+              relay.ws.on('message', dataHandler);
+              resolve();
+            }
+          } else if (msg.type === 'close') {
+            if (!isResolved) {
+              isResolved = true;
+              clearTimeout(fallbackTimer);
+              clearTimeout(connTimeout);
+              relay.ws.off('message', messageHandler);
+              reject(new Error(`Local Relay Agent failed to connect to ${sshConfig.host}:${sshConfig.port || 22} (connection closed)`));
+            }
+          }
+        } catch (err) {}
+      };
+
+      const dataHandler = (raw) => {
+        try {
+          const msg = JSON.parse(raw.toString());
+          if (msg.connId !== connId) return;
+
+          if (msg.type === 'data') {
+            duplex.push(Buffer.from(msg.data, 'base64'));
+          } else if (msg.type === 'close') {
+            duplex.push(null); // End of stream
+            relay.ws.off('message', dataHandler);
+          }
+        } catch (err) {}
+      };
+
+      relay.ws.on('message', messageHandler);
+
+      duplex.on('close', () => {
+        clearTimeout(fallbackTimer);
+        clearTimeout(connTimeout);
+        relay.ws.off('message', messageHandler);
+        relay.ws.off('message', dataHandler);
+        if (relay.ws.readyState === 1) relay.ws.send(JSON.stringify({ type: 'close', connId }));
+      });
+
+      if (relay.ws.readyState === 1) {
+        relay.ws.send(JSON.stringify({ type: 'open', connId, host: sshConfig.host, port: sshConfig.port || 22 }));
+      } else {
+        clearTimeout(fallbackTimer);
+        clearTimeout(connTimeout);
+        reject(new Error('Local Relay Agent WebSocket connection is not ready.'));
+      }
     });
 
-    // Tell the relay agent to open an outbound TCP connection to the actual SSH target.
-    // The relay agent (local-relay.js) runs on the user's local machine and will connect
-    // FROM there TO the target server's SSH port — so we send the real hostname/IP.
-    if (relay.ws.readyState === 1) {
-      relay.ws.send(JSON.stringify({ type: 'open', connId, host: sshConfig.host, port: sshConfig.port || 22 }));
-    }
-
-    // Set ssh2 client to use our custom socket stream instead of host/port
     sshConfig.sock = duplex;
   }
 
