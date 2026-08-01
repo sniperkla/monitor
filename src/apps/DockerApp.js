@@ -1878,6 +1878,9 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
                             ))}
                           </div>
                         )}
+                      </div>
+                    )}
+
                     {/* ── SWARM SERVICES TAB ── */}
                     {activeTab === 'swarm' && (
                       <div className="flex flex-col gap-5">
