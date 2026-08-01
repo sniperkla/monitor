@@ -2094,7 +2094,7 @@ function handleDockerCommand(ws, msg) {
       const port     = String(args[3] || '').replace(/[^0-9:]/g, '');
       if (!svcName || !image || isNaN(replicas) || replicas < 1)
         return ws.send(JSON.stringify({ type: 'docker:error', connId, error: 'Invalid service create parameters' }));
-      const portFlag = port ? `--publish published=${port.split(':')[0]},target=${port.split(':')[1] || port.split(':')[0]}` : '';
+      const portFlag = port ? `--publish ${port.includes(':') ? port : `${port}:${port}`}` : '';
       cmdSuffix = `service create --name ${svcName} --replicas ${replicas} ${portFlag} --update-order start-first --update-delay 5s ${image}`;
     } else if (action === 'swarm:update' && args.length >= 2) {
 

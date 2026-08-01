@@ -1473,8 +1473,23 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
                                             e.stopPropagation();
                                             let mappedPort = '';
                                             if (typeof c.ports === 'string') {
-                                              const match = c.ports.match(/(\d+)->(\d+)/);
-                                              if (match) mappedPort = `${match[1]}:${match[2]}`;
+                                              const arrowMatch = c.ports.match(/(\d+)->(\d+)/);
+                                              if (arrowMatch) {
+                                                mappedPort = `${arrowMatch[1]}:${arrowMatch[2]}`;
+                                              } else {
+                                                const singleMatch = c.ports.match(/(\d+)/);
+                                                if (singleMatch) mappedPort = `${singleMatch[1]}:${singleMatch[1]}`;
+                                              }
+                                            } else if (Array.isArray(c.ports) && c.ports.length > 0) {
+                                              const p = c.ports[0];
+                                              if (typeof p === 'object' && p !== null) {
+                                                const host = p.host_port || p.hostPort || p.PublicPort || p.container_port || p.PrivatePort;
+                                                const container = p.container_port || p.containerPort || p.PrivatePort || host;
+                                                if (host && container) mappedPort = `${host}:${container}`;
+                                              } else if (typeof p === 'string') {
+                                                const match = p.match(/(\d+)/);
+                                                if (match) mappedPort = `${match[1]}:${match[1]}`;
+                                              }
                                             }
                                             const cleanName = (c.name || 'app').replace(/^\//, '').replace(/[^a-zA-Z0-9._-]/g, '');
                                             setCreateServiceModal({
