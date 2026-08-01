@@ -1534,7 +1534,43 @@ function setupControlChannel(ws, connId, peer, dc) {
           return;
         }
         preparedSessions.delete(connId);
-        startSshP2P(connId, sshConfig, sendControl);
+
+        // If the WebSocket relay path already opened an SSH session (via ssh:prepare → handleSshConnect),
+        // reuse it — just upgrade the I/O to flow through the WebRTC DataChannel.
+        // Opening a second SSH connection would cause a duplicate MOTD/banner on the terminal.
+        const existingSession = sshSessions.get(connId);
+        if (existingSession?.stream) {
+          console.log(`♻️ [WebRTC][${connId}] Reusing existing WebSocket relay SSH session for P2P DataChannel`);
+
+          // Attach the WebRTC ssh DataChannel as the output target
+          const rtcPeer = activeRtcPeers.get(connId);
+          const sshDc = rtcPeer?._sshDc;
+          existingSession.rtcSshDc = sshDc || existingSession.rtcSshDc;
+
+          // Re-wire output: clear old WebSocket listeners, route SSH data → DataChannel
+          existingSession.stream.removeAllListeners('data');
+          if (existingSession.stream.stderr) existingSession.stream.stderr.removeAllListeners('data');
+
+          const writeToRtc = (data) => {
+            const session = sshSessions.get(connId);
+            const dc = session?.rtcSshDc;
+            if (dc && dc.isOpen()) {
+              try { dc.sendMessage(typeof data === 'string' ? data : data.toString('utf-8')); } catch {}
+            }
+          };
+          existingSession.stream.on('data', writeToRtc);
+          if (existingSession.stream.stderr) existingSession.stream.stderr.on('data', writeToRtc);
+
+          existingSession.stream.once('close', () => {
+            sendControl({ type: 'ssh:closed', connId });
+            cleanupSsh(connId);
+          });
+
+          sendControl({ type: 'ssh:connected', connId });
+        } else {
+          // No existing session — open a fresh P2P SSH connection
+          startSshP2P(connId, sshConfig, sendControl);
+        }
         break;
       }
       case 'ssh:resize': {
