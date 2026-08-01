@@ -14,7 +14,7 @@ function safeStringify(obj) {
 }
 import { 
   Palette, Image as ImageIcon, Monitor, Layout, Bell, Shield, Info, 
-  Database, CheckCircle, AlertCircle, RefreshCw, Zap, Wifi, WifiOff, Server,
+  Database, CheckCircle, AlertCircle, RefreshCw, Zap, Wifi, WifiOff, Server, Box, Package,
   Loader, Trash2, Lock, Unlock, Key, Mail, Code, Volume2, Sun, Moon, Cpu,
   Search, Terminal, Network, Download, Copy, X, CheckCheck, Sparkles,
   GitBranch, GitCommit, ChevronDown, Settings, Send, Music, ChevronRight, Globe, LogOut, Check,
