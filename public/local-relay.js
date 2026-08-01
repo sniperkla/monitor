@@ -2085,7 +2085,8 @@ function handleDockerCommand(ws, msg) {
     } else if (action === 'swarm:nodes') {
       cmdSuffix = `node ls --format "{{json .}}"`;
     } else if (action === 'swarm:init') {
-      cmdSuffix = `swarm init 2>&1 || exit 0`;
+      // Use sh -c so shell operators work; always exits 0 (already-in-swarm is OK)
+      return runRawCmd(`sh -c 'docker swarm init 2>&1; exit 0'`);
     } else if (action === 'swarm:update' && args.length >= 2) {
       const serviceName = String(args[0] || '').replace(/[^a-zA-Z0-9._-]/g, '');
       const image = String(args[1] || '').replace(/[^a-zA-Z0-9.@/:-]/g, '');

@@ -471,6 +471,21 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
           const parsed = lines.map(line => JSON.parse(line));
           setSwarmNodes(parsed);
         } catch (e) { setSwarmNodes([]); }
+      } else if (action === 'swarm:init') {
+        // After init (or already-init), refresh swarm services + nodes
+        setIsLoading(false);
+        setTimeout(() => {
+          if (socketRef.current) {
+            socketRef.current.emit('docker:command', { action: 'swarm:services' });
+            socketRef.current.emit('docker:command', { action: 'swarm:nodes' });
+          }
+        }, 800);
+        const alreadyInit = output.toLowerCase().includes('already part of a swarm');
+        addNotification({
+          title: alreadyInit ? '🐝 Swarm Already Active' : '🐝 Swarm Initialized!',
+          message: alreadyInit ? 'This node is already running in Swarm mode.' : 'Docker Swarm mode is now active. You can create services.',
+          type: 'success'
+        });
       } else if (action === 'search') {
         setIsSearching(false);
         try {
