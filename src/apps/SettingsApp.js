@@ -3766,52 +3766,97 @@ docker image prune -f
                         )}
                       </div>
 
-                      <button
-                        type="button"
-                        onClick={handleAiAnalyze}
-                        disabled={aiAnalyzing || deployLoading}
-                        className="w-full py-2.5 bg-gradient-to-r from-indigo-500 to-violet-600 hover:from-indigo-600 hover:to-violet-700 disabled:opacity-50 text-white rounded-xl text-xs font-bold transition-all shadow-md flex items-center justify-center gap-2 cursor-pointer"
-                      >
-                        {aiAnalyzing ? <Loader size={12} className="animate-spin" /> : <Sparkles size={12} />}
-                        {aiAnalyzing ? t('deploy.aiAnalyzing', 'Scanning & Analyzing...') : t('deploy.aiAnalyzeBtn', 'Analyze with AI')}
-                      </button>
+                      {(() => {
+                        const isMissingKey = deployConfig.aiModel === 'manual' && !deployConfig.aiApiKey?.trim();
+                        const isBtnDisabled = isMissingKey || aiAnalyzing || deployLoading;
 
-                      {deployConfig.aiProfile && (
-                        <div className="p-4 rounded-xl bg-slate-900/60 border border-[var(--border-color)] space-y-3 animate-in fade-in duration-200">
-                          <div className="flex items-center justify-between border-b border-slate-800 pb-2">
-                            <span className="text-[10px] uppercase font-extrabold tracking-wider text-indigo-400">{t('deploy.aiRecommendation', 'AI Recommendation')}</span>
-                            <span className="px-2 py-0.5 rounded bg-indigo-500/10 text-indigo-300 text-[9px] font-bold">
-                              {deployConfig.aiProfile.projectType}
-                            </span>
-                          </div>
+                        return (
+                          <>
+                            <button
+                              type="button"
+                              onClick={handleAiAnalyze}
+                              disabled={isBtnDisabled}
+                              title={isMissingKey ? 'AI API Key is required for manual model mode' : ''}
+                              className={`w-full py-2.5 text-white rounded-xl text-xs font-bold transition-all shadow-md flex items-center justify-center gap-2 ${
+                                isBtnDisabled 
+                                  ? 'bg-slate-800 border border-slate-700 text-slate-500 cursor-not-allowed opacity-60' 
+                                  : 'bg-gradient-to-r from-indigo-500 to-violet-600 hover:from-indigo-600 hover:to-violet-700 cursor-pointer'
+                              }`}
+                            >
+                              {aiAnalyzing ? <Loader size={12} className="animate-spin" /> : <Sparkles size={12} />}
+                              {aiAnalyzing ? t('deploy.aiAnalyzing', 'Scanning & Analyzing...') : isMissingKey ? 'AI API Key Required' : t('deploy.aiAnalyzeBtn', 'Analyze with AI')}
+                            </button>
 
-                          {deployConfig.aiProfile.technologies && deployConfig.aiProfile.technologies.length > 0 && (
-                            <div className="flex flex-wrap gap-1">
-                              {deployConfig.aiProfile.technologies.map(t => (
-                                <span key={t} className="px-1.5 py-0.5 rounded bg-slate-800 border border-slate-700 text-[9px] text-slate-300 font-medium">
-                                  {t}
-                                </span>
-                              ))}
-                            </div>
-                          )}
+                            {deployConfig.aiProfile && (
+                              <div className="p-4 rounded-xl bg-slate-900/60 border border-[var(--border-color)] space-y-3 animate-in fade-in duration-200">
+                                <div className="flex items-center justify-between border-b border-slate-800 pb-2">
+                                  <span className="text-[10px] uppercase font-extrabold tracking-wider text-indigo-400">{t('deploy.aiRecommendation', 'AI Recommendation')}</span>
+                                  <span className="px-2 py-0.5 rounded bg-indigo-500/10 text-indigo-300 text-[9px] font-bold">
+                                    {deployConfig.aiProfile.projectType}
+                                  </span>
+                                </div>
 
-                          <p className="text-[10px] text-slate-400 leading-normal italic">
-                            &quot;{deployConfig.aiProfile.summary}&quot;
-                          </p>
+                                {deployConfig.aiProfile.technologies && deployConfig.aiProfile.technologies.length > 0 && (
+                                  <div className="flex flex-wrap gap-1">
+                                    {deployConfig.aiProfile.technologies.map(t => (
+                                      <span key={t} className="px-1.5 py-0.5 rounded bg-slate-800 border border-slate-700 text-[9px] text-slate-300 font-medium">
+                                        {t}
+                                      </span>
+                                    ))}
+                                  </div>
+                                )}
 
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setDeployConfig(p => ({ ...p, deployCommand: p.aiProfile.deployCommand }));
-                              addNotification({ title: t('deploy.aiRecommendedApplied', 'Recommended Applied'), message: t('deploy.aiRecommendedAppliedMsg', 'Deployment command set to AI suggestion.'), type: 'info' });
-                            }}
-                            className="w-full py-1.5 bg-slate-800 hover:bg-slate-750 border border-slate-700 hover:border-slate-600 text-slate-200 rounded-lg text-[10px] font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer"
-                          >
-                            <Code size={11} />
-                            {t('deploy.aiApplyCommand', 'Apply AI Command')}
-                          </button>
-                        </div>
-                      )}
+                                <p className="text-[10px] text-slate-400 leading-normal italic">
+                                  &quot;{deployConfig.aiProfile.summary}&quot;
+                                </p>
+
+                                <div className="grid grid-cols-2 gap-2">
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setDeployConfig(p => ({ ...p, deployCommand: p.aiProfile.deployCommand }));
+                                      addNotification({ title: t('deploy.aiRecommendedApplied', 'Recommended Applied'), message: t('deploy.aiRecommendedAppliedMsg', 'Deployment command set to AI suggestion.'), type: 'info' });
+                                    }}
+                                    className="py-1.5 bg-slate-800 hover:bg-slate-750 border border-slate-700 text-slate-200 rounded-lg text-[10px] font-bold transition-all flex items-center justify-center gap-1 cursor-pointer"
+                                  >
+                                    <Code size={11} />
+                                    Standard AI Script
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      const nameHint = (deployConfig.name || 'myapp').toLowerCase().replace(/[^a-z0-9_-]/g, '');
+                                      const swarmScript = `#!/bin/bash
+set -e
+
+# 🐝 AI Swarm Zero-Downtime Deployment
+SERVICE_NAME="${nameHint}_service"
+IMAGE_NAME="${nameHint}:latest"
+
+if docker service inspect $SERVICE_NAME >/dev/null 2>&1; then
+  echo "🐝 Docker Swarm detected! Updating $SERVICE_NAME..."
+  docker build -t $IMAGE_NAME .
+  docker service update --image $IMAGE_NAME --update-order start-first --update-delay 5s $SERVICE_NAME
+else
+  echo "📦 Running standard AI deployment script..."
+  ${deployConfig.aiProfile.deployCommand}
+fi
+docker image prune -f
+`;
+                                      setDeployConfig(p => ({ ...p, deployCommand: swarmScript }));
+                                      addNotification({ title: '🐝 Swarm AI Command Applied', message: 'Swarm zero-downtime deployment script applied.', type: 'success' });
+                                    }}
+                                    className="py-1.5 bg-purple-500/20 hover:bg-purple-500/30 border border-purple-500/40 text-purple-300 rounded-lg text-[10px] font-bold transition-all flex items-center justify-center gap-1 cursor-pointer"
+                                  >
+                                    <Zap size={11} />
+                                    Apply Swarm AI
+                                  </button>
+                                </div>
+                              </div>
+                            )}
+                          </>
+                        );
+                      })()}
 
                       {/* AI History Logs */}
                       {deployConfig.aiLogs && deployConfig.aiLogs.length > 0 && (
