@@ -10,6 +10,7 @@ import { decrypt } from '@/utils/encryption';
 
 // Supported model options
 const FALLBACK_MODEL = 'llama-3.3-70b-versatile';
+const GROQ_ENDPOINT = 'https://api.groq.com/openai/v1/chat/completions';
 
 export async function POST(request) {
   try {
@@ -117,6 +118,7 @@ export async function POST(request) {
     const projectSetting = await SystemSetting.findOne({ key: dbKey });
     const projectAiPrefs = projectSetting?.value || {};
 
+    // Start with global Groq key as fallback
     let apiKey = process.env.GROQ_API_KEY || '';
     if (keysSetting?.value?.keys && Array.isArray(keysSetting.value.keys) && keysSetting.value.keys.length > 0) {
       const idx = keysSetting.value.currentIndex || 0;
@@ -129,14 +131,18 @@ export async function POST(request) {
     const effectiveAiEndpoint = (aiEndpointBody && aiEndpointBody.trim()) ? aiEndpointBody.trim() : (projectAiPrefs.aiEndpoint || '');
     const effectiveAiApiKey = (aiApiKeyBody && aiApiKeyBody.trim()) ? aiApiKeyBody.trim() : (projectAiPrefs.aiApiKey || '');
 
-    let aiEndpoint = 'https://api.groq.com/openai/v1/chat/completions';
+    let aiEndpoint = GROQ_ENDPOINT;
     let modelName = configSetting?.value?.model || FALLBACK_MODEL;
+    // Track whether this is a custom endpoint (affects response_format support)
+    let isCustomEndpoint = false;
 
     if (effectiveAiModel === 'manual' || (effectiveAiEndpoint && effectiveAiApiKey)) {
       // Custom endpoint mode: use whatever endpoint and key the user provided
       aiEndpoint = effectiveAiEndpoint || 'https://api.openai.com/v1/chat/completions';
       modelName = effectiveAiCustomModel || 'gpt-3.5-turbo';
       apiKey = effectiveAiApiKey || apiKey;
+      // Only Groq and OpenAI official support response_format: json_object reliably
+      isCustomEndpoint = !aiEndpoint.includes('api.groq.com') && !aiEndpoint.includes('api.openai.com');
 
       if (!apiKey) {
         return NextResponse.json({ success: false, error: 'Custom AI API Key is required. Enter your API key in the Auto Deploy → AI Settings section.' }, { status: 400 });
@@ -167,7 +173,7 @@ export async function POST(request) {
       SERVICE_NAME="projectname_service"
       IMAGE_NAME="projectname:latest"
       if docker service inspect $SERVICE_NAME >/dev/null 2>&1; then
-        echo "🐝 Swarm service detected! Triggering zero-downtime rolling update..."
+        echo "Swarm service detected! Triggering zero-downtime rolling update..."
         docker build -t $IMAGE_NAME .
         docker service update --image $IMAGE_NAME --update-order start-first --update-delay 5s $SERVICE_NAME
       else
@@ -197,7 +203,18 @@ You MUST respond with a valid JSON object ONLY. Do not wrap the JSON in markdown
 
     const userPrompt = `Here is the scanned directory listing and config files content for the project path "${resolvedPath}":\n\n${filesListing}`;
 
-    // Query Groq API
+    // Build request body — skip response_format for custom endpoints that may not support it
+    const requestBody = {
+      model: aiConfig.model,
+      temperature: aiConfig.temperature,
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userPrompt }
+      ],
+      ...(!isCustomEndpoint ? { response_format: { type: 'json_object' } } : {})
+    };
+
+    // Call the AI endpoint
     let parsedResult = null;
     try {
       const response = await fetch(aiEndpoint, {
@@ -206,30 +223,38 @@ You MUST respond with a valid JSON object ONLY. Do not wrap the JSON in markdown
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${apiKey}`
         },
-        body: JSON.stringify({
-          model: aiConfig.model,
-          temperature: aiConfig.temperature,
-          messages: [
-            { role: 'system', content: systemPrompt },
-            { role: 'user', content: userPrompt }
-          ],
-          response_format: { type: 'json_object' }
-        })
+        body: JSON.stringify(requestBody)
       });
 
       if (!response.ok) {
         const errorText = await response.text();
-        throw new Error(`Groq API returned ${response.status}: ${errorText}`);
+        throw new Error(`AI API returned ${response.status}: ${errorText}`);
       }
 
       const resJson = await response.json();
       const content = resJson.choices?.[0]?.message?.content;
-      parsedResult = JSON.parse(content);
+
+      if (!content) {
+        throw new Error('AI returned an empty response. Check your model name and endpoint.');
+      }
+
+      // Try to parse JSON directly, or extract from markdown code blocks
+      try {
+        parsedResult = JSON.parse(content);
+      } catch (_) {
+        // Some endpoints wrap JSON in markdown ```json blocks — strip them
+        const jsonMatch = content.match(/```(?:json)?\s*([\s\S]*?)\s*```/) || content.match(/(\{[\s\S]*\})/);
+        if (jsonMatch) {
+          parsedResult = JSON.parse(jsonMatch[1]);
+        } else {
+          throw new Error(`Could not parse JSON from AI response: ${content.slice(0, 200)}`);
+        }
+      }
     } catch (aiErr) {
-      console.error('Groq AI Call failed:', aiErr.message);
+      console.error('AI Call failed:', aiErr.message);
       return NextResponse.json({ 
         success: false, 
-        error: `AI analysis failed: ${aiErr.message}. Make sure your Groq API key is valid.` 
+        error: `AI analysis failed: ${aiErr.message}`
       }, { status: 500 });
     }
 
