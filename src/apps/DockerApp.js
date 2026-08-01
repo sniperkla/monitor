@@ -193,6 +193,7 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
   const [swarmNodes, setSwarmNodes] = useState([]);
   const [scaleModal, setScaleModal] = useState({ isOpen: false, serviceName: '', count: 1 });
   const [swarmUpdateModal, setSwarmUpdateModal] = useState({ isOpen: false, serviceName: '', currentImage: '', newImage: '' });
+  const [createServiceModal, setCreateServiceModal] = useState({ isOpen: false, name: '', image: '', replicas: 2, port: '' });
   const [searchResults, setSearchResults] = useState([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [pullingTasks, setPullingTasks] = useState({});
@@ -484,6 +485,18 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
         addNotification({
           title: alreadyInit ? '🐝 Swarm Already Active' : '🐝 Swarm Initialized!',
           message: alreadyInit ? 'This node is already running in Swarm mode.' : 'Docker Swarm mode is now active. You can create services.',
+          type: 'success'
+        });
+      } else if (action === 'swarm:create') {
+        setIsLoading(false);
+        setTimeout(() => {
+          if (socketRef.current) {
+            socketRef.current.emit('docker:command', { action: 'swarm:services' });
+          }
+        }, 1000);
+        addNotification({
+          title: '🐝 Service Created!',
+          message: `Swarm service is now running with rolling update enabled.`,
           type: 'success'
         });
       } else if (action === 'search') {
@@ -1927,6 +1940,13 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
                                 <Zap size={14} />
                                 Initialize Docker Swarm
                               </button>
+                              <button
+                                onClick={() => setCreateServiceModal({ isOpen: true, name: '', image: '', replicas: 2, port: '' })}
+                                className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold transition-all shadow-lg flex items-center gap-1.5 cursor-pointer"
+                              >
+                                <Plus size={14} />
+                                Create Service
+                              </button>
                             </div>
                           </div>
                         ) : (
@@ -1935,6 +1955,12 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
                               <Zap size={14} />
                               ACTIVE SWARM SERVICES ({swarmServices.length})
                             </h3>
+                            <button
+                              onClick={() => setCreateServiceModal({ isOpen: true, name: '', image: '', replicas: 2, port: '' })}
+                              className="ml-auto px-3 py-1.5 bg-purple-500/20 hover:bg-purple-500/30 border border-purple-500/30 text-purple-300 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer"
+                            >
+                              <Plus size={12} /> New Service
+                            </button>
                             <div className="grid grid-cols-1 xl:grid-cols-2 gap-3">
                               {swarmServices.map((svc, idx) => {
                                 const svcName = svc.Name || svc.name || 'unnamed-service';
@@ -2686,6 +2712,101 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
                   className="px-4 py-2 rounded-xl text-xs font-bold bg-purple-500 hover:bg-purple-600 text-white transition-all shadow-lg cursor-pointer"
                 >
                   Apply Scale
+                </button>
+              </div>
+            </div>
+          </MacOSModalWindow>,
+          document.body
+        )}
+
+        {/* Create Swarm Service Modal */}
+        {createServiceModal.isOpen && createPortal(
+          <MacOSModalWindow
+            isOpen={createServiceModal.isOpen}
+            onClose={() => setCreateServiceModal({ isOpen: false, name: '', image: '', replicas: 2, port: '' })}
+            title="Create Swarm Service"
+            icon={Zap}
+            defaultWidth={480}
+            defaultHeight={460}
+            enableMaximize={false}
+            enableMinimize={false}
+          >
+            <div className="p-6 space-y-4">
+              <div className="p-3 bg-purple-500/10 border border-purple-500/20 rounded-xl text-xs text-purple-300">
+                🐝 <strong>Zero-Downtime Ready</strong> — service is created with <code className="text-white">--update-order start-first</code> and <code className="text-white">--update-delay 5s</code> baked in.
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-[10px] font-bold uppercase text-[var(--text-muted)] tracking-wider block mb-1">Service Name</label>
+                  <input
+                    type="text"
+                    value={createServiceModal.name}
+                    onChange={(e) => setCreateServiceModal(prev => ({ ...prev, name: e.target.value.replace(/[^a-zA-Z0-9._-]/g, '') }))}
+                    placeholder="e.g. myapp_service"
+                    className="w-full bg-slate-950 border border-[var(--border-color)] rounded-xl p-2.5 text-xs font-mono focus:outline-none focus:border-purple-500/50"
+                  />
+                </div>
+                <div>
+                  <label className="text-[10px] font-bold uppercase text-[var(--text-muted)] tracking-wider block mb-1">Replicas</label>
+                  <input
+                    type="number"
+                    min="1" max="20"
+                    value={createServiceModal.replicas}
+                    onChange={(e) => setCreateServiceModal(prev => ({ ...prev, replicas: parseInt(e.target.value) || 1 }))}
+                    className="w-full bg-slate-950 border border-[var(--border-color)] rounded-xl p-2.5 text-xs font-mono focus:outline-none focus:border-purple-500/50"
+                  />
+                </div>
+              </div>
+              <div>
+                <label className="text-[10px] font-bold uppercase text-[var(--text-muted)] tracking-wider block mb-1">Docker Image</label>
+                <input
+                  type="text"
+                  value={createServiceModal.image}
+                  onChange={(e) => setCreateServiceModal(prev => ({ ...prev, image: e.target.value }))}
+                  placeholder="e.g. myapp:latest or nginx:alpine"
+                  className="w-full bg-slate-950 border border-[var(--border-color)] rounded-xl p-2.5 text-xs font-mono text-emerald-400 focus:outline-none focus:border-emerald-500/50"
+                />
+              </div>
+              <div>
+                <label className="text-[10px] font-bold uppercase text-[var(--text-muted)] tracking-wider block mb-1">Port Mapping <span className="text-[var(--text-muted)] normal-case font-normal">(optional, host:container)</span></label>
+                <input
+                  type="text"
+                  value={createServiceModal.port}
+                  onChange={(e) => setCreateServiceModal(prev => ({ ...prev, port: e.target.value }))}
+                  placeholder="e.g. 80:3000 or 443:443"
+                  className="w-full bg-slate-950 border border-[var(--border-color)] rounded-xl p-2.5 text-xs font-mono focus:outline-none focus:border-sky-500/50"
+                />
+              </div>
+              <div className="p-3 bg-slate-800/50 rounded-xl text-[10px] font-mono text-slate-400 break-all">
+                <span className="text-purple-400">$ </span>
+                docker service create --name <span className="text-emerald-400">{createServiceModal.name || '<name>'}</span>{' '}
+                --replicas <span className="text-sky-400">{createServiceModal.replicas}</span>{' '}
+                {createServiceModal.port && <><span className="text-amber-400">--publish {createServiceModal.port}</span>{' '}</>}
+                --update-order start-first --update-delay 5s{' '}
+                <span className="text-emerald-400">{createServiceModal.image || '<image>'}</span>
+              </div>
+              <div className="flex justify-end gap-2 pt-1">
+                <button
+                  onClick={() => setCreateServiceModal({ isOpen: false, name: '', image: '', replicas: 2, port: '' })}
+                  className="px-4 py-2 rounded-xl text-xs font-bold border border-[var(--border-color)] hover:bg-white/5 transition-all cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={() => {
+                    if (!createServiceModal.name.trim() || !createServiceModal.image.trim()) return;
+                    setIsLoading(true);
+                    socketRef.current.emit('docker:command', {
+                      action: 'swarm:create',
+                      args: [createServiceModal.name.trim(), createServiceModal.image.trim(), createServiceModal.replicas, createServiceModal.port.trim()]
+                    });
+                    setCreateServiceModal({ isOpen: false, name: '', image: '', replicas: 2, port: '' });
+                  }}
+                  disabled={!createServiceModal.name.trim() || !createServiceModal.image.trim()}
+                  className="px-4 py-2 rounded-xl text-xs font-bold bg-purple-500 hover:bg-purple-600 disabled:opacity-40 disabled:cursor-not-allowed text-white transition-all shadow-lg flex items-center gap-1.5 cursor-pointer"
+                >
+                  <Zap size={13} />
+                  Create Service
                 </button>
               </div>
             </div>

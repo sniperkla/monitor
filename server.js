@@ -1463,6 +1463,14 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
                             return executeDockerCommand(currentCmd, currentAction, currentArgs, true);
                         }
 
+                        // If 'docker run' fails to start (e.g. port already in use), it still creates the container 
+                        // and prints the 64-char ID to stdout. We should auto-remove this dead container.
+                        if (currentAction === 'run' && code !== 0 && output.trim().length === 64) {
+                            const deadId = output.trim();
+                            console.log(`🧹 [${socket.id}] docker run failed, removing leftover container: ${deadId}`);
+                            sshClient.exec(`${prefix}docker rm -f ${deadId}`, () => {});
+                        }
+
                         // For pull and pull:status, always emit result even on non-zero exit
                         // because the shell scripts can exit non-zero legitimately
                         if (currentAction === 'pull:status' || currentAction === 'pull') {
@@ -1470,14 +1478,6 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
                         } else if (code !== 0) {
                            const errText = stderr.trim() || `Docker ${currentAction} failed (code ${code})`;
                            socket.emit('docker:error', errText);
-
-                           // If 'docker run' fails to start (e.g. port already in use), it still creates the container 
-                           // and prints the 64-char ID to stdout. We should auto-remove this dead container.
-                           if (currentAction === 'run' && output.trim().length === 64) {
-                               const deadId = output.trim();
-                               console.log(`🧹 [${socket.id}] docker run failed, removing leftover container: ${deadId}`);
-                               sshClient.exec(`${prefix}docker rm -f ${deadId}`, () => {});
-                           }
                         } else {
                            socket.emit('docker:result', { action: currentAction, output: output.trim(), code, args: currentArgs });
                         }
@@ -1490,7 +1490,29 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
                cmdSuffix = `ps -a --format "{{json .}}"`;
             } else if (action === 'images') {
                cmdSuffix = `image ls -a --format "{{json .}}"`;
-            } else if (action === 'vol-assoc') {
+            } else if (action === 'swarm:init') {
+               // Use sh -c so || shell operator works; always exits 0 (already-in-swarm is OK)
+               cmdSuffix = `sh -c 'docker swarm init 2>&1; exit 0'`;
+            } else if (action === 'swarm:create' && args.length >= 3) {
+               const svcName  = String(args[0] || '').replace(/[^a-zA-Z0-9._-]/g, '');
+               const image    = String(args[1] || '').replace(/[^a-zA-Z0-9.@/:-]/g, '');
+               const replicas = parseInt(args[2], 10);
+               const port     = String(args[3] || '').replace(/[^0-9:]/g, '');
+               if (!svcName || !image || isNaN(replicas) || replicas < 1)
+                 return socket.emit('docker:error', 'Invalid service create parameters');
+               const portFlag = port ? `--publish published=${port.split(':')[0]},target=${port.split(':')[1] || port.split(':')[0]}` : '';
+               cmdSuffix = `service create --name ${svcName} --replicas ${replicas} ${portFlag} --update-order start-first --update-delay 5s ${image}`;
+            } else if (action === 'swarm:update' && args.length >= 2) {
+                 const serviceName = String(args[0] || '').replace(/[^a-zA-Z0-9._-]/g, '');
+                 const image = String(args[1] || '').replace(/[^a-zA-Z0-9.@/:-]/g, '');
+                 if (!serviceName || !image) return socket.emit('docker:error', 'Invalid Swarm Service or Image');
+                 cmdSuffix = `service update --image ${image} --update-order start-first --update-delay 5s ${serviceName}`;
+              } else if (action === 'swarm:scale' && args.length >= 2) {
+                 const serviceName = String(args[0] || '').replace(/[^a-zA-Z0-9._-]/g, '');
+                 const count = parseInt(args[1], 10);
+                 if (!serviceName || isNaN(count) || count < 0) return socket.emit('docker:error', 'Invalid Scale Parameters');
+                 cmdSuffix = `service scale ${serviceName}=${count}`;
+              } else if (action === 'vol-assoc') {
                cmdSuffix = `ids=$(docker ps -aq); [ -z "$ids" ] || docker inspect --format 'assoc:{{.ID}}\t{{.Name}}\t{{range .Mounts}}{{.Name}} {{end}}' $ids`;
             } else if (action === 'search' && args.length > 0) {
                  const query = String(args[0] || '').replace(/[^a-zA-Z0-9._\- ]/g, '').trim();
@@ -1504,19 +1526,6 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
                  cmdSuffix = `service ls --format "{{json .}}"`;
               } else if (action === 'swarm:nodes') {
                  cmdSuffix = `node ls --format "{{json .}}"`;
-              } else if (action === 'swarm:init') {
-                 // Use sh -c so || shell operator works; always exits 0 (already-in-swarm is OK)
-                 cmdSuffix = `sh -c 'docker swarm init 2>&1; exit 0'`;
-              } else if (action === 'swarm:update' && args.length >= 2) {
-                 const serviceName = String(args[0] || '').replace(/[^a-zA-Z0-9._-]/g, '');
-                 const image = String(args[1] || '').replace(/[^a-zA-Z0-9.@/:-]/g, '');
-                 if (!serviceName || !image) return socket.emit('docker:error', 'Invalid Swarm Service or Image');
-                 cmdSuffix = `service update --image ${image} --update-order start-first --update-delay 5s ${serviceName}`;
-              } else if (action === 'swarm:scale' && args.length >= 2) {
-                 const serviceName = String(args[0] || '').replace(/[^a-zA-Z0-9._-]/g, '');
-                 const count = parseInt(args[1], 10);
-                 if (!serviceName || isNaN(count) || count < 0) return socket.emit('docker:error', 'Invalid Scale Parameters');
-                 cmdSuffix = `service scale ${serviceName}=${count}`;
               } else if (action === 'rmi' && args.length > 0) {
                  const targetId = String(args[0] || '').replace(/[^a-zA-Z0-9._/:-]/g, '');
                  if (!targetId) return socket.emit('docker:error', 'Invalid Image ID');
@@ -1721,7 +1730,7 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
             
             // For pull & pull:status, cmdSuffix is a full shell script — execute directly
             // For all other actions, cmdSuffix is the part after 'docker' — use executeDockerCommand
-            if (['pull', 'pull:status', 'build', 'build:status', 'backup', 'backup:status', 'read-config', 'write-config', 'find-config', 'check-port', 'start-all', 'remove-selected', 'prune-custom', 'swarm:init'].includes(action)) {
+            if (['pull', 'pull:status', 'build', 'build:status', 'backup', 'backup:status', 'read-config', 'write-config', 'find-config', 'check-port', 'start-all', 'remove-selected', 'prune-custom', 'swarm:init', 'swarm:create'].includes(action)) {
                 console.log(`🐳 [${socket.id}] DOCKER EXEC (raw): ${cmdSuffix.substring(0, 120)}...`);
                 sshClient.exec(cmdSuffix, (err, stream) => {
                     if (err) {
