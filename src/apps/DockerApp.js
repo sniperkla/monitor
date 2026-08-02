@@ -490,6 +490,36 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
           const parsed = lines.map(line => JSON.parse(line));
           setSwarmServices(parsed);
         } catch (e) { console.error('swarm:services parse error:', e); }
+      } else if (action === 'swarm:inspect') {
+        try {
+          const raw = output.trim();
+          const svcJson = JSON.parse(raw.split('\n').filter(Boolean)[0]);
+          const spec = svcJson.Spec || {};
+          const taskTmpl = spec.TaskTemplate || {};
+          const container = taskTmpl.ContainerSpec || {};
+          const mode = spec.Mode || {};
+          const endpoint = svcJson.Endpoint || spec.EndpointSpec || {};
+          const liveImage = (container.Image || '').replace(/@sha256:[a-f0-9]+$/, '');
+          const liveReplicas = mode.Replicated?.Replicas ?? 2;
+          const ports = endpoint.Ports || [];
+          const livePort = ports.length > 0 ? `${ports[0].PublishedPort}:${ports[0].TargetPort}` : '';
+          const nets = spec.Networks || taskTmpl.Networks || [];
+          const liveNetwork = nets.map(n => n.Target || '').filter(Boolean).join(',');
+          const liveEnv = (container.Env || []).join(',');
+          const liveMounts = (container.Mounts || []).map(m => `${m.Source}:${m.Target}`).join(',');
+          setSwarmConfigModal(prev => ({
+            ...prev,
+            image: liveImage || prev.image,
+            replicas: liveReplicas,
+            port: livePort || prev.port,
+            network: liveNetwork,
+            env: liveEnv,
+            mounts: liveMounts
+          }));
+        } catch (e) {
+          console.error('swarm:inspect parse error:', e);
+          setSwarmConfigModal(prev => ({ ...prev, network: '' }));
+        }
       } else if (action === 'swarm:nodes') {
         try {
           const lines = output.split('\n').filter(l => l.trim() && l.trim().startsWith('{'));
@@ -2329,6 +2359,7 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
                                     <div className="flex items-center gap-2 pt-1 border-t border-white/5">
                                       <button
                                         onClick={() => {
+                                          // Optimistic open with parsed values
                                           const currentCount = parseInt((svcReplicas.split('/')[1] || '1'), 10) || 1;
                                           let parsedPort = '';
                                           if (svcPorts && svcPorts !== '-') {
@@ -2347,10 +2378,14 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
                                             image: svcImage,
                                             replicas: currentCount,
                                             port: parsedPort,
-                                            network: '',
+                                            network: 'loading...',
                                             env: '',
                                             mounts: ''
                                           });
+                                          // Fetch live config via swarm:inspect
+                                          if (socketRef.current) {
+                                            socketRef.current.emit('docker:command', { action: 'swarm:inspect', args: [svcName] });
+                                          }
                                         }}
                                         className="flex-1 py-1.5 px-3 rounded-lg bg-purple-500/15 hover:bg-purple-500/25 border border-purple-500/30 text-purple-300 text-[10px] font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer"
                                         title="Configure Service (Network, Env, Image, Ports, Replicas)"

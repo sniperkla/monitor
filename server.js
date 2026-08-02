@@ -1626,6 +1626,11 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
                  cmdSuffix = `network ls --format "{{json .}}"`;
               } else if (action === 'swarm:services') {
                  cmdSuffix = `service ls --format "{{json .}}"`;
+
+               } else if (action === 'swarm:inspect' && args.length >= 1) {
+                  const svcNameI = String(args[0] || '').replace(/[^a-zA-Z0-9._-]/g, '');
+                  if (!svcNameI) return socket.emit('docker:error', 'Invalid Service Name');
+                  cmdSuffix = `service inspect ${svcNameI} --format "{{json .}}"`;
               } else if (action === 'swarm:nodes') {
                  cmdSuffix = `node ls --format "{{json .}}"`;
               } else if (action === 'rmi' && args.length > 0) {
