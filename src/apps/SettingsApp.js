@@ -167,7 +167,7 @@ export default function SettingsApp({ initialTab, deploymentOnly = false, openRe
   const { data: session } = useSession();
   const { t, i18n } = useTranslation();
   const { state: osState, setWallpaper, setGlassmorphism, setIconSize, setIconStyle, setBrightness, setUiScale, setNotifications, setLanguage, setTheme, setTaskbarPosition, setWindowLayout, addCustomWallpaper, removeCustomWallpaper, saveSettings, addNotification, showConfirm, setKeyboardShortcuts, setTerminalSettings } = useOS();
-  const { state: appState, dispatch, apiFetch, fetchConnections } = useApp();
+  const { state: appState, dispatch, apiFetch, fetchConnections, connectionsReady } = useApp();
   const { vaultStatus, decryptedUri, lockVault, clearVault, setupVault, showVault } = useVault();
   const { glassmorphism, brightness, uiScale, notifications } = osState;
 
@@ -520,14 +520,14 @@ export default function SettingsApp({ initialTab, deploymentOnly = false, openRe
   // (does NOT re-fetch deploy config — avoids resetting connectionId)
   useEffect(() => {
     if (activeTab !== 'deployment') return;
-    if (appState.connections.length === 0) return;
+    if (!connectionsReady || appState.connections.length === 0) return;
     setConnections(prev => {
       const global = appState.connections.filter(c => c.type === 'ssh');
       // Only update if the global list has more/different entries than what we have
       if (global.length > prev.length) return global;
       return prev;
     });
-  }, [activeTab, appState.connections]);
+  }, [activeTab, connectionsReady, appState.connections]);
 
   // Real-time Server-Sent Events for deployment status
   useEffect(() => {

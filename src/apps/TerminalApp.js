@@ -13,6 +13,7 @@ function isLocalhost(host) {
 
 export default function TerminalApp({ onEditConnection, initialConnection, initialConnectionId, initialCommand, windowId }) {
   const { state, dispatch, relayInfo } = useApp();
+  const { connectionsReady } = useApp();
   const { t } = useTranslation();
   
   // Read SSH mode from settings (default: server)
@@ -83,7 +84,7 @@ export default function TerminalApp({ onEditConnection, initialConnection, initi
 
   // Auto-connect if initialConnection or initialConnectionId is provided
   useEffect(() => {
-    if (!connections || connections.length === 0) return;
+    if (!connectionsReady || connections.length === 0) return;
     
     let conn = null;
     if (initialConnRef.current) {
@@ -117,7 +118,7 @@ export default function TerminalApp({ onEditConnection, initialConnection, initi
         setIsSelecting(false);
       }
     }
-  }, [connections, initialCommand, isStandalone, dispatch]);
+  }, [connectionsReady, connections, initialCommand, isStandalone, dispatch]);
 
 
   // Auto-select latest terminal if a new one is added and we aren't selecting

@@ -6,6 +6,7 @@ import FileLayout from '@/components/FileLayout';
 
 export default function FilesApp({ onEditConnection, initialConnection, initialConnectionId, windowId, initialPath }) {
   const { state, dispatch } = useApp();
+  const { connectionsReady } = useApp();
   const { t } = useTranslation();
   const { connections } = state;
   const sshConnections = connections.filter(c => c.type !== 'database');
@@ -35,7 +36,7 @@ export default function FilesApp({ onEditConnection, initialConnection, initialC
   // Load persisted tabs on mount
   useEffect(() => {
     if (tabs.length > 0 || initialConnectionId) return;
-    if (!windowId || !connections || connections.length === 0) return;
+    if (!windowId || !connectionsReady || connections.length === 0) return;
 
     const savedTabs = localStorage.getItem(`files-tabs-${windowId}`);
     if (savedTabs) {
@@ -61,7 +62,7 @@ export default function FilesApp({ onEditConnection, initialConnection, initialC
         console.error('Failed to load files tabs:', e);
       }
     }
-  }, [connections, windowId]);
+  }, [connectionsReady, connections, windowId]);
 
   // Save tabs on change
   useEffect(() => {
@@ -77,7 +78,7 @@ export default function FilesApp({ onEditConnection, initialConnection, initialC
     if (tabs.length > 0) return;
     const targetId = initialConnIdRef.current;
     if (!targetId) return;
-    if (!connections || connections.length === 0) return;
+    if (!connectionsReady || connections.length === 0) return;
 
     let baseConnId = targetId;
     if (typeof targetId === 'string' && targetId.startsWith('docker-')) {
@@ -90,7 +91,7 @@ export default function FilesApp({ onEditConnection, initialConnection, initialC
 
     initialConnIdRef.current = null;
     handleConnect(conn, targetId);
-  }, [connections, tabs.length]);
+  }, [connectionsReady, connections, tabs.length]);
 
   const handleConnect = (conn, overrideId = null) => {
     if (conn.storage === 'manual') {
