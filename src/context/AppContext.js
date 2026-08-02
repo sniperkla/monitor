@@ -349,7 +349,38 @@ export function AppProvider({ children }) {
   }, [vaultStatus, decryptedUri, decryptedTunnel]);
 
 
-  // 3. Auto-refresh connections when DB Config changes or on Mount
+  // 3. Auto-detect local relay on mount (if discovery server running on localhost:48923)
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const detectLocalRelay = async () => {
+      try {
+        const res = await fetch('http://127.0.0.1:48923', { signal: AbortSignal.timeout(1000) });
+        const data = await res.json();
+        if (data.relayName) {
+          localStorage.setItem('ssh_monitor_local_relay', data.relayName);
+          const currentMode = localStorage.getItem('ssh_monitor_ssh_mode');
+          if (!currentMode) {
+            localStorage.setItem('ssh_monitor_ssh_mode', 'local');
+            window.dispatchEvent(new Event('ssh-mode-changed'));
+          }
+        }
+      } catch (_) {}
+    };
+    detectLocalRelay();
+  }, []);
+
+  // 4. Auto-fetch connections when SSH mode or preferred relay changes
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const handleModeChange = () => {
+      console.log('📡 [AppContext] SSH mode/relay changed — auto-fetching connections');
+      fetchConnections();
+    };
+    window.addEventListener('ssh-mode-changed', handleModeChange);
+    return () => window.removeEventListener('ssh-mode-changed', handleModeChange);
+  }, [fetchConnections]);
+
+  // 5. Auto-refresh connections when DB Config changes or on Mount
   useEffect(() => {
     console.log(`📡 [AppContext] Fetching connections (URI: ${state.dbConfig?.uri ? 'PRIVATE' : 'CENTER'})`);
     fetchConnections();

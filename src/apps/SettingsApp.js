@@ -2328,6 +2328,7 @@ export default function SettingsApp({ initialTab, deploymentOnly = false, openRe
                                 onClick={() => {
                                   localStorage.setItem('ssh_monitor_preferred_relay', relayLabel);
                                   setPreferredRelay(relayLabel);
+                                  window.dispatchEvent(new Event('ssh-mode-changed'));
                                   addNotification({ title: 'Relay Selected', message: `"${relayLabel}" is now your active relay for this browser.`, type: 'success' });
                                 }}
                                 className={`w-full flex items-center gap-2.5 text-[11px] px-2.5 py-1.5 rounded-lg transition-all cursor-pointer ${
