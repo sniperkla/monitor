@@ -166,11 +166,11 @@ export async function POST(request) {
    IMPORTANT FOR DOCKER PROJECTS: If the project uses Docker (docker compose, docker-compose, Dockerfile, or Swarm), follow these rules strictly:
    a) ALWAYS check if a Swarm service exists first before falling back to compose/docker run:
       Derive SERVICE_NAME directly from the project/container name (e.g., "rental_frontend") and IMAGE_NAME (e.g., "rental_frontend:latest").
-      Check if a Swarm service exists under $SERVICE_NAME or ${SERVICE_NAME}_service:
+      Check if a Swarm service exists under $SERVICE_NAME or \${SERVICE_NAME}_service:
       Example pattern:
       SERVICE_NAME="projectname"
       IMAGE_NAME="projectname:latest"
-      SWARM_TARGET=$(docker service inspect $SERVICE_NAME >/dev/null 2>&1 && echo "$SERVICE_NAME" || (docker service inspect ${SERVICE_NAME}_service >/dev/null 2>&1 && echo "${SERVICE_NAME}_service" || echo ""))
+      SWARM_TARGET=$(docker service inspect $SERVICE_NAME >/dev/null 2>&1 && echo "$SERVICE_NAME" || (docker service inspect \${SERVICE_NAME}_service >/dev/null 2>&1 && echo "\${SERVICE_NAME}_service" || echo ""))
       if [ -n "$SWARM_TARGET" ]; then
         echo "Swarm service '$SWARM_TARGET' detected! Building image and triggering zero-downtime rolling update..."
         docker build -t $IMAGE_NAME .
