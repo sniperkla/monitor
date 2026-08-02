@@ -987,10 +987,11 @@ export default function SettingsApp({ initialTab, deploymentOnly = false, openRe
       if (data.success) {
         setDeployConfig(prev => ({
           ...prev,
+          deployCommand: data.aiProfile?.deployCommand || prev.deployCommand,
           aiProfile: data.aiProfile,
           aiLogs: data.aiLogs
         }));
-        addNotification({ title: 'AI Analysis Complete', message: `Detected ${data.aiProfile.projectType} project structure.`, type: 'success' });
+        addNotification({ title: 'AI Analysis Complete', message: `Detected ${data.aiProfile.projectType} project structure & updated deployment script.`, type: 'success' });
       } else {
         addNotification({ title: 'AI Analysis Failed', message: data.error || 'Failed to analyze project.', type: 'error' });
       }
