@@ -645,11 +645,13 @@ export default function SettingsApp({ initialTab, deploymentOnly = false, openRe
   const handleTriggerDeploy = async (commitSha = null) => {
     setDeployTriggering(true);
     try {
+      // Auto-save configuration first so server always has the latest script
+      await handleSaveDeployConfig();
       const actualCommitSha = typeof commitSha === 'string' ? commitSha : null;
       const res = await apiFetch(`/api/deploy/webhook?project=${selectedProjectId}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ manual: true, commitSha: actualCommitSha })
+        body: JSON.stringify({ manual: true, commitSha: actualCommitSha, deployCommand: deployConfig.deployCommand })
       });
       const data = await res.json();
       if (data.success) {

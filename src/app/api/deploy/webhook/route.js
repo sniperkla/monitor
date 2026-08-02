@@ -1487,12 +1487,15 @@ export async function POST(request) {
 
     const triggerSource = isManual ? 'Manual (Dashboard)' : (bodyText?.includes?.('"actor"') ? 'Bitbucket Webhook' : 'GitHub Webhook');
 
-    // Extract commitSha from manual trigger body
+    // Extract commitSha & deployCommand from manual trigger body
     let commitSha = null;
     if (isManual && bodyText) {
       try {
         const body = JSON.parse(bodyText);
         if (body.commitSha) commitSha = body.commitSha;
+        if (body.deployCommand && body.deployCommand.trim()) {
+          config.deployCommand = body.deployCommand.trim();
+        }
       } catch (e) {}
     }
 
