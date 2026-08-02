@@ -1133,8 +1133,9 @@ export async function runDeployment(config, runMeta = {}) {
           let rawDeployCmd = (config.deployCommand || '').trim();
           // Strip non-ASCII multibyte characters (like emojis) from bash script to prevent locale issues on Linux shells
           rawDeployCmd = rawDeployCmd.replace(/[^\x00-\x7F]/g, '');
+          let cleanCmd = rawDeployCmd.replace(/^#!\/bin\/bash\s*\n?/, '').trim();
           // Build the user command script content — written via SFTP directly (no echo/base64 which has shell length limits)
-          const userCmdScript = rawDeployCmd ? `#!/bin/bash\nset +e\n${rawDeployCmd}\n` : '#!/bin/bash\nexit 0\n';
+          const userCmdScript = cleanCmd ? `#!/bin/bash\nset +e\n${cleanCmd}\n` : '#!/bin/bash\nexit 0\n';
           const userCmdPath = `/tmp/deploy_cmd_${projectId}.sh`;
 
           // The outer run script references the pre-uploaded user command script directly

@@ -313,12 +313,13 @@ You MUST respond with a valid JSON object ONLY. Do not wrap the JSON in markdown
      docker swarm init 2>/dev/null || true
      docker swarm update --task-history-limit 1 2>/dev/null || true
 
-     # Ensure attachable overlay network proxy-net exists for Nginx DNS
-     if [ "$(docker network inspect proxy-net --format '{{.Driver}}' 2>/dev/null)" != "overlay" ]; then
-       echo "[net] Ensuring proxy-net is an attachable overlay network..."
-       docker network rm proxy-net 2>/dev/null || true
-       docker network create --driver overlay --attachable proxy-net 2>/dev/null || true
-     fi
+      # Ensure attachable overlay network proxy-net exists for Nginx DNS
+      NET_DRIVER=$(docker network inspect proxy-net --format '{{.Driver}}' 2>/dev/null || echo "")
+      if [ "$NET_DRIVER" != "overlay" ]; then
+        echo "[net] Ensuring proxy-net is an attachable overlay network..."
+        docker network rm proxy-net 2>/dev/null || true
+        docker network create --driver overlay --attachable proxy-net 2>/dev/null || true
+      fi
 ${buildSection}
      # Fallback compose build
      docker compose build 2>/dev/null || docker-compose build 2>/dev/null || true
