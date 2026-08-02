@@ -890,7 +890,7 @@ export async function runDeployment(config, runMeta = {}) {
           // ── The actual deploy script ──────────────────────────
           const scriptLines = [
             '#!/bin/bash',
-            `trap 'rm -f /tmp/deploy_run_${projectId}.sh /tmp/deploy_tmux_${projectId}.sh 2>/dev/null' EXIT`,
+            `trap 'rm -f /tmp/deploy_run_${projectId}.sh /tmp/deploy_tmux_${projectId}.sh /tmp/deploy_cmd_${projectId}.sh 2>/dev/null' EXIT`,
             'echo "[deploy] Starting deployment on $(hostname) at $(date)"',
             'echo "[deploy] Working directory: ' + resolvedPath + '"',
             `if [ ! -d "${resolvedPath}" ]; then echo "[deploy] ERROR: Directory '${resolvedPath}' does not exist"; exit 1; fi`,
@@ -968,19 +968,20 @@ export async function runDeployment(config, runMeta = {}) {
           }
           scriptLines.push('echo "[deploy] Running deploy command..."');
           
-          let cleanDeployCmd = (config.deployCommand || '').trim();
-          // Filter out lines with broken subshell syntax
-          cleanDeployCmd = cleanDeployCmd.split('\n').filter(line => !line.includes('SWARM_TARGET=$(') && !line.includes('|| (docker service inspect')).map((line, idx) => {
-            if (idx > 0 && (line.trim() === '#!/bin/bash' || line.trim() === 'set -e')) {
-              return '# ' + line;
-            }
-            if (line.includes('docker service create') && line.includes('$IMAGE_NAME')) {
-              return line.replace('$IMAGE_NAME', '"${SVC}:latest"').replace('|| docker compose up -d --build', '2>/dev/null || true');
-            }
-            return line;
-          }).join('\n');
+          // Write user deploy command to a separate isolated script file.
+          // This prevents any bash syntax in the user's script from breaking the
+          // surrounding infrastructure wrapper (credentials, git ops, cleanup).
+          const userCmdPath = `/tmp/deploy_cmd_${projectId}.sh`;
+          const rawDeployCmd = (config.deployCommand || '').trim();
+          const userCmdScript = '#!/bin/bash\n' + rawDeployCmd + '\n';
 
-          scriptLines.push(cleanDeployCmd);
+          scriptLines.push(`USER_CMD_EXIT=0`);
+          scriptLines.push(`bash "${userCmdPath}" || USER_CMD_EXIT=$?`);
+          scriptLines.push(`rm -f "${userCmdPath}" 2>/dev/null || true`);
+          scriptLines.push(`if [ "$USER_CMD_EXIT" != "0" ]; then`);
+          scriptLines.push(`  echo "[deploy] ❌ Deploy command exited with code $USER_CMD_EXIT"`);
+          scriptLines.push(`  exit $USER_CMD_EXIT`);
+          scriptLines.push(`fi`);
 
           // Clean up credentials after deploy command completes
           if (config.bitbucketConnected) {
@@ -1006,6 +1007,17 @@ export async function runDeployment(config, runMeta = {}) {
           // ── Write deploy script via SFTP ─────────────────────────────────
             tmuxSession = `deploy-${projectId.replace(/[^a-zA-Z0-9_-]/g, '-')}`.slice(0, 60);
             const tmuxWrapperPath = `/tmp/deploy_tmux_${projectId}.sh`;
+
+            // Write user deploy command to a separate isolated file first
+            sftp.writeFile(userCmdPath, userCmdScript, { mode: 0o755 }, (userCmdWriteErr) => {
+              if (userCmdWriteErr) {
+                logOutput += `[SSH Error] Failed to write user deploy command: ${userCmdWriteErr.message}\n`;
+                logOutput = limitLogOutput(logOutput);
+                try { clearRunning(projectId); } catch (e) {}
+                updateStatus('failed', logOutput).catch(() => {});
+                conn.end();
+                return;
+              }
 
             sftp.writeFile(remoteDeployPath, deployScript, (writeErr) => {
             if (writeErr) {
@@ -1149,7 +1161,8 @@ export async function runDeployment(config, runMeta = {}) {
               if (tmuxWriteErr) logOutput += `[deploy] tmux wrapper write failed: ${tmuxWriteErr.message}\n`;
               launchDeploy();
             });
-          });
+          }); // end sftp.writeFile(remoteDeployPath)
+          }); // end sftp.writeFile(userCmdPath)
         });
       });
 
