@@ -1182,6 +1182,10 @@ export async function POST(request) {
     let projectId = searchParams.get('project') || 'default';
     let dbKey = projectId === 'default' ? 'auto_deploy_config' : `auto_deploy_config_${projectId}`;
 
+    let body = {};
+    try { body = await request.json(); } catch (_) {}
+    const { deployCommand: bodyDeployCmd } = body;
+
     console.log(`[webhook] Received POST request for project: ${projectId}`);
 
     // 1. Check for manual trigger (requires dashboard session)
@@ -1201,7 +1205,12 @@ export async function POST(request) {
     } else {
       setting = await SystemSetting.findOne({ key: dbKey });
     }
-    const config = setting?.value;
+    const config = setting?.value || {};
+
+    // If manual trigger passed a fresh deployCommand in body, prioritize it!
+    if (isManual && bodyDeployCmd?.trim()) {
+      config.deployCommand = bodyDeployCmd;
+    }
 
     // Resolve actual projectId/dbKey from the matched setting (important for token-based lookups)
     if (setting?.key) {
