@@ -178,7 +178,18 @@ CRITICAL INSTRUCTIONS - USE ORIGINAL SCRIPT AS STARTING MATERIAL:
      docker swarm init 2>/dev/null || true
      docker swarm update --task-history-limit 1 2>/dev/null || true
 
-     # Build latest images for all services
+     # Build & tag explicit images for subfolder services (e.g. ./frontend -> autfrontend:latest, ./backend -> autbackend:latest)
+     for SVC in "\${SERVICES[@]}"; do
+       SUBDIR=\$(echo \$SVC | sed 's/aut//g' | sed 's/app//g')
+       if [ -d "\$SUBDIR" ] && [ -f "\$SUBDIR/Dockerfile" ]; then
+         echo "🔨 Building image \${SVC}:latest from ./\$SUBDIR/Dockerfile..."
+         docker build -t "\${SVC}:latest" "./\$SUBDIR"
+       elif [ -f Dockerfile ]; then
+         docker build -t "\${SVC}:latest" .
+       fi
+     done
+
+     # Fallback compose build
      docker compose build 2>/dev/null || docker-compose build 2>/dev/null || true
 
      # Target exact container names from docker-compose.yml
