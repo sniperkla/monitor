@@ -166,22 +166,36 @@ CRITICAL INSTRUCTIONS - USE ORIGINAL SCRIPT AS STARTING MATERIAL:
 1. PRIMARY REQUIREMENT: If an existing deployment script is provided in the prompt below, YOU MUST USE IT AS YOUR EXACT STARTING MATERIAL / TEMPLATE.
 2. PRESERVE ORIGINAL COMMANDS: Keep all original "cd" commands (e.g. \`cd /home/ec2-user/aut/\`), repository updates (\`git pull\`), custom environment setup, echo/log statements (e.g. \`echo "Deployment completed successfully."\`), and cleanup commands (\`docker image prune -f\`).
 3. NO DUPLICATE HEADERS: Put \`#!/bin/bash\` and \`set -e\` ONLY ONCE at the very top of the script (lines 1 & 2). Never include nested \`#!/bin/bash\` or \`set -e\` inside \`if/else\` blocks.
-4. SWARM ENHANCEMENT: Replace/upgrade ONLY the container launch command (like \`docker-compose up -d --build\` or \`docker run\`) with a Swarm service check while retaining the original fallback:
+4. AUTOMATIC SWARM INITIALIZATION & CREATION:
+   - If the project uses Docker (Dockerfile or docker-compose), upgrade the deployment section to AUTOMATICALLY create or update a Docker Swarm service:
+   - Example structure:
 
-   SERVICE_NAME="<project_or_container_name>"
-   IMAGE_NAME="<project_or_container_name>:latest"
+     # Ensure Swarm is active and task history limit is set to 1
+     docker swarm init 2>/dev/null || true
+     docker swarm update --task-history-limit 1 2>/dev/null || true
 
-   SWARM_TARGET=$(docker service inspect $SERVICE_NAME >/dev/null 2>&1 && echo "$SERVICE_NAME" || (docker service inspect \${SERVICE_NAME}_service >/dev/null 2>&1 && echo "\${SERVICE_NAME}_service" || echo ""))
+     SERVICE_NAME="<project_or_container_name>"
+     IMAGE_NAME="<project_or_container_name>:latest"
 
-   if [ -n "$SWARM_TARGET" ]; then
-     echo "Swarm service '$SWARM_TARGET' detected! Building image and updating service..."
+     # Build latest docker image
      docker build -t $IMAGE_NAME .
-     docker service update --image $IMAGE_NAME --update-order start-first --update-delay 5s $SWARM_TARGET
-     docker container prune -f
-   else
-     # Original container launch fallback
-     docker-compose up -d --build
-   fi
+
+     SWARM_TARGET=$(docker service inspect $SERVICE_NAME >/dev/null 2>&1 && echo "$SERVICE_NAME" || (docker service inspect \${SERVICE_NAME}_service >/dev/null 2>&1 && echo "\${SERVICE_NAME}_service" || echo ""))
+
+     if [ -n "$SWARM_TARGET" ]; then
+       echo "🐝 Swarm service '$SWARM_TARGET' found! Updating service zero-downtime..."
+       docker service update --image $IMAGE_NAME --update-order start-first --update-delay 5s $SWARM_TARGET
+     else
+       echo "🐝 Creating new Swarm service '$SERVICE_NAME'..."
+       # Stop and remove old non-swarm standalone container if exists to free container name
+       docker stop $SERVICE_NAME 2>/dev/null || true
+       docker rm -f $SERVICE_NAME 2>/dev/null || true
+
+       # Create Swarm service (expose ports if detected in Dockerfile/compose, e.g. -p 80:80)
+       docker service create --name $SERVICE_NAME --replicas 2 $IMAGE_NAME || docker-compose up -d --build
+     fi
+
+     docker container prune -f 2>/dev/null || true
 
 You MUST respond with a valid JSON object ONLY. Do not wrap the JSON in markdown formatting blocks or include any extra text. The JSON format must be EXACTLY:
 {
