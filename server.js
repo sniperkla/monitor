@@ -1823,7 +1823,7 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
                  // Check if port is in use on host (TCP listen)
                  cmdSuffix = `sh -c "(ss -tuln 2>/dev/null || netstat -tuln) | grep -q -w ':${port}' && echo 'IN_USE' || echo 'FREE'"`;
               } else if (action === 'connect-nginx-swarm') {
-                  cmdSuffix = `sh -c 'NETS=$(docker network ls --filter driver=overlay --format "{{.Name}}"); for net in $NETS; do echo "Connecting Nginx to $net..."; docker network connect $net global-nginx 2>/dev/null || docker network connect $net nginx 2>/dev/null || true; done; docker exec global-nginx nginx -s reload 2>/dev/null || docker exec nginx nginx -s reload 2>/dev/null || true; echo "Nginx connected and reloaded successfully!"'`;
+                  cmdSuffix = `sh -c 'NETS=$(docker network ls --filter driver=overlay --format "{{.Name}}"); for net in $NETS; do echo "Connecting Nginx to $net..."; docker network connect $net global-nginx 2>/dev/null || docker network connect $net nginx 2>/dev/null || true; done; echo "Restarting Nginx container to apply new network routes and clear DNS cache..."; docker restart global-nginx 2>/dev/null || docker restart nginx 2>/dev/null || docker exec global-nginx nginx -s reload 2>/dev/null || docker exec nginx nginx -s reload 2>/dev/null || systemctl reload nginx 2>/dev/null || true; echo "Nginx connected and restarted successfully!"'`;
              } else {
                return socket.emit('docker:error', 'Invalid Docker action');
             }
