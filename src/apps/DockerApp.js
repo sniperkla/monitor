@@ -1489,14 +1489,14 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
 
                                                       <div className="flex items-center gap-1.5 shrink-0">
                                                         <button
-                                                          onClick={() => openTerminalTab(task.id, task.name, 'logs')}
+                                                          onClick={(e) => { e.stopPropagation(); fetchLogs(task.id, task.name); }}
                                                           className="px-2 py-1 bg-white/5 hover:bg-white/10 text-[10px] font-medium text-sky-400 rounded-lg transition-all flex items-center gap-1 cursor-pointer"
                                                           title="View Logs"
                                                         >
                                                           <FileText size={11} /> Logs
                                                         </button>
                                                         <button
-                                                          onClick={() => openTerminalTab(task.id, task.name, 'exec')}
+                                                          onClick={(e) => { e.stopPropagation(); attachToContainer(task.id, task.name); }}
                                                           disabled={task.state !== 'running'}
                                                           className="px-2 py-1 bg-white/5 hover:bg-white/10 text-[10px] font-medium text-emerald-400 rounded-lg transition-all disabled:opacity-30 flex items-center gap-1 cursor-pointer"
                                                           title="Terminal"
