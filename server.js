@@ -1533,7 +1533,9 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
                 }
                 const createCmd = `docker service create ${flags.join(' ')} ${image}`;
                 if (network) {
-                  cmdSuffix = `sh -c 'docker network inspect ${network} >/dev/null 2>&1 || docker network create --driver overlay --attachable ${network}; ${createCmd}'`;
+                  // Check driver type: overlay networks work with swarm, bridge do not
+                  // If proxy-net exists as bridge (e.g. from docker-compose), we must error clearly
+                  cmdSuffix = `sh -c 'driver=$(docker network inspect ${network} --format "{{.Driver}}" 2>/dev/null); if [ "$driver" = "overlay" ]; then echo "Using existing overlay network ${network}"; elif [ -z "$driver" ]; then docker network create --driver overlay --attachable ${network}; else echo "ERROR: network ${network} exists as driver=$driver (not overlay). Remove it first or use a different name." >&2; exit 1; fi; ${createCmd}'`;
                 } else {
                   cmdSuffix = createCmd;
                 }
@@ -1596,7 +1598,7 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
                  flags.push(`--update-order start-first`);
                  const updateCmd = `docker service update ${flags.join(' ')} ${serviceName}`;
                  if (network) {
-                   cmdSuffix = `sh -c 'docker network inspect ${network} >/dev/null 2>&1 || docker network create --driver overlay --attachable ${network}; ${updateCmd}'`;
+                    cmdSuffix = `sh -c 'driver=$(docker network inspect ${network} --format "{{.Driver}}" 2>/dev/null); if [ "$driver" = "overlay" ]; then echo "Using existing overlay network ${network}"; elif [ -z "$driver" ]; then docker network create --driver overlay --attachable ${network}; else echo "ERROR: network ${network} exists as driver=$driver (not overlay). Remove it first or use a different name." >&2; exit 1; fi; ${updateCmd}'`;
                  } else {
                    cmdSuffix = updateCmd;
                  }
