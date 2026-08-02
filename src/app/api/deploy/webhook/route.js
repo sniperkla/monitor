@@ -106,8 +106,8 @@ function extractErrorsFromLog(logText) {
   // Patterns that indicate an actual error line
   const errorLinePattern = /\b(error|fatal|exception|crash|panic|segfault|killed|denied|cannot|unable to|refused|timed? ?out|broken|ENOENT|EACCES|EPERM|ENOSPC|ENOMEM|no space left|disk full|out of memory|not found|no such file|undefined is not|cannot read|failed to|command not found|permission denied|syntax error|unexpected token|module not found|cannot find module|type error|reference error|range error)\b/i;
 
-  // Patterns to SKIP — these are noise or generic status lines
-  const skipPattern = /^(---DEPLOY_EXIT_CODE:|--->\s*Running|Deploying\.\.\.|warn\s*[:\-]|warning\s*[:\-]|info\s*[:\-]|\[SSE\]|npm warn|npm notice|yarn warning|deprecated|peer dep|info Visit|Done in \d|✨\s*Done|\/tmp\/deploy_cmd_)/i;
+  // Patterns to SKIP — these are noise, wrapper-infrastructure or generic status lines
+  const skipPattern = /^(---DEPLOY_EXIT_CODE:|--->\s*Running|Deploying\.\.\.|warn\s*[:\-]|warning\s*[:\-]|info\s*[:\-]|\[SSE\]|npm warn|npm notice|yarn warning|deprecated|peer dep|info Visit|Done in \d|✨\s*Done|\/tmp\/deploy_(?:cmd|run|tmux)_|\[deploy\]\s*[✅⚠️❌🚀🧹📌]|\[deploy\]\s*(Starting|Working directory|Now in|Checking out|Running deploy|Deploy command finished|Stash|Dropping|aut))/i;
 
   // Patterns for compiler-style messages: "file:line:col: error: message"
   const compilerPattern = /(.+?):(\d+):(\d+):\s*(error|fatal error|E\d+):\s*(.+)/i;
@@ -243,8 +243,12 @@ async function extractErrorForTelegram(config, logText) {
     }
 
     if (apiKey) {
-      // Snippet of recent build failure output (last 35KB)
-      const logSnippet = logText.length > 35000 ? logText.slice(-35000) : logText;
+      // Strip wrapper-infrastructure lines (deploy script internals) before sending to AI.
+      // These are noise that can mislead the LLM (e.g. /tmp/deploy_cmd_*.sh: unexpected EOF,
+      // /tmp/deploy_run_*.sh: cd: No such file, [deploy] ✅ success messages, etc.).
+      const deployWrapperNoise = /(\/tmp\/deploy_(?:cmd|run|tmux)_[^\n]*|^\[deploy\]\s*[✅⚠️❌🚀🧹📌][^\n]*|^\[deploy\]\s*(?:Starting|Working directory|Now in|Checking out|Running deploy|Deploy command finished|Stash|Dropping)[^\n]*|---DEPLOY_EXIT(?:_CODE)?:[^\n]*|---DEPLOY_MONITOR_DONE---[^\n]*)/gm;
+      const cleanedLog = logText.replace(deployWrapperNoise, '').replace(/\n{3,}/g, '\n\n').trim();
+      const logSnippet = cleanedLog.length > 35000 ? cleanedLog.slice(-35000) : cleanedLog;
 
       const openai = new OpenAI({
         baseURL,
@@ -259,13 +263,22 @@ async function extractErrorForTelegram(config, logText) {
         messages: [
           {
             role: 'system',
-            content: `You are a precise error detection engine. Analyze the deployment log and extract ONLY the exact actual error message line(s) causing the failure (e.g. TypeScript type errors like "Type error: ...", file/line numbers like "./components/CustomerView.tsx:1799:44", disk space errors like "No space left on device", missing modules, syntax errors, or command exit failures).
+            content: `You are a precise error detection engine. Analyze the deployment log and extract ONLY the exact actual error message line(s) causing the failure.
+
+Examples of what to extract:
+- TypeScript: "./components/CustomerView.tsx:1799:44 - Type error: This comparison appears to be unintentional..."
+- Disk: "No space left on device"
+- Module: "Module not found: Can't resolve 'some-package'"
+- Build: "Failed to compile."
+- Syntax: "SyntaxError: Unexpected token"
 
 CRITICAL FORMAT RULES:
-- Output ONLY the exact raw error message line(s).
-- Include file path and line number if present.
-- DO NOT add conversational intros, outros, or explanations (e.g. DO NOT say "Here is the error:", "Root cause:", "The deployment failed because").
-- DO NOT output full logs or warning chatter. Return ONLY 1 to 4 clean error lines.`
+- Output ONLY the exact raw error line(s) from the log. Do NOT paraphrase.
+- Include file path and line number if present in the log.
+- IGNORE any lines starting with /tmp/deploy_ — those are wrapper script internals, not real errors.
+- IGNORE lines like "[deploy] ✅", "[deploy] ❌", "[deploy] Starting", "[deploy] Working directory" — those are deploy system messages.
+- DO NOT add explanations, intros, or outros.
+- Return ONLY 1 to 4 clean, exact error lines from the build/compile/runtime output.`
           },
           {
             role: 'user',
