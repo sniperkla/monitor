@@ -252,22 +252,39 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
     }
   }, [selectedConnection, windowId, osDispatch]);
 
-  // Restore connection state
+  // If global connections list is empty on mount, trigger a fetch so DockerApp
+  // doesn't silently fail when the user reopens without visiting SSH Manager first.
+  useEffect(() => {
+    if (connections.length === 0) {
+      osDispatch({ type: 'FETCH_CONNECTIONS' });
+    }
+  }, []); // run once on mount
+
+  // Restore connection state — re-runs whenever connections finishes loading
   useEffect(() => {
     if (selectedConnection) return;
-    if (!connections || connections.length === 0) return;
+    if (!sshConnections || sshConnections.length === 0) return;
+
+    // 1. Try initialConnectionId from prop (window launched directly to a connection)
     if (initialConnectionId) {
-      const conn = connections.find(c => c._id === initialConnectionId);
+      const conn = sshConnections.find(c => c._id === initialConnectionId);
       if (conn) { setSelectedConnection(conn); return; }
     }
+
+    // 2. Try localStorage saved connection for this window instance
     if (windowId) {
       const savedConnId = localStorage.getItem(`docker-connection-${windowId}`);
       if (savedConnId) {
-        const conn = connections.find(c => c._id === savedConnId);
-        if (conn) setSelectedConnection(conn);
+        const conn = sshConnections.find(c => c._id === savedConnId);
+        if (conn) { setSelectedConnection(conn); return; }
       }
     }
-  }, [connections, initialConnectionId, windowId, selectedConnection]);
+
+    // 3. Fallback: if only one SSH connection exists, auto-select it
+    if (sshConnections.length === 1) {
+      setSelectedConnection(sshConnections[0]);
+    }
+  }, [sshConnections, initialConnectionId, windowId, selectedConnection]);
 
   // Restore active tab state
   useEffect(() => {
