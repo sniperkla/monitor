@@ -1755,6 +1755,8 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
               } else if (action === 'prune-images') {
                   const pruneAll = args && (args[0] === true || args[0] === 'all');
                   cmdSuffix = `image prune ${pruneAll ? '-a ' : ''}-f`;
+              } else if (action === 'prune-networks') {
+                  cmdSuffix = `network prune -f`;
               } else if (action === 'prune-system') {
                   const pruneAll = args && (args[0] === true || args[0] === 'all');
                   cmdSuffix = `system prune ${pruneAll ? '-a ' : ''}-f --volumes`;
@@ -1762,34 +1764,34 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
                   const targets = args[0] || {};
                   const pruneAll = args[1] === true;
                   const cmds = [];
-                  if (targets.containers) cmds.push('container prune -f');
-                  if (targets.images) cmds.push(`image prune ${pruneAll ? '-a ' : ''}-f`);
-                  if (targets.volumes) cmds.push('volume prune -f');
-                  if (targets.networks) cmds.push('network prune -f');
-                  if (targets.cache) cmds.push(`builder prune ${pruneAll ? '-a ' : ''}-f`);
+                  if (targets.containers) cmds.push('docker container prune -f');
+                  if (targets.images) cmds.push(`docker image prune ${pruneAll ? '-a ' : ''}-f`);
+                  if (targets.volumes) cmds.push('docker volume prune -f');
+                  if (targets.networks) cmds.push('docker network prune -f');
+                  if (targets.cache) cmds.push(`docker builder prune ${pruneAll ? '-a ' : ''}-f`);
                   if (cmds.length === 0) return socket.emit('docker:error', 'No targets selected');
-                  cmdSuffix = cmds.map(c => `docker ${c}`).join(' && ');
+                  cmdSuffix = `sh -c '${cmds.join(' && ')}'`;
               } else if (action === 'remove-selected') {
                   const sel = args[0] || {};
                   const pruneAll = sel.pruneAll === true;
                   const cmds = [];
                   if (sel.containers && sel.containers.length > 0) {
                     const ids = sel.containers.map(id => String(id).replace(/[^a-zA-Z0-9._-]/g, '')).filter(Boolean);
-                    if (ids.length > 0) cmds.push(`rm ${ids.join(' ')}`);
+                    if (ids.length > 0) cmds.push(`docker rm ${ids.join(' ')}`);
                   } else if (sel.targets?.containers) {
-                    cmds.push('container prune -f');
+                    cmds.push('docker container prune -f');
                   }
                   if (sel.images && sel.images.length > 0) {
                     const tags = sel.images.map(t => String(t).replace(/[^a-zA-Z0-9._:@/-]/g, '')).filter(Boolean);
-                    if (tags.length > 0) cmds.push(`rmi ${tags.join(' ')}`);
+                    if (tags.length > 0) cmds.push(`docker rmi ${tags.join(' ')}`);
                   } else if (sel.targets?.images) {
-                    cmds.push(`image prune ${pruneAll ? '-a ' : ''}-f`);
+                    cmds.push(`docker image prune ${pruneAll ? '-a ' : ''}-f`);
                   }
                   if (sel.volumes && sel.volumes.length > 0) {
                     const names = sel.volumes.map(n => String(n).replace(/[^a-zA-Z0-9._-]/g, '')).filter(Boolean);
-                    if (names.length > 0) cmds.push(`volume rm ${names.join(' ')}`);
+                    if (names.length > 0) cmds.push(`docker volume rm ${names.join(' ')}`);
                   } else if (sel.targets?.volumes) {
-                    cmds.push('volume prune -f');
+                    cmds.push('docker volume prune -f');
                   }
                   if (sel.networks && sel.networks.length > 0) {
                     const names = sel.networks.map(n => String(n).replace(/[^a-zA-Z0-9._-]/g, '')).filter(Boolean);

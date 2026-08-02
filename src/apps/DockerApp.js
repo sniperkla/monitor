@@ -718,6 +718,10 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
           setIsLoading(false);
           addNotification({ title: 'Images Pruned', message: 'Unused Docker images have been successfully deleted.', type: 'success' });
           socketRef.current.emit('docker:command', { action: 'images' });
+        } else if (action === 'prune-networks') {
+          setIsLoading(false);
+          emitDockerLs();
+          addNotification({ title: 'Networks Pruned', message: 'Unused networks have been removed.', type: 'success' });
         } else if (action === 'prune-system') {
           setIsLoading(false);
           addNotification({ title: 'System Pruned', message: 'Docker system has been cleaned up. Unused containers, images, networks, and volumes removed.', type: 'success' });
@@ -2012,8 +2016,21 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
                     {/* ── NETWORKS TAB ── */}
                     {activeTab === 'networks' && (
                       <div className="flex flex-col gap-5">
-                        <div className="flex gap-3">
-                          <StatCard icon={Globe} label="Networks" value={networks.length} color="amber" />
+                        <div className="flex items-center justify-between">
+                          <div className="flex gap-3">
+                            <StatCard icon={Globe} label="Networks" value={networks.length} color="amber" />
+                          </div>
+                          <button
+                            onClick={() => {
+                              if (!window.confirm('Prune all unused networks? Active container networks will not be affected.')) return;
+                              setIsLoading(true);
+                              socketRef.current.emit('docker:command', { action: 'prune-networks' });
+                            }}
+                            className="px-4 py-2 bg-rose-500/10 text-rose-500 hover:bg-rose-500 hover:text-white rounded-xl text-xs font-bold transition-all flex items-center gap-2 border border-rose-500/20 cursor-pointer"
+                          >
+                            <Trash2 size={14} />
+                            Prune Unused
+                          </button>
                         </div>
                         {networks.length === 0 ? (
                           <div className="text-center py-16 opacity-40">
