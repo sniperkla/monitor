@@ -1531,9 +1531,9 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
                     }
                   });
                 }
-                let createCmd = `service create ${flags.join(' ')} ${image}`;
+                let createCmd = `${dockerSudo}docker service create ${flags.join(' ')} ${image}`;
                 if (network) {
-                  cmdSuffix = `sh -c 'docker network inspect ${network} >/dev/null 2>&1 || docker network create --driver overlay --attachable ${network}; docker ${createCmd}'`;
+                  cmdSuffix = `sh -c "${dockerSudo}docker network inspect ${network} >/dev/null 2>&1 || ${dockerSudo}docker network create --driver overlay --attachable ${network}; ${createCmd}"`;
                 } else {
                   cmdSuffix = createCmd;
                 }
@@ -1594,7 +1594,12 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
                    });
                  }
                  flags.push(`--update-order start-first`);
-                 cmdSuffix = `service update ${flags.join(' ')} ${serviceName}`;
+                 let updateCmd = `${dockerSudo}docker service update ${flags.join(' ')} ${serviceName}`;
+                 if (network) {
+                   cmdSuffix = `sh -c "${dockerSudo}docker network inspect ${network} >/dev/null 2>&1 || ${dockerSudo}docker network create --driver overlay --attachable ${network}; ${updateCmd}"`;
+                 } else {
+                   cmdSuffix = updateCmd;
+                 }
               } else if (action === 'vol-assoc') {
                cmdSuffix = `ids=$(docker ps -aq); [ -z "$ids" ] || docker inspect --format 'assoc:{{.ID}}\t{{.Name}}\t{{range .Mounts}}{{.Name}} {{end}}' $ids`;
             } else if (action === 'search' && args.length > 0) {
@@ -1813,7 +1818,7 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
             
             // For pull & pull:status, cmdSuffix is a full shell script — execute directly
             // For all other actions, cmdSuffix is the part after 'docker' — use executeDockerCommand
-            if (['pull', 'pull:status', 'build', 'build:status', 'backup', 'backup:status', 'read-config', 'write-config', 'find-config', 'check-port', 'start-all', 'remove-selected', 'prune-custom', 'swarm:init'].includes(action)) {
+            if (['pull', 'pull:status', 'build', 'build:status', 'backup', 'backup:status', 'read-config', 'write-config', 'find-config', 'check-port', 'start-all', 'remove-selected', 'prune-custom', 'swarm:init', 'swarm:create', 'swarm:configure'].includes(action)) {
                 console.log(`🐳 [${socket.id}] DOCKER EXEC (raw): ${cmdSuffix.substring(0, 120)}...`);
                 sshClient.exec(cmdSuffix, (err, stream) => {
                     if (err) {
