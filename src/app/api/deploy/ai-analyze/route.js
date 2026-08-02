@@ -7,10 +7,11 @@ import connectDB from '@/lib/mongodb';
 import SystemSetting from '@/models/SystemSetting';
 import { ConnectionRepository } from '@/lib/repositories/ConnectionRepository';
 import { decrypt } from '@/utils/encryption';
+import OpenAI from 'openai';
 
 // Supported model options
 const FALLBACK_MODEL = 'llama-3.3-70b-versatile';
-const GROQ_ENDPOINT = 'https://api.groq.com/openai/v1/chat/completions';
+const GROQ_BASE_URL = 'https://api.groq.com/openai/v1';
 
 export async function POST(request) {
   try {
@@ -131,23 +132,19 @@ export async function POST(request) {
     const effectiveAiEndpoint = (aiEndpointBody && aiEndpointBody.trim()) ? aiEndpointBody.trim() : (projectAiPrefs.aiEndpoint || '');
     const effectiveAiApiKey = (aiApiKeyBody && aiApiKeyBody.trim()) ? aiApiKeyBody.trim() : (projectAiPrefs.aiApiKey || '');
 
-    let aiEndpoint = GROQ_ENDPOINT;
+    let baseURL = GROQ_BASE_URL;
     let modelName = configSetting?.value?.model || FALLBACK_MODEL;
-    // Track whether this is a custom endpoint (affects response_format support)
     let isCustomEndpoint = false;
 
     if (effectiveAiModel === 'manual' || (effectiveAiEndpoint && effectiveAiApiKey)) {
-      // Custom endpoint mode: use whatever endpoint and key the user provided
-      let customEndpoint = effectiveAiEndpoint || 'https://api.openai.com/v1/chat/completions';
-      // Auto-append /chat/completions if user only entered a base URL (e.g. https://api.example.com/v1)
-      if (!customEndpoint.endsWith('/chat/completions') && !customEndpoint.endsWith('/completions')) {
-        customEndpoint = customEndpoint.replace(/\/$/, '') + '/chat/completions';
-      }
-      aiEndpoint = customEndpoint;
+      // Custom endpoint mode: use user's base URL and key
+      let userEndpoint = effectiveAiEndpoint || 'https://api.openai.com/v1';
+      // Normalize base URL (strip /chat/completions if included)
+      userEndpoint = userEndpoint.replace(/\/chat\/completions\/?$/, '').replace(/\/+$/, '');
+      baseURL = userEndpoint;
       modelName = effectiveAiCustomModel || 'gpt-3.5-turbo';
       apiKey = effectiveAiApiKey || apiKey;
-      // Only Groq and OpenAI official support response_format: json_object reliably
-      isCustomEndpoint = !aiEndpoint.includes('api.groq.com') && !aiEndpoint.includes('api.openai.com');
+      isCustomEndpoint = !baseURL.includes('api.groq.com') && !baseURL.includes('api.openai.com');
 
       if (!apiKey) {
         return NextResponse.json({ success: false, error: 'Custom AI API Key is required. Enter your API key in the Auto Deploy → AI Settings section.' }, { status: 400 });
@@ -159,13 +156,6 @@ export async function POST(request) {
     if (!apiKey) {
       return NextResponse.json({ success: false, error: 'AI API Key is not configured. Please add a Groq API key in the global AI settings, or switch to Manual mode and enter a custom API key in the Auto Deploy settings.' }, { status: 400 });
     }
-
-    const aiConfig = {
-      model: modelName,
-      temperature: 0.1,
-      max_tokens: 2048,
-      ...configSetting?.value
-    };
 
     const systemPrompt = `You are a DevOps and Deployment agent. You will analyze a directory listing and standard project configuration files (like package.json, requirements.txt, docker-compose.yml, Dockerfile, pom.xml, build.gradle, etc.) to determine:
 1. The project type (e.g., Node.js / React, Python / Django, Docker, Java / Spring Boot, Go, PHP, etc.)
@@ -208,46 +198,38 @@ You MUST respond with a valid JSON object ONLY. Do not wrap the JSON in markdown
 
     const userPrompt = `Here is the scanned directory listing and config files content for the project path "${resolvedPath}":\n\n${filesListing}`;
 
-    // Build request body — skip response_format for custom endpoints that may not support it
-    const requestBody = {
-      model: aiConfig.model,
-      temperature: aiConfig.temperature,
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: userPrompt }
-      ],
-      ...(!isCustomEndpoint ? { response_format: { type: 'json_object' } } : {})
-    };
+    console.log(`[ai-analyze] OpenAI SDK Client -> baseURL: ${baseURL} | model: ${modelName} | keyPrefix: ${apiKey ? apiKey.slice(0, 8) + '...' : 'EMPTY'}`);
 
-    // Call the AI endpoint
+    // Initialize official OpenAI client SDK
+    const openai = new OpenAI({
+      baseURL,
+      apiKey,
+    });
+
     let parsedResult = null;
     try {
-      const response = await fetch(aiEndpoint, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${apiKey}`
-        },
-        body: JSON.stringify(requestBody)
-      });
+      const completionParams = {
+        model: modelName,
+        temperature: 0.1,
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userPrompt }
+        ],
+        stream: false,
+        ...(!isCustomEndpoint ? { response_format: { type: 'json_object' } } : {})
+      };
 
-      if (!response.ok) {
-        const errorText = await response.text();
-        throw new Error(`AI API returned ${response.status}: ${errorText}`);
-      }
-
-      const resJson = await response.json();
-      const content = resJson.choices?.[0]?.message?.content;
+      const completion = await openai.chat.completions.create(completionParams);
+      const content = completion.choices?.[0]?.message?.content;
 
       if (!content) {
         throw new Error('AI returned an empty response. Check your model name and endpoint.');
       }
 
-      // Try to parse JSON directly, or extract from markdown code blocks
+      // Parse JSON directly or extract from markdown ```json blocks
       try {
         parsedResult = JSON.parse(content);
       } catch (_) {
-        // Some endpoints wrap JSON in markdown ```json blocks — strip them
         const jsonMatch = content.match(/```(?:json)?\s*([\s\S]*?)\s*```/) || content.match(/(\{[\s\S]*\})/);
         if (jsonMatch) {
           parsedResult = JSON.parse(jsonMatch[1]);
@@ -256,7 +238,7 @@ You MUST respond with a valid JSON object ONLY. Do not wrap the JSON in markdown
         }
       }
     } catch (aiErr) {
-      console.error('AI Call failed:', aiErr.message);
+      console.error('[ai-analyze] OpenAI SDK call failed:', aiErr.message);
       return NextResponse.json({ 
         success: false, 
         error: `AI analysis failed: ${aiErr.message}`
