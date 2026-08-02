@@ -2976,14 +2976,53 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="text-[10px] font-bold uppercase text-[var(--text-muted)] tracking-wider block mb-1">Network <span className="text-[var(--text-muted)] normal-case font-normal">(e.g. proxy-net)</span></label>
-                  <input
-                    type="text"
-                    value={createServiceModal.network}
-                    onChange={(e) => setCreateServiceModal(prev => ({ ...prev, network: e.target.value }))}
-                    placeholder="e.g. proxy-net or bridge"
-                    className="w-full bg-slate-950 border border-[var(--border-color)] rounded-xl p-2.5 text-xs font-mono focus:outline-none focus:border-amber-500/50"
-                  />
+                  <label className="text-[10px] font-bold uppercase text-[var(--text-muted)] tracking-wider block mb-1">Network <span className="text-[var(--text-muted)] normal-case font-normal">(optional — overlay recommended for Swarm)</span></label>
+                  <div className="relative">
+                    <input
+                      list="swarm-create-networks"
+                      type="text"
+                      value={createServiceModal.network}
+                      onChange={(e) => setCreateServiceModal(prev => ({ ...prev, network: e.target.value }))}
+                      placeholder="e.g. proxy-net-overlay"
+                      className="w-full bg-slate-950 border border-[var(--border-color)] rounded-xl p-2.5 text-xs font-mono focus:outline-none focus:border-amber-500/50"
+                    />
+                    <datalist id="swarm-create-networks">
+                      {networks.filter(n => !['bridge','host','none'].includes(n.Name)).map((n, i) => (
+                        <option key={i} value={n.Name}>{n.Name} [{n.Driver}]</option>
+                      ))}
+                    </datalist>
+                  </div>
+                  {networks.length > 0 && (
+                    <div className="flex flex-wrap gap-1 mt-1.5">
+                      {networks
+                        .filter(n => !['host','none'].includes(n.Name))
+                        .map((n, i) => {
+                          const isOverlay = n.Driver === 'overlay';
+                          const isBridge = n.Driver === 'bridge';
+                          const isSelected = createServiceModal.network === n.Name;
+                          return (
+                            <button
+                              key={i}
+                              type="button"
+                              onClick={() => setCreateServiceModal(prev => ({ ...prev, network: isSelected ? '' : n.Name }))}
+                              className={`px-2 py-0.5 rounded-lg text-[9px] font-mono font-bold border transition-all cursor-pointer ${
+                                isSelected
+                                  ? 'bg-amber-500/20 border-amber-400/60 text-amber-300'
+                                  : isOverlay
+                                  ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400 hover:border-emerald-400/60'
+                                  : isBridge
+                                  ? 'bg-slate-700/40 border-slate-600/30 text-slate-400 hover:border-slate-500/60'
+                                  : 'bg-slate-700/40 border-slate-600/30 text-slate-400 hover:border-slate-500/60'
+                              }`}
+                              title={`${n.Driver} · ${n.Scope}${isOverlay ? ' ✓ Swarm compatible' : isBridge ? ' ⚠ Bridge — Swarm will auto-create overlay fallback' : ''}`}
+                            >
+                              {isOverlay ? '⬡ ' : isBridge ? '⬢ ' : ''}{n.Name}
+                            </button>
+                          );
+                        })
+                      }
+                    </div>
+                  )}
                 </div>
                 <div>
                   <label className="text-[10px] font-bold uppercase text-[var(--text-muted)] tracking-wider block mb-1">Volume Mounts <span className="text-[var(--text-muted)] normal-case font-normal">(host:container)</span></label>
@@ -3169,15 +3208,52 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
                   />
                 </div>
                 <div>
-                  <label className="text-[10px] font-bold uppercase text-[var(--text-muted)] tracking-wider block mb-1">Network <span className="text-[var(--text-muted)] normal-case font-normal">(e.g. proxy-net)</span></label>
-                  <input
-                    type="text"
-                    value={swarmConfigModal.network}
-                    onChange={(e) => setSwarmConfigModal(prev => ({ ...prev, network: e.target.value }))}
-                    placeholder="e.g. overlay-net"
-                    className="w-full bg-slate-950 border border-[var(--border-color)] rounded-xl p-2.5 text-xs font-mono focus:outline-none focus:border-purple-500/50"
-                  />
-                </div>
+                   <label className="text-[10px] font-bold uppercase text-[var(--text-muted)] tracking-wider block mb-1">Add Network <span className="text-[var(--text-muted)] normal-case font-normal">(overlay recommended for Swarm)</span></label>
+                   <div className="relative">
+                     <input
+                       list="swarm-config-networks"
+                       type="text"
+                       value={swarmConfigModal.network}
+                       onChange={(e) => setSwarmConfigModal(prev => ({ ...prev, network: e.target.value }))}
+                       placeholder="e.g. proxy-net-overlay"
+                       className="w-full bg-slate-950 border border-[var(--border-color)] rounded-xl p-2.5 text-xs font-mono focus:outline-none focus:border-purple-500/50"
+                     />
+                     <datalist id="swarm-config-networks">
+                       {networks.filter(n => !['bridge','host','none'].includes(n.Name)).map((n, i) => (
+                         <option key={i} value={n.Name}>{n.Name} [{n.Driver}]</option>
+                       ))}
+                     </datalist>
+                   </div>
+                   {networks.length > 0 && (
+                     <div className="flex flex-wrap gap-1 mt-1.5">
+                       {networks
+                         .filter(n => !['host','none'].includes(n.Name))
+                         .map((n, i) => {
+                           const isOverlay = n.Driver === 'overlay';
+                           const isBridge = n.Driver === 'bridge';
+                           const isSelected = swarmConfigModal.network === n.Name;
+                           return (
+                             <button
+                               key={i}
+                               type="button"
+                               onClick={() => setSwarmConfigModal(prev => ({ ...prev, network: isSelected ? '' : n.Name }))}
+                               className={`px-2 py-0.5 rounded-lg text-[9px] font-mono font-bold border transition-all cursor-pointer ${
+                                 isSelected
+                                   ? 'bg-purple-500/20 border-purple-400/60 text-purple-300'
+                                   : isOverlay
+                                   ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400 hover:border-emerald-400/60'
+                                   : 'bg-slate-700/40 border-slate-600/30 text-slate-400 hover:border-slate-500/60'
+                               }`}
+                               title={`${n.Driver} · ${n.Scope}${isOverlay ? ' ✓ Swarm compatible' : isBridge ? ' ⚠ Bridge — not directly usable by Swarm' : ''}`}
+                             >
+                               {isOverlay ? '⬡ ' : isBridge ? '⬢ ' : ''}{n.Name}
+                             </button>
+                           );
+                         })
+                       }
+                     </div>
+                   )}
+                 </div>
               </div>
 
               <div>
