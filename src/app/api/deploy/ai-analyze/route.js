@@ -231,24 +231,43 @@ You MUST respond with a valid JSON object ONLY. Do not wrap the JSON in markdown
     }
 
     // --- SERVER-SIDE SWARM INJECTION ---
-    // Parse container_name entries and their ports from docker-compose.yml in filesListing
-    // This guarantees correct docker service create syntax regardless of what the AI wrote.
+    // Extract service names from docker-compose.yml (container_name OR service definitions under `services:`)
     let swarmBlock = '';
-    const composeMatch = filesListing.match(/container_name:\s*(\S+)/g);
-    if (composeMatch && composeMatch.length > 0) {
-      const services = composeMatch.map(m => m.replace('container_name:', '').trim());
+    let services = [];
 
+    // 1. Try matching explicit container_name entries
+    const composeContainerNames = filesListing.match(/container_name:\s*(\S+)/g);
+    if (composeContainerNames && composeContainerNames.length > 0) {
+      services = composeContainerNames.map(m => m.replace('container_name:', '').trim());
+    } else {
+      // 2. Try matching top-level service block keys under services:
+      const servicesSectionMatch = filesListing.match(/services:\s*\n((?:\s{2,4}[a-zA-Z0-9._-]+:\s*\n[\s\S]*?)+)(?=\n\S|\n$)/);
+      if (servicesSectionMatch) {
+        const serviceKeys = servicesSectionMatch[1].match(/^\s{2,4}([a-zA-Z0-9._-]+):/gm);
+        if (serviceKeys) {
+          services = serviceKeys.map(k => k.trim().replace(':', ''));
+        }
+      }
+    }
+
+    // 3. Fallback: project folder name if docker-compose.yml missing or couldn't parse
+    if (services.length === 0) {
+      const folderName = resolvedPath.split('/').filter(Boolean).pop() || 'app';
+      services = [folderName.toLowerCase().replace(/[^a-z0-9._-]/g, '')];
+    }
+
+    if (services.length > 0) {
       // Detect subfolder build contexts from docker-compose.yml (build: ./frontend etc)
       const buildLines = filesListing.match(/build:\s*(\S+)/g) || [];
       const buildDirs = buildLines.map(b => b.replace('build:', '').trim().replace(/^\.\//,''));
 
-      // Detect ports per container: scan each container_name block for its ports
+      // Detect ports per container: scan each container_name or service block for its ports
       const portMap = {};
       for (const svc of services) {
-        // Find host:container port patterns near this container name
-        const svcPortMatch = filesListing.match(new RegExp(`container_name:\\s*${svc}[\\s\\S]{0,400}?ports:[\\s\\S]{0,200}?-(\\s*['"]?\\d+:\\d+['"]?)`, 'm'));
+        // Find host:container port patterns near this service name
+        const svcPortMatch = filesListing.match(new RegExp(`(?:container_name:|${svc}:)[\\s\\S]{0,400}?ports:[\\s\\S]{0,200}?-(\\s*['"]?\\d+:\\d+['"]?)`, 'm'));
         if (svcPortMatch) {
-          const portLine = svcPortMatch[1].trim().replace(/['"]/, '').replace(/['"]$/, '').trim();
+          const portLine = svcPortMatch[1].trim().replace(/^['"]/, '').replace(/['"]$/, '').trim();
           portMap[svc] = portLine;
         }
       }
