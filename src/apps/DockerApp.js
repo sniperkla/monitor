@@ -2983,7 +2983,7 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
                       type="text"
                       value={createServiceModal.network}
                       onChange={(e) => setCreateServiceModal(prev => ({ ...prev, network: e.target.value }))}
-                      placeholder="e.g. proxy-net-overlay"
+                      placeholder="leave empty to use swarm-net (auto-created)"
                       className="w-full bg-slate-950 border border-[var(--border-color)] rounded-xl p-2.5 text-xs font-mono focus:outline-none focus:border-amber-500/50"
                     />
                     <datalist id="swarm-create-networks">
@@ -3211,7 +3211,7 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
                        type="text"
                        value={swarmConfigModal.network}
                        onChange={(e) => setSwarmConfigModal(prev => ({ ...prev, network: e.target.value }))}
-                       placeholder="e.g. proxy-net-overlay"
+                       placeholder="leave empty to use swarm-net (auto-created)"
                        className="w-full bg-slate-950 border border-[var(--border-color)] rounded-xl p-2.5 text-xs font-mono focus:outline-none focus:border-purple-500/50"
                      />
                      <datalist id="swarm-config-networks">

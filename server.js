@@ -1531,14 +1531,14 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
                     }
                   });
                 }
-                const createCmd = `docker service create ${flags.join(' ')} ${image}`;
-                if (network) {
-                  // Check driver type: overlay networks work with swarm, bridge do not
-                  // If proxy-net exists as bridge (e.g. from docker-compose), we must error clearly
-                  cmdSuffix = `sh -c 'target_net="${network}"; driver=$(docker network inspect ${network} --format "{{.Driver}}" 2>/dev/null); if [ "$driver" = "overlay" ]; then echo "Using overlay network ${network}"; elif [ -z "$driver" ]; then docker network create --driver overlay --attachable ${network}; elif [ "$driver" = "bridge" ]; then count=$(docker network inspect ${network} --format "{{len .Containers}}" 2>/dev/null); if [ "$count" = "0" ] || [ -z "$count" ]; then echo "Converting unused bridge network to overlay..."; docker network rm ${network} >/dev/null 2>&1 && docker network create --driver overlay --attachable ${network}; else target_net="${network}-overlay"; echo "Network ${network} is a bridge network in use; auto-creating attachable overlay network ${target_net}..."; docker network inspect ${target_net} >/dev/null 2>&1 || docker network create --driver overlay --attachable ${target_net}; fi; fi; ${createCmd}'`;
-                } else {
-                  cmdSuffix = createCmd;
+                // If no network specified, always use the default swarm overlay network
+                const effectiveNetwork = network || 'swarm-net';
+                if (!network) {
+                  flags.push(`--network $target_net`);
                 }
+                const createCmd = `docker service create ${flags.join(' ')} ${image}`;
+                // Always run network setup: use/create the overlay network, then deploy
+                cmdSuffix = `sh -c 'target_net="${effectiveNetwork}"; driver=$(docker network inspect ${effectiveNetwork} --format "{{.Driver}}" 2>/dev/null); if [ "$driver" = "overlay" ]; then echo "Using overlay network ${effectiveNetwork}"; elif [ -z "$driver" ]; then echo "Creating overlay network ${effectiveNetwork}..."; docker network create --driver overlay --attachable ${effectiveNetwork}; elif [ "$driver" = "bridge" ]; then count=$(docker network inspect ${effectiveNetwork} --format "{{len .Containers}}" 2>/dev/null); if [ "$count" = "0" ] || [ -z "$count" ]; then echo "Converting unused bridge to overlay..."; docker network rm ${effectiveNetwork} >/dev/null 2>&1 && docker network create --driver overlay --attachable ${effectiveNetwork}; else target_net="${effectiveNetwork}-overlay"; echo "Auto-creating overlay network $target_net..."; docker network inspect $target_net >/dev/null 2>&1 || docker network create --driver overlay --attachable $target_net; fi; fi; ${createCmd}'`;
             } else if (action === 'swarm:update' && args.length >= 2) {
                  const serviceName = String(args[0] || '').replace(/[^a-zA-Z0-9._-]/g, '');
                  const image = String(args[1] || '').replace(/[^a-zA-Z0-9.@/:-]/g, '');
