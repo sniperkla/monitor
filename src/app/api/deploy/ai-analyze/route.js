@@ -160,47 +160,29 @@ export async function POST(request) {
       return NextResponse.json({ success: false, error: 'AI API Key is not configured. Please add a Groq API key in the global AI settings, or switch to Manual mode and enter a custom API key in the Auto Deploy settings.' }, { status: 400 });
     }
 
-    const systemPrompt = `You are a DevOps and Deployment agent. You will analyze a directory listing, standard project configuration files, and any existing deployment script to determine:
-1. The project type (e.g., Node.js / React, Python / Django, Docker, Java / Spring Boot, Go, PHP, etc.)
-2. Key technologies, dependencies, and frameworks used
-3. An optimized shell/bash deployment script/command suitable for production.
+    const systemPrompt = `You are a DevOps and Deployment agent. You will analyze a directory listing, standard project configuration files, and an existing deployment script to produce an updated, production-ready script.
 
-CRITICAL DEPLOYMENT SCRIPT RULES:
-a) SCRIPT STRUCTURE & BASE PRESERVATION:
-   - If an existing deployment script is provided in the user prompt, USE IT AS YOUR PRIMARY BASE REFERENCE.
-   - PRESERVE directory navigation steps (e.g., \`cd /path/to/project\`), repository updates (\`git pull\`), custom environment variables, and pre/post deployment hooks.
-   - ALWAYS include \`git pull\` (or git fetch) BEFORE building docker images or updating services so the latest code changes are built!
-   - Write ONE clean bash script. Place \`#!/bin/bash\` and \`set -e\` ONLY ONCE at the very top of the script. NEVER output nested \`#!/bin/bash\` or \`set -e\` inside \`if/else\` blocks or subshells!
+CRITICAL INSTRUCTIONS - USE ORIGINAL SCRIPT AS STARTING MATERIAL:
+1. PRIMARY REQUIREMENT: If an existing deployment script is provided in the prompt below, YOU MUST USE IT AS YOUR EXACT STARTING MATERIAL / TEMPLATE.
+2. PRESERVE ORIGINAL COMMANDS: Keep all original `cd` commands (e.g. \`cd /home/ec2-user/aut/\`), repository updates (\`git pull\`), custom environment setup, echo/log statements (e.g. \`echo "Deployment completed successfully."\`), and cleanup commands (\`docker image prune -f\`).
+3. NO DUPLICATE HEADERS: Put \`#!/bin/bash\` and \`set -e\` ONLY ONCE at the very top of the script (lines 1 & 2). Never include nested \`#!/bin/bash\` or \`set -e\` inside \`if/else\` blocks.
+4. SWARM ENHANCEMENT: Replace/upgrade ONLY the container launch command (like \`docker-compose up -d --build\` or \`docker run\`) with a Swarm service check while retaining the original fallback:
+   \`\`\`bash
+   SERVICE_NAME="<project_or_container_name>"
+   IMAGE_NAME="<project_or_container_name>:latest"
 
-b) DOCKER & DOCKER SWARM SERVICES:
-   - If the project uses Docker (docker compose, Dockerfile, or Swarm), follow this pattern:
-     1. Start with setup: \`cd <path>\` (if applicable) and \`git pull\` (if git repository).
-     2. Define \`SERVICE_NAME\` (derived from project name, e.g. "aut") and \`IMAGE_NAME\` (e.g. "aut:latest").
-     3. Check for Swarm service:
-        \`\`\`bash
-        SWARM_TARGET=$(docker service inspect $SERVICE_NAME >/dev/null 2>&1 && echo "$SERVICE_NAME" || (docker service inspect \${SERVICE_NAME}_service >/dev/null 2>&1 && echo "\${SERVICE_NAME}_service" || echo ""))
-        if [ -n "$SWARM_TARGET" ]; then
-          echo "Swarm service '$SWARM_TARGET' detected! Building image and triggering zero-downtime rolling update..."
-          docker build -t $IMAGE_NAME .
-          docker service update --image $IMAGE_NAME --update-order start-first --update-delay 5s $SWARM_TARGET
-          docker container prune -f
-        else
-          echo "Running standard Docker Compose deployment..."
-          docker compose up -d --build
-          sleep 3
-          if docker compose ps | grep -E "Up|running|healthy"; then
-            echo "Deployment successful: containers are running"
-          else
-            echo "Deployment failed: containers did not start correctly. Showing logs:"
-            docker compose logs --tail=50
-            exit 1
-          fi
-          docker image prune -f && docker container prune -f
-        fi
-        \`\`\`
-   - Use 'docker compose' (or 'docker-compose' if legacy is specified in existing script).
+   SWARM_TARGET=$(docker service inspect $SERVICE_NAME >/dev/null 2>&1 && echo "$SERVICE_NAME" || (docker service inspect \${SERVICE_NAME}_service >/dev/null 2>&1 && echo "\${SERVICE_NAME}_service" || echo ""))
 
-4. A concise summary of why you recommended this configuration.
+   if [ -n "$SWARM_TARGET" ]; then
+     echo "Swarm service '$SWARM_TARGET' detected! Building image and updating service..."
+     docker build -t $IMAGE_NAME .
+     docker service update --image $IMAGE_NAME --update-order start-first --update-delay 5s $SWARM_TARGET
+     docker container prune -f
+   else
+     # Original container launch fallback
+     docker-compose up -d --build
+   fi
+   \`\`\`
 
 You MUST respond with a valid JSON object ONLY. Do not wrap the JSON in markdown formatting blocks or include any extra text. The JSON format must be EXACTLY:
 {
