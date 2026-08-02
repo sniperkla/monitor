@@ -9,6 +9,7 @@ const AppContext = createContext();
 
 const initialState = {
   connections: [],
+  connectionsReady: false, // true once fetchConnections has resolved at least once
   activeTerminals: [], // SSH Manager Tabs { id, connectionId, connectionName, host }
   standaloneTerminals: [], // Dedicated Terminal App { id, connectionId, connectionName, host }
   activeFileManagers: [], // { id, connectionId, connectionName }
@@ -212,8 +213,11 @@ function reducer(state, action) {
       return { ...state, standaloneTerminals: action.payload };
     case 'SET_ACTIVE_STANDALONE_DATABASE_BROWSERS':
       return { ...state, standaloneDatabaseBrowsers: action.payload };
+    case 'SET_CONNECTIONS_READY':
+      return { ...state, connectionsReady: action.payload };
+    case 'FETCH_CONNECTIONS': // no-op — handled by the useEffect watching this dispatch
+      return state;
     default:
-
       return state;
   }
 }
@@ -314,6 +318,7 @@ export function AppProvider({ children }) {
     // 3. Update State
     console.log(`✅ [AppContext] Connections updated: ${dbConnections.length} (DB) + ${localConnections.length} (Local)`);
     dispatch({ type: 'SET_CONNECTIONS', payload: [...dbConnections, ...localConnections] });
+    dispatch({ type: 'SET_CONNECTIONS_READY', payload: true }); // signal all apps that connections are loaded
     dispatch({ type: 'SET_LOADING', payload: false });
   }, [apiFetch]);
 
@@ -440,7 +445,7 @@ export function AppProvider({ children }) {
   }, [state.activeTerminals, state.activeFileManagers, state.activeDatabaseBrowsers, state.standaloneTerminals, state.standaloneDatabaseBrowsers, state.activeTerminalId, state.activeDatabaseBrowserId, state.activeFileManagerId, state.view]);
 
   return (
-    <AppContext.Provider value={{ state, dispatch, fetchConnections, apiFetch, relayInfo: state.relayInfo }}>
+    <AppContext.Provider value={{ state, dispatch, fetchConnections, apiFetch, relayInfo: state.relayInfo, connectionsReady: state.connectionsReady }}>
       {children}
     </AppContext.Provider>
   );

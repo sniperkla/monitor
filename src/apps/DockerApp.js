@@ -181,6 +181,7 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
   const { state } = useApp();
   const { showConfirm, showPrompt, addNotification, openWindow, dispatch: osDispatch } = useOS();
   const { t } = useTranslation();
+  const { connectionsReady } = useApp();
   
   // App state
   const [portStatus, setPortStatus] = useState(null); // 'checking', 'free', 'in-use', null
@@ -252,18 +253,10 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
     }
   }, [selectedConnection, windowId, osDispatch]);
 
-  // If global connections list is empty on mount, trigger a fetch so DockerApp
-  // doesn't silently fail when the user reopens without visiting SSH Manager first.
-  useEffect(() => {
-    if (connections.length === 0) {
-      osDispatch({ type: 'FETCH_CONNECTIONS' });
-    }
-  }, []); // run once on mount
-
-  // Restore connection state — re-runs whenever connections finishes loading
+  // Restore connection state — re-runs when global connections finish loading (connectionsReady)
   useEffect(() => {
     if (selectedConnection) return;
-    if (!sshConnections || sshConnections.length === 0) return;
+    if (!connectionsReady || !sshConnections || sshConnections.length === 0) return;
 
     // 1. Try initialConnectionId from prop (window launched directly to a connection)
     if (initialConnectionId) {
@@ -284,7 +277,8 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
     if (sshConnections.length === 1) {
       setSelectedConnection(sshConnections[0]);
     }
-  }, [sshConnections, initialConnectionId, windowId, selectedConnection]);
+  }, [connectionsReady, sshConnections, initialConnectionId, windowId, selectedConnection]);
+
 
   // Restore active tab state
   useEffect(() => {
