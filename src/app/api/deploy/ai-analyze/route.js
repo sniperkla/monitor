@@ -164,10 +164,10 @@ export async function POST(request) {
 
 CRITICAL INSTRUCTIONS - USE ORIGINAL SCRIPT AS STARTING MATERIAL:
 1. PRIMARY REQUIREMENT: If an existing deployment script is provided in the prompt below, YOU MUST USE IT AS YOUR EXACT STARTING MATERIAL / TEMPLATE.
-2. PRESERVE ORIGINAL COMMANDS: Keep all original `cd` commands (e.g. \`cd /home/ec2-user/aut/\`), repository updates (\`git pull\`), custom environment setup, echo/log statements (e.g. \`echo "Deployment completed successfully."\`), and cleanup commands (\`docker image prune -f\`).
+2. PRESERVE ORIGINAL COMMANDS: Keep all original "cd" commands (e.g. \`cd /home/ec2-user/aut/\`), repository updates (\`git pull\`), custom environment setup, echo/log statements (e.g. \`echo "Deployment completed successfully."\`), and cleanup commands (\`docker image prune -f\`).
 3. NO DUPLICATE HEADERS: Put \`#!/bin/bash\` and \`set -e\` ONLY ONCE at the very top of the script (lines 1 & 2). Never include nested \`#!/bin/bash\` or \`set -e\` inside \`if/else\` blocks.
 4. SWARM ENHANCEMENT: Replace/upgrade ONLY the container launch command (like \`docker-compose up -d --build\` or \`docker run\`) with a Swarm service check while retaining the original fallback:
-   \`\`\`bash
+
    SERVICE_NAME="<project_or_container_name>"
    IMAGE_NAME="<project_or_container_name>:latest"
 
@@ -182,7 +182,6 @@ CRITICAL INSTRUCTIONS - USE ORIGINAL SCRIPT AS STARTING MATERIAL:
      # Original container launch fallback
      docker-compose up -d --build
    fi
-   \`\`\`
 
 You MUST respond with a valid JSON object ONLY. Do not wrap the JSON in markdown formatting blocks or include any extra text. The JSON format must be EXACTLY:
 {
