@@ -976,6 +976,7 @@ export default function SettingsApp({ initialTab, deploymentOnly = false, openRe
           targetType: deployConfig.targetType,
           connectionId: deployConfig.connectionId,
           projectPath: deployConfig.projectPath,
+          deployCommand: deployConfig.deployCommand,
           aiModel: deployConfig.aiModel,
           aiCustomModel: deployConfig.aiCustomModel,
           aiEndpoint: deployConfig.aiEndpoint,
