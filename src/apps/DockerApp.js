@@ -1506,48 +1506,56 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
                                                 {tasks.map((task, idx) => {
                                                   const replicaNum = task.name.includes('.') ? `#${task.name.split('.')[1] || (idx + 1)}` : `#${idx + 1}`;
                                                   return (
-                                                    <div key={task.id} className="p-2.5 rounded-xl bg-[var(--bg-card)] border border-white/5 flex items-center justify-between gap-3 text-xs hover:border-purple-500/30 transition-all">
-                                                      <div className="flex items-center gap-2 min-w-0">
-                                                        <span className="px-1.5 py-0.5 text-[9px] bg-purple-500/20 text-purple-300 font-bold rounded">
-                                                          {replicaNum}
-                                                        </span>
-                                                        <span className="font-mono text-[10px] text-[var(--text-muted)]">{task.id.substring(0, 10)}</span>
-                                                        <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded ${task.state === 'running' ? 'bg-emerald-500/15 text-emerald-400' : 'bg-rose-500/15 text-rose-400'}`}>
-                                                          {task.state === 'running' ? `● ${formatUptime(task.status)}` : task.status}
-                                                        </span>
-                                                      </div>
+                                                    <div key={task.id} className="rounded-xl bg-[var(--bg-card)] border border-white/5 overflow-hidden transition-all hover:border-purple-500/30">
+                                                      <div className="p-2.5 flex items-center justify-between gap-3 text-xs">
+                                                        <div className="flex items-center gap-2 min-w-0">
+                                                          <span className="px-1.5 py-0.5 text-[9px] bg-purple-500/20 text-purple-300 font-bold rounded">
+                                                            {replicaNum}
+                                                          </span>
+                                                          <span className="font-mono text-[10px] text-[var(--text-muted)]">{task.id.substring(0, 10)}</span>
+                                                          <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded ${task.state === 'running' ? 'bg-emerald-500/15 text-emerald-400' : 'bg-rose-500/15 text-rose-400'}`}>
+                                                            {task.state === 'running' ? `● ${formatUptime(task.status)}` : task.status}
+                                                          </span>
+                                                        </div>
 
-                                                      <div className="flex items-center gap-1.5 shrink-0">
-                                                        <button
-                                                          onClick={(e) => { e.stopPropagation(); fetchLogs(task.id, task.name); }}
-                                                          className="px-2 py-1 bg-white/5 hover:bg-white/10 text-[10px] font-medium text-sky-400 rounded-lg transition-all flex items-center gap-1 cursor-pointer"
-                                                          title="View Logs"
-                                                        >
-                                                          <FileText size={11} /> Logs
-                                                        </button>
-                                                        <button
-                                                          onClick={(e) => { e.stopPropagation(); attachToContainer(task.id, task.name); }}
-                                                          disabled={task.state !== 'running'}
-                                                          className="px-2 py-1 bg-white/5 hover:bg-white/10 text-[10px] font-medium text-emerald-400 rounded-lg transition-all disabled:opacity-30 flex items-center gap-1 cursor-pointer"
-                                                          title="Terminal"
-                                                        >
-                                                          <TermIcon size={11} /> Terminal
-                                                        </button>
-                                                        <button
-                                                          onClick={() => handleContainerAction(task.id, task.state === 'running' ? 'stop' : 'start')}
-                                                          className={`px-2 py-1 text-[10px] font-medium rounded-lg transition-all flex items-center gap-1 cursor-pointer ${task.state === 'running' ? 'bg-amber-500/10 text-amber-400 hover:bg-amber-500/20' : 'bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20'}`}
-                                                        >
-                                                          {task.state === 'running' ? <Square size={11} /> : <Play size={11} />}
-                                                          {task.state === 'running' ? 'Stop' : 'Start'}
-                                                        </button>
-                                                        <button
-                                                          onClick={() => showConfirm(`Delete task ${task.name}?`, () => handleContainerAction(task.id, 'rm'), 'Remove', 'Delete')}
-                                                          className="p-1 bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 rounded-lg transition-all cursor-pointer"
-                                                          title="Delete task container"
-                                                        >
-                                                          <Trash2 size={11} />
-                                                        </button>
+                                                        <div className="flex items-center gap-1.5 shrink-0">
+                                                          <button
+                                                            onClick={(e) => { e.stopPropagation(); fetchLogs(task.id, task.name); }}
+                                                            className="px-2 py-1 bg-white/5 hover:bg-white/10 text-[10px] font-medium text-sky-400 rounded-lg transition-all flex items-center gap-1 cursor-pointer"
+                                                            title="View Logs"
+                                                          >
+                                                            <FileText size={11} /> Logs
+                                                          </button>
+                                                          <button
+                                                            onClick={(e) => { e.stopPropagation(); attachToContainer(task.id, task.name); }}
+                                                            disabled={task.state !== 'running'}
+                                                            className="px-2 py-1 bg-white/5 hover:bg-white/10 text-[10px] font-medium text-emerald-400 rounded-lg transition-all disabled:opacity-30 flex items-center gap-1 cursor-pointer"
+                                                            title="Terminal"
+                                                          >
+                                                            <TermIcon size={11} /> Terminal
+                                                          </button>
+                                                          <button
+                                                            onClick={() => handleContainerAction(task.id, task.state === 'running' ? 'stop' : 'start')}
+                                                            className={`px-2 py-1 text-[10px] font-medium rounded-lg transition-all flex items-center gap-1 cursor-pointer ${task.state === 'running' ? 'bg-amber-500/10 text-amber-400 hover:bg-amber-500/20' : 'bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20'}`}
+                                                          >
+                                                            {task.state === 'running' ? <Square size={11} /> : <Play size={11} />}
+                                                            {task.state === 'running' ? 'Stop' : 'Start'}
+                                                          </button>
+                                                          <button
+                                                            onClick={() => showConfirm(`Delete task ${task.name}?`, () => handleContainerAction(task.id, 'rm'), 'Remove', 'Delete')}
+                                                            className="p-1 bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 rounded-lg transition-all cursor-pointer"
+                                                            title="Delete task container"
+                                                          >
+                                                            <Trash2 size={11} />
+                                                          </button>
+                                                        </div>
                                                       </div>
+                                                      {(task.networks || task.mounts) && (
+                                                        <div className="px-3 py-1.5 bg-black/40 border-t border-white/5 grid grid-cols-2 gap-x-4 gap-y-1 text-[9px] font-mono text-[var(--text-muted)]">
+                                                          <div><span className="text-purple-400/80 font-sans font-bold mr-1">Network:</span>{task.networks || 'proxy-net'}</div>
+                                                          <div className="truncate" title={task.mounts}><span className="text-purple-400/80 font-sans font-bold mr-1">Mounts:</span>{task.mounts || '-'}</div>
+                                                        </div>
+                                                      )}
                                                     </div>
                                                   );
                                                 })}
