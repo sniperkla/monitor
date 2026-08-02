@@ -161,7 +161,7 @@ export async function POST(request) {
     }
 
     // Check if the user has explicitly set up Swarm before (existing script has swarm/service commands)
-    const isSwarmMode = /docker\s+(swarm|service|stack)/.test(existingScript) || existingScript.includes('AUTO-INJECTED SWARM SECTION');
+    const isSwarmMode = /docker\s+(swarm|service|stack)/.test(existingScript);
 
     const systemPrompt = `You are a DevOps and Deployment agent. You will analyze a directory listing, standard project configuration files, and an existing deployment script to produce an updated, production-ready script.
 
@@ -309,7 +309,7 @@ You MUST respond with a valid JSON object ONLY. Do not wrap the JSON in markdown
       }
 
       swarmBlock = `
-     # === AUTO-INJECTED SWARM SECTION ===
+     # Docker Swarm Zero-Downtime Deployment
      docker swarm init 2>/dev/null || true
      docker swarm update --task-history-limit 1 2>/dev/null || true
 
@@ -331,8 +331,7 @@ ${svcSection}
      done
      docker exec global-nginx nginx -s reload 2>/dev/null || docker restart global-nginx 2>/dev/null || true
 
-     docker container prune -f 2>/dev/null || true
-     # === END SWARM SECTION ===`;
+     docker container prune -f 2>/dev/null || true`;
     } // end isSwarmMode
 
     // Always build standardScript and swarmScript separately
@@ -341,7 +340,7 @@ ${svcSection}
 
     if (swarmBlock) {
       // Remove any swarm/stack/service commands the AI may have written
-      let cleanScript = standardScript.replace(/docker\s+(swarm|service|stack)\s+[^\n]*/g, '# [swarm commands replaced by injected section]');
+      let cleanScript = standardScript.replace(/docker\s+(swarm|service|stack)\s+[^\n]*/g, '').replace(/\n\s*\n\s*\n/g, '\n\n');
       // Insert swarm block before the final echo or at end
       const echoIdx = cleanScript.lastIndexOf('echo "Deployment completed');
       if (echoIdx !== -1) {
