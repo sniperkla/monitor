@@ -968,32 +968,20 @@ export async function runDeployment(config, runMeta = {}) {
           }
           scriptLines.push('echo "[deploy] Running deploy command..."');
           
-          // Embed the user deploy command inline but run it inside an isolated subshell
-          // so that any syntax or exit-code in the user's script can't corrupt the wrapper context.
-          // set +e / set -e bracketing prevents `set -e` in the outer wrapper from killing us if
-          // the user script exits non-zero — we capture the exit code ourselves.
           const rawDeployCmd = (config.deployCommand || '').trim();
-          // Strip duplicate shebang/set -e lines that shouldn't appear mid-script
-          const cleanedLines = rawDeployCmd.split('\n').map((line, idx) => {
-            if (idx > 0 && (line.trim() === '#!/bin/bash' || line.trim() === 'set -e' || line.trim() === 'set -o pipefail')) {
-              return '# ' + line;
-            }
-            return line;
-          });
-          const cleanDeployCmd = cleanedLines.join('\n');
+          const userCmdB64 = Buffer.from(rawDeployCmd ? `#!/bin/bash\n${rawDeployCmd}\n` : 'exit 0\n').toString('base64');
+          const userCmdPath = `/tmp/deploy_cmd_${projectId}.sh`;
 
-          // Run the user deploy command in its own subshell to fully isolate any syntax issues
-          scriptLines.push('set +e');
-          scriptLines.push('(');
-          scriptLines.push('set -e');
-          scriptLines.push(cleanDeployCmd);
-          scriptLines.push(')');
-          scriptLines.push('USER_CMD_EXIT=$?');
-          scriptLines.push('set -e');
-          scriptLines.push('if [ "$USER_CMD_EXIT" != "0" ]; then');
-          scriptLines.push('  echo "[deploy] ❌ Deploy command exited with code $USER_CMD_EXIT"');
-          scriptLines.push('  exit $USER_CMD_EXIT');
-          scriptLines.push('fi');
+          scriptLines.push(`USER_CMD_PATH="${userCmdPath}"`);
+          scriptLines.push(`echo "${userCmdB64}" | base64 -d > "$USER_CMD_PATH"`);
+          scriptLines.push(`chmod +x "$USER_CMD_PATH"`);
+          scriptLines.push(`USER_CMD_EXIT=0`);
+          scriptLines.push(`bash "$USER_CMD_PATH" || USER_CMD_EXIT=$?`);
+          scriptLines.push(`rm -f "$USER_CMD_PATH" 2>/dev/null || true`);
+          scriptLines.push(`if [ "$USER_CMD_EXIT" != "0" ]; then`);
+          scriptLines.push(`  echo "[deploy] ❌ Deploy command exited with code $USER_CMD_EXIT"`);
+          scriptLines.push(`  exit $USER_CMD_EXIT`);
+          scriptLines.push(`fi`);
 
           // Clean up credentials after deploy command completes
           if (config.bitbucketConnected) {
