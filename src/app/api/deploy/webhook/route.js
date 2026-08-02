@@ -1182,8 +1182,28 @@ export async function POST(request) {
     let projectId = searchParams.get('project') || 'default';
     let dbKey = projectId === 'default' ? 'auto_deploy_config' : `auto_deploy_config_${projectId}`;
 
+    let rawBodyText = '';
+    try { rawBodyText = await request.text(); } catch (_) {}
+
+    let bodyText = rawBodyText;
+    if (bodyText && (bodyText.startsWith('payload=') || bodyText.includes('payload='))) {
+      try {
+        const params = new URLSearchParams(bodyText);
+        const rawPayload = params.get('payload');
+        if (rawPayload) {
+          bodyText = rawPayload;
+        } else {
+          bodyText = decodeURIComponent(bodyText.replace(/\+/g, ' ').replace(/^payload=/, ''));
+        }
+      } catch (_) {
+        try {
+          bodyText = decodeURIComponent(bodyText.replace(/\+/g, ' ').replace(/^payload=/, ''));
+        } catch (_) {}
+      }
+    }
+
     let body = {};
-    try { body = await request.json(); } catch (_) {}
+    try { if (bodyText) body = JSON.parse(bodyText); } catch (_) {}
     const { deployCommand: bodyDeployCmd } = body;
 
     console.log(`[webhook] Received POST request for project: ${projectId}`);
@@ -1288,28 +1308,6 @@ export async function POST(request) {
       }
     }
 
-    let bodyText = await request.text();
-
-    // GitHub supports two webhook content types:
-    //   1. application/json          → body is raw JSON (normal)
-    //   2. application/x-www-form-urlencoded → body is "payload=%7B%22ref%22..." (URL-encoded JSON)
-    // Normalize to raw JSON so all downstream JSON.parse() calls work regardless of content type.
-    if (bodyText && (bodyText.startsWith('payload=') || bodyText.includes('payload='))) {
-      try {
-        const params = new URLSearchParams(bodyText);
-        const rawPayload = params.get('payload');
-        if (rawPayload) {
-          bodyText = rawPayload;
-        } else {
-          bodyText = decodeURIComponent(bodyText.replace(/\+/g, ' ').replace(/^payload=/, ''));
-        }
-      } catch (_) {
-        try {
-          bodyText = decodeURIComponent(bodyText.replace(/\+/g, ' ').replace(/^payload=/, ''));
-        } catch (_) {}
-      }
-    }
-
     // 3. Signature verification for webhook calls (when not a manual trigger)
     if (!isManual) {
       const githubEvent = request.headers.get('x-github-event');
@@ -1336,7 +1334,7 @@ export async function POST(request) {
         if (config.secret) {
           // GitHub uses x-hub-signature-256, Bitbucket uses x-hub-signature
           const signatureHeader = request.headers.get('x-hub-signature-256') || request.headers.get('x-hub-signature');
-          if (!signatureHeader || !verifySignature(bodyText, config.secret, signatureHeader)) {
+          if (!signatureHeader || (!verifySignature(rawBodyText, config.secret, signatureHeader) && !verifySignature(bodyText, config.secret, signatureHeader))) {
             console.log(`[webhook] Signature verification failed`);
             await updateDeployStatus(
               projectId,
