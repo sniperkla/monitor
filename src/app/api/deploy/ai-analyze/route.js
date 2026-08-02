@@ -170,8 +170,8 @@ CRITICAL INSTRUCTIONS - USE ORIGINAL SCRIPT AS STARTING MATERIAL:
    - If the project uses Docker (Dockerfile or docker-compose), upgrade the deployment section to AUTOMATICALLY create or update Docker Swarm services.
 
 5. MULTI-CONTAINER / MULTI-SERVICE PROJECTS:
-   - If `docker-compose.yml` defines multiple services (e.g. "autbackend" and "autfrontend"):
-   - Use `docker stack deploy` or handle all services defined in `docker-compose.yml`.
+   - If docker-compose.yml defines multiple services (e.g. "autbackend" and "autfrontend"):
+   - Use docker stack deploy or handle all services defined in docker-compose.yml.
    - Example structure for multi-service projects:
 
      # Ensure Swarm is active and task history limit is set to 1
@@ -187,7 +187,7 @@ CRITICAL INSTRUCTIONS - USE ORIGINAL SCRIPT AS STARTING MATERIAL:
      SERVICES=("autfrontend" "autbackend")
      ANY_SWARM=0
 
-     for SVC in "${SERVICES[@]}"; do
+     for SVC in "\${SERVICES[@]}"; do
        SWARM_TARGET=$(docker service inspect $SVC >/dev/null 2>&1 && echo "$SVC" || (docker service inspect \${PROJECT_NAME}_\${SVC} >/dev/null 2>&1 && echo "\${PROJECT_NAME}_\${SVC}" || echo ""))
        if [ -n "$SWARM_TARGET" ]; then
          echo "🐝 Updating Swarm service '$SWARM_TARGET' zero-downtime..."
