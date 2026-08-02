@@ -10,6 +10,7 @@ import { ConnectionRepository } from '@/lib/repositories/ConnectionRepository';
 import { decrypt } from '@/utils/encryption';
 import { broadcastDeploymentStatus } from '@/app/api/deploy/sse/route';
 import { setRunning, clearRunning, getRunning, tryAcquireStartLock, releaseStartLock } from '@/lib/deployProcesses';
+import OpenAI from 'openai';
 
 // Simple per-project rate limiter for deployment triggers
 const triggerRateLimit = new Map();
@@ -103,7 +104,7 @@ function extractErrorsFromLog(logText) {
   const lines = logText.split('\n');
 
   // Patterns that indicate an actual error line
-  const errorLinePattern = /\b(error|fatal|exception|crash|panic|segfault|killed|denied|cannot|unable to|refused|timed? ?out|broken|ENOENT|EACCES|EPERM|not found|no such file|undefined is not|cannot read|failed to|command not found|permission denied|syntax error|unexpected token|module not found|cannot find module|type error|reference error|range error)\b/i;
+  const errorLinePattern = /\b(error|fatal|exception|crash|panic|segfault|killed|denied|cannot|unable to|refused|timed? ?out|broken|ENOENT|EACCES|EPERM|ENOSPC|ENOMEM|no space left|disk full|out of memory|not found|no such file|undefined is not|cannot read|failed to|command not found|permission denied|syntax error|unexpected token|module not found|cannot find module|type error|reference error|range error)\b/i;
 
   // Patterns to SKIP — these are noise or generic status lines
   const skipPattern = /^(---DEPLOY_EXIT_CODE:|--->\s*Running|Deploying\.\.\.|warn\s*[:\-]|warning\s*[:\-]|info\s*[:\-]|\[SSE\]|npm warn|npm notice|yarn warning|deprecated|peer dep|info Visit|Done in \d|✨\s*Done|\/tmp\/deploy_cmd_)/i;
@@ -115,14 +116,18 @@ function extractErrorsFromLog(logText) {
   const buildErrorPatterns = [
     // gcc/clang: "file:line: error: message"
     /^(.+?):(\d+):\d*:\s*(?:fatal )?error:\s*(.+)/i,
-    // Node/JS: "SyntaxError: message", "TypeError: message", etc.
-    /^((?:Syntax|Type|Reference|Range|URI|Eval|Internal)?Error):?\s*(.+)/i,
+    // Node/JS/TS: "Type error: message", "SyntaxError: message", etc.
+    /^((?:Type|Syntax|Reference|Range|URI|Eval|Internal)?\s*error):?\s*(.+)/i,
+    // TypeScript line errors: "./components/View.tsx:1799:44"
+    /^(\.\/.+?:\d+:\d+)\s*(.+)/i,
     // Go: "file:line:col: error message" or "./path: line: message"
     /^(\.\/.+?):(\d+):\s*(.+)/i,
     // Python: "File \"path\", line N, in module" + following "XError: message"
     /^(?:Traceback|File\s+".+",\s+line\s+\d+)/i,
     // Generic "Error: ..." at start of line
     /^(?:Error|FATAL|FAILURE|FAILED)[\s:]+(.+)/i,
+    // Disk / memory errors
+    /(?:no space left on device|out of memory|disk full|ENOSPC|ENOMEM)/i,
     // "make: *** [target] Error N"
     /^make:\s*\*\*\*/i,
     // Docker build errors
@@ -197,6 +202,96 @@ function extractErrorsFromLog(logText) {
   return [...errors].slice(0, 15); // Cap at 15 errors
 }
 
+// Extract error summary for Telegram notification using project/global AI settings.
+// If AI is unavailable or fails, falls back to legacy regex error extractor.
+async function extractErrorForTelegram(config, logText) {
+  if (!logText) return null;
+
+  // 1. Try AI Error Extraction using Auto Deploy AI config
+  try {
+    const projectId = config.id || 'default';
+    const dbKey = projectId === 'default' ? 'auto_deploy_config' : `auto_deploy_config_${projectId}`;
+
+    await connectDB(process.env.MONGODB_URI, true);
+    const keysSetting = await SystemSetting.findOne({ key: 'ai_api_keys' });
+    const configSetting = await SystemSetting.findOne({ key: 'ai_config' });
+    const projectSetting = await SystemSetting.findOne({ key: dbKey });
+    const projectAiPrefs = projectSetting?.value || {};
+
+    let apiKey = process.env.GROQ_API_KEY || '';
+    if (keysSetting?.value?.keys && Array.isArray(keysSetting.value.keys) && keysSetting.value.keys.length > 0) {
+      const idx = keysSetting.value.currentIndex || 0;
+      apiKey = keysSetting.value.keys[idx] || keysSetting.value.keys[0];
+    }
+
+    const effectiveAiModel = config.aiModel || projectAiPrefs.aiModel;
+    const effectiveAiCustomModel = config.aiCustomModel || projectAiPrefs.aiCustomModel;
+    const effectiveAiEndpoint = (config.aiEndpoint || projectAiPrefs.aiEndpoint || '').trim();
+    const effectiveAiApiKey = (config.aiApiKey || projectAiPrefs.aiApiKey || '').trim();
+
+    let baseURL = 'https://api.groq.com/openai/v1';
+    let modelName = configSetting?.value?.model || 'llama-3.3-70b-versatile';
+
+    if (effectiveAiModel === 'manual' || (effectiveAiEndpoint && effectiveAiApiKey)) {
+      let userEndpoint = effectiveAiEndpoint || 'https://api.openai.com/v1';
+      userEndpoint = userEndpoint.replace(/\/chat\/completions\/?$/, '').replace(/\/+$/, '');
+      baseURL = userEndpoint;
+      modelName = effectiveAiCustomModel || 'gpt-3.5-turbo';
+      apiKey = effectiveAiApiKey || apiKey;
+    } else if (effectiveAiModel && effectiveAiModel !== 'auto') {
+      modelName = effectiveAiModel;
+    }
+
+    if (apiKey) {
+      // Snippet of recent build failure output (last 35KB)
+      const logSnippet = logText.length > 35000 ? logText.slice(-35000) : logText;
+
+      const openai = new OpenAI({
+        baseURL,
+        apiKey,
+        timeout: 12000 // 12 sec max timeout
+      });
+
+      const completion = await openai.chat.completions.create({
+        model: modelName,
+        temperature: 0.1,
+        max_tokens: 350,
+        messages: [
+          {
+            role: 'system',
+            content: `You are a precise error detection engine. Analyze the deployment log and extract ONLY the exact actual error message line(s) causing the failure (e.g. TypeScript type errors like "Type error: ...", file/line numbers like "./components/CustomerView.tsx:1799:44", disk space errors like "No space left on device", missing modules, syntax errors, or command exit failures).
+
+CRITICAL FORMAT RULES:
+- Output ONLY the exact raw error message line(s).
+- Include file path and line number if present.
+- DO NOT add conversational intros, outros, or explanations (e.g. DO NOT say "Here is the error:", "Root cause:", "The deployment failed because").
+- DO NOT output full logs or warning chatter. Return ONLY 1 to 4 clean error lines.`
+          },
+          {
+            role: 'user',
+            content: `Deployment Log:\n${logSnippet}`
+          }
+        ]
+      });
+
+      const aiText = completion.choices?.[0]?.message?.content?.trim();
+      if (aiText && aiText.length > 0) {
+        return { isAi: true, text: aiText };
+      }
+    }
+  } catch (aiErr) {
+    console.warn('[Telegram Notification] AI error extraction failed, using legacy mode fallback:', aiErr.message);
+  }
+
+  // 2. Fallback to Legacy Mode
+  const errors = extractErrorsFromLog(logText);
+  if (errors && errors.length > 0) {
+    return { isAi: false, errors };
+  }
+
+  return null;
+}
+
 export async function sendTelegramNotification(config, status, extra = {}) {
   if (!config.telegramNotification || !config.telegramBotToken || !config.telegramChatId) {
     return;
@@ -241,11 +336,15 @@ export async function sendTelegramNotification(config, status, extra = {}) {
   }
 
   if (status === 'failed' && extra.logText) {
-    const errors = extractErrorsFromLog(extra.logText);
-    if (errors.length > 0) {
-      text += `\n<b>Errors:</b>\n`;
-      for (const err of errors) {
-        text += `• <code>${escapeHtml(err)}</code>\n`;
+    const errorAnalysis = await extractErrorForTelegram(config, extra.logText);
+    if (errorAnalysis) {
+      if (errorAnalysis.isAi) {
+        text += `\n🤖 <b>AI Failure Analysis:</b>\n<pre>${escapeHtml(errorAnalysis.text)}</pre>\n`;
+      } else if (errorAnalysis.errors && errorAnalysis.errors.length > 0) {
+        text += `\n<b>Errors (Legacy Detector):</b>\n`;
+        for (const err of errorAnalysis.errors) {
+          text += `• <code>${escapeHtml(err)}</code>\n`;
+        }
       }
     }
   } else if (status === 'success' && extra.logText) {
@@ -699,7 +798,8 @@ export async function runDeployment(config, runMeta = {}) {
       logOutput += `[${finishedAt.toISOString()}] Process exited with code: ${code}\n`;
       logOutput = limitLogOutput(logOutput);
       const hasSuccessMessage = logOutput.includes('[deploy] Deploy command finished successfully');
-      const status = (code === 0 || hasSuccessMessage) ? 'success' : 'failed';
+      const hasErrorMarker = logOutput.includes('❌ Deploy command failed') || logOutput.includes('⚠️ Deploy command returned code');
+      const status = (code === 0 && hasSuccessMessage && !hasErrorMarker) ? 'success' : 'failed';
       try { clearRunning(projectId); } catch (e) {}
       updateStatus(status, logOutput).catch(() => {});
     });
@@ -979,7 +1079,18 @@ export async function runDeployment(config, runMeta = {}) {
           scriptLines.push(`bash "$USER_CMD_PATH" || USER_CMD_EXIT=$?`);
           scriptLines.push(`rm -f "$USER_CMD_PATH" 2>/dev/null || true`);
           scriptLines.push(`if [ "$USER_CMD_EXIT" != "0" ]; then`);
-          scriptLines.push(`  echo "[deploy] ⚠️ Deploy command returned code $USER_CMD_EXIT (continuing deployment pipeline)"`);
+          scriptLines.push(`  echo "[deploy] ❌ Deploy command failed with exit code $USER_CMD_EXIT"`);
+          if (config.bitbucketConnected) {
+            scriptLines.push(`  cd "${resolvedPath}" || true`);
+            scriptLines.push('  rm -f ~/.git-credentials');
+            scriptLines.push('  git config --global --unset credential.helper 2>/dev/null || true');
+            scriptLines.push('  if [ -n "$RAW_URL" ]; then git remote set-url origin "$RAW_URL" 2>/dev/null || true; fi');
+          } else if (config.githubToken) {
+            scriptLines.push(`  cd "${resolvedPath}" || true`);
+            scriptLines.push('  git config --unset http.extraHeader || true');
+          }
+          scriptLines.push('  if [ "$STASH_MADE" = "1" ]; then git stash drop 2>/dev/null || true; fi');
+          scriptLines.push(`  exit $USER_CMD_EXIT`);
           scriptLines.push(`fi`);
 
           // Clean up credentials after deploy command completes
@@ -1135,7 +1246,8 @@ export async function runDeployment(config, runMeta = {}) {
                   logOutput += `[${finishedAt.toISOString()}] [SSH] Execution finished. Exit code: ${finalCode}\n`;
                   logOutput = limitLogOutput(logOutput);
                   const hasSuccessMessage = logOutput.includes('[deploy] Deploy command finished successfully');
-                  const status = (finalCode === 0 || hasSuccessMessage) ? 'success' : 'failed';
+                  const hasErrorMarker = logOutput.includes('❌ Deploy command failed') || logOutput.includes('⚠️ Deploy command returned code');
+                  const status = (finalCode === 0 && hasSuccessMessage && !hasErrorMarker) ? 'success' : 'failed';
 
                   try { clearRunning(projectId); } catch (e) {}
                    updateStatus(status, logOutput).catch(() => {});
