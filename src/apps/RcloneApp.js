@@ -564,7 +564,7 @@ function DynamicCronPicker({ value, onChange }) {
 
 export default function RcloneApp() {
   const { vaultStatus } = useVault();
-  const { state: appState, apiFetch } = useApp();
+  const { state: appState, apiFetch, connectionsReady } = useApp();
   
   // Read connections directly from AppContext so all apps share the same source of truth
   const connections = (appState?.connections || []).filter(c => c.type !== 'database');
@@ -662,35 +662,42 @@ export default function RcloneApp() {
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
-  // Auto-select first connection whenever the connections list changes and none is selected yet
+  // Auto-select first connection once global connections are ready and none is selected yet
   useEffect(() => {
-    if (connections.length > 0 && !selectedConnId) {
-      const firstId = connections[0].id || connections[0]._id;
-      setSelectedConnId(firstId);
-    }
-  }, [connections, selectedConnId]);
+    if (!connectionsReady || connections.length === 0 || selectedConnId) return;
+    // Try to restore from localStorage first
+    const savedId = typeof window !== 'undefined' ? localStorage.getItem('rclone-selected-conn') : null;
+    const restoredConn = savedId && connections.find(c => (c._id || c.id) === savedId);
+    const firstConn = restoredConn || connections[0];
+    setSelectedConnId(firstConn._id || firstConn.id);
+  }, [connectionsReady, connections, selectedConnId]);
 
   // Fetch Rclone status whenever selected connection changes & clear stale data
   useEffect(() => {
-    if (selectedConnId && vaultStatus === 'unlocked') {
-      setRcloneStatus(null);
-      setInstallJob(null);
-      setInstallLog('');
-      setIsInstalling(false);
-      setActiveJob(null);
-      setJobLog('');
-      setIsJobRunning(false);
-      setRemoteItems([]);
-      setBrowseRemote('');
-      setBrowsePath('');
-      setTargetPath('');
-      setServerCrons([]);
-      setCollapsedProjects({});
-      setExpandedLogIdx(null);
-      setHistoryFilter('all');
-      fetchRcloneStatus();
-      fetchCrons();
-      fetchHistory();
+    if (selectedConnId) {
+      // Persist so we can restore on reopen without needing SSH Manager
+      if (typeof window !== 'undefined') localStorage.setItem('rclone-selected-conn', selectedConnId);
+
+      if (vaultStatus === 'unlocked') {
+        setRcloneStatus(null);
+        setInstallJob(null);
+        setInstallLog('');
+        setIsInstalling(false);
+        setActiveJob(null);
+        setJobLog('');
+        setIsJobRunning(false);
+        setRemoteItems([]);
+        setBrowseRemote('');
+        setBrowsePath('');
+        setTargetPath('');
+        setServerCrons([]);
+        setCollapsedProjects({});
+        setExpandedLogIdx(null);
+        setHistoryFilter('all');
+        fetchRcloneStatus();
+        fetchCrons();
+        fetchHistory();
+      }
     }
   }, [selectedConnId, vaultStatus]);
 
