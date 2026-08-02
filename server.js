@@ -1832,8 +1832,17 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
                     stream.on('close', (code) => {
                         const combined = output.trim();
                         const errText = stderr.trim();
-                        if (code !== 0 && errText) {
-                            socket.emit('docker:result', { action, output: combined + (combined ? '\n' : '') + `[stderr] ${errText}`, code, args });
+                        // Always log full result for debugging
+                        console.log(`🐳 [${socket.id}] RAW RESULT [${action}] code=${code} stdout=${combined.substring(0,200)} stderr=${errText.substring(0,200)}`);
+                        
+                        // Streaming actions (pull/build/backup) always go through as result even on error
+                        const isStreaming = ['pull', 'pull:status', 'build', 'build:status', 'backup', 'backup:status'].includes(action);
+                        
+                        if (!isStreaming && code !== 0) {
+                            // For non-streaming actions, treat non-zero exit as a real error
+                            const errorMsg = errText || combined || `Command failed with exit code ${code}`;
+                            console.error(`❌ [${socket.id}] SWARM/CMD FAILED [${action}]: ${errorMsg}`);
+                            socket.emit('docker:error', errorMsg);
                         } else {
                             socket.emit('docker:result', { action, output: combined + (errText ? `\n${errText}` : ''), code, args });
                         }
