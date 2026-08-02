@@ -3833,25 +3833,8 @@ docker image prune -f
                                   <button
                                     type="button"
                                     onClick={() => {
-                                      const nameHint = (deployConfig.name || 'myapp').toLowerCase().replace(/[^a-z0-9_-]/g, '');
-                                      const swarmScript = `#!/bin/bash
-set -e
-
-# 🐝 AI Swarm Zero-Downtime Deployment
-SERVICE_NAME="${nameHint}_service"
-IMAGE_NAME="${nameHint}:latest"
-
-if docker service inspect $SERVICE_NAME >/dev/null 2>&1; then
-  echo "🐝 Docker Swarm detected! Updating $SERVICE_NAME..."
-  docker build -t $IMAGE_NAME .
-  docker service update --image $IMAGE_NAME --update-order start-first --update-delay 5s $SERVICE_NAME
-else
-  echo "📦 Running standard AI deployment script..."
-  ${deployConfig.aiProfile.deployCommand}
-fi
-docker image prune -f
-`;
-                                      setDeployConfig(p => ({ ...p, deployCommand: swarmScript }));
+                                      // Use AI-generated deployCommand directly — server already injected the Swarm section
+                                      setDeployConfig(p => ({ ...p, deployCommand: p.aiProfile.deployCommand }));
                                       addNotification({ title: '🐝 Swarm AI Command Applied', message: 'Swarm zero-downtime deployment script applied.', type: 'success' });
                                     }}
                                     className="py-1.5 bg-purple-500/20 hover:bg-purple-500/30 border border-purple-500/40 text-purple-300 rounded-lg text-[10px] font-bold transition-all flex items-center justify-center gap-1 cursor-pointer"
