@@ -2141,12 +2141,23 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
                                       <button
                                         onClick={() => {
                                           const currentCount = parseInt((svcReplicas.split('/')[1] || '1'), 10) || 1;
+                                          let parsedPort = '';
+                                          if (svcPorts && svcPorts !== '-') {
+                                            const match = svcPorts.match(/(\d+)->(\d+)/);
+                                            if (match) {
+                                              parsedPort = `${match[1]}:${match[2]}`;
+                                            } else {
+                                              const nums = svcPorts.match(/\d+/g);
+                                              if (nums && nums.length >= 2) parsedPort = `${nums[0]}:${nums[1]}`;
+                                              else if (nums && nums.length === 1) parsedPort = `${nums[0]}:${nums[0]}`;
+                                            }
+                                          }
                                           setSwarmConfigModal({
                                             isOpen: true,
                                             serviceName: svcName,
                                             image: svcImage,
                                             replicas: currentCount,
-                                            port: svcPorts !== '-' ? svcPorts : '',
+                                            port: parsedPort,
                                             network: '',
                                             env: '',
                                             mounts: ''

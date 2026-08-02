@@ -1560,8 +1560,11 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
                  if (image) flags.push(`--image ${image}`);
                  if (!isNaN(replicas) && replicas >= 0) flags.push(`--replicas ${replicas}`);
                  if (port) {
-                   const p = port.includes(':') ? port : `${port}:${port}`;
-                   flags.push(`--publish-add ${p}`);
+                   const cleanPort = port.replace(/^:+/, '').trim();
+                   if (/^\d+(:\d+)?$/.test(cleanPort)) {
+                     const p = cleanPort.includes(':') ? cleanPort : `${cleanPort}:${cleanPort}`;
+                     flags.push(`--publish-add ${p}`);
+                   }
                  }
                  if (network) {
                    flags.push(`--network-add ${network}`);
