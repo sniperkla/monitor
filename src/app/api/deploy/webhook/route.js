@@ -536,7 +536,9 @@ function monitorTmuxAfterReconnect(sshConfig, tmuxSession, projectId, logOutput,
 // Detects docker/compose/build success even when exit code is non-zero
 // due to wrapper script cleanup failures (e.g. cd ./relative: No such file).
 function resolveDeployStatus(exitCode, logText) {
-  const hasSuccessMessage = logText.includes('[deploy] Deploy command finished successfully');
+  // Strip ANSI color escape codes so terminal output matches clean text
+  const cleanLog = (logText || '').replace(/\x1B\[[0-9;]*[a-zA-Z]/g, '');
+  const hasSuccessMessage = cleanLog.includes('[deploy] Deploy command finished successfully');
 
   // Real build/compile errors — these always mean failure
   const realBuildErrors = [
@@ -552,7 +554,7 @@ function resolveDeployStatus(exitCode, logText) {
     /\bENOSPC\b/,
   ];
 
-  const hasRealBuildError = realBuildErrors.some(p => p.test(logText));
+  const hasRealBuildError = realBuildErrors.some(p => p.test(cleanLog));
   if (hasRealBuildError) return 'failed';
 
   // Standard success: exit 0 + success echo
@@ -561,18 +563,18 @@ function resolveDeployStatus(exitCode, logText) {
   // Docker/Compose success indicators — if containers started/running,
   // treat as success even when wrapper cleanup scripts fail with non-zero exit
   const dockerSuccessPatterns = [
-    /\bContainer\s+\S+\s+Started\b/m,
-    /\bContainer\s+\S+\s+Running\b/m,
-    /✔\s+Container\s+/m,
-    /✓\s+Container\s+/m,
-    /\[deploy\] Deploy command finished successfully/m,
+    /\bContainer\s+\S+\s+(?:Started|Running)\b/i,
+    /✔\s*Container/i,
+    /✓\s*Container/i,
+    /\bImage\s+\S+\s+Built\b/i,
+    /\[deploy\] Deploy command finished successfully/i,
   ];
 
   // Wrapper-only failure patterns — if failure is ONLY from /tmp/deploy_* scripts
   // and not from actual build tools, the real deployment succeeded
-  const wrapperOnlyFailure = /\/tmp\/deploy_(?:cmd|run|tmux)_\S+:\s*line\s*\d+:/m.test(logText);
+  const wrapperOnlyFailure = /\/tmp\/deploy_(?:cmd|run|tmux)_\S+:\s*line\s*\d+:/i.test(cleanLog);
 
-  const dockerSucceeded = dockerSuccessPatterns.some(p => p.test(logText));
+  const dockerSucceeded = dockerSuccessPatterns.some(p => p.test(cleanLog));
   if (dockerSucceeded && wrapperOnlyFailure && !hasRealBuildError) return 'success';
 
   // Default
@@ -773,7 +775,7 @@ export async function runDeployment(config, runMeta = {}) {
     }
     scriptLines.push('echo "[deploy] Running deploy command..."');
     
-    let cleanLocalDeployCmd = (config.deployCommand || '').trim();
+    let cleanLocalDeployCmd = (config.deployCommand || '').trim().replace(/[^\x00-\x7F]/g, '');
     cleanLocalDeployCmd = cleanLocalDeployCmd.split('\n').filter(line => !line.includes('SWARM_TARGET=$(') && !line.includes('|| (docker service inspect')).map((line, idx) => {
       if (idx > 0 && (line.trim() === '#!/bin/bash' || line.trim() === 'set -e')) {
         return '# ' + line;
@@ -1128,8 +1130,10 @@ export async function runDeployment(config, runMeta = {}) {
           }
           scriptLines.push('echo "[deploy] Running deploy command..."');
           
-          const rawDeployCmd = (config.deployCommand || '').trim();
-          const userCmdB64 = Buffer.from(rawDeployCmd ? `#!/bin/bash\n${rawDeployCmd}\n` : 'exit 0\n').toString('base64');
+          let rawDeployCmd = (config.deployCommand || '').trim();
+          // Strip non-ASCII multibyte characters (like emojis) from bash script to prevent quote syntax errors on Linux shells
+          rawDeployCmd = rawDeployCmd.replace(/[^\x00-\x7F]/g, '');
+          const userCmdB64 = Buffer.from(rawDeployCmd ? `#!/bin/bash\nexport LC_ALL=C.UTF-8 LANG=C.UTF-8 2>/dev/null || true\n${rawDeployCmd}\n` : 'exit 0\n').toString('base64');
           const userCmdPath = `/tmp/deploy_cmd_${projectId}.sh`;
 
           scriptLines.push(`USER_CMD_PATH="${userCmdPath}"`);

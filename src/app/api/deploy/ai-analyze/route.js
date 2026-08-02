@@ -315,7 +315,7 @@ You MUST respond with a valid JSON object ONLY. Do not wrap the JSON in markdown
 
      # Ensure attachable overlay network proxy-net exists for Nginx DNS
      if [ "$(docker network inspect proxy-net --format '{{.Driver}}' 2>/dev/null)" != "overlay" ]; then
-       echo "🌐 Ensuring proxy-net is an attachable overlay network..."
+       echo "[net] Ensuring proxy-net is an attachable overlay network..."
        docker network rm proxy-net 2>/dev/null || true
        docker network create --driver overlay --attachable proxy-net 2>/dev/null || true
      fi
