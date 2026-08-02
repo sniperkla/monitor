@@ -2082,6 +2082,10 @@ function handleDockerCommand(ws, msg) {
       cmdSuffix = `network ls --format "{{json .}}"`;
     } else if (action === 'swarm:services') {
       cmdSuffix = `service ls --format "{{json .}}"`;
+    } else if (action === 'swarm:inspect' && args.length >= 1) {
+      const svcNameI = String(args[0] || '').replace(/[^a-zA-Z0-9._-]/g, '');
+      if (!svcNameI) return ws.send(JSON.stringify({ type: 'docker:error', connId, error: 'Invalid Service Name' }));
+      cmdSuffix = `service inspect ${svcNameI} --format "{{json .}}"`;
     } else if (action === 'swarm:nodes') {
       cmdSuffix = `node ls --format "{{json .}}"`;
     } else if (action === 'swarm:init') {
