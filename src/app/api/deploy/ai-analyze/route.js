@@ -49,8 +49,9 @@ export async function POST(request) {
       if (!connectionId) {
         return NextResponse.json({ success: false, error: 'Connection ID is required for SSH target' }, { status: 400 });
       }
-      const db = await connectDB(process.env.MONGODB_URI, true);
+      const db = await connectDB();
       const repo = new ConnectionRepository(db);
+      await repo.init();
       const connection = await repo.findById(connectionId);
       if (!connection) {
         return NextResponse.json({ success: false, error: 'SSH Connection not found' }, { status: 404 });
