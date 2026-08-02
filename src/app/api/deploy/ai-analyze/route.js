@@ -191,10 +191,12 @@ CRITICAL INSTRUCTIONS - USE ORIGINAL SCRIPT AS STARTING MATERIAL:
        docker service update --image $IMAGE_NAME --update-order start-first --update-delay 5s $SWARM_TARGET
      else
        echo "🐝 Creating new Swarm service '$SERVICE_NAME'..."
-       # Remove old service or non-swarm standalone container first to free container name and ports
-       docker service rm $SERVICE_NAME 2>/dev/null || true
-       docker stop $SERVICE_NAME 2>/dev/null || true
-       docker rm -f $SERVICE_NAME 2>/dev/null || true
+       # Gracefully handle legacy standalone container if running
+       if docker ps --format '{{.Names}}' | grep -w "$SERVICE_NAME" >/dev/null 2>&1; then
+         echo "📦 Transitioning standalone container '$SERVICE_NAME' to Swarm service..."
+         docker stop $SERVICE_NAME 2>/dev/null || true
+         docker rm $SERVICE_NAME 2>/dev/null || true
+       fi
 
        # Create Swarm service with --detach=true --no-resolve-image so local images start immediately
        docker service create --name $SERVICE_NAME --detach=true --no-resolve-image --replicas 2 $IMAGE_NAME || docker-compose up -d --build
