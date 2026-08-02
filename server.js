@@ -1531,7 +1531,12 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
                     }
                   });
                 }
-                cmdSuffix = `service create ${flags.join(' ')} ${image}`;
+                let createCmd = `service create ${flags.join(' ')} ${image}`;
+                if (network) {
+                  cmdSuffix = `sh -c 'docker network inspect ${network} >/dev/null 2>&1 || docker network create --driver overlay --attachable ${network}; docker ${createCmd}'`;
+                } else {
+                  cmdSuffix = createCmd;
+                }
             } else if (action === 'swarm:update' && args.length >= 2) {
                  const serviceName = String(args[0] || '').replace(/[^a-zA-Z0-9._-]/g, '');
                  const image = String(args[1] || '').replace(/[^a-zA-Z0-9.@/:-]/g, '');
