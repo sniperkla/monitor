@@ -178,6 +178,13 @@ CRITICAL INSTRUCTIONS - USE ORIGINAL SCRIPT AS STARTING MATERIAL:
      docker swarm init 2>/dev/null || true
      docker swarm update --task-history-limit 1 2>/dev/null || true
 
+     # Ensure external proxy network is an attachable overlay network for Swarm compatibility
+     if [ "$(docker network inspect proxy-net --format '{{.Driver}}' 2>/dev/null)" != "overlay" ]; then
+       echo "🌐 Ensuring proxy-net is an attachable overlay network..."
+       docker network rm proxy-net 2>/dev/null || true
+       docker network create --driver overlay --attachable proxy-net 2>/dev/null || true
+     fi
+
      PROJECT_NAME="aut"
 
      # Build latest images for all services
@@ -198,7 +205,10 @@ CRITICAL INSTRUCTIONS - USE ORIGINAL SCRIPT AS STARTING MATERIAL:
 
      if [ "$ANY_SWARM" -eq 0 ]; then
        echo "🐝 Deploying Swarm Stack '$PROJECT_NAME' from docker-compose.yml..."
-       docker stack deploy -c docker-compose.yml $PROJECT_NAME || docker compose up -d --build
+       if ! docker stack deploy -c docker-compose.yml $PROJECT_NAME; then
+         echo "📦 Falling back to standard Docker Compose..."
+         docker compose up -d --build 2>/dev/null || docker-compose up -d --build 2>/dev/null || true
+       fi
      fi
 
      docker container prune -f 2>/dev/null || true
