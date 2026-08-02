@@ -1131,14 +1131,15 @@ export async function runDeployment(config, runMeta = {}) {
           scriptLines.push('echo "[deploy] Running deploy command..."');
           
           let rawDeployCmd = (config.deployCommand || '').trim();
-          // Strip non-ASCII multibyte characters (like emojis) from bash script to prevent quote syntax errors on Linux shells
+          // Strip non-ASCII multibyte characters (like emojis) from bash script to prevent locale issues on Linux shells
           rawDeployCmd = rawDeployCmd.replace(/[^\x00-\x7F]/g, '');
-          const userCmdB64 = Buffer.from(rawDeployCmd ? `#!/bin/bash\nexport LC_ALL=C.UTF-8 LANG=C.UTF-8 2>/dev/null || true\n${rawDeployCmd}\n` : 'exit 0\n').toString('base64');
+          // Build the user command script content — written via SFTP directly (no echo/base64 which has shell length limits)
+          const userCmdScript = rawDeployCmd ? `#!/bin/bash\nset +e\n${rawDeployCmd}\n` : '#!/bin/bash\nexit 0\n';
           const userCmdPath = `/tmp/deploy_cmd_${projectId}.sh`;
 
+          // The outer run script references the pre-uploaded user command script directly
           scriptLines.push(`USER_CMD_PATH="${userCmdPath}"`);
-          scriptLines.push(`echo "${userCmdB64}" | base64 -d > "$USER_CMD_PATH"`);
-          scriptLines.push(`chmod +x "$USER_CMD_PATH"`);
+          scriptLines.push(`chmod +x "$USER_CMD_PATH" 2>/dev/null || true`);
           scriptLines.push(`USER_CMD_EXIT=0`);
           scriptLines.push(`bash "$USER_CMD_PATH" || USER_CMD_EXIT=$?`);
           scriptLines.push(`rm -f "$USER_CMD_PATH" 2>/dev/null || true`);
@@ -1165,9 +1166,16 @@ export async function runDeployment(config, runMeta = {}) {
           scriptLines.push('echo "[deploy] Deploy command finished successfully"');
           const deployScript = scriptLines.join('\n') + '\n';
 
-          // ── Write deploy script via SFTP ─────────────────────────────────
-            tmuxSession = `deploy-${projectId.replace(/[^a-zA-Z0-9_-]/g, '-')}`.slice(0, 60);
-            const tmuxWrapperPath = `/tmp/deploy_tmux_${projectId}.sh`;
+          // ── Write both scripts via SFTP ─────────────────────────────────
+          // Write the user command script FIRST via SFTP (no echo/base64 — avoids shell length limits)
+          // Then write the outer run script which references it
+          tmuxSession = `deploy-${projectId.replace(/[^a-zA-Z0-9_-]/g, '-')}`.slice(0, 60);
+          const tmuxWrapperPath = `/tmp/deploy_tmux_${projectId}.sh`;
+
+          sftp.writeFile(userCmdPath, userCmdScript, { mode: 0o755 }, (userCmdWriteErr) => {
+            if (userCmdWriteErr) {
+              logOutput += `[SSH] Warning: could not pre-upload user cmd script (${userCmdWriteErr.message})\n`;
+            }
 
             sftp.writeFile(remoteDeployPath, deployScript, { mode: 0o755 }, (writeErr) => {
             if (writeErr) {
@@ -1179,7 +1187,7 @@ export async function runDeployment(config, runMeta = {}) {
               return;
             }
 
-            logOutput += `[SSH] Script uploaded. Launching deployment...\n\n`;
+            logOutput += `[SSH] Scripts uploaded. Launching deployment...\n\n`;
             logOutput = limitLogOutput(logOutput);
             updateStatus('running', logOutput);
 
@@ -1305,14 +1313,14 @@ export async function runDeployment(config, runMeta = {}) {
               });
             }; // end launchDeploy
 
-            // Write tmux wrapper script, then launch. If write fails, launch anyway (tmux check handles fallback).
             sftp.writeFile(tmuxWrapperPath, tmuxWrapper, { mode: 0o755 }, (tmuxWriteErr) => {
               if (tmuxWriteErr) logOutput += `[deploy] tmux wrapper write failed: ${tmuxWriteErr.message}\n`;
               launchDeploy();
             });
           }); // end sftp.writeFile(remoteDeployPath)
-        });
-      });
+        }); // end sftp.writeFile(userCmdPath)
+      }); // end conn.sftp
+    }); // end conn.on('ready')
 
       conn.on('error', (err) => {
         logOutput += `\n[SSH Error] Connection error: ${err.message}\n`;
