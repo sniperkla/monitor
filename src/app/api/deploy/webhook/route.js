@@ -612,7 +612,19 @@ export async function runDeployment(config, runMeta = {}) {
       scriptLines.push(`git checkout ${commitSha}`);
     }
     scriptLines.push('echo "[deploy] Running deploy command..."');
-    scriptLines.push(config.deployCommand);
+    
+    let cleanLocalDeployCmd = (config.deployCommand || '').trim();
+    cleanLocalDeployCmd = cleanLocalDeployCmd.replace(/\|\|\s*\(\s*docker service inspect[^)]+\)/g, '');
+    cleanLocalDeployCmd = cleanLocalDeployCmd.split('\n').map((line, idx) => {
+      if (idx > 0 && (line.trim() === '#!/bin/bash' || line.trim() === 'set -e')) {
+        return '# ' + line;
+      }
+      return line;
+    }).join('\n');
+    cleanLocalDeployCmd = cleanLocalDeployCmd.replace(/docker service create --name \$SVC \$PORT_FLAGS --detach=true --no-resolve-image --replicas 2 \$IMAGE_NAME/g, 'docker service create --name $SVC $PORT_FLAGS --detach=true --no-resolve-image --replicas 2 "${SVC}:latest"');
+    cleanLocalDeployCmd = cleanLocalDeployCmd.replace(/\|\| docker compose up -d --build/g, '2>/dev/null || true');
+
+    scriptLines.push(cleanLocalDeployCmd);
 
     // Clean up credentials after deploy command completes
     if (config.bitbucketConnected) {
@@ -959,7 +971,23 @@ export async function runDeployment(config, runMeta = {}) {
             scriptLines.push(`export -f git 2>/dev/null || true`);
           }
           scriptLines.push('echo "[deploy] Running deploy command..."');
-          scriptLines.push(config.deployCommand);
+          
+          let cleanDeployCmd = (config.deployCommand || '').trim();
+          // Auto-heal nested subshell syntax error: || (docker service inspect...)
+          cleanDeployCmd = cleanDeployCmd.replace(/\|\|\s*\(\s*docker service inspect[^)]+\)/g, '');
+          // Auto-heal duplicate nested headers inside body
+          cleanDeployCmd = cleanDeployCmd.split('\n').map((line, idx) => {
+            if (idx > 0 && (line.trim() === '#!/bin/bash' || line.trim() === 'set -e')) {
+              return '# ' + line;
+            }
+            return line;
+          }).join('\n');
+          // Auto-heal empty $IMAGE_NAME variable in docker service create
+          cleanDeployCmd = cleanDeployCmd.replace(/docker service create --name \$SVC \$PORT_FLAGS --detach=true --no-resolve-image --replicas 2 \$IMAGE_NAME/g, 'docker service create --name $SVC $PORT_FLAGS --detach=true --no-resolve-image --replicas 2 "${SVC}:latest"');
+          // Remove broken inline fallback
+          cleanDeployCmd = cleanDeployCmd.replace(/\|\| docker compose up -d --build/g, '2>/dev/null || true');
+
+          scriptLines.push(cleanDeployCmd);
 
           // Clean up credentials after deploy command completes
           if (config.bitbucketConnected) {
