@@ -166,60 +166,8 @@ CRITICAL INSTRUCTIONS - USE ORIGINAL SCRIPT AS STARTING MATERIAL:
 1. PRIMARY REQUIREMENT: If an existing deployment script is provided in the prompt below, YOU MUST USE IT AS YOUR EXACT STARTING MATERIAL / TEMPLATE.
 2. PRESERVE ORIGINAL COMMANDS: Keep all original "cd" commands (e.g. \`cd /home/ec2-user/aut/\`), repository updates (\`git pull\`), custom environment setup, echo/log statements (e.g. \`echo "Deployment completed successfully."\`), and cleanup commands (\`docker image prune -f\`).
 3. NO DUPLICATE HEADERS: Put \`#!/bin/bash\` and \`set -e\` ONLY ONCE at the very top of the script (lines 1 & 2). Never include nested \`#!/bin/bash\` or \`set -e\` inside \`if/else\` blocks.
-4. AUTOMATIC SWARM INITIALIZATION & CREATION:
-   - If the project uses Docker (Dockerfile or docker-compose), upgrade the deployment section to AUTOMATICALLY create or update Docker Swarm services.
-
-5. MULTI-CONTAINER / MULTI-SERVICE PROJECTS:
-   - If docker-compose.yml defines multiple services with container_name (e.g. "autfrontend" and "autbackend"):
-   - Do NOT use docker stack deploy (it rejects container_name and external bridge networks).
-   - Instead, create or update individual Swarm services for EACH container name defined in docker-compose.yml:
-
-     # Ensure Swarm is active and task history limit is set to 1
-     docker swarm init 2>/dev/null || true
-     docker swarm update --task-history-limit 1 2>/dev/null || true
-
-     # Build images explicitly from each service subfolder
-     if [ -d "frontend" ] && [ -f "frontend/Dockerfile" ]; then
-       echo "🔨 Building autfrontend:latest from ./frontend..."
-       docker build -t autfrontend:latest ./frontend
-     fi
-     if [ -d "backend" ] && [ -f "backend/Dockerfile" ]; then
-       echo "🔨 Building autbackend:latest from ./backend..."
-       docker build -t autbackend:latest ./backend
-     fi
-     # Fallback: use compose build if subfolders not found
-     docker compose build 2>/dev/null || docker-compose build 2>/dev/null || true
-
-     # ------ autfrontend ------
-     if docker service inspect autfrontend >/dev/null 2>&1; then
-       echo "🐝 Updating Swarm service autfrontend zero-downtime..."
-       docker service update --image autfrontend:latest --update-order start-first --update-delay 5s autfrontend
-     else
-       echo "🐝 Creating new Swarm service autfrontend..."
-       docker stop autfrontend 2>/dev/null || true
-       docker rm   autfrontend 2>/dev/null || true
-       docker service create --name autfrontend --publish 3090:3090 --detach=true --no-resolve-image --replicas 2 autfrontend:latest
-     fi
-
-     # ------ autbackend ------
-     if docker service inspect autbackend >/dev/null 2>&1; then
-       echo "🐝 Updating Swarm service autbackend zero-downtime..."
-       docker service update --image autbackend:latest --update-order start-first --update-delay 5s autbackend
-     else
-       echo "🐝 Creating new Swarm service autbackend..."
-       docker stop autbackend 2>/dev/null || true
-       docker rm   autbackend 2>/dev/null || true
-       docker service create --name autbackend --publish 3033:3033 --detach=true --no-resolve-image --replicas 2 autbackend:latest
-     fi
-
-     # Reconnect Nginx to Swarm overlay networks so container-name DNS resolves
-     NETS=$(docker network ls --filter driver=overlay --format "{{.Name}}")
-     for net in $NETS; do
-       docker network connect $net global-nginx 2>/dev/null || docker network connect $net nginx 2>/dev/null || true
-     done
-     docker exec global-nginx nginx -s reload 2>/dev/null || docker restart global-nginx 2>/dev/null || docker exec nginx nginx -s reload 2>/dev/null || docker restart nginx 2>/dev/null || true
-
-     docker container prune -f 2>/dev/null || true
+4. DOCKER BUILD ONLY: If the project uses Docker, keep the original docker build or docker-compose build commands. Do NOT add any docker service, docker swarm, or docker stack commands — those will be injected automatically by the system.
+5. END THE SCRIPT with the original echo completion message and image prune if present.
 
 You MUST respond with a valid JSON object ONLY. Do not wrap the JSON in markdown formatting blocks or include any extra text. The JSON format must be EXACTLY:
 {
@@ -282,6 +230,95 @@ You MUST respond with a valid JSON object ONLY. Do not wrap the JSON in markdown
       return NextResponse.json({ success: false, error: 'AI did not return a valid response.' }, { status: 500 });
     }
 
+    // --- SERVER-SIDE SWARM INJECTION ---
+    // Parse container_name entries and their ports from docker-compose.yml in filesListing
+    // This guarantees correct docker service create syntax regardless of what the AI wrote.
+    let swarmBlock = '';
+    const composeMatch = filesListing.match(/container_name:\s*(\S+)/g);
+    if (composeMatch && composeMatch.length > 0) {
+      const services = composeMatch.map(m => m.replace('container_name:', '').trim());
+
+      // Detect subfolder build contexts from docker-compose.yml (build: ./frontend etc)
+      const buildLines = filesListing.match(/build:\s*(\S+)/g) || [];
+      const buildDirs = buildLines.map(b => b.replace('build:', '').trim().replace(/^\.\//,''));
+
+      // Detect ports per container: scan each container_name block for its ports
+      const portMap = {};
+      for (const svc of services) {
+        // Find host:container port patterns near this container name
+        const svcPortMatch = filesListing.match(new RegExp(`container_name:\\s*${svc}[\\s\\S]{0,400}?ports:[\\s\\S]{0,200}?-(\\s*['"]?\\d+:\\d+['"]?)`, 'm'));
+        if (svcPortMatch) {
+          const portLine = svcPortMatch[1].trim().replace(/['"]/, '').replace(/['"]$/, '').trim();
+          portMap[svc] = portLine;
+        }
+      }
+
+      let buildSection = '';
+      for (let i = 0; i < services.length; i++) {
+        const svc = services[i];
+        const dir = buildDirs[i] || '';
+        // Strip project prefix for subfolder guess (e.g. autfrontend -> frontend, autbackend -> backend)
+        const subdir = dir || svc.replace(/^aut/, '').replace(/^app/, '');
+        buildSection += `
+     # Build image for ${svc}
+     if [ -d "${subdir}" ] && [ -f "${subdir}/Dockerfile" ]; then
+       echo "Building ${svc}:latest from ./${subdir}..."
+       docker build -t ${svc}:latest ./${subdir}
+     fi`;
+      }
+
+      let svcSection = '';
+      for (const svc of services) {
+        const port = portMap[svc] || '';
+        const publishFlag = port ? `--publish ${port}` : '';
+        svcSection += `
+
+     # ------ ${svc} ------
+     if docker service inspect ${svc} >/dev/null 2>&1; then
+       echo "Updating Swarm service ${svc} zero-downtime..."
+       docker service update --image ${svc}:latest --update-order start-first --update-delay 5s ${svc}
+     else
+       echo "Creating new Swarm service ${svc}..."
+       docker stop ${svc} 2>/dev/null || true
+       docker rm ${svc} 2>/dev/null || true
+       docker service create --name ${svc} ${publishFlag} --detach=true --no-resolve-image --replicas 2 ${svc}:latest
+     fi`;
+      }
+
+      swarmBlock = `
+     # === AUTO-INJECTED SWARM SECTION ===
+     docker swarm init 2>/dev/null || true
+     docker swarm update --task-history-limit 1 2>/dev/null || true
+${buildSection}
+     # Fallback compose build
+     docker compose build 2>/dev/null || docker-compose build 2>/dev/null || true
+${svcSection}
+
+     # Reconnect Nginx to Swarm overlay networks
+     NETS=$(docker network ls --filter driver=overlay --format "{{.Name}}")
+     for net in $NETS; do
+       docker network connect $net global-nginx 2>/dev/null || docker network connect $net nginx 2>/dev/null || true
+     done
+     docker exec global-nginx nginx -s reload 2>/dev/null || docker restart global-nginx 2>/dev/null || true
+
+     docker container prune -f 2>/dev/null || true
+     # === END SWARM SECTION ===`;
+    }
+
+    // Inject swarm block: insert before echo/prune at end of AI script, or append
+    let finalScript = parsedResult.deployCommand || '';
+    if (swarmBlock) {
+      // Remove any swarm/stack/service commands the AI may have written
+      finalScript = finalScript.replace(/docker\s+(swarm|service|stack)\s+[^\n]*/g, '# [swarm commands replaced by injected section]');
+      // Insert swarm block before the final echo or at end
+      const echoIdx = finalScript.lastIndexOf('echo "Deployment completed');
+      if (echoIdx !== -1) {
+        finalScript = finalScript.slice(0, echoIdx) + swarmBlock + '\n\n     ' + finalScript.slice(echoIdx);
+      } else {
+        finalScript = finalScript.trimEnd() + '\n' + swarmBlock;
+      }
+    }
+
     // Save configuration inside system settings: value.aiProfile & value.aiLogs
     const existing = await SystemSetting.findOne({ key: dbKey });
     const existingValue = existing?.value || {};
@@ -289,7 +326,7 @@ You MUST respond with a valid JSON object ONLY. Do not wrap the JSON in markdown
     const aiProfile = {
       projectType: parsedResult.projectType,
       technologies: parsedResult.technologies,
-      deployCommand: parsedResult.deployCommand,
+      deployCommand: finalScript,
       summary: parsedResult.summary,
       analyzedAt: new Date()
     };
