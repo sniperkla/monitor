@@ -177,8 +177,12 @@ CRITICAL INSTRUCTIONS - USE ORIGINAL SCRIPT AS STARTING MATERIAL:
      SERVICE_NAME="<project_or_container_name>"
      IMAGE_NAME="<project_or_container_name>:latest"
 
-     # Build latest docker image
-     docker build -t $IMAGE_NAME .
+     # Build image safely (check if Dockerfile exists, otherwise build via compose)
+     if [ -f Dockerfile ]; then
+       docker build -t $IMAGE_NAME .
+     else
+       docker compose build 2>/dev/null || docker-compose build 2>/dev/null || true
+     fi
 
      SWARM_TARGET=$(docker service inspect $SERVICE_NAME >/dev/null 2>&1 && echo "$SERVICE_NAME" || (docker service inspect \${SERVICE_NAME}_service >/dev/null 2>&1 && echo "\${SERVICE_NAME}_service" || echo ""))
 
