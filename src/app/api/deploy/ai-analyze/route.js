@@ -170,46 +170,39 @@ CRITICAL INSTRUCTIONS - USE ORIGINAL SCRIPT AS STARTING MATERIAL:
    - If the project uses Docker (Dockerfile or docker-compose), upgrade the deployment section to AUTOMATICALLY create or update Docker Swarm services.
 
 5. MULTI-CONTAINER / MULTI-SERVICE PROJECTS:
-   - If docker-compose.yml defines multiple services (e.g. "autbackend" and "autfrontend"):
-   - Use docker stack deploy or handle all services defined in docker-compose.yml.
-   - Example structure for multi-service projects:
+   - If docker-compose.yml defines multiple services with container_name (e.g. "autfrontend" and "autbackend"):
+   - Do NOT use docker stack deploy (it rejects container_name and external bridge networks).
+   - Instead, create or update individual Swarm services for EACH container name defined in docker-compose.yml:
 
      # Ensure Swarm is active and task history limit is set to 1
      docker swarm init 2>/dev/null || true
      docker swarm update --task-history-limit 1 2>/dev/null || true
 
-     # Ensure external proxy network is an attachable overlay network for Swarm compatibility
-     if [ "$(docker network inspect proxy-net --format '{{.Driver}}' 2>/dev/null)" != "overlay" ]; then
-       echo "🌐 Ensuring proxy-net is an attachable overlay network..."
-       docker network rm proxy-net 2>/dev/null || true
-       docker network create --driver overlay --attachable proxy-net 2>/dev/null || true
-     fi
-
-     PROJECT_NAME="aut"
-
      # Build latest images for all services
      docker compose build 2>/dev/null || docker-compose build 2>/dev/null || true
 
-     # Check if Docker Stack or Swarm services exist for this project
+     # Target exact container names from docker-compose.yml
      SERVICES=("autfrontend" "autbackend")
-     ANY_SWARM=0
 
      for SVC in "\${SERVICES[@]}"; do
-       SWARM_TARGET=$(docker service inspect $SVC >/dev/null 2>&1 && echo "$SVC" || (docker service inspect \${PROJECT_NAME}_\${SVC} >/dev/null 2>&1 && echo "\${PROJECT_NAME}_\${SVC}" || echo ""))
-       if [ -n "$SWARM_TARGET" ]; then
-         echo "🐝 Updating Swarm service '$SWARM_TARGET' zero-downtime..."
-         docker service update --image "\${SVC}:latest" --update-order start-first --update-delay 5s $SWARM_TARGET 2>/dev/null || docker service update --image "\${PROJECT_NAME}_\${SVC}:latest" --update-order start-first --update-delay 5s $SWARM_TARGET 2>/dev/null || true
-         ANY_SWARM=1
+       IMAGE_NAME=\$(docker inspect --format='{{.Config.Image}}' \$SVC 2>/dev/null || echo "\${SVC}:latest")
+       
+       SWARM_TARGET=\$(docker service inspect \$SVC >/dev/null 2>&1 && echo "\$SVC" || echo "")
+
+       if [ -n "\$SWARM_TARGET" ]; then
+         echo "🐝 Swarm service '\$SWARM_TARGET' found! Updating service zero-downtime..."
+         docker service update --image "\$IMAGE_NAME" --update-order start-first --update-delay 5s \$SWARM_TARGET
+       else
+         echo "🐝 Creating new Swarm service '\$SVC'..."
+         # Stop & remove old non-swarm standalone container to free container name
+         if docker ps -a --format '{{.Names}}' | grep -w "\$SVC" >/dev/null 2>&1; then
+           docker stop \$SVC 2>/dev/null || true
+           docker rm \$SVC 2>/dev/null || true
+         fi
+         # Create Swarm service using exact container name
+         docker service create --name \$SVC --detach=true --no-resolve-image --replicas 2 \$IMAGE_NAME || docker compose up -d --build
        fi
      done
-
-     if [ "$ANY_SWARM" -eq 0 ]; then
-       echo "🐝 Deploying Swarm Stack '$PROJECT_NAME' from docker-compose.yml..."
-       if ! docker stack deploy -c docker-compose.yml $PROJECT_NAME; then
-         echo "📦 Falling back to standard Docker Compose..."
-         docker compose up -d --build 2>/dev/null || docker-compose up -d --build 2>/dev/null || true
-       fi
-     fi
 
      docker container prune -f 2>/dev/null || true
 
