@@ -1531,11 +1531,11 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
                     }
                   });
                 }
-                let createCmd = `${dockerSudo}docker service create ${flags.join(' ')} ${image}`;
+                let createCmd = `service create ${flags.join(' ')} ${image}`;
                 if (network) {
-                  cmdSuffix = `sh -c "${dockerSudo}docker network inspect ${network} >/dev/null 2>&1 || ${dockerSudo}docker network create --driver overlay --attachable ${network}; ${createCmd}"`;
+                  cmdSuffix = `sh -c "${dockerSudo}docker network inspect ${network} >/dev/null 2>&1 || ${dockerSudo}docker network create --driver overlay --attachable ${network}; ${dockerSudo}docker ${createCmd}"`;
                 } else {
-                  cmdSuffix = createCmd;
+                  cmdSuffix = `${dockerSudo}docker ${createCmd}`;
                 }
             } else if (action === 'swarm:update' && args.length >= 2) {
                  const serviceName = String(args[0] || '').replace(/[^a-zA-Z0-9._-]/g, '');
@@ -1818,7 +1818,7 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
             
             // For pull & pull:status, cmdSuffix is a full shell script — execute directly
             // For all other actions, cmdSuffix is the part after 'docker' — use executeDockerCommand
-            if (['pull', 'pull:status', 'build', 'build:status', 'backup', 'backup:status', 'read-config', 'write-config', 'find-config', 'check-port', 'start-all', 'remove-selected', 'prune-custom', 'swarm:init', 'swarm:create', 'swarm:configure'].includes(action)) {
+            if (['pull', 'pull:status', 'build', 'build:status', 'backup', 'backup:status', 'read-config', 'write-config', 'find-config', 'check-port', 'start-all', 'remove-selected', 'prune-custom', 'swarm:init'].includes(action) || (cmdSuffix && (cmdSuffix.startsWith('sh -c') || cmdSuffix.startsWith('docker ')))) {
                 console.log(`🐳 [${socket.id}] DOCKER EXEC (raw): ${cmdSuffix.substring(0, 120)}...`);
                 sshClient.exec(cmdSuffix, (err, stream) => {
                     if (err) {
