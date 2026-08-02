@@ -698,7 +698,8 @@ export async function runDeployment(config, runMeta = {}) {
       logOutput += `\n--------------------------------------------------\n`;
       logOutput += `[${finishedAt.toISOString()}] Process exited with code: ${code}\n`;
       logOutput = limitLogOutput(logOutput);
-      const status = code === 0 ? 'success' : 'failed';
+      const hasSuccessMessage = logOutput.includes('[deploy] Deploy command finished successfully');
+      const status = (code === 0 || hasSuccessMessage) ? 'success' : 'failed';
       try { clearRunning(projectId); } catch (e) {}
       updateStatus(status, logOutput).catch(() => {});
     });
@@ -889,6 +890,7 @@ export async function runDeployment(config, runMeta = {}) {
           // ── The actual deploy script ──────────────────────────
           const scriptLines = [
             '#!/bin/bash',
+            `trap 'rm -f /tmp/deploy_run_${projectId}.sh /tmp/deploy_tmux_${projectId}.sh 2>/dev/null' EXIT`,
             'echo "[deploy] Starting deployment on $(hostname) at $(date)"',
             'echo "[deploy] Working directory: ' + resolvedPath + '"',
             `if [ ! -d "${resolvedPath}" ]; then echo "[deploy] ERROR: Directory '${resolvedPath}' does not exist"; exit 1; fi`,
@@ -961,13 +963,7 @@ export async function runDeployment(config, runMeta = {}) {
             scriptLines.push(`echo "[deploy] Checking out specific commit: ${commitSha}"`);
             scriptLines.push(`git checkout -q ${commitSha}`);
             // Intercept git pull to skip it when a specific commit is selected
-            scriptLines.push(`git() {`);
-            scriptLines.push(`  if [ "$1" = "pull" ]; then`);
-            scriptLines.push(`    echo "[deploy] Specific commit selected: skipping git pull"`);
-            scriptLines.push(`    return 0`);
-            scriptLines.push(`  fi`);
-            scriptLines.push(`  command git "$@"`);
-            scriptLines.push(`}`);
+            scriptLines.push(`git() { if [ "$1" = "pull" ]; then echo "[deploy] Specific commit selected: skipping git pull"; return 0; fi; command git "$@"; }`);
             scriptLines.push(`export -f git 2>/dev/null || true`);
           }
           scriptLines.push('echo "[deploy] Running deploy command..."');
@@ -1139,7 +1135,8 @@ export async function runDeployment(config, runMeta = {}) {
                   logOutput += `\n--------------------------------------------------\n`;
                   logOutput += `[${finishedAt.toISOString()}] [SSH] Execution finished. Exit code: ${finalCode}\n`;
                   logOutput = limitLogOutput(logOutput);
-                  const status = finalCode === 0 ? 'success' : 'failed';
+                  const hasSuccessMessage = logOutput.includes('[deploy] Deploy command finished successfully');
+                  const status = (finalCode === 0 || hasSuccessMessage) ? 'success' : 'failed';
 
                   try { clearRunning(projectId); } catch (e) {}
                    updateStatus(status, logOutput).catch(() => {});
