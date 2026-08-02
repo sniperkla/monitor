@@ -1535,7 +1535,7 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
                 if (network) {
                   // Check driver type: overlay networks work with swarm, bridge do not
                   // If proxy-net exists as bridge (e.g. from docker-compose), we must error clearly
-                  cmdSuffix = `sh -c 'driver=$(docker network inspect ${network} --format "{{.Driver}}" 2>/dev/null); if [ "$driver" = "overlay" ]; then echo "Using existing overlay network ${network}"; elif [ -z "$driver" ]; then docker network create --driver overlay --attachable ${network}; else echo "ERROR: network ${network} exists as driver=$driver (not overlay). Remove it first or use a different name." >&2; exit 1; fi; ${createCmd}'`;
+                  cmdSuffix = `sh -c 'driver=$(docker network inspect ${network} --format "{{.Driver}}" 2>/dev/null); if [ "$driver" = "overlay" ]; then echo "Using existing overlay network ${network}"; elif [ -z "$driver" ]; then docker network create --driver overlay --attachable ${network}; elif [ "$driver" = "bridge" ]; then count=$(docker network inspect ${network} --format "{{len .Containers}}" 2>/dev/null); if [ "$count" = "0" ] || [ -z "$count" ]; then echo "Converting unused bridge network ${network} to overlay..."; docker network rm ${network} >/dev/null 2>&1 && docker network create --driver overlay --attachable ${network}; else echo "ERROR: network ${network} exists as driver=bridge and is currently used by $count container(s). Disconnect them or use another network name." >&2; exit 1; fi; else echo "ERROR: network ${network} exists as driver=$driver (not overlay)." >&2; exit 1; fi; ${createCmd}'`;
                 } else {
                   cmdSuffix = createCmd;
                 }
@@ -1598,7 +1598,7 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
                  flags.push(`--update-order start-first`);
                  const updateCmd = `docker service update ${flags.join(' ')} ${serviceName}`;
                  if (network) {
-                    cmdSuffix = `sh -c 'driver=$(docker network inspect ${network} --format "{{.Driver}}" 2>/dev/null); if [ "$driver" = "overlay" ]; then echo "Using existing overlay network ${network}"; elif [ -z "$driver" ]; then docker network create --driver overlay --attachable ${network}; else echo "ERROR: network ${network} exists as driver=$driver (not overlay). Remove it first or use a different name." >&2; exit 1; fi; ${updateCmd}'`;
+                    cmdSuffix = `sh -c 'driver=$(docker network inspect ${network} --format "{{.Driver}}" 2>/dev/null); if [ "$driver" = "overlay" ]; then echo "Using existing overlay network ${network}"; elif [ -z "$driver" ]; then docker network create --driver overlay --attachable ${network}; elif [ "$driver" = "bridge" ]; then count=$(docker network inspect ${network} --format "{{len .Containers}}" 2>/dev/null); if [ "$count" = "0" ] || [ -z "$count" ]; then echo "Converting unused bridge network ${network} to overlay..."; docker network rm ${network} >/dev/null 2>&1 && docker network create --driver overlay --attachable ${network}; else echo "ERROR: network ${network} exists as driver=bridge and is currently used by $count container(s). Disconnect them or use another network name." >&2; exit 1; fi; else echo "ERROR: network ${network} exists as driver=$driver (not overlay)." >&2; exit 1; fi; ${updateCmd}'`;
                  } else {
                    cmdSuffix = updateCmd;
                  }
