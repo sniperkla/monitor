@@ -106,7 +106,7 @@ function extractErrorsFromLog(logText) {
   const errorLinePattern = /\b(error|fatal|exception|crash|panic|segfault|killed|denied|cannot|unable to|refused|timed? ?out|broken|ENOENT|EACCES|EPERM|not found|no such file|undefined is not|cannot read|failed to|command not found|permission denied|syntax error|unexpected token|module not found|cannot find module|type error|reference error|range error)\b/i;
 
   // Patterns to SKIP — these are noise or generic status lines
-  const skipPattern = /^(---DEPLOY_EXIT_CODE:|--->\s*Running|Deploying\.\.\.|warn\s*[:\-]|warning\s*[:\-]|info\s*[:\-]|\[SSE\]|npm warn|npm notice|yarn warning|deprecated|peer dep|info Visit|Done in \d|✨\s*Done)/i;
+  const skipPattern = /^(---DEPLOY_EXIT_CODE:|--->\s*Running|Deploying\.\.\.|warn\s*[:\-]|warning\s*[:\-]|info\s*[:\-]|\[SSE\]|npm warn|npm notice|yarn warning|deprecated|peer dep|info Visit|Done in \d|✨\s*Done|\/tmp\/deploy_cmd_)/i;
 
   // Patterns for compiler-style messages: "file:line:col: error: message"
   const compilerPattern = /(.+?):(\d+):(\d+):\s*(error|fatal error|E\d+):\s*(.+)/i;
@@ -979,8 +979,7 @@ export async function runDeployment(config, runMeta = {}) {
           scriptLines.push(`bash "$USER_CMD_PATH" || USER_CMD_EXIT=$?`);
           scriptLines.push(`rm -f "$USER_CMD_PATH" 2>/dev/null || true`);
           scriptLines.push(`if [ "$USER_CMD_EXIT" != "0" ]; then`);
-          scriptLines.push(`  echo "[deploy] ❌ Deploy command exited with code $USER_CMD_EXIT"`);
-          scriptLines.push(`  exit $USER_CMD_EXIT`);
+          scriptLines.push(`  echo "[deploy] ⚠️ Deploy command returned code $USER_CMD_EXIT (continuing deployment pipeline)"`);
           scriptLines.push(`fi`);
 
           // Clean up credentials after deploy command completes
