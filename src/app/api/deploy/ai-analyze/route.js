@@ -161,16 +161,19 @@ export async function POST(request) {
 1. The project type (e.g., Node.js / React, Python / Django, Docker, Java / Spring Boot, Go, PHP, etc.)
 2. Key technologies, dependencies, and frameworks used
 3. An optimized shell/bash deployment script/command suitable for a production build & run (e.g., git pull && npm run build && pm2 restart app). Include steps like downloading dependencies, running builds, restarting processes/services, or running Docker containers. Include comments explaining key steps. Crucially, always write bash/shell commands safely (e.g. start bash scripts with '#!/bin/bash\nset -e\n' or chain sequential commands with '&&') to ensure that if any intermediate command fails (like a build), the script immediately stops and returns a non-zero exit status to fail the deployment.
-   IMPORTANT FOR DOCKER PROJECTS: If the project uses Docker (docker compose, docker-compose, or Dockerfile), follow these rules strictly:
+   IMPORTANT FOR DOCKER PROJECTS: If the project uses Docker (docker compose, docker-compose, Dockerfile, or Swarm), follow these rules strictly:
    a) ALWAYS check if a Swarm service exists first before falling back to compose/docker run:
-      Use a SERVICE_NAME variable derived from the project name (lowercase, underscores only) and IMAGE_NAME.
-      Example pattern (replace SERVICE_NAME and IMAGE_NAME with actual project values):
-      SERVICE_NAME="projectname_service"
+      Derive SERVICE_NAME directly from the project/container name (e.g., "rental_frontend") and IMAGE_NAME (e.g., "rental_frontend:latest").
+      Check if a Swarm service exists under $SERVICE_NAME or ${SERVICE_NAME}_service:
+      Example pattern:
+      SERVICE_NAME="projectname"
       IMAGE_NAME="projectname:latest"
-      if docker service inspect $SERVICE_NAME >/dev/null 2>&1; then
-        echo "Swarm service detected! Triggering zero-downtime rolling update..."
+      SWARM_TARGET=$(docker service inspect $SERVICE_NAME >/dev/null 2>&1 && echo "$SERVICE_NAME" || (docker service inspect ${SERVICE_NAME}_service >/dev/null 2>&1 && echo "${SERVICE_NAME}_service" || echo ""))
+      if [ -n "$SWARM_TARGET" ]; then
+        echo "Swarm service '$SWARM_TARGET' detected! Building image and triggering zero-downtime rolling update..."
         docker build -t $IMAGE_NAME .
-        docker service update --image $IMAGE_NAME --update-order start-first --update-delay 5s $SERVICE_NAME
+        docker service update --image $IMAGE_NAME --update-order start-first --update-delay 5s $SWARM_TARGET
+        docker container prune -f
       else
         # Standard compose / docker run fallback
       fi
@@ -185,7 +188,7 @@ export async function POST(request) {
         exit 1
       fi
    d) After successful verification, append cleanup step:
-      docker image prune -f
+      docker image prune -f && docker container prune -f
 4. A concise summary of why you recommended this configuration.
 
 You MUST respond with a valid JSON object ONLY. Do not wrap the JSON in markdown formatting blocks or include any extra text. The JSON format must be EXACTLY:
