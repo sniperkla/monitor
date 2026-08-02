@@ -8,7 +8,7 @@ import {
   ExternalLink, AlertTriangle, Trash2, Folder, FileText, Star, Archive,
   Download, Search, X, RotateCcw, Cpu, HardDrive, Clock, Activity,
   ChevronDown, ChevronRight, Zap, Globe, Package, Shield, Plus, Share2,
-  Upload, Eye, EyeOff, Settings, CircleCheck, CircleAlert, Sunrise
+  Upload, Eye, EyeOff, Settings, CircleCheck, CircleAlert, Sunrise, MoreHorizontal, Sliders
 } from 'lucide-react';
 import { useApp } from '@/context/AppContext';
 import { useOS } from '@/context/OSContext';
@@ -194,6 +194,8 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
   const [scaleModal, setScaleModal] = useState({ isOpen: false, serviceName: '', count: 1 });
   const [swarmUpdateModal, setSwarmUpdateModal] = useState({ isOpen: false, serviceName: '', currentImage: '', newImage: '' });
   const [createServiceModal, setCreateServiceModal] = useState({ isOpen: false, name: '', image: '', replicas: 2, port: '', network: '', mounts: '', env: '', oldContainerId: '', oldContainerName: '', stopOld: true });
+  const [swarmConfigModal, setSwarmConfigModal] = useState({ isOpen: false, serviceName: '', image: '', replicas: 2, port: '', network: '', env: '', mounts: '' });
+  const [openMenuContainerId, setOpenMenuContainerId] = useState(null);
 
   const [searchResults, setSearchResults] = useState([]);
   const [searchQuery, setSearchQuery] = useState('');
@@ -505,11 +507,9 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
           message: alreadyInit ? 'This node is already running in Swarm mode.' : 'Docker Swarm mode is now active. You can create services.',
           type: 'success'
         });
-      } else if (action === 'swarm:create') {
+      } else if (action === 'swarm:create' || action === 'swarm:configure' || action === 'swarm:remove') {
         setIsLoading(false);
-        // Switch to Swarm Services tab so user sees the result
         setActiveTab('swarm');
-        // Refresh at 1s, 3s, and 6s to catch slow swarm scheduling
         const refreshSwarm = () => {
           if (socketRef.current) {
             socketRef.current.emit('docker:command', { action: 'swarm:services' });
@@ -519,9 +519,14 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
         setTimeout(refreshSwarm, 1000);
         setTimeout(refreshSwarm, 3000);
         setTimeout(refreshSwarm, 6000);
+        const titleMap = {
+          'swarm:create': '🐝 Service Created!',
+          'swarm:configure': '🐝 Service Updated!',
+          'swarm:remove': '🗑️ Service Removed!'
+        };
         addNotification({
-          title: '🐝 Service Created!',
-          message: `Swarm service is now running with rolling update enabled.`,
+          title: titleMap[action] || '🐝 Swarm Updated!',
+          message: `Swarm operation completed successfully.`,
           type: 'success'
         });
       } else if (action === 'search') {
@@ -1444,103 +1449,154 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
                                         </div>
                                       )}
 
-                                      {/* Action buttons — grouped sections */}
-                                      <div className="px-4 pb-3 flex items-center gap-2 flex-wrap">
-                                        {/* Control section */}
-                                        <div className="flex items-center gap-1 p-1 rounded-lg bg-white/[0.03]">
+                                      {/* Action buttons — compact icon toolbar + overflow menu */}
+                                      <div className="px-4 pb-3 flex items-center justify-between gap-2">
+                                        {/* Primary toolbar */}
+                                        <div className="flex items-center gap-1.5 p-1 rounded-xl bg-white/[0.04] border border-white/5">
                                           {c.state === 'running' ? (
-                                            <button onClick={(e) => { e.stopPropagation(); handleContainerAction(c.id, 'stop'); }} className="flex items-center gap-1 px-2 py-1.5 rounded-md bg-orange-500/10 text-orange-400 text-[10px] font-medium hover:bg-orange-500/15 transition-all">
-                                              {isPending === 'stop' ? <RefreshCw size={10} className="animate-spin" /> : <Square size={10} />}
-                                              <span>{isPending === 'stop' ? 'Stopping' : 'Stop'}</span>
+                                            <button 
+                                              onClick={(e) => { e.stopPropagation(); handleContainerAction(c.id, 'stop'); }} 
+                                              title="Stop Container"
+                                              className="p-1.5 rounded-lg bg-orange-500/10 text-orange-400 hover:bg-orange-500/20 transition-all cursor-pointer"
+                                            >
+                                              {isPending === 'stop' ? <RefreshCw size={14} className="animate-spin" /> : <Square size={14} />}
                                             </button>
                                           ) : (
-                                            <button onClick={(e) => { e.stopPropagation(); handleContainerAction(c.id, 'start'); }} className="flex items-center gap-1 px-2 py-1.5 rounded-md bg-emerald-500/10 text-emerald-400 text-[10px] font-medium hover:bg-emerald-500/15 transition-all">
-                                              {isPending === 'start' ? <RefreshCw size={10} className="animate-spin" /> : <Play size={10} />}
-                                              <span>{isPending === 'start' ? 'Starting' : 'Start'}</span>
+                                            <button 
+                                              onClick={(e) => { e.stopPropagation(); handleContainerAction(c.id, 'start'); }} 
+                                              title="Start Container"
+                                              className="p-1.5 rounded-lg bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20 transition-all cursor-pointer"
+                                            >
+                                              {isPending === 'start' ? <RefreshCw size={14} className="animate-spin" /> : <Play size={14} />}
                                             </button>
                                           )}
-                                          <button onClick={(e) => { e.stopPropagation(); handleContainerAction(c.id, 'restart'); }} className="flex items-center gap-1 px-2 py-1.5 rounded-md text-blue-400 text-[10px] font-medium hover:bg-blue-500/10 transition-all">
-                                            <RotateCcw size={10} />
-                                            <span>Restart</span>
+                                          <button 
+                                            onClick={(e) => { e.stopPropagation(); handleContainerAction(c.id, 'restart'); }} 
+                                            title="Restart Container"
+                                            className="p-1.5 rounded-lg text-blue-400 hover:bg-blue-500/10 transition-all cursor-pointer"
+                                          >
+                                            <RotateCcw size={14} />
+                                          </button>
+                                          <div className="w-px h-3.5 bg-white/10 mx-0.5" />
+                                          <button 
+                                            onClick={(e) => { e.stopPropagation(); fetchLogs(c.id, c.name); }} 
+                                            title="View Logs"
+                                            className="p-1.5 rounded-lg text-sky-400 hover:bg-sky-500/10 transition-all cursor-pointer"
+                                          >
+                                            <FileText size={14} />
+                                          </button>
+                                          <button 
+                                            onClick={(e) => { e.stopPropagation(); attachToContainer(c.id, c.name); }} 
+                                            disabled={c.state !== 'running'} 
+                                            title="Terminal Exec"
+                                            className="p-1.5 rounded-lg text-purple-400 disabled:opacity-20 hover:bg-purple-500/10 transition-all cursor-pointer"
+                                          >
+                                            <TermIcon size={14} />
                                           </button>
                                         </div>
 
-                                        {/* Inspect section */}
-                                        <div className="flex items-center gap-1 p-1 rounded-lg bg-white/[0.03]">
-                                          <button onClick={(e) => { e.stopPropagation(); fetchLogs(c.id, c.name); }} className="flex items-center gap-1 px-2 py-1.5 rounded-md text-sky-400 text-[10px] font-medium hover:bg-sky-500/10 transition-all">
-                                            <FileText size={10} />
-                                            <span>Logs</span>
+                                        {/* Overflow actions menu */}
+                                        <div className="relative">
+                                          <button 
+                                            onClick={(e) => { 
+                                              e.stopPropagation(); 
+                                              setOpenMenuContainerId(openMenuContainerId === c.id ? null : c.id); 
+                                            }}
+                                            className="p-1.5 rounded-xl bg-white/[0.04] border border-white/5 text-[var(--text-secondary)] hover:text-white hover:bg-white/10 transition-all cursor-pointer flex items-center gap-1"
+                                            title="More Actions"
+                                          >
+                                            <MoreHorizontal size={14} />
                                           </button>
-                                          <button onClick={(e) => { e.stopPropagation(); browseContainer(c.id, c.name); }} disabled={c.state !== 'running'} className="flex items-center gap-1 px-2 py-1.5 rounded-md text-amber-400 text-[10px] font-medium disabled:opacity-20 hover:bg-amber-500/10 transition-all">
-                                            <Folder size={10} />
-                                            <span>Files</span>
-                                          </button>
-                                          <button onClick={(e) => { e.stopPropagation(); attachToContainer(c.id, c.name); }} disabled={c.state !== 'running'} className="flex items-center gap-1 px-2 py-1.5 rounded-md text-purple-400 text-[10px] font-medium disabled:opacity-20 hover:bg-purple-500/10 transition-all">
-                                            <TermIcon size={10} />
-                                            <span>Exec</span>
-                                          </button>
+
+                                          {openMenuContainerId === c.id && (
+                                            <>
+                                              <div 
+                                                className="fixed inset-0 z-40" 
+                                                onClick={(e) => { e.stopPropagation(); setOpenMenuContainerId(null); }} 
+                                              />
+                                              <div 
+                                                className="absolute right-0 bottom-full mb-1 z-50 min-w-[150px] p-1.5 rounded-xl bg-[#181c2e] border border-white/10 shadow-2xl space-y-0.5 text-xs animate-[fadeIn_0.1s_ease-out]"
+                                                onClick={(e) => e.stopPropagation()}
+                                              >
+                                                <button 
+                                                  onClick={() => { setOpenMenuContainerId(null); browseContainer(c.id, c.name); }}
+                                                  disabled={c.state !== 'running'}
+                                                  className="w-full px-2.5 py-1.5 rounded-lg text-left text-amber-400 hover:bg-amber-500/10 disabled:opacity-30 flex items-center gap-2 transition-all cursor-pointer"
+                                                >
+                                                  <Folder size={13} /> Browse Files
+                                                </button>
+                                                <button 
+                                                  onClick={() => { setOpenMenuContainerId(null); handleBackup(c.id, c.name); }}
+                                                  className="w-full px-2.5 py-1.5 rounded-lg text-left text-teal-400 hover:bg-teal-500/10 flex items-center gap-2 transition-all cursor-pointer"
+                                                >
+                                                  <Archive size={13} /> Backup Data
+                                                </button>
+                                                <button 
+                                                  onClick={() => { setOpenMenuContainerId(null); handleExportProject(c); }}
+                                                  className="w-full px-2.5 py-1.5 rounded-lg text-left text-cyan-400 hover:bg-cyan-500/10 flex items-center gap-2 transition-all cursor-pointer"
+                                                >
+                                                  <Share2 size={13} /> Export Config
+                                                </button>
+                                                <button 
+                                                  onClick={() => {
+                                                    setOpenMenuContainerId(null);
+                                                    let mappedPort = '';
+                                                    if (typeof c.ports === 'string') {
+                                                      const arrowMatch = c.ports.match(/(\d+)->(\d+)/);
+                                                      if (arrowMatch) {
+                                                        mappedPort = `${arrowMatch[1]}:${arrowMatch[2]}`;
+                                                      } else {
+                                                        const singleMatch = c.ports.match(/(\d+)/);
+                                                        if (singleMatch) mappedPort = `${singleMatch[1]}:${singleMatch[1]}`;
+                                                      }
+                                                    } else if (Array.isArray(c.ports) && c.ports.length > 0) {
+                                                      const p = c.ports[0];
+                                                      if (typeof p === 'object' && p !== null) {
+                                                        const host = p.host_port || p.hostPort || p.PublicPort || p.container_port || p.PrivatePort;
+                                                        const container = p.container_port || p.containerPort || p.PrivatePort || host;
+                                                        if (host && container) mappedPort = `${host}:${container}`;
+                                                      } else if (typeof p === 'string') {
+                                                        const match = p.match(/(\d+)/);
+                                                        if (match) mappedPort = `${match[1]}:${match[1]}`;
+                                                      }
+                                                    }
+                                                    const cleanName = (c.name || 'app').replace(/^\//, '').replace(/[^a-zA-Z0-9._-]/g, '');
+                                                    setCreateServiceModal({
+                                                      isOpen: true,
+                                                      name: cleanName + '_service',
+                                                      image: c.image || '',
+                                                      replicas: 2,
+                                                      port: mappedPort,
+                                                      network: c.networks || '',
+                                                      mounts: c.mounts || '',
+                                                      env: '',
+                                                      oldContainerId: c.id,
+                                                      oldContainerName: c.name,
+                                                      stopOld: true
+                                                    });
+                                                  }}
+                                                  className="w-full px-2.5 py-1.5 rounded-lg text-left text-purple-400 hover:bg-purple-500/10 flex items-center gap-2 transition-all cursor-pointer font-medium"
+                                                >
+                                                  <Zap size={13} /> Convert to Swarm
+                                                </button>
+
+                                                <div className="my-1 border-t border-white/10" />
+
+                                                <button 
+                                                  onClick={() => {
+                                                    setOpenMenuContainerId(null);
+                                                    showConfirm(`Delete ${c.name}?`, () => handleContainerAction(c.id, 'rm'), 'Remove', 'Delete');
+                                                  }}
+                                                  disabled={isPending}
+                                                  className="w-full px-2.5 py-1.5 rounded-lg text-left text-rose-400 hover:bg-rose-500/15 flex items-center gap-2 transition-all cursor-pointer font-medium"
+                                                >
+                                                  {isPending === 'rm' ? <RefreshCw size={13} className="animate-spin" /> : <Trash2 size={13} />}
+                                                  Delete Container
+                                                </button>
+                                              </div>
+                                            </>
+                                          )}
                                         </div>
-
-                                        {/* Data section */}
-                                        <div className="flex items-center gap-1 p-1 rounded-lg bg-white/[0.03]">
-                                          <button onClick={(e) => { e.stopPropagation(); handleBackup(c.id, c.name); }} className="flex items-center gap-1 px-2 py-1.5 rounded-md text-teal-400 text-[10px] font-medium hover:bg-teal-500/10 transition-all" title="Backup Files & Data">
-                                            <Archive size={10} />
-                                            <span>Backup</span>
-                                          </button>
-                                          <button onClick={(e) => { e.stopPropagation(); handleExportProject(c); }} className="flex items-center gap-1 px-2 py-1.5 rounded-md text-cyan-400 text-[10px] font-medium hover:bg-cyan-500/10 transition-all" title="Export Configuration">
-                                            <Share2 size={10} />
-                                            <span>Export</span>
-                                          </button>
-                                          <button onClick={(e) => {
-                                            e.stopPropagation();
-                                            let mappedPort = '';
-                                            if (typeof c.ports === 'string') {
-                                              const arrowMatch = c.ports.match(/(\d+)->(\d+)/);
-                                              if (arrowMatch) {
-                                                mappedPort = `${arrowMatch[1]}:${arrowMatch[2]}`;
-                                              } else {
-                                                const singleMatch = c.ports.match(/(\d+)/);
-                                                if (singleMatch) mappedPort = `${singleMatch[1]}:${singleMatch[1]}`;
-                                              }
-                                            } else if (Array.isArray(c.ports) && c.ports.length > 0) {
-                                              const p = c.ports[0];
-                                              if (typeof p === 'object' && p !== null) {
-                                                const host = p.host_port || p.hostPort || p.PublicPort || p.container_port || p.PrivatePort;
-                                                const container = p.container_port || p.containerPort || p.PrivatePort || host;
-                                                if (host && container) mappedPort = `${host}:${container}`;
-                                              } else if (typeof p === 'string') {
-                                                const match = p.match(/(\d+)/);
-                                                if (match) mappedPort = `${match[1]}:${match[1]}`;
-                                              }
-                                            }
-                                            const cleanName = (c.name || 'app').replace(/^\//, '').replace(/[^a-zA-Z0-9._-]/g, '');
-                                            setCreateServiceModal({
-                                              isOpen: true,
-                                              name: cleanName + '_service',
-                                              image: c.image || '',
-                                              replicas: 2,
-                                              port: mappedPort,
-                                              network: c.networks || '',
-                                              mounts: c.mounts || '',
-                                              env: '',
-                                              oldContainerId: c.id,
-                                              oldContainerName: c.name,
-                                              stopOld: true
-                                            });
-                                          }} className="flex items-center gap-1 px-2 py-1.5 rounded-md text-purple-400 bg-purple-500/10 hover:bg-purple-500/20 text-[10px] font-bold transition-all border border-purple-500/20" title="Convert running container to Docker Swarm zero-downtime service">
-
-                                            <Zap size={10} />
-                                            <span>To Swarm</span>
-                                          </button>
-                                        </div>
-
-                                        <div className="flex-1" />
-
-                                        {/* Danger section */}
-                                        <button onClick={(e) => { e.stopPropagation(); showConfirm(`Delete ${c.name}?`, () => handleContainerAction(c.id, 'rm'), 'Remove', 'Delete'); }} className="flex items-center gap-1 px-2 py-1.5 rounded-lg bg-rose-500/10 text-rose-400 text-[10px] font-medium hover:bg-rose-500/15 transition-all" disabled={isPending}>
-                                          {isPending === 'rm' ? <RefreshCw size={10} className="animate-spin" /> : <Trash2 size={10} />}
-                                          <span>Delete</span>
-                                        </button>
                                       </div>
                                     </motion.div>
                                   );
@@ -2084,17 +2140,23 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
                                     <div className="flex items-center gap-2 pt-1 border-t border-white/5">
                                       <button
                                         onClick={() => {
-                                          setSwarmUpdateModal({
+                                          const currentCount = parseInt((svcReplicas.split('/')[1] || '1'), 10) || 1;
+                                          setSwarmConfigModal({
                                             isOpen: true,
                                             serviceName: svcName,
-                                            currentImage: svcImage,
-                                            newImage: svcImage
+                                            image: svcImage,
+                                            replicas: currentCount,
+                                            port: svcPorts !== '-' ? svcPorts : '',
+                                            network: '',
+                                            env: '',
+                                            mounts: ''
                                           });
                                         }}
-                                        className="flex-1 py-1.5 px-3 rounded-lg bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/20 text-emerald-400 text-[10px] font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer"
+                                        className="flex-1 py-1.5 px-3 rounded-lg bg-purple-500/15 hover:bg-purple-500/25 border border-purple-500/30 text-purple-300 text-[10px] font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer"
+                                        title="Configure Service (Network, Env, Image, Ports, Replicas)"
                                       >
-                                        <Zap size={11} />
-                                        Zero-Downtime Update
+                                        <Sliders size={11} />
+                                        Configure
                                       </button>
                                       <button
                                         onClick={() => {
@@ -2105,10 +2167,28 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
                                             count: currentCount
                                           });
                                         }}
-                                        className="py-1.5 px-3 rounded-lg bg-purple-500/10 hover:bg-purple-500/20 border border-purple-500/20 text-purple-300 text-[10px] font-bold transition-all flex items-center gap-1.5 cursor-pointer"
+                                        className="py-1.5 px-3 rounded-lg bg-blue-500/10 hover:bg-blue-500/20 border border-blue-500/20 text-blue-300 text-[10px] font-bold transition-all flex items-center gap-1.5 cursor-pointer"
+                                        title="Scale Replicas"
                                       >
                                         <Layers size={11} />
                                         Scale
+                                      </button>
+                                      <button
+                                        onClick={() => {
+                                          showConfirm(
+                                            `Delete Swarm Service "${svcName}"? This will remove all service containers permanently.`,
+                                            () => {
+                                              setIsLoading(true);
+                                              socketRef.current?.emit('docker:command', { action: 'swarm:remove', args: [svcName] });
+                                            },
+                                            'Remove Service',
+                                            'Delete'
+                                          );
+                                        }}
+                                        className="py-1.5 px-2.5 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 border border-rose-500/20 text-rose-400 text-[10px] font-bold transition-all flex items-center gap-1 cursor-pointer"
+                                        title="Remove Swarm Service permanently"
+                                      >
+                                        <Trash2 size={11} />
                                       </button>
                                     </div>
                                   </div>
@@ -3013,6 +3093,129 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
                 >
                   <Zap size={13} />
                   Trigger Rolling Update
+                </button>
+              </div>
+            </div>
+          </MacOSModalWindow>,
+          document.body
+        )}
+
+        {/* Configure Swarm Service Modal */}
+        {swarmConfigModal.isOpen && createPortal(
+          <MacOSModalWindow
+            isOpen={swarmConfigModal.isOpen}
+            onClose={() => setSwarmConfigModal({ isOpen: false, serviceName: '', image: '', replicas: 2, port: '', network: '', env: '', mounts: '' })}
+            title={`Configure Swarm Service: ${swarmConfigModal.serviceName}`}
+            icon={Sliders}
+            defaultWidth={540}
+            defaultHeight={480}
+            enableMaximize={false}
+            enableMinimize={false}
+          >
+            <div className="p-6 space-y-4">
+              <div className="p-3 bg-purple-500/10 border border-purple-500/20 rounded-xl text-xs text-purple-300">
+                🐝 <strong>Update Swarm Service Configuration</strong>. Changes are applied via zero-downtime rolling updates without taking down active containers.
+              </div>
+
+              <div className="grid grid-cols-3 gap-3">
+                <div className="col-span-2">
+                  <label className="text-[10px] font-bold uppercase text-[var(--text-muted)] tracking-wider block mb-1">Docker Image</label>
+                  <input
+                    type="text"
+                    value={swarmConfigModal.image}
+                    onChange={(e) => setSwarmConfigModal(prev => ({ ...prev, image: e.target.value }))}
+                    placeholder="e.g. nginx:latest"
+                    className="w-full bg-slate-950 border border-[var(--border-color)] rounded-xl p-2.5 text-xs font-mono text-emerald-400 focus:outline-none focus:border-purple-500/50"
+                  />
+                </div>
+                <div>
+                  <label className="text-[10px] font-bold uppercase text-[var(--text-muted)] tracking-wider block mb-1">Replicas</label>
+                  <input
+                    type="number"
+                    min="0"
+                    max="100"
+                    value={swarmConfigModal.replicas}
+                    onChange={(e) => setSwarmConfigModal(prev => ({ ...prev, replicas: parseInt(e.target.value, 10) || 0 }))}
+                    className="w-full bg-slate-950 border border-[var(--border-color)] rounded-xl p-2.5 text-xs font-mono focus:outline-none focus:border-purple-500/50 text-center"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-[10px] font-bold uppercase text-[var(--text-muted)] tracking-wider block mb-1">Port Mapping <span className="text-[var(--text-muted)] normal-case font-normal">(host:container)</span></label>
+                  <input
+                    type="text"
+                    value={swarmConfigModal.port}
+                    onChange={(e) => setSwarmConfigModal(prev => ({ ...prev, port: e.target.value }))}
+                    placeholder="e.g. 80:80"
+                    className="w-full bg-slate-950 border border-[var(--border-color)] rounded-xl p-2.5 text-xs font-mono focus:outline-none focus:border-purple-500/50"
+                  />
+                </div>
+                <div>
+                  <label className="text-[10px] font-bold uppercase text-[var(--text-muted)] tracking-wider block mb-1">Network <span className="text-[var(--text-muted)] normal-case font-normal">(e.g. proxy-net)</span></label>
+                  <input
+                    type="text"
+                    value={swarmConfigModal.network}
+                    onChange={(e) => setSwarmConfigModal(prev => ({ ...prev, network: e.target.value }))}
+                    placeholder="e.g. overlay-net"
+                    className="w-full bg-slate-950 border border-[var(--border-color)] rounded-xl p-2.5 text-xs font-mono focus:outline-none focus:border-purple-500/50"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="text-[10px] font-bold uppercase text-[var(--text-muted)] tracking-wider block mb-1">Add Env Variables <span className="text-[var(--text-muted)] normal-case font-normal">(comma-separated KEY=VAL)</span></label>
+                <input
+                  type="text"
+                  value={swarmConfigModal.env}
+                  onChange={(e) => setSwarmConfigModal(prev => ({ ...prev, env: e.target.value }))}
+                  placeholder="e.g. NODE_ENV=production,PORT=8080"
+                  className="w-full bg-slate-950 border border-[var(--border-color)] rounded-xl p-2.5 text-xs font-mono focus:outline-none focus:border-purple-500/50"
+                />
+              </div>
+
+              <div className="p-3 bg-slate-800/50 rounded-xl text-[10px] font-mono text-slate-400 break-all space-y-1">
+                <div>
+                  <span className="text-purple-400">$ </span>
+                  docker service update{' '}
+                  {swarmConfigModal.image && <><span className="text-emerald-400">--image {swarmConfigModal.image}</span>{' '}</>}
+                  <span className="text-sky-400">--replicas {swarmConfigModal.replicas}</span>{' '}
+                  {swarmConfigModal.port && <><span className="text-amber-400">--publish-add {swarmConfigModal.port}</span>{' '}</>}
+                  {swarmConfigModal.network && <><span className="text-purple-400">--network-add {swarmConfigModal.network}</span>{' '}</>}
+                  {swarmConfigModal.env && <><span className="text-teal-400">--env-add "{swarmConfigModal.env}"</span>{' '}</>}
+                  --update-order start-first <span className="text-purple-300">{swarmConfigModal.serviceName}</span>
+                </div>
+              </div>
+
+              <div className="flex justify-end gap-2 pt-1">
+                <button
+                  onClick={() => setSwarmConfigModal({ isOpen: false, serviceName: '', image: '', replicas: 2, port: '', network: '', env: '', mounts: '' })}
+                  className="px-4 py-2 rounded-xl text-xs font-bold border border-[var(--border-color)] hover:bg-white/5 transition-all cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={() => {
+                    setIsLoading(true);
+                    socketRef.current.emit('docker:command', {
+                      action: 'swarm:configure',
+                      args: [
+                        swarmConfigModal.serviceName,
+                        swarmConfigModal.image.trim(),
+                        swarmConfigModal.replicas,
+                        swarmConfigModal.port.trim(),
+                        swarmConfigModal.network.trim(),
+                        swarmConfigModal.env.trim(),
+                        swarmConfigModal.mounts.trim()
+                      ]
+                    });
+                    setSwarmConfigModal({ isOpen: false, serviceName: '', image: '', replicas: 2, port: '', network: '', env: '', mounts: '' });
+                  }}
+                  className="px-4 py-2 rounded-xl text-xs font-bold bg-purple-500 hover:bg-purple-600 text-white transition-all shadow-lg flex items-center gap-1.5 cursor-pointer"
+                >
+                  <Sliders size={13} />
+                  Apply Configuration
                 </button>
               </div>
             </div>
