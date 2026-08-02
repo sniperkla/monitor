@@ -178,57 +178,46 @@ CRITICAL INSTRUCTIONS - USE ORIGINAL SCRIPT AS STARTING MATERIAL:
      docker swarm init 2>/dev/null || true
      docker swarm update --task-history-limit 1 2>/dev/null || true
 
-     # Build & tag explicit images for subfolder services (e.g. ./frontend -> autfrontend:latest, ./backend -> autbackend:latest)
-     for SVC in "\${SERVICES[@]}"; do
-       SUBDIR=\$(echo \$SVC | sed 's/aut//g' | sed 's/app//g')
-       if [ -d "\$SUBDIR" ] && [ -f "\$SUBDIR/Dockerfile" ]; then
-         echo "🔨 Building image \${SVC}:latest from ./\$SUBDIR/Dockerfile..."
-         docker build -t "\${SVC}:latest" "./\$SUBDIR"
-       elif [ -f Dockerfile ]; then
-         docker build -t "\${SVC}:latest" .
-       fi
-     done
-
-     # Fallback compose build
+     # Build images explicitly from each service subfolder
+     if [ -d "frontend" ] && [ -f "frontend/Dockerfile" ]; then
+       echo "🔨 Building autfrontend:latest from ./frontend..."
+       docker build -t autfrontend:latest ./frontend
+     fi
+     if [ -d "backend" ] && [ -f "backend/Dockerfile" ]; then
+       echo "🔨 Building autbackend:latest from ./backend..."
+       docker build -t autbackend:latest ./backend
+     fi
+     # Fallback: use compose build if subfolders not found
      docker compose build 2>/dev/null || docker-compose build 2>/dev/null || true
 
-     # Target exact container names from docker-compose.yml
-     SERVICES=("autfrontend" "autbackend")
+     # ------ autfrontend ------
+     if docker service inspect autfrontend >/dev/null 2>&1; then
+       echo "🐝 Updating Swarm service autfrontend zero-downtime..."
+       docker service update --image autfrontend:latest --update-order start-first --update-delay 5s autfrontend
+     else
+       echo "🐝 Creating new Swarm service autfrontend..."
+       docker stop autfrontend 2>/dev/null || true
+       docker rm   autfrontend 2>/dev/null || true
+       docker service create --name autfrontend --publish 3090:3090 --detach=true --no-resolve-image --replicas 2 autfrontend:latest
+     fi
 
-     for SVC in "\${SERVICES[@]}"; do
-       IMAGE_NAME="\${SVC}:latest"
-       
-       # Extract published ports for this service (e.g. --publish 3090:3090)
-       PORT_FLAGS=""
-       if [ "\$SVC" = "autfrontend" ]; then PORT_FLAGS="--publish 3090:3090"; fi
-       if [ "\$SVC" = "autbackend" ]; then PORT_FLAGS="--publish 3033:3033"; fi
+     # ------ autbackend ------
+     if docker service inspect autbackend >/dev/null 2>&1; then
+       echo "🐝 Updating Swarm service autbackend zero-downtime..."
+       docker service update --image autbackend:latest --update-order start-first --update-delay 5s autbackend
+     else
+       echo "🐝 Creating new Swarm service autbackend..."
+       docker stop autbackend 2>/dev/null || true
+       docker rm   autbackend 2>/dev/null || true
+       docker service create --name autbackend --publish 3033:3033 --detach=true --no-resolve-image --replicas 2 autbackend:latest
+     fi
 
-       SWARM_TARGET=\$(docker service inspect \$SVC >/dev/null 2>&1 && echo "\$SVC" || echo "")
-
-       if [ -n "\$SWARM_TARGET" ]; then
-         echo "🐝 Swarm service '\$SWARM_TARGET' found! Updating service zero-downtime..."
-         docker service update --image "\$IMAGE_NAME" --update-order start-first --update-delay 5s \$SWARM_TARGET
-       else
-         echo "🐝 Creating new Swarm service '\$SVC'..."
-         # Stop & remove old non-swarm standalone container to free container name and ports
-         if docker ps -a --format '{{.Names}}' | grep -w "\$SVC" >/dev/null 2>&1; then
-           docker stop \$SVC 2>/dev/null || true
-           docker rm \$SVC 2>/dev/null || true
-         fi
-         # Create Swarm service using exact container name and published ports
-         if ! docker service create --name \$SVC \$PORT_FLAGS --detach=true --no-resolve-image --replicas 2 \$IMAGE_NAME; then
-           echo "📦 Service creation fallback..."
-           docker compose up -d --build 2>/dev/null || docker-compose up -d --build 2>/dev/null || true
-         fi
-       fi
+     # Reconnect Nginx to Swarm overlay networks so container-name DNS resolves
+     NETS=$(docker network ls --filter driver=overlay --format "{{.Name}}")
+     for net in $NETS; do
+       docker network connect $net global-nginx 2>/dev/null || docker network connect $net nginx 2>/dev/null || true
      done
-
-     # Automatically connect Nginx proxy to Swarm overlay network so container names resolve cleanly
-     NETS=\$(docker network ls --filter driver=overlay --format "{{.Name}}")
-     for net in \$NETS; do
-       docker network connect \$net global-nginx 2>/dev/null || docker network connect \$net nginx 2>/dev/null || true
-     done
-     docker restart global-nginx 2>/dev/null || docker exec global-nginx nginx -s reload 2>/dev/null || docker restart nginx 2>/dev/null || true
+     docker exec global-nginx nginx -s reload 2>/dev/null || docker restart global-nginx 2>/dev/null || docker exec nginx nginx -s reload 2>/dev/null || docker restart nginx 2>/dev/null || true
 
      docker container prune -f 2>/dev/null || true
 
