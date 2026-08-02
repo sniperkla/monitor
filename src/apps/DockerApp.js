@@ -1427,7 +1427,7 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
                                                 <h3 className="font-bold text-sm truncate flex items-center gap-2">
                                                   <span>{serviceName}</span>
                                                   <span className="px-2 py-0.5 text-[9px] bg-purple-500/20 text-purple-300 font-bold uppercase rounded-lg border border-purple-500/40 shadow-sm flex items-center gap-1">
-                                                    🐝 SWARM GROUP ({runningTasks.length}/{tasks.length} Replicas)
+                                                    🐝 SWARM GROUP ({runningTasks.length} Active {runningTasks.length === 1 ? 'Replica' : 'Replicas'})
                                                   </span>
                                                 </h3>
                                                 <p className="text-[10px] font-mono text-[var(--text-muted)] truncate mt-0.5">{firstTask.image || '-'}</p>
@@ -1450,9 +1450,24 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
                                           {/* Group tasks inside */}
                                           {isGroupExpanded && (
                                             <div className="p-3 border-t border-purple-500/20 bg-black/20 space-y-2">
-                                              <p className="text-[10px] font-bold text-purple-300 uppercase tracking-wider px-1">
-                                                Replica Tasks ({tasks.length})
-                                              </p>
+                                              <div className="flex items-center justify-between px-1">
+                                                <p className="text-[10px] font-bold text-purple-300 uppercase tracking-wider">
+                                                  Replica Tasks ({tasks.length})
+                                                </p>
+                                                {tasks.some(t => t.state !== 'running') && (
+                                                  <button
+                                                    onClick={(e) => {
+                                                      e.stopPropagation();
+                                                      setIsLoading(true);
+                                                      socketRef.current.emit('docker:command', { action: 'prune-custom', args: [{ containers: true }, false] });
+                                                    }}
+                                                    className="px-2 py-0.5 text-[9px] font-bold text-rose-400 bg-rose-500/10 hover:bg-rose-500/20 border border-rose-500/20 rounded-md transition-all flex items-center gap-1 cursor-pointer"
+                                                    title="Clean up all exited task history containers"
+                                                  >
+                                                    <Trash2 size={10} /> Clean Exited Tasks
+                                                  </button>
+                                                )}
+                                              </div>
                                               <div className="space-y-1.5">
                                                 {tasks.map((task, idx) => {
                                                   const replicaNum = task.name.includes('.') ? `#${task.name.split('.')[1] || (idx + 1)}` : `#${idx + 1}`;
