@@ -614,15 +614,15 @@ export async function runDeployment(config, runMeta = {}) {
     scriptLines.push('echo "[deploy] Running deploy command..."');
     
     let cleanLocalDeployCmd = (config.deployCommand || '').trim();
-    cleanLocalDeployCmd = cleanLocalDeployCmd.replace(/\|\|\s*\(\s*docker service inspect[^)]+\)/g, '');
-    cleanLocalDeployCmd = cleanLocalDeployCmd.split('\n').map((line, idx) => {
+    cleanLocalDeployCmd = cleanLocalDeployCmd.split('\n').filter(line => !line.includes('SWARM_TARGET=$(') && !line.includes('|| (docker service inspect')).map((line, idx) => {
       if (idx > 0 && (line.trim() === '#!/bin/bash' || line.trim() === 'set -e')) {
         return '# ' + line;
       }
+      if (line.includes('docker service create') && line.includes('$IMAGE_NAME')) {
+        return line.replace('$IMAGE_NAME', '"${SVC}:latest"').replace('|| docker compose up -d --build', '2>/dev/null || true');
+      }
       return line;
     }).join('\n');
-    cleanLocalDeployCmd = cleanLocalDeployCmd.replace(/docker service create --name \$SVC \$PORT_FLAGS --detach=true --no-resolve-image --replicas 2 \$IMAGE_NAME/g, 'docker service create --name $SVC $PORT_FLAGS --detach=true --no-resolve-image --replicas 2 "${SVC}:latest"');
-    cleanLocalDeployCmd = cleanLocalDeployCmd.replace(/\|\| docker compose up -d --build/g, '2>/dev/null || true');
 
     scriptLines.push(cleanLocalDeployCmd);
 
@@ -973,19 +973,16 @@ export async function runDeployment(config, runMeta = {}) {
           scriptLines.push('echo "[deploy] Running deploy command..."');
           
           let cleanDeployCmd = (config.deployCommand || '').trim();
-          // Auto-heal nested subshell syntax error: || (docker service inspect...)
-          cleanDeployCmd = cleanDeployCmd.replace(/\|\|\s*\(\s*docker service inspect[^)]+\)/g, '');
-          // Auto-heal duplicate nested headers inside body
-          cleanDeployCmd = cleanDeployCmd.split('\n').map((line, idx) => {
+          // Filter out lines with broken subshell syntax
+          cleanDeployCmd = cleanDeployCmd.split('\n').filter(line => !line.includes('SWARM_TARGET=$(') && !line.includes('|| (docker service inspect')).map((line, idx) => {
             if (idx > 0 && (line.trim() === '#!/bin/bash' || line.trim() === 'set -e')) {
               return '# ' + line;
             }
+            if (line.includes('docker service create') && line.includes('$IMAGE_NAME')) {
+              return line.replace('$IMAGE_NAME', '"${SVC}:latest"').replace('|| docker compose up -d --build', '2>/dev/null || true');
+            }
             return line;
           }).join('\n');
-          // Auto-heal empty $IMAGE_NAME variable in docker service create
-          cleanDeployCmd = cleanDeployCmd.replace(/docker service create --name \$SVC \$PORT_FLAGS --detach=true --no-resolve-image --replicas 2 \$IMAGE_NAME/g, 'docker service create --name $SVC $PORT_FLAGS --detach=true --no-resolve-image --replicas 2 "${SVC}:latest"');
-          // Remove broken inline fallback
-          cleanDeployCmd = cleanDeployCmd.replace(/\|\| docker compose up -d --build/g, '2>/dev/null || true');
 
           scriptLines.push(cleanDeployCmd);
 
