@@ -335,35 +335,35 @@ ${svcSection}
      # === END SWARM SECTION ===`;
     } // end isSwarmMode
 
-    // Inject swarm block: only if user is in Swarm mode AND we built a block
-    let finalScript = parsedResult.deployCommand || '';
-    if (swarmBlock && isSwarmMode) {
+    // Always build standardScript and swarmScript separately
+    const standardScript = parsedResult.deployCommand || '';
+    let swarmScript = standardScript;
+
+    if (swarmBlock) {
       // Remove any swarm/stack/service commands the AI may have written
-      finalScript = finalScript.replace(/docker\s+(swarm|service|stack)\s+[^\n]*/g, '# [swarm commands replaced by injected section]');
+      let cleanScript = standardScript.replace(/docker\s+(swarm|service|stack)\s+[^\n]*/g, '# [swarm commands replaced by injected section]');
       // Insert swarm block before the final echo or at end
-      const echoIdx = finalScript.lastIndexOf('echo "Deployment completed');
+      const echoIdx = cleanScript.lastIndexOf('echo "Deployment completed');
       if (echoIdx !== -1) {
-        finalScript = finalScript.slice(0, echoIdx) + swarmBlock + '\n\n     ' + finalScript.slice(echoIdx);
+        swarmScript = cleanScript.slice(0, echoIdx) + swarmBlock + '\n\n     ' + cleanScript.slice(echoIdx);
       } else {
-        finalScript = finalScript.trimEnd() + '\n' + swarmBlock;
+        swarmScript = cleanScript.trimEnd() + '\n' + swarmBlock;
       }
     }
-    // If NOT swarm mode: finalScript stays as the pure AI-generated standard deployment script
+
+    // Default deployCommand is swarmScript if user was already in swarm mode, else standardScript
+    const finalScript = isSwarmMode ? swarmScript : standardScript;
 
     // Save configuration inside system settings: value.aiProfile & value.aiLogs
     const existing = await SystemSetting.findOne({ key: dbKey });
     const existingValue = existing?.value || {};
 
-    // Always store BOTH scripts so the user can choose which mode to apply
-    const standardScript = parsedResult.deployCommand || '';
-    const swarmScript = (swarmBlock && swarmBlock.trim()) ? finalScript : '';
-
     const aiProfile = {
       projectType: parsedResult.projectType,
       technologies: parsedResult.technologies,
-      deployCommand: finalScript,   // default = standard if no swarm block
-      standardScript,               // always available
-      swarmScript,                  // empty string if Swarm injection was skipped
+      deployCommand: finalScript,
+      standardScript,
+      swarmScript,
       summary: parsedResult.summary,
       analyzedAt: new Date()
     };
