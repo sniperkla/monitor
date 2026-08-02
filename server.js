@@ -1505,6 +1505,13 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
                   return socket.emit('docker:error', 'Invalid service name or image');
 
                 let flags = [`--name ${svcName}`, `--replicas ${replicas}`, `--update-order start-first`, `--update-delay 5s`];
+                let baseAlias = svcName.replace(/_service$/, '').replace(/-service$/, '').replace(/_swarm$/, '');
+                if (baseAlias && baseAlias !== svcName) {
+                  flags.push(`--network-alias ${baseAlias}`);
+                  if (baseAlias.includes('_')) flags.push(`--network-alias ${baseAlias.replace(/_/g, '-')}`);
+                  if (baseAlias.includes('-')) flags.push(`--network-alias ${baseAlias.replace(/-/g, '_')}`);
+                }
+
                 if (port) {
                   const p = port.includes(':') ? port : `${port}:${port}`;
                   flags.push(`--publish ${p}`);
@@ -1538,7 +1545,7 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
                 }
                 const createCmd = `docker service create ${flags.join(' ')} ${image}`;
                 // Always run network setup: use/create the overlay network, then deploy and auto-connect Nginx proxy
-                cmdSuffix = `sh -c 'target_net="${effectiveNetwork}"; driver=$(docker network inspect ${effectiveNetwork} --format "{{.Driver}}" 2>/dev/null); if [ "$driver" = "overlay" ]; then echo "Using overlay network ${effectiveNetwork}"; elif [ -z "$driver" ]; then echo "Creating overlay network ${effectiveNetwork}..."; docker network create --driver overlay --attachable ${effectiveNetwork}; elif [ "$driver" = "bridge" ]; then count=$(docker network inspect ${effectiveNetwork} --format "{{len .Containers}}" 2>/dev/null); if [ "$count" = "0" ] || [ -z "$count" ]; then echo "Converting unused bridge to overlay..."; docker network rm ${effectiveNetwork} >/dev/null 2>&1 && docker network create --driver overlay --attachable ${effectiveNetwork}; else target_net="${effectiveNetwork}-overlay"; echo "Auto-creating overlay network $target_net..."; docker network inspect $target_net >/dev/null 2>&1 || docker network create --driver overlay --attachable $target_net; fi; fi; ${createCmd} && (docker network connect $target_net global-nginx 2>/dev/null || docker network connect $target_net nginx 2>/dev/null || true)'`;
+                cmdSuffix = `sh -c 'target_net="${effectiveNetwork}"; driver=$(docker network inspect ${effectiveNetwork} --format "{{.Driver}}" 2>/dev/null); if [ "$driver" = "overlay" ]; then echo "Using overlay network ${effectiveNetwork}"; elif [ -z "$driver" ]; then echo "Creating overlay network ${effectiveNetwork}..."; docker network create --driver overlay --attachable ${effectiveNetwork}; elif [ "$driver" = "bridge" ]; then count=$(docker network inspect ${effectiveNetwork} --format "{{len .Containers}}" 2>/dev/null); if [ "$count" = "0" ] || [ -z "$count" ]; then echo "Converting unused bridge to overlay..."; docker network rm ${effectiveNetwork} >/dev/null 2>&1 && docker network create --driver overlay --attachable ${effectiveNetwork}; else target_net="${effectiveNetwork}-overlay"; echo "Auto-creating overlay network $target_net..."; docker network inspect $target_net >/dev/null 2>&1 || docker network create --driver overlay --attachable $target_net; fi; fi; ${createCmd} && (docker network connect $target_net global-nginx 2>/dev/null || docker network connect $target_net nginx 2>/dev/null || true) && (docker exec global-nginx nginx -s reload 2>/dev/null || docker exec nginx nginx -s reload 2>/dev/null || true)'`;
             } else if (action === 'swarm:update' && args.length >= 2) {
                  const serviceName = String(args[0] || '').replace(/[^a-zA-Z0-9._-]/g, '');
                  const image = String(args[1] || '').replace(/[^a-zA-Z0-9.@/:-]/g, '');
@@ -1816,7 +1823,7 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
                  // Check if port is in use on host (TCP listen)
                  cmdSuffix = `sh -c "(ss -tuln 2>/dev/null || netstat -tuln) | grep -q -w ':${port}' && echo 'IN_USE' || echo 'FREE'"`;
               } else if (action === 'connect-nginx-swarm') {
-                  cmdSuffix = `sh -c 'NETS=$(docker network ls --filter driver=overlay --format "{{.Name}}"); for net in $NETS; do echo "Connecting Nginx to $net..."; docker network connect $net global-nginx 2>/dev/null || docker network connect $net nginx 2>/dev/null || true; done; echo "Nginx connected to all overlay networks successfully!"'`;
+                  cmdSuffix = `sh -c 'NETS=$(docker network ls --filter driver=overlay --format "{{.Name}}"); for net in $NETS; do echo "Connecting Nginx to $net..."; docker network connect $net global-nginx 2>/dev/null || docker network connect $net nginx 2>/dev/null || true; done; docker exec global-nginx nginx -s reload 2>/dev/null || docker exec nginx nginx -s reload 2>/dev/null || true; echo "Nginx connected and reloaded successfully!"'`;
              } else {
                return socket.emit('docker:error', 'Invalid Docker action');
             }
