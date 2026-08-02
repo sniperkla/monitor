@@ -770,9 +770,10 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
       setIsWakingUp(false);
       setPendingActions({});
 
-      if (err.includes('command not found') || err.includes('not found')) {
+      const lowerErr = (err || '').toLowerCase();
+      if (lowerErr.includes('docker: command not found') || lowerErr.includes('command not found: docker') || lowerErr.includes('docker: not found') || lowerErr.includes('executable file not found in $path')) {
         setIsDockerInstalled(false);
-      } else if (err.includes('Cannot connect to the Docker daemon') || err.includes('docker daemon is not running')) {
+      } else if (lowerErr.includes('cannot connect to the docker daemon') || lowerErr.includes('docker daemon is not running') || lowerErr.includes('is the docker daemon running')) {
         setIsDockerRunning(false);
       } else {
         // Prevent duplicate toasts if we already showed it recently
