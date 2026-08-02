@@ -1493,16 +1493,17 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
             } else if (action === 'swarm:init') {
                // Use sh -c so || shell operator works; always exits 0 (already-in-swarm is OK)
                cmdSuffix = `sh -c 'docker swarm init 2>&1; exit 0'`;
-             } else if (action === 'swarm:create') {
-                const svcName   = String(args[0] || '').replace(/[^a-zA-Z0-9._-]/g, '');
-                const image     = String(args[1] || '').replace(/[^a-zA-Z0-9.@/:-]/g, '');
-                const replicas  = parseInt(args[2], 10) || 2;
-                const port      = String(args[3] || '').replace(/[^0-9:]/g, '');
-                const network   = String(args[4] || '').replace(/[^a-zA-Z0-9._-]/g, '');
-                const rawEnv    = String(args[5] || '');
-                const rawMounts = String(args[6] || '');
-                if (!svcName || !image)
-                  return socket.emit('docker:error', 'Invalid service name or image');
+              } else if (action === 'swarm:create') {
+                 const svcName      = String(args[0] || '').replace(/[^a-zA-Z0-9._-]/g, '');
+                 const image        = String(args[1] || '').replace(/[^a-zA-Z0-9.@/:-]/g, '');
+                 const replicas     = parseInt(args[2], 10) || 2;
+                 const port         = String(args[3] || '').replace(/[^0-9:]/g, '');
+                 const network      = String(args[4] || '').replace(/[^a-zA-Z0-9._-]/g, '');
+                 const rawEnv       = String(args[5] || '');
+                 const rawMounts    = String(args[6] || '');
+                 const oldContId    = String(args[7] || '').replace(/[^a-zA-Z0-9._-]/g, '');
+                 if (!svcName || !image)
+                   return socket.emit('docker:error', 'Invalid service name or image');
 
                 let flags = [`--name ${svcName}`, `--replicas ${replicas}`, `--update-order start-first`, `--update-delay 5s`];
                 let baseAlias = svcName.replace(/_service$/, '').replace(/-service$/, '').replace(/_swarm$/, '');
@@ -1544,8 +1545,12 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
                   flags.push(`--network $target_net`);
                 }
                 const createCmd = `docker service create ${flags.join(' ')} ${image}`;
+                // If migrating from an existing container: stop it and remove it first (frees the name)
+                const stopRmCmd = oldContId
+                  ? `echo "Stopping old container ${oldContId}..."; docker stop ${oldContId} 2>/dev/null || true; echo "Removing old container ${oldContId}..."; docker rm ${oldContId} 2>/dev/null || true; `
+                  : '';
                 // Always run network setup: use/create the overlay network, then deploy and auto-connect Nginx proxy
-                cmdSuffix = `sh -c 'target_net="${effectiveNetwork}"; driver=$(docker network inspect ${effectiveNetwork} --format "{{.Driver}}" 2>/dev/null); if [ "$driver" = "overlay" ]; then echo "Using overlay network ${effectiveNetwork}"; elif [ -z "$driver" ]; then echo "Creating overlay network ${effectiveNetwork}..."; docker network create --driver overlay --attachable ${effectiveNetwork}; elif [ "$driver" = "bridge" ]; then count=$(docker network inspect ${effectiveNetwork} --format "{{len .Containers}}" 2>/dev/null); if [ "$count" = "0" ] || [ -z "$count" ]; then echo "Converting unused bridge to overlay..."; docker network rm ${effectiveNetwork} >/dev/null 2>&1 && docker network create --driver overlay --attachable ${effectiveNetwork}; else target_net="${effectiveNetwork}-overlay"; echo "Auto-creating overlay network $target_net..."; docker network inspect $target_net >/dev/null 2>&1 || docker network create --driver overlay --attachable $target_net; fi; fi; ${createCmd} && (docker network connect $target_net global-nginx 2>/dev/null || docker network connect $target_net nginx 2>/dev/null || true) && (docker exec global-nginx nginx -s reload 2>/dev/null || docker exec nginx nginx -s reload 2>/dev/null || true)'`;
+                cmdSuffix = `sh -c '${stopRmCmd}target_net="${effectiveNetwork}"; driver=$(docker network inspect ${effectiveNetwork} --format "{{.Driver}}" 2>/dev/null); if [ "$driver" = "overlay" ]; then echo "Using overlay network ${effectiveNetwork}"; elif [ -z "$driver" ]; then echo "Creating overlay network ${effectiveNetwork}..."; docker network create --driver overlay --attachable ${effectiveNetwork}; elif [ "$driver" = "bridge" ]; then count=$(docker network inspect ${effectiveNetwork} --format "{{len .Containers}}" 2>/dev/null); if [ "$count" = "0" ] || [ -z "$count" ]; then echo "Converting unused bridge to overlay..."; docker network rm ${effectiveNetwork} >/dev/null 2>&1 && docker network create --driver overlay --attachable ${effectiveNetwork}; else target_net="${effectiveNetwork}-overlay"; echo "Auto-creating overlay network $target_net..."; docker network inspect $target_net >/dev/null 2>&1 || docker network create --driver overlay --attachable $target_net; fi; fi; ${createCmd} && (docker network connect $target_net global-nginx 2>/dev/null || docker network connect $target_net nginx 2>/dev/null || true) && (docker restart global-nginx 2>/dev/null || docker exec global-nginx nginx -s reload 2>/dev/null || true)'`;
             } else if (action === 'swarm:update' && args.length >= 2) {
                  const serviceName = String(args[0] || '').replace(/[^a-zA-Z0-9._-]/g, '');
                  const image = String(args[1] || '').replace(/[^a-zA-Z0-9.@/:-]/g, '');

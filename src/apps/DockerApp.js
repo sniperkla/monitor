@@ -1576,7 +1576,7 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
                                                     const cleanName = (c.name || 'app').replace(/^\//, '').replace(/[^a-zA-Z0-9._-]/g, '');
                                                     setCreateServiceModal({
                                                       isOpen: true,
-                                                      name: cleanName + '_service',
+                                                      name: cleanName,
                                                       image: c.image || '',
                                                       replicas: 2,
                                                       port: mappedPort,
@@ -3101,9 +3101,6 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
                   onClick={() => {
                     if (!createServiceModal.name.trim() || !createServiceModal.image.trim()) return;
                     setIsLoading(true);
-                    if (createServiceModal.oldContainerId && createServiceModal.stopOld) {
-                      handleContainerAction(createServiceModal.oldContainerId, 'stop');
-                    }
                     socketRef.current.emit('docker:command', {
                       action: 'swarm:create',
                       args: [
@@ -3113,7 +3110,9 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
                         createServiceModal.port.trim(),
                         createServiceModal.network.trim(),
                         createServiceModal.env.trim(),
-                        createServiceModal.mounts.trim()
+                        createServiceModal.mounts.trim(),
+                        // Pass oldContainerId so server can stop+rm it before creating service with same name
+                        createServiceModal.stopOld ? (createServiceModal.oldContainerId || '') : ''
                       ]
                     });
                     setCreateServiceModal({ isOpen: false, name: '', image: '', replicas: 2, port: '', network: '', mounts: '', env: '', oldContainerId: '', oldContainerName: '', stopOld: true });
