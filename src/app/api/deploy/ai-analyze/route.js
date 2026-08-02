@@ -354,10 +354,16 @@ ${svcSection}
     const existing = await SystemSetting.findOne({ key: dbKey });
     const existingValue = existing?.value || {};
 
+    // Always store BOTH scripts so the user can choose which mode to apply
+    const standardScript = parsedResult.deployCommand || '';
+    const swarmScript = (swarmBlock && swarmBlock.trim()) ? finalScript : '';
+
     const aiProfile = {
       projectType: parsedResult.projectType,
       technologies: parsedResult.technologies,
-      deployCommand: finalScript,
+      deployCommand: finalScript,   // default = standard if no swarm block
+      standardScript,               // always available
+      swarmScript,                  // empty string if Swarm injection was skipped
       summary: parsedResult.summary,
       analyzedAt: new Date()
     };

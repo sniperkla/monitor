@@ -3718,30 +3718,39 @@ export default function SettingsApp({ initialTab, deploymentOnly = false, openRe
                                   &quot;{deployConfig.aiProfile.summary}&quot;
                                 </p>
 
-                                <div className="grid grid-cols-2 gap-2">
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      setDeployConfig(p => ({ ...p, deployCommand: p.aiProfile.deployCommand }));
-                                      addNotification({ title: t('deploy.aiRecommendedApplied', 'Recommended Applied'), message: t('deploy.aiRecommendedAppliedMsg', 'Deployment command set to AI suggestion.'), type: 'info' });
-                                    }}
-                                    className="py-1.5 bg-slate-800 hover:bg-slate-750 border border-slate-700 text-slate-200 rounded-lg text-[10px] font-bold transition-all flex items-center justify-center gap-1 cursor-pointer"
-                                  >
-                                    <Code size={11} />
-                                    Standard AI Script
-                                  </button>
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      // Use AI-generated deployCommand directly — server already injected the Swarm section
-                                      setDeployConfig(p => ({ ...p, deployCommand: p.aiProfile.deployCommand }));
-                                      addNotification({ title: '🐝 Swarm AI Command Applied', message: 'Swarm zero-downtime deployment script applied.', type: 'success' });
-                                    }}
-                                    className="py-1.5 bg-purple-500/20 hover:bg-purple-500/30 border border-purple-500/40 text-purple-300 rounded-lg text-[10px] font-bold transition-all flex items-center justify-center gap-1 cursor-pointer"
-                                  >
-                                    <Zap size={11} />
-                                    Apply Swarm AI
-                                  </button>
+                                {/* Mode selector — pick Standard or Swarm */}
+                                <div className="mt-1 space-y-1.5">
+                                  <p className="text-[9px] font-bold uppercase text-[var(--text-muted)] tracking-wider">Choose Deployment Mode</p>
+                                  <div className="grid grid-cols-2 gap-2">
+                                    {/* Standard Mode */}
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        const script = deployConfig.aiProfile.standardScript || deployConfig.aiProfile.deployCommand;
+                                        setDeployConfig(p => ({ ...p, deployCommand: script }));
+                                        addNotification({ title: '📦 Standard Deploy Applied', message: 'Normal docker-compose deployment script applied.', type: 'info' });
+                                      }}
+                                      className="py-2.5 bg-slate-800 hover:bg-slate-700 border border-slate-600 text-slate-200 rounded-xl text-[10px] font-bold transition-all flex flex-col items-center justify-center gap-1 cursor-pointer"
+                                    >
+                                      <Code size={13} />
+                                      <span>Standard</span>
+                                      <span className="text-[8px] font-normal text-slate-400">docker compose up</span>
+                                    </button>
+                                    {/* Swarm Mode */}
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        const script = deployConfig.aiProfile.swarmScript || deployConfig.aiProfile.deployCommand;
+                                        setDeployConfig(p => ({ ...p, deployCommand: script }));
+                                        addNotification({ title: '🐝 Swarm Deploy Applied', message: 'Zero-downtime Swarm deployment script applied.', type: 'success' });
+                                      }}
+                                      className="py-2.5 bg-purple-500/15 hover:bg-purple-500/25 border border-purple-500/40 text-purple-200 rounded-xl text-[10px] font-bold transition-all flex flex-col items-center justify-center gap-1 cursor-pointer"
+                                    >
+                                      <Zap size={13} />
+                                      <span>Swarm</span>
+                                      <span className="text-[8px] font-normal text-purple-400">zero-downtime rolling</span>
+                                    </button>
+                                  </div>
                                 </div>
                               </div>
                             )}
