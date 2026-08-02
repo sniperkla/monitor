@@ -160,14 +160,18 @@ export async function POST(request) {
       return NextResponse.json({ success: false, error: 'AI API Key is not configured. Please add a Groq API key in the global AI settings, or switch to Manual mode and enter a custom API key in the Auto Deploy settings.' }, { status: 400 });
     }
 
+    // Check if the user has explicitly set up Swarm before (existing script has swarm/service commands)
+    const isSwarmMode = /docker\s+(swarm|service|stack)/.test(existingScript) || existingScript.includes('AUTO-INJECTED SWARM SECTION');
+
     const systemPrompt = `You are a DevOps and Deployment agent. You will analyze a directory listing, standard project configuration files, and an existing deployment script to produce an updated, production-ready script.
 
 CRITICAL INSTRUCTIONS - USE ORIGINAL SCRIPT AS STARTING MATERIAL:
 1. PRIMARY REQUIREMENT: If an existing deployment script is provided in the prompt below, YOU MUST USE IT AS YOUR EXACT STARTING MATERIAL / TEMPLATE.
 2. PRESERVE ORIGINAL COMMANDS: Keep all original "cd" commands (e.g. \`cd /home/ec2-user/aut/\`), repository updates (\`git pull\`), custom environment setup, echo/log statements (e.g. \`echo "Deployment completed successfully."\`), and cleanup commands (\`docker image prune -f\`).
 3. NO DUPLICATE HEADERS: Put \`#!/bin/bash\` and \`set -e\` ONLY ONCE at the very top of the script (lines 1 & 2). Never include nested \`#!/bin/bash\` or \`set -e\` inside \`if/else\` blocks.
-4. DOCKER BUILD ONLY: If the project uses Docker, keep the original docker build or docker-compose build commands. Do NOT add any docker service, docker swarm, or docker stack commands — those will be injected automatically by the system.
+4. DOCKER BUILD ONLY: If the project uses Docker, keep the original docker build or docker-compose build commands. Do NOT add any docker service, docker swarm, or docker stack commands — those will be injected automatically by the system if needed.
 5. END THE SCRIPT with the original echo completion message and image prune if present.
+6. FRESH SETUP: If no existing script is provided, generate a standard docker-compose based deployment script that uses \`docker compose up -d --build\` (or \`docker-compose up -d --build\`). Do NOT add Swarm commands.
 
 You MUST respond with a valid JSON object ONLY. Do not wrap the JSON in markdown formatting blocks or include any extra text. The JSON format must be EXACTLY:
 {
@@ -329,11 +333,11 @@ ${svcSection}
 
      docker container prune -f 2>/dev/null || true
      # === END SWARM SECTION ===`;
-    }
+    } // end isSwarmMode
 
-    // Inject swarm block: insert before echo/prune at end of AI script, or append
+    // Inject swarm block: only if user is in Swarm mode AND we built a block
     let finalScript = parsedResult.deployCommand || '';
-    if (swarmBlock) {
+    if (swarmBlock && isSwarmMode) {
       // Remove any swarm/stack/service commands the AI may have written
       finalScript = finalScript.replace(/docker\s+(swarm|service|stack)\s+[^\n]*/g, '# [swarm commands replaced by injected section]');
       // Insert swarm block before the final echo or at end
@@ -344,6 +348,7 @@ ${svcSection}
         finalScript = finalScript.trimEnd() + '\n' + swarmBlock;
       }
     }
+    // If NOT swarm mode: finalScript stays as the pure AI-generated standard deployment script
 
     // Save configuration inside system settings: value.aiProfile & value.aiLogs
     const existing = await SystemSetting.findOne({ key: dbKey });
