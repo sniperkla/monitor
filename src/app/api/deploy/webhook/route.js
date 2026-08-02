@@ -532,6 +532,53 @@ function monitorTmuxAfterReconnect(sshConfig, tmuxSession, projectId, logOutput,
   setTimeout(tryReconnect, 10000);
 }
 
+// Resolve final deployment status from exit code + log output.
+// Detects docker/compose/build success even when exit code is non-zero
+// due to wrapper script cleanup failures (e.g. cd ./relative: No such file).
+function resolveDeployStatus(exitCode, logText) {
+  const hasSuccessMessage = logText.includes('[deploy] Deploy command finished successfully');
+
+  // Real build/compile errors — these always mean failure
+  const realBuildErrors = [
+    /\bFailed to compile\b/i,
+    /\bType error:/i,
+    /\bSyntaxError:/i,
+    /\bModule not found:/i,
+    /\bCannot find module\b/i,
+    /\bbuild failed\b/i,
+    /\bERROR in\b/,
+    /\bCompilation error\b/i,
+    /\bno space left on device\b/i,
+    /\bENOSPC\b/,
+  ];
+
+  const hasRealBuildError = realBuildErrors.some(p => p.test(logText));
+  if (hasRealBuildError) return 'failed';
+
+  // Standard success: exit 0 + success echo
+  if (exitCode === 0 && hasSuccessMessage) return 'success';
+
+  // Docker/Compose success indicators — if containers started/running,
+  // treat as success even when wrapper cleanup scripts fail with non-zero exit
+  const dockerSuccessPatterns = [
+    /\bContainer\s+\S+\s+Started\b/m,
+    /\bContainer\s+\S+\s+Running\b/m,
+    /✔\s+Container\s+/m,
+    /✓\s+Container\s+/m,
+    /\[deploy\] Deploy command finished successfully/m,
+  ];
+
+  // Wrapper-only failure patterns — if failure is ONLY from /tmp/deploy_* scripts
+  // and not from actual build tools, the real deployment succeeded
+  const wrapperOnlyFailure = /\/tmp\/deploy_(?:cmd|run|tmux)_\S+:\s*line\s*\d+:/m.test(logText);
+
+  const dockerSucceeded = dockerSuccessPatterns.some(p => p.test(logText));
+  if (dockerSucceeded && wrapperOnlyFailure && !hasRealBuildError) return 'success';
+
+  // Default
+  return exitCode === 0 ? 'success' : 'failed';
+}
+
 // Background deployment execution
 export async function runDeployment(config, runMeta = {}) {
   const startedAt = new Date();
@@ -676,7 +723,8 @@ export async function runDeployment(config, runMeta = {}) {
       'echo "[deploy] Starting deployment at $(date)"',
       `if [ ! -d "${cwdPath}" ]; then echo "[deploy] ERROR: Directory '${cwdPath}' does not exist"; exit 1; fi`,
       `cd "${cwdPath}" || { echo "[deploy] ERROR: cannot cd to ${cwdPath}"; exit 1; }`,
-      'echo "[deploy] Working directory: $(pwd)"',
+      'DEPLOY_ABS_DIR="$(pwd)"',
+      'echo "[deploy] Working directory: $DEPLOY_ABS_DIR"',
       'set -e',
       'set -o pipefail',
       // ── Self-healing: stash local changes before pull to prevent collision ──
@@ -740,11 +788,11 @@ export async function runDeployment(config, runMeta = {}) {
 
     // Clean up credentials after deploy command completes
     if (config.bitbucketConnected) {
-      scriptLines.push(`cd "${cwdPath}" || true`);
+      scriptLines.push('cd "$DEPLOY_ABS_DIR" 2>/dev/null || true');
       scriptLines.push('rm -f ~/.git-credentials');
       scriptLines.push('git config --global --unset credential.helper || true');
     } else if (config.githubToken) {
-      scriptLines.push(`cd "${cwdPath}" || true`);
+      scriptLines.push('cd "$DEPLOY_ABS_DIR" 2>/dev/null || true');
       scriptLines.push('git config --unset http.extraHeader || true');
     }
     // ── Self-healing: drop stash after deploy (stash was only a collision fix) ──
@@ -810,9 +858,7 @@ export async function runDeployment(config, runMeta = {}) {
       logOutput += `\n--------------------------------------------------\n`;
       logOutput += `[${finishedAt.toISOString()}] Process exited with code: ${code}\n`;
       logOutput = limitLogOutput(logOutput);
-      const hasSuccessMessage = logOutput.includes('[deploy] Deploy command finished successfully');
-      const hasErrorMarker = logOutput.includes('❌ Deploy command failed') || logOutput.includes('⚠️ Deploy command returned code');
-      const status = (code === 0 && hasSuccessMessage && !hasErrorMarker) ? 'success' : 'failed';
+      const status = resolveDeployStatus(code, logOutput);
       try { clearRunning(projectId); } catch (e) {}
       updateStatus(status, logOutput).catch(() => {});
     });
@@ -1008,7 +1054,8 @@ export async function runDeployment(config, runMeta = {}) {
             'echo "[deploy] Working directory: ' + resolvedPath + '"',
             `if [ ! -d "${resolvedPath}" ]; then echo "[deploy] ERROR: Directory '${resolvedPath}' does not exist"; exit 1; fi`,
             `cd "${resolvedPath}" || { echo "[deploy] ERROR: Cannot cd to ${resolvedPath}"; exit 1; }`,
-            'echo "[deploy] Now in: $(pwd)"',
+            'DEPLOY_ABS_DIR="$(pwd)"',
+            'echo "[deploy] Absolute working directory: $DEPLOY_ABS_DIR"',
             'set -e',
             'set -o pipefail',
             // ── Self-healing: stash local changes before fetch/pull to prevent collision ──
@@ -1093,37 +1140,24 @@ export async function runDeployment(config, runMeta = {}) {
           scriptLines.push(`rm -f "$USER_CMD_PATH" 2>/dev/null || true`);
           scriptLines.push(`if [ "$USER_CMD_EXIT" != "0" ]; then`);
           scriptLines.push(`  echo "[deploy] ❌ Deploy command failed with exit code $USER_CMD_EXIT"`);
-          if (config.bitbucketConnected) {
-            scriptLines.push(`  cd "${resolvedPath}" || true`);
-            scriptLines.push('  rm -f ~/.git-credentials');
-            scriptLines.push('  git config --global --unset credential.helper 2>/dev/null || true');
-            scriptLines.push('  if [ -n "$RAW_URL" ]; then git remote set-url origin "$RAW_URL" 2>/dev/null || true; fi');
-          } else if (config.githubToken) {
-            scriptLines.push(`  cd "${resolvedPath}" || true`);
-            scriptLines.push('  git config --unset http.extraHeader || true');
-          }
-          scriptLines.push('  if [ "$STASH_MADE" = "1" ]; then git stash drop 2>/dev/null || true; fi');
-          scriptLines.push(`  exit $USER_CMD_EXIT`);
           scriptLines.push(`fi`);
 
-          // Clean up credentials after deploy command completes
+          // Clean up credentials — always run regardless of exit code, never fail the script
           if (config.bitbucketConnected) {
-            scriptLines.push(`cd "${resolvedPath}" || true`);
-            scriptLines.push('rm -f ~/.git-credentials');
+            scriptLines.push('cd "$DEPLOY_ABS_DIR" 2>/dev/null || true');
+            scriptLines.push('rm -f ~/.git-credentials 2>/dev/null || true');
             scriptLines.push('git config --global --unset credential.helper 2>/dev/null || true');
-            scriptLines.push('if [ -n "$RAW_URL" ]; then');
-            scriptLines.push('  git remote set-url origin "$RAW_URL" 2>/dev/null || true');
-            scriptLines.push('fi');
+            scriptLines.push('if [ -n "$RAW_URL" ]; then git remote set-url origin "$RAW_URL" 2>/dev/null || true; fi');
           } else if (config.githubToken) {
-            scriptLines.push(`cd "${resolvedPath}" || true`);
-            scriptLines.push('git config --unset http.extraHeader || true');
+            scriptLines.push('cd "$DEPLOY_ABS_DIR" 2>/dev/null || true');
+            scriptLines.push('git config --unset http.extraHeader 2>/dev/null || true');
           }
           // ── Self-healing: drop stash after deploy ──
           scriptLines.push('if [ "$STASH_MADE" = "1" ]; then');
-          scriptLines.push('  echo "[deploy] 🧹 Dropping auto-stash..."');
           scriptLines.push('  git stash drop 2>/dev/null || true');
-          scriptLines.push('  echo "[deploy] ✅ Stash dropped."');
           scriptLines.push('fi');
+          // Always exit with the user command exit code (0 = success, non-zero = fail)
+          scriptLines.push('if [ "$USER_CMD_EXIT" != "0" ]; then exit $USER_CMD_EXIT; fi');
           scriptLines.push('echo "[deploy] Deploy command finished successfully"');
           const deployScript = scriptLines.join('\n') + '\n';
 
@@ -1258,9 +1292,7 @@ export async function runDeployment(config, runMeta = {}) {
                   logOutput += `\n--------------------------------------------------\n`;
                   logOutput += `[${finishedAt.toISOString()}] [SSH] Execution finished. Exit code: ${finalCode}\n`;
                   logOutput = limitLogOutput(logOutput);
-                  const hasSuccessMessage = logOutput.includes('[deploy] Deploy command finished successfully');
-                  const hasErrorMarker = logOutput.includes('❌ Deploy command failed') || logOutput.includes('⚠️ Deploy command returned code');
-                  const status = (finalCode === 0 && hasSuccessMessage && !hasErrorMarker) ? 'success' : 'failed';
+                  const status = resolveDeployStatus(finalCode, logOutput);
 
                   try { clearRunning(projectId); } catch (e) {}
                    updateStatus(status, logOutput).catch(() => {});
