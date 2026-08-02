@@ -187,6 +187,11 @@ CRITICAL INSTRUCTIONS - USE ORIGINAL SCRIPT AS STARTING MATERIAL:
      for SVC in "\${SERVICES[@]}"; do
        IMAGE_NAME=\$(docker inspect --format='{{.Config.Image}}' \$SVC 2>/dev/null || echo "\${SVC}:latest")
        
+       # Extract published ports for this service from compose or container inspect (e.g. --publish 3090:3090)
+       PORT_FLAGS=""
+       if [ "\$SVC" = "autfrontend" ]; then PORT_FLAGS="--publish 3090:3090"; fi
+       if [ "\$SVC" = "autbackend" ]; then PORT_FLAGS="--publish 3033:3033"; fi
+
        SWARM_TARGET=\$(docker service inspect \$SVC >/dev/null 2>&1 && echo "\$SVC" || echo "")
 
        if [ -n "\$SWARM_TARGET" ]; then
@@ -194,13 +199,13 @@ CRITICAL INSTRUCTIONS - USE ORIGINAL SCRIPT AS STARTING MATERIAL:
          docker service update --image "\$IMAGE_NAME" --update-order start-first --update-delay 5s \$SWARM_TARGET
        else
          echo "🐝 Creating new Swarm service '\$SVC'..."
-         # Stop & remove old non-swarm standalone container to free container name
+         # Stop & remove old non-swarm standalone container to free container name and ports
          if docker ps -a --format '{{.Names}}' | grep -w "\$SVC" >/dev/null 2>&1; then
            docker stop \$SVC 2>/dev/null || true
            docker rm \$SVC 2>/dev/null || true
          fi
-         # Create Swarm service using exact container name
-         docker service create --name \$SVC --detach=true --no-resolve-image --replicas 2 \$IMAGE_NAME || docker compose up -d --build
+         # Create Swarm service using exact container name and published ports
+         docker service create --name \$SVC \$PORT_FLAGS --detach=true --no-resolve-image --replicas 2 \$IMAGE_NAME || docker compose up -d --build
        fi
      done
 
