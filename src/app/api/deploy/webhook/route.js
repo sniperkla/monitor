@@ -968,20 +968,32 @@ export async function runDeployment(config, runMeta = {}) {
           }
           scriptLines.push('echo "[deploy] Running deploy command..."');
           
-          // Write user deploy command to a separate isolated script file.
-          // This prevents any bash syntax in the user's script from breaking the
-          // surrounding infrastructure wrapper (credentials, git ops, cleanup).
-          const userCmdPath = `/tmp/deploy_cmd_${projectId}.sh`;
+          // Embed the user deploy command inline but run it inside an isolated subshell
+          // so that any syntax or exit-code in the user's script can't corrupt the wrapper context.
+          // set +e / set -e bracketing prevents `set -e` in the outer wrapper from killing us if
+          // the user script exits non-zero — we capture the exit code ourselves.
           const rawDeployCmd = (config.deployCommand || '').trim();
-          const userCmdScript = '#!/bin/bash\n' + rawDeployCmd + '\n';
+          // Strip duplicate shebang/set -e lines that shouldn't appear mid-script
+          const cleanedLines = rawDeployCmd.split('\n').map((line, idx) => {
+            if (idx > 0 && (line.trim() === '#!/bin/bash' || line.trim() === 'set -e' || line.trim() === 'set -o pipefail')) {
+              return '# ' + line;
+            }
+            return line;
+          });
+          const cleanDeployCmd = cleanedLines.join('\n');
 
-          scriptLines.push(`USER_CMD_EXIT=0`);
-          scriptLines.push(`bash "${userCmdPath}" || USER_CMD_EXIT=$?`);
-          scriptLines.push(`rm -f "${userCmdPath}" 2>/dev/null || true`);
-          scriptLines.push(`if [ "$USER_CMD_EXIT" != "0" ]; then`);
-          scriptLines.push(`  echo "[deploy] ❌ Deploy command exited with code $USER_CMD_EXIT"`);
-          scriptLines.push(`  exit $USER_CMD_EXIT`);
-          scriptLines.push(`fi`);
+          // Run the user deploy command in its own subshell to fully isolate any syntax issues
+          scriptLines.push('set +e');
+          scriptLines.push('(');
+          scriptLines.push('set -e');
+          scriptLines.push(cleanDeployCmd);
+          scriptLines.push(')');
+          scriptLines.push('USER_CMD_EXIT=$?');
+          scriptLines.push('set -e');
+          scriptLines.push('if [ "$USER_CMD_EXIT" != "0" ]; then');
+          scriptLines.push('  echo "[deploy] ❌ Deploy command exited with code $USER_CMD_EXIT"');
+          scriptLines.push('  exit $USER_CMD_EXIT');
+          scriptLines.push('fi');
 
           // Clean up credentials after deploy command completes
           if (config.bitbucketConnected) {
@@ -995,11 +1007,11 @@ export async function runDeployment(config, runMeta = {}) {
             scriptLines.push(`cd "${resolvedPath}" || true`);
             scriptLines.push('git config --unset http.extraHeader || true');
           }
-          // ── Self-healing: drop stash after deploy (stash was only a collision fix) ──
+          // ── Self-healing: drop stash after deploy ──
           scriptLines.push('if [ "$STASH_MADE" = "1" ]; then');
-          scriptLines.push('  echo "[deploy] 🧹 Dropping auto-stash (local changes were saved as a temporary fix)..."');
+          scriptLines.push('  echo "[deploy] 🧹 Dropping auto-stash..."');
           scriptLines.push('  git stash drop 2>/dev/null || true');
-          scriptLines.push('  echo "[deploy] ✅ Stash dropped. Local changes discarded (they were only stashed to unblock the pull)."');
+          scriptLines.push('  echo "[deploy] ✅ Stash dropped."');
           scriptLines.push('fi');
           scriptLines.push('echo "[deploy] Deploy command finished successfully"');
           const deployScript = scriptLines.join('\n') + '\n';
@@ -1008,18 +1020,7 @@ export async function runDeployment(config, runMeta = {}) {
             tmuxSession = `deploy-${projectId.replace(/[^a-zA-Z0-9_-]/g, '-')}`.slice(0, 60);
             const tmuxWrapperPath = `/tmp/deploy_tmux_${projectId}.sh`;
 
-            // Write user deploy command to a separate isolated file first
-            sftp.writeFile(userCmdPath, userCmdScript, { mode: 0o755 }, (userCmdWriteErr) => {
-              if (userCmdWriteErr) {
-                logOutput += `[SSH Error] Failed to write user deploy command: ${userCmdWriteErr.message}\n`;
-                logOutput = limitLogOutput(logOutput);
-                try { clearRunning(projectId); } catch (e) {}
-                updateStatus('failed', logOutput).catch(() => {});
-                conn.end();
-                return;
-              }
-
-            sftp.writeFile(remoteDeployPath, deployScript, (writeErr) => {
+            sftp.writeFile(remoteDeployPath, deployScript, { mode: 0o755 }, (writeErr) => {
             if (writeErr) {
               logOutput += `[SSH Error] Failed to write deploy script: ${writeErr.message}\n`;
               logOutput = limitLogOutput(logOutput);
@@ -1162,7 +1163,6 @@ export async function runDeployment(config, runMeta = {}) {
               launchDeploy();
             });
           }); // end sftp.writeFile(remoteDeployPath)
-          }); // end sftp.writeFile(userCmdPath)
         });
       });
 
