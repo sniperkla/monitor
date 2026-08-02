@@ -138,7 +138,12 @@ export async function POST(request) {
 
     if (effectiveAiModel === 'manual' || (effectiveAiEndpoint && effectiveAiApiKey)) {
       // Custom endpoint mode: use whatever endpoint and key the user provided
-      aiEndpoint = effectiveAiEndpoint || 'https://api.openai.com/v1/chat/completions';
+      let customEndpoint = effectiveAiEndpoint || 'https://api.openai.com/v1/chat/completions';
+      // Auto-append /chat/completions if user only entered a base URL (e.g. https://api.example.com/v1)
+      if (!customEndpoint.endsWith('/chat/completions') && !customEndpoint.endsWith('/completions')) {
+        customEndpoint = customEndpoint.replace(/\/$/, '') + '/chat/completions';
+      }
+      aiEndpoint = customEndpoint;
       modelName = effectiveAiCustomModel || 'gpt-3.5-turbo';
       apiKey = effectiveAiApiKey || apiKey;
       // Only Groq and OpenAI official support response_format: json_object reliably

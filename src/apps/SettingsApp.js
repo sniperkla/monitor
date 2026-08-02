@@ -3736,9 +3736,10 @@ docker image prune -f
                                   type="text"
                                   value={deployConfig.aiEndpoint}
                                   onChange={(e) => setDeployConfig(p => ({ ...p, aiEndpoint: e.target.value }))}
-                                  placeholder="https://api.your-ai-provider.com/v1/chat/completions"
+                                  placeholder="https://gen.ai.kku.ac.th/okmd/api/v1"
                                   className="w-full bg-[var(--bg-primary)] border border-[var(--border-color)] rounded-xl px-3 py-2 text-xs text-[var(--text-primary)] focus:outline-none focus:border-indigo-500"
                                 />
+                                <p className="mt-1 text-[10px] text-slate-500">Enter the base URL — <span className="text-indigo-400">/chat/completions</span> is appended automatically if missing.</p>
                               </div>
                               <div>
                                 <label className="block text-[11px] font-bold text-[var(--text-secondary)] uppercase tracking-wider mb-2">{t('deploy.aiApiKey', 'API Key')}</label>
