@@ -1531,11 +1531,11 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
                     }
                   });
                 }
-                let createCmd = `service create ${flags.join(' ')} ${image}`;
+                const createCmd = `docker service create ${flags.join(' ')} ${image}`;
                 if (network) {
-                  cmdSuffix = `sh -c "${dockerSudo}docker network inspect ${network} >/dev/null 2>&1 || ${dockerSudo}docker network create --driver overlay --attachable ${network}; ${dockerSudo}docker ${createCmd}"`;
+                  cmdSuffix = `sh -c 'docker network inspect ${network} >/dev/null 2>&1 || docker network create --driver overlay --attachable ${network}; ${createCmd}'`;
                 } else {
-                  cmdSuffix = `${dockerSudo}docker ${createCmd}`;
+                  cmdSuffix = createCmd;
                 }
             } else if (action === 'swarm:update' && args.length >= 2) {
                  const serviceName = String(args[0] || '').replace(/[^a-zA-Z0-9._-]/g, '');
@@ -1594,13 +1594,13 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
                    });
                  }
                  flags.push(`--update-order start-first`);
-                 let updateCmd = `${dockerSudo}docker service update ${flags.join(' ')} ${serviceName}`;
+                 const updateCmd = `docker service update ${flags.join(' ')} ${serviceName}`;
                  if (network) {
-                   cmdSuffix = `sh -c "${dockerSudo}docker network inspect ${network} >/dev/null 2>&1 || ${dockerSudo}docker network create --driver overlay --attachable ${network}; ${updateCmd}"`;
+                   cmdSuffix = `sh -c 'docker network inspect ${network} >/dev/null 2>&1 || docker network create --driver overlay --attachable ${network}; ${updateCmd}'`;
                  } else {
                    cmdSuffix = updateCmd;
                  }
-              } else if (action === 'vol-assoc') {
+               } else if (action === 'vol-assoc') {
                cmdSuffix = `ids=$(docker ps -aq); [ -z "$ids" ] || docker inspect --format 'assoc:{{.ID}}\t{{.Name}}\t{{range .Mounts}}{{.Name}} {{end}}' $ids`;
             } else if (action === 'search' && args.length > 0) {
                  const query = String(args[0] || '').replace(/[^a-zA-Z0-9._\- ]/g, '').trim();

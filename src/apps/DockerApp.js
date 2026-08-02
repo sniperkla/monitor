@@ -341,6 +341,10 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
 
     socketRef.current.on('ssh:connected', () => {
       socketRef.current.emit('docker:command', { action: 'info' });
+      // Fallback: if 'info' is slow or stuck, still load data after 6s
+      setTimeout(() => {
+        if (socketRef.current?.connected) emitDockerLs();
+      }, 6000);
     });
 
     socketRef.current.on('docker:result', ({ action, output, code, args }) => {
