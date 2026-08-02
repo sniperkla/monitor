@@ -167,39 +167,38 @@ CRITICAL INSTRUCTIONS - USE ORIGINAL SCRIPT AS STARTING MATERIAL:
 2. PRESERVE ORIGINAL COMMANDS: Keep all original "cd" commands (e.g. \`cd /home/ec2-user/aut/\`), repository updates (\`git pull\`), custom environment setup, echo/log statements (e.g. \`echo "Deployment completed successfully."\`), and cleanup commands (\`docker image prune -f\`).
 3. NO DUPLICATE HEADERS: Put \`#!/bin/bash\` and \`set -e\` ONLY ONCE at the very top of the script (lines 1 & 2). Never include nested \`#!/bin/bash\` or \`set -e\` inside \`if/else\` blocks.
 4. AUTOMATIC SWARM INITIALIZATION & CREATION:
-   - If the project uses Docker (Dockerfile or docker-compose), upgrade the deployment section to AUTOMATICALLY create or update a Docker Swarm service:
-   - Example structure:
+   - If the project uses Docker (Dockerfile or docker-compose), upgrade the deployment section to AUTOMATICALLY create or update Docker Swarm services.
+
+5. MULTI-CONTAINER / MULTI-SERVICE PROJECTS:
+   - If `docker-compose.yml` defines multiple services (e.g. "autbackend" and "autfrontend"):
+   - Use `docker stack deploy` or handle all services defined in `docker-compose.yml`.
+   - Example structure for multi-service projects:
 
      # Ensure Swarm is active and task history limit is set to 1
      docker swarm init 2>/dev/null || true
      docker swarm update --task-history-limit 1 2>/dev/null || true
 
-     SERVICE_NAME="<project_or_container_name>"
-     IMAGE_NAME="<project_or_container_name>:latest"
+     PROJECT_NAME="aut"
 
-     # Build image safely (check if Dockerfile exists, otherwise build via compose)
-     if [ -f Dockerfile ]; then
-       docker build -t $IMAGE_NAME .
-     else
-       docker compose build 2>/dev/null || docker-compose build 2>/dev/null || true
-     fi
+     # Build latest images for all services
+     docker compose build 2>/dev/null || docker-compose build 2>/dev/null || true
 
-     SWARM_TARGET=$(docker service inspect $SERVICE_NAME >/dev/null 2>&1 && echo "$SERVICE_NAME" || (docker service inspect \${SERVICE_NAME}_service >/dev/null 2>&1 && echo "\${SERVICE_NAME}_service" || echo ""))
+     # Check if Docker Stack or Swarm services exist for this project
+     SERVICES=("autfrontend" "autbackend")
+     ANY_SWARM=0
 
-     if [ -n "$SWARM_TARGET" ]; then
-       echo "🐝 Swarm service '$SWARM_TARGET' found! Updating service zero-downtime..."
-       docker service update --image $IMAGE_NAME --update-order start-first --update-delay 5s $SWARM_TARGET
-     else
-       echo "🐝 Creating new Swarm service '$SERVICE_NAME'..."
-       # Gracefully handle legacy standalone container if running
-       if docker ps --format '{{.Names}}' | grep -w "$SERVICE_NAME" >/dev/null 2>&1; then
-         echo "📦 Transitioning standalone container '$SERVICE_NAME' to Swarm service..."
-         docker stop $SERVICE_NAME 2>/dev/null || true
-         docker rm $SERVICE_NAME 2>/dev/null || true
+     for SVC in "${SERVICES[@]}"; do
+       SWARM_TARGET=$(docker service inspect $SVC >/dev/null 2>&1 && echo "$SVC" || (docker service inspect \${PROJECT_NAME}_\${SVC} >/dev/null 2>&1 && echo "\${PROJECT_NAME}_\${SVC}" || echo ""))
+       if [ -n "$SWARM_TARGET" ]; then
+         echo "🐝 Updating Swarm service '$SWARM_TARGET' zero-downtime..."
+         docker service update --image "\${SVC}:latest" --update-order start-first --update-delay 5s $SWARM_TARGET 2>/dev/null || docker service update --image "\${PROJECT_NAME}_\${SVC}:latest" --update-order start-first --update-delay 5s $SWARM_TARGET 2>/dev/null || true
+         ANY_SWARM=1
        fi
+     done
 
-       # Create Swarm service with --detach=true --no-resolve-image so local images start immediately
-       docker service create --name $SERVICE_NAME --detach=true --no-resolve-image --replicas 2 $IMAGE_NAME || docker-compose up -d --build
+     if [ "$ANY_SWARM" -eq 0 ]; then
+       echo "🐝 Deploying Swarm Stack '$PROJECT_NAME' from docker-compose.yml..."
+       docker stack deploy -c docker-compose.yml $PROJECT_NAME || docker compose up -d --build
      fi
 
      docker container prune -f 2>/dev/null || true
