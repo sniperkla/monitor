@@ -726,6 +726,10 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
           setIsLoading(false);
           emitDockerLs();
           addNotification({ title: 'Nginx Connected', message: 'Nginx proxy connected to all Swarm overlay networks successfully.', type: 'success' });
+        } else if (action === 'clean-exited-swarm') {
+          setIsLoading(false);
+          emitDockerLs();
+          addNotification({ title: 'Exited Tasks Cleaned', message: 'All exited Swarm task containers have been removed.', type: 'success' });
         } else if (action === 'prune-system') {
           setIsLoading(false);
           addNotification({ title: 'System Pruned', message: 'Docker system has been cleaned up. Unused containers, images, networks, and volumes removed.', type: 'success' });
@@ -1459,7 +1463,7 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
                                                     onClick={(e) => {
                                                       e.stopPropagation();
                                                       setIsLoading(true);
-                                                      socketRef.current.emit('docker:command', { action: 'prune-custom', args: [{ containers: true }, false] });
+                                                      socketRef.current.emit('docker:command', { action: 'clean-exited-swarm' });
                                                     }}
                                                     className="px-2 py-0.5 text-[9px] font-bold text-rose-400 bg-rose-500/10 hover:bg-rose-500/20 border border-rose-500/20 rounded-md transition-all flex items-center gap-1 cursor-pointer"
                                                     title="Clean up all exited task history containers"

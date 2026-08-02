@@ -2278,7 +2278,7 @@ function handleDockerCommand(ws, msg) {
       const targets = args[0] || {};
       const pruneAll = args[1] === true;
       const cmds = [];
-      if (targets.containers) cmds.push('container prune -f');
+      if (targets.containers) { cmds.push('container prune -f'); cmds.push('rm -f $(docker ps -a --filter status=exited -q 2>/dev/null)'); }
       if (targets.images) cmds.push(`image prune ${pruneAll ? '-a ' : ''}-f`);
       if (targets.volumes) cmds.push('volume prune -f');
       if (targets.networks) cmds.push('network prune -f');
@@ -2318,6 +2318,8 @@ function handleDockerCommand(ws, msg) {
       return runRawCmd(`sh -c "(ss -tuln 2>/dev/null || netstat -tuln) | grep -q -w ':${port}' && echo 'IN_USE' || echo 'FREE'"`);
     } else if (action === 'prune-networks') {
       return runRawCmd(`docker network prune -f`);
+    } else if (action === 'clean-exited-swarm') {
+      return runRawCmd(`sh -c 'EXITED=$(docker ps -a --filter status=exited -q 2>/dev/null); if [ -n "$EXITED" ]; then echo "Removing exited task containers..."; docker rm -f $EXITED 2>&1; else echo "No exited containers found"; fi; docker container prune -f 2>/dev/null || true'`);
     } else if (action === 'connect-nginx-swarm') {
       return runRawCmd(`sh -c 'NETS=$(docker network ls --filter driver=overlay --format "{{.Name}}"); for net in $NETS; do echo "Connecting Nginx to $net..."; docker network connect $net global-nginx 2>/dev/null || docker network connect $net nginx 2>/dev/null || true; done; docker restart global-nginx 2>/dev/null || docker exec global-nginx nginx -s reload 2>/dev/null || docker exec nginx nginx -s reload 2>/dev/null || true; echo "Nginx connected and restarted successfully!"'`);
     } else if (action === 'start-all') {

@@ -1776,7 +1776,7 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
                   const targets = args[0] || {};
                   const pruneAll = args[1] === true;
                   const cmds = [];
-                  if (targets.containers) cmds.push('docker container prune -f');
+                  if (targets.containers) { cmds.push('docker container prune -f'); cmds.push('EXITED=$(docker ps -a --filter status=exited -q 2>/dev/null); [ -z "$EXITED" ] || docker rm -f $EXITED'); }
                   if (targets.images) cmds.push(`docker image prune ${pruneAll ? '-a ' : ''}-f`);
                   if (targets.volumes) cmds.push('docker volume prune -f');
                   if (targets.networks) cmds.push('docker network prune -f');
@@ -1827,6 +1827,8 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
                  if (!port) return socket.emit('docker:error', 'Invalid Port');
                  // Check if port is in use on host (TCP listen)
                  cmdSuffix = `sh -c "(ss -tuln 2>/dev/null || netstat -tuln) | grep -q -w ':${port}' && echo 'IN_USE' || echo 'FREE'"`;
+              } else if (action === 'clean-exited-swarm') {
+                  cmdSuffix = `sh -c 'EXITED=$(docker ps -a --filter status=exited -q 2>/dev/null); if [ -n "$EXITED" ]; then echo "Removing exited task containers..."; docker rm -f $EXITED 2>&1; else echo "No exited containers found"; fi; docker container prune -f 2>/dev/null || true'`;
               } else if (action === 'connect-nginx-swarm') {
                   cmdSuffix = `sh -c 'NETS=$(docker network ls --filter driver=overlay --format "{{.Name}}"); for net in $NETS; do echo "Connecting Nginx to $net..."; docker network connect $net global-nginx 2>/dev/null || docker network connect $net nginx 2>/dev/null || true; done; echo "Restarting Nginx container to apply new network routes and clear DNS cache..."; docker restart global-nginx 2>/dev/null || docker restart nginx 2>/dev/null || docker exec global-nginx nginx -s reload 2>/dev/null || docker exec nginx nginx -s reload 2>/dev/null || systemctl reload nginx 2>/dev/null || true; echo "Nginx connected and restarted successfully!"'`;
              } else {
