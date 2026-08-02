@@ -1756,7 +1756,7 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
                   const pruneAll = args && (args[0] === true || args[0] === 'all');
                   cmdSuffix = `image prune ${pruneAll ? '-a ' : ''}-f`;
               } else if (action === 'prune-networks') {
-                  cmdSuffix = `network prune -f`;
+                  cmdSuffix = `docker network prune -f`;
               } else if (action === 'prune-system') {
                   const pruneAll = args && (args[0] === true || args[0] === 'all');
                   cmdSuffix = `system prune ${pruneAll ? '-a ' : ''}-f --volumes`;
@@ -1822,7 +1822,7 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
             
             // For pull & pull:status, cmdSuffix is a full shell script — execute directly
             // For all other actions, cmdSuffix is the part after 'docker' — use executeDockerCommand
-            if (['pull', 'pull:status', 'build', 'build:status', 'backup', 'backup:status', 'read-config', 'write-config', 'find-config', 'check-port', 'start-all', 'remove-selected', 'prune-custom', 'swarm:init'].includes(action) || (cmdSuffix && (cmdSuffix.startsWith('sh -c') || cmdSuffix.startsWith('docker ')))) {
+            if (['pull', 'pull:status', 'build', 'build:status', 'backup', 'backup:status', 'read-config', 'write-config', 'find-config', 'check-port', 'start-all', 'remove-selected', 'prune-custom', 'prune-networks', 'swarm:init'].includes(action) || (cmdSuffix && (cmdSuffix.startsWith('sh -c') || cmdSuffix.startsWith('docker ')))) {
                 console.log(`🐳 [${socket.id}] DOCKER EXEC (raw): ${cmdSuffix.substring(0, 120)}...`);
                 sshClient.exec(cmdSuffix, (err, stream) => {
                     if (err) {
