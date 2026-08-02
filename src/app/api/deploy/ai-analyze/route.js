@@ -196,9 +196,9 @@ CRITICAL INSTRUCTIONS - USE ORIGINAL SCRIPT AS STARTING MATERIAL:
      SERVICES=("autfrontend" "autbackend")
 
      for SVC in "\${SERVICES[@]}"; do
-       IMAGE_NAME=\$(docker inspect --format='{{.Config.Image}}' \$SVC 2>/dev/null || echo "\${SVC}:latest")
+       IMAGE_NAME="\${SVC}:latest"
        
-       # Extract published ports for this service from compose or container inspect (e.g. --publish 3090:3090)
+       # Extract published ports for this service (e.g. --publish 3090:3090)
        PORT_FLAGS=""
        if [ "\$SVC" = "autfrontend" ]; then PORT_FLAGS="--publish 3090:3090"; fi
        if [ "\$SVC" = "autbackend" ]; then PORT_FLAGS="--publish 3033:3033"; fi
@@ -216,7 +216,10 @@ CRITICAL INSTRUCTIONS - USE ORIGINAL SCRIPT AS STARTING MATERIAL:
            docker rm \$SVC 2>/dev/null || true
          fi
          # Create Swarm service using exact container name and published ports
-         docker service create --name \$SVC \$PORT_FLAGS --detach=true --no-resolve-image --replicas 2 \$IMAGE_NAME || docker compose up -d --build
+         if ! docker service create --name \$SVC \$PORT_FLAGS --detach=true --no-resolve-image --replicas 2 \$IMAGE_NAME; then
+           echo "📦 Service creation fallback..."
+           docker compose up -d --build 2>/dev/null || docker-compose up -d --build 2>/dev/null || true
+         fi
        fi
      done
 
