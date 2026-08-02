@@ -1046,12 +1046,14 @@ export async function runDeployment(config, runMeta = {}) {
             return;
           }
 
-          const remoteDeployPath = `/tmp/deploy_run_${projectId}.sh`;
+          const runTimestamp = Date.now();
+          const remoteDeployPath = `/tmp/deploy_run_${projectId}_${runTimestamp}.sh`;
+          const userCmdPath = `/tmp/deploy_cmd_${projectId}_${runTimestamp}.sh`;
 
           // ── The actual deploy script ──────────────────────────
           const scriptLines = [
             '#!/bin/bash',
-            `trap 'rm -f /tmp/deploy_run_${projectId}.sh /tmp/deploy_tmux_${projectId}.sh /tmp/deploy_cmd_${projectId}.sh 2>/dev/null' EXIT`,
+            `trap 'rm -f /tmp/deploy_*_${projectId}*.sh 2>/dev/null || true' EXIT`,
             'echo "[deploy] Starting deployment on $(hostname) at $(date)"',
             'echo "[deploy] Working directory: ' + resolvedPath + '"',
             `if [ ! -d "${resolvedPath}" ]; then echo "[deploy] ERROR: Directory '${resolvedPath}' does not exist"; exit 1; fi`,
@@ -1136,7 +1138,6 @@ export async function runDeployment(config, runMeta = {}) {
           let cleanCmd = rawDeployCmd.replace(/^#!\/bin\/bash\s*\n?/, '').trim();
           // Build the user command script content — written via SFTP directly (no echo/base64 which has shell length limits)
           const userCmdScript = cleanCmd ? `#!/bin/bash\nset +e\n${cleanCmd}\n` : '#!/bin/bash\nexit 0\n';
-          const userCmdPath = `/tmp/deploy_cmd_${projectId}.sh`;
 
           // The outer run script references the pre-uploaded user command script directly
           scriptLines.push(`USER_CMD_PATH="${userCmdPath}"`);
