@@ -209,6 +209,13 @@ CRITICAL INSTRUCTIONS - USE ORIGINAL SCRIPT AS STARTING MATERIAL:
        fi
      done
 
+     # Automatically connect Nginx proxy to Swarm overlay network so container names resolve cleanly
+     NETS=\$(docker network ls --filter driver=overlay --format "{{.Name}}")
+     for net in \$NETS; do
+       docker network connect \$net global-nginx 2>/dev/null || docker network connect \$net nginx 2>/dev/null || true
+     done
+     docker restart global-nginx 2>/dev/null || docker exec global-nginx nginx -s reload 2>/dev/null || docker restart nginx 2>/dev/null || true
+
      docker container prune -f 2>/dev/null || true
 
 You MUST respond with a valid JSON object ONLY. Do not wrap the JSON in markdown formatting blocks or include any extra text. The JSON format must be EXACTLY:
