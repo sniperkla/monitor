@@ -932,9 +932,9 @@ export async function runDeployment(config, runMeta = {}) {
                 scriptLines.push(`git config --global credential.helper store`);
                 // Also set it directly in the remote URL for git fetch/checkout
                 scriptLines.push('if [ -n "$RAW_URL" ]; then');
-                scriptLines.push('  CLEAN_PATH=$(echo "$RAW_URL" | sed -E \'s|.*bitbucket\\.org/|bitbucket.org/|; s|.*github\\.com/|github.com/|\')');
-                scriptLines.push(`  AUTH_URL="https://${encodedUser}:${encodedPass}@\${CLEAN_PATH}"`);
-                scriptLines.push('  git remote set-url origin "$AUTH_URL"');
+                scriptLines.push('  CLEAN_PATH=$(echo "$RAW_URL" | sed -E "s|https://[^@]+@|https://|")');
+                scriptLines.push(`  AUTH_URL="https://${encodedUser}:${encodedPass}@\${CLEAN_PATH#https://}"`);
+                scriptLines.push('  git remote set-url origin "$AUTH_URL" 2>/dev/null || true');
                 scriptLines.push('fi');
               }
             } catch (e) {}
@@ -986,10 +986,9 @@ export async function runDeployment(config, runMeta = {}) {
           if (config.bitbucketConnected) {
             scriptLines.push(`cd "${resolvedPath}" || true`);
             scriptLines.push('rm -f ~/.git-credentials');
-            scriptLines.push('git config --global --unset credential.helper || true');
+            scriptLines.push('git config --global --unset credential.helper 2>/dev/null || true');
             scriptLines.push('if [ -n "$RAW_URL" ]; then');
-            scriptLines.push('  CLEAN_PATH=$(echo "$RAW_URL" | sed -E \'s|.*bitbucket\\.org/|bitbucket.org/|; s|.*github\\.com/|github.com/|\')');
-            scriptLines.push('  git remote set-url origin "https://${CLEAN_PATH}"');
+            scriptLines.push('  git remote set-url origin "$RAW_URL" 2>/dev/null || true');
             scriptLines.push('fi');
           } else if (config.githubToken) {
             scriptLines.push(`cd "${resolvedPath}" || true`);
