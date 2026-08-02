@@ -2976,7 +2976,7 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="text-[10px] font-bold uppercase text-[var(--text-muted)] tracking-wider block mb-1">Network <span className="text-[var(--text-muted)] normal-case font-normal">(optional — overlay recommended for Swarm)</span></label>
+                  <label className="text-[10px] font-bold uppercase text-[var(--text-muted)] tracking-wider block mb-1">Network <span className="text-[var(--text-muted)] normal-case font-normal">(optional)</span></label>
                   <div className="relative">
                     <input
                       list="swarm-create-networks"
@@ -3008,15 +3008,11 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
                               className={`px-2 py-0.5 rounded-lg text-[9px] font-mono font-bold border transition-all cursor-pointer ${
                                 isSelected
                                   ? 'bg-amber-500/20 border-amber-400/60 text-amber-300'
-                                  : isOverlay
-                                  ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400 hover:border-emerald-400/60'
-                                  : isBridge
-                                  ? 'bg-slate-700/40 border-slate-600/30 text-slate-400 hover:border-slate-500/60'
                                   : 'bg-slate-700/40 border-slate-600/30 text-slate-400 hover:border-slate-500/60'
                               }`}
-                              title={`${n.Driver} · ${n.Scope}${isOverlay ? ' ✓ Swarm compatible' : isBridge ? ' ⚠ Bridge — Swarm will auto-create overlay fallback' : ''}`}
+                              title={`${n.Driver} · ${n.Scope}`}
                             >
-                              {isOverlay ? '⬡ ' : isBridge ? '⬢ ' : ''}{n.Name}
+                              {n.Name}
                             </button>
                           );
                         })
@@ -3208,7 +3204,7 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
                   />
                 </div>
                 <div>
-                   <label className="text-[10px] font-bold uppercase text-[var(--text-muted)] tracking-wider block mb-1">Add Network <span className="text-[var(--text-muted)] normal-case font-normal">(overlay recommended for Swarm)</span></label>
+                   <label className="text-[10px] font-bold uppercase text-[var(--text-muted)] tracking-wider block mb-1">Network <span className="text-[var(--text-muted)] normal-case font-normal">(optional)</span></label>
                    <div className="relative">
                      <input
                        list="swarm-config-networks"
@@ -3240,11 +3236,9 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
                                className={`px-2 py-0.5 rounded-lg text-[9px] font-mono font-bold border transition-all cursor-pointer ${
                                  isSelected
                                    ? 'bg-purple-500/20 border-purple-400/60 text-purple-300'
-                                   : isOverlay
-                                   ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400 hover:border-emerald-400/60'
                                    : 'bg-slate-700/40 border-slate-600/30 text-slate-400 hover:border-slate-500/60'
                                }`}
-                               title={`${n.Driver} · ${n.Scope}${isOverlay ? ' ✓ Swarm compatible' : isBridge ? ' ⚠ Bridge — not directly usable by Swarm' : ''}`}
+                               title={`${n.Driver} · ${n.Scope}`}
                              >
                                {isOverlay ? '⬡ ' : isBridge ? '⬢ ' : ''}{n.Name}
                              </button>
