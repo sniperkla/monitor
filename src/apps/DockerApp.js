@@ -1134,6 +1134,29 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
     return containers;
   }, [containers, containerFilter]);
 
+  // Group Swarm task containers by serviceName for clean UI
+  const groupedContainers = useMemo(() => {
+    const items = [];
+    const swarmGroups = new Map();
+
+    filteredContainers.forEach(c => {
+      if (c.swarmService) {
+        if (!swarmGroups.has(c.swarmService)) {
+          swarmGroups.set(c.swarmService, []);
+        }
+        swarmGroups.get(c.swarmService).push(c);
+      } else {
+        items.push({ type: 'single', container: c });
+      }
+    });
+
+    swarmGroups.forEach((tasks, serviceName) => {
+      items.push({ type: 'swarm_group', serviceName, tasks });
+    });
+
+    return items;
+  }, [filteredContainers]);
+
   const getFilterCount = useCallback((f) => {
     if (f === 'all') return containers.length;
     if (f === 'running') return containers.filter(c => c.state === 'running').length;
@@ -1377,7 +1400,116 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
                             ) : (
                               <div className="grid grid-cols-1 xl:grid-cols-2 gap-3">
                                 <AnimatePresence mode="popLayout">
-                                  {filteredContainers.map((c, i) => {
+                                  {groupedContainers.map((item, i) => {
+                                    if (item.type === 'swarm_group') {
+                                      const { serviceName, tasks } = item;
+                                      const runningTasks = tasks.filter(t => t.state === 'running');
+                                      const firstTask = tasks[0] || {};
+                                      const isGroupExpanded = expandedContainer === `swarm-group-${serviceName}`;
+
+                                      return (
+                                        <motion.div
+                                          key={`swarm-group-${serviceName}`}
+                                          layout
+                                          initial={{ opacity: 0, scale: 0.95 }}
+                                          animate={{ opacity: 1, scale: 1 }}
+                                          className="rounded-2xl border border-purple-500/30 bg-[var(--bg-card)] transition-all duration-200 overflow-hidden"
+                                        >
+                                          <div 
+                                            className="p-4 cursor-pointer flex items-start justify-between bg-purple-500/5 hover:bg-purple-500/10 transition-colors"
+                                            onClick={() => setExpandedContainer(isGroupExpanded ? null : `swarm-group-${serviceName}`)}
+                                          >
+                                            <div className="flex items-center gap-3 min-w-0">
+                                              <div className="w-10 h-10 rounded-xl bg-purple-500/20 text-purple-400 flex items-center justify-center shrink-0 shadow-lg">
+                                                <Zap size={20} />
+                                              </div>
+                                              <div className="min-w-0">
+                                                <h3 className="font-bold text-sm truncate flex items-center gap-2">
+                                                  <span>{serviceName}</span>
+                                                  <span className="px-2 py-0.5 text-[9px] bg-purple-500/20 text-purple-300 font-bold uppercase rounded-lg border border-purple-500/40 shadow-sm flex items-center gap-1">
+                                                    🐝 SWARM GROUP ({runningTasks.length}/{tasks.length} Replicas)
+                                                  </span>
+                                                </h3>
+                                                <p className="text-[10px] font-mono text-[var(--text-muted)] truncate mt-0.5">{firstTask.image || '-'}</p>
+                                                {firstTask.ports && (
+                                                  <p className="text-[9px] font-mono text-sky-400/70 flex items-center gap-1 mt-0.5 truncate">
+                                                    <ExternalLink size={8} className="shrink-0" /> <span className="truncate">{typeof firstTask.ports === 'string' ? firstTask.ports : JSON.stringify(firstTask.ports)}</span>
+                                                  </p>
+                                                )}
+                                              </div>
+                                            </div>
+
+                                            <div className="flex items-center gap-2 shrink-0 ml-2">
+                                              <span className={`text-[10px] font-bold px-2.5 py-1 rounded-full ${runningTasks.length > 0 ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30' : 'bg-rose-500/15 text-rose-400 border border-rose-500/30'}`}>
+                                                ● {runningTasks.length > 0 ? `${runningTasks.length} Active` : 'Stopped'}
+                                              </span>
+                                              {isGroupExpanded ? <ChevronDown size={14} className="opacity-40" /> : <ChevronRight size={14} className="opacity-40" />}
+                                            </div>
+                                          </div>
+
+                                          {/* Group tasks inside */}
+                                          {isGroupExpanded && (
+                                            <div className="p-3 border-t border-purple-500/20 bg-black/20 space-y-2">
+                                              <p className="text-[10px] font-bold text-purple-300 uppercase tracking-wider px-1">
+                                                Replica Tasks ({tasks.length})
+                                              </p>
+                                              <div className="space-y-1.5">
+                                                {tasks.map((task, idx) => {
+                                                  const replicaNum = task.name.includes('.') ? `#${task.name.split('.')[1] || (idx + 1)}` : `#${idx + 1}`;
+                                                  return (
+                                                    <div key={task.id} className="p-2.5 rounded-xl bg-[var(--bg-card)] border border-white/5 flex items-center justify-between gap-3 text-xs hover:border-purple-500/30 transition-all">
+                                                      <div className="flex items-center gap-2 min-w-0">
+                                                        <span className="px-1.5 py-0.5 text-[9px] bg-purple-500/20 text-purple-300 font-bold rounded">
+                                                          {replicaNum}
+                                                        </span>
+                                                        <span className="font-mono text-[10px] text-[var(--text-muted)]">{task.id.substring(0, 10)}</span>
+                                                        <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded ${task.state === 'running' ? 'bg-emerald-500/15 text-emerald-400' : 'bg-rose-500/15 text-rose-400'}`}>
+                                                          {task.state === 'running' ? `● ${formatUptime(task.status)}` : task.status}
+                                                        </span>
+                                                      </div>
+
+                                                      <div className="flex items-center gap-1.5 shrink-0">
+                                                        <button
+                                                          onClick={() => openTerminalTab(task.id, task.name, 'logs')}
+                                                          className="px-2 py-1 bg-white/5 hover:bg-white/10 text-[10px] font-medium text-sky-400 rounded-lg transition-all flex items-center gap-1 cursor-pointer"
+                                                          title="View Logs"
+                                                        >
+                                                          <FileText size={11} /> Logs
+                                                        </button>
+                                                        <button
+                                                          onClick={() => openTerminalTab(task.id, task.name, 'exec')}
+                                                          disabled={task.state !== 'running'}
+                                                          className="px-2 py-1 bg-white/5 hover:bg-white/10 text-[10px] font-medium text-emerald-400 rounded-lg transition-all disabled:opacity-30 flex items-center gap-1 cursor-pointer"
+                                                          title="Terminal"
+                                                        >
+                                                          <TerminalIcon size={11} /> Terminal
+                                                        </button>
+                                                        <button
+                                                          onClick={() => handleContainerAction(task.id, task.state === 'running' ? 'stop' : 'start')}
+                                                          className={`px-2 py-1 text-[10px] font-medium rounded-lg transition-all flex items-center gap-1 cursor-pointer ${task.state === 'running' ? 'bg-amber-500/10 text-amber-400 hover:bg-amber-500/20' : 'bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20'}`}
+                                                        >
+                                                          {task.state === 'running' ? <Square size={11} /> : <Play size={11} />}
+                                                          {task.state === 'running' ? 'Stop' : 'Start'}
+                                                        </button>
+                                                        <button
+                                                          onClick={() => showConfirm(`Delete task ${task.name}?`, () => handleContainerAction(task.id, 'rm'), 'Remove', 'Delete')}
+                                                          className="p-1 bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 rounded-lg transition-all cursor-pointer"
+                                                          title="Delete task container"
+                                                        >
+                                                          <Trash2 size={11} />
+                                                        </button>
+                                                      </div>
+                                                    </div>
+                                                  );
+                                                })}
+                                              </div>
+                                            </div>
+                                          )}
+                                        </motion.div>
+                                      );
+                                    }
+
+                                    const c = item.container;
                                     const isExpanded = expandedContainer === c.id;
                                     const isPending = pendingActions[c.id];
                                     return (
