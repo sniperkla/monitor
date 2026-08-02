@@ -722,6 +722,10 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
           setIsLoading(false);
           emitDockerLs();
           addNotification({ title: 'Networks Pruned', message: 'Unused networks have been removed.', type: 'success' });
+        } else if (action === 'connect-nginx-swarm') {
+          setIsLoading(false);
+          emitDockerLs();
+          addNotification({ title: 'Nginx Connected', message: 'Nginx proxy connected to all Swarm overlay networks successfully.', type: 'success' });
         } else if (action === 'prune-system') {
           setIsLoading(false);
           addNotification({ title: 'System Pruned', message: 'Docker system has been cleaned up. Unused containers, images, networks, and volumes removed.', type: 'success' });
@@ -2110,12 +2114,24 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
                                 <Zap size={14} />
                                 ACTIVE SWARM SERVICES ({swarmServices.length})
                               </h3>
-                              <button
-                                onClick={() => setCreateServiceModal({ isOpen: true, name: '', image: '', replicas: 2, port: '' })}
-                                className="px-3 py-1.5 bg-purple-500/20 hover:bg-purple-500/30 border border-purple-500/30 text-purple-300 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer"
-                              >
-                                <Plus size={12} /> New Service
-                              </button>
+                              <div className="flex items-center gap-2">
+                                <button
+                                  onClick={() => {
+                                    setIsLoading(true);
+                                    socketRef.current.emit('docker:command', { action: 'connect-nginx-swarm' });
+                                  }}
+                                  className="px-3 py-1.5 bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-500/30 text-emerald-300 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer"
+                                  title="Connect Nginx container (global-nginx) to all Swarm overlay networks"
+                                >
+                                  <Globe size={12} /> Connect Nginx
+                                </button>
+                                <button
+                                  onClick={() => setCreateServiceModal({ isOpen: true, name: '', image: '', replicas: 2, port: '' })}
+                                  className="px-3 py-1.5 bg-purple-500/20 hover:bg-purple-500/30 border border-purple-500/30 text-purple-300 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer"
+                                >
+                                  <Plus size={12} /> New Service
+                                </button>
+                              </div>
                             </div>
                             <div className="grid grid-cols-1 xl:grid-cols-2 gap-3">
                               {swarmServices.map((svc, idx) => {
