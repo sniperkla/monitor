@@ -1542,6 +1542,51 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
                  const count = parseInt(args[1], 10);
                  if (!serviceName || isNaN(count) || count < 0) return socket.emit('docker:error', 'Invalid Scale Parameters');
                  cmdSuffix = `service scale ${serviceName}=${count}`;
+              } else if (action === 'swarm:remove' && args.length >= 1) {
+                 const serviceName = String(args[0] || '').replace(/[^a-zA-Z0-9._-]/g, '');
+                 if (!serviceName) return socket.emit('docker:error', 'Invalid Service Name');
+                 cmdSuffix = `service rm ${serviceName}`;
+              } else if (action === 'swarm:configure') {
+                 const serviceName = String(args[0] || '').replace(/[^a-zA-Z0-9._-]/g, '');
+                 const image = String(args[1] || '').replace(/[^a-zA-Z0-9.@/:-]/g, '');
+                 const replicas = parseInt(args[2], 10);
+                 const port = String(args[3] || '').replace(/[^0-9:]/g, '');
+                 const network = String(args[4] || '').replace(/[^a-zA-Z0-9._-]/g, '');
+                 const rawEnv = String(args[5] || '');
+                 const rawMounts = String(args[6] || '');
+                 if (!serviceName) return socket.emit('docker:error', 'Invalid Service Name');
+
+                 let flags = [];
+                 if (image) flags.push(`--image ${image}`);
+                 if (!isNaN(replicas) && replicas >= 0) flags.push(`--replicas ${replicas}`);
+                 if (port) {
+                   const p = port.includes(':') ? port : `${port}:${port}`;
+                   flags.push(`--publish-add ${p}`);
+                 }
+                 if (network) {
+                   flags.push(`--network-add ${network}`);
+                 }
+                 if (rawEnv) {
+                   rawEnv.split(',').forEach(e => {
+                     const kv = e.trim().replace(/[^a-zA-Z0-9._=\-]/g, '');
+                     if (kv.includes('=')) flags.push(`--env-add "${kv}"`);
+                   });
+                 }
+                 if (rawMounts) {
+                   rawMounts.split(',').forEach(m => {
+                     const parts = m.trim().split(':');
+                     if (parts.length >= 2) {
+                       const src = parts[0].trim().replace(/[^a-zA-Z0-9._/:-]/g, '');
+                       const target = parts[1].trim().replace(/[^a-zA-Z0-9._/:-]/g, '');
+                       if (src && target) {
+                         const type = src.startsWith('/') ? 'bind' : 'volume';
+                         flags.push(`--mount-add type=${type},source=${src},target=${target}`);
+                       }
+                     }
+                   });
+                 }
+                 flags.push(`--update-order start-first`);
+                 cmdSuffix = `service update ${flags.join(' ')} ${serviceName}`;
               } else if (action === 'vol-assoc') {
                cmdSuffix = `ids=$(docker ps -aq); [ -z "$ids" ] || docker inspect --format 'assoc:{{.ID}}\t{{.Name}}\t{{range .Mounts}}{{.Name}} {{end}}' $ids`;
             } else if (action === 'search' && args.length > 0) {
