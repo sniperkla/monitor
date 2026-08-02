@@ -1482,7 +1482,7 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
                                                           className="px-2 py-1 bg-white/5 hover:bg-white/10 text-[10px] font-medium text-emerald-400 rounded-lg transition-all disabled:opacity-30 flex items-center gap-1 cursor-pointer"
                                                           title="Terminal"
                                                         >
-                                                          <TerminalIcon size={11} /> Terminal
+                                                          <TermIcon size={11} /> Terminal
                                                         </button>
                                                         <button
                                                           onClick={() => handleContainerAction(task.id, task.state === 'running' ? 'stop' : 'start')}
