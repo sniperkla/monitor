@@ -3264,8 +3264,6 @@ export default function SettingsApp({ initialTab, deploymentOnly = false, openRe
                           placeholder={t('deploy.deployCommandPlaceholder', '# Enter shell script to run on deploy event')}
                           className="w-full bg-slate-950 border border-[var(--border-color)] rounded-xl p-4 text-xs font-mono text-emerald-400 focus:outline-none focus:border-indigo-500/50 shadow-inner"
                         />
-                          </div>
-                        </div>
                       </div>
                       {commandChanged && (
                         <div className="mt-3 px-3 py-2 rounded-lg bg-amber-500/10 border border-amber-500/30 flex items-center gap-2">
