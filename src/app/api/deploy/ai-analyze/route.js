@@ -38,10 +38,11 @@ export async function POST(request) {
       return NextResponse.json({ success: false, error: 'Invalid project path' }, { status: 400 });
     }
 
+    const probeCmd = `cd "${resolvedPath}" && ls -la && cat package.json 2>/dev/null && cat docker-compose.yml 2>/dev/null && cat Dockerfile 2>/dev/null && cat requirements.txt 2>/dev/null && cat pyproject.toml 2>/dev/null && cat pom.xml 2>/dev/null && cat build.gradle 2>/dev/null && echo "=== SYSTEM INFORMATION ===" && uname -a 2>/dev/null && cat /etc/os-release 2>/dev/null | grep -E "^(NAME|VERSION)=" || true && echo "=== DOCKER VERSION ===" && docker --version 2>/dev/null || echo "Docker not installed" && echo "=== DOCKER COMPOSE PLUGIN ===" && docker compose version 2>/dev/null || echo "Plugin docker compose NOT available" && echo "=== DOCKER COMPOSE LEGACY BINARY ===" && docker-compose --version 2>/dev/null || echo "Binary docker-compose NOT available" && echo "=== DOCKER SWARM STATUS ===" && docker info 2>/dev/null | grep -i "Swarm:" || echo "Swarm status unknown"`;
+
     if (targetType === 'local') {
-      const cmd = `cd "${resolvedPath}" && ls -la && cat package.json 2>/dev/null && cat docker-compose.yml 2>/dev/null && cat Dockerfile 2>/dev/null && cat requirements.txt 2>/dev/null && cat pyproject.toml 2>/dev/null && cat pom.xml 2>/dev/null && cat build.gradle 2>/dev/null && echo "=== DOCKER COMPOSE VERSION ===" && (docker compose version 2>/dev/null || docker-compose --version 2>/dev/null)`;
       filesListing = await new Promise((resolve) => {
-        exec(cmd, { timeout: 30000 }, (error, stdout, stderr) => {
+        exec(probeCmd, { timeout: 30000 }, (error, stdout, stderr) => {
           resolve((stdout || stderr || error?.message || '').toString());
         });
       });
@@ -82,8 +83,7 @@ export async function POST(request) {
 
         conn.on('ready', () => {
           clearTimeout(sshTimeout);
-          const sshCmd = `cd "${resolvedPath}" && ls -la && cat package.json 2>/dev/null && cat docker-compose.yml 2>/dev/null && cat Dockerfile 2>/dev/null && cat requirements.txt 2>/dev/null && cat pyproject.toml 2>/dev/null && cat pom.xml 2>/dev/null && cat build.gradle 2>/dev/null && echo "=== DOCKER COMPOSE VERSION ===" && (docker compose version 2>/dev/null || docker-compose --version 2>/dev/null)`;
-          conn.exec(sshCmd, { timeout: 30000 }, (err, stream) => {
+          conn.exec(probeCmd, { timeout: 30000 }, (err, stream) => {
             if (err) {
               conn.end();
               return resolve(`SSH Exec Error: ${err.message}`);
@@ -163,15 +163,18 @@ export async function POST(request) {
     // Check if the user has explicitly set up Swarm before (existing script has swarm/service commands)
     const isSwarmMode = /docker\s+(swarm|service|stack)/.test(existingScript);
 
-    const systemPrompt = `You are a DevOps and Deployment agent. You will analyze a directory listing, standard project configuration files, and an existing deployment script to produce an updated, production-ready script.
+    const systemPrompt = `You are a DevOps and Deployment agent. You will analyze a directory listing, environment probe output (OS, Docker version, Docker Compose capability), and an existing deployment script to produce an updated, production-ready deployment script.
 
-CRITICAL INSTRUCTIONS - USE ORIGINAL SCRIPT AS STARTING MATERIAL:
-1. PRIMARY REQUIREMENT: If an existing deployment script is provided in the prompt below, YOU MUST USE IT AS YOUR EXACT STARTING MATERIAL / TEMPLATE.
-2. PRESERVE ORIGINAL COMMANDS: Keep all original "cd" commands (e.g. \`cd /home/ec2-user/aut/\`), repository updates (\`git pull\`), custom environment setup, echo/log statements (e.g. \`echo "Deployment completed successfully."\`), and cleanup commands (\`docker image prune -f\`).
-3. NO DUPLICATE HEADERS: Put \`#!/bin/bash\` and \`set -e\` ONLY ONCE at the very top of the script (lines 1 & 2). Never include nested \`#!/bin/bash\` or \`set -e\` inside \`if/else\` blocks.
-4. DOCKER BUILD ONLY: If the project uses Docker, keep the original docker build or docker-compose build commands. Do NOT add any docker service, docker swarm, or docker stack commands — those will be injected automatically by the system if needed.
-5. END THE SCRIPT with the original echo completion message and image prune if present.
-6. FRESH SETUP: If no existing script is provided, generate a standard docker-compose based deployment script that uses \`docker compose up -d --build\` (or \`docker-compose up -d --build\`). Do NOT add Swarm commands.
+CRITICAL INSTRUCTIONS:
+1. ENVIRONMENT AWARENESS: Examine the === SYSTEM INFORMATION ===, === DOCKER VERSION ===, and === DOCKER COMPOSE === sections in the probe output.
+   - If "docker compose version" plugin is available, use \`docker compose up -d --build\`.
+   - If only legacy "docker-compose" binary is available, use \`docker-compose up -d --build\`.
+   - Use fallback pattern \`docker compose up -d --build 2>/dev/null || docker-compose up -d --build\` if uncertain.
+2. PRIMARY REQUIREMENT: If an existing deployment script is provided in the prompt below, YOU MUST USE IT AS YOUR EXACT STARTING MATERIAL / TEMPLATE.
+3. PRESERVE ORIGINAL COMMANDS: Keep all original "cd" commands (e.g. \`cd /home/ec2-user/aut/\`), repository updates (\`git pull\`), custom environment setup, echo/log statements, and cleanup commands (\`docker image prune -f\`).
+4. NO DUPLICATE HEADERS: Put \`#!/bin/bash\` and \`set -e\` ONLY ONCE at the very top of the script (lines 1 & 2). Never include nested \`#!/bin/bash\` or \`set -e\` inside \`if/else\` blocks.
+5. DOCKER BUILD ONLY: Keep standard docker build or docker compose commands. Do NOT add any docker service, docker swarm, or docker stack commands — those are managed separately by the system.
+6. END THE SCRIPT with the original echo completion message and image prune if present.
 
 You MUST respond with a valid JSON object ONLY. Do not wrap the JSON in markdown formatting blocks or include any extra text. The JSON format must be EXACTLY:
 {
