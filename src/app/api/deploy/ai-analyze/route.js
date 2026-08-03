@@ -313,13 +313,28 @@ You MUST respond with a valid JSON object ONLY. Do not wrap the JSON in markdown
      docker swarm init 2>/dev/null || true
      docker swarm update --task-history-limit 1 2>/dev/null || true
 
-      # Ensure attachable overlay network proxy-net exists for Nginx DNS
-      NET_DRIVER=$(docker network inspect proxy-net --format '{{.Driver}}' 2>/dev/null || echo "")
-      if [ "$NET_DRIVER" != "overlay" ]; then
-        echo "[net] Ensuring proxy-net is an attachable overlay network..."
-        docker network rm proxy-net 2>/dev/null || true
-        docker network create --driver overlay --attachable proxy-net 2>/dev/null || true
-      fi
+     # Ensure proxy-net overlay network exists — wait up to 15s if Swarm init is still propagating
+     NET_DRIVER=$(docker network inspect proxy-net --format '{{.Driver}}' 2>/dev/null || echo "")
+     if [ "$NET_DRIVER" != "overlay" ]; then
+       echo "[net] proxy-net not found or not overlay — (re)creating..."
+       docker network rm proxy-net 2>/dev/null || true
+       docker network create --driver overlay --attachable proxy-net
+       # Wait up to 15s for the network to become visible
+       for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
+         NET_CHECK=$(docker network inspect proxy-net --format '{{.Driver}}' 2>/dev/null || echo "")
+         if [ "$NET_CHECK" = "overlay" ]; then
+           echo "[net] proxy-net overlay network is ready."
+           break
+         fi
+         echo "[net] Waiting for proxy-net to appear... ($i/15)"
+         sleep 1
+       done
+       NET_CHECK=$(docker network inspect proxy-net --format '{{.Driver}}' 2>/dev/null || echo "")
+       if [ "$NET_CHECK" != "overlay" ]; then
+         echo "[net] ERROR: proxy-net overlay network still not available after 15s. Aborting."
+         exit 1
+       fi
+     fi
 ${buildSection}
      # Fallback compose build
      docker compose build 2>/dev/null || docker-compose build 2>/dev/null || true
