@@ -296,106 +296,153 @@ ${existingScript || '# No previous script set'}`;
       return NextResponse.json({ success: false, error: 'AI did not return a valid response.' }, { status: 500 });
     }
 
-    // --- SERVER-SIDE SWARM INJECTION ---
-    // Extract service names from docker-compose.yml using container_name per service block
+    // ─── SERVER-SIDE SWARM INJECTION ───────────────────────────────────────────
     let swarmBlock = '';
     let services = [];
 
-
-    // Normalize CRLF line endings from SSH output (Windows-style may break regex)
+    // Normalize CRLF from SSH output
     const normalizedListing = filesListing.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
 
-    // Parse docker-compose.yml content from filesListing
-    // Primary: extract container_name entries directly
-    const containerNameMatches = normalizedListing.match(/container_name:\s*([a-zA-Z0-9._-]+)/g);
-    if (containerNameMatches && containerNameMatches.length > 0) {
-      services = Array.from(new Set(containerNameMatches.map(m => m.replace(/container_name:\s*/, '').trim())));
-      console.log(`[ai-analyze] Detected services from container_name: ${services.join(', ')}`);
-    } else {
-      // Fallback 1: Parse service keys under services: section
-      const composeMatch = normalizedListing.match(/services:\s*\n([\s\S]*?)(?=\n[a-zA-Z0-9._-]+:|\n$|$)/);
-      if (composeMatch) {
-        const servicesBlock = composeMatch[1];
-        const serviceKeys = servicesBlock.match(/^\s{2,4}([a-zA-Z0-9._-]+):/gm);
-        if (serviceKeys) {
-          services = Array.from(new Set(serviceKeys.map(k => k.trim().replace(':', ''))))
-            .filter(svc => !/^(db|database|redis|mongo|mysql|postgres|rabbitmq|memcached|elasticsearch|zookeeper|kafka)$/i.test(svc));
-          console.log(`[ai-analyze] Detected services from service keys: ${services.join(', ')}`);
+    // ── Step 1: Extract docker-compose.yml content ───────────────────────────
+    // Probe echoes "=== DOCKER COMPOSE ===" before catting the file — use it as a fence
+    const composeMarkerIdx = normalizedListing.indexOf('=== DOCKER COMPOSE ===');
+    let composeContent = '';
+    if (composeMarkerIdx !== -1) {
+      const afterMarker = normalizedListing.slice(composeMarkerIdx + 22);
+      // Stop at the next "===" section marker
+      const nextMarkerIdx = afterMarker.indexOf('\n===');
+      composeContent = (nextMarkerIdx !== -1 ? afterMarker.slice(0, nextMarkerIdx) : afterMarker).trim();
+    }
+    // Fallback: search the whole listing if marker not found
+    if (!composeContent) composeContent = normalizedListing;
+    console.log(`[ai-analyze] compose content length: ${composeContent.length} chars`);
+
+    // ── Step 2: Parse per-service blocks from compose YAML ───────────────────
+    // Returns { containerName: { buildDir, ports[] } }
+    function parseComposeServices(yaml) {
+      const parsed = {};
+      const servicesIdx = yaml.search(/^services\s*:/m);
+      if (servicesIdx === -1) return parsed;
+
+      // Slice from services: to next top-level key (no leading spaces)
+      const afterServices = yaml.slice(servicesIdx + yaml.slice(servicesIdx).indexOf('\n') + 1);
+      const stopIdx = afterServices.search(/^[a-zA-Z0-9]/m);
+      const servicesYaml = stopIdx !== -1 ? afterServices.slice(0, stopIdx) : afterServices;
+
+      // Split into service blocks by finding 2-space indented keys at the top level of the block
+      const serviceHeaderRe = /^  ([a-zA-Z0-9_][a-zA-Z0-9_-]*):/gm;
+      const headers = [];
+      let hm;
+      while ((hm = serviceHeaderRe.exec(servicesYaml)) !== null) {
+        headers.push({ name: hm[1], start: hm.index, end: hm.index + hm[0].length });
+      }
+
+      for (let hi = 0; hi < headers.length; hi++) {
+        const h = headers[hi];
+        const blockStart = h.end;
+        const blockEnd = hi + 1 < headers.length ? headers[hi + 1].start : servicesYaml.length;
+        const block = servicesYaml.slice(blockStart, blockEnd);
+
+        // container_name (falls back to service key)
+        const cnMatch = block.match(/container_name:\s*([a-zA-Z0-9._-]+)/);
+        const containerName = cnMatch ? cnMatch[1].trim() : h.name;
+
+        // build context — handle both "build: ./dir" and "build:\n  context: ./dir"
+        let buildDir = '';
+        const buildLineMatch = block.match(/build:\s*(\S+)/);
+        if (buildLineMatch) {
+          const buildVal = buildLineMatch[1].trim();
+          // If the value itself is "context:" or just a colon it's a block form
+          if (buildVal !== 'context:' && buildVal !== '|' && buildVal !== '>') {
+            buildDir = buildVal.replace(/^\.\//, '');
+          }
         }
+        // Override with explicit context: if found inside a build block
+        const contextMatch = block.match(/context:\s*(\S+)/);
+        if (contextMatch) {
+          buildDir = contextMatch[1].trim().replace(/^\.\//, '');
+        }
+
+        // ports — collect all "- HOST:CONTAINER" or "- PORT" entries
+        const ports = [];
+        const portsSection = block.match(/ports:\s*\n((?:[ \t]+-[ \t]+.+\n?)*)/);
+        if (portsSection) {
+          const portLineRe = /- +['"]?(\d+:\d+|\d+)['"]?/g;
+          let pm;
+          while ((pm = portLineRe.exec(portsSection[1])) !== null) {
+            const p = pm[1];
+            ports.push(p.includes(':') ? p : `${p}:${p}`);
+          }
+        }
+
+        parsed[containerName] = { buildDir, ports };
+        console.log(`[ai-analyze] Parsed service: ${h.name} → containerName=${containerName}, buildDir=${buildDir || '(root)'}, ports=[${ports.join(',')}]`);
+      }
+      return parsed;
+    }
+
+    const composeServices = parseComposeServices(composeContent);
+
+    // ── Step 3: Build services list ───────────────────────────────────────────
+    if (Object.keys(composeServices).length > 0) {
+      // Filter out common infra-only containers
+      const infraRe = /^(db|database|redis|mongo|mysql|postgres|rabbitmq|memcached|elasticsearch|zookeeper|kafka)$/i;
+      services = Object.keys(composeServices).filter(s => !infraRe.test(s));
+      console.log(`[ai-analyze] Services from compose YAML: ${services.join(', ')}`);
+    }
+
+    // Fallback A: container_name grep across full listing
+    if (services.length === 0) {
+      const cnMatches = normalizedListing.match(/container_name:\s*([a-zA-Z0-9._-]+)/g);
+      if (cnMatches) {
+        services = Array.from(new Set(cnMatches.map(m => m.replace(/container_name:\s*/, '').trim())));
+        console.log(`[ai-analyze] Services from container_name grep: ${services.join(', ')}`);
       }
     }
 
-    // Fallback 2: Extract container names from AI-generated script (docker service create --name <NAME>)
-    if (services.length === 0 && parsedResult?.deployCommand) {
-      const scriptServiceMatches = parsedResult.deployCommand.match(/docker\s+(?:service\s+(?:create|update)|run|start)\s+(?:--[\w-]+\s+\S+\s+)*--name\s+([a-zA-Z0-9._-]+)/g);
-      if (scriptServiceMatches && scriptServiceMatches.length > 0) {
-        services = Array.from(new Set(scriptServiceMatches.map(m => m.match(/--name\s+([a-zA-Z0-9._-]+)/)?.[1]).filter(Boolean)));
-        console.log(`[ai-analyze] Detected services from AI script: ${services.join(', ')}`);
-      }
-    }
-
-    // Fallback 3: project folder name if all detection methods failed
+    // Fallback B: project folder name
     if (services.length === 0) {
       const folderName = resolvedPath.split('/').filter(Boolean).pop() || 'app';
       services = [folderName.toLowerCase().replace(/[^a-z0-9._-]/g, '')];
-      console.warn(`[ai-analyze] WARNING: No services detected from docker-compose.yml or AI script. Falling back to folder name: ${services[0]}`);
+      console.warn(`[ai-analyze] WARNING: Falling back to folder name: ${services[0]}`);
     } else {
-      console.log(`[ai-analyze] Final services for Swarm injection: ${services.join(', ')}`);
+      console.log(`[ai-analyze] Final services: ${services.join(', ')}`);
     }
 
+    // ── Step 4: Generate build + swarm sections ───────────────────────────────
     if (services.length > 0) {
-      // Build map of service/container name to build context path
-      const buildDirMap = {};
-      for (const svc of services) {
-        // Match build block under container_name or service block
-        // Fix: Clean up any trailing/leading 'context:' string if matched
-        const buildCtxMatch = normalizedListing.match(new RegExp(`(?:container_name:\\s*${svc}|${svc}:)[\\s\\S]{0,300}?build:\\s*(?:context:\\s*(\\S+)|(\\S+))`, 'm'));
-        if (buildCtxMatch) {
-          let rawPath = (buildCtxMatch[1] || buildCtxMatch[2] || '').trim();
-          if (rawPath.startsWith('context:')) rawPath = rawPath.replace('context:', '').trim();
-          const cleanPath = rawPath.replace(/^\.\//, '');
-          if (cleanPath && cleanPath !== '.' && cleanPath !== 'context:') {
-            buildDirMap[svc] = cleanPath;
-          }
-        }
-      }
-
-      // Detect ports per container: scan each container_name or service block for ports OR fall back to Nginx upstream ports found
-      const portMap = {};
-      for (const svc of services) {
-        // Find host:container port patterns in compose file
-        const svcPortMatch = normalizedListing.match(new RegExp(`(?:container_name:\\s*${svc}|${svc}:)[\\s\\S]{0,500}?ports:[\\s\\S]{0,200}?-[\\s"']*(\\d+:\\d+|\\d+)[\\s"']*`, 'm'));
-        if (svcPortMatch) {
-          const rawPort = svcPortMatch[1].trim();
-          portMap[svc] = rawPort.includes(':') ? rawPort : `${rawPort}:${rawPort}`;
-        }
-      }
-
       let buildSection = '';
-      for (let i = 0; i < services.length; i++) {
-        const svc = services[i];
-        // Priority: explicit build directory from compose -> guessed subfolder -> fallback root
-        const dir = buildDirMap[svc] || '';
-        const subdir = dir || svc.replace(/^aut/i, '').replace(/^app/i, '').toLowerCase();
-        
-        buildSection += `
+      for (const svc of services) {
+        const info = composeServices[svc] || {};
+        const dir = info.buildDir || '';
+        // Guess subdir from container name (strip common prefix like "aut", "app")
+        const guessedSubdir = svc.replace(/^aut|^app/i, '').toLowerCase() || svc;
+
+        if (dir) {
+          // Explicit build dir from compose file
+          buildSection += `
+     # Build image for ${svc} (from ./${dir})
+     docker build -t ${svc}:latest ./${dir}`;
+        } else {
+          // Check subdir first, then root fallback
+          buildSection += `
      # Build image for ${svc}
-     if [ -n "${dir}" ] && [ -d "${dir}" ] && [ -f "${dir}/Dockerfile" ]; then
-       echo "Building ${svc}:latest from ./${dir}..."
-       docker build -t ${svc}:latest ./${dir}
-     elif [ -n "${subdir}" ] && [ -d "${subdir}" ] && [ -f "${subdir}/Dockerfile" ]; then
-       echo "Building ${svc}:latest from ./${subdir}..."
-       docker build -t ${svc}:latest ./${subdir}
+     if [ -d "${guessedSubdir}" ] && [ -f "${guessedSubdir}/Dockerfile" ]; then
+       echo "Building ${svc}:latest from ./${guessedSubdir}..."
+       docker build -t ${svc}:latest ./${guessedSubdir}
      elif [ -f "Dockerfile" ]; then
        echo "Building ${svc}:latest from ./..."
        docker build -t ${svc}:latest ./
      fi`;
+        }
       }
 
       let svcSection = '';
       for (const svc of services) {
-        const port = portMap[svc] || '';
-        const publishFlag = port ? `--publish ${port}` : '';
+        const info = composeServices[svc] || {};
+        const port = (info.ports && info.ports[0]) ? info.ports[0] : '';
+        const publishFlag = port ? `--publish ${port} ` : '';
+
         svcSection += `
 
      # ------ ${svc} ------
@@ -414,7 +461,7 @@ ${existingScript || '# No previous script set'}`;
          _HAD_CONTAINER=0
        fi
        # Create Swarm service — if it fails and we had a standalone container, roll back
-       if docker service create --name ${svc} --network "$SWARM_NET" ${publishFlag} --detach --no-resolve-image --replicas 2 ${svc}:latest; then
+       if docker service create --name ${svc} --network "$SWARM_NET" ${publishFlag}--detach --no-resolve-image --replicas 2 ${svc}:latest; then
          echo "[swarm] Service ${svc} created. Waiting for replica to start..."
          _STARTED=0
          for _i in 1 2 3 4 5 6 7 8 9 10; do
@@ -486,7 +533,8 @@ ${svcSection}
      docker exec global-nginx nginx -s reload 2>/dev/null || docker restart global-nginx 2>/dev/null || true
 
      docker container prune -f 2>/dev/null || true`;
-    } // end isSwarmMode
+    } // end service injection
+
 
     // Always build standardScript and swarmScript separately
     const standardScript = parsedResult.deployCommand || '';
