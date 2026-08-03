@@ -501,8 +501,8 @@ ${svcSection}
     };
 
     // Re-fetch project setting to get latest value for saving
-    const projectSetting = await SystemSetting.findOne({ key: dbKey });
-    const existingValue = projectSetting?.value || {};
+    const savedProjectSetting = await SystemSetting.findOne({ key: dbKey });
+    const existingValue = savedProjectSetting?.value || {};
 
     const aiLogs = Array.isArray(existingValue.aiLogs) ? existingValue.aiLogs : [];
     aiLogs.unshift({
