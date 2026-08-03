@@ -296,33 +296,21 @@ ${existingScript || '# No previous script set'}`;
     let services = [];
 
 
-    // Parse docker-compose.yml content from filesListing (between cat output markers)
-    // Strategy: split into service blocks, for each block use container_name if present, else the service key
-    const composeMatch = filesListing.match(/services:\s*\n([\s\S]*?)(?=\n\S|\n$|$)/);
-    if (composeMatch) {
-      const servicesBlock = composeMatch[1];
-      // Split into individual service blocks by top-level 2/4-space keys
-      const serviceBlockRegex = /^( {2}|\t)([a-zA-Z0-9._-]+):\s*\n([\s\S]*?)(?=^( {2}|\t)[a-zA-Z0-9._-]+:|\Z)/gm;
-      let blockMatch;
-      while ((blockMatch = serviceBlockRegex.exec(servicesBlock)) !== null) {
-        const serviceKey = blockMatch[2];          // e.g. "frontend"
-        const blockBody = blockMatch[3] || '';
-        // Extract container_name from this service's block
-        const cnMatch = blockBody.match(/container_name:\s*(\S+)/);
-        const resolvedName = cnMatch ? cnMatch[1].trim() : serviceKey;
-        // Skip infrastructure-only services (db, redis, mongo, etc.) unless they have container_name
-        const isInfra = !cnMatch && /^(db|database|redis|mongo|mysql|postgres|rabbitmq|memcached|elasticsearch|zookeeper|kafka)$/i.test(serviceKey);
-        if (!isInfra) {
-          services.push(resolvedName);
+    // Parse docker-compose.yml content from filesListing
+    // Extract container_name entries or service keys directly
+    const containerNameMatches = filesListing.match(/container_name:\s*([a-zA-Z0-9._-]+)/g);
+    if (containerNameMatches && containerNameMatches.length > 0) {
+      services = Array.from(new Set(containerNameMatches.map(m => m.replace(/container_name:\s*/, '').trim())));
+    } else {
+      // Parse service names under services: section if no explicit container_name found
+      const composeMatch = filesListing.match(/services:\s*\n([\s\S]*?)(?=\n[a-zA-Z0-9._-]+:|\n$|$)/);
+      if (composeMatch) {
+        const servicesBlock = composeMatch[1];
+        const serviceKeys = servicesBlock.match(/^\s{2,4}([a-zA-Z0-9._-]+):/gm);
+        if (serviceKeys) {
+          services = Array.from(new Set(serviceKeys.map(k => k.trim().replace(':', ''))))
+            .filter(svc => !/^(db|database|redis|mongo|mysql|postgres|rabbitmq|memcached|elasticsearch|zookeeper|kafka)$/i.test(svc));
         }
-      }
-    }
-
-    // Fallback 1: global container_name scan if services block parse failed
-    if (services.length === 0) {
-      const globalCN = filesListing.match(/container_name:\s*(\S+)/g);
-      if (globalCN && globalCN.length > 0) {
-        services = globalCN.map(m => m.replace('container_name:', '').trim());
       }
     }
 
