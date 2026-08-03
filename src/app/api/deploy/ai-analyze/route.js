@@ -291,26 +291,42 @@ ${existingScript || '# No previous script set'}`;
     }
 
     // --- SERVER-SIDE SWARM INJECTION ---
-    // Extract service names from docker-compose.yml (container_name OR service definitions under `services:`)
+    // Extract service names from docker-compose.yml using container_name per service block
     let swarmBlock = '';
     let services = [];
 
-    // 1. Try matching explicit container_name entries
-    const composeContainerNames = filesListing.match(/container_name:\s*(\S+)/g);
-    if (composeContainerNames && composeContainerNames.length > 0) {
-      services = composeContainerNames.map(m => m.replace('container_name:', '').trim());
-    } else {
-      // 2. Try matching top-level service block keys under services:
-      const servicesSectionMatch = filesListing.match(/services:\s*\n((?:\s{2,4}[a-zA-Z0-9._-]+:\s*\n[\s\S]*?)+)(?=\n\S|\n$)/);
-      if (servicesSectionMatch) {
-        const serviceKeys = servicesSectionMatch[1].match(/^\s{2,4}([a-zA-Z0-9._-]+):/gm);
-        if (serviceKeys) {
-          services = serviceKeys.map(k => k.trim().replace(':', ''));
+
+    // Parse docker-compose.yml content from filesListing (between cat output markers)
+    // Strategy: split into service blocks, for each block use container_name if present, else the service key
+    const composeMatch = filesListing.match(/services:\s*\n([\s\S]*?)(?=\n\S|\n$|$)/);
+    if (composeMatch) {
+      const servicesBlock = composeMatch[1];
+      // Split into individual service blocks by top-level 2/4-space keys
+      const serviceBlockRegex = /^( {2}|\t)([a-zA-Z0-9._-]+):\s*\n([\s\S]*?)(?=^( {2}|\t)[a-zA-Z0-9._-]+:|\Z)/gm;
+      let blockMatch;
+      while ((blockMatch = serviceBlockRegex.exec(servicesBlock)) !== null) {
+        const serviceKey = blockMatch[2];          // e.g. "frontend"
+        const blockBody = blockMatch[3] || '';
+        // Extract container_name from this service's block
+        const cnMatch = blockBody.match(/container_name:\s*(\S+)/);
+        const resolvedName = cnMatch ? cnMatch[1].trim() : serviceKey;
+        // Skip infrastructure-only services (db, redis, mongo, etc.) unless they have container_name
+        const isInfra = !cnMatch && /^(db|database|redis|mongo|mysql|postgres|rabbitmq|memcached|elasticsearch|zookeeper|kafka)$/i.test(serviceKey);
+        if (!isInfra) {
+          services.push(resolvedName);
         }
       }
     }
 
-    // 3. Fallback: project folder name if docker-compose.yml missing or couldn't parse
+    // Fallback 1: global container_name scan if services block parse failed
+    if (services.length === 0) {
+      const globalCN = filesListing.match(/container_name:\s*(\S+)/g);
+      if (globalCN && globalCN.length > 0) {
+        services = globalCN.map(m => m.replace('container_name:', '').trim());
+      }
+    }
+
+    // Fallback 2: project folder name if docker-compose.yml missing or couldn't parse
     if (services.length === 0) {
       const folderName = resolvedPath.split('/').filter(Boolean).pop() || 'app';
       services = [folderName.toLowerCase().replace(/[^a-z0-9._-]/g, '')];
@@ -325,7 +341,7 @@ ${existingScript || '# No previous script set'}`;
       const portMap = {};
       for (const svc of services) {
         // Find host:container port patterns near this service name
-        const svcPortMatch = filesListing.match(new RegExp(`(?:container_name:|${svc}:)[\\s\\S]{0,400}?ports:[\\s\\S]{0,200}?-(\\s*['"]?\\d+:\\d+['"]?)`, 'm'));
+        const svcPortMatch = filesListing.match(new RegExp(`(?:container_name:|${svc}:)[\\s\\S]{0,400}?ports:[\\s\\S]{0,200}?-(\\s*['\"]?\\d+:\\d+['\"]?)`, 'm'));
         if (svcPortMatch) {
           const portLine = svcPortMatch[1].trim().replace(/^['"]/, '').replace(/['"]$/, '').trim();
           portMap[svc] = portLine;
