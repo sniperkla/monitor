@@ -475,6 +475,9 @@ ${svcSection}
       }
     }
 
+    // Default deployCommand is swarmScript if user was already in swarm mode, else standardScript
+    const finalScript = isSwarmMode ? swarmScript : standardScript;
+
     // Verify final script correctness: ensure all detected services exist in the Swarm script
     let validationWarning = '';
     if (isSwarmMode && services.length > 0) {
