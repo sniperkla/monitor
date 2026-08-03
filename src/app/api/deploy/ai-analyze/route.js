@@ -389,7 +389,7 @@ ${existingScript || '# No previous script set'}`;
          for _i in 1 2 3 4 5 6 7 8 9 10; do
            _REPLICAS=$(docker service ls --filter name=^${svc}$ --format '{{.Replicas}}' 2>/dev/null || echo "0/2")
            _RUNNING=$(echo "$_REPLICAS" | cut -d'/' -f1)
-           if [ "${_RUNNING:-0}" -ge 1 ] 2>/dev/null; then
+           if [ "\${_RUNNING:-0}" -ge 1 ] 2>/dev/null; then
              _STARTED=1
              echo "[swarm] Service ${svc} running ($_REPLICAS)."
              if [ "$_HAD_CONTAINER" = "1" ]; then
