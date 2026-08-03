@@ -38,7 +38,46 @@ export async function POST(request) {
       return NextResponse.json({ success: false, error: 'Invalid project path' }, { status: 400 });
     }
 
-    const probeCmd = `cd "${resolvedPath}" && ls -la && cat package.json 2>/dev/null && cat docker-compose.yml 2>/dev/null && cat Dockerfile 2>/dev/null && cat requirements.txt 2>/dev/null && cat pyproject.toml 2>/dev/null && cat pom.xml 2>/dev/null && cat build.gradle 2>/dev/null && echo "=== SYSTEM INFORMATION ===" && uname -a 2>/dev/null && cat /etc/os-release 2>/dev/null | grep -E "^(NAME|VERSION)=" || true && echo "=== DOCKER VERSION ===" && docker --version 2>/dev/null || echo "Docker not installed" && echo "=== DOCKER COMPOSE PLUGIN ===" && docker compose version 2>/dev/null || echo "Plugin docker compose NOT available" && echo "=== DOCKER COMPOSE LEGACY BINARY ===" && docker-compose --version 2>/dev/null || echo "Binary docker-compose NOT available" && echo "=== DOCKER SWARM STATUS ===" && docker info 2>/dev/null | grep -i "Swarm:" || echo "Swarm status unknown"`;
+    const probeCmd = [
+      // --- Project files ---
+      `cd "${resolvedPath}"`,
+      `ls -la`,
+      `cat package.json 2>/dev/null`,
+      `cat docker-compose.yml 2>/dev/null`,
+      `cat Dockerfile 2>/dev/null`,
+      `cat requirements.txt 2>/dev/null`,
+      `cat pyproject.toml 2>/dev/null`,
+      `cat pom.xml 2>/dev/null`,
+      `cat build.gradle 2>/dev/null`,
+
+      // --- System info ---
+      `echo "=== SYSTEM INFORMATION ==="`,
+      `uname -a 2>/dev/null || true`,
+      `cat /etc/os-release 2>/dev/null | grep -E "^(NAME|VERSION)=" || true`,
+
+      // --- Docker environment ---
+      `echo "=== DOCKER VERSION ==="`,
+      `docker --version 2>/dev/null || echo "Docker not installed"`,
+      `echo "=== DOCKER COMPOSE PLUGIN ==="`,
+      `docker compose version 2>/dev/null || echo "Plugin docker compose NOT available"`,
+      `echo "=== DOCKER COMPOSE LEGACY BINARY ==="`,
+      `docker-compose --version 2>/dev/null || echo "Binary docker-compose NOT available"`,
+      `echo "=== DOCKER SWARM STATUS ==="`,
+      `docker info 2>/dev/null | grep -i "Swarm:" || echo "Swarm status unknown"`,
+
+      // --- Nginx config inspection ---
+      // Try to read nginx config from inside the nginx container (global-nginx or nginx)
+      `echo "=== NGINX CONFIG (from container) ==="`,
+      `docker exec global-nginx cat /etc/nginx/nginx.conf 2>/dev/null || docker exec nginx cat /etc/nginx/nginx.conf 2>/dev/null || echo "Could not read nginx.conf from container"`,
+      `echo "=== NGINX CONF.D (from container) ==="`,
+      `docker exec global-nginx sh -c "ls /etc/nginx/conf.d/ 2>/dev/null && cat /etc/nginx/conf.d/*.conf 2>/dev/null" || docker exec nginx sh -c "ls /etc/nginx/conf.d/ 2>/dev/null && cat /etc/nginx/conf.d/*.conf 2>/dev/null" || echo "Could not read conf.d from container"`,
+      `echo "=== NGINX SITES-ENABLED (from container) ==="`,
+      `docker exec global-nginx sh -c "ls /etc/nginx/sites-enabled/ 2>/dev/null && cat /etc/nginx/sites-enabled/* 2>/dev/null" || docker exec nginx sh -c "ls /etc/nginx/sites-enabled/ 2>/dev/null && cat /etc/nginx/sites-enabled/* 2>/dev/null" || echo "No sites-enabled in container"`,
+      // Also try to read nginx templates from host filesystem
+      `echo "=== NGINX CONFIG (host filesystem) ==="`,
+      `cat /etc/nginx/nginx.conf 2>/dev/null || echo "No host nginx.conf"`,
+      `find /etc/nginx/conf.d /etc/nginx/sites-enabled /home/*/nginx /root/nginx 2>/dev/null -name "*.conf" | head -20 | xargs -I{} sh -c 'echo "--- {} ---" && cat {}' 2>/dev/null || true`,
+    ].join(' && ');
 
     if (targetType === 'local') {
       filesListing = await new Promise((resolve) => {
@@ -163,28 +202,42 @@ export async function POST(request) {
     // Check if the user has explicitly set up Swarm before (existing script has swarm/service commands)
     const isSwarmMode = /docker\s+(swarm|service|stack)/.test(existingScript);
 
-    const systemPrompt = `You are a DevOps and Deployment agent. You will analyze a directory listing, environment probe output (OS, Docker version, Docker Compose capability), and an existing deployment script to produce an updated, production-ready deployment script.
+    const systemPrompt = `You are a DevOps and Deployment agent. You will analyze a directory listing, environment probe output (OS, Docker version, Docker Compose capability, Nginx configuration), and an existing deployment script to produce an updated, production-ready deployment script.
 
 CRITICAL INSTRUCTIONS:
-1. ENVIRONMENT AWARENESS: Examine the === SYSTEM INFORMATION ===, === DOCKER VERSION ===, and === DOCKER COMPOSE === sections in the probe output.
+1. ENVIRONMENT AWARENESS: Examine the === SYSTEM INFORMATION ===, === DOCKER VERSION ===, and === DOCKER COMPOSE === sections.
    - If "docker compose version" plugin is available, use \`docker compose up -d --build\`.
    - If only legacy "docker-compose" binary is available, use \`docker-compose up -d --build\`.
    - Use fallback pattern \`docker compose up -d --build 2>/dev/null || docker-compose up -d --build\` if uncertain.
-2. PRIMARY REQUIREMENT: If an existing deployment script is provided in the prompt below, YOU MUST USE IT AS YOUR EXACT STARTING MATERIAL / TEMPLATE.
-3. PRESERVE ORIGINAL COMMANDS: Keep all original "cd" commands (e.g. \`cd /home/ec2-user/aut/\`), repository updates (\`git pull\`), custom environment setup, echo/log statements, and cleanup commands (\`docker image prune -f\`).
-4. NO DUPLICATE HEADERS: Put \`#!/bin/bash\` and \`set -e\` ONLY ONCE at the very top of the script (lines 1 & 2). Never include nested \`#!/bin/bash\` or \`set -e\` inside \`if/else\` blocks.
-5. DOCKER BUILD ONLY: Keep standard docker build or docker compose commands. Do NOT add any docker service, docker swarm, or docker stack commands — those are managed separately by the system.
-6. END THE SCRIPT with the original echo completion message and image prune if present.
+2. NGINX CONFIG ANALYSIS: Examine the === NGINX CONFIG === and === NGINX CONF.D === sections carefully.
+   - If nginx upstreams use \`proxy_pass http://CONTAINER_NAME:PORT\` — Docker services/containers MUST be named exactly CONTAINER_NAME.
+   - If nginx upstreams use \`proxy_pass http://127.0.0.1:PORT\` — containers should publish PORT to the host.
+   - Extract all upstream hostnames and ports from nginx config and include them in the summary so the system can match service names.
+   - List found nginx upstreams in the "summary" field as: "nginx_upstreams: [{name: 'autfrontend', port: 3090}, ...]"
+3. PRIMARY REQUIREMENT: If an existing deployment script is provided in the prompt below, YOU MUST USE IT AS YOUR EXACT STARTING MATERIAL / TEMPLATE.
+4. PRESERVE ORIGINAL COMMANDS: Keep all original "cd" commands (e.g. \`cd /home/ec2-user/aut/\`), repository updates (\`git pull\`), custom environment setup, echo/log statements, and cleanup commands (\`docker image prune -f\`).
+5. NO DUPLICATE HEADERS: Put \`#!/bin/bash\` and \`set -e\` ONLY ONCE at the very top of the script (lines 1 & 2). Never include nested \`#!/bin/bash\` or \`set -e\` inside \`if/else\` blocks.
+6. DOCKER BUILD ONLY: Keep standard docker build or docker compose commands. Do NOT add any docker service, docker swarm, or docker stack commands — those are managed separately by the system.
+7. END THE SCRIPT with the original echo completion message and image prune if present.
 
 You MUST respond with a valid JSON object ONLY. Do not wrap the JSON in markdown formatting blocks or include any extra text. The JSON format must be EXACTLY:
 {
   "projectType": "Name of project type",
   "technologies": ["tech1", "tech2", "tech3"],
   "deployCommand": "string representing shell script with newlines",
-  "summary": "Concise summary of recommendations and analysis"
+  "summary": "Concise summary including nginx_upstreams found in nginx config"
 }`;
 
-    const userPrompt = `Here is the scanned directory listing and config files content for the project path "${resolvedPath}":\n\n${filesListing}\n\nExisting deployment script (USE AS BASELINE REFERENCE to preserve cd, git pull, etc.):\n${existingScript || '# No previous script set'}`;
+    const userPrompt = `Here is the scanned directory listing, project config files, system environment probe, and nginx config for the project path "${resolvedPath}":
+
+${filesListing}
+
+Pay special attention to:
+- The === NGINX CONFIG === and === NGINX CONF.D === sections: extract all proxy_pass upstream hostnames and ports.
+- The === DOCKER VERSION === and === DOCKER COMPOSE === sections: use the correct docker compose command for this environment.
+
+Existing deployment script (USE AS BASELINE REFERENCE to preserve cd, git pull, etc.):
+${existingScript || '# No previous script set'}`;
 
     console.log(`[ai-analyze] OpenAI SDK Client -> baseURL: ${baseURL} | model: ${modelName} | keyPrefix: ${apiKey ? apiKey.slice(0, 8) + '...' : 'EMPTY'}`);
 
