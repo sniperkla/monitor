@@ -205,42 +205,41 @@ export async function POST(request) {
       return NextResponse.json({ success: false, error: 'AI API Key is not configured. Please add a Groq API key in the global AI settings, or switch to Manual mode and enter a custom API key in the Auto Deploy settings.' }, { status: 400 });
     }
 
+    // Sanitize API key, base URL, and model name to pure ASCII printable characters to prevent ByteString header errors
+    apiKey = (apiKey || '').replace(/[^\x20-\x7E]/g, '').trim();
+    baseURL = (baseURL || '').replace(/[^\x20-\x7E]/g, '').trim();
+    modelName = (modelName || '').replace(/[^\x20-\x7E]/g, '').trim();
+    const safeFilesListing = (filesListing || '').replace(/[^\x09\x0A\x0D\x20-\x7E\xA0-\uFFFF]/g, '');
+
     // Check if the user has explicitly set up Swarm before (existing script has swarm/service commands)
     const isSwarmMode = /docker\s+(swarm|service|stack)/.test(existingScript);
 
-    const systemPrompt = `You are a DevOps and Deployment agent. You will analyze a directory listing, environment probe output (OS, Docker version, Docker Compose capability, Nginx configuration), and an existing deployment script to produce an updated, production-ready deployment script.
+    const systemPrompt = `You are an expert DevOps AI agent analyzing a project repository, Docker Compose file, and Nginx reverse proxy configuration.
 
 CRITICAL INSTRUCTIONS:
-1. ENVIRONMENT AWARENESS: Examine the === SYSTEM INFORMATION ===, === DOCKER VERSION ===, and === DOCKER COMPOSE === sections.
-   - If "docker compose version" plugin is available, use \`docker compose up -d --build\`.
-   - If only legacy "docker-compose" binary is available, use \`docker-compose up -d --build\`.
-   - Use fallback pattern \`docker compose up -d --build 2>/dev/null || docker-compose up -d --build\` if uncertain.
-2. NGINX CONFIG ANALYSIS: Examine the === NGINX CONFIG === and === NGINX CONF.D === sections carefully.
-   - If nginx upstreams use \`proxy_pass http://CONTAINER_NAME:PORT\` — Docker services/containers MUST be named exactly CONTAINER_NAME.
-   - If nginx upstreams use \`proxy_pass http://127.0.0.1:PORT\` — containers should publish PORT to the host.
-   - Extract all upstream hostnames and ports from nginx config and include them in the summary so the system can match service names.
-   - List found nginx upstreams in the "summary" field as: "nginx_upstreams: [{name: 'autfrontend', port: 3090}, ...]"
-3. PRIMARY REQUIREMENT: If an existing deployment script is provided in the prompt below, YOU MUST USE IT AS YOUR EXACT STARTING MATERIAL / TEMPLATE.
-4. PRESERVE ORIGINAL COMMANDS: Keep all original "cd" commands (e.g. \`cd /home/ec2-user/aut/\`), repository updates (\`git pull\`), custom environment setup, echo/log statements, and cleanup commands (\`docker image prune -f\`).
-5. NO DUPLICATE HEADERS: Put \`#!/bin/bash\` and \`set -e\` ONLY ONCE at the very top of the script (lines 1 & 2). Never include nested \`#!/bin/bash\` or \`set -e\` inside \`if/else\` blocks.
-6. DOCKER BUILD ONLY: Keep standard docker build or docker compose commands. Do NOT add any docker service, docker swarm, or docker stack commands — those are managed separately by the system.
-7. END THE SCRIPT with the original echo completion message and image prune if present.
+1. ENVIRONMENT & SERVICES IDENTIFICATION:
+   - Carefully examine docker-compose.yml and Nginx proxy configs (proxy_pass directives).
+   - Identify all application services (containers) that need to be built and deployed (e.g., frontend, backend).
+   - Determine their container_name / service name, build context directory (e.g., ./frontend, ./backend, or ./), and exposed/proxied port (e.g., 3033, 3090).
+2. SCRIPT CONSTRUCT & PRESERVATION:
+   - If an existing deployment script is provided, keep all original "cd", "git pull", custom environment setup, echo/log statements.
+   - Put \`#!/bin/bash\` and \`set -e\` ONLY ONCE at the top.
+   - Do NOT include any docker service/swarm commands in "deployCommand" — the system handles zero-downtime Swarm injection.
 
-You MUST respond with a valid JSON object ONLY. Do not wrap the JSON in markdown formatting blocks or include any extra text. The JSON format must be EXACTLY:
+You MUST respond with a valid JSON object ONLY:
 {
   "projectType": "Name of project type",
-  "technologies": ["tech1", "tech2", "tech3"],
-  "deployCommand": "string representing shell script with newlines",
-  "summary": "Concise summary including nginx_upstreams found in nginx config"
+  "technologies": ["tech1", "tech2"],
+  "services": [
+    { "name": "service_container_name", "buildDir": "frontend_or_backend_or_empty", "port": 3033 }
+  ],
+  "deployCommand": "string representing standard bash script with newlines",
+  "summary": "Concise summary of identified services, build context, and proxy ports"
 }`;
 
     const userPrompt = `Here is the scanned directory listing, project config files, system environment probe, and nginx config for the project path "${resolvedPath}":
 
-${filesListing}
-
-Pay special attention to:
-- The === NGINX CONFIG === and === NGINX CONF.D === sections: extract all proxy_pass upstream hostnames and ports.
-- The === DOCKER VERSION === and === DOCKER COMPOSE === sections: use the correct docker compose command for this environment.
+${safeFilesListing}
 
 Existing deployment script (USE AS BASELINE REFERENCE to preserve cd, git pull, etc.):
 ${existingScript || '# No previous script set'}`;
@@ -265,6 +264,7 @@ ${existingScript || '# No previous script set'}`;
         stream: false,
         ...(!isCustomEndpoint ? { response_format: { type: 'json_object' } } : {})
       };
+
 
       const completion = await openai.chat.completions.create(completionParams);
       const content = completion.choices?.[0]?.message?.content;
@@ -383,13 +383,34 @@ ${existingScript || '# No previous script set'}`;
 
     const composeServices = parseComposeServices(composeContent);
 
+    // ── Merge AI LLM detected services ────────────────────────────────────────
+    if (parsedResult?.services && Array.isArray(parsedResult.services)) {
+      for (const aiSvc of parsedResult.services) {
+        if (!aiSvc || !aiSvc.name) continue;
+        const name = String(aiSvc.name).trim();
+        const buildDir = aiSvc.buildDir ? String(aiSvc.buildDir).trim().replace(/^\.\//, '') : '';
+        const port = aiSvc.port ? String(aiSvc.port).trim() : '';
+
+        if (!composeServices[name]) {
+          composeServices[name] = { buildDir, ports: port ? [port.includes(':') ? port : `${port}:${port}`] : [] };
+        } else {
+          if (!composeServices[name].buildDir && buildDir) composeServices[name].buildDir = buildDir;
+          if ((!composeServices[name].ports || composeServices[name].ports.length === 0) && port) {
+            composeServices[name].ports = [port.includes(':') ? port : `${port}:${port}`];
+          }
+        }
+        console.log(`[ai-analyze] Merged AI LLM service: ${name} -> buildDir=${buildDir}, port=${port}`);
+      }
+    }
+
     // ── Step 3: Build services list ───────────────────────────────────────────
     if (Object.keys(composeServices).length > 0) {
       // Filter out common infra-only containers
       const infraRe = /^(db|database|redis|mongo|mysql|postgres|rabbitmq|memcached|elasticsearch|zookeeper|kafka)$/i;
       services = Object.keys(composeServices).filter(s => !infraRe.test(s));
-      console.log(`[ai-analyze] Services from compose YAML: ${services.join(', ')}`);
+      console.log(`[ai-analyze] Services from compose YAML & AI LLM: ${services.join(', ')}`);
     }
+
 
     // Fallback A: container_name grep across full listing
     if (services.length === 0) {
