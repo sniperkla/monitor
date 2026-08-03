@@ -38,17 +38,24 @@ export async function POST(request) {
       return NextResponse.json({ success: false, error: 'Invalid project path' }, { status: 400 });
     }
 
-    const probeCmd = [
-      // --- Project files ---
+    // Use semicolons to separate commands so a missing file won't break the chain.
+    // cat with 2>/dev/null exits code 1 when file missing — breaking && chain completely.
+    const probeParts = [
+      // --- Project files (each runs independently with ;) ---
       `cd "${resolvedPath}"`,
-      `ls -la`,
-      `cat package.json 2>/dev/null`,
-      `cat docker-compose.yml 2>/dev/null`,
-      `cat Dockerfile 2>/dev/null`,
-      `cat requirements.txt 2>/dev/null`,
-      `cat pyproject.toml 2>/dev/null`,
-      `cat pom.xml 2>/dev/null`,
-      `cat build.gradle 2>/dev/null`,
+      `echo "=== LS ==="`,
+      `ls -la 2>/dev/null || true`,
+      `echo "=== PACKAGE JSON ==="`,
+      `cat package.json 2>/dev/null || true`,
+      `echo "=== DOCKER COMPOSE ==="`,
+      `cat docker-compose.yml 2>/dev/null || cat docker-compose.yaml 2>/dev/null || echo "No docker-compose.yml found"`,
+      `echo "=== DOCKERFILE ==="`,
+      `cat Dockerfile 2>/dev/null || true`,
+      `echo "=== REQUIREMENTS ==="`,
+      `cat requirements.txt 2>/dev/null || true`,
+      `cat pyproject.toml 2>/dev/null || true`,
+      `cat pom.xml 2>/dev/null || true`,
+      `cat build.gradle 2>/dev/null || true`,
 
       // --- System info ---
       `echo "=== SYSTEM INFORMATION ==="`,
@@ -66,18 +73,17 @@ export async function POST(request) {
       `docker info 2>/dev/null | grep -i "Swarm:" || echo "Swarm status unknown"`,
 
       // --- Nginx config inspection ---
-      // Try to read nginx config from inside the nginx container (global-nginx or nginx)
       `echo "=== NGINX CONFIG (from container) ==="`,
       `docker exec global-nginx cat /etc/nginx/nginx.conf 2>/dev/null || docker exec nginx cat /etc/nginx/nginx.conf 2>/dev/null || echo "Could not read nginx.conf from container"`,
       `echo "=== NGINX CONF.D (from container) ==="`,
       `docker exec global-nginx sh -c "ls /etc/nginx/conf.d/ 2>/dev/null && cat /etc/nginx/conf.d/*.conf 2>/dev/null" || docker exec nginx sh -c "ls /etc/nginx/conf.d/ 2>/dev/null && cat /etc/nginx/conf.d/*.conf 2>/dev/null" || echo "Could not read conf.d from container"`,
       `echo "=== NGINX SITES-ENABLED (from container) ==="`,
       `docker exec global-nginx sh -c "ls /etc/nginx/sites-enabled/ 2>/dev/null && cat /etc/nginx/sites-enabled/* 2>/dev/null" || docker exec nginx sh -c "ls /etc/nginx/sites-enabled/ 2>/dev/null && cat /etc/nginx/sites-enabled/* 2>/dev/null" || echo "No sites-enabled in container"`,
-      // Also try to read nginx templates from host filesystem
       `echo "=== NGINX CONFIG (host filesystem) ==="`,
       `cat /etc/nginx/nginx.conf 2>/dev/null || echo "No host nginx.conf"`,
       `find /etc/nginx/conf.d /etc/nginx/sites-enabled /home/*/nginx /root/nginx 2>/dev/null -name "*.conf" | head -20 | xargs -I{} sh -c 'echo "--- {} ---" && cat {}' 2>/dev/null || true`,
-    ].join(' && ');
+    ];
+    const probeCmd = probeParts.join(' ; ');
 
     if (targetType === 'local') {
       filesListing = await new Promise((resolve) => {
