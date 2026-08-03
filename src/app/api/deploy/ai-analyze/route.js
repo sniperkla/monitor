@@ -344,25 +344,30 @@ ${existingScript || '# No previous script set'}`;
     }
 
     if (services.length > 0) {
-      // Build map of service/container name to build context path (handles both build: ./dir and build:\n context: ./dir)
+      // Build map of service/container name to build context path
       const buildDirMap = {};
       for (const svc of services) {
         // Match build block under container_name or service block
-        const buildCtxMatch = normalizedListing.match(new RegExp(`(?:container_name:\\s*${svc}|${svc}:)[\\s\\S]{0,300}?build:(?:\\s*(\\S+)|[\\s\\S]{0,100}?context:\\s*(\\S+))`, 'm'));
+        // Fix: Clean up any trailing/leading 'context:' string if matched
+        const buildCtxMatch = normalizedListing.match(new RegExp(`(?:container_name:\\s*${svc}|${svc}:)[\\s\\S]{0,300}?build:\\s*(?:context:\\s*(\\S+)|(\\S+))`, 'm'));
         if (buildCtxMatch) {
-          const path = (buildCtxMatch[1] || buildCtxMatch[2] || '').trim().replace(/^\.\//, '');
-          if (path && path !== '.') buildDirMap[svc] = path;
+          let rawPath = (buildCtxMatch[1] || buildCtxMatch[2] || '').trim();
+          if (rawPath.startsWith('context:')) rawPath = rawPath.replace('context:', '').trim();
+          const cleanPath = rawPath.replace(/^\.\//, '');
+          if (cleanPath && cleanPath !== '.' && cleanPath !== 'context:') {
+            buildDirMap[svc] = cleanPath;
+          }
         }
       }
 
-      // Detect ports per container: scan each container_name or service block for its ports
+      // Detect ports per container: scan each container_name or service block for ports OR fall back to Nginx upstream ports found
       const portMap = {};
       for (const svc of services) {
-        // Find host:container port patterns near this service name
-        const svcPortMatch = normalizedListing.match(new RegExp(`(?:container_name:\\s*${svc}|${svc}:)[\\s\\S]{0,400}?ports:[\\s\\S]{0,200}?-(\\s*['\"]?\\d+:\\d+['\"]?)`, 'm'));
+        // Find host:container port patterns in compose file
+        const svcPortMatch = normalizedListing.match(new RegExp(`(?:container_name:\\s*${svc}|${svc}:)[\\s\\S]{0,500}?ports:[\\s\\S]{0,200}?-[\\s"']*(\\d+:\\d+|\\d+)[\\s"']*`, 'm'));
         if (svcPortMatch) {
-          const portLine = svcPortMatch[1].trim().replace(/^['"]/, '').replace(/['"]$/, '').trim();
-          portMap[svc] = portLine;
+          const rawPort = svcPortMatch[1].trim();
+          portMap[svc] = rawPort.includes(':') ? rawPort : `${rawPort}:${rawPort}`;
         }
       }
 
