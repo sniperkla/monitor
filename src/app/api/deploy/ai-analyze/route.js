@@ -302,12 +302,12 @@ You MUST respond with a valid JSON object ONLY. Do not wrap the JSON in markdown
      # ------ ${svc} ------
      if docker service inspect ${svc} >/dev/null 2>&1; then
        echo "Updating Swarm service ${svc} zero-downtime..."
-       docker service update --image ${svc}:latest --network-add proxy-net --update-order start-first --update-delay 5s ${svc}
+       docker service update --image ${svc}:latest --network-add "$SWARM_NET" --update-order start-first --update-delay 5s ${svc}
      else
        echo "Creating new Swarm service ${svc}..."
        docker stop ${svc} 2>/dev/null || true
        docker rm ${svc} 2>/dev/null || true
-       docker service create --name ${svc} --network proxy-net ${publishFlag} --detach=true --no-resolve-image --replicas 2 ${svc}:latest
+       docker service create --name ${svc} --network "$SWARM_NET" ${publishFlag} --detach --no-resolve-image --replicas 2 ${svc}:latest
      fi`;
       }
 
@@ -316,25 +316,25 @@ You MUST respond with a valid JSON object ONLY. Do not wrap the JSON in markdown
      docker swarm init 2>/dev/null || true
      docker swarm update --task-history-limit 1 2>/dev/null || true
 
-     # Ensure proxy-net overlay network exists — wait up to 15s if Swarm init is still propagating
-     NET_DRIVER=$(docker network inspect proxy-net --format '{{.Driver}}' 2>/dev/null || echo "")
-     if [ "$NET_DRIVER" != "overlay" ]; then
-       echo "[net] proxy-net not found or not overlay — (re)creating..."
-       docker network rm proxy-net 2>/dev/null || true
+     # Detect existing overlay network — use it if found, only create if none exist
+     SWARM_NET=$(docker network ls --filter driver=overlay --format '{{.Name}}' 2>/dev/null | grep -v '^ingress$' | head -1)
+     if [ -n "$SWARM_NET" ]; then
+       echo "[net] Using existing overlay network: $SWARM_NET"
+     else
+       echo "[net] No overlay network found — creating proxy-net..."
        docker network create --driver overlay --attachable proxy-net
        # Wait up to 15s for the network to become visible
        for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
-         NET_CHECK=$(docker network inspect proxy-net --format '{{.Driver}}' 2>/dev/null || echo "")
-         if [ "$NET_CHECK" = "overlay" ]; then
-           echo "[net] proxy-net overlay network is ready."
+         SWARM_NET=$(docker network ls --filter driver=overlay --format '{{.Name}}' 2>/dev/null | grep -v '^ingress$' | head -1)
+         if [ -n "$SWARM_NET" ]; then
+           echo "[net] Overlay network ready: $SWARM_NET"
            break
          fi
-         echo "[net] Waiting for proxy-net to appear... ($i/15)"
+         echo "[net] Waiting for overlay network to appear... ($i/15)"
          sleep 1
        done
-       NET_CHECK=$(docker network inspect proxy-net --format '{{.Driver}}' 2>/dev/null || echo "")
-       if [ "$NET_CHECK" != "overlay" ]; then
-         echo "[net] ERROR: proxy-net overlay network still not available after 15s. Aborting."
+       if [ -z "$SWARM_NET" ]; then
+         echo "[net] ERROR: No overlay network available after 15s. Aborting."
          exit 1
        fi
      fi
@@ -343,7 +343,7 @@ ${buildSection}
      docker compose build 2>/dev/null || docker-compose build 2>/dev/null || true
 ${svcSection}
 
-     # Reconnect Nginx to Swarm overlay networks
+     # Reconnect Nginx to all Swarm overlay networks
      NETS=$(docker network ls --filter driver=overlay --format "{{.Name}}")
      for net in $NETS; do
        docker network connect $net global-nginx 2>/dev/null || docker network connect $net nginx 2>/dev/null || true
