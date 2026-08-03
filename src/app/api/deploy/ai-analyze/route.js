@@ -296,28 +296,45 @@ ${existingScript || '# No previous script set'}`;
     let services = [];
 
 
+    // Normalize CRLF line endings from SSH output (Windows-style may break regex)
+    const normalizedListing = filesListing.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+
     // Parse docker-compose.yml content from filesListing
-    // Extract container_name entries or service keys directly
-    const containerNameMatches = filesListing.match(/container_name:\s*([a-zA-Z0-9._-]+)/g);
+    // Primary: extract container_name entries directly
+    const containerNameMatches = normalizedListing.match(/container_name:\s*([a-zA-Z0-9._-]+)/g);
     if (containerNameMatches && containerNameMatches.length > 0) {
       services = Array.from(new Set(containerNameMatches.map(m => m.replace(/container_name:\s*/, '').trim())));
+      console.log(`[ai-analyze] Detected services from container_name: ${services.join(', ')}`);
     } else {
-      // Parse service names under services: section if no explicit container_name found
-      const composeMatch = filesListing.match(/services:\s*\n([\s\S]*?)(?=\n[a-zA-Z0-9._-]+:|\n$|$)/);
+      // Fallback 1: Parse service keys under services: section
+      const composeMatch = normalizedListing.match(/services:\s*\n([\s\S]*?)(?=\n[a-zA-Z0-9._-]+:|\n$|$)/);
       if (composeMatch) {
         const servicesBlock = composeMatch[1];
         const serviceKeys = servicesBlock.match(/^\s{2,4}([a-zA-Z0-9._-]+):/gm);
         if (serviceKeys) {
           services = Array.from(new Set(serviceKeys.map(k => k.trim().replace(':', ''))))
             .filter(svc => !/^(db|database|redis|mongo|mysql|postgres|rabbitmq|memcached|elasticsearch|zookeeper|kafka)$/i.test(svc));
+          console.log(`[ai-analyze] Detected services from service keys: ${services.join(', ')}`);
         }
       }
     }
 
-    // Fallback 2: project folder name if docker-compose.yml missing or couldn't parse
+    // Fallback 2: Extract container names from AI-generated script (docker service create --name <NAME>)
+    if (services.length === 0 && parsedResult?.deployCommand) {
+      const scriptServiceMatches = parsedResult.deployCommand.match(/docker\s+(?:service\s+(?:create|update)|run|start)\s+(?:--[\w-]+\s+\S+\s+)*--name\s+([a-zA-Z0-9._-]+)/g);
+      if (scriptServiceMatches && scriptServiceMatches.length > 0) {
+        services = Array.from(new Set(scriptServiceMatches.map(m => m.match(/--name\s+([a-zA-Z0-9._-]+)/)?.[1]).filter(Boolean)));
+        console.log(`[ai-analyze] Detected services from AI script: ${services.join(', ')}`);
+      }
+    }
+
+    // Fallback 3: project folder name if all detection methods failed
     if (services.length === 0) {
       const folderName = resolvedPath.split('/').filter(Boolean).pop() || 'app';
       services = [folderName.toLowerCase().replace(/[^a-z0-9._-]/g, '')];
+      console.warn(`[ai-analyze] WARNING: No services detected from docker-compose.yml or AI script. Falling back to folder name: ${services[0]}`);
+    } else {
+      console.log(`[ai-analyze] Final services for Swarm injection: ${services.join(', ')}`);
     }
 
     if (services.length > 0) {
