@@ -357,31 +357,44 @@ ${existingScript || '# No previous script set'}`;
        echo "[swarm] Updating Swarm service ${svc} zero-downtime..."
        docker service update --image ${svc}:latest --network-add "$SWARM_NET" --update-order start-first --update-delay 5s ${svc}
      else
-       echo "[swarm] Migrating ${svc}: standalone container -> Swarm service..."
-       # Stop old container first to free port (keep for rollback if rm not done yet)
-       docker stop ${svc} 2>/dev/null || true
-       # Create Swarm service (dry-test: if fails, we restart old container)
+       # Check if a standalone container with this name exists
+       if docker inspect ${svc} >/dev/null 2>&1; then
+         echo "[swarm] Migrating ${svc}: standalone container -> Swarm service..."
+         docker stop ${svc} 2>/dev/null || true
+         _HAD_CONTAINER=1
+       else
+         echo "[swarm] Creating fresh Swarm service ${svc} (no standalone container found)..."
+         _HAD_CONTAINER=0
+       fi
+       # Create Swarm service — if it fails and we had a standalone container, roll back
        if docker service create --name ${svc} --network "$SWARM_NET" ${publishFlag} --detach --no-resolve-image --replicas 2 ${svc}:latest; then
          echo "[swarm] Service ${svc} created. Waiting for replica to start..."
          _STARTED=0
          for _i in 1 2 3 4 5 6 7 8 9 10; do
            _REPLICAS=$(docker service ls --filter name=^${svc}$ --format '{{.Replicas}}' 2>/dev/null || echo "0/2")
            _RUNNING=$(echo "$_REPLICAS" | cut -d'/' -f1)
-           if [ "\${_RUNNING:-0}" -ge 1 ] 2>/dev/null; then
+           if [ "${_RUNNING:-0}" -ge 1 ] 2>/dev/null; then
              _STARTED=1
-             echo "[swarm] Service ${svc} running ($_REPLICAS). Removing old standalone container..."
-             docker rm ${svc} 2>/dev/null || true
+             echo "[swarm] Service ${svc} running ($_REPLICAS)."
+             if [ "$_HAD_CONTAINER" = "1" ]; then
+               echo "[swarm] Removing old standalone container ${svc}..."
+               docker rm ${svc} 2>/dev/null || true
+             fi
              break
            fi
            echo "[swarm] Waiting for ${svc} replica... ($_i/10)"
            sleep 3
          done
          if [ "$_STARTED" = "0" ]; then
-           echo "[swarm] WARNING: ${svc} service did not start replicas in time. Old container preserved."
+           echo "[swarm] WARNING: ${svc} service did not start replicas in time."
+           [ "$_HAD_CONTAINER" = "1" ] && echo "[swarm] Old standalone container preserved for rollback."
          fi
        else
-         echo "[swarm] ERROR: Failed to create Swarm service ${svc}. Rolling back — restarting old container..."
-         docker start ${svc} 2>/dev/null || true
+         echo "[swarm] ERROR: Failed to create Swarm service ${svc}."
+         if [ "$_HAD_CONTAINER" = "1" ]; then
+           echo "[swarm] Rolling back — restarting old container..."
+           docker start ${svc} 2>/dev/null || true
+         fi
        fi
      fi`;
       }
