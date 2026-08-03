@@ -352,13 +352,17 @@ ${existingScript || '# No previous script set'}`;
       for (let i = 0; i < services.length; i++) {
         const svc = services[i];
         const dir = buildDirs[i] || '';
-        // Strip project prefix for subfolder guess (e.g. autfrontend -> frontend, autbackend -> backend)
-        const subdir = dir || svc.replace(/^aut/, '').replace(/^app/, '');
+        // If dir is specified or subdir exists (e.g. frontend, backend)
+        const subdir = dir || svc.replace(/^aut/i, '').replace(/^app/i, '').toLowerCase();
+        
         buildSection += `
      # Build image for ${svc}
-     if [ -d "${subdir}" ] && [ -f "${subdir}/Dockerfile" ]; then
+     if [ -n "${subdir}" ] && [ -d "${subdir}" ] && [ -f "${subdir}/Dockerfile" ]; then
        echo "Building ${svc}:latest from ./${subdir}..."
        docker build -t ${svc}:latest ./${subdir}
+     elif [ -f "Dockerfile" ]; then
+       echo "Building ${svc}:latest from ./..."
+       docker build -t ${svc}:latest ./
      fi`;
       }
 
