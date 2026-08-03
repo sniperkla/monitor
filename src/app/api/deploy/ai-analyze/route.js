@@ -375,7 +375,8 @@ ${existingScript || '# No previous script set'}`;
      # ------ ${svc} ------
      if docker service inspect ${svc} >/dev/null 2>&1; then
        echo "[swarm] Updating Swarm service ${svc} zero-downtime..."
-       docker service update --image ${svc}:latest --network-add "$SWARM_NET" --update-order start-first --update-delay 5s ${svc}
+       docker service update --image ${svc}:latest --update-order start-first --update-delay 5s ${svc}
+       docker service update --network-add "$SWARM_NET" ${svc} 2>/dev/null || true
      else
        # Check if a standalone container with this name exists
        if docker inspect ${svc} >/dev/null 2>&1; then
