@@ -409,6 +409,52 @@ ${existingScript || '# No previous script set'}`;
       console.log(`[ai-analyze] Final services: ${services.join(', ')}`);
     }
 
+    // ── Step 3b: Extract Nginx port map as fallback ───────────────────────────
+    // Probe already reads nginx conf.d and sites-enabled from the nginx container.
+    // Pattern 1: proxy_pass http://autfrontend:3033;
+    // Pattern 2: server autfrontend:3033;   (inside upstream block)
+    function extractNginxPortMap(listing, svcNames) {
+      const nginxPortMap = {};
+      // Collect all Nginx config sections from probe output
+      const nginxSections = [
+        'NGINX CONF.D (from container)',
+        'NGINX SITES-ENABLED (from container)',
+        'NGINX CONFIG (from container)',
+        'NGINX CONFIG (host filesystem)',
+      ];
+      let nginxContent = '';
+      for (const section of nginxSections) {
+        const idx = listing.indexOf(`=== ${section} ===`);
+        if (idx !== -1) {
+          const after = listing.slice(idx + section.length + 8);
+          const nextSection = after.indexOf('\n===');
+          nginxContent += (nextSection !== -1 ? after.slice(0, nextSection) : after) + '\n';
+        }
+      }
+      if (!nginxContent) return nginxPortMap;
+
+      for (const svc of svcNames) {
+        // proxy_pass http://autfrontend:PORT  or  proxy_pass http://autfrontend:PORT/
+        const proxyMatch = nginxContent.match(new RegExp(`proxy_pass\\s+https?://${svc}:(\\d+)`, 'i'));
+        if (proxyMatch) {
+          const p = proxyMatch[1];
+          nginxPortMap[svc] = `${p}:${p}`;
+          console.log(`[ai-analyze] Nginx port for ${svc}: ${p} (from proxy_pass)`);
+          continue;
+        }
+        // server autfrontend:PORT; (upstream block)
+        const upstreamMatch = nginxContent.match(new RegExp(`server\\s+${svc}:(\\d+)`, 'i'));
+        if (upstreamMatch) {
+          const p = upstreamMatch[1];
+          nginxPortMap[svc] = `${p}:${p}`;
+          console.log(`[ai-analyze] Nginx port for ${svc}: ${p} (from upstream server)`);
+        }
+      }
+      return nginxPortMap;
+    }
+
+    const nginxPortMap = extractNginxPortMap(normalizedListing, services);
+
     // ── Step 4: Generate build + swarm sections ───────────────────────────────
     if (services.length > 0) {
       let buildSection = '';
@@ -440,8 +486,15 @@ ${existingScript || '# No previous script set'}`;
       let svcSection = '';
       for (const svc of services) {
         const info = composeServices[svc] || {};
-        const port = (info.ports && info.ports[0]) ? info.ports[0] : '';
+        // Priority: compose ports → nginx upstream port → no publish (overlay network only)
+        const port = (info.ports && info.ports[0]) ? info.ports[0] : (nginxPortMap[svc] || '');
         const publishFlag = port ? `--publish ${port} ` : '';
+        if (port) {
+          console.log(`[ai-analyze] ${svc}: using port ${port} for --publish flag`);
+        } else {
+          console.log(`[ai-analyze] ${svc}: no port found — service uses overlay network via Nginx proxy`);
+        }
+
 
         svcSection += `
 
