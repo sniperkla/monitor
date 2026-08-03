@@ -475,12 +475,15 @@ ${svcSection}
       }
     }
 
-    // Default deployCommand is swarmScript if user was already in swarm mode, else standardScript
-    const finalScript = isSwarmMode ? swarmScript : standardScript;
-
-    // Save configuration inside system settings: value.aiProfile & value.aiLogs
-    const existing = await SystemSetting.findOne({ key: dbKey });
-    const existingValue = existing?.value || {};
+    // Verify final script correctness: ensure all detected services exist in the Swarm script
+    let validationWarning = '';
+    if (isSwarmMode && services.length > 0) {
+      const missingSvcs = services.filter(s => !finalScript.includes(s));
+      if (missingSvcs.length > 0) {
+        validationWarning = `⚠️ WARNING: Detected services [${missingSvcs.join(', ')}] were missing from the generated script. Please check your docker-compose.yml or click "Re-Analyze".`;
+        console.warn(`[ai-analyze] ${validationWarning}`);
+      }
+    }
 
     const aiProfile = {
       projectType: parsedResult.projectType,
@@ -488,7 +491,9 @@ ${svcSection}
       deployCommand: finalScript,
       standardScript,
       swarmScript,
-      summary: parsedResult.summary,
+      summary: validationWarning ? `${validationWarning}\n\n${parsedResult.summary}` : parsedResult.summary,
+      validationPassed: !validationWarning,
+      detectedServices: services,
       analyzedAt: new Date()
     };
 
