@@ -415,7 +415,6 @@ ${existingScript || '# No previous script set'}`;
     // Pattern 2: server autfrontend:3033;   (inside upstream block)
     function extractNginxPortMap(listing, svcNames) {
       const nginxPortMap = {};
-      // Collect all Nginx config sections from probe output
       const nginxSections = [
         'NGINX CONF.D (from container)',
         'NGINX SITES-ENABLED (from container)',
@@ -424,14 +423,27 @@ ${existingScript || '# No previous script set'}`;
       ];
       let nginxContent = '';
       for (const section of nginxSections) {
-        const idx = listing.indexOf(`=== ${section} ===`);
+        const marker = `=== ${section} ===`;
+        const idx = listing.indexOf(marker);
         if (idx !== -1) {
-          const after = listing.slice(idx + section.length + 8);
+          const after = listing.slice(idx + marker.length);  // skip exact marker length
           const nextSection = after.indexOf('\n===');
-          nginxContent += (nextSection !== -1 ? after.slice(0, nextSection) : after) + '\n';
+          const content = (nextSection !== -1 ? after.slice(0, nextSection) : after).trim();
+          console.log(`[ai-analyze] Nginx section "${section}" found — ${content.length} chars`);
+          nginxContent += content + '\n';
+        } else {
+          console.log(`[ai-analyze] Nginx section "${section}" NOT found in probe output`);
         }
       }
-      if (!nginxContent) return nginxPortMap;
+
+      if (!nginxContent.trim()) {
+        console.warn('[ai-analyze] No Nginx config content extracted from probe. Port detection will be skipped.');
+        return nginxPortMap;
+      }
+
+      console.log(`[ai-analyze] Total Nginx content: ${nginxContent.length} chars`);
+      // Log first 500 chars of nginx content for debugging
+      console.log('[ai-analyze] Nginx content preview:', nginxContent.slice(0, 500).replace(/\n/g, '\\n'));
 
       for (const svc of svcNames) {
         // proxy_pass http://autfrontend:PORT  or  proxy_pass http://autfrontend:PORT/
@@ -442,13 +454,15 @@ ${existingScript || '# No previous script set'}`;
           console.log(`[ai-analyze] Nginx port for ${svc}: ${p} (from proxy_pass)`);
           continue;
         }
-        // server autfrontend:PORT; (upstream block)
+        // server autfrontend:PORT; (inside upstream block)
         const upstreamMatch = nginxContent.match(new RegExp(`server\\s+${svc}:(\\d+)`, 'i'));
         if (upstreamMatch) {
           const p = upstreamMatch[1];
           nginxPortMap[svc] = `${p}:${p}`;
           console.log(`[ai-analyze] Nginx port for ${svc}: ${p} (from upstream server)`);
+          continue;
         }
+        console.log(`[ai-analyze] No Nginx port pattern found for: ${svc}`);
       }
       return nginxPortMap;
     }
