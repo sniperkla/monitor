@@ -344,15 +344,22 @@ ${existingScript || '# No previous script set'}`;
     }
 
     if (services.length > 0) {
-      // Detect subfolder build contexts from docker-compose.yml (build: ./frontend etc)
-      const buildLines = filesListing.match(/build:\s*(\S+)/g) || [];
-      const buildDirs = buildLines.map(b => b.replace('build:', '').trim().replace(/^\.\//,''));
+      // Build map of service/container name to build context path (handles both build: ./dir and build:\n context: ./dir)
+      const buildDirMap = {};
+      for (const svc of services) {
+        // Match build block under container_name or service block
+        const buildCtxMatch = normalizedListing.match(new RegExp(`(?:container_name:\\s*${svc}|${svc}:)[\\s\\S]{0,300}?build:(?:\\s*(\\S+)|[\\s\\S]{0,100}?context:\\s*(\\S+))`, 'm'));
+        if (buildCtxMatch) {
+          const path = (buildCtxMatch[1] || buildCtxMatch[2] || '').trim().replace(/^\.\//, '');
+          if (path && path !== '.') buildDirMap[svc] = path;
+        }
+      }
 
       // Detect ports per container: scan each container_name or service block for its ports
       const portMap = {};
       for (const svc of services) {
         // Find host:container port patterns near this service name
-        const svcPortMatch = filesListing.match(new RegExp(`(?:container_name:|${svc}:)[\\s\\S]{0,400}?ports:[\\s\\S]{0,200}?-(\\s*['\"]?\\d+:\\d+['\"]?)`, 'm'));
+        const svcPortMatch = normalizedListing.match(new RegExp(`(?:container_name:\\s*${svc}|${svc}:)[\\s\\S]{0,400}?ports:[\\s\\S]{0,200}?-(\\s*['\"]?\\d+:\\d+['\"]?)`, 'm'));
         if (svcPortMatch) {
           const portLine = svcPortMatch[1].trim().replace(/^['"]/, '').replace(/['"]$/, '').trim();
           portMap[svc] = portLine;
@@ -362,13 +369,16 @@ ${existingScript || '# No previous script set'}`;
       let buildSection = '';
       for (let i = 0; i < services.length; i++) {
         const svc = services[i];
-        const dir = buildDirs[i] || '';
-        // If dir is specified or subdir exists (e.g. frontend, backend)
+        // Priority: explicit build directory from compose -> guessed subfolder -> fallback root
+        const dir = buildDirMap[svc] || '';
         const subdir = dir || svc.replace(/^aut/i, '').replace(/^app/i, '').toLowerCase();
         
         buildSection += `
      # Build image for ${svc}
-     if [ -n "${subdir}" ] && [ -d "${subdir}" ] && [ -f "${subdir}/Dockerfile" ]; then
+     if [ -n "${dir}" ] && [ -d "${dir}" ] && [ -f "${dir}/Dockerfile" ]; then
+       echo "Building ${svc}:latest from ./${dir}..."
+       docker build -t ${svc}:latest ./${dir}
+     elif [ -n "${subdir}" ] && [ -d "${subdir}" ] && [ -f "${subdir}/Dockerfile" ]; then
        echo "Building ${svc}:latest from ./${subdir}..."
        docker build -t ${svc}:latest ./${subdir}
      elif [ -f "Dockerfile" ]; then
