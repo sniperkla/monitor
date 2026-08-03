@@ -355,8 +355,17 @@ ${svcSection}
     let swarmScript = standardScript;
 
     if (swarmBlock) {
-      // Remove any swarm/stack/service commands the AI may have written
-      let cleanScript = standardScript.replace(/docker\s+(swarm|service|stack)\s+[^\n]*/g, '').replace(/\n\s*\n\s*\n/g, '\n\n');
+      // Strip commands that conflict with Swarm mode:
+      // 1. Any docker swarm/service/stack lines (the AI may have written them in the base script)
+      // 2. docker-compose up/down / docker compose up/down — Swarm handles container lifecycle, not compose up
+      // 3. docker image prune — the Swarm block already handles cleanup
+      let cleanScript = standardScript
+        .replace(/docker\s+(swarm|service|stack)\s+[^\n]*/g, '')       // remove swarm/service/stack lines
+        .replace(/docker(-compose|\s+compose)\s+(up|down)\s+[^\n]*/g, '') // remove compose up/down
+        .replace(/docker\s+image\s+prune\s+[^\n]*/g, '')               // remove image prune (Swarm block does this)
+        .replace(/docker\s+container\s+prune\s+[^\n]*/g, '')           // remove container prune
+        .replace(/\n\s*\n\s*\n/g, '\n\n');                             // collapse triple newlines
+
       // Insert swarm block before the final echo or at end
       const echoIdx = cleanScript.lastIndexOf('echo "Deployment completed');
       if (echoIdx !== -1) {
