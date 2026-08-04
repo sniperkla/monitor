@@ -53,6 +53,72 @@ export default function MongoBackupApp() {
   const [jobEnabled, setJobEnabled] = useState(true);
   const [editingJobId, setEditingJobId] = useState(null);
 
+  // Auto-fetch Database & Collection lists for selected Connection
+  const [fetchedDbs, setFetchedDbs] = useState([]);
+  const [fetchedColls, setFetchedColls] = useState([]);
+  const [fetchingDbs, setFetchingDbs] = useState(false);
+  const [fetchingColls, setFetchingColls] = useState(false);
+
+  // Fetch databases when connection changes
+  useEffect(() => {
+    if (!jobConnId) return;
+    const fetchDatabases = async () => {
+      setFetchingDbs(true);
+      try {
+        const res = await apiFetch('/api/mongo-sync/schema-explorer', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ connectionId: jobConnId })
+        });
+        const data = await res.json();
+        if (data.success && data.databases?.length > 0) {
+          setFetchedDbs(data.databases);
+          if (!data.databases.includes(jobDbName)) {
+            setJobDbName(data.databases[0]);
+          }
+        } else {
+          setFetchedDbs([]);
+        }
+      } catch (err) {
+        console.error('Failed to fetch databases:', err);
+        setFetchedDbs([]);
+      } finally {
+        setFetchingDbs(false);
+      }
+    };
+    fetchDatabases();
+  }, [jobConnId]);
+
+  // Fetch collections when database changes
+  useEffect(() => {
+    if (!jobConnId || !jobDbName) return;
+    const fetchCollections = async () => {
+      setFetchingColls(true);
+      try {
+        const res = await apiFetch('/api/mongo-sync/schema-explorer', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ connectionId: jobConnId, database: jobDbName })
+        });
+        const data = await res.json();
+        if (data.success && data.collections?.length > 0) {
+          setFetchedColls(data.collections);
+          if (!data.collections.includes(jobCollName)) {
+            setJobCollName(data.collections[0]);
+          }
+        } else {
+          setFetchedColls([]);
+        }
+      } catch (err) {
+        console.error('Failed to fetch collections:', err);
+        setFetchedColls([]);
+      } finally {
+        setFetchingColls(false);
+      }
+    };
+    fetchCollections();
+  }, [jobConnId, jobDbName]);
+
   // ── Restore State ───────────────────────────────────────────────
   const [restoreFolderId, setRestoreFolderId] = useState('');
   const [backupFiles, setBackupFiles] = useState([]);
@@ -924,28 +990,59 @@ export default function MongoBackupApp() {
                           </select>
                         </div>
                         <div>
-                          <label className="text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)] block mb-1">Database</label>
-                          <input
-                            type="text"
-                            value={jobDbName}
-                            onChange={(e) => setJobDbName(e.target.value)}
-                            className="input-field text-xs w-full bg-[var(--bg-tertiary)]"
-                            required
-                          />
+                          <label className="text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)] block mb-1 flex items-center justify-between">
+                            <span>Database</span>
+                            {fetchingDbs && <Loader size={10} className="animate-spin text-emerald-400" />}
+                          </label>
+                          {fetchedDbs.length > 0 ? (
+                            <select
+                              value={jobDbName}
+                              onChange={(e) => setJobDbName(e.target.value)}
+                              className="input-field text-xs w-full bg-[var(--bg-tertiary)]"
+                            >
+                              {fetchedDbs.map(db => (
+                                <option key={db} value={db}>{db}</option>
+                              ))}
+                            </select>
+                          ) : (
+                            <input
+                              type="text"
+                              value={jobDbName}
+                              onChange={(e) => setJobDbName(e.target.value)}
+                              className="input-field text-xs w-full bg-[var(--bg-tertiary)]"
+                              placeholder="e.g. monitor"
+                              required
+                            />
+                          )}
                         </div>
                       </div>
 
                       <div className="grid grid-cols-2 gap-2">
                         <div>
-                          <label className="text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)] block mb-1">Collection</label>
-                          <input
-                            type="text"
-                            value={jobCollName}
-                            onChange={(e) => setJobCollName(e.target.value)}
-                            className="input-field text-xs w-full bg-[var(--bg-tertiary)]"
-                            placeholder="e.g. connections"
-                            required
-                          />
+                          <label className="text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)] block mb-1 flex items-center justify-between">
+                            <span>Collection</span>
+                            {fetchingColls && <Loader size={10} className="animate-spin text-emerald-400" />}
+                          </label>
+                          {fetchedColls.length > 0 ? (
+                            <select
+                              value={jobCollName}
+                              onChange={(e) => setJobCollName(e.target.value)}
+                              className="input-field text-xs w-full bg-[var(--bg-tertiary)]"
+                            >
+                              {fetchedColls.map(c => (
+                                <option key={c} value={c}>{c}</option>
+                              ))}
+                            </select>
+                          ) : (
+                            <input
+                              type="text"
+                              value={jobCollName}
+                              onChange={(e) => setJobCollName(e.target.value)}
+                              className="input-field text-xs w-full bg-[var(--bg-tertiary)]"
+                              placeholder="e.g. customers"
+                              required
+                            />
+                          )}
                         </div>
                         <div>
                           <label className="text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)] block mb-1">Drive Folder</label>

@@ -51,8 +51,10 @@ export async function POST(request, { params }) {
         pooled = await getPooledConnection(connData);
       }
 
-      const dbInstance = job.connectionId === 'default' ? pooled.db.connection.db : pooled.db.db;
-      const targetDb = dbInstance.databaseName === job.database ? dbInstance : dbInstance.parentDb ? dbInstance.parentDb.db(job.database) : dbInstance.client.db(job.database);
+      const dbInstance = job.connectionId === 'default' ? pooled.db : pooled.db.db;
+      const targetDb = dbInstance.databaseName === job.database
+        ? dbInstance
+        : dbInstance.client ? dbInstance.client.db(job.database) : dbInstance.parentDb ? dbInstance.parentDb.db(job.database) : dbInstance;
       const col = targetDb.collection(job.collection);
 
       const docs = await col.find({}).toArray();
