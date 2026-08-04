@@ -88,12 +88,8 @@ export async function GET(request) {
       picture: userInfo.picture || ''
     };
 
-    // Update in DB (using upsert logic)
-    await SystemSetting.findOneAndUpdate(
-      { key: 'google_drive_config' },
-      { key: 'google_drive_config', value: driveConfig },
-      { upsert: true, new: true }
-    );
+    // Update in DB (using upsert logic via SystemSettingRepository)
+    await settingRepo.update({ key: 'google_drive_config' }, { value: driveConfig });
 
     // Return a success page that auto-closes
     const html = `

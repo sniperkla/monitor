@@ -104,10 +104,10 @@ export class SystemSettingRepository {
       const conn = this.db.connection || this.db;
       const rawDb = conn.db || (conn.connections && conn.connections[0]?.db);
       if (rawDb) {
-        await rawDb.collection('system_settings').updateOne(criteria, { $set: data });
+        await rawDb.collection('system_settings').updateOne(criteria, { $set: data }, { upsert: true });
         return true;
       }
-      return await SystemSetting.updateOne(criteria, { $set: data });
+      return await SystemSetting.updateOne(criteria, { $set: data }, { upsert: true });
     }
   }
 }
