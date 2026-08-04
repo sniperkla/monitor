@@ -2204,7 +2204,8 @@ function handleDockerCommand(ws, msg) {
     } else if (action === 'logs' && args.length > 0) {
       const targetId = String(args[0] || '').replace(/[^a-zA-Z0-9._/:-]/g, '');
       if (!targetId) return ws.send(JSON.stringify({ type: 'docker:error', connId, error: 'Invalid Container ID' }));
-      cmdSuffix = `logs --tail 200 ${targetId}`;
+      // docker logs writes to both stdout and stderr — merge with 2>&1 so all output is captured
+      cmdSuffix = `logs --tail 200 --timestamps ${targetId} 2>&1`;
     } else if (action === 'run' && args.length >= 2) {
       const name = String(args[0] || '').replace(/[^a-zA-Z0-9._-]/g, '');
       const image = String(args[1] || '').replace(/[^a-zA-Z0-9.@/:-]/g, '');

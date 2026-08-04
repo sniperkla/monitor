@@ -70,6 +70,8 @@ export default function DockerLogApp({ initialConnection, initialConnectionId, i
 
   const fetchLogs = () => {
     if (!socketRef.current || !containerId) return;
+    setLogs('');
+    setError(null);
     setIsLoading(true);
     socketRef.current.emit('docker:command', { action: 'logs', args: [containerId] });
   };
@@ -77,48 +79,72 @@ export default function DockerLogApp({ initialConnection, initialConnectionId, i
   useEffect(() => {
     if (!selectedConnection || !containerId) return;
 
-    socketRef.current = io({
+    // ── Reset state for each new container view ──────────────────────────────
+    setLogs('');
+    setError(null);
+    setIsLoading(true);
+
+    // Guard: ignore events after this effect has been cleaned up
+    let active = true;
+
+    // Disconnect any previous socket cleanly before creating a new one
+    if (socketRef.current) {
+      socketRef.current.removeAllListeners();
+      socketRef.current.disconnect();
+      socketRef.current = null;
+    }
+
+    const socket = io({
       path: '/api/socket',
       transports: ['websocket', 'polling'],
       query: { dbUri: dbConfig?.uri || '' }
     });
+    socketRef.current = socket;
 
-    socketRef.current.on('connect', () => {
-      socketRef.current.emit('ssh:connect', {
+    socket.on('connect', () => {
+      if (!active) return;
+      socket.emit('ssh:connect', {
         connectionId: selectedConnection._id,
         connection: selectedConnection,
         preferredRelay: typeof window !== 'undefined' ? (localStorage.getItem('ssh_monitor_preferred_relay') || undefined) : undefined,
       });
     });
 
-    socketRef.current.on('ssh:connected', () => {
-      fetchLogs();
+    socket.on('ssh:connected', () => {
+      if (!active) return;
+      socket.emit('docker:command', { action: 'logs', args: [containerId] });
     });
 
-    socketRef.current.on('docker:result', ({ action, output }) => {
+    socket.on('docker:result', ({ action, output }) => {
+      if (!active) return;
       if (action === 'logs') {
         setIsLoading(false);
         setLogs(output || 'No logs found.');
       }
     });
 
-    socketRef.current.on('docker:error', (err) => {
+    socket.on('docker:error', (err) => {
+      if (!active) return;
       setIsLoading(false);
-      setError(err);
-      addNotification({ title: 'Docker Error', message: err, type: 'error' });
+      setError(typeof err === 'string' ? err : err?.message || 'Docker error');
+      addNotification({ title: 'Docker Error', message: typeof err === 'string' ? err : err?.message, type: 'error' });
     });
 
-    socketRef.current.on('ssh:error', (err) => {
+    socket.on('ssh:error', (err) => {
+      if (!active) return;
       setIsLoading(false);
       setError(err?.message || 'Connection failed');
     });
 
     return () => {
+      active = false;
       if (socketRef.current) {
+        socketRef.current.removeAllListeners();
         socketRef.current.disconnect();
+        socketRef.current = null;
       }
     };
-  }, [selectedConnection, containerId]);
+  }, [selectedConnection?._id, containerId]);
 
   // Auto scroll to bottom when logs arrive
   useEffect(() => {
