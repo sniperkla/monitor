@@ -968,6 +968,81 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
               });
             });
           });
+          // ── Re-register docker:command for reattached session ──────────────
+          // The listener was removed above (line ~857) but never re-added in the reattach path,
+          // causing docker commands to silently drop and the UI to stay stuck after reconnect.
+          socket.on('docker:command', ({ action, args = [] }) => {
+            if (!sshClient || sshClient._state === 'closed') {
+              return socket.emit('docker:error', 'SSH Connection Closed');
+            }
+            const connection = pending.connection || connectionData || {};
+            let dockerSudo = pending.dockerSudo || '';
+
+            const executeDockerCmd = (cmdSuffix, currentAction, currentArgs, attemptWithSudo = false) => {
+              const escapedPass = (connection?.password || '').replace(/'/g, "'\\''");
+              const prefix = attemptWithSudo ? `echo '${escapedPass}' | sudo -S su root -c ` : '';
+              const finalCmd = attemptWithSudo
+                ? `${prefix} 'docker ${cmdSuffix.replace(/'/g, "'\\''")}'`
+                : `docker ${cmdSuffix}`;
+              sshClient.exec(finalCmd, (err, stream) => {
+                if (err) return socket.emit('docker:error', err.message);
+                let stdout = '';
+                let stderr = '';
+                stream.on('data', (d) => { stdout += d.toString().replace(/\/home\/.+?\.bashrc: line \d+: .+?: No such file or directory\n?/g, ''); });
+                stream.stderr.on('data', (d) => { stderr += d.toString().replace(/\/home\/.+?\.bashrc: line \d+: .+?: No such file or directory\n?/g, ''); });
+                stream.on('close', (code) => {
+                  stdout = stdout.replace(/\/home\/.+?\.bashrc: line \d+: .+?: No such file or directory\n?/g, '').trim();
+                  stderr = stderr.replace(/\/home\/.+?\.bashrc: line \d+: .+?: No such file or directory\n?/g, '').trim();
+                  const combined = (stdout + stderr).toLowerCase();
+                  if (currentAction === 'info' && code !== 0 && combined.includes('permission denied') && !attemptWithSudo) {
+                    pending.dockerSudo = 'sudo ';
+                    return executeDockerCmd(cmdSuffix, currentAction, currentArgs, true);
+                  }
+                  if (attemptWithSudo && code === 0) pending.dockerSudo = 'sudo ';
+                  if (code !== 0 && !['pull', 'pull:status'].includes(currentAction)) {
+                    socket.emit('docker:error', stderr || `Docker ${currentAction} failed (code ${code})`);
+                  } else {
+                    socket.emit('docker:result', { action: currentAction, output: stdout, code, args: currentArgs });
+                  }
+                });
+              });
+            };
+
+            // Build command suffix from action (mirror of the main handler)
+            let cmdSuffix = '';
+            if (action === 'list') { cmdSuffix = `ps -a --format "{{json .}}"`; }
+            else if (action === 'images') { cmdSuffix = `image ls -a --format "{{json .}}"`; }
+            else if (action === 'info') { cmdSuffix = `info --format "{{json .}}"`; }
+            else if (action === 'logs' && args.length > 0) {
+              const targetId = String(args[0] || '').replace(/[^a-zA-Z0-9._/:-]/g, '');
+              if (!targetId) return socket.emit('docker:error', 'Invalid Container ID');
+              cmdSuffix = `logs --tail 200 --timestamps ${targetId} 2>&1`;
+            } else if (action === 'start' && args.length > 0) {
+              cmdSuffix = `start ${String(args[0]).replace(/[^a-zA-Z0-9._-]/g, '')}`;
+            } else if (action === 'stop' && args.length > 0) {
+              cmdSuffix = `stop ${String(args[0]).replace(/[^a-zA-Z0-9._-]/g, '')}`;
+            } else if (action === 'restart' && args.length > 0) {
+              cmdSuffix = `restart ${String(args[0]).replace(/[^a-zA-Z0-9._-]/g, '')}`;
+            } else if (action === 'rm' && args.length > 0) {
+              cmdSuffix = `rm -f ${String(args[0]).replace(/[^a-zA-Z0-9._-]/g, '')}`;
+            } else if (action === 'volumes') {
+              cmdSuffix = `volume ls --format "{{json .}}"`;
+            } else if (action === 'networks') {
+              cmdSuffix = `network ls --format "{{json .}}"`;
+            } else if (action === 'vol-assoc') {
+              cmdSuffix = `ids=$(docker ps -aq); [ -z "$ids" ] || docker inspect --format 'assoc:{{.ID}}\\t{{.Name}}\\t{{range .Mounts}}{{.Name}} {{end}}' $ids`;
+            } else if (action === 'swarm:services') {
+              cmdSuffix = `service ls --format "{{json .}}"`;
+            } else if (action === 'swarm:nodes') {
+              cmdSuffix = `node ls --format "{{json .}}" 2>/dev/null || echo ""`;
+            } else {
+              // For any other action, forward to the full handler by re-emitting won't work here —
+              // just return an error for unrecognized actions in the reattach path
+              return socket.emit('docker:error', `Action '${action}' requires a fresh connection. Please refresh.`);
+            }
+
+            executeDockerCmd(cmdSuffix, action, args);
+          });
 
           socket.emit('ssh:connected');
 
