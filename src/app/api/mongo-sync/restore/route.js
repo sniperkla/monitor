@@ -92,6 +92,7 @@ export async function POST(request) {
       }
       let connData = fullConn.toObject ? fullConn.toObject() : fullConn;
       connData = await attachRequestUserId(request, connData);
+      connData = normalizeMongoConnection(connData);
       pooled = await getPooledConnection(connData);
     }
 

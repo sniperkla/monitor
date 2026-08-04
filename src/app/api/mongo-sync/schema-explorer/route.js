@@ -4,6 +4,7 @@ import { authOptions } from "@/lib/auth";
 import connectDB from '@/lib/mongodb';
 import { ConnectionRepository } from '@/lib/repositories/ConnectionRepository';
 import { getPooledConnection } from '@/lib/dbPool';
+import { normalizeMongoConnection } from '@/lib/mongoSyncUtils';
 import { attachRequestUserId } from '@/lib/requestUser';
 import mongoose from 'mongoose';
 
@@ -31,6 +32,7 @@ export async function POST(request) {
       }
       connData = fullConn.toObject ? fullConn.toObject() : fullConn;
       connData = await attachRequestUserId(request, connData);
+      connData = normalizeMongoConnection(connData);
       pooled = await getPooledConnection(connData);
     }
 

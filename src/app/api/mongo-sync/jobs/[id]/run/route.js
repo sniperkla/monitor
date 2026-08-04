@@ -9,6 +9,7 @@ import { SystemSettingRepository } from '@/lib/repositories/SystemSettingReposit
 import SystemSetting from '@/models/SystemSetting';
 import { uploadFileToGoogleDrive } from '@/lib/gdriveHelper';
 import { attachRequestUserId } from '@/lib/requestUser';
+import { normalizeMongoConnection } from '@/lib/mongoSyncUtils';
 
 export async function POST(request, { params }) {
   try {
@@ -50,6 +51,7 @@ export async function POST(request, { params }) {
         }
         let connData = fullConn.toObject ? fullConn.toObject() : fullConn;
         connData = await attachRequestUserId(request, connData);
+        connData = normalizeMongoConnection(connData);
         pooled = await getPooledConnection(connData);
       }
 

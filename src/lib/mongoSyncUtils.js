@@ -96,3 +96,36 @@ export async function getDeduplicatedToken(refreshTokenFn, getConfigFn, saveConf
 
   return pendingRefresh;
 }
+
+/**
+ * Normalize connection config for MongoSync.
+ * If the connection is an SSH server record (type === 'ssh' or port === 22),
+ * transform it into an SSH Tunnel configuration pointing to MongoDB on 127.0.0.1:27017 on the remote server.
+ */
+export function normalizeMongoConnection(connData) {
+  if (!connData) return connData;
+
+  const isSshRecord = connData.type === 'ssh' || (!connData.dbProvider && connData.type !== 'database') || Number(connData.port) === 22;
+
+  if (isSshRecord && !connData.sshTunnel) {
+    return {
+      ...connData,
+      dbProvider: 'mongodb',
+      host: connData.mongoHost || '127.0.0.1',
+      port: Number(connData.mongoPort) || 27017,
+      username: connData.mongoUsername || '',
+      password: connData.mongoPassword || '',
+      database: connData.database || connData.mongoDatabase || 'monitor',
+      sshTunnel: true,
+      sshTunnelHost: connData.host,
+      sshTunnelPort: Number(connData.port) || 22,
+      sshTunnelUser: connData.username || '',
+      sshTunnelAuth: connData.authType || 'password',
+      sshTunnelPassword: connData.password || null,
+      sshTunnelPrivateKey: connData.privateKey || null,
+      sshTunnelPassphrase: connData.passphrase || null,
+    };
+  }
+
+  return connData;
+}
