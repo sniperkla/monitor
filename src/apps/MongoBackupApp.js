@@ -128,6 +128,52 @@ export default function MongoBackupApp() {
   const [restoreCollName, setRestoreCollName] = useState('');
   const [restoreMode, setRestoreMode] = useState('insert');
 
+  // Auto-fetch DB & Collections for Restore target connection
+  const [restoreFetchedDbs, setRestoreFetchedDbs] = useState([]);
+  const [restoreFetchedColls, setRestoreFetchedColls] = useState([]);
+  const [restoreFetchingDbs, setRestoreFetchingDbs] = useState(false);
+  const [restoreFetchingColls, setRestoreFetchingColls] = useState(false);
+
+  useEffect(() => {
+    if (!restoreConnId) return;
+    const fetchDatabases = async () => {
+      setRestoreFetchingDbs(true);
+      try {
+        const res = await apiFetch('/api/mongo-sync/schema-explorer', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ connectionId: restoreConnId })
+        });
+        const data = await res.json();
+        if (data.success && data.databases?.length > 0) {
+          setRestoreFetchedDbs(data.databases);
+          if (!data.databases.includes(restoreDbName)) setRestoreDbName(data.databases[0]);
+        } else { setRestoreFetchedDbs([]); }
+      } catch { setRestoreFetchedDbs([]); }
+      finally { setRestoreFetchingDbs(false); }
+    };
+    fetchDatabases();
+  }, [restoreConnId]);
+
+  useEffect(() => {
+    if (!restoreConnId || !restoreDbName) return;
+    const fetchCollections = async () => {
+      setRestoreFetchingColls(true);
+      try {
+        const res = await apiFetch('/api/mongo-sync/schema-explorer', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ connectionId: restoreConnId, database: restoreDbName })
+        });
+        const data = await res.json();
+        if (data.success && data.collections?.length > 0) {
+          setRestoreFetchedColls(data.collections);
+          if (!data.collections.includes(restoreCollName)) setRestoreCollName(data.collections[0]);
+        } else { setRestoreFetchedColls([]); }
+      } catch { setRestoreFetchedColls([]); }
+      finally { setRestoreFetchingColls(false); }
+    };
+    fetchCollections();
+  }, [restoreConnId, restoreDbName]);
+
   // ── Replica Set Failover State ──────────────────────────────────────────
   const [rsConnId, setRsConnId] = useState('default');
   const [rsData, setRsData] = useState(null);
@@ -573,8 +619,11 @@ export default function MongoBackupApp() {
   };
 
   const executeRestore = async () => {
-    if (!selectedFileId || !restoreDbName.trim() || !restoreCollName.trim()) return;
-    if (!confirm(`Are you sure you want to restore data from Google Drive into target collection "${restoreCollName}"? This will run in ${restoreMode} mode.`)) return;
+    if (!selectedFileId || !restoreDbName.trim()) return;
+    const selectedFile = backupFiles.find(f => f.id === selectedFileId);
+    const isAllColBackup = selectedFile?.name?.includes('ALL_COLLECTIONS');
+    const collectionLabel = isAllColBackup ? 'ALL collections' : `"${restoreCollName}"`;
+    if (!confirm(`Are you sure you want to restore data from Google Drive into ${collectionLabel} in database "${restoreDbName}"? This will run in ${restoreMode} mode.`)) return;
     setLoading(true);
     try {
       const res = await apiFetch('/api/mongo-sync/restore', {
@@ -584,7 +633,7 @@ export default function MongoBackupApp() {
           fileId: selectedFileId,
           connectionId: restoreConnId,
           database: restoreDbName.trim(),
-          collection: restoreCollName.trim(),
+          collection: isAllColBackup ? 'ALL_COLLECTIONS' : restoreCollName.trim(),
           mode: restoreMode
         })
       });
@@ -1285,27 +1334,66 @@ export default function MongoBackupApp() {
                       </div>
 
                       <div>
-                        <label className="text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)] block mb-1">Target Database</label>
-                        <input
-                          type="text"
-                          value={restoreDbName}
-                          onChange={(e) => setRestoreDbName(e.target.value)}
-                          className="input-field text-xs w-full bg-[var(--bg-tertiary)]"
-                          placeholder="e.g. monitor"
-                          required
-                        />
+                        <label className="text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)] block mb-1 flex items-center justify-between">
+                          <span>Target Database</span>
+                          {restoreFetchingDbs && <Loader size={10} className="animate-spin text-emerald-400" />}
+                        </label>
+                        {restoreFetchedDbs.length > 0 ? (
+                          <select
+                            value={restoreDbName}
+                            onChange={(e) => setRestoreDbName(e.target.value)}
+                            className="input-field text-xs w-full bg-[var(--bg-tertiary)]"
+                          >
+                            {restoreFetchedDbs.map(db => (
+                              <option key={db} value={db}>{db}</option>
+                            ))}
+                          </select>
+                        ) : (
+                          <input
+                            type="text"
+                            value={restoreDbName}
+                            onChange={(e) => setRestoreDbName(e.target.value)}
+                            className="input-field text-xs w-full bg-[var(--bg-tertiary)]"
+                            placeholder="e.g. monitor"
+                          />
+                        )}
                       </div>
 
                       <div>
-                        <label className="text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)] block mb-1">Target Collection Name</label>
-                        <input
-                          type="text"
-                          value={restoreCollName}
-                          onChange={(e) => setRestoreCollName(e.target.value)}
-                          className="input-field text-xs w-full bg-[var(--bg-tertiary)]"
-                          placeholder="e.g. connections"
-                          required
-                        />
+                        <label className="text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)] block mb-1 flex items-center justify-between">
+                          <span>Target Collection</span>
+                          {restoreFetchingColls && <Loader size={10} className="animate-spin text-emerald-400" />}
+                        </label>
+                        {(() => {
+                          const isAllColBackup = backupFiles.find(f => f.id === selectedFileId)?.name?.includes('ALL_COLLECTIONS');
+                          if (isAllColBackup) {
+                            return (
+                              <div className="input-field text-xs w-full bg-emerald-500/10 border-emerald-500/30 text-emerald-400 font-bold flex items-center gap-2 px-3 py-2 rounded-xl">
+                                <CheckCircle size={12} />
+                                <span>All Collections (auto-detected from backup)</span>
+                              </div>
+                            );
+                          }
+                          return restoreFetchedColls.length > 0 ? (
+                            <select
+                              value={restoreCollName}
+                              onChange={(e) => setRestoreCollName(e.target.value)}
+                              className="input-field text-xs w-full bg-[var(--bg-tertiary)]"
+                            >
+                              {restoreFetchedColls.map(c => (
+                                <option key={c} value={c}>{c}</option>
+                              ))}
+                            </select>
+                          ) : (
+                            <input
+                              type="text"
+                              value={restoreCollName}
+                              onChange={(e) => setRestoreCollName(e.target.value)}
+                              className="input-field text-xs w-full bg-[var(--bg-tertiary)]"
+                              placeholder="e.g. customers"
+                            />
+                          );
+                        })()}
                       </div>
 
                       <div>
@@ -1323,13 +1411,13 @@ export default function MongoBackupApp() {
 
                     <button
                       onClick={executeRestore}
-                      disabled={loading || !selectedFileId || !restoreDbName.trim() || !restoreCollName.trim()}
+                      disabled={loading || !selectedFileId || !restoreDbName.trim()}
                       className="w-full btn-primary justify-center font-bold text-xs py-2 disabled:opacity-40 disabled:cursor-not-allowed shadow-lg mt-2"
                     >
                       {loading ? (
                         <>
                           <Loader className="animate-spin" size={14} />
-                          <span>Restoring collection...</span>
+                          <span>Restoring...</span>
                         </>
                       ) : (
                         <>
