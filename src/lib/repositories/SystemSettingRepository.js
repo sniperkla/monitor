@@ -63,15 +63,6 @@ export class SystemSettingRepository {
       const r = rows[0];
       return { ...r, _id: r.id.toString(), value: typeof r.value === 'string' ? JSON.parse(r.value) : r.value };
     } else {
-      const conn = this.db.connection || this.db;
-      const rawDb = conn.db || (conn.connections && conn.connections[0]?.db);
-      if (rawDb) {
-        const doc = await rawDb.collection('system_settings').findOne(criteria);
-        if (doc) {
-          doc._id = doc._id.toString();
-        }
-        return doc;
-      }
       return await SystemSetting.findOne(criteria);
     }
   }
@@ -101,13 +92,36 @@ export class SystemSettingRepository {
       await this.db.query(query, [JSON.stringify(newValue), existing.key]);
       return true;
     } else {
-      const conn = this.db.connection || this.db;
-      const rawDb = conn.db || (conn.connections && conn.connections[0]?.db);
-      if (rawDb) {
-        await rawDb.collection('system_settings').updateOne(criteria, { $set: data }, { upsert: true });
-        return true;
+      return await SystemSetting.updateOne(criteria, { $set: data });
+    }
+  }
+
+  /**
+   * Upsert a setting by key — inserts if not exists, updates if it does.
+   * Works for both SQL (MySQL/PostgreSQL) and MongoDB backends.
+   */
+  async upsert(key, value) {
+    if (this.isSql) {
+      const existing = await this.findOne({ key });
+      if (existing) {
+        const quote = this.isPostgres ? '"' : '`';
+        const query = this.isPostgres
+          ? `UPDATE system_settings SET ${quote}value${quote} = $1, ${quote}updatedAt${quote} = CURRENT_TIMESTAMP WHERE ${quote}key${quote} = $2`
+          : 'UPDATE system_settings SET `value` = ?, `updatedAt` = CURRENT_TIMESTAMP WHERE `key` = ?';
+        await this.db.query(query, [JSON.stringify(value), key]);
+      } else {
+        const quote = this.isPostgres ? '"' : '`';
+        const query = this.isPostgres
+          ? `INSERT INTO system_settings (${quote}key${quote}, ${quote}value${quote}) VALUES ($1, $2)`
+          : 'INSERT INTO system_settings (`key`, `value`) VALUES (?, ?)';
+        await this.db.query(query, [key, JSON.stringify(value)]);
       }
-      return await SystemSetting.updateOne(criteria, { $set: data }, { upsert: true });
+    } else {
+      await SystemSetting.findOneAndUpdate(
+        { key },
+        { key, value },
+        { upsert: true, new: true }
+      );
     }
   }
 }

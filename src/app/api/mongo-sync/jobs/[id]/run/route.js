@@ -6,7 +6,6 @@ import connectDB from '@/lib/mongodb';
 import mongoose from 'mongoose';
 import { ConnectionRepository } from '@/lib/repositories/ConnectionRepository';
 import { SystemSettingRepository } from '@/lib/repositories/SystemSettingRepository';
-import SystemSetting from '@/models/SystemSetting';
 import { uploadFileToGoogleDrive } from '@/lib/gdriveHelper';
 import { attachRequestUserId } from '@/lib/requestUser';
 import { normalizeMongoConnection } from '@/lib/mongoSyncUtils';
@@ -23,10 +22,10 @@ export async function POST(request, { params }) {
     const db = await connectDB();
     const settingRepo = new SystemSettingRepository(db);
     await settingRepo.init();
-    
+
     const jobsSetting = await settingRepo.findOne({ key: 'mongo_sync_jobs' });
     const jobs = jobsSetting ? jobsSetting.value : [];
-    
+
     const jobIndex = jobs.findIndex(j => j.id === id);
     if (jobIndex === -1) {
       return NextResponse.json({ success: false, error: 'Job not found' }, { status: 404 });
@@ -55,34 +54,45 @@ export async function POST(request, { params }) {
         pooled = await getPooledConnection(connData);
       }
 
-      const dbInstance = job.connectionId === 'default' ? pooled.db : pooled.db.db;
-      const targetDb = dbInstance.databaseName === job.database
-        ? dbInstance
-        : dbInstance.client ? dbInstance.client.db(job.database) : dbInstance.parentDb ? dbInstance.parentDb.db(job.database) : dbInstance;
+      const isDefault = job.connectionId === 'default';
+      const dbInstance = isDefault ? pooled.db : pooled.db.db;
+
+      // Resolve target database:
+      // For single-DB URI connections, always use dbInstance directly (don't switch via client.db)
+      const configuredDb = isDefault ? null : dbInstance.databaseName;
+      let targetDb = dbInstance;
+      if (!isDefault && job.database && job.database !== 'All Databases (*)' && job.database !== dbInstance.databaseName) {
+        // Only switch if not a single-DB scoped connection
+        if (!configuredDb && dbInstance.client) {
+          targetDb = dbInstance.client.db(job.database);
+        } else if (configuredDb && configuredDb !== job.database && dbInstance.client) {
+          targetDb = dbInstance.client.db(job.database);
+        }
+      }
 
       const allCollectionNames = ['*', 'ALL_COLLECTIONS', 'All Collections', 'All Collections (*)'];
       const allDatabaseNames = ['All Databases (*)', 'ALL_DATABASES', '*'];
       const isAllCollections = allCollectionNames.includes(job.collection);
       const isAllDatabases = allDatabaseNames.includes(job.database);
 
-      console.log(`[mongo-sync] Running backup job ${job.id} on connection ${job.connectionId} name=${job.connectionName} database=${job.database} collection=${job.collection}`);
-      if (isAllDatabases) {
-        console.log('[mongo-sync] Backup mode: ALL_DATABASES');
-      } else if (isAllCollections) {
-        console.log('[mongo-sync] Backup mode: ALL_COLLECTIONS');
-      }
+      console.log(`[mongo-sync] Running backup job ${job.id} db=${job.database} col=${job.collection}`);
 
       if (isAllDatabases) {
         // ── Backup ALL databases on this connection ──
-        const adminDb = dbInstance.client ? dbInstance.client.db('admin') : dbInstance;
-        const dbList = await adminDb.admin().listDatabases();
-        const dbNames = dbList.databases
-          .map(d => d.name)
-          .filter(n => !['admin', 'local', 'config'].includes(n));
+        let dbNames = [];
+        try {
+          const adminDb = dbInstance.admin ? dbInstance.admin() : (dbInstance.client ? dbInstance.client.db('admin') : null);
+          if (adminDb) {
+            const dbList = await adminDb.listDatabases();
+            dbNames = dbList.databases.map(d => d.name).filter(n => !['admin', 'local', 'config'].includes(n));
+          }
+        } catch (_) {
+          // fallback: use the connected DB
+          dbNames = [dbInstance.databaseName];
+        }
 
         const allData = {};
         let totalDocs = 0;
-
         for (const dbName of dbNames) {
           const dbObj = dbInstance.client ? dbInstance.client.db(dbName) : dbInstance;
           const collections = await dbObj.listCollections().toArray();
@@ -133,19 +143,12 @@ export async function POST(request, { params }) {
       }
 
     } catch (err) {
-      console.error('Backup run error for job:', job.id, {
-        message: err.message,
-        stack: err.stack,
-        jobId: job.id,
-        connectionId: job.connectionId,
-        database: job.database,
-        collection: job.collection,
-        driveFolderId: job.driveFolderId,
-      });
+      console.error('Backup run error:', err.message, { jobId: job.id, database: job.database, collection: job.collection });
+      runStatus = 'error';
       runMessage = err.message;
     }
 
-    // Update job status in DB
+    // Update job status — use settingRepo.upsert to support all DB backends
     const updatedJobs = [...jobs];
     updatedJobs[jobIndex] = {
       ...job,
@@ -153,14 +156,9 @@ export async function POST(request, { params }) {
       lastStatus: runStatus,
       lastMessage: runMessage
     };
+    await settingRepo.upsert('mongo_sync_jobs', updatedJobs);
 
-    await SystemSetting.findOneAndUpdate(
-      { key: 'mongo_sync_jobs' },
-      { key: 'mongo_sync_jobs', value: updatedJobs },
-      { upsert: true, new: true }
-    );
-
-    // Also write a history entry
+    // Write history entry
     const historySetting = await settingRepo.findOne({ key: 'mongo_sync_history' });
     const history = historySetting ? historySetting.value : [];
     const newHistoryEntry = {
@@ -175,11 +173,7 @@ export async function POST(request, { params }) {
       message: runMessage,
       count
     };
-    await SystemSetting.findOneAndUpdate(
-      { key: 'mongo_sync_history' },
-      { key: 'mongo_sync_history', value: [newHistoryEntry, ...history].slice(0, 100) }, // Cap at 100 entries
-      { upsert: true, new: true }
-    );
+    await settingRepo.upsert('mongo_sync_history', [newHistoryEntry, ...history].slice(0, 100));
 
     return NextResponse.json({
       success: runStatus === 'success',

@@ -637,7 +637,7 @@ export default function MongoBackupApp() {
   const handleRunJob = async (id) => {
     setLoading(true);
     try {
-      const res = await apiFetch(`/api/mongo-sync/jobs/run?id=${encodeURIComponent(id)}`, { method: 'POST' });
+      const res = await apiFetch(`/api/mongo-sync/jobs/${encodeURIComponent(id)}/run`, { method: 'POST' });
       const data = await res.json();
       if (data.success) {
         addNotification({ title: 'Backup Successful', message: data.message, type: 'success' });
