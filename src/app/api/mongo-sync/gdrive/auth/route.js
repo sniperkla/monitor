@@ -26,8 +26,14 @@ export async function GET(request) {
       }, { status: 400 });
     }
 
-    // Determine redirect URI automatically based on request host
-    const origin = request.nextUrl.origin;
+    // Determine redirect URI automatically based on origin / reverse proxy headers
+    let origin = process.env.NEXTAUTH_URL || request.nextUrl.origin;
+    const forwardedProto = request.headers.get('x-forwarded-proto');
+    const forwardedHost = request.headers.get('x-forwarded-host') || request.headers.get('host');
+    if (forwardedHost) {
+      const proto = forwardedProto || (forwardedHost.includes('localhost') ? 'http' : 'https');
+      origin = `${proto}://${forwardedHost}`;
+    }
     const redirectUri = `${origin}/api/mongo-sync/gdrive/callback`;
 
     // Save temporary redirectUri and client details so callback knows which client secret to use

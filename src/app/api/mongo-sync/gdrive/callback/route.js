@@ -27,7 +27,13 @@ export async function GET(request) {
       });
     }
 
-    const origin = request.nextUrl.origin;
+    let origin = process.env.NEXTAUTH_URL || request.nextUrl.origin;
+    const forwardedProto = request.headers.get('x-forwarded-proto');
+    const forwardedHost = request.headers.get('x-forwarded-host') || request.headers.get('host');
+    if (forwardedHost) {
+      const proto = forwardedProto || (forwardedHost.includes('localhost') ? 'http' : 'https');
+      origin = `${proto}://${forwardedHost}`;
+    }
     const redirectUri = `${origin}/api/mongo-sync/gdrive/callback`;
 
     // Exchange code for tokens
