@@ -46,8 +46,8 @@ export default function MongoBackupApp() {
   const [jobs, setJobs] = useState([]);
   const [jobName, setJobName] = useState('');
   const [jobConnId, setJobConnId] = useState('default');
-  const [jobDbName, setJobDbName] = useState('monitor');
-  const [jobCollName, setJobCollName] = useState('');
+  const [jobDbName, setJobDbName] = useState('All Databases (*)');
+  const [jobCollName, setJobCollName] = useState('All Collections (*)');
   const [jobFolderId, setJobFolderId] = useState('');
   const [jobSchedule, setJobSchedule] = useState('daily'); // manual, hourly, daily, weekly
   const [jobEnabled, setJobEnabled] = useState(true);
@@ -73,8 +73,8 @@ export default function MongoBackupApp() {
         const data = await res.json();
         if (data.success && data.databases?.length > 0) {
           setFetchedDbs(data.databases);
-          if (!data.databases.includes(jobDbName)) {
-            setJobDbName(data.databases[0]);
+          if (!data.databases.includes(jobDbName) && jobDbName !== 'All Databases (*)') {
+            // don't override; keep whatever user picked
           }
         } else {
           setFetchedDbs([]);
@@ -124,8 +124,8 @@ export default function MongoBackupApp() {
   const [backupFiles, setBackupFiles] = useState([]);
   const [selectedFileId, setSelectedFileId] = useState('');
   const [restoreConnId, setRestoreConnId] = useState('default');
-  const [restoreDbName, setRestoreDbName] = useState('monitor');
-  const [restoreCollName, setRestoreCollName] = useState('');
+  const [restoreDbName, setRestoreDbName] = useState('All Databases (*)');
+  const [restoreCollName, setRestoreCollName] = useState('All Collections (*)');
   const [restoreMode, setRestoreMode] = useState('insert');
 
   // Auto-fetch DB & Collections for Restore target connection
@@ -1043,26 +1043,16 @@ export default function MongoBackupApp() {
                             <span>Database</span>
                             {fetchingDbs && <Loader size={10} className="animate-spin text-emerald-400" />}
                           </label>
-                          {fetchedDbs.length > 0 ? (
-                            <select
-                              value={jobDbName}
-                              onChange={(e) => setJobDbName(e.target.value)}
-                              className="input-field text-xs w-full bg-[var(--bg-tertiary)]"
-                            >
-                              {fetchedDbs.map(db => (
-                                <option key={db} value={db}>{db}</option>
-                              ))}
-                            </select>
-                          ) : (
-                            <input
-                              type="text"
-                              value={jobDbName}
-                              onChange={(e) => setJobDbName(e.target.value)}
-                              className="input-field text-xs w-full bg-[var(--bg-tertiary)]"
-                              placeholder="e.g. monitor"
-                              required
-                            />
-                          )}
+                          <select
+                            value={jobDbName}
+                            onChange={(e) => setJobDbName(e.target.value)}
+                            className="input-field text-xs w-full bg-[var(--bg-tertiary)]"
+                          >
+                            <option value="All Databases (*)">All Databases (*)</option>
+                            {fetchedDbs.map(db => (
+                              <option key={db} value={db}>{db}</option>
+                            ))}
+                          </select>
                         </div>
                       </div>
 
@@ -1072,26 +1062,16 @@ export default function MongoBackupApp() {
                             <span>Collection</span>
                             {fetchingColls && <Loader size={10} className="animate-spin text-emerald-400" />}
                           </label>
-                          {fetchedColls.length > 0 ? (
-                            <select
-                              value={jobCollName}
-                              onChange={(e) => setJobCollName(e.target.value)}
-                              className="input-field text-xs w-full bg-[var(--bg-tertiary)]"
-                            >
-                              {fetchedColls.map(c => (
-                                <option key={c} value={c}>{c}</option>
-                              ))}
-                            </select>
-                          ) : (
-                            <input
-                              type="text"
-                              value={jobCollName}
-                              onChange={(e) => setJobCollName(e.target.value)}
-                              className="input-field text-xs w-full bg-[var(--bg-tertiary)]"
-                              placeholder="e.g. customers"
-                              required
-                            />
-                          )}
+                          <select
+                            value={jobCollName}
+                            onChange={(e) => setJobCollName(e.target.value)}
+                            className="input-field text-xs w-full bg-[var(--bg-tertiary)]"
+                          >
+                            <option value="All Collections (*)">All Collections (*)</option>
+                            {fetchedColls.map(c => (
+                              <option key={c} value={c}>{c}</option>
+                            ))}
+                          </select>
                         </div>
                         <div>
                           <label className="text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)] block mb-1">Drive Folder</label>
@@ -1338,25 +1318,16 @@ export default function MongoBackupApp() {
                           <span>Target Database</span>
                           {restoreFetchingDbs && <Loader size={10} className="animate-spin text-emerald-400" />}
                         </label>
-                        {restoreFetchedDbs.length > 0 ? (
-                          <select
-                            value={restoreDbName}
-                            onChange={(e) => setRestoreDbName(e.target.value)}
-                            className="input-field text-xs w-full bg-[var(--bg-tertiary)]"
-                          >
-                            {restoreFetchedDbs.map(db => (
-                              <option key={db} value={db}>{db}</option>
-                            ))}
-                          </select>
-                        ) : (
-                          <input
-                            type="text"
-                            value={restoreDbName}
-                            onChange={(e) => setRestoreDbName(e.target.value)}
-                            className="input-field text-xs w-full bg-[var(--bg-tertiary)]"
-                            placeholder="e.g. monitor"
-                          />
-                        )}
+                        <select
+                          value={restoreDbName}
+                          onChange={(e) => setRestoreDbName(e.target.value)}
+                          className="input-field text-xs w-full bg-[var(--bg-tertiary)]"
+                        >
+                          <option value="All Databases (*)">All Databases (*)</option>
+                          {restoreFetchedDbs.map(db => (
+                            <option key={db} value={db}>{db}</option>
+                          ))}
+                        </select>
                       </div>
 
                       <div>
@@ -1364,36 +1335,23 @@ export default function MongoBackupApp() {
                           <span>Target Collection</span>
                           {restoreFetchingColls && <Loader size={10} className="animate-spin text-emerald-400" />}
                         </label>
-                        {(() => {
-                          const isAllColBackup = backupFiles.find(f => f.id === selectedFileId)?.name?.includes('ALL_COLLECTIONS');
-                          if (isAllColBackup) {
-                            return (
-                              <div className="input-field text-xs w-full bg-emerald-500/10 border-emerald-500/30 text-emerald-400 font-bold flex items-center gap-2 px-3 py-2 rounded-xl">
-                                <CheckCircle size={12} />
-                                <span>All Collections (auto-detected from backup)</span>
-                              </div>
-                            );
-                          }
-                          return restoreFetchedColls.length > 0 ? (
-                            <select
-                              value={restoreCollName}
-                              onChange={(e) => setRestoreCollName(e.target.value)}
-                              className="input-field text-xs w-full bg-[var(--bg-tertiary)]"
-                            >
-                              {restoreFetchedColls.map(c => (
-                                <option key={c} value={c}>{c}</option>
-                              ))}
-                            </select>
-                          ) : (
-                            <input
-                              type="text"
-                              value={restoreCollName}
-                              onChange={(e) => setRestoreCollName(e.target.value)}
-                              className="input-field text-xs w-full bg-[var(--bg-tertiary)]"
-                              placeholder="e.g. customers"
-                            />
-                          );
-                        })()}
+                        {backupFiles.find(f => f.id === selectedFileId)?.name?.includes('ALL_COLLECTIONS') ? (
+                          <div className="input-field text-xs w-full bg-emerald-500/10 border-emerald-500/30 text-emerald-400 font-bold flex items-center gap-2 px-3 py-2 rounded-xl">
+                            <CheckCircle size={12} />
+                            <span>All Collections (auto-detected)</span>
+                          </div>
+                        ) : (
+                          <select
+                            value={restoreCollName}
+                            onChange={(e) => setRestoreCollName(e.target.value)}
+                            className="input-field text-xs w-full bg-[var(--bg-tertiary)]"
+                          >
+                            <option value="All Collections (*)">All Collections (*)</option>
+                            {restoreFetchedColls.map(c => (
+                              <option key={c} value={c}>{c}</option>
+                            ))}
+                          </select>
+                        )}
                       </div>
 
                       <div>

@@ -56,9 +56,40 @@ export async function POST(request, { params }) {
         ? dbInstance
         : dbInstance.client ? dbInstance.client.db(job.database) : dbInstance.parentDb ? dbInstance.parentDb.db(job.database) : dbInstance;
 
-      const isAllCollections = job.collection === '*' || job.collection === 'ALL_COLLECTIONS' || job.collection === 'All Collections';
+      const isAllCollections = ['*', 'ALL_COLLECTIONS', 'All Collections', 'All Collections (*)'].includes(job.collection);
+      const isAllDatabases = ['All Databases (*)', 'ALL_DATABASES', '*'].includes(job.database);
 
-      if (isAllCollections) {
+      if (isAllDatabases) {
+        // ── Backup ALL databases on this connection ──
+        const adminDb = dbInstance.client ? dbInstance.client.db('admin') : dbInstance;
+        const dbList = await adminDb.admin().listDatabases();
+        const dbNames = dbList.databases
+          .map(d => d.name)
+          .filter(n => !['admin', 'local', 'config'].includes(n));
+
+        const allData = {};
+        let totalDocs = 0;
+
+        for (const dbName of dbNames) {
+          const dbObj = dbInstance.client ? dbInstance.client.db(dbName) : dbInstance;
+          const collections = await dbObj.listCollections().toArray();
+          const colNames = collections.map(c => c.name).filter(n => !n.startsWith('system.'));
+          allData[dbName] = {};
+          for (const colName of colNames) {
+            const docs = await dbObj.collection(colName).find({}).toArray();
+            allData[dbName][colName] = docs;
+            totalDocs += docs.length;
+          }
+        }
+
+        const timeStamp = new Date().toISOString().replace(/[:.]/g, '-');
+        const fileName = `backup_ALL_DATABASES_${timeStamp}.json`;
+        await uploadFileToGoogleDrive({ fileName, content: JSON.stringify(allData, null, 2), folderId: job.driveFolderId });
+        count = totalDocs;
+        runMessage = `Successfully backed up ALL ${dbNames.length} databases (${count} total docs) to Google Drive.`;
+
+      } else if (isAllCollections) {
+        // ── Backup ALL collections in target DB ──
         const collections = await targetDb.listCollections().toArray();
         const colNames = collections.map(c => c.name).filter(n => !n.startsWith('system.'));
         let totalDocs = 0;
@@ -72,31 +103,19 @@ export async function POST(request, { params }) {
 
         const timeStamp = new Date().toISOString().replace(/[:.]/g, '-');
         const fileName = `backup_${job.database}_ALL_COLLECTIONS_${timeStamp}.json`;
-        const fileContent = JSON.stringify(allDbData, null, 2);
-
-        await uploadFileToGoogleDrive({
-          fileName,
-          content: fileContent,
-          folderId: job.driveFolderId
-        });
-
+        await uploadFileToGoogleDrive({ fileName, content: JSON.stringify(allDbData, null, 2), folderId: job.driveFolderId });
         count = totalDocs;
         runMessage = `Successfully backed up ALL ${colNames.length} collections (${count} total docs) to Google Drive.`;
+
       } else {
+        // ── Backup single collection ──
         const col = targetDb.collection(job.collection);
         const docs = await col.find({}).toArray();
         count = docs.length;
 
         const timeStamp = new Date().toISOString().replace(/[:.]/g, '-');
         const fileName = `backup_${job.database}_${job.collection}_${timeStamp}.json`;
-        const fileContent = JSON.stringify(docs, null, 2);
-
-        await uploadFileToGoogleDrive({
-          fileName,
-          content: fileContent,
-          folderId: job.driveFolderId
-        });
-
+        await uploadFileToGoogleDrive({ fileName, content: JSON.stringify(docs, null, 2), folderId: job.driveFolderId });
         runMessage = `Successfully backed up ${count} documents from '${job.collection}' to Google Drive.`;
       }
 

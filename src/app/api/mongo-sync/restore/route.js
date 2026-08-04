@@ -43,25 +43,37 @@ export async function POST(request) {
     const body = await request.json();
     const { fileId, connectionId, database, collection, mode = 'insert' } = body;
 
-    if (!fileId || !database || !collection) {
+    if (!fileId || !database) {
       return NextResponse.json({ success: false, error: 'Missing required parameters' }, { status: 400 });
     }
+
+    const isAllCollectionsSel = ['*', 'ALL_COLLECTIONS', 'All Collections', 'All Collections (*)'].includes(collection);
+    const isAllDatabasesSel   = ['All Databases (*)', 'ALL_DATABASES', '*'].includes(database);
 
     // 1. Download file from Google Drive
     console.log(`📥 Downloading backup file ${fileId} from Google Drive...`);
     const backupData = await downloadDriveFile(fileId);
 
-    const isAllCollectionsFile = !Array.isArray(backupData) && typeof backupData === 'object' && backupData !== null;
+    // Detect file shape
+    const isAllDbFile = !Array.isArray(backupData)
+      && typeof backupData === 'object'
+      && backupData !== null
+      && Object.values(backupData).every(v => !Array.isArray(v) && typeof v === 'object');
 
-    if (!Array.isArray(backupData) && !isAllCollectionsFile) {
+    const isAllCollectionsFile = !Array.isArray(backupData)
+      && typeof backupData === 'object'
+      && backupData !== null
+      && !isAllDbFile;
+
+    if (!Array.isArray(backupData) && !isAllCollectionsFile && !isAllDbFile) {
       return NextResponse.json({ success: false, error: 'Downloaded backup file is not a valid JSON document' }, { status: 400 });
     }
 
-    if (backupData.length === 0) {
+    if (Array.isArray(backupData) && backupData.length === 0) {
       return NextResponse.json({ success: true, message: 'Backup file is empty. No documents imported.', count: 0 });
     }
 
-    if (backupData.length > MAX_RESTORE_DOCS) {
+    if (Array.isArray(backupData) && backupData.length > MAX_RESTORE_DOCS) {
       return NextResponse.json({ success: false, error: `Restore limit exceeded. Maximum ${MAX_RESTORE_DOCS} documents per request.` }, { status: 400 });
     }
 
@@ -83,61 +95,62 @@ export async function POST(request) {
     }
 
     const dbInstance = connectionId === 'default' ? pooled.db : pooled.db.db;
-    const targetDb = dbInstance.databaseName === database
-      ? dbInstance
-      : dbInstance.client ? dbInstance.client.db(database) : dbInstance.parentDb ? dbInstance.parentDb.db(database) : dbInstance;
 
     let insertedCount = 0;
-    let updatedCount = 0;
-    let totalCount = 0;
+    let updatedCount  = 0;
+    let totalCount    = 0;
 
-    if (isAllCollectionsFile) {
-      // Restore dictionary of { collectionName: [doc1, doc2, ...] }
-      for (const [colName, docs] of Object.entries(backupData)) {
-        if (!Array.isArray(docs) || docs.length === 0) continue;
-        const col = targetDb.collection(colName);
-        const sanitizedDocs = docs.map(doc => sanitizeDocument(doc));
-        totalCount += sanitizedDocs.length;
-
-        if (mode === 'upsert') {
-          const ops = sanitizedDocs.map(doc => {
-            const filter = doc._id ? { _id: doc._id } : { _id: new mongoose.Types.ObjectId() };
-            return { updateOne: { filter, update: { $set: doc }, upsert: true } };
-          });
-          try {
-            const res = await col.bulkWrite(ops, { ordered: false });
-            insertedCount += (res.upsertedCount || 0) + (res.insertedCount || 0);
-            updatedCount += (res.modifiedCount || 0);
-          } catch (bulkErr) {
-            console.warn(`Bulk write error for collection ${colName}:`, bulkErr.message);
-          }
-        } else {
-          try {
-            const res = await col.insertMany(sanitizedDocs, { ordered: false });
-            insertedCount += res.insertedCount || sanitizedDocs.length;
-          } catch (insErr) {
-            console.warn(`Insert error for collection ${colName}:`, insErr.message);
-          }
-        }
-      }
-    } else {
-      // Single collection restore
-      const col = targetDb.collection(collection);
-      const sanitizedDocs = backupData.map(doc => sanitizeDocument(doc));
-      totalCount = sanitizedDocs.length;
-
+    // Helper: restore docs into a single collection
+    const restoreCollection = async (col, docs) => {
+      if (!docs || docs.length === 0) return;
+      const sanitized = docs.map(d => sanitizeDocument(d));
+      totalCount += sanitized.length;
       if (mode === 'upsert') {
-        const ops = sanitizedDocs.map(doc => {
+        const ops = sanitized.map(doc => {
           const filter = doc._id ? { _id: doc._id } : { _id: new mongoose.Types.ObjectId() };
           return { updateOne: { filter, update: { $set: doc }, upsert: true } };
         });
-        const res = await col.bulkWrite(ops, { ordered: false });
-        insertedCount = (res.upsertedCount || 0) + (res.insertedCount || 0);
-        updatedCount = res.modifiedCount || 0;
+        try {
+          const r = await col.bulkWrite(ops, { ordered: false });
+          insertedCount += (r.upsertedCount || 0) + (r.insertedCount || 0);
+          updatedCount  += r.modifiedCount || 0;
+        } catch (e) { console.warn('bulkWrite error:', e.message); }
       } else {
-        const res = await col.insertMany(sanitizedDocs, { ordered: false });
-        insertedCount = res.insertedCount || sanitizedDocs.length;
+        try {
+          const r = await col.insertMany(sanitized, { ordered: false });
+          insertedCount += r.insertedCount || sanitized.length;
+        } catch (e) { console.warn('insertMany error:', e.message); }
       }
+    };
+
+    if (isAllDbFile || isAllDatabasesSel) {
+      // ── Restore ALL databases: { dbName: { collName: [docs] } } ──
+      for (const [dbName, colMap] of Object.entries(backupData)) {
+        const dbObj = dbInstance.client ? dbInstance.client.db(dbName) : dbInstance;
+        if (typeof colMap !== 'object' || Array.isArray(colMap)) continue;
+        for (const [colName, docs] of Object.entries(colMap)) {
+          if (!Array.isArray(docs)) continue;
+          await restoreCollection(dbObj.collection(colName), docs);
+        }
+      }
+    } else if (isAllCollectionsFile || isAllCollectionsSel) {
+      // ── Restore ALL collections in one DB: { collName: [docs] } ──
+      const targetDb = dbInstance.databaseName === database
+        ? dbInstance
+        : dbInstance.client ? dbInstance.client.db(database) : dbInstance;
+      for (const [colName, docs] of Object.entries(backupData)) {
+        if (!Array.isArray(docs)) continue;
+        await restoreCollection(targetDb.collection(colName), docs);
+      }
+    } else {
+      // ── Restore single collection ──
+      if (!collection) {
+        return NextResponse.json({ success: false, error: 'Collection name required for single-collection restore' }, { status: 400 });
+      }
+      const targetDb = dbInstance.databaseName === database
+        ? dbInstance
+        : dbInstance.client ? dbInstance.client.db(database) : dbInstance;
+      await restoreCollection(targetDb.collection(collection), backupData);
     }
 
     return NextResponse.json({
