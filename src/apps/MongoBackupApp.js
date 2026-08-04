@@ -570,8 +570,14 @@ export default function MongoBackupApp() {
           </button>
           <button
             onClick={() => setActiveTab('jobs')}
+            disabled={!driveConnected}
+            title={!driveConnected ? 'Please connect Google Drive first' : ''}
             className={`w-full flex items-center gap-2.5 px-3 py-2 text-xs font-bold rounded-xl transition-all ${
-              activeTab === 'jobs' ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/20 shadow-sm' : 'hover:bg-[var(--bg-card-hover)] border border-transparent text-[var(--text-muted)] hover:text-[var(--text-primary)]'
+              !driveConnected
+                ? 'opacity-40 cursor-not-allowed border border-transparent text-[var(--text-muted)]'
+                : activeTab === 'jobs'
+                ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/20 shadow-sm'
+                : 'hover:bg-[var(--bg-card-hover)] border border-transparent text-[var(--text-muted)] hover:text-[var(--text-primary)]'
             }`}
           >
             <RefreshCw size={14} />
@@ -579,11 +585,18 @@ export default function MongoBackupApp() {
           </button>
           <button
             onClick={() => {
+              if (!driveConnected) return;
               setActiveTab('restore');
               if (restoreFolderId) fetchBackups(restoreFolderId);
             }}
+            disabled={!driveConnected}
+            title={!driveConnected ? 'Please connect Google Drive first' : ''}
             className={`w-full flex items-center gap-2.5 px-3 py-2 text-xs font-bold rounded-xl transition-all ${
-              activeTab === 'restore' ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/20 shadow-sm' : 'hover:bg-[var(--bg-card-hover)] border border-transparent text-[var(--text-muted)] hover:text-[var(--text-primary)]'
+              !driveConnected
+                ? 'opacity-40 cursor-not-allowed border border-transparent text-[var(--text-muted)]'
+                : activeTab === 'restore'
+                ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/20 shadow-sm'
+                : 'hover:bg-[var(--bg-card-hover)] border border-transparent text-[var(--text-muted)] hover:text-[var(--text-primary)]'
             }`}
           >
             <History size={14} />
@@ -767,84 +780,46 @@ export default function MongoBackupApp() {
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                   {/* Auth Setup */}
                   <div className="space-y-4 bg-[var(--bg-card)] p-5 rounded-2xl border border-[var(--border-color)]">
-                    <h3 className="text-sm font-bold flex items-center gap-2">
-                      <Key className="text-emerald-400" size={16} /> 1. OAuth API Configuration
+                    <h3 className="text-sm font-bold flex items-center gap-2 mb-2">
+                      <CloudLightning className="text-emerald-400" size={16} /> 1. Google Account Linkage
                     </h3>
                     <p className="text-[11px] text-[var(--text-muted)] leading-relaxed">
-                      By default, this app will use credentials defined in the server's `.env` configuration file. If you need to set up custom OAuth client details, you can override them here:
+                      Authenticate with your Google account to enable automated collection backups and cloud restore capabilities.
                     </p>
 
-                    <div className="space-y-3">
-                      <div>
-                        <label className="text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)] block mb-1">Google OAuth Client ID</label>
-                        <input
-                          type="text"
-                          value={clientId}
-                          onChange={(e) => setClientId(e.target.value)}
-                          className="input-field text-xs w-full bg-[var(--bg-tertiary)]"
-                          placeholder="xxxxxxxxxxxx-xxxxxxxxxxxxxxxx.apps.googleusercontent.com"
-                        />
-                      </div>
-                      <div>
-                        <label className="text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)] block mb-1">Google OAuth Client Secret</label>
-                        <input
-                          type="password"
-                          value={clientSecret}
-                          onChange={(e) => setClientSecret(e.target.value)}
-                          className="input-field text-xs w-full bg-[var(--bg-tertiary)]"
-                          placeholder="••••••••••••••••••••••••••••••••"
-                        />
-                      </div>
-                    </div>
-
-                    <div className="flex gap-3 pt-2">
-                      <button
-                        onClick={handleSaveCredentials}
-                        disabled={driveLoading}
-                        className="btn-primary text-xs font-bold py-1.5 px-4"
-                      >
-                        {driveLoading ? <Loader className="animate-spin" size={12} /> : 'Save API Config'}
-                      </button>
-                    </div>
-
-                    <div className="mt-4 border-t border-[var(--border-color)] pt-4">
-                      <h3 className="text-sm font-bold flex items-center gap-2 mb-2">
-                        <CloudLightning className="text-emerald-400" size={16} /> 2. Account Linkage
-                      </h3>
-                      {driveConnected ? (
-                        <div className="p-4 bg-emerald-500/10 border border-emerald-500/20 rounded-xl space-y-3">
-                          <div className="flex items-center gap-3">
-                            <CheckCircle className="text-emerald-400" size={20} />
-                            <div>
-                              <div className="text-xs font-bold text-emerald-400">Connected to Google Drive</div>
-                              <div className="text-[10px] text-[var(--text-muted)]">{driveEmail} ({driveName})</div>
-                            </div>
+                    {driveConnected ? (
+                      <div className="p-4 bg-emerald-500/10 border border-emerald-500/20 rounded-xl space-y-3">
+                        <div className="flex items-center gap-3">
+                          <CheckCircle className="text-emerald-400" size={20} />
+                          <div>
+                            <div className="text-xs font-bold text-emerald-400">Connected to Google Drive</div>
+                            <div className="text-[10px] text-[var(--text-muted)]">{driveEmail} ({driveName})</div>
                           </div>
-                          <button
-                            onClick={handleDisconnectDrive}
-                            className="text-[10px] font-bold text-red-400 hover:text-red-300 transition-colors uppercase tracking-wider block"
-                          >
-                            Unlink Account
-                          </button>
                         </div>
-                      ) : (
-                        <div className="p-4 bg-rose-500/5 border border-rose-500/10 rounded-xl space-y-3">
-                          <div className="flex items-center gap-3">
-                            <ShieldAlert className="text-amber-400" size={20} />
-                            <div>
-                              <div className="text-xs font-bold text-amber-400">Account Not Connected</div>
-                              <div className="text-[10px] text-[var(--text-muted)]">Authorize this app to access a dedicated folder on your Google Drive.</div>
-                            </div>
+                        <button
+                          onClick={handleDisconnectDrive}
+                          className="text-[10px] font-bold text-red-400 hover:text-red-300 transition-colors uppercase tracking-wider block"
+                        >
+                          Unlink Account
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="p-4 bg-amber-500/5 border border-amber-500/20 rounded-xl space-y-3">
+                        <div className="flex items-center gap-3">
+                          <ShieldAlert className="text-amber-400" size={20} />
+                          <div>
+                            <div className="text-xs font-bold text-amber-400">Account Not Connected</div>
+                            <div className="text-[10px] text-[var(--text-muted)]">Click below to authorize access to your Google Drive folder.</div>
                           </div>
-                          <button
-                            onClick={handleLinkDrive}
-                            className="px-4 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold flex items-center gap-2"
-                          >
-                            <Cloud size={14} /> Link Google Drive
-                          </button>
                         </div>
-                      )}
-                    </div>
+                        <button
+                          onClick={handleLinkDrive}
+                          className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold flex items-center gap-2 shadow-md transition-all"
+                        >
+                          <Cloud size={14} /> Link Google Drive
+                        </button>
+                      </div>
+                    )}
                   </div>
 
                   {/* Folders Management */}
