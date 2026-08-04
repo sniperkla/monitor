@@ -63,6 +63,15 @@ export class SystemSettingRepository {
       const r = rows[0];
       return { ...r, _id: r.id.toString(), value: typeof r.value === 'string' ? JSON.parse(r.value) : r.value };
     } else {
+      const conn = this.db.connection || this.db;
+      const rawDb = conn.db || (conn.connections && conn.connections[0]?.db);
+      if (rawDb) {
+        const doc = await rawDb.collection('system_settings').findOne(criteria);
+        if (doc) {
+          doc._id = doc._id.toString();
+        }
+        return doc;
+      }
       return await SystemSetting.findOne(criteria);
     }
   }
@@ -92,6 +101,12 @@ export class SystemSettingRepository {
       await this.db.query(query, [JSON.stringify(newValue), existing.key]);
       return true;
     } else {
+      const conn = this.db.connection || this.db;
+      const rawDb = conn.db || (conn.connections && conn.connections[0]?.db);
+      if (rawDb) {
+        await rawDb.collection('system_settings').updateOne(criteria, { $set: data });
+        return true;
+      }
       return await SystemSetting.updateOne(criteria, { $set: data });
     }
   }

@@ -24,6 +24,10 @@ export async function executeMongoSyncJob(request, jobId) {
   const jobsSetting = await settingRepo.findOne({ key: 'mongo_sync_jobs' });
   const jobs = jobsSetting ? jobsSetting.value : [];
 
+  console.log('[executeMongoSyncJob] Requested jobId:', jobId);
+  console.log('[executeMongoSyncJob] Loaded jobs count:', jobs.length);
+  console.log('[executeMongoSyncJob] Loaded job IDs:', jobs.map(j => j.id));
+
   const jobIndex = jobs.findIndex(j => j.id === jobId);
   if (jobIndex === -1) {
     return NextResponse.json({ success: false, error: 'Job not found' }, { status: 404 });
