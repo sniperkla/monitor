@@ -27,14 +27,21 @@ export async function GET(request) {
       });
     }
 
-    let origin = process.env.NEXTAUTH_URL || request.nextUrl.origin;
-    const forwardedProto = request.headers.get('x-forwarded-proto');
-    const forwardedHost = request.headers.get('x-forwarded-host') || request.headers.get('host');
-    if (forwardedHost) {
-      const proto = forwardedProto || (forwardedHost.includes('localhost') ? 'http' : 'https');
-      origin = `${proto}://${forwardedHost}`;
+    let redirectUri = process.env.GDRIVE_REDIRECT_URI;
+    if (!redirectUri) {
+      let origin = process.env.NEXTAUTH_URL;
+      if (!origin || origin.includes('localhost')) {
+        const forwardedProto = request.headers.get('x-forwarded-proto');
+        const forwardedHost = request.headers.get('x-forwarded-host') || request.headers.get('host');
+        if (forwardedHost) {
+          const proto = forwardedProto || (forwardedHost.includes('localhost') ? 'http' : 'https');
+          origin = `${proto}://${forwardedHost}`;
+        } else {
+          origin = request.nextUrl.origin;
+        }
+      }
+      redirectUri = `${origin.replace(/\/$/, '')}/api/mongo-sync/gdrive/callback`;
     }
-    const redirectUri = `${origin}/api/mongo-sync/gdrive/callback`;
 
     // Exchange code for tokens
     const tokenRes = await fetch('https://oauth2.googleapis.com/token', {
