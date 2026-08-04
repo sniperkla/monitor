@@ -124,8 +124,11 @@ export default function MongoBackupApp() {
         const data = await res.json();
         if (data.success && data.databases?.length > 0) {
           setFetchedDbs(data.databases);
-          if (jobDbName !== 'All Databases (*)' && !data.databases.includes(jobDbName)) {
-            // don't override if user selected All Databases (*)
+          // If connection returns only 1 DB (single-DB URI), auto-select it
+          if (data.databases.length === 1) {
+            setJobDbName(data.databases[0]);
+          } else if (jobDbName !== 'All Databases (*)' && !data.databases.includes(jobDbName)) {
+            setJobDbName('All Databases (*)');
           }
         } else {
           setFetchedDbs([]);
@@ -202,7 +205,10 @@ export default function MongoBackupApp() {
         const data = await res.json();
         if (data.success && data.databases?.length > 0) {
           setRestoreFetchedDbs(data.databases);
-          if (restoreDbName !== 'All Databases (*)' && !data.databases.includes(restoreDbName)) {
+          // If connection returns only 1 DB (single-DB URI), auto-select it
+          if (data.databases.length === 1) {
+            setRestoreDbName(data.databases[0]);
+          } else if (restoreDbName !== 'All Databases (*)' && !data.databases.includes(restoreDbName)) {
             setRestoreDbName(data.databases[0]);
           }
         } else { setRestoreFetchedDbs([]); }
@@ -1143,7 +1149,10 @@ export default function MongoBackupApp() {
                             onChange={(e) => setJobDbName(e.target.value)}
                             className="input-field text-xs w-full bg-[var(--bg-tertiary)]"
                           >
-                            <option value="All Databases (*)">All Databases (*)</option>
+                            {/* Only show All Databases (*) when connection has access to multiple DBs */}
+                            {fetchedDbs.length !== 1 && (
+                              <option value="All Databases (*)">All Databases (*)</option>
+                            )}
                             {fetchedDbs.map(db => (
                               <option key={db} value={db}>{db}</option>
                             ))}
@@ -1418,7 +1427,10 @@ export default function MongoBackupApp() {
                           onChange={(e) => setRestoreDbName(e.target.value)}
                           className="input-field text-xs w-full bg-[var(--bg-tertiary)]"
                         >
-                          <option value="All Databases (*)">All Databases (*)</option>
+                          {/* Only show All Databases (*) when connection has access to multiple DBs */}
+                          {restoreFetchedDbs.length !== 1 && (
+                            <option value="All Databases (*)">All Databases (*)</option>
+                          )}
                           {restoreFetchedDbs.map(db => (
                             <option key={db} value={db}>{db}</option>
                           ))}
