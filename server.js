@@ -1035,9 +1035,24 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
               cmdSuffix = `service ls --format "{{json .}}"`;
             } else if (action === 'swarm:nodes') {
               cmdSuffix = `node ls --format "{{json .}}" 2>/dev/null || echo ""`;
+            } else if (action === 'start-all') {
+              cmdSuffix = `sh -c "STOPPED=$(${dockerSudo}docker ps -a --filter status=exited --filter status=created --filter status=paused -q 2>/dev/null); if [ -z \\"$STOPPED\\" ]; then echo 'NONE_STOPPED'; else ${dockerSudo}docker start $STOPPED 2>&1; echo '---FINISHED---'; fi"`;
+            } else if (action === 'check-port' && args.length > 0) {
+              const port = String(args[0]).replace(/[^0-9]/g, '');
+              if (!port) return socket.emit('docker:error', 'Invalid Port');
+              cmdSuffix = `sh -c "(ss -tuln 2>/dev/null || netstat -tuln) | grep -q -w ':${port}' && echo 'IN_USE' || echo 'FREE'"`;
+            } else if (action === 'prune-volumes') {
+              cmdSuffix = `volume prune -f`;
+            } else if (action === 'prune-images') {
+              const pruneAll = args && (args[0] === true || args[0] === 'all');
+              cmdSuffix = `image prune ${pruneAll ? '-a ' : ''}-f`;
+            } else if (action === 'prune-networks') {
+              cmdSuffix = `network prune -f`;
+            } else if (action === 'clean-exited-swarm') {
+              cmdSuffix = `sh -c 'EXITED=$(docker ps -a --filter status=exited -q 2>/dev/null); if [ -n "$EXITED" ]; then echo "Removing exited task containers..."; docker rm -f $EXITED 2>&1; else echo "No exited containers found"; fi; docker container prune -f 2>/dev/null || true'`;
+            } else if (action === 'connect-nginx-swarm') {
+              cmdSuffix = `sh -c 'NETS=$(docker network ls --filter driver=overlay --format "{{.Name}}"); for net in $NETS; do echo "Connecting Nginx to $net..."; docker network connect $net global-nginx 2>/dev/null || docker network connect $net nginx 2>/dev/null || true; done; echo "Restarting Nginx container to apply new network routes and clear DNS cache..."; docker restart global-nginx 2>/dev/null || docker restart nginx 2>/dev/null || docker exec global-nginx nginx -s reload 2>/dev/null || docker exec nginx nginx -s reload 2>/dev/null || systemctl reload nginx 2>/dev/null || true; echo "Nginx connected and restarted successfully!"'`;
             } else {
-              // For any other action, forward to the full handler by re-emitting won't work here —
-              // just return an error for unrecognized actions in the reattach path
               return socket.emit('docker:error', `Action '${action}' requires a fresh connection. Please refresh.`);
             }
 

@@ -6,7 +6,8 @@ import { useOS } from '@/context/OSContext';
 import { 
   Database, Upload, Cloud, RefreshCw, Play, Trash2, Plus, 
   CheckCircle, AlertCircle, Calendar, ShieldAlert, ArrowRight,
-  FolderPlus, History, Key, Settings, Loader, CloudLightning, FileJson
+  FolderPlus, History, Key, Settings, Loader, CloudLightning, FileJson, ShieldCheck,
+  Copy, Server, Wifi, WifiOff, Terminal
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
@@ -60,6 +61,112 @@ export default function MongoBackupApp() {
   const [restoreDbName, setRestoreDbName] = useState('monitor');
   const [restoreCollName, setRestoreCollName] = useState('');
   const [restoreMode, setRestoreMode] = useState('insert');
+
+  // ── Replica Set Failover State ──────────────────────────────────────────
+  const [rsConnId, setRsConnId] = useState('default');
+  const [rsData, setRsData] = useState(null);
+  const [rsLoading, setRsLoading] = useState(false);
+  const [rsActionLoading, setRsActionLoading] = useState(false);
+
+  // Setup / Init wizard state
+  const [initSetName, setInitSetName] = useState('rs0');
+  const [addNodeHost, setAddNodeHost] = useState('');
+
+  // Per-node SSH scan wizard
+  const emptyNode = () => ({
+    sshConnId: '', instances: [], selectedPort: '', selectedHost: '',
+    scanning: false, scanError: null, verifying: false, verified: null
+  });
+  const [nodes, setNodes] = useState([emptyNode(), emptyNode(), emptyNode()]);
+  const updateNode = (i, patch) => setNodes(prev => prev.map((n, idx) => idx === i ? { ...n, ...patch } : n));
+
+  // SSH connections (for node scanning)
+  const sshConnections = connections.filter(c => c.type === 'ssh' || (!c.type && !c.dbProvider));
+
+  const scanNode = async (i) => {
+    const node = nodes[i];
+    if (!node.sshConnId) return;
+    updateNode(i, { scanning: true, scanError: null, instances: [], selectedPort: '', selectedHost: '', verified: null });
+    const isLocalRelayMode = localStorage.getItem('ssh_monitor_ssh_mode') === 'local';
+    try {
+      const res = await apiFetch('/api/mongo-sync/scan-node', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'scan', sshConnId: node.sshConnId, useRelay: isLocalRelayMode })
+      });
+      const data = await res.json();
+      if (data.success && data.instances?.length > 0) {
+        const first = data.instances[0];
+        updateNode(i, {
+          scanning: false,
+          instances: data.instances,
+          selectedPort: String(first.port || ''),
+          selectedHost: first.host || data.host || '',
+          verified: { connected: first.connected, isReplSet: first.isReplSet, setName: first.setName, state: first.state, error: first.error }
+        });
+      } else {
+        updateNode(i, { scanning: false, scanError: data.error || 'No MongoDB instances found' });
+      }
+    } catch (err) {
+      updateNode(i, { scanning: false, scanError: err.message });
+    }
+  };
+
+  const verifyNodePort = async (i, port, host) => {
+    if (!port || !host) return;
+    const sshConnId = nodes[i]?.sshConnId;
+    if (!sshConnId) return;
+    updateNode(i, { verifying: true, verified: null });
+    const isLocalRelayMode = localStorage.getItem('ssh_monitor_ssh_mode') === 'local';
+    try {
+      const res = await apiFetch('/api/mongo-sync/scan-node', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'verify', sshConnId, mongoUri: `mongodb://${host}:${port}`, useRelay: isLocalRelayMode })
+      });
+      const data = await res.json();
+      updateNode(i, { verifying: false, verified: data });
+    } catch (err) {
+      updateNode(i, { verifying: false, verified: { connected: false, error: err.message } });
+    }
+  };
+
+  const fetchReplicaSetStatus = async (connId = rsConnId) => {
+    setRsLoading(true);
+    try {
+      const res = await apiFetch(`/api/mongo-sync/replica-set?connectionId=${connId}`);
+      if (res.success) {
+        setRsData(res);
+      } else {
+        setRsData({ isReplSet: false, error: res.error || 'Failed to query Replica Set' });
+      }
+    } catch (err) {
+      setRsData({ isReplSet: false, error: err.message });
+    } finally {
+      setRsLoading(false);
+    }
+  };
+
+  const handleFailoverAction = async (action, extraData = {}) => {
+    setRsActionLoading(true);
+    try {
+      const res = await apiFetch('/api/mongo-sync/replica-set', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action, connectionId: rsConnId, ...extraData })
+      });
+      if (res.success) {
+        addNotification({ title: 'Replica Set', message: res.message, type: 'success' });
+        setTimeout(() => fetchReplicaSetStatus(rsConnId), 2000);
+      } else {
+        addNotification({ title: 'Failover Error', message: res.error || 'Action failed', type: 'error' });
+      }
+    } catch (err) {
+      addNotification({ title: 'Failover Error', message: err.message, type: 'error' });
+    } finally {
+      setRsActionLoading(false);
+    }
+  };
 
   // Load configuration and data
   useEffect(() => {
@@ -481,6 +588,18 @@ export default function MongoBackupApp() {
           >
             <History size={14} />
             <span>Restore Backup</span>
+          </button>
+          <button
+            onClick={() => {
+              setActiveTab('failover');
+              fetchReplicaSetStatus(rsConnId);
+            }}
+            className={`w-full flex items-center gap-2.5 px-3 py-2 text-xs font-bold rounded-xl transition-all ${
+              activeTab === 'failover' ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/20 shadow-sm' : 'hover:bg-[var(--bg-card-hover)] border border-transparent text-[var(--text-muted)] hover:text-[var(--text-primary)]'
+            }`}
+          >
+            <ShieldAlert size={14} />
+            <span>Failover & Replica Set</span>
           </button>
         </nav>
 
@@ -1149,6 +1268,493 @@ export default function MongoBackupApp() {
                     </button>
                   </div>
                 </div>
+              </motion.div>
+            )}
+
+            {/* ── FAILOVER & REPLICA SET MANAGER TAB ── */}
+            {activeTab === 'failover' && (
+              <motion.div
+                key="tab-failover"
+                initial={{ opacity: 0, y: 8 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -8 }}
+                className="space-y-6"
+              >
+                {/* Header controls & Target Database Connection */}
+                <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 p-4 rounded-xl bg-[var(--bg-secondary)]/40 border border-[var(--border-color)]">
+                  <div>
+                    <h3 className="font-extrabold text-sm flex items-center gap-2 text-emerald-400">
+                      <ShieldAlert size={16} />
+                      <span>MongoDB Replica Set & Failover Manager</span>
+                    </h3>
+                    <p className="text-xs text-[var(--text-muted)] mt-0.5">
+                      Monitor 3-node High Availability clusters, trigger one-click failover elections, or initialize new replica sets.
+                    </p>
+                  </div>
+
+                  <div className="flex items-center gap-3">
+                    <div className="flex items-center gap-2">
+                      <label className="text-xs font-bold text-[var(--text-muted)]">Cluster Target:</label>
+                      <select
+                        value={rsConnId}
+                        onChange={(e) => {
+                          setRsConnId(e.target.value);
+                          fetchReplicaSetStatus(e.target.value);
+                        }}
+                        className="input-field text-xs bg-[var(--bg-tertiary)] py-1 px-2 font-mono"
+                      >
+                        {dbConnections.map(c => (
+                          <option key={c._id} value={c._id}>{c.name}</option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <button
+                      onClick={() => fetchReplicaSetStatus(rsConnId)}
+                      disabled={rsLoading}
+                      className="px-3 py-1.5 rounded-lg bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 text-xs font-bold flex items-center gap-1.5 hover:bg-emerald-500/25 transition-all disabled:opacity-50"
+                    >
+                      <RefreshCw size={13} className={rsLoading ? 'animate-spin' : ''} />
+                      <span>Refresh</span>
+                    </button>
+                  </div>
+                </div>
+
+                {/* Loading / Status State */}
+                {rsLoading && !rsData && (
+                  <div className="p-8 text-center bg-[var(--bg-secondary)]/20 rounded-xl border border-[var(--border-color)]">
+                    <Loader size={24} className="animate-spin text-emerald-400 mx-auto mb-2" />
+                    <p className="text-xs text-[var(--text-muted)] font-medium">Inspecting MongoDB Replica Set status across nodes...</p>
+                  </div>
+                )}
+
+                {/* Replica Set Active Status View */}
+                {rsData?.isReplSet && (
+                  <div className="space-y-5">
+                    {/* Overview Banner */}
+                    <div className="p-4 rounded-xl bg-emerald-500/10 border border-emerald-500/20 flex flex-wrap items-center justify-between gap-4">
+                      <div className="flex items-center gap-3">
+                        <div className="w-10 h-10 rounded-xl bg-emerald-500/20 flex items-center justify-center text-emerald-400 font-extrabold border border-emerald-500/30">
+                          RS
+                        </div>
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <span className="font-extrabold text-sm text-[var(--text-primary)]">Replica Set: {rsData.setName}</span>
+                            <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
+                              ACTIVE (HA)
+                            </span>
+                          </div>
+                          <p className="text-xs text-[var(--text-muted)] font-mono mt-0.5">
+                            Connected Host: {rsData.me || 'Unknown'} | Primary Host: <strong className="text-emerald-400">{rsData.primary || 'Detecting...'}</strong>
+                          </p>
+                        </div>
+                      </div>
+
+                      {/* Primary Step-Down Action */}
+                      <button
+                        onClick={() => {
+                          if (confirm('Trigger Primary Step-Down? The current primary will step down for 60 seconds to force an election.')) {
+                            handleFailoverAction('stepDown', { stepDownSecs: 60 });
+                          }
+                        }}
+                        disabled={rsActionLoading}
+                        className="px-3.5 py-2 rounded-xl bg-amber-500/15 border border-amber-500/30 text-amber-400 text-xs font-bold flex items-center gap-2 hover:bg-amber-500/25 transition-all disabled:opacity-50 shadow-sm"
+                      >
+                        <ShieldAlert size={14} />
+                        <span>Step Down Primary (Force Election)</span>
+                      </button>
+                    </div>
+
+                    {/* Nodes Grid (Members) */}
+                    <div>
+                      <h4 className="text-xs font-bold uppercase tracking-wider text-[var(--text-muted)] mb-3 flex items-center justify-between">
+                        <span>Cluster Member Nodes ({rsData.rsStatus?.members?.length || rsData.hosts?.length || 0})</span>
+                        <span className="text-[10px] font-mono text-emerald-400">Auto-Election Enabled</span>
+                      </h4>
+
+                      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                        {(rsData.rsStatus?.members || (rsData.hosts || []).map((h, i) => ({ host: h, stateStr: h === rsData.primary ? 'PRIMARY' : 'SECONDARY', health: 1 }))).map((member, idx) => {
+                          const isPrimary = member.stateStr === 'PRIMARY' || member.host === rsData.primary;
+                          const isHealthy = member.health === 1 || member.health === undefined;
+                          const priority = rsData.rsConfig?.members?.find(m => m.host === member.host || member.name === m.host)?.priority ?? (isPrimary ? 10 : 1);
+
+                          return (
+                            <div
+                              key={member.id || member.host || idx}
+                              className={`p-4 rounded-xl border transition-all flex flex-col justify-between space-y-3 ${
+                                isPrimary
+                                  ? 'bg-emerald-500/10 border-emerald-500/30 shadow-[0_0_15px_rgba(16,185,129,0.1)]'
+                                  : isHealthy
+                                  ? 'bg-[var(--bg-secondary)]/50 border-[var(--border-color)]'
+                                  : 'bg-rose-500/10 border-rose-500/30'
+                              }`}
+                            >
+                              <div>
+                                <div className="flex items-center justify-between mb-2">
+                                  <span className={`px-2 py-0.5 rounded-md text-[10px] font-black uppercase tracking-wider border ${
+                                    isPrimary
+                                      ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/40'
+                                      : 'bg-indigo-500/20 text-indigo-400 border-indigo-500/30'
+                                  }`}>
+                                    {member.stateStr || (isPrimary ? 'PRIMARY' : 'SECONDARY')}
+                                  </span>
+
+                                  <div className="flex items-center gap-1.5">
+                                    <div className={`w-2 h-2 rounded-full ${isHealthy ? 'bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.6)]' : 'bg-rose-500 animate-pulse'}`} />
+                                    <span className="text-[10px] font-mono font-bold text-[var(--text-muted)]">
+                                      {isHealthy ? 'Healthy' : 'Down'}
+                                    </span>
+                                  </div>
+                                </div>
+
+                                <div className="font-mono text-xs font-bold text-[var(--text-primary)] truncate" title={member.name || member.host}>
+                                  {member.name || member.host}
+                                </div>
+
+                                <div className="mt-2 space-y-1 text-[11px] text-[var(--text-muted)] font-mono">
+                                  <div className="flex justify-between">
+                                    <span>Member ID:</span>
+                                    <span className="font-bold text-[var(--text-primary)]">#{member._id ?? idx}</span>
+                                  </div>
+                                  <div className="flex justify-between">
+                                    <span>Election Priority:</span>
+                                    <span className="font-bold text-amber-400">{priority}</span>
+                                  </div>
+                                  {member.pingMs !== undefined && (
+                                    <div className="flex justify-between">
+                                      <span>Latency:</span>
+                                      <span className="font-bold text-emerald-400">{member.pingMs}ms</span>
+                                    </div>
+                                  )}
+                                </div>
+                              </div>
+
+                              {/* Action: Failover Promote to Primary */}
+                              {!isPrimary && (
+                                <button
+                                  onClick={() => {
+                                    if (confirm(`Promote node ${member.name || member.host} to Primary? This will update priority to 10 and trigger failover.`)) {
+                                      handleFailoverAction('promoteNode', { targetHost: member.name || member.host });
+                                    }
+                                  }}
+                                  disabled={rsActionLoading}
+                                  className="w-full py-1.5 rounded-lg bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 text-[11px] font-bold flex items-center justify-center gap-1.5 hover:bg-emerald-500/25 transition-all disabled:opacity-50 mt-2"
+                                >
+                                  <CloudLightning size={12} />
+                                  <span>Promote to Primary</span>
+                                </button>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    {/* Manage Nodes (Add / Remove) */}
+                    <div className="p-4 rounded-xl bg-[var(--bg-secondary)]/30 border border-[var(--border-color)] space-y-3">
+                      <h4 className="text-xs font-bold uppercase tracking-wider text-[var(--text-muted)]">Add Member Node to Cluster</h4>
+                      <div className="flex items-center gap-3">
+                        <input
+                          type="text"
+                          value={addNodeHost}
+                          onChange={(e) => setAddNodeHost(e.target.value)}
+                          placeholder="e.g. 192.168.1.102:27017"
+                          className="input-field text-xs bg-[var(--bg-tertiary)] flex-1 font-mono"
+                        />
+                        <button
+                          onClick={() => {
+                            if (!addNodeHost.trim()) return;
+                            handleFailoverAction('addMember', { targetHost: addNodeHost.trim() });
+                            setAddNodeHost('');
+                          }}
+                          disabled={rsActionLoading || !addNodeHost.trim()}
+                          className="btn-primary text-xs py-1.5 px-4 font-bold disabled:opacity-40"
+                        >
+                          <Plus size={14} />
+                          <span>Add Node</span>
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* Not a Replica Set / Setup Wizard */}
+                {rsData && !rsData.isReplSet && (
+                  <div className="space-y-5">
+                    <div className="p-4 rounded-xl bg-amber-500/10 border border-amber-500/20 flex items-start gap-3">
+                      <AlertCircle size={20} className="text-amber-400 shrink-0 mt-0.5" />
+                      <div>
+                        <h4 className="font-extrabold text-sm text-amber-400">Standalone MongoDB Detected (Not a Replica Set)</h4>
+                        <p className="text-xs text-[var(--text-muted)] mt-0.5">
+                          {rsData.error || 'The selected database connection is running in standalone mode. Initialize a 3-node replica set below to enable automated High-Availability failover.'}
+                        </p>
+                      </div>
+                    </div>
+
+                    {/* 3-Node SSH-Scan Setup Wizard */}
+                    <div className="p-5 rounded-xl bg-[var(--bg-secondary)]/40 border border-[var(--border-color)] space-y-5">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <ShieldCheck size={16} className="text-emerald-400" />
+                          <h4 className="font-extrabold text-sm text-[var(--text-primary)]">Initialize 3-Node High-Availability Replica Set</h4>
+                        </div>
+                        <span className="text-[10px] font-mono text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/20">Auto-Scan Mode</span>
+                      </div>
+
+                      {/* Replica Set Name */}
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                        <div>
+                          <label className="text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)] block mb-1">Replica Set Name</label>
+                          <input
+                            type="text"
+                            value={initSetName}
+                            onChange={(e) => setInitSetName(e.target.value)}
+                            className="input-field text-xs w-full bg-[var(--bg-tertiary)] font-mono"
+                            placeholder="rs0"
+                          />
+                        </div>
+                        <div className="sm:col-span-2 flex items-end">
+                          <p className="text-[11px] text-[var(--text-muted)] leading-relaxed">
+                            Select an SSH connection for each node, click <strong className="text-emerald-400">Scan</strong> to auto-discover MongoDB instances, then pick the port. If MongoDB isn&apos;t running with <code className="text-amber-400">--replSet</code>, a docker command will appear.
+                          </p>
+                        </div>
+                      </div>
+
+                      {/* 3 Node Cards */}
+                      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                        {nodes.map((node, i) => {
+                          const nodeLabels = ['Primary', 'Secondary 1', 'Secondary 2'];
+                          const nodeColors = ['emerald', 'indigo', 'violet'];
+                          const col = nodeColors[i];
+                          const v = node.verified;
+                          const isConnected = v?.connected;
+                          const isInitialized = v?.isReplSet;
+                          const isNotInit = isConnected && !isInitialized;
+                          const isDown = v && !isConnected;
+                          const dockerPort = node.selectedPort || String(27017 + i);
+                          const dockerHost = node.selectedHost || `10.0.0.${i + 1}`;
+                          const dockerCmd = `docker run -d --name mongo${i + 1} -p ${dockerPort}:27017 mongo:latest mongod --replSet ${initSetName} --bind_ip_all`;
+
+                          return (
+                            <div
+                              key={i}
+                              className={`rounded-xl border p-4 space-y-3 flex flex-col ${
+                                isInitialized
+                                  ? 'bg-emerald-500/5 border-emerald-500/25'
+                                  : isNotInit
+                                  ? 'bg-amber-500/5 border-amber-500/25'
+                                  : isDown
+                                  ? 'bg-rose-500/5 border-rose-500/25'
+                                  : 'bg-[var(--bg-secondary)]/30 border-[var(--border-color)]'
+                              }`}
+                            >
+                              {/* Node header */}
+                              <div className="flex items-center justify-between">
+                                <div className="flex items-center gap-2">
+                                  <div className={`w-7 h-7 rounded-lg bg-${col}-500/15 border border-${col}-500/30 text-${col}-400 text-xs font-black flex items-center justify-center`}>
+                                    {i + 1}
+                                  </div>
+                                  <div>
+                                    <div className="text-xs font-extrabold">Node {i + 1}</div>
+                                    <div className={`text-[10px] text-${col}-400 font-mono`}>{nodeLabels[i]}</div>
+                                  </div>
+                                </div>
+                                {/* Status badge */}
+                                {node.verifying ? (
+                                  <Loader size={12} className="animate-spin text-emerald-400" />
+                                ) : v ? (
+                                  <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold border flex items-center gap-1 ${
+                                    isInitialized
+                                      ? 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30'
+                                      : isNotInit
+                                      ? 'bg-amber-500/15 text-amber-400 border-amber-500/30'
+                                      : 'bg-rose-500/15 text-rose-400 border-rose-500/30'
+                                  }`}>
+                                    {isInitialized ? <Wifi size={10} /> : isNotInit ? <AlertCircle size={10} /> : <WifiOff size={10} />}
+                                    {isInitialized ? v.state : isNotInit ? 'No replSet' : 'Down'}
+                                  </span>
+                                ) : null}
+                              </div>
+
+                              {/* SSH connection selector */}
+                              <div>
+                                <label className="text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)] block mb-1">SSH Server</label>
+                                <div className="flex gap-1.5">
+                                  <select
+                                    value={node.sshConnId}
+                                    onChange={(e) => updateNode(i, { sshConnId: e.target.value, instances: [], selectedPort: '', selectedHost: '', verified: null, scanError: null })}
+                                    className="input-field text-xs flex-1 bg-[var(--bg-tertiary)] min-w-0 truncate"
+                                  >
+                                    <option value="">(Select SSH Server)</option>
+                                    {sshConnections.map(c => (
+                                      <option key={c._id} value={c._id}>{c.name} — {c.host}</option>
+                                    ))}
+                                  </select>
+                                  <button
+                                    onClick={() => scanNode(i)}
+                                    disabled={!node.sshConnId || node.scanning}
+                                    title="Scan MongoDB instances on this server"
+                                    className="px-2.5 py-1.5 text-[11px] font-bold rounded-lg bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/25 transition-all disabled:opacity-40 flex items-center gap-1 shrink-0"
+                                  >
+                                    {node.scanning
+                                      ? <Loader size={11} className="animate-spin" />
+                                      : <RefreshCw size={11} />}
+                                    Scan
+                                  </button>
+                                </div>
+                              </div>
+
+                              {/* Scan error */}
+                              {node.scanError && (
+                                <div className="text-[10px] text-rose-400 bg-rose-500/10 border border-rose-500/20 rounded-lg px-3 py-2 leading-relaxed">
+                                  ❌ {node.scanError}
+                                </div>
+                              )}
+
+                              {/* MongoDB instance selector (from scan) */}
+                              {node.instances.length > 0 && (
+                                <div>
+                                  <label className="text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)] block mb-1">MongoDB Instance</label>
+                                  <select
+                                    value={`${node.selectedHost}:${node.selectedPort}`}
+                                    onChange={(e) => {
+                                      const [h, ...pParts] = e.target.value.split(':');
+                                      const p = pParts.join(':');
+                                      updateNode(i, { selectedHost: h, selectedPort: p, verified: null });
+                                      verifyNodePort(i, p, h);
+                                    }}
+                                    className="input-field text-xs w-full bg-[var(--bg-tertiary)] font-mono"
+                                  >
+                                    {node.instances.map(inst => (
+                                      <option key={inst.port} value={`${inst.host}:${inst.port}`}>
+                                        {inst.host}:{inst.port}
+                                        {inst.connected
+                                          ? inst.isReplSet ? ` ✅ ${inst.state}` : ' ⚠️ Standalone'
+                                          : ' ❌ Unreachable'}
+                                      </option>
+                                    ))}
+                                  </select>
+                                  {node.selectedHost && node.selectedPort && (
+                                    <div className="mt-1 text-[10px] font-mono text-[var(--text-muted)]">
+                                      Selected: <span className="text-emerald-400">{node.selectedHost}:{node.selectedPort}</span>
+                                    </div>
+                                  )}
+                                </div>
+                              )}
+
+                              {/* ── Not initialized → show docker run command with Auto-Run button ── */}
+                              {isNotInit && (
+                                <div className="rounded-lg bg-[var(--bg-card)]/60 border border-amber-500/25 p-3 space-y-2 flex-1">
+                                  <div className="flex items-center justify-between">
+                                    <span className="text-[10px] font-bold text-amber-400 flex items-center gap-1">
+                                      <Terminal size={10} /> Docker command (Node {i + 1}):
+                                    </span>
+                                    <button
+                                      onClick={() => {
+                                        navigator.clipboard.writeText(dockerCmd);
+                                        addNotification({ title: `Copied Node ${i + 1}!`, message: 'Docker command copied to clipboard', type: 'info' });
+                                      }}
+                                      className="text-[10px] text-emerald-400 hover:text-emerald-300 font-bold flex items-center gap-1"
+                                    >
+                                      <Copy size={10} /> Copy
+                                    </button>
+                                  </div>
+                                  <code className="block text-[10px] font-mono text-[var(--text-primary)] break-all leading-relaxed bg-slate-900/50 rounded p-2 select-all">
+                                    {dockerCmd}
+                                  </code>
+                                  <button
+                                    onClick={async () => {
+                                      if (!node.sshConnId) return addNotification({ title: 'SSH Missing', message: 'Select SSH connection first', type: 'error' });
+                                      updateNode(i, { verifying: true });
+                                      try {
+                                        const res = await apiFetch('/api/mongo-sync/scan-node', {
+                                          method: 'POST',
+                                          headers: { 'Content-Type': 'application/json' },
+                                          body: JSON.stringify({ action: 'run-docker', sshConnId: node.sshConnId, command: dockerCmd })
+                                        });
+                                        const data = await res.json();
+                                        if (data.success) {
+                                          addNotification({ title: `Node ${i + 1} Started!`, message: 'MongoDB container launched. Re-verifying...', type: 'success' });
+                                          setTimeout(() => scanNode(i), 2000);
+                                        } else {
+                                          addNotification({ title: `Launch Failed`, message: data.output || 'Could not run docker container', type: 'error' });
+                                          updateNode(i, { verifying: false });
+                                        }
+                                      } catch (err) {
+                                        addNotification({ title: `Error`, message: err.message, type: 'error' });
+                                        updateNode(i, { verifying: false });
+                                      }
+                                    }}
+                                    disabled={node.verifying}
+                                    className="w-full py-1.5 rounded bg-amber-500/20 border border-amber-500/40 hover:bg-amber-500/30 text-amber-300 text-[11px] font-bold flex items-center justify-center gap-1.5 transition-all disabled:opacity-50"
+                                  >
+                                    <Play size={12} />
+                                    <span>{node.verifying ? 'Starting Container via SSH...' : `1-Click Auto-Run Docker Container`}</span>
+                                  </button>
+                                </div>
+                              )}
+
+                              {/* Already in replica set — show info */}
+                              {isInitialized && (
+                                <div className="text-[10px] font-mono text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 rounded-lg px-3 py-2">
+                                  ✅ Set: <strong>{v.setName}</strong> | State: <strong>{v.state}</strong>
+                                </div>
+                              )}
+
+                              {/* Show selected host:port as final value */}
+                              {node.selectedHost && node.selectedPort && !node.instances.length && (
+                                <div className="text-[10px] font-mono text-[var(--text-muted)] bg-[var(--bg-tertiary)]/50 border border-[var(--border-color)] rounded px-2 py-1">
+                                  {node.selectedHost}:{node.selectedPort}
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+
+                      {/* Summary of selected nodes */}
+                      {(() => {
+                        const selected = nodes.filter(n => n.selectedHost && n.selectedPort);
+                        if (selected.length === 0) return null;
+                        return (
+                          <div className="p-3 rounded-lg bg-[var(--bg-tertiary)]/40 border border-[var(--border-color)] text-[11px] font-mono space-y-1">
+                            <div className="text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)] mb-2">Replica Set Members to Initialize:</div>
+                            {selected.map((n, i) => (
+                              <div key={i} className="text-emerald-400">
+                                Member {i}: <span className="text-[var(--text-primary)]">{n.selectedHost}:{n.selectedPort}</span>
+                              </div>
+                            ))}
+                          </div>
+                        );
+                      })()}
+
+                      {/* One-Click Initialize Button */}
+                      <button
+                        onClick={() => {
+                          const members = nodes
+                            .filter(n => n.selectedHost && n.selectedPort)
+                            .map(n => `${n.selectedHost}:${n.selectedPort}`);
+                          if (members.length === 0) return alert('Configure and scan at least 1 node first');
+                          handleFailoverAction('initiate', { setName: initSetName, members });
+                        }}
+                        disabled={rsActionLoading || !nodes.some(n => n.selectedHost && n.selectedPort)}
+                        className="w-full btn-primary justify-center font-bold text-xs py-2.5 shadow-lg"
+                      >
+                        {rsActionLoading ? (
+                          <>
+                            <Loader className="animate-spin" size={14} />
+                            <span>Connecting &amp; Initializing {nodes.filter(n => n.selectedHost && n.selectedPort).length}-Node Cluster...</span>
+                          </>
+                        ) : (
+                          <>
+                            <ShieldCheck size={14} />
+                            <span>One-Click Initialize Replica Set ({nodes.filter(n => n.selectedHost && n.selectedPort).length} node{nodes.filter(n => n.selectedHost && n.selectedPort).length !== 1 ? 's' : ''} ready)</span>
+                          </>
+                        )}
+                      </button>
+                    </div>
+                  </div>
+                )}
               </motion.div>
             )}
           </AnimatePresence>
