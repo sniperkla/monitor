@@ -4,6 +4,7 @@ import { authOptions } from "@/lib/auth";
 import connectDB from '@/lib/mongodb';
 import { ConnectionRepository } from '@/lib/repositories/ConnectionRepository';
 import { getPooledConnection } from '@/lib/dbPool';
+import { attachRequestUserId } from '@/lib/requestUser';
 import mongoose from 'mongoose';
 
 export async function POST(request) {
@@ -16,6 +17,7 @@ export async function POST(request) {
     const { connectionId, database } = await request.json();
 
     let pooled;
+    let connData = null;
     if (connectionId === 'default') {
       await connectDB(null, true);
       pooled = { db: mongoose.connection.db };
@@ -27,14 +29,19 @@ export async function POST(request) {
       if (!fullConn) {
         return NextResponse.json({ success: false, error: 'Connection not found' }, { status: 404 });
       }
-      const connData = fullConn.toObject ? fullConn.toObject() : fullConn;
+      connData = fullConn.toObject ? fullConn.toObject() : fullConn;
+      connData = await attachRequestUserId(request, connData);
       pooled = await getPooledConnection(connData);
     }
 
     const dbInstance = connectionId === 'default' ? pooled.db : pooled.db.db;
 
-    // If database parameter is provided, return collections for that database
+    // If database parameter is provided and is a specific DB name (not "All Databases (*)")
     if (database) {
+      if (database === 'All Databases (*)' || database === 'ALL_DATABASES' || database === '*') {
+        return NextResponse.json({ success: true, collections: ['All Collections (*)'] });
+      }
+
       const targetDb = dbInstance.databaseName === database
         ? dbInstance
         : dbInstance.client ? dbInstance.client.db(database) : dbInstance.parentDb ? dbInstance.parentDb.db(database) : dbInstance;
@@ -45,22 +52,27 @@ export async function POST(request) {
     }
 
     // Otherwise list databases
-    const adminDb = dbInstance.admin ? dbInstance.admin() : dbInstance.client ? dbInstance.client.db('admin') : null;
     let dbs = [];
-    if (adminDb) {
-      try {
+    const configuredDb = connData?.database || dbInstance?.databaseName;
+
+    try {
+      const adminDb = dbInstance.admin ? dbInstance.admin() : (dbInstance.client ? dbInstance.client.db('admin') : null);
+      if (adminDb) {
         const listRes = await adminDb.listDatabases();
-        dbs = listRes.databases.map(d => d.name).filter(name => !['admin', 'local', 'config'].includes(name));
-      } catch (_) {
-        // Fallback to current db name if admin command fails (e.g. limited user permissions)
-        dbs = [dbInstance.databaseName || 'monitor'];
+        if (listRes?.databases) {
+          dbs = listRes.databases.map(d => d.name).filter(name => !['admin', 'local', 'config'].includes(name));
+        }
       }
-    } else {
-      dbs = [dbInstance.databaseName || 'monitor'];
+    } catch (err) {
+      console.warn('schema-explorer listDatabases warning:', err.message);
+    }
+
+    if (configuredDb && !dbs.includes(configuredDb) && !['admin', 'local', 'config'].includes(configuredDb)) {
+      dbs.unshift(configuredDb);
     }
 
     if (dbs.length === 0) {
-      dbs = [dbInstance.databaseName || 'monitor'];
+      dbs = [configuredDb || 'monitor'];
     }
 
     return NextResponse.json({ success: true, databases: dbs });

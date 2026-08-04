@@ -8,6 +8,7 @@ import { ConnectionRepository } from '@/lib/repositories/ConnectionRepository';
 import { SystemSettingRepository } from '@/lib/repositories/SystemSettingRepository';
 import SystemSetting from '@/models/SystemSetting';
 import { uploadFileToGoogleDrive } from '@/lib/gdriveHelper';
+import { attachRequestUserId } from '@/lib/requestUser';
 
 export async function POST(request, { params }) {
   try {
@@ -47,7 +48,8 @@ export async function POST(request, { params }) {
         if (!fullConn) {
           throw new Error(`Connection ${job.connectionId} not found.`);
         }
-        const connData = fullConn.toObject ? fullConn.toObject() : fullConn;
+        let connData = fullConn.toObject ? fullConn.toObject() : fullConn;
+        connData = await attachRequestUserId(request, connData);
         pooled = await getPooledConnection(connData);
       }
 

@@ -5,6 +5,7 @@ import { getPooledConnection } from '@/lib/dbPool';
 import connectDB from '@/lib/mongodb';
 import { ConnectionRepository } from '@/lib/repositories/ConnectionRepository';
 import { sanitizeDocument } from '@/lib/mongoSyncUtils';
+import { attachRequestUserId } from '@/lib/requestUser';
 import mongoose from 'mongoose';
 
 const MAX_IMPORT_DOCS = 100000;
@@ -43,7 +44,8 @@ export async function POST(request) {
       if (!fullConn) {
         return NextResponse.json({ success: false, error: 'Target connection not found' }, { status: 404 });
       }
-      const connData = fullConn.toObject ? fullConn.toObject() : fullConn;
+      let connData = fullConn.toObject ? fullConn.toObject() : fullConn;
+      connData = await attachRequestUserId(request, connData);
       pooled = await getPooledConnection(connData);
     }
 

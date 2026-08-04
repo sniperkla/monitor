@@ -90,7 +90,8 @@ export async function POST(request) {
       if (!fullConn) {
         return NextResponse.json({ success: false, error: 'Target connection not found' }, { status: 404 });
       }
-      const connData = fullConn.toObject ? fullConn.toObject() : fullConn;
+      let connData = fullConn.toObject ? fullConn.toObject() : fullConn;
+      connData = await attachRequestUserId(request, connData);
       pooled = await getPooledConnection(connData);
     }
 

@@ -59,6 +59,57 @@ export default function MongoBackupApp() {
   const [fetchingDbs, setFetchingDbs] = useState(false);
   const [fetchingColls, setFetchingColls] = useState(false);
 
+  // Auto-fetch DB & Collections for Import JSON target connection
+  const [importFetchedDbs, setImportFetchedDbs] = useState([]);
+  const [importFetchedColls, setImportFetchedColls] = useState([]);
+  const [importFetchingDbs, setImportFetchingDbs] = useState(false);
+  const [importFetchingColls, setImportFetchingColls] = useState(false);
+
+  useEffect(() => {
+    if (!importConnId) return;
+    const fetchDatabases = async () => {
+      setImportFetchingDbs(true);
+      try {
+        const res = await apiFetch('/api/mongo-sync/schema-explorer', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ connectionId: importConnId })
+        });
+        const data = await res.json();
+        if (data.success && data.databases?.length > 0) {
+          setImportFetchedDbs(data.databases);
+          if (!importDbName || !data.databases.includes(importDbName)) {
+            setImportDbName(data.databases[0]);
+          }
+        } else { setImportFetchedDbs([]); }
+      } catch { setImportFetchedDbs([]); }
+      finally { setImportFetchingDbs(false); }
+    };
+    fetchDatabases();
+  }, [importConnId]);
+
+  useEffect(() => {
+    if (!importConnId || !importDbName) return;
+    const fetchCollections = async () => {
+      setImportFetchingColls(true);
+      try {
+        const res = await apiFetch('/api/mongo-sync/schema-explorer', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ connectionId: importConnId, database: importDbName })
+        });
+        const data = await res.json();
+        if (data.success && data.collections?.length > 0) {
+          const filtered = data.collections.filter(c => c !== 'All Collections (*)');
+          setImportFetchedColls(filtered);
+          if (filtered.length > 0 && !filtered.includes(importCollName)) {
+            setImportCollName(filtered[0]);
+          }
+        } else { setImportFetchedColls([]); }
+      } catch { setImportFetchedColls([]); }
+      finally { setImportFetchingColls(false); }
+    };
+    fetchCollections();
+  }, [importConnId, importDbName]);
+
   // Fetch databases when connection changes
   useEffect(() => {
     if (!jobConnId) return;
@@ -73,8 +124,8 @@ export default function MongoBackupApp() {
         const data = await res.json();
         if (data.success && data.databases?.length > 0) {
           setFetchedDbs(data.databases);
-          if (!data.databases.includes(jobDbName) && jobDbName !== 'All Databases (*)') {
-            // don't override; keep whatever user picked
+          if (jobDbName !== 'All Databases (*)' && !data.databases.includes(jobDbName)) {
+            // don't override if user selected All Databases (*)
           }
         } else {
           setFetchedDbs([]);
@@ -92,6 +143,11 @@ export default function MongoBackupApp() {
   // Fetch collections when database changes
   useEffect(() => {
     if (!jobConnId || !jobDbName) return;
+    if (jobDbName === 'All Databases (*)') {
+      setFetchedColls(['All Collections (*)']);
+      setJobCollName('All Collections (*)');
+      return;
+    }
     const fetchCollections = async () => {
       setFetchingColls(true);
       try {
@@ -103,15 +159,15 @@ export default function MongoBackupApp() {
         const data = await res.json();
         if (data.success && data.collections?.length > 0) {
           setFetchedColls(data.collections);
-          if (!data.collections.includes(jobCollName)) {
+          if (jobCollName !== 'All Collections (*)' && !data.collections.includes(jobCollName)) {
             setJobCollName(data.collections[0]);
           }
         } else {
-          setFetchedColls([]);
+          setFetchedColls(['All Collections (*)']);
         }
       } catch (err) {
         console.error('Failed to fetch collections:', err);
-        setFetchedColls([]);
+        setFetchedColls(['All Collections (*)']);
       } finally {
         setFetchingColls(false);
       }
@@ -146,7 +202,9 @@ export default function MongoBackupApp() {
         const data = await res.json();
         if (data.success && data.databases?.length > 0) {
           setRestoreFetchedDbs(data.databases);
-          if (!data.databases.includes(restoreDbName)) setRestoreDbName(data.databases[0]);
+          if (restoreDbName !== 'All Databases (*)' && !data.databases.includes(restoreDbName)) {
+            setRestoreDbName(data.databases[0]);
+          }
         } else { setRestoreFetchedDbs([]); }
       } catch { setRestoreFetchedDbs([]); }
       finally { setRestoreFetchingDbs(false); }
@@ -156,6 +214,11 @@ export default function MongoBackupApp() {
 
   useEffect(() => {
     if (!restoreConnId || !restoreDbName) return;
+    if (restoreDbName === 'All Databases (*)') {
+      setRestoreFetchedColls(['All Collections (*)']);
+      setRestoreCollName('All Collections (*)');
+      return;
+    }
     const fetchCollections = async () => {
       setRestoreFetchingColls(true);
       try {
@@ -166,9 +229,11 @@ export default function MongoBackupApp() {
         const data = await res.json();
         if (data.success && data.collections?.length > 0) {
           setRestoreFetchedColls(data.collections);
-          if (!data.collections.includes(restoreCollName)) setRestoreCollName(data.collections[0]);
-        } else { setRestoreFetchedColls([]); }
-      } catch { setRestoreFetchedColls([]); }
+          if (restoreCollName !== 'All Collections (*)' && !data.collections.includes(restoreCollName)) {
+            setRestoreCollName(data.collections[0]);
+          }
+        } else { setRestoreFetchedColls(['All Collections (*)']); }
+      } catch { setRestoreFetchedColls(['All Collections (*)']); }
       finally { setRestoreFetchingColls(false); }
     };
     fetchCollections();
@@ -779,27 +844,57 @@ export default function MongoBackupApp() {
                         </select>
                       </div>
                       <div>
-                        <label className="text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)] block mb-1">Target Database</label>
-                        <input
-                          type="text"
-                          value={importDbName}
-                          onChange={(e) => setImportDbName(e.target.value)}
-                          className="input-field text-xs w-full bg-[var(--bg-tertiary)]"
-                          placeholder="e.g. monitor"
-                        />
+                        <label className="text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)] block mb-1 flex items-center justify-between">
+                          <span>Target Database</span>
+                          {importFetchingDbs && <Loader size={10} className="animate-spin text-emerald-400" />}
+                        </label>
+                        {importFetchedDbs.length > 0 ? (
+                          <select
+                            value={importDbName}
+                            onChange={(e) => setImportDbName(e.target.value)}
+                            className="input-field text-xs w-full bg-[var(--bg-tertiary)]"
+                          >
+                            {importFetchedDbs.map(db => (
+                              <option key={db} value={db}>{db}</option>
+                            ))}
+                          </select>
+                        ) : (
+                          <input
+                            type="text"
+                            value={importDbName}
+                            onChange={(e) => setImportDbName(e.target.value)}
+                            className="input-field text-xs w-full bg-[var(--bg-tertiary)]"
+                            placeholder="e.g. monitor"
+                          />
+                        )}
                       </div>
                     </div>
 
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                       <div>
-                        <label className="text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)] block mb-1">Target Collection Name</label>
-                        <input
-                          type="text"
-                          value={importCollName}
-                          onChange={(e) => setImportCollName(e.target.value)}
-                          className="input-field text-xs w-full bg-[var(--bg-tertiary)]"
-                          placeholder="e.g. connections"
-                        />
+                        <label className="text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)] block mb-1 flex items-center justify-between">
+                          <span>Target Collection Name</span>
+                          {importFetchingColls && <Loader size={10} className="animate-spin text-emerald-400" />}
+                        </label>
+                        {importFetchedColls.length > 0 ? (
+                          <select
+                            value={importCollName}
+                            onChange={(e) => setImportCollName(e.target.value)}
+                            className="input-field text-xs w-full bg-[var(--bg-tertiary)]"
+                          >
+                            {importFetchedColls.map(c => (
+                              <option key={c} value={c}>{c}</option>
+                            ))}
+                          </select>
+                        ) : (
+                          <input
+                            type="text"
+                            value={importCollName}
+                            onChange={(e) => setImportCollName(e.target.value)}
+                            className="input-field text-xs w-full bg-[var(--bg-tertiary)]"
+                            placeholder="e.g. connections"
+                          />
+                        )}
                       </div>
                       <div>
                         <label className="text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)] block mb-1">Import Mode</label>
