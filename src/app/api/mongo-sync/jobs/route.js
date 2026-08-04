@@ -4,20 +4,18 @@ import { authOptions } from "@/lib/auth";
 import connectDB from '@/lib/mongodb';
 import mongoose from 'mongoose';
 import { v4 as uuidv4 } from 'uuid';
-import { executeMongoSyncJob } from '@/lib/mongoSyncJobRunner';
-async function getJobs() {
-  await connectDB(null, true);
-  const jobsSetting = await mongoose.connection.db.collection('system_settings').findOne({ key: 'mongo_sync_jobs' });
-  return jobsSetting?.value || [];
+import { SystemSettingRepository } from '@/lib/repositories/SystemSettingRepository';
+
+async function getSettingRepo() {
+  const db = await connectDB();
+  const repo = new SystemSettingRepository(db);
+  await repo.init();
+  return repo;
 }
 
-async function saveJobs(jobs) {
-  await connectDB(null, true);
-  await mongoose.connection.db.collection('system_settings').updateOne(
-    { key: 'mongo_sync_jobs' },
-    { $set: { key: 'mongo_sync_jobs', value: jobs } },
-    { upsert: true }
-  );
+async function getJobs(repo) {
+  const setting = await repo.findOne({ key: 'mongo_sync_jobs' });
+  return setting?.value || [];
 }
 
 export async function GET(request) {
@@ -27,7 +25,8 @@ export async function GET(request) {
       return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
     }
 
-    const jobs = await getJobs();
+    const repo = await getSettingRepo();
+    const jobs = await getJobs(repo);
     return NextResponse.json({ success: true, data: jobs });
 
   } catch (error) {
@@ -37,20 +36,14 @@ export async function GET(request) {
 }
 
 export async function POST(request) {
-  const url = new URL(request.url);
-  const runFlag = url.searchParams.get('run');
-  const runJobId = url.searchParams.get('id');
-  if (runFlag === 'true' && runJobId) {
-    return executeMongoSyncJob(request, runJobId);
-  }
-
   try {
     const session = await getServerSession(authOptions);
     if (!session) {
       return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
     }
 
-    const jobs = await getJobs();
+    const repo = await getSettingRepo();
+    const jobs = await getJobs(repo);
     const body = await request.json();
     const { id, name, connectionId, connectionName, database, collection, driveFolderId, driveFolderName, schedule, enabled = true } = body;
 
@@ -61,48 +54,30 @@ export async function POST(request) {
     let updatedJobs = [...jobs];
 
     if (id) {
-      // Update
+      // Update existing
       const index = updatedJobs.findIndex(j => j.id === id);
       if (index === -1) {
         return NextResponse.json({ success: false, error: 'Job not found' }, { status: 404 });
       }
       updatedJobs[index] = {
         ...updatedJobs[index],
-        name,
-        connectionId,
-        connectionName,
-        database,
-        collection,
-        driveFolderId,
-        driveFolderName,
-        schedule,
-        enabled,
+        name, connectionId, connectionName, database, collection,
+        driveFolderId, driveFolderName, schedule, enabled,
         updatedAt: Date.now()
       };
     } else {
-      // Create
+      // Create new
       const newJob = {
         id: `job-${uuidv4()}`,
-        name,
-        connectionId,
-        connectionName,
-        database,
-        collection,
-        driveFolderId,
-        driveFolderName,
-        schedule,
-        enabled,
-        createdAt: Date.now(),
-        updatedAt: Date.now(),
-        lastRun: null,
-        lastStatus: null,
-        lastMessage: null
+        name, connectionId, connectionName, database, collection,
+        driveFolderId, driveFolderName, schedule, enabled,
+        createdAt: Date.now(), updatedAt: Date.now(),
+        lastRun: null, lastStatus: null, lastMessage: null
       };
       updatedJobs.push(newJob);
     }
 
-    await saveJobs(updatedJobs);
-
+    await repo.upsert('mongo_sync_jobs', updatedJobs);
     return NextResponse.json({ success: true, data: updatedJobs });
 
   } catch (error) {
@@ -125,9 +100,10 @@ export async function DELETE(request) {
       return NextResponse.json({ success: false, error: 'Job ID is required' }, { status: 400 });
     }
 
-    const jobs = await getJobs();
+    const repo = await getSettingRepo();
+    const jobs = await getJobs(repo);
     const filteredJobs = jobs.filter(j => j.id !== id);
-    await saveJobs(filteredJobs);
+    await repo.upsert('mongo_sync_jobs', filteredJobs);
 
     return NextResponse.json({ success: true, data: filteredJobs });
 

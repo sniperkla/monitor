@@ -1,11 +1,31 @@
+import mongoose from 'mongoose';
 import SystemSetting from '@/models/SystemSetting';
 
+/**
+ * SystemSettingRepository
+ *
+ * Provides a unified interface for reading/writing system settings across
+ * different database backends (MySQL, PostgreSQL, MongoDB).
+ *
+ * NOTE: For MongoDB, we use the native driver directly against the
+ * 'system_settings' collection (NOT the Mongoose 'SystemSetting' model
+ * which writes to 'systemsettings'). This ensures consistency with the
+ * original native-driver code.
+ */
 export class SystemSettingRepository {
   constructor(db) {
     this.db = db;
     this.isMysql = db.type === 'mysql';
     this.isPostgres = db.type === 'postgres';
     this.isSql = this.isMysql || this.isPostgres;
+  }
+
+  /**
+   * Get the native MongoDB collection for system_settings.
+   * Uses mongoose.connection.db to read from the correct database.
+   */
+  _mongoCol() {
+    return mongoose.connection.db.collection('system_settings');
   }
 
   async init() {
@@ -63,7 +83,9 @@ export class SystemSettingRepository {
       const r = rows[0];
       return { ...r, _id: r.id.toString(), value: typeof r.value === 'string' ? JSON.parse(r.value) : r.value };
     } else {
-      return await SystemSetting.findOne(criteria);
+      // Use native driver against 'system_settings' collection
+      const doc = await this._mongoCol().findOne(criteria);
+      return doc || null;
     }
   }
 
@@ -85,20 +107,26 @@ export class SystemSettingRepository {
       }
 
       const quote = this.isPostgres ? '"' : '`';
-      const query = this.isPostgres 
+      const query = this.isPostgres
         ? `UPDATE system_settings SET ${quote}value${quote} = $1, ${quote}updatedAt${quote} = CURRENT_TIMESTAMP WHERE ${quote}key${quote} = $2`
         : 'UPDATE system_settings SET `value` = ?, `updatedAt` = CURRENT_TIMESTAMP WHERE `key` = ?';
-      
+
       await this.db.query(query, [JSON.stringify(newValue), existing.key]);
       return true;
     } else {
-      return await SystemSetting.updateOne(criteria, { $set: data });
+      // Use native driver against 'system_settings' collection
+      const setData = {};
+      for (const [key, val] of Object.entries(data)) {
+        setData[key] = val;
+      }
+      await this._mongoCol().updateOne(criteria, { $set: setData });
+      return true;
     }
   }
 
   /**
    * Upsert a setting by key — inserts if not exists, updates if it does.
-   * Works for both SQL (MySQL/PostgreSQL) and MongoDB backends.
+   * Works for all DB backends (MySQL, PostgreSQL, MongoDB).
    */
   async upsert(key, value) {
     if (this.isSql) {
@@ -117,10 +145,11 @@ export class SystemSettingRepository {
         await this.db.query(query, [key, JSON.stringify(value)]);
       }
     } else {
-      await SystemSetting.findOneAndUpdate(
+      // Use native driver against 'system_settings' collection (same as jobs/route.js always did)
+      await this._mongoCol().updateOne(
         { key },
-        { key, value },
-        { upsert: true, new: true }
+        { $set: { key, value, updatedAt: new Date() } },
+        { upsert: true }
       );
     }
   }
