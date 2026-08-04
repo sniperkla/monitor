@@ -99,13 +99,22 @@ export async function getDeduplicatedToken(refreshTokenFn, getConfigFn, saveConf
 
 /**
  * Normalize connection config for MongoSync.
- * If the connection is an SSH server record (type === 'ssh' or port === 22),
- * transform it into an SSH Tunnel configuration pointing to MongoDB on 127.0.0.1:27017 on the remote server.
+ * Only transforms pure SSH server records (type=ssh, no dbProvider) by wrapping
+ * them with an SSH tunnel to MongoDB on 127.0.0.1:27017.
+ *
+ * IMPORTANT: if dbProvider is already set to mongodb/mysql/postgres,
+ * the record IS a database connection — return as-is.
  */
 export function normalizeMongoConnection(connData) {
   if (!connData) return connData;
 
-  const isSshRecord = connData.type === 'ssh' || (!connData.dbProvider && connData.type !== 'database') || Number(connData.port) === 22;
+  // If a database provider is explicitly set, this is a DB connection — never transform it
+  if (connData.dbProvider && ['mongodb', 'mysql', 'postgres', 'sqlite'].includes(connData.dbProvider)) {
+    return connData;
+  }
+
+  // Only transform explicit SSH server records (type='ssh', no dbProvider)
+  const isSshRecord = connData.type === 'ssh' && !connData.dbProvider;
 
   if (isSshRecord && !connData.sshTunnel) {
     return {

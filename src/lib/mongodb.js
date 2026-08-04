@@ -292,12 +292,16 @@ async function connectDB(uri = null, isCenter = false, relayName = null) {
   const targetUri = uri || (await getUriFromRequest());
   const normalizedUri = normalizeRelayDatabaseUri(targetUri);
 
+  const centerUri = getCenterUri();
+  if (isCenter) {
+    return connectCenter(centerUri || normalizedUri);
+  }
+
   // Non-MongoDB URIs must always go through the dynamic connection path
   const isNonMongo = normalizedUri && !normalizedUri.startsWith('mongodb://') && !normalizedUri.startsWith('mongodb+srv://');
 
-  const centerUri = getCenterUri();
-  // If this is the center DB (User storage), use the default connection
-  if (!isNonMongo && (isCenter || normalizedUri === centerUri || targetUri === centerUri || normalizedUri === process.env.MONGODB_URI || targetUri === process.env.MONGODB_URI)) {
+  // If this request is targeting the center DB URI, use the default connection.
+  if (!isNonMongo && (normalizedUri === centerUri || targetUri === centerUri || normalizedUri === process.env.MONGODB_URI || targetUri === process.env.MONGODB_URI)) {
     return connectCenter(normalizedUri);
   }
 

@@ -9,6 +9,7 @@ const SystemSettingSchema = new mongoose.Schema({
   value: mongoose.Schema.Types.Mixed,
 }, {
   timestamps: true,
+  collection: 'system_settings'
 });
 
 export default mongoose.models.SystemSetting || mongoose.model('SystemSetting', SystemSettingSchema);

@@ -4,7 +4,7 @@ import { authOptions } from "@/lib/auth";
 import connectDB from '@/lib/mongodb';
 import mongoose from 'mongoose';
 import { v4 as uuidv4 } from 'uuid';
-
+import { executeMongoSyncJob } from '@/lib/mongoSyncJobRunner';
 async function getJobs() {
   await connectDB(null, true);
   const jobsSetting = await mongoose.connection.db.collection('system_settings').findOne({ key: 'mongo_sync_jobs' });
@@ -37,6 +37,13 @@ export async function GET(request) {
 }
 
 export async function POST(request) {
+  const url = new URL(request.url);
+  const runFlag = url.searchParams.get('run');
+  const runJobId = url.searchParams.get('id');
+  if (runFlag === 'true' && runJobId) {
+    return executeMongoSyncJob(request, runJobId);
+  }
+
   try {
     const session = await getServerSession(authOptions);
     if (!session) {

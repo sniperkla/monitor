@@ -284,15 +284,52 @@ export async function getPooledConnection(conn) {
   if (provider === 'mongodb') {
     const tunnelConn = { ...conn, host: connectHost, port: connectPort, isSrv: false };
     const uri = buildMongoUri(tunnelConn, password);
-    db = await mongoose.createConnection(uri, {
-      serverSelectionTimeoutMS: 15000,
-      connectTimeoutMS: 15000,
-      maxPoolSize: usedRelay ? 2 : 5,
-      minPoolSize: 0,
-      maxIdleTimeMS: usedRelay ? 30000 : 60000,
-      directConnection: true,
-      appName: 'ssh-monitor',
-    }).asPromise();
+    // DEBUG: log masked URI to diagnose auth failures
+    const maskedUri = uri.replace(/:([^@]+)@/, ':***@');
+    console.log('[dbPool] MongoDB URI:', maskedUri);
+    console.log('[dbPool] authSource:', tunnelConn.authSource, '| password length:', password?.length || 0, '| username:', tunnelConn.username);
+    try {
+      db = await mongoose.createConnection(uri, {
+        serverSelectionTimeoutMS: 15000,
+        connectTimeoutMS: 15000,
+        maxPoolSize: usedRelay ? 2 : 5,
+        minPoolSize: 0,
+        maxIdleTimeMS: usedRelay ? 30000 : 60000,
+        directConnection: true,
+        appName: 'ssh-monitor',
+      }).asPromise();
+    } catch (err) {
+      console.error(`[dbPool] Mongo connection error for user:${tunnelConn.username} host:${connectHost} port:${connectPort} authSource:${tunnelConn.authSource} - ${err.message}`);
+
+      // If authentication failed and no authSource was provided, try a safe fallback to authSource=admin
+      const authFailed = String(err.message || '').toLowerCase().includes('authentication failed') || err.code === 18;
+      if (authFailed && !tunnelConn.authSource) {
+        try {
+          console.log('[dbPool] Attempting fallback with authSource=admin');
+          const fallbackConn = { ...tunnelConn, authSource: 'admin' };
+          const fallbackUri = buildMongoUri(fallbackConn, password);
+          const maskedFallback = fallbackUri.replace(/:([^@]+)@/, ':***@');
+          console.log('[dbPool] MongoDB fallback URI:', maskedFallback);
+          db = await mongoose.createConnection(fallbackUri, {
+            serverSelectionTimeoutMS: 15000,
+            connectTimeoutMS: 15000,
+            maxPoolSize: usedRelay ? 2 : 5,
+            minPoolSize: 0,
+            maxIdleTimeMS: usedRelay ? 30000 : 60000,
+            directConnection: true,
+            appName: 'ssh-monitor',
+          }).asPromise();
+          // Update tunnelConn.authSource so cache key reflects the chosen authSource
+          tunnelConn.authSource = 'admin';
+        } catch (fbErr) {
+          console.error('[dbPool] Mongo fallback authSource=admin failed:', fbErr.message);
+          throw err; // rethrow original for upstream handling
+        }
+      } else {
+        // Rethrow original error for upstream handling
+        throw err;
+      }
+    }
   } else if (provider === 'mysql') {
     db = await mysql.createConnection({
       host: connectHost,

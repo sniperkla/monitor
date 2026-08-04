@@ -31,13 +31,26 @@ export async function POST(request) {
         return NextResponse.json({ success: false, error: 'Connection not found' }, { status: 404 });
       }
       connData = fullConn.toObject ? fullConn.toObject() : fullConn;
+      // DEBUG: log before normalization and connection
+      console.log('[schema-explorer] raw connData.type:', connData?.type, '| dbProvider:', connData?.dbProvider, '| port:', connData?.port, '| database:', connData?.database);
       connData = await attachRequestUserId(request, connData);
       connData = normalizeMongoConnection(connData);
+      console.log('[schema-explorer] normalized: sshTunnel:', connData?.sshTunnel, '| host:', connData?.host, '| port:', connData?.port, '| database:', connData?.database);
       pooled = await getPooledConnection(connData);
     }
 
     const isDefault = connectionId === 'default';
     const dbInstance = isDefault ? pooled.db : pooled.db.db;
+
+    // DEBUG: log exactly what we got
+    console.log('[schema-explorer] connectionId:', connectionId);
+    console.log('[schema-explorer] connData.database:', connData?.database);
+    console.log('[schema-explorer] connData.dbProvider:', connData?.dbProvider);
+    console.log('[schema-explorer] connData.type:', connData?.type);
+    console.log('[schema-explorer] connData.host:', connData?.host);
+    console.log('[schema-explorer] connData.port:', connData?.port);
+    console.log('[schema-explorer] dbInstance.databaseName:', dbInstance?.databaseName);
+    console.log('[schema-explorer] requested database:', database);
 
     // The database this connection is scoped to:
     // - For default (system): dbInstance.databaseName (the system DB)

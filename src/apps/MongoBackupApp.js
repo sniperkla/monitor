@@ -11,6 +11,9 @@ import {
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
+const ALL_DATABASES = 'All Databases (*)';
+const ALL_COLLECTIONS = 'All Collections (*)';
+
 export default function MongoBackupApp() {
   const { state, apiFetch } = useApp();
   const { addNotification } = useOS();
@@ -19,8 +22,18 @@ export default function MongoBackupApp() {
   const [activeTab, setActiveTab] = useState('import');
   const [loading, setLoading] = useState(false);
 
-  // Connection selector (only MongoDB connections)
-  const dbConnections = [{ _id: 'default', name: 'System Database (Default)', dbProvider: 'mongodb' }, ...connections.filter(c => c.type === 'database' && c.dbProvider === 'mongodb')];
+  // Connection selector: include Mongo `database` entries and SSH entries that are configured as DB targets
+  const dbConnections = [
+    { _id: 'default', name: 'System Database (Default)', dbProvider: 'mongodb' },
+    ...connections.filter(c => (
+      // Normal DB connections for Mongo
+      (c.type === 'database' && c.dbProvider === 'mongodb') ||
+      // SSH entries that explicitly specify a target database or mongo-specific host/port
+      (c.type === 'ssh' && (
+        !!c.database || !!c.mongoHost || !!c.mongoPort || !!c.mongoUsername || !!c.mongoPassword
+      ))
+    ))
+  ];
 
   // ── Import Collection State ──────────────────────────────────────────────
   const [importConnId, setImportConnId] = useState('default');
@@ -46,8 +59,8 @@ export default function MongoBackupApp() {
   const [jobs, setJobs] = useState([]);
   const [jobName, setJobName] = useState('');
   const [jobConnId, setJobConnId] = useState('default');
-  const [jobDbName, setJobDbName] = useState('All Databases (*)');
-  const [jobCollName, setJobCollName] = useState('All Collections (*)');
+  const [jobDbName, setJobDbName] = useState(ALL_DATABASES);
+  const [jobCollName, setJobCollName] = useState(ALL_COLLECTIONS);
   const [jobFolderId, setJobFolderId] = useState('');
   const [jobSchedule, setJobSchedule] = useState('daily'); // manual, hourly, daily, weekly
   const [jobEnabled, setJobEnabled] = useState(true);
@@ -127,8 +140,8 @@ export default function MongoBackupApp() {
           // If connection returns only 1 DB (single-DB URI), auto-select it
           if (data.databases.length === 1) {
             setJobDbName(data.databases[0]);
-          } else if (jobDbName !== 'All Databases (*)' && !data.databases.includes(jobDbName)) {
-            setJobDbName('All Databases (*)');
+          } else if (jobDbName !== ALL_DATABASES && !data.databases.includes(jobDbName)) {
+            setJobDbName(ALL_DATABASES);
           }
         } else {
           setFetchedDbs([]);
@@ -146,9 +159,9 @@ export default function MongoBackupApp() {
   // Fetch collections when database changes
   useEffect(() => {
     if (!jobConnId || !jobDbName) return;
-    if (jobDbName === 'All Databases (*)') {
-      setFetchedColls(['All Collections (*)']);
-      setJobCollName('All Collections (*)');
+    if (jobDbName === ALL_DATABASES) {
+      setFetchedColls([ALL_COLLECTIONS]);
+      setJobCollName(ALL_COLLECTIONS);
       return;
     }
     const fetchCollections = async () => {
@@ -162,15 +175,15 @@ export default function MongoBackupApp() {
         const data = await res.json();
         if (data.success && data.collections?.length > 0) {
           setFetchedColls(data.collections);
-          if (jobCollName !== 'All Collections (*)' && !data.collections.includes(jobCollName)) {
+          if (jobCollName !== ALL_COLLECTIONS && !data.collections.includes(jobCollName)) {
             setJobCollName(data.collections[0]);
           }
         } else {
-          setFetchedColls(['All Collections (*)']);
+          setFetchedColls([ALL_COLLECTIONS]);
         }
       } catch (err) {
         console.error('Failed to fetch collections:', err);
-        setFetchedColls(['All Collections (*)']);
+        setFetchedColls([ALL_COLLECTIONS]);
       } finally {
         setFetchingColls(false);
       }
@@ -183,8 +196,8 @@ export default function MongoBackupApp() {
   const [backupFiles, setBackupFiles] = useState([]);
   const [selectedFileId, setSelectedFileId] = useState('');
   const [restoreConnId, setRestoreConnId] = useState('default');
-  const [restoreDbName, setRestoreDbName] = useState('All Databases (*)');
-  const [restoreCollName, setRestoreCollName] = useState('All Collections (*)');
+  const [restoreDbName, setRestoreDbName] = useState(ALL_DATABASES);
+  const [restoreCollName, setRestoreCollName] = useState(ALL_COLLECTIONS);
   const [restoreMode, setRestoreMode] = useState('insert');
 
   // Auto-fetch DB & Collections for Restore target connection
@@ -208,7 +221,7 @@ export default function MongoBackupApp() {
           // If connection returns only 1 DB (single-DB URI), auto-select it
           if (data.databases.length === 1) {
             setRestoreDbName(data.databases[0]);
-          } else if (restoreDbName !== 'All Databases (*)' && !data.databases.includes(restoreDbName)) {
+          } else if (restoreDbName !== ALL_DATABASES && !data.databases.includes(restoreDbName)) {
             setRestoreDbName(data.databases[0]);
           }
         } else { setRestoreFetchedDbs([]); }
@@ -220,9 +233,9 @@ export default function MongoBackupApp() {
 
   useEffect(() => {
     if (!restoreConnId || !restoreDbName) return;
-    if (restoreDbName === 'All Databases (*)') {
-      setRestoreFetchedColls(['All Collections (*)']);
-      setRestoreCollName('All Collections (*)');
+    if (restoreDbName === ALL_DATABASES) {
+      setRestoreFetchedColls([ALL_COLLECTIONS]);
+      setRestoreCollName(ALL_COLLECTIONS);
       return;
     }
     const fetchCollections = async () => {
@@ -235,11 +248,11 @@ export default function MongoBackupApp() {
         const data = await res.json();
         if (data.success && data.collections?.length > 0) {
           setRestoreFetchedColls(data.collections);
-          if (restoreCollName !== 'All Collections (*)' && !data.collections.includes(restoreCollName)) {
+          if (restoreCollName !== ALL_COLLECTIONS && !data.collections.includes(restoreCollName)) {
             setRestoreCollName(data.collections[0]);
           }
-        } else { setRestoreFetchedColls(['All Collections (*)']); }
-      } catch { setRestoreFetchedColls(['All Collections (*)']); }
+        } else { setRestoreFetchedColls([ALL_COLLECTIONS]); }
+      } catch { setRestoreFetchedColls([ALL_COLLECTIONS]); }
       finally { setRestoreFetchingColls(false); }
     };
     fetchCollections();
@@ -624,13 +637,13 @@ export default function MongoBackupApp() {
   const handleRunJob = async (id) => {
     setLoading(true);
     try {
-      const res = await apiFetch(`/api/mongo-sync/jobs/${id}/run`, { method: 'POST' });
+      const res = await apiFetch(`/api/mongo-sync/jobs/run?id=${encodeURIComponent(id)}`, { method: 'POST' });
       const data = await res.json();
       if (data.success) {
         addNotification({ title: 'Backup Successful', message: data.message, type: 'success' });
         fetchJobs();
       } else {
-        throw new Error(data.message);
+        throw new Error(data.message || 'Unknown error');
       }
     } catch (err) {
       addNotification({ title: 'Backup Failed', message: err.message, type: 'error' });
@@ -1151,7 +1164,7 @@ export default function MongoBackupApp() {
                           >
                             {/* Only show All Databases (*) when connection has access to multiple DBs */}
                             {fetchedDbs.length !== 1 && (
-                              <option value="All Databases (*)">All Databases (*)</option>
+                              <option value={ALL_DATABASES}>{ALL_DATABASES}</option>
                             )}
                             {fetchedDbs.map(db => (
                               <option key={db} value={db}>{db}</option>
@@ -1171,7 +1184,7 @@ export default function MongoBackupApp() {
                             onChange={(e) => setJobCollName(e.target.value)}
                             className="input-field text-xs w-full bg-[var(--bg-tertiary)]"
                           >
-                            <option value="All Collections (*)">All Collections (*)</option>
+                            <option value={ALL_COLLECTIONS}>{ALL_COLLECTIONS}</option>
                             {fetchedColls.map(c => (
                               <option key={c} value={c}>{c}</option>
                             ))}
@@ -1429,7 +1442,7 @@ export default function MongoBackupApp() {
                         >
                           {/* Only show All Databases (*) when connection has access to multiple DBs */}
                           {restoreFetchedDbs.length !== 1 && (
-                            <option value="All Databases (*)">All Databases (*)</option>
+                            <option value={ALL_DATABASES}>{ALL_DATABASES}</option>
                           )}
                           {restoreFetchedDbs.map(db => (
                             <option key={db} value={db}>{db}</option>
@@ -1453,7 +1466,7 @@ export default function MongoBackupApp() {
                             onChange={(e) => setRestoreCollName(e.target.value)}
                             className="input-field text-xs w-full bg-[var(--bg-tertiary)]"
                           >
-                            <option value="All Collections (*)">All Collections (*)</option>
+                            <option value={ALL_COLLECTIONS}>{ALL_COLLECTIONS}</option>
                             {restoreFetchedColls.map(c => (
                               <option key={c} value={c}>{c}</option>
                             ))}

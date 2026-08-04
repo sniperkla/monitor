@@ -60,8 +60,17 @@ export async function POST(request, { params }) {
         ? dbInstance
         : dbInstance.client ? dbInstance.client.db(job.database) : dbInstance.parentDb ? dbInstance.parentDb.db(job.database) : dbInstance;
 
-      const isAllCollections = ['*', 'ALL_COLLECTIONS', 'All Collections', 'All Collections (*)'].includes(job.collection);
-      const isAllDatabases = ['All Databases (*)', 'ALL_DATABASES', '*'].includes(job.database);
+      const allCollectionNames = ['*', 'ALL_COLLECTIONS', 'All Collections', 'All Collections (*)'];
+      const allDatabaseNames = ['All Databases (*)', 'ALL_DATABASES', '*'];
+      const isAllCollections = allCollectionNames.includes(job.collection);
+      const isAllDatabases = allDatabaseNames.includes(job.database);
+
+      console.log(`[mongo-sync] Running backup job ${job.id} on connection ${job.connectionId} name=${job.connectionName} database=${job.database} collection=${job.collection}`);
+      if (isAllDatabases) {
+        console.log('[mongo-sync] Backup mode: ALL_DATABASES');
+      } else if (isAllCollections) {
+        console.log('[mongo-sync] Backup mode: ALL_COLLECTIONS');
+      }
 
       if (isAllDatabases) {
         // ── Backup ALL databases on this connection ──
@@ -124,8 +133,15 @@ export async function POST(request, { params }) {
       }
 
     } catch (err) {
-      console.error('Backup run error for job:', job.id, err);
-      runStatus = 'failed';
+      console.error('Backup run error for job:', job.id, {
+        message: err.message,
+        stack: err.stack,
+        jobId: job.id,
+        connectionId: job.connectionId,
+        database: job.database,
+        collection: job.collection,
+        driveFolderId: job.driveFolderId,
+      });
       runMessage = err.message;
     }
 
