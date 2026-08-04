@@ -320,28 +320,37 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
 
   useEffect(() => {
     if (!selectedConnection) return;
-    
+
     setIsLoading(true);
-    socketRef.current = io({
+
+    // Disconnect any stale socket before creating a new one
+    if (socketRef.current) {
+      socketRef.current.removeAllListeners();
+      socketRef.current.disconnect();
+      socketRef.current = null;
+    }
+
+    const newSocket = io({
       path: '/api/socket',
       transports: ['websocket', 'polling'],
       query: { dbUri: dbConfig?.uri || '' }
     });
+    socketRef.current = newSocket;
 
-    socketRef.current.on('connect', () => {
-      socketRef.current.emit('ssh:connect', {
+    newSocket.on('connect', () => {
+      newSocket.emit('ssh:connect', {
         connectionId: selectedConnection._id,
         connection: selectedConnection,
         preferredRelay: typeof window !== 'undefined' ? (localStorage.getItem('ssh_monitor_preferred_relay') || undefined) : undefined,
       });
     });
 
-    socketRef.current.on('disconnect', (reason) => {
+    newSocket.on('disconnect', (reason) => {
       setIsLoading(false);
       console.warn('⚡ Docker Socket disconnected:', reason);
     });
 
-    socketRef.current.on('connect_error', (err) => {
+    newSocket.on('connect_error', (err) => {
       setIsLoading(false);
       console.error('⚡ Docker Socket connect error:', err);
     });
@@ -357,17 +366,16 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
          socketRef.current.emit('docker:command', { action: 'networks' });
          setTimeout(() => { isPollingBusy = false; }, 8000);
       }
-    }, 15000); // 15s is standard for decent balance between freshness and overhead
+    }, 15000);
 
-    socketRef.current.on('ssh:connected', () => {
-      socketRef.current.emit('docker:command', { action: 'info' });
-      // Fallback: if 'info' is slow or stuck, still load data after 6s
-      setTimeout(() => {
-        if (socketRef.current?.connected) emitDockerLs();
-      }, 6000);
+    newSocket.on('ssh:connected', () => {
+      // Always fetch container list immediately — don't gate on 'info' success
+      emitDockerLs();
+      // Also fetch docker info for sudo detection (non-blocking)
+      newSocket.emit('docker:command', { action: 'info' });
     });
 
-    socketRef.current.on('docker:result', ({ action, output, code, args }) => {
+    newSocket.on('docker:result', ({ action, output, code, args }) => {
       setIsLoading(false);
       const targetId = args?.[0];
       if (targetId) setPendingActions(prev => { const n = { ...prev }; delete n[targetId]; return n; });
@@ -831,7 +839,7 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
         }
       });
 
-    socketRef.current.on('docker:error', (err) => {
+    newSocket.on('docker:error', (err) => {
       setIsLoading(false);
       setIsWakingUp(false);
       setPendingActions({});
@@ -842,16 +850,19 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
       } else if (lowerErr.includes('cannot connect to the docker daemon') || lowerErr.includes('docker daemon is not running') || lowerErr.includes('is the docker daemon running')) {
         setIsDockerRunning(false);
       } else {
-        // Prevent duplicate toasts if we already showed it recently
         addNotification({ title: 'Docker Error', message: err, type: 'error' });
       }
     });
 
     return () => {
       clearInterval(pollInterval);
-      if (socketRef.current) socketRef.current.disconnect();
+      if (socketRef.current) {
+        socketRef.current.removeAllListeners();
+        socketRef.current.disconnect();
+        socketRef.current = null;
+      }
     };
-  }, [selectedConnection, dbConfig, emitDockerLs]);
+  }, [selectedConnection?._id, dbConfig?.uri, emitDockerLs]);
 
   // Poll for pulling tasks
   useEffect(() => {
