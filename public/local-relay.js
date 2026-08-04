@@ -2151,6 +2151,50 @@ function handleDockerCommand(ws, msg) {
       const count = parseInt(args[1], 10);
       if (!serviceName || isNaN(count) || count < 0) return ws.send(JSON.stringify({ type: 'docker:error', connId, error: 'Invalid Scale Parameters' }));
       cmdSuffix = `service scale ${serviceName}=${count}`;
+    } else if (action === 'swarm:remove' && args.length >= 1) {
+      const serviceName = String(args[0] || '').replace(/[^a-zA-Z0-9._-]/g, '');
+      if (!serviceName) return ws.send(JSON.stringify({ type: 'docker:error', connId, error: 'Invalid Service Name' }));
+      cmdSuffix = `service rm ${serviceName}`;
+    } else if (action === 'swarm:configure' && args.length >= 1) {
+      const serviceName = String(args[0] || '').replace(/[^a-zA-Z0-9._-]/g, '');
+      const image       = String(args[1] || '').replace(/[^a-zA-Z0-9.@/:-]/g, '');
+      const replicas    = parseInt(args[2], 10);
+      const port        = String(args[3] || '').replace(/[^0-9:]/g, '');
+      const network     = String(args[4] || '').replace(/[^a-zA-Z0-9._-]/g, '');
+      const rawEnv      = String(args[5] || '');
+      const rawMounts   = String(args[6] || '');
+      if (!serviceName) return ws.send(JSON.stringify({ type: 'docker:error', connId, error: 'Invalid Service Name' }));
+
+      let updateFlags = ['--update-order start-first'];
+      if (image) updateFlags.push(`--image ${image}`);
+      if (!isNaN(replicas) && replicas >= 0) updateFlags.push(`--replicas ${replicas}`);
+      if (port) {
+        const p = port.includes(':') ? port : `${port}:${port}`;
+        updateFlags.push(`--publish-add ${p}`);
+      }
+      if (network) {
+        updateFlags.push(`--network-add ${network}`);
+      }
+      if (rawEnv) {
+        rawEnv.split(',').forEach(e => {
+          const kv = e.trim().replace(/[^a-zA-Z0-9._=\-]/g, '');
+          if (kv.includes('=')) updateFlags.push(`--env-add "${kv}"`);
+        });
+      }
+      if (rawMounts) {
+        rawMounts.split(',').forEach(m => {
+          const parts = m.trim().split(':');
+          if (parts.length >= 2) {
+            const src = parts[0].trim().replace(/[^a-zA-Z0-9._/:-]/g, '');
+            const target = parts[1].trim().replace(/[^a-zA-Z0-9._/:-]/g, '');
+            if (src && target) {
+              const type = src.startsWith('/') ? 'bind' : 'volume';
+              updateFlags.push(`--mount-add type=${type},source=${src},target=${target}`);
+            }
+          }
+        });
+      }
+      return runRawCmd(`sh -c 'docker service update ${updateFlags.join(' ')} ${serviceName} && (docker container prune -f 2>/dev/null || true)'`);
     } else if (action === 'rmi' && args.length > 0) {
       const targetId = String(args[0] || '').replace(/[^a-zA-Z0-9._/:-]/g, '');
       if (!targetId) return ws.send(JSON.stringify({ type: 'docker:error', connId, error: 'Invalid Image ID' }));

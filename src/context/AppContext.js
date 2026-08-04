@@ -442,15 +442,23 @@ export function AppProvider({ children }) {
     }
   }, []);
 
-  // 5. Fetch relay status once on mount
+  // 5. Fetch relay status once on mount & prioritize local relay if connected
   useEffect(() => {
     fetch('/api/relay/token')
       .then(r => r.json())
       .then(data => {
+        const isConnected = data.connected || false;
         dispatch({
           type: 'SET_RELAY_INFO',
-          payload: { connected: data.connected || false, relays: data.relays || [], checkDone: true },
+          payload: { connected: isConnected, relays: data.relays || [], checkDone: true },
         });
+        if (isConnected && typeof window !== 'undefined') {
+          const currentMode = localStorage.getItem('ssh_monitor_ssh_mode');
+          if (!currentMode || currentMode !== 'local') {
+            localStorage.setItem('ssh_monitor_ssh_mode', 'local');
+            window.dispatchEvent(new Event('ssh-mode-changed'));
+          }
+        }
       })
       .catch(() => {
         dispatch({ type: 'SET_RELAY_INFO', payload: { connected: false, relays: [], checkDone: true } });

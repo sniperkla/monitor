@@ -264,7 +264,7 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
       if (conn) { setSelectedConnection(conn); return; }
     }
 
-    // 2. Try localStorage saved connection for this window instance
+    // 2. Try localStorage saved connection for this specific window instance
     if (windowId) {
       const savedConnId = localStorage.getItem(`docker-connection-${windowId}`);
       if (savedConnId) {
@@ -273,12 +273,18 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
       }
     }
 
-    // 3. Fallback: if only one SSH connection exists, auto-select it
-    if (sshConnections.length === 1) {
+    // 3. Fall back to globally saved last-selected connection
+    const globalSavedConnId = localStorage.getItem('docker-last-selected-connection');
+    if (globalSavedConnId) {
+      const conn = sshConnections.find(c => c._id === globalSavedConnId);
+      if (conn) { setSelectedConnection(conn); return; }
+    }
+
+    // 4. Fallback: if SSH connections exist, default to the first one (or single one)
+    if (sshConnections.length > 0) {
       setSelectedConnection(sshConnections[0]);
     }
   }, [connectionsReady, sshConnections, initialConnectionId, windowId, selectedConnection]);
-
 
   // Restore active tab state
   useEffect(() => {
@@ -290,8 +296,11 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
 
   // Save selected connection and tab
   useEffect(() => {
+    if (selectedConnection?._id) {
+      if (windowId) localStorage.setItem(`docker-connection-${windowId}`, selectedConnection._id);
+      localStorage.setItem('docker-last-selected-connection', selectedConnection._id);
+    }
     if (windowId) {
-      if (selectedConnection?._id) localStorage.setItem(`docker-connection-${windowId}`, selectedConnection._id);
       localStorage.setItem(`docker-tab-${windowId}`, activeTab);
     }
   }, [selectedConnection, activeTab, windowId]);
