@@ -38,43 +38,78 @@ export async function POST(request) {
 
     const dbInstance = connectionId === 'default' ? pooled.db : pooled.db.db;
 
-    // If database parameter is provided and is a specific DB name (not "All Databases (*)")
+    // The database name configured in the connection (e.g. the URI's default DB)
+    const configuredDb = connData?.database || dbInstance?.databaseName;
+
+    // ── Handle "list collections" request ──────────────────────────────────
     if (database) {
       if (database === 'All Databases (*)' || database === 'ALL_DATABASES' || database === '*') {
         return NextResponse.json({ success: true, collections: ['All Collections (*)'] });
       }
 
-      const targetDb = dbInstance.databaseName === database
-        ? dbInstance
-        : dbInstance.client ? dbInstance.client.db(database) : dbInstance.parentDb ? dbInstance.parentDb.db(database) : dbInstance;
+      // Use dbInstance directly if it already matches, OR if this connection
+      // is scoped to a single database (configuredDb matches requested DB).
+      let targetDb = dbInstance;
+      if (dbInstance.databaseName !== database) {
+        if (configuredDb && configuredDb === database) {
+          // Single-DB connection, already connected to this DB — just use dbInstance
+          targetDb = dbInstance;
+        } else if (dbInstance.client) {
+          // Multi-DB connection: switch to the requested database
+          targetDb = dbInstance.client.db(database);
+        }
+        // else: keep dbInstance (only accessible DB)
+      }
 
-      const collections = await targetDb.listCollections().toArray();
-      const collectionNames = ['All Collections (*)', ...collections.map(c => c.name).filter(n => !n.startsWith('system.')).sort()];
-      return NextResponse.json({ success: true, collections: collectionNames });
+      try {
+        const collections = await targetDb.listCollections().toArray();
+        const collectionNames = [
+          'All Collections (*)',
+          ...collections.map(c => c.name).filter(n => !n.startsWith('system.')).sort()
+        ];
+        return NextResponse.json({ success: true, collections: collectionNames });
+      } catch (collErr) {
+        console.warn('schema-explorer listCollections error, retrying on dbInstance:', collErr.message);
+        // Last resort: list on the directly connected dbInstance
+        const collections = await dbInstance.listCollections().toArray();
+        const collectionNames = [
+          'All Collections (*)',
+          ...collections.map(c => c.name).filter(n => !n.startsWith('system.')).sort()
+        ];
+        return NextResponse.json({ success: true, collections: collectionNames });
+      }
     }
 
-    // Otherwise list databases
-    let dbs = [];
-    const configuredDb = connData?.database || dbInstance?.databaseName;
+    // ── Handle "list databases" request ─────────────────────────────────────
+    // For single-database URI connections (configuredDb set), return that DB immediately —
+    // these connections often have no admin privileges to run listDatabases.
+    let dbs = configuredDb ? [configuredDb] : [];
 
+    // Try admin listDatabases — works for connections with admin/root access
     try {
-      const adminDb = dbInstance.admin ? dbInstance.admin() : (dbInstance.client ? dbInstance.client.db('admin') : null);
+      const adminDb = dbInstance.admin
+        ? dbInstance.admin()
+        : dbInstance.client ? dbInstance.client.db('admin') : null;
       if (adminDb) {
         const listRes = await adminDb.listDatabases();
         if (listRes?.databases) {
-          dbs = listRes.databases.map(d => d.name).filter(name => !['admin', 'local', 'config'].includes(name));
+          const allDbs = listRes.databases
+            .map(d => d.name)
+            .filter(n => !['admin', 'local', 'config'].includes(n));
+          if (allDbs.length > 0) {
+            // Put configuredDb first so the dropdown defaults to it
+            dbs = configuredDb
+              ? [configuredDb, ...allDbs.filter(d => d !== configuredDb)]
+              : allDbs;
+          }
         }
       }
-    } catch (err) {
-      console.warn('schema-explorer listDatabases warning:', err.message);
-    }
-
-    if (configuredDb && !dbs.includes(configuredDb) && !['admin', 'local', 'config'].includes(configuredDb)) {
-      dbs.unshift(configuredDb);
+    } catch (_) {
+      // User doesn't have listDatabases permission — use configuredDb fallback above
     }
 
     if (dbs.length === 0) {
-      dbs = [configuredDb || 'monitor'];
+      dbs = [configuredDb || dbInstance.databaseName || 'monitor'];
     }
 
     return NextResponse.json({ success: true, databases: dbs });
