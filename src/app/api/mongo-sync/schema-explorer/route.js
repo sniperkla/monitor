@@ -40,7 +40,7 @@ export async function POST(request) {
         : dbInstance.client ? dbInstance.client.db(database) : dbInstance.parentDb ? dbInstance.parentDb.db(database) : dbInstance;
 
       const collections = await targetDb.listCollections().toArray();
-      const collectionNames = collections.map(c => c.name).sort();
+      const collectionNames = ['All Collections (*)', ...collections.map(c => c.name).filter(n => !n.startsWith('system.')).sort()];
       return NextResponse.json({ success: true, collections: collectionNames });
     }
 

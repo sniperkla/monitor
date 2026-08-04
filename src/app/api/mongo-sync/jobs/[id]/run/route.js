@@ -55,21 +55,50 @@ export async function POST(request, { params }) {
       const targetDb = dbInstance.databaseName === job.database
         ? dbInstance
         : dbInstance.client ? dbInstance.client.db(job.database) : dbInstance.parentDb ? dbInstance.parentDb.db(job.database) : dbInstance;
-      const col = targetDb.collection(job.collection);
 
-      const docs = await col.find({}).toArray();
-      count = docs.length;
+      const isAllCollections = job.collection === '*' || job.collection === 'ALL_COLLECTIONS' || job.collection === 'All Collections';
 
-      const fileName = `backup_${job.database}_${job.collection}_${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
-      const fileContent = JSON.stringify(docs, null, 2);
+      if (isAllCollections) {
+        const collections = await targetDb.listCollections().toArray();
+        const colNames = collections.map(c => c.name).filter(n => !n.startsWith('system.'));
+        let totalDocs = 0;
+        const allDbData = {};
 
-      await uploadFileToGoogleDrive({
-        fileName,
-        content: fileContent,
-        folderId: job.driveFolderId
-      });
+        for (const colName of colNames) {
+          const docs = await targetDb.collection(colName).find({}).toArray();
+          allDbData[colName] = docs;
+          totalDocs += docs.length;
+        }
 
-      runMessage = `Successfully backed up ${count} documents to Google Drive.`;
+        const timeStamp = new Date().toISOString().replace(/[:.]/g, '-');
+        const fileName = `backup_${job.database}_ALL_COLLECTIONS_${timeStamp}.json`;
+        const fileContent = JSON.stringify(allDbData, null, 2);
+
+        await uploadFileToGoogleDrive({
+          fileName,
+          content: fileContent,
+          folderId: job.driveFolderId
+        });
+
+        count = totalDocs;
+        runMessage = `Successfully backed up ALL ${colNames.length} collections (${count} total docs) to Google Drive.`;
+      } else {
+        const col = targetDb.collection(job.collection);
+        const docs = await col.find({}).toArray();
+        count = docs.length;
+
+        const timeStamp = new Date().toISOString().replace(/[:.]/g, '-');
+        const fileName = `backup_${job.database}_${job.collection}_${timeStamp}.json`;
+        const fileContent = JSON.stringify(docs, null, 2);
+
+        await uploadFileToGoogleDrive({
+          fileName,
+          content: fileContent,
+          folderId: job.driveFolderId
+        });
+
+        runMessage = `Successfully backed up ${count} documents from '${job.collection}' to Google Drive.`;
+      }
 
     } catch (err) {
       console.error('Backup run error for job:', job.id, err);

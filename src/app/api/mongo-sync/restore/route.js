@@ -51,8 +51,10 @@ export async function POST(request) {
     console.log(`📥 Downloading backup file ${fileId} from Google Drive...`);
     const backupData = await downloadDriveFile(fileId);
 
-    if (!Array.isArray(backupData)) {
-      return NextResponse.json({ success: false, error: 'Downloaded backup file is not a valid JSON array of documents' }, { status: 400 });
+    const isAllCollectionsFile = !Array.isArray(backupData) && typeof backupData === 'object' && backupData !== null;
+
+    if (!Array.isArray(backupData) && !isAllCollectionsFile) {
+      return NextResponse.json({ success: false, error: 'Downloaded backup file is not a valid JSON document' }, { status: 400 });
     }
 
     if (backupData.length === 0) {
@@ -80,43 +82,70 @@ export async function POST(request) {
       pooled = await getPooledConnection(connData);
     }
 
-    const dbInstance = connectionId === 'default' ? pooled.db.connection.db : pooled.db.db;
-    const targetDb = dbInstance.databaseName === database ? dbInstance : dbInstance.parentDb ? dbInstance.parentDb.db(database) : dbInstance.client.db(database);
-    const col = targetDb.collection(collection);
-
-    // 3. Sanitize IDs
-    const sanitizedDocs = backupData.map(doc => sanitizeDocument(doc));
+    const dbInstance = connectionId === 'default' ? pooled.db : pooled.db.db;
+    const targetDb = dbInstance.databaseName === database
+      ? dbInstance
+      : dbInstance.client ? dbInstance.client.db(database) : dbInstance.parentDb ? dbInstance.parentDb.db(database) : dbInstance;
 
     let insertedCount = 0;
     let updatedCount = 0;
+    let totalCount = 0;
 
-    // 4. Perform import
-    if (mode === 'upsert') {
-      const ops = sanitizedDocs.map(doc => {
-        const filter = doc._id ? { _id: doc._id } : { _id: new mongoose.Types.ObjectId() };
-        return {
-          updateOne: {
-            filter,
-            update: { $set: doc },
-            upsert: true
+    if (isAllCollectionsFile) {
+      // Restore dictionary of { collectionName: [doc1, doc2, ...] }
+      for (const [colName, docs] of Object.entries(backupData)) {
+        if (!Array.isArray(docs) || docs.length === 0) continue;
+        const col = targetDb.collection(colName);
+        const sanitizedDocs = docs.map(doc => sanitizeDocument(doc));
+        totalCount += sanitizedDocs.length;
+
+        if (mode === 'upsert') {
+          const ops = sanitizedDocs.map(doc => {
+            const filter = doc._id ? { _id: doc._id } : { _id: new mongoose.Types.ObjectId() };
+            return { updateOne: { filter, update: { $set: doc }, upsert: true } };
+          });
+          try {
+            const res = await col.bulkWrite(ops, { ordered: false });
+            insertedCount += (res.upsertedCount || 0) + (res.insertedCount || 0);
+            updatedCount += (res.modifiedCount || 0);
+          } catch (bulkErr) {
+            console.warn(`Bulk write error for collection ${colName}:`, bulkErr.message);
           }
-        };
-      });
-
-      const res = await col.bulkWrite(ops, { ordered: false });
-      insertedCount = res.upsertedCount + (res.insertedCount || 0);
-      updatedCount = res.modifiedCount;
+        } else {
+          try {
+            const res = await col.insertMany(sanitizedDocs, { ordered: false });
+            insertedCount += res.insertedCount || sanitizedDocs.length;
+          } catch (insErr) {
+            console.warn(`Insert error for collection ${colName}:`, insErr.message);
+          }
+        }
+      }
     } else {
-      const res = await col.insertMany(sanitizedDocs, { ordered: false });
-      insertedCount = res.insertedCount;
+      // Single collection restore
+      const col = targetDb.collection(collection);
+      const sanitizedDocs = backupData.map(doc => sanitizeDocument(doc));
+      totalCount = sanitizedDocs.length;
+
+      if (mode === 'upsert') {
+        const ops = sanitizedDocs.map(doc => {
+          const filter = doc._id ? { _id: doc._id } : { _id: new mongoose.Types.ObjectId() };
+          return { updateOne: { filter, update: { $set: doc }, upsert: true } };
+        });
+        const res = await col.bulkWrite(ops, { ordered: false });
+        insertedCount = (res.upsertedCount || 0) + (res.insertedCount || 0);
+        updatedCount = res.modifiedCount || 0;
+      } else {
+        const res = await col.insertMany(sanitizedDocs, { ordered: false });
+        insertedCount = res.insertedCount || sanitizedDocs.length;
+      }
     }
 
     return NextResponse.json({
       success: true,
       insertedCount,
       updatedCount,
-      totalCount: sanitizedDocs.length,
-      message: `Successfully restored ${insertedCount} documents (updated ${updatedCount}) from Google Drive.`
+      totalCount,
+      message: `Successfully restored ${insertedCount} documents across collections (updated ${updatedCount}) from Google Drive.`
     });
 
   } catch (error) {
