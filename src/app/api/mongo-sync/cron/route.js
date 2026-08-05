@@ -257,26 +257,29 @@ find "$LOGS_DIR" -name "mongosync-${safeId}-*.log" -mtime +14 -delete 2>/dev/nul
 
     const installScript = `
 mkdir -p "$HOME/.mongosync-scripts/logs" "$HOME/.mongosync-scripts/tmp"
-cat > "$HOME/.mongosync-scripts/mongosync-${safeId}.sh" << 'SCRIPT_EOF'
+cat <<'SCRIPT_EOF' > "$HOME/.mongosync-scripts/mongosync-${safeId}.sh"
 ${scriptContent}
 SCRIPT_EOF
 chmod +x "$HOME/.mongosync-scripts/mongosync-${safeId}.sh"
-# Install crontab (remove old entry for this job if exists, then add fresh)
-TMP_CRON=$(mktemp)
+
+TMP_CRON=$(mktemp 2>/dev/null || echo "/tmp/mongosync_cron_tmp")
 crontab -l 2>/dev/null | grep -F -v "mongosync-${safeId}" > "$TMP_CRON" || true
 echo ${bashSingleQuote(cronLine)} >> "$TMP_CRON"
-crontab "$TMP_CRON"
+crontab "$TMP_CRON" 2>&1 || true
 rm -f "$TMP_CRON"
-echo "INSTALLED"
+echo "INSTALLED_SUCCESS"
 `;
 
     const result = await execCommand(sshConfig, installScript);
 
-    if (result.code !== 0 || !result.stdout.includes('INSTALLED')) {
+    if (result.code !== 0 || !result.stdout.includes('INSTALLED_SUCCESS')) {
+      const errMsg = result.stderr.trim() || result.stdout.trim() || 'Failed to install script on target SSH server';
+      console.error('[mongo-sync/cron POST] SSH exec failure:', errMsg);
       return NextResponse.json({
         success: false,
-        error: result.stderr || 'Failed to install script on SSH server',
-        output: result.stdout
+        error: errMsg,
+        stdout: result.stdout,
+        stderr: result.stderr
       }, { status: 500 });
     }
 
