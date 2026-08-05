@@ -2051,10 +2051,7 @@ export default function MongoBackupApp() {
                           <CustomSelect
                             value={restoreCollName}
                             onChange={(val) => setRestoreCollName(val)}
-                            options={[
-                              { value: ALL_COLLECTIONS, label: ALL_COLLECTIONS },
-                              ...restoreFetchedColls.map(c => ({ value: c, label: c }))
-                            ]}
+                            options={Array.from(new Set([ALL_COLLECTIONS, ...restoreFetchedColls])).map(c => ({ value: c, label: c }))}
                           />
                         )}
                       </div>

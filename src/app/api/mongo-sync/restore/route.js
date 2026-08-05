@@ -5,7 +5,8 @@ import { getPooledConnection } from '@/lib/dbPool';
 import connectDB from '@/lib/mongodb';
 import { ConnectionRepository } from '@/lib/repositories/ConnectionRepository';
 import { listDriveFiles, downloadDriveFile } from '@/lib/gdriveHelper';
-import { sanitizeDocument } from '@/lib/mongoSyncUtils';
+import { sanitizeDocument, normalizeMongoConnection } from '@/lib/mongoSyncUtils';
+import { attachRequestUserId } from '@/lib/requestUser';
 import mongoose from 'mongoose';
 
 const MAX_RESTORE_DOCS = 100000;
