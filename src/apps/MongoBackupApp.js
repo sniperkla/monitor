@@ -1142,16 +1142,8 @@ export default function MongoBackupApp() {
       if (data.success) {
         setBackupFiles(data.files);
         if (data.files.length > 0) {
-          setSelectedFileId(data.files[0].id);
-          const fname = data.files[0].name;
-          const cleanName = fname.replace(/\.json$/i, '');
-          const parts = cleanName.split('_');
-          if (parts.length >= 3 && parts[0] === 'backup') {
-            setRestoreDbName(parts[1]);
-            setRestoreCollName(parts[2]);
-          } else if (cleanName) {
-            setRestoreCollName(cleanName);
-          }
+          setSelectedFileId('ALL');
+          setRestoreCollName(ALL_COLLECTIONS);
         } else {
           setSelectedFileId('');
         }
@@ -1214,6 +1206,10 @@ export default function MongoBackupApp() {
 
   const handleBackupFileSelect = (fileId) => {
     setSelectedFileId(fileId);
+    if (fileId === 'ALL') {
+      setRestoreCollName(ALL_COLLECTIONS);
+      return;
+    }
     const file = backupFiles.find(f => f.id === fileId);
     if (!file) return;
     const cleanName = file.name.replace(/\.json$/i, '');
@@ -1262,8 +1258,8 @@ export default function MongoBackupApp() {
   const executeRestore = async () => {
     if (!selectedFileId || !restoreDbName.trim()) return;
     const selectedFile = backupFiles.find(f => f.id === selectedFileId);
-    const isAllColBackup = selectedFile?.name?.includes('ALL_COLLECTIONS');
-    const collectionLabel = isAllColBackup ? 'ALL collections' : `"${restoreCollName}"`;
+    const isAllColBackup = selectedFileId === 'ALL' || selectedFile?.name?.includes('ALL_COLLECTIONS');
+    const collectionLabel = isAllColBackup ? `ALL ${backupFiles.length} collections` : `"${restoreCollName}"`;
     if (!confirm(`Are you sure you want to restore data from Google Drive into ${collectionLabel} in database "${restoreDbName}"? This will run in ${restoreMode} mode.`)) return;
     setLoading(true);
     try {
@@ -1272,6 +1268,7 @@ export default function MongoBackupApp() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           fileId: selectedFileId,
+          driveFolderId: restoreFolderId,
           fileName: selectedFile?.name,
           connectionId: restoreConnId,
           database: restoreDbName.trim(),
@@ -2029,9 +2026,28 @@ export default function MongoBackupApp() {
                     <div className="flex-1 border border-[var(--border-color)] rounded-xl overflow-hidden flex flex-col bg-[var(--bg-tertiary)]/20 min-h-[200px]">
                       <div className="bg-[var(--bg-tertiary)]/30 border-b border-[var(--border-color)] px-3 py-1.5 text-[9px] font-bold uppercase tracking-wider text-[var(--text-muted)] flex justify-between">
                         <span>Backup Files ({backupFiles.length})</span>
-                        <span>Select file to restore</span>
+                        <span>Select option to restore</span>
                       </div>
                       <div className="flex-1 overflow-y-auto custom-scrollbar p-2 space-y-1">
+                        {backupFiles.length > 0 && (
+                          <button
+                            type="button"
+                            onClick={() => handleBackupFileSelect('ALL')}
+                            className={`w-full text-left p-2.5 rounded-lg text-xs transition-all flex items-center justify-between border ${
+                              selectedFileId === 'ALL' 
+                                ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40 shadow-sm font-bold' 
+                                : 'bg-emerald-500/5 hover:bg-emerald-500/10 border-emerald-500/20 text-emerald-400 font-semibold'
+                            }`}
+                          >
+                            <span className="truncate flex-1 flex items-center gap-2">
+                              <Database size={14} className="text-emerald-400 shrink-0" />
+                              <span>All Collections (Batch Restore All {backupFiles.length} Files)</span>
+                            </span>
+                            <span className="text-[9px] font-bold text-emerald-400 bg-emerald-500/20 px-2 py-0.5 rounded-full border border-emerald-500/30 shrink-0">
+                              ALL FILES
+                            </span>
+                          </button>
+                        )}
                         {backupFiles.map(file => (
                           <button
                             key={file.id}
@@ -2097,10 +2113,10 @@ export default function MongoBackupApp() {
                           <span>Target Collection</span>
                           {restoreFetchingColls && <Loader size={10} className="animate-spin text-emerald-400" />}
                         </label>
-                        {backupFiles.find(f => f.id === selectedFileId)?.name?.includes('ALL_COLLECTIONS') ? (
+                        {selectedFileId === 'ALL' || backupFiles.find(f => f.id === selectedFileId)?.name?.includes('ALL_COLLECTIONS') ? (
                           <div className="input-field text-xs w-full bg-emerald-500/10 border-emerald-500/30 text-emerald-400 font-bold flex items-center gap-2 px-3 py-2 rounded-xl">
                             <CheckCircle size={12} />
-                            <span>All Collections (auto-detected)</span>
+                            <span>{selectedFileId === 'ALL' ? `All Collections (Restore All ${backupFiles.length} Files)` : 'All Collections (auto-detected)'}</span>
                           </div>
                         ) : (
                           <CustomSelect
@@ -2132,12 +2148,12 @@ export default function MongoBackupApp() {
                       {loading ? (
                         <>
                           <Loader className="animate-spin" size={14} />
-                          <span>Restoring...</span>
+                          <span>Restoring Data...</span>
                         </>
                       ) : (
                         <>
                           <History size={14} />
-                          <span>Execute Restore</span>
+                          <span>{selectedFileId === 'ALL' ? `Execute Restore (All ${backupFiles.length} Collections)` : 'Execute Restore'}</span>
                         </>
                       )}
                     </button>

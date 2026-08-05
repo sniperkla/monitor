@@ -42,7 +42,7 @@ export async function POST(request) {
     }
 
     const body = await request.json();
-    const { fileId, connectionId, database, collection, mode = 'insert' } = body;
+    const { fileId, driveFolderId, connectionId, database, collection, mode = 'insert' } = body;
 
     if (!fileId || !database) {
       return NextResponse.json({ success: false, error: 'Missing required parameters' }, { status: 400 });
@@ -51,34 +51,7 @@ export async function POST(request) {
     const isAllCollectionsSel = ['*', 'ALL_COLLECTIONS', 'All Collections', 'All Collections (*)'].includes(collection);
     const isAllDatabasesSel   = ['All Databases (*)', 'ALL_DATABASES', '*'].includes(database);
 
-    // 1. Download file from Google Drive
-    console.log(`📥 Downloading backup file ${fileId} from Google Drive...`);
-    const backupData = await downloadDriveFile(fileId);
-
-    // Detect file shape
-    const isAllDbFile = !Array.isArray(backupData)
-      && typeof backupData === 'object'
-      && backupData !== null
-      && Object.values(backupData).every(v => !Array.isArray(v) && typeof v === 'object');
-
-    const isAllCollectionsFile = !Array.isArray(backupData)
-      && typeof backupData === 'object'
-      && backupData !== null
-      && !isAllDbFile;
-
-    if (!Array.isArray(backupData) && !isAllCollectionsFile && !isAllDbFile) {
-      return NextResponse.json({ success: false, error: 'Downloaded backup file is not a valid JSON document' }, { status: 400 });
-    }
-
-    if (Array.isArray(backupData) && backupData.length === 0) {
-      return NextResponse.json({ success: true, message: 'Backup file is empty. No documents imported.', count: 0 });
-    }
-
-    if (Array.isArray(backupData) && backupData.length > MAX_RESTORE_DOCS) {
-      return NextResponse.json({ success: false, error: `Restore limit exceeded. Maximum ${MAX_RESTORE_DOCS} documents per request.` }, { status: 400 });
-    }
-
-    // 2. Establish connection to target DB
+    // Establish connection to target DB
     let pooled;
     if (connectionId === 'default') {
       const db = await connectDB(null, true);
@@ -125,6 +98,85 @@ export async function POST(request) {
         } catch (e) { console.warn('insertMany error:', e.message); }
       }
     };
+
+    // ── Check if this is a Batch Folder Restore (fileId === 'ALL') ──
+    if (fileId === 'ALL') {
+      const targetFolderId = driveFolderId || body.driveFolderId;
+      if (!targetFolderId) {
+        return NextResponse.json({ success: false, error: 'Drive Folder ID required for full folder restore' }, { status: 400 });
+      }
+      const files = await listDriveFiles(targetFolderId);
+      const jsonFiles = (files || []).filter(f => f.name && f.name.endsWith('.json'));
+
+      if (jsonFiles.length === 0) {
+        return NextResponse.json({ success: false, error: 'No JSON backup files found in selected folder' }, { status: 400 });
+      }
+
+      let restoredCollectionsCount = 0;
+      const targetDb = dbInstance.databaseName === database
+        ? dbInstance
+        : dbInstance.client ? dbInstance.client.db(database) : dbInstance;
+
+      for (const file of jsonFiles) {
+        try {
+          const fileData = await downloadDriveFile(file.id);
+          if (!fileData || (Array.isArray(fileData) && fileData.length === 0)) continue;
+
+          const cleanName = file.name.replace(/\.json$/i, '');
+          const parts = cleanName.split('_');
+          const collName = parts.length >= 3 && parts[0] === 'backup' ? parts[2] : cleanName;
+
+          if (Array.isArray(fileData)) {
+            await restoreCollection(targetDb.collection(collName), fileData);
+            restoredCollectionsCount++;
+          } else if (typeof fileData === 'object' && fileData !== null) {
+            for (const [cName, docs] of Object.entries(fileData)) {
+              if (Array.isArray(docs) && docs.length > 0) {
+                await restoreCollection(targetDb.collection(cName), docs);
+                restoredCollectionsCount++;
+              }
+            }
+          }
+        } catch (fileErr) {
+          console.warn(`[Batch Restore] Error restoring file ${file.name}:`, fileErr.message);
+        }
+      }
+
+      return NextResponse.json({
+        success: true,
+        insertedCount,
+        updatedCount,
+        totalCount,
+        message: `Successfully restored ${insertedCount} documents across ${restoredCollectionsCount} collections from Google Drive folder.`
+      });
+    }
+
+    // 1. Single File Download from Google Drive
+    console.log(`📥 Downloading backup file ${fileId} from Google Drive...`);
+    const backupData = await downloadDriveFile(fileId);
+
+    // Detect file shape
+    const isAllDbFile = !Array.isArray(backupData)
+      && typeof backupData === 'object'
+      && backupData !== null
+      && Object.values(backupData).every(v => !Array.isArray(v) && typeof v === 'object');
+
+    const isAllCollectionsFile = !Array.isArray(backupData)
+      && typeof backupData === 'object'
+      && backupData !== null
+      && !isAllDbFile;
+
+    if (!Array.isArray(backupData) && !isAllCollectionsFile && !isAllDbFile) {
+      return NextResponse.json({ success: false, error: 'Downloaded backup file is not a valid JSON document' }, { status: 400 });
+    }
+
+    if (Array.isArray(backupData) && backupData.length === 0) {
+      return NextResponse.json({ success: true, message: 'Backup file is empty. No documents imported.', count: 0 });
+    }
+
+    if (Array.isArray(backupData) && backupData.length > MAX_RESTORE_DOCS) {
+      return NextResponse.json({ success: false, error: `Restore limit exceeded. Maximum ${MAX_RESTORE_DOCS} documents per request.` }, { status: 400 });
+    }
 
     if (isAllDbFile) {
       // ── Restore ALL databases: { dbName: { collName: [docs] } } ──
