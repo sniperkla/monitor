@@ -7,7 +7,7 @@ import {
   Database, Upload, Cloud, RefreshCw, Play, Trash2, Plus, 
   CheckCircle, AlertCircle, Calendar, ShieldAlert, ArrowRight,
   FolderPlus, History, Key, Settings, Loader, CloudLightning, FileJson, ShieldCheck,
-  Copy, Server, Wifi, WifiOff, Terminal, ChevronDown, Check
+  Copy, Server, Wifi, WifiOff, Terminal, ChevronDown, Check, Clock
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
@@ -127,7 +127,41 @@ export default function MongoBackupApp() {
   const [driveBrowseMode, setDriveBrowseMode] = useState('job');
   const [driveBrowsePath, setDriveBrowsePath] = useState([{ id: 'root', name: 'My Drive' }]);
   const [driveBrowseFolders, setDriveBrowseFolders] = useState([]);
-  const [driveBrowseLoading, setDriveBrowseLoading] = useState(false);
+  // ── Sync History State ─────────────────────────────────────────────
+  const [historyRuns, setHistoryRuns] = useState([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
+
+  const fetchHistory = async () => {
+    setHistoryLoading(true);
+    try {
+      const res = await apiFetch('/api/mongo-sync/history');
+      const data = await res.json();
+      if (data.success) {
+        setHistoryRuns(data.data || []);
+      }
+    } catch (err) {
+      console.error('Failed to fetch sync history:', err);
+    } finally {
+      setHistoryLoading(false);
+    }
+  };
+
+  const handleClearHistory = async () => {
+    if (!confirm('Are you sure you want to clear all backup history logs?')) return;
+    setHistoryLoading(true);
+    try {
+      const res = await apiFetch('/api/mongo-sync/history', { method: 'DELETE' });
+      const data = await res.json();
+      if (data.success) {
+        setHistoryRuns([]);
+        addNotification({ title: 'History Cleared', message: 'Backup execution history has been cleared.', type: 'success' });
+      }
+    } catch (err) {
+      addNotification({ title: 'Clear Failed', message: err.message, type: 'error' });
+    } finally {
+      setHistoryLoading(false);
+    }
+  };
 
   // Auto-fetch Database & Collection lists for selected Connection
   const [fetchedDbs, setFetchedDbs] = useState([]);
@@ -946,6 +980,18 @@ export default function MongoBackupApp() {
           </button>
           <button
             onClick={() => {
+              setActiveTab('history');
+              fetchHistory();
+            }}
+            className={`w-full flex items-center gap-2.5 px-3 py-2 text-xs font-bold rounded-xl transition-all ${
+              activeTab === 'history' ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/20 shadow-sm' : 'hover:bg-[var(--bg-card-hover)] border border-transparent text-[var(--text-muted)] hover:text-[var(--text-primary)]'
+            }`}
+          >
+            <Clock size={14} />
+            <span>Execution History</span>
+          </button>
+          <button
+            onClick={() => {
               setActiveTab('failover');
               fetchReplicaSetStatus(rsConnId);
             }}
@@ -1438,6 +1484,18 @@ export default function MongoBackupApp() {
 
                           <div className="flex items-center gap-2 shrink-0">
                             <button
+                              onClick={() => {
+                                setRestoreFolderId(job.driveFolderId);
+                                setRestoreFolderName(job.driveFolderName);
+                                setActiveTab('restore');
+                                fetchBackups(job.driveFolderId);
+                              }}
+                              className="p-2 bg-emerald-500/10 hover:bg-emerald-500/25 border border-emerald-500/20 hover:border-emerald-500/40 text-emerald-400 rounded-xl transition-all"
+                              title="Navigate to backup files in Restore"
+                            >
+                              <FileJson size={14} />
+                            </button>
+                            <button
                               onClick={() => handleRunJob(job.id)}
                               disabled={loading || !driveConnected}
                               className="p-2 bg-emerald-500/10 hover:bg-emerald-500/25 border border-emerald-500/20 hover:border-emerald-500/40 text-emerald-400 rounded-xl transition-all disabled:opacity-40"
@@ -1448,7 +1506,7 @@ export default function MongoBackupApp() {
                             <button
                               onClick={() => handleEditJob(job)}
                               className="p-2 bg-[var(--bg-tertiary)] hover:bg-[var(--bg-card-hover)] border border-[var(--border-color)] text-[var(--text-secondary)] rounded-xl transition-all"
-                              title="Edit job"
+                              title="Edit job config"
                             >
                               <Settings size={14} />
                             </button>
@@ -1645,6 +1703,89 @@ export default function MongoBackupApp() {
                       )}
                     </button>
                   </div>
+                </div>
+              </motion.div>
+            )}
+
+            {/* ── EXECUTION HISTORY TAB ── */}
+            {activeTab === 'history' && (
+              <motion.div
+                key="tab-history"
+                initial={{ opacity: 0, y: 8 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -8 }}
+                className="space-y-6"
+              >
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-[var(--bg-card)] p-5 rounded-2xl border border-[var(--border-color)]">
+                  <div>
+                    <h2 className="text-xl font-black italic uppercase tracking-tight text-[var(--text-primary)] flex items-center gap-2">
+                      <Clock className="text-emerald-500" /> Backup Execution History
+                    </h2>
+                    <p className="text-xs text-[var(--text-muted)]">View real-time status and logs of manual and scheduled MongoDB sync jobs.</p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={fetchHistory}
+                      disabled={historyLoading}
+                      className="px-3 py-1.5 rounded-xl bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 text-xs font-bold border border-emerald-500/20 flex items-center gap-1.5 transition-all disabled:opacity-50"
+                    >
+                      <RefreshCw size={12} className={historyLoading ? 'animate-spin' : ''} />
+                      <span>Refresh Log</span>
+                    </button>
+                    <button
+                      onClick={handleClearHistory}
+                      disabled={historyLoading || historyRuns.length === 0}
+                      className="px-3 py-1.5 rounded-xl bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 text-xs font-bold border border-rose-500/20 flex items-center gap-1.5 transition-all disabled:opacity-50"
+                    >
+                      <Trash2 size={12} />
+                      <span>Clear Log</span>
+                    </button>
+                  </div>
+                </div>
+
+                <div className="bg-[var(--bg-card)] border border-[var(--border-color)] rounded-2xl p-5">
+                  {historyLoading && historyRuns.length === 0 ? (
+                    <div className="py-12 text-center text-xs text-[var(--text-muted)] flex items-center justify-center gap-2">
+                      <Loader size={16} className="animate-spin text-emerald-400" />
+                      <span>Loading execution history...</span>
+                    </div>
+                  ) : historyRuns.length === 0 ? (
+                    <div className="py-12 text-center text-xs text-[var(--text-muted)] italic">
+                      No backup execution history recorded yet. Run a manual backup or wait for a scheduled task.
+                    </div>
+                  ) : (
+                    <div className="space-y-3 max-h-[600px] overflow-y-auto custom-scrollbar pr-1 divide-y divide-[var(--border-color)]/40">
+                      {historyRuns.map(run => (
+                        <div key={run.id} className="pt-3 first:pt-0 space-y-1.5">
+                          <div className="flex items-center justify-between gap-4">
+                            <div className="flex items-center gap-2">
+                              <span className={`w-2 h-2 rounded-full ${run.status === 'success' ? 'bg-emerald-400 shadow-[0_0_6px_rgba(52,211,153,0.5)]' : 'bg-rose-500'}`} />
+                              <span className="font-bold text-xs text-[var(--text-primary)]">{run.jobName || 'Mongo Backup'}</span>
+                              <span className={`text-[9px] px-2 py-0.5 rounded-full font-bold uppercase ${
+                                run.status === 'success' ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30' : 'bg-rose-500/15 text-rose-400 border border-rose-500/30'
+                              }`}>
+                                {run.status}
+                              </span>
+                            </div>
+                            <span className="text-[10px] text-[var(--text-muted)] font-mono">
+                              {new Date(run.runAt).toLocaleString()}
+                            </span>
+                          </div>
+
+                          <div className="text-[10px] font-mono text-[var(--text-muted)] flex items-center justify-between gap-2">
+                            <span>Database: <strong className="text-[var(--text-primary)]">{run.database}</strong> | Collection: <strong className="text-[var(--text-primary)]">{run.collection}</strong></span>
+                            {run.count !== undefined && <span className="text-emerald-400 font-bold">{run.count} docs</span>}
+                          </div>
+
+                          {run.message && (
+                            <div className="text-[11px] font-mono bg-[var(--bg-tertiary)] p-2.5 rounded-xl border border-[var(--border-color)] text-[var(--text-secondary)] leading-relaxed">
+                              {run.message}
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               </motion.div>
             )}
