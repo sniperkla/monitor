@@ -1,4 +1,4 @@
-import { getSshMemoryModel } from '../../models/SshMemory';
+import { getSshMemoryModel } from '../../models/SshMemory.js';
 
 export class SshMemoryRepository {
   constructor(db) {

@@ -1,7 +1,7 @@
-import connectDB from './mongodb';
-import { SystemSettingRepository } from './repositories/SystemSettingRepository';
-import SystemSetting from '../models/SystemSetting';
-import { withRetry } from './mongoSyncUtils';
+import connectDB from './mongodb.js';
+import { SystemSettingRepository } from './repositories/SystemSettingRepository.js';
+import SystemSetting from '../models/SystemSetting.js';
+import { withRetry } from './mongoSyncUtils.js';
 
 const SIMPLE_UPLOAD_LIMIT = 5 * 1024 * 1024; // 5MB — Google's limit for simple upload
 

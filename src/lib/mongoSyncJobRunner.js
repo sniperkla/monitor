@@ -1,14 +1,14 @@
 import { NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth/next';
-import { authOptions } from './auth';
-import { getPooledConnection } from './dbPool';
-import connectDB from './mongodb';
+import { authOptions } from './auth.js';
+import { getPooledConnection } from './dbPool.js';
+import connectDB from './mongodb.js';
 import mongoose from 'mongoose';
-import { ConnectionRepository } from './repositories/ConnectionRepository';
-import { SystemSettingRepository } from './repositories/SystemSettingRepository';
-import { uploadFileToGoogleDrive } from './gdriveHelper';
-import { attachRequestUserId } from './requestUser';
-import { normalizeMongoConnection } from './mongoSyncUtils';
+import { ConnectionRepository } from './repositories/ConnectionRepository.js';
+import { SystemSettingRepository } from './repositories/SystemSettingRepository.js';
+import { uploadFileToGoogleDrive } from './gdriveHelper.js';
+import { attachRequestUserId } from './requestUser.js';
+import { normalizeMongoConnection } from './mongoSyncUtils.js';
 
 export async function executeMongoSyncJob(request, jobId) {
   const session = await getServerSession(authOptions);

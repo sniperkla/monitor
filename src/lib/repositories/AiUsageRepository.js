@@ -1,4 +1,4 @@
-import AiUsage from '../../models/AiUsage';
+import AiUsage from '../../models/AiUsage.js';
 
 export class AiUsageRepository {
   constructor(db) {

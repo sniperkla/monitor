@@ -18,8 +18,8 @@ import mongoose from 'mongoose';
 import mysql from 'mysql2/promise';
 import { Client as PgClient } from 'pg';
 import { Client as SshClient } from 'ssh2';
-import { decrypt } from '../utils/encryption';
-import { resolveLocalhostViaRelay } from './sshTunnel';
+import { decrypt } from '../utils/encryption.js';
+import { resolveLocalhostViaRelay } from './sshTunnel.js';
 import { headers } from 'next/headers.js';
 
 
