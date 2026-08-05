@@ -62,9 +62,18 @@ export default function MongoBackupApp() {
   const [jobDbName, setJobDbName] = useState(ALL_DATABASES);
   const [jobCollName, setJobCollName] = useState(ALL_COLLECTIONS);
   const [jobFolderId, setJobFolderId] = useState('');
+  const [jobFolderName, setJobFolderName] = useState('');
+  const [restoreFolderName, setRestoreFolderName] = useState('');
   const [jobSchedule, setJobSchedule] = useState('daily'); // manual, hourly, daily, weekly
   const [jobEnabled, setJobEnabled] = useState(true);
   const [editingJobId, setEditingJobId] = useState(null);
+  const [jobFolderInputActive, setJobFolderInputActive] = useState(false);
+  const [filteredDriveFolderOptions, setFilteredDriveFolderOptions] = useState([]);
+  const [driveBrowseVisible, setDriveBrowseVisible] = useState(false);
+  const [driveBrowseMode, setDriveBrowseMode] = useState('job');
+  const [driveBrowsePath, setDriveBrowsePath] = useState([{ id: 'root', name: 'My Drive' }]);
+  const [driveBrowseFolders, setDriveBrowseFolders] = useState([]);
+  const [driveBrowseLoading, setDriveBrowseLoading] = useState(false);
 
   // Auto-fetch Database & Collection lists for selected Connection
   const [fetchedDbs, setFetchedDbs] = useState([]);
@@ -383,6 +392,7 @@ export default function MongoBackupApp() {
         if (data.folders.length > 0) {
           setJobFolderId(data.folders[0].id);
           setRestoreFolderId(data.folders[0].id);
+          setJobFolderName(data.folders[0].name);
         }
       }
     } catch (err) {
@@ -577,7 +587,7 @@ export default function MongoBackupApp() {
           database: jobDbName.trim(),
           collection: jobCollName.trim(),
           driveFolderId: jobFolderId,
-          driveFolderName: driveFolders.find(f => f.id === jobFolderId)?.name || 'Default Folder',
+          driveFolderName: jobFolderName || driveFolders.find(f => f.id === jobFolderId)?.name || 'Default Folder',
           schedule: jobSchedule,
           enabled: jobEnabled
         })
@@ -604,9 +614,14 @@ export default function MongoBackupApp() {
     setJobConnId('default');
     setJobDbName('monitor');
     setJobCollName('');
+    setJobFolderId('');
+    setJobFolderName('');
     setJobSchedule('daily');
     setJobEnabled(true);
     setEditingJobId(null);
+    setDriveBrowseVisible(false);
+    setDriveBrowsePath([{ id: 'root', name: 'My Drive' }]);
+    setDriveBrowseFolders([]);
   };
 
   const handleEditJob = (job) => {
@@ -616,6 +631,8 @@ export default function MongoBackupApp() {
     setJobDbName(job.database);
     setJobCollName(job.collection);
     setJobFolderId(job.driveFolderId);
+    setJobFolderName(job.driveFolderName || '');
+    setRestoreFolderName(job.driveFolderName || '');
     setJobSchedule(job.schedule);
     setJobEnabled(job.enabled);
   };
@@ -664,7 +681,6 @@ export default function MongoBackupApp() {
         setBackupFiles(data.files);
         if (data.files.length > 0) {
           setSelectedFileId(data.files[0].id);
-          // Try to autofill DB/Coll name from filename (e.g. backup_dbname_collname_timestamp.json)
           const fname = data.files[0].name;
           const parts = fname.split('_');
           if (parts.length >= 3) {
@@ -680,6 +696,46 @@ export default function MongoBackupApp() {
     } finally {
       setLoading(false);
     }
+  };
+
+  const fetchDriveBrowseFolders = async (parentId = null) => {
+    setDriveBrowseLoading(true);
+    try {
+      const url = parentId ? `/api/mongo-sync/gdrive/folders?parentId=${parentId}` : '/api/mongo-sync/gdrive/folders';
+      const res = await apiFetch(url);
+      const data = await res.json();
+      if (data.success) {
+        setDriveBrowseFolders(data.folders || []);
+      }
+    } catch (err) {
+      console.error('Failed to load drive folders:', err);
+    } finally {
+      setDriveBrowseLoading(false);
+    }
+  };
+
+  const openDriveBrowser = (mode = 'job') => {
+    setDriveBrowseMode(mode);
+    setDriveBrowseVisible(true);
+    setDriveBrowsePath([{ id: 'root', name: 'My Drive' }]);
+    setDriveBrowseFolders([]);
+    fetchDriveBrowseFolders();
+  };
+
+  const navigateDriveFolder = async (folder) => {
+    if (folder.id === 'root') {
+      setDriveBrowsePath([{ id: 'root', name: 'My Drive' }]);
+      await fetchDriveBrowseFolders();
+      return;
+    }
+    const nextPath = [...driveBrowsePath];
+    const existingIndex = nextPath.findIndex(p => p.id === folder.id);
+    if (existingIndex !== -1) {
+      setDriveBrowsePath(nextPath.slice(0, existingIndex + 1));
+    } else {
+      setDriveBrowsePath([...nextPath, folder]);
+    }
+    await fetchDriveBrowseFolders(folder.id);
   };
 
   useEffect(() => {
@@ -700,6 +756,39 @@ export default function MongoBackupApp() {
       setRestoreDbName(parts[1]);
       setRestoreCollName(parts[2]);
     }
+  };
+
+  const handleDriveFolderSelect = (folder) => {
+    if (driveBrowseMode === 'job') {
+      setJobFolderId(folder.id);
+      setJobFolderName(folder.name);
+    } else {
+      setRestoreFolderId(folder.id);
+      setRestoreFolderName(folder.name);
+    }
+    setDriveBrowseVisible(false);
+  };
+
+  const handleJobFolderInputChange = (value) => {
+    setJobFolderName(value);
+    setJobFolderInputActive(true);
+    const filtered = driveFolders.filter(f => f.name.toLowerCase().includes(value.toLowerCase()));
+    setFilteredDriveFolderOptions(filtered.length > 0 ? filtered : driveFolders);
+    const exact = driveFolders.find(f => f.name.toLowerCase() === value.toLowerCase());
+    if (exact) {
+      setJobFolderId(exact.id);
+    }
+  };
+
+  const handleSelectJobFolder = (folder) => {
+    setJobFolderId(folder.id);
+    setJobFolderName(folder.name);
+    setJobFolderInputActive(false);
+    setFilteredDriveFolderOptions([]);
+  };
+
+  const handleJobFolderInputBlur = () => {
+    setTimeout(() => setJobFolderInputActive(false), 150);
   };
 
   const executeRestore = async () => {
@@ -855,7 +944,7 @@ export default function MongoBackupApp() {
                         <select
                           value={importConnId}
                           onChange={(e) => setImportConnId(e.target.value)}
-                          className="input-field text-xs w-full bg-[var(--bg-tertiary)]"
+                          className="select-field text-xs w-full bg-[var(--bg-tertiary)]"
                         >
                           {dbConnections.map(c => (
                             <option key={c._id} value={c._id}>{c.name}</option>
@@ -871,7 +960,7 @@ export default function MongoBackupApp() {
                           <select
                             value={importDbName}
                             onChange={(e) => setImportDbName(e.target.value)}
-                            className="input-field text-xs w-full bg-[var(--bg-tertiary)]"
+                            className="select-field text-xs w-full bg-[var(--bg-tertiary)]"
                           >
                             {importFetchedDbs.map(db => (
                               <option key={db} value={db}>{db}</option>
@@ -899,7 +988,7 @@ export default function MongoBackupApp() {
                           <select
                             value={importCollName}
                             onChange={(e) => setImportCollName(e.target.value)}
-                            className="input-field text-xs w-full bg-[var(--bg-tertiary)]"
+                            className="select-field text-xs w-full bg-[var(--bg-tertiary)]"
                           >
                             {importFetchedColls.map(c => (
                               <option key={c} value={c}>{c}</option>
@@ -920,7 +1009,7 @@ export default function MongoBackupApp() {
                         <select
                           value={importMode}
                           onChange={(e) => setImportMode(e.target.value)}
-                          className="input-field text-xs w-full bg-[var(--bg-tertiary)]"
+                          className="select-field text-xs w-full bg-[var(--bg-tertiary)]"
                         >
                           <option value="insert">Insert (Fail on duplicate ID)</option>
                           <option value="upsert">Upsert (Overwrite matching ID)</option>
@@ -1145,7 +1234,7 @@ export default function MongoBackupApp() {
                           <select
                             value={jobConnId}
                             onChange={(e) => setJobConnId(e.target.value)}
-                            className="input-field text-xs w-full bg-[var(--bg-tertiary)]"
+                            className="select-field text-xs w-full bg-[var(--bg-tertiary)]"
                           >
                             {dbConnections.map(c => (
                               <option key={c._id} value={c._id}>{c.name}</option>
@@ -1160,7 +1249,7 @@ export default function MongoBackupApp() {
                           <select
                             value={jobDbName}
                             onChange={(e) => setJobDbName(e.target.value)}
-                            className="input-field text-xs w-full bg-[var(--bg-tertiary)]"
+                            className="select-field text-xs w-full bg-[var(--bg-tertiary)]"
                           >
                             {/* Only show All Databases (*) when connection has access to multiple DBs */}
                             {fetchedDbs.length !== 1 && (
@@ -1182,7 +1271,7 @@ export default function MongoBackupApp() {
                           <select
                             value={jobCollName}
                             onChange={(e) => setJobCollName(e.target.value)}
-                            className="input-field text-xs w-full bg-[var(--bg-tertiary)]"
+                            className="select-field text-xs w-full bg-[var(--bg-tertiary)]"
                           >
                             <option value={ALL_COLLECTIONS}>{ALL_COLLECTIONS}</option>
                             {fetchedColls.map(c => (
@@ -1192,19 +1281,43 @@ export default function MongoBackupApp() {
                         </div>
                         <div>
                           <label className="text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)] block mb-1">Drive Folder</label>
-                          <select
-                            value={jobFolderId}
-                            onChange={(e) => setJobFolderId(e.target.value)}
-                            className="input-field text-xs w-full bg-[var(--bg-tertiary)]"
-                            required
-                          >
-                            {driveFolders.map(f => (
-                              <option key={f.id} value={f.id}>{f.name}</option>
-                            ))}
-                            {driveFolders.length === 0 && (
-                              <option value="">(No folders available)</option>
-                            )}
-                          </select>
+                          <div className="flex gap-2">
+                            <div className="flex-1 relative">
+                              <input
+                                type="text"
+                                value={jobFolderName}
+                                onChange={(e) => handleJobFolderInputChange(e.target.value)}
+                                onFocus={() => setJobFolderInputActive(true)}
+                                onBlur={handleJobFolderInputBlur}
+                                placeholder="Type or browse folder..."
+                                className="w-full px-3 py-2 text-xs rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] font-mono text-[var(--text-primary)] focus:border-emerald-500 focus:outline-none"
+                                required
+                                disabled={!driveConnected}
+                              />
+                              {jobFolderInputActive && filteredDriveFolderOptions.length > 0 && (
+                                <div className="absolute z-50 mt-1 w-full max-h-48 overflow-y-auto rounded-2xl border border-[var(--border-color)] bg-[var(--bg-secondary)] shadow-2xl">
+                                  {filteredDriveFolderOptions.map(folder => (
+                                    <button
+                                      key={folder.id}
+                                      type="button"
+                                      onMouseDown={() => handleSelectJobFolder(folder)}
+                                      className="w-full px-3 py-2 text-left text-xs font-mono text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)]"
+                                    >
+                                      {folder.name}
+                                    </button>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => openDriveBrowser('job')}
+                              disabled={!driveConnected}
+                              className="px-3 py-1.5 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-[11px] font-bold text-emerald-400 hover:bg-emerald-500/15 transition-all"
+                            >
+                              Browse
+                            </button>
+                          </div>
                         </div>
                       </div>
 
@@ -1214,7 +1327,7 @@ export default function MongoBackupApp() {
                           <select
                             value={jobSchedule}
                             onChange={(e) => setJobSchedule(e.target.value)}
-                            className="input-field text-xs w-full bg-[var(--bg-tertiary)]"
+                            className="select-field text-xs w-full bg-[var(--bg-tertiary)]"
                           >
                             <option value="manual">Manual Only</option>
                             <option value="hourly">Hourly</option>
@@ -1351,17 +1464,24 @@ export default function MongoBackupApp() {
                     <div className="flex flex-col md:flex-row gap-4 mb-2">
                       <div className="flex-1">
                         <label className="text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)] block mb-1">Select Backup Folder</label>
-                        <select
-                          value={restoreFolderId}
-                          onChange={(e) => setRestoreFolderId(e.target.value)}
-                          className="input-field text-xs w-full bg-[var(--bg-tertiary)]"
-                          disabled={!driveConnected}
-                        >
-                          <option value="">(Select Folder)</option>
-                          {driveFolders.map(f => (
-                            <option key={f.id} value={f.id}>{f.name}</option>
-                          ))}
-                        </select>
+                        <div className="flex gap-2">
+                          <input
+                            type="text"
+                            value={restoreFolderName || (restoreFolderId ? driveFolders.find(f => f.id === restoreFolderId)?.name || '' : '')}
+                            readOnly
+                            placeholder="Choose folder..."
+                            className="w-full px-3 py-2 text-xs rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] font-mono text-[var(--text-primary)] focus:border-emerald-500 focus:outline-none"
+                            disabled={!driveConnected}
+                          />
+                          <button
+                            type="button"
+                            onClick={() => openDriveBrowser('restore')}
+                            disabled={!driveConnected}
+                            className="px-3 py-1.5 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-[11px] font-bold text-emerald-400 hover:bg-emerald-500/15 transition-all"
+                          >
+                            Browse
+                          </button>
+                        </div>
                       </div>
                       <div className="flex items-end shrink-0">
                         <button
@@ -1422,7 +1542,7 @@ export default function MongoBackupApp() {
                         <select
                           value={restoreConnId}
                           onChange={(e) => setRestoreConnId(e.target.value)}
-                          className="input-field text-xs w-full bg-[var(--bg-tertiary)]"
+                          className="select-field text-xs w-full bg-[var(--bg-tertiary)]"
                         >
                           {dbConnections.map(c => (
                             <option key={c._id} value={c._id}>{c.name}</option>
@@ -1438,7 +1558,7 @@ export default function MongoBackupApp() {
                         <select
                           value={restoreDbName}
                           onChange={(e) => setRestoreDbName(e.target.value)}
-                          className="input-field text-xs w-full bg-[var(--bg-tertiary)]"
+                          className="select-field text-xs w-full bg-[var(--bg-tertiary)]"
                         >
                           {/* Only show All Databases (*) when connection has access to multiple DBs */}
                           {restoreFetchedDbs.length !== 1 && (
@@ -1464,7 +1584,7 @@ export default function MongoBackupApp() {
                           <select
                             value={restoreCollName}
                             onChange={(e) => setRestoreCollName(e.target.value)}
-                            className="input-field text-xs w-full bg-[var(--bg-tertiary)]"
+                            className="select-field text-xs w-full bg-[var(--bg-tertiary)]"
                           >
                             <option value={ALL_COLLECTIONS}>{ALL_COLLECTIONS}</option>
                             {restoreFetchedColls.map(c => (
@@ -1479,7 +1599,7 @@ export default function MongoBackupApp() {
                         <select
                           value={restoreMode}
                           onChange={(e) => setRestoreMode(e.target.value)}
-                          className="input-field text-xs w-full bg-[var(--bg-tertiary)]"
+                          className="select-field text-xs w-full bg-[var(--bg-tertiary)]"
                         >
                           <option value="insert">Insert (Fail on duplicate ID)</option>
                           <option value="upsert">Upsert (Overwrite matching ID)</option>
@@ -1539,7 +1659,7 @@ export default function MongoBackupApp() {
                           setRsConnId(e.target.value);
                           fetchReplicaSetStatus(e.target.value);
                         }}
-                        className="input-field text-xs bg-[var(--bg-tertiary)] py-1 px-2 font-mono"
+                        className="select-field text-xs bg-[var(--bg-tertiary)] py-1 px-2 font-mono"
                       >
                         {dbConnections.map(c => (
                           <option key={c._id} value={c._id}>{c.name}</option>
@@ -1821,7 +1941,7 @@ export default function MongoBackupApp() {
                                   <select
                                     value={node.sshConnId}
                                     onChange={(e) => updateNode(i, { sshConnId: e.target.value, instances: [], selectedPort: '', selectedHost: '', verified: null, scanError: null })}
-                                    className="input-field text-xs flex-1 bg-[var(--bg-tertiary)] min-w-0 truncate"
+                                    className="select-field text-xs flex-1 bg-[var(--bg-tertiary)] min-w-0 truncate"
                                   >
                                     <option value="">(Select SSH Server)</option>
                                     {sshConnections.map(c => (
@@ -1861,7 +1981,7 @@ export default function MongoBackupApp() {
                                       updateNode(i, { selectedHost: h, selectedPort: p, verified: null });
                                       verifyNodePort(i, p, h);
                                     }}
-                                    className="input-field text-xs w-full bg-[var(--bg-tertiary)] font-mono"
+                                    className="select-field text-xs w-full bg-[var(--bg-tertiary)] font-mono"
                                   >
                                     {node.instances.map(inst => (
                                       <option key={inst.port} value={`${inst.host}:${inst.port}`}>
@@ -1996,6 +2116,60 @@ export default function MongoBackupApp() {
               </motion.div>
             )}
           </AnimatePresence>
+
+          {driveBrowseVisible && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+              <div className="w-full max-w-3xl rounded-3xl border border-[var(--border-color)] bg-[var(--bg-card)] shadow-2xl overflow-hidden">
+                <div className="flex items-center justify-between border-b border-[var(--border-color)] px-5 py-4">
+                  <div>
+                    <div className="text-sm font-bold">Browse Google Drive</div>
+                    <div className="text-[11px] text-[var(--text-muted)]">Select a folder for {driveBrowseMode === 'job' ? 'backup jobs' : 'restore files'}.</div>
+                  </div>
+                  <button
+                    onClick={() => setDriveBrowseVisible(false)}
+                    className="rounded-xl border border-[var(--border-color)] bg-[var(--bg-tertiary)] px-3 py-2 text-[11px] font-bold hover:bg-[var(--bg-card-hover)]"
+                  >
+                    Close
+                  </button>
+                </div>
+                <div className="space-y-4 p-5">
+                  <div className="flex flex-wrap gap-2 text-[11px] text-[var(--text-muted)]">
+                    {driveBrowsePath.map((folder, idx) => (
+                      <button
+                        key={folder.id}
+                        type="button"
+                        onClick={() => navigateDriveFolder(folder)}
+                        className="rounded-full border border-[var(--border-color)] bg-[var(--bg-tertiary)] px-3 py-1 text-[11px] font-semibold hover:bg-[var(--bg-card-hover)]"
+                      >
+                        {folder.name}
+                      </button>
+                    ))}
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-[10px] uppercase tracking-[0.24em] text-[var(--text-muted)]">Folders</span>
+                    {driveBrowseLoading && <Loader size={12} className="animate-spin text-emerald-400" />}
+                  </div>
+                  <div className="grid gap-3 max-h-[360px] overflow-y-auto">
+                    {driveBrowseFolders.length > 0 ? driveBrowseFolders.map(folder => (
+                      <button
+                        key={folder.id}
+                        type="button"
+                        onClick={() => handleDriveFolderSelect(folder)}
+                        className="w-full rounded-2xl border border-[var(--border-color)] bg-[var(--bg-tertiary)] p-4 text-left transition hover:border-emerald-500/30 hover:bg-[var(--bg-card-hover)]"
+                      >
+                        <div className="font-semibold text-sm text-[var(--text-primary)]">{folder.name}</div>
+                        <div className="text-[10px] text-[var(--text-muted)] font-mono truncate">{folder.id}</div>
+                      </button>
+                    )) : (
+                      <div className="rounded-2xl border border-dashed border-[var(--border-color)] bg-[var(--bg-tertiary)] p-6 text-center text-[11px] text-[var(--text-muted)]">
+                        {driveBrowseLoading ? 'Loading folders...' : 'No folders found under this path.'}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       </div>
     </div>

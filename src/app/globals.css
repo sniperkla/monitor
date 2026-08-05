@@ -1227,7 +1227,8 @@ body {
   background: var(--bg-secondary);
   border: 1px solid var(--border-color);
   color: var(--text-primary);
-  padding: 10px 14px;
+  padding: 10px 14px 10px 14px;
+  padding-right: 38px;
   border-radius: 10px;
   font-size: 14px;
   width: 100%;
@@ -1236,6 +1237,12 @@ body {
   cursor: pointer;
   appearance: none;
   font-family: "Inter", sans-serif;
+  background-image:
+    linear-gradient(45deg, transparent 50%, currentColor 50%),
+    linear-gradient(135deg, currentColor 50%, transparent 50%);
+  background-position: right 14px center;
+  background-size: 8px 8px;
+  background-repeat: no-repeat;
 }
 
 .select-field:focus {

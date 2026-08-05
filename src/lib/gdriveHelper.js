@@ -69,11 +69,12 @@ export async function getGoogleAccessToken() {
   return data.access_token;
 }
 
-export async function listGoogleDriveFolders() {
+export async function listGoogleDriveFolders(parentId = 'root') {
   return withRetry(async () => {
     const accessToken = await getGoogleAccessToken();
 
-    const query = "mimeType = 'application/vnd.google-apps.folder' and trashed = false";
+    const parentClause = parentId ? ` and '${parentId}' in parents` : '';
+    const query = `mimeType = 'application/vnd.google-apps.folder' and trashed = false${parentClause}`;
     const url = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(query)}&fields=files(id,name)`;
 
     const res = await fetch(url, {
@@ -89,7 +90,6 @@ export async function listGoogleDriveFolders() {
 export async function createGoogleDriveFolder(folderName) {
   return withRetry(async () => {
     const accessToken = await getGoogleAccessToken();
-
     const res = await fetch('https://www.googleapis.com/drive/v3/files', {
       method: 'POST',
       headers: {
@@ -106,6 +106,40 @@ export async function createGoogleDriveFolder(folderName) {
     if (data.error) throw new Error(data.error.message);
     return data;
   }, { label: 'createGoogleDriveFolder' });
+}
+
+export async function ensureDriveFolder(parentId, folderName) {
+  return withRetry(async () => {
+    const accessToken = await getGoogleAccessToken();
+    // Search for existing folder with this name under the parent
+    const query = `mimeType = 'application/vnd.google-apps.folder' and trashed = false and name = '${folderName.replace(/'/g, "\\'")}' and '${parentId}' in parents`;
+    const url = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(query)}&fields=files(id,name)`;
+
+    const res = await fetch(url, {
+      headers: { 'Authorization': `Bearer ${accessToken}` }
+    });
+    const data = await res.json();
+    if (data.error) throw new Error(data.error.message);
+    if (data.files && data.files.length > 0) return data.files[0];
+
+    // Not found — create it with parent
+    const createRes = await fetch('https://www.googleapis.com/drive/v3/files', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${accessToken}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        name: folderName,
+        mimeType: 'application/vnd.google-apps.folder',
+        parents: [parentId]
+      })
+    });
+
+    const created = await createRes.json();
+    if (created.error) throw new Error(created.error.message);
+    return created;
+  }, { label: 'ensureDriveFolder' });
 }
 
 export async function uploadFileToGoogleDrive({ fileName, content, folderId }) {

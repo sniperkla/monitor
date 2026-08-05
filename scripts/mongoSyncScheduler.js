@@ -48,16 +48,17 @@ async function runJob(job, driveConfig) {
     // 1. Get access token via shared helper (handles refresh + dedup)
     const token = await gdrive.getGoogleAccessToken();
 
-    // 2. Fetch docs with size guard
-    let docs = [];
+    // 2. Fetch docs and handle "all collections" or single collection
+    const allCollectionNames = ['*', 'ALL_COLLECTIONS', 'All Collections', 'All Collections (*)'];
+    const isAllCollections = allCollectionNames.includes(job.collection);
+
+    // Helper: get target DB handle and list collections
+    let targetDb;
     if (job.connectionId === 'default') {
       const { default: connectDB } = await import('../src/lib/mongodb.js');
       await connectDB(null, true);
       const centerDb = mongoose.connection.db;
-      const targetDb = centerDb.databaseName === job.database
-        ? centerDb
-        : centerDb.client.db(job.database);
-      docs = await targetDb.collection(job.collection).find({}).limit(MAX_DOCS).toArray();
+      targetDb = centerDb.databaseName === job.database ? centerDb : centerDb.client.db(job.database);
     } else {
       const { MongoClient } = require('mongodb');
       const connData = await getConnectionData(job.connectionId);
@@ -76,24 +77,68 @@ async function runJob(job, driveConfig) {
 
       client = new MongoClient(uri, { serverSelectionTimeoutMS: 8000 });
       await client.connect();
-      const targetDb = client.db(job.database);
-      docs = await targetDb.collection(job.collection).find({}).limit(MAX_DOCS).toArray();
+      targetDb = client.db(job.database);
     }
 
-    count = docs.length;
+    // Prepare Drive nested folders: Day and Time under configured folder
+    const now = new Date();
+    const pad = (v) => String(v).padStart(2, '0');
+    const dayFolderName = `${now.getDate()}_${pad(now.getMonth()+1)}_${now.getFullYear()}`;
+    const timeFolderName = `${pad(now.getHours())}-${pad(now.getMinutes())}`;
 
-    // 3. Size check
-    const jsonContent = JSON.stringify(docs, null, 2);
-    if (Buffer.byteLength(jsonContent, 'utf8') > MAX_DOC_BYTES) {
-      throw new Error(`Backup data exceeds ${MAX_DOC_BYTES / 1024 / 1024}MB limit. Found ${count} documents.`);
+    // Upload per-collection if requested
+    if (isAllCollections) {
+      const collections = await targetDb.listCollections().toArray();
+      const colNames = collections.map(c => c.name).filter(n => !n.startsWith('system.'));
+
+      // Ensure nested day/time subfolders under configured Drive folder
+      let targetFolder = job.driveFolderId;
+      if (job.driveFolderId) {
+        const day = await gdrive.ensureDriveFolder(job.driveFolderId, dayFolderName);
+        const time = await gdrive.ensureDriveFolder(day.id || job.driveFolderId, timeFolderName);
+        targetFolder = time.id || (day.id || targetFolder);
+      }
+
+      let totalDocs = 0;
+      for (const colName of colNames) {
+        const docs = await targetDb.collection(colName).find({}).limit(MAX_DOCS).toArray();
+        const jsonContent = JSON.stringify(docs, null, 2);
+        if (Buffer.byteLength(jsonContent, 'utf8') > MAX_DOC_BYTES) {
+          throw new Error(`Backup data for ${colName} exceeds ${MAX_DOC_BYTES / 1024 / 1024}MB limit.`);
+        }
+        const fileName = `${colName}.json`;
+        await gdrive.uploadFileToGoogleDrive({ fileName, content: jsonContent, folderId: targetFolder });
+        totalDocs += docs.length;
+      }
+
+      count = totalDocs;
+      runMessage = `Successfully backed up ALL ${colNames.length} collections (${count} total docs).`;
+      console.log(`[Scheduler] Backup job completed: ${job.name}`);
+
+    } else {
+      // Single collection path (unchanged behavior)
+      const docs = await targetDb.collection(job.collection).find({}).limit(MAX_DOCS).toArray();
+      count = docs.length;
+
+      const jsonContent = JSON.stringify(docs, null, 2);
+      if (Buffer.byteLength(jsonContent, 'utf8') > MAX_DOC_BYTES) {
+        throw new Error(`Backup data exceeds ${MAX_DOC_BYTES / 1024 / 1024}MB limit. Found ${count} documents.`);
+      }
+
+      // Ensure nested day/time subfolders under configured Drive folder
+      let targetFolder = job.driveFolderId;
+      if (job.driveFolderId) {
+        const day = await gdrive.ensureDriveFolder(job.driveFolderId, dayFolderName);
+        const time = await gdrive.ensureDriveFolder(day.id || job.driveFolderId, timeFolderName);
+        targetFolder = time.id || (day.id || targetFolder);
+      }
+
+      const fileName = `${job.collection}.json`;
+      await gdrive.uploadFileToGoogleDrive({ fileName, content: jsonContent, folderId: targetFolder });
+
+      runMessage = `Successfully backed up ${count} documents.`;
+      console.log(`[Scheduler] Backup job completed: ${job.name}`);
     }
-
-    // 4. Upload to Drive using shared helper
-    const fileName = `backup_${job.database}_${job.collection}_${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
-    await gdrive.uploadFileToGoogleDrive({ fileName, content: jsonContent, folderId: job.driveFolderId });
-
-    runMessage = `Successfully backed up ${count} documents.`;
-    console.log(`[Scheduler] Backup job completed: ${job.name}`);
 
     // 5. Retention cleanup — delete backups beyond configured max count
     const maxBackups = job.maxBackups || 0;

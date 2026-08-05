@@ -6,7 +6,7 @@ import connectDB from '@/lib/mongodb';
 import mongoose from 'mongoose';
 import { ConnectionRepository } from '@/lib/repositories/ConnectionRepository';
 import { SystemSettingRepository } from '@/lib/repositories/SystemSettingRepository';
-import { uploadFileToGoogleDrive } from '@/lib/gdriveHelper';
+import { uploadFileToGoogleDrive, ensureDriveFolder } from '@/lib/gdriveHelper';
 import { attachRequestUserId } from '@/lib/requestUser';
 import { normalizeMongoConnection } from '@/lib/mongoSyncUtils';
 
@@ -112,21 +112,32 @@ export async function POST(request, { params }) {
         runMessage = `Successfully backed up ALL ${dbNames.length} databases (${count} total docs) to Google Drive.`;
 
       } else if (isAllCollections) {
-        // ── Backup ALL collections in target DB ──
+        // ── Backup ALL collections in target DB (one file per collection) ──
         const collections = await targetDb.listCollections().toArray();
         const colNames = collections.map(c => c.name).filter(n => !n.startsWith('system.'));
         let totalDocs = 0;
-        const allDbData = {};
+
+        // Build Day/Time nested folders under configured Drive folder
+        const now = new Date();
+        const pad = (v) => String(v).padStart(2, '0');
+        const dayFolderName = `${now.getDate()}_${pad(now.getMonth()+1)}_${now.getFullYear()}`;
+        const timeFolderName = `${pad(now.getHours())}-${pad(now.getMinutes())}`;
+
+        let targetFolder = job.driveFolderId;
+        if (job.driveFolderId) {
+          const day = await ensureDriveFolder(job.driveFolderId, dayFolderName);
+          const time = await ensureDriveFolder(day.id || job.driveFolderId, timeFolderName);
+          targetFolder = time.id || (day.id || targetFolder);
+        }
 
         for (const colName of colNames) {
           const docs = await targetDb.collection(colName).find({}).toArray();
-          allDbData[colName] = docs;
+          const jsonContent = JSON.stringify(docs, null, 2);
+          const fileName = `${colName}.json`;
+          await uploadFileToGoogleDrive({ fileName, content: jsonContent, folderId: targetFolder });
           totalDocs += docs.length;
         }
 
-        const timeStamp = new Date().toISOString().replace(/[:.]/g, '-');
-        const fileName = `backup_${job.database}_ALL_COLLECTIONS_${timeStamp}.json`;
-        await uploadFileToGoogleDrive({ fileName, content: JSON.stringify(allDbData, null, 2), folderId: job.driveFolderId });
         count = totalDocs;
         runMessage = `Successfully backed up ALL ${colNames.length} collections (${count} total docs) to Google Drive.`;
 
