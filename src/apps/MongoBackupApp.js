@@ -7,7 +7,8 @@ import {
   Database, Upload, Cloud, RefreshCw, Play, Trash2, Plus, 
   CheckCircle, AlertCircle, Calendar, ShieldAlert, ArrowRight,
   FolderPlus, History, Key, Settings, Loader, CloudLightning, FileJson, ShieldCheck,
-  Copy, Server, Wifi, WifiOff, Terminal, ChevronDown, Check, Clock
+  Copy, Server, Wifi, WifiOff, Terminal, ChevronDown, Check, Clock,
+  XCircle, TrendingUp, X, Zap, Shield, BarChart3
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
@@ -404,6 +405,8 @@ export default function MongoBackupApp() {
   // ── Sync History State ─────────────────────────────────────────────
   const [historyRuns, setHistoryRuns] = useState([]);
   const [historyLoading, setHistoryLoading] = useState(false);
+  // ── Restore Result Modal State ─────────────────────────────────────
+  const [restoreResult, setRestoreResult] = useState(null); // null = closed
 
   const fetchHistory = async () => {
     setHistoryLoading(true);
@@ -1278,12 +1281,38 @@ export default function MongoBackupApp() {
       });
       const data = await res.json();
       if (data.success) {
-        addNotification({ title: 'Restore Complete', message: data.message, type: 'success' });
+        setRestoreResult({
+          success: true,
+          database: restoreDbName.trim(),
+          collection: isAllColBackup ? `All Collections (${backupFiles.length} files)` : restoreCollName.trim(),
+          mode: restoreMode,
+          insertedCount: data.insertedCount ?? 0,
+          updatedCount: data.updatedCount ?? 0,
+          matchedCount: data.matchedCount ?? 0,
+          totalCount: data.totalCount ?? 0,
+          message: data.message,
+          timestamp: new Date().toLocaleString(),
+          folderName: restoreFolderName,
+        });
       } else {
-        throw new Error(data.error);
+        setRestoreResult({
+          success: false,
+          database: restoreDbName.trim(),
+          collection: isAllColBackup ? `All Collections` : restoreCollName.trim(),
+          mode: restoreMode,
+          message: data.error || 'Unknown error',
+          timestamp: new Date().toLocaleString(),
+        });
       }
     } catch (err) {
-      addNotification({ title: 'Restore Failed', message: err.message, type: 'error' });
+      setRestoreResult({
+        success: false,
+        database: restoreDbName.trim(),
+        collection: restoreCollName,
+        mode: restoreMode,
+        message: err.message,
+        timestamp: new Date().toLocaleString(),
+      });
     } finally {
       setLoading(false);
     }
@@ -1291,7 +1320,130 @@ export default function MongoBackupApp() {
 
   return (
     <div className="flex h-full w-full bg-transparent text-[var(--text-primary)] border-[var(--border-color)] overflow-hidden font-sans">
+
+      {/* ── macOS-style Restore Result Modal ──────────────────────────────── */}
+      <AnimatePresence>
+        {restoreResult && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[9999] flex items-center justify-center p-4"
+            style={{ background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(8px)' }}
+            onClick={() => setRestoreResult(null)}
+          >
+            <motion.div
+              initial={{ scale: 0.85, opacity: 0, y: 30 }}
+              animate={{ scale: 1, opacity: 1, y: 0 }}
+              exit={{ scale: 0.85, opacity: 0, y: 30 }}
+              transition={{ type: 'spring', stiffness: 400, damping: 30 }}
+              onClick={e => e.stopPropagation()}
+              className="w-full max-w-md rounded-3xl border shadow-2xl overflow-hidden"
+              style={{
+                background: 'var(--bg-card)',
+                borderColor: restoreResult.success ? 'rgba(52,211,153,0.3)' : 'rgba(239,68,68,0.3)',
+                boxShadow: restoreResult.success
+                  ? '0 0 60px rgba(52,211,153,0.15), 0 25px 50px rgba(0,0,0,0.5)'
+                  : '0 0 60px rgba(239,68,68,0.15), 0 25px 50px rgba(0,0,0,0.5)',
+              }}
+            >
+              {/* Header stripe */}
+              <div className={`px-6 pt-7 pb-5 text-center border-b border-[var(--border-color)] relative`}
+                style={{ background: restoreResult.success ? 'rgba(52,211,153,0.06)' : 'rgba(239,68,68,0.06)' }}
+              >
+                <button
+                  onClick={() => setRestoreResult(null)}
+                  className="absolute top-4 right-4 w-7 h-7 rounded-full bg-[var(--bg-tertiary)] hover:bg-[var(--bg-card-hover)] border border-[var(--border-color)] flex items-center justify-center text-[var(--text-muted)] hover:text-[var(--text-primary)] transition-all"
+                >
+                  <X size={13} />
+                </button>
+
+                {/* macOS traffic-light style icon */}
+                <div className={`w-16 h-16 rounded-2xl mx-auto mb-4 flex items-center justify-center shadow-lg border ${
+                  restoreResult.success
+                    ? 'bg-emerald-500/15 border-emerald-500/30'
+                    : 'bg-red-500/15 border-red-500/30'
+                }`}>
+                  {restoreResult.success
+                    ? <CheckCircle size={32} className="text-emerald-400" />
+                    : <XCircle size={32} className="text-red-400" />
+                  }
+                </div>
+
+                <h2 className="text-base font-black tracking-tight text-[var(--text-primary)] mb-0.5">
+                  {restoreResult.success ? 'Restore Complete' : 'Restore Failed'}
+                </h2>
+                <p className="text-[11px] text-[var(--text-muted)]">{restoreResult.timestamp}</p>
+              </div>
+
+              {/* Stats grid (only on success) */}
+              {restoreResult.success && (
+                <div className="grid grid-cols-3 gap-px bg-[var(--border-color)] border-b border-[var(--border-color)]">
+                  {[
+                    { label: 'New', value: restoreResult.insertedCount, icon: <Zap size={12} />, color: 'text-emerald-400' },
+                    { label: 'Updated', value: restoreResult.updatedCount, icon: <TrendingUp size={12} />, color: 'text-blue-400' },
+                    { label: 'Existing', value: restoreResult.matchedCount, icon: <Shield size={12} />, color: 'text-slate-400' },
+                  ].map(stat => (
+                    <div key={stat.label} className="flex flex-col items-center py-4 gap-1 bg-[var(--bg-card)]">
+                      <span className={`flex items-center gap-1 ${stat.color} text-[10px] font-bold uppercase tracking-wider`}>
+                        {stat.icon}{stat.label}
+                      </span>
+                      <span className={`text-2xl font-black ${stat.color}`}>{stat.value}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* Details */}
+              <div className="px-6 py-5 space-y-3">
+                {restoreResult.success && (
+                  <div className="flex items-center justify-between py-2 border-b border-[var(--border-color)]">
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)]">Total Processed</span>
+                    <span className="text-sm font-black text-[var(--text-primary)]">{restoreResult.totalCount} docs</span>
+                  </div>
+                )}
+                {[
+                  { label: 'Target DB', value: restoreResult.database },
+                  { label: 'Collection', value: restoreResult.collection },
+                  { label: 'Mode', value: restoreResult.mode === 'upsert' ? 'Upsert (Overwrite)' : 'Insert (Strict)' },
+                  ...(restoreResult.folderName ? [{ label: 'Source Folder', value: restoreResult.folderName }] : []),
+                ].map(row => (
+                  <div key={row.label} className="flex items-start justify-between gap-4">
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)] shrink-0">{row.label}</span>
+                    <span className="text-[11px] font-mono text-[var(--text-secondary)] text-right truncate max-w-[200px]">{row.value}</span>
+                  </div>
+                ))}
+
+                {/* Summary message */}
+                <div className={`mt-1 px-3 py-2.5 rounded-xl text-[11px] leading-relaxed border ${
+                  restoreResult.success
+                    ? 'bg-emerald-500/5 border-emerald-500/20 text-emerald-300'
+                    : 'bg-red-500/5 border-red-500/20 text-red-300'
+                }`}>
+                  {restoreResult.message}
+                </div>
+              </div>
+
+              {/* Footer button */}
+              <div className="px-6 pb-6">
+                <button
+                  onClick={() => setRestoreResult(null)}
+                  className={`w-full py-2.5 rounded-xl font-bold text-sm transition-all ${
+                    restoreResult.success
+                      ? 'bg-emerald-500 hover:bg-emerald-400 text-white shadow-lg shadow-emerald-500/25'
+                      : 'bg-red-500 hover:bg-red-400 text-white shadow-lg shadow-red-500/25'
+                  }`}
+                >
+                  {restoreResult.success ? 'Done' : 'Close'}
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       {/* Sidebar Navigation */}
+
       <div className="w-56 border-r border-[var(--border-color)] p-4 flex flex-col shrink-0 h-full bg-[var(--bg-secondary)]/30">
         <div className="flex items-center gap-2 mb-6 px-1">
           <div className="w-8 h-8 rounded-lg bg-emerald-500/10 flex items-center justify-center border border-emerald-500/20 shadow-inner">
