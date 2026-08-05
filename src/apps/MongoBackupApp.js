@@ -7,12 +7,66 @@ import {
   Database, Upload, Cloud, RefreshCw, Play, Trash2, Plus, 
   CheckCircle, AlertCircle, Calendar, ShieldAlert, ArrowRight,
   FolderPlus, History, Key, Settings, Loader, CloudLightning, FileJson, ShieldCheck,
-  Copy, Server, Wifi, WifiOff, Terminal
+  Copy, Server, Wifi, WifiOff, Terminal, ChevronDown, Check
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
 const ALL_DATABASES = 'All Databases (*)';
 const ALL_COLLECTIONS = 'All Collections (*)';
+
+// 🎨 Custom Styled Popover Select Component (Matching Rclone / App Design System)
+function CustomSelect({ value, onChange, options = [], className = '', textClass = '', disabled = false }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef(null);
+
+  useEffect(() => {
+    const handleClick = (e) => {
+      if (ref.current && !ref.current.contains(e.target)) setOpen(false);
+    };
+    document.addEventListener('mousedown', handleClick);
+    return () => document.removeEventListener('mousedown', handleClick);
+  }, []);
+
+  const selectedOpt = options.find(o => String(o.value) === String(value)) || options[0];
+
+  return (
+    <div className="relative inline-block w-full" ref={ref}>
+      <button
+        type="button"
+        disabled={disabled}
+        onClick={() => !disabled && setOpen(!open)}
+        className={`w-full px-3 py-2 text-xs rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] text-[var(--text-primary)] font-mono flex items-center justify-between gap-2 cursor-pointer hover:border-emerald-500/50 transition-all disabled:opacity-50 disabled:cursor-not-allowed ${className}`}
+      >
+        <span className={`truncate ${textClass}`}>{selectedOpt?.label || value}</span>
+        <ChevronDown size={14} className={`text-[var(--text-muted)] transition-transform shrink-0 ${open ? 'rotate-180' : ''}`} />
+      </button>
+
+      {open && !disabled && (
+        <div className="absolute top-full left-0 right-0 mt-1 bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-xl shadow-2xl z-[9999] overflow-hidden max-h-56 overflow-y-auto divide-y divide-[var(--border-color)]/30">
+          {options.map((opt) => {
+            const isSelected = String(opt.value) === String(value);
+            return (
+              <button
+                key={opt.value}
+                type="button"
+                onClick={() => {
+                  onChange(opt.value);
+                  setOpen(false);
+                }}
+                className={`w-full px-3 py-2 text-left text-xs font-mono flex items-center justify-between transition-colors cursor-pointer ${
+                  isSelected ? 'bg-emerald-500/15 text-emerald-400 font-bold' : 'hover:bg-[var(--bg-tertiary)] text-[var(--text-primary)]'
+                }`}
+              >
+                <span className="truncate">{opt.label}</span>
+                {isSelected && <Check size={12} className="text-emerald-400 shrink-0 ml-1" />}
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
 
 export default function MongoBackupApp() {
   const { state, apiFetch } = useApp();
@@ -941,15 +995,11 @@ export default function MongoBackupApp() {
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                       <div>
                         <label className="text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)] block mb-1">Target Connection</label>
-                        <select
+                        <CustomSelect
                           value={importConnId}
-                          onChange={(e) => setImportConnId(e.target.value)}
-                          className="select-field text-xs w-full bg-[var(--bg-tertiary)]"
-                        >
-                          {dbConnections.map(c => (
-                            <option key={c._id} value={c._id}>{c.name}</option>
-                          ))}
-                        </select>
+                          onChange={(val) => setImportConnId(val)}
+                          options={dbConnections.map(c => ({ value: c._id, label: c.name }))}
+                        />
                       </div>
                       <div>
                         <label className="text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)] block mb-1 flex items-center justify-between">
@@ -957,15 +1007,11 @@ export default function MongoBackupApp() {
                           {importFetchingDbs && <Loader size={10} className="animate-spin text-emerald-400" />}
                         </label>
                         {importFetchedDbs.length > 0 ? (
-                          <select
+                          <CustomSelect
                             value={importDbName}
-                            onChange={(e) => setImportDbName(e.target.value)}
-                            className="select-field text-xs w-full bg-[var(--bg-tertiary)]"
-                          >
-                            {importFetchedDbs.map(db => (
-                              <option key={db} value={db}>{db}</option>
-                            ))}
-                          </select>
+                            onChange={(val) => setImportDbName(val)}
+                            options={importFetchedDbs.map(db => ({ value: db, label: db }))}
+                          />
                         ) : (
                           <input
                             type="text"
@@ -985,15 +1031,11 @@ export default function MongoBackupApp() {
                           {importFetchingColls && <Loader size={10} className="animate-spin text-emerald-400" />}
                         </label>
                         {importFetchedColls.length > 0 ? (
-                          <select
+                          <CustomSelect
                             value={importCollName}
-                            onChange={(e) => setImportCollName(e.target.value)}
-                            className="select-field text-xs w-full bg-[var(--bg-tertiary)]"
-                          >
-                            {importFetchedColls.map(c => (
-                              <option key={c} value={c}>{c}</option>
-                            ))}
-                          </select>
+                            onChange={(val) => setImportCollName(val)}
+                            options={importFetchedColls.map(c => ({ value: c, label: c }))}
+                          />
                         ) : (
                           <input
                             type="text"
@@ -1006,14 +1048,14 @@ export default function MongoBackupApp() {
                       </div>
                       <div>
                         <label className="text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)] block mb-1">Import Mode</label>
-                        <select
+                        <CustomSelect
                           value={importMode}
-                          onChange={(e) => setImportMode(e.target.value)}
-                          className="select-field text-xs w-full bg-[var(--bg-tertiary)]"
-                        >
-                          <option value="insert">Insert (Fail on duplicate ID)</option>
-                          <option value="upsert">Upsert (Overwrite matching ID)</option>
-                        </select>
+                          onChange={(val) => setImportMode(val)}
+                          options={[
+                            { value: 'insert', label: 'Insert (Fail on duplicate ID)' },
+                            { value: 'upsert', label: 'Upsert (Overwrite matching ID)' }
+                          ]}
+                        />
                       </div>
                     </div>
 
@@ -1231,34 +1273,25 @@ export default function MongoBackupApp() {
                       <div className="grid grid-cols-2 gap-2">
                         <div>
                           <label className="text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)] block mb-1">Source Conn</label>
-                          <select
+                          <CustomSelect
                             value={jobConnId}
-                            onChange={(e) => setJobConnId(e.target.value)}
-                            className="select-field text-xs w-full bg-[var(--bg-tertiary)]"
-                          >
-                            {dbConnections.map(c => (
-                              <option key={c._id} value={c._id}>{c.name}</option>
-                            ))}
-                          </select>
+                            onChange={(val) => setJobConnId(val)}
+                            options={dbConnections.map(c => ({ value: c._id, label: c.name }))}
+                          />
                         </div>
                         <div>
                           <label className="text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)] block mb-1 flex items-center justify-between">
                             <span>Database</span>
                             {fetchingDbs && <Loader size={10} className="animate-spin text-emerald-400" />}
                           </label>
-                          <select
+                          <CustomSelect
                             value={jobDbName}
-                            onChange={(e) => setJobDbName(e.target.value)}
-                            className="select-field text-xs w-full bg-[var(--bg-tertiary)]"
-                          >
-                            {/* Only show All Databases (*) when connection has access to multiple DBs */}
-                            {fetchedDbs.length !== 1 && (
-                              <option value={ALL_DATABASES}>{ALL_DATABASES}</option>
-                            )}
-                            {fetchedDbs.map(db => (
-                              <option key={db} value={db}>{db}</option>
-                            ))}
-                          </select>
+                            onChange={(val) => setJobDbName(val)}
+                            options={[
+                              ...(fetchedDbs.length !== 1 ? [{ value: ALL_DATABASES, label: ALL_DATABASES }] : []),
+                              ...fetchedDbs.map(db => ({ value: db, label: db }))
+                            ]}
+                          />
                         </div>
                       </div>
 
@@ -1268,16 +1301,14 @@ export default function MongoBackupApp() {
                             <span>Collection</span>
                             {fetchingColls && <Loader size={10} className="animate-spin text-emerald-400" />}
                           </label>
-                          <select
+                          <CustomSelect
                             value={jobCollName}
-                            onChange={(e) => setJobCollName(e.target.value)}
-                            className="select-field text-xs w-full bg-[var(--bg-tertiary)]"
-                          >
-                            <option value={ALL_COLLECTIONS}>{ALL_COLLECTIONS}</option>
-                            {fetchedColls.map(c => (
-                              <option key={c} value={c}>{c}</option>
-                            ))}
-                          </select>
+                            onChange={(val) => setJobCollName(val)}
+                            options={[
+                              { value: ALL_COLLECTIONS, label: ALL_COLLECTIONS },
+                              ...fetchedColls.map(c => ({ value: c, label: c }))
+                            ]}
+                          />
                         </div>
                         <div>
                           <label className="text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)] block mb-1">Drive Folder</label>
@@ -1324,16 +1355,16 @@ export default function MongoBackupApp() {
                       <div className="grid grid-cols-2 gap-2">
                         <div>
                           <label className="text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)] block mb-1">Schedule</label>
-                          <select
+                          <CustomSelect
                             value={jobSchedule}
-                            onChange={(e) => setJobSchedule(e.target.value)}
-                            className="select-field text-xs w-full bg-[var(--bg-tertiary)]"
-                          >
-                            <option value="manual">Manual Only</option>
-                            <option value="hourly">Hourly</option>
-                            <option value="daily">Daily</option>
-                            <option value="weekly">Weekly</option>
-                          </select>
+                            onChange={(val) => setJobSchedule(val)}
+                            options={[
+                              { value: 'manual', label: 'Manual Only' },
+                              { value: 'hourly', label: 'Hourly' },
+                              { value: 'daily', label: 'Daily' },
+                              { value: 'weekly', label: 'Weekly' }
+                            ]}
+                          />
                         </div>
                         <div className="flex items-center justify-center pt-4">
                           <label className="flex items-center gap-2 cursor-pointer text-xs font-bold">
@@ -1539,15 +1570,11 @@ export default function MongoBackupApp() {
                     <div className="space-y-3">
                       <div>
                         <label className="text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)] block mb-1">Target Connection</label>
-                        <select
+                        <CustomSelect
                           value={restoreConnId}
-                          onChange={(e) => setRestoreConnId(e.target.value)}
-                          className="select-field text-xs w-full bg-[var(--bg-tertiary)]"
-                        >
-                          {dbConnections.map(c => (
-                            <option key={c._id} value={c._id}>{c.name}</option>
-                          ))}
-                        </select>
+                          onChange={(val) => setRestoreConnId(val)}
+                          options={dbConnections.map(c => ({ value: c._id, label: c.name }))}
+                        />
                       </div>
 
                       <div>
@@ -1555,19 +1582,14 @@ export default function MongoBackupApp() {
                           <span>Target Database</span>
                           {restoreFetchingDbs && <Loader size={10} className="animate-spin text-emerald-400" />}
                         </label>
-                        <select
+                        <CustomSelect
                           value={restoreDbName}
-                          onChange={(e) => setRestoreDbName(e.target.value)}
-                          className="select-field text-xs w-full bg-[var(--bg-tertiary)]"
-                        >
-                          {/* Only show All Databases (*) when connection has access to multiple DBs */}
-                          {restoreFetchedDbs.length !== 1 && (
-                            <option value={ALL_DATABASES}>{ALL_DATABASES}</option>
-                          )}
-                          {restoreFetchedDbs.map(db => (
-                            <option key={db} value={db}>{db}</option>
-                          ))}
-                        </select>
+                          onChange={(val) => setRestoreDbName(val)}
+                          options={[
+                            ...(restoreFetchedDbs.length !== 1 ? [{ value: ALL_DATABASES, label: ALL_DATABASES }] : []),
+                            ...restoreFetchedDbs.map(db => ({ value: db, label: db }))
+                          ]}
+                        />
                       </div>
 
                       <div>
@@ -1581,29 +1603,27 @@ export default function MongoBackupApp() {
                             <span>All Collections (auto-detected)</span>
                           </div>
                         ) : (
-                          <select
+                          <CustomSelect
                             value={restoreCollName}
-                            onChange={(e) => setRestoreCollName(e.target.value)}
-                            className="select-field text-xs w-full bg-[var(--bg-tertiary)]"
-                          >
-                            <option value={ALL_COLLECTIONS}>{ALL_COLLECTIONS}</option>
-                            {restoreFetchedColls.map(c => (
-                              <option key={c} value={c}>{c}</option>
-                            ))}
-                          </select>
+                            onChange={(val) => setRestoreCollName(val)}
+                            options={[
+                              { value: ALL_COLLECTIONS, label: ALL_COLLECTIONS },
+                              ...restoreFetchedColls.map(c => ({ value: c, label: c }))
+                            ]}
+                          />
                         )}
                       </div>
 
                       <div>
                         <label className="text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)] block mb-1">Restore Mode</label>
-                        <select
+                        <CustomSelect
                           value={restoreMode}
-                          onChange={(e) => setRestoreMode(e.target.value)}
-                          className="select-field text-xs w-full bg-[var(--bg-tertiary)]"
-                        >
-                          <option value="insert">Insert (Fail on duplicate ID)</option>
-                          <option value="upsert">Upsert (Overwrite matching ID)</option>
-                        </select>
+                          onChange={(val) => setRestoreMode(val)}
+                          options={[
+                            { value: 'insert', label: 'Insert (Fail on duplicate ID)' },
+                            { value: 'upsert', label: 'Upsert (Overwrite matching ID)' }
+                          ]}
+                        />
                       </div>
                     </div>
 
