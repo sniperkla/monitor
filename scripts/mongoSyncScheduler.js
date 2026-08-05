@@ -183,10 +183,13 @@ async function runJob(job, settingsCol) {
       const centerDb = await getCenterDb();
       targetDb = centerDb.databaseName === job.database
         ? centerDb
-        : mongoose.connection.getClient().db(job.database);
+        : mongoose.connection.client.db(job.database);
+      console.log(`[Scheduler] 📦 Backing up from CENTRAL DB → ${job.database}`);
     } else {
+      // Look up the target server connection config from central DB
       const connDoc = await settingsCol.db.collection('connections').findOne({ _id: new mongoose.Types.ObjectId(job.connectionId) });
-      if (!connDoc) throw new Error(`Connection ${job.connectionId} not found`);
+      if (!connDoc) throw new Error(`Connection ${job.connectionId} not found in center DB`);
+      console.log(`[Scheduler] 📦 Backing up from TARGET SERVER → ${connDoc.name} (${connDoc.host}:${connDoc.port}) DB: ${job.database}`);
       const external = await getExternalMongoDb(connDoc, job.database);
       externalClient = external.client;
       targetDb = external.db;
