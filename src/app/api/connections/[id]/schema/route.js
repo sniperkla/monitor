@@ -47,7 +47,13 @@ export async function POST(request, { params }) {
     const pooled = await getPooledConnection(conn);
     
     if (provider === 'mongodb') {
-      const collections = await pooled.db.db.listCollections().toArray();
+      let collections = [];
+      try {
+        const rawColls = await pooled.db.db.listCollections().toArray();
+        collections = rawColls;
+      } catch (collErr) {
+        console.warn(`[schema] listCollections auth warning for ${id}:`, collErr.message);
+      }
       
       // Update status if it's a real DB connection
       if (id && !id.startsWith('local-')) {
