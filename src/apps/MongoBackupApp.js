@@ -109,10 +109,14 @@ export default function MongoBackupApp() {
   const [newFolderName, setNewFolderName] = useState('');
   const [driveLoading, setDriveLoading] = useState(false);
 
+  // SSH Server connections for runner execution target & replica set scanning
+  const sshConnections = connections.filter(c => c.type === 'ssh' || (!c.type && !c.dbProvider));
+
   // ── Sync Jobs State ─────────────────────────────────────────────
   const [jobs, setJobs] = useState([]);
   const [jobName, setJobName] = useState('');
   const [jobConnId, setJobConnId] = useState('default');
+  const [targetSshConnId, setTargetSshConnId] = useState('');
   const [jobDbName, setJobDbName] = useState(ALL_DATABASES);
   const [jobCollName, setJobCollName] = useState(ALL_COLLECTIONS);
   const [jobFolderId, setJobFolderId] = useState('');
@@ -372,9 +376,6 @@ export default function MongoBackupApp() {
   });
   const [nodes, setNodes] = useState([emptyNode(), emptyNode(), emptyNode()]);
   const updateNode = (i, patch) => setNodes(prev => prev.map((n, idx) => idx === i ? { ...n, ...patch } : n));
-
-  // SSH connections (for node scanning)
-  const sshConnections = connections.filter(c => c.type === 'ssh' || (!c.type && !c.dbProvider));
 
   const scanNode = async (i) => {
     const node = nodes[i];
@@ -660,6 +661,10 @@ export default function MongoBackupApp() {
   const handleSaveJob = async (e) => {
     e.preventDefault();
     if (!jobName.trim() || !jobDbName.trim() || !jobCollName.trim() || !jobFolderId) return;
+    if (jobSchedule !== 'manual' && !targetSshConnId) {
+      addNotification({ title: 'SSH Server Required', message: 'Please select a Target SSH Server for scheduled jobs.', type: 'error' });
+      return;
+    }
 
     const targetConn = dbConnections.find(c => c._id === jobConnId);
     setLoading(true);
@@ -677,18 +682,64 @@ export default function MongoBackupApp() {
           driveFolderId: jobFolderId,
           driveFolderName: jobFolderName || driveFolders.find(f => f.id === jobFolderId)?.name || 'Default Folder',
           schedule: jobSchedule,
-          enabled: jobEnabled
+          enabled: jobEnabled,
+          targetSshConnId: jobSchedule !== 'manual' ? targetSshConnId : null
         })
       });
       const data = await res.json();
       if (data.success) {
         setJobs(data.data);
+        // If schedule is set, install the cron on the user's SSH server
+        if (jobSchedule !== 'manual' && targetSshConnId) {
+          const savedJob = data.data.find(j =>
+            j.name === jobName.trim() && j.connectionId === jobConnId
+          );
+          if (savedJob) {
+            try {
+              const cronRes = await apiFetch('/api/mongo-sync/cron', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  jobId: savedJob.id,
+                  jobName: savedJob.name,
+                  schedule: jobSchedule,
+                  targetSshConnId,
+                  connectionId: jobConnId,
+                  database: jobDbName.trim(),
+                  collection: jobCollName.trim(),
+                  driveFolderId: jobFolderId
+                })
+              });
+              const cronData = await cronRes.json();
+              if (cronData.success) {
+                addNotification({
+                  title: editingJobId ? 'Job Updated' : 'Job Created',
+                  message: `✅ Schedule installed on SSH server — ${cronData.humanSchedule}. 100% user-side execution.`,
+                  type: 'success'
+                });
+              } else {
+                addNotification({
+                  title: 'Job Saved (Cron Failed)',
+                  message: `Job saved but cron install failed: ${cronData.error}`,
+                  type: 'warning'
+                });
+              }
+            } catch (cronErr) {
+              addNotification({
+                title: 'Job Saved (Cron Error)',
+                message: `Job saved but cron install error: ${cronErr.message}`,
+                type: 'warning'
+              });
+            }
+          }
+        } else {
+          addNotification({
+            title: editingJobId ? 'Job Updated' : 'Job Created',
+            message: 'Job saved as manual-only (no scheduled cron).',
+            type: 'success'
+          });
+        }
         resetJobForm();
-        addNotification({
-          title: editingJobId ? 'Job Updated' : 'Job Created',
-          message: `Job saved successfully.`,
-          type: 'success'
-        });
       }
     } catch (err) {
       addNotification({ title: 'Save Job Failed', message: err.message, type: 'error' });
@@ -700,6 +751,7 @@ export default function MongoBackupApp() {
   const resetJobForm = () => {
     setJobName('');
     setJobConnId('default');
+    setTargetSshConnId('');
     setJobDbName('monitor');
     setJobCollName('');
     setJobFolderId('');
@@ -716,6 +768,7 @@ export default function MongoBackupApp() {
     setEditingJobId(job.id);
     setJobName(job.name);
     setJobConnId(job.connectionId);
+    setTargetSshConnId(job.targetSshConnId || '');
     setJobDbName(job.database);
     setJobCollName(job.collection);
     setJobFolderId(job.driveFolderId);
@@ -727,12 +780,25 @@ export default function MongoBackupApp() {
 
   const handleDeleteJob = async (id) => {
     if (!confirm('Are you sure you want to delete this sync job?')) return;
+    const job = jobs.find(j => j.id === id);
     try {
+      // If job has a scheduled cron on an SSH server, remove it first
+      if (job?.targetSshConnId && job?.schedule !== 'manual') {
+        try {
+          await apiFetch('/api/mongo-sync/cron', {
+            method: 'DELETE',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ jobId: id, targetSshConnId: job.targetSshConnId })
+          });
+        } catch (cronErr) {
+          console.warn('Could not remove cron from SSH server:', cronErr.message);
+        }
+      }
       const res = await apiFetch(`/api/mongo-sync/jobs?id=${id}`, { method: 'DELETE' });
       const data = await res.json();
       if (data.success) {
         setJobs(data.data);
-        addNotification({ title: 'Job Deleted', message: 'Sync job removed successfully.', type: 'info' });
+        addNotification({ title: 'Job Deleted', message: 'Sync job and remote cron schedule removed.', type: 'info' });
       }
     } catch (err) {
       addNotification({ title: 'Delete Failed', message: err.message, type: 'error' });
@@ -1412,7 +1478,40 @@ export default function MongoBackupApp() {
                             ]}
                           />
                         </div>
-                        <div className="flex items-center justify-center pt-4">
+                        {jobSchedule !== 'manual' ? (
+                          <div>
+                            <label className="text-[10px] font-bold uppercase tracking-wider text-emerald-400 block mb-1 flex items-center gap-1">
+                              <Server size={10} /> Target SSH Server
+                            </label>
+                            <CustomSelect
+                              value={targetSshConnId}
+                              onChange={(val) => setTargetSshConnId(val)}
+                              options={[
+                                { value: '', label: '(Select User SSH Server)' },
+                                ...sshConnections.map(c => ({ value: c._id, label: `${c.name} (${c.host})` }))
+                              ]}
+                            />
+                          </div>
+                        ) : (
+                          <div className="flex items-center justify-center pt-4">
+                            <label className="flex items-center gap-2 cursor-pointer text-xs font-bold">
+                              <input
+                                type="checkbox"
+                                checked={jobEnabled}
+                                onChange={(e) => setJobEnabled(e.target.checked)}
+                                className="rounded border-[var(--border-color)] bg-[var(--bg-tertiary)] text-emerald-500 focus:ring-emerald-500"
+                              />
+                              <span>Enabled</span>
+                            </label>
+                          </div>
+                        )}
+                      </div>
+
+                      {jobSchedule !== 'manual' && (
+                        <div className="flex items-center justify-between pt-2 border-t border-[var(--border-color)]/40">
+                          <span className="text-[10px] text-[var(--text-muted)] font-mono">
+                            ⚡ 100% User Resource Execution (Cron runs on target SSH server)
+                          </span>
                           <label className="flex items-center gap-2 cursor-pointer text-xs font-bold">
                             <input
                               type="checkbox"
@@ -1423,7 +1522,7 @@ export default function MongoBackupApp() {
                             <span>Enabled</span>
                           </label>
                         </div>
-                      </div>
+                      )}
                     </div>
 
                     <div className="flex gap-2 pt-2">
@@ -1456,14 +1555,22 @@ export default function MongoBackupApp() {
                     <div className="space-y-3 max-h-[450px] overflow-y-auto custom-scrollbar pr-1">
                       {jobs.map(job => (
                         <div key={job.id} className="bg-[var(--bg-card)] border border-[var(--border-color)] hover:border-emerald-500/20 rounded-2xl p-4 flex flex-col md:flex-row md:items-center justify-between gap-4 transition-all shadow-sm">
-                          <div className="space-y-1">
-                            <div className="flex items-center gap-2">
+                          <div className="space-y-1.5">
+                            <div className="flex items-center gap-2 flex-wrap">
                               <span className="font-bold text-xs text-[var(--text-primary)]">{job.name}</span>
                               <span className={`text-[9px] px-2 py-0.5 rounded-full font-bold uppercase tracking-wider ${
                                 job.enabled ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' : 'bg-slate-500/10 text-slate-400 border border-slate-500/20'
                               }`}>
                                 {job.schedule}
                               </span>
+                              {job.targetSshConnId && job.schedule !== 'manual' && (() => {
+                                const sshConn = sshConnections.find(c => c._id === job.targetSshConnId);
+                                return sshConn ? (
+                                  <span className="text-[9px] px-2 py-0.5 rounded-full font-bold bg-blue-500/10 text-blue-400 border border-blue-500/20 flex items-center gap-1">
+                                    <Server size={8} />⚡ {sshConn.name}
+                                  </span>
+                                ) : null;
+                              })()}
                             </div>
                             <div className="text-[10px] text-[var(--text-muted)] font-mono flex items-center gap-2">
                               <span>Source: {job.connectionName} / {job.database} / {job.collection}</span>
@@ -1474,7 +1581,7 @@ export default function MongoBackupApp() {
                               <div className={`text-[9px] font-semibold flex items-center gap-1.5 ${
                                 job.lastStatus === 'success' ? 'text-emerald-400' : 'text-rose-400'
                               }`}>
-                                <ClockIcon size={9} />
+                                <Clock size={9} />
                                 <span>Last Run: {new Date(job.lastRun).toLocaleString()}</span>
                                 <span className="opacity-60">•</span>
                                 <span className="truncate max-w-xs">{job.lastMessage}</span>

@@ -45,7 +45,7 @@ export async function POST(request) {
     const repo = await getSettingRepo();
     const jobs = await getJobs(repo);
     const body = await request.json();
-    const { id, name, connectionId, connectionName, database, collection, driveFolderId, driveFolderName, schedule, enabled = true } = body;
+    const { id, name, connectionId, connectionName, database, collection, driveFolderId, driveFolderName, schedule, enabled = true, targetSshConnId } = body;
 
     if (!name || !database || !collection || !driveFolderId) {
       return NextResponse.json({ success: false, error: 'Missing required job parameters' }, { status: 400 });
@@ -62,7 +62,7 @@ export async function POST(request) {
       updatedJobs[index] = {
         ...updatedJobs[index],
         name, connectionId, connectionName, database, collection,
-        driveFolderId, driveFolderName, schedule, enabled,
+        driveFolderId, driveFolderName, schedule, enabled, targetSshConnId,
         updatedAt: Date.now()
       };
     } else {
@@ -70,7 +70,7 @@ export async function POST(request) {
       const newJob = {
         id: `job-${uuidv4()}`,
         name, connectionId, connectionName, database, collection,
-        driveFolderId, driveFolderName, schedule, enabled,
+        driveFolderId, driveFolderName, schedule, enabled, targetSshConnId,
         createdAt: Date.now(), updatedAt: Date.now(),
         lastRun: null, lastStatus: null, lastMessage: null
       };
