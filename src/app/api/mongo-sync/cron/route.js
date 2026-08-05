@@ -324,10 +324,11 @@ export async function POST(req) {
 
     const installScript = `
 mkdir -p "$HOME/.mongosync-scripts/logs" "$HOME/.mongosync-scripts/tmp"
+chmod 700 "$HOME/.mongosync-scripts" "$HOME/.mongosync-scripts/logs" "$HOME/.mongosync-scripts/tmp" 2>/dev/null || true
 cat <<'SCRIPT_EOF' > "$HOME/.mongosync-scripts/mongosync-${safeId}.sh"
 ${scriptContent}
 SCRIPT_EOF
-chmod +x "$HOME/.mongosync-scripts/mongosync-${safeId}.sh"
+chmod 700 "$HOME/.mongosync-scripts/mongosync-${safeId}.sh"
 TMP_CRON=$(mktemp 2>/dev/null || echo "/tmp/mongosync_cron_tmp_$$")
 crontab -l 2>/dev/null | grep -F -v "mongosync-${safeId}" > "$TMP_CRON" || true
 echo ${bashSingleQuote(cronLine)} >> "$TMP_CRON"
