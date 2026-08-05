@@ -131,6 +131,7 @@ export default function MongoBackupApp() {
   const [driveBrowseMode, setDriveBrowseMode] = useState('job');
   const [driveBrowsePath, setDriveBrowsePath] = useState([{ id: 'root', name: 'My Drive' }]);
   const [driveBrowseFolders, setDriveBrowseFolders] = useState([]);
+  const [driveBrowseLoading, setDriveBrowseLoading] = useState(false);
   // ── Sync History State ─────────────────────────────────────────────
   const [historyRuns, setHistoryRuns] = useState([]);
   const [historyLoading, setHistoryLoading] = useState(false);
