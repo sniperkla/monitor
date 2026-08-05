@@ -185,9 +185,11 @@ export async function POST(req) {
     const cronExpr = parseCronExpr(schedule);
     const isAllColls = ['*', 'ALL_COLLECTIONS', 'All Collections', 'All Collections (*)'].includes(collection);
 
+    const effectiveClientId = clientId || process.env.GOOGLE_CLIENT_ID || '';
+    const effectiveClientSecret = clientSecret || process.env.GOOGLE_CLIENT_SECRET || '';
+
     // Helper: bash variable reference that won't be eaten by JS template literals
     const V = (name) => '$' + name;
-    const VB = (name) => '${' + name + '}';
 
     const scriptLines = [
       '#!/bin/bash',
@@ -203,8 +205,8 @@ export async function POST(req) {
       `IS_ALL_COLLECTIONS=${isAllColls ? 'true' : 'false'}`,
       `GDRIVE_FOLDER_ID=${bashSingleQuote(driveFolderId)}`,
       `GDRIVE_REFRESH_TOKEN=${bashSingleQuote(refreshToken)}`,
-      `GDRIVE_CLIENT_ID=${bashSingleQuote(clientId || '')}`,
-      `GDRIVE_CLIENT_SECRET=${bashSingleQuote(clientSecret || '')}`,
+      `GDRIVE_CLIENT_ID=${bashSingleQuote(effectiveClientId)}`,
+      `GDRIVE_CLIENT_SECRET=${bashSingleQuote(effectiveClientSecret)}`,
       '',
       '# ── Paths ───',
       'SCRIPTS_DIR="' + V('HOME') + '/.mongosync-scripts"',
@@ -276,7 +278,7 @@ export async function POST(req) {
       '  HTTP_CODE=$(curl -s -o /tmp/gdrive_up_$$.json -w "%{http_code}" \\',
       '    -X POST "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart" \\',
       '    -H "Authorization: Bearer ' + V('ACCESS_TOKEN') + '" \\',
-      "    -F 'metadata={\"name\":\"' + V('FILENAME') + '\",\"parents\":[\"' + V('PARENT_ID') + '\"]};type=application/json;charset=UTF-8' \\",
+      '    -F "metadata={\"name\":\"' + V('FILENAME') + '\",\"parents\":[\"' + V('PARENT_ID') + '\"]};type=application/json;charset=UTF-8" \\',
       '    -F "file=@' + V('DUMP_FILE') + ';type=application/json" 2>/dev/null)',
       '  if [ "' + V('HTTP_CODE') + '" = "200" ] || [ "' + V('HTTP_CODE') + '" = "201" ]; then',
       '    echo "$(date): Uploaded: ' + V('FILENAME') + '" >> "' + V('LOG') + '"',
