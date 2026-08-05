@@ -43,11 +43,11 @@ function CustomSelect({ value, onChange, options = [], className = '', textClass
 
       {open && !disabled && (
         <div className="absolute top-full left-0 right-0 mt-1 bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-xl shadow-2xl z-[9999] overflow-hidden max-h-56 overflow-y-auto divide-y divide-[var(--border-color)]/30">
-          {options.map((opt) => {
+          {options.map((opt, idx) => {
             const isSelected = String(opt.value) === String(value);
             return (
               <button
-                key={opt.value}
+                key={opt.key || `${opt.value}-${idx}`}
                 type="button"
                 onClick={() => {
                   onChange(opt.value);
@@ -1416,10 +1416,7 @@ export default function MongoBackupApp() {
                           <CustomSelect
                             value={jobCollName}
                             onChange={(val) => setJobCollName(val)}
-                            options={[
-                              { value: ALL_COLLECTIONS, label: ALL_COLLECTIONS },
-                              ...fetchedColls.map(c => ({ value: c, label: c }))
-                            ]}
+                            options={Array.from(new Set([ALL_COLLECTIONS, ...fetchedColls])).map(c => ({ value: c, label: c }))}
                           />
                         </div>
                         <div>
