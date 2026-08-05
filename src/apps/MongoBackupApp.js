@@ -405,8 +405,9 @@ export default function MongoBackupApp() {
   // ── Sync History State ─────────────────────────────────────────────
   const [historyRuns, setHistoryRuns] = useState([]);
   const [historyLoading, setHistoryLoading] = useState(false);
-  // ── Restore Result Modal State ─────────────────────────────────────
+  // ── Restore Result Modal & Live Progress State ─────────────────────
   const [restoreResult, setRestoreResult] = useState(null); // null = closed
+  const [restoreProgress, setRestoreProgress] = useState(null); // { active, total, current, percent, currentFile, processedFiles }
 
   const fetchHistory = async () => {
     setHistoryLoading(true);
@@ -1263,63 +1264,222 @@ export default function MongoBackupApp() {
     const selectedFile = backupFiles.find(f => f.id === selectedFileId);
     const isAllColBackup = selectedFileId === 'ALL' || selectedFile?.name?.includes('ALL_COLLECTIONS');
     const collectionLabel = isAllColBackup ? `ALL ${backupFiles.length} collections` : `"${restoreCollName}"`;
+    
     if (!confirm(`Are you sure you want to restore data from Google Drive into ${collectionLabel} in database "${restoreDbName}"? This will run in ${restoreMode} mode.`)) return;
+
     setLoading(true);
-    try {
-      const res = await apiFetch('/api/mongo-sync/restore', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          fileId: selectedFileId,
-          driveFolderId: restoreFolderId,
-          fileName: selectedFile?.name,
-          connectionId: restoreConnId,
-          database: restoreDbName.trim(),
-          collection: isAllColBackup ? 'ALL_COLLECTIONS' : restoreCollName.trim(),
-          mode: restoreMode
-        })
-      });
-      const data = await res.json();
-      if (data.success) {
-        setRestoreResult({
-          success: true,
-          database: restoreDbName.trim(),
-          collection: isAllColBackup ? `All Collections (${backupFiles.length} files)` : restoreCollName.trim(),
-          mode: restoreMode,
-          insertedCount: data.insertedCount ?? 0,
-          updatedCount: data.updatedCount ?? 0,
-          matchedCount: data.matchedCount ?? 0,
-          totalCount: data.totalCount ?? 0,
-          message: data.message,
-          timestamp: new Date().toLocaleString(),
-          folderName: restoreFolderName,
-        });
-      } else {
-        setRestoreResult({
-          success: false,
-          database: restoreDbName.trim(),
-          collection: isAllColBackup ? `All Collections` : restoreCollName.trim(),
-          mode: restoreMode,
-          message: data.error || 'Unknown error',
-          timestamp: new Date().toLocaleString(),
-        });
-      }
-    } catch (err) {
-      setRestoreResult({
-        success: false,
-        database: restoreDbName.trim(),
-        collection: restoreCollName,
-        mode: restoreMode,
-        message: err.message,
-        timestamp: new Date().toLocaleString(),
-      });
-    } finally {
+
+    const filesToProcess = selectedFileId === 'ALL' 
+      ? backupFiles.filter(f => f.name && f.name.endsWith('.json'))
+      : selectedFile ? [selectedFile] : [];
+
+    if (filesToProcess.length === 0) {
+      addNotification({ title: 'No Files', message: 'No valid JSON files found to restore.', type: 'warning' });
       setLoading(false);
+      return;
     }
+
+    setRestoreProgress({
+      active: true,
+      total: filesToProcess.length,
+      current: 1,
+      percent: 0,
+      currentFile: filesToProcess[0].name,
+      processedFiles: []
+    });
+
+    let totalInserted = 0;
+    let totalUpdated = 0;
+    let totalMatched = 0;
+    let totalDocsProcessed = 0;
+    const processedLog = [];
+
+    for (let i = 0; i < filesToProcess.length; i++) {
+      const file = filesToProcess[i];
+      const currentPercent = Math.round(((i + 1) / filesToProcess.length) * 100);
+
+      setRestoreProgress(prev => ({
+        ...prev,
+        current: i + 1,
+        percent: currentPercent,
+        currentFile: file.name
+      }));
+
+      try {
+        const cleanName = file.name.replace(/\.json$/i, '');
+        const parts = cleanName.split('_');
+        const collName = parts.length >= 3 && parts[0] === 'backup' ? parts[2] : cleanName;
+
+        const res = await apiFetch('/api/mongo-sync/restore', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            fileId: file.id,
+            fileName: file.name,
+            connectionId: restoreConnId,
+            database: restoreDbName.trim(),
+            collection: selectedFileId === 'ALL' ? collName : restoreCollName.trim(),
+            mode: restoreMode
+          })
+        });
+
+        const data = await res.json();
+        if (data.success) {
+          totalInserted += data.insertedCount || 0;
+          totalUpdated += data.updatedCount || 0;
+          totalMatched += data.matchedCount || 0;
+          totalDocsProcessed += data.totalCount || 0;
+
+          const logItem = {
+            name: file.name,
+            success: true,
+            count: data.totalCount || 0,
+            inserted: data.insertedCount || 0,
+            updated: data.updatedCount || 0,
+            matched: data.matchedCount || 0
+          };
+          processedLog.push(logItem);
+          setRestoreProgress(prev => ({
+            ...prev,
+            processedFiles: [logItem, ...prev.processedFiles]
+          }));
+        } else {
+          const logItem = { name: file.name, success: false, error: data.error || 'Failed' };
+          processedLog.push(logItem);
+          setRestoreProgress(prev => ({
+            ...prev,
+            processedFiles: [logItem, ...prev.processedFiles]
+          }));
+        }
+      } catch (err) {
+        const logItem = { name: file.name, success: false, error: err.message };
+        processedLog.push(logItem);
+        setRestoreProgress(prev => ({
+          ...prev,
+          processedFiles: [logItem, ...prev.processedFiles]
+        }));
+      }
+    }
+
+    setRestoreProgress(null);
+    setLoading(false);
+
+    const buildMsg = () => {
+      if (totalInserted > 0 || totalUpdated > 0) {
+        return `Successfully restored ${totalInserted + totalUpdated + totalMatched} documents (${totalInserted} new, ${totalUpdated} updated, ${totalMatched} existing) across ${filesToProcess.length} collection file(s).`;
+      } else if (totalDocsProcessed > 0) {
+        return `All ${totalDocsProcessed} documents across ${filesToProcess.length} collection file(s) already match existing records in MongoDB (0 modified).`;
+      } else {
+        return `Checked ${filesToProcess.length} backup file(s), but no documents were found to import.`;
+      }
+    };
+
+    setRestoreResult({
+      success: true,
+      database: restoreDbName.trim(),
+      collection: isAllColBackup ? `All Collections (${filesToProcess.length} files)` : restoreCollName.trim(),
+      mode: restoreMode,
+      insertedCount: totalInserted,
+      updatedCount: totalUpdated,
+      matchedCount: totalMatched,
+      totalCount: totalDocsProcessed,
+      message: buildMsg(),
+      timestamp: new Date().toLocaleString(),
+      folderName: restoreFolderName,
+      processedLog
+    });
   };
 
   return (
     <div className="flex h-full w-full bg-transparent text-[var(--text-primary)] border-[var(--border-color)] overflow-hidden font-sans">
+
+      {/* ── Real-Time Live Restore Progress Modal ──────────────────────────── */}
+      <AnimatePresence>
+        {restoreProgress && restoreProgress.active && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[9999] flex items-center justify-center p-4"
+            style={{ background: 'rgba(0,0,0,0.65)', backdropFilter: 'blur(10px)' }}
+          >
+            <motion.div
+              initial={{ scale: 0.9, opacity: 0, y: 20 }}
+              animate={{ scale: 1, opacity: 1, y: 0 }}
+              exit={{ scale: 0.9, opacity: 0, y: 20 }}
+              transition={{ type: 'spring', stiffness: 350, damping: 28 }}
+              className="w-full max-w-lg rounded-3xl border border-emerald-500/30 bg-[var(--bg-card)] p-6 shadow-2xl overflow-hidden"
+              style={{
+                boxShadow: '0 0 60px rgba(52,211,153,0.15), 0 25px 50px rgba(0,0,0,0.6)'
+              }}
+            >
+              <div className="flex items-center gap-3.5 mb-4">
+                <div className="w-11 h-11 rounded-2xl bg-emerald-500/15 border border-emerald-500/30 flex items-center justify-center shadow-lg shrink-0">
+                  <RefreshCw className="animate-spin text-emerald-400" size={22} />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <h3 className="font-extrabold text-sm tracking-tight text-[var(--text-primary)]">Restoring Backup Data</h3>
+                  <p className="text-[11px] text-[var(--text-muted)] truncate">
+                    Processing file {restoreProgress.current} of {restoreProgress.total}...
+                  </p>
+                </div>
+                <span className="text-2xl font-black text-emerald-400 shrink-0 font-mono">
+                  {restoreProgress.percent}%
+                </span>
+              </div>
+
+              {/* Progress bar container */}
+              <div className="w-full h-3 bg-[var(--bg-tertiary)] rounded-full overflow-hidden mb-4 border border-[var(--border-color)] p-0.5">
+                <motion.div
+                  className="h-full bg-gradient-to-r from-emerald-500 via-teal-400 to-emerald-300 rounded-full"
+                  style={{ width: `${restoreProgress.percent}%` }}
+                  transition={{ ease: 'easeOut', duration: 0.2 }}
+                />
+              </div>
+
+              {/* Active File indicator */}
+              <div className="text-[11px] font-mono text-emerald-300 bg-emerald-500/10 border border-emerald-500/20 px-3.5 py-2.5 rounded-xl mb-4 flex items-center justify-between">
+                <span className="truncate flex items-center gap-2">
+                  <Loader size={12} className="animate-spin text-emerald-400 shrink-0" />
+                  <span className="truncate">Active: <b className="text-emerald-200">{restoreProgress.currentFile}</b></span>
+                </span>
+                <span className="text-[10px] font-bold text-emerald-400 shrink-0 pl-2">
+                  {restoreProgress.current}/{restoreProgress.total}
+                </span>
+              </div>
+
+              {/* Live Processed Log list */}
+              <div className="space-y-1">
+                <div className="text-[9px] font-bold uppercase tracking-wider text-[var(--text-muted)] px-1 flex justify-between">
+                  <span>Processed Files ({restoreProgress.processedFiles.length})</span>
+                  <span>Status</span>
+                </div>
+                <div className="max-h-44 overflow-y-auto custom-scrollbar border border-[var(--border-color)] bg-[var(--bg-tertiary)]/40 rounded-2xl p-2 space-y-1.5 font-mono text-[10px]">
+                  {restoreProgress.processedFiles.map((f, idx) => (
+                    <div key={idx} className="flex items-center justify-between px-3 py-1.5 rounded-xl bg-[var(--bg-card)] border border-[var(--border-color)]">
+                      <span className="flex items-center gap-2 truncate text-[var(--text-secondary)]">
+                        {f.success 
+                          ? <CheckCircle size={13} className="text-emerald-400 shrink-0" /> 
+                          : <XCircle size={13} className="text-red-400 shrink-0" />
+                        }
+                        <span className="truncate">{f.name}</span>
+                      </span>
+                      <span className="text-[9px] font-bold text-[var(--text-muted)] shrink-0 pl-2">
+                        {f.success ? `${f.count || 0} docs` : 'Failed'}
+                      </span>
+                    </div>
+                  ))}
+                  {restoreProgress.processedFiles.length === 0 && (
+                    <div className="text-center py-6 text-[10px] text-[var(--text-muted)] italic font-sans">
+                      Starting file restoration...
+                    </div>
+                  )}
+                </div>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* ── macOS-style Restore Result Modal ──────────────────────────────── */}
       <AnimatePresence>
@@ -1422,6 +1582,28 @@ export default function MongoBackupApp() {
                 }`}>
                   {restoreResult.message}
                 </div>
+
+                {/* Per-file breakdown if batch restore */}
+                {restoreResult.processedLog && restoreResult.processedLog.length > 0 && (
+                  <div className="pt-2">
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)] block mb-1">
+                      File Breakdown ({restoreResult.processedLog.length})
+                    </span>
+                    <div className="max-h-36 overflow-y-auto custom-scrollbar border border-[var(--border-color)] bg-[var(--bg-tertiary)]/40 rounded-xl p-1.5 space-y-1 font-mono text-[9px]">
+                      {restoreResult.processedLog.map((f, idx) => (
+                        <div key={idx} className="flex items-center justify-between px-2 py-1 rounded-lg bg-[var(--bg-card)] border border-[var(--border-color)]">
+                          <span className="flex items-center gap-1.5 truncate text-[var(--text-secondary)]">
+                            {f.success ? <CheckCircle size={10} className="text-emerald-400 shrink-0" /> : <XCircle size={10} className="text-red-400 shrink-0" />}
+                            <span className="truncate">{f.name}</span>
+                          </span>
+                          <span className="text-[9px] font-bold text-[var(--text-muted)] shrink-0 pl-2">
+                            {f.count || 0} docs
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
 
               {/* Footer button */}
