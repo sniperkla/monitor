@@ -76,9 +76,11 @@ export async function GET(request) {
       console.error('Failed to fetch Google user info:', infoErr);
     }
 
-    // Save configuration
+    // Save configuration (persist clientId and clientSecret for background sync)
     const driveConfig = {
       ...savedConfig,
+      clientId: clientId || savedConfig.clientId,
+      clientSecret: clientSecret || savedConfig.clientSecret,
       accessToken: access_token,
       refreshToken: refresh_token || savedConfig.refreshToken, // Google only returns refresh token on prompt=consent
       expiresAt: Date.now() + expires_in * 1000,
