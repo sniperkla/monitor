@@ -126,7 +126,7 @@ export async function POST(request) {
       }
     };
 
-    if (isAllDbFile || isAllDatabasesSel) {
+    if (isAllDbFile) {
       // ── Restore ALL databases: { dbName: { collName: [docs] } } ──
       for (const [dbName, colMap] of Object.entries(backupData)) {
         const dbObj = dbInstance.client ? dbInstance.client.db(dbName) : dbInstance;
@@ -136,7 +136,7 @@ export async function POST(request) {
           await restoreCollection(dbObj.collection(colName), docs);
         }
       }
-    } else if (isAllCollectionsFile || isAllCollectionsSel) {
+    } else if (isAllCollectionsFile) {
       // ── Restore ALL collections in one DB: { collName: [docs] } ──
       const targetDb = dbInstance.databaseName === database
         ? dbInstance
@@ -146,14 +146,22 @@ export async function POST(request) {
         await restoreCollection(targetDb.collection(colName), docs);
       }
     } else {
-      // ── Restore single collection ──
-      if (!collection) {
-        return NextResponse.json({ success: false, error: 'Collection name required for single-collection restore' }, { status: 400 });
+      // ── Restore single collection (backupData is Array of docs) ──
+      let targetColl = collection;
+      if (isAllCollectionsSel || !targetColl || targetColl === 'ALL_COLLECTIONS') {
+        if (body.fileName) {
+          const cleanName = body.fileName.replace(/\.json$/i, '');
+          const parts = cleanName.split('_');
+          targetColl = parts.length >= 3 && parts[0] === 'backup' ? parts[2] : cleanName;
+        }
+      }
+      if (!targetColl || isAllCollectionsSel) {
+        return NextResponse.json({ success: false, error: 'Target collection name required for single-collection restore' }, { status: 400 });
       }
       const targetDb = dbInstance.databaseName === database
         ? dbInstance
         : dbInstance.client ? dbInstance.client.db(database) : dbInstance;
-      await restoreCollection(targetDb.collection(collection), backupData);
+      await restoreCollection(targetDb.collection(targetColl), backupData);
     }
 
     return NextResponse.json({

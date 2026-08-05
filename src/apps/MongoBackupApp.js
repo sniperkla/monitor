@@ -1144,10 +1144,13 @@ export default function MongoBackupApp() {
         if (data.files.length > 0) {
           setSelectedFileId(data.files[0].id);
           const fname = data.files[0].name;
-          const parts = fname.split('_');
-          if (parts.length >= 3) {
+          const cleanName = fname.replace(/\.json$/i, '');
+          const parts = cleanName.split('_');
+          if (parts.length >= 3 && parts[0] === 'backup') {
             setRestoreDbName(parts[1]);
             setRestoreCollName(parts[2]);
+          } else if (cleanName) {
+            setRestoreCollName(cleanName);
           }
         } else {
           setSelectedFileId('');
@@ -1160,7 +1163,7 @@ export default function MongoBackupApp() {
     }
   };
 
-  const fetchDriveBrowseFolders = async (parentId = null) => {
+  const handleDriveBrowseFolders = async (parentId = null) => {
     setDriveBrowseLoading(true);
     try {
       const url = parentId ? `/api/mongo-sync/gdrive/folders?parentId=${parentId}` : '/api/mongo-sync/gdrive/folders';
@@ -1181,13 +1184,13 @@ export default function MongoBackupApp() {
     setDriveBrowseVisible(true);
     setDriveBrowsePath([{ id: 'root', name: 'My Drive' }]);
     setDriveBrowseFolders([]);
-    fetchDriveBrowseFolders();
+    handleDriveBrowseFolders();
   };
 
   const navigateDriveFolder = async (folder) => {
     if (folder.id === 'root') {
       setDriveBrowsePath([{ id: 'root', name: 'My Drive' }]);
-      await fetchDriveBrowseFolders();
+      await handleDriveBrowseFolders();
       return;
     }
     const nextPath = [...driveBrowsePath];
@@ -1197,7 +1200,7 @@ export default function MongoBackupApp() {
     } else {
       setDriveBrowsePath([...nextPath, folder]);
     }
-    await fetchDriveBrowseFolders(folder.id);
+    await handleDriveBrowseFolders(folder.id);
   };
 
   useEffect(() => {
@@ -1213,10 +1216,13 @@ export default function MongoBackupApp() {
     setSelectedFileId(fileId);
     const file = backupFiles.find(f => f.id === fileId);
     if (!file) return;
-    const parts = file.name.split('_');
-    if (parts.length >= 3) {
+    const cleanName = file.name.replace(/\.json$/i, '');
+    const parts = cleanName.split('_');
+    if (parts.length >= 3 && parts[0] === 'backup') {
       setRestoreDbName(parts[1]);
       setRestoreCollName(parts[2]);
+    } else if (cleanName) {
+      setRestoreCollName(cleanName);
     }
   };
 
@@ -1266,6 +1272,7 @@ export default function MongoBackupApp() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           fileId: selectedFileId,
+          fileName: selectedFile?.name,
           connectionId: restoreConnId,
           database: restoreDbName.trim(),
           collection: isAllColBackup ? 'ALL_COLLECTIONS' : restoreCollName.trim(),
