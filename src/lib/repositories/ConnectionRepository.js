@@ -1,4 +1,4 @@
-import { getConnectionModel } from '@/models/Connection';
+import { getConnectionModel } from '../../models/Connection';
 
 export class ConnectionRepository {
   constructor(db) {

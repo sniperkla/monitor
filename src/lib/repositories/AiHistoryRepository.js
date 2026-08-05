@@ -1,4 +1,4 @@
-import AiHistory from '@/models/AiHistory';
+import AiHistory from '../../models/AiHistory';
 
 export class AiHistoryRepository {
   constructor(db) {

@@ -1,5 +1,5 @@
 import mongoose from 'mongoose';
-import SystemSetting from '@/models/SystemSetting';
+import SystemSetting from '../../models/SystemSetting';
 
 /**
  * SystemSettingRepository
