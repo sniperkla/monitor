@@ -63,7 +63,7 @@ function bashSingleQuote(str) {
   return `'${String(str || '').replace(/'/g, `'\\''`)}'`;
 }
 
-// GET — list active cron entries for a job on its target SSH server
+// GET — check cron status and read last run time from SSH log files
 export async function GET(req) {
   try {
     const session = await getServerSession(authOptions);
@@ -72,6 +72,7 @@ export async function GET(req) {
     const { searchParams } = new URL(req.url);
     const jobId = searchParams.get('jobId');
     const targetSshConnId = searchParams.get('targetSshConnId');
+    const fetchLogs = searchParams.get('fetchLogs') === '1';
 
     if (!jobId || !targetSshConnId) {
       return NextResponse.json({ success: false, error: 'jobId and targetSshConnId are required' }, { status: 400 });
@@ -80,14 +81,54 @@ export async function GET(req) {
     const sshConfig = await getSshConfig(targetSshConnId);
     const safeId = jobId.replace(/[^a-zA-Z0-9_-]/g, '_');
 
-    const fetchScript = `(crontab -l 2>/dev/null | grep -F "mongosync-${safeId}" || true)`;
-    const res = await execCommand(sshConfig, fetchScript);
-    const cronLine = (res.stdout || '').trim();
+    // Check crontab and optionally read last log
+    const checkScript = `
+CRON_LINE=$(crontab -l 2>/dev/null | grep -F "mongosync-${safeId}" || true)
+echo "CRON_LINE:$CRON_LINE"
+LOG_DIR="$HOME/.mongosync-scripts/logs"
+if [ -d "$LOG_DIR" ]; then
+  LATEST=$(ls -t "$LOG_DIR"/mongosync-${safeId}-*.log 2>/dev/null | head -1)
+  if [ -n "$LATEST" ]; then
+    echo "LATEST_LOG:$LATEST"
+    echo "LOG_TAIL_START"
+    tail -20 "$LATEST" 2>/dev/null
+    echo "LOG_TAIL_END"
+  fi
+fi
+`;
+    const res = await execCommand(sshConfig, checkScript);
+    const output = res.stdout || '';
+
+    const cronLineMatch = output.match(/^CRON_LINE:(.*)/m);
+    const cronLine = cronLineMatch ? cronLineMatch[1].trim() : null;
+
+    const latestLogMatch = output.match(/^LATEST_LOG:(.*)/m);
+    const latestLog = latestLogMatch ? latestLogMatch[1].trim() : null;
+
+    // Extract last run timestamp from log filename: mongosync-<safeId>-YYYYMMDD_HHmmss.log
+    let lastRunFromLog = null;
+    if (latestLog) {
+      const m = latestLog.match(/(\d{8}_\d{6})\.log$/);
+      if (m) {
+        const ts = m[1]; // YYYYMMDD_HHmmss
+        const y = ts.slice(0,4), mo = ts.slice(4,6), d = ts.slice(6,8);
+        const h = ts.slice(9,11), mi = ts.slice(11,13), s = ts.slice(13,15);
+        lastRunFromLog = new Date(`${y}-${mo}-${d}T${h}:${mi}:${s}`).toISOString();
+      }
+    }
+
+    // Extract log tail
+    let logTail = null;
+    const tailMatch = output.match(/LOG_TAIL_START\n([\s\S]*?)LOG_TAIL_END/);
+    if (tailMatch) logTail = tailMatch[1].trim();
 
     return NextResponse.json({
       success: true,
       cronLine: cronLine || null,
-      installed: !!cronLine
+      installed: !!cronLine,
+      lastRunFromLog,
+      latestLogFile: latestLog,
+      logTail: fetchLogs ? logTail : undefined,
     });
   } catch (error) {
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });

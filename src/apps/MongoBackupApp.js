@@ -1094,6 +1094,44 @@ export default function MongoBackupApp() {
     }
   };
 
+  const handleSyncSshStatus = async (job) => {
+    if (!job.targetSshConnId) {
+      addNotification({ title: 'No SSH Server', message: 'This job is not configured to run on an SSH server.', type: 'warning' });
+      return;
+    }
+    setLoading(true);
+    try {
+      const res = await apiFetch(`/api/mongo-sync/cron?jobId=${job.id}&targetSshConnId=${job.targetSshConnId}&fetchLogs=1`);
+      const data = await res.json();
+      if (data.success) {
+        if (!data.installed) {
+          addNotification({ title: 'Cron Not Installed', message: 'Cron job is not installed on the target SSH server.', type: 'warning' });
+        } else if (data.lastRunFromLog) {
+          addNotification({ 
+            title: 'SSH Status Synced', 
+            message: `Latest SSH execution: ${new Date(data.lastRunFromLog).toLocaleString()}`, 
+            type: 'info' 
+          });
+          // Update local state with latest SSH lastRun time
+          setJobs(prevJobs => prevJobs.map(j => j.id === job.id ? { 
+            ...j, 
+            lastRun: new Date(data.lastRunFromLog).getTime(),
+            lastStatus: 'success',
+            lastMessage: `Cron executed on SSH server (Log: ${data.latestLogFile || 'active'})`
+          } : j));
+        } else {
+          addNotification({ title: 'No Log Found', message: 'Cron is installed on SSH server, but no execution log was found yet.', type: 'info' });
+        }
+      } else {
+        throw new Error(data.error || 'Failed to sync SSH cron status');
+      }
+    } catch (err) {
+      addNotification({ title: 'Sync Error', message: err.message, type: 'error' });
+    } finally {
+      setLoading(false);
+    }
+  };
+
   // ── Restore Logic ──────────────────────────────────────────────────────────
   const fetchBackups = async (folderId) => {
     if (!folderId) return;
@@ -1870,6 +1908,16 @@ export default function MongoBackupApp() {
                           </div>
 
                           <div className="flex items-center gap-2 shrink-0">
+                            {job.targetSshConnId && job.schedule !== 'manual' && (
+                              <button
+                                onClick={() => handleSyncSshStatus(job)}
+                                disabled={loading}
+                                className="p-2 bg-blue-500/10 hover:bg-blue-500/25 border border-blue-500/20 hover:border-blue-500/40 text-blue-400 rounded-xl transition-all disabled:opacity-40"
+                                title="Check & sync SSH execution log timestamp"
+                              >
+                                <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
+                              </button>
+                            )}
                             <button
                               onClick={() => {
                                 setRestoreFolderId(job.driveFolderId);
