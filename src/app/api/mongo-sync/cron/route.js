@@ -8,6 +8,8 @@ import { getSshConfig, execCommand } from '@/app/api/server-backup/_ssh';
 import { decrypt } from '@/utils/encryption';
 
 function parseCronExpr(schedule) {
+  if (!schedule) return '0 2 * * *';
+  if (schedule.trim().split(/\s+/).length === 5) return schedule.trim();
   switch (schedule) {
     case 'hourly':  return '0 * * * *';
     case 'daily':   return '0 2 * * *';
@@ -17,11 +19,28 @@ function parseCronExpr(schedule) {
 }
 
 function parseCronHuman(schedule) {
+  if (!schedule) return 'Daily';
+  const expr = parseCronExpr(schedule);
+  const parts = expr.trim().split(/\s+/);
+  if (parts.length === 5) {
+    const [min, hour, dom, mon, dow] = parts;
+    if (min === '*/5' && hour === '*' && dom === '*' && mon === '*' && dow === '*') return 'Every 5 Minutes';
+    if (min === '*/15' && hour === '*' && dom === '*' && mon === '*' && dow === '*') return 'Every 15 Minutes';
+    if (min === '*/30' && hour === '*' && dom === '*' && mon === '*' && dow === '*') return 'Every 30 Minutes';
+    if (min === '0' && hour === '*' && dom === '*' && mon === '*' && dow === '*') return 'Every Hour at :00';
+    if (dom === '*' && mon === '*' && dow === '*' && !min.includes('/') && !hour.includes('/')) {
+      const hr = parseInt(hour, 10);
+      const m = parseInt(min, 10);
+      const ampm = hr >= 12 ? 'PM' : 'AM';
+      const hr12 = hr % 12 === 0 ? 12 : hr % 12;
+      return `Every Day at ${String(hr12).padStart(2, '0')}:${String(m).padStart(2, '0')} ${ampm}`;
+    }
+  }
   switch (schedule) {
     case 'hourly':  return 'Every Hour at :00';
     case 'daily':   return 'Every Day at 02:00 AM';
     case 'weekly':  return 'Every Sunday at 02:00 AM';
-    default:        return schedule;
+    default:        return `Cron (${expr})`;
   }
 }
 

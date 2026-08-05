@@ -68,6 +68,250 @@ function CustomSelect({ value, onChange, options = [], className = '', textClass
   );
 }
 
+// ⏰ Modern Cron Builder Component for MongoSync
+function CronBuilder({ value, onChange }) {
+  const [mode, setMode] = useState('everyday'); // everyday, weekly, monthly, interval, custom
+  const [time, setTime] = useState('02:00');
+  const [weekDay, setWeekDay] = useState('0'); // 0 = Sunday
+  const [monthDay, setMonthDay] = useState('1');
+  const [intervalVal, setIntervalVal] = useState('*/5 * * * *');
+  const [customVal, setCustomVal] = useState('*/5 * * * *');
+
+  useEffect(() => {
+    if (!value || value === 'manual') return;
+    if (value === '0 * * * *' || value === 'hourly') {
+      setMode('interval');
+      setIntervalVal('0 * * * *');
+    } else if (value === '0 2 * * *' || value === 'daily') {
+      setMode('everyday');
+      setTime('02:00');
+    } else if (value === '0 2 * * 0' || value === 'weekly') {
+      setMode('weekly');
+      setTime('02:00');
+      setWeekDay('0');
+    } else if (value.startsWith('*/')) {
+      setMode('interval');
+      setIntervalVal(value);
+    } else {
+      const parts = value.trim().split(/\s+/);
+      if (parts.length === 5) {
+        const [min, hr, dom, mon, dow] = parts;
+        if (dom === '*' && dow === '*' && mon === '*' && !min.includes('/') && !hr.includes('/')) {
+          setMode('everyday');
+          setTime(`${String(hr).padStart(2, '0')}:${String(min).padStart(2, '0')}`);
+        } else if (dom === '*' && mon === '*' && dow !== '*' && !min.includes('/') && !hr.includes('/')) {
+          setMode('weekly');
+          setTime(`${String(hr).padStart(2, '0')}:${String(min).padStart(2, '0')}`);
+          setWeekDay(dow);
+        } else if (dom !== '*' && mon === '*' && dow === '*' && !min.includes('/') && !hr.includes('/')) {
+          setMode('monthly');
+          setTime(`${String(hr).padStart(2, '0')}:${String(min).padStart(2, '0')}`);
+          setMonthDay(dom);
+        } else {
+          setMode('custom');
+          setCustomVal(value);
+        }
+      } else {
+        setMode('custom');
+        setCustomVal(value);
+      }
+    }
+  }, []);
+
+  const updateCron = (newMode, newTime, newWeekDay, newMonthDay, newInterval, newCustom) => {
+    let cron = '0 2 * * *';
+    const [hrStr, minStr] = (newTime || '02:00').split(':');
+    const hr = parseInt(hrStr || '0', 10);
+    const min = parseInt(minStr || '0', 10);
+
+    if (newMode === 'everyday') {
+      cron = `${min} ${hr} * * *`;
+    } else if (newMode === 'weekly') {
+      cron = `${min} ${hr} * * ${newWeekDay}`;
+    } else if (newMode === 'monthly') {
+      cron = `${min} ${hr} ${newMonthDay} * *`;
+    } else if (newMode === 'interval') {
+      cron = newInterval;
+    } else if (newMode === 'custom') {
+      cron = newCustom;
+    }
+
+    onChange(cron);
+  };
+
+  const getHumanReadable = () => {
+    const [hrStr, minStr] = (time || '00:00').split(':');
+    const hr = parseInt(hrStr || '0', 10);
+    const min = parseInt(minStr || '0', 10);
+    const ampm = hr >= 12 ? 'PM' : 'AM';
+    const hr12 = hr % 12 === 0 ? 12 : hr % 12;
+    const timeFormatted = `${String(hr12).padStart(2, '0')}:${String(min).padStart(2, '0')} ${ampm}`;
+    const daysMap = { '0': 'Sunday', '1': 'Monday', '2': 'Tuesday', '3': 'Wednesday', '4': 'Thursday', '5': 'Friday', '6': 'Saturday' };
+
+    if (mode === 'everyday') return `Every day at ${timeFormatted} (${time} server time)`;
+    if (mode === 'weekly') return `Every ${daysMap[weekDay] || 'day'} at ${timeFormatted}`;
+    if (mode === 'monthly') return `Day ${monthDay} of every month at ${timeFormatted}`;
+    if (mode === 'interval') {
+      if (intervalVal === '*/5 * * * *') return 'Every 5 minutes (*/5 * * * *)';
+      if (intervalVal === '*/15 * * * *') return 'Every 15 minutes (*/15 * * * *)';
+      if (intervalVal === '*/30 * * * *') return 'Every 30 minutes (*/30 * * * *)';
+      if (intervalVal === '0 * * * *') return 'Every hour (at :00)';
+      if (intervalVal === '0 */2 * * *') return 'Every 2 hours';
+      if (intervalVal === '0 */6 * * *') return 'Every 6 hours';
+      if (intervalVal === '0 */12 * * *') return 'Every 12 hours';
+      return `Interval: ${intervalVal}`;
+    }
+    return `Custom cron: ${customVal}`;
+  };
+
+  return (
+    <div className="p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/20 space-y-2.5">
+      <div className="flex items-center justify-between">
+        <label className="text-xs font-bold text-emerald-400 flex items-center gap-1.5">
+          <Clock size={12} /> Schedule & Time Picker
+        </label>
+        <span className="text-[10px] font-mono text-emerald-300 bg-emerald-500/20 px-2 py-0.5 rounded font-bold">
+          {value}
+        </span>
+      </div>
+
+      <div className="grid grid-cols-5 gap-1">
+        {[
+          { id: 'everyday', label: 'Everyday' },
+          { id: 'weekly',   label: 'Weekly' },
+          { id: 'monthly',  label: 'Monthly' },
+          { id: 'interval', label: 'Interval' },
+          { id: 'custom',   label: 'Custom' },
+        ].map((m) => (
+          <button
+            key={m.id}
+            type="button"
+            onClick={() => {
+              setMode(m.id);
+              updateCron(m.id, time, weekDay, monthDay, intervalVal, customVal);
+            }}
+            className={`py-1 px-1 text-center rounded-lg border text-[10px] font-bold transition-all cursor-pointer ${
+              mode === m.id
+                ? 'bg-emerald-600 border-emerald-500 text-white shadow-md shadow-emerald-600/20'
+                : 'bg-[var(--bg-tertiary)] border-[var(--border-color)] text-[var(--text-muted)] hover:text-[var(--text-primary)]'
+            }`}
+          >
+            {m.label}
+          </button>
+        ))}
+      </div>
+
+      <div className="pt-2 border-t border-[var(--border-color)]/40 space-y-2">
+        {(mode === 'everyday' || mode === 'weekly' || mode === 'monthly') && (
+          <div className="grid grid-cols-2 gap-2 items-center">
+            <div>
+              <label className="text-[10px] font-semibold text-[var(--text-muted)] block mb-1">
+                Execution Time (HH:MM):
+              </label>
+              <input
+                type="time"
+                value={time}
+                onChange={(e) => {
+                  const newT = e.target.value || '00:00';
+                  setTime(newT);
+                  updateCron(mode, newT, weekDay, monthDay, intervalVal, customVal);
+                }}
+                className="w-full px-2.5 py-1 text-xs rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] font-mono text-[var(--text-primary)] focus:border-emerald-500 focus:outline-none cursor-pointer"
+              />
+            </div>
+
+            {mode === 'weekly' && (
+              <div>
+                <label className="text-[10px] font-semibold text-[var(--text-muted)] block mb-1">
+                  Day of Week:
+                </label>
+                <CustomSelect
+                  value={weekDay}
+                  onChange={(val) => {
+                    setWeekDay(val);
+                    updateCron(mode, time, val, monthDay, intervalVal, customVal);
+                  }}
+                  options={[
+                    { value: '1', label: 'Every Monday' },
+                    { value: '2', label: 'Every Tuesday' },
+                    { value: '3', label: 'Every Wednesday' },
+                    { value: '4', label: 'Every Thursday' },
+                    { value: '5', label: 'Every Friday' },
+                    { value: '6', label: 'Every Saturday' },
+                    { value: '0', label: 'Every Sunday' },
+                  ]}
+                />
+              </div>
+            )}
+
+            {mode === 'monthly' && (
+              <div>
+                <label className="text-[10px] font-semibold text-[var(--text-muted)] block mb-1">
+                  Day of Month:
+                </label>
+                <CustomSelect
+                  value={monthDay}
+                  onChange={(val) => {
+                    setMonthDay(val);
+                    updateCron(mode, time, weekDay, val, intervalVal, customVal);
+                  }}
+                  options={Array.from({ length: 31 }, (_, i) => ({ value: String(i + 1), label: `Day ${i + 1}` }))}
+                />
+              </div>
+            )}
+          </div>
+        )}
+
+        {mode === 'interval' && (
+          <div>
+            <label className="text-[10px] font-semibold text-[var(--text-muted)] block mb-1">
+              Select Recurrence Interval:
+            </label>
+            <CustomSelect
+              value={intervalVal}
+              onChange={(val) => {
+                setIntervalVal(val);
+                updateCron(mode, time, weekDay, monthDay, val, customVal);
+              }}
+              options={[
+                { value: '*/5 * * * *', label: 'Every 5 Minutes (*/5 * * * *)' },
+                { value: '*/15 * * * *', label: 'Every 15 Minutes (*/15 * * * *)' },
+                { value: '*/30 * * * *', label: 'Every 30 Minutes (*/30 * * * *)' },
+                { value: '0 * * * *', label: 'Every Hour (0 * * * *)' },
+                { value: '0 */2 * * *', label: 'Every 2 Hours (0 */2 * * *)' },
+                { value: '0 */6 * * *', label: 'Every 6 Hours (0 */6 * * *)' },
+                { value: '0 */12 * * *', label: 'Every 12 Hours (0 */12 * * *)' },
+              ]}
+            />
+          </div>
+        )}
+
+        {mode === 'custom' && (
+          <div>
+            <label className="text-[10px] font-semibold text-[var(--text-muted)] block mb-1">
+              Custom Cron Expression (5 Fields):
+            </label>
+            <input
+              type="text"
+              value={customVal}
+              onChange={(e) => {
+                setCustomVal(e.target.value);
+                updateCron(mode, time, weekDay, monthDay, intervalVal, e.target.value);
+              }}
+              placeholder="e.g. 0 18 * * *"
+              className="w-full px-3 py-1 text-xs rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] font-mono text-[var(--text-primary)] focus:outline-none"
+            />
+          </div>
+        )}
+
+        <div className="text-[10px] text-emerald-400 font-medium italic pt-1">
+          {getHumanReadable()}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function MongoBackupApp() {
   const { state, apiFetch } = useApp();
   const { addNotification } = useOS();
@@ -1462,46 +1706,59 @@ export default function MongoBackupApp() {
                         </div>
                       </div>
 
-                      <div className="grid grid-cols-2 gap-2">
-                        <div>
-                          <label className="text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)] block mb-1">Schedule</label>
-                          <CustomSelect
-                            value={jobSchedule}
-                            onChange={(val) => setJobSchedule(val)}
-                            options={[
-                              { value: 'manual', label: 'Manual Only' },
-                              { value: 'hourly', label: 'Hourly' },
-                              { value: 'daily', label: 'Daily' },
-                              { value: 'weekly', label: 'Weekly' }
-                            ]}
-                          />
-                        </div>
-                        {jobSchedule !== 'manual' ? (
+                      <div className="space-y-2">
+                        <div className="grid grid-cols-2 gap-2">
                           <div>
-                            <label className="text-[10px] font-bold uppercase tracking-wider text-emerald-400 block mb-1 flex items-center gap-1">
-                              <Server size={10} /> Target SSH Server
-                            </label>
+                            <label className="text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)] block mb-1">Schedule Mode</label>
                             <CustomSelect
-                              value={targetSshConnId}
-                              onChange={(val) => setTargetSshConnId(val)}
+                              value={jobSchedule === 'manual' ? 'manual' : 'scheduled'}
+                              onChange={(val) => {
+                                if (val === 'manual') {
+                                  setJobSchedule('manual');
+                                } else {
+                                  if (jobSchedule === 'manual') setJobSchedule('0 18 * * *');
+                                }
+                              }}
                               options={[
-                                { value: '', label: '(Select User SSH Server)' },
-                                ...sshConnections.map(c => ({ value: c._id, label: `${c.name} (${c.host})` }))
+                                { value: 'manual', label: 'Manual Only' },
+                                { value: 'scheduled', label: 'Scheduled Cron ⏰' }
                               ]}
                             />
                           </div>
-                        ) : (
-                          <div className="flex items-center justify-center pt-4">
-                            <label className="flex items-center gap-2 cursor-pointer text-xs font-bold">
-                              <input
-                                type="checkbox"
-                                checked={jobEnabled}
-                                onChange={(e) => setJobEnabled(e.target.checked)}
-                                className="rounded border-[var(--border-color)] bg-[var(--bg-tertiary)] text-emerald-500 focus:ring-emerald-500"
+                          {jobSchedule !== 'manual' ? (
+                            <div>
+                              <label className="text-[10px] font-bold uppercase tracking-wider text-emerald-400 block mb-1 flex items-center gap-1">
+                                <Server size={10} /> Target SSH Server
+                              </label>
+                              <CustomSelect
+                                value={targetSshConnId}
+                                onChange={(val) => setTargetSshConnId(val)}
+                                options={[
+                                  { value: '', label: '(Select User SSH Server)' },
+                                  ...sshConnections.map(c => ({ value: c._id, label: `${c.name} (${c.host})` }))
+                                ]}
                               />
-                              <span>Enabled</span>
-                            </label>
-                          </div>
+                            </div>
+                          ) : (
+                            <div className="flex items-center justify-center pt-4">
+                              <label className="flex items-center gap-2 cursor-pointer text-xs font-bold">
+                                <input
+                                  type="checkbox"
+                                  checked={jobEnabled}
+                                  onChange={(e) => setJobEnabled(e.target.checked)}
+                                  className="rounded border-[var(--border-color)] bg-[var(--bg-tertiary)] text-emerald-500 focus:ring-emerald-500"
+                                />
+                                <span>Enabled</span>
+                              </label>
+                            </div>
+                          )}
+                        </div>
+
+                        {jobSchedule !== 'manual' && (
+                          <CronBuilder
+                            value={jobSchedule}
+                            onChange={(newCron) => setJobSchedule(newCron)}
+                          />
                         )}
                       </div>
 
