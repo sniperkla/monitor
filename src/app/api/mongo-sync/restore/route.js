@@ -74,6 +74,7 @@ export async function POST(request) {
 
     let insertedCount = 0;
     let updatedCount  = 0;
+    let matchedCount  = 0;
     let totalCount    = 0;
 
     // Helper: restore docs into a single collection
@@ -90,12 +91,25 @@ export async function POST(request) {
           const r = await col.bulkWrite(ops, { ordered: false });
           insertedCount += (r.upsertedCount || 0) + (r.insertedCount || 0);
           updatedCount  += r.modifiedCount || 0;
+          matchedCount  += r.matchedCount || 0;
         } catch (e) { console.warn('bulkWrite error:', e.message); }
       } else {
         try {
           const r = await col.insertMany(sanitized, { ordered: false });
           insertedCount += r.insertedCount || sanitized.length;
         } catch (e) { console.warn('insertMany error:', e.message); }
+      }
+    };
+
+    // Helper to build human-readable result message
+    const buildResultMessage = (collCount) => {
+      const processedCount = insertedCount + updatedCount + matchedCount;
+      if (insertedCount > 0 || updatedCount > 0) {
+        return `Successfully restored ${processedCount || totalCount} documents (${insertedCount} new, ${updatedCount} updated, ${matchedCount} existing) across ${collCount} collection(s).`;
+      } else if (totalCount > 0) {
+        return `All ${totalCount} documents across ${collCount} collection(s) already exist and match records in MongoDB (0 modified).`;
+      } else {
+        return `Checked ${collCount} collection(s), but no documents were found in backup files.`;
       }
     };
 
@@ -146,8 +160,9 @@ export async function POST(request) {
         success: true,
         insertedCount,
         updatedCount,
+        matchedCount,
         totalCount,
-        message: `Successfully restored ${insertedCount} documents across ${restoredCollectionsCount} collections from Google Drive folder.`
+        message: buildResultMessage(restoredCollectionsCount)
       });
     }
 
@@ -171,13 +186,14 @@ export async function POST(request) {
     }
 
     if (Array.isArray(backupData) && backupData.length === 0) {
-      return NextResponse.json({ success: true, message: 'Backup file is empty. No documents imported.', count: 0 });
+      return NextResponse.json({ success: true, message: 'Backup file is empty (0 documents in source collection). No documents imported.', count: 0 });
     }
 
     if (Array.isArray(backupData) && backupData.length > MAX_RESTORE_DOCS) {
       return NextResponse.json({ success: false, error: `Restore limit exceeded. Maximum ${MAX_RESTORE_DOCS} documents per request.` }, { status: 400 });
     }
 
+    let collsCount = 1;
     if (isAllDbFile) {
       // ── Restore ALL databases: { dbName: { collName: [docs] } } ──
       for (const [dbName, colMap] of Object.entries(backupData)) {
@@ -186,6 +202,7 @@ export async function POST(request) {
         for (const [colName, docs] of Object.entries(colMap)) {
           if (!Array.isArray(docs)) continue;
           await restoreCollection(dbObj.collection(colName), docs);
+          collsCount++;
         }
       }
     } else if (isAllCollectionsFile) {
@@ -196,6 +213,7 @@ export async function POST(request) {
       for (const [colName, docs] of Object.entries(backupData)) {
         if (!Array.isArray(docs)) continue;
         await restoreCollection(targetDb.collection(colName), docs);
+        collsCount++;
       }
     } else {
       // ── Restore single collection (backupData is Array of docs) ──
@@ -220,8 +238,9 @@ export async function POST(request) {
       success: true,
       insertedCount,
       updatedCount,
+      matchedCount,
       totalCount,
-      message: `Successfully restored ${insertedCount} documents across collections (updated ${updatedCount}) from Google Drive.`
+      message: buildResultMessage(collsCount)
     });
 
   } catch (error) {
