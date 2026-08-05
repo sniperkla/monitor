@@ -537,19 +537,41 @@ function DynamicCronPicker({ value, onChange }) {
         )}
 
         {mode === 'custom' && (
-          <div>
-            <label className="text-[10px] font-semibold text-[var(--text-muted)] block mb-1">
-              Custom Cron Expression (5 Fields):
+          <div className="space-y-1">
+            <label className="text-[10px] font-semibold text-[var(--text-muted)] block">
+              Custom Cron or Natural Input (e.g., "5 min", "18:00", "every 2 hours", "*/5 * * * *"):
             </label>
             <input
               type="text"
               value={customVal}
               onChange={(e) => {
-                setCustomVal(e.target.value);
-                updateCron(mode, time, weekDay, monthDay, intervalVal, e.target.value);
+                const raw = e.target.value;
+                setCustomVal(raw);
+
+                // Auto-convert natural input phrases to 5-field cron
+                let parsedCron = raw.trim();
+                const lower = raw.trim().toLowerCase();
+
+                const minMatch = lower.match(/^(?:every\s+)?(\d+)\s*(?:m|min|mins|minutes)$/);
+                const timeMatch = lower.match(/^(\d{1,2})[:.](\d{2})$/);
+                const hrMatch = lower.match(/^(?:every\s+)?(\d+)\s*(?:h|hr|hrs|hour|hours)$/);
+
+                if (minMatch) {
+                  const m = parseInt(minMatch[1], 10);
+                  if (m > 0 && m < 60) parsedCron = `*/${m} * * * *`;
+                } else if (timeMatch) {
+                  const hr = parseInt(timeMatch[1], 10);
+                  const min = parseInt(timeMatch[2], 10);
+                  if (hr >= 0 && hr < 24 && min >= 0 && min < 60) parsedCron = `${min} ${hr} * * *`;
+                } else if (hrMatch) {
+                  const h = parseInt(hrMatch[1], 10);
+                  if (h > 0 && h < 24) parsedCron = `0 */${h} * * *`;
+                }
+
+                updateCron(mode, time, weekDay, monthDay, intervalVal, parsedCron);
               }}
-              placeholder="e.g. 0 4 * * 1-5"
-              className="w-full px-3.5 py-1.5 text-xs rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] font-mono text-[var(--text-primary)] focus:outline-none"
+              placeholder="e.g. 5 min, 18:00, or 0 4 * * 1-5"
+              className="w-full px-3.5 py-1.5 text-xs rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] font-mono text-[var(--text-primary)] focus:outline-none focus:border-indigo-500"
             />
           </div>
         )}
