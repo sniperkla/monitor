@@ -751,6 +751,8 @@ export default function MongoBackupApp() {
         setDriveEmail(data.email || '');
         setDriveName(data.name || '');
         setClientId(data.clientId || '');
+        // Don't fetch the actual secret — just show placeholder if one is saved
+        if (data.hasClientSecret) setClientSecret('••••••••••••••••••••');
         setDriveFolders(data.folders || []);
         if (data.folders.length > 0) {
           setJobFolderId(data.folders[0].id);
@@ -847,19 +849,22 @@ export default function MongoBackupApp() {
   const handleSaveCredentials = async () => {
     setDriveLoading(true);
     try {
+      // Don't overwrite the saved secret with the masked placeholder
+      const secretToSave = clientSecret.includes('•') ? undefined : clientSecret;
       const res = await apiFetch('/api/mongo-sync/gdrive/status', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ clientId, clientSecret })
+        body: JSON.stringify({ clientId, clientSecret: secretToSave })
       });
       const data = await res.json();
       if (data.success) {
-        addNotification({ title: 'Config Saved', message: 'Google OAuth Client Credentials updated.', type: 'success' });
+        addNotification({ title: 'Credentials Saved', message: 'Google OAuth Client ID & Secret saved to database.', type: 'success' });
+        fetchGDriveStatus();
       } else {
         throw new Error(data.error);
       }
     } catch (err) {
-      addNotification({ title: 'Error Saving Config', message: err.message, type: 'error' });
+      addNotification({ title: 'Error Saving Credentials', message: err.message, type: 'error' });
     } finally {
       setDriveLoading(false);
     }
@@ -1989,8 +1994,53 @@ export default function MongoBackupApp() {
                     </div>
                   </div>
                 </div>
+
+                {/* 2. OAuth Client Credentials — full width below */}
+                <div className="bg-[var(--bg-card)] p-5 rounded-2xl border border-[var(--border-color)]">
+                  <h3 className="text-sm font-bold flex items-center gap-2 mb-1">
+                    <ShieldAlert className="text-amber-400" size={16} /> 2. OAuth Client Credentials
+                    <span className="ml-auto text-[9px] font-semibold px-2 py-0.5 rounded-full bg-amber-500/10 text-amber-400 border border-amber-500/20">Stored in DB · Not in .env</span>
+                  </h3>
+                  <p className="text-[11px] text-[var(--text-muted)] mb-4 leading-relaxed">
+                    Enter your <strong>Google Cloud OAuth 2.0</strong> Client ID and Secret from your Google Cloud Console project.
+                    These are saved securely in the database — no <code className="px-1 bg-[var(--bg-tertiary)] rounded text-amber-300">.env</code> file edits required.
+                  </p>
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3 items-end">
+                    <div>
+                      <label className="text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)] block mb-1">Google Client ID</label>
+                      <input
+                        type="text"
+                        value={clientId}
+                        onChange={(e) => setClientId(e.target.value)}
+                        placeholder="xxxxxxxxxxxx-xxxx.apps.googleusercontent.com"
+                        className="w-full px-3 py-2 text-xs rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] font-mono text-[var(--text-primary)] focus:border-emerald-500 focus:outline-none"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)] block mb-1">Google Client Secret</label>
+                      <input
+                        type="password"
+                        value={clientSecret}
+                        onChange={(e) => setClientSecret(e.target.value)}
+                        placeholder="GOCSPX-xxxxxxxxxxxxxxxxxxxx"
+                        className="w-full px-3 py-2 text-xs rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] font-mono text-[var(--text-primary)] focus:border-emerald-500 focus:outline-none"
+                      />
+                    </div>
+                    <button
+                      onClick={handleSaveCredentials}
+                      disabled={driveLoading || !clientId.trim() || !clientSecret.trim()}
+                      className="w-full px-4 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-white rounded-xl text-xs font-bold flex items-center justify-center gap-2 shadow-md transition-all"
+                    >
+                      {driveLoading ? <Loader className="animate-spin" size={12} /> : <><ShieldAlert size={13} /> Save OAuth Credentials</>}
+                    </button>
+                  </div>
+                  <p className="text-[10px] text-[var(--text-muted)] mt-3 opacity-70">
+                    💡 After saving credentials, click <strong>Link Google Drive</strong> above to authorize. The credentials will be automatically used for all backup jobs and scheduled crons.
+                  </p>
+                </div>
               </motion.div>
             )}
+
 
             {activeTab === 'jobs' && (
               <motion.div
