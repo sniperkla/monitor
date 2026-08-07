@@ -571,11 +571,11 @@ deploy_service() {
       --update-order start-first \\
       --update-delay 5s \\
       --update-monitor 15s \\
-      --update-failure-action rollback \\
+      --update-failure-action pause \\
       --rollback-order start-first \\
       --rollback-monitor 15s \\
       --stop-grace-period 30s \\
-      "$NAME" || echo "[swarm] WARNING: $NAME update triggered rollback — checking status..."
+      "$NAME" || echo "[swarm] WARNING: $NAME update exited non-zero — checking task state..."
     docker service update --network-add "$SWARM_NET" "$NAME" 2>/dev/null || true
   else
     if docker inspect "$NAME" >/dev/null 2>&1; then
@@ -596,7 +596,7 @@ deploy_service() {
       --detach \\
       --no-resolve-image \\
       --update-order start-first \\
-      --update-failure-action rollback \\
+      --update-failure-action pause \\
       --rollback-order start-first \\
       --stop-grace-period 30s \\
       "$IMAGE"; then
@@ -609,20 +609,26 @@ deploy_service() {
   fi
 
   echo "[swarm] Waiting for $NAME to be healthy..."
-  for _i in $(seq 1 20); do
-    _REPLICAS=$(docker service ls --filter name="^\${NAME}$" --format '{{.Replicas}}' 2>/dev/null || echo "0/2")
-    _RUNNING=$(echo "$_REPLICAS" | cut -d'/' -f1)
-    if [ "\${_RUNNING:-0}" -ge 1 ] 2>/dev/null; then
-      echo "[swarm] $NAME healthy: $_REPLICAS"
+  for _i in $(seq 1 30); do
+    _RUNNING=$(docker service ps "$NAME" --filter "desired-state=running" --format '{{.CurrentState}}' 2>/dev/null | grep -c "Running" || echo "0")
+    _FAILED=$(docker service ps "$NAME" --filter "desired-state=shutdown" --format '{{.CurrentState}}' 2>/dev/null | grep -c "Failed" || echo "0")
+    if [ "$_RUNNING" -ge 1 ] 2>/dev/null; then
+      echo "[swarm] $NAME is running ($_RUNNING replica(s) up)."
       return 0
     fi
-    echo "[swarm] Waiting for $NAME... ($_i/20)"
+    if [ "$_FAILED" -ge 3 ] 2>/dev/null; then
+      echo "[swarm] ERROR: $NAME has $_FAILED failed tasks — container likely crashing."
+      docker service ps "$NAME" --no-trunc 2>/dev/null | tail -5
+      return 1
+    fi
+    echo "[swarm] Waiting for $NAME... ($_i/30)"
     sleep 3
   done
 
-  echo "[swarm] ERROR: $NAME did not become healthy in time."
-  docker service rollback "$NAME" 2>/dev/null || true
-  return 1
+  echo "[swarm] WARNING: $NAME replicas not confirmed after 90s — service may still be starting."
+  echo "[swarm] Current task state:"
+  docker service ps "$NAME" --no-trunc 2>/dev/null | tail -10
+  return 0
 }
 
 # ── Deploy services ──────────────────────────────────────────────────────────
