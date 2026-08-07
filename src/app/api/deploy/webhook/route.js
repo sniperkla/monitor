@@ -664,13 +664,12 @@ export async function runDeployment(config, runMeta = {}) {
   let lastUpdateTime = 0;
 
   const throttledUpdateStatus = async (status, finalLog, extra = {}) => {
-    const cleanLog = limitLogOutput(finalLog);
     if (status !== 'running') {
       if (pendingUpdate) {
         clearTimeout(pendingUpdate);
         pendingUpdate = null;
       }
-      await updateStatus(status, cleanLog, extra);
+      await updateStatus(status, finalLog, extra);
       return;
     }
 
@@ -681,7 +680,7 @@ export async function runDeployment(config, runMeta = {}) {
         pendingUpdate = null;
       }
       lastUpdateTime = now;
-      await updateStatus(status, cleanLog, extra);
+      await updateStatus(status, finalLog, extra);
     } else {
       if (!pendingUpdate) {
         pendingUpdate = setTimeout(async () => {
@@ -834,7 +833,6 @@ export async function runDeployment(config, runMeta = {}) {
     const watchdog = setTimeout(async () => {
       const now = new Date();
       logOutput += `\n[Timeout] Deployment exceeded ${timeoutMs / 1000} seconds and will be terminated.\n`;
-      logOutput = limitLogOutput(logOutput);
       try {
         await updateStatus('failed', logOutput);
       } catch (e) {
@@ -850,13 +848,11 @@ export async function runDeployment(config, runMeta = {}) {
 
     childProcess.stdout.on('data', (data) => {
       logOutput += data.toString();
-      if (logOutput.length > 200000) logOutput = limitLogOutput(logOutput);
       throttledUpdateStatus('running', logOutput).catch(() => {}); // Stream logs
     });
 
     childProcess.stderr.on('data', (data) => {
       logOutput += data.toString();
-      if (logOutput.length > 200000) logOutput = limitLogOutput(logOutput);
       throttledUpdateStatus('running', logOutput).catch(() => {}); // Stream logs
     });
 
@@ -865,7 +861,6 @@ export async function runDeployment(config, runMeta = {}) {
       const finishedAt = new Date();
       logOutput += `\n--------------------------------------------------\n`;
       logOutput += `[${finishedAt.toISOString()}] Process exited with code: ${code}\n`;
-      logOutput = limitLogOutput(logOutput);
       const status = resolveDeployStatus(code, logOutput);
       try { clearRunning(projectId); } catch (e) {}
       updateStatus(status, logOutput).catch(() => {});
@@ -876,7 +871,6 @@ export async function runDeployment(config, runMeta = {}) {
       const finishedAt = new Date();
       logOutput += `\n--------------------------------------------------\n`;
       logOutput += `[${finishedAt.toISOString()}] ❌ Process execution error: ${err.message}\n`;
-      logOutput = limitLogOutput(logOutput);
       try { clearRunning(projectId); } catch (e) {}
       updateStatus('failed', logOutput).catch(() => {});
     });
@@ -1188,7 +1182,6 @@ export async function runDeployment(config, runMeta = {}) {
             sftp.writeFile(remoteDeployPath, deployScript, { mode: 0o755 }, (writeErr) => {
             if (writeErr) {
               logOutput += `[SSH Error] Failed to write deploy script: ${writeErr.message}\n`;
-              logOutput = limitLogOutput(logOutput);
               try { clearRunning(projectId); } catch (e) {}
               updateStatus('failed', logOutput).catch(() => {});
               conn.end();
@@ -1196,7 +1189,6 @@ export async function runDeployment(config, runMeta = {}) {
             }
 
             logOutput += `[SSH] Scripts uploaded. Launching deployment...\n\n`;
-            logOutput = limitLogOutput(logOutput);
             updateStatus('running', logOutput);
 
             // tmux wrapper: runs the deploy script, captures exit code, writes status file for post-reconnect monitoring
@@ -1239,7 +1231,6 @@ export async function runDeployment(config, runMeta = {}) {
               conn.exec(command, (execErr, stream) => {
                 if (execErr) {
                   logOutput += `[SSH Error] Execution failed: ${execErr.message}\n`;
-                  logOutput = limitLogOutput(logOutput);
                   try { clearRunning(projectId); } catch (e) {}
                   updateStatus('failed', logOutput);
                   conn.end();
@@ -1250,7 +1241,6 @@ export async function runDeployment(config, runMeta = {}) {
                 const timeoutMs = (config.timeoutSeconds || 600) * 1000;
                 const watchdog = setTimeout(async () => {
                   logOutput += `\n[Timeout] Deployment exceeded ${timeoutMs / 1000}s. Terminating...\n`;
-                  logOutput = limitLogOutput(logOutput);
                   try {
                     await updateStatus('failed', logOutput);
                   } catch (e) {
@@ -1283,13 +1273,13 @@ export async function runDeployment(config, runMeta = {}) {
                     logOutput += rawLine + '\n';
                   }
 
-                  if (logOutput.length > 200000) logOutput = limitLogOutput(logOutput);
+                  if (logOutput.length > 200000) logOutput = logOutput.slice(-200000);
                   throttledUpdateStatus('running', logOutput).catch(() => {});
                 });
 
                 stream.stderr.on('data', (data) => {
                   logOutput += data.toString();
-                  if (logOutput.length > 200000) logOutput = limitLogOutput(logOutput);
+                  if (logOutput.length > 200000) logOutput = logOutput.slice(-200000);
                   throttledUpdateStatus('running', logOutput).catch(() => {});
                 });
 
@@ -1311,7 +1301,6 @@ export async function runDeployment(config, runMeta = {}) {
                   const finishedAt = new Date();
                   logOutput += `\n--------------------------------------------------\n`;
                   logOutput += `[${finishedAt.toISOString()}] [SSH] Execution finished. Exit code: ${finalCode}\n`;
-                  logOutput = limitLogOutput(logOutput);
                   const status = resolveDeployStatus(finalCode, logOutput);
 
                   try { clearRunning(projectId); } catch (e) {}
