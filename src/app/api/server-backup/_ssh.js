@@ -157,20 +157,45 @@ export function sftpTransfer(sourceConfig, sourcePath, targetConfig, targetPath,
         if (srcErr) { cleanup(); return reject(srcErr); }
         tgtConn.sftp((tgtErr, tgtSftp) => {
           if (tgtErr) { cleanup(); return reject(tgtErr); }
-          srcSftp.stat(sourcePath, (statErr, stats) => {
-            if (statErr) { cleanup(); return reject(statErr); }
-            totalSize = stats.size;
-            if (onProgress) onProgress({ transferred: 0, totalSize, percent: 0 });
-            const readStream = srcSftp.createReadStream(sourcePath);
-            const writeStream = tgtSftp.createWriteStream(targetPath, { mode: 0o644 });
-            readStream.on('data', (chunk) => {
-              transferred += chunk.length;
-              if (onProgress) onProgress({ transferred, totalSize, percent: totalSize > 0 ? Math.round((transferred / totalSize) * 100) : 0 });
+
+          // Ensure target parent directory exists before writing
+          const path = require('path');
+          const targetDir = path.posix.dirname(targetPath);
+          const mkdirp = (sftp, dir, cb) => {
+            // Walk up and create each missing segment
+            sftp.mkdir(dir, (err) => {
+              if (!err) return cb();
+              if (err.code === 4 || err.code === 11) return cb(); // already exists
+              const parent = path.posix.dirname(dir);
+              if (parent === dir) return cb(err); // reached root
+              mkdirp(sftp, parent, (parentErr) => {
+                if (parentErr) return cb(parentErr);
+                sftp.mkdir(dir, (err2) => {
+                  if (!err2 || err2.code === 4 || err2.code === 11) return cb();
+                  cb(err2);
+                });
+              });
             });
-            readStream.pipe(writeStream);
-            writeStream.on('close', () => { cleanup(); resolve({ transferred, totalSize }); });
-            writeStream.on('error', (e) => { cleanup(); reject(e); });
-            readStream.on('error', (e) => { cleanup(); reject(e); });
+          };
+
+          mkdirp(tgtSftp, targetDir, (mkErr) => {
+            if (mkErr) { cleanup(); return reject(new Error(`Cannot create target directory ${targetDir}: ${mkErr.message}`)); }
+
+            srcSftp.stat(sourcePath, (statErr, stats) => {
+              if (statErr) { cleanup(); return reject(statErr); }
+              totalSize = stats.size;
+              if (onProgress) onProgress({ transferred: 0, totalSize, percent: 0 });
+              const readStream = srcSftp.createReadStream(sourcePath);
+              const writeStream = tgtSftp.createWriteStream(targetPath, { mode: 0o644 });
+              readStream.on('data', (chunk) => {
+                transferred += chunk.length;
+                if (onProgress) onProgress({ transferred, totalSize, percent: totalSize > 0 ? Math.round((transferred / totalSize) * 100) : 0 });
+              });
+              readStream.pipe(writeStream);
+              writeStream.on('close', () => { cleanup(); resolve({ transferred, totalSize }); });
+              writeStream.on('error', (e) => { cleanup(); reject(e); });
+              readStream.on('error', (e) => { cleanup(); reject(e); });
+            });
           });
         });
       });

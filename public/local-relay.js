@@ -1285,8 +1285,11 @@ async function handleSftpCopy(ws, msg) {
 async function handleCrossServerTransfer(ws, msg) {
   // msg: { connId (dest), srcConnId, srcPath, destPath, action }
   const { connId, srcConnId, srcPath, destPath, action = 'copy' } = msg;
+  console.log(`🌐 [relay agent] cross_server_transfer: srcConnId=${srcConnId} destConnId=${connId} srcPath=${srcPath} destPath=${destPath}`);
+  console.log(`   sshSessions keys: ${[...sshSessions.keys()].join(', ')}`);
   const srcSession = sshSessions.get(srcConnId);
   const destSession = sshSessions.get(connId);
+  console.log(`   srcSession found: ${!!srcSession?.sshClient}  destSession found: ${!!destSession?.sshClient}`);
 
   if (!srcSession?.sshClient) {
     return ws.send(JSON.stringify({ type: 'sftp:error', connId, message: 'Source connection not active. Please ensure the source server tab is open.' }));
@@ -1322,9 +1325,10 @@ async function handleCrossServerTransfer(ws, msg) {
   });
 
   if (isDir) {
-    // Pipe tar from source → dest directly
-    const cmdSrc = `tar czf - -C ${JSON.stringify(require('path').posix.dirname(srcPath))} ${JSON.stringify(filename)}`;
-    const cmdDest = `mkdir -p ${JSON.stringify(destPath)} && tar xzf - -C ${JSON.stringify(destPath)}`;
+    // Single SSH exec for dest: rm+mkdir do NOT read stdin, so tar gets the full stream.
+    // 2>/dev/null suppresses noise; exit ≤1 = success, ≥2 = fatal.
+    const cmdSrc = `tar cf - -C ${JSON.stringify(srcPath)} . 2>/dev/null`;
+    const cmdDest = `rm -rf ${JSON.stringify(destPath)} && mkdir -p ${JSON.stringify(destPath)} && tar xf - -C ${JSON.stringify(destPath)} 2>/dev/null`;
 
     srcSession.sshClient.exec(cmdSrc, (err, srcStream) => {
       if (err) return sendError(err);
@@ -1337,22 +1341,33 @@ async function handleCrossServerTransfer(ws, msg) {
         let bytesSent = 0;
         srcStream.on('data', chunk => {
           bytesSent += chunk.length;
-          sendProgress(Math.min(99, Math.round(bytesSent / 1024 / 10)), filename); // rough estimate
+          sendProgress(Math.min(99, Math.round(bytesSent / 1024 / 10)), filename);
         });
 
-        destStream.on('close', (code) => {
-          if (code !== 0) return sendError(`Transfer failed with code ${code}`);
-          if (action === 'cut') srcSession.sshClient.exec(`rm -rf ${JSON.stringify(srcPath)}`, () => {});
-          sendSuccess();
-        });
+        let srcExitCode = null;
+        let destExitCode = null;
+        const tryFinish = () => {
+          if (srcExitCode === null || destExitCode === null) return;
+          if (srcExitCode <= 1 && destExitCode <= 1) {
+            if (action === 'cut') srcSession.sshClient.exec(`rm -rf ${JSON.stringify(srcPath)}`, () => {});
+            sendSuccess();
+          } else {
+            sendError(`Transfer failed (src tar: ${srcExitCode}, dest tar: ${destExitCode})`);
+          }
+        };
+
+        // NOTE: do NOT add srcStream.on('end') → destStream.end() — pipe() already does that.
+        srcStream.on('close', (code) => { srcExitCode = code ?? 0; tryFinish(); });
+        destStream.on('close', (code) => { destExitCode = code ?? 0; tryFinish(); });
         srcStream.on('error', sendError);
         destStream.on('error', sendError);
       });
     });
   } else {
-    // File: pipe cat src | cat > dest between the two SSH sessions
+    // File: ensure parent dir exists, then pipe cat src | cat > dest
     const cmdSrc = `cat ${JSON.stringify(srcPath)}`;
-    const cmdDest = `cat > ${JSON.stringify(destPath)}`;
+    const destDir = require('path').posix.dirname(destPath);
+    const cmdDest = `mkdir -p ${JSON.stringify(destDir)} && cat > ${JSON.stringify(destPath)}`;
 
     // Get file size for progress
     let totalBytes = 0;
@@ -1375,7 +1390,7 @@ async function handleCrossServerTransfer(ws, msg) {
         });
 
         destStream.on('close', (code) => {
-          if (code !== 0) return sendError(`File transfer failed (exit ${code})`);
+          if (code !== null && code !== 0) return sendError(`File transfer failed (exit ${code})`);
           if (action === 'cut') srcSession.sshClient.exec(`rm -f ${JSON.stringify(srcPath)}`, () => {});
           sendSuccess();
         });

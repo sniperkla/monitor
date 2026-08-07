@@ -548,9 +548,14 @@ SWARM_NET=$(docker network ls --filter driver=overlay --format '{{.Name}}' 2>/de
 if [ -n "$SWARM_NET" ]; then
   echo "[net] Using existing overlay network: $SWARM_NET"
 else
-  echo "[net] No overlay network found — creating proxy-net..."
-  docker network create --driver overlay --attachable proxy-net
-  SWARM_NET="proxy-net"
+  # Pick a name that doesn't collide with any existing network
+  _NET_CANDIDATE="proxy-net"
+  if docker network inspect "$_NET_CANDIDATE" >/dev/null 2>&1; then
+    _NET_CANDIDATE="swarm-overlay"
+  fi
+  echo "[net] No overlay network found — creating $_NET_CANDIDATE..."
+  docker network create --driver overlay --attachable "$_NET_CANDIDATE" 2>/dev/null || true
+  SWARM_NET="$_NET_CANDIDATE"
   for _i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
     [ -n "$(docker network ls --filter driver=overlay --format '{{.Name}}' 2>/dev/null | grep -v '^ingress$' | head -1)" ] && break
     echo "[net] Waiting for overlay network... ($_i/15)"; sleep 1
@@ -558,6 +563,7 @@ else
   if [ -z "$(docker network ls --filter driver=overlay --format '{{.Name}}' 2>/dev/null | grep -v '^ingress$' | head -1)" ]; then
     echo "[net] ERROR: No overlay network after 15s. Aborting."; exit 1
   fi
+  SWARM_NET=$(docker network ls --filter driver=overlay --format '{{.Name}}' 2>/dev/null | grep -v '^ingress$' | head -1)
 fi
 
 # ── Build images ─────────────────────────────────────────────────────────────

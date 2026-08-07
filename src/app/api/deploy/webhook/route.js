@@ -1039,15 +1039,7 @@ export async function runDeployment(config, runMeta = {}) {
         logOutput += `[SSH] Connected successfully. Preparing deployment scripts...\n`;
         updateStatus('running', logOutput);
 
-        conn.sftp((err, sftp) => {
-          if (err) {
-            logOutput += `[SSH Error] SFTP initialization failed: ${err.message}\n`;
-            try { clearRunning(projectId); } catch (e) {}
-            updateStatus('failed', logOutput);
-            conn.end();
-            return;
-          }
-
+        {
           const runTimestamp = Date.now();
           const remoteDeployPath = `/tmp/deploy_run_${projectId}_${runTimestamp}.sh`;
           const userCmdPath = `/tmp/deploy_cmd_${projectId}_${runTimestamp}.sh`;
@@ -1217,12 +1209,41 @@ fi
           tmuxSession = `deploy-${projectId.replace(/[^a-zA-Z0-9_-]/g, '-')}`.slice(0, 60);
           const tmuxWrapperPath = `/tmp/deploy_tmux_${projectId}.sh`;
 
-          sftp.writeFile(userCmdPath, userCmdScript, { mode: 0o755 }, (userCmdWriteErr) => {
+          // Write a file via SSH exec (base64 + printf) instead of SFTP.
+          // This bypasses SFTP "Failure" errors on hardened servers where SFTP writes
+          // to /tmp are blocked by noexec or restricted SFTP subsystems.
+          const writeViaSsh = (remotePath, content, mode, cb) => {
+            const b64 = Buffer.from(content).toString('base64');
+            // Split into chunks to avoid ARG_MAX limits on very large scripts
+            const CHUNK = 4096;
+            const chunks = [];
+            for (let i = 0; i < b64.length; i += CHUNK) chunks.push(b64.slice(i, i + CHUNK));
+            const writeCmd = [
+              `rm -f ${remotePath}`,
+              ...chunks.map((c, i) => i === 0
+                ? `printf '%s' '${c}' > ${remotePath}.b64`
+                : `printf '%s' '${c}' >> ${remotePath}.b64`),
+              `base64 -d < ${remotePath}.b64 > ${remotePath}`,
+              `rm -f ${remotePath}.b64`,
+              `chmod ${mode.toString(8)} ${remotePath}`,
+            ].join(' && ');
+            conn.exec(writeCmd, (err, stream) => {
+              if (err) return cb(err);
+              let stderr = '';
+              stream.stderr.on('data', d => { stderr += d.toString(); });
+              stream.on('close', (code) => {
+                if (code !== 0) return cb(new Error(stderr.trim() || `write exited ${code}`));
+                cb(null);
+              });
+            });
+          };
+
+          writeViaSsh(userCmdPath, userCmdScript, 0o755, (userCmdWriteErr) => {
             if (userCmdWriteErr) {
               logOutput += `[SSH] Warning: could not pre-upload user cmd script (${userCmdWriteErr.message})\n`;
             }
 
-            sftp.writeFile(remoteDeployPath, deployScript, { mode: 0o755 }, (writeErr) => {
+            writeViaSsh(remoteDeployPath, deployScript, 0o755, (writeErr) => {
             if (writeErr) {
               logOutput += `[SSH Error] Failed to write deploy script: ${writeErr.message}\n`;
               try { clearRunning(projectId); } catch (e) {}
@@ -1347,13 +1368,13 @@ fi
               });
             }; // end launchDeploy
 
-            sftp.writeFile(tmuxWrapperPath, tmuxWrapper, { mode: 0o755 }, (tmuxWriteErr) => {
+            writeViaSsh(tmuxWrapperPath, tmuxWrapper, 0o755, (tmuxWriteErr) => {
               if (tmuxWriteErr) logOutput += `[deploy] tmux wrapper write failed: ${tmuxWriteErr.message}\n`;
               launchDeploy();
             });
-          }); // end sftp.writeFile(remoteDeployPath)
-        }); // end sftp.writeFile(userCmdPath)
-      }); // end conn.sftp
+          }); // end writeViaSsh(remoteDeployPath)
+        }); // end writeViaSsh(userCmdPath)
+      } // end ready block
     }); // end conn.on('ready')
 
       conn.on('error', (err) => {

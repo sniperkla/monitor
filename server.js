@@ -817,6 +817,32 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
               });
             });
 
+            // sftp:cross_server_transfer needs srcConnId translated from MongoDB _id → relay connId
+            socket.removeAllListeners('sftp:cross_server_transfer');
+            socket.on('sftp:cross_server_transfer', (payload) => {
+              const { srcConnId: srcMongoId, ...rest } = payload;
+              console.log(`🌐 [Relay/reattach] cross_server_transfer received: srcMongoId=${srcMongoId} destRelayConnId=${relayConnId} userId=${userId}`);
+              console.log(`   activeSessions total: ${activeSessions.size}`);
+              for (const [sid, sess] of activeSessions) {
+                console.log(`   session: socketId=${sid} relayMode=${sess.relayMode} connId=${sess.connectionId} relayConnId=${sess.relayConnId} userId=${sess.userId}`);
+              }
+              // Find relay connId for source — must be relay mode with matching connectionId + userId
+              let srcRelayConnId = null;
+              for (const [, sess] of activeSessions) {
+                if (sess.relayConnId && sess.userId === userId && String(sess.connectionId) === String(srcMongoId)) {
+                  srcRelayConnId = sess.relayConnId;
+                  break;
+                }
+              }
+              if (!srcRelayConnId) {
+                console.error(`❌ [Relay] cross_server_transfer: no relay session found for srcConnId=${srcMongoId}`);
+                socket.emit('sftp:error', { message: 'Source connection not active in relay. Please ensure the source server tab is open.' });
+                return;
+              }
+              console.log(`✅ [Relay] cross_server_transfer: resolved srcRelayConnId=${srcRelayConnId}`);
+              forwardOrQueue({ type: 'sftp:cross_server_transfer', connId: relayConnId, srcConnId: srcRelayConnId, ...rest });
+            });
+
             socket.removeAllListeners('sftp:upload');
             socket.on('sftp:upload', ({ filename, path: destPath, size, offset = 0 }) => {
               let aborted = false;
@@ -2908,24 +2934,20 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
                       }
                     });
 
-                    const cmdSrc = `tar czf - -C ${shellQuote(srcPath)} .`;
-                    const cmdDest = [
-                      `rm -rf ${shellQuote(destPath)}`,
-                      `mkdir -p ${shellQuote(destPath)}`,
-                      `tar xzf - -C ${shellQuote(destPath)}`,
-                    ].join(' && ');
-                    
+                    // Single SSH exec for dest: rm+mkdir+tar as one shell command.
+                    // rm and mkdir do NOT read stdin, so the tar stream arrives intact.
+                    // 2>/dev/null on both sides suppresses noise; exit ≤1 = success.
+                    const cmdSrc = `tar cf - -C ${shellQuote(srcPath)} . 2>/dev/null`;
+                    const cmdDest = `rm -rf ${shellQuote(destPath)} && mkdir -p ${shellQuote(destPath)} && tar xf - -C ${shellQuote(destPath)} 2>/dev/null`;
+
                     srcSession.sshClient.exec(cmdSrc, (err, srcStream) => {
                       if (err) return finish(err);
                       sshClient.exec(cmdDest, (err, destStream) => {
-                        if (err) {
-                          srcStream.destroy();
-                          return finish(err);
-                        }
-                        
+                        if (err) { srcStream.destroy(); return finish(err); }
+
                         srcStream.pipe(destStream);
                         socket.emit('sftp:progress', { action: 'copy', filename: srcBase, progress: 1 });
-                        
+
                         let bytesSent = 0;
                         srcStream.on('data', (chunk) => {
                           bytesSent += chunk.length;
@@ -2935,18 +2957,24 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
                           }
                         });
 
-                        destStream.on('close', (code) => {
+                        let srcExitCode = null;
+                        let destExitCode = null;
+                        const tryFinish = () => {
+                          if (srcExitCode === null || destExitCode === null) return;
                           clearTimeout(transferTimer);
-                          if (code === 0) {
+                          if (srcExitCode <= 1 && destExitCode <= 1) {
                             socket.emit('sftp:progress', { action: action === 'cut' ? 'move' : 'copy', filename: srcBase, progress: 100 });
                             socket.emit('sftp:action_success', { action: action === 'cut' ? 'move' : 'copy', path: destPath });
-                            if (action === 'cut') srcSession.sshClient.exec(`rm -rf "${srcPath}"`, () => {});
+                            if (action === 'cut') srcSession.sshClient.exec(`rm -rf ${shellQuote(srcPath)}`, () => {});
                           } else {
-                            finish(`Tar failed with code ${code}`);
+                            finish(`Transfer failed (src tar: ${srcExitCode}, dest tar: ${destExitCode})`);
                           }
-                        });
+                        };
 
-                        srcStream.on('end', () => destStream.end());
+                        // NOTE: do NOT add srcStream.on('end') to call destStream.end() —
+                        // pipe() already does that. Double-ending corrupts the stream.
+                        srcStream.on('close', (code) => { srcExitCode = code ?? 0; tryFinish(); });
+                        destStream.on('close', (code) => { destExitCode = code ?? 0; tryFinish(); });
                         srcStream.on('error', (err) => { finish(err); srcStream.destroy(); destStream.destroy(); });
                         destStream.on('error', (err) => { finish(err); srcStream.destroy(); destStream.destroy(); });
                       });
@@ -2955,7 +2983,9 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
                     // File transfer via SSH pipe — mirrors the folder tar pattern exactly
                     const filename = path.posix.basename(srcPath);
                     const cmdSrc = `cat ${shellQuote(srcPath)}`;
-                    const cmdDest = `cat > ${shellQuote(destPath)}`;
+                    // Ensure parent directory exists before writing
+                    const destDir = path.posix.dirname(destPath);
+                    const cmdDest = `mkdir -p ${shellQuote(destDir)} && cat > ${shellQuote(destPath)}`;
 
                     // Get file size for progress reporting (best-effort)
                     let totalBytes = 0;
@@ -2982,7 +3012,7 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
 
                         destStream.on('close', (code) => {
                           clearTimeout(transferTimer);
-                          if (code === 0) {
+                          if (code === null || code === 0) {
                             socket.emit('sftp:progress', { action: action === 'cut' ? 'move' : 'copy', filename, progress: 100 });
                             socket.emit('sftp:action_success', { action: action === 'cut' ? 'move' : 'copy', path: destPath });
                             if (action === 'cut') srcSession.sshClient.exec(`rm -f ${shellQuote(srcPath)}`, () => {});
@@ -3820,6 +3850,32 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
             });
           });
 
+          // sftp:cross_server_transfer needs srcConnId translated from MongoDB _id → relay connId
+          socket.removeAllListeners('sftp:cross_server_transfer');
+          socket.on('sftp:cross_server_transfer', (payload) => {
+            const { srcConnId: srcMongoId, ...rest } = payload;
+            console.log(`🌐 [Relay] cross_server_transfer received: srcMongoId=${srcMongoId} destRelayConnId=${relayConnId} userId=${userId}`);
+            console.log(`   activeSessions total: ${activeSessions.size}`);
+            for (const [sid, sess] of activeSessions) {
+              console.log(`   session: socketId=${sid} relayMode=${sess.relayMode} connId=${sess.connectionId} relayConnId=${sess.relayConnId} userId=${sess.userId}`);
+            }
+            // Find relay connId for source — must have relayConnId + matching connectionId + userId
+            let srcRelayConnId = null;
+            for (const [, sess] of activeSessions) {
+              if (sess.relayConnId && sess.userId === userId && String(sess.connectionId) === String(srcMongoId)) {
+                srcRelayConnId = sess.relayConnId;
+                break;
+              }
+            }
+            if (!srcRelayConnId) {
+              console.error(`❌ [Relay] cross_server_transfer: no relay session found for srcConnId=${srcMongoId}`);
+              socket.emit('sftp:error', { message: 'Source connection not active in relay. Please ensure the source server tab is open.' });
+              return;
+            }
+            console.log(`✅ [Relay] cross_server_transfer: resolved srcRelayConnId=${srcRelayConnId}`);
+            forwardOrQueue({ type: 'sftp:cross_server_transfer', connId: relayConnId, srcConnId: srcRelayConnId, ...rest });
+          });
+
           socket.removeAllListeners('sftp:upload');
           socket.on('sftp:upload', ({ filename, path: destPath, size, offset = 0 }) => {
             let aborted = false;
@@ -3865,6 +3921,7 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
           activeSessions.set(socket.id, {
             relayMode: true,
             relayConnId,
+            connectionId,  // MongoDB _id — needed to resolve srcConnId in cross_server_transfer
             userId,
             preferredRelay,
             lastActivityAt: Date.now(),
