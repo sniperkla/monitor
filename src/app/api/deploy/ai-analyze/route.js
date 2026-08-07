@@ -644,24 +644,55 @@ docker container prune -f 2>/dev/null || true`;
     let swarmScript = standardScript;
 
     if (swarmBlock) {
-      // Strip commands that conflict with Swarm mode:
-      // 1. Any docker swarm/service/stack lines (the AI may have written them in the base script)
-      // 2. docker-compose up/down / docker compose up/down — Swarm handles container lifecycle, not compose up
-      // 3. docker image prune — the Swarm block already handles cleanup
-      let cleanScript = standardScript
-        .replace(/docker\s+(swarm|service|stack)\s+[^\n]*/g, '')       // remove swarm/service/stack lines
-        .replace(/docker(-compose|\s+compose)\s+(up|down)\s+[^\n]*/g, '') // remove compose up/down
-        .replace(/docker\s+image\s+prune\s+[^\n]*/g, '')               // remove image prune (Swarm block does this)
-        .replace(/docker\s+container\s+prune\s+[^\n]*/g, '')           // remove container prune
-        .replace(/\n\s*\n\s*\n/g, '\n\n');                             // collapse triple newlines
+      // The swarmBlock handles: swarm init, overlay network, docker build, deploy_service, nginx reconnect, cleanup.
+      // From standardScript we want to keep everything EXCEPT the parts swarmBlock replaces:
+      //   - docker build lines (swarmBlock has its own build section)
+      //   - docker service / docker stack / docker swarm lines
+      //   - docker-compose / docker compose up|down
+      //   - docker image prune / docker container prune
+      //   - nginx reconnect block
+      //   - the final "Deployment completed" echo (we append our own)
+      // Everything else (cd, git pull, npm install, export, custom setup) is kept as preamble.
+      const skipLine = (line) => {
+        const t = line.trim();
+        if (!t) return false; // keep blank lines
+        return (
+          /^docker\s+build\b/.test(t) ||
+          /^docker\s+(service|swarm|stack)\s/.test(t) ||
+          /^docker(-compose|\s+compose)\s+(up|down)/.test(t) ||
+          /^docker\s+(image|container)\s+prune/.test(t) ||
+          /^docker\s+(exec|restart)\s+.*nginx/.test(t) ||
+          /^docker\s+network\s+connect/.test(t) ||
+          /echo\s+"Deployment completed/.test(t) ||
+          /echo\s+'Deployment completed/.test(t) ||
+          // Skip swarm health-wait loops and SWARM_NET setup that the swarmBlock replaces
+          /^SWARM_NET=/.test(t) ||
+          /swarm.*overlay|overlay.*swarm/i.test(t)
+        );
+      };
 
-      // Insert swarm block before the final echo or at end
-      const echoIdx = cleanScript.lastIndexOf('echo "Deployment completed');
-      if (echoIdx !== -1) {
-        swarmScript = cleanScript.slice(0, echoIdx) + swarmBlock + '\n\n     ' + cleanScript.slice(echoIdx);
-      } else {
-        swarmScript = cleanScript.trimEnd() + '\n' + swarmBlock;
+      // Collect preamble: stop when we hit the first docker build or service line
+      // (everything after that point is replaced by swarmBlock)
+      const standardLines = standardScript.split('\n');
+      const preambleLines = [];
+      let hitSwarmSection = false;
+      for (const line of standardLines) {
+        const t = line.trim();
+        if (!hitSwarmSection && (
+          /^docker\s+build\b/.test(t) ||
+          /^docker\s+(service|swarm|stack)\s/.test(t) ||
+          /^docker(-compose|\s+compose)\s+(up|down)/.test(t) ||
+          /^SWARM_NET=/.test(t)
+        )) {
+          hitSwarmSection = true;
+        }
+        if (!hitSwarmSection && !skipLine(line)) {
+          preambleLines.push(line);
+        }
       }
+
+      const preamble = preambleLines.join('\n').trimEnd();
+      swarmScript = (preamble ? preamble + '\n\n' : '') + swarmBlock + '\n\necho "Deployment completed successfully."';
     }
 
     // Default deployCommand is swarmScript if user was already in swarm mode, else standardScript
