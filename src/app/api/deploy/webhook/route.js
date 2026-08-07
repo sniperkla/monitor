@@ -643,7 +643,7 @@ export async function runDeployment(config, runMeta = {}) {
               gitInfo: runMeta.gitInfo || null,
               triggerSource: runMeta.triggerSource || null,
               duration,
-              logText: status !== 'running' ? cleanLog : undefined
+              logText: status !== 'running' ? finalLog : undefined
             });
           } catch (err) {
             console.error('[Telegram] error:', err.message);
@@ -848,11 +848,13 @@ export async function runDeployment(config, runMeta = {}) {
 
     childProcess.stdout.on('data', (data) => {
       logOutput += data.toString();
+      if (logOutput.length > 200000) logOutput = logOutput.slice(0, 6000) + '\n\n[... log trimmed — middle omitted to save memory ...]\n\n' + logOutput.slice(-190000);
       throttledUpdateStatus('running', logOutput).catch(() => {}); // Stream logs
     });
 
     childProcess.stderr.on('data', (data) => {
       logOutput += data.toString();
+      if (logOutput.length > 200000) logOutput = logOutput.slice(0, 6000) + '\n\n[... log trimmed — middle omitted to save memory ...]\n\n' + logOutput.slice(-190000);
       throttledUpdateStatus('running', logOutput).catch(() => {}); // Stream logs
     });
 
@@ -1273,13 +1275,7 @@ export async function runDeployment(config, runMeta = {}) {
                     logOutput += rawLine + '\n';
                   }
 
-                  if (logOutput.length > 200000) logOutput = logOutput.slice(-200000);
-                  throttledUpdateStatus('running', logOutput).catch(() => {});
-                });
-
-                stream.stderr.on('data', (data) => {
-                  logOutput += data.toString();
-                  if (logOutput.length > 200000) logOutput = logOutput.slice(-200000);
+                  if (logOutput.length > 200000) logOutput = logOutput.slice(0, 6000) + '\n\n[... log trimmed — middle omitted to save memory ...]\n\n' + logOutput.slice(-190000);
                   throttledUpdateStatus('running', logOutput).catch(() => {});
                 });
 
