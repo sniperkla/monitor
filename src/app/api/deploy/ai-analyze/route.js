@@ -539,7 +539,7 @@ fi`;
       swarmBlock = `
 # set -e intentionally omitted — docker service update exits non-zero during rollback by design
 
-# ── Swarm init ──────────────────────────────────────────────────────────────
+# ── Swarm init (best-effort) ─────────────────────────────────────────────────
 docker swarm init 2>/dev/null || true
 docker swarm update --task-history-limit 3 2>/dev/null || true
 
@@ -563,6 +563,15 @@ fi
 # ── Build images ─────────────────────────────────────────────────────────────
 ${buildSection}
 
+# ── Detect swarm mode ────────────────────────────────────────────────────────
+_IS_SWARM=0
+if docker node ls >/dev/null 2>&1; then
+  _IS_SWARM=1
+  echo "[deploy] Swarm mode active."
+else
+  echo "[deploy] No swarm manager — using standalone container mode."
+fi
+
 # ── deploy_service <name> <image> <host_port:container_port> ─────────────────
 deploy_service() {
   local NAME="$1"
@@ -572,81 +581,102 @@ deploy_service() {
   echo ""
   echo "===== Deploy $NAME ====="
 
-  if docker service inspect "$NAME" >/dev/null 2>&1; then
-    echo "[swarm] Updating $NAME..."
-    docker service update \\
-      --image "$IMAGE" \\
-      --force \\
-      --update-order start-first \\
-      --update-delay 5s \\
-      --update-monitor 15s \\
-      --update-failure-action rollback \\
-      --rollback-order start-first \\
-      --rollback-monitor 15s \\
-      --stop-grace-period 30s \\
-      "$NAME" || echo "[swarm] WARNING: $NAME update exited non-zero — checking task state..."
-    docker service update --network-add "$SWARM_NET" "$NAME" 2>/dev/null || true
-  else
-    if docker inspect "$NAME" >/dev/null 2>&1; then
-      echo "[swarm] Migrating $NAME: standalone container → Swarm service..."
-      docker stop "$NAME" 2>/dev/null || true
-      _HAD_CONTAINER=1
+  if [ "$_IS_SWARM" = "1" ]; then
+    # ── SWARM MODE ──
+    if docker service inspect "$NAME" >/dev/null 2>&1; then
+      echo "[swarm] Updating $NAME..."
+      docker service update \\
+        --image "$IMAGE" \\
+        --force \\
+        --update-order start-first \\
+        --update-delay 5s \\
+        --update-monitor 15s \\
+        --update-failure-action rollback \\
+        --rollback-order start-first \\
+        --rollback-monitor 15s \\
+        --stop-grace-period 30s \\
+        "$NAME" || echo "[swarm] WARNING: $NAME update exited non-zero — checking task state..."
+      docker service update --network-add "$SWARM_NET" "$NAME" 2>/dev/null || true
     else
-      echo "[swarm] Creating fresh Swarm service $NAME..."
-      _HAD_CONTAINER=0
+      if docker inspect "$NAME" >/dev/null 2>&1; then
+        echo "[swarm] Migrating $NAME: standalone container → Swarm service..."
+        docker stop "$NAME" 2>/dev/null || true
+        _HAD_CONTAINER=1
+      else
+        echo "[swarm] Creating fresh Swarm service $NAME..."
+        _HAD_CONTAINER=0
+      fi
+      PUBLISH_FLAG=""
+      [ -n "$PORT" ] && PUBLISH_FLAG="--publish $PORT"
+      if docker service create \\
+        --name "$NAME" \\
+        --network "$SWARM_NET" \\
+        $PUBLISH_FLAG \\
+        --replicas 2 \\
+        --detach \\
+        --no-resolve-image \\
+        --update-order start-first \\
+        --update-failure-action rollback \\
+        --rollback-order start-first \\
+        --stop-grace-period 30s \\
+        "$IMAGE"; then
+        [ "$_HAD_CONTAINER" = "1" ] && docker rm "$NAME" 2>/dev/null || true
+      else
+        echo "[swarm] ERROR: Failed to create $NAME."
+        [ "$_HAD_CONTAINER" = "1" ] && docker start "$NAME" 2>/dev/null || true
+        return 1
+      fi
     fi
-    PUBLISH_FLAG=""
-    [ -n "$PORT" ] && PUBLISH_FLAG="--publish $PORT"
-    if docker service create \\
-      --name "$NAME" \\
-      --network "$SWARM_NET" \\
-      $PUBLISH_FLAG \\
-      --replicas 2 \\
-      --detach \\
-      --no-resolve-image \\
-      --update-order start-first \\
-      --update-failure-action rollback \\
-      --rollback-order start-first \\
-      --stop-grace-period 30s \\
-      "$IMAGE"; then
-      [ "$_HAD_CONTAINER" = "1" ] && docker rm "$NAME" 2>/dev/null || true
+
+    echo "[swarm] Waiting for $NAME to be healthy..."
+    for _i in $(seq 1 30); do
+      _RUNNING=$(docker service ps "$NAME" --filter "desired-state=running" --format '{{.CurrentState}}' 2>/dev/null | grep -c "Running" || echo "0")
+      _FAILED=$(docker service ps "$NAME" --filter "desired-state=shutdown" --format '{{.CurrentState}}' 2>/dev/null | grep -c "Failed" || echo "0")
+      if [ "$_RUNNING" -ge 1 ] 2>/dev/null; then
+        echo "[swarm] $NAME is running ($_RUNNING replica(s) up)."
+        return 0
+      fi
+      if [ "$_FAILED" -ge 3 ] 2>/dev/null; then
+        echo "[swarm] ERROR: $NAME has $_FAILED failed tasks — container likely crashing."
+        docker service ps "$NAME" --no-trunc 2>/dev/null | tail -5
+        return 1
+      fi
+      echo "[swarm] Waiting for $NAME... ($_i/30)"
+      sleep 3
+    done
+    echo "[swarm] WARNING: $NAME replicas not confirmed after 90s — service may still be starting."
+    docker service ps "$NAME" --no-trunc 2>/dev/null | tail -10
+    return 0
+
+  else
+    # ── STANDALONE MODE ──
+    echo "[docker] Deploying $NAME as standalone container..."
+    if docker inspect "$NAME" >/dev/null 2>&1; then
+      echo "[docker] Stopping and removing existing container $NAME..."
+      docker stop "$NAME" 2>/dev/null || true
+      docker rm "$NAME" 2>/dev/null || true
+    fi
+    PORT_FLAG=""
+    [ -n "$PORT" ] && PORT_FLAG="-p $PORT"
+    if docker run -d --name "$NAME" --restart unless-stopped $PORT_FLAG "$IMAGE"; then
+      echo "[docker] $NAME started successfully."
+      return 0
     else
-      echo "[swarm] ERROR: Failed to create $NAME."
-      [ "$_HAD_CONTAINER" = "1" ] && docker start "$NAME" 2>/dev/null || true
+      echo "[docker] ERROR: Failed to start $NAME."
       return 1
     fi
   fi
-
-  echo "[swarm] Waiting for $NAME to be healthy..."
-  for _i in $(seq 1 30); do
-    _RUNNING=$(docker service ps "$NAME" --filter "desired-state=running" --format '{{.CurrentState}}' 2>/dev/null | grep -c "Running" || echo "0")
-    _FAILED=$(docker service ps "$NAME" --filter "desired-state=shutdown" --format '{{.CurrentState}}' 2>/dev/null | grep -c "Failed" || echo "0")
-    if [ "$_RUNNING" -ge 1 ] 2>/dev/null; then
-      echo "[swarm] $NAME is running ($_RUNNING replica(s) up)."
-      return 0
-    fi
-    if [ "$_FAILED" -ge 3 ] 2>/dev/null; then
-      echo "[swarm] ERROR: $NAME has $_FAILED failed tasks — container likely crashing."
-      docker service ps "$NAME" --no-trunc 2>/dev/null | tail -5
-      return 1
-    fi
-    echo "[swarm] Waiting for $NAME... ($_i/30)"
-    sleep 3
-  done
-
-  echo "[swarm] WARNING: $NAME replicas not confirmed after 90s — service may still be starting."
-  echo "[swarm] Current task state:"
-  docker service ps "$NAME" --no-trunc 2>/dev/null | tail -10
-  return 0
 }
 
 # ── Deploy services ──────────────────────────────────────────────────────────
 ${svcSection}
 
 # ── Reconnect Nginx ───────────────────────────────────────────────────────────
-for _net in $(docker network ls --filter driver=overlay --format "{{.Name}}"); do
-  docker network connect "$_net" global-nginx 2>/dev/null || docker network connect "$_net" nginx 2>/dev/null || true
-done
+if [ "$_IS_SWARM" = "1" ]; then
+  for _net in $(docker network ls --filter driver=overlay --format "{{.Name}}"); do
+    docker network connect "$_net" global-nginx 2>/dev/null || docker network connect "$_net" nginx 2>/dev/null || true
+  done
+fi
 docker exec global-nginx nginx -s reload 2>/dev/null || docker restart global-nginx 2>/dev/null || true
 
 # ── Cleanup ───────────────────────────────────────────────────────────────────

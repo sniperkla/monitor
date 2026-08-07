@@ -8,7 +8,7 @@ import {
   CheckCircle, AlertCircle, Calendar, ShieldAlert, ArrowRight,
   FolderPlus, History, Key, Settings, Loader, CloudLightning, FileJson, ShieldCheck,
   Copy, Server, Wifi, WifiOff, Terminal, ChevronDown, Check, Clock,
-  XCircle, TrendingUp, X, Zap, Shield, BarChart3, Folder, ExternalLink
+  XCircle, TrendingUp, X, Zap, Shield, BarChart3, Folder, ExternalLink, Search
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
@@ -380,6 +380,7 @@ export default function MongoBackupApp() {
   const [clientId, setClientId] = useState('');
   const [clientSecret, setClientSecret] = useState('');
   const [driveFolders, setDriveFolders] = useState([]);
+  const [driveAllFolders, setDriveAllFolders] = useState([]); // flat list with paths for autocomplete
   const [newFolderName, setNewFolderName] = useState('');
   const [driveLoading, setDriveLoading] = useState(false);
   const [showCredGuide, setShowCredGuide] = useState(true);
@@ -818,7 +819,6 @@ export default function MongoBackupApp() {
         setDriveEmail(data.email || '');
         setDriveName(data.name || '');
         setClientId(data.clientId || '');
-        // Don't fetch the actual secret — just show placeholder if one is saved
         if (data.hasClientSecret) setClientSecret('••••••••••••••••••••');
         setDriveFolders(data.folders || []);
         if (data.folders.length > 0) {
@@ -826,11 +826,140 @@ export default function MongoBackupApp() {
           setRestoreFolderId(data.folders[0].id);
           setJobFolderName(data.folders[0].name);
           setRestoreFolderName(data.folders[0].name);
+          // Seed autocomplete pool with root-level folders (path = name)
+          setDriveAllFolders(data.folders.map(f => ({ ...f, path: f.name })));
         }
+        // folder tree loaded on-demand via drivePicker
       }
     } catch (err) {
       console.error('Failed to fetch Google Drive status:', err);
     }
+  };
+
+  // Live folder drill-down picker state — shared by job and restore
+  const [drivePicker, setDrivePicker] = useState({
+    open: false,
+    mode: 'job', // 'job' | 'restore'
+    path: [{ id: null, name: 'My Drive' }], // breadcrumb
+    folders: [],
+    loading: false,
+    search: '',
+  });
+
+  const openDrivePicker = async (mode) => {
+    setDrivePicker({ open: true, mode, path: [{ id: null, name: 'My Drive' }], folders: [], loading: true, search: '' });
+    try {
+      const res = await apiFetch('/api/mongo-sync/gdrive/folders');
+      const data = await res.json();
+      const folders = data.folders || [];
+      setDrivePicker(p => ({ ...p, folders, loading: false }));
+      // Seed autocomplete pool with root folders (path = name for root level)
+      if (folders.length > 0) {
+        setDriveAllFolders(prev => {
+          const existingIds = new Set(prev.map(f => f.id));
+          const newEntries = folders
+            .filter(f => !existingIds.has(f.id))
+            .map(f => ({ ...f, path: f.name }));
+          return newEntries.length > 0 ? [...prev, ...newEntries] : prev;
+        });
+      }
+    } catch {
+      setDrivePicker(p => ({ ...p, loading: false }));
+    }
+  };
+
+  const drivePickerNavigate = async (folder) => {
+    setDrivePicker(p => ({
+      ...p,
+      path: [...p.path, folder],
+      folders: [],
+      loading: true,
+      search: '',
+    }));
+    try {
+      const res = await apiFetch(`/api/mongo-sync/gdrive/folders?parentId=${folder.id}`);
+      const data = await res.json();
+      const subFolders = data.folders || [];
+      setDrivePicker(p => {
+        // Build full path for the navigated folder using the updated breadcrumb
+        const newPath = [...p.path]; // p.path already has folder appended above
+        // Add the navigated folder itself to autocomplete pool with its path
+        const folderPathStr = newPath
+          .filter(seg => seg.id !== null)
+          .map(seg => seg.name)
+          .join(' / ');
+        // Add subfolders to autocomplete pool with full paths
+        setDriveAllFolders(prev => {
+          const existingIds = new Set(prev.map(f => f.id));
+          const entries = [];
+          // Add navigated folder itself if not already present
+          if (!existingIds.has(folder.id)) {
+            entries.push({ ...folder, path: folderPathStr || folder.name });
+          }
+          // Add subfolders
+          subFolders.forEach(sf => {
+            if (!existingIds.has(sf.id)) {
+              const sfPath = folderPathStr ? `${folderPathStr} / ${sf.name}` : sf.name;
+              entries.push({ ...sf, path: sfPath });
+            }
+          });
+          return entries.length > 0 ? [...prev, ...entries] : prev;
+        });
+        return { ...p, folders: subFolders, loading: false };
+      });
+    } catch {
+      setDrivePicker(p => ({ ...p, loading: false }));
+    }
+  };
+
+  const drivePickerBack = async (idx) => {
+    const newPath = drivePicker.path.slice(0, idx + 1);
+    const parent = newPath[newPath.length - 1];
+    setDrivePicker(p => ({ ...p, path: newPath, folders: [], loading: true, search: '' }));
+    try {
+      const url = parent.id ? `/api/mongo-sync/gdrive/folders?parentId=${parent.id}` : '/api/mongo-sync/gdrive/folders';
+      const res = await apiFetch(url);
+      const data = await res.json();
+      const subFolders = data.folders || [];
+      // Build path prefix for subfolders at this level
+      const pathPrefix = newPath
+        .filter(seg => seg.id !== null)
+        .map(seg => seg.name)
+        .join(' / ');
+      setDriveAllFolders(prev => {
+        const existingIds = new Set(prev.map(f => f.id));
+        const entries = subFolders
+          .filter(sf => !existingIds.has(sf.id))
+          .map(sf => ({ ...sf, path: pathPrefix ? `${pathPrefix} / ${sf.name}` : sf.name }));
+        return entries.length > 0 ? [...prev, ...entries] : prev;
+      });
+      setDrivePicker(p => ({ ...p, folders: subFolders, loading: false }));
+    } catch {
+      setDrivePicker(p => ({ ...p, loading: false }));
+    }
+  };
+
+  const drivePickerSelect = () => {
+    const current = drivePicker.path[drivePicker.path.length - 1];
+    if (!current.id) return; // can't select root
+    // Build the full path string from breadcrumbs (skip "My Drive" root segment)
+    const fullPath = drivePicker.path
+      .filter(seg => seg.id !== null)
+      .map(seg => seg.name)
+      .join(' / ');
+    // Ensure this folder (with full path) is in the autocomplete pool
+    setDriveAllFolders(prev => {
+      if (prev.find(f => f.id === current.id)) return prev;
+      return [...prev, { ...current, path: fullPath || current.name }];
+    });
+    if (drivePicker.mode === 'job') {
+      setJobFolderId(current.id);
+      setJobFolderName(fullPath || current.name);
+    } else {
+      setRestoreFolderId(current.id);
+      setRestoreFolderName(fullPath || current.name);
+    }
+    setDrivePicker(p => ({ ...p, open: false }));
   };
 
   const fetchJobs = async () => {
@@ -1509,18 +1638,26 @@ export default function MongoBackupApp() {
   const handleJobFolderInputChange = (value) => {
     setJobFolderName(value);
     setJobFolderInputActive(true);
-    const filtered = driveFolders.filter(f => f.name.toLowerCase().includes(value.toLowerCase()));
-    setFilteredDriveFolderOptions(filtered.length > 0 ? filtered : driveFolders);
+    const pool = driveAllFolders.length > 0 ? driveAllFolders : driveFolders;
+    const q = value.toLowerCase().replace(/\s*\/\s*/g, '/');
+    const filtered = pool.filter(f => {
+      const name = f.name.toLowerCase();
+      const path = (f.path || '').toLowerCase().replace(/\s*\/\s*/g, '/');
+      return name.includes(q) || path.includes(q);
+    });
+    setFilteredDriveFolderOptions(filtered.length > 0 ? filtered : pool);
     setJobFolderSelectedIndex(filtered.length > 0 ? 0 : -1);
-    const exact = driveFolders.find(f => f.name.toLowerCase() === value.toLowerCase());
-    if (exact) {
-      setJobFolderId(exact.id);
-    }
+    const qNorm = value.toLowerCase().replace(/\s*\/\s*/g, '/');
+    const exact = pool.find(f =>
+      (f.path || f.name).toLowerCase().replace(/\s*\/\s*/g, '/') === qNorm ||
+      f.name.toLowerCase() === value.toLowerCase()
+    );
+    if (exact) setJobFolderId(exact.id);
   };
 
   const handleSelectJobFolder = (folder) => {
     setJobFolderId(folder.id);
-    setJobFolderName(folder.name);
+    setJobFolderName(folder.path || folder.name);
     setJobFolderInputActive(false);
     setJobFolderSelectedIndex(-1);
     setFilteredDriveFolderOptions([]);
@@ -1588,18 +1725,26 @@ export default function MongoBackupApp() {
   const handleRestoreFolderInputChange = (value) => {
     setRestoreFolderName(value);
     setRestoreFolderInputActive(true);
-    const filtered = driveFolders.filter(f => f.name.toLowerCase().includes(value.toLowerCase()));
-    setFilteredRestoreFolderOptions(filtered.length > 0 ? filtered : driveFolders);
+    const pool = driveAllFolders.length > 0 ? driveAllFolders : driveFolders;
+    const q = value.toLowerCase().replace(/\s*\/\s*/g, '/');
+    const filtered = pool.filter(f => {
+      const name = f.name.toLowerCase();
+      const path = (f.path || '').toLowerCase().replace(/\s*\/\s*/g, '/');
+      return name.includes(q) || path.includes(q);
+    });
+    setFilteredRestoreFolderOptions(filtered.length > 0 ? filtered : pool);
     setRestoreFolderSelectedIndex(filtered.length > 0 ? 0 : -1);
-    const exact = driveFolders.find(f => f.name.toLowerCase() === value.toLowerCase());
-    if (exact) {
-      setRestoreFolderId(exact.id);
-    }
+    const qNorm = value.toLowerCase().replace(/\s*\/\s*/g, '/');
+    const exact = pool.find(f =>
+      (f.path || f.name).toLowerCase().replace(/\s*\/\s*/g, '/') === qNorm ||
+      f.name.toLowerCase() === value.toLowerCase()
+    );
+    if (exact) setRestoreFolderId(exact.id);
   };
 
   const handleSelectRestoreFolder = (folder) => {
     setRestoreFolderId(folder.id);
-    setRestoreFolderName(folder.name);
+    setRestoreFolderName(folder.path || folder.name);
     setRestoreFolderInputActive(false);
     setRestoreFolderSelectedIndex(-1);
     setFilteredRestoreFolderOptions([]);
@@ -2996,10 +3141,15 @@ export default function MongoBackupApp() {
                               onKeyDown={handleJobFolderKeyDown}
                               onFocus={() => {
                                 setJobFolderInputActive(true);
-                                const filtered = driveFolders.filter(f => f.name.toLowerCase().includes(jobFolderName.toLowerCase()));
-                                setFilteredDriveFolderOptions(filtered.length > 0 ? filtered : driveFolders);
-                                const firstIdx = filtered.length > 0 ? 0 : -1;
-                                setJobFolderSelectedIndex(firstIdx);
+                                const pool = driveAllFolders.length > 0 ? driveAllFolders : driveFolders;
+                                const q = jobFolderName.toLowerCase().replace(/\s*\/\s*/g, '/');
+                                const filtered = pool.filter(f => {
+                                  const name = f.name.toLowerCase();
+                                  const path = (f.path || '').toLowerCase().replace(/\s*\/\s*/g, '/');
+                                  return name.includes(q) || path.includes(q);
+                                });
+                                setFilteredDriveFolderOptions(filtered.length > 0 ? filtered : pool);
+                                setJobFolderSelectedIndex(filtered.length > 0 ? 0 : -1);
                               }}
                               onBlur={handleJobFolderInputBlur}
                               placeholder="Type to search or browse folders..."
@@ -3030,7 +3180,12 @@ export default function MongoBackupApp() {
                                       }`}
                                     >
                                       <Folder size={13} className="text-amber-400 shrink-0" />
-                                      <span className="truncate">{folder.name}</span>
+                                      <div className="flex-1 min-w-0">
+                                        <div className="truncate font-semibold">{folder.name}</div>
+                                        {folder.path && folder.path !== folder.name && (
+                                          <div className="text-[9px] text-[var(--text-muted)] truncate">{folder.path}</div>
+                                        )}
+                                      </div>
                                     </div>
                                   );
                                 })}
@@ -3039,7 +3194,7 @@ export default function MongoBackupApp() {
                           </div>
                           <button
                             type="button"
-                            onClick={() => openDriveBrowser('job')}
+                            onClick={() => openDrivePicker('job')}
                             disabled={!driveConnected}
                             className="px-4 py-2 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-xs font-bold text-emerald-400 hover:bg-emerald-500/15 transition-all flex items-center gap-2 shrink-0"
                           >
@@ -3276,67 +3431,20 @@ export default function MongoBackupApp() {
                     <div className="flex flex-col md:flex-row gap-4 mb-2">
                       <div className="flex-1">
                         <label className="text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)] block mb-1">Select Backup Folder</label>
-                        <div className="flex gap-2 relative">
-                          <div className="flex-1 relative">
-                            <input
-                              type="text"
-                              value={restoreFolderName}
-                              onChange={(e) => handleRestoreFolderInputChange(e.target.value)}
-                              onKeyDown={handleRestoreFolderKeyDown}
-                              onFocus={() => {
-                                if (driveFolders.length > 0) {
-                                  setRestoreFolderInputActive(true);
-                                  const filtered = driveFolders.filter(f => f.name.toLowerCase().includes(restoreFolderName.toLowerCase()));
-                                  setFilteredRestoreFolderOptions(filtered.length > 0 ? filtered : driveFolders);
-                                  const firstIdx = filtered.length > 0 ? 0 : -1;
-                                  setRestoreFolderSelectedIndex(firstIdx);
-                                }
-                              }}
-                              onBlur={handleRestoreFolderInputBlur}
-                              placeholder="Type to search or browse..."
-                              className="w-full px-3 py-2 text-xs rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] font-mono text-[var(--text-primary)] focus:border-emerald-500 focus:outline-none"
-                              disabled={!driveConnected}
-                            />
-                            {restoreFolderInputActive && filteredRestoreFolderOptions.length > 0 && (
-                              <div ref={restoreFolderDropdownRef} style={{ zIndex: 10000 }} className="absolute left-0 right-0 top-full mt-1.5 bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-xl shadow-2xl overflow-hidden max-h-56 overflow-y-auto divide-y divide-[var(--border-color)]">
-                                <div className="px-3 py-1 bg-[var(--bg-tertiary)] flex items-center justify-between text-[10px] text-[var(--text-muted)] font-mono">
-                                  <span>Folders ({filteredRestoreFolderOptions.length})</span>
-                                  <span className="text-emerald-400 font-semibold">Press <kbd className="bg-black/40 px-1 py-0.5 rounded text-white border border-[var(--border-color)]">Tab ⇥</kbd> or <kbd className="bg-black/40 px-1 py-0.5 rounded text-white border border-[var(--border-color)]">↵</kbd></span>
-                                </div>
-                                {filteredRestoreFolderOptions.map((folder, idx) => {
-                                  const isSelected = idx === restoreFolderSelectedIndex;
-                                  return (
-                                    <div
-                                      key={folder.id}
-                                      data-index={idx}
-                                      onClick={() => handleSelectRestoreFolder(folder)}
-                                      onMouseEnter={() => {
-                                        setRestoreFolderSelectedIndex(idx);
-                                      }}
-                                      className={`px-3 py-2 flex items-center gap-2 font-mono text-xs cursor-pointer transition-colors ${
-                                        isSelected
-                                          ? 'bg-emerald-500/15 text-emerald-400 font-bold'
-                                          : 'hover:bg-[var(--bg-tertiary)] text-[var(--text-primary)]'
-                                      }`}
-                                    >
-                                      <Folder size={13} className="text-amber-400 shrink-0" />
-                                      <div className="flex-1 min-w-0">
-                                        <div className="font-semibold truncate">{folder.name}</div>
-                                        <div className="text-[9px] text-[var(--text-muted)] truncate">{folder.id}</div>
-                                      </div>
-                                    </div>
-                                  );
-                                })}
-                              </div>
-                            )}
+                        <div className="flex gap-2">
+                          <div className="flex-1 flex items-center gap-2 px-3 py-2 rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] min-w-0">
+                            <Folder size={13} className="text-amber-400 shrink-0" />
+                            <span className={`text-xs font-mono truncate ${restoreFolderName ? 'text-[var(--text-primary)]' : 'text-[var(--text-muted)] italic'}`}>
+                              {restoreFolderName || 'No folder selected — click Browse'}
+                            </span>
                           </div>
                           <button
                             type="button"
-                            onClick={() => openDriveBrowser('restore')}
+                            onClick={() => openDrivePicker('restore')}
                             disabled={!driveConnected}
-                            className="px-3 py-1.5 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-[11px] font-bold text-emerald-400 hover:bg-emerald-500/15 transition-all"
+                            className="px-3 py-1.5 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-[11px] font-bold text-emerald-400 hover:bg-emerald-500/15 transition-all flex items-center gap-1.5 shrink-0"
                           >
-                            Browse
+                            <Search size={12} /> Browse
                           </button>
                         </div>
                       </div>
@@ -4171,55 +4279,117 @@ export default function MongoBackupApp() {
             )}
           </AnimatePresence>
 
-          {driveBrowseVisible && (
+          {drivePicker.open && (
             <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-              <div className="w-full max-w-3xl rounded-3xl border border-[var(--border-color)] bg-[var(--bg-card)] shadow-2xl overflow-hidden">
-                <div className="flex items-center justify-between border-b border-[var(--border-color)] px-5 py-4">
+              <div className="w-full max-w-lg rounded-3xl border border-[var(--border-color)] bg-[var(--bg-card)] shadow-2xl overflow-hidden flex flex-col" style={{ maxHeight: '80vh' }}>
+                {/* Header */}
+                <div className="flex items-center justify-between border-b border-[var(--border-color)] px-5 py-4 shrink-0">
                   <div>
-                    <div className="text-sm font-bold">Browse Google Drive</div>
-                    <div className="text-[11px] text-[var(--text-muted)]">Select a folder for {driveBrowseMode === 'job' ? 'backup jobs' : 'restore files'}.</div>
+                    <div className="text-sm font-bold">Select Google Drive Folder</div>
+                    <div className="text-[11px] text-[var(--text-muted)]">Navigate into subfolders, then click Select.</div>
                   </div>
-                  <button
-                    onClick={() => setDriveBrowseVisible(false)}
-                    className="rounded-xl border border-[var(--border-color)] bg-[var(--bg-tertiary)] px-3 py-2 text-[11px] font-bold hover:bg-[var(--bg-card-hover)]"
-                  >
-                    Close
-                  </button>
+                  <button onClick={() => setDrivePicker(p => ({ ...p, open: false }))} className="rounded-xl border border-[var(--border-color)] bg-[var(--bg-tertiary)] px-3 py-2 text-[11px] font-bold hover:bg-[var(--bg-card-hover)]">Close</button>
                 </div>
-                <div className="space-y-4 p-5">
-                  <div className="flex flex-wrap gap-2 text-[11px] text-[var(--text-muted)]">
-                    {driveBrowsePath.map((folder, idx) => (
+
+                {/* Breadcrumb */}
+                <div className="flex items-center gap-1 px-4 py-2.5 border-b border-[var(--border-color)] bg-[var(--bg-secondary)]/40 flex-wrap shrink-0">
+                  {drivePicker.path.map((crumb, idx) => (
+                    <span key={idx} className="flex items-center gap-1">
+                      {idx > 0 && <span className="text-[var(--text-muted)] text-[11px]">/</span>}
                       <button
-                        key={folder.id}
-                        type="button"
-                        onClick={() => navigateDriveFolder(folder)}
-                        className="rounded-full border border-[var(--border-color)] bg-[var(--bg-tertiary)] px-3 py-1 text-[11px] font-semibold hover:bg-[var(--bg-card-hover)]"
+                        onClick={() => drivePickerBack(idx)}
+                        className={`px-2 py-0.5 rounded-lg text-[11px] font-semibold transition-all ${idx === drivePicker.path.length - 1 ? 'bg-indigo-500/15 text-indigo-400' : 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'}`}
                       >
-                        {folder.name}
+                        {crumb.name}
                       </button>
-                    ))}
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <span className="text-[10px] uppercase tracking-[0.24em] text-[var(--text-muted)]">Folders</span>
-                    {driveBrowseLoading && <Loader size={12} className="animate-spin text-emerald-400" />}
-                  </div>
-                  <div className="grid gap-3 max-h-[360px] overflow-y-auto">
-                    {driveBrowseFolders.length > 0 ? driveBrowseFolders.map(folder => (
+                    </span>
+                  ))}
+                  {drivePicker.loading && <Loader size={11} className="animate-spin text-emerald-400 ml-1" />}
+                </div>
+
+                {/* Search bar */}
+                <div className="px-3 py-2 border-b border-[var(--border-color)] shrink-0">
+                  <div className="relative">
+                    <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-[var(--text-muted)]" />
+                    <input
+                      type="text"
+                      value={drivePicker.search}
+                      onChange={e => setDrivePicker(p => ({ ...p, search: e.target.value }))}
+                      placeholder="Search folders in current level..."
+                      className="w-full pl-7 pr-3 py-1.5 text-xs rounded-lg bg-[var(--bg-tertiary)] border border-[var(--border-color)] text-[var(--text-primary)] focus:border-indigo-500 focus:outline-none font-mono"
+                    />
+                    {drivePicker.search && (
                       <button
-                        key={folder.id}
-                        type="button"
-                        onClick={() => handleDriveFolderSelect(folder)}
-                        className="w-full rounded-2xl border border-[var(--border-color)] bg-[var(--bg-tertiary)] p-4 text-left transition hover:border-emerald-500/30 hover:bg-[var(--bg-card-hover)]"
+                        onClick={() => setDrivePicker(p => ({ ...p, search: '' }))}
+                        className="absolute right-2 top-1/2 -translate-y-1/2 text-[var(--text-muted)] hover:text-[var(--text-primary)]"
                       >
-                        <div className="font-semibold text-sm text-[var(--text-primary)]">{folder.name}</div>
-                        <div className="text-[10px] text-[var(--text-muted)] font-mono truncate">{folder.id}</div>
+                        <X size={12} />
                       </button>
-                    )) : (
-                      <div className="rounded-2xl border border-dashed border-[var(--border-color)] bg-[var(--bg-tertiary)] p-6 text-center text-[11px] text-[var(--text-muted)]">
-                        {driveBrowseLoading ? 'Loading folders...' : 'No folders found under this path.'}
-                      </div>
                     )}
                   </div>
+                </div>
+
+                {/* Folder list */}
+                <div className="flex-1 overflow-y-auto p-3 space-y-1">
+                  {drivePicker.loading && drivePicker.folders.length === 0 ? (
+                    <div className="flex items-center justify-center py-10 text-[var(--text-muted)] text-xs gap-2">
+                      <Loader size={14} className="animate-spin" /> Loading...
+                    </div>
+                  ) : (() => {
+                    const q = drivePicker.search.toLowerCase().trim();
+                    const visible = q
+                      ? drivePicker.folders.filter(f => f.name.toLowerCase().includes(q))
+                      : drivePicker.folders;
+                    if (visible.length === 0) {
+                      return (
+                        <div className="flex flex-col items-center justify-center py-10 text-[var(--text-muted)] text-xs gap-2">
+                          {q ? (
+                            <span>No folders match <b className="text-[var(--text-primary)]">"{drivePicker.search}"</b></span>
+                          ) : (
+                            <>
+                              <span>No subfolders here.</span>
+                              <span className="text-[10px]">Click <b>Select This Folder</b> below to use the current folder.</span>
+                            </>
+                          )}
+                        </div>
+                      );
+                    }
+                    return visible.map(folder => (
+                      <button
+                        key={folder.id}
+                        onClick={() => drivePickerNavigate(folder)}
+                        className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl border border-[var(--border-color)] bg-[var(--bg-tertiary)] hover:border-indigo-500/40 hover:bg-indigo-500/5 transition-all text-left"
+                      >
+                        <span className="text-amber-400">📁</span>
+                        <div className="flex-1 min-w-0">
+                          <div className="text-sm font-semibold text-[var(--text-primary)] truncate">{folder.name}</div>
+                          {folder.modifiedTime && (
+                            <div className="text-[9px] text-[var(--text-muted)]">
+                              {new Date(folder.modifiedTime).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })}
+                            </div>
+                          )}
+                        </div>
+                        <span className="text-[10px] text-[var(--text-muted)] shrink-0">open →</span>
+                      </button>
+                    ));
+                  })()}
+                </div>
+
+                {/* Footer */}
+                <div className="flex items-center justify-between px-5 py-3.5 border-t border-[var(--border-color)] bg-[var(--bg-secondary)]/40 shrink-0">
+                  <div className="text-[11px] text-[var(--text-muted)] truncate max-w-[60%]">
+                    {drivePicker.path.length > 1
+                      ? <span>📁 <b className="text-[var(--text-primary)]">{drivePicker.path[drivePicker.path.length - 1].name}</b></span>
+                      : <span className="italic">No folder selected</span>
+                    }
+                  </div>
+                  <button
+                    onClick={drivePickerSelect}
+                    disabled={drivePicker.path.length <= 1}
+                    className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white text-xs font-bold transition-all"
+                  >
+                    Select This Folder
+                  </button>
                 </div>
               </div>
             </div>

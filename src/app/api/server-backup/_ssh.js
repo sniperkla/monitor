@@ -125,7 +125,7 @@ export function sftpReadStream(sshConfig, filePath) {
   });
 }
 
-export function sftpTransfer(sourceConfig, sourcePath, targetConfig, targetPath) {
+export function sftpTransfer(sourceConfig, sourcePath, targetConfig, targetPath, { onProgress, signal } = {}) {
   return new Promise((resolve, reject) => {
     let totalSize = 0;
     let transferred = 0;
@@ -133,8 +133,18 @@ export function sftpTransfer(sourceConfig, sourcePath, targetConfig, targetPath)
     const tgtConn = new Client();
     let srcReady = false;
     let tgtReady = false;
+    let aborted = false;
 
     const cleanup = () => { try { srcConn.end(); } catch {} try { tgtConn.end(); } catch {} };
+
+    // Support abort signal
+    if (signal) {
+      signal.addEventListener('abort', () => {
+        aborted = true;
+        cleanup();
+        reject(new Error('Transfer cancelled by user'));
+      });
+    }
 
     srcConn.on('ready', () => { srcReady = true; if (tgtReady) doTransfer(); });
     tgtConn.on('ready', () => { tgtReady = true; if (srcReady) doTransfer(); });
@@ -142,6 +152,7 @@ export function sftpTransfer(sourceConfig, sourcePath, targetConfig, targetPath)
     tgtConn.on('error', (e) => { cleanup(); reject(e); });
 
     const doTransfer = () => {
+      if (aborted) return;
       srcConn.sftp((srcErr, srcSftp) => {
         if (srcErr) { cleanup(); return reject(srcErr); }
         tgtConn.sftp((tgtErr, tgtSftp) => {
@@ -149,9 +160,13 @@ export function sftpTransfer(sourceConfig, sourcePath, targetConfig, targetPath)
           srcSftp.stat(sourcePath, (statErr, stats) => {
             if (statErr) { cleanup(); return reject(statErr); }
             totalSize = stats.size;
+            if (onProgress) onProgress({ transferred: 0, totalSize, percent: 0 });
             const readStream = srcSftp.createReadStream(sourcePath);
             const writeStream = tgtSftp.createWriteStream(targetPath, { mode: 0o644 });
-            readStream.on('data', (chunk) => { transferred += chunk.length; });
+            readStream.on('data', (chunk) => {
+              transferred += chunk.length;
+              if (onProgress) onProgress({ transferred, totalSize, percent: totalSize > 0 ? Math.round((transferred / totalSize) * 100) : 0 });
+            });
             readStream.pipe(writeStream);
             writeStream.on('close', () => { cleanup(); resolve({ transferred, totalSize }); });
             writeStream.on('error', (e) => { cleanup(); reject(e); });

@@ -127,12 +127,32 @@ export default function ServerBackupApp() {
   const [transferTargetPath, setTransferTargetPath] = useState('/tmp/');
   const [isTransferring, setIsTransferring] = useState(false);
   const [transferProgress, setTransferProgress] = useState('');
+  const [transferSourceEntry, setTransferSourceEntry] = useState(null);
+  const [transferId, setTransferId] = useState(null);
+  const [transferStats, setTransferStats] = useState(null); // { transferred, totalSize, percent, status }
+  const transferPollRef = useRef(null);
 
   const sshConnections = connections.filter(c => c.type !== 'database');
 
   useEffect(() => {
     if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
   }, [jobLogs]);
+
+  // Reset connection-specific state when connectionId changes
+  const prevConnectionIdRef = useRef(null);
+  useEffect(() => {
+    if (prevConnectionIdRef.current && prevConnectionIdRef.current !== connectionId) {
+      // Clear selected containers — they're from the old server
+      updateConfig('containers', []);
+      // Clear config paths — they're server-specific
+      updateConfig('paths', ['']);
+      // Clear backup output from previous session
+      setOutFilePath('');
+      setJobLogs('');
+      setJobStatus(null);
+    }
+    prevConnectionIdRef.current = connectionId;
+  }, [connectionId]);
 
   // Fetch Docker containers when connection changes and backup type is docker
   useEffect(() => {
@@ -159,11 +179,12 @@ export default function ServerBackupApp() {
   }, [connectionId, backupType]);
 
   // Fetch directory listing for folder browser
-  const browseFolder = async (path) => {
-    if (!connectionId) return;
+  const browseFolder = async (path, connIdOverride) => {
+    const connId = connIdOverride || connectionId;
+    if (!connId) return;
     setFolderBrowser(prev => ({ ...prev, loading: true, currentPath: path }));
     try {
-      const res = await apiFetch(`/api/server-backup/browse?connectionId=${connectionId}&path=${encodeURIComponent(path)}`);
+      const res = await apiFetch(`/api/server-backup/browse?connectionId=${connId}&path=${encodeURIComponent(path)}`);
       const data = await res.json();
       if (data.success) {
         setFolderBrowser(prev => ({ ...prev, entries: data.entries || [], loading: false }));
@@ -180,8 +201,15 @@ export default function ServerBackupApp() {
     const currentPath = config.paths[pathIndex] || '/';
     const dirPath = currentPath.endsWith('/') ? currentPath : currentPath.split('/').slice(0, -1).join('/') || '/';
     setFolderHistory([dirPath]);
-    setFolderBrowser({ isOpen: true, currentPath: dirPath, entries: [], loading: false, targetPathIndex: pathIndex });
+    setFolderBrowser({ isOpen: true, currentPath: dirPath, entries: [], loading: false, targetPathIndex: pathIndex, targetField: null });
     browseFolder(dirPath);
+  };
+
+  const openFolderBrowserForField = (field, currentValue, connIdOverride) => {
+    const dirPath = (currentValue || '/').endsWith('/') ? (currentValue || '/') : (currentValue || '/').split('/').slice(0, -1).join('/') || '/';
+    setFolderHistory([dirPath]);
+    setFolderBrowser({ isOpen: true, currentPath: dirPath, entries: [], loading: false, targetPathIndex: null, targetField: field });
+    browseFolder(dirPath, connIdOverride);
   };
 
   const navigateToFolder = (folderPath) => {
@@ -199,10 +227,15 @@ export default function ServerBackupApp() {
 
   const selectFolder = (folderPath) => {
     const idx = folderBrowser.targetPathIndex;
-    if (idx !== null) {
+    const field = folderBrowser.targetField;
+    if (idx !== null && idx !== undefined) {
       updatePath(idx, folderPath);
+    } else if (field === 'restorePath') {
+      setRestorePath(folderPath);
+    } else if (field === 'transferTargetPath') {
+      setTransferTargetPath(folderPath.endsWith('/') ? folderPath : folderPath + '/');
     }
-    setFolderBrowser({ isOpen: false, currentPath: '/', entries: [], loading: false, targetPathIndex: null });
+    setFolderBrowser({ isOpen: false, currentPath: '/', entries: [], loading: false, targetPathIndex: null, targetField: null });
   };
 
   // Compose file browser functions
@@ -434,38 +467,82 @@ export default function ServerBackupApp() {
   };
 
   const handleTransfer = async () => {
-    if (!connectionId || !outFilePath || !transferTargetId) return addNotification({ title: 'Error', message: 'Complete a backup and select target server', type: 'error' });
+    const sourceFile = outFilePath || transferSourceEntry?.filePath;
+    const sourceConnId = outFilePath ? connectionId : transferSourceEntry?.connectionId;
+    if (!sourceFile || !sourceConnId || !transferTargetId) return addNotification({ title: 'Error', message: 'Select a source backup and target server', type: 'error' });
 
     setIsTransferring(true);
-    setTransferProgress('Transferring...');
+    setTransferProgress('Connecting...');
+    setTransferStats({ transferred: 0, totalSize: 0, percent: 0, status: 'connecting' });
+    setTransferId(null);
+
     try {
-      const filename = outFilePath.split('/').pop();
+      const filename = sourceFile.split('/').pop();
       const targetPath = transferTargetPath.endsWith('/') ? `${transferTargetPath}${filename}` : `${transferTargetPath}/${filename}`;
 
       const res = await apiFetch('/api/server-backup/transfer', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          sourceConnectionId: connectionId,
-          sourcePath: outFilePath,
+          sourceConnectionId: sourceConnId,
+          sourcePath: sourceFile,
           targetConnectionId: transferTargetId,
           targetPath,
         }),
       });
       const data = await res.json();
+      if (!data.success) throw new Error(data.error || 'Failed to start transfer');
 
-      if (data.success) {
-        addNotification({ title: 'Transfer Complete', message: `Transferred ${formatSize(data.transferred)} to target server`, type: 'success' });
-        setTransferProgress(`Done: ${formatSize(data.transferred)}`);
-      } else {
-        addNotification({ title: 'Transfer Failed', message: data.error, type: 'error' });
-        setTransferProgress(`Error: ${data.error}`);
-      }
+      const tid = data.transferId;
+      setTransferId(tid);
+      setTransferProgress('Transferring...');
+
+      // Poll for progress
+      transferPollRef.current = setInterval(async () => {
+        try {
+          const pr = await apiFetch(`/api/server-backup/transfer?transferId=${tid}`);
+          const pd = await pr.json();
+          if (!pd.success) return;
+
+          setTransferStats({ transferred: pd.transferred, totalSize: pd.totalSize, percent: pd.percent, status: pd.status });
+
+          if (pd.status === 'completed') {
+            clearInterval(transferPollRef.current);
+            setIsTransferring(false);
+            setTransferProgress(`Done: ${formatSize(pd.transferred)}`);
+            addNotification({ title: 'Transfer Complete', message: `Transferred ${formatSize(pd.transferred)} to target server`, type: 'success' });
+          } else if (pd.status === 'failed') {
+            clearInterval(transferPollRef.current);
+            setIsTransferring(false);
+            setTransferProgress(`Error: ${pd.error}`);
+            addNotification({ title: 'Transfer Failed', message: pd.error, type: 'error' });
+          } else if (pd.status === 'cancelled') {
+            clearInterval(transferPollRef.current);
+            setIsTransferring(false);
+            setTransferProgress('Cancelled');
+          }
+        } catch (err) {
+          console.error('[transfer poll]', err);
+        }
+      }, 800);
+
     } catch (err) {
-      addNotification({ title: 'Error', message: err.message, type: 'error' });
+      setIsTransferring(false);
       setTransferProgress(`Error: ${err.message}`);
+      setTransferStats(null);
+      addNotification({ title: 'Error', message: err.message, type: 'error' });
     }
+  };
+
+  const handleCancelTransfer = async () => {
+    if (!transferId) return;
+    try {
+      await apiFetch(`/api/server-backup/transfer?transferId=${transferId}`, { method: 'DELETE' });
+    } catch {}
+    if (transferPollRef.current) clearInterval(transferPollRef.current);
     setIsTransferring(false);
+    setTransferProgress('Cancelled');
+    setTransferStats(prev => prev ? { ...prev, status: 'cancelled' } : null);
   };
 
   const handleCleanup = async () => {
@@ -799,7 +876,14 @@ export default function ServerBackupApp() {
                 ))}
               </div>
               {restoreType === 'files' && (
-                <InputField label="Restore Path" value={restorePath} onChange={setRestorePath} placeholder="/tmp/restore" />
+                <div className="flex gap-2">
+                  <div className="flex-1">
+                    <InputField label="Restore Path" value={restorePath} onChange={setRestorePath} placeholder="/tmp/restore" />
+                  </div>
+                  <button onClick={() => openFolderBrowserForField('restorePath', restorePath, restoreTargetId)} disabled={!restoreTargetId} className="mt-4 px-2.5 py-2 rounded-lg bg-[var(--bg-tertiary)] hover:bg-indigo-500/10 border border-[var(--border-color)] text-[var(--text-secondary)] hover:text-indigo-400 text-xs transition-all disabled:opacity-30" title="Browse server folders">
+                    <FolderOpen size={14} />
+                  </button>
+                </div>
               )}
             </ConfigSection>
 
@@ -818,14 +902,45 @@ export default function ServerBackupApp() {
 
         {activeTab === 'transfer' && (
           <>
-            <ConfigSection title="Source (Current Backup)">
+            <ConfigSection title="Source Backup">
               {outFilePath ? (
-                <div className="flex items-center gap-2 text-xs">
-                  <CheckCircle size={14} className="text-emerald-400" />
-                  <span className="font-mono text-[var(--text-secondary)]">{outFilePath}</span>
+                <div className="space-y-2">
+                  <div className="flex items-center gap-2 p-2.5 rounded-lg bg-emerald-500/10 border border-emerald-500/20">
+                    <CheckCircle size={14} className="text-emerald-400 shrink-0" />
+                    <span className="font-mono text-[11px] text-emerald-300 truncate">{outFilePath}</span>
+                    <span className="text-[9px] text-emerald-500 shrink-0">current session</span>
+                  </div>
+                  {backupHistory.length > 0 && (
+                    <button onClick={() => setTransferSourceEntry(null)} className="text-[10px] text-[var(--text-muted)] hover:text-indigo-400 transition-colors">or pick from history ↓</button>
+                  )}
+                </div>
+              ) : backupHistory.length > 0 ? (
+                <div className="space-y-1.5">
+                  <div className="text-[10px] text-[var(--text-muted)] mb-2">Pick a backup from history:</div>
+                  {backupHistory.slice(0, 8).map(entry => (
+                    <button
+                      key={entry.id}
+                      onClick={() => setTransferSourceEntry(entry)}
+                      className={`w-full flex items-center gap-2.5 p-2.5 rounded-lg border text-left transition-all ${transferSourceEntry?.id === entry.id ? 'bg-indigo-500/15 border-indigo-500/40' : 'bg-[var(--bg-secondary)]/50 border-[var(--border-color)] hover:border-indigo-500/30'}`}
+                    >
+                      <div className={`w-3.5 h-3.5 rounded-full border-2 shrink-0 flex items-center justify-center ${transferSourceEntry?.id === entry.id ? 'border-indigo-400 bg-indigo-400' : 'border-[var(--border-color)]'}`}>
+                        {transferSourceEntry?.id === entry.id && <div className="w-1.5 h-1.5 rounded-full bg-white" />}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-1.5">
+                          <span className="font-mono text-[11px] text-[var(--text-primary)] truncate">{entry.filePath.split('/').pop()}</span>
+                          <span className="text-[9px] px-1.5 py-0.5 rounded bg-indigo-500/10 text-indigo-400 font-bold uppercase shrink-0">{entry.type}</span>
+                        </div>
+                        <div className="text-[10px] text-[var(--text-muted)] mt-0.5">
+                          {new Date(entry.timestamp).toLocaleString()}
+                          {entry.size ? ` · ${formatSize(entry.size)}` : ''}
+                        </div>
+                      </div>
+                    </button>
+                  ))}
                 </div>
               ) : (
-                <div className="text-xs text-[var(--text-muted)]">Run a backup first to get a source file</div>
+                <div className="text-xs text-[var(--text-muted)]">No backups available. Run a backup first.</div>
               )}
             </ConfigSection>
 
@@ -836,16 +951,76 @@ export default function ServerBackupApp() {
                 options={sshConnections.filter(c => c._id !== connectionId).map(c => ({ value: c._id, label: `${c.name} (${c.host})` }))}
                 placeholder="Select target server..."
               />
-              <InputField label="Target Path" value={transferTargetPath} onChange={setTransferTargetPath} placeholder="/tmp/" />
+              <div className="flex gap-2">
+                <div className="flex-1">
+                  <InputField label="Target Path" value={transferTargetPath} onChange={setTransferTargetPath} placeholder="/tmp/" />
+                </div>
+                <button onClick={() => openFolderBrowserForField('transferTargetPath', transferTargetPath, transferTargetId)} disabled={!transferTargetId} className="mt-4 px-2.5 py-2 rounded-lg bg-[var(--bg-tertiary)] hover:bg-indigo-500/10 border border-[var(--border-color)] text-[var(--text-secondary)] hover:text-indigo-400 text-xs transition-all disabled:opacity-30" title="Browse server folders">
+                  <FolderOpen size={14} />
+                </button>
+              </div>
             </ConfigSection>
 
-            <button onClick={handleTransfer} disabled={isTransferring || !outFilePath || !transferTargetId} className="px-5 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold transition-all disabled:opacity-50 flex items-center gap-2">
-              {isTransferring ? <Loader size={14} className="animate-spin" /> : <ArrowLeftRight size={14} />}
-              {isTransferring ? 'Transferring...' : 'Transfer Backup'}
-            </button>
+            <div className="flex gap-2">
+              <button onClick={handleTransfer} disabled={isTransferring || (!outFilePath && !transferSourceEntry) || !transferTargetId} className="px-5 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold transition-all disabled:opacity-50 flex items-center gap-2">
+                {isTransferring ? <Loader size={14} className="animate-spin" /> : <ArrowLeftRight size={14} />}
+                {isTransferring ? 'Transferring...' : 'Transfer Backup'}
+              </button>
+              {isTransferring && (
+                <button onClick={handleCancelTransfer} className="px-4 py-2.5 rounded-xl bg-red-600/20 hover:bg-red-600/30 border border-red-500/30 text-red-400 text-xs font-bold transition-all flex items-center gap-2">
+                  <X size={14} /> Cancel
+                </button>
+              )}
+            </div>
 
-            {transferProgress && (
-              <div className="text-xs text-[var(--text-secondary)]">{transferProgress}</div>
+            {(isTransferring || transferStats) && (
+              <div className="p-4 rounded-xl bg-[var(--bg-secondary)]/60 border border-[var(--border-color)] space-y-3">
+                {/* File info */}
+                <div className="flex items-center justify-between text-[11px]">
+                  <span className="text-[var(--text-muted)] font-mono truncate max-w-[60%]">
+                    {(outFilePath || transferSourceEntry?.filePath || '').split('/').pop()}
+                  </span>
+                  <span className={`font-bold px-2 py-0.5 rounded-full text-[10px] ${
+                    transferStats?.status === 'completed' ? 'bg-emerald-500/15 text-emerald-400' :
+                    transferStats?.status === 'failed' ? 'bg-red-500/15 text-red-400' :
+                    transferStats?.status === 'cancelled' ? 'bg-slate-500/15 text-slate-400' :
+                    'bg-indigo-500/15 text-indigo-400'
+                  }`}>
+                    {transferStats?.status === 'completed' ? '✓ Done' :
+                     transferStats?.status === 'failed' ? '✗ Failed' :
+                     transferStats?.status === 'cancelled' ? '⊘ Cancelled' :
+                     transferStats?.status === 'connecting' ? '⟳ Connecting' : '⟳ Transferring'}
+                  </span>
+                </div>
+
+                {/* Progress bar */}
+                <div className="w-full bg-slate-800 rounded-full h-2 overflow-hidden">
+                  <div
+                    className={`h-2 rounded-full transition-all duration-300 ${
+                      transferStats?.status === 'completed' ? 'bg-emerald-500' :
+                      transferStats?.status === 'failed' ? 'bg-red-500' :
+                      transferStats?.status === 'cancelled' ? 'bg-slate-500' :
+                      'bg-indigo-500'
+                    } ${isTransferring && transferStats?.percent === 0 ? 'animate-pulse w-full opacity-40' : ''}`}
+                    style={{ width: `${transferStats?.percent || 0}%` }}
+                  />
+                </div>
+
+                {/* Bytes transferred */}
+                <div className="flex items-center justify-between text-[10px] text-[var(--text-muted)]">
+                  <span>
+                    {transferStats?.transferred > 0 ? formatSize(transferStats.transferred) : '0 B'}
+                    {transferStats?.totalSize > 0 ? ` / ${formatSize(transferStats.totalSize)}` : ''}
+                  </span>
+                  <span className="font-bold text-[var(--text-secondary)]">
+                    {transferStats?.percent > 0 ? `${transferStats.percent}%` : ''}
+                  </span>
+                </div>
+
+                {transferStats?.status === 'failed' && transferStats?.error && (
+                  <div className="text-[10px] text-red-400 font-mono bg-red-500/10 rounded-lg px-3 py-2">{transferStats.error}</div>
+                )}
+              </div>
             )}
           </>
         )}
@@ -939,7 +1114,7 @@ export default function ServerBackupApp() {
                 <FolderOpen size={16} className="text-indigo-400" />
                 <span className="text-sm font-bold text-[var(--text-primary)]">Browse Server Folders</span>
               </div>
-              <button onClick={() => setFolderBrowser({ isOpen: false, currentPath: '/', entries: [], loading: false, targetPathIndex: null })} className="p-1 rounded-lg hover:bg-white/5 transition-colors">
+              <button onClick={() => setFolderBrowser({ isOpen: false, currentPath: '/', entries: [], loading: false, targetPathIndex: null, targetField: null })} className="p-1 rounded-lg hover:bg-white/5 transition-colors">
                 <X size={16} className="text-[var(--text-muted)]" />
               </button>
             </div>

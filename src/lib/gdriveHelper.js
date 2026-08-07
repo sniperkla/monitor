@@ -73,7 +73,7 @@ export async function listGoogleDriveFolders(parentId = null) {
     // Always require explicit parent — if null, use 'root'
     const actualParentId = parentId || 'root';
     const query = `mimeType = 'application/vnd.google-apps.folder' and trashed = false and '${actualParentId}' in parents`;
-    const url = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(query)}&fields=files(id,name)&orderBy=name`;
+    const url = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(query)}&fields=files(id,name,modifiedTime)&orderBy=modifiedTime desc`;
 
     const res = await fetch(url, {
       headers: { 'Authorization': `Bearer ${accessToken}` }
@@ -216,8 +216,10 @@ export async function uploadFileToGoogleDrive({ fileName, content, folderId }) {
 export async function listDriveFiles(folderId) {
   return withRetry(async () => {
     const accessToken = await getGoogleAccessToken();
-    const query = `'${folderId}' in parents and trashed = false and mimeType = 'application/json'`;
-    const url = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(query)}&orderBy=createdTime desc&fields=files(id,name,size,createdTime)`;
+    // Don't filter by mimeType — Google Drive may store JSON as application/octet-stream
+    // or other types depending on how they were uploaded. Filter by name instead.
+    const query = `'${folderId}' in parents and trashed = false`;
+    const url = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(query)}&orderBy=createdTime desc&fields=files(id,name,size,createdTime,mimeType)`;
 
     const res = await fetch(url, {
       headers: { 'Authorization': `Bearer ${accessToken}` }
@@ -225,7 +227,16 @@ export async function listDriveFiles(folderId) {
 
     const data = await res.json();
     if (data.error) throw new Error(data.error.message);
-    return data.files || [];
+
+    // Include JSON files regardless of mimeType, and also include any backup archives
+    const files = (data.files || []).filter(f =>
+      f.name.endsWith('.json') ||
+      f.name.endsWith('.gz') ||
+      f.name.endsWith('.tar.gz') ||
+      f.mimeType === 'application/json' ||
+      f.mimeType === 'application/octet-stream'
+    );
+    return files;
   }, { label: 'listDriveFiles' });
 }
 

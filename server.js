@@ -1052,6 +1052,17 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
               cmdSuffix = `sh -c 'EXITED=$(docker ps -a --filter status=exited -q 2>/dev/null); if [ -n "$EXITED" ]; then echo "Removing exited task containers..."; docker rm -f $EXITED 2>&1; else echo "No exited containers found"; fi; docker container prune -f 2>/dev/null || true'`;
             } else if (action === 'connect-nginx-swarm') {
               cmdSuffix = `sh -c 'NETS=$(docker network ls --filter driver=overlay --format "{{.Name}}"); for net in $NETS; do echo "Connecting Nginx to $net..."; docker network connect $net global-nginx 2>/dev/null || docker network connect $net nginx 2>/dev/null || true; done; echo "Restarting Nginx container to apply new network routes and clear DNS cache..."; docker restart global-nginx 2>/dev/null || docker restart nginx 2>/dev/null || docker exec global-nginx nginx -s reload 2>/dev/null || docker exec nginx nginx -s reload 2>/dev/null || systemctl reload nginx 2>/dev/null || true; echo "Nginx connected and restarted successfully!"'`;
+            } else if (action === 'swarm:init') {
+              const advertiseAddr = args && args[0] ? String(args[0]).replace(/[^a-zA-Z0-9.:_/-]/g, '') : '';
+              const advertiseFlag = advertiseAddr ? `--advertise-addr ${advertiseAddr}` : '';
+              const rawCmd = `sh -c 'docker swarm init ${advertiseFlag} 2>&1; STATUS=$?; if [ $STATUS -eq 0 ]; then docker swarm update --task-history-limit 1 2>/dev/null || true; fi; exit 0'`;
+              return sshClient.exec(rawCmd, (err, stream) => {
+                if (err) return socket.emit('docker:error', err.message);
+                let out = '', err2 = '';
+                stream.on('data', d => out += d.toString());
+                stream.stderr.on('data', d => err2 += d.toString());
+                stream.on('close', () => socket.emit('docker:result', { action, output: (out + err2).trim(), code: 0, args }));
+              });
             } else {
               return socket.emit('docker:error', `Action '${action}' requires a fresh connection. Please refresh.`);
             }
@@ -1581,8 +1592,11 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
             } else if (action === 'images') {
                cmdSuffix = `image ls -a --format "{{json .}}"`;
             } else if (action === 'swarm:init') {
+                // args[0] = optional advertise-addr (e.g. "192.168.1.10" or "eth0")
+                const advertiseAddr = args && args[0] ? String(args[0]).replace(/[^a-zA-Z0-9.:_/-]/g, '') : '';
+                const advertiseFlag = advertiseAddr ? `--advertise-addr ${advertiseAddr}` : '';
                 // Use sh -c so || shell operator works; set task history limit to 1 so old containers don't pile up
-                cmdSuffix = `sh -c 'docker swarm init 2>&1; docker swarm update --task-history-limit 1 2>/dev/null || true; exit 0'`;
+                cmdSuffix = `sh -c 'docker swarm init ${advertiseFlag} 2>&1; STATUS=$?; if [ $STATUS -eq 0 ]; then docker swarm update --task-history-limit 1 2>/dev/null || true; fi; exit 0'`;
             } else if (action === 'swarm:create') {
                  const svcName      = String(args[0] || '').replace(/[^a-zA-Z0-9._-]/g, '');
                  const image        = String(args[1] || '').replace(/[^a-zA-Z0-9.@/:-]/g, '');

@@ -2089,8 +2089,11 @@ function handleDockerCommand(ws, msg) {
     } else if (action === 'swarm:nodes') {
       cmdSuffix = `node ls --format "{{json .}}"`;
     } else if (action === 'swarm:init') {
+      // args[0] = optional advertise-addr (e.g. "192.168.1.10" or "eth0")
+      const advertiseAddr = args && args[0] ? String(args[0]).replace(/[^a-zA-Z0-9.:_/-]/g, '') : '';
+      const advertiseFlag = advertiseAddr ? `--advertise-addr ${advertiseAddr}` : '';
       // Use sh -c so shell operators work; always exits 0 (already-in-swarm is OK)
-      return runRawCmd(`sh -c 'docker swarm init 2>&1; docker swarm update --task-history-limit 1 2>/dev/null || true; exit 0'`);
+      return runRawCmd(`sh -c 'docker swarm init ${advertiseFlag} 2>&1; STATUS=$?; if [ $STATUS -eq 0 ]; then docker swarm update --task-history-limit 1 2>/dev/null || true; fi; exit 0'`);
     } else if (action === 'swarm:create') {
       const svcName      = String(args[0] || '').replace(/[^a-zA-Z0-9._-]/g, '');
       const image        = String(args[1] || '').replace(/[^a-zA-Z0-9.@/:-]/g, '');

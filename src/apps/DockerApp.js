@@ -192,6 +192,8 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
   const [networks, setNetworks] = useState([]);
   const [swarmServices, setSwarmServices] = useState([]);
   const [swarmNodes, setSwarmNodes] = useState([]);
+  const [swarmInitAddr, setSwarmInitAddr] = useState(''); // optional --advertise-addr for swarm init
+  const [swarmInitNeedsAddr, setSwarmInitNeedsAddr] = useState(false); // true when server has multiple IPs
   const [scaleModal, setScaleModal] = useState({ isOpen: false, serviceName: '', count: 1 });
   const [swarmUpdateModal, setSwarmUpdateModal] = useState({ isOpen: false, serviceName: '', currentImage: '', newImage: '' });
   const [createServiceModal, setCreateServiceModal] = useState({ isOpen: false, name: '', image: '', replicas: 2, port: '', network: '', mounts: '', env: '', oldContainerId: '', oldContainerName: '', stopOld: true });
@@ -242,6 +244,8 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
   const [selectedConnection, setSelectedConnection] = useState(initialConnection || null);
 
   const initialConnIdRef = useRef(initialConnectionId);
+  // Set to true when user explicitly clicks SWITCH — prevents the restore useEffect from auto-reselecting
+  const userClearedRef = useRef(false);
 
   // Update window title
   useEffect(() => {
@@ -256,6 +260,7 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
   // Restore connection state — re-runs when global connections finish loading (connectionsReady)
   useEffect(() => {
     if (selectedConnection) return;
+    if (userClearedRef.current) return; // user clicked SWITCH — stay on selection screen
     if (!connectionsReady || !sshConnections || sshConnections.length === 0) return;
 
     // 1. Try initialConnectionId from prop (window launched directly to a connection)
@@ -557,18 +562,31 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
       } else if (action === 'swarm:init') {
         // After init (or already-init), refresh swarm services + nodes
         setIsLoading(false);
-        setTimeout(() => {
-          if (socketRef.current) {
-            socketRef.current.emit('docker:command', { action: 'swarm:services' });
-            socketRef.current.emit('docker:command', { action: 'swarm:nodes' });
-          }
-        }, 800);
-        const alreadyInit = output.toLowerCase().includes('already part of a swarm');
-        addNotification({
-          title: alreadyInit ? '🐝 Swarm Already Active' : '🐝 Swarm Initialized!',
-          message: alreadyInit ? 'This node is already running in Swarm mode.' : 'Docker Swarm mode is now active. You can create services.',
-          type: 'success'
-        });
+        const outLower = output.toLowerCase();
+        const alreadyInit = outLower.includes('already part of a swarm');
+        const multiAddr = outLower.includes('could not choose an ip address') || outLower.includes('multiple addresses') || outLower.includes('--advertise-addr');
+        if (multiAddr && !alreadyInit) {
+          // Server has multiple network interfaces — need --advertise-addr
+          setSwarmInitNeedsAddr(true);
+          addNotification({
+            title: '⚠️ Multiple Network Interfaces',
+            message: 'Docker cannot choose an IP automatically. Enter the IP address or interface name (e.g. eth0 or 192.168.1.10) below and try again.',
+            type: 'error'
+          });
+        } else {
+          setSwarmInitNeedsAddr(false);
+          setTimeout(() => {
+            if (socketRef.current) {
+              socketRef.current.emit('docker:command', { action: 'swarm:services' });
+              socketRef.current.emit('docker:command', { action: 'swarm:nodes' });
+            }
+          }, 800);
+          addNotification({
+            title: alreadyInit ? '🐝 Swarm Already Active' : '🐝 Swarm Initialized!',
+            message: alreadyInit ? 'This node is already running in Swarm mode.' : 'Docker Swarm mode is now active. You can create services.',
+            type: 'success'
+          });
+        }
       } else if (action === 'swarm:create' || action === 'swarm:configure' || action === 'swarm:remove') {
         setIsLoading(false);
         setActiveTab('swarm');
@@ -1259,7 +1277,7 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
                     e.dataTransfer.setDragImage(ghost, 0, 0);
                     setTimeout(() => document.body.removeChild(ghost), 0);
                   }}
-                  onClick={() => setSelectedConnection(conn)} 
+                  onClick={() => { userClearedRef.current = false; setSelectedConnection(conn); }} 
                   className="p-4 rounded-xl border border-[var(--border-color)] bg-[var(--bg-card)] hover:bg-[var(--bg-card-hover)] hover:border-sky-500/30 transition-all text-left group cursor-grab active:cursor-grabbing"
                 >
                     <div className="flex items-center gap-4">
@@ -1361,7 +1379,13 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
                     <RefreshCw size={14} className={isLoading ? 'animate-spin' : ''} />
                 </button>
                 <div className="w-px h-4 bg-white/10" />
-                <button onClick={() => setSelectedConnection(null)} className="text-[10px] text-[var(--text-muted)] hover:text-white transition-colors">SWITCH</button>
+                <button onClick={() => {
+                    // Clear saved connection so the restore useEffect doesn't immediately re-select it
+                    if (windowId) localStorage.removeItem(`docker-connection-${windowId}`);
+                    localStorage.removeItem('docker-last-selected-connection');
+                    userClearedRef.current = true;
+                    setSelectedConnection(null);
+                  }} className="text-[10px] text-[var(--text-muted)] hover:text-white transition-colors">SWITCH</button>
             </div>
         </div>
 
@@ -2306,25 +2330,43 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
                                 Swarm mode enables zero-downtime rolling updates (<code className="text-emerald-400">--update-order start-first</code>). New containers start before old ones stop so your website never drops a single request.
                               </p>
                             </div>
-                            <div className="flex justify-center gap-3 pt-2">
-                              <button
-                                onClick={() => {
-                                  setIsLoading(true);
-                                  socketRef.current.emit('docker:command', { action: 'swarm:init' });
-                                  setTimeout(() => emitDockerLs(), 1500);
-                                }}
-                                className="px-4 py-2 bg-purple-500 hover:bg-purple-600 text-white rounded-xl text-xs font-bold transition-all shadow-lg flex items-center gap-1.5 cursor-pointer"
-                              >
-                                <Zap size={14} />
-                                Initialize Docker Swarm
-                              </button>
-                              <button
-                                onClick={() => setCreateServiceModal({ isOpen: true, name: '', image: '', replicas: 2, port: '' })}
-                                className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold transition-all shadow-lg flex items-center gap-1.5 cursor-pointer"
-                              >
-                                <Plus size={14} />
-                                Create Service
-                              </button>
+                            <div className="flex justify-center gap-3 pt-2 flex-col items-center">
+                              {swarmInitNeedsAddr && (
+                                <div className="w-full max-w-sm space-y-1.5">
+                                  <label className="text-[10px] font-bold uppercase tracking-wider text-amber-400 flex items-center gap-1.5">
+                                    <AlertTriangle size={11} /> --advertise-addr required
+                                  </label>
+                                  <input
+                                    type="text"
+                                    value={swarmInitAddr}
+                                    onChange={e => setSwarmInitAddr(e.target.value)}
+                                    placeholder="e.g. 192.168.1.10 or eth0"
+                                    className="w-full px-3 py-2 text-xs rounded-xl bg-[var(--bg-tertiary)] border border-amber-500/40 font-mono text-[var(--text-primary)] focus:border-amber-400 focus:outline-none"
+                                    autoFocus
+                                  />
+                                  <p className="text-[9px] text-[var(--text-muted)]">Docker detected multiple network interfaces. Enter the IP or interface to advertise.</p>
+                                </div>
+                              )}
+                              <div className="flex gap-3">
+                                <button
+                                  onClick={() => {
+                                    setIsLoading(true);
+                                    socketRef.current.emit('docker:command', { action: 'swarm:init', args: swarmInitAddr ? [swarmInitAddr] : [] });
+                                    setTimeout(() => emitDockerLs(), 1500);
+                                  }}
+                                  className="px-4 py-2 bg-purple-500 hover:bg-purple-600 text-white rounded-xl text-xs font-bold transition-all shadow-lg flex items-center gap-1.5 cursor-pointer"
+                                >
+                                  <Zap size={14} />
+                                  Initialize Docker Swarm
+                                </button>
+                                <button
+                                  onClick={() => setCreateServiceModal({ isOpen: true, name: '', image: '', replicas: 2, port: '' })}
+                                  className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold transition-all shadow-lg flex items-center gap-1.5 cursor-pointer"
+                                >
+                                  <Plus size={14} />
+                                  Create Service
+                                </button>
+                              </div>
                             </div>
                           </div>
                         ) : (

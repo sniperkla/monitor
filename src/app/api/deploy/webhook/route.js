@@ -1082,6 +1082,17 @@ export async function runDeployment(config, runMeta = {}) {
           const targetBranch = (config.branch || 'main').replace('refs/heads/', '');
 
           // Temporarily write Bitbucket/GitHub credentials depending on provider
+          // Wrap all git operations in a git-availability check so servers without git skip gracefully
+          scriptLines.push(`if ! command -v git >/dev/null 2>&1; then`);
+          scriptLines.push(`  echo "[deploy] git not found — attempting auto-install..."`);
+          scriptLines.push(`  if command -v dnf >/dev/null 2>&1; then sudo dnf install -y git 2>&1 || true`);
+          scriptLines.push(`  elif command -v yum >/dev/null 2>&1; then sudo yum install -y git 2>&1 || true`);
+          scriptLines.push(`  elif command -v apt-get >/dev/null 2>&1; then sudo apt-get install -y git 2>&1 || true`);
+          scriptLines.push(`  elif command -v apk >/dev/null 2>&1; then sudo apk add --no-cache git 2>&1 || true`);
+          scriptLines.push(`  fi`);
+          scriptLines.push(`  command -v git >/dev/null 2>&1 && echo "[deploy] git installed successfully." || echo "[deploy] WARNING: git install failed — fetch/checkout will be skipped."`);
+          scriptLines.push(`fi`);
+          scriptLines.push(`if command -v git >/dev/null 2>&1; then`);
           if (config.bitbucketConnected && (config.bitbucketUser || config.bitbucketUsername) && config.bitbucketAppPassword) {
             try {
               let bbUser = config.bitbucketUser || decrypt(config.bitbucketUsername);
@@ -1092,46 +1103,49 @@ export async function runDeployment(config, runMeta = {}) {
               if (bbUser && bbPass) {
                 const encodedUser = encodeURIComponent(bbUser);
                 const encodedPass = encodeURIComponent(bbPass);
-                scriptLines.push('RAW_URL=$(git remote get-url origin 2>/dev/null || echo "")');
+                scriptLines.push('  RAW_URL=$(git remote get-url origin 2>/dev/null || echo "")');
                 // Set credentials in git credential store for all subprocesses
-                scriptLines.push(`echo "https://${encodedUser}:${encodedPass}@bitbucket.org" > ~/.git-credentials`);
-                scriptLines.push(`git config --global credential.helper store`);
+                scriptLines.push(`  echo "https://${encodedUser}:${encodedPass}@bitbucket.org" > ~/.git-credentials`);
+                scriptLines.push(`  git config --global credential.helper store`);
                 // Also set it directly in the remote URL for git fetch/checkout
-                scriptLines.push('if [ -n "$RAW_URL" ]; then');
-                scriptLines.push('  CLEAN_PATH=$(echo "$RAW_URL" | sed -E "s|https://[^@]+@|https://|")');
-                scriptLines.push(`  AUTH_URL="https://${encodedUser}:${encodedPass}@\${CLEAN_PATH#https://}"`);
-                scriptLines.push('  git remote set-url origin "$AUTH_URL" 2>/dev/null || true');
-                scriptLines.push('fi');
+                scriptLines.push('  if [ -n "$RAW_URL" ]; then');
+                scriptLines.push('    CLEAN_PATH=$(echo "$RAW_URL" | sed -E "s|https://[^@]+@|https://|")');
+                scriptLines.push(`    AUTH_URL="https://${encodedUser}:${encodedPass}@\${CLEAN_PATH#https://}"`);
+                scriptLines.push('    git remote set-url origin "$AUTH_URL" 2>/dev/null || true');
+                scriptLines.push('  fi');
               }
             } catch (e) {}
-            scriptLines.push(`git fetch origin`);
+            scriptLines.push(`  git fetch origin`);
           } else if (config.githubToken) {
             try {
               let ghToken = decrypt(config.githubToken);
               if (ghToken) {
                 const b64Cred = Buffer.from(`x-access-token:${ghToken}`).toString('base64');
                 // Set local repository header so all subsequent git commands (including git pull in deployCommand) inherit it
-                scriptLines.push(`git config http.extraHeader "Authorization: Basic ${b64Cred}"`);
-                scriptLines.push(`git fetch origin`);
+                scriptLines.push(`  git config http.extraHeader "Authorization: Basic ${b64Cred}"`);
+                scriptLines.push(`  git fetch origin`);
               } else {
-                scriptLines.push(`git fetch origin`);
+                scriptLines.push(`  git fetch origin`);
               }
             } catch (e) {
-              scriptLines.push(`git fetch origin`);
+              scriptLines.push(`  git fetch origin`);
             }
           } else {
-            scriptLines.push(`git fetch origin`);
+            scriptLines.push(`  git fetch origin`);
           }
-          scriptLines.push(`echo "[deploy] Checking out branch: ${targetBranch}"`);
-          scriptLines.push(`git checkout -B ${targetBranch} origin/${targetBranch}`);
-          
+          scriptLines.push(`  echo "[deploy] Checking out branch: ${targetBranch}"`);
+          scriptLines.push(`  git checkout -B ${targetBranch} origin/${targetBranch}`);
+
           if (commitSha) {
-            scriptLines.push(`echo "[deploy] Checking out specific commit: ${commitSha}"`);
-            scriptLines.push(`git checkout -q ${commitSha}`);
+            scriptLines.push(`  echo "[deploy] Checking out specific commit: ${commitSha}"`);
+            scriptLines.push(`  git checkout -q ${commitSha}`);
             // Intercept git pull to skip it when a specific commit is selected
-            scriptLines.push(`git() { if [ "$1" = "pull" ]; then echo "[deploy] Specific commit selected: skipping git pull"; return 0; fi; command git "$@"; }`);
-            scriptLines.push(`export -f git 2>/dev/null || true`);
+            scriptLines.push(`  git() { if [ "$1" = "pull" ]; then echo "[deploy] Specific commit selected: skipping git pull"; return 0; fi; command git "$@"; }`);
+            scriptLines.push(`  export -f git 2>/dev/null || true`);
           }
+          scriptLines.push(`else`);
+          scriptLines.push(`  echo "[deploy] git not found — skipping fetch/checkout, running deploy command directly"`);
+          scriptLines.push(`fi`);
           scriptLines.push('echo "[deploy] Running deploy command..."');
           
           let rawDeployCmd = (config.deployCommand || '').trim();
@@ -1139,7 +1153,34 @@ export async function runDeployment(config, runMeta = {}) {
           rawDeployCmd = rawDeployCmd.replace(/[^\x00-\x7F]/g, '');
           let cleanCmd = rawDeployCmd.replace(/^#!\/bin\/bash\s*\n?/, '').trim();
           // Build the user command script content — written via SFTP directly (no echo/base64 which has shell length limits)
-          const userCmdScript = cleanCmd ? `#!/bin/bash\nset +e\n${cleanCmd}\n` : '#!/bin/bash\nexit 0\n';
+          // Auto-install git if not present, then proceed normally
+          const gitShim = `
+# ── Auto-install git if not installed ──
+if ! command -v git >/dev/null 2>&1; then
+  echo "[deploy] git not found — attempting auto-install..."
+  if command -v dnf >/dev/null 2>&1; then
+    sudo dnf install -y git 2>&1 || true
+  elif command -v yum >/dev/null 2>&1; then
+    sudo yum install -y git 2>&1 || true
+  elif command -v apt-get >/dev/null 2>&1; then
+    sudo apt-get install -y git 2>&1 || true
+  elif command -v apk >/dev/null 2>&1; then
+    sudo apk add --no-cache git 2>&1 || true
+  else
+    echo "[deploy] WARNING: No package manager found — cannot auto-install git. Skipping git commands."
+    git() { echo "[deploy] WARNING: git not installed — skipping: git $*"; return 0; }
+    export -f git 2>/dev/null || true
+  fi
+  if command -v git >/dev/null 2>&1; then
+    echo "[deploy] git installed successfully."
+  else
+    echo "[deploy] WARNING: git install failed — git commands will be skipped."
+    git() { echo "[deploy] WARNING: git not installed — skipping: git $*"; return 0; }
+    export -f git 2>/dev/null || true
+  fi
+fi
+`;
+          const userCmdScript = cleanCmd ? `#!/bin/bash\nset +e\n${gitShim}\n${cleanCmd}\n` : '#!/bin/bash\nexit 0\n';
 
           // The outer run script references the pre-uploaded user command script directly
           scriptLines.push(`USER_CMD_PATH="${userCmdPath}"`);
