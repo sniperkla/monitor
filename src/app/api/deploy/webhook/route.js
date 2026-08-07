@@ -51,18 +51,7 @@ function verifySignature(bodyText, secret, signatureHeader) {
   }
 }
 
-// Restrict log output to prevent database bloat, event-loop blocking, and network delay.
-// Keeps the last N characters of log text.
-function limitLogOutput(logText, maxChars = 150000) {
-  if (!logText) return '';
-  if (logText.length <= maxChars) return logText;
-  
-  const truncated = logText.slice(-maxChars);
-  const firstNewline = truncated.indexOf('\n');
-  const cleanTruncated = firstNewline !== -1 ? truncated.slice(firstNewline + 1) : truncated;
-  
-  return `[... previous logs truncated for size ...]\n` + cleanTruncated;
-}
+// No log truncation — each deployment stores the full log from start to finish.
 
 // Helper to update status in DB (outside runDeployment scope)
 async function updateDeployStatus(projectId, status, logText, cancelRequested = false) {
@@ -498,13 +487,11 @@ function monitorTmuxAfterReconnect(sshConfig, tmuxSession, projectId, logOutput,
             }
             logOutput += rawLine + '\n';
           }
-          if (logOutput.length > 200000) logOutput = limitLogOutput(logOutput);
           updateStatus('running', logOutput).catch(() => {});
         });
 
         stream.stderr.on('data', (data) => {
           logOutput += data.toString();
-          if (logOutput.length > 200000) logOutput = limitLogOutput(logOutput);
           updateStatus('running', logOutput).catch(() => {});
         });
 
@@ -617,7 +604,6 @@ export async function runDeployment(config, runMeta = {}) {
     if (status === 'success' || status === 'failed') {
       isFinished = true;
     }
-    const cleanLog = limitLogOutput(finalLog);
     const isTerminal = status === 'success' || status === 'failed';
     const maxAttempts = isTerminal ? 3 : 1;
 
@@ -626,7 +612,7 @@ export async function runDeployment(config, runMeta = {}) {
         await connectDB(process.env.MONGODB_URI, true);
         const updateFields = {
           'value.status': status,
-          'value.lastDeployLog': cleanLog,
+          'value.lastDeployLog': finalLog,
           'value.lastDeployAt': startedAt,
           'value.cancelRequested': extra.cancelRequested === true ? true : false
         };
