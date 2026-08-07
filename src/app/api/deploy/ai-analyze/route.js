@@ -610,9 +610,9 @@ deploy_service() {
 
   echo "[swarm] Waiting for $NAME to be healthy..."
   for _i in $(seq 1 20); do
-    _REPLICAS=$(docker service ls --filter name="^${NAME}$" --format '{{.Replicas}}' 2>/dev/null || echo "0/2")
+    _REPLICAS=$(docker service ls --filter name="^\${NAME}$" --format '{{.Replicas}}' 2>/dev/null || echo "0/2")
     _RUNNING=$(echo "$_REPLICAS" | cut -d'/' -f1)
-    if [ "${_RUNNING:-0}" -ge 1 ] 2>/dev/null; then
+    if [ "\${_RUNNING:-0}" -ge 1 ] 2>/dev/null; then
       echo "[swarm] $NAME healthy: $_REPLICAS"
       return 0
     fi
