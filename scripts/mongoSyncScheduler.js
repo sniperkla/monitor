@@ -157,7 +157,9 @@ async function getExternalMongoDb(connDoc, database) {
   let uri = connDoc.username && password
     ? `${protocol}://${connDoc.username}:${encodeURIComponent(password)}@${connDoc.host}${portPart}/${connDoc.database || ''}`
     : `${protocol}://${connDoc.host}${portPart}/${connDoc.database || ''}`;
-  if (connDoc.authSource) uri += `?authSource=${connDoc.authSource}`;
+  // Default to authSource=admin when credentials are present but authSource is missing
+  const authSource = connDoc.authSource || (connDoc.username && password ? 'admin' : null);
+  if (authSource) uri += `?authSource=${authSource}`;
 
   const client = new MongoClient(uri, { serverSelectionTimeoutMS: 8000 });
   await client.connect();
