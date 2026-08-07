@@ -500,148 +500,142 @@ ${existingScript || '# No previous script set'}`;
         const guessedSubdir = svc.replace(/^aut|^app/i, '').toLowerCase() || svc;
 
         if (dir) {
-          // Explicit build dir from compose file
           buildSection += `
-     # Build image for ${svc} (from ./${dir})
-     docker build -t ${svc}:latest ./${dir}`;
+echo "Building ${svc}:latest from ./${dir}..."
+docker build --no-cache -t ${svc}:latest ./${dir}`;
         } else {
-          // Check subdir first, then root fallback
           buildSection += `
-     # Build image for ${svc}
-     if [ -d "${guessedSubdir}" ] && [ -f "${guessedSubdir}/Dockerfile" ]; then
-       echo "Building ${svc}:latest from ./${guessedSubdir}..."
-       docker build -t ${svc}:latest ./${guessedSubdir}
-     elif [ -f "Dockerfile" ]; then
-       echo "Building ${svc}:latest from ./..."
-       docker build -t ${svc}:latest ./
-     fi`;
+if [ -d "${guessedSubdir}" ] && [ -f "${guessedSubdir}/Dockerfile" ]; then
+  echo "Building ${svc}:latest from ./${guessedSubdir}..."
+  docker build --no-cache -t ${svc}:latest ./${guessedSubdir}
+elif [ -f "Dockerfile" ]; then
+  echo "Building ${svc}:latest from ./..."
+  docker build --no-cache -t ${svc}:latest ./
+fi`;
         }
       }
 
       let svcSection = '';
       for (const svc of services) {
         const info = composeServices[svc] || {};
-        // Priority: compose ports → nginx upstream port → no publish (overlay network only)
         const port = (info.ports && info.ports[0]) ? info.ports[0] : (nginxPortMap[svc] || '');
-        const publishFlag = port ? `--publish ${port} ` : '';
         if (port) {
-          console.log(`[ai-analyze] ${svc}: using port ${port} for --publish flag`);
+          console.log(`[ai-analyze] ${svc}: using port ${port}`);
         } else {
-          console.log(`[ai-analyze] ${svc}: no port found — service uses overlay network via Nginx proxy`);
+          console.log(`[ai-analyze] ${svc}: no port found — overlay network only`);
         }
-
-
-        svcSection += `
-
-     # ------ ${svc} ------
-     if docker service inspect ${svc} >/dev/null 2>&1; then
-       echo "[swarm] Updating Swarm service ${svc} zero-downtime (forced rollout)..."
-       docker service update \
-         --image ${svc}:latest \
-         --force \
-         --update-order start-first \
-         --update-delay 5s \
-         --update-failure-action rollback \
-         --update-monitor 10s \
-         --rollback-order start-first \
-         --rollback-failure-action continue \
-         ${svc} || {
-           echo "[swarm] WARNING: Update failed — Swarm is rolling back ${svc} to previous image automatically."
-         }
-       docker service update --network-add "$SWARM_NET" ${svc} 2>/dev/null || true
-     else
-       # Check if a standalone container with this name exists
-       if docker inspect ${svc} >/dev/null 2>&1; then
-         echo "[swarm] Migrating ${svc}: standalone container -> Swarm service..."
-         docker stop ${svc} 2>/dev/null || true
-         _HAD_CONTAINER=1
-       else
-         echo "[swarm] Creating fresh Swarm service ${svc} (no standalone container found)..."
-         _HAD_CONTAINER=0
-       fi
-       # Create Swarm service — if it fails and we had a standalone container, roll back
-       if docker service create \
-         --name ${svc} \
-         --network "$SWARM_NET" \
-         ${publishFlag}\
-         --detach \
-         --no-resolve-image \
-         --replicas 2 \
-         --update-order start-first \
-         --update-failure-action rollback \
-         --rollback-order start-first \
-         ${svc}:latest; then
-         echo "[swarm] Service ${svc} created. Waiting for replica to start..."
-         _STARTED=0
-         for _i in 1 2 3 4 5 6 7 8 9 10; do
-           _REPLICAS=$(docker service ls --filter name=^${svc}$ --format '{{.Replicas}}' 2>/dev/null || echo "0/2")
-           _RUNNING=$(echo "$_REPLICAS" | cut -d'/' -f1)
-           if [ "\${_RUNNING:-0}" -ge 1 ] 2>/dev/null; then
-             _STARTED=1
-             echo "[swarm] Service ${svc} running ($_REPLICAS)."
-             if [ "$_HAD_CONTAINER" = "1" ]; then
-               echo "[swarm] Removing old standalone container ${svc}..."
-               docker rm ${svc} 2>/dev/null || true
-             fi
-             break
-           fi
-           echo "[swarm] Waiting for ${svc} replica... ($_i/10)"
-           sleep 3
-         done
-         if [ "$_STARTED" = "0" ]; then
-           echo "[swarm] WARNING: ${svc} service did not start replicas in time."
-           [ "$_HAD_CONTAINER" = "1" ] && echo "[swarm] Old standalone container preserved for rollback."
-         fi
-       else
-         echo "[swarm] ERROR: Failed to create Swarm service ${svc}."
-         if [ "$_HAD_CONTAINER" = "1" ]; then
-           echo "[swarm] Rolling back — restarting old container..."
-           docker start ${svc} 2>/dev/null || true
-         fi
-       fi
-     fi`;
+        svcSection += `deploy_service ${svc} ${svc}:latest ${port || ''}\n`;
       }
 
       swarmBlock = `
-     # Docker Swarm Zero-Downtime Deployment
-     docker swarm init 2>/dev/null || true
-     docker swarm update --task-history-limit 1 2>/dev/null || true
+# set -e intentionally omitted — docker service update exits non-zero during rollback by design
 
-     # Detect existing overlay network — use it if found, only create if none exist
-     SWARM_NET=$(docker network ls --filter driver=overlay --format '{{.Name}}' 2>/dev/null | grep -v '^ingress$' | head -1)
-     if [ -n "$SWARM_NET" ]; then
-       echo "[net] Using existing overlay network: $SWARM_NET"
-     else
-       echo "[net] No overlay network found — creating proxy-net..."
-       docker network create --driver overlay --attachable proxy-net
-       # Wait up to 15s for the network to become visible
-       for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
-         SWARM_NET=$(docker network ls --filter driver=overlay --format '{{.Name}}' 2>/dev/null | grep -v '^ingress$' | head -1)
-         if [ -n "$SWARM_NET" ]; then
-           echo "[net] Overlay network ready: $SWARM_NET"
-           break
-         fi
-         echo "[net] Waiting for overlay network to appear... ($i/15)"
-         sleep 1
-       done
-       if [ -z "$SWARM_NET" ]; then
-         echo "[net] ERROR: No overlay network available after 15s. Aborting."
-         exit 1
-       fi
-     fi
+# ── Swarm init ──────────────────────────────────────────────────────────────
+docker swarm init 2>/dev/null || true
+docker swarm update --task-history-limit 3 2>/dev/null || true
+
+# ── Overlay network ─────────────────────────────────────────────────────────
+SWARM_NET=$(docker network ls --filter driver=overlay --format '{{.Name}}' 2>/dev/null | grep -v '^ingress$' | head -1)
+if [ -n "$SWARM_NET" ]; then
+  echo "[net] Using existing overlay network: $SWARM_NET"
+else
+  echo "[net] No overlay network found — creating proxy-net..."
+  docker network create --driver overlay --attachable proxy-net
+  SWARM_NET="proxy-net"
+  for _i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
+    [ -n "$(docker network ls --filter driver=overlay --format '{{.Name}}' 2>/dev/null | grep -v '^ingress$' | head -1)" ] && break
+    echo "[net] Waiting for overlay network... ($_i/15)"; sleep 1
+  done
+  if [ -z "$(docker network ls --filter driver=overlay --format '{{.Name}}' 2>/dev/null | grep -v '^ingress$' | head -1)" ]; then
+    echo "[net] ERROR: No overlay network after 15s. Aborting."; exit 1
+  fi
+fi
+
+# ── Build images ─────────────────────────────────────────────────────────────
 ${buildSection}
-     # Fallback compose build
-     docker compose build 2>/dev/null || docker-compose build 2>/dev/null || true
+
+# ── deploy_service <name> <image> <host_port:container_port> ─────────────────
+deploy_service() {
+  local NAME="$1"
+  local IMAGE="$2"
+  local PORT="$3"
+
+  echo ""
+  echo "===== Deploy $NAME ====="
+
+  if docker service inspect "$NAME" >/dev/null 2>&1; then
+    echo "[swarm] Updating $NAME..."
+    docker service update \\
+      --image "$IMAGE" \\
+      --force \\
+      --update-order start-first \\
+      --update-delay 5s \\
+      --update-monitor 15s \\
+      --update-failure-action rollback \\
+      --rollback-order start-first \\
+      --rollback-monitor 15s \\
+      --stop-grace-period 30s \\
+      "$NAME" || echo "[swarm] WARNING: $NAME update triggered rollback — checking status..."
+    docker service update --network-add "$SWARM_NET" "$NAME" 2>/dev/null || true
+  else
+    if docker inspect "$NAME" >/dev/null 2>&1; then
+      echo "[swarm] Migrating $NAME: standalone container → Swarm service..."
+      docker stop "$NAME" 2>/dev/null || true
+      _HAD_CONTAINER=1
+    else
+      echo "[swarm] Creating fresh Swarm service $NAME..."
+      _HAD_CONTAINER=0
+    fi
+    PUBLISH_FLAG=""
+    [ -n "$PORT" ] && PUBLISH_FLAG="--publish $PORT"
+    if docker service create \\
+      --name "$NAME" \\
+      --network "$SWARM_NET" \\
+      $PUBLISH_FLAG \\
+      --replicas 2 \\
+      --detach \\
+      --no-resolve-image \\
+      --update-order start-first \\
+      --update-failure-action rollback \\
+      --rollback-order start-first \\
+      --stop-grace-period 30s \\
+      "$IMAGE"; then
+      [ "$_HAD_CONTAINER" = "1" ] && docker rm "$NAME" 2>/dev/null || true
+    else
+      echo "[swarm] ERROR: Failed to create $NAME."
+      [ "$_HAD_CONTAINER" = "1" ] && docker start "$NAME" 2>/dev/null || true
+      return 1
+    fi
+  fi
+
+  echo "[swarm] Waiting for $NAME to be healthy..."
+  for _i in $(seq 1 20); do
+    _REPLICAS=$(docker service ls --filter name="^${NAME}$" --format '{{.Replicas}}' 2>/dev/null || echo "0/2")
+    _RUNNING=$(echo "$_REPLICAS" | cut -d'/' -f1)
+    if [ "${_RUNNING:-0}" -ge 1 ] 2>/dev/null; then
+      echo "[swarm] $NAME healthy: $_REPLICAS"
+      return 0
+    fi
+    echo "[swarm] Waiting for $NAME... ($_i/20)"
+    sleep 3
+  done
+
+  echo "[swarm] ERROR: $NAME did not become healthy in time."
+  docker service rollback "$NAME" 2>/dev/null || true
+  return 1
+}
+
+# ── Deploy services ──────────────────────────────────────────────────────────
 ${svcSection}
 
-     # Reconnect Nginx to all Swarm overlay networks
-     NETS=$(docker network ls --filter driver=overlay --format "{{.Name}}")
-     for net in $NETS; do
-       docker network connect $net global-nginx 2>/dev/null || docker network connect $net nginx 2>/dev/null || true
-     done
-     docker exec global-nginx nginx -s reload 2>/dev/null || docker restart global-nginx 2>/dev/null || true
+# ── Reconnect Nginx ───────────────────────────────────────────────────────────
+for _net in $(docker network ls --filter driver=overlay --format "{{.Name}}"); do
+  docker network connect "$_net" global-nginx 2>/dev/null || docker network connect "$_net" nginx 2>/dev/null || true
+done
+docker exec global-nginx nginx -s reload 2>/dev/null || docker restart global-nginx 2>/dev/null || true
 
-     docker container prune -f 2>/dev/null || true`;
+# ── Cleanup ───────────────────────────────────────────────────────────────────
+docker container prune -f 2>/dev/null || true`;
     } // end service injection
 
 
