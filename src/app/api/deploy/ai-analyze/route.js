@@ -502,15 +502,24 @@ ${existingScript || '# No previous script set'}`;
         if (dir) {
           buildSection += `
 echo "Building ${svc}:latest from ./${dir}..."
-docker build --no-cache -t ${svc}:latest ./${dir}`;
+if ! docker build --no-cache -t ${svc}:latest ./${dir}; then
+  echo "[deploy] ERROR: Build failed for ${svc} — aborting deployment."
+  exit 1
+fi`;
         } else {
           buildSection += `
 if [ -d "${guessedSubdir}" ] && [ -f "${guessedSubdir}/Dockerfile" ]; then
   echo "Building ${svc}:latest from ./${guessedSubdir}..."
-  docker build --no-cache -t ${svc}:latest ./${guessedSubdir}
+  if ! docker build --no-cache -t ${svc}:latest ./${guessedSubdir}; then
+    echo "[deploy] ERROR: Build failed for ${svc} — aborting deployment."
+    exit 1
+  fi
 elif [ -f "Dockerfile" ]; then
   echo "Building ${svc}:latest from ./..."
-  docker build --no-cache -t ${svc}:latest ./
+  if ! docker build --no-cache -t ${svc}:latest ./; then
+    echo "[deploy] ERROR: Build failed for ${svc} — aborting deployment."
+    exit 1
+  fi
 fi`;
         }
       }
@@ -571,7 +580,7 @@ deploy_service() {
       --update-order start-first \\
       --update-delay 5s \\
       --update-monitor 15s \\
-      --update-failure-action pause \\
+      --update-failure-action rollback \\
       --rollback-order start-first \\
       --rollback-monitor 15s \\
       --stop-grace-period 30s \\
@@ -596,7 +605,7 @@ deploy_service() {
       --detach \\
       --no-resolve-image \\
       --update-order start-first \\
-      --update-failure-action pause \\
+      --update-failure-action rollback \\
       --rollback-order start-first \\
       --stop-grace-period 30s \\
       "$IMAGE"; then
