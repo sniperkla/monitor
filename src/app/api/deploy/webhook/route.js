@@ -1209,24 +1209,12 @@ fi
           tmuxSession = `deploy-${projectId.replace(/[^a-zA-Z0-9_-]/g, '-')}`.slice(0, 60);
           const tmuxWrapperPath = `/tmp/deploy_tmux_${projectId}.sh`;
 
-          // Write a file via SSH exec (base64 + printf) instead of SFTP.
-          // This bypasses SFTP "Failure" errors on hardened servers where SFTP writes
-          // to /tmp are blocked by noexec or restricted SFTP subsystems.
+          // Write a file via SSH exec — sends content as base64 over stdin.
+          // Avoids SFTP "Failure" errors and ARG_MAX limits on large scripts.
           const writeViaSsh = (remotePath, content, mode, cb) => {
             const b64 = Buffer.from(content).toString('base64');
-            // Split into chunks to avoid ARG_MAX limits on very large scripts
-            const CHUNK = 4096;
-            const chunks = [];
-            for (let i = 0; i < b64.length; i += CHUNK) chunks.push(b64.slice(i, i + CHUNK));
-            const writeCmd = [
-              `rm -f ${remotePath}`,
-              ...chunks.map((c, i) => i === 0
-                ? `printf '%s' '${c}' > ${remotePath}.b64`
-                : `printf '%s' '${c}' >> ${remotePath}.b64`),
-              `base64 -d < ${remotePath}.b64 > ${remotePath}`,
-              `rm -f ${remotePath}.b64`,
-              `chmod ${mode.toString(8)} ${remotePath}`,
-            ].join(' && ');
+            // The remote command reads base64 from stdin and decodes to file
+            const writeCmd = `base64 -d > ${remotePath} && chmod ${mode.toString(8)} ${remotePath}`;
             conn.exec(writeCmd, (err, stream) => {
               if (err) return cb(err);
               let stderr = '';
@@ -1235,6 +1223,9 @@ fi
                 if (code !== 0) return cb(new Error(stderr.trim() || `write exited ${code}`));
                 cb(null);
               });
+              stream.on('error', cb);
+              // Write base64 content as stdin and close
+              stream.end(b64 + '\n');
             });
           };
 
