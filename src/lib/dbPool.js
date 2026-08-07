@@ -218,7 +218,9 @@ export function buildMongoUri(conn, password) {
   }
 
   const params = new URLSearchParams();
-  if (conn.authSource) params.set('authSource', conn.authSource);
+  // Default to authSource=admin when credentials are present but authSource is missing
+  const authSource = conn.authSource || (conn.username && password ? 'admin' : null);
+  if (authSource) params.set('authSource', authSource);
   if (conn.dbOptions && typeof conn.dbOptions === 'object') {
     for (const [key, value] of Object.entries(conn.dbOptions)) {
       if (value != null && value !== '') params.set(key, String(value));

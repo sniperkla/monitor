@@ -8,7 +8,7 @@ import {
   CheckCircle, AlertCircle, Calendar, ShieldAlert, ArrowRight,
   FolderPlus, History, Key, Settings, Loader, CloudLightning, FileJson, ShieldCheck,
   Copy, Server, Wifi, WifiOff, Terminal, ChevronDown, Check, Clock,
-  XCircle, TrendingUp, X, Zap, Shield, BarChart3
+  XCircle, TrendingUp, X, Zap, Shield, BarChart3, Folder, ExternalLink
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
@@ -368,6 +368,10 @@ export default function MongoBackupApp() {
   const [importFileData, setImportFileData] = useState(null);
   const [importLogs, setImportLogs] = useState([]);
   const fileInputRef = useRef(null);
+  // Batch import state
+  const [batchImportMode, setBatchImportMode] = useState(false);
+  const [batchFiles, setBatchFiles] = useState([]); // [{ file, name, data, collection }]
+  const [batchImporting, setBatchImporting] = useState(false);
 
   // ── Google Drive Link State ──────────────────────────────────────────────
   const [driveConnected, setDriveConnected] = useState(false);
@@ -378,6 +382,7 @@ export default function MongoBackupApp() {
   const [driveFolders, setDriveFolders] = useState([]);
   const [newFolderName, setNewFolderName] = useState('');
   const [driveLoading, setDriveLoading] = useState(false);
+  const [showCredGuide, setShowCredGuide] = useState(true);
 
   // SSH Server connections for runner execution target & replica set scanning
   const sshConnections = connections.filter(c => c.type === 'ssh' || (!c.type && !c.dbProvider));
@@ -396,6 +401,8 @@ export default function MongoBackupApp() {
   const [jobEnabled, setJobEnabled] = useState(true);
   const [editingJobId, setEditingJobId] = useState(null);
   const [jobFolderInputActive, setJobFolderInputActive] = useState(false);
+  const [jobFolderSelectedIndex, setJobFolderSelectedIndex] = useState(-1);
+  const jobFolderDropdownRef = useRef(null); // For scroll-into-view
   const [filteredDriveFolderOptions, setFilteredDriveFolderOptions] = useState([]);
   const [driveBrowseVisible, setDriveBrowseVisible] = useState(false);
   const [driveBrowseMode, setDriveBrowseMode] = useState('job');
@@ -405,9 +412,19 @@ export default function MongoBackupApp() {
   // ── Sync History State ─────────────────────────────────────────────
   const [historyRuns, setHistoryRuns] = useState([]);
   const [historyLoading, setHistoryLoading] = useState(false);
+  // ── SSH Cron Log State ─────────────────────────────────────────────
+  const [cronLogs, setCronLogs] = useState({}); // { [jobId]: { logTail, lastRunFromLog } }
+  const [cronLogLoading, setCronLogLoading] = useState({}); // { [jobId]: bool }
+  const [cronLogExpanded, setCronLogExpanded] = useState({}); // { [jobId]: bool } - collapse state
   // ── Restore Result Modal & Live Progress State ─────────────────────
   const [restoreResult, setRestoreResult] = useState(null); // null = closed
   const [restoreProgress, setRestoreProgress] = useState(null); // { active, total, current, percent, currentFile, processedFiles }
+  // ── Dependency Pre-flight Check Modal ─────────────────────────────
+  const [depCheckModal, setDepCheckModal] = useState(null); // null = closed, { status, missingTools, recommendations, pendingJobPayload }
+  const [depCheckLoading, setDepCheckLoading] = useState(false);
+  // ── Live Install Terminal Modal ────────────────────────────────────
+  const [installTerminal, setInstallTerminal] = useState(null); // null = closed, { lines[], done, code, pendingJobPayload }
+  const installTerminalRef = useRef(null);
 
   const fetchHistory = async () => {
     setHistoryLoading(true);
@@ -422,6 +439,52 @@ export default function MongoBackupApp() {
     } finally {
       setHistoryLoading(false);
     }
+  };
+
+  // Auto-refresh execution history every 10 seconds when on History tab
+  useEffect(() => {
+    if (activeTab !== 'history') return;
+    
+    // Initial fetch
+    fetchHistory();
+    fetchAllCronLogs();
+    
+    // Set up polling
+    const interval = setInterval(() => {
+      fetchHistory();
+      fetchAllCronLogs();
+    }, 10000); // 10 seconds
+    
+    return () => clearInterval(interval);
+  }, [activeTab]);
+
+  const fetchCronLog = async (job) => {
+    if (!job.targetSshConnId) return;
+    setCronLogLoading(prev => ({ ...prev, [job.id]: true }));
+    try {
+      const res = await apiFetch(
+        `/api/mongo-sync/cron?jobId=${encodeURIComponent(job.id)}&targetSshConnId=${encodeURIComponent(job.targetSshConnId)}&fetchLogs=1`
+      );
+      const data = await res.json();
+      if (data.success) {
+        setCronLogs(prev => ({ ...prev, [job.id]: {
+          logTail: data.logTail || '(no log output)',
+          lastRunFromLog: data.lastRunFromLog,
+          installed: data.installed,
+          cronLine: data.cronLine,
+        }}));
+      } else {
+        setCronLogs(prev => ({ ...prev, [job.id]: { logTail: `Error: ${data.error}`, lastRunFromLog: null } }));
+      }
+    } catch (err) {
+      setCronLogs(prev => ({ ...prev, [job.id]: { logTail: `Error: ${err.message}`, lastRunFromLog: null } }));
+    } finally {
+      setCronLogLoading(prev => ({ ...prev, [job.id]: false }));
+    }
+  };
+
+  const fetchAllCronLogs = () => {
+    jobs.filter(j => j.targetSshConnId && j.schedule !== 'manual').forEach(j => fetchCronLog(j));
   };
 
   const handleClearHistory = async () => {
@@ -568,6 +631,10 @@ export default function MongoBackupApp() {
 
   // ── Restore State ───────────────────────────────────────────────
   const [restoreFolderId, setRestoreFolderId] = useState('');
+  const [restoreFolderInputActive, setRestoreFolderInputActive] = useState(false);
+  const [restoreFolderSelectedIndex, setRestoreFolderSelectedIndex] = useState(-1);
+  const restoreFolderDropdownRef = useRef(null); // For scroll-into-view
+  const [filteredRestoreFolderOptions, setFilteredRestoreFolderOptions] = useState([]);
   const [backupFiles, setBackupFiles] = useState([]);
   const [selectedFileId, setSelectedFileId] = useState('');
   const [restoreConnId, setRestoreConnId] = useState('default');
@@ -758,6 +825,7 @@ export default function MongoBackupApp() {
           setJobFolderId(data.folders[0].id);
           setRestoreFolderId(data.folders[0].id);
           setJobFolderName(data.folders[0].name);
+          setRestoreFolderName(data.folders[0].name);
         }
       }
     } catch (err) {
@@ -779,8 +847,66 @@ export default function MongoBackupApp() {
 
   // ── Import Logic ──────────────────────────────────────────────────────────
   const handleFileChange = (e) => {
-    const file = e.target.files[0];
-    if (!file) return;
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+
+    // Batch mode: handle multiple files
+    if (batchImportMode) {
+      const filePromises = Array.from(files).map(file => {
+        return new Promise((resolve) => {
+          const reader = new FileReader();
+          reader.onload = (evt) => {
+            try {
+              const parsed = JSON.parse(evt.target.result);
+              if (Array.isArray(parsed)) {
+                const collectionName = file.name.replace(/\.json$/i, '');
+                resolve({
+                  file,
+                  name: file.name,
+                  data: parsed,
+                  collection: collectionName,
+                  size: parsed.length,
+                  error: null
+                });
+              } else {
+                resolve({
+                  file,
+                  name: file.name,
+                  data: null,
+                  collection: null,
+                  size: 0,
+                  error: 'JSON must contain an array of documents'
+                });
+              }
+            } catch (err) {
+              resolve({
+                file,
+                name: file.name,
+                data: null,
+                collection: null,
+                size: 0,
+                error: 'Invalid JSON format'
+              });
+            }
+          };
+          reader.readAsText(file);
+        });
+      });
+
+      Promise.all(filePromises).then(results => {
+        setBatchFiles(results);
+        const validCount = results.filter(r => r.data).length;
+        const errorCount = results.filter(r => r.error).length;
+        setImportLogs([
+          `Loaded ${results.length} file(s): ${validCount} valid, ${errorCount} invalid`,
+          ...results.filter(r => r.error).map(r => `❌ ${r.name}: ${r.error}`)
+        ]);
+      });
+      return;
+    }
+
+    // Single file mode (original behavior)
+    const file = files[0];
     setImportFile(file);
     const reader = new FileReader();
     reader.onload = (evt) => {
@@ -805,6 +931,71 @@ export default function MongoBackupApp() {
   };
 
   const executeImport = async () => {
+    // Batch mode
+    if (batchImportMode) {
+      const validFiles = batchFiles.filter(f => f.data && f.collection);
+      if (validFiles.length === 0) {
+        setImportLogs(['No valid files to import']);
+        return;
+      }
+
+      setBatchImporting(true);
+      setImportLogs([`Starting batch import of ${validFiles.length} file(s)...`]);
+
+      let successCount = 0;
+      let failCount = 0;
+      const logs = [`Starting batch import of ${validFiles.length} file(s)...`];
+
+      for (const fileObj of validFiles) {
+        logs.push(`\n📄 Importing ${fileObj.name} → ${importDbName}.${fileObj.collection}`);
+        setImportLogs([...logs]);
+
+        try {
+          const res = await apiFetch('/api/mongo-sync/import', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              connectionId: importConnId,
+              database: importDbName,
+              collection: fileObj.collection,
+              documents: fileObj.data,
+              mode: importMode
+            })
+          });
+          const data = await res.json();
+          
+          if (data.success) {
+            successCount++;
+            logs.push(`  ✅ Success: ${data.insertedCount} inserted, ${data.updatedCount} updated`);
+          } else {
+            failCount++;
+            logs.push(`  ❌ Failed: ${data.error}`);
+          }
+        } catch (err) {
+          failCount++;
+          logs.push(`  ❌ Error: ${err.message}`);
+        }
+        
+        setImportLogs([...logs]);
+      }
+
+      logs.push(`\n=== Batch Import Complete ===`);
+      logs.push(`✅ Succeeded: ${successCount}`);
+      logs.push(`❌ Failed: ${failCount}`);
+      logs.push(`📊 Total: ${validFiles.length}`);
+      setImportLogs(logs);
+
+      addNotification({
+        title: 'Batch Import Complete',
+        message: `${successCount} of ${validFiles.length} files imported successfully`,
+        type: successCount === validFiles.length ? 'success' : 'warning'
+      });
+
+      setBatchImporting(false);
+      return;
+    }
+
+    // Single file mode (original)
     if (!importFileData || !importCollName.trim()) return;
     setLoading(true);
     setImportLogs(prev => [...prev, 'Starting import...']);
@@ -946,32 +1137,99 @@ export default function MongoBackupApp() {
     }
 
     const targetConn = dbConnections.find(c => c._id === jobConnId);
+
+    // ── Pre-flight dependency check for scheduled jobs ─────────────────────
+    if (jobSchedule !== 'manual' && targetSshConnId) {
+      setDepCheckLoading(true);
+      try {
+        const checkRes = await apiFetch('/api/mongo-sync/check-dependencies', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ targetSshConnId })
+        });
+        const checkData = await checkRes.json();
+        setDepCheckLoading(false);
+
+        if (!checkData.success) {
+          addNotification({ title: 'Dependency Check Failed', message: checkData.error, type: 'error' });
+          return;
+        }
+
+        // Show confirmation modal if any tools are missing
+        if (checkData.missingTools.length > 0) {
+          setDepCheckModal({
+            status: checkData.status,
+            missingTools: checkData.missingTools,
+            recommendations: checkData.recommendations,
+            canAutoInstall: checkData.canAutoInstall,
+            pendingJobPayload: {
+              name: jobName.trim(),
+              connectionId: jobConnId,
+              connectionName: targetConn?.name || 'Local Database',
+              database: jobDbName.trim(),
+              collection: jobCollName.trim(),
+              driveFolderId: jobFolderId,
+              driveFolderName: jobFolderName || driveFolders.find(f => f.id === jobFolderId)?.name || 'Default Folder',
+              schedule: jobSchedule,
+              enabled: jobEnabled,
+              targetSshConnId,
+              isEdit: !!editingJobId,
+              editingJobId
+            }
+          });
+          return; // Wait for user to confirm in modal
+        }
+      } catch (checkErr) {
+        setDepCheckLoading(false);
+        addNotification({ title: 'Dependency Check Error', message: checkErr.message, type: 'error' });
+        return;
+      }
+    }
+
+    // All deps OK — proceed straight to save + cron install
+    await saveJobAndInstallCron({
+      name: jobName.trim(),
+      connectionId: jobConnId,
+      connectionName: targetConn?.name || 'Local Database',
+      database: jobDbName.trim(),
+      collection: jobCollName.trim(),
+      driveFolderId: jobFolderId,
+      driveFolderName: jobFolderName || driveFolders.find(f => f.id === jobFolderId)?.name || 'Default Folder',
+      schedule: jobSchedule,
+      enabled: jobEnabled,
+      targetSshConnId: jobSchedule !== 'manual' ? targetSshConnId : null,
+      isEdit: !!editingJobId,
+      editingJobId
+    });
+  };
+
+  const saveJobAndInstallCron = async (payload) => {
     setLoading(true);
     try {
       const res = await apiFetch('/api/mongo-sync/jobs', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          id: editingJobId,
-          name: jobName.trim(),
-          connectionId: jobConnId,
-          connectionName: targetConn?.name || 'Local Database',
-          database: jobDbName.trim(),
-          collection: jobCollName.trim(),
-          driveFolderId: jobFolderId,
-          driveFolderName: jobFolderName || driveFolders.find(f => f.id === jobFolderId)?.name || 'Default Folder',
-          schedule: jobSchedule,
-          enabled: jobEnabled,
-          targetSshConnId: jobSchedule !== 'manual' ? targetSshConnId : null
+          id: payload.editingJobId,
+          name: payload.name,
+          connectionId: payload.connectionId,
+          connectionName: payload.connectionName,
+          database: payload.database,
+          collection: payload.collection,
+          driveFolderId: payload.driveFolderId,
+          driveFolderName: payload.driveFolderName,
+          schedule: payload.schedule,
+          enabled: payload.enabled,
+          targetSshConnId: payload.targetSshConnId,
+          depWarning: payload.depWarning || null
         })
       });
       const data = await res.json();
       if (data.success) {
         setJobs(data.data);
-        // If schedule is set, install the cron on the user's SSH server
-        if (jobSchedule !== 'manual' && targetSshConnId) {
+        if (payload.schedule !== 'manual' && payload.targetSshConnId) {
           const savedJob = data.data.find(j =>
-            j.name === jobName.trim() && j.connectionId === jobConnId
+            j.name === payload.name && j.connectionId === payload.connectionId
           );
           if (savedJob) {
             try {
@@ -981,18 +1239,18 @@ export default function MongoBackupApp() {
                 body: JSON.stringify({
                   jobId: savedJob.id,
                   jobName: savedJob.name,
-                  schedule: jobSchedule,
-                  targetSshConnId,
-                  connectionId: jobConnId,
-                  database: jobDbName.trim(),
-                  collection: jobCollName.trim(),
-                  driveFolderId: jobFolderId
+                  schedule: payload.schedule,
+                  targetSshConnId: payload.targetSshConnId,
+                  connectionId: payload.connectionId,
+                  database: payload.database,
+                  collection: payload.collection,
+                  driveFolderId: payload.driveFolderId
                 })
               });
               const cronData = await cronRes.json();
               if (cronData.success) {
                 addNotification({
-                  title: editingJobId ? 'Job Updated' : 'Job Created',
+                  title: payload.isEdit ? 'Job Updated' : 'Job Created',
                   message: `✅ Schedule installed on SSH server — ${cronData.humanSchedule}. 100% user-side execution.`,
                   type: 'success'
                 });
@@ -1013,7 +1271,7 @@ export default function MongoBackupApp() {
           }
         } else {
           addNotification({
-            title: editingJobId ? 'Job Updated' : 'Job Created',
+            title: payload.isEdit ? 'Job Updated' : 'Job Created',
             message: 'Job saved as manual-only (no scheduled cron).',
             type: 'success'
           });
@@ -1044,6 +1302,7 @@ export default function MongoBackupApp() {
   };
 
   const handleEditJob = (job) => {
+    setActiveTab('jobs'); // Switch to jobs tab so form is visible
     setEditingJobId(job.id);
     setJobName(job.name);
     setJobConnId(job.connectionId);
@@ -1055,6 +1314,11 @@ export default function MongoBackupApp() {
     setRestoreFolderName(job.driveFolderName || '');
     setJobSchedule(job.schedule);
     setJobEnabled(job.enabled);
+    // Scroll form into view after a short delay for tab animation
+    setTimeout(() => {
+      const formEl = document.querySelector('form[onsubmit]');
+      if (formEl) formEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }, 150);
   };
 
   const handleDeleteJob = async (id) => {
@@ -1247,6 +1511,7 @@ export default function MongoBackupApp() {
     setJobFolderInputActive(true);
     const filtered = driveFolders.filter(f => f.name.toLowerCase().includes(value.toLowerCase()));
     setFilteredDriveFolderOptions(filtered.length > 0 ? filtered : driveFolders);
+    setJobFolderSelectedIndex(filtered.length > 0 ? 0 : -1);
     const exact = driveFolders.find(f => f.name.toLowerCase() === value.toLowerCase());
     if (exact) {
       setJobFolderId(exact.id);
@@ -1257,11 +1522,146 @@ export default function MongoBackupApp() {
     setJobFolderId(folder.id);
     setJobFolderName(folder.name);
     setJobFolderInputActive(false);
+    setJobFolderSelectedIndex(-1);
     setFilteredDriveFolderOptions([]);
   };
 
   const handleJobFolderInputBlur = () => {
-    setTimeout(() => setJobFolderInputActive(false), 150);
+    setTimeout(() => {
+      setJobFolderInputActive(false);
+      setJobFolderSelectedIndex(-1);
+    }, 150);
+  };
+
+  const handleJobFolderKeyDown = (e) => {
+    if (!jobFolderInputActive || filteredDriveFolderOptions.length === 0) {
+      if (e.key === 'ArrowDown' || (e.key === 'Tab' && !e.shiftKey)) {
+        e.preventDefault();
+        setJobFolderInputActive(true);
+        const filtered = driveFolders.filter(f => f.name.toLowerCase().includes(jobFolderName.toLowerCase()));
+        setFilteredDriveFolderOptions(filtered.length > 0 ? filtered : driveFolders);
+        setJobFolderSelectedIndex(filtered.length > 0 ? 0 : -1);
+      }
+      return;
+    }
+
+    if (e.key === 'Tab') {
+      e.preventDefault();
+      const idxToUse = jobFolderSelectedIndex >= 0 ? jobFolderSelectedIndex : 0;
+      if (filteredDriveFolderOptions[idxToUse]) {
+        handleSelectJobFolder(filteredDriveFolderOptions[idxToUse]);
+      }
+    } else if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      const newIdx = jobFolderSelectedIndex < filteredDriveFolderOptions.length - 1 ? jobFolderSelectedIndex + 1 : 0;
+      setJobFolderSelectedIndex(newIdx);
+      // Scroll into view
+      setTimeout(() => {
+        const dropdown = jobFolderDropdownRef.current;
+        if (dropdown) {
+          const selected = dropdown.querySelector(`[data-index="${newIdx}"]`);
+          if (selected) selected.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        }
+      }, 10);
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      const newIdx = jobFolderSelectedIndex > 0 ? jobFolderSelectedIndex - 1 : filteredDriveFolderOptions.length - 1;
+      setJobFolderSelectedIndex(newIdx);
+      // Scroll into view
+      setTimeout(() => {
+        const dropdown = jobFolderDropdownRef.current;
+        if (dropdown) {
+          const selected = dropdown.querySelector(`[data-index="${newIdx}"]`);
+          if (selected) selected.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        }
+      }, 10);
+    } else if (e.key === 'Enter' && jobFolderSelectedIndex >= 0) {
+      e.preventDefault();
+      handleSelectJobFolder(filteredDriveFolderOptions[jobFolderSelectedIndex]);
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      setJobFolderInputActive(false);
+      setJobFolderSelectedIndex(-1);
+    }
+  };
+
+  const handleRestoreFolderInputChange = (value) => {
+    setRestoreFolderName(value);
+    setRestoreFolderInputActive(true);
+    const filtered = driveFolders.filter(f => f.name.toLowerCase().includes(value.toLowerCase()));
+    setFilteredRestoreFolderOptions(filtered.length > 0 ? filtered : driveFolders);
+    setRestoreFolderSelectedIndex(filtered.length > 0 ? 0 : -1);
+    const exact = driveFolders.find(f => f.name.toLowerCase() === value.toLowerCase());
+    if (exact) {
+      setRestoreFolderId(exact.id);
+    }
+  };
+
+  const handleSelectRestoreFolder = (folder) => {
+    setRestoreFolderId(folder.id);
+    setRestoreFolderName(folder.name);
+    setRestoreFolderInputActive(false);
+    setRestoreFolderSelectedIndex(-1);
+    setFilteredRestoreFolderOptions([]);
+  };
+
+  const handleRestoreFolderInputBlur = () => {
+    setTimeout(() => {
+      setRestoreFolderInputActive(false);
+      setRestoreFolderSelectedIndex(-1);
+    }, 150);
+  };
+
+  const handleRestoreFolderKeyDown = (e) => {
+    if (!restoreFolderInputActive || filteredRestoreFolderOptions.length === 0) {
+      if (e.key === 'ArrowDown' || (e.key === 'Tab' && !e.shiftKey)) {
+        e.preventDefault();
+        setRestoreFolderInputActive(true);
+        const filtered = driveFolders.filter(f => f.name.toLowerCase().includes(restoreFolderName.toLowerCase()));
+        setFilteredRestoreFolderOptions(filtered.length > 0 ? filtered : driveFolders);
+        setRestoreFolderSelectedIndex(filtered.length > 0 ? 0 : -1);
+      }
+      return;
+    }
+
+    if (e.key === 'Tab') {
+      e.preventDefault();
+      const idxToUse = restoreFolderSelectedIndex >= 0 ? restoreFolderSelectedIndex : 0;
+      if (filteredRestoreFolderOptions[idxToUse]) {
+        handleSelectRestoreFolder(filteredRestoreFolderOptions[idxToUse]);
+      }
+    } else if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      const newIdx = restoreFolderSelectedIndex < filteredRestoreFolderOptions.length - 1 ? restoreFolderSelectedIndex + 1 : 0;
+      setRestoreFolderSelectedIndex(newIdx);
+      // Scroll into view
+      setTimeout(() => {
+        const dropdown = restoreFolderDropdownRef.current;
+        if (dropdown) {
+          const selected = dropdown.querySelector(`[data-index="${newIdx}"]`);
+          if (selected) selected.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        }
+      }, 10);
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      const newIdx = restoreFolderSelectedIndex > 0 ? restoreFolderSelectedIndex - 1 : filteredRestoreFolderOptions.length - 1;
+      setRestoreFolderSelectedIndex(newIdx);
+      // Scroll into view
+      setTimeout(() => {
+        const dropdown = restoreFolderDropdownRef.current;
+        if (dropdown) {
+          const selected = dropdown.querySelector(`[data-index="${newIdx}"]`);
+          if (selected) selected.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        }
+      }, 10);
+    } else if (e.key === 'Enter' && restoreFolderSelectedIndex >= 0) {
+      e.preventDefault();
+      handleSelectRestoreFolder(filteredRestoreFolderOptions[restoreFolderSelectedIndex]);
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      setRestoreFolderInputActive(false);
+      setRestoreFolderSelectedIndex(-1);
+    }
   };
 
   const executeRestore = async () => {
@@ -1629,6 +2029,326 @@ export default function MongoBackupApp() {
         )}
       </AnimatePresence>
 
+      {/* ── Live Install Terminal Modal ─────────────────────────────────────── */}
+      <AnimatePresence>
+        {installTerminal && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[9999] flex items-center justify-center p-4"
+            style={{ background: 'rgba(0,0,0,0.75)', backdropFilter: 'blur(12px)' }}
+          >
+            <motion.div
+              initial={{ scale: 0.93, opacity: 0, y: 20 }}
+              animate={{ scale: 1, opacity: 1, y: 0 }}
+              exit={{ scale: 0.93, opacity: 0, y: 20 }}
+              transition={{ type: 'spring', stiffness: 350, damping: 28 }}
+              className="w-full max-w-2xl rounded-3xl border border-emerald-500/20 bg-[#0d1117] shadow-2xl overflow-hidden"
+              style={{ boxShadow: '0 0 80px rgba(52,211,153,0.08), 0 25px 50px rgba(0,0,0,0.7)' }}
+            >
+              {/* Title bar */}
+              <div className="flex items-center gap-2 px-4 py-3 border-b border-white/5 bg-[#161b22]">
+                <div className="flex gap-1.5">
+                  <div className="w-3 h-3 rounded-full bg-red-500/70" />
+                  <div className="w-3 h-3 rounded-full bg-yellow-500/70" />
+                  <div className="w-3 h-3 rounded-full bg-emerald-500/70" />
+                </div>
+                <span className="flex-1 text-center text-[11px] font-mono text-white/40">
+                  mongosync — install-deps
+                </span>
+                {!installTerminal.done && (
+                  <span className="flex items-center gap-1.5 text-[10px] text-emerald-400 font-mono">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                    running...
+                  </span>
+                )}
+                {installTerminal.done && (
+                  <span className={`text-[10px] font-mono font-bold ${installTerminal.code === 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                    {installTerminal.code === 0 ? '✅ done' : `❌ exit ${installTerminal.code}`}
+                  </span>
+                )}
+              </div>
+
+              {/* Terminal output */}
+              <div
+                ref={installTerminalRef}
+                className="font-mono text-[11px] leading-relaxed p-4 overflow-y-auto bg-[#0d1117] text-green-300"
+                style={{ height: '380px', whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}
+              >
+                {installTerminal.lines.length === 0 && (
+                  <span className="text-white/30">
+                    Connecting to SSH server
+                    <span className="animate-pulse">...</span>
+                    <br />
+                    <span className="text-white/20 text-[10px]">(timeout in 2 min if unreachable)</span>
+                  </span>
+                )}
+                {installTerminal.lines.map((line, i) => {
+                  const color =
+                    line.includes('✅') ? 'text-emerald-400' :
+                    line.includes('❌') ? 'text-red-400' :
+                    line.includes('⚠️') ? 'text-amber-400' :
+                    line.includes('===') ? 'text-white font-bold' :
+                    line.includes('---') ? 'text-blue-300' :
+                    line.includes('Downloading') || line.includes('Trying') ? 'text-yellow-300' :
+                    'text-green-300';
+                  return (
+                    <div key={i} className={color}>{line}</div>
+                  );
+                })}
+                {!installTerminal.done && (
+                  <span className="text-white/40 animate-pulse">█</span>
+                )}
+              </div>
+
+              {/* Footer — smart status based on what actually installed */}
+              {(() => {
+                const lines = installTerminal.lines.join('\n');
+                const hasMongoexport = lines.includes('✅ mongoexport');
+                const hasShell = lines.includes('✅ mongosh') || lines.includes('✅ mongo:');
+                const hasPymongo = lines.includes('✅ pymongo');
+                const canList = hasShell || hasPymongo;
+                const fullyReady = hasMongoexport && canList;
+                const missingList = [];
+                if (!hasMongoexport) missingList.push('mongoexport');
+                if (!canList) missingList.push('mongosh or pymongo');
+
+                return (
+                  <div className="px-4 py-3 border-t border-white/5 bg-[#161b22] space-y-2">
+                    {/* Status summary */}
+                    {installTerminal.done && (
+                      <div className={`flex items-center gap-2 px-3 py-2 rounded-xl text-[11px] font-mono ${
+                        fullyReady
+                          ? 'bg-emerald-500/10 border border-emerald-500/30 text-emerald-400'
+                          : hasMongoexport
+                          ? 'bg-amber-500/10 border border-amber-500/30 text-amber-400'
+                          : 'bg-red-500/10 border border-red-500/30 text-red-400'
+                      }`}>
+                        {fullyReady ? '✅' : hasMongoexport ? '⚠️' : '❌'}
+                        <span className="flex-1">
+                          {fullyReady
+                            ? 'All dependencies ready. You can proceed.'
+                            : hasMongoexport
+                            ? 'mongoexport OK but no collection listing tool. "All Collections" jobs may fail.'
+                            : 'Required tools missing. Cannot install cron until fixed.'}
+                        </span>
+                      </div>
+                    )}
+
+                    {/* Manual install instructions if anything failed */}
+                    {installTerminal.done && missingList.length > 0 && (
+                      <div className="bg-[#0d1117] border border-white/10 rounded-xl p-3 text-[10px] font-mono text-white/60 space-y-1">
+                        <p className="text-white/40 font-bold uppercase tracking-wider mb-1.5">Manual install required on the SSH server:</p>
+                        {!hasMongoexport && (
+                          <p className="text-amber-300">
+                            # mongoexport (mongodb-database-tools)<br/>
+                            curl -fsSL https://fastdl.mongodb.org/tools/db/mongodb-database-tools-ubuntu2204-x86_64-100.10.0.tgz | tar -xz -C /tmp && cp /tmp/mongodb-database-tools-*/bin/mongoexport ~/.local/bin/ && chmod +x ~/.local/bin/mongoexport
+                          </p>
+                        )}
+                        {!canList && (
+                          <p className="text-blue-300 mt-1">
+                            # pymongo (recommended — python3 is already installed)<br/>
+                            pip3 install pymongo --user
+                          </p>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Buttons */}
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => setInstallTerminal(null)}
+                        disabled={!installTerminal.done}
+                        className="flex-1 py-2 rounded-xl text-xs font-bold bg-white/5 hover:bg-white/10 text-white/50 hover:text-white/80 border border-white/10 transition-all disabled:opacity-30 disabled:cursor-not-allowed"
+                      >
+                        {installTerminal.done ? 'Close' : 'Running...'}
+                      </button>
+                      {installTerminal.done && (
+                        <button
+                          disabled={!hasMongoexport}
+                          onClick={async () => {
+                            const payload = {
+                              ...installTerminal.pendingJobPayload,
+                              depWarning: fullyReady ? null : missingList.length > 0
+                                ? 'Missing: ' + missingList.join(', ') + '. Install manually on SSH server.'
+                                : null
+                            };
+                            setInstallTerminal(null);
+                            await saveJobAndInstallCron(payload);
+                          }}
+                          className={`flex-1 py-2 rounded-xl text-xs font-bold transition-all disabled:opacity-40 disabled:cursor-not-allowed ${
+                            fullyReady
+                              ? 'bg-emerald-500 hover:bg-emerald-400 text-black shadow-lg shadow-emerald-500/25'
+                              : hasMongoexport
+                              ? 'bg-amber-500 hover:bg-amber-400 text-black'
+                              : 'bg-red-500/20 text-red-400 border border-red-500/30 cursor-not-allowed'
+                          }`}
+                          title={!hasMongoexport ? 'Install mongoexport first before creating this job' : ''}
+                        >
+                          {fullyReady
+                            ? '✅ Continue → Save & Install Cron'
+                            : hasMongoexport
+                            ? '⚠️ Continue (collection listing limited)'
+                            : '❌ Cannot Continue — Install Tools First'}
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                );
+              })()}
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* ── Dependency Pre-flight Check Modal ──────────────────────────────── */}
+      <AnimatePresence>
+        {depCheckModal && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[9999] flex items-center justify-center p-4"
+            style={{ background: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(12px)' }}
+          >
+            <motion.div
+              initial={{ scale: 0.9, opacity: 0, y: 20 }}
+              animate={{ scale: 1, opacity: 1, y: 0 }}
+              exit={{ scale: 0.9, opacity: 0, y: 20 }}
+              transition={{ type: 'spring', stiffness: 350, damping: 28 }}
+              className="w-full max-w-md rounded-3xl border border-amber-500/30 bg-[var(--bg-card)] p-6 shadow-2xl"
+              style={{ boxShadow: '0 0 60px rgba(245,158,11,0.12), 0 25px 50px rgba(0,0,0,0.6)' }}
+            >
+              {/* Header */}
+              <div className="flex items-center gap-3 mb-5">
+                <div className="w-11 h-11 rounded-2xl bg-amber-500/15 border border-amber-500/30 flex items-center justify-center shrink-0">
+                  <ShieldAlert size={22} className="text-amber-400" />
+                </div>
+                <div>
+                  <h3 className="font-extrabold text-sm text-[var(--text-primary)]">Missing Dependencies Detected</h3>
+                  <p className="text-[11px] text-[var(--text-muted)] mt-0.5">Required tools not found on the target SSH server</p>
+                </div>
+                <button onClick={() => setDepCheckModal(null)} className="ml-auto text-[var(--text-muted)] hover:text-[var(--text-primary)] transition-colors">
+                  <X size={16} />
+                </button>
+              </div>
+
+              {/* Tool Status Grid */}
+              <div className="grid grid-cols-2 gap-2 mb-4">
+                {['mongoexport', 'mongosh', 'python3'].map(tool => {
+                  const info = depCheckModal.status[tool];
+                  const installed = info?.installed;
+                  return (
+                    <div key={tool} className={`flex items-center gap-2 px-3 py-2 rounded-xl border text-xs font-mono ${
+                      installed
+                        ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400'
+                        : 'bg-red-500/10 border-red-500/30 text-red-400'
+                    }`}>
+                      {installed
+                        ? <CheckCircle size={13} className="shrink-0" />
+                        : <XCircle size={13} className="shrink-0" />}
+                      <span className="truncate">{tool}</span>
+                    </div>
+                  );
+                })}
+                <div className={`flex items-center gap-2 px-3 py-2 rounded-xl border text-xs font-mono ${
+                  depCheckModal.status.mongosh?.installed || depCheckModal.status.mongo?.installed
+                    ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400'
+                    : 'bg-amber-500/10 border-amber-500/30 text-amber-400'
+                }`}>
+                  {depCheckModal.status.mongosh?.installed || depCheckModal.status.mongo?.installed
+                    ? <CheckCircle size={13} className="shrink-0" />
+                    : <AlertCircle size={13} className="shrink-0" />}
+                  <span className="truncate">mongo shell</span>
+                </div>
+              </div>
+
+              {/* What will be installed */}
+              <div className="rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] p-3 mb-4 space-y-1.5">
+                <p className="text-[11px] font-bold text-[var(--text-muted)] uppercase tracking-wider mb-2">Auto-install plan</p>
+                {depCheckModal.recommendations.map((rec, i) => (
+                  <div key={i} className="flex items-start gap-2 text-[11px] text-[var(--text-secondary)]">
+                    <span className="mt-0.5 shrink-0">
+                      {rec.startsWith('⚠️') ? '⚠️' : rec.startsWith('ℹ️') ? 'ℹ️' : '✅'}
+                    </span>
+                    <span>{rec.replace(/^[⚠️ℹ️✅]\s*/, '')}</span>
+                  </div>
+                ))}
+                {!depCheckModal.canAutoInstall && (
+                  <p className="text-[11px] text-red-400 font-semibold mt-1">
+                    ⚠️ Cannot auto-install. Please install manually before creating this job.
+                  </p>
+                )}
+              </div>
+
+              {/* Buttons */}
+              <div className="flex gap-2">
+                <button
+                  onClick={() => setDepCheckModal(null)}
+                  className="flex-1 py-2.5 rounded-xl font-bold text-xs bg-[var(--bg-tertiary)] border border-[var(--border-color)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:border-[var(--text-muted)] transition-all"
+                >
+                  Cancel
+                </button>
+                <button
+                  disabled={!depCheckModal.canAutoInstall}
+                  onClick={async () => {
+                    const payload = depCheckModal.pendingJobPayload;
+                    const sshConnId = payload.targetSshConnId;
+                    setDepCheckModal(null);
+                    // Open live terminal and stream install output
+                    setInstallTerminal({ lines: [], done: false, code: null, pendingJobPayload: payload });
+                    try {
+                      const res = await apiFetch('/api/mongo-sync/install-deps', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ targetSshConnId: sshConnId })
+                      });
+                      const reader = res.body.getReader();
+                      const decoder = new TextDecoder();
+                      let buf = '';
+                      while (true) {
+                        const { done, value } = await reader.read();
+                        if (done) break;
+                        buf += decoder.decode(value, { stream: true });
+                        const parts = buf.split('\n\n');
+                        buf = parts.pop();
+                        for (const part of parts) {
+                          const dataLine = part.replace(/^data: /, '').trim();
+                          if (!dataLine) continue;
+                          try {
+                            const msg = JSON.parse(dataLine);
+                            if (msg.line !== undefined) {
+                              setInstallTerminal(prev => {
+                                const next = { ...prev, lines: [...prev.lines, msg.line] };
+                                setTimeout(() => {
+                                  if (installTerminalRef.current) {
+                                    installTerminalRef.current.scrollTop = installTerminalRef.current.scrollHeight;
+                                  }
+                                }, 20);
+                                return next;
+                              });
+                            }
+                            if (msg.done) {
+                              setInstallTerminal(prev => ({ ...prev, done: true, code: msg.code }));
+                            }
+                          } catch {}
+                        }
+                      }
+                    } catch (err) {
+                      setInstallTerminal(prev => ({ ...prev, lines: [...prev.lines, `❌ Error: ${err.message}`], done: true, code: 1 }));
+                    }
+                  }}
+                  className="flex-1 py-2.5 rounded-xl font-bold text-xs bg-amber-500 hover:bg-amber-400 text-black shadow-lg shadow-amber-500/25 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  {depCheckModal.canAutoInstall ? 'Install & Continue' : 'Cannot Auto-install'}
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       {/* Sidebar Navigation */}
 
       <div className="w-56 border-r border-[var(--border-color)] p-4 flex flex-col shrink-0 h-full bg-[var(--bg-secondary)]/30">
@@ -1699,6 +2419,7 @@ export default function MongoBackupApp() {
             onClick={() => {
               setActiveTab('history');
               fetchHistory();
+              fetchAllCronLogs();
             }}
             className={`w-full flex items-center gap-2.5 px-3 py-2 text-xs font-bold rounded-xl transition-all ${
               activeTab === 'history' ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/20 shadow-sm' : 'hover:bg-[var(--bg-card-hover)] border border-transparent text-[var(--text-muted)] hover:text-[var(--text-primary)]'
@@ -1822,9 +2543,36 @@ export default function MongoBackupApp() {
                       </div>
                     </div>
 
+                    {/* Batch Import Mode Toggle */}
+                    <div className="flex items-center justify-between p-3 bg-blue-500/5 border border-blue-500/20 rounded-xl">
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="checkbox"
+                          id="batchMode"
+                          checked={batchImportMode}
+                          onChange={(e) => {
+                            setBatchImportMode(e.target.checked);
+                            setBatchFiles([]);
+                            setImportFile(null);
+                            setImportFileData(null);
+                            setImportLogs([]);
+                          }}
+                          className="w-4 h-4 rounded border-blue-500/30 bg-[var(--bg-tertiary)] checked:bg-blue-500 focus:ring-2 focus:ring-blue-500/20"
+                        />
+                        <label htmlFor="batchMode" className="text-xs font-bold text-blue-400 cursor-pointer">
+                          Batch Import Mode
+                        </label>
+                      </div>
+                      <span className="text-[10px] text-blue-400/60">
+                        {batchImportMode ? 'Multi-file: auto-map filename → collection' : 'Single file: manual collection name'}
+                      </span>
+                    </div>
+
                     {/* Drag and Drop Zone */}
                     <div>
-                      <label className="text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)] block mb-1">Backup JSON File</label>
+                      <label className="text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)] block mb-1">
+                        {batchImportMode ? 'Backup JSON Files (Multiple)' : 'Backup JSON File'}
+                      </label>
                       <div 
                         onClick={() => fileInputRef.current?.click()}
                         className="border-2 border-dashed border-[var(--border-color)] hover:border-emerald-500/40 bg-[var(--bg-tertiary)]/20 hover:bg-emerald-500/5 rounded-2xl p-6 text-center cursor-pointer transition-all flex flex-col items-center justify-center gap-2 group"
@@ -1833,29 +2581,86 @@ export default function MongoBackupApp() {
                           ref={fileInputRef}
                           type="file"
                           accept=".json"
+                          multiple={batchImportMode}
                           className="hidden"
                           onChange={handleFileChange}
                         />
                         <Upload className="text-[var(--text-muted)] group-hover:text-emerald-400 transition-colors" size={28} />
-                        <span className="text-xs font-bold">{importFile ? importFile.name : 'Select or drag JSON collection file'}</span>
-                        <span className="text-[10px] text-[var(--text-muted)]">{importFile ? `${(importFile.size / 1024).toFixed(1)} KB` : 'Must contain a top-level array of documents'}</span>
+                        <span className="text-xs font-bold">
+                          {batchImportMode 
+                            ? (batchFiles.length > 0 ? `${batchFiles.length} file(s) selected` : 'Select or drag JSON files')
+                            : (importFile ? importFile.name : 'Select or drag JSON collection file')
+                          }
+                        </span>
+                        <span className="text-[10px] text-[var(--text-muted)]">
+                          {batchImportMode
+                            ? 'Filenames will auto-map to collection names (e.g., users.json → users)'
+                            : (importFile ? `${(importFile.size / 1024).toFixed(1)} KB` : 'Must contain a top-level array of documents')
+                          }
+                        </span>
                       </div>
+
+                      {/* Batch Files List */}
+                      {batchImportMode && batchFiles.length > 0 && (
+                        <div className="mt-3 space-y-2 max-h-48 overflow-y-auto custom-scrollbar">
+                          {batchFiles.map((fileObj, idx) => (
+                            <div
+                              key={idx}
+                              className={`flex items-center justify-between p-2 rounded-lg border text-xs ${
+                                fileObj.error
+                                  ? 'bg-red-500/5 border-red-500/20'
+                                  : 'bg-emerald-500/5 border-emerald-500/20'
+                              }`}
+                            >
+                              <div className="flex items-center gap-2 flex-1 min-w-0">
+                                {fileObj.error ? (
+                                  <XCircle size={14} className="text-red-400 shrink-0" />
+                                ) : (
+                                  <CheckCircle size={14} className="text-emerald-400 shrink-0" />
+                                )}
+                                <span className="font-mono truncate">{fileObj.name}</span>
+                              </div>
+                              <div className="flex items-center gap-2 shrink-0">
+                                {fileObj.error ? (
+                                  <span className="text-[10px] text-red-400">{fileObj.error}</span>
+                                ) : (
+                                  <>
+                                    <ArrowRight size={12} className="text-[var(--text-muted)]" />
+                                    <span className="font-bold text-emerald-400">{fileObj.collection}</span>
+                                    <span className="text-[10px] text-[var(--text-muted)]">({fileObj.size} docs)</span>
+                                  </>
+                                )}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
                     </div>
 
                     <button
                       onClick={executeImport}
-                      disabled={loading || !importFileData || !importCollName.trim()}
+                      disabled={
+                        batchImporting ||
+                        (batchImportMode
+                          ? batchFiles.filter(f => f.data).length === 0
+                          : (loading || !importFileData || !importCollName.trim()))
+                      }
                       className="w-full btn-primary justify-center font-bold text-xs py-2 disabled:opacity-40 disabled:cursor-not-allowed shadow-lg"
                     >
-                      {loading ? (
+                      {(loading || batchImporting) ? (
                         <>
                           <Loader size={14} className="animate-spin" />
-                          <span>Importing documents...</span>
+                          <span>{batchImportMode ? 'Importing files...' : 'Importing documents...'}</span>
                         </>
                       ) : (
                         <>
                           <Play size={14} />
-                          <span>Import Collection</span>
+                          <span>
+                            {batchImportMode
+                              ? `Import ${batchFiles.filter(f => f.data).length} Collection(s)`
+                              : 'Import Collection'
+                            }
+                          </span>
                         </>
                       )}
                     </button>
@@ -1900,11 +2705,89 @@ export default function MongoBackupApp() {
                   <p className="text-xs text-[var(--text-muted)]">Configure and authenticate your Google OAuth application to upload backups securely to your Google Drive.</p>
                 </div>
 
+                {/* 1. OAuth Client Credentials — full width, do this first */}
+                <div className="bg-[var(--bg-card)] p-5 rounded-2xl border border-[var(--border-color)] space-y-5">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <h3 className="text-sm font-bold flex items-center gap-2">
+                        <Key className="text-amber-400" size={16} /> 1. Connect with Google Cloud
+                      </h3>
+                      <p className="text-[11px] text-[var(--text-muted)] mt-1 leading-relaxed">
+                        To link Google Drive, you need a free <strong>Client ID</strong> and <strong>Client Secret</strong> from Google Cloud. It only takes a few minutes — follow the steps below.
+                      </p>
+                    </div>
+                    <span className="shrink-0 text-[10px] font-bold px-2 py-1 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 whitespace-nowrap">Saved securely</span>
+                  </div>
+
+                  {/* Step-by-step guide */}
+                  <div className="border border-[var(--border-color)] rounded-xl overflow-hidden">
+                    <button
+                      type="button"
+                      onClick={() => setShowCredGuide(v => !v)}
+                      className="w-full flex items-center justify-between px-4 py-2.5 bg-[var(--bg-tertiary)]/40 hover:bg-[var(--bg-tertiary)]/70 transition-colors"
+                    >
+                      <span className="text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)]">How to get your credentials</span>
+                      <div className="flex items-center gap-2">
+                        <a
+                          href="https://console.cloud.google.com/apis/credentials"
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          onClick={(e) => e.stopPropagation()}
+                          className="flex items-center gap-1 text-[10px] font-bold text-emerald-400 hover:text-emerald-300 transition-colors"
+                        >
+                          Open Console <ExternalLink size={10} />
+                        </a>
+                        <ChevronDown size={13} className={`text-[var(--text-muted)] transition-transform duration-200 ${showCredGuide ? 'rotate-180' : ''}`} />
+                      </div>
+                    </button>
+                    {showCredGuide && (
+                      <div className="p-4 space-y-3 bg-[var(--bg-tertiary)]/20">
+                        {[
+                          { step: 1, text: 'Go to', link: 'https://console.cloud.google.com', label: 'Google Cloud Console', after: 'and sign in with your Google account.' },
+                          { step: 2, text: 'Create a new project (or select an existing one) from the top bar.' },
+                          { step: 3, text: 'In the left menu go to', link: 'https://console.cloud.google.com/apis/library/drive.googleapis.com', label: 'APIs & Services → Library', after: ', search for "Google Drive API" and click Enable.' },
+                          { step: 4, text: 'Go to', link: 'https://console.cloud.google.com/apis/credentials/consent', label: 'OAuth Consent Screen', after: '. Set User Type to External, fill in your app name, then save.' },
+                          { step: 5, text: 'Go to', link: 'https://console.cloud.google.com/apis/credentials', label: 'Credentials', after: ', click + Create Credentials → OAuth Client ID → choose Web application.' },
+                          { step: 6, text: 'Copy the Client ID and Client Secret shown — paste them into the fields below.' },
+                        ].map(({ step, text, link, label, after }) => (
+                          <div key={step} className="flex items-start gap-3">
+                            <span className="shrink-0 w-5 h-5 rounded-full bg-amber-500/15 border border-amber-500/30 text-amber-400 text-[10px] font-bold flex items-center justify-center mt-0.5">{step}</span>
+                            <p className="text-[11px] text-[var(--text-muted)] leading-relaxed">
+                              {text}{' '}
+                              {link && <a href={link} target="_blank" rel="noopener noreferrer" className="text-emerald-400 hover:text-emerald-300 underline underline-offset-2 font-semibold transition-colors">{label}</a>}
+                              {after && <> {after}</>}
+                            </p>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Credential inputs */}
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3 items-end">
+                    <div>
+                      <label className="text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)] block mb-1.5">Client ID</label>
+                      <input type="text" value={clientId} onChange={(e) => setClientId(e.target.value)} placeholder="xxxxxxxxxxxx-xxxx.apps.googleusercontent.com" className="w-full px-3 py-2 text-xs rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] font-mono text-[var(--text-primary)] focus:border-emerald-500 focus:outline-none" />
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)] block mb-1.5">Client Secret</label>
+                      <input type="password" value={clientSecret} onChange={(e) => setClientSecret(e.target.value)} placeholder="GOCSPX-xxxxxxxxxxxxxxxxxxxx" className="w-full px-3 py-2 text-xs rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] font-mono text-[var(--text-primary)] focus:border-emerald-500 focus:outline-none" />
+                    </div>
+                    <button onClick={handleSaveCredentials} disabled={driveLoading || !clientId.trim() || !clientSecret.trim()} className="w-full px-4 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 disabled:cursor-not-allowed text-white rounded-xl text-xs font-bold flex items-center justify-center gap-2 shadow-md transition-all">
+                      {driveLoading ? <Loader className="animate-spin" size={12} /> : <><ShieldCheck size={13} /> Save &amp; Continue</>}
+                    </button>
+                  </div>
+
+                  <p className="text-[10px] text-[var(--text-muted)] opacity-70 flex items-start gap-1.5">
+                    <span className="text-amber-400 mt-0.5">💡</span>
+                    After saving, click <strong className="text-[var(--text-primary)]">Link Google Drive</strong> in section 2 below to complete the connection.
+                  </p>
+                </div>
+
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                  {/* Auth Setup */}
                   <div className="space-y-4 bg-[var(--bg-card)] p-5 rounded-2xl border border-[var(--border-color)]">
                     <h3 className="text-sm font-bold flex items-center gap-2 mb-2">
-                      <CloudLightning className="text-emerald-400" size={16} /> 1. Google Account Linkage
+                      <CloudLightning className="text-emerald-400" size={16} /> 2. Link Your Google Account
                     </h3>
                     <p className="text-[11px] text-[var(--text-muted)] leading-relaxed">
                       Authenticate with your Google account to enable automated collection backups and cloud restore capabilities.
@@ -1946,98 +2829,81 @@ export default function MongoBackupApp() {
                   </div>
 
                   {/* Folders Management */}
-                  <div className="space-y-4 bg-[var(--bg-card)] p-5 rounded-2xl border border-[var(--border-color)] flex flex-col">
-                    <h3 className="text-sm font-bold flex items-center gap-2">
-                      <FolderPlus className="text-emerald-400" size={16} /> 3. Dedicated Sync Folders
-                    </h3>
-                    <p className="text-[11px] text-[var(--text-muted)] leading-relaxed">
-                      Select or create a dedicated folder in your Google Drive where automated JSON backups will be uploaded.
-                    </p>
+                  <div className="bg-[var(--bg-card)] p-5 rounded-2xl border border-[var(--border-color)] flex flex-col gap-4">
+                    {/* Header */}
+                    <div className="flex items-start justify-between gap-2">
+                      <div>
+                        <h3 className="text-sm font-bold flex items-center gap-2">
+                          <FolderPlus className="text-emerald-400" size={16} />
+                          3. Dedicated Sync Folders
+                        </h3>
+                        <p className="text-[11px] text-[var(--text-muted)] mt-1 leading-relaxed">
+                          Create a folder in your Google Drive to store automated JSON backups.
+                        </p>
+                      </div>
+                      {driveFolders.length > 0 && (
+                        <span className="shrink-0 text-[10px] font-bold px-2 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-400">
+                          {driveFolders.length} folder{driveFolders.length !== 1 ? 's' : ''}
+                        </span>
+                      )}
+                    </div>
 
-                    <div className="flex-1 space-y-3">
+                    {/* Create new folder */}
+                    <div className="bg-[var(--bg-tertiary)]/40 rounded-xl p-3 border border-[var(--border-color)]">
+                      <label className="text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)] block mb-2">
+                        Create New Folder
+                      </label>
                       <div className="flex gap-2">
                         <input
                           type="text"
                           value={newFolderName}
                           onChange={(e) => setNewFolderName(e.target.value)}
-                          className="input-field text-xs flex-1 bg-[var(--bg-tertiary)]"
-                          placeholder="New folder name..."
+                          onKeyDown={(e) => e.key === 'Enter' && !(!driveConnected || driveLoading || !newFolderName.trim()) && handleCreateFolder()}
+                          className="flex-1 px-3 py-2 text-xs rounded-xl bg-[var(--bg-secondary)] border border-[var(--border-color)] font-mono text-[var(--text-primary)] focus:border-emerald-500 focus:outline-none placeholder:text-[var(--text-muted)]"
+                          placeholder="e.g. mongo-backups-prod"
                           disabled={!driveConnected || driveLoading}
                         />
                         <button
                           onClick={handleCreateFolder}
                           disabled={!driveConnected || driveLoading || !newFolderName.trim()}
-                          className="btn-primary text-xs font-bold py-1.5 px-4 disabled:opacity-40"
+                          className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 disabled:cursor-not-allowed text-white rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all shadow-sm"
                         >
-                          {driveLoading ? <Loader className="animate-spin" size={12} /> : 'Create'}
+                          {driveLoading ? <Loader className="animate-spin" size={12} /> : <><FolderPlus size={12} /> Create</>}
                         </button>
                       </div>
+                    </div>
 
-                      <div className="border border-[var(--border-color)] rounded-xl overflow-hidden flex-1 min-h-[160px] max-h-[200px] flex flex-col bg-[var(--bg-tertiary)]/20">
-                        <div className="bg-[var(--bg-tertiary)]/30 border-b border-[var(--border-color)] px-3 py-1.5 text-[9px] font-bold uppercase tracking-wider text-[var(--text-muted)]">
-                          Accessible Folders ({driveFolders.length})
-                        </div>
-                        <div className="flex-1 overflow-y-auto custom-scrollbar p-2 space-y-1">
-                          {driveFolders.map(folder => (
-                            <div key={folder.id} className="flex items-center justify-between p-2 hover:bg-[var(--bg-card-hover)] rounded-lg text-xs">
-                              <span className="font-bold truncate">{folder.name}</span>
-                              <span className="font-mono text-[9px] text-[var(--text-muted)] bg-[var(--bg-tertiary)] px-1.5 py-0.5 rounded border border-[var(--border-color)]">{folder.id}</span>
-                            </div>
-                          ))}
-                          {driveFolders.length === 0 && (
-                            <div className="text-center py-8 text-[11px] text-[var(--text-muted)] italic">
-                              {driveConnected ? 'No sync folders created yet.' : 'Please connect Google Drive to list folders.'}
-                            </div>
-                          )}
-                        </div>
+                    {/* Folder list */}
+                    <div className="flex-1 flex flex-col min-h-0">
+                      <label className="text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)] block mb-2">
+                        Available Folders
+                      </label>
+                      <div className="rounded-xl overflow-hidden border border-[var(--border-color)] flex-1 min-h-[140px] max-h-[200px] flex flex-col">
+                        {driveFolders.length === 0 ? (
+                          <div className="flex-1 flex flex-col items-center justify-center gap-2 py-6 text-[var(--text-muted)]">
+                            <Folder size={22} className="opacity-30" />
+                            <p className="text-[11px] italic">
+                              {driveConnected ? 'No folders yet — create one above.' : 'Connect Google Drive first.'}
+                            </p>
+                          </div>
+                        ) : (
+                          <div className="overflow-y-auto custom-scrollbar divide-y divide-[var(--border-color)]">
+                            {driveFolders.map((folder, i) => (
+                              <div key={folder.id} className="flex items-center gap-2.5 px-3 py-2.5 hover:bg-[var(--bg-card-hover)] transition-colors group">
+                                <Folder size={13} className="text-amber-400 shrink-0" />
+                                <span className="flex-1 text-xs font-semibold text-[var(--text-primary)] truncate">{folder.name}</span>
+                                <span className="font-mono text-[9px] text-[var(--text-muted)] bg-[var(--bg-tertiary)] px-1.5 py-0.5 rounded border border-[var(--border-color)] opacity-60 group-hover:opacity-100 transition-opacity truncate max-w-[100px]">
+                                  {folder.id}
+                                </span>
+                              </div>
+                            ))}
+                          </div>
+                        )}
                       </div>
                     </div>
                   </div>
                 </div>
 
-                {/* 2. OAuth Client Credentials — full width below */}
-                <div className="bg-[var(--bg-card)] p-5 rounded-2xl border border-[var(--border-color)]">
-                  <h3 className="text-sm font-bold flex items-center gap-2 mb-1">
-                    <ShieldAlert className="text-amber-400" size={16} /> 2. OAuth Client Credentials
-                    <span className="ml-auto text-[9px] font-semibold px-2 py-0.5 rounded-full bg-amber-500/10 text-amber-400 border border-amber-500/20">Stored in DB · Not in .env</span>
-                  </h3>
-                  <p className="text-[11px] text-[var(--text-muted)] mb-4 leading-relaxed">
-                    Enter your <strong>Google Cloud OAuth 2.0</strong> Client ID and Secret from your Google Cloud Console project.
-                    These are saved securely in the database — no <code className="px-1 bg-[var(--bg-tertiary)] rounded text-amber-300">.env</code> file edits required.
-                  </p>
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3 items-end">
-                    <div>
-                      <label className="text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)] block mb-1">Google Client ID</label>
-                      <input
-                        type="text"
-                        value={clientId}
-                        onChange={(e) => setClientId(e.target.value)}
-                        placeholder="xxxxxxxxxxxx-xxxx.apps.googleusercontent.com"
-                        className="w-full px-3 py-2 text-xs rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] font-mono text-[var(--text-primary)] focus:border-emerald-500 focus:outline-none"
-                      />
-                    </div>
-                    <div>
-                      <label className="text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)] block mb-1">Google Client Secret</label>
-                      <input
-                        type="password"
-                        value={clientSecret}
-                        onChange={(e) => setClientSecret(e.target.value)}
-                        placeholder="GOCSPX-xxxxxxxxxxxxxxxxxxxx"
-                        className="w-full px-3 py-2 text-xs rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] font-mono text-[var(--text-primary)] focus:border-emerald-500 focus:outline-none"
-                      />
-                    </div>
-                    <button
-                      onClick={handleSaveCredentials}
-                      disabled={driveLoading || !clientId.trim() || !clientSecret.trim()}
-                      className="w-full px-4 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-white rounded-xl text-xs font-bold flex items-center justify-center gap-2 shadow-md transition-all"
-                    >
-                      {driveLoading ? <Loader className="animate-spin" size={12} /> : <><ShieldAlert size={13} /> Save OAuth Credentials</>}
-                    </button>
-                  </div>
-                  <p className="text-[10px] text-[var(--text-muted)] mt-3 opacity-70">
-                    💡 After saving credentials, click <strong>Link Google Drive</strong> above to authorize. The credentials will be automatically used for all backup jobs and scheduled crons.
-                  </p>
-                </div>
               </motion.div>
             )}
 
@@ -2057,9 +2923,9 @@ export default function MongoBackupApp() {
                   <p className="text-xs text-[var(--text-muted)]">Configure automated sync jobs to backup MongoDB collections directly to your linked Google Drive folder.</p>
                 </div>
 
-                <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                  {/* Job Form */}
-                  <form onSubmit={handleSaveJob} className="space-y-4 bg-[var(--bg-card)] p-5 rounded-2xl border border-[var(--border-color)]">
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                  {/* Job Form - Now takes half width (lg:col-span-1) for better readability */}
+                  <form onSubmit={handleSaveJob} className="space-y-4 bg-[var(--bg-card)] p-6 rounded-2xl border border-[var(--border-color)]">
                     <h3 className="text-sm font-bold flex items-center gap-2 border-b border-[var(--border-color)] pb-2">
                       <Plus className="text-emerald-400" size={16} /> 
                       {editingJobId ? 'Edit Sync Job' : 'Create Sync Job'}
@@ -2078,9 +2944,9 @@ export default function MongoBackupApp() {
                         />
                       </div>
 
-                      <div className="grid grid-cols-2 gap-2">
+                      <div className="grid grid-cols-2 gap-3">
                         <div>
-                          <label className="text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)] block mb-1">Source Conn</label>
+                          <label className="text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)] block mb-1">Source Connection</label>
                           <CustomSelect
                             value={jobConnId}
                             onChange={(val) => setJobConnId(val)}
@@ -2103,57 +2969,83 @@ export default function MongoBackupApp() {
                         </div>
                       </div>
 
-                      <div className="grid grid-cols-2 gap-2">
-                        <div>
-                          <label className="text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)] block mb-1 flex items-center justify-between">
-                            <span>Collection</span>
-                            {fetchingColls && <Loader size={10} className="animate-spin text-emerald-400" />}
-                          </label>
-                          <CustomSelect
-                            value={jobCollName}
-                            onChange={(val) => setJobCollName(val)}
-                            options={Array.from(new Set([ALL_COLLECTIONS, ...fetchedColls])).map(c => ({ value: c, label: c }))}
-                          />
-                        </div>
-                        <div>
-                          <label className="text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)] block mb-1">Drive Folder</label>
-                          <div className="flex gap-2">
-                            <div className="flex-1 relative">
-                              <input
-                                type="text"
-                                value={jobFolderName}
-                                onChange={(e) => handleJobFolderInputChange(e.target.value)}
-                                onFocus={() => setJobFolderInputActive(true)}
-                                onBlur={handleJobFolderInputBlur}
-                                placeholder="Type or browse folder..."
-                                className="w-full px-3 py-2 text-xs rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] font-mono text-[var(--text-primary)] focus:border-emerald-500 focus:outline-none"
-                                required
-                                disabled={!driveConnected}
-                              />
-                              {jobFolderInputActive && filteredDriveFolderOptions.length > 0 && (
-                                <div className="absolute z-50 mt-1 w-full max-h-48 overflow-y-auto rounded-2xl border border-[var(--border-color)] bg-[var(--bg-secondary)] shadow-2xl">
-                                  {filteredDriveFolderOptions.map(folder => (
-                                    <button
-                                      key={folder.id}
-                                      type="button"
-                                      onMouseDown={() => handleSelectJobFolder(folder)}
-                                      className="w-full px-3 py-2 text-left text-xs font-mono text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)]"
-                                    >
-                                      {folder.name}
-                                    </button>
-                                  ))}
-                                </div>
-                              )}
-                            </div>
-                            <button
-                              type="button"
-                              onClick={() => openDriveBrowser('job')}
+                      <div>
+                        <label className="text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)] block mb-1 flex items-center justify-between">
+                          <span>Collection</span>
+                          {fetchingColls && <Loader size={10} className="animate-spin text-emerald-400" />}
+                        </label>
+                        <CustomSelect
+                          value={jobCollName}
+                          onChange={(val) => setJobCollName(val)}
+                          options={Array.from(new Set([ALL_COLLECTIONS, ...fetchedColls])).map(c => ({ value: c, label: c }))}
+                        />
+                      </div>
+
+                      {/* Drive Folder - Full width for better UX */}
+                      <div>
+                        <label className="text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)] block mb-1 flex items-center gap-2">
+                          <Cloud size={11} className="text-emerald-400" />
+                          <span>Google Drive Target Folder</span>
+                        </label>
+                        <div className="flex gap-2">
+                          <div className="flex-1 relative">
+                            <input
+                              type="text"
+                              value={jobFolderName}
+                              onChange={(e) => handleJobFolderInputChange(e.target.value)}
+                              onKeyDown={handleJobFolderKeyDown}
+                              onFocus={() => {
+                                setJobFolderInputActive(true);
+                                const filtered = driveFolders.filter(f => f.name.toLowerCase().includes(jobFolderName.toLowerCase()));
+                                setFilteredDriveFolderOptions(filtered.length > 0 ? filtered : driveFolders);
+                                const firstIdx = filtered.length > 0 ? 0 : -1;
+                                setJobFolderSelectedIndex(firstIdx);
+                              }}
+                              onBlur={handleJobFolderInputBlur}
+                              placeholder="Type to search or browse folders..."
+                              className="w-full px-3 py-2 text-xs rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] font-mono text-[var(--text-primary)] focus:border-emerald-500 focus:outline-none"
+                              required
                               disabled={!driveConnected}
-                              className="px-3 py-1.5 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-[11px] font-bold text-emerald-400 hover:bg-emerald-500/15 transition-all"
-                            >
-                              Browse
-                            </button>
+                            />
+                            {jobFolderInputActive && filteredDriveFolderOptions.length > 0 && (
+                              <div ref={jobFolderDropdownRef} style={{ zIndex: 10000 }} className="absolute left-0 right-0 top-full mt-1.5 bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-xl shadow-2xl overflow-hidden max-h-56 overflow-y-auto divide-y divide-[var(--border-color)]">
+                                <div className="px-3 py-1 bg-[var(--bg-tertiary)] flex items-center justify-between text-[10px] text-[var(--text-muted)] font-mono">
+                                  <span>Folders ({filteredDriveFolderOptions.length})</span>
+                                  <span className="text-emerald-400 font-semibold">Press <kbd className="bg-black/40 px-1 py-0.5 rounded text-white border border-[var(--border-color)]">Tab ⇥</kbd> or <kbd className="bg-black/40 px-1 py-0.5 rounded text-white border border-[var(--border-color)]">↵</kbd></span>
+                                </div>
+                                {filteredDriveFolderOptions.map((folder, idx) => {
+                                  const isSelected = idx === jobFolderSelectedIndex;
+                                  return (
+                                    <div
+                                      key={folder.id}
+                                      data-index={idx}
+                                      onClick={() => handleSelectJobFolder(folder)}
+                                      onMouseEnter={() => {
+                                        setJobFolderSelectedIndex(idx);
+                                      }}
+                                      className={`px-3 py-2 flex items-center gap-2 font-mono text-xs cursor-pointer transition-colors ${
+                                        isSelected
+                                          ? 'bg-emerald-500/15 text-emerald-400 font-bold'
+                                          : 'hover:bg-[var(--bg-tertiary)] text-[var(--text-primary)]'
+                                      }`}
+                                    >
+                                      <Folder size={13} className="text-amber-400 shrink-0" />
+                                      <span className="truncate">{folder.name}</span>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            )}
                           </div>
+                          <button
+                            type="button"
+                            onClick={() => openDriveBrowser('job')}
+                            disabled={!driveConnected}
+                            className="px-4 py-2 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-xs font-bold text-emerald-400 hover:bg-emerald-500/15 transition-all flex items-center gap-2 shrink-0"
+                          >
+                            <FolderPlus size={14} />
+                            Browse
+                          </button>
                         </div>
                       </div>
 
@@ -2234,10 +3126,10 @@ export default function MongoBackupApp() {
                     <div className="flex gap-2 pt-2">
                       <button
                         type="submit"
-                        disabled={loading || !driveConnected || driveFolders.length === 0}
+                        disabled={loading || depCheckLoading || !driveConnected || driveFolders.length === 0}
                         className="flex-1 btn-primary justify-center font-bold text-xs py-2 disabled:opacity-40"
                       >
-                        {loading ? <Loader className="animate-spin" size={14} /> : 'Save Job'}
+                        {loading || depCheckLoading ? <Loader className="animate-spin" size={14} /> : 'Save Job'}
                       </button>
                       {editingJobId && (
                         <button
@@ -2251,8 +3143,8 @@ export default function MongoBackupApp() {
                     </div>
                   </form>
 
-                  {/* Jobs List */}
-                  <div className="lg:col-span-2 space-y-3">
+                  {/* Jobs List - Now takes the other half of the layout */}
+                  <div className="lg:col-span-1 space-y-3">
                     <h3 className="text-sm font-bold flex items-center gap-2 mb-3">
                       <Calendar className="text-emerald-400" size={16} /> 
                       Configured Sync Jobs ({jobs.length})
@@ -2277,6 +3169,14 @@ export default function MongoBackupApp() {
                                   </span>
                                 ) : null;
                               })()}
+                              {(job.depWarning || (job.lastStatus === 'failed' && job.lastMessage?.includes('Could not list collections'))) && (
+                                <span
+                                  className="text-[9px] px-2 py-0.5 rounded-full font-bold bg-red-500/10 text-red-400 border border-red-500/20 flex items-center gap-1"
+                                  title={job.depWarning || 'Collection listing failed — mongosh or pymongo not installed on SSH server. Run: pip3 install pymongo --user'}
+                                >
+                                  <AlertCircle size={8} />⚠️ deps missing
+                                </span>
+                              )}
                             </div>
                             <div className="text-[10px] text-[var(--text-muted)] font-mono flex items-center gap-2">
                               <span>Source: {job.connectionName} / {job.database} / {job.collection}</span>
@@ -2376,15 +3276,60 @@ export default function MongoBackupApp() {
                     <div className="flex flex-col md:flex-row gap-4 mb-2">
                       <div className="flex-1">
                         <label className="text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)] block mb-1">Select Backup Folder</label>
-                        <div className="flex gap-2">
-                          <input
-                            type="text"
-                            value={restoreFolderName || (restoreFolderId ? driveFolders.find(f => f.id === restoreFolderId)?.name || '' : '')}
-                            readOnly
-                            placeholder="Choose folder..."
-                            className="w-full px-3 py-2 text-xs rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] font-mono text-[var(--text-primary)] focus:border-emerald-500 focus:outline-none"
-                            disabled={!driveConnected}
-                          />
+                        <div className="flex gap-2 relative">
+                          <div className="flex-1 relative">
+                            <input
+                              type="text"
+                              value={restoreFolderName}
+                              onChange={(e) => handleRestoreFolderInputChange(e.target.value)}
+                              onKeyDown={handleRestoreFolderKeyDown}
+                              onFocus={() => {
+                                if (driveFolders.length > 0) {
+                                  setRestoreFolderInputActive(true);
+                                  const filtered = driveFolders.filter(f => f.name.toLowerCase().includes(restoreFolderName.toLowerCase()));
+                                  setFilteredRestoreFolderOptions(filtered.length > 0 ? filtered : driveFolders);
+                                  const firstIdx = filtered.length > 0 ? 0 : -1;
+                                  setRestoreFolderSelectedIndex(firstIdx);
+                                }
+                              }}
+                              onBlur={handleRestoreFolderInputBlur}
+                              placeholder="Type to search or browse..."
+                              className="w-full px-3 py-2 text-xs rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] font-mono text-[var(--text-primary)] focus:border-emerald-500 focus:outline-none"
+                              disabled={!driveConnected}
+                            />
+                            {restoreFolderInputActive && filteredRestoreFolderOptions.length > 0 && (
+                              <div ref={restoreFolderDropdownRef} style={{ zIndex: 10000 }} className="absolute left-0 right-0 top-full mt-1.5 bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-xl shadow-2xl overflow-hidden max-h-56 overflow-y-auto divide-y divide-[var(--border-color)]">
+                                <div className="px-3 py-1 bg-[var(--bg-tertiary)] flex items-center justify-between text-[10px] text-[var(--text-muted)] font-mono">
+                                  <span>Folders ({filteredRestoreFolderOptions.length})</span>
+                                  <span className="text-emerald-400 font-semibold">Press <kbd className="bg-black/40 px-1 py-0.5 rounded text-white border border-[var(--border-color)]">Tab ⇥</kbd> or <kbd className="bg-black/40 px-1 py-0.5 rounded text-white border border-[var(--border-color)]">↵</kbd></span>
+                                </div>
+                                {filteredRestoreFolderOptions.map((folder, idx) => {
+                                  const isSelected = idx === restoreFolderSelectedIndex;
+                                  return (
+                                    <div
+                                      key={folder.id}
+                                      data-index={idx}
+                                      onClick={() => handleSelectRestoreFolder(folder)}
+                                      onMouseEnter={() => {
+                                        setRestoreFolderSelectedIndex(idx);
+                                      }}
+                                      className={`px-3 py-2 flex items-center gap-2 font-mono text-xs cursor-pointer transition-colors ${
+                                        isSelected
+                                          ? 'bg-emerald-500/15 text-emerald-400 font-bold'
+                                          : 'hover:bg-[var(--bg-tertiary)] text-[var(--text-primary)]'
+                                      }`}
+                                    >
+                                      <Folder size={13} className="text-amber-400 shrink-0" />
+                                      <div className="flex-1 min-w-0">
+                                        <div className="font-semibold truncate">{folder.name}</div>
+                                        <div className="text-[9px] text-[var(--text-muted)] truncate">{folder.id}</div>
+                                      </div>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            )}
+                          </div>
                           <button
                             type="button"
                             onClick={() => openDriveBrowser('restore')}
@@ -2564,12 +3509,12 @@ export default function MongoBackupApp() {
                   </div>
                   <div className="flex items-center gap-2">
                     <button
-                      onClick={fetchHistory}
+                      onClick={() => { fetchHistory(); fetchAllCronLogs(); }}
                       disabled={historyLoading}
                       className="px-3 py-1.5 rounded-xl bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 text-xs font-bold border border-emerald-500/20 flex items-center gap-1.5 transition-all disabled:opacity-50"
                     >
                       <RefreshCw size={12} className={historyLoading ? 'animate-spin' : ''} />
-                      <span>Refresh Log</span>
+                      <span>Refresh</span>
                     </button>
                     <button
                       onClick={handleClearHistory}
@@ -2577,23 +3522,130 @@ export default function MongoBackupApp() {
                       className="px-3 py-1.5 rounded-xl bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 text-xs font-bold border border-rose-500/20 flex items-center gap-1.5 transition-all disabled:opacity-50"
                     >
                       <Trash2 size={12} />
-                      <span>Clear Log</span>
+                      <span>Clear</span>
                     </button>
                   </div>
                 </div>
 
+                {/* ── SSH Cron Logs ── */}
+                {jobs.filter(j => j.targetSshConnId && j.schedule !== 'manual').length > 0 && (
+                  <div className="bg-[var(--bg-card)] border border-[var(--border-color)] rounded-2xl p-5 space-y-4">
+                    <h3 className="text-sm font-bold flex items-center gap-2 text-[var(--text-primary)]">
+                      <Terminal size={14} className="text-blue-400" /> SSH Cron Execution Logs
+                      <span className="text-[10px] font-normal text-[var(--text-muted)]">— from log files on remote servers</span>
+                    </h3>
+                    <div className="space-y-3">
+                      {jobs.filter(j => j.targetSshConnId && j.schedule !== 'manual').map(job => {
+                        const cronLog = cronLogs[job.id];
+                        const sshConn = sshConnections.find(c => c._id === job.targetSshConnId);
+                        const hasError = cronLog?.logTail?.includes('ERROR') || cronLog?.logTail?.includes('❌');
+                        const hasDone = cronLog?.logTail?.includes('=== Done');
+                        return (
+                          <div key={job.id} className="rounded-xl border border-[var(--border-color)] overflow-hidden">
+                            {/* Job header */}
+                            <div className={`flex items-center justify-between px-3 py-2 text-[11px] ${
+                              hasError ? 'bg-red-500/5 border-b border-red-500/20' :
+                              hasDone ? 'bg-emerald-500/5 border-b border-emerald-500/20' :
+                              'bg-[var(--bg-tertiary)] border-b border-[var(--border-color)]'
+                            }`}>
+                              <div className="flex items-center gap-2">
+                                <button
+                                  onClick={() => {
+                                    setCronLogExpanded(prev => {
+                                      const currentState = prev[job.id] !== false; // Default to true (expanded)
+                                      return { ...prev, [job.id]: !currentState };
+                                    });
+                                  }}
+                                  className="p-0.5 hover:bg-white/5 rounded transition-all"
+                                  title={(cronLogExpanded[job.id] !== false) ? 'Collapse' : 'Expand'}
+                                >
+                                  <ChevronDown
+                                    size={14}
+                                    className={`text-[var(--text-muted)] transition-transform ${(cronLogExpanded[job.id] !== false) ? '' : '-rotate-90'}`}
+                                  />
+                                </button>
+                                <span className={`w-2 h-2 rounded-full ${hasError ? 'bg-red-400' : hasDone ? 'bg-emerald-400' : 'bg-slate-500'}`} />
+                                <span className="font-bold text-[var(--text-primary)]">{job.name}</span>
+                                <span className="text-[var(--text-muted)]">→</span>
+                                <span className="font-mono text-[var(--text-muted)]">{job.database}/{job.collection}</span>
+                                {sshConn && (
+                                  <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-blue-500/10 text-blue-400 border border-blue-500/20">
+                                    ⚡ {sshConn.name}
+                                  </span>
+                                )}
+                              </div>
+                              <div className="flex items-center gap-2">
+                                {cronLog?.lastRunFromLog && (
+                                  <span className="text-[var(--text-muted)] font-mono">
+                                    Last: {new Date(cronLog.lastRunFromLog).toLocaleString()}
+                                  </span>
+                                )}
+                                <button
+                                  onClick={() => fetchCronLog(job)}
+                                  disabled={cronLogLoading[job.id]}
+                                  className="px-2 py-0.5 rounded-lg bg-blue-500/10 hover:bg-blue-500/20 text-blue-400 text-[10px] font-bold border border-blue-500/20 flex items-center gap-1 transition-all"
+                                >
+                                  <RefreshCw size={10} className={cronLogLoading[job.id] ? 'animate-spin' : ''} />
+                                  {cronLog ? 'Refresh' : 'Fetch Log'}
+                                </button>
+                              </div>
+                            </div>
+                            {/* Log output - collapsible */}
+                            {cronLogExpanded[job.id] !== false && ( // default to expanded
+                              cronLog?.logTail ? (
+                                <pre className={`text-[10px] font-mono p-3 overflow-x-auto max-h-48 overflow-y-auto whitespace-pre-wrap leading-relaxed ${
+                                  hasError ? 'bg-red-950/20 text-red-200' : hasDone ? 'bg-emerald-950/20 text-emerald-200' : 'bg-[var(--bg-secondary)] text-[var(--text-secondary)]'
+                                }`}>
+                                {cronLog.logTail.split('\n').map((line, i) => {
+                                  const color =
+                                    // Special case: "Failed: 0" or "❌ Failed: 0" is actually success
+                                    (line.includes('Failed: 0') || line.includes('❌ Failed: 0')) ? 'text-slate-400' :
+                                    // Real errors
+                                    line.includes('ERROR') || (line.includes('❌') && !line.includes(': 0')) ? 'text-red-400' :
+                                    // Success indicators
+                                    line.includes('=== Done') || line.includes('Uploaded:') || line.includes('✅') || line.includes('Success rate: 100%') ? 'text-emerald-400' :
+                                    // Warnings
+                                    line.includes('WARNING') || line.includes('⚠️') ? 'text-amber-400' :
+                                    // Summary section headers
+                                    line.includes('===') ? 'text-white font-bold' :
+                                    '';
+                                  return <span key={i} className={`block ${color}`}>{line}</span>;
+                                })}
+                              </pre>
+                              ) : cronLogLoading[job.id] ? (
+                                <div className="p-4 text-center text-[11px] text-[var(--text-muted)] flex items-center justify-center gap-2">
+                                  <Loader size={12} className="animate-spin text-blue-400" /> Fetching log...
+                                </div>
+                              ) : (
+                                <div className="p-4 text-center text-[11px] text-[var(--text-muted)] italic">
+                                  Click "Fetch Log" to load the latest cron run output from the SSH server.
+                                </div>
+                              )
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
+                {/* ── In-app Manual Run History ── */}
                 <div className="bg-[var(--bg-card)] border border-[var(--border-color)] rounded-2xl p-5">
+                  <h3 className="text-sm font-bold flex items-center gap-2 mb-4 text-[var(--text-primary)]">
+                    <Play size={14} className="text-emerald-400" /> Manual Run History
+                    <span className="text-[10px] font-normal text-[var(--text-muted)]">— from in-app "Run Now" button</span>
+                  </h3>
                   {historyLoading && historyRuns.length === 0 ? (
                     <div className="py-12 text-center text-xs text-[var(--text-muted)] flex items-center justify-center gap-2">
                       <Loader size={16} className="animate-spin text-emerald-400" />
                       <span>Loading execution history...</span>
                     </div>
                   ) : historyRuns.length === 0 ? (
-                    <div className="py-12 text-center text-xs text-[var(--text-muted)] italic">
-                      No backup execution history recorded yet. Run a manual backup or wait for a scheduled task.
+                    <div className="py-8 text-center text-xs text-[var(--text-muted)] italic">
+                      No manual run history yet. Use the "Run Now" button on a job to trigger a manual backup.
                     </div>
                   ) : (
-                    <div className="space-y-3 max-h-[600px] overflow-y-auto custom-scrollbar pr-1 divide-y divide-[var(--border-color)]/40">
+                    <div className="space-y-3 max-h-[500px] overflow-y-auto custom-scrollbar pr-1 divide-y divide-[var(--border-color)]/40">
                       {historyRuns.map(run => (
                         <div key={run.id} className="pt-3 first:pt-0 space-y-1.5">
                           <div className="flex items-center justify-between gap-4">
@@ -2610,14 +3662,16 @@ export default function MongoBackupApp() {
                               {new Date(run.runAt).toLocaleString()}
                             </span>
                           </div>
-
                           <div className="text-[10px] font-mono text-[var(--text-muted)] flex items-center justify-between gap-2">
-                            <span>Database: <strong className="text-[var(--text-primary)]">{run.database}</strong> | Collection: <strong className="text-[var(--text-primary)]">{run.collection}</strong></span>
+                            <span>DB: <strong className="text-[var(--text-primary)]">{run.database}</strong> | Col: <strong className="text-[var(--text-primary)]">{run.collection}</strong></span>
                             {run.count !== undefined && <span className="text-emerald-400 font-bold">{run.count} docs</span>}
                           </div>
-
                           {run.message && (
-                            <div className="text-[11px] font-mono bg-[var(--bg-tertiary)] p-2.5 rounded-xl border border-[var(--border-color)] text-[var(--text-secondary)] leading-relaxed">
+                            <div className={`text-[11px] font-mono p-2.5 rounded-xl border leading-relaxed ${
+                              run.status === 'success'
+                                ? 'bg-emerald-500/5 border-emerald-500/20 text-emerald-300'
+                                : 'bg-red-500/5 border-red-500/20 text-red-300'
+                            }`}>
                               {run.message}
                             </div>
                           )}

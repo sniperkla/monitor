@@ -274,6 +274,7 @@ export default function SettingsApp({ initialTab, deploymentOnly = false, openRe
   const projectSearchRef = useRef(null);
   const [logSearch, setLogSearch] = useState('');
   const [logSearchIndex, setLogSearchIndex] = useState(0);
+  const [currentErrorIdx, setCurrentErrorIdx] = useState(0);
   const logContainerRef = useRef(null);
 
   // Telegram auto-fetch & test notification states
@@ -3926,18 +3927,19 @@ export default function SettingsApp({ initialTab, deploymentOnly = false, openRe
                   }
                   const jumpToError = (direction) => {
                     if (errorLineIndices.length === 0) return;
-                    const el = logContainerRef.current;
-                    const currentScroll = el ? el.scrollTop : 0;
-                    const lineHeight = 18;
-                    const currentTopLine = Math.floor(currentScroll / lineHeight);
-                    let targetIdx;
+                    let nextIdx;
                     if (direction === 'next') {
-                      targetIdx = errorLineIndices.find(i => i > currentTopLine + 2) ?? errorLineIndices[0];
+                      nextIdx = (currentErrorIdx + 1) % errorLineIndices.length;
                     } else {
-                      const reversed = [...errorLineIndices].reverse();
-                      targetIdx = reversed.find(i => i < currentTopLine - 2) ?? errorLineIndices[errorLineIndices.length - 1];
+                      nextIdx = (currentErrorIdx - 1 + errorLineIndices.length) % errorLineIndices.length;
                     }
-                    if (el) el.scrollTop = targetIdx * lineHeight;
+                    setCurrentErrorIdx(nextIdx);
+                    const targetLine = errorLineIndices[nextIdx];
+                    const el = logContainerRef.current;
+                    if (el) {
+                      const row = el.querySelector(`[data-line="${targetLine}"]`);
+                      if (row) row.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                    }
                   };
                   const jumpToMatch = (idx) => {
                     if (matchingLineIndices.length === 0) return;
@@ -4022,14 +4024,17 @@ export default function SettingsApp({ initialTab, deploymentOnly = false, openRe
                               className="px-2 py-1 text-[10px] bg-red-500/10 hover:bg-red-500/20 text-red-400 rounded-lg border border-red-500/20 transition-colors cursor-pointer"
                               title="Previous error"
                             >
-                              ↑ Prev Error
+                              ↑ Prev
                             </button>
+                            <span className="text-[10px] text-red-400 font-mono px-1">
+                              {currentErrorIdx + 1}/{errorLineIndices.length}
+                            </span>
                             <button
                               onClick={() => jumpToError('next')}
                               className="px-2 py-1 text-[10px] bg-red-500/10 hover:bg-red-500/20 text-red-400 rounded-lg border border-red-500/20 transition-colors cursor-pointer"
                               title="Next error"
                             >
-                              ↓ Next Error
+                              ↓ Next
                             </button>
                           </div>
                         )}
@@ -4041,11 +4046,12 @@ export default function SettingsApp({ initialTab, deploymentOnly = false, openRe
                           const isError = errorPattern.test(line);
                           const isSearchMatch = logQ && line.toLowerCase().includes(logQ);
                           const isCurrentMatch = isSearchMatch && matchingLineIndices[logSearchIndex] === idx;
-                          const shouldHighlight = logQ ? isSearchMatch : isError;
+                          const isActiveError = isError && errorLineIndices[currentErrorIdx] === idx;
                           return (
                             <div
                               key={idx}
-                              className={`flex px-4 ${isError ? 'bg-red-500/10 border-l-2 border-red-500' : isSearchMatch ? 'bg-indigo-500/10 border-l-2 border-indigo-500' : 'border-l-2 border-transparent'} ${isCurrentMatch ? 'ring-1 ring-inset ring-indigo-400' : ''}`}
+                              data-line={idx}
+                              className={`flex px-4 ${isError ? 'bg-red-500/10 border-l-2 border-red-500' : isSearchMatch ? 'bg-indigo-500/10 border-l-2 border-indigo-500' : 'border-l-2 border-transparent'} ${isActiveError ? 'ring-1 ring-inset ring-red-400 bg-red-500/20' : ''} ${isCurrentMatch ? 'ring-1 ring-inset ring-indigo-400' : ''}`}
                             >
                               <span className="text-slate-600 w-10 text-right pr-3 flex-shrink-0 select-none">{idx + 1}</span>
                               <span className={`whitespace-pre-wrap break-all ${isError ? 'text-red-300' : isSearchMatch ? 'text-indigo-200' : 'text-slate-300'}`}>

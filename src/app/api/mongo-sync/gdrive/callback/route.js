@@ -1,7 +1,6 @@
 import { NextResponse } from 'next/server';
 import connectDB from '@/lib/mongodb';
 import { SystemSettingRepository } from '@/lib/repositories/SystemSettingRepository';
-import SystemSetting from '@/models/SystemSetting';
 
 export async function GET(request) {
   try {
@@ -91,11 +90,7 @@ export async function GET(request) {
     };
 
     // Update in DB (using upsert logic)
-    await SystemSetting.findOneAndUpdate(
-      { key: 'google_drive_config' },
-      { key: 'google_drive_config', value: driveConfig },
-      { upsert: true, new: true }
-    );
+    await settingRepo.upsert('google_drive_config', driveConfig);
 
     // Return a success page that auto-closes
     const html = `

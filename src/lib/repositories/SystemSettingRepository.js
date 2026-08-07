@@ -13,8 +13,13 @@ import SystemSetting from '../../models/SystemSetting.js';
  * original native-driver code.
  */
 export class SystemSettingRepository {
-  constructor(db) {
+  /**
+   * @param {object} db - DB connection object
+   * @param {string} [userId='global'] - The user ID to scope settings. Use 'global' for shared/system settings.
+   */
+  constructor(db, userId = 'global') {
     this.db = db;
+    this.userId = userId || 'global';
     this.isMysql = db.type === 'mysql';
     this.isPostgres = db.type === 'postgres';
     this.isSql = this.isMysql || this.isPostgres;
@@ -22,7 +27,6 @@ export class SystemSettingRepository {
 
   /**
    * Get the native MongoDB collection for system_settings.
-   * Uses mongoose.connection.db to read from the correct database.
    */
   _mongoCol() {
     return mongoose.connection.db.collection('system_settings');
@@ -33,20 +37,24 @@ export class SystemSettingRepository {
       await this.db.query(`
         CREATE TABLE IF NOT EXISTS system_settings (
           id INT AUTO_INCREMENT PRIMARY KEY,
-          \`key\` VARCHAR(255) NOT NULL UNIQUE,
+          user_id VARCHAR(255) NOT NULL DEFAULT 'global',
+          \`key\` VARCHAR(255) NOT NULL,
           value JSON,
           createdAt DATETIME DEFAULT CURRENT_TIMESTAMP,
-          updatedAt DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+          updatedAt DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+          UNIQUE KEY unique_user_key (user_id, \`key\`)
         )
       `);
     } else if (this.isPostgres) {
       await this.db.query(`
         CREATE TABLE IF NOT EXISTS system_settings (
           "id" SERIAL PRIMARY KEY,
-          "key" VARCHAR(255) NOT NULL UNIQUE,
+          "user_id" VARCHAR(255) NOT NULL DEFAULT 'global',
+          "key" VARCHAR(255) NOT NULL,
           "value" JSONB,
           "createdAt" TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-          "updatedAt" TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+          "updatedAt" TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          UNIQUE("user_id", "key")
         )
       `);
 
@@ -72,19 +80,20 @@ export class SystemSettingRepository {
 
   async findOne(criteria) {
     if (this.isSql) {
-      const keys = Object.keys(criteria);
+      const scopedCriteria = { user_id: this.userId, ...criteria };
+      const keys = Object.keys(scopedCriteria);
       if (keys.length === 0) return null;
       const quote = this.isPostgres ? '"' : '`';
       const where = keys.map((k, i) => `${quote}${k === '_id' ? 'id' : k}${quote} = ${this.isPostgres ? '$' + (i + 1) : '?'}`).join(' AND ');
       const query = `SELECT * FROM system_settings WHERE ${where} LIMIT 1`;
-      const res = await this.db.query(query, Object.values(criteria));
+      const res = await this.db.query(query, Object.values(scopedCriteria));
       const rows = this.isPostgres ? res.rows : res[0];
       if (rows.length === 0) return null;
       const r = rows[0];
       return { ...r, _id: r.id.toString(), value: typeof r.value === 'string' ? JSON.parse(r.value) : r.value };
     } else {
-      // Use native driver against 'system_settings' collection
-      const doc = await this._mongoCol().findOne(criteria);
+      // Scope by userId in MongoDB
+      const doc = await this._mongoCol().findOne({ userId: this.userId, ...criteria });
       return doc || null;
     }
   }
@@ -108,25 +117,24 @@ export class SystemSettingRepository {
 
       const quote = this.isPostgres ? '"' : '`';
       const query = this.isPostgres
-        ? `UPDATE system_settings SET ${quote}value${quote} = $1, ${quote}updatedAt${quote} = CURRENT_TIMESTAMP WHERE ${quote}key${quote} = $2`
-        : 'UPDATE system_settings SET `value` = ?, `updatedAt` = CURRENT_TIMESTAMP WHERE `key` = ?';
+        ? `UPDATE system_settings SET ${quote}value${quote} = $1, ${quote}updatedAt${quote} = CURRENT_TIMESTAMP WHERE ${quote}user_id${quote} = $2 AND ${quote}key${quote} = $3`
+        : 'UPDATE system_settings SET `value` = ?, `updatedAt` = CURRENT_TIMESTAMP WHERE `user_id` = ? AND `key` = ?';
 
-      await this.db.query(query, [JSON.stringify(newValue), existing.key]);
+      await this.db.query(query, [JSON.stringify(newValue), this.userId, existing.key]);
       return true;
     } else {
-      // Use native driver against 'system_settings' collection
       const setData = {};
       for (const [key, val] of Object.entries(data)) {
         setData[key] = val;
       }
-      await this._mongoCol().updateOne(criteria, { $set: setData });
+      await this._mongoCol().updateOne({ userId: this.userId, ...criteria }, { $set: setData });
       return true;
     }
   }
 
   /**
    * Upsert a setting by key — inserts if not exists, updates if it does.
-   * Works for all DB backends (MySQL, PostgreSQL, MongoDB).
+   * Scoped to this.userId.
    */
   async upsert(key, value) {
     if (this.isSql) {
@@ -134,23 +142,23 @@ export class SystemSettingRepository {
       if (existing) {
         const quote = this.isPostgres ? '"' : '`';
         const query = this.isPostgres
-          ? `UPDATE system_settings SET ${quote}value${quote} = $1, ${quote}updatedAt${quote} = CURRENT_TIMESTAMP WHERE ${quote}key${quote} = $2`
-          : 'UPDATE system_settings SET `value` = ?, `updatedAt` = CURRENT_TIMESTAMP WHERE `key` = ?';
-        await this.db.query(query, [JSON.stringify(value), key]);
+          ? `UPDATE system_settings SET ${quote}value${quote} = $1, ${quote}updatedAt${quote} = CURRENT_TIMESTAMP WHERE ${quote}user_id${quote} = $2 AND ${quote}key${quote} = $3`
+          : 'UPDATE system_settings SET `value` = ?, `updatedAt` = CURRENT_TIMESTAMP WHERE `user_id` = ? AND `key` = ?';
+        await this.db.query(query, [JSON.stringify(value), this.userId, key]);
       } else {
         const quote = this.isPostgres ? '"' : '`';
         const query = this.isPostgres
-          ? `INSERT INTO system_settings (${quote}key${quote}, ${quote}value${quote}) VALUES ($1, $2)`
-          : 'INSERT INTO system_settings (`key`, `value`) VALUES (?, ?)';
-        await this.db.query(query, [key, JSON.stringify(value)]);
+          ? `INSERT INTO system_settings (${quote}user_id${quote}, ${quote}key${quote}, ${quote}value${quote}) VALUES ($1, $2, $3)`
+          : 'INSERT INTO system_settings (`user_id`, `key`, `value`) VALUES (?, ?, ?)';
+        await this.db.query(query, [this.userId, key, JSON.stringify(value)]);
       }
     } else {
-      // Use native driver against 'system_settings' collection (same as jobs/route.js always did)
       await this._mongoCol().updateOne(
-        { key },
-        { $set: { key, value, updatedAt: new Date() } },
+        { userId: this.userId, key },
+        { $set: { userId: this.userId, key, value, updatedAt: new Date() } },
         { upsert: true }
       );
     }
   }
 }
+

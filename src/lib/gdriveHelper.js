@@ -1,6 +1,5 @@
 import connectDB from './mongodb.js';
 import { SystemSettingRepository } from './repositories/SystemSettingRepository.js';
-import SystemSetting from '../models/SystemSetting.js';
 import { withRetry } from './mongoSyncUtils.js';
 
 const SIMPLE_UPLOAD_LIMIT = 5 * 1024 * 1024; // 5MB — Google's limit for simple upload
@@ -14,12 +13,10 @@ export async function getGoogleDriveConfig() {
 }
 
 export async function saveGoogleDriveConfig(config) {
-  await connectDB();
-  await SystemSetting.findOneAndUpdate(
-    { key: 'google_drive_config' },
-    { key: 'google_drive_config', value: config },
-    { upsert: true, new: true }
-  );
+  const db = await connectDB();
+  const settingRepo = new SystemSettingRepository(db);
+  await settingRepo.init();
+  await settingRepo.upsert('google_drive_config', config);
 }
 
 export async function getGoogleAccessToken() {
@@ -69,13 +66,14 @@ export async function getGoogleAccessToken() {
   return data.access_token;
 }
 
-export async function listGoogleDriveFolders(parentId = 'root') {
+export async function listGoogleDriveFolders(parentId = null) {
   return withRetry(async () => {
     const accessToken = await getGoogleAccessToken();
 
-    const parentClause = parentId ? ` and '${parentId}' in parents` : '';
-    const query = `mimeType = 'application/vnd.google-apps.folder' and trashed = false${parentClause}`;
-    const url = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(query)}&fields=files(id,name)`;
+    // Always require explicit parent — if null, use 'root'
+    const actualParentId = parentId || 'root';
+    const query = `mimeType = 'application/vnd.google-apps.folder' and trashed = false and '${actualParentId}' in parents`;
+    const url = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(query)}&fields=files(id,name)&orderBy=name`;
 
     const res = await fetch(url, {
       headers: { 'Authorization': `Bearer ${accessToken}` }
