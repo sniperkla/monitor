@@ -77,6 +77,16 @@ export async function POST(request, { params }) {
 
       console.log(`[mongo-sync] Running backup job ${job.id} db=${job.database} col=${job.collection}`);
 
+      // ── Build shared YYYY-MM-DD_HH-MM subfolder (matches cron structure) ──
+      const now = new Date();
+      const pad = (v) => String(v).padStart(2, '0');
+      const folderName = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}_${pad(now.getHours())}-${pad(now.getMinutes())}`;
+      let targetFolder = job.driveFolderId;
+      if (job.driveFolderId) {
+        const subfolder = await ensureDriveFolder(job.driveFolderId, folderName);
+        targetFolder = subfolder.id || job.driveFolderId;
+      }
+
       if (isAllDatabases) {
         // ── Backup ALL databases on this connection ──
         let dbNames = [];
@@ -105,30 +115,16 @@ export async function POST(request, { params }) {
           }
         }
 
-        const timeStamp = new Date().toISOString().replace(/[:.]/g, '-');
-        const fileName = `backup_ALL_DATABASES_${timeStamp}.json`;
-        await uploadFileToGoogleDrive({ fileName, content: JSON.stringify(allData, null, 2), folderId: job.driveFolderId });
+        const fileName = `backup_ALL_DATABASES.json`;
+        await uploadFileToGoogleDrive({ fileName, content: JSON.stringify(allData, null, 2), folderId: targetFolder });
         count = totalDocs;
-        runMessage = `Successfully backed up ALL ${dbNames.length} databases (${count} total docs) to Google Drive.`;
+        runMessage = `Successfully backed up ALL ${dbNames.length} databases (${count} total docs) to Google Drive folder: ${folderName}`;
 
       } else if (isAllCollections) {
         // ── Backup ALL collections in target DB (one file per collection) ──
         const collections = await targetDb.listCollections().toArray();
         const colNames = collections.map(c => c.name).filter(n => !n.startsWith('system.'));
         let totalDocs = 0;
-
-        // Build Day/Time nested folders under configured Drive folder
-        const now = new Date();
-        const pad = (v) => String(v).padStart(2, '0');
-        const dayFolderName = `${now.getDate()}_${pad(now.getMonth()+1)}_${now.getFullYear()}`;
-        const timeFolderName = `${pad(now.getHours())}-${pad(now.getMinutes())}`;
-
-        let targetFolder = job.driveFolderId;
-        if (job.driveFolderId) {
-          const day = await ensureDriveFolder(job.driveFolderId, dayFolderName);
-          const time = await ensureDriveFolder(day.id || job.driveFolderId, timeFolderName);
-          targetFolder = time.id || (day.id || targetFolder);
-        }
 
         for (const colName of colNames) {
           const docs = await targetDb.collection(colName).find({}).toArray();
@@ -139,7 +135,7 @@ export async function POST(request, { params }) {
         }
 
         count = totalDocs;
-        runMessage = `Successfully backed up ALL ${colNames.length} collections (${count} total docs) to Google Drive.`;
+        runMessage = `Successfully backed up ALL ${colNames.length} collections (${count} total docs) to Google Drive folder: ${folderName}`;
 
       } else {
         // ── Backup single collection ──
@@ -147,10 +143,9 @@ export async function POST(request, { params }) {
         const docs = await col.find({}).toArray();
         count = docs.length;
 
-        const timeStamp = new Date().toISOString().replace(/[:.]/g, '-');
-        const fileName = `backup_${job.database}_${job.collection}_${timeStamp}.json`;
-        await uploadFileToGoogleDrive({ fileName, content: JSON.stringify(docs, null, 2), folderId: job.driveFolderId });
-        runMessage = `Successfully backed up ${count} documents from '${job.collection}' to Google Drive.`;
+        const fileName = `${job.collection}.json`;
+        await uploadFileToGoogleDrive({ fileName, content: JSON.stringify(docs, null, 2), folderId: targetFolder });
+        runMessage = `Successfully backed up ${count} documents from '${job.collection}' to Google Drive folder: ${folderName}`;
       }
 
     } catch (err) {

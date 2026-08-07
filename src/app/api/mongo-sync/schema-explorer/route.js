@@ -100,10 +100,30 @@ export async function POST(request) {
     // ── Handle "list databases" request ─────────────────────────────────────
 
     // For external (non-default) connections that have a configured database:
-    // Just return that single database — don't call listDatabases() which may return
-    // ALL system databases (even when authSource=admin is used just for authentication).
+    // Return that database. BUT also check if it actually has collections — if not,
+    // fall back to listing all available databases so the user can pick the right one.
+    // (This handles the common mistake of using the Docker service/container name as
+    // the database name instead of the actual database name in the URI.)
     if (!isDefault && configuredDb) {
-      return NextResponse.json({ success: true, databases: [configuredDb] });
+      // Quick check: does the configured DB actually have any collections?
+      let hasCollections = false;
+      try {
+        const checkDb = dbInstance.databaseName === configuredDb
+          ? dbInstance
+          : (dbInstance.client ? dbInstance.client.db(configuredDb) : dbInstance);
+        const colls = await checkDb.listCollections().toArray();
+        hasCollections = colls.filter(c => !c.name.startsWith('system.')).length > 0;
+      } catch (_) {
+        // If we can't check, assume it exists
+        hasCollections = true;
+      }
+
+      if (hasCollections) {
+        return NextResponse.json({ success: true, databases: [configuredDb] });
+      }
+
+      // Configured DB is empty — try to list all actual databases so the user can select the right one
+      console.log(`[schema-explorer] configuredDb "${configuredDb}" has no collections, falling back to listDatabases`);
     }
 
     // For the system default connection (or connections without a configured DB):

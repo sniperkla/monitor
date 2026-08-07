@@ -675,27 +675,37 @@ function handleSftpDelete(ws, msg) {
   }
 
   const filePath = msg.path;
+  const connId = msg.connId;
 
-  const doDelete = (isRetry = false) => {
-    // Use rm -rf directly — handles both files and directories without opening a new SFTP subsystem
-    const cmd = `rm -rf "${filePath.replace(/"/g, '\\"')}"`;
+  // Batch rapid deletes into a single rm -rf to prevent SSH channel exhaustion
+  if (!session.__deleteQueue) {
+    session.__deleteQueue = [];
+    session.__deleteTimer = null;
+  }
+  session.__deleteQueue.push(filePath);
 
+  const flushDeletes = (isRetry = false) => {
+    const paths = session.__deleteQueue.splice(0);
+    if (!paths.length) return;
+    const quoted = paths.map(p => `"${p.replace(/"/g, '\\"')}"`).join(' ');
+    const cmd = `rm -rf ${quoted}`;
     session.sshClient.exec(cmd, (err, stream) => {
-      if (err) return sendSftpError(ws, msg.connId, err);
+      if (err) return sendSftpError(ws, connId, err);
       let stderr = '';
       stream.on('data', () => {});
-      stream.stderr.on('data', (d) => { stderr += d.toString(); });
+      stream.stderr.on('data', d => { stderr += d.toString(); });
       stream.on('close', (code) => {
         if (code === 0) {
-          ws.send(JSON.stringify({ type: 'sftp:action_success', connId: msg.connId, action: 'delete', path: filePath }));
+          paths.forEach(p => ws.send(JSON.stringify({ type: 'sftp:action_success', connId, action: 'delete', path: p })));
         } else {
-          sendSftpError(ws, msg.connId, new Error(stderr.trim() || `Delete failed (exit ${code})`));
+          sendSftpError(ws, connId, new Error(stderr.trim() || `Delete failed (exit ${code})`));
         }
       });
     });
   };
 
-  doDelete();
+  clearTimeout(session.__deleteTimer);
+  session.__deleteTimer = setTimeout(flushDeletes, 50);
 }
 
 // Active upload streams: key = `${connId}:${remotePath}`

@@ -958,17 +958,31 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
             console.log(`🗑️ [${socket.id}] [REATTACHED] SFTP DELETE: ${path}`);
             const sc = pending.sshClient;
             if (!sc || sc._state === 'closed') return socket.emit('sftp:error', { message: 'SSH Connection Closed' });
-            const cmd = `rm -rf "${path.replace(/"/g, '\\"')}"`;
-            sc.exec(cmd, (err, execStream) => {
-              if (err) return socket.emit('sftp:error', { message: 'Delete failed' });
-              let stderr = '';
-              execStream.on('data', () => {});
-              execStream.stderr.on('data', d => stderr += d.toString());
-              execStream.on('close', (code) => {
-                if (code === 0) socket.emit('sftp:action_success', { action: 'delete', path });
-                else socket.emit('sftp:error', { message: stderr.trim() || `Exit code ${code}` });
+
+            if (!socket.__deleteQueue) {
+              socket.__deleteQueue = [];
+              socket.__deleteTimer = null;
+            }
+            socket.__deleteQueue.push(path);
+
+            const flushDeletes = () => {
+              const paths = socket.__deleteQueue.splice(0);
+              if (!paths.length) return;
+              const quoted = paths.map(p => `"${p.replace(/"/g, '\\"')}"`).join(' ');
+              sc.exec(`rm -rf ${quoted}`, (err, execStream) => {
+                if (err) return socket.emit('sftp:error', { message: 'Delete failed' });
+                let stderr = '';
+                execStream.on('data', () => {});
+                execStream.stderr.on('data', d => stderr += d.toString());
+                execStream.on('close', (code) => {
+                  if (code === 0) paths.forEach(p => socket.emit('sftp:action_success', { action: 'delete', path: p }));
+                  else socket.emit('sftp:error', { message: stderr.trim() || `Exit code ${code}` });
+                });
               });
-            });
+            };
+
+            clearTimeout(socket.__deleteTimer);
+            socket.__deleteTimer = setTimeout(flushDeletes, 50);
           });
 
           socket.on('sftp:upload', ({ filename, path: destPath, size, offset = 0 }) => {
@@ -2235,32 +2249,46 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
           socket.on('sftp:delete', (path) => {
             console.log(`🗑️ [${socket.id}] SFTP DELETE: ${path}`);
 
-            const doDelete = (isRetry = false) => {
-              // Build the command: try plain rm -rf first, sudo on retry
-              const cmd = (isRetry && connection?.password)
-                ? `echo "${Buffer.from(connection.password).toString('base64')}" | base64 -d | sudo -S rm -rf "${path.replace(/"/g, '\\"')}"`
-                : `rm -rf "${path.replace(/"/g, '\\"')}"`;
+            // Batch rapid delete requests into a single rm -rf to avoid SSH channel exhaustion
+            if (!socket.__deleteQueue) {
+              socket.__deleteQueue = [];
+              socket.__deleteTimer = null;
+            }
+            socket.__deleteQueue.push(path);
 
-              sshClient.exec(cmd, (err, stream) => {
-                if (err) return emitSftpError(err, 'Delete failed');
-                let stderr = '';
-                stream.on('data', () => {});
-                stream.stderr.on('data', d => stderr += d.toString());
-                stream.on('close', (code) => {
-                  if (code !== 0 && !isRetry && stderr.toLowerCase().includes('permission denied') && connection?.password) {
-                    console.warn(`⚠️ [${socket.id}] Delete failed with permission denied. Retrying with sudo.`);
-                    return doDelete(true);
-                  }
-                  if (code === 0) {
-                    socket.emit('sftp:action_success', { action: 'delete', path });
-                  } else {
-                    emitSftpError(stderr.trim() || `Exit code ${code}`, 'Delete failed');
-                  }
+            const flushDeletes = () => {
+              const paths = socket.__deleteQueue.splice(0);
+              if (!paths.length) return;
+
+              const doDelete = (pathList, isRetry = false) => {
+                const quoted = pathList.map(p => `"${p.replace(/"/g, '\\"')}"`).join(' ');
+                const cmd = (isRetry && connection?.password)
+                  ? `echo "${Buffer.from(connection.password).toString('base64')}" | base64 -d | sudo -S rm -rf ${quoted}`
+                  : `rm -rf ${quoted}`;
+
+                sshClient.exec(cmd, (err, stream) => {
+                  if (err) return pathList.forEach(p => emitSftpError(err, 'Delete failed'));
+                  let stderr = '';
+                  stream.on('data', () => {});
+                  stream.stderr.on('data', d => stderr += d.toString());
+                  stream.on('close', (code) => {
+                    if (code !== 0 && !isRetry && stderr.toLowerCase().includes('permission denied') && connection?.password) {
+                      return doDelete(pathList, true);
+                    }
+                    if (code === 0) {
+                      pathList.forEach(p => socket.emit('sftp:action_success', { action: 'delete', path: p }));
+                    } else {
+                      emitSftpError(stderr.trim() || `Exit code ${code}`, 'Delete failed');
+                    }
+                  });
                 });
-              });
+              };
+
+              doDelete(paths);
             };
 
-            doDelete();
+            clearTimeout(socket.__deleteTimer);
+            socket.__deleteTimer = setTimeout(flushDeletes, 50);
           });
 
           // Read File
