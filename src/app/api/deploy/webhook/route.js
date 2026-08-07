@@ -1209,32 +1209,45 @@ fi
           tmuxSession = `deploy-${projectId.replace(/[^a-zA-Z0-9_-]/g, '-')}`.slice(0, 60);
           const tmuxWrapperPath = `/tmp/deploy_tmux_${projectId}.sh`;
 
-          // Write a file via SSH exec — sends content as base64 over stdin.
-          // Avoids SFTP "Failure" errors and ARG_MAX limits on large scripts.
+          // Write a file to the remote server.
+          // Primary: sftp.writeFile (fast, reliable on most servers).
+          // Fallback: base64 over SSH exec stdin (for servers with restricted SFTP).
+          const writeRemoteFile = (remotePath, content, mode, cb) => {
+            conn.sftp((sftpErr, sftp) => {
+              if (sftpErr) return writeViaSsh(remotePath, content, mode, cb);
+              sftp.writeFile(remotePath, content, { mode }, (writeErr) => {
+                if (!writeErr) return cb(null);
+                // SFTP failed — fall back to exec
+                logOutput += `[SSH] SFTP write failed (${writeErr.message}), trying exec fallback...\n`;
+                writeViaSsh(remotePath, content, mode, cb);
+              });
+            });
+          };
+
           const writeViaSsh = (remotePath, content, mode, cb) => {
             const b64 = Buffer.from(content).toString('base64');
-            // The remote command reads base64 from stdin and decodes to file
+            // Send base64 content as stdin — no ARG_MAX issues, works on any server
             const writeCmd = `base64 -d > ${remotePath} && chmod ${mode.toString(8)} ${remotePath}`;
             conn.exec(writeCmd, (err, stream) => {
               if (err) return cb(err);
               let stderr = '';
               stream.stderr.on('data', d => { stderr += d.toString(); });
+              stream.stdout.resume();
               stream.on('close', (code) => {
                 if (code !== 0) return cb(new Error(stderr.trim() || `write exited ${code}`));
                 cb(null);
               });
               stream.on('error', cb);
-              // Write base64 content as stdin and close
               stream.end(b64 + '\n');
             });
           };
 
-          writeViaSsh(userCmdPath, userCmdScript, 0o755, (userCmdWriteErr) => {
+          writeRemoteFile(userCmdPath, userCmdScript, 0o755, (userCmdWriteErr) => {
             if (userCmdWriteErr) {
               logOutput += `[SSH] Warning: could not pre-upload user cmd script (${userCmdWriteErr.message})\n`;
             }
 
-            writeViaSsh(remoteDeployPath, deployScript, 0o755, (writeErr) => {
+            writeRemoteFile(remoteDeployPath, deployScript, 0o755, (writeErr) => {
             if (writeErr) {
               logOutput += `[SSH Error] Failed to write deploy script: ${writeErr.message}\n`;
               try { clearRunning(projectId); } catch (e) {}
@@ -1359,12 +1372,12 @@ fi
               });
             }; // end launchDeploy
 
-            writeViaSsh(tmuxWrapperPath, tmuxWrapper, 0o755, (tmuxWriteErr) => {
+            writeRemoteFile(tmuxWrapperPath, tmuxWrapper, 0o755, (tmuxWriteErr) => {
               if (tmuxWriteErr) logOutput += `[deploy] tmux wrapper write failed: ${tmuxWriteErr.message}\n`;
               launchDeploy();
             });
-          }); // end writeViaSsh(remoteDeployPath)
-        }); // end writeViaSsh(userCmdPath)
+          }); // end writeRemoteFile(remoteDeployPath)
+        }); // end writeRemoteFile(userCmdPath)
       } // end ready block
     }); // end conn.on('ready')
 
