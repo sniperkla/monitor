@@ -223,7 +223,7 @@ CRITICAL INSTRUCTIONS:
    - Determine their container_name / service name, build context directory (e.g., ./frontend, ./backend, or ./), and exposed/proxied port (e.g., 3033, 3090).
 2. SCRIPT CONSTRUCT & PRESERVATION:
    - If an existing deployment script is provided, keep all original "cd", "git pull", custom environment setup, echo/log statements.
-   - Put \`#!/bin/bash\` and \`set -e\` ONLY ONCE at the top.
+   - Put \`#!/bin/bash\` ONLY ONCE at the top. Do NOT add \`set -e\` — Swarm rollback commands exit non-zero by design and set -e would abort the script mid-rollback.
    - Do NOT include any docker service/swarm commands in "deployCommand" — the system handles zero-downtime Swarm injection.
 
 You MUST respond with a valid JSON object ONLY:

@@ -762,18 +762,26 @@ export async function runDeployment(config, runMeta = {}) {
     scriptLines.push('echo "[deploy] Running deploy command..."');
     
     let cleanLocalDeployCmd = (config.deployCommand || '').trim().replace(/[^\x00-\x7F]/g, '');
-    // Patch any existing `docker service update` commands to add rollback-on-failure flags.
-    // This ensures old saved scripts get zero-downtime rollback protection automatically.
-    cleanLocalDeployCmd = cleanLocalDeployCmd.replace(
-      /docker service update(\s+--image\s+\S+)?(\s+--force)?(\s+--update-order\s+\S+)?(\s+--update-delay\s+\S+)?/g,
-      (match) => {
-        let patched = match;
-        if (!patched.includes('--update-failure-action')) patched += ' --update-failure-action rollback';
-        if (!patched.includes('--update-monitor')) patched += ' --update-monitor 10s';
-        if (!patched.includes('--rollback-order')) patched += ' --rollback-order start-first';
-        return patched;
-      }
-    );
+    // For Swarm deployments: patch in rollback flags and remove set -e.
+    // set -e causes the entire script to abort when `docker service update` exits non-zero
+    // (which happens normally during a rollback), killing the process before Swarm finishes
+    // rolling back to the good image.
+    const isSwarmScript = /docker\s+(service|stack|swarm)/.test(cleanLocalDeployCmd);
+    if (isSwarmScript) {
+      // Remove set -e — swarm scripts handle failures explicitly
+      cleanLocalDeployCmd = cleanLocalDeployCmd.replace(/^set -e\s*$/m, '# set -e disabled for swarm (rollback exits non-zero by design)');
+      // Inject rollback flags into any service update command missing them
+      cleanLocalDeployCmd = cleanLocalDeployCmd.replace(
+        /docker service update(\s[^\n]+)/g,
+        (match) => {
+          let patched = match;
+          if (!patched.includes('--update-failure-action')) patched += ' --update-failure-action rollback';
+          if (!patched.includes('--update-monitor')) patched += ' --update-monitor 10s';
+          if (!patched.includes('--rollback-order')) patched += ' --rollback-order start-first';
+          return patched;
+        }
+      );
+    }
     cleanLocalDeployCmd = cleanLocalDeployCmd.split('\n').filter(line => !line.includes('SWARM_TARGET=$(') && !line.includes('|| (docker service inspect')).map((line, idx) => {
       if (idx > 0 && (line.trim() === '#!/bin/bash' || line.trim() === 'set -e')) {
         return '# ' + line;
