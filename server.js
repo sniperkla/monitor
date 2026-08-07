@@ -2952,54 +2952,47 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
                       });
                     });
                   } else {
-                    const os = require('os');
-                    const tempFile = path.resolve(os.tmpdir(), `transfer-${socket.id}-${Date.now()}-${path.basename(srcPath)}`);
-                    
-                    console.log(`🚀 [${socket.id}] Starting reliable transfer via temp: ${tempFile}`);
-                    
-                    // Step 1: Download from Source to Temp (0-50%)
-                    srcSftp.fastGet(srcPath, tempFile, {
-                      step: (transferred, chunk, total) => {
-                        const percent = Math.round((transferred / total) * 50);
-                        socket.emit('sftp:progress', {
-                          action: action === 'cut' ? 'move' : 'copy',
-                          filename: path.posix.basename(srcPath),
-                          progress: percent
+                    // File transfer via SSH pipe — mirrors the folder tar pattern exactly
+                    const filename = path.posix.basename(srcPath);
+                    const cmdSrc = `cat ${shellQuote(srcPath)}`;
+                    const cmdDest = `cat > ${shellQuote(destPath)}`;
+
+                    // Get file size for progress reporting (best-effort)
+                    let totalBytes = 0;
+                    srcSession.sshClient.exec(`stat -c%s ${shellQuote(srcPath)} 2>/dev/null || echo 0`, (szErr, szStream) => {
+                      if (!szErr) szStream.on('data', d => { const n = parseInt(d.toString().trim()); if (!isNaN(n) && n > 0) totalBytes = n; });
+                    });
+
+                    srcSession.sshClient.exec(cmdSrc, (err, srcStream) => {
+                      if (err) return finish(err);
+                      sshClient.exec(cmdDest, (err, destStream) => {
+                        if (err) { srcStream.destroy(); return finish(err); }
+
+                        srcStream.pipe(destStream);
+                        socket.emit('sftp:progress', { action: action === 'cut' ? 'move' : 'copy', filename, progress: 1 });
+
+                        let bytesSent = 0;
+                        srcStream.on('data', chunk => {
+                          bytesSent += chunk.length;
+                          if (totalBytes > 0) {
+                            const progress = Math.min(99, Math.round((bytesSent / totalBytes) * 100));
+                            socket.emit('sftp:progress', { action: action === 'cut' ? 'move' : 'copy', filename, progress });
+                          }
                         });
-                      }
-                    }, (err) => {
-                      if (err) {
-                        console.error(`❌ [${socket.id}] Download failed:`, err);
-                        fs.unlink(tempFile, () => {});
-                        return finish(err);
-                      }
 
-                      console.log(`✅ [${socket.id}] Download complete. Starting upload...`);
-                      
-                      // Step 2: Upload from Temp to Destination (50-100%)
-                      destSftp.fastPut(tempFile, destPath, {
-                        step: (transferred, chunk, total) => {
-                          const percent = 50 + Math.round((transferred / total) * 50);
-                           socket.emit('sftp:progress', {
-                            action: action === 'cut' ? 'move' : 'copy',
-                            filename: path.posix.basename(srcPath),
-                            progress: percent
-                          });
-                        }
-                      }, (err) => {
-                         // Clean up temp file
-                         fs.unlink(tempFile, () => {});
-                         
-                         if (err) {
-                           console.error(`❌ [${socket.id}] Upload failed:`, err);
-                           return finish(err);
-                         }
+                        destStream.on('close', (code) => {
+                          clearTimeout(transferTimer);
+                          if (code === 0) {
+                            socket.emit('sftp:progress', { action: action === 'cut' ? 'move' : 'copy', filename, progress: 100 });
+                            socket.emit('sftp:action_success', { action: action === 'cut' ? 'move' : 'copy', path: destPath });
+                            if (action === 'cut') srcSession.sshClient.exec(`rm -f ${shellQuote(srcPath)}`, () => {});
+                          } else {
+                            finish(`File transfer failed (exit ${code})`);
+                          }
+                        });
 
-                         console.log(`✅ [${socket.id}] Upload complete!`);
-                         clearTimeout(transferTimer);
-                          socket.emit("sftp:progress", { action: action === "cut" ? "move" : "copy", filename: path.posix.basename(srcPath), progress: 100 });
-                         socket.emit('sftp:action_success', { action: action === 'cut' ? 'move' : 'copy', path: destPath });
-                         if (action === 'cut') srcSftp.unlink(srcPath, () => {});
+                        srcStream.on('error', err => { finish(err); srcStream.destroy(); destStream.destroy(); });
+                        destStream.on('error', err => { finish(err); srcStream.destroy(); destStream.destroy(); });
                       });
                     });
                   }

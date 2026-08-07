@@ -349,6 +349,7 @@ function connect() {
       case 'sftp:move':           handleSftpMove(ws, msg);           break;
       case 'sftp:readFileBase64': handleSftpReadBase64(ws, msg);     break;
       case 'sftp:extract':        handleSftpExtract(ws, msg);        break;
+      case 'sftp:cross_server_transfer': handleCrossServerTransfer(ws, msg); break;
 
       // ── WebRTC Signaling & Relay SSH Provisioning ──
       // ssh:prepare: server sends plaintext SSH config before WebRTC offer arrives or for WebSocket relay apps
@@ -1278,6 +1279,110 @@ async function handleSftpCopy(ws, msg) {
     const safetyTimer = setTimeout(() => { sendSuccess(); }, 120000);
   } catch (err) {
     sendSftpError(ws, msg.connId, err);
+  }
+}
+
+async function handleCrossServerTransfer(ws, msg) {
+  // msg: { connId (dest), srcConnId, srcPath, destPath, action }
+  const { connId, srcConnId, srcPath, destPath, action = 'copy' } = msg;
+  const srcSession = sshSessions.get(srcConnId);
+  const destSession = sshSessions.get(connId);
+
+  if (!srcSession?.sshClient) {
+    return ws.send(JSON.stringify({ type: 'sftp:error', connId, message: 'Source connection not active. Please ensure the source server tab is open.' }));
+  }
+  if (!destSession?.sshClient) {
+    return ws.send(JSON.stringify({ type: 'sftp:error', connId, message: 'Destination connection not active.' }));
+  }
+
+  const sendProgress = (progress, filename) => {
+    try { ws.send(JSON.stringify({ type: 'sftp:progress', connId, action: action === 'cut' ? 'move' : 'copy', filename, progress })); } catch {}
+  };
+  const sendError = (err) => {
+    try { ws.send(JSON.stringify({ type: 'sftp:error', connId, message: typeof err === 'string' ? err : err.message })); } catch {}
+  };
+  const sendSuccess = () => {
+    try {
+      ws.send(JSON.stringify({ type: 'sftp:progress', connId, action: action === 'cut' ? 'move' : 'copy', filename: require('path').posix.basename(srcPath), progress: 100 }));
+      ws.send(JSON.stringify({ type: 'sftp:action_success', connId, action: action === 'cut' ? 'move' : 'copy', path: destPath }));
+    } catch {}
+  };
+
+  const filename = require('path').posix.basename(srcPath);
+  sendProgress(1, filename);
+
+  // Check if source is a directory
+  const isDir = await new Promise((resolve) => {
+    srcSession.sshClient.exec(`[ -d ${JSON.stringify(srcPath)} ] && echo DIR || echo FILE`, (err, stream) => {
+      if (err) return resolve(false);
+      let out = '';
+      stream.on('data', d => out += d.toString());
+      stream.on('close', () => resolve(out.trim() === 'DIR'));
+    });
+  });
+
+  if (isDir) {
+    // Pipe tar from source → dest directly
+    const cmdSrc = `tar czf - -C ${JSON.stringify(require('path').posix.dirname(srcPath))} ${JSON.stringify(filename)}`;
+    const cmdDest = `mkdir -p ${JSON.stringify(destPath)} && tar xzf - -C ${JSON.stringify(destPath)}`;
+
+    srcSession.sshClient.exec(cmdSrc, (err, srcStream) => {
+      if (err) return sendError(err);
+      destSession.sshClient.exec(cmdDest, (err2, destStream) => {
+        if (err2) { srcStream.destroy(); return sendError(err2); }
+
+        srcStream.pipe(destStream);
+        sendProgress(1, filename);
+
+        let bytesSent = 0;
+        srcStream.on('data', chunk => {
+          bytesSent += chunk.length;
+          sendProgress(Math.min(99, Math.round(bytesSent / 1024 / 10)), filename); // rough estimate
+        });
+
+        destStream.on('close', (code) => {
+          if (code !== 0) return sendError(`Transfer failed with code ${code}`);
+          if (action === 'cut') srcSession.sshClient.exec(`rm -rf ${JSON.stringify(srcPath)}`, () => {});
+          sendSuccess();
+        });
+        srcStream.on('error', sendError);
+        destStream.on('error', sendError);
+      });
+    });
+  } else {
+    // File: pipe cat src | cat > dest between the two SSH sessions
+    const cmdSrc = `cat ${JSON.stringify(srcPath)}`;
+    const cmdDest = `cat > ${JSON.stringify(destPath)}`;
+
+    // Get file size for progress
+    let totalBytes = 0;
+    srcSession.sshClient.exec(`stat -c%s ${JSON.stringify(srcPath)} 2>/dev/null || echo 0`, (szErr, szStream) => {
+      if (!szErr) szStream.on('data', d => { const n = parseInt(d.toString().trim()); if (!isNaN(n) && n > 0) totalBytes = n; });
+    });
+
+    srcSession.sshClient.exec(cmdSrc, (err, srcStream) => {
+      if (err) return sendError(err);
+      destSession.sshClient.exec(cmdDest, (err2, destStream) => {
+        if (err2) { srcStream.destroy(); return sendError(err2); }
+
+        srcStream.pipe(destStream);
+        sendProgress(1, filename);
+
+        let bytesSent = 0;
+        srcStream.on('data', chunk => {
+          bytesSent += chunk.length;
+          if (totalBytes > 0) sendProgress(Math.min(99, Math.round((bytesSent / totalBytes) * 100)), filename);
+        });
+
+        destStream.on('close', (code) => {
+          if (code !== 0) return sendError(`File transfer failed (exit ${code})`);
+          if (action === 'cut') srcSession.sshClient.exec(`rm -f ${JSON.stringify(srcPath)}`, () => {});
+          sendSuccess();
+        });
+        srcStream.on('error', sendError);
+        destStream.on('error', sendError);
+      });
+    });
   }
 }
 
