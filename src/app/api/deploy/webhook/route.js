@@ -762,6 +762,18 @@ export async function runDeployment(config, runMeta = {}) {
     scriptLines.push('echo "[deploy] Running deploy command..."');
     
     let cleanLocalDeployCmd = (config.deployCommand || '').trim().replace(/[^\x00-\x7F]/g, '');
+    // Patch any existing `docker service update` commands to add rollback-on-failure flags.
+    // This ensures old saved scripts get zero-downtime rollback protection automatically.
+    cleanLocalDeployCmd = cleanLocalDeployCmd.replace(
+      /docker service update(\s+--image\s+\S+)?(\s+--force)?(\s+--update-order\s+\S+)?(\s+--update-delay\s+\S+)?/g,
+      (match) => {
+        let patched = match;
+        if (!patched.includes('--update-failure-action')) patched += ' --update-failure-action rollback';
+        if (!patched.includes('--update-monitor')) patched += ' --update-monitor 10s';
+        if (!patched.includes('--rollback-order')) patched += ' --rollback-order start-first';
+        return patched;
+      }
+    );
     cleanLocalDeployCmd = cleanLocalDeployCmd.split('\n').filter(line => !line.includes('SWARM_TARGET=$(') && !line.includes('|| (docker service inspect')).map((line, idx) => {
       if (idx > 0 && (line.trim() === '#!/bin/bash' || line.trim() === 'set -e')) {
         return '# ' + line;

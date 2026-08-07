@@ -536,7 +536,18 @@ ${existingScript || '# No previous script set'}`;
      # ------ ${svc} ------
      if docker service inspect ${svc} >/dev/null 2>&1; then
        echo "[swarm] Updating Swarm service ${svc} zero-downtime (forced rollout)..."
-       docker service update --image ${svc}:latest --force --update-order start-first --update-delay 5s ${svc}
+       docker service update \
+         --image ${svc}:latest \
+         --force \
+         --update-order start-first \
+         --update-delay 5s \
+         --update-failure-action rollback \
+         --update-monitor 10s \
+         --rollback-order start-first \
+         --rollback-failure-action continue \
+         ${svc} || {
+           echo "[swarm] WARNING: Update failed — Swarm is rolling back ${svc} to previous image automatically."
+         }
        docker service update --network-add "$SWARM_NET" ${svc} 2>/dev/null || true
      else
        # Check if a standalone container with this name exists
@@ -549,7 +560,17 @@ ${existingScript || '# No previous script set'}`;
          _HAD_CONTAINER=0
        fi
        # Create Swarm service — if it fails and we had a standalone container, roll back
-       if docker service create --name ${svc} --network "$SWARM_NET" ${publishFlag}--detach --no-resolve-image --replicas 2 ${svc}:latest; then
+       if docker service create \
+         --name ${svc} \
+         --network "$SWARM_NET" \
+         ${publishFlag}\
+         --detach \
+         --no-resolve-image \
+         --replicas 2 \
+         --update-order start-first \
+         --update-failure-action rollback \
+         --rollback-order start-first \
+         ${svc}:latest; then
          echo "[swarm] Service ${svc} created. Waiting for replica to start..."
          _STARTED=0
          for _i in 1 2 3 4 5 6 7 8 9 10; do
