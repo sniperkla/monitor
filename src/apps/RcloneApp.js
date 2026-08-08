@@ -999,7 +999,7 @@ export default function RcloneApp() {
       }
 
       // Listen for postMessage from the callback page OR poll for closure
-      const messageHandler = (event) => {
+      const messageHandler = async (event) => {
         // Only trust messages from same origin
         if (event.origin !== window.location.origin) return;
         const { oauthResult } = event.data || {};
@@ -1007,18 +1007,48 @@ export default function RcloneApp() {
 
         window.removeEventListener('message', messageHandler);
         clearInterval(pollInterval);
-        popup.close();
-        setOauthLoading(false);
 
-        if (oauthResult.success) {
-          setOauthToast({ type: 'success', msg: oauthResult.message || `Remote "${newRemoteName}" authenticated!` });
-          setShowAddRemoteModal(false);
-          setNewRemoteName('');
-          setRemoteConfig({});
-          setDriveAuthMode('oauth');
-          setTimeout(fetchRcloneStatus, 600);
-        } else {
+        if (!oauthResult.success) {
+          popup.close();
+          setOauthLoading(false);
           setOauthToast({ type: 'error', msg: oauthResult.error || 'OAuth failed' });
+          setTimeout(() => setOauthToast(null), 8000);
+          return;
+        }
+
+        // Token received — now save via apiFetch so x-mongodb-uri headers are included
+        try {
+          const saveRes = await apiFetch('/api/rclone/oauth/save-token', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              connectionId:  oauthResult.connectionId,
+              remoteName:    oauthResult.remoteName,
+              clientId:      oauthResult.clientId,
+              clientSecret:  oauthResult.clientSecret,
+              scope:         oauthResult.scope,
+              rcloneToken:   oauthResult.rcloneToken,
+            }),
+          });
+          const saveData = await saveRes.json();
+
+          popup.close();
+          setOauthLoading(false);
+
+          if (saveData?.success) {
+            setOauthToast({ type: 'success', msg: saveData.message || `Remote "${newRemoteName}" authenticated!` });
+            setShowAddRemoteModal(false);
+            setNewRemoteName('');
+            setRemoteConfig({});
+            setDriveAuthMode('oauth');
+            setTimeout(fetchRcloneStatus, 600);
+          } else {
+            setOauthToast({ type: 'error', msg: saveData?.error || 'Failed to save rclone config' });
+          }
+        } catch (saveErr) {
+          popup.close();
+          setOauthLoading(false);
+          setOauthToast({ type: 'error', msg: `Save failed: ${saveErr.message}` });
         }
         setTimeout(() => setOauthToast(null), 8000);
       };

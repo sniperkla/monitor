@@ -1,16 +1,13 @@
 import { NextResponse } from 'next/server';
-import { getSshConfig, execCommand } from '@/app/api/server-backup/_ssh';
-
-function quote(str) {
-  return `'${String(str).replace(/'/g, `'\\''`)}'`;
-}
 
 /**
  * Returns an HTML page that sends a postMessage to window.opener and
  * then closes the popup window.
  */
-function popupResponse({ success, message, error }) {
-  const payload = JSON.stringify({ oauthResult: { success, message, error } });
+function popupResponse({ success, message, error, payload }) {
+  const data = JSON.stringify({
+    oauthResult: { success, message, error, ...(payload || {}) },
+  });
   const html = `<!DOCTYPE html>
 <html>
 <head>
@@ -31,15 +28,21 @@ function popupResponse({ success, message, error }) {
 </head>
 <body>
   <div class="icon">${success ? '✅' : '❌'}</div>
-  <h2>${success ? 'Google Drive Connected!' : 'Authentication Failed'}</h2>
-  <p>${success ? (message || 'Remote configured successfully. This window will close…') : (error || 'An error occurred.')}</p>
+  <h2>${success ? 'Google Sign-In Successful!' : 'Authentication Failed'}</h2>
+  <p>${success ? 'Saving your configuration… This window will close.' : (error || 'An error occurred.')}</p>
   <script>
-    try {
-      if (window.opener && !window.opener.closed) {
-        window.opener.postMessage(${payload}, window.location.origin);
+    (function () {
+      var payload = ${data};
+      try {
+        if (window.opener && !window.opener.closed) {
+          window.opener.postMessage(payload, window.location.origin);
+        }
+      } catch (e) {
+        // cross-origin safety — should never happen since same origin
       }
-    } catch(e) {}
-    setTimeout(() => window.close(), 1500);
+      // Close after a short delay so the user can read the message
+      setTimeout(function () { window.close(); }, ${success ? 1500 : 3000});
+    })();
   </script>
 </body>
 </html>`;
@@ -52,15 +55,23 @@ function popupResponse({ success, message, error }) {
 /**
  * GET /api/rclone/oauth/callback?code=...&state=...
  *
- * Google redirects here after user authorises the app.
+ * Google redirects here after the user authorises the app.
  * The `state` param carries base64url-encoded JSON with:
  *   { connectionId, remoteName, clientId, clientSecret, scope }
  *
- * This handler:
- *  1. Decodes state → SSH target context
- *  2. Exchanges `code` for tokens via Google's token endpoint (server-side)
- *  3. Writes / patches the rclone remote config on the remote server via SSH
- *  4. Returns an HTML page that sends postMessage to the opener popup and closes
+ * This handler ONLY:
+ *  1. Decodes state
+ *  2. Exchanges `code` for OAuth tokens via Google (server-side, no CORS)
+ *  3. Sends the token + context back to the opener via postMessage
+ *
+ * The opener (RcloneApp) then calls POST /api/rclone/oauth/save-token
+ * through the normal apiFetch path (which carries x-mongodb-uri, etc.)
+ * to actually SSH into the server and write the rclone config.
+ *
+ * This separation is necessary because this callback is a plain browser
+ * redirect from Google — it carries NO custom headers (x-mongodb-uri,
+ * x-ssh-mode, etc.) that apiFetch normally injects, so any direct DB /
+ * SSH call here would fail with "Connection not found".
  */
 export async function GET(req) {
   const { searchParams } = new URL(req.url);
@@ -68,16 +79,15 @@ export async function GET(req) {
   const state = searchParams.get('state');
   const error = searchParams.get('error');
 
-  // Google returned an error (user denied etc.)
   if (error) {
-    return popupResponse({ success: false, error: `Google OAuth denied: ${error}` });
+    return popupResponse({ success: false, error: `Google denied access: ${error}` });
   }
 
   if (!code || !state) {
-    return popupResponse({ success: false, error: 'Missing code or state parameter from Google.' });
+    return popupResponse({ success: false, error: 'Missing code or state from Google.' });
   }
 
-  // ── Decode state ────────────────────────────────────────────────────────
+  // ── Decode state ─────────────────────────────────────────────────────────
   let ctx;
   try {
     ctx = JSON.parse(Buffer.from(state, 'base64url').toString('utf-8'));
@@ -88,15 +98,15 @@ export async function GET(req) {
   const { connectionId, remoteName, clientId, clientSecret, scope = 'drive' } = ctx;
 
   if (!connectionId || !remoteName || !clientId || !clientSecret) {
-    return popupResponse({ success: false, error: 'Incomplete state context — please try again.' });
+    return popupResponse({ success: false, error: 'Incomplete OAuth context — please try again.' });
   }
 
-  // ── Build redirect_uri (must match what was sent in the auth request) ───
+  // ── Build redirect_uri (must exactly match what was registered) ──────────
   const host        = req.headers.get('host') || 'localhost:3000';
   const proto       = host.startsWith('localhost') ? 'http' : 'https';
   const redirectUri = `${proto}://${host}/api/rclone/oauth/callback`;
 
-  // ── Exchange code for tokens (server-side, no CORS issues) ──────────────
+  // ── Exchange code → tokens (server-side) ─────────────────────────────────
   let tokenData;
   try {
     const tokenRes = await fetch('https://oauth2.googleapis.com/token', {
@@ -110,7 +120,6 @@ export async function GET(req) {
         grant_type:    'authorization_code',
       }).toString(),
     });
-
     tokenData = await tokenRes.json();
 
     if (!tokenRes.ok || tokenData.error) {
@@ -120,10 +129,10 @@ export async function GET(req) {
       });
     }
   } catch (err) {
-    return popupResponse({ success: false, error: `Token exchange request failed: ${err.message}` });
+    return popupResponse({ success: false, error: `Token exchange error: ${err.message}` });
   }
 
-  // ── Build rclone token JSON (rclone's internal format) ──────────────────
+  // ── Build rclone token JSON ───────────────────────────────────────────────
   const rcloneToken = JSON.stringify({
     access_token:  tokenData.access_token,
     token_type:    tokenData.token_type    || 'Bearer',
@@ -133,72 +142,19 @@ export async function GET(req) {
       : new Date(Date.now() + 3600 * 1000).toISOString(),
   });
 
-  // ── Write config to remote server via SSH ───────────────────────────────
-  try {
-    const sshConfig  = await getSshConfig(connectionId);
-    const cleanName  = remoteName.replace(/[^a-zA-Z0-9_\-]/g, '');
-    const pathPrefix = 'export PATH="$HOME/.local/bin:$HOME/bin:/usr/local/bin:/usr/bin:$PATH"; ';
-
-    const SCOPES = {
-      drive:              'https://www.googleapis.com/auth/drive',
-      'drive.readonly':   'https://www.googleapis.com/auth/drive.readonly',
-      'drive.file':       'https://www.googleapis.com/auth/drive.file',
-    };
-    const driveScope = SCOPES[scope] || SCOPES['drive'];
-
-    // Try rclone config create (idempotent — creates or overwrites the remote)
-    const createCmd = [
-      pathPrefix,
-      `rclone config create ${quote(cleanName)} drive`,
-      `client_id=${quote(clientId)}`,
-      `client_secret=${quote(clientSecret)}`,
-      `scope=${quote(driveScope)}`,
-      `token=${quote(rcloneToken)}`,
-      'non_interactive=true',
-    ].join(' ');
-
-    const result = await execCommand(sshConfig, createCmd);
-
-    if (result.code !== 0) {
-      // Fallback: directly patch rclone.conf
-      const confBlock = [
-        `[${cleanName}]`,
-        `type = drive`,
-        `client_id = ${clientId}`,
-        `client_secret = ${clientSecret}`,
-        `scope = ${driveScope}`,
-        `token = ${rcloneToken}`,
-        '',
-      ].join('\n');
-
-      const patchCmd = [
-        pathPrefix,
-        `mkdir -p ~/.config/rclone`,
-        `&& python3 -c "`,
-          `import re, os;`,
-          `f='$HOME/.config/rclone/rclone.conf';`,
-          `txt=open(f).read() if os.path.exists(f) else '';`,
-          `txt=re.sub(r'\\\\[${cleanName}\\\\][^\\\\[]*', '', txt).strip();`,
-          `open(f, 'w').write(txt + '\\n')`,
-        `" 2>/dev/null || true`,
-        `&& printf %s ${quote('\n' + confBlock)} >> ~/.config/rclone/rclone.conf`,
-      ].join(' ');
-
-      const fallback = await execCommand(sshConfig, patchCmd);
-      if (fallback.code !== 0) {
-        return popupResponse({
-          success: false,
-          error: `Failed to write rclone config: ${fallback.stderr || fallback.stdout}`,
-        });
-      }
-    }
-  } catch (err) {
-    return popupResponse({ success: false, error: `SSH error: ${err.message}` });
-  }
-
-  // ── Success ──────────────────────────────────────────────────────────────
+  // ── Send token + context back to the parent window via postMessage ────────
+  // The parent (RcloneApp) will call /api/rclone/oauth/save-token via apiFetch
+  // so that the correct x-mongodb-uri / SSH headers are included.
   return popupResponse({
     success: true,
-    message: `Google Drive remote "${remoteName}" authenticated successfully!`,
+    message: `Google authorisation received for "${remoteName}". Saving config…`,
+    payload: {
+      rcloneToken,
+      connectionId,
+      remoteName,
+      clientId,
+      clientSecret,
+      scope,
+    },
   });
 }
