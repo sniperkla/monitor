@@ -28,6 +28,8 @@ export async function POST(req) {
       'if command -v rclone >/dev/null 2>&1 || [ -x "$HOME/.local/bin/rclone" ]; then',
       '  echo "✅ Rclone is already installed on this server!"',
       '  rclone version 2>/dev/null || "$HOME/.local/bin/rclone" version',
+      '  echo "🎉 [4/4] Verifying installation..."',
+      '  echo "✅ SUCCESS! Rclone is ready for cloud backup!"',
       '  exit 0',
       'fi',
       'echo "📦 [2/4] Detecting server OS & Architecture..."',

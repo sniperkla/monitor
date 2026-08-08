@@ -15,9 +15,15 @@ export async function GET(req) {
 
     const sshConfig = await getSshConfig(connectionId, { sshMode, preferredRelay });
     const detectScript = `
-export PATH="$HOME/.local/bin:$HOME/bin:/usr/local/bin:/usr/bin:/snap/bin:$PATH"
-RCLONE_CMD="$(command -v rclone 2>/dev/null || which rclone 2>/dev/null || echo "$HOME/.local/bin/rclone")"
-if [ ! -x "$RCLONE_CMD" ] && ! command -v rclone >/dev/null 2>&1; then
+export PATH="$HOME/.local/bin:$HOME/bin:/usr/local/bin:/usr/bin:/bin:/snap/bin:$PATH"
+RCLONE_CMD=""
+for _p in "$HOME/.local/bin/rclone" "/usr/bin/rclone" "/usr/local/bin/rclone" "/snap/bin/rclone"; do
+  if [ -x "$_p" ]; then RCLONE_CMD="$_p"; break; fi
+done
+if [ -z "$RCLONE_CMD" ]; then
+  RCLONE_CMD="$(command -v rclone 2>/dev/null || which rclone 2>/dev/null || true)"
+fi
+if [ -z "$RCLONE_CMD" ] || [ ! -x "$RCLONE_CMD" ]; then
   echo "NOT_INSTALLED"
   exit 0
 fi
@@ -127,7 +133,7 @@ echo "$NPROC"
       configDump = catRes.stdout || '';
     }
     if (!configDump) {
-      const dumpRes = await execCommand(sshConfig, `${pathPrefix || ''}rclone config show 2>/dev/null || true`);
+      const dumpRes = await execCommand(sshConfig, `rclone config show 2>/dev/null || true`);
       configDump = dumpRes.stdout || '';
     }
 
