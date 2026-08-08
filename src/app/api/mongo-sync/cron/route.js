@@ -232,9 +232,9 @@ export async function POST(req) {
       `# MongoSync Auto-Backup: ${safeName}`,
       `# Job ID: ${jobId}`,
       '',
-      '# Use set -ue (no pipefail — pipefail causes silent death when python3 pipelines',
-      '# return non-zero even with 2>/dev/null guards. All critical steps use explicit checks.)',
-      'set -ue',
+      '# Use set -u only: -e (exit on error) would kill the script before PYEXIT=$? is captured.',
+      '# -u catches unset variable bugs. All critical exit codes are checked explicitly.',
+      'set -u',
       '',
       '# ── Embedded config (set at install time) ───',
       `MONGO_URI=${bashSingleQuote(mongoUri)}`,
@@ -456,8 +456,8 @@ export async function POST(req) {
       'fi',
       '',
       'echo "$(date): Starting pymongo export for: ' + V('EXPORT_TARGET') + '"',
-      'python3 "' + V('PYEXPORT_SCRIPT') + '" "' + V('MONGO_URI') + '" "' + V('DB_NAME') + '" "' + V('EXPORT_TARGET') + '" "' + V('EXPORT_DIR') + '"',
-      'PYEXIT=$?',
+      '# Capture python3 exit code without triggering set -e (use && ... || ... pattern)',
+      'python3 "' + V('PYEXPORT_SCRIPT') + '" "' + V('MONGO_URI') + '" "' + V('DB_NAME') + '" "' + V('EXPORT_TARGET') + '" "' + V('EXPORT_DIR') + '" && PYEXIT=0 || PYEXIT=$?',
       'rm -f "' + V('PYEXPORT_SCRIPT') + '"',
       '',
       'if [ "' + V('PYEXIT') + '" -ne 0 ]; then',
@@ -499,10 +499,10 @@ export async function POST(req) {
 
     // 5. Write script and install crontab on user's SSH server
     const scriptPath = `$HOME/.mongosync-scripts/mongosync-${safeId}.sh`;
-    const tmuxSessionName = `mongosync-${safeId}`;
-    // Run in detached tmux session so it doesn't interfere with SSH connections
-    // Session will auto-close when script finishes
-    const cronLine = `${cronExpr} tmux new-session -d -s "${tmuxSessionName}-$(date +\\%s)" "/bin/bash ${scriptPath}"`;
+    // Run bash directly — cron is already fully detached from SSH so tmux is not needed.
+    // Using tmux caused silent failures when tmux was missing from cron's minimal PATH.
+    // The script handles its own log redirect with `exec >> "$LOG" 2>&1`.
+    const cronLine = `${cronExpr} /bin/bash ${scriptPath}`;
 
     const installScript = `
 mkdir -p "$HOME/.mongosync-scripts/logs" "$HOME/.mongosync-scripts/tmp"
@@ -517,6 +517,51 @@ if [ -n "$SYNTAX_ERR" ]; then
   echo "SYNTAX_ERROR: $SYNTAX_ERR"
   exit 1
 fi
+# ── Preflight probe: run environment checks now so errors appear in log immediately ──
+# This writes a log entry right at install time — if anything is missing, the log shows why.
+PROBE_LOG="$HOME/.mongosync-scripts/logs/mongosync-${safeId}-$(date +%Y%m%d_%H%M%S).log"
+{
+  echo "=== MongoSync Preflight Probe: ${safeId} | $(date) ==="
+  echo "$(date): Checking environment..."
+  # Check python3
+  if command -v python3 > /dev/null 2>&1; then
+    echo "$(date): ✅ python3: $(python3 --version 2>&1)"
+  else
+    echo "$(date): ❌ ERROR: python3 not found — cron job will fail. Install python3 first."
+  fi
+  # Check pymongo
+  if python3 -c "import pymongo" > /dev/null 2>&1; then
+    echo "$(date): ✅ pymongo: $(python3 -c 'import pymongo; print(pymongo.version)' 2>/dev/null)"
+  else
+    echo "$(date): ❌ ERROR: pymongo not installed — run: pip3 install pymongo"
+  fi
+  # Check curl
+  if command -v curl > /dev/null 2>&1; then
+    echo "$(date): ✅ curl: $(curl --version 2>&1 | head -1)"
+  else
+    echo "$(date): ❌ ERROR: curl not found — cron job will fail. Install curl first."
+  fi
+  # Check MongoDB reachability (quick 3s timeout)
+  MONGO_REACHABLE=$(python3 -c "
+from pymongo import MongoClient
+import sys
+try:
+    c = MongoClient('${mongoUri.replace(/'/g, "'\\''")}', serverSelectionTimeoutMS=3000)
+    c.admin.command('ping')
+    print('ok')
+    c.close()
+except Exception as e:
+    print('fail: ' + str(e))
+" 2>/dev/null || echo "fail: python3 error")
+  if [ "\$MONGO_REACHABLE" = "ok" ]; then
+    echo "$(date): ✅ MongoDB reachable"
+  else
+    echo "$(date): ❌ ERROR: MongoDB not reachable — \$MONGO_REACHABLE"
+  fi
+  echo "$(date): Preflight probe complete."
+  echo "=== Cron schedule: ${cronLine} ==="
+} >> "\$PROBE_LOG" 2>&1
+echo "PROBE_LOG:\$PROBE_LOG"
 TMP_CRON=$(mktemp 2>/dev/null || echo "/tmp/mongosync_cron_tmp_$$")
 crontab -l 2>/dev/null | grep -F -v "mongosync-${safeId}" > "$TMP_CRON" || true
 echo ${bashSingleQuote(cronLine)} >> "$TMP_CRON"
@@ -541,13 +586,31 @@ echo "INSTALLED_SUCCESS"
       }, { status: 500 });
     }
 
+    // Extract probe log path and read its content to surface any preflight warnings
+    const probeLogMatch = result.stdout.match(/^PROBE_LOG:(.+)$/m);
+    const probeLogPath = probeLogMatch ? probeLogMatch[1].trim() : null;
+    let probeLogContent = null;
+    let probeWarnings = [];
+    if (probeLogPath) {
+      try {
+        const probeResult = await execCommand(sshConfig, `cat "${probeLogPath}" 2>/dev/null || echo "(probe log not found)"`);
+        probeLogContent = probeResult.stdout.trim();
+        // Extract any ❌ ERROR lines as warnings to surface in the UI
+        probeWarnings = (probeLogContent || '').split('\n')
+          .filter(l => l.includes('❌ ERROR:'))
+          .map(l => l.replace(/^[^❌]*❌ ERROR:\s*/, '').trim());
+      } catch (_) {}
+    }
+
     return NextResponse.json({
       success: true,
       message: `Schedule installed on SSH server (${parseCronHuman(schedule)})`,
       cronLine,
       humanSchedule: parseCronHuman(schedule),
       scriptPath: `~/.mongosync-scripts/mongosync-${safeId}.sh`,
-      scriptInstalled: true
+      scriptInstalled: true,
+      probeLog: probeLogContent,
+      probeWarnings: probeWarnings.length > 0 ? probeWarnings : undefined,
     });
 
   } catch (error) {

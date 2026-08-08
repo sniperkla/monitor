@@ -1378,11 +1378,20 @@ export default function MongoBackupApp() {
               });
               const cronData = await cronRes.json();
               if (cronData.success) {
-                addNotification({
-                  title: payload.isEdit ? 'Job Updated' : 'Job Created',
-                  message: `✅ Schedule installed on SSH server — ${cronData.humanSchedule}. 100% user-side execution.`,
-                  type: 'success'
-                });
+                if (cronData.probeWarnings && cronData.probeWarnings.length > 0) {
+                  // Install succeeded but preflight found issues — show them prominently
+                  addNotification({
+                    title: '⚠️ Schedule Installed — Preflight Warnings',
+                    message: `Cron installed (${cronData.humanSchedule}) but preflight detected:\n${cronData.probeWarnings.map(w => `• ${w}`).join('\n')}`,
+                    type: 'warning'
+                  });
+                } else {
+                  addNotification({
+                    title: payload.isEdit ? 'Job Updated' : 'Job Created',
+                    message: `✅ Schedule installed on SSH server — ${cronData.humanSchedule}. Preflight checks passed.`,
+                    type: 'success'
+                  });
+                }
               } else {
                 addNotification({
                   title: 'Job Saved (Cron Failed)',
@@ -3308,10 +3317,10 @@ export default function MongoBackupApp() {
                     <div className="space-y-3 max-h-[450px] overflow-y-auto custom-scrollbar pr-1">
                       {jobs.map(job => (
                         <div key={job.id} className="bg-[var(--bg-card)] border border-[var(--border-color)] hover:border-emerald-500/20 rounded-2xl p-4 flex flex-col md:flex-row md:items-center justify-between gap-4 transition-all shadow-sm">
-                          <div className="space-y-1.5">
+                          <div className="space-y-1.5 min-w-0 flex-1">
                             <div className="flex items-center gap-2 flex-wrap">
-                              <span className="font-bold text-xs text-[var(--text-primary)]">{job.name}</span>
-                              <span className={`text-[9px] px-2 py-0.5 rounded-full font-bold uppercase tracking-wider ${
+                              <span className="font-bold text-xs text-[var(--text-primary)] truncate max-w-[200px]" title={job.name}>{job.name}</span>
+                              <span className={`text-[9px] px-2 py-0.5 rounded-full font-bold uppercase tracking-wider shrink-0 ${
                                 job.enabled ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' : 'bg-slate-500/10 text-slate-400 border border-slate-500/20'
                               }`}>
                                 {job.schedule}
@@ -3319,33 +3328,35 @@ export default function MongoBackupApp() {
                               {job.targetSshConnId && job.schedule !== 'manual' && (() => {
                                 const sshConn = sshConnections.find(c => c._id === job.targetSshConnId);
                                 return sshConn ? (
-                                  <span className="text-[9px] px-2 py-0.5 rounded-full font-bold bg-blue-500/10 text-blue-400 border border-blue-500/20 flex items-center gap-1">
+                                  <span className="text-[9px] px-2 py-0.5 rounded-full font-bold bg-blue-500/10 text-blue-400 border border-blue-500/20 flex items-center gap-1 shrink-0">
                                     <Server size={8} />⚡ {sshConn.name}
                                   </span>
                                 ) : null;
                               })()}
                               {(job.depWarning || (job.lastStatus === 'failed' && job.lastMessage?.includes('Could not list collections'))) && (
                                 <span
-                                  className="text-[9px] px-2 py-0.5 rounded-full font-bold bg-red-500/10 text-red-400 border border-red-500/20 flex items-center gap-1"
+                                  className="text-[9px] px-2 py-0.5 rounded-full font-bold bg-red-500/10 text-red-400 border border-red-500/20 flex items-center gap-1 shrink-0"
                                   title={job.depWarning || 'Collection listing failed — mongosh or pymongo not installed on SSH server. Run: pip3 install pymongo --user'}
                                 >
                                   <AlertCircle size={8} />⚠️ deps missing
                                 </span>
                               )}
                             </div>
-                            <div className="text-[10px] text-[var(--text-muted)] font-mono flex items-center gap-2">
-                              <span>Source: {job.connectionName} / {job.database} / {job.collection}</span>
-                              <ArrowRight size={10} className="text-slate-500" />
-                              <span>GDrive: {job.driveFolderName}</span>
+                            <div className="text-[10px] text-[var(--text-muted)] font-mono flex items-center gap-1.5 min-w-0 overflow-hidden">
+                              <span className="truncate" title={`${job.connectionName} / ${job.database} / ${job.collection}`}>
+                                {job.connectionName} / {job.database} / {job.collection}
+                              </span>
+                              <ArrowRight size={10} className="text-slate-500 shrink-0" />
+                              <span className="truncate shrink-0 max-w-[120px]" title={job.driveFolderName}>{job.driveFolderName}</span>
                             </div>
                             {job.lastRun && (
-                              <div className={`text-[9px] font-semibold flex items-center gap-1.5 ${
+                              <div className={`text-[9px] font-semibold flex items-center gap-1.5 min-w-0 ${
                                 job.lastStatus === 'success' ? 'text-emerald-400' : 'text-rose-400'
                               }`}>
-                                <Clock size={9} />
-                                <span>Last Run: {new Date(job.lastRun).toLocaleString()}</span>
-                                <span className="opacity-60">•</span>
-                                <span className="truncate max-w-xs">{job.lastMessage}</span>
+                                <Clock size={9} className="shrink-0" />
+                                <span className="shrink-0">Last Run: {new Date(job.lastRun).toLocaleString()}</span>
+                                <span className="opacity-60 shrink-0">•</span>
+                                <span className="truncate">{job.lastMessage}</span>
                               </div>
                             )}
                           </div>
@@ -3646,7 +3657,14 @@ export default function MongoBackupApp() {
                       {jobs.filter(j => j.targetSshConnId && j.schedule !== 'manual').map(job => {
                         const cronLog = cronLogs[job.id];
                         const sshConn = sshConnections.find(c => c._id === job.targetSshConnId);
-                        const hasError = cronLog?.logTail?.includes('ERROR') || cronLog?.logTail?.includes('❌');
+                        // A successful run always contains "❌ Failed: 0" — that is NOT an error.
+                        // hasError = true only when there's a real ERROR: line, or a ❌ line that
+                        // isn't "Failed: 0" (meaning at least one upload/export actually failed).
+                        const logLines = (cronLog?.logTail || '').split('\n');
+                        const hasError = logLines.some(l =>
+                          l.includes('ERROR:') ||
+                          (l.includes('❌') && !l.includes('Failed: 0') && !l.includes(': 0'))
+                        );
                         const hasDone = cronLog?.logTail?.includes('=== Done');
                         return (
                           <div key={job.id} className="rounded-xl border border-[var(--border-color)] overflow-hidden">
@@ -3706,10 +3724,10 @@ export default function MongoBackupApp() {
                                 }`}>
                                 {cronLog.logTail.split('\n').map((line, i) => {
                                   const color =
-                                    // Special case: "Failed: 0" or "❌ Failed: 0" is actually success
+                                    // "Failed: 0" is a success — show as muted, not red
                                     (line.includes('Failed: 0') || line.includes('❌ Failed: 0')) ? 'text-slate-400' :
-                                    // Real errors
-                                    line.includes('ERROR') || (line.includes('❌') && !line.includes(': 0')) ? 'text-red-400' :
+                                    // Real errors: must have "ERROR:" (with colon) or a ❌ that isn't "Failed: 0"
+                                    line.includes('ERROR:') || (line.includes('❌') && !line.includes('Failed: 0') && !line.includes(': 0')) ? 'text-red-400' :
                                     // Success indicators
                                     line.includes('=== Done') || line.includes('Uploaded:') || line.includes('✅') || line.includes('Success rate: 100%') ? 'text-emerald-400' :
                                     // Warnings
