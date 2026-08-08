@@ -42,21 +42,9 @@ const handle = app.getRequestHandler();
 
 const shellQuote = (value) => `'${String(value).replace(/'/g, `'\\''`)}'`;
 
-// MongoDB connection — Priority: db-config.json > .env > default
+// MongoDB connection — use MONGODB_URI from .env only
 let MONGODB_URI = null;
-try {
-  const dbConfigPath = path.resolve(__dirname, 'db-config.json');
-  if (fs.existsSync(dbConfigPath)) {
-    const dbConfig = JSON.parse(fs.readFileSync(dbConfigPath, 'utf-8'));
-    if (dbConfig.uri) {
-      MONGODB_URI = dbConfig.uri;
-      console.log('📂 Using database URI from db-config.json');
-    }
-  }
-} catch (e) {
-  console.error('Error reading db-config.json:', e);
-}
-if (!MONGODB_URI && process.env.MONGODB_URI) {
+if (process.env.MONGODB_URI) {
   MONGODB_URI = process.env.MONGODB_URI;
   console.log('📂 Using database URI from .env');
 }
@@ -139,13 +127,6 @@ const SessionSchema = new mongoose.Schema({
 
 
 function getLatestCenterUri() {
-  try {
-    const dbConfigPath = path.resolve(__dirname, 'db-config.json');
-    if (fs.existsSync(dbConfigPath)) {
-      const dbConfig = JSON.parse(fs.readFileSync(dbConfigPath, 'utf-8'));
-      if (dbConfig.uri) return dbConfig.uri;
-    }
-  } catch (e) {}
   return process.env.MONGODB_URI || MONGODB_URI;
 }
 

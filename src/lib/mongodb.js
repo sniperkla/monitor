@@ -11,8 +11,6 @@ import {
   normalizeRelayDatabaseUri,
 } from './sshTunnel.js';
 import { Pool as PgPool } from 'pg';
-import fs from 'fs';
-import path from 'path';
 
 /**
  * Global is used here to maintain a cached connection across hot reloads
@@ -28,13 +26,6 @@ if (!cached) {
 const connectionPool = new Map();
 
 export function getCenterUri() {
-  try {
-    const p = path.join(process.cwd(), 'db-config.json');
-    if (fs.existsSync(p)) {
-      const c = JSON.parse(fs.readFileSync(p, 'utf-8'));
-      if (c.uri) return c.uri;
-    }
-  } catch (e) {}
   return process.env.MONGODB_URI;
 }
 

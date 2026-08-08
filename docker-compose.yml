@@ -14,8 +14,8 @@ services:
       - .env
     environment:
       NODE_ENV: production
-      PORT: 3030 # <--- FIXED: Changed from 3000 to 3030 to match your Nginx default.conf!
-      MONGO_URI: mongodb://monitor:AaBb1234!@monitor-mongo:27017/monitor?authSource=admin
+      PORT: 3030
+      MONGODB_URI: mongodb://monitor:AaBb1234!@monitor-mongo:27017/monitor?authSource=admin
     networks:
       - proxy-net
 

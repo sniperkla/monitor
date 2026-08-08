@@ -20,3 +20,4 @@ patch*.js
 patch.py
 refactor.mjs
 scripts/test*.js
+db-config.json
