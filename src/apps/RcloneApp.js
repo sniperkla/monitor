@@ -2036,11 +2036,17 @@ export default function RcloneApp() {
                           <button onClick={() => navigator.clipboard.writeText(cron.raw)} className="p-1.5 text-[var(--text-muted)] hover:text-emerald-400 hover:bg-emerald-500/10 rounded-lg transition-colors cursor-pointer" title="Copy Command"><Copy size={12} /></button>
                           <button
                             onClick={() => {
+                              // Strip $HOME/ prefix so the edit field shows a clean path.
+                              // The API's normSource logic will re-expand it correctly on save,
+                              // and this prevents the $HOME/$HOME/ accumulation bug on repeat saves.
+                              const cleanSource = (cron.source || '/')
+                                .replace(/^\$HOME\//, '/')
+                                .replace(/^~\//, '/');
                               setEditingCron({
                                 rawLine: cron.raw,
                                 schedule: cron.schedule,
                                 action: cron.action || 'copy',
-                                source: cron.source || '/',
+                                source: cleanSource,
                                 target: cron.target || 'gdrive:',
                                 options: {
                                   useTimestampFolder: cron.options?.useTimestampFolder ?? true,
@@ -2394,10 +2400,10 @@ export default function RcloneApp() {
               </div>
               <button onClick={() => setShowAddRemoteModal(false)} className="p-1 rounded-lg text-[var(--text-muted)] hover:bg-[var(--bg-tertiary)] cursor-pointer">✕</button>
             </div>
-            <div className="p-5 space-y-3">
+            <div className="p-4 space-y-2">
               <div>
                 <label className="text-[11px] font-semibold text-[var(--text-muted)] block mb-1">Remote Name</label>
-                <input type="text" value={newRemoteName} onChange={(e) => setNewRemoteName(e.target.value)} placeholder="e.g. gdrive_backup" className="w-full px-3.5 py-2 text-xs rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] font-mono text-[var(--text-primary)] focus:border-indigo-500 focus:outline-none" />
+                <input type="text" value={newRemoteName} onChange={(e) => setNewRemoteName(e.target.value)} placeholder="e.g. gdrive_backup" className="w-full px-3 py-1.5 text-xs rounded-lg bg-[var(--bg-tertiary)] border border-[var(--border-color)] font-mono text-[var(--text-primary)] focus:border-indigo-500 focus:outline-none" />
               </div>
               <div>
                 <label className="text-[11px] font-semibold text-[var(--text-muted)] block mb-1">Storage Provider</label>
@@ -2422,174 +2428,121 @@ export default function RcloneApp() {
               )}
 
               {newRemoteType === 'drive' && (
-                <div className="space-y-3 pt-2 border-t border-[var(--border-color)]">
+                <div className="space-y-2 pt-2 border-t border-[var(--border-color)]">
 
                   {/* ── Auth mode toggle ── */}
-                  <div className="flex items-center gap-1 p-1 rounded-xl bg-[var(--bg-primary)] border border-[var(--border-color)]">
-                    <button
-                      type="button"
-                      onClick={() => setDriveAuthMode('oauth')}
-                      className={`flex-1 flex items-center justify-center gap-1.5 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${driveAuthMode === 'oauth' ? 'bg-indigo-600 text-white shadow-sm' : 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'}`}
-                    >
-                      <LogIn size={12} /> OAuth (Browser Sign-In)
+                  <div className="flex items-center gap-1 p-0.5 rounded-lg bg-[var(--bg-primary)] border border-[var(--border-color)]">
+                    <button type="button" onClick={() => setDriveAuthMode('oauth')}
+                      className={`flex-1 flex items-center justify-center gap-1 py-1 rounded-md text-[11px] font-bold transition-all cursor-pointer ${driveAuthMode === 'oauth' ? 'bg-indigo-600 text-white shadow-sm' : 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'}`}>
+                      <LogIn size={11} /> OAuth
                     </button>
-                    <button
-                      type="button"
-                      onClick={() => setDriveAuthMode('service_account')}
-                      className={`flex-1 flex items-center justify-center gap-1.5 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${driveAuthMode === 'service_account' ? 'bg-emerald-600 text-white shadow-sm' : 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'}`}
-                    >
-                      <KeyRound size={12} /> Service Account (Recommended)
+                    <button type="button" onClick={() => setDriveAuthMode('service_account')}
+                      className={`flex-1 flex items-center justify-center gap-1 py-1 rounded-md text-[11px] font-bold transition-all cursor-pointer ${driveAuthMode === 'service_account' ? 'bg-emerald-600 text-white shadow-sm' : 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'}`}>
+                      <KeyRound size={11} /> Service Account
                     </button>
                   </div>
 
                   {/* ════ OAuth Flow ════ */}
                   {driveAuthMode === 'oauth' && (
                     <div className="space-y-2">
-                      {/* Callback URI info box */}
-                      <div className="p-3 rounded-xl bg-indigo-500/10 border border-indigo-500/25 space-y-1.5">
-                        <p className="text-[10px] font-bold text-indigo-400 flex items-center gap-1.5">
-                          <Info size={11} /> Google Cloud Console — Authorised Redirect URI
-                        </p>
-                        <div className="flex items-center gap-2 bg-black/40 rounded-lg px-2.5 py-1.5 border border-indigo-500/20">
-                          <code className="text-[11px] font-mono text-emerald-300 flex-1 break-all select-all">
-                            {typeof window !== 'undefined' ? `${window.location.origin}/api/rclone/oauth/callback` : 'https://your-domain.com/api/rclone/oauth/callback'}
-                          </code>
-                          <button
-                            type="button"
-                            onClick={() => navigator.clipboard.writeText(`${window.location.origin}/api/rclone/oauth/callback`)}
-                            className="shrink-0 text-indigo-400 hover:text-white cursor-pointer"
-                            title="Copy"
-                          >
-                            <Copy size={12} />
-                          </button>
-                        </div>
-                        <p className="text-[10px] text-[var(--text-muted)] leading-relaxed">
-                          Add this URI in <strong className="text-[var(--text-primary)]">Google Cloud Console → APIs &amp; Services → Credentials → OAuth 2.0 Client → Authorised Redirect URIs</strong>.
-                        </p>
+
+                      {/* Redirect URI — inline copyable row */}
+                      <div className="flex items-center gap-1.5 bg-[var(--bg-primary)] rounded-lg px-2 py-1.5 border border-indigo-500/20">
+                        <span className="text-[9px] text-indigo-400 font-bold shrink-0 uppercase tracking-wide">Redirect URI</span>
+                        <code className="text-[10px] font-mono text-emerald-300 flex-1 truncate select-all">
+                          {typeof window !== 'undefined' ? `${window.location.origin}/api/rclone/oauth/callback` : '/api/rclone/oauth/callback'}
+                        </code>
+                        <button type="button"
+                          onClick={() => navigator.clipboard.writeText(`${window.location.origin}/api/rclone/oauth/callback`)}
+                          className="shrink-0 text-indigo-400 hover:text-white cursor-pointer p-0.5 rounded" title="Copy redirect URI">
+                          <Copy size={11} />
+                        </button>
                       </div>
 
-                      {/* Client ID + Secret */}
-                      <input
-                        type="text"
-                        placeholder="Client ID  (xxxx.apps.googleusercontent.com)"
-                        value={remoteConfig.client_id || ''}
-                        onChange={(e) => setRemoteConfig({ ...remoteConfig, client_id: e.target.value })}
-                        className="w-full px-3.5 py-1.5 text-xs rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] font-mono text-[var(--text-primary)] focus:border-indigo-500 focus:outline-none"
-                      />
-                      <input
-                        type="password"
-                        placeholder="Client Secret"
-                        value={remoteConfig.client_secret || ''}
-                        onChange={(e) => setRemoteConfig({ ...remoteConfig, client_secret: e.target.value })}
-                        className="w-full px-3.5 py-1.5 text-xs rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] font-mono text-[var(--text-primary)] focus:border-indigo-500 focus:outline-none"
-                      />
+                      {/* Client ID + Secret side by side */}
+                      <div className="grid grid-cols-2 gap-1.5">
+                        <input type="text" placeholder="Client ID"
+                          value={remoteConfig.client_id || ''}
+                          onChange={(e) => setRemoteConfig({ ...remoteConfig, client_id: e.target.value })}
+                          className="w-full px-2.5 py-1.5 text-[11px] rounded-lg bg-[var(--bg-tertiary)] border border-[var(--border-color)] font-mono text-[var(--text-primary)] focus:border-indigo-500 focus:outline-none" />
+                        <input type="password" placeholder="Client Secret"
+                          value={remoteConfig.client_secret || ''}
+                          onChange={(e) => setRemoteConfig({ ...remoteConfig, client_secret: e.target.value })}
+                          className="w-full px-2.5 py-1.5 text-[11px] rounded-lg bg-[var(--bg-tertiary)] border border-[var(--border-color)] font-mono text-[var(--text-primary)] focus:border-indigo-500 focus:outline-none" />
+                      </div>
 
-                      {/* Scope */}
-                      <select
-                        value={remoteConfig.scope || 'drive'}
-                        onChange={(e) => setRemoteConfig({ ...remoteConfig, scope: e.target.value })}
-                        className="w-full px-3.5 py-1.5 text-xs rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] text-[var(--text-primary)] focus:outline-none"
-                      >
-                        <option value="drive">Full Access (drive)</option>
-                        <option value="drive.readonly">Read-Only (drive.readonly)</option>
-                        <option value="drive.file">Application Files Only (drive.file)</option>
-                      </select>
-
-                      {/* Drive Folder Lock */}
-                      <div>
-                        <label className="text-[10px] font-bold text-emerald-400 flex items-center gap-1 mb-1"><Link2 size={11} /> Lock to Specific Folder (optional)</label>
-                        <input
-                          type="text"
-                          placeholder="Paste Google Drive URL or Folder ID"
+                      {/* Scope + Folder ID side by side */}
+                      <div className="grid grid-cols-2 gap-1.5">
+                        <select value={remoteConfig.scope || 'drive'}
+                          onChange={(e) => setRemoteConfig({ ...remoteConfig, scope: e.target.value })}
+                          className="w-full px-2.5 py-1.5 text-[11px] rounded-lg bg-[var(--bg-tertiary)] border border-[var(--border-color)] text-[var(--text-primary)] focus:outline-none">
+                          <option value="drive">Full Access</option>
+                          <option value="drive.readonly">Read-Only</option>
+                          <option value="drive.file">App Files Only</option>
+                        </select>
+                        <input type="text" placeholder="Folder URL/ID (optional)"
                           value={remoteConfig._drive_url || ''}
                           onChange={(e) => {
                             const raw = e.target.value;
                             const match = raw.match(/\/folders\/([a-zA-Z0-9_-]{15,})/);
                             setRemoteConfig({ ...remoteConfig, _drive_url: raw, root_folder_id: match ? match[1] : raw.trim() });
                           }}
-                          className="w-full px-3.5 py-1.5 text-xs rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] font-mono text-[var(--text-primary)] focus:outline-none"
-                        />
-                        {remoteConfig.root_folder_id && (
-                          <p className="text-[10px] text-emerald-400 font-mono mt-1">✓ {remoteConfig.root_folder_id}</p>
-                        )}
+                          className="w-full px-2.5 py-1.5 text-[11px] rounded-lg bg-[var(--bg-tertiary)] border border-[var(--border-color)] font-mono text-[var(--text-primary)] focus:border-emerald-500 focus:outline-none" />
                       </div>
+                      {remoteConfig.root_folder_id && (
+                        <p className="text-[10px] text-emerald-400 font-mono -mt-1 px-0.5">✓ {remoteConfig.root_folder_id}</p>
+                      )}
 
-                      {/* OAuth toast feedback */}
+                      {/* Toast */}
                       {oauthToast && (
-                        <div className={`flex items-start gap-2 p-2.5 rounded-xl border text-xs font-semibold ${oauthToast.type === 'success' ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400' : 'bg-rose-500/10 border-rose-500/30 text-rose-400'}`}>
-                          {oauthToast.type === 'success' ? <CheckCircle2 size={14} className="shrink-0 mt-0.5" /> : <AlertTriangle size={14} className="shrink-0 mt-0.5" />}
-                          <span className="leading-snug">{oauthToast.msg}</span>
+                        <div className={`flex items-center gap-2 px-2.5 py-1.5 rounded-lg border text-[11px] font-semibold ${oauthToast.type === 'success' ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400' : 'bg-rose-500/10 border-rose-500/30 text-rose-400'}`}>
+                          {oauthToast.type === 'success' ? <CheckCircle2 size={12} className="shrink-0" /> : <AlertTriangle size={12} className="shrink-0" />}
+                          <span className="truncate">{oauthToast.msg}</span>
                         </div>
                       )}
 
-                      {/* Sign in with Google button */}
-                      <button
-                        type="button"
-                        onClick={handleStartOAuth}
+                      {/* Sign in with Google */}
+                      <button type="button" onClick={handleStartOAuth}
                         disabled={oauthLoading || !newRemoteName.trim() || !remoteConfig.client_id?.trim() || !remoteConfig.client_secret?.trim()}
-                        className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-white hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed text-gray-800 font-bold text-xs transition-colors shadow-md cursor-pointer border border-gray-200"
-                      >
-                        {oauthLoading ? (
-                          <RefreshCw size={14} className="animate-spin text-gray-600" />
-                        ) : (
-                          /* Google "G" logo SVG */
-                          <svg width="16" height="16" viewBox="0 0 48 48" xmlns="http://www.w3.org/2000/svg">
+                        className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-lg bg-white hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed text-gray-800 font-bold text-xs transition-colors shadow-sm cursor-pointer border border-gray-200">
+                        {oauthLoading ? <RefreshCw size={13} className="animate-spin text-gray-500" /> : (
+                          <svg width="14" height="14" viewBox="0 0 48 48" xmlns="http://www.w3.org/2000/svg">
                             <path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/>
                             <path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/>
                             <path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/>
                             <path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/>
                           </svg>
                         )}
-                        {oauthLoading ? 'Opening Google Sign-In…' : 'Sign in with Google'}
+                        {oauthLoading ? 'Opening…' : 'Sign in with Google'}
                       </button>
-                      <p className="text-[10px] text-[var(--text-muted)] text-center">
-                        A Google sign-in popup will open. After approving, the remote is configured automatically on your server.
-                      </p>
                     </div>
                   )}
 
                   {/* ════ Service Account Flow ════ */}
                   {driveAuthMode === 'service_account' && (
                     <div className="space-y-2">
-                      <div className="p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/25 space-y-1.5">
-                        <p className="text-[10px] font-bold text-emerald-400 flex items-center gap-1.5">
-                          <ShieldCheck size={11} /> Recommended for Server Backups — No browser needed
+                      {/* Compact steps */}
+                      <div className="flex items-start gap-2 bg-emerald-500/8 rounded-lg px-2.5 py-2 border border-emerald-500/20">
+                        <ShieldCheck size={13} className="text-emerald-400 shrink-0 mt-0.5" />
+                        <p className="text-[10px] text-[var(--text-muted)] leading-relaxed">
+                          GCP → IAM → Service Accounts → Create → grant Drive access → download JSON → upload to server → paste path below.
                         </p>
-                        <ol className="text-[10px] text-[var(--text-muted)] leading-relaxed list-decimal pl-4 space-y-0.5">
-                          <li>Google Cloud Console → IAM &amp; Admin → Service Accounts → Create</li>
-                          <li>Grant it access to the Drive folder you want</li>
-                          <li>Download the JSON key file</li>
-                          <li>Upload the JSON file to your server (e.g. <code className="text-emerald-300">/home/ec2-user/gdrive-sa.json</code>)</li>
-                          <li>Paste that server path below</li>
-                        </ol>
                       </div>
-
-                      <input
-                        type="text"
-                        placeholder="Service Account JSON path on server  (e.g. /home/ec2-user/gdrive-sa.json)"
+                      <input type="text" placeholder="JSON path on server  (e.g. /home/ec2-user/gdrive-sa.json)"
                         value={remoteConfig.service_account_file || ''}
                         onChange={(e) => setRemoteConfig({ ...remoteConfig, service_account_file: e.target.value })}
-                        className="w-full px-3.5 py-1.5 text-xs rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] font-mono text-[var(--text-primary)] focus:border-emerald-500 focus:outline-none"
-                      />
-
-                      {/* Drive Folder Lock */}
-                      <div>
-                        <label className="text-[10px] font-bold text-emerald-400 flex items-center gap-1 mb-1"><Link2 size={11} /> Lock to Specific Folder (optional)</label>
-                        <input
-                          type="text"
-                          placeholder="Paste Google Drive URL or Folder ID"
-                          value={remoteConfig._drive_url || ''}
-                          onChange={(e) => {
-                            const raw = e.target.value;
-                            const match = raw.match(/\/folders\/([a-zA-Z0-9_-]{15,})/);
-                            setRemoteConfig({ ...remoteConfig, _drive_url: raw, root_folder_id: match ? match[1] : raw.trim() });
-                          }}
-                          className="w-full px-3.5 py-1.5 text-xs rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] font-mono text-[var(--text-primary)] focus:outline-none"
-                        />
-                        {remoteConfig.root_folder_id && (
-                          <p className="text-[10px] text-emerald-400 font-mono mt-1">✓ {remoteConfig.root_folder_id}</p>
-                        )}
-                      </div>
+                        className="w-full px-2.5 py-1.5 text-[11px] rounded-lg bg-[var(--bg-tertiary)] border border-[var(--border-color)] font-mono text-[var(--text-primary)] focus:border-emerald-500 focus:outline-none" />
+                      <input type="text" placeholder="Folder URL/ID (optional)"
+                        value={remoteConfig._drive_url || ''}
+                        onChange={(e) => {
+                          const raw = e.target.value;
+                          const match = raw.match(/\/folders\/([a-zA-Z0-9_-]{15,})/);
+                          setRemoteConfig({ ...remoteConfig, _drive_url: raw, root_folder_id: match ? match[1] : raw.trim() });
+                        }}
+                        className="w-full px-2.5 py-1.5 text-[11px] rounded-lg bg-[var(--bg-tertiary)] border border-[var(--border-color)] font-mono text-[var(--text-primary)] focus:border-emerald-500 focus:outline-none" />
+                      {remoteConfig.root_folder_id && (
+                        <p className="text-[10px] text-emerald-400 font-mono px-0.5">✓ {remoteConfig.root_folder_id}</p>
+                      )}
                     </div>
                   )}
                 </div>
@@ -2602,11 +2555,11 @@ export default function RcloneApp() {
                 </div>
               )}
             </div>
-            <div className="flex justify-end gap-2 px-5 py-4 border-t border-[var(--border-color)]">
-              <button onClick={() => { setShowAddRemoteModal(false); setDriveAuthMode('oauth'); setOauthToast(null); }} className="px-4 py-2 rounded-xl bg-[var(--bg-tertiary)] text-xs font-semibold hover:bg-[var(--border-color)] cursor-pointer">Cancel</button>
+            <div className="flex justify-end gap-2 px-4 py-3 border-t border-[var(--border-color)]">
+              <button onClick={() => { setShowAddRemoteModal(false); setDriveAuthMode('oauth'); setOauthToast(null); }} className="px-3.5 py-1.5 rounded-lg bg-[var(--bg-tertiary)] text-xs font-semibold hover:bg-[var(--border-color)] cursor-pointer">Cancel</button>
               {/* Hide Save button when using OAuth for drive — OAuth flow saves automatically */}
               {!(newRemoteType === 'drive' && driveAuthMode === 'oauth') && (
-                <button onClick={handleSaveRemote} disabled={loading} className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-60 text-white text-xs font-bold cursor-pointer shadow-lg shadow-indigo-500/20">
+                <button onClick={handleSaveRemote} disabled={loading} className="px-3.5 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:opacity-60 text-white text-xs font-bold cursor-pointer shadow-lg shadow-indigo-500/20">
                   {loading ? 'Saving...' : 'Save Remote'}
                 </button>
               )}

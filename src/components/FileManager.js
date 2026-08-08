@@ -758,6 +758,22 @@ export default function FileManager({
     });
 
     newSocket.on('sftp:action_success', ({ action, path }) => {
+       // For rename/move: dismiss the spinner toast immediately — the UI already
+       // shows the new name via optimistic update. The list refresh below is just
+       // a correctness backstop to sync any server-side changes.
+       if (action === 'move') {
+         // Clear via ref if available; the toast also has a 4s auto-dismiss as fallback
+         if (toastRef.current) {
+           removeNotification(toastRef.current);
+           toastRef.current = null;
+         }
+         if (refreshTimeoutRef.current) clearTimeout(refreshTimeoutRef.current);
+         refreshTimeoutRef.current = setTimeout(() => {
+           const targetPath = currentPathRef.current || '.';
+           newSocket.emit('sftp:list', targetPath);
+         }, 400);
+         return;
+       }
        if (action === 'delete') {
           const deletedFilename = path ? path.replace(/\/+$/, '').split('/').pop() : '';
           if (deletedFilename) {
@@ -2705,18 +2721,29 @@ export default function FileManager({
       t('files.modals.rename.prompt') || `Enter new name for '${originalName}':`,
       (newName) => {
         if (!newName || newName.trim() === '' || newName === originalName) return;
-        
+        const trimmed = newName.trim();
         const srcPath = currentPath === '.' ? originalName : `${currentPath}/${originalName}`;
-        const destPath = currentPath === '.' ? newName.trim() : `${currentPath}/${newName.trim()}`;
-        
+        const destPath = currentPath === '.' ? trimmed : `${currentPath}/${trimmed}`;
+
+        // Optimistic UI — rename instantly so there's no perceived lag
+        setFiles(prev => prev.map(f =>
+          f.filename === originalName
+            ? { ...f, filename: trimmed, longname: f.longname ? f.longname.replace(originalName, trimmed) : trimmed }
+            : f
+        ));
+
         toastRef.current = addNotification({ 
           title: t('files.status.renaming') || 'Renaming', 
-          message: `Renaming ${originalName} to ${newName.trim()}...`, 
+          message: `${originalName} → ${trimmed}`, 
           type: 'loading', 
-          duration: 0 
+          duration: 4000,
         });
         
-        socket.emit('sftp:move', { src: srcPath, dest: destPath, overwrite: false });
+        // Use socketRef.current — socket state can be stale when the prompt modal
+        // causes re-renders between handleRename call and the user clicking OK.
+        // A stale socket's sftp:action_success listener was already torn down,
+        // so the success event would never clear the toast.
+        (socketRef.current || socket)?.emit('sftp:move', { src: srcPath, dest: destPath, overwrite: false });
         setContextMenu({ ...contextMenu, visible: false });
       },
       originalName,
@@ -2743,7 +2770,7 @@ export default function FileManager({
   };
 
   const commitRename = () => {
-    if (!renamingFile || !socket) return;
+    if (!renamingFile || !socketRef.current) return;
     const originalName = renamingFile.filename;
     const newName = renamingFile.value.trim();
     setRenamingFile(null);
@@ -2753,14 +2780,24 @@ export default function FileManager({
     const srcPath = currentPath === '.' ? originalName : `${currentPath}/${originalName}`;
     const destPath = currentPath === '.' ? newName : `${currentPath}/${newName}`;
 
+    // Optimistic UI — rename instantly in the list so there's zero perceived lag.
+    // The server confirms with sftp:action_success which triggers a real list refresh.
+    setFiles(prev => prev.map(f =>
+      f.filename === originalName
+        ? { ...f, filename: newName, longname: f.longname ? f.longname.replace(originalName, newName) : newName }
+        : f
+    ));
+
+    // Auto-dismiss after 4s as a safety net in case the success event closure
+    // is stale and removeNotification doesn't fire
     toastRef.current = addNotification({
       title: t('files.status.renaming') || 'Renaming',
-      message: `Renaming ${originalName} to ${newName}...`,
+      message: `${originalName} → ${newName}`,
       type: 'loading',
-      duration: 0,
+      duration: 4000,
     });
 
-    socket.emit('sftp:move', { src: srcPath, dest: destPath, overwrite: false });
+    socketRef.current.emit('sftp:move', { src: srcPath, dest: destPath, overwrite: false });
   };
 
   const cancelRename = () => {

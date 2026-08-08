@@ -4453,47 +4453,91 @@ export default function SettingsApp({ initialTab, deploymentOnly = false, openRe
                       </AnimatePresence>
                     </div>
 
-                    {/* Collapsible advanced options */}
-                    <details className="group border-t border-[var(--border-color)] pt-3">
-                      <summary className="text-[10px] text-[var(--text-muted)] cursor-pointer select-none hover:text-[var(--text-secondary)] transition-colors flex items-center gap-1.5 py-1">
-                        <ChevronDown size={11} className="group-open:rotate-180 transition-transform" />
-                        Advanced options (uninstall, alternative methods)
-                      </summary>
-                      <div className="pt-3 space-y-2">
-                        {detectedOS !== 'windows' && (
+                    {/* ── Uninstall Section ── */}
+                    <div className="border-t border-[var(--border-color)] pt-3 space-y-2">
+                      <div className="flex items-center gap-2">
+                        <div className="flex-1 h-px bg-[var(--border-color)]" />
+                        <span className="text-[9px] font-bold text-[var(--text-muted)] uppercase tracking-widest px-1">Uninstall</span>
+                        <div className="flex-1 h-px bg-[var(--border-color)]" />
+                      </div>
+
+                      {/* What uninstall does */}
+                      <div className="flex gap-2.5 p-2.5 rounded-xl bg-rose-500/[0.06] border border-rose-500/15">
+                        <Trash2 size={13} className="shrink-0 text-rose-400 mt-0.5" />
+                        <div className="text-[10px] text-[var(--text-muted)] leading-relaxed space-y-0.5">
+                          <p className="font-semibold text-rose-300">Remove the relay agent from your machine</p>
+                          <p>Stops the background service, removes the auto-start entry, and deletes <code className="text-amber-300">local-relay.js</code>.</p>
+                        </div>
+                      </div>
+
+                      {/* Uninstall command block */}
+                      <div className="relative rounded-xl overflow-hidden border border-rose-500/20">
+                        <div className="flex items-center gap-2 px-3 py-1.5 bg-rose-950/40 border-b border-rose-500/15">
+                          <div className="flex gap-1.5">
+                            <div className="w-2 h-2 rounded-full bg-red-500/60" />
+                            <div className="w-2 h-2 rounded-full bg-amber-500/60" />
+                            <div className="w-2 h-2 rounded-full bg-emerald-500/60" />
+                          </div>
+                          <span className="text-[9px] text-rose-400/70 font-mono flex-1">
+                            {detectedOS === 'windows' ? 'PowerShell / CMD' : 'Terminal'} — run on your machine (not the server)
+                          </span>
                           <button
-                            onClick={() => downloadInstallerScript('install')}
-                            disabled={!relayToken}
-                            className="w-full flex items-center gap-2 px-4 py-2 bg-[var(--bg-tertiary)] hover:bg-[var(--border-color)] rounded-xl text-[var(--text-secondary)] text-[11px] font-bold transition-colors disabled:opacity-40"
+                            onClick={() => {
+                              navigator.clipboard.writeText(getRelayOneLiner('uninstall'));
+                              addNotification({ title: 'Copied!', message: detectedOS === 'windows' ? 'Paste in PowerShell or CMD to uninstall.' : 'Paste in Terminal to uninstall the relay.', type: 'info' });
+                            }}
+                            className="flex items-center gap-1 px-2 py-0.5 rounded-md bg-rose-500/15 hover:bg-rose-500/25 border border-rose-500/20 text-rose-400 text-[9px] font-bold transition-colors cursor-pointer"
                           >
-                            <Download size={13} /> Download script file instead
+                            <Copy size={9} /> Copy
                           </button>
-                        )}
+                        </div>
+                        <div className="p-3 bg-slate-950 min-h-[44px] flex items-center">
+                          <code className="text-[10px] font-mono text-rose-300/90 break-all leading-relaxed">
+                            {getRelayOneLiner('uninstall')}
+                          </code>
+                        </div>
+                      </div>
+
+                      {/* Action buttons */}
+                      <div className="grid grid-cols-2 gap-2">
                         <button
                           onClick={() => {
                             navigator.clipboard.writeText(getRelayOneLiner('uninstall'));
                             addNotification({ title: 'Copied!', message: detectedOS === 'windows' ? 'Paste in PowerShell or CMD to uninstall.' : 'Paste in Terminal to uninstall.', type: 'info' });
                           }}
-                          className="w-full flex items-center gap-2 px-4 py-2 bg-red-500/10 hover:bg-red-500/15 border border-red-500/20 rounded-xl text-red-400 text-[11px] font-bold transition-all"
+                          className="flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl bg-rose-500/10 hover:bg-rose-500/20 border border-rose-500/25 text-rose-400 text-[11px] font-bold transition-all cursor-pointer"
                         >
-                          <Copy size={12} /> Copy Uninstall Command
+                          <Copy size={11} /> Copy Command
                         </button>
                         <button
                           onClick={() => downloadInstallerScript('uninstall')}
-                          className="w-full flex items-center gap-2 px-4 py-2 bg-[var(--bg-tertiary)] hover:bg-[var(--border-color)] rounded-xl text-[var(--text-secondary)] text-[11px] font-bold transition-colors"
+                          className="flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl bg-[var(--bg-tertiary)] hover:bg-[var(--border-color)] border border-[var(--border-color)] text-[var(--text-secondary)] text-[11px] font-bold transition-colors cursor-pointer"
                         >
-                          <Download size={12} /> Download {getRelayScriptFilename('uninstall')}
+                          <Download size={11} /> {getRelayScriptFilename('uninstall')}
                         </button>
-                        {relayConnected && (
-                          <button
-                            onClick={handleRevokeAllRelays}
-                            className="w-full text-[10px] text-red-400/60 hover:text-red-400 transition-colors py-1 text-center"
-                          >
-                            Revoke all tokens
-                          </button>
-                        )}
                       </div>
-                    </details>
+
+                      {/* Alternative install script download (non-windows) */}
+                      {detectedOS !== 'windows' && (
+                        <button
+                          onClick={() => downloadInstallerScript('install')}
+                          disabled={!relayToken}
+                          className="w-full flex items-center justify-center gap-2 px-3 py-2 bg-[var(--bg-tertiary)] hover:bg-[var(--border-color)] border border-[var(--border-color)] rounded-xl text-[var(--text-muted)] text-[10px] font-bold transition-colors disabled:opacity-40 cursor-pointer"
+                        >
+                          <Download size={11} /> Download install script instead ({getRelayScriptFilename('install')})
+                        </button>
+                      )}
+
+                      {/* Revoke all tokens */}
+                      {relayConnected && (
+                        <button
+                          onClick={handleRevokeAllRelays}
+                          className="w-full text-[10px] text-rose-400/50 hover:text-rose-400 transition-colors py-1 text-center cursor-pointer"
+                        >
+                          Revoke all relay tokens
+                        </button>
+                      )}
+                    </div>
                   </>
                 )}
               </div>

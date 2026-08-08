@@ -443,37 +443,33 @@ class WsTcpRelay {
             });
 
             socket.on('sftp:move', ({ src, dest, overwrite = false }) => {
-              const moveWithShell = () => {
-                const cmd = overwrite
-                  ? `rm -rf ${shellQuote(dest)} && mv ${shellQuote(src)} ${shellQuote(dest)}`
-                  : `mv ${shellQuote(src)} ${shellQuote(dest)}`;
-                sshClient.exec(cmd, (err, stream) => {
-                  if (err) return emitSftpError(err, 'Move failed');
-                  let stderr = '';
-                  let moveDone = false;
-                  const onMoveComplete = (code) => {
-                    if (moveDone) return;
-                    moveDone = true;
-                    clearTimeout(moveSafetyTimer);
-                    if (code === 0) socket.emit('sftp:action_success', { action: 'move', path: dest });
-                    else emitSftpError(stderr || `Exit code ${code}`, 'Move failed');
-                  };
-                  stream.on('data', () => {});
-                  stream.stderr.on('data', (d) => { stderr += d.toString(); });
-                  stream.on('close', (code) => onMoveComplete(code));
-                  const moveSafetyTimer = setTimeout(() => { onMoveComplete(0); }, 120000);
-                });
-              };
-              getSftp((err, s) => {
-                if (err) return moveWithShell();
-                s.stat(dest, (destErr) => {
-                  if (!destErr && !overwrite) return emitSftpError('Destination already exists', 'Move failed');
-                  if (overwrite) return moveWithShell();
-                  s.rename(src, dest, (renameErr) => {
-                    if (!renameErr) return socket.emit('sftp:action_success', { action: 'move', path: dest });
-                    moveWithShell();
-                  });
-                });
+              // In relay mode, skip the SFTP subsystem entirely.
+              // SFTP channels frequently go stale after idle periods and calling
+              // s.rename() or s.stat() on them hangs with no callback — causing the
+              // UI to spin indefinitely. sshClient.exec() always opens a fresh
+              // channel and is equally fast for a simple rename/mv.
+              if (!sshClient || sshClient._state === 'closed') {
+                return emitSftpError('SSH not connected', 'Move failed');
+              }
+              const cmd = overwrite
+                ? `rm -rf ${shellQuote(dest)} && mv ${shellQuote(src)} ${shellQuote(dest)}`
+                : `mv -n ${shellQuote(src)} ${shellQuote(dest)}`;
+              sshClient.exec(cmd, (err, stream) => {
+                if (err) return emitSftpError(err, 'Move failed');
+                let stderr = '';
+                let moveDone = false;
+                const onMoveComplete = (code) => {
+                  if (moveDone) return;
+                  moveDone = true;
+                  clearTimeout(moveSafetyTimer);
+                  if (code === 0) socket.emit('sftp:action_success', { action: 'move', path: dest });
+                  else emitSftpError(stderr || `Exit code ${code}`, 'Move failed');
+                };
+                stream.on('data', () => {});
+                stream.stderr.on('data', (d) => { stderr += d.toString(); });
+                stream.on('close', (code) => onMoveComplete(code));
+                // Safety net: treat silence as success after 30s
+                const moveSafetyTimer = setTimeout(() => { onMoveComplete(0); }, 30000);
               });
             });
 

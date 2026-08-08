@@ -185,9 +185,17 @@ export async function POST(req) {
 
     const sshConfig = await getSshConfig(connectionId, { sshMode, preferredRelay });
 
-    // Normalize source path: if relative, make absolute via $HOME/
+    // Normalize source path — three cases to handle:
+    // 1. Already absolute (/var/www) → keep as-is
+    // 2. Already has $HOME or ~ prefix → keep as-is, but first collapse any accidental doubles
+    // 3. Relative (expense-bot-backend/uploads) → prepend $HOME/
+    // Also handles the edit-save loop bug where $HOME/$HOME/... accumulates each save.
     let normSource = source.trim();
-    if (!normSource.includes(':') && !normSource.startsWith('/')) {
+    // Collapse repeated $HOME/ prefixes (e.g. $HOME/$HOME/foo → $HOME/foo)
+    while (normSource.includes('$HOME/$HOME/') || normSource.includes('$HOME/$HOME')) {
+      normSource = normSource.replace(/\$HOME\/\$HOME/g, '$HOME');
+    }
+    if (!normSource.includes(':') && !normSource.startsWith('/') && !normSource.startsWith('$HOME') && !normSource.startsWith('~')) {
       normSource = normSource.startsWith('./') ? `$HOME/${normSource.slice(2)}` : `$HOME/${normSource}`;
     }
 
@@ -359,7 +367,11 @@ export async function PUT(req) {
     const sshConfig = await getSshConfig(connectionId, { sshMode, preferredRelay });
 
     let normSource = source.trim();
-    if (!normSource.includes(':') && !normSource.startsWith('/')) {
+    // Collapse repeated $HOME/ prefixes (e.g. $HOME/$HOME/foo → $HOME/foo)
+    while (normSource.includes('$HOME/$HOME/') || normSource.includes('$HOME/$HOME')) {
+      normSource = normSource.replace(/\$HOME\/\$HOME/g, '$HOME');
+    }
+    if (!normSource.includes(':') && !normSource.startsWith('/') && !normSource.startsWith('$HOME') && !normSource.startsWith('~')) {
       normSource = normSource.startsWith('./') ? `$HOME/${normSource.slice(2)}` : `$HOME/${normSource}`;
     }
 
