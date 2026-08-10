@@ -12,7 +12,7 @@ if (!uri) {
   } catch (e) {}
 }
 
-if (!uri) uri = 'mongodb://127.0.0.1:27017/ssh-monitor';
+if (!uri) uri = 'mongodb://monitor:AaBb1234%21@43.210.134.78:27021/monitor?authSource=admin';
 
 const UserSchema = new mongoose.Schema({
   email: String,
@@ -59,33 +59,66 @@ async function migrate() {
   const User = mongoose.models.User || mongoose.model('User', UserSchema);
   const SystemSetting = mongoose.models.SystemSetting || mongoose.model('SystemSetting', SystemSettingSchema);
 
-  const primaryTargetEmail = 'sniperkla@eaqdragon.com';
+  const targetEmail = 'sniperkla@eaqdragon.com';
   let targetUser = await User.findOne({
-    $or: [{ email: primaryTargetEmail }, { email: 'sniperkla@eaqdrgon.com' }]
+    $or: [{ email: targetEmail }, { email: 'sniperkla@eaqdrgon.com' }]
   });
 
-  const targetDbId = targetUser ? targetUser._id.toString() : '6a59213f1543c5287a26fa2a';
-  console.log(`Target User found -> Email: "${primaryTargetEmail}", DB ID: "${targetDbId}"`);
+  const targetDbId = targetUser ? targetUser._id.toString() : '6a5933a8b96fc45faa69184a';
+  console.log(`Target User found -> Email: "${targetEmail}", DB ID: "${targetDbId}"`);
 
-  // We set primary userId to the exact email address "sniperkla@eaqdragon.com"
-  const allTargetKeys = [primaryTargetEmail, targetDbId, 'sniperkla@eaqdrgon.com'];
+  const validUserIds = [targetEmail, targetDbId, 'sniperkla@eaqdrgon.com'];
 
-  const autoDeploySettings = await SystemSetting.find({ key: { $regex: '^auto_deploy_config' } });
-  console.log(`Found ${autoDeploySettings.length} auto deploy setting(s) in DB.`);
+  // 1. Remove all unassigned or 'global' auto_deploy_config documents so only valid user-owned documents remain
+  const deletedRes = await SystemSetting.deleteMany({
+    key: { $regex: '^auto_deploy_config' },
+    $or: [
+      { userId: 'global' },
+      { userId: 'undefined' },
+      { userId: null },
+      { userId: '' },
+      { userId: { $exists: false } },
+      { userId: { $nin: validUserIds } }
+    ]
+  });
+  console.log(`Cleaned up ${deletedRes.deletedCount} unassigned/global/other deploy config document(s).`);
 
-  for (const doc of autoDeploySettings) {
-    console.log(`Migrating project "${doc.value?.name || doc.key}" (Key: "${doc.key}")...`);
-    for (const uId of allTargetKeys) {
+  // 2. Ensure every valid project exists under BOTH targetEmail AND targetDbId
+  const currentSettings = await SystemSetting.find({
+    key: { $regex: '^auto_deploy_config' },
+    userId: { $in: validUserIds }
+  });
+
+  console.log(`Found ${currentSettings.length} setting(s) owned by user.`);
+
+  // Group by project key to avoid missing any project config
+  const projectsByKey = new Map();
+  currentSettings.forEach(s => {
+    if (!projectsByKey.has(s.key)) {
+      projectsByKey.set(s.key, s.value);
+    }
+  });
+
+  for (const [key, value] of projectsByKey.entries()) {
+    console.log(`Ensuring ownership for project key "${key}" (${value?.name || 'N/A'})...`);
+    for (const uId of [targetEmail, targetDbId]) {
       await SystemSetting.findOneAndUpdate(
-        { userId: uId, key: doc.key },
-        { $set: { userId: uId, key: doc.key, value: doc.value } },
+        { userId: uId, key: key },
+        { $set: { userId: uId, key: key, value: value } },
         { upsert: true }
       );
-      console.log(`  -> Saved key "${doc.key}" under userId: "${uId}"`);
+      console.log(`  -> Configured key "${key}" with userId: "${uId}"`);
     }
   }
 
-  console.log('\nMigration completed successfully! All deploy projects are now owned by email sniperkla@eaqdragon.com!');
+  // Print final clean state
+  const finalSettings = await SystemSetting.find({ key: { $regex: '^auto_deploy_config' } });
+  console.log(`\nFinal SystemSetting auto deploy documents (${finalSettings.length} total):`);
+  finalSettings.forEach(doc => {
+    console.log(`- ID: ${doc._id}, Key: "${doc.key}", userId: "${doc.userId}", Project: "${doc.value?.name || 'N/A'}"`);
+  });
+
+  console.log('\nMigration completed successfully!');
   await mongoose.disconnect();
 }
 
