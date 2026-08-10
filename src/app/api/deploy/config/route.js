@@ -293,9 +293,14 @@ export async function POST(request) {
       sshConnectionData: finalSshConnectionData
     };
 
+    const rawUserId = session.user?.id || session.user?.sub;
+    const targetUserId = (rawUserId && mongoose.Types.ObjectId.isValid(rawUserId))
+      ? new mongoose.Types.ObjectId(rawUserId)
+      : (rawUserId || session.user?.email || 'global');
+
     await SystemSetting.findOneAndUpdate(
-      { userId, key: dbKey },
-      { $set: { userId, key: dbKey, value: updatedValue } },
+      { userId: targetUserId, key: dbKey },
+      { $set: { userId: targetUserId, key: dbKey, value: updatedValue } },
       { upsert: true, runValidators: false }
     );
 
@@ -321,9 +326,14 @@ export async function DELETE(request) {
       return NextResponse.json({ success: false, error: 'Cannot delete the default project configuration' }, { status: 400 });
     }
 
-    const userId = session.user?.id || session.user?.sub || session.user?.email || 'global';
+    const rawUserId = session.user?.id || session.user?.sub;
+    const objectId = (rawUserId && mongoose.Types.ObjectId.isValid(rawUserId))
+      ? new mongoose.Types.ObjectId(rawUserId)
+      : null;
+    const userKeys = [...new Set([objectId, rawUserId, session.user?.email].filter(Boolean))];
+
     await connectDB(process.env.MONGODB_URI, true);
-    await SystemSetting.deleteOne({ userId, key: `auto_deploy_config_${projectId}` });
+    await SystemSetting.deleteOne({ userId: { $in: userKeys }, key: `auto_deploy_config_${projectId}` });
 
     return NextResponse.json({ success: true, message: 'Project deployment config deleted' });
   } catch (error) {
