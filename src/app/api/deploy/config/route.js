@@ -48,13 +48,14 @@ export async function GET(request) {
       return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
     }
 
-    const userId = session.user?.id || session.user?.sub || session.user?.email || 'global';
+    const userKeys = Array.from(new Set([session.user?.email, session.user?.id, session.user?.sub].filter(Boolean)));
+    const userId = session.user?.email || session.user?.id || session.user?.sub || 'global';
 
     await connectDB(process.env.MONGODB_URI, true);
     
     // Find settings keys that start with auto_deploy_config for this user (or global fallback)
     const rawSettings = await SystemSetting.find({
-      userId: { $in: [userId, 'global'] },
+      userId: { $in: [...userKeys, 'global'] },
       key: { $regex: '^auto_deploy_config' }
     });
 

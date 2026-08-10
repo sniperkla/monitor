@@ -59,24 +59,23 @@ async function migrate() {
   const User = mongoose.models.User || mongoose.model('User', UserSchema);
   const SystemSetting = mongoose.models.SystemSetting || mongoose.model('SystemSetting', SystemSettingSchema);
 
-  const userEmails = ['sniperkla@eaqdragon.com', 'sniperkla@eaqdrgon.com'];
+  const primaryTargetEmail = 'sniperkla@eaqdragon.com';
   let targetUser = await User.findOne({
-    $or: userEmails.map(e => ({ email: { $regex: new RegExp(`^${e}$`, 'i') } }))
+    $or: [{ email: primaryTargetEmail }, { email: 'sniperkla@eaqdrgon.com' }]
   });
 
   const targetDbId = targetUser ? targetUser._id.toString() : '6a59213f1543c5287a26fa2a';
-  const targetEmail = targetUser ? targetUser.email : 'sniperkla@eaqdragon.com';
-  console.log(`Target User found in DB -> DB ID: "${targetDbId}", Email: "${targetEmail}"`);
+  console.log(`Target User found -> Email: "${primaryTargetEmail}", DB ID: "${targetDbId}"`);
 
-  // Target IDs to associate
-  const allUserIds = Array.from(new Set([targetDbId, targetEmail, 'sniperkla@eaqdrgon.com']));
+  // We set primary userId to the exact email address "sniperkla@eaqdragon.com"
+  const allTargetKeys = [primaryTargetEmail, targetDbId, 'sniperkla@eaqdrgon.com'];
 
   const autoDeploySettings = await SystemSetting.find({ key: { $regex: '^auto_deploy_config' } });
   console.log(`Found ${autoDeploySettings.length} auto deploy setting(s) in DB.`);
 
   for (const doc of autoDeploySettings) {
     console.log(`Migrating project "${doc.value?.name || doc.key}" (Key: "${doc.key}")...`);
-    for (const uId of allUserIds) {
+    for (const uId of allTargetKeys) {
       await SystemSetting.findOneAndUpdate(
         { userId: uId, key: doc.key },
         { $set: { userId: uId, key: doc.key, value: doc.value } },
@@ -86,7 +85,7 @@ async function migrate() {
     }
   }
 
-  console.log('\nMigration to sniperkla@eaqdragon.com completed successfully!');
+  console.log('\nMigration completed successfully! All deploy projects are now owned by email sniperkla@eaqdragon.com!');
   await mongoose.disconnect();
 }
 
