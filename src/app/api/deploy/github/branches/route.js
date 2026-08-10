@@ -33,6 +33,8 @@ export async function GET(request) {
       return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
     }
 
+    const userId = session.user?.id || session.user?.sub || session.user?.email || 'global';
+
     const url = new URL(request.url);
     let repo = url.searchParams.get('repo');
     const project = url.searchParams.get('project');
@@ -45,7 +47,7 @@ export async function GET(request) {
 
     if (project) {
       const dbKey = project === 'default' ? 'auto_deploy_config' : `auto_deploy_config_${project}`;
-      const setting = await SystemSetting.findOne({ key: dbKey });
+      const setting = await SystemSetting.findOne({ userId: { $in: [userId, 'global'] }, key: dbKey });
       const cfg = setting?.value || {};
       if (!resolvedRepo && cfg.githubRepo) resolvedRepo = cfg.githubRepo;
       if (cfg.githubToken) {

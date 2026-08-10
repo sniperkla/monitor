@@ -1435,6 +1435,7 @@ export async function POST(request) {
     // 1. Check for manual trigger (requires dashboard session)
     const session = await getServerSession(authOptions);
     const isManual = !!session;
+    const userId = session?.user?.id || session?.user?.sub || session?.user?.email || null;
 
     // 2. Fetch the deployment config
     await connectDB(process.env.MONGODB_URI, true);
@@ -1446,6 +1447,8 @@ export async function POST(request) {
       if (!setting) {
         return NextResponse.json({ success: false, error: 'Invalid webhook token' }, { status: 404 });
       }
+    } else if (isManual && userId) {
+      setting = await SystemSetting.findOne({ userId: { $in: [userId, 'global'] }, key: dbKey });
     } else {
       setting = await SystemSetting.findOne({ key: dbKey });
     }

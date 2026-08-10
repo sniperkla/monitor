@@ -13,6 +13,8 @@ export async function GET(request) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
   }
 
+  const userId = session.user?.id || session.user?.sub || session.user?.email || 'global';
+
   const { searchParams } = new URL(request.url);
   const projectId = searchParams.get('project') || 'default';
 
@@ -35,7 +37,7 @@ export async function GET(request) {
       try {
         await connectDB(process.env.MONGODB_URI, true);
         const dbKey = projectId === 'default' ? 'auto_deploy_config' : `auto_deploy_config_${projectId}`;
-        const setting = await SystemSetting.findOne({ key: dbKey });
+        const setting = await SystemSetting.findOne({ userId: { $in: [userId, 'global'] }, key: dbKey });
         const config = setting?.value;
 
         if (config) {

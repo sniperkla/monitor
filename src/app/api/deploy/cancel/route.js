@@ -5,15 +5,16 @@ import SystemSetting from '@/models/SystemSetting';
 import { broadcastDeploymentStatus } from '@/app/api/deploy/sse/route';
 import { getRunning, clearRunning } from '@/lib/deployProcesses';
 
-async function updateStatusToCancelled(projectId, message) {
+async function updateStatusToCancelled(projectId, message, userId = 'global') {
   try {
     await connectDB(process.env.MONGODB_URI, true);
     const dbKey = projectId === 'default' ? 'auto_deploy_config' : `auto_deploy_config_${projectId}`;
-    const setting = await SystemSetting.findOne({ key: dbKey });
+    const setting = await SystemSetting.findOne({ userId: { $in: [userId, 'global'] }, key: dbKey });
     const config = setting?.value || {};
+    const targetUserId = setting?.userId || userId;
     const now = new Date();
     const finalLog = (config.lastDeployLog || '') + `\n[${now.toISOString()}] ❌ Deployment cancelled by user. ${message || ''}\n`;
-    await SystemSetting.findOneAndUpdate({ key: dbKey }, {
+    await SystemSetting.findOneAndUpdate({ userId: targetUserId, key: dbKey }, {
       $set: {
         'value.status': 'failed',
         'value.lastDeployLog': finalLog,
@@ -34,13 +35,15 @@ export async function POST(request) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
   }
 
+  const userId = session.user?.id || session.user?.sub || session.user?.email || 'global';
+
   try {
     const { searchParams } = new URL(request.url);
     const projectId = searchParams.get('project') || 'default';
 
     const running = getRunning(projectId);
     if (!running) {
-      await updateStatusToCancelled(projectId, 'Cancelled via API (no active process)');
+      await updateStatusToCancelled(projectId, 'Cancelled via API (no active process)', userId);
       return NextResponse.json({ success: true, message: 'Cancellation requested' });
     }
 
@@ -67,7 +70,7 @@ export async function POST(request) {
     }
 
     clearRunning(projectId);
-    await updateStatusToCancelled(projectId, 'Cancelled via API');
+    await updateStatusToCancelled(projectId, 'Cancelled via API', userId);
 
     return NextResponse.json({ success: true, message: 'Cancellation requested' });
   } catch (err) {

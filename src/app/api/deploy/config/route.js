@@ -48,15 +48,25 @@ export async function GET(request) {
       return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
     }
 
-    const { searchParams } = new URL(request.url);
-    const projectId = searchParams.get('project');
+    const userId = session.user?.id || session.user?.sub || session.user?.email || 'global';
 
     await connectDB(process.env.MONGODB_URI, true);
     
-    // Find all settings keys that start with auto_deploy_config
-    const allSettings = await SystemSetting.find({
+    // Find settings keys that start with auto_deploy_config for this user (or global fallback)
+    const rawSettings = await SystemSetting.find({
+      userId: { $in: [userId, 'global'] },
       key: { $regex: '^auto_deploy_config' }
     });
+
+    // Deduplicate: user-specific setting overrides global setting
+    const settingsMap = new Map();
+    rawSettings.forEach(s => {
+      const existing = settingsMap.get(s.key);
+      if (!existing || (s.userId === userId && existing.userId === 'global')) {
+        settingsMap.set(s.key, s);
+      }
+    });
+    const allSettings = Array.from(settingsMap.values());
 
     // Parse all projects
     let projects = [];
@@ -164,12 +174,15 @@ export async function POST(request) {
       }
     }
 
+    const userId = session.user?.id || session.user?.sub || session.user?.email || 'global';
+
     // NOW connect to main database for saving deployment config
     await connectDB(process.env.MONGODB_URI, true);
 
-    // Check for duplicate project name (if provided)
+    // Check for duplicate project name (for this user)
     if (body.name && body.name.trim()) {
       const allSettings = await SystemSetting.find({
+        userId,
         key: { $regex: '^auto_deploy_config' }
       });
       
@@ -185,7 +198,7 @@ export async function POST(request) {
       }
     }
 
-    const existing = await SystemSetting.findOne({ key: dbKey });
+    const existing = await SystemSetting.findOne({ userId, key: dbKey });
     const existingValue = existing?.value || {};
 
     // Generate webhookToken for new projects or existing ones without one
@@ -271,8 +284,8 @@ export async function POST(request) {
     };
 
     await SystemSetting.findOneAndUpdate(
-      { key: dbKey },
-      { $set: { value: updatedValue } },
+      { userId, key: dbKey },
+      { $set: { userId, key: dbKey, value: updatedValue } },
       { upsert: true, runValidators: false }
     );
 
@@ -298,8 +311,9 @@ export async function DELETE(request) {
       return NextResponse.json({ success: false, error: 'Cannot delete the default project configuration' }, { status: 400 });
     }
 
+    const userId = session.user?.id || session.user?.sub || session.user?.email || 'global';
     await connectDB(process.env.MONGODB_URI, true);
-    await SystemSetting.deleteOne({ key: `auto_deploy_config_${projectId}` });
+    await SystemSetting.deleteOne({ userId, key: `auto_deploy_config_${projectId}` });
 
     return NextResponse.json({ success: true, message: 'Project deployment config deleted' });
   } catch (error) {

@@ -30,13 +30,15 @@ export async function GET(request) {
       return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
     }
 
+    const userId = session.user?.id || session.user?.sub || session.user?.email || 'global';
+
     const { searchParams } = new URL(request.url);
     const projectId = searchParams.get('project') || 'default';
     const providedToken = searchParams.get('botToken');
 
     await connectDB(process.env.MONGODB_URI, true);
     const dbKey = projectId === 'default' ? 'auto_deploy_config' : `auto_deploy_config_${projectId}`;
-    const setting = await SystemSetting.findOne({ key: dbKey });
+    const setting = await SystemSetting.findOne({ userId: { $in: [userId, 'global'] }, key: dbKey });
     const savedConfig = setting?.value || {};
 
     const botToken = resolveBotToken(providedToken, savedConfig.telegramBotToken);
@@ -122,6 +124,8 @@ export async function POST(request) {
       return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
     }
 
+    const userId = session.user?.id || session.user?.sub || session.user?.email || 'global';
+
     const body = await request.json();
     const { projectId = 'default', botToken: providedToken, chatId } = body;
 
@@ -136,7 +140,7 @@ export async function POST(request) {
 
     await connectDB(process.env.MONGODB_URI, true);
     const dbKey = projectId === 'default' ? 'auto_deploy_config' : `auto_deploy_config_${projectId}`;
-    const setting = await SystemSetting.findOne({ key: dbKey });
+    const setting = await SystemSetting.findOne({ userId: { $in: [userId, 'global'] }, key: dbKey });
     const savedConfig = setting?.value || {};
 
     const botToken = resolveBotToken(providedToken, savedConfig.telegramBotToken);

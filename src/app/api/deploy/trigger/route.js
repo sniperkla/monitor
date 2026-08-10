@@ -68,7 +68,13 @@ async function handleTrigger(request) {
       dbKey = setting.key;
       projectId = dbKey === 'auto_deploy_config' ? 'default' : dbKey.replace('auto_deploy_config_', '');
     } else {
-      setting = await SystemSetting.findOne({ key: dbKey });
+      const session = await getServerSession(authOptions);
+      if (!session && !secretToken) {
+        console.log(`[trigger] ❌ No secret configured and no session — rejecting unauthenticated trigger`);
+        return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
+      }
+      const userId = session?.user?.id || session?.user?.sub || session?.user?.email || 'global';
+      setting = await SystemSetting.findOne({ userId: { $in: [userId, 'global'] }, key: dbKey });
     }
     const config = setting?.value;
 
