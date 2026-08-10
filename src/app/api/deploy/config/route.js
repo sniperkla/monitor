@@ -72,11 +72,10 @@ export async function GET(request) {
     });
     console.log('[deploy/config] found', rawSettings.length, 'settings for user');
 
-    // Deduplicate: user-specific setting overrides global setting
+    // Deduplicate by project key
     const settingsMap = new Map();
     rawSettings.forEach(s => {
-      const existing = settingsMap.get(s.key);
-      if (!existing || (s.userId === userId && existing.userId === 'global')) {
+      if (!settingsMap.has(s.key)) {
         settingsMap.set(s.key, s);
       }
     });
