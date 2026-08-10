@@ -26,7 +26,26 @@ if (!cached) {
 const connectionPool = new Map();
 
 export function getCenterUri() {
-  return process.env.MONGODB_URI;
+  try {
+    const fs = require('fs');
+    const path = require('path');
+    const envPath = path.resolve(process.cwd(), '.env');
+    if (fs.existsSync(envPath)) {
+      const content = fs.readFileSync(envPath, 'utf-8');
+      const match = content.match(/^MONGODB_URI=(.+)$/m);
+      if (match && match[1]) {
+        let uri = match[1].trim();
+        if ((uri.startsWith('"') && uri.endsWith('"')) || (uri.startsWith("'") && uri.endsWith("'"))) {
+          uri = uri.slice(1, -1);
+        }
+        if (uri) {
+          process.env.MONGODB_URI = uri;
+          return uri;
+        }
+      }
+    }
+  } catch (e) {}
+  return process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017/ssh-monitor';
 }
 
 /**
@@ -107,7 +126,7 @@ async function connectCenter(uri) {
     return cached.conn;
   }
 
-  const centerUri = getCenterUri() || uri;
+  const centerUri = getCenterUri();
 
   // If connection is stuck connecting (readyState 2) or disconnected (readyState 0), reset and reconnect
   if (mongoose.connection.readyState === 2 || mongoose.connection.readyState === 0 || !cached.promise) {
