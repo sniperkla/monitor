@@ -2,8 +2,8 @@ import mongoose from 'mongoose';
 
 const SystemSettingSchema = new mongoose.Schema({
   userId: {
-    type: mongoose.Schema.Types.Mixed,
-    default: 'global', // 'global' for system-wide settings, user ObjectId / ID for per-user settings
+    type: String,
+    default: 'global', // 'global' for system-wide settings, user ID string for per-user settings
     index: true,
   },
   key: {

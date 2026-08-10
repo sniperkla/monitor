@@ -52,28 +52,15 @@ export async function GET(request) {
     const { searchParams } = new URL(request.url);
     const projectId = searchParams.get('project');
 
-    const rawUserId = session.user?.id || session.user?.sub;
-    // Support both BSON ObjectId (stored in DB) and plain string ID from session
-    const objectId = (rawUserId && mongoose.Types.ObjectId.isValid(rawUserId))
-      ? new mongoose.Types.ObjectId(rawUserId)
-      : null;
-    // Include all possible ID forms so query matches regardless of storage format
-    const userKeys = [...new Set([objectId, rawUserId, session.user?.email].filter(Boolean))];
-    const userId = objectId || rawUserId || session.user?.email || 'global';
+    // Always use plain string userId — session.user.id is already a string
+    const userId = String(session.user?.id || session.user?.sub || session.user?.email || 'global');
 
     await connectDB(process.env.MONGODB_URI, true);
 
-    // Use raw MongoDB driver to avoid Mongoose BSON type coercion issues.
-    // Mongoose Mixed type $in queries don't match ObjectId docs when string is passed and vice versa.
-    const db = mongoose.connection.db;
-    const col = db.collection('systemsettings');
-
-    // Build query keys covering BSON ObjectId, string ID, email — matches any storage format
-    const queryKeys = [...userKeys, 'global'];
-    const rawSettings = await col.find({
-      userId: { $in: queryKeys },
+    const rawSettings = await SystemSetting.find({
+      userId,
       key: { $regex: '^auto_deploy_config' }
-    }).toArray();
+    }).lean();
 
     // Deduplicate by project key
     const settingsMap = new Map();
@@ -88,9 +75,8 @@ export async function GET(request) {
     let projects = [];
     const needsTokenUpdate = [];
     allSettings.forEach(s => {
-      // Compatibility with old auto_deploy_config
       if (s.key === 'auto_deploy_config') {
-        const proj = { ...defaultConfig, ...s.value, id: 'default', name: s.value.name || 'Default Project' };
+        const proj = { ...defaultConfig, ...s.value, id: 'default', name: s.value?.name || 'Default Project' };
         if (!proj.webhookToken) {
           proj.webhookToken = crypto.randomUUID();
           needsTokenUpdate.push({ key: s.key, token: proj.webhookToken });
@@ -107,11 +93,11 @@ export async function GET(request) {
       }
     });
 
-    // Auto-assign webhook tokens for existing projects that don't have one
+    // Auto-assign webhook tokens for projects that don't have one
     if (needsTokenUpdate.length > 0) {
       for (const { key, token } of needsTokenUpdate) {
         await SystemSetting.findOneAndUpdate(
-          { key },
+          { userId, key },
           { $set: { 'value.webhookToken': token } }
         );
       }
@@ -119,7 +105,7 @@ export async function GET(request) {
 
     // Ensure we have at least one project
     if (projects.length === 0) {
-      projects.push(defaultConfig);
+      projects.push({ ...defaultConfig });
     }
 
     // If requesting a specific project
@@ -131,15 +117,13 @@ export async function GET(request) {
       });
     }
 
-    return NextResponse.json({
-      success: true,
-      projects
-    });
+    return NextResponse.json({ success: true, projects });
   } catch (error) {
     console.error('[deploy/config] GET error:', error.message);
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   }
-}
+
+
 
 // POST /api/deploy/config
 export async function POST(request) {
@@ -190,7 +174,7 @@ export async function POST(request) {
       }
     }
 
-    const userId = session.user?.id || session.user?.sub || session.user?.email || 'global';
+    const userId = String(session.user?.id || session.user?.sub || session.user?.email || 'global');
 
     // NOW connect to main database for saving deployment config
     await connectDB(process.env.MONGODB_URI, true);
@@ -299,18 +283,10 @@ export async function POST(request) {
       sshConnectionData: finalSshConnectionData
     };
 
-    const rawUserId = session.user?.id || session.user?.sub;
-    const targetUserId = (rawUserId && mongoose.Types.ObjectId.isValid(rawUserId))
-      ? new mongoose.Types.ObjectId(rawUserId)
-      : (rawUserId || session.user?.email || 'global');
-
-    // Use raw MongoDB driver to avoid Mongoose BSON type coercion issues
-    const db = mongoose.connection.db;
-    const col = db.collection('systemsettings');
-    await col.updateOne(
-      { userId: targetUserId, key: dbKey },
-      { $set: { userId: targetUserId, key: dbKey, value: updatedValue } },
-      { upsert: true }
+    await SystemSetting.findOneAndUpdate(
+      { userId, key: dbKey },
+      { $set: { userId, key: dbKey, value: updatedValue } },
+      { upsert: true, runValidators: false }
     );
 
     return NextResponse.json({ success: true, config: updatedValue });
@@ -335,15 +311,10 @@ export async function DELETE(request) {
       return NextResponse.json({ success: false, error: 'Cannot delete the default project configuration' }, { status: 400 });
     }
 
-    const rawUserId = session.user?.id || session.user?.sub;
-    const objectId = (rawUserId && mongoose.Types.ObjectId.isValid(rawUserId))
-      ? new mongoose.Types.ObjectId(rawUserId)
-      : null;
-    const userKeys = [...new Set([objectId, rawUserId, session.user?.email].filter(Boolean))];
+    const userId = String(session.user?.id || session.user?.sub || session.user?.email || 'global');
 
     await connectDB(process.env.MONGODB_URI, true);
-    const db = mongoose.connection.db;
-    await db.collection('systemsettings').deleteOne({ userId: { $in: userKeys }, key: `auto_deploy_config_${projectId}` });
+    await SystemSetting.deleteOne({ userId, key: `auto_deploy_config_${projectId}` });
 
     return NextResponse.json({ success: true, message: 'Project deployment config deleted' });
   } catch (error) {
