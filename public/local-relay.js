@@ -431,6 +431,12 @@ function handleSshConnect(ws, msg) {
   }
 
   const { connId, connection, cols, rows } = msg;
+
+  if (sshSessions.has(connId)) {
+    console.log(`⚠️ [Relay SSH] Session already exists or connecting for connId=${connId}`);
+    return;
+  }
+
   const config = {
     host: connection.host,
     port: connection.port || 22,
@@ -445,26 +451,41 @@ function handleSshConnect(ws, msg) {
 
   const sshClient = new ssh2.Client();
 
+  let resolveReady;
+  const readyPromise = new Promise((res) => { resolveReady = res; });
+  const sessionEntry = { status: 'connecting', sshClient, connection, readyPromise, stream: null };
+  sshSessions.set(connId, sessionEntry);
+
   sshClient.on('ready', () => {
     console.log(`✅ [${connId}] SSH connected to ${config.host}:${config.port}`);
 
     sshClient.shell({ term: 'xterm-256color', cols: cols || 120, rows: rows || 30 }, (err, stream) => {
       if (err) {
+        sshSessions.delete(connId);
+        resolveReady(null);
         ws.send(JSON.stringify({ type: 'ssh:error', connId, error: err.message }));
         return;
       }
 
-      sshSessions.set(connId, { sshClient, stream, connection });
+      sessionEntry.status = 'ready';
+      sessionEntry.stream = stream;
+      resolveReady(sessionEntry);
 
       ws.send(JSON.stringify({ type: 'ssh:connected', connId }));
 
-      stream.on('data', (data) => {
-        if (ws.readyState === 1) ws.send(JSON.stringify({ type: 'ssh:data', connId, data: data.toString('utf-8') }));
-      });
+      const writeOutput = (data) => {
+        const str = typeof data === 'string' ? data : data.toString('utf-8');
+        const dc = sessionEntry.rtcSshDc;
+        if (dc && typeof dc.isOpen === 'function' && dc.isOpen()) {
+          try { dc.sendMessage(str); return; } catch (_) {}
+        }
+        if (ws.readyState === 1) {
+          ws.send(JSON.stringify({ type: 'ssh:data', connId, data: str }));
+        }
+      };
 
-      stream.stderr.on('data', (data) => {
-        if (ws.readyState === 1) ws.send(JSON.stringify({ type: 'ssh:data', connId, data: data.toString('utf-8') }));
-      });
+      stream.on('data', writeOutput);
+      if (stream.stderr) stream.stderr.on('data', writeOutput);
 
       stream.on('close', () => {
         ws.send(JSON.stringify({ type: 'ssh:closed', connId }));
@@ -475,6 +496,8 @@ function handleSshConnect(ws, msg) {
 
   sshClient.on('error', (err) => {
     console.error(`✗ [${connId}] SSH error: ${err.message}`);
+    sshSessions.delete(connId);
+    resolveReady(null);
     ws.send(JSON.stringify({ type: 'ssh:error', connId, error: err.message }));
     cleanupSsh(connId);
   });
@@ -1651,7 +1674,7 @@ function setupControlChannel(ws, connId, peer, dc) {
     try { if (dc.isOpen()) dc.sendMessage(JSON.stringify(obj)); } catch {}
   };
 
-  dc.onMessage((raw) => {
+  dc.onMessage(async (raw) => {
     let msg;
     try { msg = JSON.parse(typeof raw === 'string' ? raw : raw.toString()); } catch { return; }
 
@@ -1659,16 +1682,18 @@ function setupControlChannel(ws, connId, peer, dc) {
       case 'ssh:start': {
         // Use pre-provisioned SSH config (credentials never sent over DataChannel)
         const sshConfig = preparedSessions.get(connId) || msg.sshConfig;
-        if (!sshConfig) {
+        if (!sshConfig && !sshSessions.has(connId)) {
           sendControl({ type: 'ssh:error', connId, error: 'No SSH config provisioned for this session' });
           return;
         }
-        preparedSessions.delete(connId);
+        if (sshConfig) preparedSessions.delete(connId);
 
-        // If the WebSocket relay path already opened an SSH session (via ssh:prepare → handleSshConnect),
-        // reuse it — just upgrade the I/O to flow through the WebRTC DataChannel.
-        // Opening a second SSH connection would cause a duplicate MOTD/banner on the terminal.
-        const existingSession = sshSessions.get(connId);
+        let existingSession = sshSessions.get(connId);
+        if (existingSession?.status === 'connecting' && existingSession.readyPromise) {
+          console.log(`⏳ [WebRTC][${connId}] Awaiting in-flight SSH connection for P2P DataChannel...`);
+          existingSession = await existingSession.readyPromise;
+        }
+
         if (existingSession?.stream) {
           console.log(`♻️ [WebRTC][${connId}] Reusing existing WebSocket relay SSH session for P2P DataChannel`);
 
@@ -1683,9 +1708,13 @@ function setupControlChannel(ws, connId, peer, dc) {
 
           const writeToRtc = (data) => {
             const session = sshSessions.get(connId);
+            const str = typeof data === 'string' ? data : data.toString('utf-8');
             const dc = session?.rtcSshDc;
-            if (dc && dc.isOpen()) {
-              try { dc.sendMessage(typeof data === 'string' ? data : data.toString('utf-8')); } catch {}
+            if (dc && typeof dc.isOpen === 'function' && dc.isOpen()) {
+              try { dc.sendMessage(str); return; } catch (_) {}
+            }
+            if (ws.readyState === 1) {
+              ws.send(JSON.stringify({ type: 'ssh:data', connId, data: str }));
             }
           };
           existingSession.stream.on('data', writeToRtc);
@@ -1697,7 +1726,7 @@ function setupControlChannel(ws, connId, peer, dc) {
           });
 
           sendControl({ type: 'ssh:connected', connId });
-        } else {
+        } else if (!existingSession) {
           // No existing session — open a fresh P2P SSH connection
           startSshP2P(connId, sshConfig, sendControl);
         }
@@ -1791,6 +1820,10 @@ function startSshP2P(connId, connection, sendControl) {
     sendControl({ type: 'ssh:error', connId, error: 'ssh2 not installed on relay agent' });
     return;
   }
+  if (sshSessions.has(connId) && sshSessions.get(connId)?.stream) {
+    console.log(`⚠️ [P2P SSH] Active session already exists for connId=${connId}`);
+    return;
+  }
 
   const config = {
     host:              connection.host,
@@ -1821,12 +1854,16 @@ function startSshP2P(connId, connection, sendControl) {
         sshSessions.set(connId, { sshClient, stream, connection, rtcSshDc: rtcPeer?._sshDc || null });
         sendControl({ type: 'ssh:connected', connId });
 
-        // SSH output → WebRTC ssh DataChannel
+        // SSH output → WebRTC ssh DataChannel (or WebSocket fallback)
         const writeToRtc = (data) => {
           const session = sshSessions.get(connId);
+          const str = typeof data === 'string' ? data : data.toString('utf-8');
           const dc = session?.rtcSshDc;
-          if (dc && dc.isOpen()) {
-            try { dc.sendMessage(typeof data === 'string' ? data : data.toString('utf-8')); } catch {}
+          if (dc && typeof dc.isOpen === 'function' && dc.isOpen()) {
+            try { dc.sendMessage(str); return; } catch (_) {}
+          }
+          if (ws.readyState === 1) {
+            ws.send(JSON.stringify({ type: 'ssh:data', connId, data: str }));
           }
         };
 

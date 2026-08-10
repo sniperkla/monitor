@@ -236,6 +236,9 @@ export default function TerminalView({ connectionId, connectionName, host, color
   const [reconnectNonce, setReconnectNonce] = useState(0);
   const reconnectNonceRef = useRef(0);
   useEffect(() => { reconnectNonceRef.current = reconnectNonce; }, [reconnectNonce]);
+  const [sshMode, setSshMode] = useState(() =>
+    typeof window !== 'undefined' ? (localStorage.getItem('ssh_monitor_ssh_mode') || 'server') : 'server'
+  );
   const [showReconnect, setShowReconnect] = useState(false);
   const [showTmuxInstallBanner, setShowTmuxInstallBanner] = useState(false);
   const [isInstallingTmux, setIsInstallingTmux] = useState(false);
@@ -248,11 +251,17 @@ export default function TerminalView({ connectionId, connectionName, host, color
   useEffect(() => { termSettingsRef.current = osState?.terminalSettings || {}; }, [osState?.terminalSettings]);
   const termStatusRef = useRef(status);
   useEffect(() => { termStatusRef.current = status; }, [status]);
+  
+  // Keep termDbUriRef in sync with appState.dbConfig?.uri without triggering socket reconnects
+  useEffect(() => {
+    termDbUriRef.current = appState.dbConfig?.uri || '';
+  }, [appState.dbConfig?.uri]);
 
   // Real-time mode switching: reconnect terminal when user swaps SSH mode in Settings
   useEffect(() => {
     const handleModeChange = () => {
       const newMode = localStorage.getItem('ssh_monitor_ssh_mode') || 'server';
+      setSshMode(newMode);
       console.log(`🔄 [TerminalView] SSH mode changed to "${newMode}" — disconnecting active session & reconnecting`);
       if (rtcPeerRef.current) {
         try { rtcPeerRef.current.close(); } catch (_) {}
@@ -1819,6 +1828,11 @@ logstash:
     window.addEventListener('keydown', handleKeyDown, { passive: true, capture: true });
 
     return () => {
+      // NOTE: Socket disconnect is handled by the outer useEffect cleanup (line ~6655).
+      // Do NOT disconnect the socket here — this cleanup fires whenever any useCallback
+      // dep changes (e.g. vaultStatus, updateConnectionStatus), which can interrupt an
+      // in-flight SSH handshake and cause the terminal to get stuck at "Connecting...".
+      // Only clean up DOM event listeners here.
       window.removeEventListener('keydown', handleKeyDown, { capture: true });
       window.removeEventListener('mouseup', handleMouseUp, { capture: true });
       if (termEl) {
@@ -1828,7 +1842,7 @@ logstash:
       }
       window.__isShowingScrollHint = false;
     };
-  }, [connectionId, appState.dbConfig?.uri, updateConnectionStatus, syncTerminalDimensions, vaultStatus]);
+  }, [connectionId, updateConnectionStatus, syncTerminalDimensions, vaultStatus]);
 
   // Handle Dynamic Theme Updates for XTerm
   useEffect(() => {
@@ -6642,6 +6656,7 @@ If this is a deployment task, switch task mode to 'deploy' instead of 'code'.`
         cleanup.then(fn => fn && fn());
       }
       if (socketRef.current) {
+        socketRef.current.__intentionalDisconnect = true; // suppress auto-reconnect in disconnect handler
         socketRef.current.emit('ssh:disconnect');
         socketRef.current.disconnect();
       }
@@ -6658,6 +6673,7 @@ If this is a deployment task, switch task mode to 'deploy' instead of 'code'.`
   const handleReconnect = () => {
     try {
       if (socketRef.current) {
+        socketRef.current.__intentionalDisconnect = true; // suppress auto-reconnect in disconnect handler
         socketRef.current.emit('ssh:disconnect');
         socketRef.current.disconnect();
       }
@@ -6769,8 +6785,8 @@ If this is a deployment task, switch task mode to 'deploy' instead of 'code'.`
           </div>
 
           <div className="flex items-center gap-2">
-            <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-medium ${typeof window !== 'undefined' && localStorage.getItem('ssh_monitor_ssh_mode') === 'local' ? 'bg-emerald-500/15 text-emerald-400' : 'bg-blue-500/15 text-blue-400'}`}>
-              {typeof window !== 'undefined' && localStorage.getItem('ssh_monitor_ssh_mode') === 'local' ? '⚡ Local' : '☁ Server'}
+            <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-medium ${sshMode === 'local' ? 'bg-emerald-500/15 text-emerald-400' : 'bg-blue-500/15 text-blue-400'}`}>
+              {sshMode === 'local' ? '⚡ Local' : '☁ Server'}
             </span>
             <div className="flex items-center gap-1.5 text-xs" style={{ color: statusInfo.color }}>
               {statusInfo.icon}
@@ -6782,6 +6798,17 @@ If this is a deployment task, switch task mode to 'deploy' instead of 'code'.`
 
       {/* Terminal body */}
       <div className="flex-1 relative bg-transparent min-h-0 overflow-hidden group/term">
+        {/* Floating Mode Badge — always visible */}
+        <div
+            className="absolute bottom-3 left-4 z-20 flex items-center gap-1 text-[9px] font-bold px-2 py-0.5 rounded-md backdrop-blur-md border shadow-lg opacity-60 group-hover/term:opacity-100 transition-all pointer-events-none"
+            style={sshMode === 'local'
+              ? { background: 'rgba(16,185,129,0.1)', borderColor: 'rgba(16,185,129,0.25)', color: '#34d399' }
+              : { background: 'rgba(59,130,246,0.1)', borderColor: 'rgba(59,130,246,0.25)', color: '#60a5fa' }
+            }
+          >
+            {sshMode === 'local' ? '⚡ Local' : '☁ Server'}
+        </div>
+
         {/* Floating Latency Badge (Visible in all modes) */}
         {latency !== null && status === 'connected' && (
           <div 

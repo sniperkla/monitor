@@ -547,27 +547,15 @@ export default function TmuxApp({ initialConnection }) {
             {/* Terminal View */}
             <div style={{ display: activeTab === 'terminal' ? 'block' : 'none', height: '100%' }}>
                 {activeSession && (
-                    localStorage.getItem('ssh_monitor_ssh_mode') === 'local' ? (
-                      <RelayTerminalView 
-                        connectionId={selectedConnection._id}
-                        connectionName={`${selectedConnection.name} [${activeSession}]`}
-                        host={selectedConnection.host}
-                        color={selectedConnection.color}
-                        connection={selectedConnection}
-                        onClose={() => setActiveTab('dashboard')}
-                        initialCommand={`tmux attach -t ${activeSession}\r`}
-                      />
-                    ) : (
-                      <TerminalView 
-                        connectionId={selectedConnection._id}
-                        connectionName={`${selectedConnection.name} [${activeSession}]`}
-                        host={selectedConnection.host}
-                        color={selectedConnection.color}
-                        connection={selectedConnection}
-                        onClose={() => setActiveTab('dashboard')}
-                        initialCommand={`tmux attach -t ${activeSession}\r`}
-                      />
-                    )
+                    <TerminalView 
+                      connectionId={selectedConnection._id}
+                      connectionName={`${selectedConnection.name} [${activeSession}]`}
+                      host={selectedConnection.host}
+                      color={selectedConnection.color}
+                      connection={selectedConnection}
+                      onClose={() => setActiveTab('dashboard')}
+                      initialCommand={`tmux attach -t ${activeSession}\r`}
+                    />
                 )}
             </div>
         </div>

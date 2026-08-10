@@ -258,6 +258,17 @@ export default function Sidebar({ onNewConnection, onEditConnection }) {
                   passphrase: parsed.passphrase,
                   database: parsed.database,
                   dbProvider: parsed.dbProvider,
+                  isSrv: parsed.isSrv,
+                  authSource: parsed.authSource,
+                  dbOptions: parsed.dbOptions,
+                  sshTunnel: parsed.sshTunnel,
+                  sshTunnelHost: parsed.sshTunnelHost,
+                  sshTunnelPort: parsed.sshTunnelPort,
+                  sshTunnelUser: parsed.sshTunnelUser,
+                  sshTunnelAuth: parsed.sshTunnelAuth,
+                  sshTunnelPassword: parsed.sshTunnelPassword,
+                  sshTunnelPrivateKey: parsed.sshTunnelPrivateKey,
+                  sshTunnelPassphrase: parsed.sshTunnelPassphrase,
                   tags: parsed.tags,
                   color: parsed.color,
                   notes: parsed.notes,
@@ -880,7 +891,7 @@ export default function Sidebar({ onNewConnection, onEditConnection }) {
                   <div className="flex-1 h-px bg-indigo-500/15" />
                 </div>
                 {sshConnections.map((conn, index) => (
-                  <ConnectionItem key={conn._id || `conn-ssh-${index}`} conn={conn} state={state} dispatch={dispatch} hoverPanel={hoverPanel} setHoverPanel={setHoverPanel} hoverTimerRef={hoverTimerRef} fetchingSpecs={fetchingSpecs} handleToggleFavorite={handleToggleFavorite} t={t} />
+                  <ConnectionItem key={conn._id || `conn-ssh-${index}`} conn={conn} state={state} dispatch={dispatch} hoverPanel={hoverPanel} setHoverPanel={setHoverPanel} hoverTimerRef={hoverTimerRef} fetchingSpecs={fetchingSpecs} handleToggleFavorite={handleToggleFavorite} syncedFingerprints={syncedFingerprints} getFingerprint={getFingerprint} t={t} />
                 ))}
               </>
             )}
@@ -896,14 +907,14 @@ export default function Sidebar({ onNewConnection, onEditConnection }) {
                   <div className="flex-1 h-px bg-emerald-500/15" />
                 </div>
                 {dbConnections.map((conn, index) => (
-                  <ConnectionItem key={conn._id || `conn-db-${index}`} conn={conn} state={state} dispatch={dispatch} hoverPanel={hoverPanel} setHoverPanel={setHoverPanel} hoverTimerRef={hoverTimerRef} fetchingSpecs={fetchingSpecs} handleToggleFavorite={handleToggleFavorite} t={t} />
+                  <ConnectionItem key={conn._id || `conn-db-${index}`} conn={conn} state={state} dispatch={dispatch} hoverPanel={hoverPanel} setHoverPanel={setHoverPanel} hoverTimerRef={hoverTimerRef} fetchingSpecs={fetchingSpecs} handleToggleFavorite={handleToggleFavorite} syncedFingerprints={syncedFingerprints} getFingerprint={getFingerprint} t={t} />
                 ))}
               </>
             )}
           </>
         ) : (
           filtered.map((conn, index) => (
-            <ConnectionItem key={conn._id || `conn-${index}`} conn={conn} state={state} dispatch={dispatch} hoverPanel={hoverPanel} setHoverPanel={setHoverPanel} hoverTimerRef={hoverTimerRef} fetchingSpecs={fetchingSpecs} handleToggleFavorite={handleToggleFavorite} t={t} />
+            <ConnectionItem key={conn._id || `conn-${index}`} conn={conn} state={state} dispatch={dispatch} hoverPanel={hoverPanel} setHoverPanel={setHoverPanel} hoverTimerRef={hoverTimerRef} fetchingSpecs={fetchingSpecs} handleToggleFavorite={handleToggleFavorite} syncedFingerprints={syncedFingerprints} getFingerprint={getFingerprint} t={t} />
           ))
         )}
       </div>
@@ -1049,7 +1060,9 @@ export default function Sidebar({ onNewConnection, onEditConnection }) {
   );
 }
 
-function ConnectionItem({ conn, state, dispatch, hoverPanel, setHoverPanel, hoverTimerRef, fetchingSpecs, handleToggleFavorite, t }) {
+function ConnectionItem({ conn, state, dispatch, hoverPanel, setHoverPanel, hoverTimerRef, fetchingSpecs, handleToggleFavorite, syncedFingerprints, getFingerprint, t }) {
+  const isSynced = syncedFingerprints && getFingerprint && syncedFingerprints.has(getFingerprint(conn));
+  
   return (
     <div
       draggable
@@ -1096,6 +1109,12 @@ function ConnectionItem({ conn, state, dispatch, hoverPanel, setHoverPanel, hove
               {conn.name}
             </span>
             <Star size={12} className={`flex-shrink-0 cursor-pointer hover:scale-125 transition-transform ${conn.isFavorite ? 'text-amber-400 fill-amber-400' : 'text-[var(--text-muted)] opacity-0 group-hover:opacity-50 hover:!opacity-100'}`} onClick={(e) => { e.stopPropagation(); handleToggleFavorite(conn._id); }} />
+            {isSynced && (
+              <span className="text-[8px] font-bold px-1 py-0.5 rounded-sm border text-sky-400 border-sky-400/30 uppercase flex-shrink-0 flex items-center gap-0.5" title="Synced to cloud">
+                <CloudUpload size={9} />
+                Cloud
+              </span>
+            )}
             <span className={`text-[8px] font-bold px-1 rounded-sm border uppercase flex-shrink-0 ${
               conn.storage === 'db' ? 'text-[var(--accent-indigo)] border-[var(--accent-indigo)]/30' :
               conn.storage === 'localstorage' ? 'text-[var(--accent-emerald)] border-[var(--accent-emerald)]/30' :

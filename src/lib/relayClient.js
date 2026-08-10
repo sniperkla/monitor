@@ -40,11 +40,14 @@ export class RelayClient {
       });
 
       this.socket.on('relay:connected', (opts) => {
+        console.log('[relay-client] Received relay:connected from server:', opts);
         this.connected = true;
         this._emit('connected', opts);
+        console.log('[relay-client] Emitted connected event to handlers');
       });
 
       this.socket.on('relay:data', (data) => {
+        console.log('[relay-client] Received relay:data, length:', typeof data === 'string' ? data.length : 'buffer');
         this._emit('data', data);
       });
 
@@ -73,12 +76,21 @@ export class RelayClient {
    */
   requestConnection(connectionData, cols, rows) {
     if (!this.socket) throw new Error('Not connected');
+    console.log('[relay-client] Emitting relay:connect:', {
+      connectionId: connectionData._id,
+      host: connectionData.host,
+      port: connectionData.port,
+      username: connectionData.username,
+      cols,
+      rows,
+    });
     this.socket.emit('relay:connect', {
       connectionId: connectionData._id,
       connection: connectionData,
       cols,
       rows,
     });
+    console.log('[relay-client] relay:connect emitted');
   }
 
   /**

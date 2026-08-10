@@ -28,13 +28,8 @@ export default function TerminalApp({ onEditConnection, initialConnection, initi
   const { connections, standaloneTerminals } = state;
   const sshConnections = connections.filter(c => c.type !== 'database');
 
-  // Determine if a specific connection should use relay
-  // ALWAYS checks if host is localhost — never blindly returns true for remote hosts
-  const shouldUseRelay = (host) => {
-    if (!isLocalhost(host)) return false; // Remote hosts never use relay
-    if (useRelay) return true; // User manually set to Local mode
-    return relayOnline; // Auto-detect: relay online + localhost
-  };
+  // TerminalView handles both server mode (direct via server.js) and local relay mode (via relay agent)
+  const shouldUseRelayNamespace = () => false;
   
   // Listen for setting changes
   useEffect(() => {
@@ -183,7 +178,7 @@ export default function TerminalApp({ onEditConnection, initialConnection, initi
     if (needsRelayCheck) {
       return <div className="flex flex-col h-full bg-transparent overflow-hidden items-center justify-center"><div className="text-xs text-[var(--text-muted)] animate-pulse">Checking relay...</div></div>;
     }
-    const TermComponent = shouldUseRelay(localStandaloneTerm.host) ? RelayTerminalView : TerminalView;
+    const TermComponent = shouldUseRelayNamespace(localStandaloneTerm.host) ? RelayTerminalView : TerminalView;
     return (
       <div className="flex flex-col h-full bg-transparent overflow-hidden">
         <TermComponent 
@@ -329,7 +324,7 @@ export default function TerminalApp({ onEditConnection, initialConnection, initi
           {needsRelayCheck ? (
             <div className="flex items-center justify-center h-full"><div className="text-xs text-[var(--text-muted)] animate-pulse">Checking relay...</div></div>
           ) : standaloneTerminals.map(term => {
-    const TermComponent = shouldUseRelay(term.host) ? RelayTerminalView : TerminalView;
+    const TermComponent = shouldUseRelayNamespace(term.host) ? RelayTerminalView : TerminalView;
             return (
               <div
                 key={term.id}

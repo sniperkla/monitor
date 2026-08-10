@@ -114,6 +114,12 @@ export default function RelayTerminalView({
       return;
     }
 
+    // Guard: prevent duplicate initialization
+    if (termInstanceRef.current || relayRef.current) {
+      console.warn('[RelayTerminalView] Terminal or relay already initialized, skipping duplicate init');
+      return;
+    }
+
     // Dynamic imports for xterm (client-side only)
     if (!Terminal) {
       const xtermModule = await import('@xterm/xterm');
@@ -173,6 +179,7 @@ export default function RelayTerminalView({
     relayRef.current = client;
 
     client.on('connected', () => {
+      console.log('[RelayTerminalView] Received relay:connected event from server');
       setStatus('connected');
       updateConnectionStatus('online');
       setShowReconnect(false);
@@ -206,6 +213,7 @@ export default function RelayTerminalView({
 
     client.on('data', (data) => {
       const str = typeof data === 'string' ? data : new TextDecoder().decode(data);
+      console.log('[RelayTerminalView] Received data:', str.substring(0, 100) + (str.length > 100 ? '...' : ''));
       term.write(str);
     });
 
@@ -298,11 +306,22 @@ export default function RelayTerminalView({
 
     // Connect to relay
     try {
+      console.log('[RelayTerminalView] Connecting to relay...');
       await client.connect();
+      console.log('[RelayTerminalView] Relay WebSocket connected');
       
       // Build connection data with password from sessionStorage if available
       const conn = propsRef.current.connection || {};
       const connId = conn._id;
+      
+      console.log('[RelayTerminalView] Building connection data:', {
+        connId,
+        host: conn.host,
+        port: conn.port,
+        username: conn.username,
+        hasPassword: !!conn.password,
+        hasPrivateKey: !!conn.privateKey,
+      });
       
       // Try to get password from sessionStorage (persisted from previous session)
       let password = conn.password;
@@ -318,6 +337,7 @@ export default function RelayTerminalView({
               password = password || parsed.password;
               privateKey = privateKey || parsed.privateKey;
               passphrase = passphrase || parsed.passphrase;
+              console.log('[RelayTerminalView] Loaded credentials from sessionStorage');
             }
           } catch {}
         }
@@ -333,12 +353,35 @@ export default function RelayTerminalView({
       }
       
       // Send connection with credentials
+      console.log('[RelayTerminalView] Emitting relay:connect with connection data');
       client.requestConnection(
         { ...conn, password, privateKey, passphrase },
         term.cols,
         term.rows
       );
+      console.log('[RelayTerminalView] relay:connect emitted successfully');
+      
+      // Add timeout warning
+      const timeoutWarning = setTimeout(() => {
+        console.warn('[RelayTerminalView] No response from server after 10 seconds. Check server logs.');
+        term.writeln('\r\n\x1b[1;33m⚠ Still waiting for server response...\x1b[0m');
+        term.writeln('\x1b[90mThis is taking longer than expected. Check:\x1b[0m');
+        term.writeln('\x1b[90m  1. Server terminal for errors\x1b[0m');
+        term.writeln('\x1b[90m  2. Browser console for relay:connect logs\x1b[0m');
+        term.writeln('\x1b[90m  3. SSH credentials are correct\x1b[0m');
+      }, 10000);
+      
+      // Clear timeout on success
+      client.on('connected', () => {
+        clearTimeout(timeoutWarning);
+      });
+      
+      // Clear timeout on error
+      client.on('error', () => {
+        clearTimeout(timeoutWarning);
+      });
     } catch (err) {
+      console.error('[RelayTerminalView] Relay connection error:', err);
       setStatus('error');
       term.writeln(`\x1b[1;31m✗ Relay connection failed: ${err.message}\x1b[0m`);
       setShowReconnect(true);
@@ -359,7 +402,24 @@ export default function RelayTerminalView({
   useEffect(() => {
     let cleanup;
     initTerminal().then((fn) => { cleanup = fn; });
-    return () => { if (cleanup) cleanup(); };
+    return () => {
+      // Eagerly clear refs so the next initTerminal run is not blocked by the guard.
+      // If the Promise hasn't resolved yet, cleanup is undefined — clear refs manually
+      // so the guard inside initTerminal doesn't block the next invocation.
+      if (cleanup) {
+        cleanup();
+      } else {
+        // Promise still pending: manually tear down to unblock next run
+        if (relayRef.current) {
+          try { relayRef.current.close(); } catch (_) {}
+          relayRef.current = null;
+        }
+        if (termInstanceRef.current) {
+          try { termInstanceRef.current.dispose(); } catch (_) {}
+          termInstanceRef.current = null;
+        }
+      }
+    };
   }, [initTerminal]);
 
   // Reconnect handler

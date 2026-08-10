@@ -1072,7 +1072,9 @@ const TerminalBridge = React.memo(({ term, target, hiddenRoom, onClose }) => {
 
   // Determine if this specific terminal should use relay
   const isLocalhost = /^(localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\])(:\d+)?$/.test(term.host || '');
-  const useRelayForThis = isLocalhost && (relayMode || relayOnline);
+  // RelayTerminalView is for SERVER MODE where server establishes SSH via /relay namespace
+  // Use it when sshMode is explicitly 'server', otherwise use TerminalView for both server and local relay
+  const useRelayNamespace = !relayMode && localStorage.getItem('ssh_monitor_ssh_mode') === 'server';
   
   // Wait for relay check before rendering localhost terminals to avoid wrong mode
   const needsRelayCheck = isLocalhost && !relayCheckDone;
@@ -1110,15 +1112,6 @@ const TerminalBridge = React.memo(({ term, target, hiddenRoom, onClose }) => {
       <div ref={bridgeRef} className="h-full w-full overflow-hidden" data-pane-id={term.paneId}>
         {needsRelayCheck ? (
           <div className="flex items-center justify-center h-full"><div className="text-xs text-[var(--text-muted)] animate-pulse">Checking relay...</div></div>
-        ) : useRelayForThis ? (
-          <RelayTerminalView
-            connectionId={term.connectionId}
-            connectionName={term.connectionName}
-            host={term.host}
-            color={term.color}
-            connection={term.connection}
-            onClose={onClose}
-          />
         ) : (
           <TerminalView
             connectionId={term.connectionId}

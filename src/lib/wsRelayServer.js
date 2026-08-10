@@ -85,6 +85,7 @@ class WsTcpRelay {
     let sshStream = null;
     let sftp = null;
     let connection = null;
+    let isConnecting = false; // Track if a connection is currently being established
 
     const emitSftpError = (err, prefix = '') => {
       const msg = typeof err === 'string' ? err : (err?.message || 'Unknown SFTP error');
@@ -133,7 +134,36 @@ class WsTcpRelay {
       });
     };
 
+    let connectionInProgress = false;
+
     socket.on('relay:connect', async (opts) => {
+      console.log(`[relay] ${socket.id} received relay:connect:`, {
+        connectionId: opts.connectionId,
+        hasConnection: !!opts.connection,
+        cols: opts.cols,
+        rows: opts.rows,
+        isConnecting,
+        hasSshClient: !!sshClient,
+        hasSshStream: !!sshStream,
+      });
+      
+      // Guard: prevent duplicate concurrent connection attempts
+      if (isConnecting) {
+        console.warn(`[relay] ${socket.id} connection already in progress - ignoring duplicate relay:connect`);
+        return;
+      }
+      
+      // Guard: if this socket already has an active SSH connection, clean it up first
+      if (sshClient || sshStream) {
+        console.warn(`[relay] ${socket.id} already has an active connection - cleaning up first`);
+        this.cleanup(socket.id);
+        sshClient = null;
+        sshStream = null;
+        sftp = null;
+      }
+      
+      isConnecting = true;
+      
       const { connectionId, connection: connectionData, cols, rows } = opts;
 
       try {
@@ -141,6 +171,7 @@ class WsTcpRelay {
         connection = connectionData;
 
         if (connectionId && !connectionId.startsWith('local-')) {
+          console.log(`[relay] ${socket.id} fetching connection from database...`);
           try {
             const getModels = require('../../server').getModels;
             const repo = await getModels(null, userId);
@@ -149,14 +180,23 @@ class WsTcpRelay {
               const dbConn = await ConnectionModel.findById(connectionId);
               if (dbConn) {
                 connection = dbConn.toObject ? dbConn.toObject() : dbConn;
+                console.log(`[relay] ${socket.id} loaded connection from DB: ${connection.host}:${connection.port}`);
+              } else {
+                console.warn(`[relay] ${socket.id} connection ${connectionId} not found in DB`);
               }
             }
-          } catch (dbErr) {}
+          } catch (dbErr) {
+            console.error(`[relay] ${socket.id} DB error:`, dbErr.message);
+          }
         }
 
+        console.log(`[relay] ${socket.id} building SSH config...`);
         const sshConfig = await this.buildSshConfig(connection);
+        console.log(`[relay] ${socket.id} SSH config built for ${sshConfig.host}:${sshConfig.port}`);
 
         sshClient.on('ready', () => {
+          console.log(`[relay] ${socket.id} SSH client ready, opening SFTP subsystem...`);
+          isConnecting = false; // Connection established successfully
           // Open SFTP subsystem
           sshClient.sftp((err, sftpInst) => {
             if (!err) {
@@ -177,12 +217,16 @@ class WsTcpRelay {
             modes: { VERASE: 127, 3: 127 }
           }, (err, stream) => {
             if (err) {
+              console.error(`[relay] ${socket.id} shell error:`, err.message);
               socket.emit('relay:error', { message: err.message });
               return;
             }
 
+            console.log(`[relay] ${socket.id} shell stream opened, registering handlers...`);
             sshStream = stream;
             this.connections.set(socket.id, { sshClient, sshStream, userId });
+            
+            console.log(`[relay] ${socket.id} emitting relay:connected to client`);
             socket.emit('relay:connected', { host: sshConfig.host });
 
             stream.on('data', (data) => {
@@ -197,6 +241,7 @@ class WsTcpRelay {
             });
 
             stream.on('close', () => {
+              console.log(`[relay] ${socket.id} stream closed`);
               socket.emit('relay:closed');
               this.cleanup(socket.id);
             });
@@ -860,19 +905,25 @@ class WsTcpRelay {
 
         sshClient.on('error', (err) => {
           console.error(`[relay] ${socket.id} SSH error:`, err.message);
+          isConnecting = false; // Reset on error
           socket.emit('relay:error', { message: err.message });
           this.cleanup(socket.id);
         });
 
         sshClient.on('end', () => {
+          console.log(`[relay] ${socket.id} SSH ended`);
+          isConnecting = false; // Reset on end
           socket.emit('relay:closed');
           this.cleanup(socket.id);
         });
 
+        console.log(`[relay] ${socket.id} calling sshClient.connect()...`);
         sshClient.connect(sshConfig);
+        console.log(`[relay] ${socket.id} sshClient.connect() called`);
 
       } catch (err) {
         console.error(`[relay] ${socket.id} connect error:`, err.message);
+        isConnecting = false; // Reset on catch
         socket.emit('relay:error', { message: err.message });
       }
     });
@@ -908,6 +959,15 @@ class WsTcpRelay {
 
   async buildSshConfig(connection) {
     const conn = connection || {};
+    console.log('[relay] buildSshConfig input:', {
+      host: conn.host,
+      port: conn.port,
+      username: conn.username,
+      hasPassword: !!conn.password,
+      hasPrivateKey: !!conn.privateKey,
+      hasPassphrase: !!conn.passphrase,
+    });
+    
     const config = {
       host: conn.host || 'localhost',
       port: parseInt(conn.port, 10) || 22,
@@ -919,18 +979,38 @@ class WsTcpRelay {
 
     if (conn.password) {
       const { text, success } = decryptWithMetadata(conn.password);
-      if (success) config.password = text;
-      else console.error('[relay] Password decryption failed for', conn.host);
+      if (success) {
+        config.password = text;
+        console.log('[relay] Password decrypted successfully');
+      } else {
+        console.error('[relay] Password decryption failed for', conn.host);
+      }
     }
     if (conn.privateKey) {
       const { text, success } = decryptWithMetadata(conn.privateKey);
-      if (success) config.privateKey = text;
-      else console.error('[relay] Private key decryption failed for', conn.host);
+      if (success) {
+        config.privateKey = text;
+        console.log('[relay] Private key decrypted successfully');
+      } else {
+        console.error('[relay] Private key decryption failed for', conn.host);
+      }
       if (conn.passphrase) {
         const { text: ppText, success: ppSuccess } = decryptWithMetadata(conn.passphrase);
-        if (ppSuccess) config.passphrase = ppText;
+        if (ppSuccess) {
+          config.passphrase = ppText;
+          console.log('[relay] Passphrase decrypted successfully');
+        }
       }
     }
+
+    console.log('[relay] buildSshConfig output:', {
+      host: config.host,
+      port: config.port,
+      username: config.username,
+      hasPassword: !!config.password,
+      hasPrivateKey: !!config.privateKey,
+      hasPassphrase: !!config.passphrase,
+    });
 
     return config;
   }

@@ -595,11 +595,27 @@ app.prepare().then(async () => {
 // Track active SSH connections
 const activeSessions = new Map();
 
-// Pending SSH sessions awaiting reattachment (keyed by connectionId)
-// When a socket disconnects unexpectedly, the SSH session is moved here
-// so the client can reattach without creating a new SSH connection.
+// Pending SSH sessions awaiting reattachment (keyed by compound session key)
+// Key format: `${connectionId}:${useShell ? 'shell' : 'noshell'}:${dockerContainerId || 'host'}:${relayMode ? 'relay' : 'server'}`
+// This prevents Terminal (useShell: true) and File Manager (useShell: false) from stealing each other's pending sessions.
 const pendingSessions = new Map();
 const PENDING_SESSION_TTL_MS = 90 * 1000; // 90 seconds to reconnect
+
+function getPendingSessionKey(connId, useShell, dockerContainerId, relayMode) {
+  const type = dockerContainerId ? `docker:${dockerContainerId}` : (useShell ? 'shell' : 'noshell');
+  const mode = relayMode ? 'relay' : 'server';
+  return `${connId}:${type}:${mode}`;
+}
+
+function sendToRelayForUser(userId, preferredRelay, msgObj) {
+  const relays = userId ? global.__activeRelays?.get(userId) : null;
+  const freshRelay = relays instanceof Map
+    ? (relays.get(preferredRelay) || relays.values().next().value)
+    : null;
+  const ws = freshRelay?.ws;
+  if (ws?.readyState === 1) { ws.send(JSON.stringify(msgObj)); return true; }
+  return false;
+}
 
 // Idle timeout (30 minutes — browser throttles background-tab timers aggressively)
 const SSH_IDLE_TIMEOUT_MS = 30 * 60 * 1000;
@@ -719,11 +735,13 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
         let connection;
 
         // ── Check for pending SSH session reattachment ──
-        const pending = pendingSessions.get(connectionId);
-        if (pending && pending.sshClient && pending.sshClient._state !== 'closed') {
-          console.log(`[REATTACH] Reattaching SSH session for ${connectionId} to socket ${socket.id}`);
+        const isRelayMode = sshMode === 'local';
+        const pendingKey = getPendingSessionKey(connectionId, useShell, dockerContainerId, isRelayMode);
+        const pending = pendingSessions.get(pendingKey);
+        if (pending && ((pending.relayMode && pending.relayConnId) || (pending.sshClient && pending.sshClient._state !== 'closed'))) {
+          console.log(`[REATTACH] Reattaching SSH session for ${pendingKey} to socket ${socket.id}`);
           clearTimeout(pending.cleanupTimer);
-          pendingSessions.delete(connectionId);
+          pendingSessions.delete(pendingKey);
 
           // Reassign to new socket
           const sshClient = pending.sshClient;
@@ -769,8 +787,19 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
           // If this is a Relay Mode session, re-bind relay signaling and event listeners
           if (pending.relayMode) {
             const relayConnId = pending.relayConnId;
+            const userId = pending.userId;
+            const preferredRelay = pending.preferredRelay;
             console.log(`⚡ [REATTACH] Reattaching Relay mode session for socket ${socket.id} (connId: ${relayConnId})`);
             global.__relayConnMap.set(relayConnId, socket.id);
+
+            const sendToRelay = (msgObj) => sendToRelayForUser(userId, preferredRelay, msgObj);
+            const sftpQueue = pending.sftpQueue || [];
+            pending.sftpQueue = sftpQueue;
+            const forwardOrQueue = (msgObj) => {
+              if (pending.relayReady) return sendToRelay(msgObj);
+              if (sftpQueue.length < 20) { sftpQueue.push(msgObj); return true; }
+              return false;
+            };
 
             socket.removeAllListeners('ssh:input');
             socket.removeAllListeners('ssh:resize');
@@ -796,6 +825,16 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
                   : { connId: relayConnId, ...payload, type: ev, archiveType: payload.type };
                 forwardOrQueue(msg);
               });
+            });
+
+            socket.removeAllListeners('docker:command');
+            socket.on('docker:command', (payload) => {
+              sendToRelay({ type: 'docker:command', connId: relayConnId, ...payload });
+            });
+
+            socket.removeAllListeners('ssh:exec');
+            socket.on('ssh:exec', ({ command }) => {
+              sendToRelay({ type: 'ssh:exec', connId: relayConnId, command });
             });
 
             // sftp:cross_server_transfer needs srcConnId translated from MongoDB _id → relay connId
@@ -1383,6 +1422,8 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
             connectionId, 
             dbUri,
             dockerContainerId,
+            useShell,
+            relayMode: false,
             sftp: null,
             sftpPending: null,
             activeTransfers: new Set(),
@@ -3923,6 +3964,8 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
           if (!global.__relayReadyCallbacks) global.__relayReadyCallbacks = new Map();
           global.__relayReadyCallbacks.set(relayConnId, () => {
             relayReady = true;
+            const sess = activeSessions.get(socket.id);
+            if (sess) sess.relayReady = true;
             flushSftpQueue();
           });
 
@@ -3933,6 +3976,10 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
             connectionId,  // MongoDB _id — needed to resolve srcConnId in cross_server_transfer
             userId,
             preferredRelay,
+            useShell,
+            dockerContainerId,
+            relayReady,
+            sftpQueue,
             lastActivityAt: Date.now(),
             lastIdleLogAt: 0,
             idleInterval: null,
@@ -3982,20 +4029,25 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
           session.stream.removeAllListeners('data');
           if (session.stream.stderr) session.stream.stderr.removeAllListeners('data');
         }
-        // Store in pending pool keyed by connectionId
-        const existing = pendingSessions.get(session.connectionId);
+        // Store in pending pool keyed by compound session key
+        const pendingKey = getPendingSessionKey(
+          session.connectionId,
+          session.useShell ?? true,
+          session.dockerContainerId,
+          session.relayMode ?? false
+        );
+        const existing = pendingSessions.get(pendingKey);
         if (existing) {
           clearTimeout(existing.cleanupTimer);
-          try { existing.sshClient.end(); } catch (_) {}
+          try { if (existing.sshClient) existing.sshClient.end(); } catch (_) {}
         }
         session.detachedSocket = null;
         session.disconnectedAt = Date.now();
-        const connId = session.connectionId;
         const timer = setTimeout(() => {
-          const pending = pendingSessions.get(connId);
+          const pending = pendingSessions.get(pendingKey);
           if (pending && pending.disconnectedAt === session.disconnectedAt) {
-            console.log(`[KEEPALIVE] Grace period expired for ${connId}, cleaning up`);
-            pendingSessions.delete(connId);
+            console.log(`[KEEPALIVE] Grace period expired for ${pendingKey}, cleaning up`);
+            pendingSessions.delete(pendingKey);
             forceCleanupSession(pending);
           }
         }, PENDING_SESSION_TTL_MS);
@@ -4003,27 +4055,27 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
         // If the remote SSH server closes the connection while pending, clean up
         if (session.stream) {
           session.stream.once('close', () => {
-            const pending = pendingSessions.get(connId);
+            const pending = pendingSessions.get(pendingKey);
             if (pending && pending.disconnectedAt === session.disconnectedAt) {
-              console.log(`[KEEPALIVE] SSH stream closed while pending for ${connId}`);
+              console.log(`[KEEPALIVE] SSH stream closed while pending for ${pendingKey}`);
               clearTimeout(pending.cleanupTimer);
-              pendingSessions.delete(connId);
+              pendingSessions.delete(pendingKey);
               forceCleanupSession(pending);
             }
           });
         }
         if (session.sshClient) {
           session.sshClient.once('close', () => {
-            const pending = pendingSessions.get(connId);
+            const pending = pendingSessions.get(pendingKey);
             if (pending && pending.disconnectedAt === session.disconnectedAt) {
-              console.log(`[KEEPALIVE] SSH client closed while pending for ${connId}`);
+              console.log(`[KEEPALIVE] SSH client closed while pending for ${pendingKey}`);
               clearTimeout(pending.cleanupTimer);
-              pendingSessions.delete(connId);
+              pendingSessions.delete(pendingKey);
               forceCleanupSession(pending);
             }
           });
         }
-        pendingSessions.set(connId, session);
+        pendingSessions.set(pendingKey, session);
         activeSessions.delete(socket.id);
       } else {
         cleanupSession(socket.id);
