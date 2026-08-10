@@ -541,6 +541,8 @@ app.prepare().then(async () => {
         res.setHeader('X-Content-Type-Options', 'nosniff');
         res.setHeader('X-XSS-Protection', '1; mode=block');
         res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+        res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=(), payment=()');
+        res.setHeader('Strict-Transport-Security', 'max-age=63072000; includeSubDomains; preload');
       }
 
       await handle(req, res);
