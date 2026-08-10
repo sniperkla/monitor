@@ -122,8 +122,7 @@ export async function GET(request) {
     console.error('[deploy/config] GET error:', error.message);
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   }
-
-
+}
 
 // POST /api/deploy/config
 export async function POST(request) {
