@@ -12,7 +12,7 @@ if (!uri) {
   } catch (e) {}
 }
 
-if (!uri) uri = 'mongodb://monitor:AaBb1234%21@43.210.134.78:27021/monitor?authSource=admin';
+if (!uri) uri = 'mongodb://127.0.0.1:27017/ssh-monitor';
 
 const UserSchema = new mongoose.Schema({
   email: String,
@@ -50,7 +50,12 @@ async function migrate() {
     key: { $regex: '^auto_deploy_config' }
   });
 
-  // Group settings by project key to keep configuration values
+  console.log(`Found ${allSettings.length} total auto deploy setting document(s):`);
+  allSettings.forEach(s => {
+    console.log(`  - ID: ${s._id}, key: ${s.key}, userId: ${JSON.stringify(s.userId)}, name: ${s.value?.name}`);
+  });
+
+  // Group settings by project key (keep the latest/best one)
   const projectsMap = new Map();
   allSettings.forEach(s => {
     if (!projectsMap.has(s.key)) {
@@ -58,16 +63,16 @@ async function migrate() {
     }
   });
 
-  // Delete all legacy auto_deploy_config documents
+  // Delete ALL auto_deploy_config documents (clean slate)
   const deleteRes = await SystemSetting.deleteMany({
     key: { $regex: '^auto_deploy_config' }
   });
-  console.log(`Cleared ${deleteRes.deletedCount} old auto_deploy_config document(s).`);
+  console.log(`\nCleared ${deleteRes.deletedCount} old auto_deploy_config document(s).`);
 
-  // Re-insert each project strictly with BSON ObjectId
+  // Re-insert each unique project strictly with BSON ObjectId
   for (const [key, value] of projectsMap.entries()) {
     await SystemSetting.create({
-      userId: targetObjectId, // BSON ObjectId("6a5933a8b96fc45faa69184a")
+      userId: targetObjectId,
       key: key,
       value: value
     });
@@ -78,11 +83,11 @@ async function migrate() {
   const finalSettings = await SystemSetting.find({ key: { $regex: '^auto_deploy_config' } });
   console.log(`\nFinal SystemSetting auto deploy documents (${finalSettings.length} total):`);
   finalSettings.forEach(doc => {
-    const isObjectId = doc.userId instanceof mongoose.Types.ObjectId || (doc.userId && typeof doc.userId === 'object');
-    console.log(`- ID: ${doc._id}, Key: "${doc.key}", userId: ObjectId("${doc.userId}"), Type: ${isObjectId ? 'BSON ObjectId' : typeof doc.userId}, Project: "${doc.value?.name || 'N/A'}"`);
+    const type = doc.userId instanceof mongoose.Types.ObjectId ? 'BSON ObjectId' : typeof doc.userId;
+    console.log(`- Key: "${doc.key}", userId: ObjectId("${doc.userId}"), type: ${type}, Project: "${doc.value?.name || 'N/A'}"`);
   });
 
-  console.log('\nMigration completed successfully! All auto deploy projects now strictly use BSON ObjectId.');
+  console.log('\nMigration completed successfully!');
   await mongoose.disconnect();
 }
 

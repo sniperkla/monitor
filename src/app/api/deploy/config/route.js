@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth/next';
 import { authOptions } from '@/lib/auth';
 import crypto from 'crypto';
+import mongoose from 'mongoose';
 import connectDB from '@/lib/mongodb';
 import { encrypt, decryptWithMetadata } from '@/utils/encryption';
 import SystemSetting from '@/models/SystemSetting';
@@ -49,9 +50,15 @@ export async function GET(request) {
     }
 
     const rawUserId = session.user?.id || session.user?.sub;
-    const objectId = (rawUserId && mongoose.Types.ObjectId.isValid(rawUserId)) ? new mongoose.Types.ObjectId(rawUserId) : null;
-    const userKeys = Array.from(new Set([objectId, rawUserId, session.user?.email].filter(Boolean)));
+    // Support both BSON ObjectId (stored in DB) and plain string ID from session
+    const objectId = (rawUserId && mongoose.Types.ObjectId.isValid(rawUserId))
+      ? new mongoose.Types.ObjectId(rawUserId)
+      : null;
+    // Include all possible ID forms so query matches regardless of storage format
+    const userKeys = [...new Set([objectId, rawUserId, session.user?.email].filter(Boolean))];
     const userId = objectId || rawUserId || session.user?.email || 'global';
+
+    console.log('[deploy/config] session userId lookup keys:', userKeys.map(String));
 
     await connectDB(process.env.MONGODB_URI, true);
     
@@ -60,6 +67,7 @@ export async function GET(request) {
       userId: { $in: [...userKeys, 'global'] },
       key: { $regex: '^auto_deploy_config' }
     });
+    console.log('[deploy/config] found', rawSettings.length, 'settings for user');
 
     // Deduplicate: user-specific setting overrides global setting
     const settingsMap = new Map();
