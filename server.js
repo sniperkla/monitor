@@ -555,7 +555,22 @@ app.prepare().then(async () => {
   const io = new Server(server, {
     maxHttpBufferSize: 10 * 1024 * 1024, // 10MB limit for high-speed file transfers & base64 previews
     cors: {
-      origin: true,
+      origin: (origin, callback) => {
+        if (!origin) return callback(null, true);
+        const allowedUrls = [process.env.APP_URL, process.env.NEXTAUTH_URL].filter(Boolean);
+        if (allowedUrls.length > 0) {
+          try {
+            const originHost = new URL(origin).host;
+            const isAllowed = allowedUrls.some(u => {
+              try { return new URL(u).host === originHost; } catch (_) { return false; }
+            });
+            if (isAllowed) return callback(null, true);
+            console.warn(`⚠️ [CORS] Blocked WebSocket connection attempt from origin: ${origin}`);
+            return callback(new Error('CORS origin not allowed'), false);
+          } catch (_) {}
+        }
+        return callback(null, true);
+      },
       methods: ['GET', 'POST'],
       credentials: true
     },
@@ -3811,7 +3826,8 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
           }
         }
         if (sshMode === 'local' && userRelay?.ws && userRelay.ws.readyState === 1 /* WS OPEN */ && userRelay.capabilities?.ssh) {
-          const relayConnId = Math.random().toString(36).slice(2, 12);
+          const crypto = require('crypto');
+          const relayConnId = crypto.randomBytes(16).toString('hex');
           global.__relayConnMap.set(relayConnId, socket.id);
           console.log(`🏠 [Relay SSH P2P] Signaling ${sshConfig.host}:${sshConfig.port} → relay agent (connId: ${relayConnId})`);
 
@@ -4301,7 +4317,8 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
 
         // Local TCP server — Mongoose driver connects here; we proxy to relay agent
         const netServer = net.createServer((tcpSock) => {
-          const connId  = Math.random().toString(36).slice(2, 10);
+          const crypto = require('crypto');
+          const connId  = crypto.randomBytes(12).toString('hex');
           const userRelays = global.__activeRelays.get(userId);
           const relay = userRelays && ws.__relayId ? userRelays.get(ws.__relayId) : undefined;
           const tHost   = relay?.targetHost || 'localhost';

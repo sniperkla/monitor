@@ -209,7 +209,8 @@ function startDiscoveryServer(relayName) {
     discoveryServer = http.createServer((req, res) => {
       res.writeHead(200, {
         'Content-Type': 'application/json',
-        'Access-Control-Allow-Origin': '*',
+        'X-Content-Type-Options': 'nosniff',
+        'Cache-Control': 'no-store',
       });
       res.end(JSON.stringify({ relayName, hostname: os.hostname() }));
     });
@@ -1608,6 +1609,11 @@ function handleWebRtcOffer(ws, msg) {
     return;
   }
   const { connId, sdp } = msg;
+  if (!preparedSessions.has(connId) && !sshSessions.has(connId)) {
+    console.warn(`⚠️ [WebRTC] Rejected unauthorized WebRTC P2P offer for unknown connId=${connId}`);
+    try { ws.send(JSON.stringify({ type: 'webrtc:answer', connId, error: 'Unauthorized session' })); } catch {}
+    return;
+  }
   console.log(`📡 [WebRTC] Received P2P offer for connId=${connId}`);
 
   try {
@@ -2470,13 +2476,13 @@ function handleDockerCommand(ws, msg) {
       return runRawCmd(statusCmd);
     } else if (action === 'read-config' && args.length >= 2) {
       const containerId = String(args[0] || '').replace(/[^a-zA-Z0-9._/:-]/g, '');
-      const filePath = String(args[1] || '').replace(/[`$]/g, '');
+      const filePath = String(args[1] || '').replace(/["'`$\\]/g, '');
       if (!containerId || !filePath) return ws.send(JSON.stringify({ type: 'docker:error', connId, error: 'Invalid read-config args' }));
       return runRawCmd(`${sudoPrefix}docker exec ${containerId} cat "${filePath}"`);
     } else if (action === 'write-config' && args.length >= 3) {
       const containerId = String(args[0] || '').replace(/[^a-zA-Z0-9._/:-]/g, '');
-      const filePath = String(args[1] || '').replace(/[`$]/g, '');
-      const b64Content = String(args[2] || '');
+      const filePath = String(args[1] || '').replace(/["'`$\\]/g, '');
+      const b64Content = String(args[2] || '').replace(/[^a-zA-Z0-9+/=]/g, '');
       if (!containerId || !filePath) return ws.send(JSON.stringify({ type: 'docker:error', connId, error: 'Invalid write-config args' }));
       return runRawCmd(`echo "${b64Content}" | base64 -d | ${sudoPrefix}docker exec -i ${containerId} sh -c "cat > '${filePath}'"`);
     } else if (action === 'find-config' && args.length >= 2) {
