@@ -1,9 +1,20 @@
 import { NextResponse } from 'next/server';
+import { getServerSession } from "next-auth/next";
+import { authOptions } from "@/lib/auth";
 import connectDB from '@/lib/mongodb';
 import { SystemSettingRepository } from '@/lib/repositories/SystemSettingRepository';
 
 export async function GET(request) {
   try {
+    const session = await getServerSession(authOptions);
+    if (!session) {
+      return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
+    }
+    const userId = session.user?.id;
+    if (!userId) {
+      return NextResponse.json({ success: false, error: 'User ID not found in session' }, { status: 400 });
+    }
+
     const code = request.nextUrl.searchParams.get('code');
     if (!code) {
       return new NextResponse('<h1>Authorization failed: missing auth code</h1>', {
@@ -12,7 +23,7 @@ export async function GET(request) {
     }
 
     const db = await connectDB();
-    const settingRepo = new SystemSettingRepository(db);
+    const settingRepo = new SystemSettingRepository(db, userId);
     await settingRepo.init();
     const savedConfigSetting = await settingRepo.findOne({ key: 'google_drive_config' });
     const savedConfig = savedConfigSetting ? savedConfigSetting.value : {};

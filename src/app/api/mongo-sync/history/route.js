@@ -10,9 +10,13 @@ export async function GET(request) {
     if (!session) {
       return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
     }
+    const userId = session.user?.id;
+    if (!userId) {
+      return NextResponse.json({ success: false, error: 'User ID not found in session' }, { status: 400 });
+    }
 
     const db = await connectDB();
-    const repo = new SystemSettingRepository(db);
+    const repo = new SystemSettingRepository(db, userId);
     await repo.init();
 
     const historySetting = await repo.findOne({ key: 'mongo_sync_history' });
@@ -31,9 +35,13 @@ export async function DELETE(request) {
     if (!session) {
       return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
     }
+    const userId = session.user?.id;
+    if (!userId) {
+      return NextResponse.json({ success: false, error: 'User ID not found in session' }, { status: 400 });
+    }
 
     const db = await connectDB();
-    const repo = new SystemSettingRepository(db);
+    const repo = new SystemSettingRepository(db, userId);
     await repo.init();
 
     await repo.upsert('mongo_sync_history', []);

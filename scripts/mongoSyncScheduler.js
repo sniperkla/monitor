@@ -29,21 +29,21 @@ async function getCenterDb() {
 }
 
 // ── Google Drive helpers (self-contained) ─────────────────────────────────────
-async function getDriveConfig(settingsCol) {
-  const doc = await settingsCol.findOne({ key: 'google_drive_config' });
+async function getDriveConfig(settingsCol, userId) {
+  const doc = await settingsCol.findOne({ key: 'google_drive_config', userId });
   return doc?.value || null;
 }
 
-async function saveDriveConfig(settingsCol, config) {
+async function saveDriveConfig(settingsCol, userId, config) {
   await settingsCol.updateOne(
-    { key: 'google_drive_config' },
-    { $set: { value: config } },
+    { key: 'google_drive_config', userId },
+    { $set: { value: config, userId, updatedAt: new Date() } },
     { upsert: true }
   );
 }
 
-async function getAccessToken(settingsCol) {
-  const config = await getDriveConfig(settingsCol);
+async function getAccessToken(settingsCol, userId) {
+  const config = await getDriveConfig(settingsCol, userId);
   if (!config?.refreshToken) throw new Error('Google Drive not connected — missing refresh token.');
 
   // Return cached token if still valid (5-min buffer)
@@ -70,12 +70,12 @@ async function getAccessToken(settingsCol) {
   if (data.error) throw new Error(`Token refresh failed: ${data.error_description || data.error}`);
 
   const updated = { ...config, accessToken: data.access_token, expiresAt: Date.now() + data.expires_in * 1000 };
-  await saveDriveConfig(settingsCol, updated);
+  await saveDriveConfig(settingsCol, userId, updated);
   return data.access_token;
 }
 
-async function ensureDriveFolder(settingsCol, parentId, folderName) {
-  const token = await getAccessToken(settingsCol);
+async function ensureDriveFolder(settingsCol, userId, parentId, folderName) {
+  const token = await getAccessToken(settingsCol, userId);
   const q = `mimeType='application/vnd.google-apps.folder' and trashed=false and name='${folderName.replace(/'/g, "\\'")}' and '${parentId}' in parents`;
   const searchRes = await fetch(`https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(q)}&fields=files(id,name)`, {
     headers: { Authorization: `Bearer ${token}` },
@@ -93,8 +93,8 @@ async function ensureDriveFolder(settingsCol, parentId, folderName) {
   return created;
 }
 
-async function uploadFileToDrive(settingsCol, { fileName, content, folderId }) {
-  const token = await getAccessToken(settingsCol);
+async function uploadFileToDrive(settingsCol, userId, { fileName, content, folderId }) {
+  const token = await getAccessToken(settingsCol, userId);
   const body = typeof content === 'string' ? content : JSON.stringify(content, null, 2);
   const bodyBytes = Buffer.byteLength(body, 'utf8');
   const metadata = { name: fileName, ...(folderId ? { parents: [folderId] } : {}) };
@@ -137,8 +137,8 @@ async function uploadFileToDrive(settingsCol, { fileName, content, folderId }) {
   return data;
 }
 
-async function listDriveFiles(settingsCol, folderId) {
-  const token = await getAccessToken(settingsCol);
+async function listDriveFiles(settingsCol, userId, folderId) {
+  const token = await getAccessToken(settingsCol, userId);
   const q = `'${folderId}' in parents and trashed=false and mimeType='application/json'`;
   const res = await fetch(`https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(q)}&orderBy=createdTime desc&fields=files(id,name,size,createdTime)`, {
     headers: { Authorization: `Bearer ${token}` },
@@ -167,7 +167,7 @@ async function getExternalMongoDb(connDoc, database) {
 }
 
 // ── Main job runner ──────────────────────────────────────────────────────────
-async function runJob(job, settingsCol) {
+async function runJob(job, userId, settingsCol) {
   console.log(`[Scheduler] Running backup job: ${job.name} (${job.database}.${job.collection})`);
 
   let externalClient = null;
@@ -209,8 +209,8 @@ async function runJob(job, settingsCol) {
 
       let targetFolder = job.driveFolderId;
       if (job.driveFolderId) {
-        const day = await ensureDriveFolder(settingsCol, job.driveFolderId, dayFolderName);
-        const time = await ensureDriveFolder(settingsCol, day.id || job.driveFolderId, timeFolderName);
+        const day = await ensureDriveFolder(settingsCol, userId, job.driveFolderId, dayFolderName);
+        const time = await ensureDriveFolder(settingsCol, userId, day.id || job.driveFolderId, timeFolderName);
         targetFolder = time.id || day.id || targetFolder;
       }
 
@@ -221,7 +221,7 @@ async function runJob(job, settingsCol) {
         if (Buffer.byteLength(jsonContent, 'utf8') > MAX_DOC_BYTES) {
           throw new Error(`Backup for ${colName} exceeds ${MAX_DOC_BYTES / 1024 / 1024}MB limit.`);
         }
-        await uploadFileToDrive(settingsCol, { fileName: `${colName}.json`, content: jsonContent, folderId: targetFolder });
+        await uploadFileToDrive(settingsCol, userId, { fileName: `${colName}.json`, content: jsonContent, folderId: targetFolder });
         totalDocs += docs.length;
       }
 
@@ -239,12 +239,12 @@ async function runJob(job, settingsCol) {
 
       let targetFolder = job.driveFolderId;
       if (job.driveFolderId) {
-        const day = await ensureDriveFolder(settingsCol, job.driveFolderId, dayFolderName);
-        const time = await ensureDriveFolder(settingsCol, day.id || job.driveFolderId, timeFolderName);
+        const day = await ensureDriveFolder(settingsCol, userId, job.driveFolderId, dayFolderName);
+        const time = await ensureDriveFolder(settingsCol, userId, day.id || job.driveFolderId, timeFolderName);
         targetFolder = time.id || day.id || targetFolder;
       }
 
-      await uploadFileToDrive(settingsCol, { fileName: `${job.collection}.json`, content: jsonContent, folderId: targetFolder });
+      await uploadFileToDrive(settingsCol, userId, { fileName: `${job.collection}.json`, content: jsonContent, folderId: targetFolder });
       runMessage = `Backed up ${count} documents from ${job.collection}.`;
       console.log(`[Scheduler] ✅ Job completed: ${job.name}`);
     }
@@ -253,9 +253,9 @@ async function runJob(job, settingsCol) {
     const maxBackups = job.maxBackups || 0;
     if (maxBackups > 0 && job.driveFolderId) {
       try {
-        const files = await listDriveFiles(settingsCol, job.driveFolderId);
+        const files = await listDriveFiles(settingsCol, userId, job.driveFolderId);
         if (files.length > maxBackups) {
-          const token = await getAccessToken(settingsCol);
+          const token = await getAccessToken(settingsCol, userId);
           const toDelete = files.slice(maxBackups);
           for (const f of toDelete) {
             try {
@@ -284,17 +284,17 @@ async function runJob(job, settingsCol) {
 
   // Persist job status + history
   try {
-    const jobsSetting = await settingsCol.findOne({ key: 'mongo_sync_jobs' });
+    const jobsSetting = await settingsCol.findOne({ key: 'mongo_sync_jobs', userId });
     if (jobsSetting?.value) {
       const updated = jobsSetting.value.map(j =>
         j.id === job.id
           ? { ...j, lastRun: Date.now(), lastStatus: runStatus, lastMessage: runMessage }
           : j
       );
-      await settingsCol.updateOne({ key: 'mongo_sync_jobs' }, { $set: { value: updated } });
+      await settingsCol.updateOne({ key: 'mongo_sync_jobs', userId }, { $set: { value: updated } });
     }
 
-    const historySetting = await settingsCol.findOne({ key: 'mongo_sync_history' });
+    const historySetting = await settingsCol.findOne({ key: 'mongo_sync_history', userId });
     const history = historySetting?.value || [];
     const entry = {
       id: `hist-${Date.now()}`,
@@ -304,8 +304,8 @@ async function runJob(job, settingsCol) {
       runAt: Date.now(), status: runStatus, message: runMessage, count,
     };
     await settingsCol.updateOne(
-      { key: 'mongo_sync_history' },
-      { $set: { value: [entry, ...history].slice(0, 100) } },
+      { key: 'mongo_sync_history', userId },
+      { $set: { value: [entry, ...history].slice(0, 100), userId, updatedAt: new Date() } },
       { upsert: true }
     );
   } catch (dbErr) {
@@ -321,13 +321,15 @@ async function tick() {
     const db = await getCenterDb();
     const settingsCol = db.collection('system_settings');
 
-    const driveSetting = await settingsCol.findOne({ key: 'google_drive_config' });
-    if (!driveSetting?.value?.refreshToken) return;
+    // Find ALL users' mongo_sync_jobs settings
+    const allJobSettings = await settingsCol.find({ key: 'mongo_sync_jobs' }).toArray();
+    
+    if (allJobSettings.length === 0) {
+      console.log('[Scheduler] No mongo_sync_jobs found in any user settings');
+      return;
+    }
 
-    const jobsSetting = await settingsCol.findOne({ key: 'mongo_sync_jobs' });
-    const jobs = jobsSetting?.value || [];
     const now = Date.now();
-
     const intervals = {
       every_5_min:  5  * 60 * 1000,
       every_15_min: 15 * 60 * 1000,
@@ -337,23 +339,46 @@ async function tick() {
       weekly:   7 * 24 * 60 * 60 * 1000,
     };
 
-    for (const job of jobs) {
-      if (!job.enabled || job.schedule === 'manual') continue;
+    // Process each user's jobs
+    for (const jobSetting of allJobSettings) {
+      const userId = jobSetting.userId;
+      const jobs = jobSetting.value || [];
+      
+      if (jobs.length === 0) continue;
 
-      const lastRun = job.lastRun || 0;
-      const scheduleKey = String(job.schedule || '').toLowerCase().trim().replace(/\s+/g, '_');
-      let interval = intervals[scheduleKey];
-      if (!interval) {
-        if (scheduleKey.includes('5'))    interval = intervals.every_5_min;
-        else if (scheduleKey.includes('15')) interval = intervals.every_15_min;
-        else if (scheduleKey.includes('30')) interval = intervals.every_30_min;
-        else if (scheduleKey.includes('hour')) interval = intervals.hourly;
-        else if (scheduleKey.includes('week')) interval = intervals.weekly;
-        else interval = intervals.daily;
+      // Check if this user has Google Drive configured
+      const driveSetting = await settingsCol.findOne({ 
+        key: 'google_drive_config',
+        userId: userId 
+      });
+      
+      if (!driveSetting?.value?.refreshToken) {
+        console.log(`[Scheduler] Skipping user ${userId} - no Google Drive config`);
+        continue;
       }
 
-      if (now - lastRun >= interval) {
-        await runJob(job, settingsCol);
+      console.log(`[Scheduler] Processing ${jobs.length} job(s) for user ${userId}`);
+
+      // Run eligible jobs for this user
+      for (const job of jobs) {
+        if (!job.enabled || job.schedule === 'manual') continue;
+
+        const lastRun = job.lastRun || 0;
+        const scheduleKey = String(job.schedule || '').toLowerCase().trim().replace(/\s+/g, '_');
+        let interval = intervals[scheduleKey];
+        if (!interval) {
+          if (scheduleKey.includes('5'))    interval = intervals.every_5_min;
+          else if (scheduleKey.includes('15')) interval = intervals.every_15_min;
+          else if (scheduleKey.includes('30')) interval = intervals.every_30_min;
+          else if (scheduleKey.includes('hour')) interval = intervals.hourly;
+          else if (scheduleKey.includes('week')) interval = intervals.weekly;
+          else interval = intervals.daily;
+        }
+
+        if (now - lastRun >= interval) {
+          console.log(`[Scheduler] Running job "${job.name}" for user ${userId}`);
+          await runJob(job, userId, settingsCol);
+        }
       }
     }
   } catch (err) {

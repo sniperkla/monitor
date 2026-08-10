@@ -4,23 +4,23 @@ import { withRetry } from './mongoSyncUtils.js';
 
 const SIMPLE_UPLOAD_LIMIT = 5 * 1024 * 1024; // 5MB — Google's limit for simple upload
 
-export async function getGoogleDriveConfig() {
+export async function getGoogleDriveConfig(userId = null) {
   const db = await connectDB();
-  const settingRepo = new SystemSettingRepository(db);
+  const settingRepo = new SystemSettingRepository(db, userId || 'global');
   await settingRepo.init();
   const configSetting = await settingRepo.findOne({ key: 'google_drive_config' });
   return configSetting ? configSetting.value : null;
 }
 
-export async function saveGoogleDriveConfig(config) {
+export async function saveGoogleDriveConfig(config, userId = null) {
   const db = await connectDB();
-  const settingRepo = new SystemSettingRepository(db);
+  const settingRepo = new SystemSettingRepository(db, userId || 'global');
   await settingRepo.init();
   await settingRepo.upsert('google_drive_config', config);
 }
 
-export async function getGoogleAccessToken() {
-  const config = await getGoogleDriveConfig();
+export async function getGoogleAccessToken(userId = null) {
+  const config = await getGoogleDriveConfig(userId);
   if (!config || !config.refreshToken) {
     throw new Error('Google Drive integration is not connected.');
   }
@@ -62,13 +62,13 @@ export async function getGoogleAccessToken() {
     expiresAt: Date.now() + data.expires_in * 1000
   };
 
-  await saveGoogleDriveConfig(updatedConfig);
+  await saveGoogleDriveConfig(updatedConfig, userId);
   return data.access_token;
 }
 
-export async function listGoogleDriveFolders(parentId = null) {
+export async function listGoogleDriveFolders(parentId = null, userId = null) {
   return withRetry(async () => {
-    const accessToken = await getGoogleAccessToken();
+    const accessToken = await getGoogleAccessToken(userId);
 
     // Always require explicit parent — if null, use 'root'
     const actualParentId = parentId || 'root';
@@ -85,9 +85,9 @@ export async function listGoogleDriveFolders(parentId = null) {
   }, { label: 'listGoogleDriveFolders' });
 }
 
-export async function createGoogleDriveFolder(folderName) {
+export async function createGoogleDriveFolder(folderName, userId = null) {
   return withRetry(async () => {
-    const accessToken = await getGoogleAccessToken();
+    const accessToken = await getGoogleAccessToken(userId);
     const res = await fetch('https://www.googleapis.com/drive/v3/files', {
       method: 'POST',
       headers: {
@@ -106,9 +106,9 @@ export async function createGoogleDriveFolder(folderName) {
   }, { label: 'createGoogleDriveFolder' });
 }
 
-export async function ensureDriveFolder(parentId, folderName) {
+export async function ensureDriveFolder(parentId, folderName, userId = null) {
   return withRetry(async () => {
-    const accessToken = await getGoogleAccessToken();
+    const accessToken = await getGoogleAccessToken(userId);
     // Search for existing folder with this name under the parent
     const query = `mimeType = 'application/vnd.google-apps.folder' and trashed = false and name = '${folderName.replace(/'/g, "\\'")}' and '${parentId}' in parents`;
     const url = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(query)}&fields=files(id,name)`;
@@ -140,8 +140,8 @@ export async function ensureDriveFolder(parentId, folderName) {
   }, { label: 'ensureDriveFolder' });
 }
 
-export async function uploadFileToGoogleDrive({ fileName, content, folderId }) {
-  const accessToken = await getGoogleAccessToken();
+export async function uploadFileToGoogleDrive({ fileName, content, folderId, userId = null }) {
+  const accessToken = await getGoogleAccessToken(userId);
   const body = typeof content === 'string' ? content : JSON.stringify(content, null, 2);
   const bodyBytes = Buffer.byteLength(body, 'utf8');
 
@@ -213,9 +213,9 @@ export async function uploadFileToGoogleDrive({ fileName, content, folderId }) {
   return data;
 }
 
-export async function listDriveFiles(folderId) {
+export async function listDriveFiles(folderId, userId = null) {
   return withRetry(async () => {
-    const accessToken = await getGoogleAccessToken();
+    const accessToken = await getGoogleAccessToken(userId);
     // Don't filter by mimeType — Google Drive may store JSON as application/octet-stream
     // or other types depending on how they were uploaded. Filter by name instead.
     const query = `'${folderId}' in parents and trashed = false`;
@@ -240,9 +240,9 @@ export async function listDriveFiles(folderId) {
   }, { label: 'listDriveFiles' });
 }
 
-export async function downloadDriveFile(fileId) {
+export async function downloadDriveFile(fileId, userId = null) {
   return withRetry(async () => {
-    const accessToken = await getGoogleAccessToken();
+    const accessToken = await getGoogleAccessToken(userId);
     const url = `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`;
 
     const res = await fetch(url, {

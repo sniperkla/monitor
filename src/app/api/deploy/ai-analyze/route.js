@@ -8,6 +8,7 @@ import SystemSetting from '@/models/SystemSetting';
 import { ConnectionRepository } from '@/lib/repositories/ConnectionRepository';
 import { decrypt } from '@/utils/encryption';
 import OpenAI from 'openai';
+import { resolveUserIdQuery, normalizeUserId } from '@/lib/deployUserQuery';
 
 // Supported model options
 const FALLBACK_MODEL = 'llama-3.3-70b-versatile';
@@ -20,7 +21,7 @@ export async function POST(request) {
       return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
     }
 
-    const userId = session.user?.id || session.user?.sub || session.user?.email || 'global';
+    const userId = normalizeUserId(session.user?.id || session.user?.sub || session.user?.email);
 
     const { searchParams } = new URL(request.url);
     const projectId = searchParams.get('project') || 'default';
@@ -165,7 +166,8 @@ export async function POST(request) {
     await connectDB(process.env.MONGODB_URI, true);
     const keysSetting = await SystemSetting.findOne({ key: 'ai_api_keys' });
     const configSetting = await SystemSetting.findOne({ key: 'ai_config' });
-    const projectSetting = await SystemSetting.findOne({ userId: { $in: [userId, 'global'] }, key: dbKey });
+    const userIdQuery = resolveUserIdQuery(userId);
+    const projectSetting = await SystemSetting.findOne({ ...userIdQuery, key: dbKey });
     const projectAiPrefs = projectSetting?.value || {};
     const existingScript = inputDeployCommand || projectAiPrefs.deployCommand || '';
 
@@ -838,7 +840,7 @@ docker container prune -f 2>/dev/null || true`;
     };
 
     // Re-fetch project setting to get latest value for saving
-    const savedProjectSetting = await SystemSetting.findOne({ userId: { $in: [userId, 'global'] }, key: dbKey });
+    const savedProjectSetting = await SystemSetting.findOne({ ...resolveUserIdQuery(userId), key: dbKey });
     const existingValue = savedProjectSetting?.value || {};
 
     const aiLogs = Array.isArray(existingValue.aiLogs) ? existingValue.aiLogs : [];

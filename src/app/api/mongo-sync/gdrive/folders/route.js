@@ -7,11 +7,12 @@ export async function GET(request) {
   try {
     const session = await getServerSession(authOptions);
     if (!session) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
+    const userId = session.user?.id;
 
     const { searchParams } = new URL(request.url);
     const parentId = searchParams.get('parentId');
 
-    const folders = await listGoogleDriveFolders(parentId || null);
+    const folders = await listGoogleDriveFolders(parentId || null, userId);
     return NextResponse.json({ success: true, folders });
   } catch (err) {
     console.error('List Drive subfolders error:', err);
@@ -25,6 +26,7 @@ export async function POST(request) {
     if (!session) {
       return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
     }
+    const userId = session.user?.id;
 
     const body = await request.json();
     const { folderName } = body;
@@ -33,7 +35,7 @@ export async function POST(request) {
       return NextResponse.json({ success: false, error: 'Folder name is required' }, { status: 400 });
     }
 
-    const folder = await createGoogleDriveFolder(folderName.trim());
+    const folder = await createGoogleDriveFolder(folderName.trim(), userId);
 
     return NextResponse.json({
       success: true,

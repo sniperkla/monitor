@@ -171,6 +171,10 @@ export async function POST(req) {
   try {
     const session = await getServerSession(authOptions);
     if (!session) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
+    const userId = session.user?.id;
+    if (!userId) {
+      return NextResponse.json({ success: false, error: 'User ID not found in session' }, { status: 400 });
+    }
 
     const {
       jobId, jobName, schedule, targetSshConnId,
@@ -184,7 +188,7 @@ export async function POST(req) {
     const db = await connectDB();
     const connRepo = new ConnectionRepository(db);
     await connRepo.init();
-    const settingRepo = new SystemSettingRepository(db);
+    const settingRepo = new SystemSettingRepository(db, userId);
     await settingRepo.init();
 
     // 1. Resolve MongoDB connection URI

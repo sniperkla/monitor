@@ -6,6 +6,7 @@ import SystemSetting from '@/models/SystemSetting';
 import { ConnectionRepository } from '@/lib/repositories/ConnectionRepository';
 import { decrypt } from '@/utils/encryption';
 import { Client } from 'ssh2';
+import { resolveUserIdQuery, normalizeUserId } from '@/lib/deployUserQuery';
 
 // POST /api/deploy/webhook-test?project=<projectId>
 // Runs independent checks and returns structured results
@@ -16,7 +17,7 @@ export async function POST(request) {
       return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
     }
 
-    const userId = session.user?.id || session.user?.sub || session.user?.email || 'global';
+    const userId = normalizeUserId(session.user?.id || session.user?.sub || session.user?.email);
 
     const { searchParams } = new URL(request.url);
     const projectId = searchParams.get('project') || 'default';
@@ -27,13 +28,15 @@ export async function POST(request) {
     let setting;
     if (token) {
       // Search only within requesting user's settings
-      const allSettings = await SystemSetting.find({ userId, key: { $regex: '^auto_deploy_config' } });
+      const userIdQuery = resolveUserIdQuery(userId);
+      const allSettings = await SystemSetting.find({ ...userIdQuery, key: { $regex: '^auto_deploy_config' } });
       setting = allSettings.find(s => s.value?.webhookToken === token);
       if (!setting) {
         return NextResponse.json({ success: false, error: 'Invalid webhook token' }, { status: 404 });
       }
     } else {
-      setting = await SystemSetting.findOne({ userId: { $in: [userId, 'global'] }, key: dbKey });
+      const userIdQuery = resolveUserIdQuery(userId);
+      setting = await SystemSetting.findOne({ ...userIdQuery, key: dbKey });
     }
     const config = setting?.value;
 

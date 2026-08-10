@@ -4,6 +4,7 @@ import { authOptions } from '@/lib/auth';
 import connectDB from '@/lib/mongodb';
 import SystemSetting from '@/models/SystemSetting';
 import { decrypt, decryptWithMetadata } from '@/utils/encryption';
+import { resolveUserIdQuery, normalizeUserId } from '@/lib/deployUserQuery';
 
 function resolveBotToken(tokenInput, savedToken) {
   if (tokenInput && tokenInput.trim()) {
@@ -30,7 +31,7 @@ export async function GET(request) {
       return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
     }
 
-    const userId = session.user?.id || session.user?.sub || session.user?.email || 'global';
+    const userId = normalizeUserId(session.user?.id || session.user?.sub || session.user?.email);
 
     const { searchParams } = new URL(request.url);
     const projectId = searchParams.get('project') || 'default';
@@ -38,7 +39,8 @@ export async function GET(request) {
 
     await connectDB(process.env.MONGODB_URI, true);
     const dbKey = projectId === 'default' ? 'auto_deploy_config' : `auto_deploy_config_${projectId}`;
-    const setting = await SystemSetting.findOne({ userId: { $in: [userId, 'global'] }, key: dbKey });
+    const userIdQuery = resolveUserIdQuery(userId);
+    const setting = await SystemSetting.findOne({ ...userIdQuery, key: dbKey });
     const savedConfig = setting?.value || {};
 
     const botToken = resolveBotToken(providedToken, savedConfig.telegramBotToken);
@@ -124,7 +126,7 @@ export async function POST(request) {
       return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
     }
 
-    const userId = session.user?.id || session.user?.sub || session.user?.email || 'global';
+    const userId = normalizeUserId(session.user?.id || session.user?.sub || session.user?.email);
 
     const body = await request.json();
     const { projectId = 'default', botToken: providedToken, chatId } = body;
@@ -140,7 +142,8 @@ export async function POST(request) {
 
     await connectDB(process.env.MONGODB_URI, true);
     const dbKey = projectId === 'default' ? 'auto_deploy_config' : `auto_deploy_config_${projectId}`;
-    const setting = await SystemSetting.findOne({ userId: { $in: [userId, 'global'] }, key: dbKey });
+    const userIdQuery = resolveUserIdQuery(userId);
+    const setting = await SystemSetting.findOne({ ...userIdQuery, key: dbKey });
     const savedConfig = setting?.value || {};
 
     const botToken = resolveBotToken(providedToken, savedConfig.telegramBotToken);

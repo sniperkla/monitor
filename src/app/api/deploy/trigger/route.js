@@ -6,6 +6,7 @@ import connectDB from '@/lib/mongodb';
 import SystemSetting from "@/models/SystemSetting";
 import { runDeployment } from '../webhook/route';
 import { getRunning, tryAcquireStartLock, releaseStartLock } from '@/lib/deployProcesses';
+import { resolveUserIdQuery, normalizeUserId } from '@/lib/deployUserQuery';
 
 function timingSafeCompare(a, b) {
   if (typeof a !== 'string' || typeof b !== 'string') return false;
@@ -73,8 +74,9 @@ async function handleTrigger(request) {
         console.log(`[trigger] ❌ No secret configured and no session — rejecting unauthenticated trigger`);
         return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
       }
-      const userId = session?.user?.id || session?.user?.sub || session?.user?.email || 'global';
-      setting = await SystemSetting.findOne({ userId: { $in: [userId, 'global'] }, key: dbKey });
+      const userId = normalizeUserId(session?.user?.id || session?.user?.sub || session?.user?.email);
+      const userIdQuery = resolveUserIdQuery(userId);
+      setting = await SystemSetting.findOne({ ...userIdQuery, key: dbKey });
     }
     const config = setting?.value;
 

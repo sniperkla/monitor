@@ -11,6 +11,7 @@ import { decrypt } from '@/utils/encryption';
 import { broadcastDeploymentStatus } from '@/app/api/deploy/sse/route';
 import { setRunning, clearRunning, getRunning, tryAcquireStartLock, releaseStartLock } from '@/lib/deployProcesses';
 import OpenAI from 'openai';
+import { resolveUserIdQuery, normalizeUserId } from '@/lib/deployUserQuery';
 
 // Simple per-project rate limiter for deployment triggers
 const triggerRateLimit = new Map();
@@ -1448,7 +1449,7 @@ export async function POST(request) {
         return NextResponse.json({ success: false, error: 'Invalid webhook token' }, { status: 404 });
       }
     } else if (isManual && userId) {
-      setting = await SystemSetting.findOne({ userId: { $in: [userId, 'global'] }, key: dbKey });
+      setting = await SystemSetting.findOne({ ...resolveUserIdQuery(userId), key: dbKey });
     } else {
       setting = await SystemSetting.findOne({ key: dbKey });
     }

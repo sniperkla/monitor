@@ -8,7 +8,8 @@ import {
   CheckCircle, AlertCircle, Calendar, ShieldAlert, ArrowRight,
   FolderPlus, History, Key, Settings, Loader, CloudLightning, FileJson, ShieldCheck,
   Copy, Server, Wifi, WifiOff, Terminal, ChevronDown, Check, Clock,
-  XCircle, TrendingUp, X, Zap, Shield, BarChart3, Folder, ExternalLink, Search
+  XCircle, TrendingUp, X, Zap, Shield, BarChart3, Folder, ExternalLink, Search,
+  ChevronLeft, ChevronRight
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
@@ -637,6 +638,8 @@ export default function MongoBackupApp() {
   const restoreFolderDropdownRef = useRef(null); // For scroll-into-view
   const [filteredRestoreFolderOptions, setFilteredRestoreFolderOptions] = useState([]);
   const [backupFiles, setBackupFiles] = useState([]);
+  const [restoreSubfolders, setRestoreSubfolders] = useState([]);
+  const [restoreBreadcrumbs, setRestoreBreadcrumbs] = useState([]);
   const [selectedFileId, setSelectedFileId] = useState('');
   const [restoreConnId, setRestoreConnId] = useState('default');
   const [restoreDbName, setRestoreDbName] = useState(ALL_DATABASES);
@@ -1548,21 +1551,63 @@ export default function MongoBackupApp() {
     if (!folderId) return;
     setLoading(true);
     try {
+      // 1. Fetch backup files in this folder
       const res = await apiFetch(`/api/mongo-sync/restore?driveFolderId=${folderId}`);
       const data = await res.json();
       if (data.success) {
-        setBackupFiles(data.files);
-        if (data.files.length > 0) {
+        setBackupFiles(data.files || []);
+        if (data.files && data.files.length > 0) {
           setSelectedFileId('ALL');
           setRestoreCollName(ALL_COLLECTIONS);
         } else {
           setSelectedFileId('');
         }
       }
+
+      // 2. Fetch subfolders inside this folder for folder drill-down
+      try {
+        const folderRes = await apiFetch(`/api/mongo-sync/gdrive/folders?parentId=${folderId}`);
+        const folderData = await folderRes.json();
+        if (folderData.success) {
+          setRestoreSubfolders(folderData.folders || []);
+        } else {
+          setRestoreSubfolders([]);
+        }
+      } catch (_) {
+        setRestoreSubfolders([]);
+      }
     } catch (err) {
       console.error('Failed to load backup files:', err);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleDrillDownRestoreFolder = (subfolder) => {
+    setRestoreFolderId(subfolder.id);
+    setRestoreFolderName(subfolder.path || subfolder.name);
+    setRestoreBreadcrumbs(prev => {
+      const existingIdx = prev.findIndex(p => p.id === subfolder.id);
+      if (existingIdx !== -1) return prev.slice(0, existingIdx + 1);
+      return [...prev, { id: subfolder.id, name: subfolder.name }];
+    });
+  };
+
+  const handleNavigateRestoreBreadcrumb = (index) => {
+    const target = restoreBreadcrumbs[index];
+    if (!target) return;
+    if (!target.id) {
+      openDrivePicker('restore');
+      return;
+    }
+    setRestoreFolderId(target.id);
+    setRestoreFolderName(target.name);
+    setRestoreBreadcrumbs(prev => prev.slice(0, index + 1));
+  };
+
+  const handleGoUpRestoreParent = () => {
+    if (restoreBreadcrumbs.length > 1) {
+      handleNavigateRestoreBreadcrumb(restoreBreadcrumbs.length - 2);
     }
   };
 
@@ -3376,11 +3421,15 @@ export default function MongoBackupApp() {
                               onClick={() => {
                                 setRestoreFolderId(job.driveFolderId);
                                 setRestoreFolderName(job.driveFolderName);
+                                setRestoreBreadcrumbs([
+                                  { id: null, name: 'Drive' },
+                                  { id: job.driveFolderId, name: job.driveFolderName || 'Backup Folder' }
+                                ]);
                                 setActiveTab('restore');
                                 fetchBackups(job.driveFolderId);
                               }}
                               className="p-2 bg-emerald-500/10 hover:bg-emerald-500/25 border border-emerald-500/20 hover:border-emerald-500/40 text-emerald-400 rounded-xl transition-all"
-                              title="Navigate to backup files in Restore"
+                              title="Navigate to backup files & subfolders in Restore"
                             >
                               <FileJson size={14} />
                             </button>
@@ -3471,12 +3520,76 @@ export default function MongoBackupApp() {
                       </div>
                     </div>
 
+                    {/* Folder Breadcrumbs & Parent Navigation */}
+                    {restoreBreadcrumbs.length > 0 && (
+                      <div className="flex items-center justify-between gap-2 px-3 py-2 rounded-xl bg-[var(--bg-tertiary)]/60 border border-[var(--border-color)] text-xs font-mono">
+                        <div className="flex items-center gap-1.5 overflow-x-auto custom-scrollbar shrink flex-1">
+                          <Folder size={12} className="text-amber-400 shrink-0" />
+                          {restoreBreadcrumbs.map((b, idx) => (
+                            <div key={b.id || idx} className="flex items-center gap-1 shrink-0">
+                              {idx > 0 && <ChevronRight size={10} className="text-[var(--text-muted)]" />}
+                              <button
+                                type="button"
+                                onClick={() => handleNavigateRestoreBreadcrumb(idx)}
+                                className={`px-1.5 py-0.5 rounded hover:bg-[var(--bg-card-hover)] transition-colors ${
+                                  idx === restoreBreadcrumbs.length - 1
+                                    ? 'text-emerald-400 font-bold bg-emerald-500/10 border border-emerald-500/20'
+                                    : 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'
+                                }`}
+                              >
+                                {b.name}
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                        {restoreBreadcrumbs.length > 1 && (
+                          <button
+                            type="button"
+                            onClick={handleGoUpRestoreParent}
+                            className="px-2.5 py-1 rounded-lg bg-[var(--bg-card)] hover:bg-[var(--bg-card-hover)] border border-[var(--border-color)] text-[10px] font-bold text-amber-400 hover:text-amber-300 flex items-center gap-1 transition-all shrink-0"
+                            title="Go up to parent folder"
+                          >
+                            <ChevronLeft size={12} /> Parent Folder
+                          </button>
+                        )}
+                      </div>
+                    )}
+
                     <div className="flex-1 border border-[var(--border-color)] rounded-xl overflow-hidden flex flex-col bg-[var(--bg-tertiary)]/20 min-h-[200px]">
                       <div className="bg-[var(--bg-tertiary)]/30 border-b border-[var(--border-color)] px-3 py-1.5 text-[9px] font-bold uppercase tracking-wider text-[var(--text-muted)] flex justify-between">
-                        <span>Backup Files ({backupFiles.length})</span>
-                        <span>Select option to restore</span>
+                        <span>
+                          Contents ({backupFiles.length} file{backupFiles.length !== 1 ? 's' : ''}
+                          {restoreSubfolders.length > 0 ? `, ${restoreSubfolders.length} folder${restoreSubfolders.length !== 1 ? 's' : ''}` : ''})
+                        </span>
+                        <span>Select folder to enter or file to restore</span>
                       </div>
                       <div className="flex-1 overflow-y-auto custom-scrollbar p-2 space-y-1">
+                        {/* 📁 Render Subfolders FIRST */}
+                        {restoreSubfolders.length > 0 && (
+                          <div className="mb-3 space-y-1 bg-amber-500/5 p-2 rounded-xl border border-amber-500/20">
+                            <div className="text-[9px] font-bold uppercase tracking-wider text-amber-400 px-1 py-0.5 flex items-center gap-1.5">
+                              <Folder size={11} /> Subfolders ({restoreSubfolders.length}) — Click to open folder
+                            </div>
+                            {restoreSubfolders.map(sub => (
+                              <button
+                                key={sub.id}
+                                type="button"
+                                onClick={() => handleDrillDownRestoreFolder(sub)}
+                                className="w-full text-left p-2.5 rounded-lg text-xs transition-all flex items-center justify-between border bg-[var(--bg-card)] hover:bg-amber-500/15 border-amber-500/20 text-[var(--text-primary)] font-semibold group shadow-sm"
+                              >
+                                <span className="truncate flex-1 flex items-center gap-2">
+                                  <Folder size={14} className="text-amber-400 shrink-0 group-hover:scale-110 transition-transform" />
+                                  <span>{sub.name}</span>
+                                </span>
+                                <span className="text-[9px] font-bold text-amber-400 bg-amber-500/10 group-hover:bg-amber-500/20 px-2 py-0.5 rounded-full border border-amber-500/20 shrink-0 flex items-center gap-1 transition-all">
+                                  Open Folder <ChevronRight size={10} />
+                                </span>
+                              </button>
+                            ))}
+                          </div>
+                        )}
+
+                        {/* 📄 Render JSON Backup Files */}
                         {backupFiles.length > 0 && (
                           <button
                             type="button"
@@ -3515,9 +3628,9 @@ export default function MongoBackupApp() {
                             </span>
                           </button>
                         ))}
-                        {backupFiles.length === 0 && (
+                        {backupFiles.length === 0 && restoreSubfolders.length === 0 && (
                           <div className="text-center py-12 text-[11px] text-[var(--text-muted)] italic">
-                            {restoreFolderId ? 'No backup files found in this folder.' : 'Please select a backup folder above.'}
+                            {restoreFolderId ? 'No backup files or subfolders found in this directory.' : 'Please select a backup folder above.'}
                           </div>
                         )}
                       </div>

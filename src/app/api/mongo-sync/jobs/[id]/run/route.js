@@ -16,11 +16,15 @@ export async function POST(request, { params }) {
     if (!session) {
       return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
     }
+    const userId = session.user?.id;
+    if (!userId) {
+      return NextResponse.json({ success: false, error: 'User ID not found in session' }, { status: 400 });
+    }
 
     const { id } = await params;
 
     const db = await connectDB();
-    const settingRepo = new SystemSettingRepository(db);
+    const settingRepo = new SystemSettingRepository(db, userId);
     await settingRepo.init();
 
     const jobsSetting = await settingRepo.findOne({ key: 'mongo_sync_jobs' });

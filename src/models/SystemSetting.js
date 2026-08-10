@@ -2,8 +2,8 @@ import mongoose from 'mongoose';
 
 const SystemSettingSchema = new mongoose.Schema({
   userId: {
-    type: String,
-    default: 'global', // 'global' for system-wide settings, user ID string for per-user settings
+    type: mongoose.Schema.Types.Mixed, // Support both String and ObjectId during migration
+    required: true, // userId is now required - no global fallback
     index: true,
   },
   key: {

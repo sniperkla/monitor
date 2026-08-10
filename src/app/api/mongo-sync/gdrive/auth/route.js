@@ -10,9 +10,13 @@ export async function GET(request) {
     if (!session) {
       return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
     }
+    const userId = session.user?.id;
+    if (!userId) {
+      return NextResponse.json({ success: false, error: 'User ID not found in session' }, { status: 400 });
+    }
 
     const db = await connectDB();
-    const settingRepo = new SystemSettingRepository(db);
+    const settingRepo = new SystemSettingRepository(db, userId);
     await settingRepo.init();
     const savedConfigSetting = await settingRepo.findOne({ key: 'google_drive_config' });
     const savedConfig = savedConfigSetting ? savedConfigSetting.value : {};

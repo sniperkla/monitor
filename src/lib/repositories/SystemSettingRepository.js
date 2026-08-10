@@ -92,8 +92,14 @@ export class SystemSettingRepository {
       const r = rows[0];
       return { ...r, _id: r.id.toString(), value: typeof r.value === 'string' ? JSON.parse(r.value) : r.value };
     } else {
+      // For MongoDB, convert string userId to ObjectId if valid
+      let userIdForMongo = this.userId;
+      if (typeof this.userId === 'string' && this.userId !== 'global' && mongoose.Types.ObjectId.isValid(this.userId)) {
+        userIdForMongo = new mongoose.Types.ObjectId(this.userId);
+      }
+      
       // Scope by userId in MongoDB
-      const doc = await this._mongoCol().findOne({ userId: this.userId, ...criteria });
+      const doc = await this._mongoCol().findOne({ userId: userIdForMongo, ...criteria });
       return doc || null;
     }
   }
@@ -153,9 +159,15 @@ export class SystemSettingRepository {
         await this.db.query(query, [this.userId, key, JSON.stringify(value)]);
       }
     } else {
+      // For MongoDB, convert string userId to ObjectId if valid
+      let userIdForMongo = this.userId;
+      if (typeof this.userId === 'string' && this.userId !== 'global' && mongoose.Types.ObjectId.isValid(this.userId)) {
+        userIdForMongo = new mongoose.Types.ObjectId(this.userId);
+      }
+      
       await this._mongoCol().updateOne(
-        { userId: this.userId, key },
-        { $set: { userId: this.userId, key, value, updatedAt: new Date() } },
+        { userId: userIdForMongo, key },
+        { $set: { userId: userIdForMongo, key, value, updatedAt: new Date() } },
         { upsert: true }
       );
     }

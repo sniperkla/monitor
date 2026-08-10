@@ -4,6 +4,7 @@ import { authOptions } from '@/lib/auth';
 import connectDB from '@/lib/mongodb';
 import SystemSetting from '@/models/SystemSetting';
 import { encrypt } from '@/utils/encryption';
+import { resolveUserIdQuery, normalizeUserId } from '@/lib/deployUserQuery';
 
 // POST /api/deploy/bitbucket/connect?project=projectId
 // Body: { username, appPassword }
@@ -12,7 +13,7 @@ export async function POST(request) {
     const session = await getServerSession(authOptions);
     if (!session) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
 
-    const userId = session.user?.id || session.user?.sub || session.user?.email || 'global';
+    const userId = normalizeUserId(session.user?.id || session.user?.sub || session.user?.email);
 
     const { searchParams } = new URL(request.url);
     const project = searchParams.get('project') || 'default';
@@ -40,7 +41,8 @@ export async function POST(request) {
     }
 
     await connectDB(process.env.MONGODB_URI, true);
-    const setting = await SystemSetting.findOne({ userId: { $in: [userId, 'global'] }, key: dbKey });
+    const userIdQuery = resolveUserIdQuery(userId);
+    const setting = await SystemSetting.findOne({ ...userIdQuery, key: dbKey });
     const existing = setting?.value || {};
 
     const updated = {
@@ -51,7 +53,8 @@ export async function POST(request) {
       bitbucketAppPassword: encrypt(appPassword),
     };
 
-    await SystemSetting.findOneAndUpdate({ userId, key: dbKey }, { $set: { userId, value: updated } }, { upsert: true });
+    const targetUserId = normalizeUserId(setting?.userId || userId, true);
+    await SystemSetting.findOneAndUpdate({ ...resolveUserIdQuery(targetUserId), key: dbKey }, { $set: { userId: targetUserId, value: updated } }, { upsert: true });
 
     return NextResponse.json({ success: true, bitbucketUser: bbUser });
   } catch (error) {
@@ -67,14 +70,15 @@ export async function GET(request) {
     const session = await getServerSession(authOptions);
     if (!session) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
 
-    const userId = session.user?.id || session.user?.sub || session.user?.email || 'global';
+    const userId = normalizeUserId(session.user?.id || session.user?.sub || session.user?.email);
 
     const { searchParams } = new URL(request.url);
     const project = searchParams.get('project') || 'default';
     const dbKey = project === 'default' ? 'auto_deploy_config' : `auto_deploy_config_${project}`;
 
     await connectDB(process.env.MONGODB_URI, true);
-    const setting = await SystemSetting.findOne({ userId: { $in: [userId, 'global'] }, key: dbKey });
+    const userIdQuery = resolveUserIdQuery(userId);
+    const setting = await SystemSetting.findOne({ ...userIdQuery, key: dbKey });
     const cfg = setting?.value || {};
 
     return NextResponse.json({

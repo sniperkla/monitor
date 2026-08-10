@@ -3,6 +3,7 @@ import { getServerSession } from 'next-auth/next';
 import { authOptions } from '@/lib/auth';
 import connectDB from '@/lib/mongodb';
 import SystemSetting from '@/models/SystemSetting';
+import { resolveUserIdQuery, normalizeUserId } from '@/lib/deployUserQuery';
 
 // Store active SSE connections
 const sseClients = new Map();
@@ -13,7 +14,7 @@ export async function GET(request) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
   }
 
-  const userId = session.user?.id || session.user?.sub || session.user?.email || 'global';
+  const userId = normalizeUserId(session.user?.id || session.user?.sub || session.user?.email);
 
   const { searchParams } = new URL(request.url);
   const projectId = searchParams.get('project') || 'default';
@@ -37,7 +38,8 @@ export async function GET(request) {
       try {
         await connectDB(process.env.MONGODB_URI, true);
         const dbKey = projectId === 'default' ? 'auto_deploy_config' : `auto_deploy_config_${projectId}`;
-        const setting = await SystemSetting.findOne({ userId: { $in: [userId, 'global'] }, key: dbKey });
+        const userIdQuery = resolveUserIdQuery(userId);
+        const setting = await SystemSetting.findOne({ ...userIdQuery, key: dbKey });
         const config = setting?.value;
 
         if (config) {
@@ -87,6 +89,7 @@ export async function broadcastDeploymentStatus(projectId = 'default') {
   try {
     await connectDB(process.env.MONGODB_URI, true);
     const dbKey = projectId === 'default' ? 'auto_deploy_config' : `auto_deploy_config_${projectId}`;
+    // Broadcast doesn't filter by userId - it sends to all connected clients
     const setting = await SystemSetting.findOne({ key: dbKey });
     const config = setting?.value;
 

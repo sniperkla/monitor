@@ -4,17 +4,18 @@ import connectDB from '@/lib/mongodb';
 import SystemSetting from '@/models/SystemSetting';
 import { broadcastDeploymentStatus } from '@/app/api/deploy/sse/route';
 import { getRunning, clearRunning } from '@/lib/deployProcesses';
+import { resolveUserIdQuery, normalizeUserId } from '@/lib/deployUserQuery';
 
 async function updateStatusToCancelled(projectId, message, userId = 'global') {
   try {
     await connectDB(process.env.MONGODB_URI, true);
     const dbKey = projectId === 'default' ? 'auto_deploy_config' : `auto_deploy_config_${projectId}`;
-    const setting = await SystemSetting.findOne({ userId: { $in: [userId, 'global'] }, key: dbKey });
+    const setting = await SystemSetting.findOne({ ...resolveUserIdQuery(userId), key: dbKey });
     const config = setting?.value || {};
-    const targetUserId = setting?.userId || userId;
+    const targetUserId = normalizeUserId(setting?.userId || userId);
     const now = new Date();
     const finalLog = (config.lastDeployLog || '') + `\n[${now.toISOString()}] ❌ Deployment cancelled by user. ${message || ''}\n`;
-    await SystemSetting.findOneAndUpdate({ userId: targetUserId, key: dbKey }, {
+    await SystemSetting.findOneAndUpdate({ ...resolveUserIdQuery(targetUserId), key: dbKey }, {
       $set: {
         'value.status': 'failed',
         'value.lastDeployLog': finalLog,
@@ -35,7 +36,7 @@ export async function POST(request) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
   }
 
-  const userId = session.user?.id || session.user?.sub || session.user?.email || 'global';
+  const userId = normalizeUserId(session.user?.id || session.user?.sub || session.user?.email);
 
   try {
     const { searchParams } = new URL(request.url);

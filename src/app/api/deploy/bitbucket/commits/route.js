@@ -4,6 +4,7 @@ import { authOptions } from '@/lib/auth';
 import connectDB from '@/lib/mongodb';
 import SystemSetting from '@/models/SystemSetting';
 import { decrypt } from '@/utils/encryption';
+import { resolveUserIdQuery, normalizeUserId } from '@/lib/deployUserQuery';
 
 function normalizeRepoParam(value) {
   if (!value) return '';
@@ -29,7 +30,7 @@ export async function GET(request) {
     const session = await getServerSession(authOptions);
     if (!session) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
 
-    const userId = session.user?.id || session.user?.sub || session.user?.email || 'global';
+    const userId = normalizeUserId(session.user?.id || session.user?.sub || session.user?.email);
 
     const url = new URL(request.url);
     let repo = url.searchParams.get('repo');
@@ -43,7 +44,8 @@ export async function GET(request) {
 
     if (project) {
       const dbKey = project === 'default' ? 'auto_deploy_config' : `auto_deploy_config_${project}`;
-      const setting = await SystemSetting.findOne({ userId: { $in: [userId, 'global'] }, key: dbKey });
+      const userIdQuery = resolveUserIdQuery(userId);
+      const setting = await SystemSetting.findOne({ ...userIdQuery, key: dbKey });
       const cfg = setting?.value || {};
 
       if (!repo && cfg.bitbucketRepo) repo = cfg.bitbucketRepo;

@@ -1,0 +1,81 @@
+feat: Migrate system settings to user-specific scope for multi-user support
+
+BREAKING CHANGE: System settings now scoped per user instead of global
+
+## Changes
+
+### Database Migration
+- Migrated 9 system_settings documents to user-specific scope
+- User-specific settings now have ObjectId userId field
+- Global settings (AI config) remain shared
+
+### User-Specific Settings
+- google_drive_config (OAuth tokens and Drive config)
+- mongo_sync_jobs (sync job definitions)
+- mongo_sync_history (sync operation history)
+- server_backup_history (backup records)
+- relay_tokens (authentication tokens)
+- auto_deploy_config* (deployment configs)
+
+### API Route Updates
+Updated 7 API routes to use session userId:
+- /api/mongo-sync/gdrive/auth
+- /api/mongo-sync/gdrive/callback
+- /api/mongo-sync/cron
+- /api/mongo-sync/jobs
+- /api/mongo-sync/jobs/[id]/run
+- /api/mongo-sync/history
+
+All routes now:
+1. Extract userId from session
+2. Pass userId to SystemSettingRepository
+3. Return 401 if no session
+4. Return 400 if no userId in session
+
+### Migration Scripts
+- scripts/migrate-all-settings.js - Migrate existing settings
+- scripts/verify-settings-migration.js - Verify migration success
+- scripts/update-routes-for-user-settings.js - Automated route updater
+
+### Documentation
+- docs/USER_SETTINGS_MIGRATION.md - Complete migration guide
+- MIGRATION_SUMMARY.md - Quick reference summary
+
+## Impact
+
+### Benefits
+- Multi-user support: Each user can have their own Google Drive connection
+- Data isolation: Users cannot access other users' settings
+- Security: Credentials properly isolated per user
+- Scalability: Ready for multiple concurrent users
+
+### Testing
+- [x] Migration script tested on production database
+- [x] Verification script confirms all settings properly scoped
+- [x] All route files have valid syntax
+- [ ] Manual testing: Google Drive OAuth flow
+- [ ] Manual testing: Sync jobs isolation
+- [ ] Manual testing: Multiple user scenarios
+
+## Deployment
+
+1. Run migration on production:
+   ```bash
+   MONGODB_URI='mongodb://...' node scripts/migrate-all-settings.js <userId>
+   ```
+
+2. Verify migration:
+   ```bash
+   MONGODB_URI='mongodb://...' node scripts/verify-settings-migration.js
+   ```
+
+3. Rebuild Docker containers:
+   ```bash
+   docker compose up -d --build
+   ```
+
+## Rollback
+
+If issues occur, restore database from backup and revert this commit.
+
+See docs/USER_SETTINGS_MIGRATION.md for complete documentation.

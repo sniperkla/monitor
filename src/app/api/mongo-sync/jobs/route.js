@@ -6,9 +6,9 @@ import mongoose from 'mongoose';
 import { v4 as uuidv4 } from 'uuid';
 import { SystemSettingRepository } from '@/lib/repositories/SystemSettingRepository';
 
-async function getSettingRepo() {
+async function getSettingRepo(userId) {
   const db = await connectDB();
-  const repo = new SystemSettingRepository(db);
+  const repo = new SystemSettingRepository(db, userId);
   await repo.init();
   return repo;
 }
@@ -24,8 +24,12 @@ export async function GET(request) {
     if (!session) {
       return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
     }
+    const userId = session.user?.id;
+    if (!userId) {
+      return NextResponse.json({ success: false, error: 'User ID not found in session' }, { status: 400 });
+    }
 
-    const repo = await getSettingRepo();
+    const repo = await getSettingRepo(userId);
     const jobs = await getJobs(repo);
     return NextResponse.json({ success: true, data: jobs });
 
@@ -41,8 +45,12 @@ export async function POST(request) {
     if (!session) {
       return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
     }
+    const userId = session.user?.id;
+    if (!userId) {
+      return NextResponse.json({ success: false, error: 'User ID not found in session' }, { status: 400 });
+    }
 
-    const repo = await getSettingRepo();
+    const repo = await getSettingRepo(userId);
     const jobs = await getJobs(repo);
     const body = await request.json();
     const { id, name, connectionId, connectionName, database, collection, driveFolderId, driveFolderName, schedule, enabled = true, targetSshConnId, depWarning = null } = body;
@@ -94,6 +102,10 @@ export async function DELETE(request) {
     if (!session) {
       return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
     }
+    const userId = session.user?.id;
+    if (!userId) {
+      return NextResponse.json({ success: false, error: 'User ID not found in session' }, { status: 400 });
+    }
 
     const { searchParams } = new URL(request.url);
     const id = searchParams.get('id');
@@ -102,7 +114,7 @@ export async function DELETE(request) {
       return NextResponse.json({ success: false, error: 'Job ID is required' }, { status: 400 });
     }
 
-    const repo = await getSettingRepo();
+    const repo = await getSettingRepo(userId);
     const jobs = await getJobs(repo);
     const filteredJobs = jobs.filter(j => j.id !== id);
     await repo.upsert('mongo_sync_jobs', filteredJobs);

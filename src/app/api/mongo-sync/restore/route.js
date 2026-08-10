@@ -17,6 +17,7 @@ export async function GET(request) {
     if (!session) {
       return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
     }
+    const userId = session.user?.id;
 
     const { searchParams } = new URL(request.url);
     const driveFolderId = searchParams.get('driveFolderId');
@@ -25,7 +26,7 @@ export async function GET(request) {
       return NextResponse.json({ success: false, error: 'Drive Folder ID is required' }, { status: 400 });
     }
 
-    const files = await listDriveFiles(driveFolderId);
+    const files = await listDriveFiles(driveFolderId, userId);
     return NextResponse.json({ success: true, files });
 
   } catch (error) {
@@ -40,6 +41,7 @@ export async function POST(request) {
     if (!session) {
       return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
     }
+    const userId = session.user?.id;
 
     const body = await request.json();
     const { fileId, driveFolderId, connectionId, database, collection, mode = 'insert' } = body;
@@ -119,7 +121,7 @@ export async function POST(request) {
       if (!targetFolderId) {
         return NextResponse.json({ success: false, error: 'Drive Folder ID required for full folder restore' }, { status: 400 });
       }
-      const files = await listDriveFiles(targetFolderId);
+      const files = await listDriveFiles(targetFolderId, userId);
       const jsonFiles = (files || []).filter(f => f.name && f.name.endsWith('.json'));
 
       if (jsonFiles.length === 0) {
@@ -133,7 +135,7 @@ export async function POST(request) {
 
       for (const file of jsonFiles) {
         try {
-          const fileData = await downloadDriveFile(file.id);
+          const fileData = await downloadDriveFile(file.id, userId);
           if (!fileData || (Array.isArray(fileData) && fileData.length === 0)) continue;
 
           const cleanName = file.name.replace(/\.json$/i, '');
@@ -168,7 +170,7 @@ export async function POST(request) {
 
     // 1. Single File Download from Google Drive
     console.log(`📥 Downloading backup file ${fileId} from Google Drive...`);
-    const backupData = await downloadDriveFile(fileId);
+    const backupData = await downloadDriveFile(fileId, userId);
 
     // Detect file shape
     const isAllDbFile = !Array.isArray(backupData)

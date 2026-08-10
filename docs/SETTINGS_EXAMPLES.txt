@@ -1,0 +1,145 @@
+================================================================================
+  SYSTEM SETTINGS - NEW USER EXAMPLE
+================================================================================
+
+SCENARIO: 3 users connect Google Drive
+  - User A: 6a5933a8b96fc45faa69184a
+  - User B: 6a7123456789abcdef012345  (NEW USER)
+  - User C: 6a8456789abcdef012345678  (NEW USER)
+
+================================================================================
+
+DATABASE COLLECTION: system_settings
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ Document 1 - User A's Google Drive Config                                  │
+├─────────────────────────────────────────────────────────────────────────────┤
+│ _id:     ObjectId("6a71edaa7b2e866c8ab05a93")                              │
+│ key:     "google_drive_config"                    ← SAME FOR ALL           │
+│ userId:  ObjectId("6a5933a8b96fc45faa69184a")     ← USER A's ID            │
+│ value: {                                                                    │
+│   email: "alice@example.com",                     ← User A's email         │
+│   accessToken: "ya29.a0Aa...",                                             │
+│   refreshToken: "1//0gAa..."                                               │
+│ }                                                                           │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ Document 2 - User B's Google Drive Config (CREATED WHEN B CONNECTS)        │
+├─────────────────────────────────────────────────────────────────────────────┤
+│ _id:     ObjectId("6a799999aaaa1111bbbb2222")     ← NEW MONGODB ID         │
+│ key:     "google_drive_config"                    ← SAME KEY               │
+│ userId:  ObjectId("6a7123456789abcdef012345")     ← USER B's ID            │
+│ value: {                                                                    │
+│   email: "bob@example.com",                       ← User B's email         │
+│   accessToken: "ya29.a0Bb...",                                             │
+│   refreshToken: "1//0gBb..."                                               │
+│ }                                                                           │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ Document 3 - User C's Google Drive Config (CREATED WHEN C CONNECTS)        │
+├─────────────────────────────────────────────────────────────────────────────┤
+│ _id:     ObjectId("6a8cccccddddeeeeffff0000")     ← ANOTHER NEW ID         │
+│ key:     "google_drive_config"                    ← SAME KEY               │
+│ userId:  ObjectId("6a8456789abcdef012345678")     ← USER C's ID            │
+│ value: {                                                                    │
+│   email: "carol@example.com",                     ← User C's email         │
+│   accessToken: "ya29.a0Cc...",                                             │
+│   refreshToken: "1//0gCc..."                                               │
+│ }                                                                           │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+================================================================================
+
+WHAT HAPPENS WHEN USER B LOGS IN AND CONNECTS GOOGLE DRIVE?
+
+1. User B logs in
+   → session.user.id = "6a7123456789abcdef012345"
+
+2. User B clicks "Connect Google Drive"
+   → Redirected to Google OAuth
+
+3. Google redirects back with auth code
+   → API route: /api/mongo-sync/gdrive/callback
+
+4. API route code:
+   ```javascript
+   const session = await getServerSession(authOptions);
+   const userId = session.user?.id;  // "6a7123456789abcdef012345"
+   
+   const repo = new SystemSettingRepository(db, userId);
+   await repo.upsert('google_drive_config', {
+     email: "bob@example.com",
+     accessToken: "ya29.a0Bb...",
+     refreshToken: "1//0gBb...",
+     // ... more fields
+   });
+   ```
+
+5. SystemSettingRepository executes:
+   ```javascript
+   db.system_settings.updateOne(
+     { 
+       key: "google_drive_config",
+       userId: ObjectId("6a7123456789abcdef012345")
+     },
+     { $set: { 
+       key: "google_drive_config",
+       userId: ObjectId("6a7123456789abcdef012345"),
+       value: { email: "bob@example.com", ... },
+       updatedAt: new Date()
+     }},
+     { upsert: true }  ← Creates new doc if not found
+   )
+   ```
+
+6. Result: Document 2 (above) is created!
+
+================================================================================
+
+KEY TAKEAWAYS:
+
+✓ The KEY stays the same: "google_drive_config"
+✓ Each user gets their OWN document with SAME key but DIFFERENT userId
+✓ MongoDB _id is auto-generated and unique per document
+✓ Unique index on (userId, key) prevents duplicates per user
+
+================================================================================
+
+QUERYING:
+
+When User B queries their config:
+  db.system_settings.findOne({ 
+    key: "google_drive_config", 
+    userId: ObjectId("6a7123456789abcdef012345") 
+  })
+  
+  Returns: Document 2 (bob@example.com)
+
+When User A queries their config:
+  db.system_settings.findOne({ 
+    key: "google_drive_config", 
+    userId: ObjectId("6a5933a8b96fc45faa69184a") 
+  })
+  
+  Returns: Document 1 (alice@example.com)
+
+Users CANNOT see each other's configs!
+
+================================================================================
+
+SAME PATTERN FOR ALL USER SETTINGS:
+
+  mongo_sync_jobs      → Each user has their own jobs list
+  mongo_sync_history   → Each user has their own history
+  server_backup_history→ Each user has their own backup history
+  relay_tokens         → Each user has their own tokens
+  auto_deploy_config*  → Each user has their own deploy configs
+
+All use:
+  - SAME key name
+  - DIFFERENT userId
+  - DIFFERENT _id (MongoDB)
+
+================================================================================
