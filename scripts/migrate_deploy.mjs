@@ -19,7 +19,7 @@ const UserSchema = new mongoose.Schema({
 }, { strict: false });
 
 const SystemSettingSchema = new mongoose.Schema({
-  userId: String,
+  userId: mongoose.Schema.Types.Mixed,
   key: String,
   value: mongoose.Schema.Types.Mixed,
 }, { strict: false });
@@ -41,17 +41,16 @@ async function migrate() {
     process.exit(1);
   }
 
+  const targetObjectId = targetUser._id; // BSON ObjectId
   const targetObjectIdStr = targetUser._id.toString();
-  console.log(`Target User found -> Email: "${targetUser.email}", User ObjectId string: "${targetObjectIdStr}"`);
-
-  const validUserIds = [targetObjectIdStr, targetEmail, 'sniperkla@eaqdrgon.com'];
+  console.log(`Target User found -> Email: "${targetUser.email}", BSON ObjectId: ObjectId("${targetObjectIdStr}")`);
 
   // Fetch all auto_deploy_config documents
   const allSettings = await SystemSetting.find({
     key: { $regex: '^auto_deploy_config' }
   });
 
-  // Group settings by project key to keep the best configuration
+  // Group settings by project key to keep configuration values
   const projectsMap = new Map();
   allSettings.forEach(s => {
     if (!projectsMap.has(s.key)) {
@@ -59,30 +58,31 @@ async function migrate() {
     }
   });
 
-  // Delete all legacy/duplicate auto_deploy_config documents
+  // Delete all legacy auto_deploy_config documents
   const deleteRes = await SystemSetting.deleteMany({
     key: { $regex: '^auto_deploy_config' }
   });
   console.log(`Cleared ${deleteRes.deletedCount} old auto_deploy_config document(s).`);
 
-  // Re-insert each project exclusively with userId set to the User's ObjectId string
+  // Re-insert each project strictly with BSON ObjectId
   for (const [key, value] of projectsMap.entries()) {
     await SystemSetting.create({
-      userId: targetObjectIdStr,
+      userId: targetObjectId, // BSON ObjectId("6a5933a8b96fc45faa69184a")
       key: key,
       value: value
     });
-    console.log(`Saved project "${value?.name || key}" -> userId: "${targetObjectIdStr}" (User ObjectId string)`);
+    console.log(`Saved project "${value?.name || key}" -> userId: ObjectId("${targetObjectIdStr}")`);
   }
 
   // Print final clean DB state
   const finalSettings = await SystemSetting.find({ key: { $regex: '^auto_deploy_config' } });
   console.log(`\nFinal SystemSetting auto deploy documents (${finalSettings.length} total):`);
   finalSettings.forEach(doc => {
-    console.log(`- ID: ${doc._id}, Key: "${doc.key}", userId: "${doc.userId}" (User ObjectId), Project: "${doc.value?.name || 'N/A'}"`);
+    const isObjectId = doc.userId instanceof mongoose.Types.ObjectId || (doc.userId && typeof doc.userId === 'object');
+    console.log(`- ID: ${doc._id}, Key: "${doc.key}", userId: ObjectId("${doc.userId}"), Type: ${isObjectId ? 'BSON ObjectId' : typeof doc.userId}, Project: "${doc.value?.name || 'N/A'}"`);
   });
 
-  console.log('\nMigration completed successfully! All auto deploy projects now strictly use User ObjectId string.');
+  console.log('\nMigration completed successfully! All auto deploy projects now strictly use BSON ObjectId.');
   await mongoose.disconnect();
 }
 

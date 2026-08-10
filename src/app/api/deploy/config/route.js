@@ -48,8 +48,10 @@ export async function GET(request) {
       return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
     }
 
-    const userKeys = Array.from(new Set([session.user?.email, session.user?.id, session.user?.sub].filter(Boolean)));
-    const userId = session.user?.email || session.user?.id || session.user?.sub || 'global';
+    const rawUserId = session.user?.id || session.user?.sub;
+    const objectId = (rawUserId && mongoose.Types.ObjectId.isValid(rawUserId)) ? new mongoose.Types.ObjectId(rawUserId) : null;
+    const userKeys = Array.from(new Set([objectId, rawUserId, session.user?.email].filter(Boolean)));
+    const userId = objectId || rawUserId || session.user?.email || 'global';
 
     await connectDB(process.env.MONGODB_URI, true);
     
