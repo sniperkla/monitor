@@ -49,6 +49,9 @@ export async function GET(request) {
       return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
     }
 
+    const { searchParams } = new URL(request.url);
+    const projectId = searchParams.get('project');
+
     const rawUserId = session.user?.id || session.user?.sub;
     // Support both BSON ObjectId (stored in DB) and plain string ID from session
     const objectId = (rawUserId && mongoose.Types.ObjectId.isValid(rawUserId))
