@@ -5,7 +5,7 @@ import { createPortal } from 'react-dom';
 import { useApp } from '@/context/AppContext';
 import TerminalView from '@/components/TerminalView';
 import RelayTerminalView from '@/components/RelayTerminalView';
-import { Terminal, Plus, X, Columns, Rows, Maximize2, Minimize2, Server, ExternalLink, RefreshCw } from 'lucide-react';
+import { Terminal, Plus, X, Columns, Rows, Maximize2, Minimize2, Server, Monitor, ExternalLink, RefreshCw, Search, ChevronRight } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 // ─── Layout Tree Helpers ─────────────────────────────────────────────────────
@@ -171,38 +171,99 @@ function Divider({ direction, onDrag, isActive }) {
 
 function PaneConnectionPicker({ connections, onSelect, onSplitH, onSplitV, paneId, canSplit }) {
   const { t } = useTranslation();
+  const [search, setSearch] = useState('');
+  const [isDragOver, setIsDragOver] = useState(false);
+
   const sshConnections = connections.filter(c => c.type !== 'database');
+  const filtered = sshConnections.filter(c =>
+    (c.name || '').toLowerCase().includes(search.toLowerCase()) ||
+    (c.host || '').toLowerCase().includes(search.toLowerCase())
+  );
 
   return (
-    <div className="h-full flex flex-col items-center justify-center bg-[var(--bg-primary)] p-6">
-      <div className="w-14 h-14 rounded-2xl flex items-center justify-center mb-4"
-        style={{ background: 'linear-gradient(135deg, rgba(74,222,128,0.1), rgba(34,211,238,0.1))', border: '1px solid rgba(74,222,128,0.2)' }}>
-        <Terminal size={24} className="text-emerald-500 dark:text-emerald-400" />
-      </div>
-      <h3 className="text-sm font-bold text-[var(--text-primary)]/80 mb-1 tracking-tight">Select Server</h3>
-      <p className="text-[11px] text-[var(--text-primary)]/30 mb-5 font-mono">$ ssh connect</p>
+    <div
+      className="h-full w-full overflow-y-auto overflow-x-hidden bg-transparent relative"
+      onDragOver={(e) => { if (e.dataTransfer.types.includes('application/ssh-connection')) { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; setIsDragOver(true); } }}
+      onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget)) setIsDragOver(false); }}
+      onDrop={(e) => {
+        e.preventDefault(); setIsDragOver(false);
+        try { const conn = JSON.parse(e.dataTransfer.getData('application/ssh-connection')); if (conn.type !== 'database') onSelect(conn); } catch (_) {}
+      }}
+    >
+      {isDragOver && (
+        <div className="absolute inset-4 rounded-2xl border-2 border-dashed border-emerald-500 bg-emerald-500/10 flex items-center justify-center z-10 pointer-events-none animate-pulse">
+          <div className="flex flex-col items-center gap-3">
+            <div className="w-14 h-14 rounded-2xl bg-emerald-500/20 flex items-center justify-center">
+              <Terminal size={24} className="text-emerald-400" />
+            </div>
+            <span className="text-sm font-semibold text-emerald-400">Drop to open terminal</span>
+          </div>
+        </div>
+      )}
+      <div className="min-h-full flex items-center justify-center p-8">
+        <div className="w-full max-w-lg flex flex-col items-center gap-6">
 
-      <div className="w-full max-w-sm space-y-1.5 max-h-[240px] overflow-y-auto custom-scrollbar px-1">
-        {sshConnections.map(conn => (
-          <button
-            key={conn._id}
-            onClick={() => onSelect(conn)}
-            className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg border border-[var(--border-color)]/5 bg-[var(--text-primary)]/[0.02] hover:bg-[var(--text-primary)]/[0.06] hover:border-[var(--border-color)]/10 transition-all group text-left"
-          >
-            <div className="w-7 h-7 rounded-md flex items-center justify-center shrink-0"
-              style={{ background: `${conn.color || '#6366f1'}15`, border: `1px solid ${conn.color || '#6366f1'}30` }}>
-              <Server size={13} style={{ color: conn.color || '#6366f1' }} />
-            </div>
-            <div className="flex-1 min-w-0">
-              <div className="text-xs font-semibold text-[var(--text-primary)]/80 truncate">{conn.name}</div>
-              <div className="text-[10px] text-[var(--text-primary)]/30 font-mono truncate">{conn.host}</div>
-            </div>
-            <div className={`w-1.5 h-1.5 rounded-full ${conn.status === 'online' ? 'bg-emerald-400' : 'bg-red-500/60'}`} />
-          </button>
-        ))}
-        {sshConnections.length === 0 && (
-          <div className="text-center py-8 text-[var(--text-primary)]/20 text-xs font-mono">No SSH connections</div>
-        )}
+          {/* Icon — matches FileLayout w-20 h-20 */}
+          <div className="w-20 h-20 rounded-[2rem] flex items-center justify-center border border-emerald-500/20 shadow-xl shadow-emerald-500/5 ring-1 ring-white/5"
+            style={{ background: 'rgba(74,222,128,0.08)' }}>
+            <Terminal className="w-10 h-10 text-emerald-400" />
+          </div>
+
+          {/* Title — matches text-2xl font-bold */}
+          <div className="text-center space-y-2">
+            <h2 className="text-2xl font-bold text-[var(--text-primary)] tracking-tight">
+              Select Server
+            </h2>
+            <p className="text-[var(--text-muted)] text-sm max-w-[280px] leading-relaxed mx-auto">
+              Choose a connection or drag one from the sidebar
+            </p>
+          </div>
+
+          {/* Search — matches h-12 rounded-2xl pl-12 */}
+          <div className="w-full relative group">
+            <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-[var(--text-muted)] group-focus-within:text-emerald-400 transition-colors" />
+            <input
+              type="text"
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+              placeholder="Search servers…"
+              className="w-full h-12 bg-[var(--bg-card)] border border-[var(--border-color)] rounded-2xl pl-12 pr-4 text-[var(--text-primary)] focus:outline-none focus:border-emerald-500/50 focus:ring-4 focus:ring-emerald-500/10 transition-all placeholder:text-[var(--text-muted)] backdrop-blur-sm shadow-sm"
+            />
+          </div>
+
+          {/* List — matches rounded-2xl border bg-[var(--bg-card)] p-2 */}
+          <div className="w-full rounded-2xl border border-[var(--border-color)] bg-[var(--bg-card)] p-2 space-y-1 backdrop-blur-sm shadow-xl">
+            {filtered.length > 0 ? filtered.map(conn => (
+              <button
+                key={conn._id}
+                onClick={() => onSelect(conn)}
+                className="w-full flex items-center gap-4 p-3 rounded-xl hover:bg-[var(--bg-card-hover)] transition-all group text-left border border-transparent hover:border-[var(--border-hover)] active:scale-[0.98]"
+              >
+                {/* Avatar — matches w-10 h-10 rounded-xl with gradient */}
+                <div className="w-10 h-10 rounded-xl flex items-center justify-center text-white font-medium shadow-lg shrink-0"
+                  style={{ background: `linear-gradient(135deg, ${conn.color || '#6366f1'}, ${conn.color || '#6366f1'}cc)` }}>
+                  <Monitor size={18} />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="text-sm font-semibold text-[var(--text-primary)] truncate">{conn.name}</div>
+                  <div className="text-[11px] text-[var(--text-muted)] truncate font-mono">{conn.host}</div>
+                </div>
+                <div className="flex items-center gap-2 shrink-0">
+                  <div className={`w-1.5 h-1.5 rounded-full ${conn.status === 'online' ? 'bg-emerald-400' : 'bg-red-500/60'}`} />
+                  <div className="w-8 h-8 rounded-full bg-[var(--bg-tertiary)] flex items-center justify-center opacity-0 group-hover:opacity-100 transition-all translate-x-1 group-hover:translate-x-0">
+                    <ChevronRight size={16} className="text-emerald-400" />
+                  </div>
+                </div>
+              </button>
+            )) : (
+              <div className="p-10 text-center opacity-40">
+                <Server className="w-10 h-10 text-[var(--text-muted)] mx-auto mb-3" />
+                <p className="text-xs font-medium uppercase tracking-[0.2em]">No SSH connections</p>
+              </div>
+            )}
+          </div>
+
+        </div>
       </div>
     </div>
   );

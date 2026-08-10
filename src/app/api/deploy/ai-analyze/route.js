@@ -493,35 +493,94 @@ ${existingScript || '# No previous script set'}`;
     // ── Step 4: Generate build + swarm sections ───────────────────────────────
     if (services.length > 0) {
       let buildSection = '';
+      const buildTasks = [];
+      
       for (const svc of services) {
         const info = composeServices[svc] || {};
         const dir = info.buildDir || '';
-        // Guess subdir from container name (strip common prefix like "aut", "app")
         const guessedSubdir = svc.replace(/^aut|^app/i, '').toLowerCase() || svc;
 
         if (dir) {
-          buildSection += `
-echo "Building ${svc}:latest from ./${dir}..."
-if ! docker build --no-cache -t ${svc}:latest ./${dir}; then
-  echo "[deploy] ERROR: Build failed for ${svc} — aborting deployment."
-  exit 1
-fi`;
+          buildTasks.push({ svc, dir });
         } else {
-          buildSection += `
-if [ -d "${guessedSubdir}" ] && [ -f "${guessedSubdir}/Dockerfile" ]; then
-  echo "Building ${svc}:latest from ./${guessedSubdir}..."
-  if ! docker build --no-cache -t ${svc}:latest ./${guessedSubdir}; then
-    echo "[deploy] ERROR: Build failed for ${svc} — aborting deployment."
-    exit 1
-  fi
-elif [ -f "Dockerfile" ]; then
-  echo "Building ${svc}:latest from ./..."
-  if ! docker build --no-cache -t ${svc}:latest ./; then
-    echo "[deploy] ERROR: Build failed for ${svc} — aborting deployment."
-    exit 1
-  fi
-fi`;
+          buildTasks.push({ svc, guessedSubdir });
         }
+      }
+
+      // Generate parallel build section
+      if (buildTasks.length > 0) {
+        buildSection += `
+echo "[$(date +%H:%M:%S)] Building ${buildTasks.length} image(s) in parallel..."
+`;
+        
+        // Background build jobs
+        for (const task of buildTasks) {
+          if (task.dir) {
+            buildSection += `
+(
+  if docker build -t ${task.svc}:latest ./${task.dir}; then
+    echo "[$(date +%H:%M:%S)] ✅ ${task.svc} build complete" > /tmp/${task.svc}_build_result
+  else
+    echo "[$(date +%H:%M:%S)] ❌ ${task.svc} build FAILED" > /tmp/${task.svc}_build_result
+    exit 1
+  fi
+) &
+${task.svc.toUpperCase()}_BUILD_PID=$!
+`;
+          } else {
+            buildSection += `
+(
+  if [ -d "${task.guessedSubdir}" ] && [ -f "${task.guessedSubdir}/Dockerfile" ]; then
+    if docker build -t ${task.svc}:latest ./${task.guessedSubdir}; then
+      echo "[$(date +%H:%M:%S)] ✅ ${task.svc} build complete" > /tmp/${task.svc}_build_result
+    else
+      echo "[$(date +%H:%M:%S)] ❌ ${task.svc} build FAILED" > /tmp/${task.svc}_build_result
+      exit 1
+    fi
+  elif [ -f "Dockerfile" ]; then
+    if docker build -t ${task.svc}:latest ./; then
+      echo "[$(date +%H:%M:%S)] ✅ ${task.svc} build complete" > /tmp/${task.svc}_build_result
+    else
+      echo "[$(date +%H:%M:%S)] ❌ ${task.svc} build FAILED" > /tmp/${task.svc}_build_result
+      exit 1
+    fi
+  else
+    echo "[$(date +%H:%M:%S)] ⚠️  ${task.svc}: No Dockerfile found" > /tmp/${task.svc}_build_result
+  fi
+) &
+${task.svc.toUpperCase()}_BUILD_PID=$!
+`;
+          }
+        }
+
+        // Wait for all builds
+        buildSection += `
+# Wait for all builds to complete
+`;
+        for (const task of buildTasks) {
+          buildSection += `wait $${task.svc.toUpperCase()}_BUILD_PID
+${task.svc.toUpperCase()}_BUILD_EXIT=$?
+`;
+        }
+
+        // Check results
+        for (const task of buildTasks) {
+          buildSection += `cat /tmp/${task.svc}_build_result 2>/dev/null
+`;
+        }
+
+        buildSection += `
+# Abort if any build failed
+`;
+        const exitChecks = buildTasks.map(t => `[ $${t.svc.toUpperCase()}_BUILD_EXIT -ne 0 ]`).join(' || ');
+        buildSection += `if ${exitChecks}; then
+  echo "[deploy] ERROR: One or more builds failed — aborting."
+  rm -f ${buildTasks.map(t => `/tmp/${t.svc}_build_result`).join(' ')}
+  exit 1
+fi
+rm -f ${buildTasks.map(t => `/tmp/${t.svc}_build_result`).join(' ')}
+echo "[$(date +%H:%M:%S)] ✅ All builds complete"
+`;
       }
 
       let svcSection = '';
@@ -543,28 +602,24 @@ fi`;
 docker swarm init 2>/dev/null || true
 docker swarm update --task-history-limit 3 2>/dev/null || true
 
-# ── Overlay network ─────────────────────────────────────────────────────────
+# ── Overlay network (fast) ──────────────────────────────────────────────────
 SWARM_NET=$(docker network ls --filter driver=overlay --format '{{.Name}}' 2>/dev/null | grep -v '^ingress$' | head -1)
-if [ -n "$SWARM_NET" ]; then
-  echo "[net] Using existing overlay network: $SWARM_NET"
-else
-  # Pick a name that doesn't collide with any existing network
-  _NET_CANDIDATE="proxy-net"
-  if docker network inspect "$_NET_CANDIDATE" >/dev/null 2>&1; then
-    _NET_CANDIDATE="swarm-overlay"
-  fi
-  echo "[net] No overlay network found — creating $_NET_CANDIDATE..."
-  docker network create --driver overlay --attachable "$_NET_CANDIDATE" 2>/dev/null || true
-  SWARM_NET="$_NET_CANDIDATE"
-  for _i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
-    [ -n "$(docker network ls --filter driver=overlay --format '{{.Name}}' 2>/dev/null | grep -v '^ingress$' | head -1)" ] && break
-    echo "[net] Waiting for overlay network... ($_i/15)"; sleep 1
+if [ -z "$SWARM_NET" ]; then
+  SWARM_NET="proxy-net"
+  docker network create --driver overlay --attachable "$SWARM_NET" 2>/dev/null || SWARM_NET="swarm-overlay"
+  docker network create --driver overlay --attachable "$SWARM_NET" 2>/dev/null || true
+  # Quick verify - only wait 3 seconds max
+  for _i in {1..3}; do
+    SWARM_NET=$(docker network ls --filter driver=overlay --format '{{.Name}}' 2>/dev/null | grep -v '^ingress$' | head -1)
+    [ -n "$SWARM_NET" ] && break
+    sleep 1
   done
-  if [ -z "$(docker network ls --filter driver=overlay --format '{{.Name}}' 2>/dev/null | grep -v '^ingress$' | head -1)" ]; then
-    echo "[net] ERROR: No overlay network after 15s. Aborting."; exit 1
+  if [ -z "$SWARM_NET" ]; then
+    echo "[net] ERROR: No overlay network after 3s. Aborting."
+    exit 1
   fi
-  SWARM_NET=$(docker network ls --filter driver=overlay --format '{{.Name}}' 2>/dev/null | grep -v '^ingress$' | head -1)
 fi
+echo "[net] Network: $SWARM_NET"
 
 # ── Build images ─────────────────────────────────────────────────────────────
 ${buildSection}
@@ -595,12 +650,15 @@ deploy_service() {
         --image "$IMAGE" \\
         --force \\
         --update-order start-first \\
-        --update-delay 5s \\
-        --update-monitor 15s \\
+        --update-parallelism 2 \\
+        --update-delay 0s \\
+        --update-monitor 3s \\
         --update-failure-action rollback \\
         --rollback-order start-first \\
-        --rollback-monitor 15s \\
-        --stop-grace-period 30s \\
+        --rollback-parallelism 2 \\
+        --rollback-delay 0s \\
+        --rollback-monitor 3s \\
+        --stop-grace-period 10s \\
         "$NAME" || echo "[swarm] WARNING: $NAME update exited non-zero — checking task state..."
       docker service update --network-add "$SWARM_NET" "$NAME" 2>/dev/null || true
     else
@@ -622,9 +680,15 @@ deploy_service() {
         --detach \\
         --no-resolve-image \\
         --update-order start-first \\
+        --update-parallelism 2 \\
+        --update-delay 0s \\
+        --update-monitor 3s \\
         --update-failure-action rollback \\
         --rollback-order start-first \\
-        --stop-grace-period 30s \\
+        --rollback-parallelism 2 \\
+        --rollback-delay 0s \\
+        --rollback-monitor 3s \\
+        --stop-grace-period 10s \\
         "$IMAGE"; then
         [ "$_HAD_CONTAINER" = "1" ] && docker rm "$NAME" 2>/dev/null || true
       else
@@ -635,7 +699,7 @@ deploy_service() {
     fi
 
     echo "[swarm] Waiting for $NAME to be healthy..."
-    for _i in $(seq 1 30); do
+    for _i in $(seq 1 10); do
       _RUNNING=$(docker service ps "$NAME" --filter "desired-state=running" --format '{{.CurrentState}}' 2>/dev/null | grep -c "Running" || echo "0")
       _FAILED=$(docker service ps "$NAME" --filter "desired-state=shutdown" --format '{{.CurrentState}}' 2>/dev/null | grep -c "Failed" || echo "0")
       if [ "$_RUNNING" -ge 1 ] 2>/dev/null; then
@@ -647,11 +711,11 @@ deploy_service() {
         docker service ps "$NAME" --no-trunc 2>/dev/null | tail -5
         return 1
       fi
-      echo "[swarm] Waiting for $NAME... ($_i/30)"
-      sleep 3
+      echo "[swarm] Waiting for $NAME... ($_i/10)"
+      sleep 1
     done
-    echo "[swarm] WARNING: $NAME replicas not confirmed after 90s — service may still be starting."
-    docker service ps "$NAME" --no-trunc 2>/dev/null | tail -10
+    echo "[swarm] WARNING: $NAME not confirmed after 10s — service may still be converging."
+    docker service ps "$NAME" --no-trunc 2>/dev/null | tail -5
     return 0
 
   else

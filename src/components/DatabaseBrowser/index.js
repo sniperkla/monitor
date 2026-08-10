@@ -1,10 +1,142 @@
 'use client';
 
 import { useApp } from '@/context/AppContext';
-import { X, Database, Edit, Plus } from 'lucide-react';
+import { X, Database, Edit, Plus, Search, ChevronRight } from 'lucide-react';
 import { useState, useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import DatabaseView from './DatabaseView';
+
+// ─── Connection Picker (empty state — unified design) ────────────────────────
+
+function DatabaseConnectionPicker({ dbConnections, onOpen, onNewConnection, t }) {
+  const [search, setSearch] = useState('');
+  const [isDragOver, setIsDragOver] = useState(false);
+
+  const filtered = dbConnections.filter(c =>
+    (c.name || '').toLowerCase().includes(search.toLowerCase()) ||
+    (c.host || '').toLowerCase().includes(search.toLowerCase())
+  );
+
+  return (
+    <div
+      className="h-full bg-[var(--bg-primary)] rounded-3xl border border-[var(--border-color)] overflow-hidden relative"
+      onDragOver={(e) => {
+        if (e.dataTransfer.types.includes('application/ssh-connection')) {
+          e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; setIsDragOver(true);
+        }
+      }}
+      onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget)) setIsDragOver(false); }}
+      onDrop={(e) => {
+        e.preventDefault(); setIsDragOver(false);
+        try {
+          const conn = JSON.parse(e.dataTransfer.getData('application/ssh-connection'));
+          if (conn.type === 'database') onOpen(conn);
+        } catch (_) {}
+      }}
+    >
+      {/* Drop overlay */}
+      {isDragOver && (
+        <div className="absolute inset-4 rounded-2xl border-2 border-dashed border-emerald-500 bg-emerald-500/10 flex items-center justify-center z-10 pointer-events-none animate-pulse">
+          <div className="flex flex-col items-center gap-3">
+            <div className="w-14 h-14 rounded-2xl bg-emerald-500/20 flex items-center justify-center">
+              <Database size={24} className="text-emerald-400" />
+            </div>
+            <span className="text-sm font-semibold text-emerald-400">Drop to open database</span>
+          </div>
+        </div>
+      )}
+
+      <div className="h-full overflow-y-auto overflow-x-hidden">
+        <div className="min-h-full flex items-center justify-center p-8">
+          <div className="w-full max-w-lg flex flex-col items-center gap-6">
+
+            {/* Hero icon */}
+            <div className="w-20 h-20 rounded-[2rem] flex items-center justify-center border border-emerald-500/20 shadow-xl shadow-emerald-500/5 ring-1 ring-white/5"
+              style={{ background: 'rgba(16,185,129,0.08)' }}>
+              <Database className="w-10 h-10 text-emerald-400" />
+            </div>
+
+            {/* Title */}
+            <div className="text-center space-y-2">
+              <h2 className="text-2xl font-bold text-[var(--text-primary)] tracking-tight">
+                {t('database.launchpad.title')}
+              </h2>
+              <p className="text-[var(--text-muted)] text-sm max-w-[280px] leading-relaxed mx-auto">
+                {t('database.launchpad.subtitle')}
+              </p>
+            </div>
+
+            {/* Search */}
+            <div className="w-full relative group">
+              <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-[var(--text-muted)] group-focus-within:text-emerald-400 transition-colors" />
+              <input
+                type="text"
+                value={search}
+                onChange={e => setSearch(e.target.value)}
+                placeholder={t('database.launchpad.search') || 'Search databases…'}
+                className="w-full h-12 bg-[var(--bg-card)] border border-[var(--border-color)] rounded-2xl pl-12 pr-4 text-[var(--text-primary)] focus:outline-none focus:border-emerald-500/50 focus:ring-4 focus:ring-emerald-500/10 transition-all placeholder:text-[var(--text-muted)] backdrop-blur-sm shadow-sm"
+              />
+            </div>
+
+            {/* List */}
+            <div className="w-full rounded-2xl border border-[var(--border-color)] bg-[var(--bg-card)] p-2 space-y-1 backdrop-blur-sm shadow-xl">
+              {filtered.length > 0 ? filtered.map(conn => (
+                <button
+                  key={conn._id || conn.id}
+                  onClick={() => onOpen(conn)}
+                  className="w-full flex items-center gap-4 p-3 rounded-xl hover:bg-[var(--bg-card-hover)] transition-all group text-left border border-transparent hover:border-[var(--border-hover)] active:scale-[0.98]"
+                >
+                  <div className="w-10 h-10 rounded-xl flex items-center justify-center text-white font-medium shadow-lg shrink-0"
+                    style={{ background: `linear-gradient(135deg, ${conn.color || '#10b981'}, ${conn.color || '#10b981'}cc)` }}>
+                    <Database size={18} />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="text-sm font-semibold text-[var(--text-primary)] truncate">{conn.name}</div>
+                    <div className="text-[11px] text-[var(--text-muted)] truncate font-mono">{conn.host || conn.dbProvider}</div>
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0">
+                    {conn.dbProvider && (
+                      <span className="text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded-md bg-[var(--bg-tertiary)] text-[var(--text-muted)]">
+                        {conn.dbProvider}
+                      </span>
+                    )}
+                    <div className="w-8 h-8 rounded-full bg-[var(--bg-tertiary)] flex items-center justify-center opacity-0 group-hover:opacity-100 transition-all translate-x-1 group-hover:translate-x-0">
+                      <ChevronRight size={16} className="text-emerald-400" />
+                    </div>
+                  </div>
+                </button>
+              )) : dbConnections.length > 0 ? (
+                <div className="p-10 text-center opacity-40">
+                  <Database className="w-10 h-10 text-[var(--text-muted)] mx-auto mb-3" />
+                  <p className="text-xs font-medium uppercase tracking-[0.2em]">No results</p>
+                </div>
+              ) : null}
+
+              {/* Add connection row — always visible at bottom */}
+              <button
+                onClick={onNewConnection}
+                className="w-full flex items-center gap-4 p-3 rounded-xl hover:bg-emerald-500/10 transition-all group text-left border border-transparent hover:border-emerald-500/20 active:scale-[0.98]"
+              >
+                <div className="w-10 h-10 rounded-xl flex items-center justify-center bg-[var(--bg-tertiary)] border border-dashed border-[var(--border-color)] group-hover:border-emerald-500/40 group-hover:bg-emerald-500/10 transition-all shrink-0">
+                  <Plus size={18} className="text-[var(--text-muted)] group-hover:text-emerald-400 transition-colors" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="text-sm font-semibold text-[var(--text-muted)] group-hover:text-emerald-400 transition-colors">
+                    {t('database.launchpad.addConnection')}
+                  </div>
+                  <div className="text-[11px] text-[var(--text-muted)] opacity-60">
+                    {t('database.launchpad.startHint') || 'Connect to MySQL, PostgreSQL, MongoDB…'}
+                  </div>
+                </div>
+              </button>
+            </div>
+
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 export default function DatabaseBrowser({ initialConnection, initialConnectionId, windowId, onEditConnection, onNewConnection }) {
   const { t } = useTranslation();
@@ -129,126 +261,14 @@ export default function DatabaseBrowser({ initialConnection, initialConnectionId
   }
 
   if (!isStandalone && activeDatabaseBrowsers.length === 0) {
-    return (
-      <div className="h-full bg-[var(--bg-primary)] rounded-3xl border border-[var(--border-color)] overflow-hidden">
-        <div className="h-full overflow-y-auto custom-scrollbar">
-          <div className="text-center p-6 sm:p-12 w-full max-w-4xl mx-auto">
-          <div className="w-20 h-20 mx-auto rounded-3xl flex items-center justify-center mb-6 shadow-2xl relative"
-            style={{ background: 'linear-gradient(135deg, rgba(16, 185, 129, 0.2), rgba(6, 182, 212, 0.2))', border: '1px solid rgba(16, 185, 129, 0.3)' }}>
-            <Database size={36} style={{ color: 'var(--accent-emerald)' }} className="drop-shadow-[0_0_10px_rgba(16,185,129,0.5)]" />
-            <div className="absolute -bottom-1 -right-1 w-6 h-6 bg-emerald-500 rounded-full flex items-center justify-center border-2 border-[var(--bg-primary)] shadow-lg">
-               <Plus size={14} className="text-white" />
-            </div>
-          </div>
-          <h3 className="text-2xl font-bold mb-2 text-[var(--text-primary)] tracking-tight">
-            {t('database.launchpad.title')}
-          </h3>
-          <p className="text-sm text-[var(--text-muted)] max-w-md mx-auto mb-10">
-            {t('database.launchpad.subtitle')}
-          </p>
-
-          <div className="space-y-8">
-            {dbConnections.length > 0 && (
-              <div className="animate-in fade-in slide-in-from-bottom-4 duration-500">
-                <h4 className="text-[10px] font-bold uppercase tracking-[0.2em] text-[var(--text-muted)] mb-4 text-center">
-                  {t('database.launchpad.savedConnections')}
-                </h4>
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 justify-items-center">
-                  {dbConnections.map((conn, idx) => (
-                    <div key={conn._id || conn.id || `conn-${idx}`} className="relative group">
-                      <button 
-                        onClick={() => {
-                          // Terminate existing session in the manager
-                          const existingInManager = activeDatabaseBrowsers.find(b => b.connectionId === conn._id);
-                          if (existingInManager) {
-                            dispatch({ type: 'CLOSE_DATABASE_BROWSER', payload: existingInManager.id });
-                          }
-
-                          if (isStandalone) {
-                            const dbId = `db-${conn._id}-${Date.now()}`;
-                            dispatch({
-                              type: 'OPEN_STANDALONE_DATABASE_BROWSER',
-                              payload: {
-                                id: dbId,
-                                connectionId: conn._id,
-                                connectionName: conn.name,
-                                color: conn.color,
-                                connection: conn,
-                              }
-                            });
-                            setActiveTab(dbId);
-                          } else {
-                            dispatch({
-                              type: 'OPEN_DATABASE_BROWSER',
-                              payload: {
-                                id: `db-${conn._id}-${Date.now()}`,
-                                connectionId: conn._id,
-                                connectionName: conn.name,
-                                color: conn.color,
-                                connection: conn,
-                              }
-                            });
-                          }
-                        }}
-                        draggable
-                        onDragStart={(e) => {
-                          e.dataTransfer.setData('application/ssh-connection', JSON.stringify(conn));
-                          e.dataTransfer.effectAllowed = 'copy';
-                          // Create a drag image
-                          const ghost = document.createElement('div');
-                          ghost.className = 'flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-semibold text-white';
-                          ghost.style.cssText = `background:${conn.color || '#6366f1'};position:fixed;top:-100px;left:-100px;z-index:99999;opacity:0.9;border-radius:8px;padding:6px 14px;pointer-events:none;`;
-                          ghost.textContent = `🖥 ${conn.name}`;
-                          document.body.appendChild(ghost);
-                          e.dataTransfer.setDragImage(ghost, 0, 0);
-                          setTimeout(() => document.body.removeChild(ghost), 0);
-                        }}
-                        className="flex flex-col items-center p-6 bg-[var(--bg-card)] hover:bg-[var(--bg-card-hover)] rounded-3xl w-40 border border-[var(--border-color)] hover:border-emerald-500/30 transition-all hover:scale-105 active:scale-95 shadow-xl group cursor-grab active:cursor-grabbing"
-                      >
-                        <div className="w-12 h-12 rounded-2xl flex items-center justify-center mb-3 transition-transform group-hover:scale-110" 
-                          style={{ background: `${conn.color}15`, border: `1px solid ${conn.color}30` }}>
-                          <Database size={24} style={{ color: conn.color }} />
-                        </div>
-                        <span className="font-bold text-xs truncate w-full" style={{ color: 'var(--text-primary)' }}>{conn.name}</span>
-                        <span className="text-[8px] text-[var(--text-muted)] mt-1 uppercase tracking-wider">{conn.dbProvider}</span>
-                      </button>
-                    </div>
-                  ))}
-                  
-                  {/* Add New Card (Trailing) */}
-                  <button 
-                    key="add-new-connection"
-                    onClick={onNewConnection}
-                    className="flex flex-col items-center justify-center p-6 bg-[var(--bg-card)] hover:bg-emerald-500/10 rounded-3xl w-40 border border-dashed border-[var(--border-color)] hover:border-emerald-500/40 transition-all hover:scale-105 active:scale-95 group"
-                  >
-                    <div className="w-12 h-12 rounded-2xl flex items-center justify-center mb-3 bg-[var(--bg-tertiary)] border border-[var(--border-color)] group-hover:bg-emerald-500/20 group-hover:border-emerald-500/30 transition-all">
-                      <Plus size={24} className="text-[var(--text-muted)] group-hover:text-emerald-400" />
-                    </div>
-                    <span className="font-bold text-[10px] text-[var(--text-muted)] group-hover:text-emerald-400 uppercase tracking-tight">{t('database.launchpad.addConnection')}</span>
-                  </button>
-                </div>
-              </div>
-            )}
-
-            {!dbConnections.length && (
-              <div className="animate-in fade-in slide-in-from-bottom-8 duration-700">
-                <button 
-                   onClick={onNewConnection}
-                   className="px-10 py-5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white rounded-2xl font-bold shadow-2xl shadow-emerald-500/20 transition-all hover:scale-105 active:scale-95 flex items-center gap-3 mx-auto"
-                >
-                   <Plus size={20} />
-                   <span>{t('database.launchpad.createFirst')}</span>
-                </button>
-                <p className="text-[9px] text-[var(--text-muted)] mt-4 uppercase tracking-[0.3em] font-medium opacity-50">
-                   {t('database.launchpad.startHint')}
-                </p>
-              </div>
-            )}
-          </div>
-          </div>
-        </div>
-      </div>
-    );
+    return <DatabaseConnectionPicker dbConnections={dbConnections} onOpen={(conn) => {
+      const existingInManager = activeDatabaseBrowsers.find(b => b.connectionId === conn._id);
+      if (existingInManager) dispatch({ type: 'CLOSE_DATABASE_BROWSER', payload: existingInManager.id });
+      dispatch({
+        type: 'OPEN_DATABASE_BROWSER',
+        payload: { id: `db-${conn._id}-${Date.now()}`, connectionId: conn._id, connectionName: conn.name, color: conn.color, connection: conn },
+      });
+    }} onNewConnection={onNewConnection} t={t} />;
   }
 
   if (isStandalone) {

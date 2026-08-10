@@ -2,11 +2,14 @@
 
 import { useOS } from '@/context/OSContext';
 import { useState, useRef, useEffect, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 import AppIcon from '@/components/common/AppIcon';
 
 export default function DesktopIcon({ id, title, icon: Icon, component, defaultPos, initialWidth, initialHeight, isMobile }) {
-  const { state, openWindow, updateIconPosition, setSortBy, setSelectedIcons, toggleIconSelection, updateMultipleIconPositions } = useOS();
-  const { selectedIconIds } = state;
+  const { state, openWindow, updateIconPosition, setSortBy, setSelectedIcons, toggleIconSelection, updateMultipleIconPositions, pinApp, unpinApp } = useOS();
+  const { selectedIconIds, pinnedApps } = state;
+  const isPinned = (pinnedApps || []).includes(id);
+  const [contextMenu, setContextMenu] = useState(null); // { x, y }
   const isSelected = selectedIconIds.includes(id);
   const [isDragging, setIsDragging] = useState(false);
   const dragRef = useRef({ startX: 0, startY: 0, snapshot: null });
@@ -61,13 +64,14 @@ export default function DesktopIcon({ id, title, icon: Icon, component, defaultP
 
   // --- Custom Drag System ---
   const handlePointerDown = useCallback((e) => {
+    console.log('[DesktopIcon] Pointer down on', id);
     // Only left mouse button
     if (e.button !== 0) return;
     e.stopPropagation();
-    e.preventDefault();
-
+    
     // Handle selection
     if (e.shiftKey || e.metaKey) {
+      e.preventDefault();
       toggleIconSelection(id);
       return; // Don't start drag on shift/cmd click
     } else if (!isSelected) {
@@ -89,16 +93,40 @@ export default function DesktopIcon({ id, title, icon: Icon, component, defaultP
       startY: e.clientY,
       snapshot,
       hasMoved: false,
+      cancelled: false,
+      targetElement: null,
     };
 
     setIsDragging(true);
 
     const handlePointerMove = (moveEvent) => {
+      if (dragRef.current.cancelled) return;
+      
       const dx = moveEvent.clientX - dragRef.current.startX;
       const dy = moveEvent.clientY - dragRef.current.startY;
 
       if (Math.abs(dx) > 2 || Math.abs(dy) > 2) {
         dragRef.current.hasMoved = true;
+      }
+
+      // Check what element we're over
+      const elementUnder = document.elementFromPoint(moveEvent.clientX, moveEvent.clientY);
+      const folderUnder = elementUnder?.closest('.desktop-folder');
+      dragRef.current.targetElement = folderUnder;
+      
+      // Trigger hover effect on folder
+      if (folderUnder && !dragRef.current.lastFolder) {
+        folderUnder.classList.add('icon-drag-over');
+        dragRef.current.lastFolder = folderUnder;
+      } else if (!folderUnder && dragRef.current.lastFolder) {
+        dragRef.current.lastFolder.classList.remove('icon-drag-over');
+        dragRef.current.lastFolder = null;
+      } else if (folderUnder && folderUnder !== dragRef.current.lastFolder) {
+        if (dragRef.current.lastFolder) {
+          dragRef.current.lastFolder.classList.remove('icon-drag-over');
+        }
+        folderUnder.classList.add('icon-drag-over');
+        dragRef.current.lastFolder = folderUnder;
       }
 
       const updates = {};
@@ -109,8 +137,6 @@ export default function DesktopIcon({ id, title, icon: Icon, component, defaultP
           y: start.y + dy,
         };
       });
-      // Track latest positions in the ref so pointerup can read them
-      // (avoids stale closure reading old state.iconPositions)
       dragRef.current.lastPositions = updates;
       updateMultipleIconPositions(updates);
     };
@@ -120,8 +146,50 @@ export default function DesktopIcon({ id, title, icon: Icon, component, defaultP
       window.removeEventListener('pointermove', handlePointerMove);
       window.removeEventListener('pointerup', handlePointerUp);
 
-      // Grid snap all moved icons using the latest dragged positions
-      // (not state.iconPositions which is stale due to React closure)
+      // Clean up hover class
+      if (dragRef.current.lastFolder) {
+        dragRef.current.lastFolder.classList.remove('icon-drag-over');
+        dragRef.current.lastFolder = null;
+      }
+
+      // Check if we dropped on a folder
+      // Temporarily hide the icon being dragged so elementFromPoint can see what's underneath
+      if (iconRef.current) iconRef.current.style.pointerEvents = 'none';
+      
+      const elementUnder = document.elementFromPoint(e.clientX, e.clientY);
+      const folderUnder = elementUnder?.closest('.desktop-folder');
+      
+      // Restore pointer events
+      if (iconRef.current) iconRef.current.style.pointerEvents = '';
+      
+      console.log('[DesktopIcon] Drop check:', {
+        clientX: e.clientX,
+        clientY: e.clientY,
+        elementUnder: elementUnder?.className,
+        folderUnder: folderUnder?.className,
+        groupId: folderUnder?.getAttribute('data-group-id'),
+        hasMoved: dragRef.current.hasMoved
+      });
+      
+      if (folderUnder && dragRef.current.hasMoved) {
+        // Dropped on folder - trigger folder drop
+        const groupId = folderUnder.getAttribute('data-group-id');
+        if (groupId) {
+          console.log('[DesktopIcon] Dropped on folder:', groupId, 'icon:', id);
+          window.dispatchEvent(new CustomEvent('desktop-folder-drop', { detail: { groupId, iconId: id } }));
+          // Reset position since we're moving to folder
+          const updates = {};
+          Object.keys(dragRef.current.snapshot).forEach(sid => {
+            updates[sid] = dragRef.current.snapshot[sid];
+          });
+          updateMultipleIconPositions(updates);
+          dragRef.current.snapshot = null;
+          dragRef.current.lastPositions = null;
+          return;
+        }
+      }
+
+      // Normal desktop reposition - grid snap
       const GRID_X = 100;
       const GRID_Y = 110;
       const updates = {};
@@ -495,6 +563,24 @@ export default function DesktopIcon({ id, title, icon: Icon, component, defaultP
   }, []);
 
   const hoverDelayTimerRef = useRef(null);
+
+  const handleContextMenu = useCallback((e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    // Place menu near cursor but keep it on-screen
+    const menuW = 200, menuH = 120;
+    const x = Math.min(e.clientX, window.innerWidth - menuW - 8);
+    const y = Math.min(e.clientY, window.innerHeight - menuH - 8);
+    setContextMenu({ x, y });
+  }, []);
+
+  // Close context menu when clicking outside
+  useEffect(() => {
+    if (!contextMenu) return;
+    const close = () => setContextMenu(null);
+    window.addEventListener('mousedown', close);
+    return () => window.removeEventListener('mousedown', close);
+  }, [contextMenu]);
 
   const handleMouseEnter = useCallback(() => {
     if (!isFalloutTheme || isExploding || isReforming) return;
@@ -886,12 +972,13 @@ export default function DesktopIcon({ id, title, icon: Icon, component, defaultP
       `}
       data-icon-id={id}
       onDoubleClick={handleDoubleClick}
-      onPointerDown={isMobile ? () => handleDoubleClick() : handlePointerDown} // Simple click to open on mobile
+      onPointerDown={isMobile ? () => handleDoubleClick() : handlePointerDown}
+      onClick={isMobile ? () => handleDoubleClick() : undefined}
       onDragOver={handleDragOver}
       onDrop={handleDrop}
       onMouseEnter={handleMouseEnter}
       onMouseLeave={handleMouseLeave}
-      onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); }}
+      onContextMenu={handleContextMenu}
       tabIndex={0}
       style={{ 
         left: isMobile ? 'auto' : position.x, 
@@ -1032,6 +1119,60 @@ export default function DesktopIcon({ id, title, icon: Icon, component, defaultP
             ☢
           </div>
         </div>
+      )}
+
+      {/* Desktop icon context menu */}
+      {contextMenu && typeof document !== 'undefined' && createPortal(
+        <div
+          className="fixed z-[100001] w-48 backdrop-blur-xl border border-[var(--border-color)] rounded-xl shadow-2xl p-1.5 overflow-hidden"
+          style={{
+            left: contextMenu.x,
+            top: contextMenu.y,
+            background: 'var(--window-bg)',
+            backdropFilter: 'blur(24px)',
+            boxShadow: '0 12px 40px rgba(0,0,0,0.5), 0 0 0 1px rgba(255,255,255,0.05)',
+          }}
+          onMouseDown={(e) => e.stopPropagation()}
+        >
+          <div className="px-3 py-1.5 text-[10px] font-bold text-[var(--text-muted)] uppercase tracking-wider border-b border-[var(--border-color)] mb-1 truncate">
+            {title}
+          </div>
+          <button
+            onClick={() => {
+              handleDoubleClick();
+              setContextMenu(null);
+            }}
+            className="w-full text-left px-3 py-2 text-xs text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] rounded-lg flex items-center gap-2 transition-colors"
+          >
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-[var(--accent-indigo)] shrink-0"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M8 12h8M12 8v8"/></svg>
+            Open
+          </button>
+          <div className="h-px bg-[var(--border-color)] my-1 mx-2" />
+          {isPinned ? (
+            <button
+              onClick={() => {
+                unpinApp(id);
+                setContextMenu(null);
+              }}
+              className="w-full text-left px-3 py-2 text-xs text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] rounded-lg flex items-center gap-2 transition-colors"
+            >
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-[var(--accent-amber)] shrink-0"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+              Unpin from Taskbar
+            </button>
+          ) : (
+            <button
+              onClick={() => {
+                pinApp(id);
+                setContextMenu(null);
+              }}
+              className="w-full text-left px-3 py-2 text-xs text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] rounded-lg flex items-center gap-2 transition-colors"
+            >
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-[var(--accent-indigo)] shrink-0"><path d="M12 2v20M2 12h20"/></svg>
+              Pin to Taskbar
+            </button>
+          )}
+        </div>,
+        document.body
       )}
     </div>
   );

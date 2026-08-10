@@ -20,6 +20,10 @@ const initialState = {
   storageMode: 'db', // 'db', 'localstorage', 'manual'
   clipboard: null, // { file, action: 'copy' | 'cut', sourcePath, connectionId }
   relayWarning: null, // Set when DB URI is localhost but relay agent is not running
+  // Health monitoring
+  mongoDown: false,           // true when local MongoDB is unreachable
+  relayDown: false,           // true when local relay agent is not connected
+  autoSwitchedToServer: false, // true when we auto-swapped from local to server mode
   dbConfig: {
     uri: '',    // Decrypted URI from vault (in memory only)
     tunnel: null, // SSH tunnel config from vault (in memory only)
@@ -203,6 +207,13 @@ function reducer(state, action) {
       return { ...state, wikiChatWindows: state.wikiChatWindows.filter(w => w.id !== action.payload) };
     case 'SET_RELAY_INFO':
       return { ...state, relayInfo: action.payload };
+    case 'SET_HEALTH_STATUS':
+      return {
+        ...state,
+        mongoDown: action.payload.mongoDown ?? state.mongoDown,
+        relayDown: action.payload.relayDown ?? state.relayDown,
+        autoSwitchedToServer: action.payload.autoSwitchedToServer ?? state.autoSwitchedToServer,
+      };
     case 'SET_ACTIVE_TERMINALS':
       return { ...state, activeTerminals: action.payload };
     case 'SET_ACTIVE_FILE_MANAGERS':
@@ -304,15 +315,50 @@ export function AppProvider({ children }) {
         if (!data.relayRequired) {
           dispatch({ type: 'SET_RELAY_WARNING', payload: null });
         }
+        // If we previously auto-switched and DB is now reachable, clear the flag
+        if (state.autoSwitchedToServer) {
+          dispatch({ type: 'SET_HEALTH_STATUS', payload: { mongoDown: false, autoSwitchedToServer: false } });
+        }
       }
       // Relay agent required — store warning so UI can prompt the user
       if (data.relayRequired) {
         dispatch({ type: 'SET_RELAY_WARNING', payload: data.relayMessage || 'Local Relay Agent is required to access localhost databases.' });
+
+        // Auto-switch to server mode if not already there
+        if (typeof window !== 'undefined') {
+          const currentMode = localStorage.getItem('ssh_monitor_ssh_mode');
+          if (currentMode !== 'server') {
+            console.warn('[AppContext] Relay required but not available — auto-switching to server mode');
+            localStorage.setItem('ssh_monitor_ssh_mode', 'server');
+            dispatch({ type: 'SET_HEALTH_STATUS', payload: { relayDown: true, autoSwitchedToServer: true } });
+            window.dispatchEvent(new Event('ssh-mode-changed'));
+          }
+        }
       }
     } catch (err) {
       console.error('Failed to fetch DB connections:', err);
       // If a newer request has started, ignore this error
       if (requestId !== latestRequestIdRef.current) return;
+
+      // Network/DB error — mark mongo as down and auto-switch to server mode
+      const isDbError = err.message && (
+        err.message.includes('ECONNREFUSED') ||
+        err.message.includes('MongoNetworkError') ||
+        err.message.includes('topology was destroyed') ||
+        err.message.includes('buffering timed out') ||
+        err.message.includes('SERVER_ERROR')
+      );
+      if (isDbError && typeof window !== 'undefined') {
+        const currentMode = localStorage.getItem('ssh_monitor_ssh_mode');
+        if (currentMode !== 'server') {
+          console.warn('[AppContext] DB unreachable — auto-switching to server mode');
+          localStorage.setItem('ssh_monitor_ssh_mode', 'server');
+          dispatch({ type: 'SET_HEALTH_STATUS', payload: { mongoDown: true, autoSwitchedToServer: true } });
+          window.dispatchEvent(new Event('ssh-mode-changed'));
+        } else {
+          dispatch({ type: 'SET_HEALTH_STATUS', payload: { mongoDown: true } });
+        }
+      }
     }
 
     // 3. Update State
@@ -465,6 +511,65 @@ export function AppProvider({ children }) {
       });
   }, []);
 
+  // 6. Health polling — every 20 seconds, detect MongoDB dead + relay dead, auto-switch
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    let consecutiveFailures = 0;
+    const MAX_FAILURES_BEFORE_SWITCH = 2; // switch after 2 consecutive failures (~40s)
+
+    const pollHealth = async () => {
+      try {
+        const res = await fetch('/api/health', { signal: AbortSignal.timeout(5000) });
+        const data = await res.json();
+
+        const mongoUp = data.mongo?.up ?? res.ok;
+        const relayUp = data.relay?.up ?? false;
+
+        if (!mongoUp) {
+          consecutiveFailures++;
+          dispatch({ type: 'SET_HEALTH_STATUS', payload: { mongoDown: true } });
+
+          // Auto-switch to server mode after sustained failure
+          if (consecutiveFailures >= MAX_FAILURES_BEFORE_SWITCH) {
+            const currentMode = localStorage.getItem('ssh_monitor_ssh_mode');
+            // Only auto-switch if currently using local mode (URI is localhost)
+            const dbUri = global?.__mongoUri || '';
+            const isLocalUri = /localhost|127\.0\.0\.1/.test(dbUri);
+            if (currentMode === 'local' || isLocalUri) {
+              if (currentMode !== 'server') {
+                console.warn(`[AppContext] MongoDB down for ${consecutiveFailures} polls — auto-switching to server mode`);
+                localStorage.setItem('ssh_monitor_ssh_mode', 'server');
+                dispatch({ type: 'SET_HEALTH_STATUS', payload: { mongoDown: true, autoSwitchedToServer: true } });
+                window.dispatchEvent(new Event('ssh-mode-changed'));
+              }
+            }
+          }
+        } else {
+          // MongoDB is back up
+          if (consecutiveFailures > 0) {
+            consecutiveFailures = 0;
+            dispatch({ type: 'SET_HEALTH_STATUS', payload: { mongoDown: false } });
+          }
+        }
+
+        if (!relayUp) {
+          dispatch({ type: 'SET_HEALTH_STATUS', payload: { relayDown: true } });
+        } else {
+          dispatch({ type: 'SET_HEALTH_STATUS', payload: { relayDown: false } });
+        }
+      } catch (_) {
+        // /api/health itself unreachable (server down) — don't flip state aggressively
+        consecutiveFailures++;
+      }
+    };
+
+    // Poll immediately then every 20 seconds
+    pollHealth();
+    const interval = setInterval(pollHealth, 20000);
+    return () => clearInterval(interval);
+  }, []);
+
   // 6. Persistence: Save active workspace state to localStorage when it changes
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -484,7 +589,7 @@ export function AppProvider({ children }) {
   }, [state.activeTerminals, state.activeFileManagers, state.activeDatabaseBrowsers, state.standaloneTerminals, state.standaloneDatabaseBrowsers, state.activeTerminalId, state.activeDatabaseBrowserId, state.activeFileManagerId, state.view]);
 
   return (
-    <AppContext.Provider value={{ state, dispatch, fetchConnections, apiFetch, relayInfo: state.relayInfo, connectionsReady: state.connectionsReady }}>
+    <AppContext.Provider value={{ state, dispatch, fetchConnections, apiFetch, relayInfo: state.relayInfo, connectionsReady: state.connectionsReady, mongoDown: state.mongoDown, relayDown: state.relayDown, autoSwitchedToServer: state.autoSwitchedToServer }}>
       {children}
     </AppContext.Provider>
   );

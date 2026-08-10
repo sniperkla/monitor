@@ -2257,3 +2257,10 @@ body {
   80% { transform: translate(3px, -1px); }
   90% { transform: translate(-2px, 3px); }
 }
+
+/* Desktop folder hover when icon is dragged over it */
+.desktop-folder.icon-drag-over > div {
+  transform: scale(1.1);
+  box-shadow: 0 0 20px rgba(99, 102, 241, 0.6), 0 0 40px rgba(99, 102, 241, 0.3) !important;
+  border-color: rgba(99, 102, 241, 0.8) !important;
+}

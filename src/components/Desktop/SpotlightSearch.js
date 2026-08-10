@@ -20,19 +20,32 @@ import NotepadApp from '@/apps/NotepadApp';
 import WikiApp from '@/apps/WikiApp';
 import FilesApp from '@/apps/FilesApp';
 import TerminalApp from '@/apps/TerminalApp';
+import TmuxApp from '@/apps/TmuxApp';
+import DockerApp from '@/apps/DockerApp';
 
 const MongoBackupApp = dynamic(() => import('@/apps/MongoBackupApp'), {
   ssr: false,
 });
 
+const ServerBackupApp = dynamic(() => import('@/apps/ServerBackupApp'), {
+  ssr: false,
+});
+
+const RcloneApp = dynamic(() => import('@/apps/RcloneApp'), {
+  ssr: false,
+});
+
 const SYSTEM_APPS = [
-  { id: 'ssh-manager', titleKey: 'ssh.manager', fallback: 'SSH Manager', icon: Monitor, component: <SSHApp />, category: 'app', initialWidth: 1200, initialHeight: 800 },
+  { id: 'ssh-manager', titleKey: 'ssh.manager', fallback: 'SSH Manager', icon: Monitor, component: <SSHApp />, category: 'app', initialWidth: 1400, initialHeight: 820 },
+  { id: 'terminal', titleKey: 'terminal.title', fallback: 'Terminal', icon: Terminal, component: <TerminalApp />, category: 'app', initialWidth: 1100, initialHeight: 700 },
+  { id: 'files-app', titleKey: null, fallback: 'Files', icon: Folder, component: <FilesApp />, category: 'app', initialWidth: 900, initialHeight: 600 },
+  { id: 'docker', titleKey: null, fallback: 'Docker', icon: Server, component: <DockerApp />, category: 'app', initialWidth: 1000, initialHeight: 700 },
   { id: 'auto-deploy', titleKey: null, fallback: 'Auto Deploy', icon: Rocket, component: <AutoDeployApp />, category: 'app', initialWidth: 1100, initialHeight: 760 },
+  { id: 'tmux', titleKey: 'apps.tmux', fallback: 'Tmux', icon: GitBranch, component: <TmuxApp />, category: 'app', initialWidth: 1000, initialHeight: 650 },
   { id: 'mongo-backup', titleKey: null, fallback: 'Mongo Sync', icon: Database, component: <MongoBackupApp />, category: 'app', initialWidth: 1050, initialHeight: 680 },
-  { id: 'settings', titleKey: 'common.settings', fallback: 'Settings', icon: Settings, component: <SettingsApp />, category: 'app', initialWidth: 800, initialHeight: 600 },
-  { id: 'notepad', titleKey: null, fallback: 'Notepad', icon: StickyNote, component: <NotepadApp />, category: 'app', initialWidth: 800, initialHeight: 600 },
-  { id: 'files-app', titleKey: null, fallback: 'Files', icon: Folder, component: <FilesApp />, category: 'app', initialWidth: 1000, initialHeight: 650 },
-  { id: 'terminal', titleKey: 'terminal.title', fallback: 'Terminal', icon: Terminal, component: <TerminalApp />, category: 'app', initialWidth: 900, initialHeight: 600 },
+  { id: 'rclone', titleKey: null, fallback: 'Rclone Sync', icon: CloudCog, component: <RcloneApp />, category: 'app', initialWidth: 1100, initialHeight: 720 },
+  { id: 'server-backup', titleKey: null, fallback: 'Server Backup', icon: ShieldCheck, component: <ServerBackupApp />, category: 'app', initialWidth: 1200, initialHeight: 780 },
+  { id: 'settings', titleKey: 'common.settings', fallback: 'Settings', icon: Settings, component: <SettingsApp />, category: 'app', initialWidth: 700, initialHeight: 500 },
 ];
 
 const CATEGORY_ICONS = {

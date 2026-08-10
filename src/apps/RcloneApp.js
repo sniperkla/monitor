@@ -10,6 +10,7 @@ import {
 } from 'lucide-react';
 import { useVault } from '@/context/VaultContext';
 import { useApp } from '@/context/AppContext';
+import { useOS } from '@/context/OSContext';
 import MasterPasswordModal from '@/components/MasterPasswordModal';
 import MacOSModalWindow from '@/components/MacOSModalWindow';
 
@@ -588,6 +589,7 @@ function DynamicCronPicker({ value, onChange }) {
 export default function RcloneApp() {
   const { vaultStatus } = useVault();
   const { state: appState, apiFetch, connectionsReady } = useApp();
+  const { showAlert, showConfirm } = useOS();
   
   // Read connections directly from AppContext so all apps share the same source of truth
   const connections = (appState?.connections || []).filter(c => c.type !== 'database');
@@ -674,6 +676,7 @@ export default function RcloneApp() {
 
   // Cron Schedule Result Modal State
   const [cronResult, setCronResult] = useState(null); // { testPassed, testStatus, humanSchedule, testOutput, finalSchedule }
+  const [updateResult, setUpdateResult] = useState(null); // { success, message, schedule? }
 
   // Custom Connection Dropdown State (matching AutoDeploy App)
   const [connDropdownOpen, setConnDropdownOpen] = useState(false);
@@ -766,10 +769,10 @@ export default function RcloneApp() {
         fetchRcloneStatus();
         fetchHistory(false);
       } else {
-        alert(data?.error || 'Failed to kill process');
+        showAlert(data?.error || 'Failed to kill process', 'Error');
       }
     } catch (err) {
-      alert(`Error: ${err.message}`);
+      showAlert(`Error: ${err.message}`, 'Error');
     }
     setLoading(false);
   };
@@ -912,7 +915,7 @@ export default function RcloneApp() {
 
   const handleSaveRemote = async () => {
     if (!newRemoteName || !newRemoteType) {
-      alert('Please enter remote name and select type');
+      showAlert('Please enter remote name and select type', 'Warning');
       return;
     }
     setLoading(true);
@@ -934,10 +937,10 @@ export default function RcloneApp() {
         setRemoteConfig({});
         fetchRcloneStatus();
       } else {
-        alert(data?.error || 'Failed to add remote');
+        showAlert(data?.error || 'Failed to add remote', 'Error');
       }
     } catch (err) {
-      alert(err.message);
+      showAlert(err.message, 'Error');
     }
     setLoading(false);
   };
@@ -951,11 +954,11 @@ export default function RcloneApp() {
    */
   const handleStartOAuth = async () => {
     if (!newRemoteName.trim()) {
-      alert('Please enter a Remote Name before authenticating');
+      showAlert('Please enter a Remote Name before authenticating', 'Warning');
       return;
     }
     if (!remoteConfig.client_id?.trim() || !remoteConfig.client_secret?.trim()) {
-      alert('Please enter your Client ID and Client Secret first');
+      showAlert('Please enter your Client ID and Client Secret first', 'Warning');
       return;
     }
 
@@ -1097,24 +1100,24 @@ export default function RcloneApp() {
 
   const handleClearHistory = async () => {
     if (!selectedConnId) return;
-    if (!confirm('Clear all backup history logs on server?')) return;
-
-    setHistoryLoading(true);
-    try {
-      const res = await apiFetch(`/api/rclone/history?connectionId=${selectedConnId}`, {
-        method: 'DELETE'
-      });
-      const data = await res.json();
-      if (data?.success) {
-        setHistoryRuns([]);
-        setHistoryProjects([]);
-      } else {
-        alert(data?.error || 'Failed to clear logs');
+    showConfirm('Clear all backup history logs on server?', async () => {
+      setHistoryLoading(true);
+      try {
+        const res = await apiFetch(`/api/rclone/history?connectionId=${selectedConnId}`, {
+          method: 'DELETE'
+        });
+        const data = await res.json();
+        if (data?.success) {
+          setHistoryRuns([]);
+          setHistoryProjects([]);
+        } else {
+          showAlert(data?.error || 'Failed to clear logs', 'Error');
+        }
+      } catch (err) {
+        showAlert(`Error: ${err.message}`, 'Error');
       }
-    } catch (err) {
-      alert(`Error: ${err.message}`);
-    }
-    setHistoryLoading(false);
+      setHistoryLoading(false);
+    }, 'Clear History', 'Clear', 'Cancel');
   };
 
   // ⚡ Real-Time Auto-Refresh Effect for Backup History (6s Interval)
@@ -1132,7 +1135,7 @@ export default function RcloneApp() {
 
   const handleSaveCron = async () => {
     if (!sourcePath || !targetPath) {
-      alert('Please specify source and target paths');
+      showAlert('Please specify source and target paths', 'Warning');
       return;
     }
     const finalSchedule = cronSchedule === 'custom' ? customCron : cronSchedule;
@@ -1172,10 +1175,10 @@ export default function RcloneApp() {
         fetchCrons();
         fetchRcloneStatus();
       } else {
-        alert(data?.error || 'Failed to add crontab job');
+        showAlert(data?.error || 'Failed to add crontab job', 'Error');
       }
     } catch (err) {
-      alert(err.message);
+      showAlert(err.message, 'Error');
     }
     setLoading(false);
   };
@@ -1199,15 +1202,19 @@ export default function RcloneApp() {
       });
       const data = await res.json();
       if (data?.success) {
-        alert('✅ Server crontab task updated successfully!');
+        setUpdateResult({
+          success: true,
+          message: 'Schedule updated successfully on the server.',
+          schedule: data.humanSchedule || editingCron.schedule,
+        });
         setEditingCron(null);
         fetchCrons();
         fetchRcloneStatus();
       } else {
-        alert(data?.error || 'Failed to update crontab task');
+        setUpdateResult({ success: false, message: data?.error || 'Failed to update crontab task' });
       }
     } catch (err) {
-      alert(err.message);
+      setUpdateResult({ success: false, message: err.message });
     }
     setLoading(false);
   };
@@ -1216,52 +1223,55 @@ export default function RcloneApp() {
     const rawLine = typeof cronItem === 'string' ? cronItem : cronItem?.raw;
     const taskName = cronItem?.projectName || (cronItem?.source && cronItem?.target ? `${cronItem.source} ➔ ${cronItem.target}` : 'this schedule');
 
-    if (!confirm(`Remove the schedule for "${taskName}" from server crontab?`)) return;
-
     const warnMsg =
       `⚠️ DELETE TASK FILES CONFIRMATION\n\n` +
       `Do you also want to delete all associated script & log files for "${taskName}" on the server?\n\n` +
-      `• Click OK to DELETE ALL:\n` +
+      `• Click "Delete All" to DELETE ALL:\n` +
       `  1. Crontab schedule entry\n` +
       `  2. Shell script file (.sh)\n` +
       `  3. All execution log files (.log)\n` +
       `  4. Task lock files (.lock)\n\n` +
-      `• Click Cancel to ONLY remove schedule from crontab (keep .sh script & log history).`;
+      `• Click "Schedule Only" to ONLY remove schedule from crontab (keep .sh script & log history).`;
 
-    const removeScript = confirm(warnMsg);
-
-    try {
-      const res = await apiFetch(`/api/rclone/cron?connectionId=${selectedConnId}&rawLine=${encodeURIComponent(rawLine)}&removeScript=${removeScript}`, {
-        method: 'DELETE',
-      });
-      const data = await res.json();
-      if (data?.success) {
-        fetchCrons();
-        fetchHistory(true);
-        fetchRcloneStatus();
-      } else {
-        alert(data?.error || 'Failed to remove crontab job');
+    const executeCronDelete = async (removeScript) => {
+      try {
+        const res = await apiFetch(`/api/rclone/cron?connectionId=${selectedConnId}&rawLine=${encodeURIComponent(rawLine)}&removeScript=${removeScript}`, {
+          method: 'DELETE',
+        });
+        const data = await res.json();
+        if (data?.success) {
+          fetchCrons();
+          fetchHistory(true);
+          fetchRcloneStatus();
+        } else {
+          showAlert(data?.error || 'Failed to remove crontab job', 'Error');
+        }
+      } catch (err) {
+        showAlert(err.message, 'Error');
       }
-    } catch (err) {
-      alert(err.message);
-    }
+    };
+
+    showConfirm(`Remove the schedule for "${taskName}" from server crontab?`, () => {
+      showConfirm(warnMsg, () => executeCronDelete(true), 'Delete Task Files', 'Delete All', 'Schedule Only', () => executeCronDelete(false));
+    }, 'Remove Schedule', 'Remove', 'Cancel');
   };
 
   const handleDeleteRemote = async (name) => {
-    if (!confirm(`Delete remote "${name}" from rclone config?`)) return;
-    try {
-      const res = await apiFetch(`/api/rclone/remote?connectionId=${selectedConnId}&name=${encodeURIComponent(name)}`, {
-        method: 'DELETE',
-      });
-      const data = await res.json();
-      if (data?.success) {
-        fetchRcloneStatus();
-      } else {
-        alert(data?.error || 'Failed to delete remote');
+    showConfirm(`Delete remote "${name}" from rclone config?`, async () => {
+      try {
+        const res = await apiFetch(`/api/rclone/remote?connectionId=${selectedConnId}&name=${encodeURIComponent(name)}`, {
+          method: 'DELETE',
+        });
+        const data = await res.json();
+        if (data?.success) {
+          fetchRcloneStatus();
+        } else {
+          showAlert(data?.error || 'Failed to delete remote', 'Error');
+        }
+      } catch (err) {
+        showAlert(err.message, 'Error');
       }
-    } catch (err) {
-      alert(err.message);
-    }
+    }, 'Delete Remote', 'Delete', 'Cancel');
   };
 
   const openPathPicker = (mode) => {
@@ -1326,7 +1336,7 @@ export default function RcloneApp() {
 
   const handleStartBackupJob = async () => {
     if (!sourcePath || !targetPath) {
-      alert('Please specify source and target paths');
+      showAlert('Please specify source and target paths', 'Warning');
       return;
     }
     setJobLog('Launching Rclone operation...');
@@ -1358,11 +1368,11 @@ export default function RcloneApp() {
         setActiveJob(data);
       } else {
         setIsJobRunning(false);
-        alert(data?.error || 'Failed to start Rclone job');
+        showAlert(data?.error || 'Failed to start Rclone job', 'Error');
       }
     } catch (err) {
       setIsJobRunning(false);
-      alert(err.message);
+      showAlert(err.message, 'Error');
     }
   };
 
@@ -2900,6 +2910,56 @@ export default function RcloneApp() {
                 }`}
               >
                 Done
+              </button>
+            </div>
+          </div>
+        )}
+      </MacOSModalWindow>
+
+      {/* ═══════ Save Changes Result Modal ═══════ */}
+      <MacOSModalWindow
+        isOpen={!!updateResult}
+        onClose={() => setUpdateResult(null)}
+        title={updateResult?.success ? 'Schedule Updated' : 'Update Failed'}
+        icon={updateResult?.success ? CheckCircle2 : AlertTriangle}
+        defaultWidth={460}
+        defaultHeight={260}
+        closeOnOverlayClick={true}
+        maxWidthClassName="max-w-[calc(100vw-40px)] sm:max-w-md"
+        contentClassName="p-0"
+      >
+        {updateResult && (
+          <div className="flex flex-col">
+            <div className={`px-6 py-4 ${updateResult.success ? 'bg-emerald-500/10 border-b border-emerald-500/20' : 'bg-rose-500/10 border-b border-rose-500/20'}`}>
+              <div className="flex items-center gap-3">
+                <div className={`p-2 rounded-full ${updateResult.success ? 'bg-emerald-500/20 text-emerald-400' : 'bg-rose-500/20 text-rose-400'}`}>
+                  {updateResult.success ? <CheckCircle2 size={22} /> : <AlertTriangle size={22} />}
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-[var(--text-primary)]">
+                    {updateResult.success ? '✅ Schedule updated successfully!' : '❌ Update failed'}
+                  </h3>
+                  {updateResult.schedule && (
+                    <p className="text-[11px] text-[var(--text-muted)] mt-0.5">
+                      Schedule: <span className="font-mono text-indigo-400 font-semibold">{updateResult.schedule}</span>
+                    </p>
+                  )}
+                </div>
+              </div>
+            </div>
+            <div className="px-6 py-4 flex-1">
+              <p className="text-xs text-[var(--text-muted)] leading-relaxed">{updateResult.message}</p>
+            </div>
+            <div className="px-6 py-4 border-t border-[var(--border-color)] flex justify-end bg-[var(--bg-secondary)]/50">
+              <button
+                onClick={() => setUpdateResult(null)}
+                className={`px-5 py-2 rounded-xl text-xs font-bold transition-colors shadow-sm cursor-pointer ${
+                  updateResult.success
+                    ? 'bg-emerald-600 hover:bg-emerald-500 text-white'
+                    : 'bg-rose-600 hover:bg-rose-500 text-white'
+                }`}
+              >
+                {updateResult.success ? 'Done ✓' : 'Close'}
               </button>
             </div>
           </div>

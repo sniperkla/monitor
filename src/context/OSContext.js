@@ -30,6 +30,7 @@ const initialState = {
   taskbarPosition: 'bottom', // top, bottom, left, right
   windowLayout: 'mac', // mac, pc
   selectedIconIds: [], // IDs of currently selected icons
+  pinnedApps: ['ssh-manager', 'terminal', 'files', 'docker', 'settings'], // Pinned app IDs for taskbar
   timestamp: 0, // Last modified timestamp for conflict resolution
   notificationQueue: [], // Array of { id, title, message, type, timestamp }
   modal: {
@@ -70,6 +71,8 @@ const initialState = {
   windowsByDesktop: {
     'desktop-1': []
   },
+  // Icon groups (folders on the desktop)
+  iconGroups: [], // Array of { id, name, position: {x,y}, iconIds: [] }
   // Keyboard shortcuts
   keyboardShortcuts: {
     previewWindow: 'Ctrl+Cmd+Up',
@@ -492,7 +495,9 @@ function osReducer(state, action) {
         },
         keyboardShortcuts: action.payload.keyboardShortcuts || state.keyboardShortcuts,
         windows: hydratedWindows.length > 0 ? hydratedWindows : state.windows,
-        windowsByDesktop: hydratedWindowsByDesktop || action.payload.windowsByDesktop || state.windowsByDesktop
+        windowsByDesktop: hydratedWindowsByDesktop || action.payload.windowsByDesktop || state.windowsByDesktop,
+        iconGroups: action.payload.iconGroups || state.iconGroups || [],
+        pinnedApps: action.payload.pinnedApps || state.pinnedApps || ['ssh-manager', 'terminal', 'files', 'docker', 'settings'],
       };
     }
     case 'SHOW_MODAL':
@@ -683,6 +688,85 @@ function osReducer(state, action) {
         timestamp: Date.now(),
       };
     }
+    case 'CREATE_ICON_GROUP': {
+      const newGroup = {
+        id: `group-${Date.now()}`,
+        name: action.payload.name || 'New Group',
+        position: action.payload.position || { x: 120, y: 120 },
+        iconIds: action.payload.iconIds || [],
+      };
+      return { ...state, iconGroups: [...(state.iconGroups || []), newGroup], timestamp: Date.now() };
+    }
+    case 'DELETE_ICON_GROUP': {
+      return {
+        ...state,
+        iconGroups: (state.iconGroups || []).filter(g => g.id !== action.payload),
+        timestamp: Date.now(),
+      };
+    }
+    case 'RENAME_ICON_GROUP': {
+      return {
+        ...state,
+        iconGroups: (state.iconGroups || []).map(g =>
+          g.id === action.payload.id ? { ...g, name: action.payload.name } : g
+        ),
+        timestamp: Date.now(),
+      };
+    }
+    case 'UPDATE_ICON_GROUP_POSITION': {
+      return {
+        ...state,
+        iconGroups: (state.iconGroups || []).map(g =>
+          g.id === action.payload.id ? { ...g, position: action.payload.position } : g
+        ),
+        timestamp: Date.now(),
+      };
+    }
+    case 'ADD_TO_ICON_GROUP': {
+      const { groupId, iconId } = action.payload;
+      console.log('[OSContext] ADD_TO_ICON_GROUP:', { groupId, iconId, currentGroups: state.iconGroups });
+      const updated = (state.iconGroups || []).map(g =>
+        g.id === groupId && !g.iconIds.includes(iconId)
+          ? { ...g, iconIds: [...g.iconIds, iconId] }
+          : g
+      );
+      console.log('[OSContext] Updated groups:', updated);
+      return {
+        ...state,
+        iconGroups: updated,
+        timestamp: Date.now(),
+      };
+    }
+    case 'REMOVE_FROM_ICON_GROUP': {
+      const { groupId, iconId } = action.payload;
+      return {
+        ...state,
+        iconGroups: (state.iconGroups || []).map(g =>
+          g.id === groupId
+            ? { ...g, iconIds: g.iconIds.filter(id => id !== iconId) }
+            : g
+        ),
+        timestamp: Date.now(),
+      };
+    }
+    case 'PIN_APP': {
+      const appId = action.payload;
+      const current = state.pinnedApps || [];
+      if (current.includes(appId)) return state;
+      return {
+        ...state,
+        pinnedApps: [...current, appId],
+        timestamp: Date.now(),
+      };
+    }
+    case 'UNPIN_APP': {
+      const appId = action.payload;
+      return {
+        ...state,
+        pinnedApps: (state.pinnedApps || []).filter(id => id !== appId),
+        timestamp: Date.now(),
+      };
+    }
     case 'UPDATE_WINDOW_POSITION': {
       const { id, position } = action.payload;
       const posData = position?.position || position || {};
@@ -823,6 +907,13 @@ export function OSProvider({ children }) {
         closeAll: 'Ctrl+Cmd+W',
         spotlight: 'Cmd+K',
       },
+      iconGroups: (s.iconGroups || []).map(g => ({
+        id: g.id,
+        name: g.name,
+        position: g.position || { x: 120, y: 120 },
+        iconIds: g.iconIds || [],
+      })),
+      pinnedApps: s.pinnedApps || ['ssh-manager', 'terminal', 'files', 'docker', 'settings'],
     });
   };
 
@@ -915,10 +1006,10 @@ export function OSProvider({ children }) {
     state.theme,
     state.keyboardShortcuts,
     state.terminalSettings,
-    state.windows
+    state.windows,
+    state.iconGroups,
+    state.pinnedApps
   ]);
-
-  // Sync state.language with i18n
   useEffect(() => {
     if (state.language && i18n.language !== state.language) {
       i18n.changeLanguage(state.language);
@@ -1549,6 +1640,16 @@ export function OSProvider({ children }) {
       setWindowLayout,
       setTheme,
       setTerminalSettings: (settings) => dispatch({ type: 'SET_TERMINAL_SETTINGS', payload: settings }),
+      // Icon groups
+      createIconGroup: (name, position, iconIds) => dispatch({ type: 'CREATE_ICON_GROUP', payload: { name, position, iconIds } }),
+      deleteIconGroup: (id) => dispatch({ type: 'DELETE_ICON_GROUP', payload: id }),
+      renameIconGroup: (id, name) => dispatch({ type: 'RENAME_ICON_GROUP', payload: { id, name } }),
+      updateIconGroupPosition: (id, position) => dispatch({ type: 'UPDATE_ICON_GROUP_POSITION', payload: { id, position } }),
+      addToIconGroup: (groupId, iconId) => dispatch({ type: 'ADD_TO_ICON_GROUP', payload: { groupId, iconId } }),
+      removeFromIconGroup: (groupId, iconId) => dispatch({ type: 'REMOVE_FROM_ICON_GROUP', payload: { groupId, iconId } }),
+      // Pinned apps
+      pinApp: (appId) => dispatch({ type: 'PIN_APP', payload: appId }),
+      unpinApp: (appId) => dispatch({ type: 'UNPIN_APP', payload: appId }),
       dispatch,
     }}>
       {children}

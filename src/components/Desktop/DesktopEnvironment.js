@@ -2,11 +2,12 @@
 
 import { useOS } from '@/context/OSContext';
 import DesktopIcon from '@/components/Desktop/DesktopIcon';
+import DesktopFolder from '@/components/Desktop/DesktopFolder';
 import Window from '@/components/Desktop/Window';
 import Taskbar from '@/components/Desktop/Taskbar';
 import SSHApp from '@/apps/SSHApp';
 import SettingsApp from '@/apps/SettingsApp';
-import { Terminal, Settings, FolderClosed, Monitor, RefreshCw, Plus, 
+import { Terminal, Settings, FolderClosed, Monitor, RefreshCw, Plus, FolderPlus,
   Image as ImageIcon, Layout, Grid, List, AlignLeft, SortAsc, Server,
   ChevronRight, Type, Calendar, HardDrive, Palette, MonitorCog, Globe, Maximize, Minimize, Database, Check, MonitorPlay, GitBranch, CloudSync, Rocket, CloudCog, ShieldCheck
 } from 'lucide-react';
@@ -50,7 +51,7 @@ const RcloneApp = dynamic(() => import('@/apps/RcloneApp'), {
 export default function DesktopEnvironment({ bootPhase }) {
   const { t } = useTranslation();
   const isMobile = useIsMobile();
-  const { state: osState, openWindow, setGlassmorphism, setIconSize, setSortBy, setWallpaper, updateIconPosition, setLanguage, setSelectedIcons, updateMultipleIconPositions, toggleMinimize, switchToPrevDesktop, switchToNextDesktop } = useOS();
+  const { state: osState, openWindow, setGlassmorphism, setIconSize, setSortBy, setWallpaper, updateIconPosition, setLanguage, setSelectedIcons, updateMultipleIconPositions, toggleMinimize, switchToPrevDesktop, switchToNextDesktop, createIconGroup, addToIconGroup } = useOS();
   const { windows, iconSize, sortBy, currentDesktopId, windowsByDesktop, keyboardShortcuts } = osState;
   const { state: appState, dispatch: appDispatch, fetchConnections } = useApp();
   
@@ -494,6 +495,19 @@ export default function DesktopEnvironment({ bootPhase }) {
     return () => window.removeEventListener('desktop-icon-drop', handleIconDrop);
   }, []);
 
+  useEffect(() => {
+    const handleFolderDrop = (e) => {
+      const { groupId, iconId } = e.detail;
+      console.log('[DesktopEnv] Folder drop event received:', { groupId, iconId });
+      if (groupId && iconId) {
+        console.log('[DesktopEnv] Adding icon to group...');
+        addToIconGroup(groupId, iconId);
+      }
+    };
+    window.addEventListener('desktop-folder-drop', handleFolderDrop);
+    return () => window.removeEventListener('desktop-folder-drop', handleFolderDrop);
+  }, [addToIconGroup]);
+
     useEffect(() => {
       const handleOpenDocker = (e) => {
           const conn = e.detail?.connection;
@@ -744,17 +758,39 @@ export default function DesktopEnvironment({ bootPhase }) {
             }
           }}
         >
-          {!hideDesktopContent && DESKTOP_ICONS.map((icon, idx) => (
-            <DesktopIcon
-              key={`${icon.id}-${refreshKey}`}
-              id={icon.id}
-              title={icon.title}
-              icon={icon.icon}
-              component={icon.component}
-              initialWidth={icon.initialWidth}
-              initialHeight={icon.initialHeight}
-              defaultPos={{ x: 20, y: 20 + idx * 110 }}
+          {!hideDesktopContent && (() => {
+            // Get all icon IDs that are in folders
+            const iconIdsInFolders = new Set(
+              (osState.iconGroups || []).flatMap(g => g.iconIds || [])
+            );
+            
+            // Filter out icons that are in folders
+            return DESKTOP_ICONS
+              .filter(icon => !iconIdsInFolders.has(icon.id))
+              .map((icon, idx) => (
+                <DesktopIcon
+                  key={`${icon.id}-${refreshKey}`}
+                  id={icon.id}
+                  title={icon.title}
+                  icon={icon.icon}
+                  component={icon.component}
+                  initialWidth={icon.initialWidth}
+                  initialHeight={icon.initialHeight}
+                  defaultPos={{ x: 20, y: 20 + idx * 110 }}
+                  isMobile={isMobile}
+                />
+              ));
+          })()}
+          {/* Render icon groups (folders) */}
+          {(osState.iconGroups || []).map((group) => (
+            <DesktopFolder
+              key={group.id}
+              group={group}
+              allIcons={DESKTOP_ICONS}
               isMobile={isMobile}
+              onOpenIcon={(icon) => {
+                openWindow(icon.id, icon.title, icon.component, icon.icon, { initialWidth: icon.initialWidth, initialHeight: icon.initialHeight });
+              }}
             />
           ))}
         </div>
@@ -913,6 +949,15 @@ export default function DesktopEnvironment({ bootPhase }) {
                 label={t('desktop.context.newConn')} 
                 onHover={() => setActiveSubmenu(null)}
                 onClick={() => { setShowNewConnModal(true); closeContext(); }} 
+              />
+              <ContextItem 
+                icon={FolderPlus} 
+                label="New Group" 
+                onHover={() => setActiveSubmenu(null)}
+                onClick={() => { 
+                  createIconGroup('New Group', { x: contextMenu.x - 100, y: contextMenu.y + 20 }, []); 
+                  closeContext(); 
+                }} 
               />
               <ContextItem 
                 icon={Terminal} 

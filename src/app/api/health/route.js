@@ -5,15 +5,37 @@ import mongoose from 'mongoose';
 export async function GET() {
   try {
     const memory = checkMemory();
-    const dbStatus = mongoose.connection.readyState;
+    const dbReadyState = mongoose.connection.readyState;
+    // readyState: 0=disconnected, 1=connected, 2=connecting, 3=disconnecting
+    const mongoUp = dbReadyState === 1;
 
-    const health = {
-      status: memory.safe && dbStatus === 1 ? 'ok' : 'degraded',
+    // Relay: check if any relay agents are active globally
+    const relayCount = global.__activeRelays?.size ?? 0;
+    const relayUp = relayCount > 0;
+
+    const status = memory.safe && mongoUp ? 'ok' : 'degraded';
+
+    return NextResponse.json({
+      status,
       timestamp: new Date().toISOString(),
-    };
-
-    return NextResponse.json(health, { status: health.status === 'ok' ? 200 : 503 });
+      mongo: {
+        up: mongoUp,
+        readyState: dbReadyState,
+      },
+      relay: {
+        up: relayUp,
+        count: relayCount,
+      },
+      memory: {
+        safe: memory.safe,
+      },
+    }, { status: status === 'ok' ? 200 : 503 });
   } catch (error) {
-    return NextResponse.json({ status: 'error' }, { status: 500 });
+    return NextResponse.json({
+      status: 'error',
+      timestamp: new Date().toISOString(),
+      mongo: { up: false, readyState: -1 },
+      relay: { up: false, count: 0 },
+    }, { status: 500 });
   }
 }

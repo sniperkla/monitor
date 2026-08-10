@@ -2,13 +2,20 @@
 
 import { useState, useEffect, useRef } from 'react';
 import { useOS } from '@/context/OSContext';
-import { Terminal, Settings, LayoutGrid, Monitor, Wifi, Volume2, Search, Power, User, X, StickyNote, Book, Layers, Columns, StickyNote as NoteIcon, BookOpen, FolderClosed, Cpu, Clock, ChevronLeft, ChevronRight, Grid3x3, Keyboard, Server } from 'lucide-react';
+import { Terminal, Settings, LayoutGrid, Monitor, Wifi, Volume2, Search, Power, User, X, StickyNote, Book, Layers, Columns, StickyNote as NoteIcon, BookOpen, FolderClosed, Cpu, Clock, ChevronLeft, ChevronRight, Grid3x3, Keyboard, Server, Rocket, MonitorPlay, Database, CloudCog, ShieldCheck } from 'lucide-react';
 import { createPortal } from 'react-dom';
 import SSHApp from '@/apps/SSHApp';
 import SettingsApp from '@/apps/SettingsApp';
 import NotepadApp from '@/apps/NotepadApp';
 import WikiApp from '@/apps/WikiApp';
 import DockerApp from '@/apps/DockerApp';
+import AutoDeployApp from '@/apps/AutoDeployApp';
+import TmuxApp from '@/apps/TmuxApp';
+import dynamic from 'next/dynamic';
+
+const MongoBackupApp = dynamic(() => import('@/apps/MongoBackupApp'), { ssr: false });
+const RcloneApp = dynamic(() => import('@/apps/RcloneApp'), { ssr: false });
+const ServerBackupApp = dynamic(() => import('@/apps/ServerBackupApp'), { ssr: false });
 import { AnimatePresence, motion } from 'framer-motion';
 import { useSession, signOut } from 'next-auth/react';
 import { useTranslation } from 'react-i18next';
@@ -21,16 +28,17 @@ import { useAIUsagePolling } from '@/hooks/useAIUsage';
 import { useIsMobile } from '@/hooks/useIsMobile';
 
 export default function Taskbar() {
-  const { state, focusWindow, toggleMinimize, openWindow, closeWindow, setTaskbarPosition, saveSettings, switchDesktop, switchToNextDesktop, switchToPrevDesktop, addNotification } = useOS();
+  const { state, focusWindow, toggleMinimize, openWindow, closeWindow, setTaskbarPosition, saveSettings, switchDesktop, switchToNextDesktop, switchToPrevDesktop, addNotification, pinApp, unpinApp } = useOS();
   const { data: session } = useSession();
   const { t } = useTranslation();
   const isMobile = useIsMobile();
-  const { windows, activeWindowId, glassmorphism, taskbarPosition: _taskbarPosition, currentDesktopId, windowsByDesktop, desktops } = state;
+  const { windows, activeWindowId, glassmorphism, taskbarPosition: _taskbarPosition, currentDesktopId, windowsByDesktop, desktops, pinnedApps } = state;
   const taskbarPosition = isMobile ? 'bottom' : _taskbarPosition;
   const [startMenuOpen, setStartMenuOpen] = useState(false);
   const [contextMenu, setContextMenu] = useState(null); // { x, y, windowId }
   const [taskbarContextMenu, setTaskbarContextMenu] = useState(null); // { x, y }
   const [showPreview, setShowPreview] = useState(false);
+  const [showAllApps, setShowAllApps] = useState(false);
   const { minimizeAll, restoreAll } = useOS();
   const [mounted, setMounted] = useState(false);
   const startMenuRef = useRef(null);
@@ -70,7 +78,7 @@ export default function Taskbar() {
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, [startMenuOpen, contextMenu, taskbarContextMenu]);
 
-  const handleContextMenu = (e, winId) => {
+  const handleContextMenu = (e, winId, pinnedAppId = null) => {
     e.preventDefault();
     e.stopPropagation();
     
@@ -101,7 +109,7 @@ export default function Taskbar() {
     }
 
     // Adjust horizontal bounds if needed
-    const menuWidth = winId ? 160 : 240;
+    const menuWidth = (winId || pinnedAppId) ? 180 : 240;
     if (position.left !== undefined) {
       if (position.left + menuWidth > window.innerWidth) {
         position.left = window.innerWidth - menuWidth - 10;
@@ -111,8 +119,8 @@ export default function Taskbar() {
       // already anchored to right
     }
 
-    if (winId) {
-      setContextMenu({ ...position, windowId: winId });
+    if (winId || pinnedAppId) {
+      setContextMenu({ ...position, windowId: winId, pinnedAppId: pinnedAppId || (winId ? winId.split('-')[0] : null) });
       setTaskbarContextMenu(null);
     } else {
       setTaskbarContextMenu(position);
@@ -142,12 +150,18 @@ export default function Taskbar() {
   if (!mounted) return null;
 
   const apps = [
-    { id: 'ssh-manager', title: t('apps.sshManager'), icon: Monitor, component: <SSHApp />, initialWidth: 1200, initialHeight: 800 },
-    { id: 'settings', title: t('apps.settings'), icon: Settings, component: <SettingsApp />, initialWidth: 800, initialHeight: 600 },
-    { id: 'wiki', title: t('apps.resourceHub'), icon: Book, component: <WikiApp />, initialWidth: 1100, initialHeight: 700 },
-    { id: 'docker-app', title: t('apps.docker'), icon: Server, component: <DockerApp />, initialWidth: 1000, initialHeight: 700 },
+    { id: 'ssh-manager', title: t('apps.sshManager'), icon: Monitor, component: <SSHApp />, initialWidth: 1400, initialHeight: 820 },
+    { id: 'terminal', title: t('apps.terminal'), icon: Terminal, component: <TerminalApp />, initialWidth: 1100, initialHeight: 700 },
+    { id: 'files', title: t('apps.files'), icon: FolderClosed, component: <FilesApp />, initialWidth: 900, initialHeight: 600 },
+    { id: 'docker', title: 'Docker', icon: Server, component: <DockerApp />, initialWidth: 1000, initialHeight: 700 },
+    { id: 'auto-deploy', title: 'Auto Deploy', icon: Rocket, component: <AutoDeployApp />, initialWidth: 1100, initialHeight: 760 },
+    { id: 'tmux', title: t('apps.tmux'), icon: MonitorPlay, component: <TmuxApp />, initialWidth: 1000, initialHeight: 650 },
+    { id: 'mongo-backup', title: 'Mongo Sync', icon: Database, component: <MongoBackupApp />, initialWidth: 1050, initialHeight: 680 },
+    { id: 'rclone', title: 'Rclone Sync', icon: CloudCog, component: <RcloneApp />, initialWidth: 1100, initialHeight: 720 },
+    { id: 'server-backup', title: 'Server Backup', icon: ShieldCheck, component: <ServerBackupApp />, initialWidth: 1200, initialHeight: 780 },
+    { id: 'settings', title: t('apps.settings'), icon: Settings, component: <SettingsApp />, initialWidth: 700, initialHeight: 500 },
     { id: 'notepad', title: t('apps.notepad'), icon: StickyNote, component: <NotepadApp />, initialWidth: 800, initialHeight: 600 },
-    { id: 'terminal', title: t('apps.terminal'), icon: Terminal, component: <TerminalApp />, initialWidth: 900, initialHeight: 600 },
+    { id: 'wiki', title: t('apps.resourceHub'), icon: Book, component: <WikiApp />, initialWidth: 1100, initialHeight: 700 },
   ];
 
   const isVertical = taskbarPosition === 'left' || taskbarPosition === 'right';
@@ -277,6 +291,7 @@ export default function Taskbar() {
           <button 
             onClick={() => {
               setStartMenuOpen(!startMenuOpen);
+              if (startMenuOpen) setShowAllApps(false);
               setContextMenu(null);
             }}
             className={`${isVertical ? 'w-10 h-10' : 'w-10 h-10'} rounded-2xl transition-all flex items-center justify-center shadow-lg shrink-0 border border-[var(--accent-indigo)]/30 ${
@@ -370,28 +385,73 @@ export default function Taskbar() {
 
                 {/* App List */}
                 <div className="px-2 pb-4 space-y-1">
-                  <h3 className="px-3 text-[10px] font-bold text-[var(--text-muted)] uppercase tracking-wider mb-2">{t('desktop.taskbar.pinned')}</h3>
-                  {apps.map(app => (
-                    <button
-                      key={app.id}
-                      onClick={() => {
-                        openWindow(app.id, app.title, app.component, app.icon, { 
-                          initialWidth: app.initialWidth, 
-                          initialHeight: app.initialHeight 
-                        });
-                        setStartMenuOpen(false);
-                      }}
-                      className="w-full flex items-center gap-3 px-3 py-2 rounded-xl hover:bg-[var(--bg-tertiary)] transition-colors group"
-                    >
-                      <div className={`w-8 h-8 rounded-lg ${state.theme === 'retro' || state.theme === 'fallout' || state.theme === 'cyberpunk' ? '' : 'bg-[var(--bg-primary)]'} group-hover:bg-[var(--bg-card-hover)] flex items-center justify-center p-1`}>
-                        <AppIcon id={app.id} size={16} theme={state.theme} iconStyle={state.iconStyle} />
-                      </div>
-                      <div className="text-left">
-                        <span className="block text-sm font-medium text-[var(--text-primary)]">{app.title}</span>
-                        <span className="block text-[10px] text-[var(--text-secondary)]">{t('desktop.taskbar.systemApp')}</span>
-                      </div>
-                    </button>
-                  ))}
+                  <h3 className="px-3 text-[10px] font-bold text-[var(--text-muted)] uppercase tracking-wider mb-2">{t('desktop.taskbar.allApps', 'All Apps')}</h3>
+                  {(() => {
+                    const LIMIT = 4;
+                    const visible = showAllApps ? apps : apps.slice(0, LIMIT);
+                    const hidden = apps.length - LIMIT;
+                    return (
+                      <>
+                        {visible.map(app => (
+                          <div key={app.id} className="flex items-center group/row">
+                            <button
+                              onClick={() => {
+                                openWindow(app.id, app.title, app.component, app.icon, { 
+                                  initialWidth: app.initialWidth, 
+                                  initialHeight: app.initialHeight 
+                                });
+                                setStartMenuOpen(false);
+                              }}
+                              className="flex-1 flex items-center gap-3 px-3 py-2 rounded-xl hover:bg-[var(--bg-tertiary)] transition-colors group"
+                            >
+                              <div className={`w-8 h-8 rounded-lg ${state.theme === 'retro' || state.theme === 'fallout' || state.theme === 'cyberpunk' ? '' : 'bg-[var(--bg-primary)]'} group-hover:bg-[var(--bg-card-hover)] flex items-center justify-center p-1`}>
+                                <AppIcon id={app.id} size={16} theme={state.theme} iconStyle={state.iconStyle} />
+                              </div>
+                              <div className="text-left">
+                                <span className="block text-sm font-medium text-[var(--text-primary)]">{app.title}</span>
+                                <span className="block text-[10px] text-[var(--text-secondary)]">{t('desktop.taskbar.systemApp')}</span>
+                              </div>
+                            </button>
+                            {(pinnedApps || []).includes(app.id) ? (
+                              <button
+                                onClick={() => { unpinApp(app.id); }}
+                                className="opacity-0 group-hover/row:opacity-100 mr-2 p-1.5 rounded-lg hover:bg-[var(--bg-tertiary)] text-[var(--text-muted)] hover:text-[var(--accent-amber)] transition-all"
+                                title={t('desktop.taskbar.unpinFromTaskbar', 'Unpin from Taskbar')}
+                              >
+                                <Columns size={12} />
+                              </button>
+                            ) : (
+                              <button
+                                onClick={() => { pinApp(app.id); }}
+                                className="opacity-0 group-hover/row:opacity-100 mr-2 p-1.5 rounded-lg hover:bg-[var(--bg-tertiary)] text-[var(--text-muted)] hover:text-[var(--accent-indigo)] transition-all"
+                                title={t('desktop.taskbar.pinToTaskbar', 'Pin to Taskbar')}
+                              >
+                                <Columns size={12} />
+                              </button>
+                            )}
+                          </div>
+                        ))}
+                        {!showAllApps && hidden > 0 && (
+                          <button
+                            onClick={() => setShowAllApps(true)}
+                            className="w-full text-left px-3 py-2 text-xs text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] rounded-xl transition-colors flex items-center gap-2"
+                          >
+                            <span className="flex items-center justify-center w-8 h-8 rounded-lg bg-[var(--bg-tertiary)] text-[var(--text-muted)] text-lg font-bold">…</span>
+                            <span>{hidden} more app{hidden > 1 ? 's' : ''}</span>
+                          </button>
+                        )}
+                        {showAllApps && apps.length > LIMIT && (
+                          <button
+                            onClick={() => setShowAllApps(false)}
+                            className="w-full text-left px-3 py-2 text-xs text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] rounded-xl transition-colors flex items-center gap-2"
+                          >
+                            <span className="flex items-center justify-center w-8 h-8 rounded-lg bg-[var(--bg-tertiary)] text-[var(--text-muted)] text-base font-bold">↑</span>
+                            <span>Show less</span>
+                          </button>
+                        )}
+                      </>
+                    );
+                  })()}
                 </div>
               </motion.div>
             )}
@@ -411,38 +471,108 @@ export default function Taskbar() {
           </button>
         )}
 
-        {/* Running Apps */}
+        {/* Dock: Pinned + Running Apps */}
         <div className={`flex-1 flex ${isVertical ? 'flex-col overflow-y-auto no-scrollbar py-1' : 'flex-row items-center overflow-x-auto no-scrollbar px-2'} gap-1.5 relative ${isVertical ? 'items-center' : ''}`}>
-          {(windowsByDesktop[currentDesktopId] || windows).filter((win, idx, arr) => arr.findIndex(w => w.id === win.id) === idx).map(win => (
-            <button
-              key={win.id}
-              onClick={() => {
-                if (contextMenu) setContextMenu(null);
-                win.isMinimized ? toggleMinimize(win.id) : focusWindow(win.id);
-              }}
-              onContextMenu={(e) => handleContextMenu(e, win.id)}
-              title={win.title}
-              className={`
-                ${isHorizontal ? 'w-11 h-11 rounded-2xl justify-center' : 'rounded-xl'} flex items-center gap-2 transition-all border relative group shrink-0
-                ${isVertical ? 'w-10 h-10 justify-center mx-auto' : ''}
-                ${activeWindowId === win.id && !win.isMinimized
-                  ? 'bg-[var(--bg-card-hover)] border-[var(--border-hover)]'
-                  : 'bg-[var(--bg-card)] hover:bg-[var(--bg-tertiary)] border-[var(--border-color)]'}
-              `}
-            >
-              <AppIcon id={win.id.split('-')[0]} size={20} theme={state.theme} iconStyle={state.iconStyle} />
-              {activeWindowId === win.id && !win.isMinimized && (
-                <motion.div
-                  layoutId="taskbar-active"
-                  className={`absolute bg-[var(--accent-indigo)] rounded-full ${
+          {/* Pinned app icons (always visible) */}
+          {(pinnedApps || []).map(appId => {
+            const appDef = apps.find(a => a.id === appId);
+            if (!appDef) return null;
+            const currentWins = (windowsByDesktop[currentDesktopId] || windows);
+            const runningWin = currentWins.find(w => w.id === appId || w.id.startsWith(appId + '-') || w.id.split('-')[0] === appId);
+            const isActive = runningWin && activeWindowId === runningWin.id && !runningWin.isMinimized;
+            const isRunning = !!runningWin;
+            return (
+              <button
+                key={`pinned-${appId}`}
+                onClick={() => {
+                  if (contextMenu) setContextMenu(null);
+                  if (runningWin) {
+                    runningWin.isMinimized ? toggleMinimize(runningWin.id) : focusWindow(runningWin.id);
+                  } else {
+                    openWindow(appDef.id, appDef.title, appDef.component, appDef.icon, {
+                      initialWidth: appDef.initialWidth,
+                      initialHeight: appDef.initialHeight,
+                    });
+                  }
+                }}
+                onContextMenu={(e) => handleContextMenu(e, runningWin ? runningWin.id : null, appId)}
+                title={appDef.title}
+                className={`
+                  ${isHorizontal ? 'w-11 h-11 rounded-2xl justify-center' : 'rounded-xl'} flex items-center gap-2 transition-all border relative group shrink-0
+                  ${isVertical ? 'w-10 h-10 justify-center mx-auto' : ''}
+                  ${isActive
+                    ? 'bg-[var(--bg-card-hover)] border-[var(--border-hover)]'
+                    : 'bg-[var(--bg-card)] hover:bg-[var(--bg-tertiary)] border-[var(--border-color)]'}
+                `}
+              >
+                <AppIcon id={appId} size={20} theme={state.theme} iconStyle={state.iconStyle} />
+                {/* Running indicator dot */}
+                {isRunning && (
+                  <span className={`absolute bg-[var(--accent-indigo)] rounded-full opacity-70 ${
                     isVertical
                       ? (taskbarPosition === 'left' ? 'right-0 top-2 bottom-2 w-1' : 'left-0 top-2 bottom-2 w-1')
                       : 'bottom-1 w-1.5 h-1.5 left-1/2 -translate-x-1/2'
-                  }`}
-                />
-              )}
-            </button>
-          ))}
+                  }`} />
+                )}
+                {isActive && (
+                  <motion.div
+                    layoutId="taskbar-active"
+                    className={`absolute bg-[var(--accent-indigo)] rounded-full ${
+                      isVertical
+                        ? (taskbarPosition === 'left' ? 'right-0 top-2 bottom-2 w-1' : 'left-0 top-2 bottom-2 w-1')
+                        : 'bottom-1 w-1.5 h-1.5 left-1/2 -translate-x-1/2'
+                    }`}
+                  />
+                )}
+              </button>
+            );
+          })}
+
+          {/* Separator between pinned and unpinned running apps */}
+          {(pinnedApps || []).length > 0 && (windowsByDesktop[currentDesktopId] || windows).some(win => {
+            const baseId = win.id.split('-')[0];
+            return !(pinnedApps || []).includes(win.id) && !(pinnedApps || []).includes(baseId);
+          }) && (
+            <div className={isVertical ? 'h-px w-8 bg-[var(--border-color)] my-1 shrink-0' : 'w-px h-7 bg-[var(--border-color)] mx-0.5 shrink-0'} />
+          )}
+
+          {/* Running windows that are NOT pinned */}
+          {(windowsByDesktop[currentDesktopId] || windows)
+            .filter((win, idx, arr) => arr.findIndex(w => w.id === win.id) === idx)
+            .filter(win => {
+              const baseId = win.id.split('-')[0];
+              return !(pinnedApps || []).includes(win.id) && !(pinnedApps || []).includes(baseId);
+            })
+            .map(win => (
+              <button
+                key={win.id}
+                onClick={() => {
+                  if (contextMenu) setContextMenu(null);
+                  win.isMinimized ? toggleMinimize(win.id) : focusWindow(win.id);
+                }}
+                onContextMenu={(e) => handleContextMenu(e, win.id, null)}
+                title={win.title}
+                className={`
+                  ${isHorizontal ? 'w-11 h-11 rounded-2xl justify-center' : 'rounded-xl'} flex items-center gap-2 transition-all border relative group shrink-0
+                  ${isVertical ? 'w-10 h-10 justify-center mx-auto' : ''}
+                  ${activeWindowId === win.id && !win.isMinimized
+                    ? 'bg-[var(--bg-card-hover)] border-[var(--border-hover)]'
+                    : 'bg-[var(--bg-card)] hover:bg-[var(--bg-tertiary)] border-[var(--border-color)]'}
+                `}
+              >
+                <AppIcon id={win.id.split('-')[0]} size={20} theme={state.theme} iconStyle={state.iconStyle} />
+                {activeWindowId === win.id && !win.isMinimized && (
+                  <motion.div
+                    layoutId="taskbar-active"
+                    className={`absolute bg-[var(--accent-indigo)] rounded-full ${
+                      isVertical
+                        ? (taskbarPosition === 'left' ? 'right-0 top-2 bottom-2 w-1' : 'left-0 top-2 bottom-2 w-1')
+                        : 'bottom-1 w-1.5 h-1.5 left-1/2 -translate-x-1/2'
+                    }`}
+                  />
+                )}
+              </button>
+            ))}
         </div>
 
         <div className={`flex items-center shrink-0 ${isVertical ? 'flex-col gap-3 py-3' : 'flex-row gap-2 sm:gap-3 ml-2 sm:ml-4'}`}>
@@ -507,33 +637,63 @@ export default function Taskbar() {
               onClick={(e) => e.stopPropagation()}
             >
               <div className="px-3 py-1.5 text-[10px] font-bold text-[var(--text-muted)] uppercase tracking-wider border-b border-[var(--border-color)] mb-1 truncate">
-                {windows.find(w => w.id === contextMenu.windowId)?.title || t('common.application')}
+                {windows.find(w => w.id === contextMenu.windowId)?.title || (contextMenu.pinnedAppId && apps.find(a => a.id === contextMenu.pinnedAppId)?.title) || t('common.application')}
               </div>
-              <button
-                onClick={() => { focusWindow(contextMenu.windowId); setContextMenu(null); }}
-                className="w-full text-left px-3 py-2 text-xs text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] rounded-lg flex items-center gap-2 transition-colors"
-              >
-                <Monitor size={13} className="text-[var(--accent-indigo)]" />
-                {t('desktop.taskbar.bringToFront')}
-              </button>
-              <button
-                onClick={() => { toggleMinimize(contextMenu.windowId); setContextMenu(null); }}
-                className="w-full text-left px-3 py-2 text-xs text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] rounded-lg flex items-center gap-2 transition-colors"
-              >
-                <Layers size={13} className="text-[var(--accent-amber)]" />
-                {windows.find(w => w.id === contextMenu.windowId)?.isMinimized ? t('common.restore') : t('common.minimize')}
-              </button>
-              <div className="h-px bg-[var(--border-color)] my-1 mx-2" />
-              <button
-                onClick={() => {
-                  closeWindow(contextMenu.windowId);
-                  setContextMenu(null);
-                }}
-                className="w-full text-left px-3 py-2 text-xs text-[var(--text-primary)] hover:bg-red-500/20 rounded-lg flex items-center gap-2 transition-colors hover:text-red-400"
-              >
-                <X size={13} className="text-[var(--accent-rose)]" />
-                {t('common.close')} 
-              </button>
+              {contextMenu.windowId && (
+                <>
+                  <button
+                    onClick={() => { focusWindow(contextMenu.windowId); setContextMenu(null); }}
+                    className="w-full text-left px-3 py-2 text-xs text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] rounded-lg flex items-center gap-2 transition-colors"
+                  >
+                    <Monitor size={13} className="text-[var(--accent-indigo)]" />
+                    {t('desktop.taskbar.bringToFront')}
+                  </button>
+                  <button
+                    onClick={() => { toggleMinimize(contextMenu.windowId); setContextMenu(null); }}
+                    className="w-full text-left px-3 py-2 text-xs text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] rounded-lg flex items-center gap-2 transition-colors"
+                  >
+                    <Layers size={13} className="text-[var(--accent-amber)]" />
+                    {windows.find(w => w.id === contextMenu.windowId)?.isMinimized ? t('common.restore') : t('common.minimize')}
+                  </button>
+                </>
+              )}
+              {contextMenu.pinnedAppId && (
+                <>
+                  <div className="h-px bg-[var(--border-color)] my-1 mx-2" />
+                  {(pinnedApps || []).includes(contextMenu.pinnedAppId) ? (
+                    <button
+                      onClick={() => { unpinApp(contextMenu.pinnedAppId); setContextMenu(null); }}
+                      className="w-full text-left px-3 py-2 text-xs text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] rounded-lg flex items-center gap-2 transition-colors"
+                    >
+                      <Columns size={13} className="text-[var(--accent-amber)]" />
+                      {t('desktop.taskbar.unpinFromTaskbar', 'Unpin from Taskbar')}
+                    </button>
+                  ) : (
+                    <button
+                      onClick={() => { pinApp(contextMenu.pinnedAppId); setContextMenu(null); }}
+                      className="w-full text-left px-3 py-2 text-xs text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] rounded-lg flex items-center gap-2 transition-colors"
+                    >
+                      <Columns size={13} className="text-[var(--accent-indigo)]" />
+                      {t('desktop.taskbar.pinToTaskbar', 'Pin to Taskbar')}
+                    </button>
+                  )}
+                </>
+              )}
+              {contextMenu.windowId && (
+                <>
+                  <div className="h-px bg-[var(--border-color)] my-1 mx-2" />
+                  <button
+                    onClick={() => {
+                      closeWindow(contextMenu.windowId);
+                      setContextMenu(null);
+                    }}
+                    className="w-full text-left px-3 py-2 text-xs text-[var(--text-primary)] hover:bg-red-500/20 rounded-lg flex items-center gap-2 transition-colors hover:text-red-400"
+                  >
+                    <X size={13} className="text-[var(--accent-rose)]" />
+                    {t('common.close')} 
+                  </button>
+                </>
+              )}
             </motion.div>
           )}
         </AnimatePresence>,
