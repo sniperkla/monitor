@@ -3868,11 +3868,11 @@ export default function MongoBackupApp() {
                   </div>
                 )}
 
-                {/* ── In-app Manual Run History ── */}
+                {/* ── In-app Run History ── */}
                 <div className="bg-[var(--bg-card)] border border-[var(--border-color)] rounded-2xl p-5">
                   <h3 className="text-sm font-bold flex items-center gap-2 mb-4 text-[var(--text-primary)]">
-                    <Play size={14} className="text-emerald-400" /> Manual Run History
-                    <span className="text-[10px] font-normal text-[var(--text-muted)]">— from in-app "Run Now" button</span>
+                    <Play size={14} className="text-emerald-400" /> Run History
+                    <span className="text-[10px] font-normal text-[var(--text-muted)]">— manual &amp; scheduled in-app runs (SSH cron runs are shown above)</span>
                   </h3>
                   {historyLoading && historyRuns.length === 0 ? (
                     <div className="py-12 text-center text-xs text-[var(--text-muted)] flex items-center justify-center gap-2">
@@ -3881,7 +3881,7 @@ export default function MongoBackupApp() {
                     </div>
                   ) : historyRuns.length === 0 ? (
                     <div className="py-8 text-center text-xs text-[var(--text-muted)] italic">
-                      No manual run history yet. Use the "Run Now" button on a job to trigger a manual backup.
+                      No run history yet. Use the "Run Now" button on a job to trigger a manual backup.
                     </div>
                   ) : (
                     <div className="space-y-3 max-h-[500px] overflow-y-auto custom-scrollbar pr-1 divide-y divide-[var(--border-color)]/40">
@@ -3895,6 +3895,16 @@ export default function MongoBackupApp() {
                                 run.status === 'success' ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30' : 'bg-rose-500/15 text-rose-400 border border-rose-500/30'
                               }`}>
                                 {run.status}
+                              </span>
+                              {/* Source badge */}
+                              <span className={`text-[9px] px-2 py-0.5 rounded-full font-bold uppercase border ${
+                                run.source === 'manual'
+                                  ? 'bg-blue-500/10 text-blue-400 border-blue-500/20'
+                                  : run.source === 'scheduler'
+                                  ? 'bg-amber-500/10 text-amber-400 border-amber-500/20'
+                                  : 'bg-slate-500/10 text-slate-400 border-slate-500/20'
+                              }`}>
+                                {run.source === 'manual' ? '👆 Manual' : run.source === 'scheduler' ? '⏰ Scheduled' : '▶ Run'}
                               </span>
                             </div>
                             <span className="text-[10px] text-[var(--text-muted)] font-mono">

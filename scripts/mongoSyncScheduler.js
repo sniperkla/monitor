@@ -302,6 +302,7 @@ async function runJob(job, userId, settingsCol) {
       database: job.database, collection: job.collection,
       driveFolderName: job.driveFolderName,
       runAt: Date.now(), status: runStatus, message: runMessage, count,
+      source: 'scheduler', // distinguish from manual 'Run Now' button
     };
     await settingsCol.updateOne(
       { key: 'mongo_sync_history', userId },
@@ -361,7 +362,10 @@ async function tick() {
 
       // Run eligible jobs for this user
       for (const job of jobs) {
+        // Skip disabled or manual-only jobs
         if (!job.enabled || job.schedule === 'manual') continue;
+        // Skip SSH cron jobs — they run on the remote server via crontab, not in-app scheduler
+        if (job.targetSshConnId) continue;
 
         const lastRun = job.lastRun || 0;
         const scheduleKey = String(job.schedule || '').toLowerCase().trim().replace(/\s+/g, '_');

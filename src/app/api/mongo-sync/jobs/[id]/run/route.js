@@ -181,7 +181,8 @@ export async function POST(request, { params }) {
       runAt: Date.now(),
       status: runStatus,
       message: runMessage,
-      count
+      count,
+      source: 'manual', // triggered by in-app "Run Now" button
     };
     await settingRepo.upsert('mongo_sync_history', [newHistoryEntry, ...history].slice(0, 100));
 
