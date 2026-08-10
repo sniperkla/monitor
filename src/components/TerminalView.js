@@ -6798,16 +6798,7 @@ If this is a deployment task, switch task mode to 'deploy' instead of 'code'.`
 
       {/* Terminal body */}
       <div className="flex-1 relative bg-transparent min-h-0 overflow-hidden group/term">
-        {/* Floating Mode Badge — always visible */}
-        <div
-            className="absolute bottom-3 left-4 z-20 flex items-center gap-1 text-[9px] font-bold px-2 py-0.5 rounded-md backdrop-blur-md border shadow-lg opacity-60 group-hover/term:opacity-100 transition-all pointer-events-none"
-            style={sshMode === 'local'
-              ? { background: 'rgba(16,185,129,0.1)', borderColor: 'rgba(16,185,129,0.25)', color: '#34d399' }
-              : { background: 'rgba(59,130,246,0.1)', borderColor: 'rgba(59,130,246,0.25)', color: '#60a5fa' }
-            }
-          >
-            {sshMode === 'local' ? '⚡ Local' : '☁ Server'}
-        </div>
+
 
         {/* Floating Latency Badge (Visible in all modes) */}
         {latency !== null && status === 'connected' && (

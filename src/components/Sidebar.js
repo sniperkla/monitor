@@ -770,15 +770,21 @@ export default function Sidebar({ onNewConnection, onEditConnection }) {
       )}
       <div className={`sidebar flex flex-col shrink-0 ${sidebarOpen ? 'open' : ''} ${!sidebarOpen ? 'hidden' : ''}`} style={{ width: '100%', height: '100%', borderRight: '1px solid var(--border-color)' }}>
       {/* Header */}
-      <div className="p-4 border-b" style={{ borderColor: 'var(--border-color)' }}>
-        <div className="flex items-center justify-between mb-4">
-          <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-lg flex items-center justify-center bg-[var(--bg-selected)] shadow-[var(--glow-indigo)] border border-[var(--accent-indigo)]/30">
-              <Terminal size={18} className="text-[var(--text-selected)]" />
+      <div className="p-3.5 border-b space-y-3" style={{ borderColor: 'var(--border-color)' }}>
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2.5">
+            <div className="w-8 h-8 rounded-xl flex items-center justify-center bg-[var(--accent-indigo)]/15 border border-[var(--accent-indigo)]/30 text-[var(--accent-indigo)] shadow-sm">
+              <Terminal size={16} />
             </div>
             <div>
-              <h1 className="text-sm font-bold" style={{ color: 'var(--text-primary)' }}>{t('common.connections')}</h1>
-              <p className="text-xs" style={{ color: 'var(--text-muted)' }}>{t('common.manage')}</p>
+              <h1 className="text-xs font-bold tracking-tight" style={{ color: 'var(--text-primary)' }}>{t('common.connections')}</h1>
+              <div className="flex items-center gap-1.5 text-[10px] text-[var(--text-muted)] font-mono">
+                <span>{stats.total} total</span>
+                <span className="opacity-40">•</span>
+                <span className="text-indigo-400 font-semibold">{stats.ssh} SSH</span>
+                <span className="opacity-40">•</span>
+                <span className="text-emerald-400 font-semibold">{stats.db} DB</span>
+              </div>
             </div>
           </div>
           <button 
@@ -786,84 +792,56 @@ export default function Sidebar({ onNewConnection, onEditConnection }) {
             className="p-1.5 rounded-lg hover:bg-[var(--bg-tertiary)] transition-colors text-[var(--text-muted)] hover:text-[var(--text-primary)]"
             title="Collapse Sidebar"
           >
-            <PanelLeftClose size={18} />
+            <PanelLeftClose size={16} />
           </button>
         </div>
 
-        {/* Stats mini bar */}
-        <div className="flex items-center gap-1.5 mb-3 px-1">
-          <span className="font-bold text-sm" style={{ color: 'var(--text-primary)' }}>{stats.total}</span>
-          <span className="text-xs" style={{ color: 'var(--text-muted)' }}>{t('common.total')}</span>
-          <span className="text-[var(--text-muted)] opacity-30 mx-0.5">·</span>
-          <span className="font-bold text-sm text-indigo-400">{stats.ssh}</span>
-          <span className="text-xs" style={{ color: 'var(--text-muted)' }}>SSH</span>
-          <span className="text-[var(--text-muted)] opacity-30 mx-0.5">·</span>
-          <span className="font-bold text-sm text-emerald-400">{stats.db}</span>
-          <span className="text-xs" style={{ color: 'var(--text-muted)' }}>DB</span>
-        </div>
-
-        {/* Section toggle */}
-        <div className="flex gap-1 p-1 rounded-lg mb-3" style={{ background: 'var(--bg-secondary)' }}>
-          {[
-            { key: 'all', label: 'All', icon: null },
-            { key: 'ssh', label: 'SSH', icon: Server },
-            { key: 'database', label: 'Database', icon: Database },
-          ].map((s) => {
-            const IconComp = s.icon;
-            return (
-              <button
-                key={s.key}
-                className={`flex-1 flex items-center justify-center gap-1 text-xs py-1.5 rounded-md transition-all font-medium ${
-                  activeSection === s.key
-                    ? s.key === 'ssh'
-                      ? 'bg-indigo-500/20 text-indigo-400 shadow-sm border border-indigo-500/30'
-                      : s.key === 'database'
-                      ? 'bg-emerald-500/20 text-emerald-400 shadow-sm border border-emerald-500/30'
-                      : 'bg-[var(--bg-selected)] text-[var(--text-selected)] shadow-sm border border-[var(--accent-indigo)]/30'
-                    : 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'
-                }`}
-                onClick={() => setActiveSection(s.key)}
-              >
-                {IconComp && <IconComp size={11} />}
-                {s.label}
-              </button>
-            );
-          })}
-        </div>
-
-        {/* Search */}
-        <div className="relative mb-3">
-          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2" style={{ color: 'var(--text-muted)' }} />
+        {/* Search Input */}
+        <div className="relative">
+          <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-[var(--text-muted)]" />
           <input
             type="text"
-            className="input-field text-sm"
-            style={{ paddingLeft: '2.25rem' }}
+            className="w-full bg-[var(--bg-tertiary)]/50 border border-[var(--border-color)] rounded-xl py-1.5 pl-8 pr-3 text-xs text-[var(--text-primary)] placeholder:text-[var(--text-muted)] focus:outline-none focus:border-[var(--accent-indigo)]/50 transition-all font-sans"
             placeholder={t('ssh.searchPlaceHolder')}
             value={search}
             onChange={(e) => setSearch(e.target.value)}
           />
         </div>
 
-        {/* Filter tabs */}
-        <div className="flex gap-1 p-1 rounded-lg" style={{ background: 'var(--bg-secondary)' }}>
+        {/* Unified Filter Pills */}
+        <div className="flex items-center gap-1 p-1 rounded-xl bg-[var(--bg-tertiary)]/50 border border-[var(--border-color)] overflow-x-auto no-scrollbar whitespace-nowrap">
           {[
-            { key: 'all', label: t('ssh.filters.all') },
-            { key: 'favorites', label: t('ssh.filters.favorites') },
-            { key: 'online', label: t('ssh.filters.online') },
-            { key: 'offline', label: t('common.offline') || 'Offline' },
-          ].map((f, i) => (
-            <button
-              key={f.key || i}
-              className={`flex-1 text-xs py-1.5 rounded-md transition-all font-medium ${
-                filter === f.key
-                  ? 'bg-[var(--bg-selected)] text-[var(--text-selected)] shadow-sm border border-[var(--accent-indigo)]/30'
-                  : 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'
-              }`}
-              onClick={() => setFilter(f.key)}
-            >
-              {f.label}
-            </button>
-          ))}
+            { key: 'all', label: 'All' },
+            { key: 'ssh', label: 'SSH' },
+            { key: 'database', label: 'DB' },
+            { key: 'favorites', label: '★ Fav' },
+            { key: 'online', label: 'Online' },
+          ].map((item) => {
+            const isActive = (item.key === 'ssh' || item.key === 'database') 
+              ? activeSection === item.key 
+              : filter === item.key && activeSection === 'all';
+            return (
+              <button
+                key={item.key}
+                onClick={() => {
+                  if (item.key === 'ssh' || item.key === 'database') {
+                    setActiveSection(item.key);
+                    setFilter('all');
+                  } else {
+                    setActiveSection('all');
+                    setFilter(item.key);
+                  }
+                }}
+                className={`flex-1 min-w-[42px] px-2 text-[11px] font-semibold py-1 rounded-lg transition-all text-center whitespace-nowrap ${
+                  isActive
+                    ? 'bg-[var(--accent-indigo)] text-white shadow-sm font-bold'
+                    : 'text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-white/5'
+                }`}
+              >
+                {item.label}
+              </button>
+            );
+          })}
         </div>
       </div>
 
@@ -871,142 +849,93 @@ export default function Sidebar({ onNewConnection, onEditConnection }) {
       <MongoDeadBanner />
 
       {/* Connection List */}
-      <div className="flex-1 overflow-y-auto py-2">
+      <div className="flex-1 overflow-y-auto px-2 py-2 space-y-1 custom-scrollbar">
         {filtered.length === 0 ? (
-          <div className="empty-state py-10">
-            <Server size={40} />
-            <p className="text-sm mt-2">{t('ssh.noConnections')}</p>
+          <div className="empty-state py-12 text-center">
+            <Server size={32} className="mx-auto text-[var(--text-muted)] opacity-40 mb-2" />
+            <p className="text-xs text-[var(--text-muted)]">{t('ssh.noConnections')}</p>
           </div>
         ) : activeSection === 'all' ? (
           <>
             {/* SSH Section */}
             {sshConnections.length > 0 && (
-              <>
-                <div className="flex items-center gap-2 px-3 py-1.5 mt-1">
+              <div className="mb-3">
+                <div className="flex items-center justify-between px-1.5 py-1 mb-1 text-[10px] font-bold uppercase tracking-wider text-indigo-400/80">
                   <div className="flex items-center gap-1.5">
-                    <Server size={11} className="text-indigo-400" />
-                    <span className="text-[10px] font-bold uppercase tracking-wider text-indigo-400">SSH Servers</span>
+                    <Server size={11} />
+                    <span>SSH Servers ({sshConnections.length})</span>
                   </div>
-                  <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-full bg-indigo-500/15 text-indigo-400 border border-indigo-500/20">{sshConnections.length}</span>
-                  <div className="flex-1 h-px bg-indigo-500/15" />
                 </div>
-                {sshConnections.map((conn, index) => (
-                  <ConnectionItem key={conn._id || `conn-ssh-${index}`} conn={conn} state={state} dispatch={dispatch} hoverPanel={hoverPanel} setHoverPanel={setHoverPanel} hoverTimerRef={hoverTimerRef} fetchingSpecs={fetchingSpecs} handleToggleFavorite={handleToggleFavorite} syncedFingerprints={syncedFingerprints} getFingerprint={getFingerprint} t={t} />
-                ))}
-              </>
+                <div className="space-y-1">
+                  {sshConnections.map((conn, index) => (
+                    <ConnectionItem key={conn._id || `conn-ssh-${index}`} conn={conn} state={state} dispatch={dispatch} hoverPanel={hoverPanel} setHoverPanel={setHoverPanel} hoverTimerRef={hoverTimerRef} fetchingSpecs={fetchingSpecs} handleToggleFavorite={handleToggleFavorite} syncedFingerprints={syncedFingerprints} getFingerprint={getFingerprint} t={t} />
+                  ))}
+                </div>
+              </div>
             )}
+
             {/* Database Section */}
             {dbConnections.length > 0 && (
-              <>
-                <div className="flex items-center gap-2 px-3 py-1.5 mt-2">
+              <div className="mb-3">
+                <div className="flex items-center justify-between px-1.5 py-1 mb-1 text-[10px] font-bold uppercase tracking-wider text-emerald-400/80">
                   <div className="flex items-center gap-1.5">
-                    <Database size={11} className="text-emerald-400" />
-                    <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-400">Databases</span>
+                    <Database size={11} />
+                    <span>Databases ({dbConnections.length})</span>
                   </div>
-                  <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-full bg-emerald-500/15 text-emerald-400 border border-emerald-500/20">{dbConnections.length}</span>
-                  <div className="flex-1 h-px bg-emerald-500/15" />
                 </div>
-                {dbConnections.map((conn, index) => (
-                  <ConnectionItem key={conn._id || `conn-db-${index}`} conn={conn} state={state} dispatch={dispatch} hoverPanel={hoverPanel} setHoverPanel={setHoverPanel} hoverTimerRef={hoverTimerRef} fetchingSpecs={fetchingSpecs} handleToggleFavorite={handleToggleFavorite} syncedFingerprints={syncedFingerprints} getFingerprint={getFingerprint} t={t} />
-                ))}
-              </>
+                <div className="space-y-1">
+                  {dbConnections.map((conn, index) => (
+                    <ConnectionItem key={conn._id || `conn-db-${index}`} conn={conn} state={state} dispatch={dispatch} hoverPanel={hoverPanel} setHoverPanel={setHoverPanel} hoverTimerRef={hoverTimerRef} fetchingSpecs={fetchingSpecs} handleToggleFavorite={handleToggleFavorite} syncedFingerprints={syncedFingerprints} getFingerprint={getFingerprint} t={t} />
+                  ))}
+                </div>
+              </div>
             )}
           </>
         ) : (
-          filtered.map((conn, index) => (
-            <ConnectionItem key={conn._id || `conn-${index}`} conn={conn} state={state} dispatch={dispatch} hoverPanel={hoverPanel} setHoverPanel={setHoverPanel} hoverTimerRef={hoverTimerRef} fetchingSpecs={fetchingSpecs} handleToggleFavorite={handleToggleFavorite} syncedFingerprints={syncedFingerprints} getFingerprint={getFingerprint} t={t} />
-          ))
+          <div className="space-y-1">
+            {filtered.map((conn, index) => (
+              <ConnectionItem key={conn._id || `conn-${index}`} conn={conn} state={state} dispatch={dispatch} hoverPanel={hoverPanel} setHoverPanel={setHoverPanel} hoverTimerRef={hoverTimerRef} fetchingSpecs={fetchingSpecs} handleToggleFavorite={handleToggleFavorite} syncedFingerprints={syncedFingerprints} getFingerprint={getFingerprint} t={t} />
+            ))}
+          </div>
         )}
       </div>
 
-      {/* Footer: Sync + Add connection */}
-      <div className="p-4 border-t pb-16 md:pb-4 space-y-2" style={{ borderColor: 'var(--border-color)' }}>
+      {/* Footer Actions */}
+      <div className="p-3 border-t space-y-2 bg-[var(--bg-primary)]/40" style={{ borderColor: 'var(--border-color)' }}>
         {isUnlocked && (
-          <>
-            {/* Save to Cloud — full-width prominent button */}
+          <div className="grid grid-cols-2 gap-1.5">
             <button
               onClick={handleSaveToCloud}
               disabled={isMigrating || connections.length === 0}
-              className="w-full flex items-center justify-center gap-2 px-3 py-2.5 text-xs font-bold rounded-lg transition-all disabled:opacity-50 relative overflow-hidden"
-              style={{
-                background: isMigrating
-                  ? 'rgba(99,102,241,0.15)'
-                  : 'linear-gradient(135deg, rgba(99,102,241,0.25) 0%, rgba(14,165,233,0.2) 100%)',
-                border: '1px solid rgba(99,102,241,0.35)',
-                color: '#a5b4fc',
-              }}
-              title="Save all connections to cloud with Argon2id + AES-256-GCM encryption (highest sensitivity)"
+              className="flex items-center justify-center gap-1.5 px-2.5 py-1.5 text-[11px] font-semibold rounded-xl bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-300 border border-indigo-500/25 transition-all disabled:opacity-40"
+              title="Save connections to cloud"
             >
-              {isMigrating && cloudProgress && cloudProgress.total > 0 && (
-                <div
-                  className="absolute inset-0 transition-all duration-300"
-                  style={{
-                    background: 'rgba(99,102,241,0.2)',
-                    width: `${Math.round((cloudProgress.current / cloudProgress.total) * 100)}%`,
-                    left: 0,
-                  }}
-                />
-              )}
-              <span className="relative flex items-center gap-2">
-                {isMigrating ? (
-                  <>
-                    <RefreshCw size={13} className="animate-spin" />
-                    {cloudProgress
-                      ? `Encrypting ${cloudProgress.current}/${cloudProgress.total}…`
-                      : 'Preparing…'}
-                  </>
-                ) : cloudProgress?.done ? (
-                  <>
-                    <Check size={13} className="text-emerald-400" />
-                    <span className="text-emerald-400">
-                      {cloudProgress.error
-                        ? `Error: ${cloudProgress.error}`
-                        : `Saved ${cloudProgress.saved ?? ''}!`}
-                    </span>
-                  </>
-                ) : (
-                  <>
-                    <CloudUpload size={13} />
-                    Save to Cloud
-                  </>
-                )}
-              </span>
+              {isMigrating ? <RefreshCw size={12} className="animate-spin" /> : <CloudUpload size={12} />}
+              <span>Save Cloud</span>
             </button>
-
-            {/* Load from Cloud */}
             <button
               onClick={handlePullSynced}
               disabled={isSyncing}
-              className="w-full flex items-center justify-center gap-2 px-3 py-2 text-xs font-semibold rounded-lg transition-all disabled:opacity-50"
-              style={{
-                background: 'rgba(16,185,129,0.08)',
-                border: '1px solid rgba(16,185,129,0.2)',
-                color: 'var(--text-muted)',
-              }}
-              title="Pull all synced connections from cloud and import to local"
+              className="flex items-center justify-center gap-1.5 px-2.5 py-1.5 text-[11px] font-semibold rounded-xl bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-300 border border-emerald-500/25 transition-all disabled:opacity-40"
+              title="Load connections from cloud"
             >
-              {isSyncing ? (
-                <>
-                  <RefreshCw size={13} className="animate-spin" />
-                  Importing…
-                </>
-              ) : (
-                <>
-                  <CloudDownload size={13} />
-                  Load from Cloud
-                </>
-              )}
+              {isSyncing ? <RefreshCw size={12} className="animate-spin" /> : <CloudDownload size={12} />}
+              <span>Load Cloud</span>
             </button>
-          </>
+          </div>
         )}
-        <button className="btn-primary w-full justify-center" onClick={onNewConnection}>
-          <Plus size={16} /> {t('ssh.newConnection')}
+        <button
+          onClick={onNewConnection}
+          className="w-full flex items-center justify-center gap-2 py-2 px-3 rounded-xl bg-[var(--accent-indigo)] hover:bg-[var(--accent-indigo)]/90 text-white font-semibold text-xs shadow-md transition-all active:scale-[0.98]"
+        >
+          <Plus size={14} />
+          <span>{t('ssh.newConnection')}</span>
         </button>
       </div>
 
     </div>
 
-    {/* Hover Action Panel - appears after 2s hold */}
+    {/* Hover Action Panel */}
     {hoverPanel && createPortal(
       <div
         ref={hoverPanelRef}
@@ -1021,15 +950,11 @@ export default function Sidebar({ onNewConnection, onEditConnection }) {
         onMouseLeave={() => setHoverPanel(null)}
       >
         <div className="w-56 max-h-[70vh] overflow-y-auto rounded-xl border shadow-2xl p-2 space-y-0.5 custom-scrollbar" style={{ background: 'var(--bg-secondary)', borderColor: 'var(--border-color)' }}>
-          {/* Header */}
           <div className="px-2 py-1.5 mb-1">
             <div className="text-xs font-bold truncate" style={{ color: 'var(--text-primary)' }}>{hoverPanel.conn.name}</div>
             <div className="text-[10px] font-mono opacity-50 truncate">{hoverPanel.conn.username}@{hoverPanel.conn.host}</div>
           </div>
-
           <div className="h-px" style={{ background: 'var(--border-color)' }} />
-
-          {/* Actions */}
           <PanelItem icon={hoverPanel.conn.type === 'database' ? Database : Terminal} label={hoverPanel.conn.type === 'database' ? 'Open Database' : 'Connect Terminal'} color="text-emerald-400" onClick={() => { handleConnect(hoverPanel.conn); setHoverPanel(null); }} />
           {hoverPanel.conn.type === 'ssh' && (
             <PanelItem icon={Folder} label="File Manager" color="text-blue-400" onClick={() => { handleFiles(hoverPanel.conn); setHoverPanel(null); }} />
@@ -1037,19 +962,13 @@ export default function Sidebar({ onNewConnection, onEditConnection }) {
           {hoverPanel.conn.type === 'ssh' && (
             <PanelItem icon={Box} label="Docker Manager" color="text-sky-400" onClick={() => { window.dispatchEvent(new CustomEvent('open-docker-manager', { detail: { connection: hoverPanel.conn } })); setHoverPanel(null); }} />
           )}
-
           <div className="h-px" style={{ background: 'var(--border-color)' }} />
-
           <PanelItem icon={Star} label={hoverPanel.conn.isFavorite ? 'Remove Favorite' : 'Add Favorite'} color="text-amber-400" onClick={() => { handleToggleFavorite(hoverPanel.conn._id); setHoverPanel(null); }} />
           {hoverPanel.conn.type === 'ssh' && (
             <PanelItem icon={Cpu} label={fetchingSpecs.has(hoverPanel.conn._id) ? 'Fetching...' : 'Refresh Specs'} color="text-purple-400" disabled={fetchingSpecs.has(hoverPanel.conn._id)} onClick={() => { handleFetchSpecs(hoverPanel.conn); setHoverPanel(null); }} />
           )}
-          {isUnlocked && hoverPanel.conn.storage !== 'manual' && (
-            <PanelItem icon={CloudUpload} label="Sync to Server" color="text-sky-400" onClick={() => { handleSyncOne(hoverPanel.conn); setHoverPanel(null); }} />
-          )}
 
           <div className="h-px" style={{ background: 'var(--border-color)' }} />
-
           <PanelItem icon={Edit} label="Edit Connection" onClick={() => { onEditConnection(hoverPanel.conn); setHoverPanel(null); }} />
           <PanelItem icon={Trash2} label="Delete Connection" color="text-red-400" onClick={() => { handleDelete(hoverPanel.conn._id); setHoverPanel(null); }} />
         </div>
@@ -1062,7 +981,8 @@ export default function Sidebar({ onNewConnection, onEditConnection }) {
 
 function ConnectionItem({ conn, state, dispatch, hoverPanel, setHoverPanel, hoverTimerRef, fetchingSpecs, handleToggleFavorite, syncedFingerprints, getFingerprint, t }) {
   const isSynced = syncedFingerprints && getFingerprint && syncedFingerprints.has(getFingerprint(conn));
-  
+  const isSelected = state.selectedConnection?._id === conn._id;
+
   return (
     <div
       draggable
@@ -1076,10 +996,10 @@ function ConnectionItem({ conn, state, dispatch, hoverPanel, setHoverPanel, hove
         e.dataTransfer.setDragImage(ghost, 0, 0);
         setTimeout(() => document.body.removeChild(ghost), 0);
       }}
-      className={`connection-item group relative !p-3 !my-1 cursor-grab active:cursor-grabbing transition-all border ${
-        state.selectedConnection?._id === conn._id
-          ? 'border-[var(--accent-indigo)]/50 bg-[var(--bg-selected)] shadow-sm'
-          : 'border-transparent'
+      className={`group relative p-2.5 rounded-xl cursor-pointer transition-all border ${
+        isSelected
+          ? 'bg-[var(--accent-indigo)]/15 border-[var(--accent-indigo)]/40 shadow-sm'
+          : 'bg-[var(--bg-card)]/60 hover:bg-[var(--bg-card)] border-[var(--border-color)]/60 hover:border-[var(--border-color)]'
       }`}
       onClick={() => {
         clearTimeout(hoverTimerRef.current);
@@ -1095,58 +1015,55 @@ function ConnectionItem({ conn, state, dispatch, hoverPanel, setHoverPanel, hove
       onMouseEnter={() => clearTimeout(hoverTimerRef.current)}
       data-conn-id={conn._id}
     >
-      <div className="flex items-center gap-3">
-        {/* Color indicator */}
-        <div className="w-1 rounded-full self-stretch" style={{ background: conn.color }} />
+      <div className="flex items-center gap-2.5">
+        {/* Connection Type / Color Pill */}
+        <div className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0 border"
+          style={{
+            background: `${conn.color || '#6366f1'}15`,
+            borderColor: `${conn.color || '#6366f1'}35`,
+            color: conn.color || '#6366f1'
+          }}
+        >
+          {conn.type === 'database' ? <Database size={15} /> : <Server size={15} />}
+        </div>
 
+        {/* Connection Details */}
         <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2 mb-0.5">
-            <span className={`status-dot ${
-              conn.status === 'online' ? 'status-online' :
-              conn.status === 'offline' ? 'status-offline' : 'status-unknown'
-            }`} />
-            <span className="text-sm font-semibold truncate" style={{ color: state.selectedConnection?._id === conn._id ? 'var(--text-selected)' : 'var(--text-primary)' }}>
-              {conn.name}
-            </span>
-            <Star size={12} className={`flex-shrink-0 cursor-pointer hover:scale-125 transition-transform ${conn.isFavorite ? 'text-amber-400 fill-amber-400' : 'text-[var(--text-muted)] opacity-0 group-hover:opacity-50 hover:!opacity-100'}`} onClick={(e) => { e.stopPropagation(); handleToggleFavorite(conn._id); }} />
-            {isSynced && (
-              <span className="text-[8px] font-bold px-1 py-0.5 rounded-sm border text-sky-400 border-sky-400/30 uppercase flex-shrink-0 flex items-center gap-0.5" title="Synced to cloud">
-                <CloudUpload size={9} />
-                Cloud
-              </span>
-            )}
-            <span className={`text-[8px] font-bold px-1 rounded-sm border uppercase flex-shrink-0 ${
-              conn.storage === 'db' ? 'text-[var(--accent-indigo)] border-[var(--accent-indigo)]/30' :
-              conn.storage === 'localstorage' ? 'text-[var(--accent-emerald)] border-[var(--accent-emerald)]/30' :
-              'text-[var(--accent-amber)] border-[var(--accent-amber)]/30'
-            }`}>
-              {conn.storage === 'localstorage' ? t('common.storage.local') : conn.storage === 'manual' ? t('common.storage.tmp') : t('common.storage.db')}
-            </span>
-          </div>
-          <div className="flex items-center gap-2">
-            <span className="text-[10px] font-bold uppercase py-0.5 px-2 bg-[var(--bg-tertiary)] rounded-full border border-[var(--border-color)]" style={{ color: conn.color }}>
-              {conn.type === 'database' ? (conn.dbProvider || 'db').toUpperCase() : 'SSH'}
-            </span>
-            <span className="text-xs font-mono truncate opacity-60" style={{ color: 'var(--text-muted)' }}>
-              {conn.username ? `${conn.username}@` : ''}{conn.host}
-            </span>
-            {conn.tags?.slice(0, 1).map((tag, tagIndex) => (
-              <span key={`${tag}-${tagIndex}`} className="tag-pill !py-0 !px-1 !text-[8px] opacity-70 max-w-[60px] truncate">{tag}</span>
-            ))}
-          </div>
-          {conn.systemInfo && conn.type === 'ssh' && (
-            <div className="flex items-center gap-2 mt-0.5">
-              <span className="text-[8px] font-mono opacity-50 inline-flex items-center gap-0.5" title={conn.systemInfo.distro || conn.systemInfo.os || ''}>
-                <HardDrive size={8} />{conn.systemInfo.distro || conn.systemInfo.os?.split(' ')[0] || '?'}
-              </span>
-              <span className="text-[8px] font-mono opacity-50 inline-flex items-center gap-0.5" title={conn.systemInfo.cpu || ''}>
-                <Cpu size={8} />{conn.systemInfo.cores || '?'}c
-              </span>
-              <span className="text-[8px] font-mono opacity-50 inline-flex items-center gap-0.5" title={`RAM: ${conn.systemInfo.ram || '?'}`}>
-                <MemoryStick size={8} />{conn.systemInfo.ram || '?'}
+          <div className="flex items-center justify-between gap-1 mb-0.5">
+            <div className="flex items-center gap-1.5 min-w-0">
+              <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${
+                conn.status === 'online' ? 'bg-emerald-400 animate-pulse' :
+                conn.status === 'offline' ? 'bg-rose-400' : 'bg-slate-400'
+              }`} />
+              <span className="text-xs font-semibold truncate text-[var(--text-primary)]">
+                {conn.name}
               </span>
             </div>
-          )}
+
+            <div className="flex items-center gap-1 shrink-0">
+              <Star
+                size={11}
+                className={`cursor-pointer hover:scale-125 transition-transform ${
+                  conn.isFavorite ? 'text-amber-400 fill-amber-400' : 'text-[var(--text-muted)] opacity-0 group-hover:opacity-60'
+                }`}
+                onClick={(e) => { e.stopPropagation(); handleToggleFavorite(conn._id); }}
+              />
+              {isSynced && (
+                <CloudUpload size={11} className="text-sky-400" title="Synced to Cloud" />
+              )}
+            </div>
+          </div>
+
+          <div className="flex items-center justify-between text-[10px] font-mono text-[var(--text-muted)]">
+            <span className="truncate max-w-[150px]">
+              {conn.username ? `${conn.username}@` : ''}{conn.host}
+            </span>
+            {conn.tags && conn.tags.length > 0 && (
+              <span className="px-1.5 py-0.2 rounded bg-white/5 border border-white/10 text-[9px] truncate max-w-[60px]">
+                {conn.tags[0]}
+              </span>
+            )}
+          </div>
         </div>
       </div>
     </div>

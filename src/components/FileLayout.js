@@ -53,7 +53,7 @@ const ConnectionPicker = ({ onSelect, search, setSearch, connections, t }) => {
 
   return (
     <div 
-      className="h-full w-full overflow-y-auto overflow-x-hidden bg-transparent relative"
+      className="h-full bg-[var(--bg-primary)] rounded-3xl border border-[var(--border-color)] overflow-hidden relative"
       onDragOver={handlePickerDragOver}
       onDragLeave={handlePickerDragLeave}
       onDrop={handlePickerDrop}
@@ -71,13 +71,14 @@ const ConnectionPicker = ({ onSelect, search, setSearch, connections, t }) => {
           </div>
         </div>
       )}
-      <div className="min-h-full flex items-center justify-center p-8">
-        <motion.div 
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.4, ease: "easeOut" }}
-          className="w-full max-w-lg flex flex-col items-center gap-6"
-        >
+      <div className="h-full overflow-y-auto overflow-x-hidden">
+        <div className="min-h-full flex items-center justify-center p-8">
+          <motion.div 
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.4, ease: "easeOut" }}
+            className="w-full max-w-lg flex flex-col items-center gap-6"
+          >
           <div className="w-20 h-20 rounded-[2rem] bg-indigo-500/10 flex items-center justify-center border border-indigo-500/20 shadow-xl shadow-indigo-500/5 ring-1 ring-white/5">
             <Server className="w-10 h-10 text-indigo-400" />
           </div>
@@ -134,7 +135,8 @@ const ConnectionPicker = ({ onSelect, search, setSearch, connections, t }) => {
               </div>
             )}
           </div>
-        </motion.div>
+          </motion.div>
+        </div>
       </div>
     </div>
   );
@@ -289,7 +291,8 @@ function LayoutRenderer({
   onAssignConnection, 
   onRatioChange,
   connections, 
-  zoomedPaneId
+  zoomedPaneId,
+  onPathChange
 }) {
   const { t } = useTranslation();
   const containerRef = useRef(null);
@@ -336,6 +339,7 @@ function LayoutRenderer({
               initialPath={layout.fmData.initialPath}
               onClosePane={() => onClosePane(layout.id)}
               onSplit={(dir) => onSplitPane(layout.id, dir)}
+              onPathChange={onPathChange ? (p) => onPathChange(layout.fmData.connectionId, p) : undefined}
             />
           ) : (
             <ConnectionPicker 
@@ -369,6 +373,7 @@ function LayoutRenderer({
           onRatioChange={onRatioChange}
           connections={connections}
           zoomedPaneId={zoomedPaneId}
+          onPathChange={onPathChange}
         />
       </div>
 
@@ -389,6 +394,7 @@ function LayoutRenderer({
           onRatioChange={onRatioChange}
           connections={connections}
           zoomedPaneId={zoomedPaneId}
+          onPathChange={onPathChange}
         />
       </div>
     </div>
@@ -397,7 +403,7 @@ function LayoutRenderer({
 
 // ─── Main FileLayout Component ──────────────────────────────────────────────
 
-export default function FileLayout({ managers: propManagers, onCloseFileManager, onSplitFileManager }) {
+export default function FileLayout({ managers: propManagers, onCloseFileManager, onSplitFileManager, onPathChange }) {
   const { state, dispatch } = useApp();
   const { t } = useTranslation();
   const { connections: allConnections, activeFileManagers: globalManagers } = state;
@@ -591,6 +597,7 @@ export default function FileLayout({ managers: propManagers, onCloseFileManager,
         onRatioChange={handleRatioChange}
         connections={connections}
         zoomedPaneId={null}
+        onPathChange={onPathChange}
       />
     </div>
   );

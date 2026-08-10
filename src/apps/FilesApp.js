@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { useApp } from '@/context/AppContext';
 import { useTranslation } from 'react-i18next';
 import { FolderClosed, HardDrive, Server } from 'lucide-react';
@@ -11,12 +11,30 @@ export default function FilesApp({ onEditConnection, initialConnection, initialC
   const { connections } = state;
   const sshConnections = connections.filter(c => c.type !== 'database');
 
+  // Helper: get persisted path for a given connectionId
+  const getPersistedPath = useCallback((connectionId) => {
+    if (!windowId || !connectionId) return '.';
+    try {
+      const saved = localStorage.getItem(`files-path-${windowId}-${connectionId}`);
+      return saved || '.';
+    } catch { return '.'; }
+  }, [windowId]);
+
+  // Helper: persist path for a given connectionId
+  const persistPath = useCallback((connectionId, path) => {
+    if (!windowId || !connectionId || !path) return;
+    try {
+      localStorage.setItem(`files-path-${windowId}-${connectionId}`, path);
+    } catch {}
+  }, [windowId]);
+
   // Initialize tabs with initialConnection if provided
   const [tabs, setTabs] = useState(() => {
     if (initialConnection && initialConnection.storage !== 'manual') {
+      const connectionId = initialConnectionId || initialConnection._id;
       return [{
-        id: `files-${initialConnectionId || initialConnection._id}-${Date.now()}`,
-        connectionId: initialConnectionId || initialConnection._id,
+        id: `files-${connectionId}-${Date.now()}`,
+        connectionId,
         connectionName: initialConnection.name,
         color: initialConnection.color,
         connection: initialConnection,
@@ -43,14 +61,21 @@ export default function FilesApp({ onEditConnection, initialConnection, initialC
       try {
         const parsed = JSON.parse(savedTabs);
         if (Array.isArray(parsed) && parsed.length > 0) {
-          // Re-verify connections exist
+          // Re-verify connections exist and restore last saved path
           const validTabs = parsed.map(tab => {
             let baseId = tab.connectionId;
             if (typeof baseId === 'string' && baseId.startsWith('docker-')) {
                baseId = baseId.split(':').pop();
             }
             const conn = connections.find(c => c._id === baseId);
-            return conn ? { ...tab, connection: conn } : null;
+            if (!conn) return null;
+            // Restore the last-visited path from localStorage
+            const savedPath = getPersistedPath(tab.connectionId);
+            return {
+              ...tab,
+              connection: conn,
+              initialPath: savedPath !== '.' ? savedPath : (tab.initialPath || '.'),
+            };
           }).filter(Boolean);
           
           if (validTabs.length > 0) {
@@ -62,7 +87,7 @@ export default function FilesApp({ onEditConnection, initialConnection, initialC
         console.error('Failed to load files tabs:', e);
       }
     }
-  }, [connectionsReady, connections, windowId]);
+  }, [connectionsReady, connections, windowId, getPersistedPath]);
 
   // Save tabs on change
   useEffect(() => {
@@ -101,12 +126,15 @@ export default function FilesApp({ onEditConnection, initialConnection, initialC
 
     const connectionId = overrideId || conn._id;
     const fileId = `files-${connectionId}-${Date.now()}`;
+    // Restore last path for this connection if available
+    const savedPath = getPersistedPath(connectionId);
     const newTab = {
       id: fileId,
       connectionId: connectionId,
       connectionName: conn.name,
       color: conn.color,
       connection: conn,
+      initialPath: savedPath,
     };
 
     setTabs(prev => [...prev, newTab]);
@@ -124,6 +152,11 @@ export default function FilesApp({ onEditConnection, initialConnection, initialC
   const handleSplitFileManager = (fmData) => {
     setTabs(prev => [...prev, fmData]);
   };
+
+  // Called by FileLayout → LayoutRenderer → FileManager whenever user navigates to a new folder
+  const handlePathChange = useCallback((connectionId, path) => {
+    persistPath(connectionId, path);
+  }, [persistPath]);
 
   return (
     <div className="flex flex-col h-full bg-transparent text-[var(--text-primary)] overflow-hidden">
@@ -182,6 +215,7 @@ export default function FilesApp({ onEditConnection, initialConnection, initialC
               managers={tabs} 
               onCloseFileManager={handleCloseFileManager}
               onSplitFileManager={handleSplitFileManager}
+              onPathChange={handlePathChange}
             />
           </div>
         )}

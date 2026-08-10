@@ -7,6 +7,7 @@ import FileTabs from '@/components/FileTabs';
 
 import ConnectionModal from '@/components/ConnectionModal';
 import { useApp } from '@/context/AppContext';
+import { useOS } from '@/context/OSContext';
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ChevronLeft, ChevronRight, Menu } from 'lucide-react';
@@ -23,13 +24,35 @@ const MIN_SIDEBAR_W = 180;
 const MAX_SIDEBAR_W = 480;
 const DEFAULT_SIDEBAR_W = 260;
 
-export default function SSHApp({ windowId }) {
+export default function SSHApp({ windowId, activeTab: propActiveTab }) {
   const { state, dispatch } = useApp();
+  const { updateWindowProps } = useOS();
   const { t } = useTranslation();
   const isMobile = useIsMobile();
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [modalMode, setModalMode] = useState('add');
   const [selectedConnection, setSelectedConnection] = useState(null);
+
+  // Sync active view from prop or localStorage on mount
+  useEffect(() => {
+    let savedView = propActiveTab;
+    if (!savedView && windowId) {
+      savedView = localStorage.getItem(`ssh-app-view-${windowId}`);
+    }
+    if (savedView && ['dashboard', 'terminal', 'files', 'database'].includes(savedView)) {
+      dispatch({ type: 'SET_VIEW', payload: savedView });
+    }
+  }, [windowId, propActiveTab, dispatch]);
+
+  const handleSetView = (view) => {
+    dispatch({ type: 'SET_VIEW', payload: view });
+    if (windowId) {
+      localStorage.setItem(`ssh-app-view-${windowId}`, view);
+      if (updateWindowProps) {
+        updateWindowProps(windowId, { activeTab: view });
+      }
+    }
+  };
 
   // Sidebar resize state
   const [sidebarWidth, setSidebarWidth] = useState(DEFAULT_SIDEBAR_W);
@@ -195,7 +218,7 @@ export default function SSHApp({ windowId }) {
            {/* Centered Navigation */}
            <div className="flex bg-[var(--bg-tertiary)]/30 p-1 rounded-lg overflow-x-auto no-scrollbar whitespace-nowrap max-w-full">
              <button
-               onClick={() => dispatch({ type: 'SET_VIEW', payload: 'dashboard' })}
+               onClick={() => handleSetView('dashboard')}
                className={`px-4 py-1.5 text-xs font-medium rounded-md transition-all ${
                  state.view === 'dashboard'
                    ? 'bg-[var(--bg-selected)] text-[var(--text-selected)] shadow-lg shadow-[var(--glow-indigo)]/20 border border-[var(--accent-indigo)]/30'
@@ -205,7 +228,7 @@ export default function SSHApp({ windowId }) {
                 {t('ssh.dashboard')}
              </button>
              <button
-               onClick={() => dispatch({ type: 'SET_VIEW', payload: 'terminal' })}
+               onClick={() => handleSetView('terminal')}
                className={`px-4 py-1.5 text-xs font-medium rounded-md transition-all ${
                  state.view === 'terminal'
                    ? 'bg-[var(--bg-selected)] text-[var(--text-selected)] shadow-lg shadow-[var(--glow-indigo)]/20 border border-[var(--accent-indigo)]/30'
@@ -215,7 +238,7 @@ export default function SSHApp({ windowId }) {
                 {t('ssh.terminal')}
              </button>
              <button
-               onClick={() => dispatch({ type: 'SET_VIEW', payload: 'files' })}
+               onClick={() => handleSetView('files')}
                className={`px-4 py-1.5 text-xs font-medium rounded-md transition-all ${
                  state.view === 'files'
                    ? 'bg-[var(--bg-selected)] text-[var(--text-selected)] shadow-lg shadow-[var(--glow-indigo)]/20 border border-[var(--accent-indigo)]/30'
@@ -225,7 +248,7 @@ export default function SSHApp({ windowId }) {
                 {t('ssh.fileGui')}
              </button>
               <button
-                onClick={() => dispatch({ type: 'SET_VIEW', payload: 'database' })}
+                onClick={() => handleSetView('database')}
                 className={`px-4 py-1.5 text-xs font-medium rounded-md transition-all ${
                   state.view === 'database'
                     ? 'bg-[var(--bg-selected)] text-[var(--text-selected)] shadow-lg shadow-[var(--glow-indigo)]/20 border border-[var(--accent-indigo)]/30'

@@ -7,7 +7,7 @@ import { StickyNote, Database, Lock, Unlock, Save, Trash2, Plus, Search, Termina
 import { motion, AnimatePresence } from 'framer-motion';
 import { useTranslation } from 'react-i18next';
 
-export default function NotepadApp() {
+export default function NotepadApp({ windowId }) {
   const { state, apiFetch } = useApp();
   const { t } = useTranslation();
   const { dbConfig } = state;
@@ -17,6 +17,13 @@ export default function NotepadApp() {
   const [activeNote, setActiveNote] = useState(null);
   const [loading, setLoading] = useState(false);
   const [search, setSearch] = useState('');
+
+  // Persist active note ID
+  useEffect(() => {
+    if (windowId && activeNote?._id) {
+      localStorage.setItem(`notepad-active-${windowId}`, activeNote._id);
+    }
+  }, [activeNote?._id, windowId]);
   
   const isMobile = useIsMobile();
   const [showSidebar, setShowSidebar] = useState(true);
@@ -45,7 +52,10 @@ export default function NotepadApp() {
       if (data.success) {
         setNotes(data.data);
         if (data.data.length > 0 && !activeNote) {
-          setActiveNote(data.data[0]);
+          // Restore previously active note if possible
+          const savedId = windowId ? localStorage.getItem(`notepad-active-${windowId}`) : null;
+          const restored = savedId ? data.data.find(n => n._id === savedId) : null;
+          setActiveNote(restored || data.data[0]);
         }
       }
     } catch (err) {

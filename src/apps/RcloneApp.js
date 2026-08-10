@@ -586,15 +586,21 @@ function DynamicCronPicker({ value, onChange }) {
   );
 }
 
-export default function RcloneApp() {
+export default function RcloneApp({ windowId = 'rclone', activeTab: propActiveTab }) {
   const { vaultStatus } = useVault();
   const { state: appState, apiFetch, connectionsReady } = useApp();
-  const { showAlert, showConfirm } = useOS();
+  const { showAlert, showConfirm, updateWindowProps } = useOS();
   
   // Read connections directly from AppContext so all apps share the same source of truth
   const connections = (appState?.connections || []).filter(c => c.type !== 'database');
   const [selectedConnId, setSelectedConnId] = useState('');
-  const [activeTab, setActiveTab] = useState('setup'); // 'setup' | 'remotes' | 'backup' | 'browser'
+  const [activeTab, setActiveTabState] = useState(propActiveTab || 'setup'); // 'setup' | 'remotes' | 'backup' | 'browser'
+  const setActiveTab = (tab) => {
+    setActiveTabState(tab);
+    if (windowId && updateWindowProps) {
+      updateWindowProps(windowId, { activeTab: tab });
+    }
+  };
   const [loading, setLoading] = useState(false);
   const [rcloneStatus, setRcloneStatus] = useState(null); // { installed, version, remotes, configPath }
   

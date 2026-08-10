@@ -182,38 +182,40 @@
 }
 
 .retro {
-  font-family: 'Share Tech Mono', monospace;
-  font-size: 0.95rem;
+  font-family: 'Rajdhani', sans-serif;
+  font-size: 1rem;
 }
 
 .retro *:not(.font-mono):not(code):not(pre):not(.terminal):not(.xterm):not(.xterm *) {
-  font-family: 'Share Tech Mono', monospace !important;
-  font-weight: 400 !important; 
+  font-family: 'Rajdhani', sans-serif !important;
+  font-weight: 400 !important;
 }
 
-/* Bump up text sizes slightly, but not as much as before since Share Tech Mono is bigger */
-.retro .text-\[9px\] { font-size: 11px !important; }
-.retro .text-\[10px\] { font-size: 12px !important; }
-.retro .text-\[11px\] { font-size: 13px !important; }
-.retro .text-xs { font-size: 0.85rem !important; }
-.retro .text-sm { font-size: 1rem !important; line-height: 1.3 !important; }
-.retro .text-base { font-size: 1.1rem !important; }
-.retro .text-lg { font-size: 1.25rem !important; }
-.retro .text-xl { font-size: 1.5rem !important; }
-.retro .text-2xl { font-size: 1.8rem !important; }
+/* Text size overrides — Rajdhani is compact so we keep sizes natural */
+.retro .text-\[9px\] { font-size: 10px !important; }
+.retro .text-\[10px\] { font-size: 11px !important; }
+.retro .text-\[11px\] { font-size: 12px !important; }
+.retro .text-xs { font-size: 0.8rem !important; }
+.retro .text-sm { font-size: 0.9rem !important; line-height: 1.4 !important; }
+.retro .text-base { font-size: 1rem !important; }
+.retro .text-lg { font-size: 1.15rem !important; }
+.retro .text-xl { font-size: 1.35rem !important; }
+.retro .text-2xl { font-size: 1.6rem !important; }
 
 .retro * {
-  text-shadow: 0 0 1px rgba(24, 225, 44, 0.4);
-  letter-spacing: 0.02em;
-  -webkit-font-smoothing: antialiased; /* Re-enable for smooth web font */
+  text-shadow: 0 0 1px rgba(24, 225, 44, 0.3);
+  letter-spacing: 0.03em;
+  -webkit-font-smoothing: antialiased;
 }
 
 .retro h1, .retro h2, .retro h3, .retro .text-lg, .retro .text-xl, .retro .text-2xl {
   text-transform: uppercase;
   color: #1aff1a;
-  letter-spacing: 0.05em;
+  letter-spacing: 0.08em;
+  font-weight: 600 !important;
 }
 
+/* Keep mono font only for actual code / terminal elements */
 .retro .font-mono, .retro code, .retro pre {
   font-family: 'Share Tech Mono', monospace !important;
   font-size: 0.92em;

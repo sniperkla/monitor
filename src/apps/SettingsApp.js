@@ -162,11 +162,18 @@ function normalizeBitbucketRepo(value) {
   return trimmed;
 }
 
-export default function SettingsApp({ initialTab, deploymentOnly = false, openRelayWizard = false }) {
-  const [activeTab, setActiveTab] = useState(initialTab || (deploymentOnly ? 'deployment' : 'appearance'));
+export default function SettingsApp({ windowId = 'settings', initialTab, activeTab: propActiveTab, deploymentOnly = false, openRelayWizard = false }) {
+  const [activeTab, setActiveTabState] = useState(initialTab || propActiveTab || (deploymentOnly ? 'deployment' : 'appearance'));
   const { data: session } = useSession();
   const { t, i18n } = useTranslation();
-  const { state: osState, setWallpaper, setGlassmorphism, setIconSize, setIconStyle, setBrightness, setUiScale, setNotifications, setLanguage, setTheme, setTaskbarPosition, setWindowLayout, addCustomWallpaper, removeCustomWallpaper, saveSettings, addNotification, showConfirm, setKeyboardShortcuts, setTerminalSettings } = useOS();
+  const { state: osState, updateWindowProps, setWallpaper, setGlassmorphism, setIconSize, setIconStyle, setBrightness, setUiScale, setNotifications, setLanguage, setTheme, setTaskbarPosition, setWindowLayout, addCustomWallpaper, removeCustomWallpaper, saveSettings, addNotification, showConfirm, setKeyboardShortcuts, setTerminalSettings } = useOS();
+
+  const setActiveTab = (tab) => {
+    setActiveTabState(tab);
+    if (windowId) {
+      updateWindowProps(windowId, { activeTab: tab });
+    }
+  };
   const { state: appState, dispatch, apiFetch, fetchConnections, connectionsReady } = useApp();
   const { vaultStatus, decryptedUri, lockVault, clearVault, setupVault, showVault } = useVault();
   const { glassmorphism, brightness, uiScale, notifications } = osState;

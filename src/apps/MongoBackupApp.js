@@ -339,12 +339,18 @@ function CronBuilder({ value, onChange }) {
   );
 }
 
-export default function MongoBackupApp() {
+export default function MongoBackupApp({ windowId = 'mongo-backup', activeTab: propActiveTab }) {
   const { state, apiFetch } = useApp();
-  const { addNotification } = useOS();
+  const { addNotification, updateWindowProps } = useOS();
   const { connections } = state;
 
-  const [activeTab, setActiveTab] = useState('import');
+  const [activeTab, setActiveTabState] = useState(propActiveTab || 'import');
+  const setActiveTab = (tab) => {
+    setActiveTabState(tab);
+    if (windowId && updateWindowProps) {
+      updateWindowProps(windowId, { activeTab: tab });
+    }
+  };
   const [loading, setLoading] = useState(false);
 
   // Connection selector: include Mongo `database` entries and SSH entries that are configured as DB targets

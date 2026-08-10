@@ -127,7 +127,8 @@ export default function FileManager({
   isSplit = false,
   initialPath = '.',
   onClosePane,
-  onSplit
+  onSplit,
+  onPathChange
 }) {
   const { t } = useTranslation();
   const { state: appState, dispatch: appDispatch, apiFetch } = useApp();
@@ -242,7 +243,11 @@ export default function FileManager({
     if (!isEditingPath) {
       setPathInput(currentPath);
     }
-  }, [currentPath, isEditingPath]);
+    // Notify parent of path change so it can persist current folder
+    if (onPathChange && currentPath && currentPath !== '.') {
+      onPathChange(currentPath);
+    }
+  }, [currentPath, isEditingPath, onPathChange]);
 
   useEffect(() => {
     // Close context menu on click elsewhere

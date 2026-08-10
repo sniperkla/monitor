@@ -32,7 +32,7 @@ const OS_ICONS = {
 
 const getOsStyle = (os) => OS_ICONS[os] || OS_ICONS['Any'];
 
-export default function WikiApp({ initialGuideId }) {
+export default function WikiApp({ initialGuideId, windowId }) {
   const { state, apiFetch, dispatch } = useApp();
   const { addNotification } = useOS();
   const { data: session } = useSession();
@@ -53,6 +53,13 @@ export default function WikiApp({ initialGuideId }) {
   const [translations, setTranslations] = useState({}); // { [key]: string }
   const [translating, setTranslating] = useState({}); // { [key]: boolean }
   const { i18n } = useTranslation();
+
+  // Persist active guide ID
+  useEffect(() => {
+    if (windowId && activeGuide?._id) {
+      localStorage.setItem(`wiki-active-${windowId}`, activeGuide._id);
+    }
+  }, [activeGuide?._id, windowId]);
   
   // Chat / AI Assistant State
   // Chat / AI Assistant State - Multiple Windows
@@ -111,7 +118,9 @@ export default function WikiApp({ initialGuideId }) {
         if (data.categories) setCategories(data.categories);
         if (data.osList) setOsList(data.osList);
         if (data.data.length > 0 && !activeGuide && !initialGuideId) {
-          setActiveGuide(data.data[0]);
+          const savedId = windowId ? localStorage.getItem(`wiki-active-${windowId}`) : null;
+          const restored = savedId ? data.data.find(g => g._id === savedId) : null;
+          setActiveGuide(restored || data.data[0]);
         }
       }
     } catch (err) {

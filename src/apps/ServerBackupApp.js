@@ -24,12 +24,18 @@ const BACKUP_TYPES = [
   { id: 'custom', label: 'Custom', icon: FolderOpen, desc: 'Pick any files or directories' },
 ];
 
-export default function ServerBackupApp() {
+export default function ServerBackupApp({ windowId = 'server-backup', activeTab: propActiveTab }) {
   const { state, apiFetch } = useApp();
-  const { addNotification } = useOS();
+  const { addNotification, updateWindowProps } = useOS();
   const { connections } = state;
 
-  const [activeTab, setActiveTab] = useState('backup');
+  const [activeTab, setActiveTabState] = useState(propActiveTab || 'backup');
+  const setActiveTab = (tab) => {
+    setActiveTabState(tab);
+    if (windowId && updateWindowProps) {
+      updateWindowProps(windowId, { activeTab: tab });
+    }
+  };
   const [connectionId, setConnectionId] = useState('');
   const [backupType, setBackupType] = useState('');
   const [isRunning, setIsRunning] = useState(false);

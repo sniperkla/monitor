@@ -177,15 +177,21 @@ function ImageComboBox({ value, onChange, options }) {
 
 
 // ── Main Component ────────────────────────────
-export default function DockerApp({ initialConnection, initialConnectionId, windowId }) {
+export default function DockerApp({ initialConnection, initialConnectionId, windowId, activeTab: propActiveTab }) {
   const { state } = useApp();
-  const { showConfirm, showPrompt, addNotification, openWindow, dispatch: osDispatch } = useOS();
+  const { showConfirm, showPrompt, addNotification, openWindow, updateWindowProps, dispatch: osDispatch } = useOS();
   const { t } = useTranslation();
   const { connectionsReady } = useApp();
   
   // App state
   const [portStatus, setPortStatus] = useState(null); // 'checking', 'free', 'in-use', null
-  const [activeTab, setActiveTab] = useState('containers');
+  const [activeTab, setActiveTabState] = useState(propActiveTab || 'containers');
+  const setActiveTab = (tab) => {
+    setActiveTabState(tab);
+    if (windowId && updateWindowProps) {
+      updateWindowProps(windowId, { activeTab: tab });
+    }
+  };
   const [containers, setContainers] = useState([]);
   const [images, setImages] = useState([]);
   const [volumes, setVolumes] = useState([]);

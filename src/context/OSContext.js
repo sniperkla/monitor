@@ -786,6 +786,24 @@ function osReducer(state, action) {
         timestamp: Date.now()
       };
     }
+    case 'UPDATE_WINDOW_PROPS': {
+      const { id, props } = action.payload;
+      return {
+        ...state,
+        windows: (state.windows || []).map(w =>
+          w.id === id ? { ...w, props: { ...(w.props || {}), ...props } } : w
+        ),
+        windowsByDesktop: Object.fromEntries(
+          Object.entries(state.windowsByDesktop || {}).map(([desktopId, wins]) => [
+            desktopId,
+            (wins || []).map(w =>
+              w.id === id ? { ...w, props: { ...(w.props || {}), ...props } } : w
+            ),
+          ])
+        ),
+        timestamp: Date.now()
+      };
+    }
     default:
       return state;
   }
@@ -949,7 +967,8 @@ export function OSProvider({ children }) {
             console.log('[OS] DB Fetch - local customWallpapers:', stateRef.current.customWallpapers);
             console.log('[OS] Timestamps - DB:', dbTimestamp, 'Local:', localTimestamp, 'isFreshLogin:', isFreshLogin);
 
-            if (isFreshLogin || dbTimestamp > localTimestamp || (localTimestamp === 0 && dbTimestamp !== 0)) {
+            const hasDbSettings = data.settings.iconPositions || data.settings.iconGroups || data.settings.wallpaper;
+            if (isFreshLogin || dbTimestamp >= localTimestamp || (localTimestamp === 0 && dbTimestamp !== 0) || hasDbSettings) {
               console.log(`🔄 [OS] Hydrating from DB (DB: ${dbTimestamp}, Local: ${localTimestamp})`);
               
               // Sync i18n immediately if needed to prevent flicker
@@ -1058,21 +1077,23 @@ export function OSProvider({ children }) {
     const timer = setTimeout(async () => {
       try {
         console.log('💾 [OS] Syncing settings to DB...');
+        const now = Date.now();
         const res = await fetch('/api/user/settings', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             ...JSON.parse(serialized),
-            timestamp: Date.now(),
+            timestamp: now,
           })
         });
         if (res.ok) {
+          stateRef.current.timestamp = now;
           lastSavedStateRef.current = serialized;
         }
       } catch (error) {
         console.error('Failed to sync settings to DB', error);
       }
-    }, 5000); // 5s debounce for stability
+    }, 1000); // 1s debounce for quick persistence to DB
       
     return () => clearTimeout(timer);
   }, [
@@ -1100,6 +1121,7 @@ export function OSProvider({ children }) {
     state.sshAiHistory,
     state.sshAiPrefs,
     state.terminalSettings,
+    state.iconGroups,
     isInitialLoad
   ]);
 
@@ -1306,6 +1328,10 @@ export function OSProvider({ children }) {
 
   const updateWindowPosition = (id, position) => {
     dispatch({ type: 'UPDATE_WINDOW_POSITION', payload: { id, position } });
+  };
+
+  const updateWindowProps = (id, props) => {
+    dispatch({ type: 'UPDATE_WINDOW_PROPS', payload: { id, props } });
   };
 
   const minimizeAll = () => {
@@ -1611,6 +1637,7 @@ export function OSProvider({ children }) {
       setSelectedIcons, 
       updateMultipleIconPositions,
       updateWindowPosition,
+      updateWindowProps,
       minimizeAll,
       restoreAll,
       setExportNaming,

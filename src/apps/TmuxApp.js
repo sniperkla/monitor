@@ -9,9 +9,9 @@ import TerminalView from '@/components/TerminalView';
 import RelayTerminalView from '@/components/RelayTerminalView';
 import { io } from 'socket.io-client';
 
-export default function TmuxApp({ initialConnection }) {
+export default function TmuxApp({ initialConnection, windowId }) {
   const { state, dispatch } = useApp();
-  const { showConfirm } = useOS();
+  const { showConfirm, updateWindowProps } = useOS();
   const { t } = useTranslation();
   
   // App state
@@ -28,6 +28,24 @@ export default function TmuxApp({ initialConnection }) {
   const { connections, dbConfig } = state;
   const sshConnections = connections.filter(c => c.type !== 'database');
   const [selectedConnection, setSelectedConnection] = useState(initialConnection || null);
+
+  // Restore persisted connection on mount
+  useEffect(() => {
+    if (selectedConnection || !windowId) return;
+    const savedConnId = localStorage.getItem(`tmux-connection-${windowId}`);
+    if (savedConnId && connections.length > 0) {
+      const conn = connections.find(c => c._id === savedConnId);
+      if (conn) setSelectedConnection(conn);
+    }
+  }, [connections, windowId, selectedConnection]);
+
+  // Persist selected connection and active tab
+  useEffect(() => {
+    if (!windowId) return;
+    if (selectedConnection) {
+      localStorage.setItem(`tmux-connection-${windowId}`, selectedConnection._id);
+    }
+  }, [selectedConnection, windowId]);
 
   // Hidden terminal socket just for running tmux commands in the background
   const socketRef = useRef(null);
@@ -325,7 +343,10 @@ export default function TmuxApp({ initialConnection }) {
           </div>
           
           <div className="flex items-center gap-2">
-              <button onClick={() => setSelectedConnection(null)} className="text-xs px-2 py-1 text-[var(--text-muted)] hover:text-[var(--text-primary)] transition-colors">
+              <button onClick={() => {
+                setSelectedConnection(null);
+                if (windowId) localStorage.removeItem(`tmux-connection-${windowId}`);
+              }} className="text-xs px-2 py-1 text-[var(--text-muted)] hover:text-[var(--text-primary)] transition-colors">
                   Change Server
               </button>
           </div>
