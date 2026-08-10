@@ -62,12 +62,18 @@ export async function GET(request) {
     const userId = objectId || rawUserId || session.user?.email || 'global';
 
     await connectDB(process.env.MONGODB_URI, true);
-    
-    // Find settings keys that start with auto_deploy_config for this user (or global fallback)
-    const rawSettings = await SystemSetting.find({
-      userId: { $in: [...userKeys, 'global'] },
+
+    // Use raw MongoDB driver to avoid Mongoose BSON type coercion issues.
+    // Mongoose Mixed type $in queries don't match ObjectId docs when string is passed and vice versa.
+    const db = mongoose.connection.db;
+    const col = db.collection('systemsettings');
+
+    // Build query keys covering BSON ObjectId, string ID, email — matches any storage format
+    const queryKeys = [...userKeys, 'global'];
+    const rawSettings = await col.find({
+      userId: { $in: queryKeys },
       key: { $regex: '^auto_deploy_config' }
-    });
+    }).toArray();
 
     // Deduplicate by project key
     const settingsMap = new Map();
@@ -298,10 +304,13 @@ export async function POST(request) {
       ? new mongoose.Types.ObjectId(rawUserId)
       : (rawUserId || session.user?.email || 'global');
 
-    await SystemSetting.findOneAndUpdate(
+    // Use raw MongoDB driver to avoid Mongoose BSON type coercion issues
+    const db = mongoose.connection.db;
+    const col = db.collection('systemsettings');
+    await col.updateOne(
       { userId: targetUserId, key: dbKey },
       { $set: { userId: targetUserId, key: dbKey, value: updatedValue } },
-      { upsert: true, runValidators: false }
+      { upsert: true }
     );
 
     return NextResponse.json({ success: true, config: updatedValue });
@@ -333,7 +342,8 @@ export async function DELETE(request) {
     const userKeys = [...new Set([objectId, rawUserId, session.user?.email].filter(Boolean))];
 
     await connectDB(process.env.MONGODB_URI, true);
-    await SystemSetting.deleteOne({ userId: { $in: userKeys }, key: `auto_deploy_config_${projectId}` });
+    const db = mongoose.connection.db;
+    await db.collection('systemsettings').deleteOne({ userId: { $in: userKeys }, key: `auto_deploy_config_${projectId}` });
 
     return NextResponse.json({ success: true, message: 'Project deployment config deleted' });
   } catch (error) {
