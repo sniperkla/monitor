@@ -61,8 +61,6 @@ export async function GET(request) {
     const userKeys = [...new Set([objectId, rawUserId, session.user?.email].filter(Boolean))];
     const userId = objectId || rawUserId || session.user?.email || 'global';
 
-    console.log('[deploy/config] session userId lookup keys:', userKeys.map(String));
-
     await connectDB(process.env.MONGODB_URI, true);
     
     // Find settings keys that start with auto_deploy_config for this user (or global fallback)
@@ -70,7 +68,6 @@ export async function GET(request) {
       userId: { $in: [...userKeys, 'global'] },
       key: { $regex: '^auto_deploy_config' }
     });
-    console.log('[deploy/config] found', rawSettings.length, 'settings for user');
 
     // Deduplicate by project key
     const settingsMap = new Map();
