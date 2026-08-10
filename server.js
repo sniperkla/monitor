@@ -15,7 +15,7 @@ try {
             (value.startsWith("'") && value.endsWith("'"))) {
           value = value.substring(1, value.length - 1);
         }
-        if (key && !process.env[key]) {
+        if (key) {
            process.env[key] = value;
         }
       }

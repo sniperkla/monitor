@@ -107,33 +107,36 @@ async function connectCenter(uri) {
     return cached.conn;
   }
 
-  // Only return cached connection if it is actually connected
-  if (cached.conn && mongoose.connection.readyState === 1) {
-    return cached.conn;
-  }
+  const centerUri = getCenterUri() || uri;
 
-  // If there's no active promise, or connection is disconnected/connecting without a promise, start connection
-  if (!cached.promise || mongoose.connection.readyState === 0) {
+  // If connection is stuck connecting (readyState 2) or disconnected (readyState 0), reset and reconnect
+  if (mongoose.connection.readyState === 2 || mongoose.connection.readyState === 0 || !cached.promise) {
+    try {
+      if (mongoose.connection.readyState !== 0) {
+        await mongoose.disconnect();
+      }
+    } catch (_) {}
+
     const opts = {
       bufferCommands: false,
+      serverSelectionTimeoutMS: 5000,
+      connectTimeoutMS: 5000,
     };
-    // Use the URI from env or config file as the definitive center DB if possible
-    const centerUri = getCenterUri() || uri;
-    cached.promise = mongoose.connect(centerUri, opts).then((mongoose) => {
-      return mongoose;
-    });
+
+    cached.promise = mongoose.connect(centerUri, opts).then((m) => m);
   }
-  
+
   try {
     cached.conn = await cached.promise;
   } catch (e) {
     cached.promise = null;
+    cached.conn = null;
     throw e;
   }
 
-  // Double check connection status after promise resolves
   if (mongoose.connection.readyState !== 1) {
     cached.promise = null;
+    cached.conn = null;
     throw new Error("Mongoose connection readyState is not 1 (connected) after awaiting connect promise.");
   }
 
