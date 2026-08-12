@@ -1236,6 +1236,15 @@ export default function FileManager({
     let returnCheckTimer = null;
 
     const verifyAfterReturn = () => {
+      // Skip verification if we're actively transferring
+      const hasActiveTransfer = transferRef.current && !transferRef.current.waiting && !transferRef.current.error;
+      const hasQueuedUploads = uploadQueueRef.current.length > 0;
+      
+      if (hasActiveTransfer) {
+        console.log('⏭️ Skipping reconnection check - active transfer in progress');
+        return;
+      }
+      
       // Only act if we were in a ready state
       if (statusRef.current !== 'ready') return;
 
@@ -1243,8 +1252,10 @@ export default function FileManager({
       if (!socketRef.current?.connected) {
         if (statusRef.current === 'ready') {
           requestReconnect('Connection lost while tab was inactive. Reconnecting...', {
-            preserveTransfer: !!transferRef.current || uploadQueueRef.current.length > 0,
-            notificationMessage: 'Connection lost while you were away. Reconnecting now.',
+            preserveTransfer: hasQueuedUploads,
+            notificationMessage: hasQueuedUploads 
+              ? 'Connection lost while you were away. Reconnecting to resume your uploads.'
+              : 'Connection lost while you were away. Reconnecting now.',
           });
         }
         return;

@@ -832,9 +832,11 @@ async function handleSftpUploadStart(ws, msg) {
     });
 
     let completionSent = false;
+    let completionTimer = null;
     const sendCompletion = () => {
       if (completionSent) return;
       completionSent = true;
+      clearTimeout(completionTimer);
       const currentEntry = activeUploads.get(key);
       if (currentEntry && (currentEntry.stream === stream || !currentEntry.stream)) {
         activeUploads.delete(key);
@@ -854,7 +856,15 @@ async function handleSftpUploadStart(ws, msg) {
 
     stream.on('finish', () => {
       console.log(`📤 [relay] Stream finish event for: ${msg.remotePath}`);
-      sendCompletion();
+      // Set a short timer to give close event a chance to fire first
+      if (!completionSent) {
+        completionTimer = setTimeout(() => {
+          if (!completionSent) {
+            console.log(`📤 [relay] Finish fallback (500ms) - sending completion for: ${msg.remotePath}`);
+            sendCompletion();
+          }
+        }, 500);
+      }
     });
 
     const entry = activeUploads.get(key);

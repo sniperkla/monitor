@@ -1143,8 +1143,9 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
               firstPoll = false;
             } else {
               consecutiveDisconnects++;
-              // Require 2 consecutive failures before switching to avoid false positives
-              if (consecutiveDisconnects >= 2) {
+              // Require 4 consecutive failures (~20s apart = 80s grace) before switching
+              // to avoid brief relay blips from reconnecting all active SSH terminals
+              if (consecutiveDisconnects >= 4) {
                 localStorage.setItem('ssh_monitor_ssh_mode', 'server');
                 window.dispatchEvent(new Event('ssh-mode-changed'));
               }

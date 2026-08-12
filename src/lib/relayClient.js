@@ -74,7 +74,7 @@ export class RelayClient {
   /**
    * Request SSH connection through the relay
    */
-  requestConnection(connectionData, cols, rows) {
+  requestConnection(connectionData, cols, rows, resuming = false) {
     if (!this.socket) throw new Error('Not connected');
     console.log('[relay-client] Emitting relay:connect:', {
       connectionId: connectionData._id,
@@ -83,12 +83,14 @@ export class RelayClient {
       username: connectionData.username,
       cols,
       rows,
+      resuming,
     });
     this.socket.emit('relay:connect', {
       connectionId: connectionData._id,
       connection: connectionData,
       cols,
       rows,
+      resuming,
     });
     console.log('[relay-client] relay:connect emitted');
   }

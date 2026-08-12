@@ -529,22 +529,8 @@ export function AppProvider({ children }) {
         if (!mongoUp) {
           consecutiveFailures++;
           dispatch({ type: 'SET_HEALTH_STATUS', payload: { mongoDown: true } });
-
-          // Auto-switch to server mode after sustained failure
-          if (consecutiveFailures >= MAX_FAILURES_BEFORE_SWITCH) {
-            const currentMode = localStorage.getItem('ssh_monitor_ssh_mode');
-            // Only auto-switch if currently using local mode (URI is localhost)
-            const dbUri = global?.__mongoUri || '';
-            const isLocalUri = /localhost|127\.0\.0\.1/.test(dbUri);
-            if (currentMode === 'local' || isLocalUri) {
-              if (currentMode !== 'server') {
-                console.warn(`[AppContext] MongoDB down for ${consecutiveFailures} polls — auto-switching to server mode`);
-                localStorage.setItem('ssh_monitor_ssh_mode', 'server');
-                dispatch({ type: 'SET_HEALTH_STATUS', payload: { mongoDown: true, autoSwitchedToServer: true } });
-                window.dispatchEvent(new Event('ssh-mode-changed'));
-              }
-            }
-          }
+          // NOTE: We do NOT auto-switch SSH mode here — MongoDB downtime is a server-side
+          // issue unrelated to SSH relay mode. Switching would disconnect all active terminals.
         } else {
           // MongoDB is back up
           if (consecutiveFailures > 0) {

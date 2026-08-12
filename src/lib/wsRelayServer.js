@@ -145,11 +145,23 @@ class WsTcpRelay {
         isConnecting,
         hasSshClient: !!sshClient,
         hasSshStream: !!sshStream,
+        resuming: opts.resuming,
       });
       
       // Guard: prevent duplicate concurrent connection attempts
       if (isConnecting) {
         console.warn(`[relay] ${socket.id} connection already in progress - ignoring duplicate relay:connect`);
+        socket.emit('relay:error', { message: 'Connection already in progress', recoverable: true });
+        return;
+      }
+      
+      // If this is a resume request and we have an active connection, just confirm it
+      if (opts.resuming && sshClient && sshClient._state !== 'closed' && sshStream) {
+        console.log(`[relay] ${socket.id} resuming existing connection`);
+        socket.emit('relay:connected', { 
+          host: connection?.host || opts.connection?.host,
+          resumed: true 
+        });
         return;
       }
       
@@ -677,32 +689,38 @@ class WsTcpRelay {
                 armInactivityTimer();
 
                 let completionSent = false;
+                let completionTimer = null;
                 const sendCompletion = () => {
                   if (completionSent) return;
                   completionSent = true;
+                  clearTimeout(completionTimer);
                   console.log(`📤 [wsRelay] Sending sftp:action_success for upload: ${destPath}`);
-                  finalize(() => { socket.emit('sftp:action_success', { action: 'upload', path: destPath }); });
+                  finalize(() => { 
+                    socket.emit('sftp:action_success', { action: 'upload', path: destPath }); 
+                  });
                 };
 
                 wStream.on('close', () => {
                   console.log(`📤 [wsRelay] Stream close event for: ${destPath}`);
                   sendCompletion();
                 });
-                // Fallback: 'finish' fires when stream.end() flushes all data to the SFTP subsystem.
-                // In production, the 'close' event (file-handle release) can be delayed or lost;
-                // 'finish' is reliable and sufficient for upload completion.
+                
                 wStream.on('finish', () => {
                   console.log(`📤 [wsRelay] Stream finish event for: ${destPath} (completionSent: ${completionSent})`);
+                  // Set a short timer to ensure close event has a chance to fire first,
+                  // but don't wait forever
                   if (!completionSent) {
-                    setTimeout(() => {
+                    completionTimer = setTimeout(() => {
                       if (!completionSent) {
-                        console.log(`📤 [wsRelay] Finish fallback (2s) - sending completion for: ${destPath}`);
+                        console.log(`📤 [wsRelay] Finish fallback (500ms) - sending completion for: ${destPath}`);
                         sendCompletion();
                       }
-                    }, 2000);
+                    }, 500);
                   }
                 });
+                
                 wStream.on('error', (err) => { 
+                  clearTimeout(completionTimer);
                   console.error(`❌ [wsRelay] Stream error for: ${destPath}:`, err.message);
                   failTransfer(err, 'Upload failed'); 
                 });
