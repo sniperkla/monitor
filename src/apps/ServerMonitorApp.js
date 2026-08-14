@@ -6,7 +6,7 @@ import {
   Clock, Package, Database, Box, RefreshCw, AlertCircle, CheckCircle2, 
   Zap, TrendingUp, TrendingDown, Minus, Pause, Play, RotateCw, Radio,
   Copy, Check, Terminal, Shield, Sparkles, ExternalLink, Laptop, AlertTriangle,
-  ChevronDown
+  ChevronDown, ListFilter, Search, XOctagon, Skull, ArrowUpDown, Trash2, X
 } from 'lucide-react';
 import { useApp } from '@/context/AppContext';
 import { useTranslation } from 'react-i18next';
@@ -99,7 +99,7 @@ export default function ServerMonitorApp() {
   const [osTab, setOsTab] = useState('posix'); // 'posix' | 'powershell' | 'cmd'
 
   const [selectedConnection, setSelectedConnection] = useState(null);
-  const [activeTab, setActiveTab] = useState('overview'); // overview, apps
+  const [activeTab, setActiveTab] = useState('overview'); // overview, apps, processes
   const [metrics, setMetrics] = useState(null);
   const [appsData, setAppsData] = useState({}); // cached by connectionId: { apps, timestamp }
   const [appsLoading, setAppsLoading] = useState(false);
@@ -109,6 +109,14 @@ export default function ServerMonitorApp() {
   const [refreshInterval, setRefreshInterval] = useState(5000); // 2000, 5000, 10000, 30000
   const [isTabVisible, setIsTabVisible] = useState(true);
   const [showAgentWizard, setShowAgentWizard] = useState(false);
+
+  // ── Processes Management State ──
+  const [processesData, setProcessesData] = useState({}); // { [connId]: { processes: [], total: 0, timestamp: null } }
+  const [processesLoading, setProcessesLoading] = useState(false);
+  const [procSearchQuery, setProcSearchQuery] = useState('');
+  const [procSortField, setProcSortField] = useState('cpu'); // 'cpu' | 'mem' | 'rssKb' | 'pid' | 'name'
+  const [procSortDir, setProcSortDir] = useState('desc'); // 'desc' | 'asc'
+  const [killModal, setKillModal] = useState({ isOpen: false, process: null, signal: 'SIGTERM', loading: false, error: null });
 
   // Per-server agent status (keyed by connectionId)
   const [agentStatuses, setAgentStatuses] = useState({}); // { [connId]: { isRunning, nodeInstalled, inTmux, inService, checkedAt } }
@@ -125,6 +133,10 @@ export default function ServerMonitorApp() {
   const [cpuHistory, setCpuHistory] = useState([]);
   const [ramHistory, setRamHistory] = useState([]);
   const [networkHistory, setNetworkHistory] = useState([]);
+
+  const inFlightProcRef = useRef(false);
+  const inFlightStatusRef = useRef(false);
+  const inFlightAppsRef = useRef(false);
 
   const connections = useMemo(() => appState.connections || [], [appState.connections]);
 
@@ -187,7 +199,8 @@ export default function ServerMonitorApp() {
 
   // ── Per-connection agent status polling ──
   const checkAgentStatusForConn = useCallback(async (connId) => {
-    if (!connId) return;
+    if (!connId || inFlightStatusRef.current) return;
+    inFlightStatusRef.current = true;
     try {
       const res = await apiFetch('/api/server-monitor/agent', {
         method: 'POST',
@@ -207,13 +220,16 @@ export default function ServerMonitorApp() {
           }
         }));
       }
-    } catch (_) {}
+    } catch (_) {
+    } finally {
+      inFlightStatusRef.current = false;
+    }
   }, [apiFetch]);
 
   useEffect(() => {
     if (!selectedConnection || relayStatus !== 'connected') return;
 
-    // Check immediately when connection is selected
+    // Check immediately when connection changes
     checkAgentStatusForConn(selectedConnection);
 
     // Then poll every 15 seconds
@@ -224,7 +240,7 @@ export default function ServerMonitorApp() {
     return () => {
       if (agentPollRef.current) clearInterval(agentPollRef.current);
     };
-  }, [selectedConnection, relayStatus, checkAgentStatusForConn]);
+  }, [selectedConnection, relayStatus]);
 
   // Page Visibility detection - pause polling when tab/window is in the background
   useEffect(() => {
@@ -358,15 +374,10 @@ export default function ServerMonitorApp() {
 
   // Fetch installed applications (on-demand with client cache)
   const fetchApps = useCallback(async (force = false) => {
-    if (!selectedConnection || relayStatus !== 'connected') return;
-
-    // Use cached data if available and fresh (< 60s) unless forced
-    const cached = appsData[selectedConnection];
-    if (!force && cached && (Date.now() - cached.timestamp < 60000)) {
-      return;
-    }
-
+    if (!selectedConnection || relayStatus !== 'connected' || inFlightAppsRef.current) return;
+    inFlightAppsRef.current = true;
     setAppsLoading(true);
+
     try {
       const response = await apiFetch(`/api/server-monitor/apps?connectionId=${selectedConnection}`);
       if (response.ok) {
@@ -382,9 +393,66 @@ export default function ServerMonitorApp() {
     } catch (err) {
       console.error('Fetch apps error:', err);
     } finally {
+      inFlightAppsRef.current = false;
       setAppsLoading(false);
     }
-  }, [selectedConnection, relayStatus, appsData, apiFetch]);
+  }, [selectedConnection, relayStatus, apiFetch]);
+
+  // Fetch running processes (on-demand or live polling)
+  const fetchProcesses = useCallback(async (force = false) => {
+    if (!selectedConnection || relayStatus !== 'connected' || inFlightProcRef.current) return;
+    inFlightProcRef.current = true;
+    setProcessesLoading(true);
+
+    try {
+      const response = await apiFetch(`/api/server-monitor/processes?connectionId=${selectedConnection}`);
+      if (response.ok) {
+        const data = await response.json();
+        setProcessesData(prev => ({
+          ...prev,
+          [selectedConnection]: {
+            processes: data.processes || [],
+            total: data.total || 0,
+            timestamp: Date.now()
+          }
+        }));
+      }
+    } catch (err) {
+      console.error('Fetch processes error:', err);
+    } finally {
+      inFlightProcRef.current = false;
+      setProcessesLoading(false);
+    }
+  }, [selectedConnection, relayStatus, apiFetch]);
+
+  // Terminate / Kill process by PID
+  const executeKillProcess = async () => {
+    if (!killModal.process || !selectedConnection) return;
+    setKillModal(prev => ({ ...prev, loading: true, error: null }));
+
+    try {
+      const res = await apiFetch('/api/server-monitor/processes', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          connectionId: selectedConnection,
+          pid: killModal.process.pid,
+          signal: killModal.signal
+        })
+      });
+
+      const data = await res.json();
+      if (res.ok && data.success) {
+        setKillModal({ isOpen: false, process: null, signal: 'SIGTERM', loading: false, error: null });
+        // Refresh process list immediately
+        fetchProcesses(true);
+      } else {
+        setKillModal(prev => ({ ...prev, loading: false, error: data.error || 'Failed to terminate process' }));
+      }
+    } catch (err) {
+      setKillModal(prev => ({ ...prev, loading: false, error: err.message }));
+    }
+  };
 
   const socketRef = useRef(null);
   const peerRef = useRef(null);
@@ -582,6 +650,24 @@ export default function ServerMonitorApp() {
       fetchApps();
     }
   }, [activeTab, selectedConnection, relayStatus, fetchApps]);
+
+  // Fetch and poll processes when switching to 'processes' tab
+  useEffect(() => {
+    if (activeTab === 'processes' && selectedConnection && relayStatus === 'connected') {
+      fetchProcesses(true);
+
+      let procInterval = null;
+      if (autoRefresh && isTabVisible) {
+        procInterval = setInterval(() => {
+          fetchProcesses(true);
+        }, Math.max(3000, refreshInterval));
+      }
+
+      return () => {
+        if (procInterval) clearInterval(procInterval);
+      };
+    }
+  }, [activeTab, selectedConnection, relayStatus, autoRefresh, refreshInterval, isTabVisible, fetchProcesses]);
 
   const selectedConn = connections.find(c => c._id === selectedConnection);
   const currentApps = appsData[selectedConnection]?.apps || null;
@@ -1025,6 +1111,7 @@ export default function ServerMonitorApp() {
           {[
             { id: 'overview', label: 'Overview', icon: Activity },
             { id: 'apps', label: 'Applications', icon: Package },
+            { id: 'processes', label: 'Processes', icon: ListFilter },
           ].map(tab => (
             <button
               key={tab.id}
@@ -1037,6 +1124,11 @@ export default function ServerMonitorApp() {
             >
               <tab.icon size={14} />
               {tab.label}
+              {tab.id === 'processes' && processesData[selectedConnection]?.total > 0 && (
+                <span className="ml-1 px-1.5 py-0.2 rounded-full text-[10px] bg-indigo-900/60 text-indigo-200">
+                  {processesData[selectedConnection].total}
+                </span>
+              )}
             </button>
           ))}
         </div>
@@ -1315,7 +1407,404 @@ export default function ServerMonitorApp() {
             )}
           </div>
         )}
+
+        {/* ── TAB: PROCESSES ── */}
+        {activeTab === 'processes' && (
+          <div className="p-4 space-y-4">
+            {(() => {
+              const currentProcList = processesData[selectedConnection]?.processes || [];
+              const procTimestamp = processesData[selectedConnection]?.timestamp || null;
+
+              // Filter processes by search query
+              const query = procSearchQuery.toLowerCase().trim();
+              const filtered = currentProcList.filter(p => {
+                if (!query) return true;
+                return (
+                  String(p.pid).includes(query) ||
+                  (p.name && p.name.toLowerCase().includes(query)) ||
+                  (p.user && p.user.toLowerCase().includes(query)) ||
+                  (p.command && p.command.toLowerCase().includes(query))
+                );
+              });
+
+              // Sort processes
+              const sorted = [...filtered].sort((a, b) => {
+                let valA = a[procSortField];
+                let valB = b[procSortField];
+                if (typeof valA === 'string') valA = valA.toLowerCase();
+                if (typeof valB === 'string') valB = valB.toLowerCase();
+                if (valA < valB) return procSortDir === 'asc' ? -1 : 1;
+                if (valA > valB) return procSortDir === 'asc' ? 1 : -1;
+                return 0;
+              });
+
+              // Compute top stats
+              const topCpu = [...currentProcList].sort((a, b) => (b.cpu || 0) - (a.cpu || 0))[0];
+              const topMem = [...currentProcList].sort((a, b) => (b.rssKb || 0) - (a.rssKb || 0))[0];
+
+              return (
+                <div className="space-y-4">
+                  {/* Top Stats Cards */}
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    <div className="bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-xl p-3.5 flex items-center justify-between">
+                      <div>
+                        <div className="text-[11px] text-[var(--text-muted)] font-medium">Total Processes</div>
+                        <div className="text-xl font-bold mt-0.5 text-[var(--text-primary)]">
+                          {currentProcList.length > 0 ? currentProcList.length : '—'}
+                        </div>
+                      </div>
+                      <div className="p-2.5 rounded-xl bg-indigo-500/10 border border-indigo-500/20 text-indigo-400">
+                        <ListFilter size={18} />
+                      </div>
+                    </div>
+
+                    <div className="bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-xl p-3.5 flex items-center justify-between">
+                      <div className="truncate pr-2">
+                        <div className="text-[11px] text-[var(--text-muted)] font-medium">Top CPU Consumer</div>
+                        <div className="text-sm font-bold mt-0.5 text-amber-400 truncate flex items-center gap-1.5">
+                          {topCpu ? (
+                            <>
+                              <span className="truncate">{topCpu.name}</span>
+                              <span className="text-[11px] px-1.5 py-0.2 rounded bg-amber-500/20 text-amber-300 font-mono font-normal">
+                                {topCpu.cpu.toFixed(1)}%
+                              </span>
+                            </>
+                          ) : '—'}
+                        </div>
+                      </div>
+                      <div className="p-2.5 rounded-xl bg-amber-500/10 border border-amber-500/20 text-amber-400 shrink-0">
+                        <Cpu size={18} />
+                      </div>
+                    </div>
+
+                    <div className="bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-xl p-3.5 flex items-center justify-between">
+                      <div className="truncate pr-2">
+                        <div className="text-[11px] text-[var(--text-muted)] font-medium">Top Memory Consumer</div>
+                        <div className="text-sm font-bold mt-0.5 text-purple-400 truncate flex items-center gap-1.5">
+                          {topMem ? (
+                            <>
+                              <span className="truncate">{topMem.name}</span>
+                              <span className="text-[11px] px-1.5 py-0.2 rounded bg-purple-500/20 text-purple-300 font-mono font-normal">
+                                {formatBytes(topMem.rssKb * 1024)}
+                              </span>
+                            </>
+                          ) : '—'}
+                        </div>
+                      </div>
+                      <div className="p-2.5 rounded-xl bg-purple-500/10 border border-purple-500/20 text-purple-400 shrink-0">
+                        <MemoryStick size={18} />
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Filter & Controls Bar */}
+                  <div className="flex flex-wrap items-center justify-between gap-2.5 bg-[var(--bg-secondary)] border border-[var(--border-color)] p-2.5 rounded-xl">
+                    <div className="relative flex-1 min-w-[220px]">
+                      <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--text-muted)]" />
+                      <input
+                        type="text"
+                        placeholder="Search processes by name, PID, user, command..."
+                        value={procSearchQuery}
+                        onChange={(e) => setProcSearchQuery(e.target.value)}
+                        className="w-full bg-[var(--bg-tertiary)] border border-[var(--border-color)] rounded-lg pl-8 pr-8 py-1.5 text-xs text-[var(--text-primary)] placeholder-[var(--text-muted)] focus:outline-none focus:border-indigo-500/50"
+                      />
+                      {procSearchQuery && (
+                        <button
+                          onClick={() => setProcSearchQuery('')}
+                          className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[var(--text-muted)] hover:text-[var(--text-primary)]"
+                        >
+                          <X size={12} />
+                        </button>
+                      )}
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-1 bg-[var(--bg-tertiary)] border border-[var(--border-color)] rounded-lg p-0.5 text-xs">
+                        <span className="text-[10px] text-[var(--text-muted)] font-medium pl-2 pr-1">Sort:</span>
+                        {[
+                          { id: 'cpu', label: 'CPU' },
+                          { id: 'mem', label: 'RAM' },
+                          { id: 'pid', label: 'PID' },
+                          { id: 'name', label: 'Name' },
+                        ].map(opt => (
+                          <button
+                            key={opt.id}
+                            onClick={() => {
+                              if (procSortField === opt.id) {
+                                setProcSortDir(prev => prev === 'desc' ? 'asc' : 'desc');
+                              } else {
+                                setProcSortField(opt.id);
+                                setProcSortDir('desc');
+                              }
+                            }}
+                            className={`px-2 py-1 rounded text-[11px] font-medium transition-colors ${
+                              procSortField === opt.id
+                                ? 'bg-indigo-600/30 text-indigo-300 font-semibold'
+                                : 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'
+                            }`}
+                          >
+                            {opt.label} {procSortField === opt.id && (procSortDir === 'desc' ? '↓' : '↑')}
+                          </button>
+                        ))}
+                      </div>
+
+                      {procTimestamp && (
+                        <span className="text-[10px] text-[var(--text-muted)] hidden sm:inline">
+                          {new Date(procTimestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                        </span>
+                      )}
+
+                      <button
+                        onClick={() => fetchProcesses(true)}
+                        disabled={processesLoading}
+                        className="flex items-center gap-1.5 px-3 py-1.5 bg-[var(--bg-tertiary)] hover:bg-[var(--bg-card-hover)] border border-[var(--border-color)] rounded-lg text-xs font-medium transition-colors disabled:opacity-50"
+                        title="Refresh Process List"
+                      >
+                        <RefreshCw size={12} className={processesLoading ? 'animate-spin text-indigo-400' : ''} />
+                        <span>Refresh</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Processes Table */}
+                  <div className="bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-xl overflow-hidden shadow-sm">
+                    <div className="overflow-x-auto max-h-[580px] overflow-y-auto">
+                      <table className="w-full text-left text-xs border-collapse font-sans">
+                        <thead className="bg-[var(--bg-tertiary)]/70 text-[10px] font-bold uppercase text-[var(--text-muted)] tracking-wider sticky top-0 z-10 border-b border-[var(--border-color)] backdrop-blur-md">
+                          <tr>
+                            <th className="py-2.5 px-3">PID</th>
+                            <th className="py-2.5 px-3">User</th>
+                            <th className="py-2.5 px-3 text-right">CPU %</th>
+                            <th className="py-2.5 px-3 text-right">MEM %</th>
+                            <th className="py-2.5 px-3 text-right">RAM (RSS)</th>
+                            <th className="py-2.5 px-2 text-center">State</th>
+                            <th className="py-2.5 px-3">Time</th>
+                            <th className="py-2.5 px-3 min-w-[200px]">Process / Command</th>
+                            <th className="py-2.5 px-3 text-center">Action</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-[var(--border-color)]/50">
+                          {sorted.map((proc) => {
+                            const isCpuHot = (proc.cpu || 0) >= 50;
+                            const isCpuWarm = (proc.cpu || 0) >= 15;
+                            const isMemHot = (proc.mem || 0) >= 40;
+                            const isMemWarm = (proc.mem || 0) >= 10;
+
+                            return (
+                              <tr
+                                key={proc.pid}
+                                className="hover:bg-[var(--bg-tertiary)]/40 transition-colors group"
+                              >
+                                <td className="py-2 px-3 font-mono font-bold text-slate-300 text-[11px]">
+                                  {proc.pid}
+                                </td>
+
+                                <td className="py-2 px-3 text-[11px] text-[var(--text-muted)]">
+                                  <span className="px-1.5 py-0.5 rounded bg-[var(--bg-tertiary)] text-slate-300 font-mono text-[10px]">
+                                    {proc.user}
+                                  </span>
+                                </td>
+
+                                <td className="py-2 px-3 text-right font-mono text-[11px]">
+                                  <span className={`font-bold ${
+                                    isCpuHot ? 'text-red-400' : isCpuWarm ? 'text-amber-400' : 'text-slate-300'
+                                  }`}>
+                                    {proc.cpu?.toFixed(1) || '0.0'}%
+                                  </span>
+                                </td>
+
+                                <td className="py-2 px-3 text-right font-mono text-[11px]">
+                                  <span className={`font-bold ${
+                                    isMemHot ? 'text-purple-400' : isMemWarm ? 'text-indigo-300' : 'text-slate-300'
+                                  }`}>
+                                    {proc.mem?.toFixed(1) || '0.0'}%
+                                  </span>
+                                </td>
+
+                                <td className="py-2 px-3 text-right font-mono text-[11px] text-slate-300">
+                                  {formatBytes((proc.rssKb || 0) * 1024)}
+                                </td>
+
+                                <td className="py-2 px-2 text-center">
+                                  <span className="px-1.5 py-0.5 rounded text-[9px] font-mono font-bold bg-slate-800 text-slate-400 border border-slate-700/50">
+                                    {proc.stat}
+                                  </span>
+                                </td>
+
+                                <td className="py-2 px-3 font-mono text-[10px] text-[var(--text-muted)]">
+                                  {proc.time}
+                                </td>
+
+                                <td className="py-2 px-3">
+                                  <div className="font-semibold text-[var(--text-primary)] truncate max-w-sm flex items-center gap-1.5" title={proc.command}>
+                                    <span className="text-indigo-400 font-mono">{proc.name}</span>
+                                    {proc.command !== proc.name && (
+                                      <span className="text-[10px] text-[var(--text-muted)] font-mono font-normal truncate opacity-70">
+                                        {proc.command}
+                                      </span>
+                                    )}
+                                  </div>
+                                </td>
+
+                                <td className="py-2 px-3 text-center">
+                                  <button
+                                    type="button"
+                                    onClick={() => setKillModal({
+                                      isOpen: true,
+                                      process: proc,
+                                      signal: 'SIGTERM',
+                                      loading: false,
+                                      error: null
+                                    })}
+                                    className="px-2 py-1 rounded-md text-[10px] font-semibold bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/30 transition-all flex items-center gap-1 mx-auto cursor-pointer"
+                                    title={`Kill Process ${proc.name} (PID: ${proc.pid})`}
+                                  >
+                                    <Trash2 size={10} />
+                                    <span>Kill</span>
+                                  </button>
+                                </td>
+                              </tr>
+                            );
+                          })}
+
+                          {sorted.length === 0 && (
+                            <tr>
+                              <td colSpan={9} className="text-center py-12 text-xs text-[var(--text-muted)]">
+                                <ListFilter size={28} className="mx-auto text-[var(--text-muted)] opacity-30 mb-2" />
+                                {processesLoading ? (
+                                  <div className="flex items-center justify-center gap-2">
+                                    <RefreshCw size={14} className="animate-spin text-indigo-400" />
+                                    <span>Loading process table...</span>
+                                  </div>
+                                ) : (
+                                  <span>No matching processes found.</span>
+                                )}
+                              </td>
+                            </tr>
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                </div>
+              );
+            })()}
+          </div>
+        )}
       </div>
+
+      {/* ── KILL PROCESS CONFIRMATION MODAL ── */}
+      {killModal.isOpen && killModal.process && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm animate-in fade-in duration-150">
+          <div className="bg-[var(--bg-primary)] border border-red-500/30 rounded-2xl w-full max-w-md shadow-2xl overflow-hidden flex flex-col">
+            <div className="flex items-center justify-between px-5 py-3.5 border-b border-[var(--border-color)] bg-red-500/10">
+              <div className="flex items-center gap-2.5 text-red-400">
+                <Skull size={18} />
+                <h3 className="font-bold text-sm text-[var(--text-primary)]">Kill Process</h3>
+              </div>
+              <button
+                onClick={() => setKillModal({ isOpen: false, process: null, signal: 'SIGTERM', loading: false, error: null })}
+                className="text-[var(--text-muted)] hover:text-[var(--text-primary)] p-1"
+              >
+                <X size={16} />
+              </button>
+            </div>
+
+            <div className="p-5 space-y-4 text-xs">
+              <div className="bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-xl p-3 space-y-1.5 font-mono">
+                <div className="flex justify-between">
+                  <span className="text-[var(--text-muted)]">Process Name:</span>
+                  <span className="font-bold text-indigo-400">{killModal.process.name}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-[var(--text-muted)]">PID:</span>
+                  <span className="font-bold text-slate-200">{killModal.process.pid}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-[var(--text-muted)]">User:</span>
+                  <span className="text-slate-300">{killModal.process.user}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-[var(--text-muted)]">CPU / RAM:</span>
+                  <span className="text-slate-300">{killModal.process.cpu}% CPU · {formatBytes(killModal.process.rssKb * 1024)}</span>
+                </div>
+                <div className="pt-1.5 border-t border-[var(--border-color)]/40 text-[10px] text-[var(--text-muted)] truncate" title={killModal.process.command}>
+                  {killModal.process.command}
+                </div>
+              </div>
+
+              <div>
+                <label className="text-[10px] font-bold uppercase text-[var(--text-muted)] tracking-wider block mb-1.5">
+                  Termination Signal
+                </label>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setKillModal(prev => ({ ...prev, signal: 'SIGTERM' }))}
+                    className={`p-2.5 rounded-xl border text-left transition-all ${
+                      killModal.signal === 'SIGTERM'
+                        ? 'bg-amber-500/15 border-amber-400/60 text-amber-300'
+                        : 'bg-[var(--bg-secondary)] border-[var(--border-color)] text-[var(--text-muted)] hover:border-slate-500'
+                    }`}
+                  >
+                    <div className="font-bold text-[11px]">Graceful (SIGTERM - 15)</div>
+                    <div className="text-[10px] opacity-75 mt-0.5">Allows process to save state & close</div>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setKillModal(prev => ({ ...prev, signal: 'SIGKILL' }))}
+                    className={`p-2.5 rounded-xl border text-left transition-all ${
+                      killModal.signal === 'SIGKILL'
+                        ? 'bg-red-500/20 border-red-400/60 text-red-300'
+                        : 'bg-[var(--bg-secondary)] border-[var(--border-color)] text-[var(--text-muted)] hover:border-slate-500'
+                    }`}
+                  >
+                    <div className="font-bold text-[11px] text-red-400">Force Kill (SIGKILL - 9)</div>
+                    <div className="text-[10px] opacity-75 mt-0.5">Immediately stops frozen processes</div>
+                  </button>
+                </div>
+              </div>
+
+              {killModal.error && (
+                <div className="p-2.5 rounded-lg bg-red-500/10 border border-red-500/30 text-red-400 text-[11px] flex items-center gap-2">
+                  <AlertCircle size={14} className="shrink-0" />
+                  <span>{killModal.error}</span>
+                </div>
+              )}
+
+              <div className="flex items-center justify-end gap-2 pt-2 border-t border-[var(--border-color)]">
+                <button
+                  type="button"
+                  disabled={killModal.loading}
+                  onClick={() => setKillModal({ isOpen: false, process: null, signal: 'SIGTERM', loading: false, error: null })}
+                  className="px-3.5 py-1.5 rounded-lg bg-[var(--bg-secondary)] hover:bg-[var(--bg-tertiary)] border border-[var(--border-color)] text-xs text-[var(--text-muted)] hover:text-[var(--text-primary)] transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  disabled={killModal.loading}
+                  onClick={executeKillProcess}
+                  className="px-4 py-1.5 rounded-lg bg-red-600 hover:bg-red-500 text-white text-xs font-bold transition-colors flex items-center gap-1.5 shadow-lg shadow-red-600/30 disabled:opacity-50"
+                >
+                  {killModal.loading ? (
+                    <>
+                      <RefreshCw size={12} className="animate-spin" />
+                      <span>Terminating...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Trash2 size={12} />
+                      <span>Terminate PID {killModal.process.pid}</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Relay Agent Setup & Management Wizard */}
       <AgentSetupWizard

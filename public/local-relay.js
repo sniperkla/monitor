@@ -2677,7 +2677,7 @@ function installMacOS() {
   const uid = typeof process.getuid === 'function' ? process.getuid() : 501;
   spawnSync('launchctl', ['bootout', `gui/${uid}`, plistPath], { stdio: 'ignore' });
   spawnSync('launchctl', ['unload', plistPath], { stdio: 'ignore' });
-  spawnSync('pkill', ['-f', 'local-relay.js'], { stdio: 'ignore' });
+  spawnSync('pkill', ['-f', '[l]ocal-relay'], { stdio: 'ignore' });
   spawnSync('launchctl', ['load', '-w', plistPath], { stdio: 'inherit' });
   console.log(`✅ Installed as macOS LaunchAgent. Logs: tail -f "${logFile}"`);
 }
@@ -2688,7 +2688,7 @@ function uninstallMacOS() {
     const uid = typeof process.getuid === 'function' ? process.getuid() : 501;
     spawnSync('launchctl', ['bootout', `gui/${uid}`, plistPath], { stdio: 'ignore' });
     spawnSync('launchctl', ['unload', plistPath], { stdio: 'ignore' });
-    spawnSync('pkill', ['-f', 'local-relay.js'], { stdio: 'ignore' });
+    spawnSync('pkill', ['-f', '[l]ocal-relay'], { stdio: 'ignore' });
     fs.unlinkSync(plistPath);
     console.log('✅ Removed macOS LaunchAgent');
   }
@@ -2707,10 +2707,21 @@ function installLinux() {
   ].join('\n') + '\n';
   fs.writeFileSync(unitPath, unit);
   spawnSync('systemctl', ['--user', 'stop', SVC_ID + '.service'], { stdio: 'ignore' });
-  spawnSync('pkill', ['-f', 'local-relay.js'], { stdio: 'ignore' });
+  spawnSync('pkill', ['-f', '[l]ocal-relay'], { stdio: 'ignore' });
   spawnSync('systemctl', ['--user', 'daemon-reload'], { stdio: 'inherit' });
   spawnSync('systemctl', ['--user', 'enable', '--now', SVC_ID + '.service'], { stdio: 'inherit' });
   console.log('✅ Installed as systemd user service');
+}
+
+function uninstallLinux() {
+  const unitPath = path.join(os.homedir(), '.config', 'systemd', 'user', SVC_ID + '.service');
+  spawnSync('systemctl', ['--user', 'stop', SVC_ID + '.service'], { stdio: 'ignore' });
+  spawnSync('systemctl', ['--user', 'disable', SVC_ID + '.service'], { stdio: 'ignore' });
+  if (fs.existsSync(unitPath)) fs.unlinkSync(unitPath);
+  spawnSync('systemctl', ['--user', 'daemon-reload'], { stdio: 'ignore' });
+  spawnSync('systemctl', ['--user', 'reset-failed'], { stdio: 'ignore' });
+  spawnSync('pkill', ['-f', '[l]ocal-relay'], { stdio: 'ignore' });
+  console.log('✅ Removed systemd user service');
 }
 
 function installWindows() {
