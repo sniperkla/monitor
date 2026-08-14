@@ -609,7 +609,7 @@ docker swarm update --task-history-limit 3 2>/dev/null || true
 # ── Overlay network (fast) ──────────────────────────────────────────────────
 SWARM_NET=$(docker network ls --filter driver=overlay --format '{{.Name}}' 2>/dev/null | grep -v '^ingress$' | head -1)
 if [ -z "$SWARM_NET" ]; then
-  SWARM_NET="proxy-net"
+  SWARM_NET="swarm-net"
   docker network create --driver overlay --attachable "$SWARM_NET" 2>/dev/null || SWARM_NET="swarm-overlay"
   docker network create --driver overlay --attachable "$SWARM_NET" 2>/dev/null || true
   # Quick verify - only wait 3 seconds max

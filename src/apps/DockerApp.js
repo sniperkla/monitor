@@ -74,7 +74,7 @@ function StatCard({ icon: Icon, label, value, color = 'sky', sub }) {
   );
 }
 
-function PullingFloater({ pullingTasks }) {
+function PullingFloater({ pullingTasks, onOpenTask }) {
   const entries = Object.entries(pullingTasks);
   if (entries.length === 0) return null;
 
@@ -83,13 +83,16 @@ function PullingFloater({ pullingTasks }) {
       {entries.map(([name, task]) => (
         <div 
           key={name} 
-          className="bg-[#1a1f2e]/95 backdrop-blur-xl border border-sky-500/20 rounded-2xl p-4 shadow-2xl shadow-sky-500/5 animate-[slideUp_0.3s_ease-out]"
+          onClick={() => onOpenTask && onOpenTask(name, task)}
+          className="bg-[#1a1f2e]/95 backdrop-blur-xl border border-sky-500/20 hover:border-sky-500/40 rounded-2xl p-4 shadow-2xl shadow-sky-500/5 animate-[slideUp_0.3s_ease-out] cursor-pointer transition-all hover:scale-[1.02]"
+          title="Click to view live command & build output"
         >
           <div className="flex justify-between items-center mb-2">
             <div className="min-w-0 mr-3">
               <div className="flex items-center gap-2">
                 <Download size={12} className="text-sky-400 animate-bounce" />
                 <h4 className="text-xs font-bold truncate text-white">{name}</h4>
+                <span className="text-[9px] px-1.5 py-0.5 rounded bg-white/10 text-slate-300">View Logs</span>
               </div>
               <p className="text-[10px] text-sky-400/70 font-mono italic truncate mt-0.5">{task.lastLine}</p>
             </div>
@@ -103,7 +106,9 @@ function PullingFloater({ pullingTasks }) {
               className="h-full rounded-full transition-all duration-700 ease-out"
               style={{ 
                 width: `${task.progress}%`,
-                backgroundImage: task.progress >= 100 
+                backgroundImage: task.status === 'Failed'
+                  ? 'linear-gradient(90deg, #ef4444, #f87171)'
+                  : task.progress >= 100 
                   ? 'linear-gradient(90deg, #10b981, #34d399)' 
                   : 'linear-gradient(90deg, #0ea5e9, #38bdf8, #0ea5e9)',
                 backgroundSize: '200% 100%',
@@ -427,7 +432,14 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
         const line = (output || '').split('\n').find(l => l.includes('WORKDIR:'));
         const detectedDir = line ? line.replace(/.*WORKDIR:\s*/, '').trim() : '';
         if (detectedDir && detectedDir !== '/' && detectedDir !== '.') {
-          setSwarmBuildDeployModal(prev => ({ ...prev, dir: detectedDir, dirLoading: false }));
+          if (typeof window !== 'undefined') {
+            setSwarmBuildDeployModal(prev => {
+              if (prev.serviceName) localStorage.setItem(`swarm_dir_${prev.serviceName}`, detectedDir);
+              return { ...prev, dir: detectedDir, dirLoading: false };
+            });
+          } else {
+            setSwarmBuildDeployModal(prev => ({ ...prev, dir: detectedDir, dirLoading: false }));
+          }
         } else {
           setSwarmBuildDeployModal(prev => ({ ...prev, dirLoading: false }));
         }
@@ -473,7 +485,7 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
                  image,
                  replicas: 2,
                  port: ports,
-                 network: networks,
+                 network: '',
                  mounts,
                  env,
                  oldContainerId: inspected.Id || inspected.ID,
@@ -618,12 +630,17 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
           const liveNetwork = nets.map(n => n.Target || '').filter(Boolean).join(',');
           const liveEnv = (container.Env || []).join(',');
           const liveMounts = (container.Mounts || []).map(m => `${m.Source}:${m.Target}`).join(',');
+          const labels = spec.Labels || {};
+          const workdirLabel = labels['com.docker.compose.project.working_dir'] || labels['project.directory'] || '';
+          if (workdirLabel) {
+            setSwarmBuildDeployModal(prev => ({ ...prev, dir: workdirLabel }));
+          }
           setSwarmConfigModal(prev => ({
             ...prev,
             image: liveImage || prev.image,
             replicas: liveReplicas,
             port: livePort || prev.port,
-            network: liveNetwork,
+            network: '',
             env: liveEnv,
             mounts: liveMounts
           }));
@@ -779,18 +796,25 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
            addNotification({ title: 'Docker', message: `Custom image ${targetTag} built and started.`, type: 'success' });
         }
 
+        const hasError = /ERROR:|fatal:|failed to solve:|npm ERR!|error building|invalid /i.test(output);
+        const finalStatus = (isFinished && hasError) ? 'Failed' : status;
+
         setPullingTasks(prev => ({
             ...prev,
             [imageName]: { 
               ...prev[imageName], 
-              lastLine, status, progress, 
+              lastLine, 
+              status: finalStatus, 
+              progress, 
               isFinished, 
-              runDispatched: isFinished ? true : prev[imageName].runDispatched 
+              rawLog: output,
+              hasError,
+              runDispatched: isFinished ? true : prev[imageName]?.runDispatched 
             }
         }));
 
-        if (isFinished || status === 'Complete') {
-            // Refresh immediately when we detect completion
+        if ((isFinished || status === 'Complete') && !hasError && finalStatus !== 'Failed') {
+            // Refresh container list when deployment succeeds
             if (pullingTasksRef.current[imageName]?.status !== 'Complete') {
                 emitDockerLs();
             }
@@ -802,7 +826,7 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
                     return next;
                 });
                 emitDockerLs();
-            }, 3000);
+            }, 5000);
         }
       } else if (action === 'pull' || action === 'build') {
         // action started — no further action needed
@@ -959,6 +983,10 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
       setPendingActions({});
 
       const lowerErr = (err || '').toLowerCase();
+      if (lowerErr.includes('swarm:get-workdir')) {
+        setSwarmBuildDeployModal(prev => ({ ...prev, dirLoading: false }));
+        return;
+      }
       if (lowerErr.includes('docker: command not found') || lowerErr.includes('command not found: docker') || lowerErr.includes('docker: not found') || lowerErr.includes('executable file not found in $path')) {
         setIsDockerInstalled(false);
       } else if (lowerErr.includes('cannot connect to the docker daemon') || lowerErr.includes('docker daemon is not running') || lowerErr.includes('is the docker daemon running')) {
@@ -978,7 +1006,7 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
     };
   }, [selectedConnection?._id, dbConfig?.uri, emitDockerLs]);
 
-  // Poll for pulling tasks
+  // Poll for pulling and deploying tasks (every 1s for fast live log stream)
   useEffect(() => {
     const activeTaskNames = Object.keys(pullingTasks).filter(name => !pullingTasks[name].isFinished);
     if (activeTaskNames.length === 0 || !socketRef.current) return;
@@ -992,7 +1020,7 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
             else if (task?.isBackup) action = 'backup:status';
             socketRef.current.emit('docker:command', { action, args: [name] });
         });
-    }, 2000);
+    }, 1000);
 
     return () => clearInterval(interval);
   }, [pullingTasks]);
@@ -1920,7 +1948,7 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
                                                          image: c.image || '',
                                                          replicas: 2,
                                                          port: mappedPort,
-                                                         network: c.networks || '',
+                                                         network: '',
                                                          mounts: c.mounts || '',
                                                          env: '',
                                                          oldContainerId: c.id,
@@ -2539,20 +2567,27 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
                                         onClick={() => {
                                           const svcN = svcName;
                                           const svcImg = svcImage !== '-' ? svcImage : `${svcN}:latest`;
+                                          // Load saved directory or start with empty + detect
+                                          const savedDir = typeof window !== 'undefined' ? (localStorage.getItem(`swarm_dir_${svcN}`) || '') : '';
                                           setSwarmBuildDeployModal({
                                             isOpen: true,
                                             serviceName: svcN,
                                             image: svcImg,
-                                            dir: `/root/${svcN}`,
-                                            dirLoading: true,
+                                            dir: savedDir,
+                                            dirLoading: !savedDir, // show loading only if no saved dir
                                             doPull: true
                                           });
-                                          // Safety timeout: stop pulse after 2.5s if server doesn't respond
-                                          setTimeout(() => {
-                                            setSwarmBuildDeployModal(prev => ({ ...prev, dirLoading: false }));
-                                          }, 2500);
-                                          // Ask server to detect actual project directory
-                                          socketRef.current?.emit('docker:command', { action: 'swarm:get-workdir', args: [svcN] });
+                                          if (!savedDir) {
+                                            // Auto-detect the server project directory
+                                            socketRef.current?.emit('docker:command', { action: 'swarm:get-workdir', args: [svcN] });
+                                            // Safety timeout: stop loading after 4s if no response
+                                            setTimeout(() => {
+                                              setSwarmBuildDeployModal(prev => {
+                                                if (prev.dirLoading) return { ...prev, dirLoading: false };
+                                                return prev;
+                                              });
+                                            }, 4000);
+                                          }
                                         }}
                                         className="py-1.5 px-3 rounded-lg bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-500/30 text-emerald-300 text-[10px] font-bold transition-all flex items-center gap-1.5 cursor-pointer shadow-sm"
                                         title="1-Click Direct Build & Deploy (git pull + docker build + zero-downtime rolling update)"
@@ -3765,125 +3800,249 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
           <MacOSModalWindow
             isOpen={swarmBuildDeployModal.isOpen}
             onClose={() => setSwarmBuildDeployModal(prev => ({ ...prev, isOpen: false }))}
-            title={`🚀 1-Click Swarm Build & Deploy: ${swarmBuildDeployModal.serviceName}`}
+            title={swarmBuildDeployModal.isDeploying 
+              ? `🚀 Live Deploy Log: ${swarmBuildDeployModal.serviceName}` 
+              : `🚀 1-Click Swarm Build & Deploy: ${swarmBuildDeployModal.serviceName}`}
             icon={Zap}
-            defaultWidth={540}
-            defaultHeight={430}
-            enableMaximize={false}
+            defaultWidth={swarmBuildDeployModal.isDeploying ? 680 : 540}
+            defaultHeight={swarmBuildDeployModal.isDeploying ? 520 : 440}
+            enableMaximize={true}
             enableMinimize={false}
           >
-            <div className="p-6 space-y-4">
-              <div className="p-3 bg-purple-500/10 border border-purple-500/20 rounded-xl text-xs text-purple-300 flex items-center gap-2">
-                <Zap size={16} className="shrink-0 text-purple-400" />
-                <span>Pulls latest git commits, builds the Docker image, and triggers a <strong>zero-downtime rolling update</strong>.</span>
-              </div>
+            {swarmBuildDeployModal.isDeploying ? (
+              (() => {
+                const sName = swarmBuildDeployModal.serviceName;
+                const activeTask = pullingTasks[sName] || {};
+                const rawLog = activeTask.rawLog || activeTask.lastLine || 'Waiting for build and deploy logs from server...';
+                const logLines = rawLog.split(/[\r\n]+/).filter(l => l.trim() && !l.includes('---FINISHED---'));
+                const isDone = activeTask.progress >= 100 || activeTask.isFinished;
+                const isFail = activeTask.status === 'Failed' || activeTask.hasError;
 
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="text-[10px] font-bold uppercase text-[var(--text-muted)] tracking-wider block mb-1">Service Name</label>
-                  <div className="p-2.5 rounded-xl bg-purple-500/10 border border-purple-500/20 text-xs font-mono text-purple-300">
-                    {swarmBuildDeployModal.serviceName}
+                return (
+                  <div className="p-5 flex flex-col h-full space-y-3">
+                    {/* Header Progress Bar */}
+                    <div className="p-3 bg-slate-900/90 border border-white/10 rounded-xl space-y-2">
+                      <div className="flex justify-between items-center text-xs">
+                        <div className="flex items-center gap-2">
+                          <span className={`w-2.5 h-2.5 rounded-full ${isFail ? 'bg-rose-500' : isDone ? 'bg-emerald-500' : 'bg-purple-500 animate-ping'}`} />
+                          <span className="font-bold text-white">{activeTask.status || 'Deploying...'}</span>
+                          <span className="text-[10px] text-slate-400 font-mono">({sName})</span>
+                        </div>
+                        <span className="font-mono font-bold text-purple-400">{activeTask.progress || 0}%</span>
+                      </div>
+                      <div className="h-1.5 bg-white/5 rounded-full overflow-hidden">
+                        <div 
+                          className="h-full rounded-full transition-all duration-500 ease-out"
+                          style={{
+                            width: `${activeTask.progress || 10}%`,
+                            backgroundImage: isFail 
+                              ? 'linear-gradient(90deg, #ef4444, #f87171)' 
+                              : isDone 
+                              ? 'linear-gradient(90deg, #10b981, #34d399)' 
+                              : 'linear-gradient(90deg, #a855f7, #6366f1)',
+                          }}
+                        />
+                      </div>
+                    </div>
+
+                    {/* Live Monospace Terminal Output */}
+                    <div className="flex-1 min-h-[260px] bg-black/95 border border-slate-800 rounded-xl p-3 font-mono text-[11px] overflow-y-auto custom-scrollbar flex flex-col space-y-1 select-text">
+                      {logLines.map((line, idx) => {
+                        const isErr = /ERROR:|fatal:|failed to solve:|npm ERR!|error building|invalid /i.test(line);
+                        const isSuccess = /DONE|Successfully built|converged|Already up to date|Updating service/i.test(line);
+                        const isHeader = /^#\d+|Step \d+|Building/i.test(line);
+
+                        return (
+                          <div 
+                            key={idx} 
+                            className={`break-all leading-relaxed ${
+                              isErr 
+                                ? 'text-rose-400 font-bold bg-rose-950/30 px-1 py-0.5 rounded' 
+                                : isSuccess 
+                                ? 'text-emerald-400 font-semibold' 
+                                : isHeader 
+                                ? 'text-cyan-300' 
+                                : 'text-slate-300'
+                            }`}
+                          >
+                            <span className="text-slate-600 select-none mr-2">{String(idx + 1).padStart(2, '0')}</span>
+                            {line}
+                          </div>
+                        );
+                      })}
+                      {logLines.length === 0 && (
+                        <div className="text-slate-500 italic py-4 text-center">Starting git pull, image build, and rolling update...</div>
+                      )}
+                    </div>
+
+                    {/* Status Banner & Actions */}
+                    <div className="flex justify-between items-center pt-1">
+                      {isDone && !isFail ? (
+                        <span className="text-xs text-emerald-400 font-bold flex items-center gap-1.5">
+                          ✅ Service successfully updated with zero downtime!
+                        </span>
+                      ) : isFail ? (
+                        <span className="text-xs text-rose-400 font-bold flex items-center gap-1.5">
+                          ❌ Build/Deploy encountered an error. Check logs above.
+                        </span>
+                      ) : (
+                        <span className="text-xs text-purple-300 flex items-center gap-1.5">
+                          <span className="animate-spin text-purple-400">⚙️</span> Streaming build output in real time...
+                        </span>
+                      )}
+
+                      <div className="flex gap-2">
+                        {isFail && (
+                          <button
+                            onClick={() => setSwarmBuildDeployModal(prev => ({ ...prev, isDeploying: false }))}
+                            className="px-3 py-1.5 rounded-xl text-xs font-bold bg-slate-800 hover:bg-slate-700 text-slate-200 transition-all cursor-pointer"
+                          >
+                            Edit & Retry
+                          </button>
+                        )}
+                        <button
+                          onClick={() => setSwarmBuildDeployModal(prev => ({ ...prev, isOpen: false, isDeploying: false }))}
+                          className="px-4 py-1.5 rounded-xl text-xs font-bold bg-purple-600 hover:bg-purple-500 text-white transition-all shadow-lg cursor-pointer"
+                        >
+                          {isDone ? 'Done' : 'Run in Background'}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })()
+            ) : (
+              <div className="p-6 space-y-4">
+                <div className="p-3 bg-purple-500/10 border border-purple-500/20 rounded-xl text-xs text-purple-300 flex items-center gap-2">
+                  <Zap size={16} className="shrink-0 text-purple-400" />
+                  <span>Pulls latest git commits, builds the Docker image, and triggers a <strong>zero-downtime rolling update</strong>.</span>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="text-[10px] font-bold uppercase text-[var(--text-muted)] tracking-wider block mb-1">Service Name</label>
+                    <div className="p-2.5 rounded-xl bg-purple-500/10 border border-purple-500/20 text-xs font-mono text-purple-300">
+                      {swarmBuildDeployModal.serviceName}
+                    </div>
+                  </div>
+                  <div>
+                    <label className="text-[10px] font-bold uppercase text-[var(--text-muted)] tracking-wider block mb-1">Docker Image Tag</label>
+                    <input
+                      type="text"
+                      value={swarmBuildDeployModal.image}
+                      onChange={(e) => setSwarmBuildDeployModal(prev => ({ ...prev, image: e.target.value }))}
+                      placeholder="e.g. monitor:latest"
+                      className="w-full bg-slate-950 border border-[var(--border-color)] rounded-xl p-2.5 text-xs font-mono focus:outline-none focus:border-purple-500/50"
+                    />
                   </div>
                 </div>
+
                 <div>
-                  <label className="text-[10px] font-bold uppercase text-[var(--text-muted)] tracking-wider block mb-1">Docker Image Tag</label>
+                  <label className="text-[10px] font-bold uppercase text-[var(--text-muted)] tracking-wider block mb-1">Project Directory on Server</label>
+                  <div className="relative">
+                    <input
+                      type="text"
+                      value={swarmBuildDeployModal.dir}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        setSwarmBuildDeployModal(prev => ({ ...prev, dir: val }));
+                        if (typeof window !== 'undefined' && swarmBuildDeployModal.serviceName) {
+                          localStorage.setItem(`swarm_dir_${swarmBuildDeployModal.serviceName}`, val);
+                        }
+                      }}
+                      placeholder={`e.g. ${swarmBuildDeployModal.serviceName} or /home/ec2-user/${swarmBuildDeployModal.serviceName} or .`}
+                      className="w-full bg-slate-950 border border-[var(--border-color)] rounded-xl p-2.5 text-xs font-mono focus:outline-none focus:border-purple-500/50"
+                    />
+                  </div>
+                  <p className="text-[10px] text-slate-500 mt-1">Directory containing the Dockerfile on your server. Leave blank to use current directory (<code className="text-slate-400">.</code>)</p>
+                </div>
+
+                <label className="flex items-center gap-2 p-2.5 bg-slate-800/40 border border-slate-700/40 rounded-xl text-xs text-slate-300 cursor-pointer">
                   <input
-                    type="text"
-                    value={swarmBuildDeployModal.image}
-                    onChange={(e) => setSwarmBuildDeployModal(prev => ({ ...prev, image: e.target.value }))}
-                    placeholder="e.g. monitor:latest"
-                    className="w-full bg-slate-950 border border-[var(--border-color)] rounded-xl p-2.5 text-xs font-mono focus:outline-none focus:border-purple-500/50"
+                    type="checkbox"
+                    checked={swarmBuildDeployModal.doPull}
+                    onChange={(e) => setSwarmBuildDeployModal(prev => ({ ...prev, doPull: e.target.checked }))}
+                    className="rounded border-purple-500/30 text-purple-500 focus:ring-purple-500"
                   />
+                  <span>Run <strong>git pull</strong> before building image</span>
+                </label>
+
+                <div className="p-3 bg-slate-800/50 rounded-xl text-[10px] font-mono text-slate-400 break-all space-y-1">
+                  <div>
+                    <span className="text-purple-400">$ </span>
+                    cd &quot;{swarmBuildDeployModal.dir || '.'}&quot; &amp;&amp;{' '}
+                    {swarmBuildDeployModal.doPull && <>git pull &amp;&amp;{' '}</>}
+                    docker build -t <span className="text-emerald-400">{swarmBuildDeployModal.image || '<image>'}</span> . &amp;&amp;{' '}
+                    docker service update --image <span className="text-emerald-400">{swarmBuildDeployModal.image || '<image>'}</span>{' '}
+                    --update-order start-first --update-delay 5s{' '}
+                    <span className="text-purple-300">{swarmBuildDeployModal.serviceName}</span>
+                  </div>
                 </div>
-              </div>
 
-              <div>
-                <label className="text-[10px] font-bold uppercase text-[var(--text-muted)] tracking-wider block mb-1">Project Directory on Server <span className="text-slate-500 font-normal normal-case">(optional)</span></label>
-                <div className="relative">
-                  <input
-                    type="text"
-                    value={swarmBuildDeployModal.dir}
-                    onChange={(e) => setSwarmBuildDeployModal(prev => ({ ...prev, dir: e.target.value }))}
-                    placeholder={`/root/${swarmBuildDeployModal.serviceName}`}
-                    className="w-full bg-slate-950 border border-[var(--border-color)] rounded-xl p-2.5 text-xs font-mono focus:outline-none focus:border-purple-500/50"
-                  />
-                  {swarmBuildDeployModal.dirLoading && (
-                    <span className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[10px] text-purple-400 animate-pulse">detecting...</span>
-                  )}
-                </div>
-                <p className="text-[10px] text-slate-500 mt-1">Auto-detected from server. Leave blank to use <code className="text-slate-400">/root/{swarmBuildDeployModal.serviceName}</code></p>
-              </div>
-
-              <label className="flex items-center gap-2 p-2.5 bg-slate-800/40 border border-slate-700/40 rounded-xl text-xs text-slate-300 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={swarmBuildDeployModal.doPull}
-                  onChange={(e) => setSwarmBuildDeployModal(prev => ({ ...prev, doPull: e.target.checked }))}
-                  className="rounded border-purple-500/30 text-purple-500 focus:ring-purple-500"
-                />
-                <span>Run <strong>git pull</strong> before building image</span>
-              </label>
-
-              <div className="p-3 bg-slate-800/50 rounded-xl text-[10px] font-mono text-slate-400 break-all space-y-1">
-                <div>
-                  <span className="text-purple-400">$ </span>
-                  cd &quot;{swarmBuildDeployModal.dir || '.'}&quot; &amp;&amp;{' '}
-                  {swarmBuildDeployModal.doPull && <>git pull &amp;&amp;{' '}</>}
-                  docker build -t <span className="text-emerald-400">{swarmBuildDeployModal.image || '<image>'}</span> . &amp;&amp;{' '}
-                  docker service update --image <span className="text-emerald-400">{swarmBuildDeployModal.image || '<image>'}</span>{' '}
-                  --update-order start-first --update-delay 5s{' '}
-                  <span className="text-purple-300">{swarmBuildDeployModal.serviceName}</span>
-                </div>
-              </div>
-
-              <div className="flex justify-end gap-2 pt-1">
-                <button
-                  onClick={() => setSwarmBuildDeployModal(prev => ({ ...prev, isOpen: false }))}
-                  className="px-4 py-2 rounded-xl text-xs font-bold border border-[var(--border-color)] hover:bg-white/5 transition-all cursor-pointer"
-                >
-                  Cancel
-                </button>
-                <button
-                  onClick={() => {
-                    if (!swarmBuildDeployModal.serviceName || !swarmBuildDeployModal.image) return;
-                    const sName = swarmBuildDeployModal.serviceName;
-                    const img = swarmBuildDeployModal.image;
-                    const dir = swarmBuildDeployModal.dir?.trim() || `/root/${sName}`;
-                    const doPull = swarmBuildDeployModal.doPull;
-
-                    setPullingTasks(prev => ({
-                      ...prev,
-                      [sName]: {
-                        name: sName,
-                        status: 'Deploying to Swarm...',
-                        progress: 10,
-                        isSwarmDeploy: true,
-                        isFinished: false,
-                        lastLine: 'Starting git pull & docker build...'
+                <div className="flex justify-end gap-2 pt-1">
+                  <button
+                    onClick={() => setSwarmBuildDeployModal(prev => ({ ...prev, isOpen: false }))}
+                    className="px-4 py-2 rounded-xl text-xs font-bold border border-[var(--border-color)] hover:bg-white/5 transition-all cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={() => {
+                      if (!swarmBuildDeployModal.serviceName || !swarmBuildDeployModal.image) return;
+                      const sName = swarmBuildDeployModal.serviceName;
+                      const img = swarmBuildDeployModal.image;
+                      const dir = swarmBuildDeployModal.dir?.trim() || '.';
+                      const doPull = swarmBuildDeployModal.doPull;
+                      if (typeof window !== 'undefined') {
+                        localStorage.setItem(`swarm_dir_${sName}`, dir);
                       }
-                    }));
 
-                    socketRef.current.emit('docker:command', {
-                      action: 'swarm:build-deploy',
-                      args: [sName, img, dir, doPull]
-                    });
+                      setPullingTasks(prev => ({
+                        ...prev,
+                        [sName]: {
+                          name: sName,
+                          image: img,
+                          dir,
+                          status: 'Starting Build...',
+                          progress: 10,
+                          isSwarmDeploy: true,
+                          isFinished: false,
+                          lastLine: 'Executing git pull & docker build...',
+                          rawLog: `$ cd "${dir}" && ${doPull ? 'git pull && ' : ''}docker build -t ${img} . && docker service update --image ${img} --update-order start-first --update-delay 5s ${sName}\nConnecting to output stream...`
+                        }
+                      }));
 
-                    addNotification({
-                      title: 'Swarm Deploy Started',
-                      message: `Building ${img} & rolling update to ${sName}...`,
-                      type: 'info'
-                    });
+                      socketRef.current.emit('docker:command', {
+                        action: 'swarm:build-deploy',
+                        args: [sName, img, dir, doPull]
+                      });
 
-                    setSwarmBuildDeployModal(prev => ({ ...prev, isOpen: false }));
-                  }}
-                  disabled={!swarmBuildDeployModal.serviceName || !swarmBuildDeployModal.image}
-                  className="px-4 py-2 rounded-xl text-xs font-bold bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 disabled:opacity-40 disabled:cursor-not-allowed text-white transition-all shadow-lg flex items-center gap-1.5 cursor-pointer"
-                >
-                  <Zap size={13} />
-                  🚀 Deploy Directly to Swarm
-                </button>
+                      // Poll status immediately after launch
+                      setTimeout(() => {
+                        socketRef.current?.emit('docker:command', {
+                          action: 'swarm:build-deploy:status',
+                          args: [sName]
+                        });
+                      }, 500);
+
+                      addNotification({
+                        title: 'Swarm Deploy Started',
+                        message: `Building ${img} & rolling update to ${sName}...`,
+                        type: 'info'
+                      });
+
+                      // Keep modal open in active live-log deploying mode!
+                      setSwarmBuildDeployModal(prev => ({ ...prev, isDeploying: true }));
+                    }}
+                    disabled={!swarmBuildDeployModal.serviceName || !swarmBuildDeployModal.image}
+                    className="px-4 py-2 rounded-xl text-xs font-bold bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 disabled:opacity-40 disabled:cursor-not-allowed text-white transition-all shadow-lg flex items-center gap-1.5 cursor-pointer"
+                  >
+                    <Zap size={13} />
+                    🚀 Deploy Directly to Swarm
+                  </button>
+                </div>
               </div>
-            </div>
+            )}
           </MacOSModalWindow>,
           document.body
         )}
