@@ -16,6 +16,7 @@ services:
       NODE_ENV: production
       PORT: 3030
       MONGODB_URI: mongodb://monitor:AaBb1234!@monitor-mongo:27017/monitor?authSource=admin
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:-}
     networks:
       - proxy-net
 

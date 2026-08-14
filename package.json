@@ -6,7 +6,8 @@
     "dev": "NODE_OPTIONS='--dns-result-order=ipv4first' node server.js",
     "build:agent": "npx javascript-obfuscator public/monitor-agent.js --output public/monitor-agent.min.js --compact true --string-array true --target node",
     "build:relay": "npx javascript-obfuscator public/local-relay.js --output public/local-relay.min.js --compact true --string-array true --target node",
-    "build": "npm run build:relay && npm run build:agent && next build",
+    "build:all": "npm run build:relay && npm run build:agent && next build",
+    "build": "next build",
     "start": "NODE_ENV=production NODE_OPTIONS='--dns-result-order=ipv4first' node server.js",
     "lint": "eslint"
   },

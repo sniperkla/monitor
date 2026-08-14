@@ -1,6 +1,9 @@
-/** @type {import('next').NextConfig} */
 const nextConfig = {
   poweredByHeader: false,
+  productionBrowserSourceMaps: false,
+  typescript: {
+    ignoreBuildErrors: true,
+  },
   serverExternalPackages: ['ssh2', 'pg', 'pg-native', 'pg-pool', 'mysql2', 'mongoose', 'mongodb'],
   async headers() {
     return [

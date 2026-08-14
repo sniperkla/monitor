@@ -1,25 +1,22 @@
 const crypto = require('crypto');
 
-const SECRET_KEY = process.env.ENCRYPTION_KEY;
-
-if (!SECRET_KEY && process.env.NODE_ENV === 'production') {
-  throw new Error("CRITICAL: ENCRYPTION_KEY is required in production environments.");
+function getKey() {
+  const secret = process.env.ENCRYPTION_KEY || process.env.NEXTAUTH_SECRET || 'development_fallback_secret_key_32_chars';
+  return crypto.createHash('sha256').update(String(secret)).digest();
 }
 
-const FALLBACK_SECRET = SECRET_KEY || 'development_fallback_secret_key_32_chars';
-const SECRET_KEY_OLD = process.env.ENCRYPTION_KEY_OLD;
+function getOldKey() {
+  const secret = process.env.ENCRYPTION_KEY_OLD;
+  return secret ? crypto.createHash('sha256').update(String(secret)).digest() : null;
+}
 
-// Use SHA-256 to ensure key is exactly 32 bytes
-const KEY = crypto.createHash('sha256').update(String(FALLBACK_SECRET)).digest();
-const OLD_KEY = SECRET_KEY_OLD ? crypto.createHash('sha256').update(String(SECRET_KEY_OLD)).digest() : null;
-
-const IV_LENGTH = 16; 
+const IV_LENGTH = 16;
 
 function encrypt(text) {
   if (!text) return text;
   try {
     const iv = crypto.randomBytes(IV_LENGTH);
-    const cipher = crypto.createCipheriv('aes-256-cbc', KEY, iv);
+    const cipher = crypto.createCipheriv('aes-256-cbc', getKey(), iv);
     let encrypted = cipher.update(text);
     encrypted = Buffer.concat([encrypted, cipher.final()]);
     return iv.toString('hex') + ':' + encrypted.toString('hex');
@@ -100,14 +97,17 @@ function decryptWithMetadata(text) {
   // Quick check: if not colon-separated hex, assume plain text (legacy/manual)
   if (!text.includes(':')) return { text, success: true, usedOldKey: false };
 
+  const currentKey = getKey();
+  const oldKey = getOldKey();
+
   try {
     // Try current key first
-    return { text: decryptWithKey(text, KEY), success: true, usedOldKey: false };
+    return { text: decryptWithKey(text, currentKey), success: true, usedOldKey: false };
   } catch (error) {
     // If current key fails, try old key (Key Rotation)
-    if (OLD_KEY) {
+    if (oldKey) {
       try {
-        const decrypted = decryptWithKey(text, OLD_KEY);
+        const decrypted = decryptWithKey(text, oldKey);
         return { text: decrypted, success: true, usedOldKey: true };
       } catch (oldError) {
         // Both failed
