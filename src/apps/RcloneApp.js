@@ -1,18 +1,19 @@
 'use client';
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   CloudSync, HardDrive, RefreshCw, Terminal, CheckCircle2, AlertTriangle,
   Plus, Trash2, Folder, File, Play, Shield, Settings, Server, Database,
   ArrowRight, Download, Eye, ExternalLink, Cpu, Info, Check, ShieldCheck,
   Zap, Copy, ArrowLeftRight, Monitor, ChevronRight, Link2, ChevronDown, Search, X, Clock,
-  KeyRound, LogIn
+  KeyRound, LogIn, HelpCircle
 } from 'lucide-react';
 import { useVault } from '@/context/VaultContext';
 import { useApp } from '@/context/AppContext';
 import { useOS } from '@/context/OSContext';
 import MasterPasswordModal from '@/components/MasterPasswordModal';
 import MacOSModalWindow from '@/components/MacOSModalWindow';
+import RcloneOnboarding, { hasCompletedRcloneOnboarding, resetRcloneOnboarding } from '@/components/RcloneOnboarding';
 
 // 🎨 Custom Styled Popover Select Component
 function CustomSelect({ value, onChange, options = [], className = '', textClass = '' }) {
@@ -589,7 +590,29 @@ function DynamicCronPicker({ value, onChange }) {
 export default function RcloneApp({ windowId = 'rclone', activeTab: propActiveTab }) {
   const { vaultStatus } = useVault();
   const { state: appState, apiFetch, connectionsReady } = useApp();
-  const { showAlert, showConfirm, updateWindowProps } = useOS();
+  const { showAlert, showConfirm, updateWindowProps, toggleMaximize, state: osState } = useOS();
+
+  // Helper: ensure the window is maximized before starting the tour
+  const ensureMaximizedThenShow = useCallback(() => {
+    const win = (osState?.windows || []).find(w => w.id === windowId);
+    if (win && !win.isMaximized) {
+      toggleMaximize(windowId);
+      setTimeout(() => setShowOnboarding(true), 350);
+    } else {
+      setShowOnboarding(true);
+    }
+  }, [osState, windowId, toggleMaximize]);
+
+  // Onboarding: show on first visit, hide once completed
+  const [showOnboarding, setShowOnboarding] = useState(false);
+  useEffect(() => {
+    const t = setTimeout(() => {
+      if (!hasCompletedRcloneOnboarding()) {
+        ensureMaximizedThenShow();
+      }
+    }, 400);
+    return () => clearTimeout(t);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
   
   // Read connections directly from AppContext so all apps share the same source of truth
   const connections = (appState?.connections || []).filter(c => c.type !== 'database');
@@ -1517,6 +1540,7 @@ export default function RcloneApp({ windowId = 'rclone', activeTab: propActiveTa
         ].map((tab) => (
           <button
             key={tab.id}
+            data-onboarding={`tab-${tab.id}`}
             onClick={() => { setActiveTab(tab.id); if (tab.id === 'browser') handleBrowseRemote(); }}
             className={`flex items-center gap-1.5 px-4 py-2.5 text-xs font-semibold border-b-2 transition-colors cursor-pointer whitespace-nowrap ${
               activeTab === tab.id
@@ -1527,6 +1551,18 @@ export default function RcloneApp({ windowId = 'rclone', activeTab: propActiveTa
             {tab.icon}{tab.label}
           </button>
         ))}
+
+        <div className="flex-1" />
+
+        {/* Replay tutorial button */}
+        <button
+          data-onboarding="help-btn"
+          onClick={() => { resetRcloneOnboarding(); ensureMaximizedThenShow(); }}
+          className="p-2 rounded-lg text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)]/60 transition-colors"
+          title="Show tutorial"
+        >
+          <HelpCircle size={16} />
+        </button>
       </div>
 
       {/* ── Main Content ── */}
@@ -2971,6 +3007,11 @@ export default function RcloneApp({ windowId = 'rclone', activeTab: propActiveTa
           </div>
         )}
       </MacOSModalWindow>
+
+      {/* First-time onboarding overlay */}
+      {showOnboarding && (
+        <RcloneOnboarding onComplete={() => setShowOnboarding(false)} />
+      )}
     </div>
   );
 }

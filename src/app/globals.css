@@ -2266,3 +2266,80 @@ body {
   box-shadow: 0 0 20px rgba(99, 102, 241, 0.6), 0 0 40px rgba(99, 102, 241, 0.3) !important;
   border-color: rgba(99, 102, 241, 0.8) !important;
 }
+
+/* Immersive Onboarding Animations */
+@keyframes ob-float {
+  0%, 100% { 
+    transform: translateY(0) translateX(0); 
+    opacity: 0.3; 
+  }
+  50% { 
+    transform: translateY(-30px) translateX(15px); 
+    opacity: 0.7; 
+  }
+}
+
+@keyframes ob-blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
+
+@keyframes ob-ring-pulse {
+  0%, 100% { 
+    box-shadow: 0 0 20px var(--glow-indigo), inset 0 0 20px rgba(99, 102, 241, 0.1); 
+    opacity: 0.8;
+  }
+  50% { 
+    box-shadow: 0 0 40px var(--glow-indigo), inset 0 0 30px rgba(99, 102, 241, 0.2); 
+    opacity: 1;
+  }
+}
+
+@keyframes ob-pulse-glow {
+  0%, 100% { 
+    box-shadow: 0 0 40px rgba(99, 102, 241, 0.3); 
+  }
+  50% { 
+    box-shadow: 0 0 80px rgba(99, 102, 241, 0.5); 
+  }
+}
+
+@keyframes ob-slide-up {
+  from {
+    opacity: 0;
+    transform: translateY(30px) scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes ob-fade-scale {
+  from {
+    opacity: 0;
+    transform: scale(0.9);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes ob-gradient-shift {
+  0%, 100% {
+    background-position: 0% 50%;
+  }
+  50% {
+    background-position: 100% 50%;
+  }
+}
+
+@keyframes ob-glow-pulse {
+  0%, 100% { 
+    filter: brightness(1) drop-shadow(0 0 8px currentColor); 
+  }
+  50% { 
+    filter: brightness(1.3) drop-shadow(0 0 20px currentColor); 
+  }
+}

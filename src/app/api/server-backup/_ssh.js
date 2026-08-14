@@ -70,7 +70,115 @@ export async function getSshConfig(connectionId, options = {}) {
   return resolveSshConfig(baseConfig, options);
 }
 
-export function execCommand(sshConfig, command) {
+// SSH Connection Pool for recurring commands and monitoring
+global.__sshConnectionPool = global.__sshConnectionPool || new Map();
+
+function getPoolKey(config) {
+  return `${config.username || 'root'}@${config.host || '127.0.0.1'}:${config.port || 22}`;
+}
+
+function getOrCreatePooledClient(sshConfig) {
+  const pool = global.__sshConnectionPool;
+  const key = getPoolKey(sshConfig);
+  
+  const existing = pool.get(key);
+  if (existing && existing.ready && existing.client && existing.client._sock && !existing.client._sock.destroyed) {
+    // Reset idle timer
+    if (existing.idleTimeout) clearTimeout(existing.idleTimeout);
+    existing.idleTimeout = setTimeout(() => {
+      try { existing.client.end(); } catch {}
+      pool.delete(key);
+    }, 30000); // 30s idle timeout
+    return Promise.resolve(existing.client);
+  }
+
+  // Cleanup broken existing entry
+  if (existing) {
+    try { existing.client.end(); } catch {}
+    pool.delete(key);
+  }
+
+  return new Promise((resolve, reject) => {
+    const conn = new Client();
+    let isSettled = false;
+
+    const entry = {
+      client: conn,
+      ready: false,
+      idleTimeout: null,
+    };
+
+    const cleanup = () => {
+      if (entry.idleTimeout) clearTimeout(entry.idleTimeout);
+      pool.delete(key);
+      try { conn.end(); } catch {}
+    };
+
+    conn.on('ready', () => {
+      entry.ready = true;
+      entry.idleTimeout = setTimeout(() => {
+        cleanup();
+      }, 30000);
+      pool.set(key, entry);
+      if (!isSettled) {
+        isSettled = true;
+        resolve(conn);
+      }
+    });
+
+    conn.on('error', (err) => {
+      cleanup();
+      if (!isSettled) {
+        isSettled = true;
+        reject(err);
+      }
+    });
+
+    conn.on('close', () => {
+      cleanup();
+    });
+
+    conn.on('end', () => {
+      cleanup();
+    });
+
+    conn.connect(sshConfig);
+  });
+}
+
+export function execCommand(sshConfig, command, options = {}) {
+  const usePool = options.pool !== false;
+
+  if (usePool) {
+    return new Promise((resolve, reject) => {
+      getOrCreatePooledClient(sshConfig)
+        .then((conn) => {
+          let stdout = '';
+          let stderr = '';
+          conn.exec(command, (err, stream) => {
+            if (err) {
+              // On exec channel failure, evict and retry once with fresh connection
+              const pool = global.__sshConnectionPool;
+              const key = getPoolKey(sshConfig);
+              pool.delete(key);
+              try { conn.end(); } catch {}
+              
+              // Fallback non-pooled execution
+              return execCommand(sshConfig, command, { pool: false }).then(resolve).catch(reject);
+            }
+            stream.on('data', (d) => { stdout += d.toString(); });
+            stream.stderr.on('data', (d) => { stderr += d.toString(); });
+            stream.on('close', (code) => { resolve({ code, stdout, stderr }); });
+          });
+        })
+        .catch((err) => {
+          // If pool creation failed, try direct connection once
+          execCommand(sshConfig, command, { pool: false }).then(resolve).catch(reject);
+        });
+    });
+  }
+
+  // Non-pooled fallback
   return new Promise((resolve, reject) => {
     const conn = new Client();
     let stdout = '';

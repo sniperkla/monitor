@@ -1,0 +1,271 @@
+import { NextResponse } from 'next/server';
+import { getServerSession } from 'next-auth/next';
+import { authOptions } from '@/lib/auth';
+import { getSshConfig, execCommand } from '@/app/api/server-backup/_ssh';
+import crypto from 'crypto';
+import fs from 'fs';
+import path from 'path';
+
+export async function POST(request) {
+  try {
+    const session = await getServerSession(authOptions);
+    if (!session) {
+      return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
+    }
+
+    const body = await request.json();
+    const { connectionId, action, method = 'tmux', serverUrl } = body;
+
+    if (!connectionId) {
+      return NextResponse.json({ success: false, error: 'Missing connectionId' }, { status: 400 });
+    }
+
+    const sshConfig = await getSshConfig(connectionId);
+    const origin = serverUrl || process.env.NEXTAUTH_URL || 'http://localhost:3000';
+
+    // 1. Status Check
+    if (action === 'status') {
+      const statusScript = `
+        export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
+        
+        # Check Node.js
+        NODE_VER="$(node -v 2>/dev/null || echo 'NONE')"
+        
+        # Check tmux session
+        TMUX_ACTIVE=0
+        if command -v tmux >/dev/null 2>&1; then
+          if tmux has-session -t monitor-agent 2>/dev/null || tmux has-session -t monitor-relay 2>/dev/null; then
+            TMUX_ACTIVE=1
+          fi
+        fi
+
+        # Check process
+        PROC_ACTIVE=0
+        if pgrep -f 'monitor-agent' >/dev/null 2>&1 || pgrep -f 'local-relay' >/dev/null 2>&1; then
+          PROC_ACTIVE=1
+        fi
+
+        # Check systemd user service
+        SERVICE_ACTIVE=0
+        if systemctl --user is-active server-monitor-agent.service 2>/dev/null | grep -q 'active'; then
+          SERVICE_ACTIVE=1
+        fi
+
+        echo "NODE=$NODE_VER"
+        echo "TMUX=$TMUX_ACTIVE"
+        echo "PROC=$PROC_ACTIVE"
+        echo "SERVICE=$SERVICE_ACTIVE"
+      `;
+
+      const result = await execCommand(sshConfig, statusScript);
+      const out = result.stdout || '';
+
+      const nodeVer = out.match(/^NODE=(.*)$/m)?.[1]?.trim() || 'NONE';
+      const tmuxActive = out.match(/^TMUX=(.*)$/m)?.[1]?.trim() === '1';
+      const procActive = out.match(/^PROC=(.*)$/m)?.[1]?.trim() === '1';
+      const serviceActive = out.match(/^SERVICE=(.*)$/m)?.[1]?.trim() === '1';
+
+      return NextResponse.json({
+        success: true,
+        nodeInstalled: nodeVer !== 'NONE',
+        nodeVersion: nodeVer,
+        isRunning: procActive || tmuxActive || serviceActive,
+        inTmux: tmuxActive,
+        inService: serviceActive,
+      });
+    }
+
+    // 2. Install Node.js
+    if (action === 'install_node') {
+      const nodeInstallScript = `
+        export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
+
+        if command -v node >/dev/null 2>&1; then
+          echo "✅ Node.js is already installed: $(node -v)"
+          exit 0
+        fi
+
+        echo "📦 Installing Node.js 20 LTS on target server..."
+        if command -v apt-get >/dev/null 2>&1; then
+          echo "Detected Debian/Ubuntu..."
+          (curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -) || (curl -fsSL https://deb.nodesource.com/setup_20.x | bash -)
+          sudo apt-get install -y nodejs || apt-get install -y nodejs
+        elif command -v dnf >/dev/null 2>&1; then
+          echo "Detected RHEL/Fedora/CentOS Stream..."
+          sudo dnf module install -y nodejs:20 || sudo dnf install -y nodejs || dnf install -y nodejs
+        elif command -v yum >/dev/null 2>&1; then
+          echo "Detected CentOS/RHEL..."
+          (curl -fsSL https://rpm.nodesource.com/setup_20.x | sudo bash -) || (curl -fsSL https://rpm.nodesource.com/setup_20.x | bash -)
+          sudo yum install -y nodejs || yum install -y nodejs
+        elif command -v apk >/dev/null 2>&1; then
+          echo "Detected Alpine Linux..."
+          apk add --no-cache nodejs npm
+        else
+          # Fallback: install standalone portable official binary from nodejs.org
+          echo "📦 Downloading standalone Node.js portable binary..."
+          ARCH=$(uname -m)
+          case "$ARCH" in
+            x86_64) NARCH="x64" ;;
+            aarch64|arm64) NARCH="arm64" ;;
+            armv7l) NARCH="armv7l" ;;
+            *) NARCH="x64" ;;
+          esac
+          mkdir -p /tmp/node-install
+          curl -fsSL "https://nodejs.org/dist/v20.18.0/node-v20.18.0-linux-\${NARCH}.tar.xz" | tar -xJ -C /tmp/node-install --strip-components=1 2>/dev/null
+          sudo cp -r /tmp/node-install/bin/* /usr/local/bin/ 2>/dev/null || cp -r /tmp/node-install/bin/* /usr/local/bin/ 2>/dev/null
+          sudo cp -r /tmp/node-install/lib/* /usr/local/lib/ 2>/dev/null || cp -r /tmp/node-install/lib/* /usr/local/lib/ 2>/dev/null
+          rm -rf /tmp/node-install
+        fi
+
+        if command -v node >/dev/null 2>&1; then
+          echo "🎉 Node.js successfully installed: $(node -v)"
+        else
+          echo "❌ Could not complete Node.js installation automatically."
+          exit 1
+        fi
+      `;
+
+      const result = await execCommand(sshConfig, nodeInstallScript);
+      const combinedOutput = ((result.stdout || '') + '\n' + (result.stderr || '')).trim();
+      return NextResponse.json({
+        success: result.code === 0,
+        output: combinedOutput || (result.code === 0 ? 'Node.js installed' : 'Installation failed with code ' + result.code),
+        error: result.code !== 0 ? (result.stderr || result.stdout || 'Installation failed') : null,
+      });
+    }
+
+    // 3. Uninstall Agent
+    if (action === 'uninstall') {
+      const uninstallScript = `
+        export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
+        
+        echo "Stopping tmux session if active..."
+        if command -v tmux >/dev/null 2>&1; then
+          tmux kill-session -t monitor-agent 2>/dev/null || true
+          tmux kill-session -t monitor-relay 2>/dev/null || true
+        fi
+
+        echo "Stopping systemd user service if active..."
+        systemctl --user stop server-monitor-agent.service 2>/dev/null || true
+        systemctl --user disable server-monitor-agent.service 2>/dev/null || true
+        rm -f ~/.config/systemd/user/server-monitor-agent.service 2>/dev/null || true
+        rm -f ~/.config/systemd/user/ssh-monitor-relay.service 2>/dev/null || true
+        rm -f ~/.monitor-agent.js ~/.monitor-agent.log 2>/dev/null || true
+
+        echo "Killing any remaining monitor-agent processes..."
+        pkill -f 'monitor-agent' 2>/dev/null || true
+        pkill -f 'local-relay' 2>/dev/null || true
+
+        echo "✅ Agent successfully uninstalled and stopped."
+      `;
+
+      const result = await execCommand(sshConfig, uninstallScript);
+      const combinedOutput = ((result.stdout || '') + '\n' + (result.stderr || '')).trim();
+      return NextResponse.json({
+        success: true,
+        output: combinedOutput || 'Uninstalled successfully',
+      });
+    }
+
+    // 4. Install Agent
+    if (action === 'install') {
+      // Use provided token or generate a fresh session token
+      const token = body.token || crypto.randomBytes(32).toString('hex');
+      if (global.__relayTokens) {
+        global.__relayTokens.set(token, {
+          userId: session.user?.id || 'admin',
+          createdAt: Date.now(),
+        });
+      }
+
+      // Read monitor-agent code from local disk
+      const agentFilePath = path.join(process.cwd(), 'public', 'monitor-agent.js');
+      const agentCode = fs.existsSync(agentFilePath) ? fs.readFileSync(agentFilePath, 'utf8') : '';
+      const b64Code = Buffer.from(agentCode).toString('base64');
+
+      let installScript = '';
+
+      if (method === 'tmux') {
+        installScript = `
+          export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
+
+          # 1. Check Node.js
+          if ! command -v node >/dev/null 2>&1; then
+            echo "❌ Node.js is not installed on this server."
+            echo "Please click 'Install Node.js 20' in the wizard first."
+            exit 1
+          fi
+
+          # 2. Check or install tmux
+          if ! command -v tmux >/dev/null 2>&1; then
+            echo "📦 tmux not found, attempting to install tmux..."
+            if command -v apt-get >/dev/null 2>&1; then
+              sudo apt-get update -qq && sudo apt-get install -y -qq tmux || apt-get install -y -qq tmux
+            elif command -v yum >/dev/null 2>&1; then
+              sudo yum install -y -q tmux || yum install -y -q tmux
+            fi
+          fi
+
+          # 3. Write monitor-agent.js directly onto server
+          mkdir -p ~/.config
+          echo "${b64Code}" | base64 -d > ~/.monitor-agent.js 2>/dev/null || node -e "require('fs').writeFileSync(require('os').homedir() + '/.monitor-agent.js', Buffer.from('${b64Code}', 'base64'))"
+
+          # 4. Kill existing session
+          tmux kill-session -t monitor-agent 2>/dev/null || true
+          pkill -f 'monitor-agent' 2>/dev/null || true
+
+          # 5. Start in tmux detached
+          echo "🚀 Launching Monitor Agent in detached tmux session [monitor-agent]..."
+          tmux new-session -d -s monitor-agent "node ~/.monitor-agent.js --server '${origin}' --token '${token}'"
+
+          sleep 2
+          if tmux has-session -t monitor-agent 2>/dev/null; then
+            echo "✅ Monitor Agent is running in background tmux session!"
+            echo "To view agent live logs: tmux attach -t monitor-agent"
+          else
+            echo "⚠️ tmux session failed to start. Attempting nohup fallback..."
+            nohup node ~/.monitor-agent.js --server '${origin}' --token '${token}' > ~/.monitor-agent.log 2>&1 &
+            sleep 1
+            if pgrep -f 'monitor-agent' >/dev/null 2>&1; then
+              echo "✅ Monitor Agent running in background via nohup."
+            else
+              echo "❌ Failed to start agent process."
+              exit 1
+            fi
+          fi
+        `;
+      } else {
+        // systemd service install
+        installScript = `
+          export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
+
+          if ! command -v node >/dev/null 2>&1; then
+            echo "❌ Node.js is not installed on this server."
+            echo "Please click 'Install Node.js 20' in the wizard first."
+            exit 1
+          fi
+
+          mkdir -p ~/.config
+          echo "${b64Code}" | base64 -d > ~/.monitor-agent.js 2>/dev/null || node -e "require('fs').writeFileSync(require('os').homedir() + '/.monitor-agent.js', Buffer.from('${b64Code}', 'base64'))"
+
+          echo "🚀 Installing Monitor Agent as background system service..."
+          node ~/.monitor-agent.js --install --server '${origin}' --token '${token}'
+        `;
+      }
+
+      const result = await execCommand(sshConfig, installScript);
+      const combinedOutput = ((result.stdout || '') + '\n' + (result.stderr || '')).trim();
+      return NextResponse.json({
+        success: result.code === 0,
+        output: combinedOutput || (result.code === 0 ? 'Agent launched successfully' : 'Installation failed with code ' + result.code),
+        error: result.code !== 0 ? (result.stderr || result.stdout || 'Installation failed with exit code ' + result.code) : null,
+        token,
+      });
+    }
+
+    return NextResponse.json({ success: false, error: 'Unknown action' }, { status: 400 });
+  } catch (error) {
+    console.error('[server-monitor/agent] error:', error);
+    return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+  }
+}

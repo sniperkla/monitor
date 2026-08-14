@@ -4,8 +4,9 @@
   "private": true,
   "scripts": {
     "dev": "NODE_OPTIONS='--dns-result-order=ipv4first' node server.js",
+    "build:agent": "npx javascript-obfuscator public/monitor-agent.js --output public/monitor-agent.min.js --compact true --string-array true --target node",
     "build:relay": "npx javascript-obfuscator public/local-relay.js --output public/local-relay.min.js --compact true --string-array true --target node",
-    "build": "npm run build:relay && next build",
+    "build": "npm run build:relay && npm run build:agent && next build",
     "start": "NODE_ENV=production NODE_OPTIONS='--dns-result-order=ipv4first' node server.js",
     "lint": "eslint"
   },
@@ -20,6 +21,7 @@
     "@xterm/addon-web-links": "^0.12.0",
     "@xterm/xterm": "^6.0.0",
     "bcryptjs": "^3.0.3",
+    "chart.js": "^4.5.1",
     "compression": "^1.8.1",
     "diff-match-patch": "^1.0.5",
     "dockerode": "^5.0.1",
@@ -38,6 +40,7 @@
     "openai": "^7.3.0",
     "pg": "^8.20.0",
     "react": "19.2.3",
+    "react-chartjs-2": "^5.3.1",
     "react-dom": "^19.2.3",
     "react-i18next": "^16.5.4",
     "react-rnd": "^10.5.2",

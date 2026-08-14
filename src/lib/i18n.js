@@ -578,7 +578,278 @@ const resources = {
           exportSuccess: "Connections exported successfully",
           exportFail: "Export failed",
           importFail: "Import failed",
+        },
+        onboarding: {
+          stepOf: "Step {{step}} of {{total}}",
+          complete: "Complete",
+          back: "Back",
+          skip: "Skip",
+          next: "Next",
+          getStarted: "Get Started",
+          steps: {
+            welcome: {
+              title: "Welcome to SSH Manager",
+              description: "SSH Manager is your all-in-one hub for managing server connections, running terminals, browsing files, and inspecting databases — all from one window.",
+            },
+            sidebar: {
+              title: "Connection Sidebar",
+              description: "All your saved servers live in the sidebar. Click \"New Connection\" to add one. Provide host, port, username, and choose password or private key auth.",
+              tip: "💡 You can upload a .pem or .ppk private key directly by dragging it into the key field.",
+            },
+            dashboard: {
+              title: "Dashboard Overview",
+              description: "The Dashboard tab shows the live status of all your servers at a glance — online, offline, or unknown. Pin your most-used servers to the top for quick access.",
+              tip: "💡 Click the star ★ on any connection to pin it to your dashboard.",
+            },
+            terminal: {
+              title: "Terminal",
+              description: "Double-click a connection (or click the Connect icon) to open a full xterm.js terminal tab. You can open multiple sessions side-by-side.",
+              tip: "💡 Use the tab bar at the top of the Terminal view to switch between open sessions.",
+            },
+            files: {
+              title: "File Manager",
+              description: "The File Management tab gives you a visual SFTP browser. Navigate folders, upload/download files, and edit remote files right in the browser.",
+              tip: "💡 Drag & drop files from your desktop directly into the file panel to upload.",
+            },
+            database: {
+              title: "Database Browser",
+              description: "Use the Database tab to browse MongoDB databases on your connected servers. Inspect collections, run queries, and manage documents without leaving the app.",
+            },
+            rclone: {
+              title: "Cloud Storage Sync",
+              description: "Rclone Cloud Sync is available as a separate app. Open it from the OS desktop to sync files to Google Drive, S3, Dropbox, and more. Configure remotes, schedule sync jobs, and monitor transfers.",
+              tip: "💡 Set up multiple cloud remotes and switch between them easily for cross-cloud transfers.",
+            },
+            "mongo-sync": {
+              title: "MongoDB Backup & Sync",
+              description: "Mongo Sync & Backup is available as a separate app. Open it from the OS desktop to automate MongoDB backups with scheduling, compression, and cloud storage integration.",
+              tip: "💡 Configure automatic backups to run daily or weekly and store them on your cloud storage via Rclone.",
+            },
+            "help-btn": {
+              title: "Replay Tutorial Anytime",
+              description: "Click this ? button at any time to re-open this tutorial from the beginning. It's always available in the top navigation bar.",
+            },
+            done: {
+              title: "You're all set!",
+              description: "That's the SSH Manager in a nutshell. Add your first server and start exploring. You can always re-open this guide from the Help menu.",
+            },
+          },
         }
+      },
+      rclone: {
+        onboarding: {
+          stepOf: "Step {{step}} of {{total}}",
+          complete: "Complete",
+          back: "Back",
+          skip: "Skip",
+          next: "Next",
+          getStarted: "Get Started",
+          steps: {
+            welcome: {
+              title: "Welcome to Rclone Cloud Sync",
+              description: "Rclone syncs files and folders to cloud storage providers. Connect Google Drive, S3, Dropbox, and 40+ providers for seamless backup and transfer.",
+            },
+            setup: {
+              title: "Server Setup",
+              description: "First, select a server connection. Rclone will check if it's installed and show the installation status. Click Install to automatically deploy Rclone if needed.",
+              tip: "💡 Rclone installs to ~/.local/bin/rclone on the remote server. Make sure the server has internet access for the installation.",
+            },
+            remotes: {
+              title: "Configure Cloud Remotes",
+              description: "Add cloud storage remotes like Google Drive, S3, or Dropbox. Each remote represents a cloud account. Use OAuth for secure authentication without storing passwords.",
+              tip: "💡 You can configure multiple remotes of the same type (e.g., multiple Google Drive accounts) and switch between them.",
+            },
+            backup: {
+              title: "Create Sync Jobs",
+              description: "Set up sync jobs to copy or move files between local server and cloud storage. Choose source, destination, and sync mode (copy, sync, move).",
+              tip: "💡 Use 'sync' mode to mirror the destination exactly - files not in source will be deleted from destination.",
+            },
+            browser: {
+              title: "Browse Cloud Files",
+              description: "Navigate your cloud storage like a local filesystem. Browse folders, preview files, and download content directly from the cloud.",
+              tip: "💡 Double-click a folder to enter it. Use the path input for quick navigation with Tab autocomplete.",
+            },
+            crons: {
+              title: "Schedule Backups",
+              description: "Create cron-based schedules to run backups automatically. Set daily, weekly, or custom schedules with retention policies.",
+              tip: "💡 Configure retention to automatically delete old backups after a specified number of days.",
+            },
+            history: {
+              title: "Sync History",
+              description: "View a full log of past sync and backup runs — including status, duration, bytes transferred, and any errors. Use this to audit and troubleshoot your jobs.",
+              tip: "💡 Each history entry shows the exact rclone command output so you can diagnose failures quickly.",
+            },
+            done: {
+              title: "You're all set!",
+              description: "You now know the basics of Rclone Cloud Sync. Create your first remote and start backing up to the cloud. Re-open this guide from the Help button anytime.",
+            },
+          },
+        }
+      },
+      mongoBackup: {
+        onboarding: {
+          stepOf: "Step {{step}} of {{total}}",
+          complete: "Complete",
+          back: "Back",
+          skip: "Skip",
+          next: "Next",
+          getStarted: "Get Started",
+          steps: {
+            welcome: {
+              title: "Welcome to Mongo Sync & Backup",
+              description: "Automate MongoDB backups with scheduled dumps, cloud storage integration, and easy restore. Protect your data with automated backup jobs.",
+            },
+            import: {
+              title: "Server Connection",
+              description: "Select a server connection where MongoDB is running. The app will connect via SSH and execute mongodump commands for backups.",
+              tip: "💡 Make sure mongodump is installed on the server. The app uses the MongoDB tools to create backups.",
+            },
+            gdrive: {
+              title: "Google Drive Setup",
+              description: "Configure Google Drive integration to upload backups to the cloud. OAuth authentication keeps your credentials secure.",
+              tip: "💡 Google Drive backups are stored in a dedicated folder. You can browse and manage them from Google Drive directly.",
+            },
+            jobs: {
+              title: "Backup Jobs",
+              description: "Create backup jobs to dump specific databases or collections. Schedule them to run automatically with cron expressions.",
+              tip: "💡 Use 'All Databases (*)' to backup everything, or select specific databases for targeted backups.",
+            },
+            restore: {
+              title: "Restore Backups",
+              description: "Restore from any available backup with one click. Browse backup history, preview contents, and restore to the same or different database.",
+              tip: "💡 Restore operations use mongorestore. Make sure the target database is accessible from the server.",
+            },
+            history: {
+              title: "Backup History",
+              description: "View all backup execution history with detailed logs. Monitor job success, see file sizes, and track upload status.",
+              tip: "💡 Failed jobs show error logs to help diagnose issues. Check the server connection and MongoDB status if backups fail.",
+            },
+            failover: {
+              title: "Failover & Replica Set",
+              description: "Monitor your MongoDB replica set status, trigger manual failovers, and inspect member health. Keep your database cluster highly available.",
+              tip: "💡 Use this tab to promote a secondary to primary or step down the current primary during planned maintenance.",
+            },
+            done: {
+              title: "You're all set!",
+              description: "You're ready to protect your MongoDB data. Create your first backup job and schedule automated backups. Re-open this guide anytime from Help.",
+            },
+          },
+        }
+      },
+      docker: {
+        onboarding: {
+          stepOf: "Step {{step}} of {{total}}",
+          complete: "Complete",
+          back: "Back",
+          skip: "Skip",
+          next: "Next",
+          getStarted: "Get Started",
+          steps: {
+            welcome: {
+              title: "Welcome to Docker Manager",
+              description: "Manage containers, images, volumes, networks, and Swarm services — all from one unified interface connected to your remote servers.",
+            },
+            containers: {
+              title: "Containers",
+              description: "View all running and stopped containers on the connected server. Start, stop, restart, and inspect logs for any container.",
+              tip: "💡 Click the container name to expand detailed info including ports, mounts, environment variables, and real-time logs.",
+            },
+            swarm: {
+              title: "Swarm Services",
+              description: "Manage Docker Swarm services and stacks. Scale services, update images, and monitor replica status across your swarm cluster.",
+              tip: "💡 Use Swarm mode for production deployments that need automatic load balancing and rolling updates.",
+            },
+            images: {
+              title: "Images",
+              description: "Browse all Docker images on the server. Pull new images from Docker Hub, delete unused ones, and see which containers use each image.",
+              tip: "💡 Regularly prune unused images to free up disk space — use the PRUNE button in the toolbar.",
+            },
+            volumes: {
+              title: "Volumes",
+              description: "Manage Docker volumes for persistent data storage. View which containers are using each volume and remove unused ones safely.",
+              tip: "💡 Named volumes persist data even after a container is removed — great for databases and uploaded files.",
+            },
+            networks: {
+              title: "Networks",
+              description: "Inspect Docker networks that connect your containers. View connected containers, network drivers, and subnet configurations.",
+              tip: "💡 Containers on the same custom bridge network can communicate using their container names as hostnames.",
+            },
+            done: {
+              title: "You're all set!",
+              description: "You now know how to manage Docker on your servers. Select a server connection and start exploring your containers. Re-open this guide anytime from the Help button.",
+            },
+          },
+        },
+      },
+      serverBackup: {
+        onboarding: {
+          stepOf: "Step {{step}} of {{total}}",
+          complete: "Complete",
+          back: "Back",
+          skip: "Skip",
+          next: "Next",
+          getStarted: "Get Started",
+          steps: {
+            welcome: {
+              title: "Welcome to Server Backup",
+              description: "Back up and restore your entire server — web apps, databases, Docker stacks, and system configs — with a single click or on a schedule.",
+            },
+            backup: {
+              title: "Create Backups",
+              description: "Select a server, choose a backup type (Web App, Docker, Database, System, or Custom), and run an instant backup. The result is a compressed archive ready to download or transfer.",
+              tip: "💡 Use 'Custom' type to select any specific directory or file path on the server.",
+            },
+            restore: {
+              title: "Restore Backups",
+              description: "Pick any previous backup from your history and restore it to the same or a different server. Restore previews the archive contents before applying.",
+              tip: "💡 You can restore to a different server by selecting a new target connection during the restore flow.",
+            },
+            transfer: {
+              title: "Transfer Between Servers",
+              description: "Migrate a backup directly from one server to another without downloading it locally. Useful for server migrations or staging/production sync.",
+              tip: "💡 Transfers use rsync over SSH — make sure the source and destination servers are both accessible.",
+            },
+            jobs: {
+              title: "Scheduled Jobs",
+              description: "Create automated backup jobs that run on a cron schedule. Set up daily or weekly backups and track each run in the job history.",
+              tip: "💡 Job history shows the status, duration, and output of every scheduled run — check here if a backup fails.",
+            },
+            done: {
+              title: "You're all set!",
+              description: "Start protecting your servers now. Run your first backup and optionally schedule it to repeat automatically. Re-open this guide anytime from the Help button.",
+            },
+          },
+        },
+      },
+      tmux: {
+        onboarding: {
+          stepOf: "Step {{step}} of {{total}}",
+          complete: "Complete",
+          back: "Back",
+          skip: "Skip",
+          next: "Next",
+          getStarted: "Get Started",
+          steps: {
+            welcome: {
+              title: "Welcome to Tmux Manager",
+              description: "Manage persistent tmux sessions on your remote servers. Sessions survive disconnects, run background tasks, and support multiple windows — all from your browser.",
+            },
+            dashboard: {
+              title: "Session Dashboard",
+              description: "The Dashboard shows all active tmux sessions on the connected server. Create new sessions, attach to existing ones, rename or kill sessions — all without a terminal.",
+              tip: "💡 Tmux sessions persist even if your SSH connection drops. Re-attach any time to pick up where you left off.",
+            },
+            terminal: {
+              title: "Integrated Terminal",
+              description: "The Terminal tab connects directly into a tmux session. Type commands, run long processes, and the session stays alive in the background even when you close the tab.",
+              tip: "💡 Use Ctrl+B then D to detach from a tmux session without killing it — it will still appear in the Dashboard.",
+            },
+            done: {
+              title: "You're all set!",
+              description: "Select a server, create your first tmux session, and start running background tasks. Re-open this guide anytime from the Help button.",
+            },
+          },
+        },
       },
       terminal: {
         title: "Terminal",
@@ -1988,6 +2259,67 @@ const resources = {
           exportSuccess: "ส่งออกการเชื่อมต่อสำเร็จ",
           exportFail: "ส่งออกล้มเหลว",
           importFail: "นำเข้าล้มเหลว",
+        },
+        onboarding: {
+          stepOf: "ขั้นตอนที่ {{step}} จาก {{total}}",
+          complete: "เสร็จสิ้น",
+          back: "ย้อนกลับ",
+          skip: "ข้าม",
+          next: "ถัดไป",
+          getStarted: "เริ่มต้น",
+          steps: {
+            welcome: {
+              title: "ยินดีต้อนรับสู่ SSH Manager",
+              description: "SSH Manager คือศูนย์รวมสำหรับจัดการการเชื่อมต่อเซิร์ฟเวอร์ เปิดเทอร์มินัล เรียกดูไฟล์ และตรวจสอบฐานข้อมูล — ทั้งหมดในหน้าต่างเดียว",
+            },
+            connections: {
+              title: "แถบด้านข้างการเชื่อมต่อ",
+              description: "เซิร์ฟเวอร์ที่บันทึกไว้ทั้งหมดอยู่ในแถบด้านข้าง คลิก \"การเชื่อมต่อใหม่\" เพื่อเพิ่ม กรอก Host, Port, Username และเลือกรหัสผ่านหรือ Private Key",
+              tip: "💡 คุณสามารถอัปโหลดไฟล์ .pem หรือ .ppk โดยลากวางลงในช่อง Key โดยตรง",
+            },
+            sidebar: {
+              title: "แถบด้านข้างการเชื่อมต่อ",
+              description: "เซิร์ฟเวอร์ที่บันทึกไว้ทั้งหมดอยู่ในแถบด้านข้าง คลิก \"การเชื่อมต่อใหม่\" เพื่อเพิ่ม กรอก Host, Port, Username และเลือกรหัสผ่านหรือ Private Key",
+              tip: "💡 คุณสามารถอัปโหลดไฟล์ .pem หรือ .ppk โดยลากวางลงในช่อง Key โดยตรง",
+            },
+            dashboard: {
+              title: "ภาพรวมแดชบอร์ด",
+              description: "แท็บ Dashboard แสดงสถานะเซิร์ฟเวอร์แบบเรียลไทม์ — ออนไลน์ ออฟไลน์ หรือไม่ทราบ ปักหมุดเซิร์ฟเวอร์ที่ใช้บ่อยไว้ด้านบนสุด",
+              tip: "💡 คลิกดาว ★ บนการเชื่อมต่อเพื่อปักหมุดไว้บนแดชบอร์ด",
+            },
+            terminal: {
+              title: "เทอร์มินัล",
+              description: "ดับเบิลคลิกการเชื่อมต่อ (หรือคลิกไอคอน Connect) เพื่อเปิดแท็บเทอร์มินัล คุณสามารถเปิดหลายเซสชันพร้อมกันได้",
+              tip: "💡 ใช้แถบแท็บที่ด้านบนของมุมมองเทอร์มินัลเพื่อสลับระหว่างเซสชัน",
+            },
+            files: {
+              title: "ตัวจัดการไฟล์",
+              description: "แท็บ File Management มีเบราว์เซอร์ SFTP แบบภาพ เรียกดูโฟลเดอร์ อัปโหลด/ดาวน์โหลดไฟล์ และแก้ไขไฟล์บนเซิร์ฟเวอร์ในเบราว์เซอร์ได้เลย",
+              tip: "💡 ลากและวางไฟล์จากเดสก์ท็อปของคุณลงในแผงไฟล์โดยตรงเพื่ออัปโหลด",
+            },
+            database: {
+              title: "เบราว์เซอร์ฐานข้อมูล",
+              description: "ใช้แท็บ Database เพื่อเรียกดูฐานข้อมูล MongoDB บนเซิร์ฟเวอร์ที่เชื่อมต่อ ตรวจสอบ Collection รันคิวรี และจัดการเอกสาร",
+            },
+            rclone: {
+              title: "ซิงค์ Cloud Storage",
+              description: "Rclone Cloud Sync เป็นแอปแยก เปิดจาก OS Desktop เพื่อซิงค์ไฟล์ไปยัง Google Drive, S3, Dropbox และอื่นๆ ตั้งค่า Remote กำหนดเวลา Sync Jobs และติดตามการถ่ายโอน",
+              tip: "💡 ตั้งค่า Cloud Remotes หลายตัวและสลับระหว่างกันได้ง่ายสำหรับการถ่ายโอนข้าม Cloud",
+            },
+            "mongo-sync": {
+              title: "MongoDB Backup & Sync",
+              description: "Mongo Sync & Backup เป็นแอปแยก เปิดจาก OS Desktop เพื่อสำรองข้อมูล MongoDB อัตโนมัติด้วยการกำหนดเวลา บีบอัด และเชื่อมต่อกับ Cloud Storage",
+              tip: "💡 ตั้งค่า Backup อัตโนมัติให้ทำงานทุกวันหรือทุกสัปดาห์ และจัดเก็บบน Cloud Storage ของคุณผ่าน Rclone",
+            },
+            "help-btn": {
+              title: "เปิดบทแนะนำซ้ำได้ทุกเมื่อ",
+              description: "คลิกปุ่ม ? นี้เมื่อใดก็ได้เพื่อเปิดบทแนะนำนี้อีกครั้งตั้งแต่ต้น ปุ่มนี้อยู่ในแถบนำทางด้านบนเสมอ",
+            },
+            done: {
+              title: "พร้อมแล้ว!",
+              description: "นั่นคือทั้งหมดของ SSH Manager โดยย่อ เพิ่มเซิร์ฟเวอร์แรกของคุณและเริ่มสำรวจ คุณสามารถเปิดคู่มือนี้ใหม่ได้จากเมนู Help เสมอ",
+            },
+          },
         }
       },
       terminal: {
@@ -2384,7 +2716,222 @@ const resources = {
         testWebhookRunning: "กำลังทดสอบ...",
         testWebhookSuccess: "Webhook ใช้งานได้",
         testWebhookFailed: "Webhook ล้มเหลว",
-      }
+      },
+      rclone: {
+        onboarding: {
+          stepOf: "ขั้นตอนที่ {{step}} จาก {{total}}",
+          complete: "เสร็จสิ้น",
+          back: "ย้อนกลับ",
+          skip: "ข้ามไป",
+          next: "ถัดไป",
+          getStarted: "เริ่มต้นใช้งาน",
+          steps: {
+            welcome: {
+              title: "ยินดีต้อนรับสู่ Rclone Cloud Sync",
+              description: "Rclone ซิงค์ไฟล์และโฟลเดอร์ไปยัง Cloud Storage ต่างๆ รองรับ Google Drive, S3, Dropbox และอีกกว่า 40 ผู้ให้บริการ",
+            },
+            setup: {
+              title: "ตั้งค่าเซิร์ฟเวอร์",
+              description: "เลือกการเชื่อมต่อเซิร์ฟเวอร์ก่อน ระบบจะตรวจสอบว่า Rclone ติดตั้งอยู่หรือไม่ กด Install เพื่อติดตั้งอัตโนมัติหากจำเป็น",
+              tip: "💡 Rclone จะติดตั้งที่ ~/.local/bin/rclone บนเซิร์ฟเวอร์ ตรวจสอบให้แน่ใจว่าเซิร์ฟเวอร์มีการเชื่อมต่ออินเทอร์เน็ต",
+            },
+            remotes: {
+              title: "ตั้งค่า Cloud Remotes",
+              description: "เพิ่ม Cloud Storage Remotes เช่น Google Drive, S3 หรือ Dropbox แต่ละ Remote แทนบัญชี Cloud หนึ่งบัญชี",
+              tip: "💡 คุณสามารถตั้งค่า Remote หลายตัวในประเภทเดียวกัน เช่น Google Drive หลายบัญชี",
+            },
+            backup: {
+              title: "สร้าง Sync Jobs",
+              description: "ตั้งค่า Sync Jobs เพื่อคัดลอกหรือย้ายไฟล์ระหว่างเซิร์ฟเวอร์และ Cloud Storage เลือกต้นทาง ปลายทาง และโหมดการซิงค์",
+              tip: "💡 ใช้โหมด 'sync' เพื่อสะท้อนปลายทางให้ตรงกันทุกประการ ไฟล์ที่ไม่มีใน Source จะถูกลบจากปลายทาง",
+            },
+            crons: {
+              title: "กำหนดเวลาสำรองข้อมูล",
+              description: "สร้างตารางเวลาแบบ Cron เพื่อรัน Backup อัตโนมัติ ตั้งค่าได้ทุกวัน ทุกสัปดาห์ หรือกำหนดเองพร้อม Retention Policy",
+              tip: "💡 ตั้งค่า Retention เพื่อลบ Backup เก่าโดยอัตโนมัติหลังจากจำนวนวันที่กำหนด",
+            },
+            history: {
+              title: "ประวัติการซิงค์",
+              description: "ดูบันทึกการรัน Sync และ Backup ที่ผ่านมาทั้งหมด รวมถึงสถานะ ระยะเวลา ขนาดข้อมูลที่โอน และข้อผิดพลาด",
+              tip: "💡 แต่ละรายการในประวัติแสดงผลลัพธ์คำสั่ง rclone จริงๆ ช่วยให้วินิจฉัยปัญหาได้รวดเร็ว",
+            },
+            browser: {
+              title: "เรียกดูไฟล์ Cloud",
+              description: "นำทางใน Cloud Storage ของคุณเหมือนระบบไฟล์ในเครื่อง เรียกดูโฟลเดอร์ ดูตัวอย่างไฟล์ และดาวน์โหลดจาก Cloud โดยตรง",
+              tip: "💡 ดับเบิลคลิกโฟลเดอร์เพื่อเข้าไป ใช้ช่อง Path พร้อม Tab Autocomplete สำหรับนำทางอย่างรวดเร็ว",
+            },
+            done: {
+              title: "พร้อมใช้งานแล้ว!",
+              description: "คุณรู้จัก Rclone Cloud Sync เบื้องต้นแล้ว สร้าง Remote แรกและเริ่มสำรองข้อมูลไปยัง Cloud เปิดคู่มือนี้ได้อีกครั้งจากปุ่ม Help",
+            },
+          },
+        }
+      },
+      mongoBackup: {
+        onboarding: {
+          stepOf: "ขั้นตอนที่ {{step}} จาก {{total}}",
+          complete: "เสร็จสิ้น",
+          back: "ย้อนกลับ",
+          skip: "ข้ามไป",
+          next: "ถัดไป",
+          getStarted: "เริ่มต้นใช้งาน",
+          steps: {
+            welcome: {
+              title: "ยินดีต้อนรับสู่ Mongo Sync & Backup",
+              description: "สำรองข้อมูล MongoDB อัตโนมัติด้วยการ Dump ตามตารางเวลา เชื่อมต่อ Cloud Storage และกู้คืนข้อมูลได้ง่าย",
+            },
+            import: {
+              title: "การเชื่อมต่อเซิร์ฟเวอร์",
+              description: "เลือกการเชื่อมต่อเซิร์ฟเวอร์ที่รัน MongoDB ระบบจะเชื่อมต่อผ่าน SSH และรันคำสั่ง mongodump เพื่อสำรองข้อมูล",
+              tip: "💡 ตรวจสอบให้แน่ใจว่าติดตั้ง mongodump บนเซิร์ฟเวอร์แล้ว แอปใช้ MongoDB Tools ในการสร้าง Backup",
+            },
+            gdrive: {
+              title: "ตั้งค่า Google Drive",
+              description: "ตั้งค่าการเชื่อมต่อ Google Drive เพื่ออัปโหลด Backup ไปยัง Cloud การยืนยันตัวตนผ่าน OAuth ช่วยให้ข้อมูลประจำตัวปลอดภัย",
+              tip: "💡 Backup บน Google Drive จะเก็บในโฟลเดอร์เฉพาะ สามารถเรียกดูจาก Google Drive ได้โดยตรง",
+            },
+            jobs: {
+              title: "Backup Jobs",
+              description: "สร้าง Backup Jobs เพื่อ Dump Database หรือ Collection ที่ต้องการ ตั้งเวลารันอัตโนมัติด้วย Cron Expression",
+              tip: "💡 ใช้ 'All Databases (*)' เพื่อสำรองทุกอย่าง หรือเลือก Database เฉพาะสำหรับการสำรองแบบเจาะจง",
+            },
+            restore: {
+              title: "กู้คืน Backup",
+              description: "กู้คืนจาก Backup ที่มีอยู่ด้วยคลิกเดียว เรียกดูประวัติ Backup ดูตัวอย่างเนื้อหา และกู้คืนไปยัง Database เดิมหรือใหม่",
+              tip: "💡 การกู้คืนใช้ mongorestore ตรวจสอบว่า Database เป้าหมายเข้าถึงได้จากเซิร์ฟเวอร์",
+            },
+            history: {
+              title: "ประวัติการสำรองข้อมูล",
+              description: "ดูประวัติการรัน Backup ทั้งหมดพร้อม Log รายละเอียด ติดตามความสำเร็จ ขนาดไฟล์ และสถานะการอัปโหลด",
+              tip: "💡 Jobs ที่ล้มเหลวจะแสดง Error Log เพื่อช่วยวินิจฉัยปัญหา ตรวจสอบการเชื่อมต่อเซิร์ฟเวอร์และ MongoDB",
+            },
+            failover: {
+              title: "Failover & Replica Set",
+              description: "ตรวจสอบสถานะ Replica Set ของ MongoDB เรียกทำ Failover แบบ Manual และตรวจสอบความสมบูรณ์ของสมาชิก",
+              tip: "💡 ใช้แท็บนี้เพื่อ Promote Secondary เป็น Primary หรือ Step Down Primary ระหว่างการบำรุงรักษา",
+            },
+            done: {
+              title: "พร้อมใช้งานแล้ว!",
+              description: "คุณพร้อมปกป้องข้อมูล MongoDB แล้ว สร้าง Backup Job แรกและตั้งค่า Backup อัตโนมัติ เปิดคู่มือนี้ได้อีกครั้งจาก Help",
+            },
+          },
+        }
+      },
+      docker: {
+        onboarding: {
+          stepOf: "ขั้นตอนที่ {{step}} จาก {{total}}",
+          complete: "เสร็จสิ้น",
+          back: "ย้อนกลับ",
+          skip: "ข้าม",
+          next: "ถัดไป",
+          getStarted: "เริ่มต้นใช้งาน",
+          steps: {
+            welcome: {
+              title: "ยินดีต้อนรับสู่ Docker Manager",
+              description: "จัดการคอนเทนเนอร์ อิมเมจ วอลุม เน็ตเวิร์ก และ Swarm services ทั้งหมดในหน้าต่างเดียวที่เชื่อมต่อกับเซิร์ฟเวอร์ของคุณ",
+            },
+            containers: {
+              title: "คอนเทนเนอร์",
+              description: "ดูคอนเทนเนอร์ที่กำลังทำงานและหยุดทำงานทั้งหมดบนเซิร์ฟเวอร์ สามารถเริ่ม หยุด รีสตาร์ท และดู log ของคอนเทนเนอร์ได้",
+              tip: "💡 คลิกชื่อคอนเทนเนอร์เพื่อดูรายละเอียด เช่น พอร์ต, mount, environment variables และ log แบบ real-time",
+            },
+            swarm: {
+              title: "Swarm Services",
+              description: "จัดการ Docker Swarm services และ stacks ปรับขนาด services อัปเดตอิมเมจ และตรวจสอบสถานะ replica ทั่วทั้ง cluster",
+              tip: "💡 ใช้ Swarm mode สำหรับการ deploy production ที่ต้องการ load balancing อัตโนมัติและ rolling updates",
+            },
+            images: {
+              title: "อิมเมจ",
+              description: "ดูอิมเมจ Docker ทั้งหมดบนเซิร์ฟเวอร์ ดึงอิมเมจใหม่จาก Docker Hub ลบอิมเมจที่ไม่ใช้ และดูว่าคอนเทนเนอร์ไหนใช้อิมเมจนั้นอยู่",
+              tip: "💡 ลบอิมเมจที่ไม่ได้ใช้เป็นประจำเพื่อเพิ่มพื้นที่ว่างบนดิสก์ — ใช้ปุ่ม PRUNE ใน toolbar",
+            },
+            volumes: {
+              title: "วอลุม",
+              description: "จัดการ Docker volumes สำหรับการจัดเก็บข้อมูลแบบถาวร ดูว่าคอนเทนเนอร์ไหนใช้แต่ละวอลุมและลบวอลุมที่ไม่ใช้ได้อย่างปลอดภัย",
+              tip: "💡 Named volumes จะเก็บข้อมูลไว้แม้คอนเทนเนอร์จะถูกลบ — เหมาะสำหรับฐานข้อมูลและไฟล์ที่อัปโหลด",
+            },
+            networks: {
+              title: "เน็ตเวิร์ก",
+              description: "ตรวจสอบเน็ตเวิร์ก Docker ที่เชื่อมต่อคอนเทนเนอร์ของคุณ ดูคอนเทนเนอร์ที่เชื่อมต่อ, network drivers และการตั้งค่า subnet",
+              tip: "💡 คอนเทนเนอร์ที่อยู่ใน custom bridge network เดียวกันสามารถสื่อสารกันได้โดยใช้ชื่อคอนเทนเนอร์เป็น hostname",
+            },
+            done: {
+              title: "พร้อมใช้งานแล้ว!",
+              description: "ตอนนี้คุณรู้วิธีจัดการ Docker บนเซิร์ฟเวอร์ของคุณแล้ว เลือกการเชื่อมต่อเซิร์ฟเวอร์และเริ่มสำรวจคอนเทนเนอร์ของคุณได้เลย",
+            },
+          },
+        },
+      },
+      serverBackup: {
+        onboarding: {
+          stepOf: "ขั้นตอนที่ {{step}} จาก {{total}}",
+          complete: "เสร็จสิ้น",
+          back: "ย้อนกลับ",
+          skip: "ข้าม",
+          next: "ถัดไป",
+          getStarted: "เริ่มต้นใช้งาน",
+          steps: {
+            welcome: {
+              title: "ยินดีต้อนรับสู่ Server Backup",
+              description: "สำรองและกู้คืนเซิร์ฟเวอร์ทั้งหมดของคุณ — web apps, ฐานข้อมูล, Docker stacks และ system configs — ด้วยคลิกเดียวหรือตั้งเวลาอัตโนมัติ",
+            },
+            backup: {
+              title: "สร้าง Backup",
+              description: "เลือกเซิร์ฟเวอร์ เลือกประเภท backup (Web App, Docker, Database, System หรือ Custom) แล้วรัน backup ทันที ผลลัพธ์จะเป็นไฟล์บีบอัดพร้อมดาวน์โหลดหรือโอนย้าย",
+              tip: "💡 ใช้ประเภท 'Custom' เพื่อเลือก directory หรือไฟล์ที่ต้องการบนเซิร์ฟเวอร์ได้เอง",
+            },
+            restore: {
+              title: "กู้คืน Backup",
+              description: "เลือก backup ใดก็ได้จากประวัติและกู้คืนไปยังเซิร์ฟเวอร์เดิมหรือเซิร์ฟเวอร์อื่น ระบบจะแสดงเนื้อหาของ archive ก่อนดำเนินการ",
+              tip: "💡 คุณสามารถกู้คืนไปยังเซิร์ฟเวอร์อื่นได้โดยเลือก connection เป้าหมายใหม่ในขั้นตอน restore",
+            },
+            transfer: {
+              title: "โอนย้ายระหว่างเซิร์ฟเวอร์",
+              description: "ย้าย backup จากเซิร์ฟเวอร์หนึ่งไปยังอีกเซิร์ฟเวอร์หนึ่งโดยตรงโดยไม่ต้องดาวน์โหลดมาที่เครื่องของคุณ เหมาะสำหรับการย้ายเซิร์ฟเวอร์หรือการ sync staging/production",
+              tip: "💡 การโอนย้ายใช้ rsync ผ่าน SSH — ตรวจสอบว่าทั้งเซิร์ฟเวอร์ต้นทางและปลายทางสามารถเข้าถึงได้",
+            },
+            jobs: {
+              title: "งานอัตโนมัติ",
+              description: "สร้างงาน backup อัตโนมัติที่รันตามตาราง cron กำหนด backup รายวันหรือรายสัปดาห์และติดตามทุกการทำงานในประวัติ",
+              tip: "💡 ประวัติงานแสดงสถานะ ระยะเวลา และผลลัพธ์ของทุกการรันตามตาราง — ตรวจสอบที่นี่หาก backup ล้มเหลว",
+            },
+            done: {
+              title: "พร้อมใช้งานแล้ว!",
+              description: "เริ่มปกป้องเซิร์ฟเวอร์ของคุณตอนนี้เลย รัน backup แรกและตั้งเวลาให้ทำซ้ำอัตโนมัติหากต้องการ",
+            },
+          },
+        },
+      },
+      tmux: {
+        onboarding: {
+          stepOf: "ขั้นตอนที่ {{step}} จาก {{total}}",
+          complete: "เสร็จสิ้น",
+          back: "ย้อนกลับ",
+          skip: "ข้าม",
+          next: "ถัดไป",
+          getStarted: "เริ่มต้นใช้งาน",
+          steps: {
+            welcome: {
+              title: "ยินดีต้อนรับสู่ Tmux Manager",
+              description: "จัดการ tmux sessions แบบถาวรบนเซิร์ฟเวอร์ของคุณ Sessions จะอยู่ต่อแม้การเชื่อมต่อจะถูกตัด รองรับการรันงานเบื้องหลังและหลาย windows",
+            },
+            dashboard: {
+              title: "แดชบอร์ด Sessions",
+              description: "แดชบอร์ดแสดง tmux sessions ทั้งหมดที่ active บนเซิร์ฟเวอร์ สร้าง sessions ใหม่ เชื่อมต่อกับ session ที่มีอยู่ เปลี่ยนชื่อหรือลบ session ได้โดยไม่ต้องใช้ terminal",
+              tip: "💡 Tmux sessions จะคงอยู่แม้การเชื่อมต่อ SSH จะหลุด สามารถ re-attach ได้ตลอดเวลา",
+            },
+            terminal: {
+              title: "Terminal ในตัว",
+              description: "แท็บ Terminal เชื่อมต่อโดยตรงเข้าสู่ tmux session พิมพ์คำสั่ง รัน process ยาวๆ และ session จะยังคงทำงานอยู่เบื้องหลังแม้คุณจะปิดแท็บ",
+              tip: "💡 ใช้ Ctrl+B แล้ว D เพื่อ detach จาก tmux session โดยไม่ kill — session จะยังแสดงในแดชบอร์ด",
+            },
+            done: {
+              title: "พร้อมใช้งานแล้ว!",
+              description: "เลือกเซิร์ฟเวอร์ สร้าง tmux session แรก และเริ่มรันงานเบื้องหลังได้เลย",
+            },
+          },
+        },
+      },
     }
   },
   cn: {
@@ -2957,6 +3504,67 @@ const resources = {
           exportSuccess: "连接已成功导出",
           exportFail: "导出失败",
           importFail: "导入失败",
+        },
+        onboarding: {
+          stepOf: "第 {{step}} 步，共 {{total}} 步",
+          complete: "完成",
+          back: "返回",
+          skip: "跳过",
+          next: "下一步",
+          getStarted: "开始使用",
+          steps: {
+            welcome: {
+              title: "欢迎使用 SSH Manager",
+              description: "SSH Manager 是您管理服务器连接、运行终端、浏览文件和查看数据库的一站式中心 — 全部在一个窗口中完成。",
+            },
+            connections: {
+              title: "连接侧边栏",
+              description: "您所有保存的服务器都在侧边栏中。点击\"新建连接\"以添加服务器，填写主机、端口、用户名，并选择密码或私钥认证方式。",
+              tip: "💡 您可以直接将 .pem 或 .ppk 私钥文件拖入密钥输入框进行上传。",
+            },
+            sidebar: {
+              title: "连接侧边栏",
+              description: "您所有保存的服务器都在侧边栏中。点击\"新建连接\"以添加服务器，填写主机、端口、用户名，并选择密码或私钥认证方式。",
+              tip: "💡 您可以直接将 .pem 或 .ppk 私钥文件拖入密钥输入框进行上传。",
+            },
+            dashboard: {
+              title: "仪表盘概览",
+              description: "仪表盘标签页实时显示所有服务器的状态 — 在线、离线或未知。将常用服务器固定到顶部，方便快速访问。",
+              tip: "💡 点击任意连接上的 ★ 星标，将其固定到仪表盘。",
+            },
+            terminal: {
+              title: "终端",
+              description: "双击连接（或点击连接图标）打开完整的 xterm.js 终端标签页。您可以并排打开多个会话。",
+              tip: "💡 使用终端视图顶部的标签栏在各会话之间切换。",
+            },
+            files: {
+              title: "文件管理器",
+              description: "文件管理标签页提供可视化的 SFTP 浏览器。在浏览器中导航文件夹、上传/下载文件并编辑远程文件。",
+              tip: "💡 将文件从桌面直接拖放到文件面板中即可上传。",
+            },
+            database: {
+              title: "数据库浏览器",
+              description: "使用数据库标签页浏览已连接服务器上的 MongoDB 数据库。检查集合、运行查询并管理文档，无需离开应用。",
+            },
+            rclone: {
+              title: "云存储同步",
+              description: "Rclone Cloud Sync 是一个独立应用。从 OS 桌面打开它，将文件同步到 Google Drive、S3、Dropbox 等云存储服务商。配置远程存储、计划同步任务并监控传输进度。",
+              tip: "💡 设置多个云存储远程端，轻松在云端之间切换进行跨云传输。",
+            },
+            "mongo-sync": {
+              title: "MongoDB 备份与同步",
+              description: "Mongo Sync & Backup 是一个独立应用。从 OS 桌面打开它，自动化 MongoDB 备份，支持计划调度、压缩和云存储集成。",
+              tip: "💡 配置每日或每周自动备份，并通过 Rclone 存储到您的云存储中。",
+            },
+            "help-btn": {
+              title: "随时重播教程",
+              description: "点击此 ? 按钮可随时从头重新打开本教程。它始终位于顶部导航栏中。",
+            },
+            done: {
+              title: "一切就绪！",
+              description: "这就是 SSH Manager 的核心功能。添加您的第一台服务器并开始探索吧。您随时可以从帮助菜单重新打开本指南。",
+            },
+          },
         }
       },
       terminal: {
@@ -3570,9 +4178,159 @@ const resources = {
         testWebhookRunning: "测试中...",
         testWebhookSuccess: "Webhook 正常",
         testWebhookFailed: "Webhook 失败",
-      }
-    }
-  }
+      },
+      rclone: {
+        onboarding: {
+          stepOf: "第 {{step}} 步，共 {{total}} 步",
+          complete: "完成",
+          back: "返回",
+          skip: "跳过",
+          next: "下一步",
+          getStarted: "开始使用",
+          steps: {
+            welcome: {
+              title: "欢迎使用 Rclone 云同步",
+              description: "Rclone 可将文件和文件夹同步到各种云存储，支持 Google Drive、S3、Dropbox 及 40 多个服务商。",
+            },
+            setup: {
+              title: "服务器设置",
+              description: "首先选择服务器连接。系统将检查 Rclone 是否已安装，并显示安装状态。如需要，点击安装自动部署 Rclone。",
+              tip: "💡 Rclone 将安装到远程服务器的 ~/.local/bin/rclone。请确保服务器有互联网访问权限。",
+            },
+            remotes: {
+              title: "配置云远端",
+              description: "添加 Google Drive、S3 或 Dropbox 等云存储远端。每个远端代表一个云账户，使用 OAuth 进行安全认证。",
+              tip: "💡 您可以配置同一类型的多个远端（例如多个 Google Drive 账户）并在它们之间切换。",
+            },
+            backup: {
+              title: "创建同步任务",
+              description: "设置同步任务，在本地服务器和云存储之间复制或移动文件。选择源、目标和同步模式。",
+              tip: "💡 使用 'sync' 模式精确镜像目标——源中不存在的文件将从目标中删除。",
+            },
+            crons: {
+              title: "定时备份",
+              description: "创建基于 Cron 的计划，自动运行备份。支持每日、每周或自定义计划，并可配置保留策略。",
+              tip: "💡 配置保留策略，在指定天数后自动删除旧备份。",
+            },
+            history: {
+              title: "同步历史",
+              description: "查看所有过去同步和备份运行的完整日志，包括状态、持续时间、传输字节数和错误信息。",
+              tip: "💡 每条历史记录显示确切的 rclone 命令输出，帮助快速诊断故障。",
+            },
+            browser: {
+              title: "浏览云文件",
+              description: "像本地文件系统一样浏览您的云存储。浏览文件夹、预览文件并直接从云端下载内容。",
+              tip: "💡 双击文件夹进入。使用路径输入框配合 Tab 自动补全快速导航。",
+            },
+            done: {
+              title: "一切就绪！",
+              description: "您已了解 Rclone 云同步的基础知识。创建您的第一个远端并开始云备份。随时可从帮助按钮重新打开本指南。",
+            },
+          },
+        }
+      },
+      mongoBackup: {
+        onboarding: {
+          stepOf: "第 {{step}} 步，共 {{total}} 步",
+          complete: "完成",
+          back: "返回",
+          skip: "跳过",
+          next: "下一步",
+          getStarted: "开始使用",
+          steps: {
+            welcome: {
+              title: "欢迎使用 Mongo 同步与备份",
+              description: "通过定时转储、云存储集成和简便恢复，自动化 MongoDB 备份。使用自动备份任务保护您的数据。",
+            },
+            import: {
+              title: "服务器连接",
+              description: "选择运行 MongoDB 的服务器连接。应用将通过 SSH 连接并执行 mongodump 命令进行备份。",
+              tip: "💡 确保服务器上已安装 mongodump。应用使用 MongoDB 工具创建备份。",
+            },
+            gdrive: {
+              title: "Google Drive 设置",
+              description: "配置 Google Drive 集成，将备份上传到云端。OAuth 认证保持您的凭据安全。",
+              tip: "💡 Google Drive 备份存储在专用文件夹中，可直接从 Google Drive 浏览和管理。",
+            },
+            jobs: {
+              title: "备份任务",
+              description: "创建备份任务，转储特定数据库或集合。使用 Cron 表达式设置自动运行计划。",
+              tip: "💡 使用 'All Databases (*)' 备份所有内容，或选择特定数据库进行针对性备份。",
+            },
+            restore: {
+              title: "恢复备份",
+              description: "一键从任何可用备份恢复。浏览备份历史、预览内容，并恢复到相同或不同的数据库。",
+              tip: "💡 恢复操作使用 mongorestore。确保目标数据库可从服务器访问。",
+            },
+            history: {
+              title: "备份历史",
+              description: "查看所有备份执行历史及详细日志。监控任务成功情况、文件大小和上传状态。",
+              tip: "💡 失败的任务显示错误日志以帮助诊断问题。如备份失败，请检查服务器连接和 MongoDB 状态。",
+            },
+            failover: {
+              title: "故障转移与副本集",
+              description: "监控 MongoDB 副本集状态，触发手动故障转移，并检查成员健康状况。保持数据库集群高可用。",
+              tip: "💡 使用此选项卡在计划维护期间将从节点提升为主节点或降级当前主节点。",
+            },
+            done: {
+              title: "一切就绪！",
+              description: "您已准备好保护 MongoDB 数据。创建第一个备份任务并设置自动备份。随时可从帮助重新打开本指南。",
+            },
+          },
+        },
+      },
+      rclone: {
+        onboarding: {
+          stepOf: "第 {{step}} 步，共 {{total}} 步",
+          complete: "完成",
+          back: "返回",
+          skip: "跳过",
+          next: "下一步",
+          getStarted: "开始使用",
+          steps: {
+            welcome: {
+              title: "欢迎使用 Rclone 云同步",
+              description: "Rclone 将文件和文件夹同步到云存储提供商。连接 Google Drive、S3、Dropbox 等 40+ 提供商，实现无缝备份和传输。",
+            },
+            setup: {
+              title: "服务器设置",
+              description: "首先选择服务器连接。Rclone 将检查是否已安装并显示安装状态。如需自动部署，请点击安装。",
+              tip: "💡 Rclone 将安装到远程服务器的 ~/.local/bin/rclone。请确保服务器有互联网访问权限。",
+            },
+            remotes: {
+              title: "配置云远端",
+              description: "添加 Google Drive、S3 或 Dropbox 等云存储远端。每个远端代表一个云账户，使用 OAuth 进行安全认证。",
+              tip: "💡 您可以配置同一类型的多个远端（例如多个 Google Drive 账户）并在它们之间切换。",
+            },
+            backup: {
+              title: "创建同步任务",
+              description: "设置同步任务，在本地服务器和云存储之间复制或移动文件。选择源、目标和同步模式。",
+              tip: "💡 使用 'sync' 模式精确镜像目标——源中不存在的文件将从目标中删除。",
+            },
+            crons: {
+              title: "定时备份",
+              description: "创建基于 Cron 的计划，自动运行备份。支持每日、每周或自定义计划，并可配置保留策略。",
+              tip: "💡 配置保留策略，在指定天数后自动删除旧备份。",
+            },
+            history: {
+              title: "同步历史",
+              description: "查看所有过去同步和备份运行的完整日志，包括状态、持续时间、传输字节数和错误信息。",
+              tip: "💡 每条历史记录显示确切的 rclone 命令输出，帮助快速诊断故障。",
+            },
+            browser: {
+              title: "浏览云文件",
+              description: "像本地文件系统一样浏览您的云存储。浏览文件夹、预览文件并直接从云端下载内容。",
+              tip: "💡 双击文件夹进入。使用路径输入框配合 Tab 自动补全快速导航。",
+            },
+            done: {
+              title: "一切就绪！",
+              description: "您已了解 Rclone 云同步的基础知识。创建您的第一个远端并开始云备份。随时可从帮助按钮重新打开本指南。",
+            },
+          },
+        },
+      },
+    },
+  },
 };
 
 

@@ -8,8 +8,9 @@ import {
   ExternalLink, AlertTriangle, Trash2, Folder, FileText, Star, Archive,
   Download, Search, X, RotateCcw, Cpu, HardDrive, Clock, Activity,
   ChevronDown, ChevronRight, Zap, Globe, Package, Shield, Plus, Share2,
-  Upload, Eye, EyeOff, Settings, CircleCheck, CircleAlert, Sunrise, MoreHorizontal, Sliders
+  Upload, Eye, EyeOff, Settings, CircleCheck, CircleAlert, Sunrise, MoreHorizontal, Sliders, HelpCircle
 } from 'lucide-react';
+import DockerOnboarding, { hasCompletedDockerOnboarding, resetDockerOnboarding } from '@/components/DockerOnboarding';
 import { useApp } from '@/context/AppContext';
 import { useOS } from '@/context/OSContext';
 import DockerLogApp from '@/apps/DockerLogApp';
@@ -179,7 +180,7 @@ function ImageComboBox({ value, onChange, options }) {
 // ── Main Component ────────────────────────────
 export default function DockerApp({ initialConnection, initialConnectionId, windowId, activeTab: propActiveTab }) {
   const { state } = useApp();
-  const { showConfirm, showPrompt, addNotification, openWindow, updateWindowProps, dispatch: osDispatch } = useOS();
+  const { showConfirm, showPrompt, addNotification, openWindow, updateWindowProps, dispatch: osDispatch, toggleMaximize, state: osState } = useOS();
   const { t } = useTranslation();
   const { connectionsReady } = useApp();
   
@@ -192,6 +193,30 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
       updateWindowProps(windowId, { activeTab: tab });
     }
   };
+
+  // Helper: ensure window is maximized before showing onboarding
+  const [showOnboarding, setShowOnboarding] = useState(false);
+  const ensureMaximizedThenShow = useCallback(() => {
+    const win = (osState?.windows || []).find(w => w.id === windowId);
+    if (win && !win.isMaximized) {
+      toggleMaximize(windowId);
+      setTimeout(() => setShowOnboarding(true), 350);
+    } else {
+      setShowOnboarding(true);
+    }
+  }, [osState, windowId, toggleMaximize]);
+  const ensureMaximizedThenShowRef = useRef(ensureMaximizedThenShow);
+  useEffect(() => { ensureMaximizedThenShowRef.current = ensureMaximizedThenShow; }, [ensureMaximizedThenShow]);
+
+  // Onboarding: show on first visit
+  useEffect(() => {
+    const t = setTimeout(() => {
+      if (!hasCompletedDockerOnboarding()) {
+        ensureMaximizedThenShowRef.current();
+      }
+    }, 400);
+    return () => clearTimeout(t);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
   const [containers, setContainers] = useState([]);
   const [images, setImages] = useState([]);
   const [volumes, setVolumes] = useState([]);
@@ -1327,6 +1352,7 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
                     {tabs.map(tab => (
                       <button 
                         key={tab.id}
+                        data-onboarding={`tab-${tab.id}`}
                         onClick={() => setActiveTab(tab.id)} 
                         className={`px-2 sm:px-3 py-1 text-[10px] font-bold rounded-md transition-all flex items-center gap-1.5 whitespace-nowrap ${
                           activeTab === tab.id 
@@ -1380,7 +1406,14 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
                     <Trash2 size={12} /> PRUNE
                   </button>
                 </div>
-                
+                <button
+                  data-onboarding="help-btn"
+                  onClick={() => { resetDockerOnboarding(); ensureMaximizedThenShow(); }}
+                  className="p-1.5 rounded-lg text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-white/5 transition-colors"
+                  title="Show tutorial"
+                >
+                  <HelpCircle size={15} />
+                </button>
                 <button onClick={fetchContainers} className="p-1.5 hover:bg-white/5 rounded-lg text-sky-400 transition-colors active:scale-90" title="Refresh">
                     <RefreshCw size={14} className={isLoading ? 'animate-spin' : ''} />
                 </button>
@@ -3628,6 +3661,10 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
             100% { background-position: -200% 0; }
           }
         `}</style>
+
+        {showOnboarding && (
+          <DockerOnboarding onComplete={() => setShowOnboarding(false)} />
+        )}
     </div>
   );
 }

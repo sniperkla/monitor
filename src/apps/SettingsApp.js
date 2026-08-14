@@ -174,6 +174,20 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
       updateWindowProps(windowId, { activeTab: tab });
     }
   };
+
+  // Track last externalTab to avoid re-render loop
+  const lastExternalTabRef = useRef(null);
+
+  // Sync activeTab when window props are updated externally (e.g. taskbar clicking Settings resets to appearance)
+  useEffect(() => {
+    const win = osState.windows?.find(w => w.id === windowId);
+    const externalTab = win?.props?.activeTab;
+    if (externalTab && externalTab !== lastExternalTabRef.current) {
+      lastExternalTabRef.current = externalTab;
+      setActiveTabState(externalTab);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [osState.windows, windowId]);
   const { state: appState, dispatch, apiFetch, fetchConnections, connectionsReady } = useApp();
   const { vaultStatus, decryptedUri, lockVault, clearVault, setupVault, showVault } = useVault();
   const { glassmorphism, brightness, uiScale, notifications } = osState;
@@ -1465,7 +1479,7 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
   };
 
   return (
-    <div className="flex h-full w-full bg-transparent text-[var(--text-primary)] border-[var(--border-color)] overflow-hidden relative">
+    <div className="flex h-full w-full bg-[var(--bg-primary)] text-[var(--text-primary)] border-[var(--border-color)] overflow-hidden relative">
       {/* Sidebar - responsive behavior */}
       {!deploymentOnly && (
         <div className={`

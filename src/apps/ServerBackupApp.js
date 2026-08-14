@@ -1,12 +1,13 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
+import ServerBackupOnboarding, { hasCompletedServerBackupOnboarding, resetServerBackupOnboarding } from '@/components/ServerBackupOnboarding';
 import { useApp } from '@/context/AppContext';
 import { useOS } from '@/context/OSContext';
 import {
   HardDrive, Download, Upload, ArrowLeftRight, History, Play, Trash2,
   CheckCircle, AlertCircle, Loader, FolderOpen, Server, Database,
-  Shield, FileBox, ChevronRight, RefreshCw, X
+  Shield, FileBox, ChevronRight, RefreshCw, X, HelpCircle
 } from 'lucide-react';
 
 const TABS = [
@@ -26,7 +27,7 @@ const BACKUP_TYPES = [
 
 export default function ServerBackupApp({ windowId = 'server-backup', activeTab: propActiveTab }) {
   const { state, apiFetch } = useApp();
-  const { addNotification, updateWindowProps } = useOS();
+  const { addNotification, updateWindowProps, toggleMaximize, state: osState } = useOS();
   const { connections } = state;
 
   const [activeTab, setActiveTabState] = useState(propActiveTab || 'backup');
@@ -36,6 +37,28 @@ export default function ServerBackupApp({ windowId = 'server-backup', activeTab:
       updateWindowProps(windowId, { activeTab: tab });
     }
   };
+
+  const [showOnboarding, setShowOnboarding] = useState(false);
+  const ensureMaximizedThenShow = useCallback(() => {
+    const win = (osState?.windows || []).find(w => w.id === windowId);
+    if (win && !win.isMaximized) {
+      toggleMaximize(windowId);
+      setTimeout(() => setShowOnboarding(true), 350);
+    } else {
+      setShowOnboarding(true);
+    }
+  }, [osState, windowId, toggleMaximize]);
+  const ensureMaximizedThenShowRef = useRef(ensureMaximizedThenShow);
+  useEffect(() => { ensureMaximizedThenShowRef.current = ensureMaximizedThenShow; }, [ensureMaximizedThenShow]);
+
+  useEffect(() => {
+    const t = setTimeout(() => {
+      if (!hasCompletedServerBackupOnboarding()) {
+        ensureMaximizedThenShowRef.current();
+      }
+    }, 400);
+    return () => clearTimeout(t);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
   const [connectionId, setConnectionId] = useState('');
   const [backupType, setBackupType] = useState('');
   const [isRunning, setIsRunning] = useState(false);
@@ -629,15 +652,26 @@ export default function ServerBackupApp({ windowId = 'server-backup', activeTab:
     <div className="flex h-full bg-[var(--bg-primary)] text-[var(--text-primary)]">
       <div className="w-52 shrink-0 border-r border-[var(--border-color)] bg-[var(--bg-secondary)]/30 flex flex-col">
         <div className="p-3 border-b border-[var(--border-color)]">
-          <div className="flex items-center gap-2 text-sm font-bold">
-            <HardDrive size={16} className="text-indigo-400" />
-            <span>Server Backup</span>
+          <div className="flex items-center justify-between gap-2 text-sm font-bold">
+            <div className="flex items-center gap-2">
+              <HardDrive size={16} className="text-indigo-400" />
+              <span>Server Backup</span>
+            </div>
+            <button
+              data-onboarding="help-btn"
+              onClick={() => { resetServerBackupOnboarding(); ensureMaximizedThenShow(); }}
+              className="p-1.5 rounded-lg text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-white/5 transition-colors"
+              title="Show tutorial"
+            >
+              <HelpCircle size={15} />
+            </button>
           </div>
         </div>
         <div className="flex-1 p-2 space-y-0.5">
           {TABS.map(tab => (
             <button
               key={tab.id}
+              data-onboarding={`tab-${tab.id}`}
               onClick={() => setActiveTab(tab.id)}
               className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs font-semibold transition-all ${activeTab === tab.id ? 'bg-indigo-500/15 text-indigo-400 border border-indigo-500/30' : 'text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] border border-transparent'}`}
             >
@@ -1368,8 +1402,7 @@ export default function ServerBackupApp({ windowId = 'server-backup', activeTab:
       )}
 
       {/* Compose File Browser Modal */}
-      {composeBrowse.isOpen && (
-        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 backdrop-blur-sm">
+      {composeBrowse.isOpen && (        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 backdrop-blur-sm">
           <div className="w-[480px] max-h-[80vh] rounded-2xl bg-[var(--bg-secondary)] border border-[var(--border-color)] shadow-2xl flex flex-col">
             {/* Header */}
             <div className="flex items-center justify-between p-4 border-b border-[var(--border-color)]">
@@ -1448,6 +1481,10 @@ export default function ServerBackupApp({ windowId = 'server-backup', activeTab:
             </div>
           </div>
         </div>
+      )}
+
+      {showOnboarding && (
+        <ServerBackupOnboarding onComplete={() => setShowOnboarding(false)} />
       )}
     </div>
   );

@@ -6,11 +6,12 @@ import TerminalTabs from '@/components/TerminalTabs';
 import FileTabs from '@/components/FileTabs';
 
 import ConnectionModal from '@/components/ConnectionModal';
+import SSHOnboarding, { hasCompletedSSHOnboarding, resetSSHOnboarding } from '@/components/SSHOnboarding';
 import { useApp } from '@/context/AppContext';
 import { useOS } from '@/context/OSContext';
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
-import { ChevronLeft, ChevronRight, Menu } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Menu, HelpCircle } from 'lucide-react';
 import { useIsMobile } from '@/hooks/useIsMobile';
 
 import dynamic from 'next/dynamic';
@@ -26,12 +27,34 @@ const DEFAULT_SIDEBAR_W = 260;
 
 export default function SSHApp({ windowId, activeTab: propActiveTab }) {
   const { state, dispatch } = useApp();
-  const { updateWindowProps } = useOS();
+  const { updateWindowProps, toggleMaximize, state: osState } = useOS();
   const { t } = useTranslation();
   const isMobile = useIsMobile();
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [modalMode, setModalMode] = useState('add');
   const [selectedConnection, setSelectedConnection] = useState(null);
+
+  // Onboarding: show on first visit, hide once completed
+  const [showOnboarding, setShowOnboarding] = useState(false);
+  const ensureMaximizedThenShow = useCallback(() => {
+    const win = (osState?.windows || []).find(w => w.id === windowId);
+    if (win && !win.isMaximized) {
+      toggleMaximize(windowId);
+      setTimeout(() => setShowOnboarding(true), 350);
+    } else {
+      setShowOnboarding(true);
+    }
+  }, [osState, windowId, toggleMaximize]);
+
+  useEffect(() => {
+    // Defer check until after hydration to avoid SSR mismatch
+    const t = setTimeout(() => {
+      if (!hasCompletedSSHOnboarding()) {
+        ensureMaximizedThenShow();
+      }
+    }, 300);
+    return () => clearTimeout(t);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Sync active view from prop or localStorage on mount
   useEffect(() => {
@@ -135,6 +158,7 @@ export default function SSHApp({ windowId, activeTab: propActiveTab }) {
 
       {/* Sidebar with dynamic width */}
       <div
+        data-onboarding="sidebar"
         className={isMobile ? 'fixed inset-y-0 left-0 z-50 bg-[var(--bg-primary)] shadow-2xl will-change-transform' : ''}
         style={isMobile ? {
           width: '80vw',
@@ -216,8 +240,9 @@ export default function SSHApp({ windowId, activeTab: propActiveTab }) {
            </div>
 
            {/* Centered Navigation */}
-           <div className="flex bg-[var(--bg-tertiary)]/30 p-1 rounded-lg overflow-x-auto no-scrollbar whitespace-nowrap max-w-full">
+           <div data-onboarding="nav-tabs" className="flex bg-[var(--bg-tertiary)]/30 p-1 rounded-lg overflow-x-auto no-scrollbar whitespace-nowrap max-w-full">
              <button
+               data-onboarding="nav-dashboard"
                onClick={() => handleSetView('dashboard')}
                className={`px-4 py-1.5 text-xs font-medium rounded-md transition-all ${
                  state.view === 'dashboard'
@@ -228,6 +253,7 @@ export default function SSHApp({ windowId, activeTab: propActiveTab }) {
                 {t('ssh.dashboard')}
              </button>
              <button
+               data-onboarding="nav-terminal"
                onClick={() => handleSetView('terminal')}
                className={`px-4 py-1.5 text-xs font-medium rounded-md transition-all ${
                  state.view === 'terminal'
@@ -238,6 +264,7 @@ export default function SSHApp({ windowId, activeTab: propActiveTab }) {
                 {t('ssh.terminal')}
              </button>
              <button
+               data-onboarding="nav-files"
                onClick={() => handleSetView('files')}
                className={`px-4 py-1.5 text-xs font-medium rounded-md transition-all ${
                  state.view === 'files'
@@ -248,6 +275,7 @@ export default function SSHApp({ windowId, activeTab: propActiveTab }) {
                 {t('ssh.fileGui')}
              </button>
               <button
+                data-onboarding="nav-database"
                 onClick={() => handleSetView('database')}
                 className={`px-4 py-1.5 text-xs font-medium rounded-md transition-all ${
                   state.view === 'database'
@@ -260,6 +288,16 @@ export default function SSHApp({ windowId, activeTab: propActiveTab }) {
             </div>
 
             <div className="flex-1" />
+
+            {/* Replay tutorial button */}
+            <button
+              data-onboarding="help-btn"
+              onClick={() => { resetSSHOnboarding(); ensureMaximizedThenShow(); }}
+              className="p-2 rounded-lg text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)]/60 transition-colors"
+              title="Show tutorial"
+            >
+              <HelpCircle size={16} />
+            </button>
         </div>
 
         {/* Terminal view: zero padding, fills full area via absolute inset */}
@@ -293,6 +331,11 @@ export default function SSHApp({ windowId, activeTab: propActiveTab }) {
           onClose={() => { setIsModalOpen(false); setSelectedConnection(null); }}
           editConnection={modalMode === 'edit' ? selectedConnection : null}
         />
+      )}
+
+      {/* First-time onboarding overlay */}
+      {showOnboarding && (
+        <SSHOnboarding onComplete={() => setShowOnboarding(false)} />
       )}
     </div>
   );

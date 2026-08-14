@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef } from 'react';
 import { useOS } from '@/context/OSContext';
-import { Terminal, Settings, LayoutGrid, Monitor, Wifi, Volume2, Search, Power, User, X, StickyNote, Book, Layers, Columns, StickyNote as NoteIcon, BookOpen, FolderClosed, Cpu, Clock, ChevronLeft, ChevronRight, Grid3x3, Keyboard, Server, Rocket, MonitorPlay, Database, CloudCog, ShieldCheck } from 'lucide-react';
+import { Terminal, Settings, LayoutGrid, Monitor, Wifi, Volume2, Search, Power, User, X, StickyNote, Book, Layers, Columns, StickyNote as NoteIcon, BookOpen, FolderClosed, Cpu, Clock, ChevronLeft, ChevronRight, Grid3x3, Keyboard, Server, Rocket, MonitorPlay, Database, CloudCog, ShieldCheck, Activity } from 'lucide-react';
 import { createPortal } from 'react-dom';
 import SSHApp from '@/apps/SSHApp';
 import SettingsApp from '@/apps/SettingsApp';
@@ -16,6 +16,7 @@ import dynamic from 'next/dynamic';
 const MongoBackupApp = dynamic(() => import('@/apps/MongoBackupApp'), { ssr: false });
 const RcloneApp = dynamic(() => import('@/apps/RcloneApp'), { ssr: false });
 const ServerBackupApp = dynamic(() => import('@/apps/ServerBackupApp'), { ssr: false });
+const ServerMonitorApp = dynamic(() => import('@/apps/ServerMonitorApp'), { ssr: false });
 import { AnimatePresence, motion } from 'framer-motion';
 import { useSession, signOut } from 'next-auth/react';
 import { useTranslation } from 'react-i18next';
@@ -28,7 +29,7 @@ import { useAIUsagePolling } from '@/hooks/useAIUsage';
 import { useIsMobile } from '@/hooks/useIsMobile';
 
 export default function Taskbar() {
-  const { state, focusWindow, toggleMinimize, openWindow, closeWindow, setTaskbarPosition, saveSettings, switchDesktop, switchToNextDesktop, switchToPrevDesktop, addNotification, pinApp, unpinApp } = useOS();
+  const { state, focusWindow, toggleMinimize, openWindow, closeWindow, setTaskbarPosition, saveSettings, switchDesktop, switchToNextDesktop, switchToPrevDesktop, addNotification, pinApp, unpinApp, updateWindowProps } = useOS();
   const { data: session } = useSession();
   const { t } = useTranslation();
   const isMobile = useIsMobile();
@@ -159,6 +160,7 @@ export default function Taskbar() {
     { id: 'mongo-backup', title: 'Mongo Sync', icon: Database, component: <MongoBackupApp />, initialWidth: 1050, initialHeight: 680 },
     { id: 'rclone', title: 'Rclone Sync', icon: CloudCog, component: <RcloneApp />, initialWidth: 1100, initialHeight: 720 },
     { id: 'server-backup', title: 'Server Backup', icon: ShieldCheck, component: <ServerBackupApp />, initialWidth: 1200, initialHeight: 780 },
+    { id: 'server-monitor', title: 'Server Monitor', icon: Activity, component: <ServerMonitorApp />, initialWidth: 1300, initialHeight: 800 },
     { id: 'settings', title: t('apps.settings'), icon: Settings, component: <SettingsApp />, initialWidth: 700, initialHeight: 500 },
     { id: 'notepad', title: t('apps.notepad'), icon: StickyNote, component: <NotepadApp />, initialWidth: 800, initialHeight: 600 },
     { id: 'wiki', title: t('apps.resourceHub'), icon: Book, component: <WikiApp />, initialWidth: 1100, initialHeight: 700 },
@@ -481,6 +483,7 @@ export default function Taskbar() {
             const runningWin = currentWins.find(w => w.id === appId || w.id.startsWith(appId + '-') || w.id.split('-')[0] === appId);
             const isActive = runningWin && activeWindowId === runningWin.id && !runningWin.isMinimized;
             const isRunning = !!runningWin;
+            const isMinimized = runningWin?.isMinimized;
             return (
               <button
                 key={`pinned-${appId}`}
@@ -498,31 +501,45 @@ export default function Taskbar() {
                 onContextMenu={(e) => handleContextMenu(e, runningWin ? runningWin.id : null, appId)}
                 title={appDef.title}
                 className={`
-                  ${isHorizontal ? 'w-11 h-11 rounded-2xl justify-center' : 'rounded-xl'} flex items-center gap-2 transition-all border relative group shrink-0
+                  ${isHorizontal ? 'w-11 h-11 rounded-2xl justify-center' : 'rounded-xl'} flex items-center gap-2 transition-all relative group shrink-0
                   ${isVertical ? 'w-10 h-10 justify-center mx-auto' : ''}
                   ${isActive
-                    ? 'bg-[var(--bg-card-hover)] border-[var(--border-hover)]'
-                    : 'bg-[var(--bg-card)] hover:bg-[var(--bg-tertiary)] border-[var(--border-color)]'}
+                    ? 'bg-[var(--accent-indigo)]/20 border border-[var(--accent-indigo)]/50 shadow-[0_0_8px_var(--accent-indigo)]/30'
+                    : isRunning && !isMinimized
+                      ? 'bg-[var(--bg-card-hover)] border border-[var(--border-hover)]'
+                      : isMinimized
+                        ? 'bg-[var(--bg-card)] border border-[var(--border-color)] opacity-60'
+                        : 'bg-transparent border border-transparent hover:bg-[var(--bg-card)] hover:border-[var(--border-color)]'
+                  }
                 `}
               >
-                <AppIcon id={appId} size={20} theme={state.theme} iconStyle={state.iconStyle} />
-                {/* Running indicator dot */}
-                {isRunning && (
-                  <span className={`absolute bg-[var(--accent-indigo)] rounded-full opacity-70 ${
+                <AppIcon id={appId} size={20} theme={state.theme} iconStyle={state.iconStyle} className={!isRunning ? 'opacity-60 group-hover:opacity-90 transition-opacity' : ''} />
+
+                {/* Bottom bar indicators */}
+                <AnimatePresence mode="popLayout">
+                  {isActive && (
+                    <motion.span
+                      key={`indicator-${appId}`}
+                      layoutId="taskbar-active-pinned"
+                      layout
+                      initial={{ opacity: 0, scale: 0.8 }}
+                      animate={{ opacity: 1, scale: 1 }}
+                      exit={{ opacity: 0, scale: 0.8 }}
+                      className={`absolute bg-[var(--accent-indigo)] rounded-full shadow-[0_0_10px_var(--accent-indigo)] ${
+                        isVertical
+                          ? (taskbarPosition === 'left' ? 'right-0 top-2 bottom-2 w-1' : 'left-0 top-2 bottom-2 w-1')
+                          : 'bottom-0.5 w-5 h-1 left-1/2 -translate-x-1/2'
+                      }`}
+                      transition={{ type: 'spring', stiffness: 400, damping: 30 }}
+                    />
+                  )}
+                </AnimatePresence>
+                {isRunning && !isActive && (
+                  <span className={`absolute bg-[var(--accent-indigo)] rounded-full transition-opacity ${
                     isVertical
-                      ? (taskbarPosition === 'left' ? 'right-0 top-2 bottom-2 w-1' : 'left-0 top-2 bottom-2 w-1')
-                      : 'bottom-1 w-1.5 h-1.5 left-1/2 -translate-x-1/2'
-                  }`} />
-                )}
-                {isActive && (
-                  <motion.div
-                    layoutId="taskbar-active"
-                    className={`absolute bg-[var(--accent-indigo)] rounded-full ${
-                      isVertical
-                        ? (taskbarPosition === 'left' ? 'right-0 top-2 bottom-2 w-1' : 'left-0 top-2 bottom-2 w-1')
-                        : 'bottom-1 w-1.5 h-1.5 left-1/2 -translate-x-1/2'
-                    }`}
-                  />
+                      ? (taskbarPosition === 'left' ? 'right-0.5 top-1/2 -translate-y-1/2 h-2 w-0.5' : 'left-0.5 top-1/2 -translate-y-1/2 h-2 w-0.5')
+                      : 'bottom-0.5 w-1.5 h-1.5 left-1/2 -translate-x-1/2'
+                  } ${isMinimized ? 'opacity-30' : 'opacity-50'}`} />
                 )}
               </button>
             );
@@ -543,36 +560,65 @@ export default function Taskbar() {
               const baseId = win.id.split('-')[0];
               return !(pinnedApps || []).includes(win.id) && !(pinnedApps || []).includes(baseId);
             })
-            .map(win => (
-              <button
-                key={win.id}
-                onClick={() => {
-                  if (contextMenu) setContextMenu(null);
-                  win.isMinimized ? toggleMinimize(win.id) : focusWindow(win.id);
-                }}
-                onContextMenu={(e) => handleContextMenu(e, win.id, null)}
-                title={win.title}
-                className={`
-                  ${isHorizontal ? 'w-11 h-11 rounded-2xl justify-center' : 'rounded-xl'} flex items-center gap-2 transition-all border relative group shrink-0
-                  ${isVertical ? 'w-10 h-10 justify-center mx-auto' : ''}
-                  ${activeWindowId === win.id && !win.isMinimized
-                    ? 'bg-[var(--bg-card-hover)] border-[var(--border-hover)]'
-                    : 'bg-[var(--bg-card)] hover:bg-[var(--bg-tertiary)] border-[var(--border-color)]'}
-                `}
-              >
-                <AppIcon id={win.id.split('-')[0]} size={20} theme={state.theme} iconStyle={state.iconStyle} />
-                {activeWindowId === win.id && !win.isMinimized && (
-                  <motion.div
-                    layoutId="taskbar-active"
-                    className={`absolute bg-[var(--accent-indigo)] rounded-full ${
+            .map(win => {
+              const isActive = activeWindowId === win.id && !win.isMinimized;
+              const isMinimized = win.isMinimized;
+              return (
+                <button
+                  key={win.id}
+                  onClick={() => {
+                    if (contextMenu) setContextMenu(null);
+                    win.isMinimized ? toggleMinimize(win.id) : focusWindow(win.id);
+                  }}
+                  onContextMenu={(e) => handleContextMenu(e, win.id, null)}
+                  title={win.title}
+                  className={`
+                    ${isHorizontal ? 'h-11 rounded-2xl justify-center px-3 max-w-[120px] min-w-[44px]' : 'rounded-xl'} flex items-center gap-2 transition-all relative group shrink-0
+                    ${isVertical ? 'w-10 h-10 justify-center mx-auto' : ''}
+                    ${isActive
+                      ? 'bg-[var(--accent-emerald)]/20 border border-[var(--accent-emerald)]/50'
+                      : isMinimized
+                        ? 'bg-[var(--bg-tertiary)]/40 border border-[var(--border-color)] opacity-60 hover:opacity-80 hover:bg-[var(--bg-tertiary)]'
+                        : 'bg-[var(--bg-tertiary)] border border-[var(--border-color)] hover:bg-[var(--bg-card-hover)] hover:border-[var(--border-hover)]'
+                    }
+                  `}
+                >
+                  <AppIcon id={win.id.split('-')[0]} size={18} theme={state.theme} iconStyle={state.iconStyle} />
+                  {/* Show title label on horizontal taskbar for running (non-pinned) apps */}
+                  {isHorizontal && (
+                    <span className={`text-[11px] font-medium truncate max-w-[72px] hidden sm:inline-block transition-colors ${isActive ? 'text-[var(--accent-emerald)]' : 'text-[var(--text-secondary)]'}`}>
+                      {win.title}
+                    </span>
+                  )}
+                  {/* Bottom indicator - emerald for unpinned running apps */}
+                  <AnimatePresence mode="popLayout">
+                    {isActive && (
+                      <motion.span
+                        key={`indicator-${win.id}`}
+                        layoutId="taskbar-active-running"
+                        layout
+                        initial={{ opacity: 0, scale: 0.8 }}
+                        animate={{ opacity: 1, scale: 1 }}
+                        exit={{ opacity: 0, scale: 0.8 }}
+                        className={`absolute bg-[var(--accent-emerald)] rounded-full shadow-[0_0_10px_var(--accent-emerald)] ${
+                          isVertical
+                            ? (taskbarPosition === 'left' ? 'right-0 top-2 bottom-2 w-1' : 'left-0 top-2 bottom-2 w-1')
+                            : 'bottom-0.5 w-5 h-1 left-1/2 -translate-x-1/2'
+                        }`}
+                        transition={{ type: 'spring', stiffness: 400, damping: 30 }}
+                      />
+                    )}
+                  </AnimatePresence>
+                  {!isActive && (
+                    <span className={`absolute bg-[var(--accent-emerald)] rounded-full transition-opacity ${
                       isVertical
-                        ? (taskbarPosition === 'left' ? 'right-0 top-2 bottom-2 w-1' : 'left-0 top-2 bottom-2 w-1')
-                        : 'bottom-1 w-1.5 h-1.5 left-1/2 -translate-x-1/2'
-                    }`}
-                  />
-                )}
-              </button>
-            ))}
+                        ? (taskbarPosition === 'left' ? 'right-0.5 top-1/2 -translate-y-1/2 h-2 w-0.5' : 'left-0.5 top-1/2 -translate-y-1/2 h-2 w-0.5')
+                        : 'bottom-0.5 w-1.5 h-1.5 left-1/2 -translate-x-1/2'
+                    } ${isMinimized ? 'opacity-30' : 'opacity-60'}`} />
+                  )}
+                </button>
+              );
+            })}
         </div>
 
         <div className={`flex items-center shrink-0 ${isVertical ? 'flex-col gap-3 py-3' : 'flex-row gap-2 sm:gap-3 ml-2 sm:ml-4'}`}>
@@ -827,7 +873,8 @@ export default function Taskbar() {
               <div className="p-1.5 pt-0">
                 <button
                   onClick={() => { 
-                    openWindow('settings', t('apps.settings'), <SettingsApp initialTab="personalization" />, Settings, { initialWidth: 900, initialHeight: 700 }); 
+                    openWindow('settings', t('apps.settings'), <SettingsApp initialTab="appearance" />, Settings, { initialWidth: 900, initialHeight: 700 }); 
+                    updateWindowProps('settings', { activeTab: 'appearance' });
                     setTaskbarContextMenu(null); 
                   }}
                   className="w-full text-left px-3 py-2.5 text-xs text-[var(--accent-indigo)] font-bold hover:bg-[var(--glow-indigo)] rounded-lg flex items-center gap-2 transition-all group"

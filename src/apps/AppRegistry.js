@@ -1,4 +1,4 @@
-import { Terminal, Settings, Monitor, Database, Folder, AlertCircle, StickyNote, Book, MonitorPlay, Server, FileText, GitBranch, CloudSync, Rocket, HardDrive, CloudCog, ShieldCheck } from 'lucide-react';
+import { Terminal, Settings, Monitor, Database, Folder, AlertCircle, StickyNote, Book, MonitorPlay, Server, FileText, GitBranch, CloudSync, Rocket, HardDrive, CloudCog, ShieldCheck, Activity } from 'lucide-react';
 
 import TerminalApp from '@/apps/TerminalApp';
 import SettingsApp from '@/apps/SettingsApp';
@@ -14,9 +14,15 @@ import DatabaseBrowser from '@/components/DatabaseBrowser';
 import MongoBackupApp from '@/apps/MongoBackupApp';
 import ServerBackupApp from '@/apps/ServerBackupApp';
 import RcloneApp from '@/apps/RcloneApp';
+import ServerMonitorApp from '@/apps/ServerMonitorApp';
 
 // Add other apps here as needed
 export const AppRegistry = {
+  'server-monitor': {
+    component: ServerMonitorApp,
+    icon: Activity,
+    defaultTitle: 'Server Monitor'
+  },
   'rclone': {
     component: RcloneApp,
     icon: CloudCog,

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { useApp } from '@/context/AppContext';
 import { useOS } from '@/context/OSContext';
 import { 
@@ -9,9 +9,10 @@ import {
   FolderPlus, History, Key, Settings, Loader, CloudLightning, FileJson, ShieldCheck,
   Copy, Server, Wifi, WifiOff, Terminal, ChevronDown, Check, Clock,
   XCircle, TrendingUp, X, Zap, Shield, BarChart3, Folder, ExternalLink, Search,
-  ChevronLeft, ChevronRight
+  ChevronLeft, ChevronRight, HelpCircle
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
+import MongoBackupOnboarding, { hasCompletedMongoBackupOnboarding, resetMongoBackupOnboarding } from '@/components/MongoBackupOnboarding';
 
 const ALL_DATABASES = 'All Databases (*)';
 const ALL_COLLECTIONS = 'All Collections (*)';
@@ -341,8 +342,32 @@ function CronBuilder({ value, onChange }) {
 
 export default function MongoBackupApp({ windowId = 'mongo-backup', activeTab: propActiveTab }) {
   const { state, apiFetch } = useApp();
-  const { addNotification, updateWindowProps } = useOS();
+  const { addNotification, updateWindowProps, toggleMaximize, state: osState } = useOS();
   const { connections } = state;
+
+  // Helper: ensure the window is maximized before starting the tour
+  // so spotlight positions are measured against the full-screen layout
+  const ensureMaximizedThenShow = useCallback(() => {
+    const win = (osState?.windows || []).find(w => w.id === windowId);
+    if (win && !win.isMaximized) {
+      toggleMaximize(windowId);
+      // Wait for the maximize animation to complete before showing onboarding
+      setTimeout(() => setShowOnboarding(true), 350);
+    } else {
+      setShowOnboarding(true);
+    }
+  }, [osState, windowId, toggleMaximize]);
+
+  // Onboarding: show on first visit, hide once completed
+  const [showOnboarding, setShowOnboarding] = useState(false);
+  useEffect(() => {
+    const t = setTimeout(() => {
+      if (!hasCompletedMongoBackupOnboarding()) {
+        ensureMaximizedThenShow();
+      }
+    }, 400);
+    return () => clearTimeout(t);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const [activeTab, setActiveTabState] = useState(propActiveTab || 'import');
   const setActiveTab = (tab) => {
@@ -2562,10 +2587,21 @@ export default function MongoBackupApp({ windowId = 'mongo-backup', activeTab: p
             <Database size={16} className="text-emerald-400" />
           </div>
           <span className="font-extrabold text-sm tracking-tight italic uppercase">Mongo Sync</span>
+          <div className="flex-1" />
+          {/* Replay tutorial button */}
+          <button
+            data-onboarding="help-btn"
+            onClick={() => { resetMongoBackupOnboarding(); ensureMaximizedThenShow(); }}
+            className="p-1.5 rounded-lg text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)]/60 transition-colors"
+            title="Show tutorial"
+          >
+            <HelpCircle size={15} />
+          </button>
         </div>
 
         <nav className="flex-1 space-y-1.5">
           <button
+            data-onboarding="tab-import"
             onClick={() => setActiveTab('import')}
             className={`w-full flex items-center gap-2.5 px-3 py-2 text-xs font-bold rounded-xl transition-all ${
               activeTab === 'import' ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/20 shadow-sm' : 'hover:bg-[var(--bg-card-hover)] border border-transparent text-[var(--text-muted)] hover:text-[var(--text-primary)]'
@@ -2575,6 +2611,7 @@ export default function MongoBackupApp({ windowId = 'mongo-backup', activeTab: p
             <span>Import JSON</span>
           </button>
           <button
+            data-onboarding="tab-gdrive"
             onClick={() => setActiveTab('gdrive')}
             className={`w-full flex items-center gap-2.5 px-3 py-2 text-xs font-bold rounded-xl transition-all relative ${
               activeTab === 'gdrive' ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/20 shadow-sm' : 'hover:bg-[var(--bg-card-hover)] border border-transparent text-[var(--text-muted)] hover:text-[var(--text-primary)]'
@@ -2587,6 +2624,7 @@ export default function MongoBackupApp({ windowId = 'mongo-backup', activeTab: p
             )}
           </button>
           <button
+            data-onboarding="tab-jobs"
             onClick={() => setActiveTab('jobs')}
             disabled={!driveConnected}
             title={!driveConnected ? 'Please connect Google Drive first' : ''}
@@ -2602,6 +2640,7 @@ export default function MongoBackupApp({ windowId = 'mongo-backup', activeTab: p
             <span>Sync Jobs</span>
           </button>
           <button
+            data-onboarding="tab-restore"
             onClick={() => {
               if (!driveConnected) return;
               setActiveTab('restore');
@@ -2621,6 +2660,7 @@ export default function MongoBackupApp({ windowId = 'mongo-backup', activeTab: p
             <span>Restore Backup</span>
           </button>
           <button
+            data-onboarding="tab-history"
             onClick={() => {
               setActiveTab('history');
               fetchHistory();
@@ -2634,6 +2674,7 @@ export default function MongoBackupApp({ windowId = 'mongo-backup', activeTab: p
             <span>Execution History</span>
           </button>
           <button
+            data-onboarding="tab-failover"
             onClick={() => {
               setActiveTab('failover');
               fetchReplicaSetStatus(rsConnId);
@@ -4543,6 +4584,11 @@ export default function MongoBackupApp({ windowId = 'mongo-backup', activeTab: p
           )}
         </div>
       </div>
+
+      {/* First-time onboarding overlay */}
+      {showOnboarding && (
+        <MongoBackupOnboarding onComplete={() => setShowOnboarding(false)} />
+      )}
     </div>
   );
 }

@@ -4025,13 +4025,97 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
       }
     });
 
-    socket.on('ssh:disconnect', () => {
-      const session = activeSessions.get(socket.id);
-      if (session) session._explicitDisconnect = true;
-      cleanupSession(socket.id);
+    socket.on('telemetry:webrtc:init', (data = {}) => {
+      const { relayName } = data;
+      const crypto = require('crypto');
+      const relayConnId = crypto.randomBytes(16).toString('hex');
+      global.__relayConnMap.set(relayConnId, socket.id);
+
+      let targetWs = null;
+      if (global.__activeRelays) {
+        for (const [userId, userRelays] of global.__activeRelays.entries()) {
+          if (userRelays instanceof Map) {
+            const r = (relayName && userRelays.get(relayName)) || (userRelays.size > 0 ? userRelays.values().next().value : null);
+            if (r?.ws && r.ws.readyState === 1) {
+              targetWs = r.ws;
+              break;
+            }
+          }
+        }
+      }
+
+      if (targetWs) {
+        targetWs.send(JSON.stringify({ type: 'telemetry:prepare', connId: relayConnId }));
+        socket.removeAllListeners('webrtc:offer');
+        socket.removeAllListeners('webrtc:ice-candidate');
+        socket.on('webrtc:offer', ({ connId: cid, sdp }) => {
+          if (cid === relayConnId && targetWs.readyState === 1) {
+            targetWs.send(JSON.stringify({ type: 'webrtc:offer', connId: relayConnId, sdp }));
+          }
+        });
+        socket.on('webrtc:ice-candidate', ({ connId: cid, candidate }) => {
+          if (cid === relayConnId && targetWs.readyState === 1) {
+            targetWs.send(JSON.stringify({ type: 'webrtc:ice-candidate', connId: relayConnId, candidate }));
+          }
+        });
+        socket.emit('telemetry:rtc:ready', { connId: relayConnId });
+      }
+    });
+
+    socket.on('telemetry:start_stream', (data = {}) => {
+      const { interval = 500, relayName } = data;
+      global.__relayConnMap.set(socket.id, socket.id);
+
+      if (global.__activeRelays) {
+        for (const [userId, userRelays] of global.__activeRelays.entries()) {
+          if (userRelays instanceof Map) {
+            const r = (relayName && userRelays.get(relayName)) || (userRelays.size > 0 ? userRelays.values().next().value : null);
+            if (r?.ws && r.ws.readyState === 1) {
+              r.ws.send(JSON.stringify({
+                type: 'telemetry:start_stream',
+                connId: socket.id,
+                interval: Number(interval) || 500
+              }));
+              break;
+            }
+          }
+        }
+      }
+    });
+
+    socket.on('telemetry:stop_stream', (data = {}) => {
+      if (global.__activeRelays) {
+        for (const [userId, userRelays] of global.__activeRelays.entries()) {
+          if (userRelays instanceof Map) {
+            for (const r of userRelays.values()) {
+              if (r?.ws && r.ws.readyState === 1) {
+                r.ws.send(JSON.stringify({
+                  type: 'telemetry:stop_stream',
+                  connId: socket.id
+                }));
+              }
+            }
+          }
+        }
+      }
     });
 
     socket.on('disconnect', () => {
+      if (global.__activeRelays) {
+        for (const [userId, userRelays] of global.__activeRelays.entries()) {
+          if (userRelays instanceof Map) {
+            for (const r of userRelays.values()) {
+              if (r?.ws && r.ws.readyState === 1) {
+                r.ws.send(JSON.stringify({
+                  type: 'telemetry:stop_stream',
+                  connId: socket.id
+                }));
+              }
+            }
+          }
+        }
+      }
+      global.__relayConnMap.delete(socket.id);
       console.log(`[DISCONNECT] Socket disconnected: ${socket.id}`);
       const session = activeSessions.get(socket.id);
       if (session?.sshClient && session?.connectionId &&
@@ -4430,6 +4514,7 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
               'sftp:download_start', 'sftp:download_chunk', 'sftp:download_done', 'sftp:download_data',
               'sftp:can_upload', 'sftp:upload_ack', 'sftp:upload_complete', 'sftp:progress', 'sftp:searchResult', 'sftp:sizeResult',
               'docker:result', 'docker:error', 'webrtc:answer', 'webrtc:ice-candidate',
+              'telemetry:stream',
             ];
             if (msg.connId && sshSftpTypes.includes(msg.type)) {
               const targetSocketId = global.__relayConnMap.get(msg.connId);
@@ -4442,8 +4527,9 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
                   const payload = { ...msg };
                   delete payload.type;
                   delete payload.connId;
-                  // For ssh:data, browser expects a plain string, not an object
-                  if (msg.type === 'ssh:data') {
+                  if (msg.type === 'telemetry:stream') {
+                    targetSocket.emit('telemetry:stream', msg.data || payload);
+                  } else if (msg.type === 'ssh:data') {
                     targetSocket.emit('ssh:data', msg.data || '');
                   } else if (msg.type === 'ssh:connected') {
                     targetSocket.emit('ssh:connected');

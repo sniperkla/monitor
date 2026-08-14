@@ -1,21 +1,44 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Laptop, Terminal as TermIcon, Play, Square, Settings, RefreshCw, Layers, List, MonitorPlay, History, ExternalLink, Zap } from 'lucide-react';
+import { Laptop, Terminal as TermIcon, Play, Square, Settings, RefreshCw, Layers, List, MonitorPlay, History, ExternalLink, Zap, HelpCircle } from 'lucide-react';
 import { useApp } from '@/context/AppContext';
 import { useOS } from '@/context/OSContext';
 import TerminalView from '@/components/TerminalView';
 import RelayTerminalView from '@/components/RelayTerminalView';
 import { io } from 'socket.io-client';
+import TmuxOnboarding, { hasCompletedTmuxOnboarding, resetTmuxOnboarding } from '@/components/TmuxOnboarding';
 
 export default function TmuxApp({ initialConnection, windowId }) {
   const { state, dispatch } = useApp();
-  const { showConfirm, updateWindowProps } = useOS();
+  const { showConfirm, updateWindowProps, toggleMaximize, state: osState } = useOS();
   const { t } = useTranslation();
   
   // App state
   const [activeTab, setActiveTab] = useState('dashboard'); // dashboard, terminal
+
+  const [showOnboarding, setShowOnboarding] = useState(false);
+  const ensureMaximizedThenShow = useCallback(() => {
+    const win = (osState?.windows || []).find(w => w.id === windowId);
+    if (win && !win.isMaximized) {
+      toggleMaximize(windowId);
+      setTimeout(() => setShowOnboarding(true), 350);
+    } else {
+      setShowOnboarding(true);
+    }
+  }, [osState, windowId, toggleMaximize]);
+  const ensureMaximizedThenShowRef = useRef(ensureMaximizedThenShow);
+  useEffect(() => { ensureMaximizedThenShowRef.current = ensureMaximizedThenShow; }, [ensureMaximizedThenShow]);
+
+  useEffect(() => {
+    const t = setTimeout(() => {
+      if (!hasCompletedTmuxOnboarding()) {
+        ensureMaximizedThenShowRef.current();
+      }
+    }, 400);
+    return () => clearTimeout(t);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
   const [sessions, setSessions] = useState([]);
   const [isLoading, setIsLoading] = useState(false);
   const [activeSession, setActiveSession] = useState(null);
@@ -282,6 +305,7 @@ export default function TmuxApp({ initialConnection, windowId }) {
               
               <button 
                   onClick={() => setActiveTab('dashboard')}
+                  data-onboarding="tab-dashboard"
                   className={`px-3 py-1.5 text-xs font-semibold rounded-md transition-all flex items-center gap-2 ${activeTab === 'dashboard' ? 'bg-blue-500/20 text-blue-400 border border-blue-500/30' : 'text-[var(--text-secondary)] hover:bg-white/5'}`}
               >
                   <Layers size={14} />
@@ -316,6 +340,7 @@ export default function TmuxApp({ initialConnection, windowId }) {
                   <button 
                       onClick={() => setActiveTab('terminal')}
                       disabled={!activeSession}
+                      data-onboarding="tab-terminal"
                       className={`px-3 py-1.5 text-xs font-semibold rounded-md transition-all flex items-center gap-2 ${activeTab === 'terminal' ? 'bg-blue-500/20 text-blue-400 border border-blue-500/30' : 'text-[var(--text-secondary)] hover:bg-white/5 disabled:opacity-30'}`}
                   >
                       <TermIcon size={14} />
@@ -343,6 +368,14 @@ export default function TmuxApp({ initialConnection, windowId }) {
           </div>
           
           <div className="flex items-center gap-2">
+              <button
+                data-onboarding="help-btn"
+                onClick={() => { resetTmuxOnboarding(); ensureMaximizedThenShow(); }}
+                className="p-1.5 rounded-lg text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-white/5 transition-colors"
+                title="Show tutorial"
+              >
+                <HelpCircle size={15} />
+              </button>
               <button onClick={() => {
                 setSelectedConnection(null);
                 if (windowId) localStorage.removeItem(`tmux-connection-${windowId}`);
@@ -580,6 +613,9 @@ export default function TmuxApp({ initialConnection, windowId }) {
                 )}
             </div>
         </div>
+      {showOnboarding && (
+        <TmuxOnboarding onComplete={() => setShowOnboarding(false)} />
+      )}
     </div>
   );
 }
