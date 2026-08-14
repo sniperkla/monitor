@@ -14,8 +14,10 @@ yarn-error.log*
 *.pid
 *.log
 README.md
+*.md
 run_test.sh
 test_folder
+test*.js
 patch*.js
 patch.py
 refactor.mjs
