@@ -180,7 +180,7 @@ export default function AgentSetupWizard({
   const tmuxCommand = `tmux new-session -d -s monitor-agent "curl -sSL '${serverUrl}/monitor-agent.min.js' | node - --server '${serverUrl}' --token '${effectiveToken}'"`;
   const serviceCommand = `curl -sSL '${serverUrl}/monitor-agent.min.js' | node - --install --server '${serverUrl}' --token '${effectiveToken}'`;
   const foregroundCommand = `curl -sSL '${serverUrl}/monitor-agent.min.js' | node - --server '${serverUrl}' --token '${effectiveToken}'`;
-  const uninstallCommand = `tmux kill-session -t monitor-agent 2>/dev/null; pkill -f 'monitor-agent'; systemctl --user stop server-monitor-agent 2>/dev/null`;
+  const uninstallCommand = `tmux kill-session -t monitor-agent 2>/dev/null; pkill -f '[m]onitor-agent'; systemctl --user stop server-monitor-agent 2>/dev/null`;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-md animate-in fade-in duration-200">

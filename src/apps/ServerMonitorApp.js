@@ -390,6 +390,7 @@ export default function ServerMonitorApp() {
   const peerRef = useRef(null);
   const [isSocketStreaming, setIsSocketStreaming] = useState(false);
   const [isP2PStreaming, setIsP2PStreaming] = useState(false);
+  const isP2PStreamingRef = useRef(false); // ref to avoid stale closure in socket event handlers
 
   // Common handler for incoming telemetry data
   const handleIncomingTelemetry = useCallback((raw) => {
@@ -449,6 +450,7 @@ export default function ServerMonitorApp() {
         const peer = await createRelayPeer({ socket, relayConnId: connId });
         peerRef.current = peer;
         setIsP2PStreaming(true);
+        isP2PStreamingRef.current = true;
         setIsSocketStreaming(false);
 
         // Tell central server to stop WebSocket relay since P2P is now active
@@ -471,6 +473,7 @@ export default function ServerMonitorApp() {
       } catch (err) {
         console.log('[WebRTC Telemetry] P2P negotiation failed, falling back to WebSocket relay:', err.message);
         setIsP2PStreaming(false);
+        isP2PStreamingRef.current = false;
         if (autoRefresh && isTabVisible && selectedConnection) {
           socket.emit('telemetry:start_stream', {
             interval: refreshInterval,
@@ -482,7 +485,7 @@ export default function ServerMonitorApp() {
 
     // 3. Fallback WebSocket Relay Stream handler
     socket.on('telemetry:stream', (raw) => {
-      if (!isP2PStreaming) {
+      if (!isP2PStreamingRef.current) {
         setIsSocketStreaming(true);
         handleIncomingTelemetry(raw);
       }
@@ -491,6 +494,7 @@ export default function ServerMonitorApp() {
     socket.on('disconnect', () => {
       setIsSocketStreaming(false);
       setIsP2PStreaming(false);
+      isP2PStreamingRef.current = false;
     });
 
     return () => {
@@ -542,8 +546,11 @@ export default function ServerMonitorApp() {
   }, [autoRefresh, isTabVisible, selectedConnection, refreshInterval, isP2PStreaming]);
 
   // Active polling lifecycle for remote server metrics
+  // Only run HTTP polling when neither WebSocket stream nor P2P DataChannel is active
   useEffect(() => {
     if (!selectedConnection || relayStatus !== 'connected') return;
+    // Skip HTTP polling when real-time stream is already delivering telemetry
+    if (isSocketStreaming || isP2PStreaming) return;
 
     let isMounted = true;
     let timeoutId = null;
@@ -567,7 +574,7 @@ export default function ServerMonitorApp() {
       isMounted = false;
       if (timeoutId) clearTimeout(timeoutId);
     };
-  }, [selectedConnection, relayStatus, autoRefresh, refreshInterval, isTabVisible, fetchMetrics]);
+  }, [selectedConnection, relayStatus, autoRefresh, refreshInterval, isTabVisible, fetchMetrics, isSocketStreaming, isP2PStreaming]);
 
   // Fetch apps on-demand when switching to 'apps' tab
   useEffect(() => {

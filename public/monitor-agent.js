@@ -148,13 +148,14 @@ function uninstallService() {
     spawnSync('systemctl', ['--user', 'disable', `${SVC_ID}.service`], { stdio: 'ignore' });
     if (fs.existsSync(unitPath)) fs.unlinkSync(unitPath);
     spawnSync('systemctl', ['--user', 'daemon-reload'], { stdio: 'ignore' });
-    spawnSync('pkill', ['-f', 'monitor-agent'], { stdio: 'ignore' });
+    spawnSync('systemctl', ['--user', 'reset-failed'], { stdio: 'ignore' });
+    spawnSync('pkill', ['-f', '[m]onitor-agent'], { stdio: 'ignore' });
     console.log('✅ Service removed.');
   } else if (platform === 'darwin') {
     const plistPath = path.join(os.homedir(), 'Library', 'LaunchAgents', `com.monitor.${SVC_ID}.plist`);
     spawnSync('launchctl', ['unload', plistPath], { stdio: 'ignore' });
     if (fs.existsSync(plistPath)) fs.unlinkSync(plistPath);
-    spawnSync('pkill', ['-f', 'monitor-agent'], { stdio: 'ignore' });
+    spawnSync('pkill', ['-f', '[m]onitor-agent'], { stdio: 'ignore' });
     console.log('✅ LaunchAgent removed.');
   }
 }
