@@ -168,7 +168,10 @@ export function execCommand(sshConfig, command, options = {}) {
             }
             stream.on('data', (d) => { stdout += d.toString(); });
             stream.stderr.on('data', (d) => { stderr += d.toString(); });
-            stream.on('close', (code) => { resolve({ code, stdout, stderr }); });
+            stream.on('close', (code) => {
+              const exitCode = typeof code === 'number' ? code : (stderr.trim() && !stdout.trim() ? 1 : 0);
+              resolve({ code: exitCode, stdout, stderr });
+            });
           });
         })
         .catch((err) => {
@@ -188,7 +191,11 @@ export function execCommand(sshConfig, command, options = {}) {
         if (err) { conn.end(); return reject(err); }
         stream.on('data', (d) => { stdout += d.toString(); });
         stream.stderr.on('data', (d) => { stderr += d.toString(); });
-        stream.on('close', (code) => { conn.end(); resolve({ code, stdout, stderr }); });
+        stream.on('close', (code) => {
+          conn.end();
+          const exitCode = typeof code === 'number' ? code : (stderr.trim() && !stdout.trim() ? 1 : 0);
+          resolve({ code: exitCode, stdout, stderr });
+        });
       });
     });
     conn.on('error', reject);

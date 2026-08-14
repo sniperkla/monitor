@@ -110,6 +110,10 @@ export default function ServerMonitorApp() {
   const [isTabVisible, setIsTabVisible] = useState(true);
   const [showAgentWizard, setShowAgentWizard] = useState(false);
 
+  // Per-server agent status (keyed by connectionId)
+  const [agentStatuses, setAgentStatuses] = useState({}); // { [connId]: { isRunning, nodeInstalled, inTmux, inService, checkedAt } }
+  const agentPollRef = useRef(null);
+
   // Client-side previous sample for instantaneous delta math (user machine CPU/Net calculation)
   const prevSampleRef = useRef(null);
   const inFlightMetricsRef = useRef(false);
@@ -180,6 +184,47 @@ export default function ServerMonitorApp() {
       setSelectedConnection(connections[0]._id);
     }
   }, [connections, selectedConnection]);
+
+  // ── Per-connection agent status polling ──
+  const checkAgentStatusForConn = useCallback(async (connId) => {
+    if (!connId) return;
+    try {
+      const res = await apiFetch('/api/server-monitor/agent', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ connectionId: connId, action: 'status' })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setAgentStatuses(prev => ({
+          ...prev,
+          [connId]: {
+            isRunning: data.isRunning,
+            nodeInstalled: data.nodeInstalled,
+            inTmux: data.inTmux,
+            inService: data.inService,
+            checkedAt: Date.now()
+          }
+        }));
+      }
+    } catch (_) {}
+  }, [apiFetch]);
+
+  useEffect(() => {
+    if (!selectedConnection || relayStatus !== 'connected') return;
+
+    // Check immediately when connection is selected
+    checkAgentStatusForConn(selectedConnection);
+
+    // Then poll every 15 seconds
+    agentPollRef.current = setInterval(() => {
+      checkAgentStatusForConn(selectedConnection);
+    }, 15000);
+
+    return () => {
+      if (agentPollRef.current) clearInterval(agentPollRef.current);
+    };
+  }, [selectedConnection, relayStatus, checkAgentStatusForConn]);
 
   // Page Visibility detection - pause polling when tab/window is in the background
   useEffect(() => {
@@ -921,17 +966,36 @@ export default function ServerMonitorApp() {
             <span className="hidden sm:inline">{autoRefresh ? 'Live' : 'Paused'}</span>
           </button>
 
-          {/* Agent Setup Wizard Button */}
-          {selectedConnection && (
-            <button
-              onClick={() => setShowAgentWizard(true)}
-              className="px-2.5 py-1.5 bg-indigo-600/15 hover:bg-indigo-600/25 text-indigo-400 border border-indigo-500/30 rounded-lg text-xs font-medium flex items-center gap-1.5 transition-colors shadow-sm cursor-pointer"
-              title="Setup / Manage Relay Agent on this Server"
-            >
-              <Zap size={14} className="text-indigo-400" />
-              <span className="hidden md:inline">Relay Agent</span>
-            </button>
-          )}
+          {/* Agent Setup Wizard Button + status badge */}
+          {selectedConnection && (() => {
+            const agentSt = agentStatuses[selectedConnection];
+            const agentRunning = agentSt?.isRunning;
+            const agentChecked = !!agentSt;
+            return (
+              <button
+                onClick={() => setShowAgentWizard(true)}
+                className={`px-2.5 py-1.5 border rounded-lg text-xs font-medium flex items-center gap-1.5 transition-colors shadow-sm cursor-pointer ${
+                  agentRunning
+                    ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30 hover:bg-emerald-500/20'
+                    : agentChecked
+                    ? 'bg-amber-500/10 text-amber-400 border-amber-500/30 hover:bg-amber-500/20'
+                    : 'bg-indigo-600/15 text-indigo-400 border-indigo-500/30 hover:bg-indigo-600/25'
+                }`}
+                title={agentRunning ? 'Monitor Agent is running on this server' : agentChecked ? 'Monitor Agent not detected — click to install' : 'Setup / Manage Monitor Agent on this Server'}
+              >
+                <span className={`w-2 h-2 rounded-full ${
+                  agentRunning
+                    ? 'bg-emerald-400 shadow-[0_0_6px_rgba(52,211,153,0.9)] animate-pulse'
+                    : agentChecked
+                    ? 'bg-amber-400'
+                    : 'bg-indigo-400 animate-pulse'
+                }`} />
+                <span className="hidden md:inline">
+                  {agentRunning ? 'Agent Connected' : agentChecked ? 'Install Agent' : 'Relay Agent'}
+                </span>
+              </button>
+            );
+          })()}
 
           {/* Manual refresh */}
           <button
@@ -1249,10 +1313,17 @@ export default function ServerMonitorApp() {
       {/* Relay Agent Setup & Management Wizard */}
       <AgentSetupWizard
         isOpen={showAgentWizard}
-        onClose={() => setShowAgentWizard(false)}
+        onClose={() => {
+          setShowAgentWizard(false);
+          // Re-check agent status after wizard closes so the badge updates
+          if (selectedConnection) checkAgentStatusForConn(selectedConnection);
+        }}
         connection={selectedConn}
         relayToken={relayToken}
-        onRefreshStatus={() => fetchMetrics(true)}
+        onRefreshStatus={() => {
+          fetchMetrics(true);
+          if (selectedConnection) checkAgentStatusForConn(selectedConnection);
+        }}
         apiFetch={apiFetch}
       />
     </div>

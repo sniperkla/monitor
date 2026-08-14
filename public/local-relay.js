@@ -2198,11 +2198,12 @@ function handleDockerCommand(ws, msg) {
   };
 
   const runWithSudoDetection = (cmdSuffix, attemptWithSudo = false) => {
+    const isRaw = cmdSuffix.startsWith('sh -c') || cmdSuffix.startsWith('(');
     const escapedPass = (connection.password || '').replace(/'/g, "'\\''");
     const prefix = attemptWithSudo ? `echo '${escapedPass}' | sudo -S su root -c ` : '';
     const finalCmd = attemptWithSudo
-      ? `${prefix} 'docker ${cmdSuffix.replace(/'/g, "'\\''")}'`
-      : `docker ${cmdSuffix}`;
+      ? (isRaw ? `${prefix} '${cmdSuffix.replace(/'/g, "'\\''")}'` : `${prefix} 'docker ${cmdSuffix.replace(/'/g, "'\\''")}'`)
+      : (isRaw ? cmdSuffix : `docker ${cmdSuffix}`);
 
     session.sshClient.exec(finalCmd, (err, stream) => {
       if (err) {
@@ -2286,10 +2287,17 @@ function handleDockerCommand(ws, msg) {
       const rawEnv       = String(args[5] || '');
       const rawMounts    = String(args[6] || '');
       const oldContId    = String(args[7] || '').replace(/[^a-zA-Z0-9._-]/g, '');
+      const composeProj  = String(args[8] || '').replace(/[^a-zA-Z0-9._-]/g, '');
       if (!svcName || !image)
         return ws.send(JSON.stringify({ type: 'docker:error', connId, error: 'Invalid service name or image' }));
 
       let flags = [`--name ${svcName}`, `--replicas ${replicas}`, `--update-order start-first`, `--update-delay 5s`];
+      const baseAlias = svcName.toLowerCase();
+      if (baseAlias) {
+        flags.push(`--network-alias ${baseAlias}`);
+        if (baseAlias.includes('_')) flags.push(`--network-alias ${baseAlias.replace(/_/g, '-')}`);
+        if (baseAlias.includes('-')) flags.push(`--network-alias ${baseAlias.replace(/-/g, '_')}`);
+      }
       if (port) {
         const p = port.includes(':') ? port : `${port}:${port}`;
         flags.push(`--publish ${p}`);
@@ -2298,10 +2306,7 @@ function handleDockerCommand(ws, msg) {
         flags.push(`--network $target_net`);
       }
       if (rawEnv) {
-        rawEnv.split(',').forEach(e => {
-          const kv = e.trim().replace(/[^a-zA-Z0-9._=\-]/g, '');
-          if (kv.includes('=')) flags.push(`--env "${kv}"`);
-        });
+        flags.push(...parseEnvFlags(rawEnv, '--env'));
       }
       if (rawMounts) {
         rawMounts.split(',').forEach(m => {
@@ -2325,7 +2330,9 @@ function handleDockerCommand(ws, msg) {
       const stopRmCmd = oldContId
         ? `echo "Stopping old container ${oldContId}..."; docker stop ${oldContId} 2>/dev/null || true; echo "Removing old container ${oldContId}..."; docker rm ${oldContId} 2>/dev/null || true; `
         : '';
-      return runRawCmd(`sh -c '${stopRmCmd}target_net="${effectiveNetwork}"; driver=$(docker network inspect ${effectiveNetwork} --format "{{.Driver}}" 2>/dev/null); if [ "$driver" = "overlay" ]; then echo "Using overlay network ${effectiveNetwork}"; elif [ -z "$driver" ]; then echo "Creating overlay network ${effectiveNetwork}..."; docker network create --driver overlay --attachable ${effectiveNetwork}; elif [ "$driver" = "bridge" ]; then count=$(docker network inspect ${effectiveNetwork} --format "{{len .Containers}}" 2>/dev/null); if [ "$count" = "0" ] || [ -z "$count" ]; then echo "Converting unused bridge to overlay..."; docker network rm ${effectiveNetwork} >/dev/null 2>&1 && docker network create --driver overlay --attachable ${effectiveNetwork}; else target_net="${effectiveNetwork}-overlay"; echo "Auto-creating overlay network $target_net..."; docker network inspect $target_net >/dev/null 2>&1 || docker network create --driver overlay --attachable $target_net; fi; fi; ${createCmd} && (docker network connect $target_net global-nginx 2>/dev/null || docker network connect $target_net nginx 2>/dev/null || true) && (docker restart global-nginx 2>/dev/null || docker exec global-nginx nginx -s reload 2>/dev/null || true) && (docker container prune -f 2>/dev/null || true)'`);
+      // Auto-convert all compose siblings and database containers into Swarm services
+      const siblingCmd = `for c in $(docker ps -aq); do cp=$(docker inspect --format '{{index .Config.Labels "com.docker.compose.project"}}' $c 2>/dev/null); cs=$(docker inspect --format '{{index .Config.Labels "com.docker.compose.service"}}' $c 2>/dev/null); cn=$(docker inspect --format "{{.Name}}" $c 2>/dev/null | sed 's/^\\///'); c_img=$(docker inspect --format "{{.Config.Image}}" $c 2>/dev/null); c_mounts=$(docker inspect --format '{{range .Mounts}}--mount type={{.Type}},source={{.Source}},target={{.Destination}} {{end}}' $c 2>/dev/null); svc_target="\${cs:-\$cn}"; if [ -n "${composeProj}" ] && [ "$cp" = "${composeProj}" ] && [ "$cn" != "${oldContId}" ] && [ "$cn" != "${svcName}" ] && [ -n "$svc_target" ] && [ -n "$c_img" ]; then if ! docker service inspect "$svc_target" >/dev/null 2>&1 && ! docker service inspect "$cn" >/dev/null 2>&1; then echo "Converting sibling $cn into Swarm service $svc_target..."; docker stop $c 2>/dev/null || true; docker rm $c 2>/dev/null || true; docker service create --name "$svc_target" --network "$target_net" $c_mounts "$c_img" 2>/dev/null || true; fi; elif echo "$cn" | grep -qiE "mongo|redis|postgres|mysql|db|database" && [ "$cn" != "${oldContId}" ] && [ "$cn" != "${svcName}" ]; then if ! docker service inspect "$svc_target" >/dev/null 2>&1 && ! docker service inspect "$cn" >/dev/null 2>&1; then echo "Auto-converting database $cn into Swarm service $svc_target..."; docker stop $c 2>/dev/null || true; docker rm $c 2>/dev/null || true; docker service create --name "$svc_target" --network "$target_net" $c_mounts "$c_img" 2>/dev/null || true; fi; fi; done; `;
+      return runRawCmd(`sh -c '${stopRmCmd}target_net="${effectiveNetwork}"; driver=$(docker network inspect ${effectiveNetwork} --format "{{.Driver}}" 2>/dev/null); if [ "$driver" = "overlay" ]; then echo "Using overlay network ${effectiveNetwork}"; elif [ -z "$driver" ]; then echo "Creating overlay network ${effectiveNetwork}..."; docker network create --driver overlay --attachable ${effectiveNetwork}; elif [ "$driver" = "bridge" ]; then count=$(docker network inspect ${effectiveNetwork} --format "{{len .Containers}}" 2>/dev/null); if [ "$count" = "0" ] || [ -z "$count" ]; then echo "Converting unused bridge to overlay..."; docker network rm ${effectiveNetwork} >/dev/null 2>&1 && docker network create --driver overlay --attachable ${effectiveNetwork}; else target_net="${effectiveNetwork}-overlay"; echo "Auto-creating overlay network $target_net..."; docker network inspect $target_net >/dev/null 2>&1 || docker network create --driver overlay --attachable $target_net; fi; fi; ${siblingCmd}${createCmd} && (docker network connect $target_net global-nginx 2>/dev/null || docker network connect $target_net nginx 2>/dev/null || true) && (docker restart global-nginx 2>/dev/null || docker exec global-nginx nginx -s reload 2>/dev/null || true) && (docker container prune -f 2>/dev/null || true)'`);
     } else if (action === 'swarm:update' && args.length >= 2) {
 
       const serviceName = String(args[0] || '').replace(/[^a-zA-Z0-9._-]/g, '');
@@ -2446,11 +2453,28 @@ function handleDockerCommand(ws, msg) {
       const safeTag = tag.replace(/[^a-z0-9]/gi, '_');
       const statusCmd = `(if [ -f "/tmp/build_${safeTag}.log" ]; then RUNNING=$(ps aux 2>/dev/null | grep -v grep | grep "docker build -t ${tag}" | wc -l); if [ "$RUNNING" = "0" ] && ! grep -q "---FINISHED---" "/tmp/build_${safeTag}.log"; then echo "---FINISHED---" >> /tmp/build_${safeTag}.log; fi; tr '\\r' '\\n' < "/tmp/build_${safeTag}.log" | tail -n 20; else echo "INITIALIZING..."; fi); exit 0`;
       return runRawCmd(statusCmd);
+    } else if (action === 'swarm:build-deploy' && args.length >= 2) {
+      const serviceName = String(args[0] || '').replace(/[^a-zA-Z0-9._-]/g, '');
+      const image = String(args[1] || '').replace(/[^a-zA-Z0-9.@/:-]/g, '');
+      const dir = String(args[2] || '.').replace(/['"$`\\]/g, '');
+      const doPull = args[3] !== false;
+      if (!serviceName || !image) return ws.send(JSON.stringify({ type: 'docker:error', connId, error: 'Invalid Service Name or Image' }));
+
+      const pullStep = doPull ? 'git pull && ' : '';
+      const cmd = `cd "${dir}" && ${pullStep}${sudoPrefix}docker build -t ${image} . && ${sudoPrefix}docker service update --image ${image} --update-order start-first --update-delay 5s ${serviceName}`;
+      const safeName = serviceName.replace(/[^a-z0-9]/gi, '_');
+      const deployCmd = `rm -f /tmp/deploy_${safeName}.log; touch /tmp/deploy_${safeName}.log; nohup sh -c '${cmd} 2>&1 | tee /tmp/deploy_${safeName}.log; echo "---FINISHED---" >> /tmp/deploy_${safeName}.log' >/dev/null 2>&1 & echo STARTED`;
+      return runRawCmd(deployCmd);
+    } else if (action === 'swarm:build-deploy:status' && args.length >= 1) {
+      const serviceName = String(args[0] || '').replace(/[^a-zA-Z0-9._-]/g, '');
+      const safeName = serviceName.replace(/[^a-z0-9]/gi, '_');
+      const statusCmd = `(if [ -f "/tmp/deploy_${safeName}.log" ]; then RUNNING=$(ps aux 2>/dev/null | grep -v grep | grep "docker.*${serviceName}" | wc -l); if [ "$RUNNING" = "0" ] && ! grep -q "---FINISHED---" "/tmp/deploy_${safeName}.log"; then echo "---FINISHED---" >> /tmp/deploy_${safeName}.log; fi; tr '\\r' '\\n' < "/tmp/deploy_${safeName}.log" | tail -n 25; else echo "INITIALIZING..."; fi); exit 0`;
+      return runRawCmd(statusCmd);
     } else if (['start', 'stop', 'restart', 'rm'].includes(action) && args.length > 0) {
       const targetId = String(args[0] || '').replace(/[^a-zA-Z0-9._/:-]/g, '');
       if (!targetId) return ws.send(JSON.stringify({ type: 'docker:error', connId, error: 'Invalid Target ID' }));
       cmdSuffix = action === 'rm' ? `rm -f ${targetId}` : `${action} ${targetId}`;
-    } else if (action === 'inspect' && args.length > 0) {
+    } else if ((action === 'inspect' || action === 'inspect-for-swarm') && args.length > 0) {
       const targetId = String(args[0] || '').replace(/[^a-zA-Z0-9._/:-]/g, '');
       if (!targetId) return ws.send(JSON.stringify({ type: 'docker:error', connId, error: 'Invalid Target ID' }));
       cmdSuffix = `inspect ${targetId}`;
@@ -2556,7 +2580,7 @@ function handleDockerCommand(ws, msg) {
     } else if (action === 'clean-exited-swarm') {
       return runRawCmd(`sh -c 'EXITED=$(docker ps -a --filter status=exited -q 2>/dev/null); if [ -n "$EXITED" ]; then echo "Removing exited task containers..."; docker rm -f $EXITED 2>&1; else echo "No exited containers found"; fi; docker container prune -f 2>/dev/null || true'`);
     } else if (action === 'connect-nginx-swarm') {
-      return runRawCmd(`sh -c 'NETS=$(docker network ls --filter driver=overlay --format "{{.Name}}"); for net in $NETS; do echo "Connecting Nginx to $net..."; docker network connect $net global-nginx 2>/dev/null || docker network connect $net nginx 2>/dev/null || true; done; docker restart global-nginx 2>/dev/null || docker exec global-nginx nginx -s reload 2>/dev/null || docker exec nginx nginx -s reload 2>/dev/null || true; echo "Nginx connected and restarted successfully!"'`);
+      return runRawCmd(`sh -c 'NETS=$(docker network ls --filter driver=overlay --format "{{.Name}}"); for net in $NETS; do echo "Connecting Nginx and Database containers to $net..."; docker network connect $net global-nginx 2>/dev/null || docker network connect $net nginx 2>/dev/null || true; docker network connect $net mongo 2>/dev/null || docker network connect $net mongodb 2>/dev/null || true; docker network connect $net redis 2>/dev/null || true; docker network connect $net postgres 2>/dev/null || true; docker network connect $net mysql 2>/dev/null || true; done; docker restart global-nginx 2>/dev/null || docker exec global-nginx nginx -s reload 2>/dev/null || docker exec nginx nginx -s reload 2>/dev/null || true; echo "✅ Connected all containers to Swarm overlay networks!"'`);
     } else if (action === 'start-all') {
       // Start ALL stopped/exited/created/paused containers in one shot
       const startAllCmd = `sh -c "STOPPED=$(${sudoPrefix}docker ps -a --filter status=exited --filter status=created --filter status=paused -q 2>/dev/null); if [ -z \\"$STOPPED\\" ]; then echo 'NONE_STOPPED'; else ${sudoPrefix}docker start $STOPPED 2>&1; echo '---FINISHED---'; fi"`;

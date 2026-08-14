@@ -227,7 +227,8 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
   const [swarmInitNeedsAddr, setSwarmInitNeedsAddr] = useState(false); // true when server has multiple IPs
   const [scaleModal, setScaleModal] = useState({ isOpen: false, serviceName: '', count: 1 });
   const [swarmUpdateModal, setSwarmUpdateModal] = useState({ isOpen: false, serviceName: '', currentImage: '', newImage: '' });
-  const [createServiceModal, setCreateServiceModal] = useState({ isOpen: false, name: '', image: '', replicas: 2, port: '', network: '', mounts: '', env: '', oldContainerId: '', oldContainerName: '', stopOld: true });
+  const [swarmBuildDeployModal, setSwarmBuildDeployModal] = useState({ isOpen: false, serviceName: '', image: '', dir: '.', doPull: true });
+  const [createServiceModal, setCreateServiceModal] = useState({ isOpen: false, name: '', image: '', replicas: 2, port: '', network: '', mounts: '', env: '', oldContainerId: '', oldContainerName: '', composeProject: '', stopOld: true });
   const [swarmConfigModal, setSwarmConfigModal] = useState({ isOpen: false, serviceName: '', image: '', replicas: 2, port: '', network: '', env: '', mounts: '' });
   const [openMenuContainerId, setOpenMenuContainerId] = useState(null);
 
@@ -422,21 +423,56 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
         return;
       }
 
-      if (action === 'inspect') {
+      if (action === 'inspect' || action === 'inspect-for-swarm') {
         try {
           const inspected = JSON.parse(output)[0];
           if (inspected) {
-             const image = inspected.Config.Image;
-             const name = inspected.Name.replace(/^\//, '');
-             const portObj = inspected.HostConfig.PortBindings || {};
-             const ports = Object.keys(portObj).map(k => (portObj[k] && portObj[k][0]) ? `${portObj[k][0].HostPort}:${k.split('/')[0]}` : null).filter(x => x).join(',');
-             const envArr = (inspected.Config.Env || []).filter(e => !e.startsWith('PATH='));
-             const env = envArr.join(',');
+             const image = inspected.Config?.Image || '';
+             const name = (inspected.Name || 'app').replace(/^\//, '').replace(/[^a-zA-Z0-9._-]/g, '');
+             const portObj = inspected.HostConfig?.PortBindings || {};
+             let ports = Object.keys(portObj).map(k => (portObj[k] && portObj[k][0]) ? `${portObj[k][0].HostPort}:${k.split('/')[0]}` : null).filter(Boolean).join(',');
+             
+             // Fallback to NetworkSettings.Ports or Config.ExposedPorts (e.g. 3030/tcp -> 3030:3030)
+             if (!ports && inspected.NetworkSettings?.Ports) {
+               const netPorts = Object.keys(inspected.NetworkSettings.Ports).map(k => {
+                 const b = inspected.NetworkSettings.Ports[k];
+                 if (b && b[0] && b[0].HostPort) return `${b[0].HostPort}:${k.split('/')[0]}`;
+                 const p = k.split('/')[0];
+                 return p ? `${p}:${p}` : null;
+               }).filter(Boolean);
+               if (netPorts.length > 0) ports = netPorts.join(',');
+             }
+             if (!ports && inspected.Config?.ExposedPorts) {
+               const exposed = Object.keys(inspected.Config.ExposedPorts).map(p => p.split('/')[0]).filter(Boolean);
+               if (exposed.length > 0) ports = exposed.map(p => `${p}:${p}`).join(',');
+             }
+
+             const envArr = (inspected.Config?.Env || []).filter(e => !e.startsWith('PATH=') && !e.startsWith('HOSTNAME='));
+             const env = envArr.join('\n');
              
              // Extract mounts
              const mounts = (inspected.Mounts || []).map(m => `${m.Source}:${m.Destination}`).join(',');
+             const networks = Object.keys(inspected.NetworkSettings?.Networks || {})[0] || '';
+             const composeProject = inspected.Config?.Labels?.['com.docker.compose.project'] || '';
              
-             setCreateModal({ isOpen: true, image, name: name + '-config', ports, env, volumes: mounts });
+             if (action === 'inspect-for-swarm') {
+               setCreateServiceModal({
+                 isOpen: true,
+                 name,
+                 image,
+                 replicas: 2,
+                 port: ports,
+                 network: networks,
+                 mounts,
+                 env,
+                 oldContainerId: inspected.Id || inspected.ID,
+                 oldContainerName: inspected.Name?.replace(/^\//, ''),
+                 composeProject,
+                 stopOld: true
+               });
+             } else {
+               setCreateModal({ isOpen: true, image, name: name + '-config', ports, env, volumes: mounts });
+             }
           }
 
         } catch(e) {
@@ -649,11 +685,12 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
         } catch (e) {
           console.error("Failed to parse Docker search JSON:", e);
         }
-      } else if (action === 'pull:status' || action === 'build:status') {
+      } else if (action === 'pull:status' || action === 'build:status' || action === 'swarm:build-deploy:status') {
         const imageName = args?.[0];
         if (!imageName || !pullingTasksRef.current[imageName]) return;
 
-        const taskType = pullingTasksRef.current[imageName].isBuild ? 'Build' : 'Pull';
+        const isDeploy = pullingTasksRef.current[imageName].isSwarmDeploy;
+        const taskType = isDeploy ? 'Swarm Deploy' : pullingTasksRef.current[imageName].isBuild ? 'Build' : 'Pull';
         const isFinished = output.includes('---FINISHED---');
         const lines = output.split(/[\r\n]+/).filter(l => l.trim() && !l.includes('---FINISHED---'));
         
@@ -661,10 +698,27 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
         const cleanLines = lines.filter(l => !l.includes('nohup:'));
         
         let progress = pullingTasksRef.current[imageName].progress || 0;
-        let status = pullingTasksRef.current[imageName].status || `${taskType}ing Layers...`;
+        let status = pullingTasksRef.current[imageName].status || `${taskType}...`;
         let lastLine = cleanLines[cleanLines.length - 1] || 'Waiting for status...';
 
-        if (action === 'pull:status') {
+        if (action === 'swarm:build-deploy:status') {
+          cleanLines.forEach(line => {
+            if (line.includes('Updating service') || line.includes('overall progress')) {
+              status = 'Rolling Update...';
+              progress = Math.max(progress, 75);
+            } else if (line.includes('Building') || line.includes('Step ') || line.includes('DONE')) {
+              status = 'Building Image...';
+              progress = Math.max(progress, 40);
+            } else if (line.includes('Already up to date') || line.includes('Updating ')) {
+              status = 'Git Pull...';
+              progress = Math.max(progress, 20);
+            }
+          });
+          if (output.includes('verify: Service converged') || output.includes('converged') || output.includes('---FINISHED---')) {
+            progress = 100;
+            status = 'Complete';
+          }
+        } else if (action === 'pull:status') {
           cleanLines.forEach(line => {
               const barMatch = line.match(/\[(=+)>?\s*\]/);
               if (barMatch) {
@@ -922,8 +976,9 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
         activeTaskNames.forEach(name => {
             const task = pullingTasksRef.current[name];
             let action = 'pull:status';
-            if (task?.isBuild) action = 'build:status';
-            if (task?.isBackup) action = 'backup:status';
+            if (task?.isSwarmDeploy) action = 'swarm:build-deploy:status';
+            else if (task?.isBuild) action = 'build:status';
+            else if (task?.isBackup) action = 'backup:status';
             socketRef.current.emit('docker:command', { action, args: [name] });
         });
     }, 2000);
@@ -1834,47 +1889,39 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
                                                   <Share2 size={13} /> Export Config
                                                 </button>
                                                 <button 
-                                                  onClick={() => {
-                                                    setOpenMenuContainerId(null);
-                                                    let mappedPort = '';
-                                                    if (typeof c.ports === 'string') {
-                                                      const arrowMatch = c.ports.match(/(\d+)->(\d+)/);
-                                                      if (arrowMatch) {
-                                                        mappedPort = `${arrowMatch[1]}:${arrowMatch[2]}`;
-                                                      } else {
-                                                        const singleMatch = c.ports.match(/(\d+)/);
-                                                        if (singleMatch) mappedPort = `${singleMatch[1]}:${singleMatch[1]}`;
-                                                      }
-                                                    } else if (Array.isArray(c.ports) && c.ports.length > 0) {
-                                                      const p = c.ports[0];
-                                                      if (typeof p === 'object' && p !== null) {
-                                                        const host = p.host_port || p.hostPort || p.PublicPort || p.container_port || p.PrivatePort;
-                                                        const container = p.container_port || p.containerPort || p.PrivatePort || host;
-                                                        if (host && container) mappedPort = `${host}:${container}`;
-                                                      } else if (typeof p === 'string') {
-                                                        const match = p.match(/(\d+)/);
-                                                        if (match) mappedPort = `${match[1]}:${match[1]}`;
-                                                      }
-                                                    }
-                                                    const cleanName = (c.name || 'app').replace(/^\//, '').replace(/[^a-zA-Z0-9._-]/g, '');
-                                                    setCreateServiceModal({
-                                                      isOpen: true,
-                                                      name: cleanName,
-                                                      image: c.image || '',
-                                                      replicas: 2,
-                                                      port: mappedPort,
-                                                      network: c.networks || '',
-                                                      mounts: c.mounts || '',
-                                                      env: '',
-                                                      oldContainerId: c.id,
-                                                      oldContainerName: c.name,
-                                                      stopOld: true
-                                                    });
-                                                  }}
-                                                  className="w-full px-2.5 py-1.5 rounded-lg text-left text-purple-400 hover:bg-purple-500/10 flex items-center gap-2 transition-all cursor-pointer font-medium"
-                                                >
-                                                  <Zap size={13} /> Convert to Swarm
-                                                </button>
+                                                   onClick={() => {
+                                                     setOpenMenuContainerId(null);
+                                                     if (socketRef.current) {
+                                                       socketRef.current.emit('docker:command', {
+                                                         action: 'inspect-for-swarm',
+                                                         args: [c.id]
+                                                       });
+                                                     } else {
+                                                       let mappedPort = '';
+                                                       if (typeof c.ports === 'string' && c.ports) {
+                                                         const singleMatch = c.ports.match(/(\d+)/);
+                                                         if (singleMatch) mappedPort = `${singleMatch[1]}:${singleMatch[1]}`;
+                                                       }
+                                                       const cleanName = (c.name || 'app').replace(/^\//, '').replace(/[^a-zA-Z0-9._-]/g, '');
+                                                       setCreateServiceModal({
+                                                         isOpen: true,
+                                                         name: cleanName,
+                                                         image: c.image || '',
+                                                         replicas: 2,
+                                                         port: mappedPort,
+                                                         network: c.networks || '',
+                                                         mounts: c.mounts || '',
+                                                         env: '',
+                                                         oldContainerId: c.id,
+                                                         oldContainerName: c.name,
+                                                         stopOld: true
+                                                       });
+                                                     }
+                                                   }}
+                                                   className="w-full px-2.5 py-1.5 rounded-lg text-left text-purple-400 hover:bg-purple-500/10 flex items-center gap-2 transition-all cursor-pointer font-medium"
+                                                 >
+                                                   <Zap size={13} /> Convert to Swarm
+                                                 </button>
 
                                                 <div className="my-1 border-t border-white/10" />
 
@@ -2477,6 +2524,22 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
                                     </div>
 
                                     <div className="flex items-center gap-2 pt-1 border-t border-white/5">
+                                      <button
+                                        onClick={() => {
+                                          setSwarmBuildDeployModal({
+                                            isOpen: true,
+                                            serviceName: svcName,
+                                            image: svcImage !== '-' ? svcImage : `${svcName}:latest`,
+                                            dir: '.',
+                                            doPull: true
+                                          });
+                                        }}
+                                        className="py-1.5 px-3 rounded-lg bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-500/30 text-emerald-300 text-[10px] font-bold transition-all flex items-center gap-1.5 cursor-pointer shadow-sm"
+                                        title="1-Click Direct Build & Deploy (git pull + docker build + zero-downtime rolling update)"
+                                      >
+                                        <Zap size={11} />
+                                        Deploy
+                                      </button>
                                       <button
                                         onClick={() => {
                                           // Optimistic open with parsed values
@@ -3370,6 +3433,16 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
                   />
                 </div>
               </div>
+              <div>
+                  <label className="text-[10px] font-bold uppercase text-[var(--text-muted)] tracking-wider block mb-1">Environment Variables <span className="text-[var(--text-muted)] normal-case font-normal">(One per line: KEY=value)</span></label>
+                  <textarea
+                    rows={3}
+                    value={createServiceModal.env}
+                    onChange={(e) => setCreateServiceModal(prev => ({ ...prev, env: e.target.value }))}
+                    placeholder="KEY=value&#10;PORT=3030"
+                    className="w-full bg-slate-950 border border-[var(--border-color)] rounded-xl p-2.5 text-xs font-mono focus:outline-none focus:border-purple-500/50 resize-y"
+                  />
+                </div>
               <div className="p-3 bg-slate-800/50 rounded-xl text-[10px] font-mono text-slate-400 break-all space-y-1">
                 <div>
                   <span className="text-purple-400">$ </span>
@@ -3378,10 +3451,22 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
                   {createServiceModal.port && <><span className="text-amber-400">--publish {createServiceModal.port}</span>{' '}</>}
                   {createServiceModal.network && <><span className="text-purple-400">--network {createServiceModal.network}</span>{' '}</>}
                   {createServiceModal.mounts && <><span className="text-cyan-400">--mount {createServiceModal.mounts}</span>{' '}</>}
+                  {createServiceModal.env && <><span className="text-teal-400">--env-add &quot;{createServiceModal.env}&quot;</span>{' '}</>}
                   --update-order start-first --update-delay 5s{' '}
                   <span className="text-emerald-400">{createServiceModal.image || '<image>'}</span>
                 </div>
               </div>
+              {createServiceModal.composeProject && (
+                <div className="p-3 bg-purple-500/10 border border-purple-500/20 rounded-xl flex items-center justify-between text-xs text-purple-300">
+                  <span className="flex items-center gap-1.5 font-bold">
+                    <Layers size={13} className="text-purple-400" />
+                    Compose Project: {createServiceModal.composeProject}
+                  </span>
+                  <span className="text-[10px] text-emerald-400 font-semibold bg-emerald-500/15 px-2 py-0.5 rounded border border-emerald-500/30">
+                    ⚡ Sibling containers (Mongo/DB) will auto-connect
+                  </span>
+                </div>
+              )}
               {createServiceModal.oldContainerId && (
                 <div className="p-3 bg-amber-500/10 border border-amber-500/20 rounded-xl flex items-center justify-between text-xs text-amber-300">
                   <span className="truncate mr-2">Migrating container <strong>{createServiceModal.oldContainerName}</strong></span>
@@ -3398,7 +3483,7 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
               )}
               <div className="flex justify-end gap-2 pt-1">
                 <button
-                  onClick={() => setCreateServiceModal({ isOpen: false, name: '', image: '', replicas: 2, port: '', network: '', mounts: '', env: '', oldContainerId: '', oldContainerName: '', stopOld: true })}
+                  onClick={() => setCreateServiceModal({ isOpen: false, name: '', image: '', replicas: 2, port: '', network: '', mounts: '', env: '', oldContainerId: '', oldContainerName: '', composeProject: '', stopOld: true })}
                   className="px-4 py-2 rounded-xl text-xs font-bold border border-[var(--border-color)] hover:bg-white/5 transition-all cursor-pointer"
                 >
                   Cancel
@@ -3418,10 +3503,11 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
                         createServiceModal.env.trim(),
                         createServiceModal.mounts.trim(),
                         // Pass oldContainerId so server can stop+rm it before creating service with same name
-                        createServiceModal.stopOld ? (createServiceModal.oldContainerId || '') : ''
+                        createServiceModal.stopOld ? (createServiceModal.oldContainerId || '') : '',
+                        createServiceModal.composeProject || ''
                       ]
                     });
-                    setCreateServiceModal({ isOpen: false, name: '', image: '', replicas: 2, port: '', network: '', mounts: '', env: '', oldContainerId: '', oldContainerName: '', stopOld: true });
+                    setCreateServiceModal({ isOpen: false, name: '', image: '', replicas: 2, port: '', network: '', mounts: '', env: '', oldContainerId: '', oldContainerName: '', composeProject: '', stopOld: true });
                   }}
                   disabled={!createServiceModal.name.trim() || !createServiceModal.image.trim()}
                   className="px-4 py-2 rounded-xl text-xs font-bold bg-purple-500 hover:bg-purple-600 disabled:opacity-40 disabled:cursor-not-allowed text-white transition-all shadow-lg flex items-center gap-1.5 cursor-pointer"
@@ -3448,19 +3534,27 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
             enableMinimize={false}
           >
             <div className="p-6 space-y-4">
-              <div className="p-3 bg-emerald-500/10 border border-emerald-500/20 rounded-xl text-xs text-emerald-300">
-                ⚡ <strong>Zero-Downtime Enabled</strong> (<code className="text-white">--update-order start-first</code>). Swarm will start new containers and verify health before stopping old ones.
+              <div>
+                <label className="text-[10px] font-bold uppercase text-[var(--text-muted)] tracking-wider block mb-1">Target Service</label>
+                <div className="p-2.5 rounded-xl bg-purple-500/10 border border-purple-500/20 text-xs font-mono text-purple-300">
+                  {swarmUpdateModal.serviceName}
+                </div>
               </div>
               <div>
-                <label className="text-[10px] font-bold uppercase text-[var(--text-muted)] tracking-wider block mb-1">
-                  Target Docker Image & Tag
-                </label>
+                <label className="text-[10px] font-bold uppercase text-[var(--text-muted)] tracking-wider block mb-1">Current Image</label>
+                <div className="p-2 rounded-xl bg-slate-950/60 border border-[var(--border-color)] text-xs font-mono text-slate-400 truncate">
+                  {swarmUpdateModal.currentImage || 'unknown'}
+                </div>
+              </div>
+              <div>
+                <label className="text-[10px] font-bold uppercase text-[var(--text-muted)] tracking-wider block mb-1">New Image Tag</label>
                 <input
                   type="text"
                   value={swarmUpdateModal.newImage}
                   onChange={(e) => setSwarmUpdateModal(prev => ({ ...prev, newImage: e.target.value }))}
-                  placeholder="e.g. myapp:latest or nginx:alpine"
-                  className="w-full bg-slate-950 border border-[var(--border-color)] rounded-xl p-3 text-xs font-mono text-emerald-400 focus:outline-none focus:border-emerald-500/50"
+                  placeholder="e.g. my-app:v2.0 or registry.example.com/app:latest"
+                  className="w-full bg-slate-950 border border-[var(--border-color)] rounded-xl p-2.5 text-xs font-mono focus:outline-none focus:border-purple-500/50"
+                  autoFocus
                 />
               </div>
               <div className="flex justify-end gap-2 pt-2">
@@ -3474,14 +3568,17 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
                   onClick={() => {
                     if (!swarmUpdateModal.newImage.trim()) return;
                     setIsLoading(true);
-                    socketRef.current.emit('docker:command', { action: 'swarm:update', args: [swarmUpdateModal.serviceName, swarmUpdateModal.newImage.trim()] });
+                    socketRef.current.emit('docker:command', {
+                      action: 'swarm:update',
+                      args: [swarmUpdateModal.serviceName, swarmUpdateModal.newImage.trim()]
+                    });
                     setSwarmUpdateModal({ isOpen: false, serviceName: '', currentImage: '', newImage: '' });
-                    setTimeout(() => emitDockerLs(), 2000);
                   }}
-                  className="px-4 py-2 rounded-xl text-xs font-bold bg-emerald-500 hover:bg-emerald-600 text-white transition-all shadow-lg flex items-center gap-1.5 cursor-pointer"
+                  disabled={!swarmUpdateModal.newImage.trim()}
+                  className="px-4 py-2 rounded-xl text-xs font-bold bg-purple-500 hover:bg-purple-600 disabled:opacity-40 disabled:cursor-not-allowed text-white transition-all shadow-lg flex items-center gap-1.5 cursor-pointer"
                 >
                   <Zap size={13} />
-                  Trigger Rolling Update
+                  Rolling Update
                 </button>
               </div>
             </div>
@@ -3495,26 +3592,22 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
             isOpen={swarmConfigModal.isOpen}
             onClose={() => setSwarmConfigModal({ isOpen: false, serviceName: '', image: '', replicas: 2, port: '', network: '', env: '', mounts: '' })}
             title={`Configure Swarm Service: ${swarmConfigModal.serviceName}`}
-            icon={Sliders}
-            defaultWidth={540}
-            defaultHeight={480}
+            icon={Zap}
+            defaultWidth={520}
+            defaultHeight={460}
             enableMaximize={false}
             enableMinimize={false}
           >
             <div className="p-6 space-y-4">
-              <div className="p-3 bg-purple-500/10 border border-purple-500/20 rounded-xl text-xs text-purple-300">
-                🐝 <strong>Update Swarm Service Configuration</strong>. Changes are applied via zero-downtime rolling updates without taking down active containers.
-              </div>
-
-              <div className="grid grid-cols-3 gap-3">
-                <div className="col-span-2">
-                  <label className="text-[10px] font-bold uppercase text-[var(--text-muted)] tracking-wider block mb-1">Docker Image</label>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-[10px] font-bold uppercase text-[var(--text-muted)] tracking-wider block mb-1">Image Tag</label>
                   <input
                     type="text"
                     value={swarmConfigModal.image}
                     onChange={(e) => setSwarmConfigModal(prev => ({ ...prev, image: e.target.value }))}
-                    placeholder="e.g. nginx:latest"
-                    className="w-full bg-slate-950 border border-[var(--border-color)] rounded-xl p-2.5 text-xs font-mono text-emerald-400 focus:outline-none focus:border-purple-500/50"
+                    placeholder="e.g. my-app:latest"
+                    className="w-full bg-slate-950 border border-[var(--border-color)] rounded-xl p-2.5 text-xs font-mono focus:outline-none focus:border-purple-500/50"
                   />
                 </div>
                 <div>
@@ -3524,78 +3617,78 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
                     min="0"
                     max="100"
                     value={swarmConfigModal.replicas}
-                    onChange={(e) => setSwarmConfigModal(prev => ({ ...prev, replicas: parseInt(e.target.value, 10) || 0 }))}
-                    className="w-full bg-slate-950 border border-[var(--border-color)] rounded-xl p-2.5 text-xs font-mono focus:outline-none focus:border-purple-500/50 text-center"
+                    onChange={(e) => setSwarmConfigModal(prev => ({ ...prev, replicas: parseInt(e.target.value) || 0 }))}
+                    className="w-full bg-slate-950 border border-[var(--border-color)] rounded-xl p-2.5 text-xs font-mono focus:outline-none focus:border-purple-500/50"
                   />
                 </div>
               </div>
 
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="text-[10px] font-bold uppercase text-[var(--text-muted)] tracking-wider block mb-1">Port Mapping <span className="text-[var(--text-muted)] normal-case font-normal">(host:container)</span></label>
+                  <label className="text-[10px] font-bold uppercase text-[var(--text-muted)] tracking-wider block mb-1">Publish Port <span className="text-[var(--text-muted)] normal-case font-normal">(host:svc)</span></label>
                   <input
                     type="text"
                     value={swarmConfigModal.port}
                     onChange={(e) => setSwarmConfigModal(prev => ({ ...prev, port: e.target.value }))}
-                    placeholder="e.g. 80:80"
+                    placeholder="e.g. 8080:80"
                     className="w-full bg-slate-950 border border-[var(--border-color)] rounded-xl p-2.5 text-xs font-mono focus:outline-none focus:border-purple-500/50"
                   />
                 </div>
                 <div>
-                   <label className="text-[10px] font-bold uppercase text-[var(--text-muted)] tracking-wider block mb-1">Network <span className="text-[var(--text-muted)] normal-case font-normal">(optional)</span></label>
-                   <div className="relative">
-                     <input
-                       list="swarm-config-networks"
-                       type="text"
-                       value={swarmConfigModal.network}
-                       onChange={(e) => setSwarmConfigModal(prev => ({ ...prev, network: e.target.value }))}
-                       placeholder="leave empty to use swarm-net (auto-created)"
-                       className="w-full bg-slate-950 border border-[var(--border-color)] rounded-xl p-2.5 text-xs font-mono focus:outline-none focus:border-purple-500/50"
-                     />
-                     <datalist id="swarm-config-networks">
-                       {networks.filter(n => !['bridge','host','none'].includes(n.Name)).map((n, i) => (
-                         <option key={i} value={n.Name}>{n.Name} [{n.Driver}]</option>
-                       ))}
-                     </datalist>
-                   </div>
-                   {networks.length > 0 && (
-                     <div className="flex flex-wrap gap-1 mt-1.5">
-                       {networks
-                         .filter(n => !['host','none'].includes(n.Name))
-                         .map((n, i) => {
-                           const isOverlay = n.Driver === 'overlay';
-                           const isBridge = n.Driver === 'bridge';
-                           const isSelected = swarmConfigModal.network === n.Name;
-                           return (
-                             <button
-                               key={i}
-                               type="button"
-                               onClick={() => setSwarmConfigModal(prev => ({ ...prev, network: isSelected ? '' : n.Name }))}
-                               className={`px-2 py-0.5 rounded-lg text-[9px] font-mono font-bold border transition-all cursor-pointer ${
-                                 isSelected
-                                   ? 'bg-purple-500/20 border-purple-400/60 text-purple-300'
-                                   : 'bg-slate-700/40 border-slate-600/30 text-slate-400 hover:border-slate-500/60'
-                               }`}
-                               title={`${n.Driver} · ${n.Scope}`}
-                             >
-                               {isOverlay ? '⬡ ' : isBridge ? '⬢ ' : ''}{n.Name}
-                             </button>
-                           );
-                         })
-                       }
-                     </div>
-                   )}
-                 </div>
-              </div>
+                  <label className="text-[10px] font-bold uppercase text-[var(--text-muted)] tracking-wider block mb-1">Attach Overlay Network</label>
+                  <div className="relative">
+                    <input
+                      type="text"
+                      list="swarm-config-networks"
+                      value={swarmConfigModal.network}
+                      onChange={(e) => setSwarmConfigModal(prev => ({ ...prev, network: e.target.value }))}
+                      placeholder="e.g. swarm-net"
+                      className="w-full bg-slate-950 border border-[var(--border-color)] rounded-xl p-2.5 text-xs font-mono focus:outline-none focus:border-purple-500/50"
+                    />
+                    <datalist id="swarm-config-networks">
+                      {networks.filter(n => !['bridge','host','none'].includes(n.Name)).map((n, i) => (
+                        <option key={i} value={n.Name}>{n.Name} [{n.Driver}]</option>
+                      ))}
+                    </datalist>
+                  </div>
+                  {networks.length > 0 && (
+                    <div className="flex flex-wrap gap-1 mt-1.5">
+                      {networks
+                        .filter(n => !['host','none'].includes(n.Name))
+                        .map((n, i) => {
+                          const isOverlay = n.Driver === 'overlay';
+                          const isBridge = n.Driver === 'bridge';
+                          const isSelected = swarmConfigModal.network === n.Name;
+                          return (
+                            <button
+                              key={i}
+                              type="button"
+                              onClick={() => setSwarmConfigModal(prev => ({ ...prev, network: isSelected ? '' : n.Name }))}
+                              className={`px-2 py-0.5 rounded-lg text-[9px] font-mono font-bold border transition-all cursor-pointer ${
+                                isSelected
+                                  ? 'bg-purple-500/20 border-purple-400/60 text-purple-300'
+                                  : 'bg-slate-700/40 border-slate-600/30 text-slate-400 hover:border-slate-500/60'
+                              }`}
+                              title={`${n.Driver} · ${n.Scope}`}
+                            >
+                              {isOverlay ? '⬡ ' : isBridge ? '⬢ ' : ''}{n.Name}
+                            </button>
+                          );
+                        })
+                      }
+                    </div>
+                  )}
+                </div>
+             </div>
 
               <div>
-                <label className="text-[10px] font-bold uppercase text-[var(--text-muted)] tracking-wider block mb-1">Add Env Variables <span className="text-[var(--text-muted)] normal-case font-normal">(comma-separated KEY=VAL)</span></label>
-                <input
-                  type="text"
+                <label className="text-[10px] font-bold uppercase text-[var(--text-muted)] tracking-wider block mb-1">Environment Variables <span className="text-[var(--text-muted)] normal-case font-normal">(One per line: KEY=value)</span></label>
+                <textarea
+                  rows={2}
                   value={swarmConfigModal.env}
                   onChange={(e) => setSwarmConfigModal(prev => ({ ...prev, env: e.target.value }))}
-                  placeholder="e.g. NODE_ENV=production,PORT=8080"
-                  className="w-full bg-slate-950 border border-[var(--border-color)] rounded-xl p-2.5 text-xs font-mono focus:outline-none focus:border-purple-500/50"
+                  placeholder="KEY=value&#10;NODE_ENV=production"
+                  className="w-full bg-slate-950 border border-[var(--border-color)] rounded-xl p-2.5 text-xs font-mono focus:outline-none focus:border-purple-500/50 resize-y"
                 />
               </div>
 
@@ -3607,7 +3700,7 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
                   <span className="text-sky-400">--replicas {swarmConfigModal.replicas}</span>{' '}
                   {swarmConfigModal.port && <><span className="text-amber-400">--publish-add {swarmConfigModal.port}</span>{' '}</>}
                   {swarmConfigModal.network && <><span className="text-purple-400">--network-add {swarmConfigModal.network}</span>{' '}</>}
-                  {swarmConfigModal.env && <><span className="text-teal-400">--env-add "{swarmConfigModal.env}"</span>{' '}</>}
+                  {swarmConfigModal.env && <><span className="text-teal-400">--env-add &quot;{swarmConfigModal.env}&quot;</span>{' '}</>}
                   --update-order start-first <span className="text-purple-300">{swarmConfigModal.serviceName}</span>
                 </div>
               </div>
@@ -3640,6 +3733,128 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
                 >
                   <Sliders size={13} />
                   Apply Configuration
+                </button>
+              </div>
+            </div>
+          </MacOSModalWindow>,
+          document.body
+        )}
+
+        {/* 1-Click Swarm Build & Deploy Modal */}
+        {swarmBuildDeployModal.isOpen && createPortal(
+          <MacOSModalWindow
+            isOpen={swarmBuildDeployModal.isOpen}
+            onClose={() => setSwarmBuildDeployModal(prev => ({ ...prev, isOpen: false }))}
+            title={`🚀 1-Click Swarm Build & Deploy: ${swarmBuildDeployModal.serviceName}`}
+            icon={Zap}
+            defaultWidth={540}
+            defaultHeight={430}
+            enableMaximize={false}
+            enableMinimize={false}
+          >
+            <div className="p-6 space-y-4">
+              <div className="p-3 bg-purple-500/10 border border-purple-500/20 rounded-xl text-xs text-purple-300 flex items-center gap-2">
+                <Zap size={16} className="shrink-0 text-purple-400" />
+                <span>Pulls latest git commits, builds the Docker image, and triggers a <strong>zero-downtime rolling update</strong>.</span>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-[10px] font-bold uppercase text-[var(--text-muted)] tracking-wider block mb-1">Service Name</label>
+                  <div className="p-2.5 rounded-xl bg-purple-500/10 border border-purple-500/20 text-xs font-mono text-purple-300">
+                    {swarmBuildDeployModal.serviceName}
+                  </div>
+                </div>
+                <div>
+                  <label className="text-[10px] font-bold uppercase text-[var(--text-muted)] tracking-wider block mb-1">Docker Image Tag</label>
+                  <input
+                    type="text"
+                    value={swarmBuildDeployModal.image}
+                    onChange={(e) => setSwarmBuildDeployModal(prev => ({ ...prev, image: e.target.value }))}
+                    placeholder="e.g. monitor:latest"
+                    className="w-full bg-slate-950 border border-[var(--border-color)] rounded-xl p-2.5 text-xs font-mono focus:outline-none focus:border-purple-500/50"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="text-[10px] font-bold uppercase text-[var(--text-muted)] tracking-wider block mb-1">Project Directory on Server</label>
+                <input
+                  type="text"
+                  value={swarmBuildDeployModal.dir}
+                  onChange={(e) => setSwarmBuildDeployModal(prev => ({ ...prev, dir: e.target.value }))}
+                  placeholder="e.g. /root/monitor or . (current dir)"
+                  className="w-full bg-slate-950 border border-[var(--border-color)] rounded-xl p-2.5 text-xs font-mono focus:outline-none focus:border-purple-500/50"
+                />
+              </div>
+
+              <label className="flex items-center gap-2 p-2.5 bg-slate-800/40 border border-slate-700/40 rounded-xl text-xs text-slate-300 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={swarmBuildDeployModal.doPull}
+                  onChange={(e) => setSwarmBuildDeployModal(prev => ({ ...prev, doPull: e.target.checked }))}
+                  className="rounded border-purple-500/30 text-purple-500 focus:ring-purple-500"
+                />
+                <span>Run <strong>git pull</strong> before building image</span>
+              </label>
+
+              <div className="p-3 bg-slate-800/50 rounded-xl text-[10px] font-mono text-slate-400 break-all space-y-1">
+                <div>
+                  <span className="text-purple-400">$ </span>
+                  cd &quot;{swarmBuildDeployModal.dir || '.'}&quot; &amp;&amp;{' '}
+                  {swarmBuildDeployModal.doPull && <>git pull &amp;&amp;{' '}</>}
+                  docker build -t <span className="text-emerald-400">{swarmBuildDeployModal.image || '<image>'}</span> . &amp;&amp;{' '}
+                  docker service update --image <span className="text-emerald-400">{swarmBuildDeployModal.image || '<image>'}</span>{' '}
+                  --update-order start-first --update-delay 5s{' '}
+                  <span className="text-purple-300">{swarmBuildDeployModal.serviceName}</span>
+                </div>
+              </div>
+
+              <div className="flex justify-end gap-2 pt-1">
+                <button
+                  onClick={() => setSwarmBuildDeployModal(prev => ({ ...prev, isOpen: false }))}
+                  className="px-4 py-2 rounded-xl text-xs font-bold border border-[var(--border-color)] hover:bg-white/5 transition-all cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={() => {
+                    if (!swarmBuildDeployModal.serviceName || !swarmBuildDeployModal.image) return;
+                    const sName = swarmBuildDeployModal.serviceName;
+                    const img = swarmBuildDeployModal.image;
+                    const dir = swarmBuildDeployModal.dir || '.';
+                    const doPull = swarmBuildDeployModal.doPull;
+
+                    setPullingTasks(prev => ({
+                      ...prev,
+                      [sName]: {
+                        name: sName,
+                        status: 'Deploying to Swarm...',
+                        progress: 10,
+                        isSwarmDeploy: true,
+                        isFinished: false,
+                        lastLine: 'Starting git pull & docker build...'
+                      }
+                    }));
+
+                    socketRef.current.emit('docker:command', {
+                      action: 'swarm:build-deploy',
+                      args: [sName, img, dir, doPull]
+                    });
+
+                    addNotification({
+                      title: 'Swarm Deploy Started',
+                      message: `Building ${img} & rolling update to ${sName}...`,
+                      type: 'info'
+                    });
+
+                    setSwarmBuildDeployModal(prev => ({ ...prev, isOpen: false }));
+                  }}
+                  disabled={!swarmBuildDeployModal.serviceName || !swarmBuildDeployModal.image}
+                  className="px-4 py-2 rounded-xl text-xs font-bold bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 disabled:opacity-40 disabled:cursor-not-allowed text-white transition-all shadow-lg flex items-center gap-1.5 cursor-pointer"
+                >
+                  <Zap size={13} />
+                  🚀 Deploy Directly to Swarm
                 </button>
               </div>
             </div>

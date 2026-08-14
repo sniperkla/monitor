@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth/next';
 import { authOptions } from '@/lib/auth';
-import { getSshConfig, execCommand } from '@/app/api/server-backup/_ssh';
+import { getSshConfig, execCommand, sftpUpload } from '@/app/api/server-backup/_ssh';
 import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
@@ -178,10 +178,15 @@ export async function POST(request) {
         });
       }
 
-      // Read monitor-agent code from local disk
+      // Try uploading monitor-agent.js directly via SFTP
       const agentFilePath = path.join(process.cwd(), 'public', 'monitor-agent.js');
-      const agentCode = fs.existsSync(agentFilePath) ? fs.readFileSync(agentFilePath, 'utf8') : '';
-      const b64Code = Buffer.from(agentCode).toString('base64');
+      try {
+        if (fs.existsSync(agentFilePath)) {
+          await sftpUpload(sshConfig, agentFilePath, '.monitor-agent.js');
+        }
+      } catch (err) {
+        console.warn('SFTP direct upload fallback to curl:', err.message);
+      }
 
       let installScript = '';
 
@@ -206,9 +211,10 @@ export async function POST(request) {
             fi
           fi
 
-          # 3. Write monitor-agent.js directly onto server
-          mkdir -p ~/.config
-          echo "${b64Code}" | base64 -d > ~/.monitor-agent.js 2>/dev/null || node -e "require('fs').writeFileSync(require('os').homedir() + '/.monitor-agent.js', Buffer.from('${b64Code}', 'base64'))"
+          # 3. Ensure ~/.monitor-agent.js exists
+          if [ ! -f ~/.monitor-agent.js ] || [ ! -s ~/.monitor-agent.js ]; then
+            curl -fsSL "${origin}/monitor-agent.js" -o ~/.monitor-agent.js 2>/dev/null || curl -fsSL "${origin}/monitor-agent.min.js" -o ~/.monitor-agent.js 2>/dev/null || true
+          fi
 
           # 4. Kill existing session
           tmux kill-session -t monitor-agent 2>/dev/null || true
@@ -222,6 +228,8 @@ export async function POST(request) {
           if tmux has-session -t monitor-agent 2>/dev/null; then
             echo "✅ Monitor Agent is running in background tmux session!"
             echo "To view agent live logs: tmux attach -t monitor-agent"
+          elif pgrep -f 'monitor-agent' >/dev/null 2>&1; then
+            echo "✅ Monitor Agent is running!"
           else
             echo "⚠️ tmux session failed to start. Attempting nohup fallback..."
             nohup node ~/.monitor-agent.js --server '${origin}' --token '${token}' > ~/.monitor-agent.log 2>&1 &
@@ -245,8 +253,9 @@ export async function POST(request) {
             exit 1
           fi
 
-          mkdir -p ~/.config
-          echo "${b64Code}" | base64 -d > ~/.monitor-agent.js 2>/dev/null || node -e "require('fs').writeFileSync(require('os').homedir() + '/.monitor-agent.js', Buffer.from('${b64Code}', 'base64'))"
+          if [ ! -f ~/.monitor-agent.js ] || [ ! -s ~/.monitor-agent.js ]; then
+            curl -fsSL "${origin}/monitor-agent.js" -o ~/.monitor-agent.js 2>/dev/null || curl -fsSL "${origin}/monitor-agent.min.js" -o ~/.monitor-agent.js 2>/dev/null || true
+          fi
 
           echo "🚀 Installing Monitor Agent as background system service..."
           node ~/.monitor-agent.js --install --server '${origin}' --token '${token}'
@@ -255,10 +264,12 @@ export async function POST(request) {
 
       const result = await execCommand(sshConfig, installScript);
       const combinedOutput = ((result.stdout || '') + '\n' + (result.stderr || '')).trim();
+      const isSuccess = result.code === 0 || combinedOutput.includes('✅');
+
       return NextResponse.json({
-        success: result.code === 0,
-        output: combinedOutput || (result.code === 0 ? 'Agent launched successfully' : 'Installation failed with code ' + result.code),
-        error: result.code !== 0 ? (result.stderr || result.stdout || 'Installation failed with exit code ' + result.code) : null,
+        success: isSuccess,
+        output: combinedOutput || (isSuccess ? 'Agent launched successfully' : 'Installation failed with code ' + result.code),
+        error: !isSuccess ? (result.stderr || result.stdout || 'Installation failed with exit code ' + result.code) : null,
         token,
       });
     }
