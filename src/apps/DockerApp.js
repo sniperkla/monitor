@@ -423,6 +423,17 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
         return;
       }
 
+      if (action === 'swarm:get-workdir') {
+        const line = (output || '').split('\n').find(l => l.includes('WORKDIR:'));
+        const detectedDir = line ? line.replace(/.*WORKDIR:\s*/, '').trim() : '';
+        if (detectedDir && detectedDir !== '/' && detectedDir !== '.') {
+          setSwarmBuildDeployModal(prev => ({ ...prev, dir: detectedDir, dirLoading: false }));
+        } else {
+          setSwarmBuildDeployModal(prev => ({ ...prev, dirLoading: false }));
+        }
+        return;
+      }
+
       if (action === 'inspect' || action === 'inspect-for-swarm') {
         try {
           const inspected = JSON.parse(output)[0];
@@ -2526,13 +2537,22 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
                                     <div className="flex items-center gap-2 pt-1 border-t border-white/5">
                                       <button
                                         onClick={() => {
+                                          const svcN = svcName;
+                                          const svcImg = svcImage !== '-' ? svcImage : `${svcN}:latest`;
                                           setSwarmBuildDeployModal({
                                             isOpen: true,
-                                            serviceName: svcName,
-                                            image: svcImage !== '-' ? svcImage : `${svcName}:latest`,
-                                            dir: '.',
+                                            serviceName: svcN,
+                                            image: svcImg,
+                                            dir: `/root/${svcN}`,
+                                            dirLoading: true,
                                             doPull: true
                                           });
+                                          // Safety timeout: stop pulse after 2.5s if server doesn't respond
+                                          setTimeout(() => {
+                                            setSwarmBuildDeployModal(prev => ({ ...prev, dirLoading: false }));
+                                          }, 2500);
+                                          // Ask server to detect actual project directory
+                                          socketRef.current?.emit('docker:command', { action: 'swarm:get-workdir', args: [svcN] });
                                         }}
                                         className="py-1.5 px-3 rounded-lg bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-500/30 text-emerald-300 text-[10px] font-bold transition-all flex items-center gap-1.5 cursor-pointer shadow-sm"
                                         title="1-Click Direct Build & Deploy (git pull + docker build + zero-downtime rolling update)"
@@ -3778,14 +3798,20 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
               </div>
 
               <div>
-                <label className="text-[10px] font-bold uppercase text-[var(--text-muted)] tracking-wider block mb-1">Project Directory on Server</label>
-                <input
-                  type="text"
-                  value={swarmBuildDeployModal.dir}
-                  onChange={(e) => setSwarmBuildDeployModal(prev => ({ ...prev, dir: e.target.value }))}
-                  placeholder="e.g. /root/monitor or . (current dir)"
-                  className="w-full bg-slate-950 border border-[var(--border-color)] rounded-xl p-2.5 text-xs font-mono focus:outline-none focus:border-purple-500/50"
-                />
+                <label className="text-[10px] font-bold uppercase text-[var(--text-muted)] tracking-wider block mb-1">Project Directory on Server <span className="text-slate-500 font-normal normal-case">(optional)</span></label>
+                <div className="relative">
+                  <input
+                    type="text"
+                    value={swarmBuildDeployModal.dir}
+                    onChange={(e) => setSwarmBuildDeployModal(prev => ({ ...prev, dir: e.target.value }))}
+                    placeholder={`/root/${swarmBuildDeployModal.serviceName}`}
+                    className="w-full bg-slate-950 border border-[var(--border-color)] rounded-xl p-2.5 text-xs font-mono focus:outline-none focus:border-purple-500/50"
+                  />
+                  {swarmBuildDeployModal.dirLoading && (
+                    <span className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[10px] text-purple-400 animate-pulse">detecting...</span>
+                  )}
+                </div>
+                <p className="text-[10px] text-slate-500 mt-1">Auto-detected from server. Leave blank to use <code className="text-slate-400">/root/{swarmBuildDeployModal.serviceName}</code></p>
               </div>
 
               <label className="flex items-center gap-2 p-2.5 bg-slate-800/40 border border-slate-700/40 rounded-xl text-xs text-slate-300 cursor-pointer">
@@ -3822,7 +3848,7 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
                     if (!swarmBuildDeployModal.serviceName || !swarmBuildDeployModal.image) return;
                     const sName = swarmBuildDeployModal.serviceName;
                     const img = swarmBuildDeployModal.image;
-                    const dir = swarmBuildDeployModal.dir || '.';
+                    const dir = swarmBuildDeployModal.dir?.trim() || `/root/${sName}`;
                     const doPull = swarmBuildDeployModal.doPull;
 
                     setPullingTasks(prev => ({
