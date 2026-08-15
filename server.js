@@ -4718,6 +4718,7 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
           try {
             const msg = JSON.parse(raw.toString());
 
+            if (msg.type === 'agent:hello') {
               const clientIp = (req.headers['x-forwarded-for'] || req.socket.remoteAddress || '').split(',')[0].trim().replace(/^::ffff:/, '');
               const agentInfo = {
                 ws,
