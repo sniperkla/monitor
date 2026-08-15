@@ -364,6 +364,15 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
   useEffect(() => {
     if (!selectedConnection) return;
 
+    // Reset all state when switching servers so server 1 data does not leak into server 2
+    setContainers([]);
+    setImages([]);
+    setVolumes([]);
+    setNetworks([]);
+    setSwarmServices([]);
+    setSwarmNodes([]);
+    setIsDockerInstalled(true);
+    setIsDockerRunning(true);
     setIsLoading(true);
 
     // Disconnect any stale socket before creating a new one
@@ -610,10 +619,14 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
         } catch (e) { /* networks may not be supported */ }
       } else if (action === 'swarm:services') {
         try {
-          const lines = output.split('\n').filter(l => l.trim() && l.trim().startsWith('{'));
-          const parsed = lines.map(line => JSON.parse(line));
-          setSwarmServices(parsed);
-        } catch (e) { console.error('swarm:services parse error:', e); }
+          if (!output || output.toLowerCase().includes('not a swarm manager')) {
+            setSwarmServices([]);
+          } else {
+            const lines = output.split('\n').filter(l => l.trim() && l.trim().startsWith('{'));
+            const parsed = lines.map(line => JSON.parse(line));
+            setSwarmServices(parsed);
+          }
+        } catch (e) { setSwarmServices([]); }
       } else if (action === 'swarm:inspect') {
         try {
           const raw = output.trim();
@@ -651,10 +664,14 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
         }
       } else if (action === 'swarm:nodes') {
         try {
-          const lines = output.split('\n').filter(l => l.trim() && l.trim().startsWith('{'));
-          const parsed = lines.map(line => JSON.parse(line));
-          setSwarmNodes(parsed);
-        } catch (e) { console.error('swarm:nodes parse error:', e); }
+          if (!output || output.toLowerCase().includes('not a swarm manager')) {
+            setSwarmNodes([]);
+          } else {
+            const lines = output.split('\n').filter(l => l.trim() && l.trim().startsWith('{'));
+            const parsed = lines.map(line => JSON.parse(line));
+            setSwarmNodes(parsed);
+          }
+        } catch (e) { setSwarmNodes([]); }
       } else if (action === 'swarm:init') {
         // After init (or already-init), refresh swarm services + nodes
         setIsLoading(false);
@@ -1017,6 +1034,12 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
       const lowerErr = (err || '').toLowerCase();
       if (lowerErr.includes('swarm:get-workdir')) {
         setSwarmBuildDeployModal(prev => ({ ...prev, dirLoading: false }));
+        return;
+      }
+      if (lowerErr.includes('not a swarm manager') || lowerErr.includes('swarm:services') || lowerErr.includes('swarm:nodes')) {
+        // Normal on standalone servers without Docker Swarm mode active — clear swarm state silently
+        setSwarmServices([]);
+        setSwarmNodes([]);
         return;
       }
       if (lowerErr.includes('docker: command not found') || lowerErr.includes('command not found: docker') || lowerErr.includes('docker: not found') || lowerErr.includes('executable file not found in $path')) {

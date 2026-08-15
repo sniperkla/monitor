@@ -1130,7 +1130,7 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
             } else if (action === 'vol-assoc') {
               cmdSuffix = `ids=$(docker ps -aq); [ -z "$ids" ] || docker inspect --format 'assoc:{{.ID}}\\t{{.Name}}\\t{{range .Mounts}}{{.Name}} {{end}}' $ids`;
             } else if (action === 'swarm:services') {
-              cmdSuffix = `service ls --format "{{json .}}"`;
+              cmdSuffix = `service ls --format "{{json .}}" 2>/dev/null || echo ""`;
             } else if (action === 'swarm:nodes') {
               cmdSuffix = `node ls --format "{{json .}}" 2>/dev/null || echo ""`;
             } else if (action === 'start-all') {

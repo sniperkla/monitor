@@ -2393,13 +2393,13 @@ function handleDockerCommand(ws, msg) {
     } else if (action === 'networks') {
       cmdSuffix = `network ls --format "{{json .}}"`;
     } else if (action === 'swarm:services') {
-      cmdSuffix = `service ls --format "{{json .}}"`;
+      cmdSuffix = `service ls --format "{{json .}}" 2>/dev/null || echo ""`;
     } else if (action === 'swarm:inspect' && args.length >= 1) {
       const svcNameI = String(args[0] || '').replace(/[^a-zA-Z0-9._-]/g, '');
       if (!svcNameI) return ws.send(JSON.stringify({ type: 'docker:error', connId, error: 'Invalid Service Name' }));
       cmdSuffix = `service inspect ${svcNameI} --format "{{json .}}"`;
     } else if (action === 'swarm:nodes') {
-      cmdSuffix = `node ls --format "{{json .}}"`;
+      cmdSuffix = `node ls --format "{{json .}}" 2>/dev/null || echo ""`;
     } else if (action === 'swarm:orphans') {
       // List all containers + listening ports for conflict detection before swarm leave
       return runRawCmd(`sh -c 'echo "CONTAINERS:"; docker ps -a --format "{{json .}}" 2>/dev/null; echo "PORTS:"; { ss -tlnp 2>/dev/null || netstat -tlnp 2>/dev/null; } | grep -oE "[0-9]+\\$" | sort -un'`);
