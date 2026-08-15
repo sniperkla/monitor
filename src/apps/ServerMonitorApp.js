@@ -133,6 +133,12 @@ export default function ServerMonitorApp() {
   const inFlightStatusRef = useRef(false);
   const inFlightAppsRef = useRef(false);
 
+  const socketRef = useRef(null);
+  const peerRef = useRef(null);
+  const [isSocketStreaming, setIsSocketStreaming] = useState(false);
+  const [isP2PStreaming, setIsP2PStreaming] = useState(false);
+  const isP2PStreamingRef = useRef(false); // ref to avoid stale closure in socket event handlers
+
   const connections = useMemo(() => appState.connections || [], [appState.connections]);
 
   // Select first connection by default
@@ -409,11 +415,6 @@ export default function ServerMonitorApp() {
     }
   };
 
-  const socketRef = useRef(null);
-  const peerRef = useRef(null);
-  const [isSocketStreaming, setIsSocketStreaming] = useState(false);
-  const [isP2PStreaming, setIsP2PStreaming] = useState(false);
-  const isP2PStreamingRef = useRef(false); // ref to avoid stale closure in socket event handlers
 
   // Common handler for incoming telemetry data
   const handleIncomingTelemetry = useCallback((raw) => {
