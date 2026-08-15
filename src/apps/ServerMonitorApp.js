@@ -118,8 +118,10 @@ export default function ServerMonitorApp() {
   const [procSortDir, setProcSortDir] = useState('desc'); // 'desc' | 'asc'
   const [killModal, setKillModal] = useState({ isOpen: false, process: null, signal: 'SIGTERM', loading: false, error: null });
 
-  // Per-server agent status (keyed by connectionId)
+  // Per-server agent status (keyed by connectionId) — from SSH process check
   const [agentStatuses, setAgentStatuses] = useState({}); // { [connId]: { isRunning, nodeInstalled, inTmux, inService, checkedAt } }
+  // Live WebSocket-connected monitor agents (from agent:online/offline events)
+  const [connectedAgents, setConnectedAgents] = useState(new Map()); // agentName → { agentName, host, connectedAt }
   const agentPollRef = useRef(null);
 
   // Client-side previous sample for instantaneous delta math (user machine CPU/Net calculation)
@@ -499,7 +501,10 @@ export default function ServerMonitorApp() {
     socketRef.current = socket;
 
     socket.on('connect', () => {
-      // 1. First priority: initiate WebRTC P2P DataChannel signaling
+      // 1. Ask server for currently connected monitor agents
+      socket.emit('agent:list');
+
+      // 2. First priority: initiate WebRTC P2P DataChannel signaling
       socket.emit('telemetry:webrtc:init');
       
       // Fallback: If not P2P yet, start WebSocket stream
@@ -509,6 +514,25 @@ export default function ServerMonitorApp() {
           connectionId: selectedConnection
         });
       }
+    });
+
+    // Agent online/offline events from server
+    socket.on('agent:list:result', (agents) => {
+      setConnectedAgents(new Map(agents.map(a => [a.agentName, a])));
+    });
+    socket.on('agent:online', (info) => {
+      setConnectedAgents(prev => {
+        const next = new Map(prev);
+        next.set(info.agentName, info);
+        return next;
+      });
+    });
+    socket.on('agent:offline', (info) => {
+      setConnectedAgents(prev => {
+        const next = new Map(prev);
+        next.delete(info.agentName);
+        return next;
+      });
     });
 
     // 2. WebRTC P2P negotiation (Direct DataChannel)
@@ -977,7 +1001,7 @@ export default function ServerMonitorApp() {
               Server Monitor
               <span className="flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
                 <Zap size={10} className="fill-emerald-400" />
-                Local Relay Active (P2P)
+                {connectedAgents.size > 0 ? `Agent Streaming (${connectedAgents.size})` : 'Local Relay Active (P2P)'}
               </span>
             </h1>
             <div className="flex items-center gap-1.5 text-[11px] text-[var(--text-muted)]">
@@ -1005,8 +1029,8 @@ export default function ServerMonitorApp() {
                   : isP2PStreaming
                   ? 'WebRTC P2P DataChannel (0ms Direct)'
                   : isSocketStreaming
-                  ? 'WebSocket Relay Stream (<10ms)'
-                  : 'Live Client Telemetry'}
+                  ? 'Agent WebSocket Stream (<10ms)'
+                  : 'Live — HTTP Polling'}
               </span>
             </div>
           </div>
@@ -1064,27 +1088,46 @@ export default function ServerMonitorApp() {
             const agentSt = agentStatuses[selectedConnection];
             const agentRunning = agentSt?.isRunning;
             const agentChecked = !!agentSt;
+            // Check if any connected WebSocket agent matches this connection's host
+            const selectedConn_ = connections.find(c => c._id === selectedConnection);
+            const connHost = selectedConn_?.host || '';
+            const liveAgent = connectedAgents.size > 0 && [...connectedAgents.values()].find(
+              a => a.host === connHost || a.agentName === connHost || a.agentName === selectedConn_?.label
+            );
+            const isLive = !!liveAgent;
             return (
               <button
                 onClick={() => setShowAgentWizard(true)}
                 className={`px-2.5 py-1.5 border rounded-lg text-xs font-medium flex items-center gap-1.5 transition-colors shadow-sm cursor-pointer ${
-                  agentRunning
+                  isLive
                     ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30 hover:bg-emerald-500/20'
+                    : agentRunning
+                    ? 'bg-amber-500/10 text-amber-400 border-amber-500/30 hover:bg-amber-500/20'
                     : agentChecked
                     ? 'bg-amber-500/10 text-amber-400 border-amber-500/30 hover:bg-amber-500/20'
                     : 'bg-indigo-600/15 text-indigo-400 border-indigo-500/30 hover:bg-indigo-600/25'
                 }`}
-                title={agentRunning ? 'Monitor Agent is running on this server' : agentChecked ? 'Monitor Agent not detected — click to install' : 'Setup / Manage Monitor Agent on this Server'}
+                title={
+                  isLive
+                    ? `Agent "${liveAgent.agentName}" is streaming live telemetry`
+                    : agentRunning
+                    ? 'Monitor Agent process is running but not connected to server — check network/token'
+                    : agentChecked
+                    ? 'Monitor Agent not detected — click to install'
+                    : 'Setup / Manage Monitor Agent on this Server'
+                }
               >
                 <span className={`w-2 h-2 rounded-full ${
-                  agentRunning
+                  isLive
                     ? 'bg-emerald-400 shadow-[0_0_6px_rgba(52,211,153,0.9)] animate-pulse'
+                    : agentRunning
+                    ? 'bg-amber-400 animate-pulse'
                     : agentChecked
                     ? 'bg-amber-400'
                     : 'bg-indigo-400 animate-pulse'
                 }`} />
                 <span className="hidden md:inline">
-                  {agentRunning ? 'Agent Connected' : agentChecked ? 'Install Agent' : 'Relay Agent'}
+                  {isLive ? 'Agent Connected' : agentRunning ? 'Agent (No WS)' : agentChecked ? 'Install Agent' : 'Relay Agent'}
                 </span>
               </button>
             );

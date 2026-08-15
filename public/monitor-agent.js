@@ -343,7 +343,7 @@ const WebSocket = (() => {
 let activeStreams = new Map();
 
 function connect() {
-  const wsUrl = `${SERVER.replace(/^http/, 'ws')}/api/relay/agent?token=${encodeURIComponent(TOKEN)}&name=${encodeURIComponent(AGENT_NAME)}`;
+  const wsUrl = `${SERVER.replace(/^http/, 'ws')}/agent-ws?token=${encodeURIComponent(TOKEN)}&name=${encodeURIComponent(AGENT_NAME)}`;
   console.log(`⚡ [Monitor Agent] Connecting to ${SERVER} as "${AGENT_NAME}"...`);
 
   let ws = null;
@@ -361,6 +361,7 @@ function connect() {
     ws.send(JSON.stringify({
       type: 'agent:hello',
       name: AGENT_NAME,
+      host: os.hostname(),
       system: {
         hostname: os.hostname(),
         platform: os.platform(),

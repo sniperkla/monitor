@@ -4276,18 +4276,19 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
     });
 
     socket.on('telemetry:webrtc:init', (data = {}) => {
-      const { relayName } = data;
+      const { agentName, connectionId } = data;
       const crypto = require('crypto');
       const relayConnId = crypto.randomBytes(16).toString('hex');
       global.__relayConnMap.set(relayConnId, socket.id);
 
+      // Find a matching monitor agent WebSocket for WebRTC negotiation
       let targetWs = null;
-      if (global.__activeRelays) {
-        for (const [userId, userRelays] of global.__activeRelays.entries()) {
-          if (userRelays instanceof Map) {
-            const r = (relayName && userRelays.get(relayName)) || (userRelays.size > 0 ? userRelays.values().next().value : null);
-            if (r?.ws && r.ws.readyState === 1) {
-              targetWs = r.ws;
+      if (global.__monitorAgents && global.__monitorAgents.size > 0) {
+        for (const [key, agent] of global.__monitorAgents.entries()) {
+          if (agent.ws && agent.ws.readyState === 1) {
+            // If agentName specified, match exactly; otherwise use first available
+            if (!agentName || agent.agentName === agentName) {
+              targetWs = agent.ws;
               break;
             }
           }
@@ -4310,58 +4311,78 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
         });
         socket.emit('telemetry:rtc:ready', { connId: relayConnId });
       }
+      // If no monitor agent is connected, do not emit rtc:ready — browser falls back to WebSocket stream
     });
 
     socket.on('telemetry:start_stream', (data = {}) => {
-      const { interval = 500, relayName } = data;
+      const { interval = 500, agentName, connectionId } = data;
+      // Register this socket so telemetry:stream responses from agents can be routed back
       global.__relayConnMap.set(socket.id, socket.id);
 
-      if (global.__activeRelays) {
-        for (const [userId, userRelays] of global.__activeRelays.entries()) {
-          if (userRelays instanceof Map) {
-            const r = (relayName && userRelays.get(relayName)) || (userRelays.size > 0 ? userRelays.values().next().value : null);
-            if (r?.ws && r.ws.readyState === 1) {
-              r.ws.send(JSON.stringify({
-                type: 'telemetry:start_stream',
-                connId: socket.id,
-                interval: Number(interval) || 500
-              }));
+      // Route to a monitor agent (not local relay)
+      if (global.__monitorAgents && global.__monitorAgents.size > 0) {
+        let targetAgent = null;
+        for (const [key, agent] of global.__monitorAgents.entries()) {
+          if (agent.ws && agent.ws.readyState === 1) {
+            if (!agentName || agent.agentName === agentName) {
+              targetAgent = agent;
               break;
             }
           }
         }
+        if (targetAgent) {
+          targetAgent.ws.send(JSON.stringify({
+            type: 'telemetry:start_stream',
+            connId: socket.id,
+            interval: Number(interval) || 500,
+          }));
+          return;
+        }
       }
+      // No monitor agent connected — client will fall back to HTTP polling
     });
 
     socket.on('telemetry:stop_stream', (data = {}) => {
-      if (global.__activeRelays) {
-        for (const [userId, userRelays] of global.__activeRelays.entries()) {
-          if (userRelays instanceof Map) {
-            for (const r of userRelays.values()) {
-              if (r?.ws && r.ws.readyState === 1) {
-                r.ws.send(JSON.stringify({
-                  type: 'telemetry:stop_stream',
-                  connId: socket.id
-                }));
-              }
-            }
+      // Stop stream on all connected monitor agents that have a stream for this socket
+      if (global.__monitorAgents) {
+        for (const [key, agent] of global.__monitorAgents.entries()) {
+          if (agent.ws && agent.ws.readyState === 1) {
+            agent.ws.send(JSON.stringify({
+              type: 'telemetry:stop_stream',
+              connId: socket.id,
+            }));
           }
         }
       }
     });
 
+    // Browser requests list of currently connected monitor agents
+    socket.on('agent:list', () => {
+      const agents = [];
+      if (global.__monitorAgents) {
+        for (const [key, agent] of global.__monitorAgents.entries()) {
+          if (agent.ws && agent.ws.readyState === 1) {
+            agents.push({
+              agentName: agent.agentName,
+              host: agent.host,
+              system: agent.system,
+              connectedAt: agent.connectedAt,
+            });
+          }
+        }
+      }
+      socket.emit('agent:list:result', agents);
+    });
+
     socket.on('disconnect', () => {
-      if (global.__activeRelays) {
-        for (const [userId, userRelays] of global.__activeRelays.entries()) {
-          if (userRelays instanceof Map) {
-            for (const r of userRelays.values()) {
-              if (r?.ws && r.ws.readyState === 1) {
-                r.ws.send(JSON.stringify({
-                  type: 'telemetry:stop_stream',
-                  connId: socket.id
-                }));
-              }
-            }
+      // Stop any active telemetry streams for this disconnecting socket
+      if (global.__monitorAgents) {
+        for (const [key, agent] of global.__monitorAgents.entries()) {
+          if (agent.ws && agent.ws.readyState === 1) {
+            agent.ws.send(JSON.stringify({
+              type: 'telemetry:stop_stream',
+              connId: socket.id,
+            }));
           }
         }
       }
@@ -4539,6 +4560,8 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
       global.__activeRelays = global.__activeRelays || new Map(); // userId → Map<relayId, {localPort, netServer, targetHost, targetPort, ws, capabilities, relayName}>
       // Map: relayConnId → socketId — routes relay agent SSH/SFTP responses back to the right browser socket
       global.__relayConnMap = global.__relayConnMap || new Map();
+      // Monitor Agent store: agentKey → { ws, userId, agentName, host, connectedAt, activeStreams: Map<connId, timer> }
+      global.__monitorAgents = global.__monitorAgents || new Map(); // agentKey (userId:agentName) → agent info
 
       // ── Persist tokens to MongoDB so they survive container rebuilds ───────
       const RELAY_TOKENS_FILE = path.resolve(__dirname, '.relay-tokens.json');
@@ -4628,13 +4651,112 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
       global.__persistRelayTokens = persistRelayTokens;
 
       const relayWss = new WebSocketServer({ noServer: true });
+      const agentWss = new WebSocketServer({ noServer: true });
 
-      // Intercept HTTP upgrades — only take /relay-ws, leave the rest to socket.io
+      // Intercept HTTP upgrades — /relay-ws for local relay, /agent-ws for monitor agents
       server.on('upgrade', (req, sock, head) => {
         if (req.url && req.url.startsWith('/relay-ws')) {
           relayWss.handleUpgrade(req, sock, head, (ws) => relayWss.emit('connection', ws, req));
+        } else if (req.url && req.url.startsWith('/agent-ws')) {
+          agentWss.handleUpgrade(req, sock, head, (ws) => agentWss.emit('connection', ws, req));
         }
       });
+
+      // ── Monitor Agent WebSocket Handler ────────────────────────────────────────
+      agentWss.on('connection', (ws, req) => {
+        const url       = new URL(req.url, 'http://localhost');
+        const token     = url.searchParams.get('token');
+        const agentName = decodeURIComponent(url.searchParams.get('name') || 'unknown');
+        const entry     = global.__relayTokens.get(token);
+
+        if (!entry || entry.expiresAt < Date.now()) {
+          ws.send(JSON.stringify({ type: 'error', message: 'Invalid or expired token' }));
+          ws.close(4001, 'Invalid token');
+          return;
+        }
+
+        const { userId } = entry;
+        const agentKey = `${userId}:${agentName}`;
+        ws.__agentKey = agentKey;
+        ws.__userId   = userId;
+        ws.__agentName = agentName;
+        const activeStreams = new Map(); // connId → interval timer
+
+        console.log(`⚡ [Agent] Connected: "${agentName}" (user ${userId})`);
+
+        // Server-side ping every 30s to keep connection alive
+        const agentPingTimer = setInterval(() => {
+          if (ws.readyState === 1) ws.ping();
+        }, 30000);
+
+        ws.on('message', (raw) => {
+          try {
+            const msg = JSON.parse(raw.toString());
+
+            if (msg.type === 'agent:hello') {
+              // Register agent with full metadata
+              const agentInfo = {
+                ws,
+                userId,
+                agentName: msg.name || agentName,
+                host: msg.host || msg.system?.hostname || agentName,
+                system: msg.system || {},
+                connectedAt: Date.now(),
+                activeStreams,
+              };
+              global.__monitorAgents.set(agentKey, agentInfo);
+              ws.send(JSON.stringify({ type: 'agent:welcome', agentName }));
+              console.log(`⚡ [Agent] Registered: "${agentName}" host=${agentInfo.host}`);
+
+              // Notify all browser sockets belonging to this userId
+              for (const [sockId, sock] of io.sockets.sockets) {
+                if (sock?.connected) {
+                  sock.emit('agent:online', { agentName, host: agentInfo.host, connectedAt: agentInfo.connectedAt });
+                }
+              }
+              return;
+            }
+
+            if (msg.type === 'ping') {
+              if (ws.readyState === 1) ws.send(JSON.stringify({ type: 'pong' }));
+              return;
+            }
+
+            // ── Telemetry stream data: forward to correct browser socket ──
+            if (msg.type === 'telemetry:stream' && msg.connId) {
+              const targetSocketId = global.__relayConnMap.get(msg.connId);
+              if (targetSocketId) {
+                const targetSocket = io.sockets.sockets.get(targetSocketId);
+                if (targetSocket?.connected) {
+                  targetSocket.emit('telemetry:stream', msg.data || msg);
+                }
+              }
+            }
+          } catch (e) {
+            console.error('[Agent] message parse error:', e.message);
+          }
+        });
+
+        ws.on('close', () => {
+          clearInterval(agentPingTimer);
+          for (const timer of activeStreams.values()) clearInterval(timer);
+          activeStreams.clear();
+          global.__monitorAgents.delete(agentKey);
+          console.log(`⚡ [Agent] Disconnected: "${agentName}" (user ${userId})`);
+
+          // Notify all browser sockets
+          for (const [sockId, sock] of io.sockets.sockets) {
+            if (sock?.connected) {
+              sock.emit('agent:offline', { agentName });
+            }
+          }
+        });
+
+        ws.on('error', (err) => {
+          console.error(`[Agent] WS error for "${agentName}": ${err.message}`);
+        });
+      });
+      // ── End Monitor Agent WebSocket Handler ────────────────────────────────────
 
       relayWss.on('connection', (ws, req) => {
         const url    = new URL(req.url, 'http://localhost');
