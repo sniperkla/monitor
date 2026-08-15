@@ -73,10 +73,14 @@ export async function createRelayPeer({ socket, relayConnId }) {
 
   // Handle SDP answer from relay (via server signaling)
   const onAnswer = ({ connId, sdp }) => {
-    if (connId !== relayConnId) return;
-    pc.setRemoteDescription(new RTCSessionDescription(sdp)).catch(err => {
-      console.error('[WebRTC] setRemoteDescription error:', err);
-    });
+    if (connId !== relayConnId || !sdp || !sdp.type) return;
+    try {
+      pc.setRemoteDescription(new RTCSessionDescription(sdp)).catch(err => {
+        console.error('[WebRTC] setRemoteDescription error:', err);
+      });
+    } catch (e) {
+      console.error('[WebRTC] Invalid RTCSessionDescription:', e);
+    }
   };
   socket.on('webrtc:answer', onAnswer);
 

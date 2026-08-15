@@ -1368,9 +1368,70 @@ async function handleCrossServerTransfer(ws, msg) {
     });
   });
 
+  const formatMB = (bytes) => {
+    if (!bytes || isNaN(bytes)) return '0 MB';
+    if (bytes >= 1024 * 1024 * 1024) return (bytes / (1024 * 1024 * 1024)).toFixed(2) + ' GB';
+    if (bytes >= 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+    if (bytes >= 1024) return (bytes / 1024).toFixed(0) + ' KB';
+    return bytes + ' B';
+  };
+
+  // Get accurate source size upfront before starting stream (5s timeout — never block transfer)
+  const totalBytes = await new Promise((resolve) => {
+    const sizeCmd = isDir
+      ? `du -sb "${srcPath}" 2>/dev/null | cut -f1`
+      : `stat -c%s "${srcPath}" 2>/dev/null || echo 0`;
+    const safetyTimeout = setTimeout(() => {
+      console.warn('[relay] totalBytes detection timed out — proceeding without size');
+      resolve(0);
+    }, 5000);
+    try {
+      srcSession.sshClient.exec(sizeCmd, (err, stream) => {
+        if (err) { clearTimeout(safetyTimeout); return resolve(0); }
+        let out = '';
+        stream.on('data', d => out += d.toString());
+        stream.stderr?.on('data', () => {}); // drain stderr so channel can close
+        stream.on('close', () => {
+          clearTimeout(safetyTimeout);
+          const n = parseInt(out.trim(), 10);
+          resolve(!isNaN(n) && n > 0 ? n : 0);
+        });
+        stream.on('error', () => { clearTimeout(safetyTimeout); resolve(0); });
+      });
+    } catch (e) {
+      clearTimeout(safetyTimeout);
+      resolve(0);
+    }
+  });
+
+  let lastProgressTime = 0;
+  let lastProgressVal = 0;
+  const sendThrottledProgress = (bytesSent, isDone = false) => {
+    const now = Date.now();
+    const pct = isDone ? 100 : (totalBytes > 0 ? Math.min(98, Math.max(1, Math.round((bytesSent / totalBytes) * 100))) : 50);
+    const statusText = totalBytes > 0
+      ? `🚀 ${formatMB(bytesSent)} / ${formatMB(totalBytes)}`
+      : `🚀 ${formatMB(bytesSent)} transferred`;
+
+    if (isDone || now - lastProgressTime > 250 || Math.abs(pct - lastProgressVal) >= 2) {
+      lastProgressTime = now;
+      lastProgressVal = pct;
+      try {
+        ws.send(JSON.stringify({
+          type: 'sftp:progress',
+          connId,
+          action: action === 'cut' ? 'move' : 'copy',
+          filename,
+          progress: pct,
+          status: statusText,
+          bytes: bytesSent,
+          totalBytes
+        }));
+      } catch {}
+    }
+  };
+
   if (isDir) {
-    // Single SSH exec for dest: rm+mkdir do NOT read stdin, so tar gets the full stream.
-    // 2>/dev/null suppresses noise; exit ≤1 = success, ≥2 = fatal.
     const cmdSrc = `tar cf - -C ${JSON.stringify(srcPath)} . 2>/dev/null`;
     const cmdDest = `rm -rf ${JSON.stringify(destPath)} && mkdir -p ${JSON.stringify(destPath)} && tar xf - -C ${JSON.stringify(destPath)} 2>/dev/null`;
 
@@ -1379,67 +1440,134 @@ async function handleCrossServerTransfer(ws, msg) {
       destSession.sshClient.exec(cmdDest, (err2, destStream) => {
         if (err2) { srcStream.destroy(); return sendError(err2); }
 
+        // Drain stderr on both sides to avoid buffer deadlocks
+        srcStream.stderr?.on('data', () => {});
+        destStream.stderr?.on('data', () => {});
+
         srcStream.pipe(destStream);
-        sendProgress(1, filename);
+        sendThrottledProgress(0);
 
         let bytesSent = 0;
         srcStream.on('data', chunk => {
           bytesSent += chunk.length;
-          sendProgress(Math.min(99, Math.round(bytesSent / 1024 / 10)), filename);
+          sendThrottledProgress(bytesSent);
         });
 
-        let srcExitCode = null;
-        let destExitCode = null;
-        const tryFinish = () => {
-          if (srcExitCode === null || destExitCode === null) return;
-          if (srcExitCode <= 1 && destExitCode <= 1) {
-            if (action === 'cut') srcSession.sshClient.exec(`rm -rf ${JSON.stringify(srcPath)}`, () => {});
+        let finished = false;
+        let completionTimer = null;
+
+        const doFinish = (isSuccess, errMsg) => {
+          if (finished) return;
+          finished = true;
+          if (completionTimer) clearTimeout(completionTimer);
+          try { srcStream.destroy(); } catch {}
+          try { destStream.destroy(); } catch {}
+
+          if (isSuccess) {
+            sendThrottledProgress(totalBytes > 0 ? totalBytes : bytesSent, true);
+            if (action === 'cut') {
+              srcSession.sshClient.exec(`rm -rf ${JSON.stringify(srcPath)}`, () => {});
+            }
             sendSuccess();
           } else {
-            sendError(`Transfer failed (src tar: ${srcExitCode}, dest tar: ${destExitCode})`);
+            sendError(errMsg || 'Transfer failed');
           }
         };
 
-        // NOTE: do NOT add srcStream.on('end') → destStream.end() — pipe() already does that.
-        srcStream.on('close', (code) => { srcExitCode = code ?? 0; tryFinish(); });
-        destStream.on('close', (code) => { destExitCode = code ?? 0; tryFinish(); });
-        srcStream.on('error', sendError);
-        destStream.on('error', sendError);
+        // When source finishes reading all tar data, signal EOF to dest and start safety timer
+        srcStream.on('end', () => {
+          try { destStream.end(); } catch {}
+          if (!completionTimer) {
+            completionTimer = setTimeout(() => {
+              // 4 seconds after source EOF, dest extraction should be complete
+              doFinish(true);
+            }, 4000);
+          }
+        });
+
+        srcStream.on('exit', (code) => {
+          if (code !== null && code !== undefined && code > 1) {
+            doFinish(false, `Source tar exited with code ${code}`);
+          }
+        });
+
+        destStream.on('exit', (code) => {
+          if (code === null || code === undefined || code <= 1) {
+            doFinish(true);
+          } else {
+            doFinish(false, `Destination tar exited with code ${code}`);
+          }
+        });
+
+        destStream.on('close', () => doFinish(true));
+        srcStream.on('error', err => doFinish(false, err));
+        destStream.on('error', err => doFinish(false, err));
       });
     });
   } else {
-    // File: ensure parent dir exists, then pipe cat src | cat > dest
+    // File: ensure parent dir exists, then pipe raw bytes
     const cmdSrc = `cat ${JSON.stringify(srcPath)}`;
     const destDir = require('path').posix.dirname(destPath);
     const cmdDest = `mkdir -p ${JSON.stringify(destDir)} && cat > ${JSON.stringify(destPath)}`;
-
-    // Get file size for progress
-    let totalBytes = 0;
-    srcSession.sshClient.exec(`stat -c%s ${JSON.stringify(srcPath)} 2>/dev/null || echo 0`, (szErr, szStream) => {
-      if (!szErr) szStream.on('data', d => { const n = parseInt(d.toString().trim()); if (!isNaN(n) && n > 0) totalBytes = n; });
-    });
 
     srcSession.sshClient.exec(cmdSrc, (err, srcStream) => {
       if (err) return sendError(err);
       destSession.sshClient.exec(cmdDest, (err2, destStream) => {
         if (err2) { srcStream.destroy(); return sendError(err2); }
 
+        srcStream.stderr?.on('data', () => {});
+        destStream.stderr?.on('data', () => {});
+
         srcStream.pipe(destStream);
-        sendProgress(1, filename);
+        sendThrottledProgress(0);
 
         let bytesSent = 0;
         srcStream.on('data', chunk => {
           bytesSent += chunk.length;
-          if (totalBytes > 0) sendProgress(Math.min(99, Math.round((bytesSent / totalBytes) * 100)), filename);
+          sendThrottledProgress(bytesSent);
         });
 
-        destStream.on('close', (code) => {
-          if (code !== null && code !== 0) return sendError(`File transfer failed (exit ${code})`);
-          if (action === 'cut') srcSession.sshClient.exec(`rm -f ${JSON.stringify(srcPath)}`, () => {});
-          sendSuccess();
+        let finished = false;
+        let completionTimer = null;
+
+        const doFinish = (isSuccess, errMsg) => {
+          if (finished) return;
+          finished = true;
+          if (completionTimer) clearTimeout(completionTimer);
+          try { srcStream.destroy(); } catch {}
+          try { destStream.destroy(); } catch {}
+
+          if (isSuccess) {
+            sendThrottledProgress(totalBytes > 0 ? totalBytes : bytesSent, true);
+            if (action === 'cut') {
+              srcSession.sshClient.exec(`rm -f ${JSON.stringify(srcPath)}`, () => {});
+            }
+            sendSuccess();
+          } else {
+            sendError(errMsg || 'File transfer failed');
+          }
+        };
+
+        srcStream.on('end', () => {
+          try { destStream.end(); } catch {}
+          if (!completionTimer) {
+            completionTimer = setTimeout(() => {
+              doFinish(true);
+            }, 3000);
+          }
         });
-        srcStream.on('error', sendError);
-        destStream.on('error', sendError);
+
+        destStream.on('exit', (code) => {
+          if (code === null || code === undefined || code === 0) {
+            doFinish(true);
+          } else {
+            doFinish(false, `File write exited with code ${code}`);
+          }
+        });
+
+        destStream.on('close', () => doFinish(true));
+        srcStream.on('error', err => doFinish(false, err));
+        destStream.on('error', err => doFinish(false, err));
       });
     });
   }
@@ -2272,6 +2400,11 @@ function handleDockerCommand(ws, msg) {
       cmdSuffix = `service inspect ${svcNameI} --format "{{json .}}"`;
     } else if (action === 'swarm:nodes') {
       cmdSuffix = `node ls --format "{{json .}}"`;
+    } else if (action === 'swarm:orphans') {
+      // List all containers + listening ports for conflict detection before swarm leave
+      return runRawCmd(`sh -c 'echo "CONTAINERS:"; docker ps -a --format "{{json .}}" 2>/dev/null; echo "PORTS:"; { ss -tlnp 2>/dev/null || netstat -tlnp 2>/dev/null; } | grep -oE "[0-9]+\\$" | sort -un'`);
+    } else if (action === 'swarm:leave') {
+      return runRawCmd(`sh -c 'docker swarm leave --force 2>&1; docker compose down --remove-orphans 2>/dev/null || true; docker container prune -f 2>/dev/null || true; docker network create proxy-net 2>/dev/null || true; echo "LEFT_SWARM"'`);
     } else if (action === 'swarm:init') {
       // args[0] = optional advertise-addr (e.g. "192.168.1.10" or "eth0")
       const advertiseAddr = args && args[0] ? String(args[0]).replace(/[^a-zA-Z0-9.:_/-]/g, '') : '';
@@ -2347,7 +2480,7 @@ function handleDockerCommand(ws, msg) {
     } else if (action === 'swarm:remove' && args.length >= 1) {
       const serviceName = String(args[0] || '').replace(/[^a-zA-Z0-9._-]/g, '');
       if (!serviceName) return ws.send(JSON.stringify({ type: 'docker:error', connId, error: 'Invalid Service Name' }));
-      cmdSuffix = `service rm ${serviceName}`;
+      return runRawCmd(`sh -c 'docker service rm ${serviceName} 2>&1; docker compose down --remove-orphans 2>/dev/null || true; docker container prune -f 2>/dev/null || true'`);
     } else if (action === 'swarm:configure' && args.length >= 1) {
       const serviceName = String(args[0] || '').replace(/[^a-zA-Z0-9._-]/g, '');
       const image       = String(args[1] || '').replace(/[^a-zA-Z0-9.@/:-]/g, '');

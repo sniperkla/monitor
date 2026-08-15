@@ -21,7 +21,7 @@ services:
       - proxy-net
 
   monitor-mongo:
-    image: mongo:7
+    image: mongo:4.4
     container_name: monitor-mongo
     restart: unless-stopped
     ports:

@@ -45,9 +45,9 @@ export async function POST(request) {
           PROC_ACTIVE=1
         fi
 
-        # Check systemd user service
+        # Check systemd user service (exact match so 'inactive' is not matched)
         SERVICE_ACTIVE=0
-        if systemctl --user is-active server-monitor-agent.service 2>/dev/null | grep -q 'active'; then
+        if systemctl --user is-active server-monitor-agent.service 2>/dev/null | grep -qx 'active'; then
           SERVICE_ACTIVE=1
         fi
 

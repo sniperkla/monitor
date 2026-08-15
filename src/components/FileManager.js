@@ -772,6 +772,8 @@ export default function FileManager({
            removeNotification(toastRef.current);
            toastRef.current = null;
          }
+         setTransfer(null);
+         transferRef.current = null;
          if (refreshTimeoutRef.current) clearTimeout(refreshTimeoutRef.current);
          refreshTimeoutRef.current = setTimeout(() => {
            const targetPath = currentPathRef.current || '.';
@@ -1158,14 +1160,17 @@ export default function FileManager({
 
   // --- Auto-Refresh Logic ---
   
-  // 1. Background Polling (Every 10 seconds if ready)
+  // 1. Background Polling (Every 20 seconds if ready and NOT transferring)
   useEffect(() => {
     if (status !== 'ready' || !socket) return;
     
     const interval = setInterval(() => {
-      console.log('🔄 Auto-refreshing file list (polling)...', currentPathRef.current);
+      // Pause polling during active uploads/transfers to prevent SSH channel congestion
+      if (transferRef.current || (uploadQueueRef.current && uploadQueueRef.current.length > 0)) {
+        return;
+      }
       refreshFiles(currentPathRef.current);
-    }, 15000); // Increased to 15s to be less aggressive
+    }, 20000);
     
     return () => clearInterval(interval);
   }, [status, socket]);
@@ -1206,7 +1211,7 @@ export default function FileManager({
     return () => clearInterval(timer);
   }, [transferCountdown]);
 
-  // Safety timeout: auto-dismiss copy/move transfer if stuck (no progress/success)
+  // Safety timeout: auto-dismiss copy/move transfer ONLY if completely stuck without progress for 180s
   useEffect(() => {
     if (transferSafetyTimerRef.current) {
       clearTimeout(transferSafetyTimerRef.current);
@@ -1214,14 +1219,14 @@ export default function FileManager({
     }
     if (transfer && (transfer.action === 'copy' || transfer.action === 'move') && !transfer.waiting && !transfer.reconnecting) {
       transferSafetyTimerRef.current = setTimeout(() => {
-        console.warn('⚠️ Transfer safety timeout — auto-dismissing stuck copy/move modal');
+        console.warn('⚠️ Transfer inactivity timeout (no progress for 3m) — auto-dismissing modal');
         setTransfer(null);
         transferRef.current = null;
         if (socket) {
           const targetPath = currentPathRef.current || '.';
           socket.emit('sftp:list', targetPath);
         }
-      }, 60000);
+      }, 180000); // 3 minutes of zero progress before timeout
     }
     return () => {
       if (transferSafetyTimerRef.current) {
@@ -1229,7 +1234,7 @@ export default function FileManager({
         transferSafetyTimerRef.current = null;
       }
     };
-  }, [transfer?.action, transfer?.waiting, transfer?.reconnecting, transfer?.filename]);
+  }, [transfer?.action, transfer?.waiting, transfer?.reconnecting, transfer?.filename, transfer?.progress]);
 
   // 2. Refresh on Window Focus / tab visibility (When user clicks back into the tab)
   useEffect(() => {
@@ -2422,13 +2427,15 @@ export default function FileManager({
             filename: dragItems.length > 1 ? `${dragItems.length} items` : dragItems[0].filename,
             progress: 0,
             action: 'copy',
+            isCrossServer: true,
+            status: '🚀 High-Speed Direct Stream in progress...',
             waiting: false
           };
           setTransfer(transferObj);
           transferRef.current = transferObj;
 
           toastRef.current = addNotification({ 
-            title: t('files.status.upload'), 
+            title: '🚀 High-Speed Direct Stream', 
             message: `${t('files.status.uploadingTo')} ${dragItems.length > 1 ? `${dragItems.length} items` : dragItems[0].filename}...`, 
             type: 'loading', 
             duration: 0 

@@ -1153,7 +1153,7 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
             } else if (action === 'swarm:remove' && args.length >= 1) {
               const serviceName = String(args[0] || '').replace(/[^a-zA-Z0-9._-]/g, '');
               if (!serviceName) return socket.emit('docker:error', 'Invalid Service Name');
-              cmdSuffix = `service rm ${serviceName}`;
+              cmdSuffix = `sh -c 'docker service rm ${serviceName} 2>&1; docker compose down --remove-orphans 2>/dev/null || true; docker container prune -f 2>/dev/null || true; echo "REMOVED"'`;
             } else if (action === 'swarm:create') {
               const svcName      = String(args[0] || '').replace(/[^a-zA-Z0-9._-]/g, '');
               const image        = String(args[1] || '').replace(/[^a-zA-Z0-9.@/:-]/g, '');
@@ -1883,7 +1883,7 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
               } else if (action === 'swarm:remove' && args.length >= 1) {
                  const serviceName = String(args[0] || '').replace(/[^a-zA-Z0-9._-]/g, '');
                  if (!serviceName) return socket.emit('docker:error', 'Invalid Service Name');
-                 cmdSuffix = `service rm ${serviceName}`;
+                 cmdSuffix = `sh -c 'docker service rm ${serviceName} 2>&1; docker compose down --remove-orphans 2>/dev/null || true; docker container prune -f 2>/dev/null || true; echo "REMOVED"'`;
               } else if (action === 'swarm:configure') {
                  const serviceName = String(args[0] || '').replace(/[^a-zA-Z0-9._-]/g, '');
                  const image = String(args[1] || '').replace(/[^a-zA-Z0-9.@/:-]/g, '');
@@ -1966,6 +1966,17 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
                   cmdSuffix = `service inspect ${svcNameI} --format "{{json .}}"`;
               } else if (action === 'swarm:nodes') {
                  cmdSuffix = `node ls --format "{{json .}}"`;
+              } else if (action === 'swarm:orphans') {
+                 // List all containers + listening ports for conflict detection
+                 const orphanCmd = [
+                   'echo "CONTAINERS:"',
+                   'docker ps -a --format "{{json .}}" 2>/dev/null',
+                   'echo "PORTS:"',
+                   '{ ss -tlnp 2>/dev/null || netstat -tlnp 2>/dev/null; } | grep -E "LISTEN" | grep -oE ":[0-9]+" | grep -oE "[0-9]+" | sort -un'
+                 ].join('; ');
+                 cmdSuffix = `sh -c '${orphanCmd.replace(/'/g, "'\\''")}'`;
+              } else if (action === 'swarm:leave') {
+                 cmdSuffix = `sh -c 'docker swarm leave --force 2>&1; docker compose down --remove-orphans 2>/dev/null || true; docker container prune -f 2>/dev/null || true; docker network create proxy-net 2>/dev/null || true; echo "LEFT_SWARM"'`;
               } else if (action === 'rmi' && args.length > 0) {
                  const targetId = String(args[0] || '').replace(/[^a-zA-Z0-9._/:-]/g, '');
                  if (!targetId) return socket.emit('docker:error', 'Invalid Image ID');
@@ -3133,27 +3144,70 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
                 };
 
                 const isDir = await checkSourceDir();
+                const filename = path.posix.basename(srcPath);
                 
-                // For Docker EITHER at source or destination, or for folders, 
-                // we use the tar pipe method. It's the most reliable for streaming.
-                if (isDir || srcSession.dockerContainerId || destSession.dockerContainerId) {
-                    const srcBase = path.posix.basename(srcPath);
-                    
-                    console.log(`📂 [${socket.id}] Folder Transfer Start: ${srcPath} -> ${destPath}`);
+                const formatMB = (bytes) => {
+                  if (!bytes || isNaN(bytes)) return '0 MB';
+                  if (bytes >= 1024 * 1024 * 1024) return (bytes / (1024 * 1024 * 1024)).toFixed(2) + ' GB';
+                  if (bytes >= 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+                  if (bytes >= 1024) return (bytes / 1024).toFixed(0) + ' KB';
+                  return bytes + ' B';
+                };
 
-                    let totalBytes = 0;
-                    srcSession.sshClient.exec(`du -sb "${srcPath}" | cut -f1`, (err, duStream) => {
-                      if (!err) {
-                        duStream.on('data', (d) => {
-                          const size = parseInt(d.toString().trim());
-                          if (!isNaN(size)) totalBytes = size;
-                        });
-                      }
+                // Get accurate total size upfront (5s timeout — never block transfer if SSH exec hangs)
+                const totalBytes = await new Promise((resolve) => {
+                  const sizeCmd = isDir
+                    ? `du -sb "${srcPath}" 2>/dev/null | cut -f1`
+                    : `stat -c%s "${srcPath}" 2>/dev/null || echo 0`;
+                  const safetyTimeout = setTimeout(() => {
+                    console.warn(`[server] totalBytes detection timed out for ${srcPath} — proceeding without size`);
+                    resolve(0);
+                  }, 5000);
+                  try {
+                    srcSession.sshClient.exec(sizeCmd, (err, stream) => {
+                      if (err) { clearTimeout(safetyTimeout); return resolve(0); }
+                      let out = '';
+                      stream.on('data', d => out += d.toString());
+                      stream.stderr?.on('data', () => {}); // drain stderr so channel can close
+                      stream.on('close', () => {
+                        clearTimeout(safetyTimeout);
+                        const n = parseInt(out.trim(), 10);
+                        resolve(!isNaN(n) && n > 0 ? n : 0);
+                      });
+                      stream.on('error', () => { clearTimeout(safetyTimeout); resolve(0); });
                     });
+                  } catch (e) {
+                    clearTimeout(safetyTimeout);
+                    resolve(0);
+                  }
+                });
 
-                    // Single SSH exec for dest: rm+mkdir+tar as one shell command.
-                    // rm and mkdir do NOT read stdin, so the tar stream arrives intact.
-                    // 2>/dev/null on both sides suppresses noise; exit ≤1 = success.
+                let lastProgressTime = 0;
+                let lastProgressVal = 0;
+                const emitThrottledProgress = (bytesSent, isDone = false) => {
+                  const now = Date.now();
+                  const pct = isDone ? 100 : (totalBytes > 0 ? Math.min(98, Math.max(1, Math.round((bytesSent / totalBytes) * 100))) : 50);
+                  const statusText = totalBytes > 0
+                    ? `🚀 ${formatMB(bytesSent)} / ${formatMB(totalBytes)}`
+                    : `🚀 ${formatMB(bytesSent)} transferred`;
+
+                  if (isDone || now - lastProgressTime > 250 || Math.abs(pct - lastProgressVal) >= 2) {
+                    lastProgressTime = now;
+                    lastProgressVal = pct;
+                    socket.emit('sftp:progress', {
+                      action: action === 'cut' ? 'move' : 'copy',
+                      filename,
+                      progress: pct,
+                      status: statusText,
+                      bytes: bytesSent,
+                      totalBytes
+                    });
+                  }
+                };
+
+                if (isDir || srcSession.dockerContainerId || destSession.dockerContainerId) {
+                    console.log(`📂 [${socket.id}] High-Speed Folder Transfer: ${srcPath} -> ${destPath} (Total: ${formatMB(totalBytes)})`);
+
                     const cmdSrc = `tar cf - -C ${shellQuote(srcPath)} . 2>/dev/null`;
                     const cmdDest = `rm -rf ${shellQuote(destPath)} && mkdir -p ${shellQuote(destPath)} && tar xf - -C ${shellQuote(destPath)} 2>/dev/null`;
 
@@ -3162,87 +3216,133 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
                       sshClient.exec(cmdDest, (err, destStream) => {
                         if (err) { srcStream.destroy(); return finish(err); }
 
+                        // Drain stderr on both sides to avoid buffer deadlocks
+                        srcStream.stderr?.on('data', () => {});
+                        destStream.stderr?.on('data', () => {});
+
                         srcStream.pipe(destStream);
-                        socket.emit('sftp:progress', { action: 'copy', filename: srcBase, progress: 1 });
+                        emitThrottledProgress(0);
 
                         let bytesSent = 0;
                         srcStream.on('data', (chunk) => {
                           bytesSent += chunk.length;
-                          if (totalBytes > 0) {
-                            const progress = Math.min(99, Math.round((bytesSent / totalBytes) * 100));
-                            socket.emit('sftp:progress', { action: 'copy', filename: srcBase, progress });
-                          }
+                          emitThrottledProgress(bytesSent);
                         });
 
-                        let srcExitCode = null;
-                        let destExitCode = null;
-                        const tryFinish = () => {
-                          if (srcExitCode === null || destExitCode === null) return;
+                        let finished = false;
+                        let completionTimer = null;
+
+                        const doFinish = (isSuccess, errMsg) => {
+                          if (finished) return;
+                          finished = true;
                           clearTimeout(transferTimer);
-                          if (srcExitCode <= 1 && destExitCode <= 1) {
-                            socket.emit('sftp:progress', { action: action === 'cut' ? 'move' : 'copy', filename: srcBase, progress: 100 });
+                          if (completionTimer) clearTimeout(completionTimer);
+                          try { srcStream.destroy(); } catch {}
+                          try { destStream.destroy(); } catch {}
+
+                          if (isSuccess) {
+                            emitThrottledProgress(totalBytes > 0 ? totalBytes : bytesSent, true);
                             socket.emit('sftp:action_success', { action: action === 'cut' ? 'move' : 'copy', path: destPath });
                             if (action === 'cut') srcSession.sshClient.exec(`rm -rf ${shellQuote(srcPath)}`, () => {});
                           } else {
-                            finish(`Transfer failed (src tar: ${srcExitCode}, dest tar: ${destExitCode})`);
+                            finish(errMsg || 'Transfer failed');
                           }
                         };
 
-                        // NOTE: do NOT add srcStream.on('end') to call destStream.end() —
-                        // pipe() already does that. Double-ending corrupts the stream.
-                        srcStream.on('close', (code) => { srcExitCode = code ?? 0; tryFinish(); });
-                        destStream.on('close', (code) => { destExitCode = code ?? 0; tryFinish(); });
-                        srcStream.on('error', (err) => { finish(err); srcStream.destroy(); destStream.destroy(); });
-                        destStream.on('error', (err) => { finish(err); srcStream.destroy(); destStream.destroy(); });
+                        srcStream.on('end', () => {
+                          try { destStream.end(); } catch {}
+                          if (!completionTimer) {
+                            completionTimer = setTimeout(() => {
+                              doFinish(true);
+                            }, 4000);
+                          }
+                        });
+
+                        srcStream.on('exit', (code) => {
+                          if (code !== null && code !== undefined && code > 1) {
+                            doFinish(false, `Source tar exited with code ${code}`);
+                          }
+                        });
+
+                        destStream.on('exit', (code) => {
+                          if (code === null || code === undefined || code <= 1) {
+                            doFinish(true);
+                          } else {
+                            doFinish(false, `Destination tar exited with code ${code}`);
+                          }
+                        });
+
+                        destStream.on('close', () => doFinish(true));
+                        srcStream.on('error', (err) => doFinish(false, err));
+                        destStream.on('error', (err) => doFinish(false, err));
                       });
                     });
-                  } else {
-                    // File transfer via SSH pipe — mirrors the folder tar pattern exactly
-                    const filename = path.posix.basename(srcPath);
-                    const cmdSrc = `cat ${shellQuote(srcPath)}`;
-                    // Ensure parent directory exists before writing
+                } else {
+                    // File transfer via direct high-throughput stream
                     const destDir = path.posix.dirname(destPath);
+                    const cmdSrc = `cat ${shellQuote(srcPath)}`;
                     const cmdDest = `mkdir -p ${shellQuote(destDir)} && cat > ${shellQuote(destPath)}`;
-
-                    // Get file size for progress reporting (best-effort)
-                    let totalBytes = 0;
-                    srcSession.sshClient.exec(`stat -c%s ${shellQuote(srcPath)} 2>/dev/null || echo 0`, (szErr, szStream) => {
-                      if (!szErr) szStream.on('data', d => { const n = parseInt(d.toString().trim()); if (!isNaN(n) && n > 0) totalBytes = n; });
-                    });
 
                     srcSession.sshClient.exec(cmdSrc, (err, srcStream) => {
                       if (err) return finish(err);
                       sshClient.exec(cmdDest, (err, destStream) => {
                         if (err) { srcStream.destroy(); return finish(err); }
 
+                        srcStream.stderr?.on('data', () => {});
+                        destStream.stderr?.on('data', () => {});
+
                         srcStream.pipe(destStream);
-                        socket.emit('sftp:progress', { action: action === 'cut' ? 'move' : 'copy', filename, progress: 1 });
+                        emitThrottledProgress(0);
 
                         let bytesSent = 0;
                         srcStream.on('data', chunk => {
                           bytesSent += chunk.length;
-                          if (totalBytes > 0) {
-                            const progress = Math.min(99, Math.round((bytesSent / totalBytes) * 100));
-                            socket.emit('sftp:progress', { action: action === 'cut' ? 'move' : 'copy', filename, progress });
-                          }
+                          emitThrottledProgress(bytesSent);
                         });
 
-                        destStream.on('close', (code) => {
+                        let finished = false;
+                        let completionTimer = null;
+
+                        const doFinish = (isSuccess, errMsg) => {
+                          if (finished) return;
+                          finished = true;
                           clearTimeout(transferTimer);
-                          if (code === null || code === 0) {
-                            socket.emit('sftp:progress', { action: action === 'cut' ? 'move' : 'copy', filename, progress: 100 });
+                          if (completionTimer) clearTimeout(completionTimer);
+                          try { srcStream.destroy(); } catch {}
+                          try { destStream.destroy(); } catch {}
+
+                          if (isSuccess) {
+                            emitThrottledProgress(totalBytes > 0 ? totalBytes : bytesSent, true);
                             socket.emit('sftp:action_success', { action: action === 'cut' ? 'move' : 'copy', path: destPath });
                             if (action === 'cut') srcSession.sshClient.exec(`rm -f ${shellQuote(srcPath)}`, () => {});
                           } else {
-                            finish(`File transfer failed (exit ${code})`);
+                            finish(errMsg || 'File transfer failed');
+                          }
+                        };
+
+                        srcStream.on('end', () => {
+                          try { destStream.end(); } catch {}
+                          if (!completionTimer) {
+                            completionTimer = setTimeout(() => {
+                              doFinish(true);
+                            }, 3000);
                           }
                         });
 
-                        srcStream.on('error', err => { finish(err); srcStream.destroy(); destStream.destroy(); });
-                        destStream.on('error', err => { finish(err); srcStream.destroy(); destStream.destroy(); });
+                        destStream.on('exit', (code) => {
+                          if (code === null || code === undefined || code === 0) {
+                            doFinish(true);
+                          } else {
+                            doFinish(false, `File write exited with code ${code}`);
+                          }
+                        });
+
+                        destStream.on('close', () => doFinish(true));
+                        srcStream.on('error', err => doFinish(false, err));
+                        destStream.on('error', err => doFinish(false, err));
                       });
                     });
-                  }
+                }
               } catch (err) {
                 finish(err);
               }

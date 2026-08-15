@@ -247,6 +247,7 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
   const [pruneSystemModal, setPruneSystemModal] = useState({ isOpen: false, targets: { containers: false, images: false, volumes: false, networks: false, cache: false }, pruneAll: false, confirmText: '' });
   const [pruneSelections, setPruneSelections] = useState({ containers: {}, images: {}, volumes: {}, networks: {} });
   const [selectedVolumes, setSelectedVolumes] = useState([]);
+  const [orphansModal, setOrphansModal] = useState({ isOpen: false, containers: [], ports: [], loading: false });
 
   const [pendingActions, setPendingActions] = useState({}); // { id: actionName }
   const [isWakingUp, setIsWakingUp] = useState(false);
@@ -682,6 +683,36 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
             type: 'success'
           });
         }
+      } else if (action === 'swarm:orphans') {
+        // Parse containers and listening ports from output
+        const lines = output.split('\n');
+        let inPorts = false;
+        const containerList = [];
+        const portList = [];
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (trimmed === 'CONTAINERS:') { inPorts = false; continue; }
+          if (trimmed === 'PORTS:') { inPorts = true; continue; }
+          if (!trimmed) continue;
+          if (inPorts) {
+            if (/^\d+$/.test(trimmed)) portList.push(trimmed);
+          } else {
+            try { containerList.push(JSON.parse(trimmed)); } catch (_) {}
+          }
+        }
+        setOrphansModal({ isOpen: true, containers: containerList, ports: portList, loading: false });
+      } else if (action === 'swarm:leave') {
+        setIsLoading(false);
+        setSwarmServices([]);
+        setSwarmNodes([]);
+        setOrphansModal({ isOpen: false, containers: [], ports: [], loading: false });
+        emitDockerLs();
+        setActiveTab('containers');
+        addNotification({
+          title: '🚢 Swarm Cleaned & Reset',
+          message: 'Left Docker Swarm, removed orphaned tasks, and reset proxy-net bridge network.',
+          type: 'success'
+        });
       } else if (action === 'swarm:create' || action === 'swarm:configure' || action === 'swarm:remove') {
         setIsLoading(false);
         setActiveTab('swarm');
@@ -690,6 +721,7 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
             socketRef.current.emit('docker:command', { action: 'swarm:services' });
             socketRef.current.emit('docker:command', { action: 'swarm:nodes' });
           }
+          emitDockerLs();
         };
         setTimeout(refreshSwarm, 1000);
         setTimeout(refreshSwarm, 3000);
@@ -2504,6 +2536,19 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
                               <div className="flex items-center gap-2">
                                 <button
                                   onClick={() => {
+                                    // First fetch zombie/orphan list, then show review modal
+                                    setOrphansModal(prev => ({ ...prev, loading: true, isOpen: true, containers: [], ports: [] }));
+                                    if (socketRef.current) {
+                                      socketRef.current.emit('docker:command', { action: 'swarm:orphans' });
+                                    }
+                                  }}
+                                  className="px-3 py-1.5 bg-red-500/15 hover:bg-red-500/25 border border-red-500/30 text-red-300 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer"
+                                  title="Leave Docker Swarm, clean orphaned containers, and reset proxy-net bridge network"
+                                >
+                                  <Trash2 size={12} /> Leave Swarm & Clean
+                                </button>
+                                <button
+                                  onClick={() => {
                                     setIsLoading(true);
                                     socketRef.current.emit('docker:command', { action: 'connect-nginx-swarm' });
                                   }}
@@ -2870,6 +2915,113 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
               });
             }}
           />
+        )}
+
+        {/* ── Orphans/Zombie Review Modal ── */}
+        {orphansModal.isOpen && (
+          <div className="fixed inset-0 z-[9998] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+            <div className="bg-[var(--bg-primary)] border border-red-500/30 rounded-2xl w-full max-w-xl shadow-2xl shadow-red-500/10 flex flex-col max-h-[80vh]">
+              {/* Header */}
+              <div className="flex items-center justify-between px-5 py-4 border-b border-red-500/20 bg-red-500/5 rounded-t-2xl">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-8 h-8 rounded-xl bg-red-500/15 flex items-center justify-center text-red-400">
+                    <Trash2 size={16} />
+                  </div>
+                  <div>
+                    <h2 className="font-bold text-sm text-white">Leave Swarm & Clean Orphans</h2>
+                    <p className="text-[10px] text-red-300/70">Review containers and port conflicts before proceeding</p>
+                  </div>
+                </div>
+                <button onClick={() => setOrphansModal({ isOpen: false, containers: [], ports: [], loading: false })} className="text-[var(--text-muted)] hover:text-white transition-colors p-1"><X size={16} /></button>
+              </div>
+
+              {/* Body */}
+              <div className="flex-1 overflow-y-auto custom-scrollbar p-4 space-y-4">
+                {orphansModal.loading ? (
+                  <div className="flex flex-col items-center justify-center py-10 gap-3 text-[var(--text-muted)]">
+                    <RefreshCw size={22} className="animate-spin text-red-400" />
+                    <p className="text-xs">Scanning for zombie containers and port conflicts...</p>
+                  </div>
+                ) : (
+                  <>
+                    {/* Port Conflicts */}
+                    {orphansModal.ports.length > 0 && (
+                      <div>
+                        <h3 className="text-[10px] font-bold uppercase tracking-wider text-amber-400 flex items-center gap-1.5 mb-2">
+                          <AlertTriangle size={11} /> Port Conflicts ({orphansModal.ports.length})
+                        </h3>
+                        <div className="flex flex-wrap gap-1.5">
+                          {orphansModal.ports.map(port => (
+                            <span key={port} className="px-2 py-0.5 bg-amber-500/15 border border-amber-500/30 rounded text-[10px] font-mono text-amber-300">:{port}</span>
+                          ))}
+                        </div>
+                        <p className="text-[9px] text-[var(--text-muted)] mt-1.5">These ports are currently in use. Containers using them will be stopped and removed.</p>
+                      </div>
+                    )}
+
+                    {/* Zombie / All Containers */}
+                    {orphansModal.containers.length === 0 ? (
+                      <div className="text-center py-6 text-[var(--text-muted)]">
+                        <CircleCheck size={22} className="mx-auto text-emerald-400 mb-2" />
+                        <p className="text-xs">No containers found. Safe to proceed.</p>
+                      </div>
+                    ) : (
+                      <div>
+                        <h3 className="text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)] flex items-center gap-1.5 mb-2">
+                          <Box size={11} /> All Containers ({orphansModal.containers.length})
+                        </h3>
+                        <div className="space-y-1.5">
+                          {orphansModal.containers.map((c, i) => {
+                            const status = (c.Status || c.state || '').toLowerCase();
+                            const isZombie = status.includes('exited') || status.includes('dead') || status.includes('created');
+                            const isSwarmTask = (c.Labels || '').includes('com.docker.swarm');
+                            const isRunning = status.includes('up');
+                            return (
+                              <div key={i} className={`flex items-center gap-3 px-3 py-2 rounded-xl border text-xs ${isZombie ? 'bg-red-500/8 border-red-500/25' : isSwarmTask ? 'bg-amber-500/8 border-amber-500/25' : 'bg-white/3 border-white/8'}`}>
+                                <div className={`w-1.5 h-1.5 rounded-full shrink-0 ${isRunning ? 'bg-emerald-400' : isZombie ? 'bg-red-400' : 'bg-amber-400'}`} />
+                                <div className="min-w-0 flex-1">
+                                  <p className="font-mono font-bold truncate text-[var(--text-primary)]">{c.Names || c.name || c.ID?.slice(0,12) || 'unknown'}</p>
+                                  <p className="text-[9px] text-[var(--text-muted)] truncate">{c.Image || c.image || ''}</p>
+                                </div>
+                                <div className="text-right shrink-0">
+                                  <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold ${isZombie ? 'bg-red-500/20 text-red-300' : isSwarmTask ? 'bg-amber-500/20 text-amber-300' : 'bg-white/10 text-slate-300'}`}>
+                                    {isZombie ? '⚠ Zombie' : isSwarmTask ? '🐝 Swarm' : isRunning ? '● Running' : status}
+                                  </span>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
+
+              {/* Footer */}
+              <div className="px-5 py-4 border-t border-white/5 flex justify-end gap-3">
+                <button
+                  onClick={() => setOrphansModal({ isOpen: false, containers: [], ports: [], loading: false })}
+                  className="px-4 py-2 bg-white/5 hover:bg-white/10 text-[var(--text-muted)] rounded-xl text-xs font-bold transition-all cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  disabled={orphansModal.loading}
+                  onClick={() => {
+                    setOrphansModal(prev => ({ ...prev, isOpen: false }));
+                    setIsLoading(true);
+                    if (socketRef.current) {
+                      socketRef.current.emit('docker:command', { action: 'swarm:leave' });
+                    }
+                  }}
+                  className="px-4 py-2 bg-red-500 hover:bg-red-600 disabled:opacity-40 text-white rounded-xl text-xs font-bold transition-all flex items-center gap-2 cursor-pointer"
+                >
+                  <Trash2 size={13} /> Leave Swarm & Clean All
+                </button>
+              </div>
+            </div>
+          </div>
         )}
 
         {pruneVolumesModal.isOpen && (
