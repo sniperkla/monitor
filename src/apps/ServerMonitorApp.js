@@ -91,13 +91,6 @@ export default function ServerMonitorApp() {
   const { t } = useTranslation();
   const { state: appState, apiFetch, relayInfo } = useApp();
   
-  // Local Relay Requirement State
-  const [relayStatus, setRelayStatus] = useState('checking'); // 'checking' | 'connected' | 'disconnected'
-  const [relayToken, setRelayToken] = useState(null);
-  const [relayLoading, setRelayLoading] = useState(false);
-  const [copiedOs, setCopiedOs] = useState(null);
-  const [osTab, setOsTab] = useState('posix'); // 'posix' | 'powershell' | 'cmd'
-
   const [selectedConnection, setSelectedConnection] = useState(null);
   const [activeTab, setActiveTab] = useState('overview'); // overview, apps, processes
   const [metrics, setMetrics] = useState(null);
@@ -142,57 +135,7 @@ export default function ServerMonitorApp() {
 
   const connections = useMemo(() => appState.connections || [], [appState.connections]);
 
-  // 1. Check & Poll Local Relay Status
-  const checkRelay = useCallback(async () => {
-    try {
-      const res = await fetch('/api/relay/token');
-      const data = await res.json();
-      if (data.success && data.connected) {
-        setRelayStatus('connected');
-        return true;
-      } else {
-        setRelayStatus('disconnected');
-        // Fetch or generate token if not already present
-        if (!relayToken && !relayLoading) {
-          generateToken();
-        }
-        return false;
-      }
-    } catch {
-      setRelayStatus('disconnected');
-      return false;
-    }
-  }, [relayToken, relayLoading]);
-
-  const generateToken = async () => {
-    setRelayLoading(true);
-    try {
-      const res = await fetch('/api/relay/token', { method: 'POST' });
-      const data = await res.json();
-      if (data.token) {
-        setRelayToken(data.token);
-      }
-    } catch (err) {
-      console.error('Failed to generate relay token:', err);
-    } finally {
-      setRelayLoading(false);
-    }
-  };
-
-  // Check relay status on mount and poll while disconnected
-  useEffect(() => {
-    checkRelay();
-
-    relayPollRef.current = setInterval(() => {
-      checkRelay();
-    }, 3000);
-
-    return () => {
-      if (relayPollRef.current) clearInterval(relayPollRef.current);
-    };
-  }, [checkRelay]);
-
-  // Select first connection by default once relay is connected
+  // Select first connection by default
   useEffect(() => {
     if (!selectedConnection && connections.length > 0) {
       setSelectedConnection(connections[0]._id);
@@ -229,20 +172,27 @@ export default function ServerMonitorApp() {
   }, [apiFetch]);
 
   useEffect(() => {
-    if (!selectedConnection || relayStatus !== 'connected') return;
+    if (!selectedConnection) return;
 
-    // Check immediately when connection changes
+    // Only run SSH process check if agent is NOT streaming live via WebSocket
+    if (isSocketStreaming || isP2PStreaming) return;
+
+    // Check once when connection changes
     checkAgentStatusForConn(selectedConnection);
 
-    // Then poll every 15 seconds
-    agentPollRef.current = setInterval(() => {
-      checkAgentStatusForConn(selectedConnection);
-    }, 15000);
+    // Only poll over SSH every 30s if wizard is open or agent is offline
+    if (showAgentWizard) {
+      agentPollRef.current = setInterval(() => {
+        if (!isSocketStreaming && !isP2PStreaming) {
+          checkAgentStatusForConn(selectedConnection);
+        }
+      }, 30000);
+    }
 
     return () => {
       if (agentPollRef.current) clearInterval(agentPollRef.current);
     };
-  }, [selectedConnection, relayStatus]);
+  }, [selectedConnection, isSocketStreaming, isP2PStreaming, showAgentWizard, checkAgentStatusForConn]);
 
   // Page Visibility detection - pause polling when tab/window is in the background
   useEffect(() => {
@@ -257,7 +207,7 @@ export default function ServerMonitorApp() {
     };
   }, []);
 
-  // Clear previous samples when server connection changes
+  // Clear previous samples and reset stream state when server connection changes
   useEffect(() => {
     prevSampleRef.current = null;
     setCpuHistory([]);
@@ -265,6 +215,9 @@ export default function ServerMonitorApp() {
     setNetworkHistory([]);
     setError(null);
     setMetrics(null);
+    setIsSocketStreaming(false);
+    setIsP2PStreaming(false);
+    isP2PStreamingRef.current = false;
   }, [selectedConnection]);
 
   // Client-side CPU and Network rate calculation from cumulative delta counters
@@ -327,7 +280,7 @@ export default function ServerMonitorApp() {
 
   // Fetch metrics with in-flight guard and client delta computation
   const fetchMetrics = useCallback(async (isManual = false) => {
-    if (!selectedConnection || relayStatus !== 'connected') return;
+    if (!selectedConnection) return;
     if (inFlightMetricsRef.current && !isManual) return;
 
     inFlightMetricsRef.current = true;
@@ -372,11 +325,11 @@ export default function ServerMonitorApp() {
       inFlightMetricsRef.current = false;
       if (isManual) setLoading(false);
     }
-  }, [selectedConnection, relayStatus, apiFetch, computeClientDeltas]);
+  }, [selectedConnection, apiFetch, computeClientDeltas]);
 
   // Fetch installed applications (on-demand with client cache)
   const fetchApps = useCallback(async (force = false) => {
-    if (!selectedConnection || relayStatus !== 'connected' || inFlightAppsRef.current) return;
+    if (!selectedConnection || inFlightAppsRef.current) return;
     inFlightAppsRef.current = true;
     setAppsLoading(true);
 
@@ -398,11 +351,11 @@ export default function ServerMonitorApp() {
       inFlightAppsRef.current = false;
       setAppsLoading(false);
     }
-  }, [selectedConnection, relayStatus, apiFetch]);
+  }, [selectedConnection, apiFetch]);
 
   // Fetch running processes (on-demand or live polling)
   const fetchProcesses = useCallback(async (force = false) => {
-    if (!selectedConnection || relayStatus !== 'connected' || inFlightProcRef.current) return;
+    if (!selectedConnection || inFlightProcRef.current) return;
     inFlightProcRef.current = true;
     setProcessesLoading(true);
 
@@ -425,7 +378,7 @@ export default function ServerMonitorApp() {
       inFlightProcRef.current = false;
       setProcessesLoading(false);
     }
-  }, [selectedConnection, relayStatus, apiFetch]);
+  }, [selectedConnection, apiFetch]);
 
   // Terminate / Kill process by PID
   const executeKillProcess = async () => {
@@ -480,20 +433,6 @@ export default function ServerMonitorApp() {
 
   // ── WebRTC P2P DataChannel + WebSocket Relay Stream ──
   useEffect(() => {
-    if (relayStatus !== 'connected') {
-      setIsSocketStreaming(false);
-      setIsP2PStreaming(false);
-      if (peerRef.current) {
-        try { peerRef.current.close(); } catch (_) {}
-        peerRef.current = null;
-      }
-      if (socketRef.current) {
-        try { socketRef.current.disconnect(); } catch (_) {}
-        socketRef.current = null;
-      }
-      return;
-    }
-
     const socket = io({
       path: '/api/socket',
       transports: ['websocket', 'polling']
@@ -504,14 +443,24 @@ export default function ServerMonitorApp() {
       // 1. Ask server for currently connected monitor agents
       socket.emit('agent:list');
 
-      // 2. First priority: initiate WebRTC P2P DataChannel signaling
-      socket.emit('telemetry:webrtc:init');
+      const selectedConn_ = connections.find(c => c._id === selectedConnection);
+      const targetHost = selectedConn_?.host || '';
+      const targetLabel = selectedConn_?.label || '';
+
+      // 2. First priority: initiate WebRTC P2P DataChannel signaling for selected server
+      socket.emit('telemetry:webrtc:init', {
+        connectionId: selectedConnection,
+        targetHost,
+        targetLabel
+      });
       
       // Fallback: If not P2P yet, start WebSocket stream
       if (autoRefresh && isTabVisible && selectedConnection && !peerRef.current) {
         socket.emit('telemetry:start_stream', {
           interval: refreshInterval,
-          connectionId: selectedConnection
+          connectionId: selectedConnection,
+          targetHost,
+          targetLabel
         });
       }
     });
@@ -575,6 +524,12 @@ export default function ServerMonitorApp() {
       }
     });
 
+    socket.on('telemetry:no_agent', () => {
+      setIsSocketStreaming(false);
+      setIsP2PStreaming(false);
+      isP2PStreamingRef.current = false;
+    });
+
     // 3. Fallback WebSocket Relay Stream handler
     socket.on('telemetry:stream', (raw) => {
       if (!isP2PStreamingRef.current) {
@@ -605,7 +560,7 @@ export default function ServerMonitorApp() {
       setIsSocketStreaming(false);
       setIsP2PStreaming(false);
     };
-  }, [relayStatus, handleIncomingTelemetry]);
+  }, [handleIncomingTelemetry]);
 
   // Synchronize stream interval and target parameters
   useEffect(() => {
@@ -627,20 +582,26 @@ export default function ServerMonitorApp() {
     if (!socket || !socket.connected) return;
 
     if (autoRefresh && isTabVisible && selectedConnection) {
+      const selectedConn_ = connections.find(c => c._id === selectedConnection);
+      const targetHost = selectedConn_?.host || '';
+      const targetLabel = selectedConn_?.label || '';
+
       socket.emit('telemetry:start_stream', {
         interval: refreshInterval,
-        connectionId: selectedConnection
+        connectionId: selectedConnection,
+        targetHost,
+        targetLabel
       });
     } else {
       socket.emit('telemetry:stop_stream');
       setIsSocketStreaming(false);
     }
-  }, [autoRefresh, isTabVisible, selectedConnection, refreshInterval, isP2PStreaming]);
+  }, [autoRefresh, isTabVisible, selectedConnection, refreshInterval, isP2PStreaming, connections]);
 
   // Active polling lifecycle for remote server metrics
   // Only run HTTP polling when neither WebSocket stream nor P2P DataChannel is active
   useEffect(() => {
-    if (!selectedConnection || relayStatus !== 'connected') return;
+    if (!selectedConnection) return;
     // Skip HTTP polling when real-time stream is already delivering telemetry
     if (isSocketStreaming || isP2PStreaming) return;
 
@@ -666,18 +627,18 @@ export default function ServerMonitorApp() {
       isMounted = false;
       if (timeoutId) clearTimeout(timeoutId);
     };
-  }, [selectedConnection, relayStatus, autoRefresh, refreshInterval, isTabVisible, fetchMetrics, isSocketStreaming, isP2PStreaming]);
+  }, [selectedConnection, autoRefresh, refreshInterval, isTabVisible, fetchMetrics, isSocketStreaming, isP2PStreaming]);
 
   // Fetch apps on-demand when switching to 'apps' tab
   useEffect(() => {
-    if (activeTab === 'apps' && selectedConnection && relayStatus === 'connected') {
+    if (activeTab === 'apps' && selectedConnection) {
       fetchApps();
     }
-  }, [activeTab, selectedConnection, relayStatus, fetchApps]);
+  }, [activeTab, selectedConnection, fetchApps]);
 
   // Fetch and poll processes when switching to 'processes' tab
   useEffect(() => {
-    if (activeTab === 'processes' && selectedConnection && relayStatus === 'connected') {
+    if (activeTab === 'processes' && selectedConnection) {
       fetchProcesses(true);
 
       let procInterval = null;
@@ -691,26 +652,13 @@ export default function ServerMonitorApp() {
         if (procInterval) clearInterval(procInterval);
       };
     }
-  }, [activeTab, selectedConnection, relayStatus, autoRefresh, refreshInterval, isTabVisible, fetchProcesses]);
+  }, [activeTab, selectedConnection, autoRefresh, refreshInterval, isTabVisible, fetchProcesses]);
 
   const selectedConn = connections.find(c => c._id === selectedConnection);
   const currentApps = appsData[selectedConnection]?.apps || null;
   const currentAppsTimestamp = appsData[selectedConnection]?.timestamp || null;
   const availableApps = useMemo(() => (currentApps || []).filter(a => a.installed), [currentApps]);
 
-  const serverUrl = typeof window !== 'undefined' ? window.location.origin : 'http://localhost:3000';
-
-  const installCommands = {
-    posix: `curl -fsSL -H "Cache-Control: no-cache" "${serverUrl}/local-relay.js" -o local-relay.js && node local-relay.js --install --server "${serverUrl}" --token "${relayToken || 'GENERATING_TOKEN...'}"`,
-    powershell: `Invoke-WebRequest -Uri "${serverUrl}/local-relay.js" -OutFile "local-relay.js"; node local-relay.js --install --server "${serverUrl}" --token "${relayToken || 'GENERATING_TOKEN...'}"`,
-    direct: `curl -fsSL "${serverUrl}/local-relay.js" -o local-relay.js && node local-relay.js --server "${serverUrl}" --token "${relayToken || 'GENERATING_TOKEN...'}"`
-  };
-
-  const copyToClipboard = (text, key) => {
-    navigator.clipboard.writeText(text);
-    setCopiedOs(key);
-    setTimeout(() => setCopiedOs(null), 2000);
-  };
 
   const formatBytes = (bytes) => {
     if (!bytes || isNaN(bytes)) return '0 B';
@@ -841,154 +789,7 @@ export default function ServerMonitorApp() {
   });
 
   // ─────────────────────────────────────────────────────────────────────────────
-  // RENDER GUARD: Local Relay Required Screen
-  // ─────────────────────────────────────────────────────────────────────────────
-  if (relayStatus === 'disconnected' || relayStatus === 'checking') {
-    return (
-      <div className="flex flex-col h-full bg-[var(--bg-primary)] text-[var(--text-primary)] overflow-y-auto">
-        {/* Header */}
-        <div className="flex items-center justify-between px-5 py-3 border-b border-[var(--border-color)] bg-[var(--bg-secondary)] shrink-0">
-          <div className="flex items-center gap-3">
-            <Activity className="text-[var(--accent-indigo)]" size={22} />
-            <div>
-              <h1 className="text-base font-semibold">Server Monitor</h1>
-              <p className="text-[11px] text-[var(--text-muted)]">Zero-Server Overhead & P2P WebRTC Telemetry</p>
-            </div>
-          </div>
-          <div className="flex items-center gap-2">
-            <span className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-medium bg-amber-500/10 text-amber-400 border border-amber-500/20">
-              <span className="w-2 h-2 rounded-full bg-amber-400 animate-ping" />
-              Relay Required
-            </span>
-          </div>
-        </div>
-
-        {/* Setup Guard Card */}
-        <div className="flex-1 flex items-center justify-center p-6">
-          <div className="max-w-2xl w-full bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-2xl p-6 sm:p-8 shadow-2xl space-y-6">
-            
-            {/* Top Banner */}
-            <div className="flex items-start gap-4">
-              <div className="p-3 bg-amber-500/10 border border-amber-500/20 rounded-xl text-amber-400 shrink-0">
-                <Laptop size={28} />
-              </div>
-              <div className="space-y-1">
-                <h2 className="text-lg font-bold text-[var(--text-primary)] flex items-center gap-2">
-                  Local Relay Agent Required
-                  <Sparkles size={16} className="text-amber-400" />
-                </h2>
-                <p className="text-xs text-[var(--text-secondary)] leading-relaxed">
-                  To protect server resources and stream high-frequency telemetry at sub-millisecond speeds, Server Monitor requires the 
-                  <strong className="text-[var(--text-primary)]"> Local Relay Agent</strong> running on your machine.
-                </p>
-              </div>
-            </div>
-
-            {/* Feature Highlights Grid */}
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-              <div className="bg-[var(--bg-tertiary)] p-3 rounded-xl border border-[var(--border-color)]/50">
-                <Shield size={16} className="text-emerald-400 mb-1.5" />
-                <div className="text-xs font-semibold">100% Client-Side</div>
-                <div className="text-[11px] text-[var(--text-muted)] mt-0.5">Central server consumes 0 CPU/bandwidth</div>
-              </div>
-              <div className="bg-[var(--bg-tertiary)] p-3 rounded-xl border border-[var(--border-color)]/50">
-                <Zap size={16} className="text-blue-400 mb-1.5" />
-                <div className="text-xs font-semibold">P2P WebRTC Speed</div>
-                <div className="text-[11px] text-[var(--text-muted)] mt-0.5">&lt;1ms latency on local loopback</div>
-              </div>
-              <div className="bg-[var(--bg-tertiary)] p-3 rounded-xl border border-[var(--border-color)]/50">
-                <RotateCw size={16} className="text-purple-400 mb-1.5" />
-                <div className="text-xs font-semibold">Auto Background Service</div>
-                <div className="text-[11px] text-[var(--text-muted)] mt-0.5">Install once, runs seamlessly in background</div>
-              </div>
-            </div>
-
-            {/* Quick Install Box */}
-            <div className="space-y-3">
-              <div className="flex items-center justify-between">
-                <label className="text-xs font-semibold text-[var(--text-secondary)] flex items-center gap-1.5">
-                  <Terminal size={14} className="text-[var(--accent-indigo)]" />
-                  Run this command in your terminal:
-                </label>
-                
-                {/* OS Switcher */}
-                <div className="flex bg-[var(--bg-primary)] p-0.5 rounded-lg border border-[var(--border-color)] text-[11px]">
-                  <button
-                    onClick={() => setOsTab('posix')}
-                    className={`px-2.5 py-0.5 rounded-md font-medium transition-colors ${
-                      osTab === 'posix' ? 'bg-[var(--accent-indigo)] text-white' : 'text-[var(--text-muted)] hover:text-white'
-                    }`}
-                  >
-                    macOS / Linux
-                  </button>
-                  <button
-                    onClick={() => setOsTab('powershell')}
-                    className={`px-2.5 py-0.5 rounded-md font-medium transition-colors ${
-                      osTab === 'powershell' ? 'bg-[var(--accent-indigo)] text-white' : 'text-[var(--text-muted)] hover:text-white'
-                    }`}
-                  >
-                    Windows PowerShell
-                  </button>
-                  <button
-                    onClick={() => setOsTab('direct')}
-                    className={`px-2.5 py-0.5 rounded-md font-medium transition-colors ${
-                      osTab === 'direct' ? 'bg-[var(--accent-indigo)] text-white' : 'text-[var(--text-muted)] hover:text-white'
-                    }`}
-                  >
-                    Run Once (No Install)
-                  </button>
-                </div>
-              </div>
-
-              {/* Code Snippet Box */}
-              <div className="relative bg-[var(--bg-primary)] border border-[var(--border-color)] rounded-xl p-3.5 font-mono text-xs text-emerald-400 group">
-                <div className="overflow-x-auto pr-10 whitespace-pre-wrap break-all select-all">
-                  {installCommands[osTab]}
-                </div>
-                <button
-                  onClick={() => copyToClipboard(installCommands[osTab], osTab)}
-                  className="absolute top-2.5 right-2.5 p-2 bg-[var(--bg-tertiary)] hover:bg-[var(--bg-card-hover)] text-[var(--text-muted)] hover:text-white rounded-lg border border-[var(--border-color)] transition-colors"
-                  title="Copy command to clipboard"
-                >
-                  {copiedOs === osTab ? <Check size={14} className="text-emerald-400" /> : <Copy size={14} />}
-                </button>
-              </div>
-            </div>
-
-            {/* Waiting Footer */}
-            <div className="flex flex-wrap items-center justify-between gap-3 pt-2 border-t border-[var(--border-color)] text-xs text-[var(--text-muted)]">
-              <div className="flex items-center gap-2">
-                <RefreshCw size={14} className="animate-spin text-[var(--accent-indigo)]" />
-                <span>Listening for Local Relay connection...</span>
-              </div>
-
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={() => checkRelay()}
-                  className="px-3 py-1.5 bg-[var(--bg-tertiary)] hover:bg-[var(--bg-card-hover)] border border-[var(--border-color)] rounded-lg text-xs font-medium text-[var(--text-primary)] transition-colors"
-                >
-                  Check Status Now
-                </button>
-                <button
-                  onClick={() => {
-                    window.dispatchEvent(new CustomEvent('open-settings-tab', { detail: 'database' }));
-                  }}
-                  className="flex items-center gap-1 px-3 py-1.5 bg-indigo-600/20 text-indigo-400 hover:bg-indigo-600/30 border border-indigo-500/30 rounded-lg text-xs font-medium transition-colors"
-                >
-                  <span>Relay Settings</span>
-                  <ExternalLink size={12} />
-                </button>
-              </div>
-            </div>
-
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  // ─────────────────────────────────────────────────────────────────────────────
-  // MAIN APP VIEW (When Local Relay is connected)
+  // MAIN APP VIEW
   // ─────────────────────────────────────────────────────────────────────────────
   return (
     <div className="flex flex-col h-full bg-[var(--bg-primary)] text-[var(--text-primary)]">
@@ -1001,7 +802,7 @@ export default function ServerMonitorApp() {
               Server Monitor
               <span className="flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
                 <Zap size={10} className="fill-emerald-400" />
-                {connectedAgents.size > 0 ? `Agent Streaming (${connectedAgents.size})` : 'Local Relay Active (P2P)'}
+                {connectedAgents.size > 0 ? `Agent Streaming (${connectedAgents.size})` : 'Agentless Mode'}
               </span>
             </h1>
             <div className="flex items-center gap-1.5 text-[11px] text-[var(--text-muted)]">
@@ -1088,13 +889,18 @@ export default function ServerMonitorApp() {
             const agentSt = agentStatuses[selectedConnection];
             const agentRunning = agentSt?.isRunning;
             const agentChecked = !!agentSt;
-            // Check if any connected WebSocket agent matches this connection's host
+            // Check if any connected WebSocket agent matches this connection
             const selectedConn_ = connections.find(c => c._id === selectedConnection);
             const connHost = selectedConn_?.host || '';
+            const currentHostname = metrics?.system?.hostname || '';
             const liveAgent = connectedAgents.size > 0 && [...connectedAgents.values()].find(
-              a => a.host === connHost || a.agentName === connHost || a.agentName === selectedConn_?.label
+              a => a.host === connHost || 
+                   a.ip === connHost ||
+                   a.agentName === connHost || 
+                   a.agentName === selectedConn_?.label ||
+                   (currentHostname && (a.agentName === currentHostname || a.host === currentHostname))
             );
-            const isLive = !!liveAgent;
+            const isLive = isSocketStreaming || isP2PStreaming || !!liveAgent;
             return (
               <button
                 onClick={() => setShowAgentWizard(true)}

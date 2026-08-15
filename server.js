@@ -4276,18 +4276,22 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
     });
 
     socket.on('telemetry:webrtc:init', (data = {}) => {
-      const { agentName, connectionId } = data;
+      const { agentName, targetHost, targetLabel, connectionId } = data;
       const crypto = require('crypto');
       const relayConnId = crypto.randomBytes(16).toString('hex');
       global.__relayConnMap.set(relayConnId, socket.id);
 
-      // Find a matching monitor agent WebSocket for WebRTC negotiation
+      // Find the specific matching monitor agent WebSocket for this server
       let targetWs = null;
       if (global.__monitorAgents && global.__monitorAgents.size > 0) {
         for (const [key, agent] of global.__monitorAgents.entries()) {
           if (agent.ws && agent.ws.readyState === 1) {
-            // If agentName specified, match exactly; otherwise use first available
-            if (!agentName || agent.agentName === agentName) {
+            const matches = 
+              (agentName && agent.agentName === agentName) ||
+              (targetHost && (agent.host === targetHost || agent.ip === targetHost || agent.agentName === targetHost)) ||
+              (targetLabel && (agent.agentName === targetLabel || agent.host === targetLabel));
+
+            if (matches) {
               targetWs = agent.ws;
               break;
             }
@@ -4311,25 +4315,43 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
         });
         socket.emit('telemetry:rtc:ready', { connId: relayConnId });
       }
-      // If no monitor agent is connected, do not emit rtc:ready — browser falls back to WebSocket stream
+      // If no monitor agent is connected for THIS server, do not emit rtc:ready — browser falls back to WebSocket stream or HTTP polling
     });
 
     socket.on('telemetry:start_stream', (data = {}) => {
-      const { interval = 500, agentName, connectionId } = data;
+      const { interval = 500, agentName, targetHost, targetLabel, connectionId } = data;
       // Register this socket so telemetry:stream responses from agents can be routed back
       global.__relayConnMap.set(socket.id, socket.id);
 
-      // Route to a monitor agent (not local relay)
+      // 1. Always stop any previously active stream for this socket on ALL agents first
+      if (global.__monitorAgents) {
+        for (const [key, agent] of global.__monitorAgents.entries()) {
+          if (agent.ws && agent.ws.readyState === 1) {
+            agent.ws.send(JSON.stringify({
+              type: 'telemetry:stop_stream',
+              connId: socket.id,
+            }));
+          }
+        }
+      }
+
+      // 2. Find the SPECIFIC monitor agent for the selected server
       if (global.__monitorAgents && global.__monitorAgents.size > 0) {
         let targetAgent = null;
         for (const [key, agent] of global.__monitorAgents.entries()) {
           if (agent.ws && agent.ws.readyState === 1) {
-            if (!agentName || agent.agentName === agentName) {
+            const matches = 
+              (agentName && agent.agentName === agentName) ||
+              (targetHost && (agent.host === targetHost || agent.ip === targetHost || agent.agentName === targetHost)) ||
+              (targetLabel && (agent.agentName === targetLabel || agent.host === targetLabel));
+
+            if (matches) {
               targetAgent = agent;
               break;
             }
           }
         }
+
         if (targetAgent) {
           targetAgent.ws.send(JSON.stringify({
             type: 'telemetry:start_stream',
@@ -4339,7 +4361,9 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
           return;
         }
       }
-      // No monitor agent connected — client will fall back to HTTP polling
+
+      // No matching monitor agent for this server — notify socket so client falls back to HTTP polling
+      socket.emit('telemetry:no_agent', { connectionId });
     });
 
     socket.on('telemetry:stop_stream', (data = {}) => {
@@ -4365,6 +4389,7 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
             agents.push({
               agentName: agent.agentName,
               host: agent.host,
+              ip: agent.ip,
               system: agent.system,
               connectedAt: agent.connectedAt,
             });
@@ -4693,25 +4718,25 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
           try {
             const msg = JSON.parse(raw.toString());
 
-            if (msg.type === 'agent:hello') {
-              // Register agent with full metadata
+              const clientIp = (req.headers['x-forwarded-for'] || req.socket.remoteAddress || '').split(',')[0].trim().replace(/^::ffff:/, '');
               const agentInfo = {
                 ws,
                 userId,
                 agentName: msg.name || agentName,
                 host: msg.host || msg.system?.hostname || agentName,
+                ip: clientIp,
                 system: msg.system || {},
                 connectedAt: Date.now(),
                 activeStreams,
               };
               global.__monitorAgents.set(agentKey, agentInfo);
               ws.send(JSON.stringify({ type: 'agent:welcome', agentName }));
-              console.log(`⚡ [Agent] Registered: "${agentName}" host=${agentInfo.host}`);
+              console.log(`⚡ [Agent] Registered: "${agentName}" host=${agentInfo.host} ip=${clientIp}`);
 
               // Notify all browser sockets belonging to this userId
               for (const [sockId, sock] of io.sockets.sockets) {
                 if (sock?.connected) {
-                  sock.emit('agent:online', { agentName, host: agentInfo.host, connectedAt: agentInfo.connectedAt });
+                  sock.emit('agent:online', { agentName, host: agentInfo.host, ip: clientIp, connectedAt: agentInfo.connectedAt });
                 }
               }
               return;
