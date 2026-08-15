@@ -177,9 +177,9 @@ export default function AgentSetupWizard({
 
   if (!isOpen) return null;
 
-  const tmuxCommand = `tmux new-session -d -s monitor-agent "curl -sSL '${serverUrl}/monitor-agent.min.js' | node - --server '${serverUrl}' --token '${effectiveToken}'"`;
-  const serviceCommand = `curl -sSL '${serverUrl}/monitor-agent.min.js' | node - --install --server '${serverUrl}' --token '${effectiveToken}'`;
-  const foregroundCommand = `curl -sSL '${serverUrl}/monitor-agent.min.js' | node - --server '${serverUrl}' --token '${effectiveToken}'`;
+  const tmuxCommand = `tmux new-session -d -s monitor-agent "curl -sSL -H 'Cache-Control: no-cache' '${serverUrl}/monitor-agent.min.js' | node - --server '${serverUrl}' --token '${effectiveToken}'"`;
+  const serviceCommand = `curl -sSL -H 'Cache-Control: no-cache' '${serverUrl}/monitor-agent.min.js' | node - --install --server '${serverUrl}' --token '${effectiveToken}'`;
+  const foregroundCommand = `curl -sSL -H 'Cache-Control: no-cache' '${serverUrl}/monitor-agent.min.js' | node - --server '${serverUrl}' --token '${effectiveToken}'`;
   const uninstallCommand = `tmux kill-session -t monitor-agent 2>/dev/null; pkill -f '[m]onitor-agent'; systemctl --user stop server-monitor-agent 2>/dev/null`;
 
   return (

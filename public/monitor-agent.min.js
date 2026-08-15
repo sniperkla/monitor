@@ -5,6 +5,8 @@
  * Connects back to the Central Monitor Server via WebSocket / WebRTC DataChannel
  * to stream ultra-low-latency 0ms system telemetry (CPU, RAM, Disks, Network, Docker).
  * 
+ * Zero dependencies required (pure standard Node.js).
+ * 
  * Usage:
  *   node monitor-agent.js --server https://your-server.com --token <TOKEN> [--name <NAME>]
  *   node monitor-agent.js --install --server https://your-server.com --token <TOKEN>
@@ -18,7 +20,9 @@ const os = require('os');
 const path = require('path');
 const http = require('http');
 const https = require('https');
-const { spawnSync, execSync } = require('child_process');
+const crypto = require('crypto');
+const EventEmitter = require('events');
+const { spawnSync } = require('child_process');
 
 // ── Service IDs ──
 const SVC_ID = 'server-monitor-agent';
@@ -335,10 +339,170 @@ function collectSystemTelemetry() {
   };
 }
 
-// ── WebSocket Client & Auto-Reconnect ──
-const WebSocket = (() => {
-  try { return require('ws'); } catch (_) { return null; }
-})();
+// ── Zero-Dependency WebSocket Client (RFC 6455) ──
+class NativeWebSocketClient extends EventEmitter {
+  constructor(url) {
+    super();
+    this.url = new URL(url);
+    this.readyState = 0; // 0=CONNECTING, 1=OPEN, 2=CLOSING, 3=CLOSED
+    this.socket = null;
+    this.buffer = Buffer.alloc(0);
+    this._connect();
+  }
+
+  _connect() {
+    const isSecure = this.url.protocol === 'wss:';
+    const transport = isSecure ? https : http;
+    const port = this.url.port || (isSecure ? 443 : 80);
+    const key = crypto.randomBytes(16).toString('base64');
+
+    const req = transport.request({
+      hostname: this.url.hostname,
+      port,
+      path: this.url.pathname + this.url.search,
+      headers: {
+        'Upgrade': 'websocket',
+        'Connection': 'Upgrade',
+        'Sec-WebSocket-Key': key,
+        'Sec-WebSocket-Version': '13',
+        'Host': this.url.host,
+      },
+      rejectUnauthorized: false
+    });
+
+    req.on('upgrade', (res, socket, head) => {
+      this.socket = socket;
+      this.readyState = 1;
+      if (head && head.length > 0) this._handleData(head);
+
+      socket.on('data', (chunk) => this._handleData(chunk));
+      socket.on('close', () => {
+        this.readyState = 3;
+        this.emit('close');
+      });
+      socket.on('error', (err) => this.emit('error', err));
+
+      this.emit('open');
+    });
+
+    req.on('error', (err) => {
+      this.readyState = 3;
+      this.emit('error', err);
+    });
+
+    req.end();
+  }
+
+  _handleData(chunk) {
+    this.buffer = Buffer.concat([this.buffer, chunk]);
+    while (this.buffer.length >= 2) {
+      const firstByte = this.buffer[0];
+      const secondByte = this.buffer[1];
+      const opcode = firstByte & 0x0F;
+      const masked = (secondByte & 0x80) === 0x80;
+      let payloadLen = secondByte & 0x7F;
+      let offset = 2;
+
+      if (payloadLen === 126) {
+        if (this.buffer.length < offset + 2) return;
+        payloadLen = this.buffer.readUInt16BE(offset);
+        offset += 2;
+      } else if (payloadLen === 127) {
+        if (this.buffer.length < offset + 8) return;
+        payloadLen = Number(this.buffer.readBigUInt64BE(offset));
+        offset += 8;
+      }
+
+      let maskKey = null;
+      if (masked) {
+        if (this.buffer.length < offset + 4) return;
+        maskKey = this.buffer.slice(offset, offset + 4);
+        offset += 4;
+      }
+
+      if (this.buffer.length < offset + payloadLen) return;
+
+      let payload = this.buffer.slice(offset, offset + payloadLen);
+      this.buffer = this.buffer.slice(offset + payloadLen);
+
+      if (masked && maskKey) {
+        payload = Buffer.from(payload);
+        for (let i = 0; i < payload.length; i++) {
+          payload[i] ^= maskKey[i % 4];
+        }
+      }
+
+      if (opcode === 0x1) { // Text
+        this.emit('message', payload.toString('utf8'));
+      } else if (opcode === 0x2) { // Binary
+        this.emit('message', payload);
+      } else if (opcode === 0x8) { // Close
+        this.close();
+      } else if (opcode === 0x9) { // Ping
+        this._sendFrame(0xA, payload); // Send Pong
+      }
+    }
+  }
+
+  _sendFrame(opcode, data = Buffer.alloc(0)) {
+    if (!this.socket || this.readyState !== 1) return;
+    const payload = Buffer.isBuffer(data) ? data : Buffer.from(String(data), 'utf8');
+    const maskKey = crypto.randomBytes(4);
+    const masked = Buffer.alloc(payload.length);
+    for (let i = 0; i < payload.length; i++) {
+      masked[i] = payload[i] ^ maskKey[i % 4];
+    }
+
+    let header;
+    const len = payload.length;
+    if (len <= 125) {
+      header = Buffer.alloc(6);
+      header[0] = 0x80 | (opcode & 0x0F);
+      header[1] = 0x80 | len;
+      maskKey.copy(header, 2);
+    } else if (len <= 65535) {
+      header = Buffer.alloc(8);
+      header[0] = 0x80 | (opcode & 0x0F);
+      header[1] = 0x80 | 126;
+      header.writeUInt16BE(len, 2);
+      maskKey.copy(header, 4);
+    } else {
+      header = Buffer.alloc(14);
+      header[0] = 0x80 | (opcode & 0x0F);
+      header[1] = 0x80 | 127;
+      header.writeBigUInt64BE(BigInt(len), 2);
+      maskKey.copy(header, 10);
+    }
+
+    try {
+      this.socket.write(Buffer.concat([header, masked]));
+    } catch (_) {}
+  }
+
+  send(data) {
+    this._sendFrame(0x1, data);
+  }
+
+  close() {
+    if (this.readyState === 1 && this.socket) {
+      this.readyState = 2;
+      this._sendFrame(0x8);
+      try { this.socket.end(); } catch (_) {}
+    }
+    this.readyState = 3;
+  }
+}
+
+function createWebSocket(url) {
+  try {
+    const WsModule = require('ws');
+    return new WsModule(url);
+  } catch (_) {}
+  if (typeof globalThis.WebSocket === 'function') {
+    try { return new globalThis.WebSocket(url); } catch (_) {}
+  }
+  return new NativeWebSocketClient(url);
+}
 
 let activeStreams = new Map();
 
@@ -346,15 +510,8 @@ function connect() {
   const wsUrl = `${SERVER.replace(/^http/, 'ws')}/agent-ws?token=${encodeURIComponent(TOKEN)}&name=${encodeURIComponent(AGENT_NAME)}`;
   console.log(`⚡ [Monitor Agent] Connecting to ${SERVER} as "${AGENT_NAME}"...`);
 
-  let ws = null;
+  let ws = createWebSocket(wsUrl);
   let retryTimeout = null;
-
-  if (WebSocket) {
-    ws = new WebSocket(wsUrl);
-  } else {
-    console.error('❌ Error: "ws" module not found. Falling back to HTTP streaming.');
-    return;
-  }
 
   ws.on('open', () => {
     console.log(`✅ [Monitor Agent] Connected successfully to Central Monitor Server!`);
@@ -373,7 +530,7 @@ function connect() {
 
   ws.on('message', (raw) => {
     try {
-      const msg = JSON.parse(raw);
+      const msg = JSON.parse(raw.toString());
       if (msg.type === 'telemetry:start_stream') {
         const interval = Math.max(100, Math.min(30000, Number(msg.interval) || 500));
         const connId = msg.connId || 'default';
@@ -414,7 +571,7 @@ function connect() {
   });
 
   ws.on('error', (err) => {
-    console.error('❌ [Monitor Agent] Connection error:', err.message);
+    console.error('❌ [Monitor Agent] Connection error:', err?.message || err);
   });
 }
 

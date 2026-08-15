@@ -184,7 +184,11 @@ export async function POST(request) {
         global.__relayTokens.set(token, {
           userId: session.user?.id || 'admin',
           createdAt: Date.now(),
+          expiresAt: Date.now() + 365 * 24 * 60 * 60 * 1000,
         });
+        if (typeof global.__persistRelayTokens === 'function') {
+          global.__persistRelayTokens().catch(() => {});
+        }
       }
 
       // Try uploading monitor-agent.js directly via SFTP
@@ -215,19 +219,29 @@ export async function POST(request) {
             echo "📦 tmux not found, attempting to install tmux..."
             if command -v apt-get >/dev/null 2>&1; then
               sudo apt-get update -qq && sudo apt-get install -y -qq tmux || apt-get install -y -qq tmux
+            elif command -v dnf >/dev/null 2>&1; then
+              sudo dnf install -y -q tmux || dnf install -y -q tmux
             elif command -v yum >/dev/null 2>&1; then
               sudo yum install -y -q tmux || yum install -y -q tmux
+            elif command -v apk >/dev/null 2>&1; then
+              apk add --no-cache tmux
             fi
           fi
 
-          # 3. Ensure ~/.monitor-agent.js exists
-          if [ ! -f ~/.monitor-agent.js ] || [ ! -s ~/.monitor-agent.js ]; then
-            curl -fsSL "${origin}/monitor-agent.js" -o ~/.monitor-agent.js 2>/dev/null || curl -fsSL "${origin}/monitor-agent.min.js" -o ~/.monitor-agent.js 2>/dev/null || true
+          # 3. Always download latest zero-dependency monitor-agent.js
+          echo "⬇️ Downloading latest Monitor Agent script..."
+          curl -fsSL -H "Cache-Control: no-cache" "${origin}/monitor-agent.js" -o ~/.monitor-agent.js 2>/dev/null || \\
+          curl -fsSL -H "Cache-Control: no-cache" "${origin}/monitor-agent.min.js" -o ~/.monitor-agent.js 2>/dev/null || true
+
+          if [ ! -s ~/.monitor-agent.js ]; then
+            echo "❌ Failed to download ~/.monitor-agent.js from ${origin}"
+            exit 1
           fi
 
-          # 4. Kill existing session (using bracket pattern so script does not kill itself)
+          # 4. Stop existing session
           tmux kill-session -t monitor-agent 2>/dev/null || true
           pkill -f '[m]onitor-agent' 2>/dev/null || true
+          sleep 1
 
           # 5. Start in tmux detached
           echo "🚀 Launching Monitor Agent in detached tmux session [monitor-agent]..."
@@ -262,9 +276,9 @@ export async function POST(request) {
             exit 1
           fi
 
-          if [ ! -f ~/.monitor-agent.js ] || [ ! -s ~/.monitor-agent.js ]; then
-            curl -fsSL "${origin}/monitor-agent.js" -o ~/.monitor-agent.js 2>/dev/null || curl -fsSL "${origin}/monitor-agent.min.js" -o ~/.monitor-agent.js 2>/dev/null || true
-          fi
+          # Always download latest zero-dependency script
+          curl -fsSL -H "Cache-Control: no-cache" "${origin}/monitor-agent.js" -o ~/.monitor-agent.js 2>/dev/null || \\
+          curl -fsSL -H "Cache-Control: no-cache" "${origin}/monitor-agent.min.js" -o ~/.monitor-agent.js 2>/dev/null || true
 
           echo "🚀 Installing Monitor Agent as background system service..."
           node ~/.monitor-agent.js --install --server '${origin}' --token '${token}'
