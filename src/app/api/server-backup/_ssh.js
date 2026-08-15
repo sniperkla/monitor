@@ -227,12 +227,22 @@ export function sftpReadStream(sshConfig, filePath) {
   return new Promise((resolve, reject) => {
     const conn = new Client();
     conn.on('ready', () => {
-      conn.sftp((err, sftp) => {
-        if (err) { conn.end(); return reject(err); }
-        const readStream = sftp.createReadStream(filePath);
-        readStream.on('close', () => conn.end());
-        readStream.on('error', (e) => { conn.end(); reject(e); });
-        resolve(readStream);
+      // Use raw cat stream for max throughput
+      conn.exec(`cat ${JSON.stringify(filePath)}`, (err, stream) => {
+        if (err) {
+          // Fallback to SFTP if exec channel fails
+          return conn.sftp((sftpErr, sftp) => {
+            if (sftpErr) { conn.end(); return reject(sftpErr); }
+            const readStream = sftp.createReadStream(filePath);
+            readStream.on('close', () => conn.end());
+            readStream.on('error', (e) => { conn.end(); reject(e); });
+            resolve(readStream);
+          });
+        }
+        stream.stderr?.on('data', () => {});
+        stream.on('close', () => conn.end());
+        stream.on('error', (e) => { conn.end(); reject(e); });
+        resolve(stream);
       });
     });
     conn.on('error', reject);
@@ -241,18 +251,17 @@ export function sftpReadStream(sshConfig, filePath) {
 }
 
 export function sftpTransfer(sourceConfig, sourcePath, targetConfig, targetPath, { onProgress, signal } = {}) {
-  return new Promise((resolve, reject) => {
-    let totalSize = 0;
-    let transferred = 0;
+  return new Promise(async (resolve, reject) => {
     const srcConn = new Client();
     const tgtConn = new Client();
-    let srcReady = false;
-    let tgtReady = false;
     let aborted = false;
+    let finished = false;
 
-    const cleanup = () => { try { srcConn.end(); } catch {} try { tgtConn.end(); } catch {} };
+    const cleanup = () => {
+      try { srcConn.end(); } catch {}
+      try { tgtConn.end(); } catch {}
+    };
 
-    // Support abort signal
     if (signal) {
       signal.addEventListener('abort', () => {
         aborted = true;
@@ -261,62 +270,148 @@ export function sftpTransfer(sourceConfig, sourcePath, targetConfig, targetPath,
       });
     }
 
-    srcConn.on('ready', () => { srcReady = true; if (tgtReady) doTransfer(); });
-    tgtConn.on('ready', () => { tgtReady = true; if (srcReady) doTransfer(); });
-    srcConn.on('error', (e) => { cleanup(); reject(e); });
-    tgtConn.on('error', (e) => { cleanup(); reject(e); });
-
-    const doTransfer = () => {
-      if (aborted) return;
-      srcConn.sftp((srcErr, srcSftp) => {
-        if (srcErr) { cleanup(); return reject(srcErr); }
-        tgtConn.sftp((tgtErr, tgtSftp) => {
-          if (tgtErr) { cleanup(); return reject(tgtErr); }
-
-          // Ensure target parent directory exists before writing
-          const path = require('path');
-          const targetDir = path.posix.dirname(targetPath);
-          const mkdirp = (sftp, dir, cb) => {
-            // Walk up and create each missing segment
-            sftp.mkdir(dir, (err) => {
-              if (!err) return cb();
-              if (err.code === 4 || err.code === 11) return cb(); // already exists
-              const parent = path.posix.dirname(dir);
-              if (parent === dir) return cb(err); // reached root
-              mkdirp(sftp, parent, (parentErr) => {
-                if (parentErr) return cb(parentErr);
-                sftp.mkdir(dir, (err2) => {
-                  if (!err2 || err2.code === 4 || err2.code === 11) return cb();
-                  cb(err2);
-                });
-              });
-            });
-          };
-
-          mkdirp(tgtSftp, targetDir, (mkErr) => {
-            if (mkErr) { cleanup(); return reject(new Error(`Cannot create target directory ${targetDir}: ${mkErr.message}`)); }
-
-            srcSftp.stat(sourcePath, (statErr, stats) => {
-              if (statErr) { cleanup(); return reject(statErr); }
-              totalSize = stats.size;
-              if (onProgress) onProgress({ transferred: 0, totalSize, percent: 0 });
-              const readStream = srcSftp.createReadStream(sourcePath);
-              const writeStream = tgtSftp.createWriteStream(targetPath, { mode: 0o644 });
-              readStream.on('data', (chunk) => {
-                transferred += chunk.length;
-                if (onProgress) onProgress({ transferred, totalSize, percent: totalSize > 0 ? Math.round((transferred / totalSize) * 100) : 0 });
-              });
-              readStream.pipe(writeStream);
-              writeStream.on('close', () => { cleanup(); resolve({ transferred, totalSize }); });
-              writeStream.on('error', (e) => { cleanup(); reject(e); });
-              readStream.on('error', (e) => { cleanup(); reject(e); });
-            });
-          });
-        });
-      });
+    const onErr = (e) => {
+      if (finished || aborted) return;
+      finished = true;
+      cleanup();
+      reject(e instanceof Error ? e : new Error(String(e)));
     };
 
-    srcConn.connect(sourceConfig);
-    tgtConn.connect(targetConfig);
+    srcConn.on('error', onErr);
+    tgtConn.on('error', onErr);
+
+    const connectBoth = Promise.all([
+      new Promise((res, rej) => { srcConn.on('ready', res); srcConn.on('error', rej); srcConn.connect(sourceConfig); }),
+      new Promise((res, rej) => { tgtConn.on('ready', res); tgtConn.on('error', rej); tgtConn.connect(targetConfig); }),
+    ]);
+
+    try {
+      await connectBoth;
+      if (aborted) return;
+
+      // Check if source is directory or single file
+      const isDir = await new Promise((res) => {
+        srcConn.exec(`[ -d ${JSON.stringify(sourcePath)} ] && echo DIR || echo FILE`, (err, stream) => {
+          if (err) return res(false);
+          let out = '';
+          stream.on('data', d => out += d.toString());
+          stream.stderr?.on('data', () => {});
+          stream.on('close', () => res(out.trim() === 'DIR'));
+        });
+      });
+
+      // Upfront accurate total size detection (5s timeout max)
+      const totalSize = await new Promise((res) => {
+        const sizeCmd = isDir
+          ? `du -sb "${sourcePath}" 2>/dev/null | cut -f1`
+          : `stat -c%s "${sourcePath}" 2>/dev/null || wc -c < "${sourcePath}" 2>/dev/null || echo 0`;
+        const timer = setTimeout(() => res(0), 5000);
+        try {
+          srcConn.exec(sizeCmd, (err, stream) => {
+            if (err) { clearTimeout(timer); return res(0); }
+            let out = '';
+            stream.on('data', d => out += d.toString());
+            stream.stderr?.on('data', () => {});
+            stream.on('close', () => {
+              clearTimeout(timer);
+              const n = parseInt(out.trim(), 10);
+              res(!isNaN(n) && n > 0 ? n : 0);
+            });
+            stream.on('error', () => { clearTimeout(timer); res(0); });
+          });
+        } catch {
+          clearTimeout(timer);
+          res(0);
+        }
+      });
+
+      if (onProgress) onProgress({ transferred: 0, totalSize, percent: 0 });
+
+      let transferred = 0;
+      let lastProgressTime = 0;
+      const sendThrottledProgress = (bytes, isDone = false) => {
+        const now = Date.now();
+        const pct = isDone ? 100 : (totalSize > 0 ? Math.min(99, Math.round((bytes / totalSize) * 100)) : 50);
+        if (isDone || now - lastProgressTime > 250) {
+          lastProgressTime = now;
+          if (onProgress) onProgress({ transferred: bytes, totalSize, percent: pct });
+        }
+      };
+
+      const path = require('path');
+      const targetDir = path.posix.dirname(targetPath);
+
+      const cmdSrc = isDir
+        ? `tar cf - -C ${JSON.stringify(sourcePath)} . 2>/dev/null`
+        : `cat ${JSON.stringify(sourcePath)}`;
+      const cmdDest = isDir
+        ? `rm -rf ${JSON.stringify(targetPath)} && mkdir -p ${JSON.stringify(targetPath)} && tar xf - -C ${JSON.stringify(targetPath)} 2>/dev/null`
+        : `mkdir -p ${JSON.stringify(targetDir)} && cat > ${JSON.stringify(targetPath)}`;
+
+      srcConn.exec(cmdSrc, (err, srcStream) => {
+        if (err) return onErr(err);
+        tgtConn.exec(cmdDest, (err2, tgtStream) => {
+          if (err2) { srcStream.destroy(); return onErr(err2); }
+
+          // Drain stderr to prevent pipe deadlocks
+          srcStream.stderr?.on('data', () => {});
+          tgtStream.stderr?.on('data', () => {});
+
+          srcStream.pipe(tgtStream);
+          sendThrottledProgress(0);
+
+          srcStream.on('data', (chunk) => {
+            transferred += chunk.length;
+            sendThrottledProgress(transferred);
+          });
+
+          let safetyTimer = null;
+          const doFinish = (success, errMsg) => {
+            if (finished || aborted) return;
+            finished = true;
+            if (safetyTimer) clearTimeout(safetyTimer);
+            try { srcStream.destroy(); } catch {}
+            try { tgtStream.destroy(); } catch {}
+            cleanup();
+
+            if (success) {
+              sendThrottledProgress(totalSize > 0 ? totalSize : transferred, true);
+              resolve({ transferred: totalSize > 0 ? totalSize : transferred, totalSize });
+            } else {
+              reject(new Error(errMsg || 'Direct transfer failed'));
+            }
+          };
+
+          srcStream.on('end', () => {
+            try { tgtStream.end(); } catch {}
+            if (!safetyTimer) {
+              safetyTimer = setTimeout(() => {
+                doFinish(true);
+              }, 4000);
+            }
+          });
+
+          srcStream.on('exit', (code) => {
+            if (code !== null && code !== undefined && code > 1) {
+              doFinish(false, `Source stream exited with code ${code}`);
+            }
+          });
+
+          tgtStream.on('exit', (code) => {
+            if (code === null || code === undefined || code <= 1) {
+              doFinish(true);
+            } else {
+              doFinish(false, `Target stream exited with code ${code}`);
+            }
+          });
+
+          tgtStream.on('close', () => doFinish(true));
+          srcStream.on('error', (e) => doFinish(false, e?.message));
+          tgtStream.on('error', (e) => doFinish(false, e?.message));
+        });
+      });
+    } catch (e) {
+      onErr(e);
+    }
   });
 }

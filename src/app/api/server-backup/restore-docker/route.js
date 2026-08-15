@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth/next';
 import { authOptions } from '@/lib/auth';
-import { getSshConfig, execCommand, sftpReadStream, sftpUpload } from '../_ssh';
+import { getSshConfig, execCommand, sftpTransfer } from '../_ssh';
 import crypto from 'crypto';
 
 export async function POST(request) {
@@ -22,29 +22,9 @@ export async function POST(request) {
     const remotePath = `/tmp/docker_restore_${restoreId}.tar.gz`;
     const extractPath = `/tmp/docker_restore_${restoreId}`;
 
-    // 1. Transfer backup from source server to target server via the Next.js server
-    // Stream: source → next.js → target (avoids browser upload limit)
-    console.log(`[restore-docker] Transferring ${sourceFilePath} from source to target...`);
-    const readStream = await sftpReadStream(sourceSshConfig, sourceFilePath);
-
-    // Write to temp file, then upload to target
-    const { writeFile, unlink } = await import('fs/promises');
-    const { join } = await import('path');
-    const { tmpdir } = await import('os');
-    const tempFile = join(tmpdir(), `docker_restore_${restoreId}.tar.gz`);
-
-    await new Promise((resolve, reject) => {
-      const fs = require('fs');
-      const writeStream = fs.createWriteStream(tempFile);
-      readStream.pipe(writeStream);
-      writeStream.on('close', resolve);
-      writeStream.on('error', reject);
-      readStream.on('error', reject);
-    });
-
-    console.log(`[restore-docker] Uploading to target server...`);
-    await sftpUpload(targetSshConfig, tempFile, remotePath);
-    try { await unlink(tempFile); } catch {}
+    // 1. High-Speed Direct Stream from source server to target server (0 temporary disk space needed)
+    console.log(`[restore-docker] High-speed direct streaming ${sourceFilePath} from source to target...`);
+    await sftpTransfer(sourceSshConfig, sourceFilePath, targetSshConfig, remotePath);
 
     // 2. Extract and discover what's inside
     const discoverCmd = `
