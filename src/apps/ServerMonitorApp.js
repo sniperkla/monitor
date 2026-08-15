@@ -1665,7 +1665,6 @@ export default function ServerMonitorApp() {
           if (selectedConnection) checkAgentStatusForConn(selectedConnection);
         }}
         connection={selectedConn}
-        relayToken={relayToken}
         onRefreshStatus={() => {
           fetchMetrics(true);
           if (selectedConnection) checkAgentStatusForConn(selectedConnection);
