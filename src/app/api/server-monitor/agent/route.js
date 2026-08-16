@@ -259,7 +259,7 @@ export async function POST(request) {
           cat > ~/.monitor-agent-launcher.sh << 'LAUNCHER_EOF'
 #!/bin/bash
 cd ~
-exec node ~/.monitor-agent.js --server '${origin}' --token '${token}' >> ~/.monitor-agent.log 2>&1
+exec node ~/.monitor-agent.js --server '${origin}' --token '${token}'${connectionId ? ` --connection-id '${connectionId}'` : ''} >> ~/.monitor-agent.log 2>&1
 LAUNCHER_EOF
           chmod +x ~/.monitor-agent-launcher.sh
 
@@ -294,7 +294,7 @@ LAUNCHER_EOF
             fi
           else
             echo "⚠️ tmux session creation failed. Attempting nohup fallback..."
-            nohup node ~/.monitor-agent.js --server '${origin}' --token '${token}' > ~/.monitor-agent.log 2>&1 </dev/null &
+            nohup node ~/.monitor-agent.js --server '${origin}' --token '${token}'${connectionId ? ` --connection-id '${connectionId}'` : ''} > ~/.monitor-agent.log 2>&1 </dev/null &
             sleep 2
             if pgrep -f '[m]onitor-agent' >/dev/null 2>&1; then
               echo "✅ Monitor Agent running in background via nohup (PID: \$(pgrep -f '[m]onitor-agent' | head -1))"
@@ -321,7 +321,7 @@ LAUNCHER_EOF
           curl -fsSL -H "Cache-Control: no-cache" "${origin}/monitor-agent.min.js" -o ~/.monitor-agent.js 2>/dev/null || true
 
           echo "🚀 Installing Monitor Agent as background system service..."
-          node ~/.monitor-agent.js --install --server '${origin}' --token '${token}'
+          node ~/.monitor-agent.js --install --server '${origin}' --token '${token}'${connectionId ? ` --connection-id '${connectionId}'` : ''}
         `;
       }
 

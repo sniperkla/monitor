@@ -1750,6 +1750,23 @@ export default function ServerMonitorApp() {
         onRefreshStatus={() => {
           fetchMetrics(true);
           if (selectedConnection) checkAgentStatusForConn(selectedConnection);
+          // Re-request telemetry stream — agent may have just come online
+          const socket = socketRef.current;
+          if (socket && socket.connected && selectedConnection) {
+            const conn_ = connections.find(c => c._id === selectedConnection);
+            socket.emit('agent:list');
+            socket.emit('telemetry:webrtc:init', {
+              connectionId: selectedConnection,
+              targetHost: conn_?.host || '',
+              targetLabel: conn_?.label || '',
+            });
+            socket.emit('telemetry:start_stream', {
+              interval: refreshInterval,
+              connectionId: selectedConnection,
+              targetHost: conn_?.host || '',
+              targetLabel: conn_?.label || '',
+            });
+          }
         }}
         apiFetch={apiFetch}
       />

@@ -4287,6 +4287,8 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
         for (const [key, agent] of global.__monitorAgents.entries()) {
           if (agent.ws && agent.ws.readyState === 1) {
             const matches = 
+              // Direct connectionId match (most reliable)
+              (connectionId && agent.connectionId && agent.connectionId === connectionId) ||
               (agentName && agent.agentName === agentName) ||
               (targetHost && (agent.host === targetHost || agent.ip === targetHost || agent.agentName === targetHost)) ||
               (targetLabel && (agent.agentName === targetLabel || agent.host === targetLabel));
@@ -4351,6 +4353,8 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
             const targetHostClean = (targetHost || '').replace(/^::ffff:/, '');
 
             const matches =
+              // Direct connectionId match (most reliable — set when agent was installed via wizard)
+              (connectionId && agent.connectionId && agent.connectionId === connectionId) ||
               (agentName && agent.agentName === agentName) ||
               (targetHostClean && (
                 agent.host === targetHostClean ||
@@ -4750,6 +4754,7 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
                 agentName: msg.name || agentName,
                 host: msg.host || msg.system?.hostname || agentName,
                 ip: clientIp,
+                connectionId: msg.connectionId || null,
                 system: msg.system || {},
                 connectedAt: Date.now(),
                 activeStreams,

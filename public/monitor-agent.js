@@ -38,6 +38,7 @@ function getArg(flag, fallback = null) {
 const SERVER = (getArg('--server') || process.env.MONITOR_SERVER || '').replace(/\/$/, '');
 const TOKEN = getArg('--token') || process.env.MONITOR_TOKEN || '';
 const AGENT_NAME = getArg('--name') || process.env.AGENT_NAME || os.hostname();
+const CONNECTION_ID = getArg('--connection-id') || process.env.MONITOR_CONNECTION_ID || '';
 const IS_INSTALL = args.includes('--install');
 const IS_UNINSTALL = args.includes('--uninstall');
 
@@ -86,7 +87,7 @@ After=network.target
 
 [Service]
 Type=simple
-ExecStart=${nodeBin} ${scriptPath} --server "${SERVER}" --token "${TOKEN}" --name "${AGENT_NAME}"
+ExecStart=${nodeBin} ${scriptPath} --server "${SERVER}" --token "${TOKEN}" --name "${AGENT_NAME}"${CONNECTION_ID ? ` --connection-id "${CONNECTION_ID}"` : ''}
 Restart=always
 RestartSec=3
 
@@ -519,6 +520,7 @@ function connect() {
       type: 'agent:hello',
       name: AGENT_NAME,
       host: os.hostname(),
+      connectionId: CONNECTION_ID || undefined,
       system: {
         hostname: os.hostname(),
         platform: os.platform(),
