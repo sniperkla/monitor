@@ -139,6 +139,11 @@ export default function ServerMonitorApp() {
   const [isP2PStreaming, setIsP2PStreaming] = useState(false);
   const isP2PStreamingRef = useRef(false); // ref to avoid stale closure in socket event handlers
 
+  // Refs for latest state accessible inside closed-over socket event handlers
+  const selectedConnectionRef = useRef(null);
+  const connectionsRef = useRef([]);
+  const refreshIntervalRef = useRef(5000);
+
   const connections = useMemo(() => appState.connections || [], [appState.connections]);
 
   // Select first connection by default
@@ -147,6 +152,13 @@ export default function ServerMonitorApp() {
       setSelectedConnection(connections[0]._id);
     }
   }, [connections, selectedConnection]);
+
+  // Keep refs in sync with latest state (for use inside closed-over socket handlers)
+  useEffect(() => { selectedConnectionRef.current = selectedConnection; }, [selectedConnection]);
+  useEffect(() => { connectionsRef.current = connections; }, [connections]);
+  useEffect(() => { refreshIntervalRef.current = refreshInterval; }, [refreshInterval]);
+
+
 
   // ── Per-connection agent status polling ──
   const checkAgentStatusForConn = useCallback(async (connId) => {
@@ -469,6 +481,16 @@ export default function ServerMonitorApp() {
     // Agent online/offline events from server
     socket.on('agent:list:result', (agents) => {
       setConnectedAgents(new Map(agents.map(a => [a.agentName, a])));
+      // Re-request stream in case stream was sent before agents were registered
+      if (agents.length > 0 && selectedConnectionRef.current && !isP2PStreamingRef.current) {
+        const conn_ = connectionsRef.current.find(c => c._id === selectedConnectionRef.current);
+        socket.emit('telemetry:start_stream', {
+          interval: refreshIntervalRef.current,
+          connectionId: selectedConnectionRef.current,
+          targetHost: conn_?.host || '',
+          targetLabel: conn_?.label || ''
+        });
+      }
     });
     socket.on('agent:online', (info) => {
       setConnectedAgents(prev => {
@@ -476,6 +498,16 @@ export default function ServerMonitorApp() {
         next.set(info.agentName, info);
         return next;
       });
+      // An agent just came online — re-request stream for current server
+      if (selectedConnectionRef.current && !isP2PStreamingRef.current) {
+        const conn_ = connectionsRef.current.find(c => c._id === selectedConnectionRef.current);
+        socket.emit('telemetry:start_stream', {
+          interval: refreshIntervalRef.current,
+          connectionId: selectedConnectionRef.current,
+          targetHost: conn_?.host || '',
+          targetLabel: conn_?.label || ''
+        });
+      }
     });
     socket.on('agent:offline', (info) => {
       setConnectedAgents(prev => {
@@ -483,6 +515,7 @@ export default function ServerMonitorApp() {
         next.delete(info.agentName);
         return next;
       });
+      setIsSocketStreaming(false);
     });
 
     // 2. WebRTC P2P negotiation (Direct DataChannel)
@@ -803,7 +836,7 @@ export default function ServerMonitorApp() {
               Server Monitor
               <span className="flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
                 <Zap size={10} className="fill-emerald-400" />
-                {connectedAgents.size > 0 ? `Agent Streaming (${connectedAgents.size})` : 'Agentless Mode'}
+                {(isSocketStreaming || isP2PStreaming) ? 'Agent Streaming' : 'Agentless Mode'}
               </span>
             </h1>
             <div className="flex items-center gap-1.5 text-[11px] text-[var(--text-muted)]">
@@ -916,7 +949,7 @@ export default function ServerMonitorApp() {
                 }`}
                 title={
                   isLive
-                    ? `Agent "${liveAgent.agentName}" is streaming live telemetry`
+                    ? `Agent "${liveAgent?.agentName ?? 'unknown'}" is streaming live telemetry`
                     : agentRunning
                     ? 'Monitor Agent process is running but not connected to server — check network/token'
                     : agentChecked

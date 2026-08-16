@@ -4338,12 +4338,30 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
       // 2. Find the SPECIFIC monitor agent for the selected server
       if (global.__monitorAgents && global.__monitorAgents.size > 0) {
         let targetAgent = null;
+        let fallbackAgent = null; // single-agent fallback
+        let liveAgentCount = 0;
+
         for (const [key, agent] of global.__monitorAgents.entries()) {
           if (agent.ws && agent.ws.readyState === 1) {
-            const matches = 
+            liveAgentCount++;
+            fallbackAgent = agent;
+
+            // Normalise IPs: strip ::ffff: prefix
+            const agentIpClean = (agent.ip || '').replace(/^::ffff:/, '');
+            const targetHostClean = (targetHost || '').replace(/^::ffff:/, '');
+
+            const matches =
               (agentName && agent.agentName === agentName) ||
-              (targetHost && (agent.host === targetHost || agent.ip === targetHost || agent.agentName === targetHost)) ||
-              (targetLabel && (agent.agentName === targetLabel || agent.host === targetLabel));
+              (targetHostClean && (
+                agent.host === targetHostClean ||
+                agentIpClean === targetHostClean ||
+                agent.agentName === targetHostClean ||
+                // partial: e.g. 'vmi2942440' matches 'vmi2942440.contaboserver.net'
+                agent.host.startsWith(targetHostClean) ||
+                targetHostClean.startsWith(agent.host.split('.')[0])
+              )) ||
+              (targetLabel && (agent.agentName === targetLabel || agent.host === targetLabel ||
+                agent.host.includes(targetLabel) || targetLabel.includes(agent.host.split('.')[0])));
 
             if (matches) {
               targetAgent = agent;
@@ -4352,8 +4370,11 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
           }
         }
 
-        if (targetAgent) {
-          targetAgent.ws.send(JSON.stringify({
+        // If no specific match but only one agent is live, stream from it
+        const chosen = targetAgent || (liveAgentCount === 1 ? fallbackAgent : null);
+
+        if (chosen) {
+          chosen.ws.send(JSON.stringify({
             type: 'telemetry:start_stream',
             connId: socket.id,
             interval: Number(interval) || 500,
