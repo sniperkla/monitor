@@ -39,12 +39,12 @@ export async function POST(request) {
           fi
         fi
 
-        # Check process (use bracket trick to avoid matching this subshell)
-        # Also detect foreground run: curl | node - --server ... --token ...
+        # Check process — only match the specific monitor-agent.js script file
+        # Use bracket trick to avoid matching this subshell
         PROC_ACTIVE=0
-        if pgrep -f '[m]onitor-agent' >/dev/null 2>&1 || \
-           pgrep -f '[l]ocal-relay' >/dev/null 2>&1 || \
-           pgrep -f 'node.*--server.*--token' >/dev/null 2>&1; then
+        if pgrep -f '[m]onitor-agent.js' >/dev/null 2>&1 || \
+           pgrep -f '[.]monitor-agent' >/dev/null 2>&1 || \
+           pgrep -f '[l]ocal-relay' >/dev/null 2>&1; then
           PROC_ACTIVE=1
         fi
 
@@ -159,21 +159,21 @@ export async function POST(request) {
         fi
 
         echo "Killing any remaining monitor-agent processes..."
-        pkill -f '[m]onitor-agent' 2>/dev/null || true
+        pkill -f '[m]onitor-agent.js' 2>/dev/null || true
+        pkill -f '[.]monitor-agent' 2>/dev/null || true
         pkill -f '[l]ocal-relay' 2>/dev/null || true
-        pkill -f 'node.*--server.*--token' 2>/dev/null || true
         sleep 2
         # Force kill if still alive
-        pkill -9 -f '[m]onitor-agent' 2>/dev/null || true
+        pkill -9 -f '[m]onitor-agent.js' 2>/dev/null || true
+        pkill -9 -f '[.]monitor-agent' 2>/dev/null || true
         pkill -9 -f '[l]ocal-relay' 2>/dev/null || true
-        pkill -9 -f 'node.*--server.*--token' 2>/dev/null || true
         sleep 1
 
         # Wait until all processes are gone (max 5 seconds)
         for i in 1 2 3 4 5; do
-          if ! pgrep -f '[m]onitor-agent' >/dev/null 2>&1 && \
-             ! pgrep -f '[l]ocal-relay' >/dev/null 2>&1 && \
-             ! pgrep -f 'node.*--server.*--token' >/dev/null 2>&1; then
+          if ! pgrep -f '[m]onitor-agent.js' >/dev/null 2>&1 && \
+             ! pgrep -f '[.]monitor-agent' >/dev/null 2>&1 && \
+             ! pgrep -f '[l]ocal-relay' >/dev/null 2>&1; then
             break
           fi
           sleep 1
