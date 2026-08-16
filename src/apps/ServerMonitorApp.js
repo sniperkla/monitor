@@ -596,9 +596,44 @@ export default function ServerMonitorApp() {
     };
   }, [handleIncomingTelemetry]);
 
+  // Track previous selected connection to detect server switches
+  const prevSelectedConnectionRef = useRef(null);
+
   // Synchronize stream interval and target parameters
   useEffect(() => {
+    const socket = socketRef.current;
+    const selectedConn_ = connections.find(c => c._id === selectedConnection);
+    const targetHost = selectedConn_?.host || '';
+    const targetLabel = selectedConn_?.label || '';
+
+    // Detect server switch while P2P is active:
+    // The existing P2P peer is bound to the OLD server's agent via WebRTC DataChannel.
+    // Sending telemetry:start_stream to it just tells the wrong agent to stream.
+    // Instead, tear down the old peer and re-initiate WebRTC for the new server.
+    const serverChanged = prevSelectedConnectionRef.current !== null &&
+      prevSelectedConnectionRef.current !== selectedConnection;
+    prevSelectedConnectionRef.current = selectedConnection;
+
     if (peerRef.current && isP2PStreaming) {
+      if (serverChanged) {
+        // Close old P2P connection — it belongs to the previous server's agent
+        try {
+          peerRef.current.sendControl({ type: 'telemetry:stop_stream' });
+          peerRef.current.close();
+        } catch (_) {}
+        peerRef.current = null;
+        setIsP2PStreaming(false);
+        isP2PStreamingRef.current = false;
+
+        // Re-initiate WebRTC for the new server, then fall through to socket path below
+        if (socket && socket.connected && autoRefresh && isTabVisible && selectedConnection) {
+          socket.emit('telemetry:webrtc:init', { connectionId: selectedConnection, targetHost, targetLabel });
+          socket.emit('telemetry:start_stream', { interval: refreshInterval, connectionId: selectedConnection, targetHost, targetLabel });
+        }
+        return;
+      }
+
+      // Same server — just update interval/params on the existing P2P peer
       if (autoRefresh && isTabVisible && selectedConnection) {
         peerRef.current.sendControl({
           type: 'telemetry:start_stream',
@@ -612,13 +647,11 @@ export default function ServerMonitorApp() {
       return;
     }
 
-    const socket = socketRef.current;
     if (!socket || !socket.connected) return;
 
     if (autoRefresh && isTabVisible && selectedConnection) {
-      const selectedConn_ = connections.find(c => c._id === selectedConnection);
-      const targetHost = selectedConn_?.host || '';
-      const targetLabel = selectedConn_?.label || '';
+      // Re-initiate WebRTC for the new server first (best path)
+      socket.emit('telemetry:webrtc:init', { connectionId: selectedConnection, targetHost, targetLabel });
 
       socket.emit('telemetry:start_stream', {
         interval: refreshInterval,

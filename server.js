@@ -4370,8 +4370,11 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
           }
         }
 
-        // If no specific match but only one agent is live, stream from it
-        const chosen = targetAgent || (liveAgentCount === 1 ? fallbackAgent : null);
+        // If no specific match but only one agent is live AND no targeting info was given, stream from it.
+        // IMPORTANT: If targetHost/targetLabel was specified but no agent matched, do NOT fallback to
+        // another server's agent — that would show Server 1's data on Server 2's view.
+        const hasTargetingInfo = !!(targetHost || targetLabel || agentName);
+        const chosen = targetAgent || (!hasTargetingInfo && liveAgentCount === 1 ? fallbackAgent : null);
 
         if (chosen) {
           chosen.ws.send(JSON.stringify({
