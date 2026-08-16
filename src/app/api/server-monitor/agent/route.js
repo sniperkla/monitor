@@ -40,8 +40,11 @@ export async function POST(request) {
         fi
 
         # Check process (use bracket trick to avoid matching this subshell)
+        # Also detect foreground run: curl | node - --server ... --token ...
         PROC_ACTIVE=0
-        if pgrep -f '[m]onitor-agent' >/dev/null 2>&1 || pgrep -f '[l]ocal-relay' >/dev/null 2>&1; then
+        if pgrep -f '[m]onitor-agent' >/dev/null 2>&1 || \
+           pgrep -f '[l]ocal-relay' >/dev/null 2>&1 || \
+           pgrep -f 'node.*--server.*--token' >/dev/null 2>&1; then
           PROC_ACTIVE=1
         fi
 
@@ -158,12 +161,25 @@ export async function POST(request) {
         echo "Killing any remaining monitor-agent processes..."
         pkill -f '[m]onitor-agent' 2>/dev/null || true
         pkill -f '[l]ocal-relay' 2>/dev/null || true
-        sleep 1
+        pkill -f 'node.*--server.*--token' 2>/dev/null || true
+        sleep 2
         # Force kill if still alive
         pkill -9 -f '[m]onitor-agent' 2>/dev/null || true
         pkill -9 -f '[l]ocal-relay' 2>/dev/null || true
+        pkill -9 -f 'node.*--server.*--token' 2>/dev/null || true
+        sleep 1
 
-        rm -f ~/.monitor-agent.js ~/.monitor-agent.log 2>/dev/null || true
+        # Wait until all processes are gone (max 5 seconds)
+        for i in 1 2 3 4 5; do
+          if ! pgrep -f '[m]onitor-agent' >/dev/null 2>&1 && \
+             ! pgrep -f '[l]ocal-relay' >/dev/null 2>&1 && \
+             ! pgrep -f 'node.*--server.*--token' >/dev/null 2>&1; then
+            break
+          fi
+          sleep 1
+        done
+
+        rm -f ~/.monitor-agent.js ~/.monitor-agent.log ~/.monitor-agent-launcher.sh 2>/dev/null || true
 
         echo "✅ Agent successfully uninstalled and stopped."
       `;
