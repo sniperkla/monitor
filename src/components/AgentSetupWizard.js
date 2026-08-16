@@ -182,10 +182,10 @@ export default function AgentSetupWizard({
 
   if (!isOpen) return null;
 
-  const tmuxCommand = `tmux new-session -d -s monitor-agent "curl -sSL -H 'Cache-Control: no-cache' '${serverUrl}/monitor-agent.min.js' | node - --server '${serverUrl}' --token '${effectiveToken}'"`;
+  const tmuxCommand = `curl -sSL -H 'Cache-Control: no-cache' '${serverUrl}/monitor-agent.min.js' -o ~/.monitor-agent.js && tmux new-session -d -s monitor-agent "node ~/.monitor-agent.js --server '${serverUrl}' --token '${effectiveToken}'"`;
   const serviceCommand = `curl -sSL -H 'Cache-Control: no-cache' '${serverUrl}/monitor-agent.min.js' | node - --install --server '${serverUrl}' --token '${effectiveToken}'`;
   const foregroundCommand = `curl -sSL -H 'Cache-Control: no-cache' '${serverUrl}/monitor-agent.min.js' | node - --server '${serverUrl}' --token '${effectiveToken}'`;
-  const uninstallCommand = `systemctl --user stop server-monitor-agent.service 2>/dev/null; systemctl --user disable server-monitor-agent.service 2>/dev/null; tmux kill-session -t monitor-agent 2>/dev/null; pkill -f '[m]onitor-agent' 2>/dev/null; pkill -f 'node.*--server.*--token' 2>/dev/null; rm -f ~/.monitor-agent.js ~/.monitor-agent-launcher.sh 2>/dev/null; echo "✅ Done"`;
+  const uninstallCommand = `systemctl --user stop server-monitor-agent.service 2>/dev/null; systemctl --user disable server-monitor-agent.service 2>/dev/null; tmux kill-session -t monitor-agent 2>/dev/null; pkill -9 -f '[.]monitor-agent' 2>/dev/null; pkill -9 -f '[m]onitor-agent.js' 2>/dev/null; rm -f ~/.monitor-agent.js ~/.monitor-agent-launcher.sh 2>/dev/null; echo "✅ Done"`;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-md animate-in fade-in duration-200">

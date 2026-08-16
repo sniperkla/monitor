@@ -265,7 +265,8 @@ LAUNCHER_EOF
 
           # 5. Stop existing session
           tmux kill-session -t monitor-agent 2>/dev/null || true
-          pkill -f '[m]onitor-agent' 2>/dev/null || true
+          pkill -9 -f '[.]monitor-agent' 2>/dev/null || true
+          pkill -9 -f '[m]onitor-agent.js' 2>/dev/null || true
           sleep 1
 
           # 6. Launch in tmux using the launcher script - this WILL detach properly
@@ -281,13 +282,13 @@ LAUNCHER_EOF
             echo "📋 To view agent live logs: tmux attach -t monitor-agent"
             echo "📋 To detach from logs: Press Ctrl+B then D"
             # Double-check process is actually running
-            if pgrep -f '[m]onitor-agent' >/dev/null 2>&1; then
-              echo "✅ Process confirmed running (PID: \$(pgrep -f '[m]onitor-agent' | head -1))"
+            if pgrep -f '[.]monitor-agent' >/dev/null 2>&1 || pgrep -f '[m]onitor-agent.js' >/dev/null 2>&1; then
+              echo "✅ Process confirmed running (PID: \$(pgrep -f '[.]monitor-agent' 2>/dev/null | head -1))"
             else
               echo "⚠️ tmux session created but process not detected yet - initializing..."
               sleep 2
-              if pgrep -f '[m]onitor-agent' >/dev/null 2>&1; then
-                echo "✅ Process now running (PID: \$(pgrep -f '[m]onitor-agent' | head -1))"
+              if pgrep -f '[.]monitor-agent' >/dev/null 2>&1 || pgrep -f '[m]onitor-agent.js' >/dev/null 2>&1; then
+                echo "✅ Process now running (PID: \$(pgrep -f '[.]monitor-agent' 2>/dev/null | head -1))"
               else
                 echo "⚠️ Process may still be starting. Check with: tmux attach -t monitor-agent"
               fi
@@ -296,8 +297,8 @@ LAUNCHER_EOF
             echo "⚠️ tmux session creation failed. Attempting nohup fallback..."
             nohup node ~/.monitor-agent.js --server '${origin}' --token '${token}'${connectionId ? ` --connection-id '${connectionId}'` : ''} > ~/.monitor-agent.log 2>&1 </dev/null &
             sleep 2
-            if pgrep -f '[m]onitor-agent' >/dev/null 2>&1; then
-              echo "✅ Monitor Agent running in background via nohup (PID: \$(pgrep -f '[m]onitor-agent' | head -1))"
+            if pgrep -f '[.]monitor-agent' >/dev/null 2>&1 || pgrep -f '[m]onitor-agent.js' >/dev/null 2>&1; then
+              echo "✅ Monitor Agent running in background via nohup (PID: \$(pgrep -f '[.]monitor-agent' 2>/dev/null | head -1))"
               echo "📋 To view logs: tail -f ~/.monitor-agent.log"
             else
               echo "❌ Failed to start agent process. Check logs: tail ~/.monitor-agent.log"
