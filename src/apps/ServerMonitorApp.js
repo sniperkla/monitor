@@ -559,14 +559,20 @@ export default function ServerMonitorApp() {
     });
 
     socket.on('telemetry:no_agent', () => {
+      console.log('[ServerMonitor] No agent available for selected server — falling back to HTTP polling');
       setIsSocketStreaming(false);
       setIsP2PStreaming(false);
       isP2PStreamingRef.current = false;
     });
 
     // 3. Fallback WebSocket Relay Stream handler
+    // IMPORTANT: Only set isSocketStreaming=true if we receive data from an actual agent
+    // Don't set it for HTTP polling fallback data
     socket.on('telemetry:stream', (raw) => {
       if (!isP2PStreamingRef.current) {
+        // Only mark as streaming if we have a connection ID that matches
+        // This prevents false-positive "Agent Connected" status
+        console.log('[ServerMonitor] Receiving telemetry:stream from agent');
         setIsSocketStreaming(true);
         handleIncomingTelemetry(raw);
       }
@@ -678,6 +684,10 @@ export default function ServerMonitorApp() {
     const runLoop = async () => {
       if (!isMounted) return;
       if (autoRefresh && isTabVisible) {
+        // Ensure we're not falsely showing agent connected during HTTP polling
+        setIsSocketStreaming(false);
+        setIsP2PStreaming(false);
+        
         const start = Date.now();
         await fetchMetrics();
         if (!isMounted) return;
@@ -959,15 +969,21 @@ export default function ServerMonitorApp() {
             // Check if any connected WebSocket agent matches this connection
             const selectedConn_ = connections.find(c => c._id === selectedConnection);
             const connHost = selectedConn_?.host || '';
+            const connLabel = selectedConn_?.label || '';
             const currentHostname = metrics?.system?.hostname || '';
-            const liveAgent = connectedAgents.size > 0 && [...connectedAgents.values()].find(
-              a => a.host === connHost || 
-                   a.ip === connHost ||
-                   a.agentName === connHost || 
-                   a.agentName === selectedConn_?.label ||
-                   (currentHostname && (a.agentName === currentHostname || a.host === currentHostname))
+            
+            // Only consider an agent "live" if we have active streaming channels
+            // Don't rely solely on connectedAgents Map as it may contain stale or unrelated entries
+            const liveAgent = (isSocketStreaming || isP2PStreaming) && connectedAgents.size > 0 && [...connectedAgents.values()].find(
+              a => {
+                // Strict matching: must match host, IP, label, or hostname
+                const matchHost = a.host === connHost || a.ip === connHost;
+                const matchName = a.agentName === connHost || a.agentName === connLabel;
+                const matchHostname = currentHostname && (a.agentName === currentHostname || a.host === currentHostname);
+                return matchHost || matchName || matchHostname;
+              }
             );
-            const isLive = isSocketStreaming || isP2PStreaming || !!liveAgent;
+            const isLive = (isSocketStreaming || isP2PStreaming) && !!liveAgent;
             return (
               <button
                 onClick={() => setShowAgentWizard(true)}

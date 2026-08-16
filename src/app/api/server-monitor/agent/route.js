@@ -238,29 +238,53 @@ export async function POST(request) {
             exit 1
           fi
 
-          # 4. Stop existing session
+          # 4. Create a simple launcher script
+          echo "📝 Creating launcher script..."
+          cat > ~/.monitor-agent-launcher.sh << 'LAUNCHER_EOF'
+#!/bin/bash
+cd ~
+exec node ~/.monitor-agent.js --server '${origin}' --token '${token}' >> ~/.monitor-agent.log 2>&1
+LAUNCHER_EOF
+          chmod +x ~/.monitor-agent-launcher.sh
+
+          # 5. Stop existing session
           tmux kill-session -t monitor-agent 2>/dev/null || true
           pkill -f '[m]onitor-agent' 2>/dev/null || true
           sleep 1
 
-          # 5. Start in tmux detached
+          # 6. Launch in tmux using the launcher script - this WILL detach properly
           echo "🚀 Launching Monitor Agent in detached tmux session [monitor-agent]..."
-          tmux new-session -d -s monitor-agent "node ~/.monitor-agent.js --server '${origin}' --token '${token}'"
-
+          tmux new-session -d -s monitor-agent ~/.monitor-agent-launcher.sh
+          
+          # Give it a moment to initialize
           sleep 2
+
+          # 7. Verify the session was created
           if tmux has-session -t monitor-agent 2>/dev/null; then
             echo "✅ Monitor Agent is running in background tmux session!"
-            echo "To view agent live logs: tmux attach -t monitor-agent"
-          elif pgrep -f '[m]onitor-agent' >/dev/null 2>&1; then
-            echo "✅ Monitor Agent is running!"
-          else
-            echo "⚠️ tmux session failed to start. Attempting nohup fallback..."
-            nohup node ~/.monitor-agent.js --server '${origin}' --token '${token}' > ~/.monitor-agent.log 2>&1 &
-            sleep 1
-            if pgrep -f 'monitor-agent' >/dev/null 2>&1; then
-              echo "✅ Monitor Agent running in background via nohup."
+            echo "📋 To view agent live logs: tmux attach -t monitor-agent"
+            echo "📋 To detach from logs: Press Ctrl+B then D"
+            # Double-check process is actually running
+            if pgrep -f '[m]onitor-agent' >/dev/null 2>&1; then
+              echo "✅ Process confirmed running (PID: \$(pgrep -f '[m]onitor-agent' | head -1))"
             else
-              echo "❌ Failed to start agent process."
+              echo "⚠️ tmux session created but process not detected yet - initializing..."
+              sleep 2
+              if pgrep -f '[m]onitor-agent' >/dev/null 2>&1; then
+                echo "✅ Process now running (PID: \$(pgrep -f '[m]onitor-agent' | head -1))"
+              else
+                echo "⚠️ Process may still be starting. Check with: tmux attach -t monitor-agent"
+              fi
+            fi
+          else
+            echo "⚠️ tmux session creation failed. Attempting nohup fallback..."
+            nohup node ~/.monitor-agent.js --server '${origin}' --token '${token}' > ~/.monitor-agent.log 2>&1 </dev/null &
+            sleep 2
+            if pgrep -f '[m]onitor-agent' >/dev/null 2>&1; then
+              echo "✅ Monitor Agent running in background via nohup (PID: \$(pgrep -f '[m]onitor-agent' | head -1))"
+              echo "📋 To view logs: tail -f ~/.monitor-agent.log"
+            else
+              echo "❌ Failed to start agent process. Check logs: tail ~/.monitor-agent.log"
               exit 1
             fi
           fi
