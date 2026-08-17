@@ -7,7 +7,7 @@ services:
     container_name: monitor
     restart: unless-stopped
     stop_signal: SIGTERM
-    stop_grace_period: 15s   # Give server.js time to write interrupted status to DB on shutdown
+    stop_grace_period: 15s # Give server.js time to write interrupted status to DB on shutdown
     depends_on:
       - monitor-mongo
     env_file:
@@ -21,7 +21,7 @@ services:
       - proxy-net
 
   monitor-mongo:
-    image: mongo:4.4
+    image: mongo:7.0
     container_name: monitor-mongo
     restart: unless-stopped
     ports:
