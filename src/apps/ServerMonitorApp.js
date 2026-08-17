@@ -158,12 +158,18 @@ export default function ServerMonitorApp() {
   const connectionsRef = useRef([]);
   const refreshIntervalRef = useRef(10000);
 
-  const connections = useMemo(() => appState.connections || [], [appState.connections]);
+  const connections = useMemo(() => {
+    return (appState.connections || []).filter(c => c.type === 'ssh' || (!c.type && !c.dbProvider));
+  }, [appState.connections]);
 
-  // Select first connection by default
+  // Select first SSH connection by default (or fallback if current selection is not an SSH connection)
   useEffect(() => {
-    if (!selectedConnection && connections.length > 0) {
-      setSelectedConnection(connections[0]._id);
+    if (connections.length > 0) {
+      if (!selectedConnection || !connections.some(c => c._id === selectedConnection)) {
+        setSelectedConnection(connections[0]._id);
+      }
+    } else {
+      setSelectedConnection(null);
     }
   }, [connections, selectedConnection]);
 
