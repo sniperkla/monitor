@@ -4,7 +4,8 @@ import { useState, useEffect, useCallback } from 'react';
 import { 
   Zap, Server, Play, Square, RefreshCw, Copy, Check, 
   Terminal, Shield, Trash2, CheckCircle2, AlertTriangle, 
-  Cpu, X, ExternalLink, HelpCircle, Download, CheckCircle
+  Cpu, X, ExternalLink, HelpCircle, Download, CheckCircle,
+  Settings2, BookOpen, PackageX
 } from 'lucide-react';
 
 export default function AgentSetupWizard({ 
@@ -13,14 +14,16 @@ export default function AgentSetupWizard({
   connection, 
   relayToken,
   onRefreshStatus,
+  onAgentInstalled,
   apiFetch 
 }) {
-  const [activeTab, setActiveTab] = useState('tmux'); // 'tmux' | 'service' | 'manual' | 'uninstall'
+  const [activeTab, setActiveTab] = useState('service'); // 'service' | 'manual' | 'uninstall'
   const [status, setStatus] = useState({ loading: true, isRunning: false, nodeInstalled: false, inTmux: false, inService: false });
   const [executing, setExecuting] = useState(false);
   const [outputLog, setOutputLog] = useState('');
   const [copied, setCopied] = useState('');
   const [installSuccess, setInstallSuccess] = useState(false);
+  const [uninstallSuccess, setUninstallSuccess] = useState(false);
 
   const [agentToken, setAgentToken] = useState(relayToken || '');
 
@@ -74,6 +77,7 @@ export default function AgentSetupWizard({
         checkAgentStatus();
         setOutputLog('');
         setInstallSuccess(false);
+        setUninstallSuccess(false);
       }
     }
   }, [isOpen, connection?._id, fetchToken, checkAgentStatus]);
@@ -132,6 +136,7 @@ export default function AgentSetupWizard({
         setOutputLog(prev => prev + `\n` + (data.output || '✅ Agent successfully launched!') + `\n\n🎉 Done! Real-time WebRTC telemetry is now active.`);
         await checkAgentStatus();
         if (onRefreshStatus) onRefreshStatus();
+        if (onAgentInstalled) onAgentInstalled();
         setInstallSuccess(true);
       } else {
         setOutputLog(prev => prev + `\n❌ Installation Error:\n` + (data.error || data.output || 'Unknown error'));
@@ -147,6 +152,7 @@ export default function AgentSetupWizard({
     if (!connection?._id) return;
     setExecuting(true);
     setInstallSuccess(false);
+    setUninstallSuccess(false);
     setOutputLog(`⏳ Stopping and removing Relay Agent from ${connection.name || connection.host}...\n`);
 
     try {
@@ -164,6 +170,7 @@ export default function AgentSetupWizard({
         setOutputLog(prev => prev + `\n` + (data.output || '✅ Agent removed cleanly.'));
         await checkAgentStatus();
         if (onRefreshStatus) onRefreshStatus();
+        setUninstallSuccess(true);
       } else {
         setOutputLog(prev => prev + `\n❌ Uninstall failed:\n` + (data.error || data.output || 'Unknown error'));
       }
@@ -259,14 +266,13 @@ export default function AgentSetupWizard({
         {/* Navigation Tabs */}
         <div className="flex border-b border-[var(--border-color)] bg-[var(--bg-secondary)] px-6 pt-2 gap-2 text-xs">
           {[
-            { id: 'tmux', label: '⚡ tmux (Fastest)', icon: Play },
-            { id: 'service', label: '⚙️ System Service', icon: Shield },
-            { id: 'manual', label: '📋 Manual Command', icon: Terminal },
-            { id: 'uninstall', label: '🗑️ Uninstall', icon: Trash2 },
+            { id: 'service', label: 'System Service', icon: Settings2 },
+            { id: 'manual', label: 'Manual Command', icon: BookOpen },
+            { id: 'uninstall', label: 'Uninstall', icon: PackageX },
           ].map(t => (
             <button
               key={t.id}
-              onClick={() => { setActiveTab(t.id); setInstallSuccess(false); }}
+              onClick={() => { setActiveTab(t.id); setInstallSuccess(false); setUninstallSuccess(false); }}
               className={`flex items-center gap-1.5 px-3 py-2 border-b-2 font-medium transition-all ${
                 activeTab === t.id
                   ? 'border-indigo-500 text-indigo-400 bg-indigo-500/5 rounded-t-md'
@@ -320,6 +326,45 @@ export default function AgentSetupWizard({
                 </button>
               </div>
             </div>
+          ) : uninstallSuccess ? (
+            /* ── Uninstall Success / Agent Removed Ready State ── */
+            <div className="flex flex-col items-center justify-center py-10 text-center gap-5">
+              <div className="relative">
+                <div className="absolute inset-0 rounded-full bg-slate-500/20 blur-xl animate-pulse" />
+                <div className="relative w-20 h-20 rounded-full bg-slate-500/10 border-2 border-slate-500/25 flex items-center justify-center">
+                  <PackageX size={38} className="text-slate-400" />
+                </div>
+              </div>
+              <div className="space-y-2">
+                <p className="text-lg font-bold text-[var(--text-primary)]">Agent Removed</p>
+                <p className="text-sm text-slate-300">
+                  Server is back to agentless mode
+                </p>
+                <p className="text-xs text-[var(--text-muted)] max-w-xs mx-auto leading-relaxed">
+                  The relay agent has been fully uninstalled from{' '}
+                  <span className="text-amber-300 font-medium">{connection?.name || connection?.host}</span>.
+                  SSH polling will continue to work normally.
+                </p>
+              </div>
+              <div className="flex items-center gap-2 px-4 py-2 rounded-xl bg-indigo-500/10 border border-indigo-500/20">
+                <CheckCircle2 size={14} className="text-indigo-400 shrink-0" />
+                <span className="text-xs text-indigo-300 font-medium">Ready — agentless monitoring active</span>
+              </div>
+              <div className="flex gap-3">
+                <button
+                  onClick={() => setUninstallSuccess(false)}
+                  className="px-5 py-2 bg-[var(--bg-tertiary)] hover:bg-[var(--bg-card-hover)] text-[var(--text-primary)] border border-[var(--border-color)] rounded-xl text-sm font-medium transition-all"
+                >
+                  Back
+                </button>
+                <button
+                  onClick={onClose}
+                  className="px-8 py-2.5 bg-indigo-600 hover:bg-indigo-500 active:scale-[0.98] rounded-xl text-white text-sm font-bold transition-all shadow-lg shadow-indigo-500/20"
+                >
+                  Done
+                </button>
+              </div>
+            </div>
           ) : (
             <>
               {/* Missing Node.js 1-Click Banner */}
@@ -342,49 +387,6 @@ export default function AgentSetupWizard({
                     {executing ? <RefreshCw size={13} className="animate-spin" /> : <Download size={13} />}
                     <span>Install Node.js 20</span>
                   </button>
-                </div>
-              )}
-
-              {activeTab === 'tmux' && (
-                <div className="space-y-4">
-                  <div className="p-3.5 rounded-xl bg-indigo-500/10 border border-indigo-500/20 text-indigo-300 space-y-1.5">
-                    <p className="font-semibold text-sm flex items-center gap-2">
-                      <Zap size={16} className="text-indigo-400" />
-                      1-Click tmux Installation (Recommended)
-                    </p>
-                    <p className="text-[11px] leading-relaxed text-indigo-200/80">
-                      Installs and launches the Relay Agent in a detached <code className="bg-black/30 px-1 py-0.5 rounded text-indigo-300">tmux</code> background session on the remote server.
-                      Requires no root privileges and survives SSH disconnections.
-                    </p>
-                  </div>
-
-                  <div className="space-y-2">
-                    <label className="text-[var(--text-muted)] font-medium">Command that will be executed over SSH:</label>
-                    <div className="relative group bg-black/60 border border-[var(--border-color)] rounded-lg p-3 font-mono text-[11px] text-indigo-300 break-all">
-                      {tmuxCommand}
-                      <button
-                        onClick={() => copyToClipboard(tmuxCommand, 'tmux')}
-                        className="absolute top-2 right-2 p-1.5 bg-white/10 hover:bg-white/20 rounded border border-white/10 text-white transition-colors"
-                        title="Copy command"
-                      >
-                        {copied === 'tmux' ? <Check size={13} className="text-emerald-400" /> : <Copy size={13} />}
-                      </button>
-                    </div>
-                  </div>
-
-                  <div className="pt-2 flex items-center justify-between">
-                    <span className="text-[11px] text-[var(--text-muted)]">
-                      Session name: <code className="text-indigo-400">monitor-agent</code>
-                    </span>
-                    <button
-                      onClick={() => handleInstall('tmux')}
-                      disabled={executing || status.loading}
-                      className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white font-medium rounded-lg shadow-lg shadow-indigo-600/30 flex items-center gap-2 transition-all disabled:opacity-50 cursor-pointer"
-                    >
-                      {executing ? <RefreshCw size={14} className="animate-spin" /> : <Play size={14} />}
-                      <span>Install & Launch in tmux</span>
-                    </button>
-                  </div>
                 </div>
               )}
 

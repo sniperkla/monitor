@@ -67,17 +67,24 @@ function CustomSelect({ value, onChange, options = [], placeholder = 'Select...'
         <div className="absolute top-full left-0 right-0 mt-1 bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-xl shadow-2xl z-[9999] overflow-hidden max-h-56 overflow-y-auto divide-y divide-[var(--border-color)]">
           {options.map((opt) => {
             const isSelected = String(opt.value) === String(value);
+            const isDisabled = !!opt.disabled;
             return (
               <button
                 key={opt.value}
                 type="button"
-                onClick={() => { onChange(opt.value); setOpen(false); }}
-                className={`w-full px-3 py-2 text-left text-xs flex items-center justify-between transition-colors cursor-pointer ${
-                  isSelected ? 'bg-indigo-500/15 text-indigo-400 font-bold' : 'hover:bg-[var(--bg-tertiary)] text-[var(--text-primary)]'
+                disabled={isDisabled}
+                onClick={() => { if (!isDisabled) { onChange(opt.value); setOpen(false); } }}
+                title={isDisabled ? (opt.disabledReason || 'Not available') : undefined}
+                className={`w-full px-3 py-2 text-left text-xs flex items-center justify-between transition-colors ${
+                  isDisabled
+                    ? 'opacity-40 cursor-not-allowed text-[var(--text-muted)]'
+                    : isSelected
+                    ? 'bg-indigo-500/15 text-indigo-400 font-bold cursor-pointer'
+                    : 'hover:bg-[var(--bg-tertiary)] text-[var(--text-primary)] cursor-pointer'
                 }`}
               >
-                <span className="truncate">{opt.label}</span>
-                {isSelected && <Check size={12} className="text-indigo-400 shrink-0 ml-1" />}
+                <span className="truncate">{opt.label}{isDisabled && opt.disabledReason ? <span className="ml-1 text-[10px] text-amber-400/70 font-normal">— agent required</span> : null}</span>
+                {isSelected && !isDisabled && <Check size={12} className="text-indigo-400 shrink-0 ml-1" />}
               </button>
             );
           })}
@@ -99,7 +106,7 @@ export default function ServerMonitorApp() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [autoRefresh, setAutoRefresh] = useState(true);
-  const [refreshInterval, setRefreshInterval] = useState(5000); // 2000, 5000, 10000, 30000
+  const [refreshInterval, setRefreshInterval] = useState(10000); // default 10s for agentless; agent unlocks faster intervals
   const [isTabVisible, setIsTabVisible] = useState(true);
   const [showAgentWizard, setShowAgentWizard] = useState(false);
 
@@ -124,10 +131,17 @@ export default function ServerMonitorApp() {
   const intervalRef = useRef(null);
   const relayPollRef = useRef(null);
 
-  // Historical data for charts (last 20 points)
+  // Historical data for charts (last 120 points — live ring buffer)
   const [cpuHistory, setCpuHistory] = useState([]);
   const [ramHistory, setRamHistory] = useState([]);
   const [networkHistory, setNetworkHistory] = useState([]);
+  const [diskHistory, setDiskHistory] = useState([]);
+
+  // Persistent history (fetched from DB for 1h / 6h / 24h views)
+  const [historyRange, setHistoryRange] = useState('live'); // 'live' | '1h' | '6h' | '24h'
+  const [historyData, setHistoryData] = useState(null);    // { data: [...], range, count } | null
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const lastSnapshotRef = useRef(0); // timestamp of last DB snapshot write (throttle to 1/30s)
 
   const inFlightProcRef = useRef(false);
   const inFlightStatusRef = useRef(false);
@@ -142,7 +156,7 @@ export default function ServerMonitorApp() {
   // Refs for latest state accessible inside closed-over socket event handlers
   const selectedConnectionRef = useRef(null);
   const connectionsRef = useRef([]);
-  const refreshIntervalRef = useRef(5000);
+  const refreshIntervalRef = useRef(10000);
 
   const connections = useMemo(() => appState.connections || [], [appState.connections]);
 
@@ -157,6 +171,14 @@ export default function ServerMonitorApp() {
   useEffect(() => { selectedConnectionRef.current = selectedConnection; }, [selectedConnection]);
   useEffect(() => { connectionsRef.current = connections; }, [connections]);
   useEffect(() => { refreshIntervalRef.current = refreshInterval; }, [refreshInterval]);
+
+  // Guard: if agent goes offline while a fast interval is active, clamp to 10s minimum
+  useEffect(() => {
+    const agentActive = isSocketStreaming || isP2PStreaming;
+    if (!agentActive && refreshInterval < 10000) {
+      setRefreshInterval(10000);
+    }
+  }, [isSocketStreaming, isP2PStreaming, refreshInterval]);
 
 
 
@@ -231,6 +253,9 @@ export default function ServerMonitorApp() {
     setCpuHistory([]);
     setRamHistory([]);
     setNetworkHistory([]);
+    setDiskHistory([]);
+    setHistoryRange('live');
+    setHistoryData(null);
     setError(null);
     setMetrics(null);
     setIsSocketStreaming(false);
@@ -323,13 +348,15 @@ export default function ServerMonitorApp() {
 
         // Update charts on client machine
         const timestamp = new Date(processed.timestampMs || Date.now()).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-        setCpuHistory(prev => [...prev.slice(-19), { time: timestamp, value: processed.cpu?.usage || 0 }]);
-        setRamHistory(prev => [...prev.slice(-19), { time: timestamp, value: processed.memory?.usedPercent || 0 }]);
-        setNetworkHistory(prev => [...prev.slice(-19), { 
+        setCpuHistory(prev => [...prev.slice(-119), { time: timestamp, value: processed.cpu?.usage || 0 }]);
+        setRamHistory(prev => [...prev.slice(-119), { time: timestamp, value: processed.memory?.usedPercent || 0 }]);
+        setNetworkHistory(prev => [...prev.slice(-119), { 
           time: timestamp, 
           rx: processed.network?.rxRate || 0, 
           tx: processed.network?.txRate || 0 
         }]);
+        const primaryDisk = processed.disk?.filesystems?.[0];
+        setDiskHistory(prev => [...prev.slice(-119), { time: timestamp, value: primaryDisk?.usedPercent || 0 }]);
       } else {
         const errData = await response.json();
         setError(errData.error || 'Failed to fetch metrics');
@@ -435,14 +462,72 @@ export default function ServerMonitorApp() {
     setError(null);
 
     const timestamp = new Date(processed.timestampMs || Date.now()).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-    setCpuHistory(prev => [...prev.slice(-19), { time: timestamp, value: processed.cpu?.usage || 0 }]);
-    setRamHistory(prev => [...prev.slice(-19), { time: timestamp, value: processed.memory?.usedPercent || 0 }]);
-    setNetworkHistory(prev => [...prev.slice(-19), { 
+    setCpuHistory(prev => [...prev.slice(-119), { time: timestamp, value: processed.cpu?.usage || 0 }]);
+    setRamHistory(prev => [...prev.slice(-119), { time: timestamp, value: processed.memory?.usedPercent || 0 }]);
+    setNetworkHistory(prev => [...prev.slice(-119), { 
       time: timestamp, 
       rx: processed.network?.rxRate || 0, 
       tx: processed.network?.txRate || 0 
     }]);
-  }, [computeClientDeltas]);
+    const primaryDisk = processed.disk?.filesystems?.[0];
+    setDiskHistory(prev => [...prev.slice(-119), { time: timestamp, value: primaryDisk?.usedPercent || 0 }]);
+
+    // Throttled DB snapshot — at most once every 30 seconds
+    const now = Date.now();
+    if (now - lastSnapshotRef.current >= 30_000) {
+      lastSnapshotRef.current = now;
+      const connId = selectedConnectionRef.current;
+      if (connId) {
+        apiFetch('/api/server-monitor/history', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            connectionId: connId,
+            cpu:          processed.cpu?.usage     ?? null,
+            ram:          processed.memory?.usedPercent ?? null,
+            rxBytes:      processed.network?.rxRate ?? null,
+            txBytes:      processed.network?.txRate ?? null,
+            disk:         primaryDisk?.usedPercent  ?? null,
+          }),
+        }).catch(() => {}); // fire-and-forget
+      }
+    }
+  }, [computeClientDeltas, apiFetch]);
+
+  // Fetch history from DB for a given range
+  const fetchHistory = useCallback(async (range, connId) => {
+    if (!connId || range === 'live') { setHistoryData(null); return; }
+    setHistoryLoading(true);
+    try {
+      const res = await apiFetch(`/api/server-monitor/history?connectionId=${connId}&range=${range}`);
+      if (res.ok) {
+        const json = await res.json();
+        setHistoryData(json);
+      }
+    } catch (err) {
+      console.error('[fetchHistory]', err);
+    } finally {
+      setHistoryLoading(false);
+    }
+  }, [apiFetch]);
+
+  // Re-fetch history when range or selected connection changes
+  useEffect(() => {
+    if (historyRange !== 'live') {
+      fetchHistory(historyRange, selectedConnection);
+    } else {
+      setHistoryData(null);
+    }
+  }, [historyRange, selectedConnection, fetchHistory]);
+
+  // Auto-refresh history every 30s while viewing a historical range
+  useEffect(() => {
+    if (historyRange === 'live') return;
+    const id = setInterval(() => {
+      fetchHistory(historyRange, selectedConnection);
+    }, 30_000);
+    return () => clearInterval(id);
+  }, [historyRange, selectedConnection, fetchHistory]);
 
   // ── WebRTC P2P DataChannel + WebSocket Relay Stream ──
   useEffect(() => {
@@ -819,52 +904,59 @@ export default function ServerMonitorApp() {
     }
   };
 
-  const getCpuChartData = () => ({
-    labels: cpuHistory.map(d => d.time),
-    datasets: [{
-      label: 'CPU Usage',
-      data: cpuHistory.map(d => d.value),
-      borderColor: 'rgb(99, 102, 241)',
-      backgroundColor: 'rgba(99, 102, 241, 0.12)',
-      fill: true,
-      tension: 0.3
-    }]
-  });
+  const getCpuChartData = () => {
+    const pts = historyData?.data ?? null;
+    if (pts) return {
+      labels: pts.map(d => d.label),
+      datasets: [{ label: 'CPU Usage', data: pts.map(d => d.cpu), borderColor: 'rgb(99, 102, 241)', backgroundColor: 'rgba(99, 102, 241, 0.12)', fill: true, tension: 0.3, pointRadius: pts.length > 60 ? 0 : 2 }]
+    };
+    return {
+      labels: cpuHistory.map(d => d.time),
+      datasets: [{ label: 'CPU Usage', data: cpuHistory.map(d => d.value), borderColor: 'rgb(99, 102, 241)', backgroundColor: 'rgba(99, 102, 241, 0.12)', fill: true, tension: 0.3 }]
+    };
+  };
 
-  const getRamChartData = () => ({
-    labels: ramHistory.map(d => d.time),
-    datasets: [{
-      label: 'RAM Usage',
-      data: ramHistory.map(d => d.value),
-      borderColor: 'rgb(16, 185, 129)',
-      backgroundColor: 'rgba(16, 185, 129, 0.12)',
-      fill: true,
-      tension: 0.3
-    }]
-  });
+  const getRamChartData = () => {
+    const pts = historyData?.data ?? null;
+    if (pts) return {
+      labels: pts.map(d => d.label),
+      datasets: [{ label: 'RAM Usage', data: pts.map(d => d.ram), borderColor: 'rgb(16, 185, 129)', backgroundColor: 'rgba(16, 185, 129, 0.12)', fill: true, tension: 0.3, pointRadius: pts.length > 60 ? 0 : 2 }]
+    };
+    return {
+      labels: ramHistory.map(d => d.time),
+      datasets: [{ label: 'RAM Usage', data: ramHistory.map(d => d.value), borderColor: 'rgb(16, 185, 129)', backgroundColor: 'rgba(16, 185, 129, 0.12)', fill: true, tension: 0.3 }]
+    };
+  };
 
-  const getNetworkChartData = () => ({
-    labels: networkHistory.map(d => d.time),
-    datasets: [
-      {
-        label: 'Download',
-        data: networkHistory.map(d => d.rx),
-        borderColor: 'rgb(59, 130, 246)',
-        backgroundColor: 'rgba(59, 130, 246, 0.12)',
-        fill: true,
-        tension: 0.3
-      },
-      {
-        label: 'Upload',
-        data: networkHistory.map(d => d.tx),
-        borderColor: 'rgb(245, 158, 11)',
-        backgroundColor: 'rgba(245, 158, 11, 0.12)',
-        fill: true,
-        tension: 0.3
-      }
-    ]
-  });
+  const getNetworkChartData = () => {
+    const pts = historyData?.data ?? null;
+    if (pts) return {
+      labels: pts.map(d => d.label),
+      datasets: [
+        { label: 'Download', data: pts.map(d => d.rxBytes), borderColor: 'rgb(59, 130, 246)', backgroundColor: 'rgba(59, 130, 246, 0.12)', fill: true, tension: 0.3, pointRadius: pts.length > 60 ? 0 : 2 },
+        { label: 'Upload',   data: pts.map(d => d.txBytes), borderColor: 'rgb(245, 158, 11)', backgroundColor: 'rgba(245, 158, 11, 0.12)', fill: true, tension: 0.3, pointRadius: pts.length > 60 ? 0 : 2 },
+      ]
+    };
+    return {
+      labels: networkHistory.map(d => d.time),
+      datasets: [
+        { label: 'Download', data: networkHistory.map(d => d.rx), borderColor: 'rgb(59, 130, 246)', backgroundColor: 'rgba(59, 130, 246, 0.12)', fill: true, tension: 0.3 },
+        { label: 'Upload',   data: networkHistory.map(d => d.tx), borderColor: 'rgb(245, 158, 11)', backgroundColor: 'rgba(245, 158, 11, 0.12)', fill: true, tension: 0.3 },
+      ]
+    };
+  };
 
+  const getDiskChartData = () => {
+    const pts = historyData?.data ?? null;
+    if (pts) return {
+      labels: pts.map(d => d.label),
+      datasets: [{ label: 'Disk Usage', data: pts.map(d => d.disk), borderColor: 'rgb(168, 85, 247)', backgroundColor: 'rgba(168, 85, 247, 0.12)', fill: true, tension: 0.3, pointRadius: pts.length > 60 ? 0 : 2 }]
+    };
+    return {
+      labels: diskHistory.map(d => d.time),
+      datasets: [{ label: 'Disk Usage', data: diskHistory.map(d => d.value), borderColor: 'rgb(168, 85, 247)', backgroundColor: 'rgba(168, 85, 247, 0.12)', fill: true, tension: 0.3 }]
+    };
+  };
   // ─────────────────────────────────────────────────────────────────────────────
   // MAIN APP VIEW
   // ─────────────────────────────────────────────────────────────────────────────
@@ -936,14 +1028,18 @@ export default function ServerMonitorApp() {
               value={String(refreshInterval)}
               onChange={(val) => setRefreshInterval(Number(val))}
               className="w-44"
-              options={[
-                { value: '500', label: '500ms (Ultra Realtime)' },
-                { value: '1000', label: '1s (High Speed)' },
-                { value: '2000', label: '2s (Real-time)' },
-                { value: '5000', label: '5s (Balanced)' },
-                { value: '10000', label: '10s (Eco)' },
-                { value: '30000', label: '30s (Low Power)' },
-              ]}
+              options={(() => {
+                const agentActive = isSocketStreaming || isP2PStreaming;
+                const agentMsg = 'Install Monitor Agent to unlock this interval';
+                return [
+                  { value: '500',   label: '500ms — Ultra Realtime', disabled: !agentActive, disabledReason: agentMsg },
+                  { value: '1000',  label: '1s — High Frequency',    disabled: !agentActive, disabledReason: agentMsg },
+                  { value: '2000',  label: '2s — Realtime',          disabled: !agentActive, disabledReason: agentMsg },
+                  { value: '5000',  label: '5s — Standard',          disabled: !agentActive, disabledReason: agentMsg },
+                  { value: '10000', label: '10s — Agentless Min' },
+                  { value: '30000', label: '30s — Low Impact' },
+                ];
+              })()}
             />
           </div>
 
@@ -1042,6 +1138,7 @@ export default function ServerMonitorApp() {
         <div className="flex gap-1">
           {[
             { id: 'overview', label: 'Overview', icon: Activity },
+            { id: 'history', label: 'History', icon: TrendingUp },
             { id: 'apps', label: 'Applications', icon: Package },
             { id: 'processes', label: 'Processes', icon: ListFilter },
           ].map(tab => (
@@ -1142,6 +1239,50 @@ export default function ServerMonitorApp() {
                 </div>
 
                 {/* Performance Metrics Grid */}
+                {/* ── History Range Picker ── */}
+                <div className="flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-1.5 p-1 bg-[var(--bg-tertiary)] border border-[var(--border-color)] rounded-xl text-xs">
+                    {[
+                      { id: 'live', label: 'Live' },
+                      { id: '1h',   label: '1 Hour' },
+                      { id: '6h',   label: '6 Hours' },
+                      { id: '24h',  label: '24 Hours' },
+                    ].map(r => (
+                      <button
+                        key={r.id}
+                        onClick={() => setHistoryRange(r.id)}
+                        className={`px-3 py-1 rounded-lg font-medium transition-all cursor-pointer ${
+                          historyRange === r.id
+                            ? 'bg-indigo-600 text-white shadow-sm shadow-indigo-500/30'
+                            : 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'
+                        }`}
+                      >
+                        {r.id === 'live' && (
+                          <span className={`inline-block w-1.5 h-1.5 rounded-full mr-1.5 align-middle ${historyRange === 'live' ? 'bg-emerald-400 animate-pulse' : 'bg-[var(--text-muted)]'}`} />
+                        )}
+                        {r.label}
+                      </button>
+                    ))}
+                  </div>
+                  {historyRange !== 'live' && (
+                    <div className="flex items-center gap-2 text-xs text-[var(--text-muted)]">
+                      {historyLoading ? (
+                        <span className="flex items-center gap-1"><RefreshCw size={11} className="animate-spin" /> Loading…</span>
+                      ) : historyData ? (
+                        <span>{historyData.count} data points · auto-refresh every 30s</span>
+                      ) : null}
+                      <button
+                        onClick={() => fetchHistory(historyRange, selectedConnection)}
+                        disabled={historyLoading}
+                        className="p-1 hover:text-[var(--text-primary)] transition-colors disabled:opacity-40"
+                        title="Refresh history"
+                      >
+                        <RefreshCw size={12} className={historyLoading ? 'animate-spin' : ''} />
+                      </button>
+                    </div>
+                  )}
+                </div>
+
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   {/* CPU Card */}
                   <div className="bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-xl p-4 shadow-sm">
@@ -1158,8 +1299,8 @@ export default function ServerMonitorApp() {
                       </div>
                     </div>
                     
-                    <div className="h-32 mb-3">
-                      {cpuHistory.length > 0 && <Line data={getCpuChartData()} options={chartOptions} />}
+                    <div className={`${historyRange !== 'live' ? 'h-48' : 'h-32'} mb-3 transition-all duration-300`}>
+                      {(cpuHistory.length > 0 || historyData) && <Line data={getCpuChartData()} options={chartOptions} />}
                     </div>
                     
                     <div className="grid grid-cols-2 gap-2 text-xs">
@@ -1191,8 +1332,8 @@ export default function ServerMonitorApp() {
                       </div>
                     </div>
                     
-                    <div className="h-32 mb-3">
-                      {ramHistory.length > 0 && <Line data={getRamChartData()} options={chartOptions} />}
+                    <div className={`${historyRange !== 'live' ? 'h-48' : 'h-32'} mb-3 transition-all duration-300`}>
+                      {(ramHistory.length > 0 || historyData) && <Line data={getRamChartData()} options={chartOptions} />}
                     </div>
                     
                     <div className="grid grid-cols-2 gap-2 text-xs">
@@ -1255,8 +1396,8 @@ export default function ServerMonitorApp() {
                       </div>
                     </div>
                     
-                    <div className="h-32 mb-3">
-                      {networkHistory.length > 0 && <Line data={getNetworkChartData()} options={{
+                    <div className={`${historyRange !== 'live' ? 'h-48' : 'h-32'} mb-3 transition-all duration-300`}>
+                      {(networkHistory.length > 0 || historyData) && <Line data={getNetworkChartData()} options={{
                         ...chartOptions,
                         scales: {
                           ...chartOptions.scales,
@@ -1293,6 +1434,231 @@ export default function ServerMonitorApp() {
               </div>
             )}
           </>
+        )}
+
+        {selectedConnection && activeTab === 'history' && (
+          <div className="space-y-4">
+            {/* History Range Picker */}
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="flex items-center gap-1.5 p-1 bg-[var(--bg-tertiary)] border border-[var(--border-color)] rounded-xl text-xs">
+                {[
+                  { id: 'live', label: 'Live' },
+                  { id: '1h',   label: '1 Hour' },
+                  { id: '6h',   label: '6 Hours' },
+                  { id: '24h',  label: '24 Hours' },
+                ].map(r => (
+                  <button
+                    key={r.id}
+                    onClick={() => setHistoryRange(r.id)}
+                    className={`px-3 py-1 rounded-lg font-medium transition-all cursor-pointer ${
+                      historyRange === r.id
+                        ? 'bg-indigo-600 text-white shadow-sm shadow-indigo-500/30'
+                        : 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'
+                    }`}
+                  >
+                    {r.id === 'live' && (
+                      <span className={`inline-block w-1.5 h-1.5 rounded-full mr-1.5 align-middle ${historyRange === 'live' ? 'bg-emerald-400 animate-pulse' : 'bg-[var(--text-muted)]'}`} />
+                    )}
+                    {r.label}
+                  </button>
+                ))}
+              </div>
+              <div className="flex items-center gap-2 text-xs text-[var(--text-muted)]">
+                {historyRange !== 'live' && (
+                  historyLoading ? (
+                    <span className="flex items-center gap-1"><RefreshCw size={11} className="animate-spin" /> Loading…</span>
+                  ) : historyData ? (
+                    <span>{historyData.count} data points · auto-refresh every 30s</span>
+                  ) : null
+                )}
+                {historyRange === 'live' && (
+                  <span className="flex items-center gap-1.5">
+                    <span className="inline-block w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                    Showing last {Math.max(cpuHistory.length, 0)} live samples
+                  </span>
+                )}
+                {historyRange !== 'live' && (
+                  <button
+                    onClick={() => fetchHistory(historyRange, selectedConnection)}
+                    disabled={historyLoading}
+                    className="p-1 hover:text-[var(--text-primary)] transition-colors disabled:opacity-40"
+                    title="Refresh history"
+                  >
+                    <RefreshCw size={12} className={historyLoading ? 'animate-spin' : ''} />
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {/* Full-width chart grid */}
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+              {/* CPU History Chart */}
+              <div className="bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-xl p-4 shadow-sm">
+                <div className="flex items-center justify-between mb-3">
+                  <div className="flex items-center gap-2">
+                    <Cpu className="text-indigo-400" size={16} />
+                    <span className="text-sm font-semibold">CPU Usage</span>
+                  </div>
+                  {metrics?.cpu?.usage != null && (
+                    <span className={`text-lg font-bold font-mono ${getStatusColor(metrics.cpu.usage)}`}>
+                      {metrics.cpu.usage.toFixed(1)}%
+                    </span>
+                  )}
+                </div>
+                <div className="h-52">
+                  {(cpuHistory.length > 0 || historyData) ? (
+                    <Line data={getCpuChartData()} options={{
+                      ...chartOptions,
+                      plugins: {
+                        ...chartOptions.plugins,
+                        legend: { display: false },
+                        tooltip: {
+                          mode: 'index',
+                          intersect: false,
+                          callbacks: { label: (ctx) => ` ${ctx.parsed.y?.toFixed(1) ?? '—'}%` }
+                        }
+                      }
+                    }} />
+                  ) : (
+                    <div className="flex items-center justify-center h-full text-xs text-[var(--text-muted)]">No data yet</div>
+                  )}
+                </div>
+              </div>
+
+              {/* RAM History Chart */}
+              <div className="bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-xl p-4 shadow-sm">
+                <div className="flex items-center justify-between mb-3">
+                  <div className="flex items-center gap-2">
+                    <MemoryStick className="text-emerald-400" size={16} />
+                    <span className="text-sm font-semibold">Memory Usage</span>
+                  </div>
+                  {metrics?.memory?.usedPercent != null && (
+                    <span className={`text-lg font-bold font-mono ${getStatusColor(metrics.memory.usedPercent)}`}>
+                      {metrics.memory.usedPercent.toFixed(1)}%
+                    </span>
+                  )}
+                </div>
+                <div className="h-52">
+                  {(ramHistory.length > 0 || historyData) ? (
+                    <Line data={getRamChartData()} options={{
+                      ...chartOptions,
+                      plugins: {
+                        ...chartOptions.plugins,
+                        legend: { display: false },
+                        tooltip: {
+                          mode: 'index',
+                          intersect: false,
+                          callbacks: { label: (ctx) => ` ${ctx.parsed.y?.toFixed(1) ?? '—'}%` }
+                        }
+                      }
+                    }} />
+                  ) : (
+                    <div className="flex items-center justify-center h-full text-xs text-[var(--text-muted)]">No data yet</div>
+                  )}
+                </div>
+              </div>
+
+              {/* Network History Chart */}
+              <div className="bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-xl p-4 shadow-sm">
+                <div className="flex items-center justify-between mb-3">
+                  <div className="flex items-center gap-2">
+                    <Wifi className="text-blue-400" size={16} />
+                    <span className="text-sm font-semibold">Network I/O</span>
+                  </div>
+                  <div className="flex items-center gap-3 text-xs font-mono">
+                    <span className="flex items-center gap-1 text-blue-400">
+                      <Download size={12} /> {formatBytes(metrics?.network?.rxRate || 0)}/s
+                    </span>
+                    <span className="flex items-center gap-1 text-amber-400">
+                      <Upload size={12} /> {formatBytes(metrics?.network?.txRate || 0)}/s
+                    </span>
+                  </div>
+                </div>
+                <div className="h-52">
+                  {(networkHistory.length > 0 || historyData) ? (
+                    <Line data={getNetworkChartData()} options={{
+                      ...chartOptions,
+                      plugins: {
+                        ...chartOptions.plugins,
+                        legend: { display: true, labels: { color: 'rgba(255,255,255,0.6)', boxWidth: 10, font: { size: 11 } } },
+                        tooltip: {
+                          mode: 'index',
+                          intersect: false,
+                          callbacks: { label: (ctx) => ` ${ctx.dataset.label}: ${formatBytes(ctx.parsed.y ?? 0)}/s` }
+                        }
+                      },
+                      scales: {
+                        ...chartOptions.scales,
+                        y: {
+                          ...chartOptions.scales.y,
+                          max: undefined,
+                          ticks: { color: 'rgba(255,255,255,0.5)', callback: (v) => formatBytes(v) + '/s' }
+                        }
+                      }
+                    }} />
+                  ) : (
+                    <div className="flex items-center justify-center h-full text-xs text-[var(--text-muted)]">No data yet</div>
+                  )}
+                </div>
+              </div>
+
+              {/* Disk History Chart */}
+              <div className="bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-xl p-4 shadow-sm">
+                <div className="flex items-center justify-between mb-3">
+                  <div className="flex items-center gap-2">
+                    <HardDrive className="text-purple-400" size={16} />
+                    <span className="text-sm font-semibold">Disk Usage <span className="text-[11px] font-normal text-[var(--text-muted)]">(primary mount)</span></span>
+                  </div>
+                  {metrics?.disk?.filesystems?.[0]?.usedPercent != null && (
+                    <span className={`text-lg font-bold font-mono ${getStatusColor(metrics.disk.filesystems[0].usedPercent)}`}>
+                      {metrics.disk.filesystems[0].usedPercent.toFixed(1)}%
+                    </span>
+                  )}
+                </div>
+                <div className="h-52">
+                  {(diskHistory.length > 0 || (historyData?.data?.some(d => d.disk != null))) ? (
+                    <Line data={getDiskChartData()} options={{
+                      ...chartOptions,
+                      plugins: {
+                        ...chartOptions.plugins,
+                        legend: { display: false },
+                        tooltip: {
+                          mode: 'index',
+                          intersect: false,
+                          callbacks: { label: (ctx) => ` ${ctx.parsed.y?.toFixed(1) ?? '—'}%` }
+                        }
+                      }
+                    }} />
+                  ) : (
+                    <div className="flex flex-col items-center justify-center h-full text-xs text-[var(--text-muted)] gap-1">
+                      <HardDrive size={24} className="opacity-30" />
+                      <span>No disk history yet — collecting on next snapshot</span>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {/* Summary stats row */}
+            {metrics && (
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                {[
+                  { label: 'CPU Cores', value: metrics.cpu?.cores ?? 'N/A', icon: <Cpu size={14} className="text-indigo-400" /> },
+                  { label: 'Total RAM', value: formatBytes(metrics.memory?.total), icon: <MemoryStick size={14} className="text-emerald-400" /> },
+                  { label: 'Primary Disk', value: metrics.disk?.filesystems?.[0] ? `${formatBytes(metrics.disk.filesystems[0].used)} / ${formatBytes(metrics.disk.filesystems[0].total)}` : 'N/A', icon: <HardDrive size={14} className="text-purple-400" /> },
+                  { label: 'Uptime', value: formatUptime(metrics.system?.uptime), icon: <Clock size={14} className="text-blue-400" /> },
+                ].map(stat => (
+                  <div key={stat.label} className="bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-xl p-3 flex items-center gap-3">
+                    <div className="p-2 rounded-lg bg-[var(--bg-tertiary)]">{stat.icon}</div>
+                    <div>
+                      <div className="text-[10px] text-[var(--text-muted)] font-medium">{stat.label}</div>
+                      <div className="text-sm font-semibold font-mono">{stat.value}</div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
         )}
 
         {selectedConnection && activeTab === 'apps' && (
@@ -1747,6 +2113,10 @@ export default function ServerMonitorApp() {
           if (selectedConnection) checkAgentStatusForConn(selectedConnection);
         }}
         connection={selectedConn}
+        onAgentInstalled={() => {
+          // Auto-switch to 500ms Ultra Realtime when agent comes online
+          setRefreshInterval(500);
+        }}
         onRefreshStatus={() => {
           fetchMetrics(true);
           if (selectedConnection) checkAgentStatusForConn(selectedConnection);
