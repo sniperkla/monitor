@@ -89,42 +89,113 @@ export async function POST(request) {
         fi
 
         echo "📦 Installing Node.js 20 LTS on target server..."
+
+        # ── Detect distro ──────────────────────────────────────────────────────
+        _install_node_binary() {
+          # Universal fallback: download official portable binary from nodejs.org
+          echo "📦 Downloading standalone Node.js 20 portable binary..."
+          ARCH=$(uname -m)
+          case "$ARCH" in
+            x86_64)         NARCH="x64" ;;
+            aarch64|arm64)  NARCH="arm64" ;;
+            armv7l)         NARCH="armv7l" ;;
+            *)              NARCH="x64" ;;
+          esac
+          TMPDIR=$(mktemp -d 2>/dev/null || echo /tmp/node-install-$$)
+          mkdir -p "$TMPDIR"
+          # Install xz-utils if missing (needed for tar -xJ)
+          if ! command -v xz >/dev/null 2>&1; then
+            command -v apt-get >/dev/null 2>&1 && (sudo apt-get install -y -qq xz-utils 2>/dev/null || apt-get install -y -qq xz-utils 2>/dev/null) || true
+            command -v apk      >/dev/null 2>&1 && apk add --no-cache xz 2>/dev/null || true
+            command -v yum      >/dev/null 2>&1 && (sudo yum install -y -q xz 2>/dev/null || true)
+            command -v dnf      >/dev/null 2>&1 && (sudo dnf install -y -q xz 2>/dev/null || true)
+          fi
+          curl -fsSL "https://nodejs.org/dist/v20.18.0/node-v20.18.0-linux-$NARCH.tar.xz" | tar -xJ -C "$TMPDIR" --strip-components=1 2>/dev/null
+          sudo cp -r "$TMPDIR/bin/"* /usr/local/bin/ 2>/dev/null || cp -r "$TMPDIR/bin/"* /usr/local/bin/ 2>/dev/null || true
+          sudo cp -r "$TMPDIR/lib/"* /usr/local/lib/ 2>/dev/null || cp -r "$TMPDIR/lib/"* /usr/local/lib/ 2>/dev/null || true
+          rm -rf "$TMPDIR"
+        }
+
+        if [ -f /etc/os-release ]; then
+          . /etc/os-release
+          OS_ID="\${ID:-unknown}"
+          OS_ID_LIKE="\${ID_LIKE:-}"
+          VERSION_ID="\${VERSION_ID:-0}"
+        else
+          OS_ID="unknown"
+        fi
+
+        # ── Debian / Ubuntu ────────────────────────────────────────────────────
         if command -v apt-get >/dev/null 2>&1; then
-          echo "Detected Debian/Ubuntu..."
-          (curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -) || (curl -fsSL https://deb.nodesource.com/setup_20.x | bash -)
-          sudo apt-get install -y nodejs || apt-get install -y nodejs
+          echo "Detected Debian/Ubuntu-based system..."
+          curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash - 2>/dev/null || \
+          curl -fsSL https://deb.nodesource.com/setup_20.x | bash - 2>/dev/null || true
+          sudo apt-get install -y nodejs 2>/dev/null || apt-get install -y nodejs 2>/dev/null || true
+
+        # ── Amazon Linux 2023 (uses dnf, no modules) ───────────────────────────
+        elif echo "$OS_ID $OS_ID_LIKE" | grep -qi "amzn" && command -v dnf >/dev/null 2>&1; then
+          echo "Detected Amazon Linux 2023..."
+          sudo dnf install -y nodejs npm 2>/dev/null || dnf install -y nodejs npm 2>/dev/null || _install_node_binary
+
+        # ── Amazon Linux 2 (uses yum + amazon-linux-extras) ───────────────────
+        elif echo "$OS_ID $OS_ID_LIKE" | grep -qi "amzn" && command -v amazon-linux-extras >/dev/null 2>&1; then
+          echo "Detected Amazon Linux 2..."
+          sudo amazon-linux-extras install -y epel 2>/dev/null || true
+          sudo amazon-linux-extras install -y nodejs18 2>/dev/null || \
+          sudo amazon-linux-extras install -y nodejs 2>/dev/null || \
+          _install_node_binary
+
+        # ── RHEL / Fedora / CentOS Stream (dnf) ───────────────────────────────
         elif command -v dnf >/dev/null 2>&1; then
-          echo "Detected RHEL/Fedora/CentOS Stream..."
-          sudo dnf module install -y nodejs:20 || sudo dnf install -y nodejs || dnf install -y nodejs
+          echo "Detected RHEL/Fedora/CentOS Stream (dnf)..."
+          # Try NodeSource RPM first, fall back to module, then binary
+          (curl -fsSL https://rpm.nodesource.com/setup_20.x | sudo bash - 2>/dev/null || \
+           curl -fsSL https://rpm.nodesource.com/setup_20.x | bash - 2>/dev/null) || true
+          sudo dnf install -y nodejs 2>/dev/null || \
+          sudo dnf module install -y nodejs:20 2>/dev/null || \
+          dnf install -y nodejs 2>/dev/null || \
+          _install_node_binary
+
+        # ── CentOS 7 / RHEL 7 (yum) ──────────────────────────────────────────
         elif command -v yum >/dev/null 2>&1; then
-          echo "Detected CentOS/RHEL..."
-          (curl -fsSL https://rpm.nodesource.com/setup_20.x | sudo bash -) || (curl -fsSL https://rpm.nodesource.com/setup_20.x | bash -)
-          sudo yum install -y nodejs || yum install -y nodejs
+          echo "Detected CentOS/RHEL (yum)..."
+          (curl -fsSL https://rpm.nodesource.com/setup_20.x | sudo bash - 2>/dev/null || \
+           curl -fsSL https://rpm.nodesource.com/setup_20.x | bash - 2>/dev/null) || true
+          sudo yum install -y nodejs 2>/dev/null || yum install -y nodejs 2>/dev/null || _install_node_binary
+
+        # ── Alpine Linux ───────────────────────────────────────────────────────
         elif command -v apk >/dev/null 2>&1; then
           echo "Detected Alpine Linux..."
           apk add --no-cache nodejs npm
+
+        # ── openSUSE / SLES ────────────────────────────────────────────────────
+        elif command -v zypper >/dev/null 2>&1; then
+          echo "Detected openSUSE/SLES..."
+          sudo zypper install -y nodejs20 2>/dev/null || sudo zypper install -y nodejs 2>/dev/null || _install_node_binary
+
+        # ── Arch / Manjaro ─────────────────────────────────────────────────────
+        elif command -v pacman >/dev/null 2>&1; then
+          echo "Detected Arch-based system..."
+          sudo pacman -Sy --noconfirm nodejs npm 2>/dev/null || _install_node_binary
+
+        # ── Generic fallback ───────────────────────────────────────────────────
         else
-          # Fallback: install standalone portable official binary from nodejs.org
-          echo "📦 Downloading standalone Node.js portable binary..."
-          ARCH=$(uname -m)
-          case "$ARCH" in
-            x86_64) NARCH="x64" ;;
-            aarch64|arm64) NARCH="arm64" ;;
-            armv7l) NARCH="armv7l" ;;
-            *) NARCH="x64" ;;
-          esac
-          mkdir -p /tmp/node-install
-          curl -fsSL "https://nodejs.org/dist/v20.18.0/node-v20.18.0-linux-\${NARCH}.tar.xz" | tar -xJ -C /tmp/node-install --strip-components=1 2>/dev/null
-          sudo cp -r /tmp/node-install/bin/* /usr/local/bin/ 2>/dev/null || cp -r /tmp/node-install/bin/* /usr/local/bin/ 2>/dev/null
-          sudo cp -r /tmp/node-install/lib/* /usr/local/lib/ 2>/dev/null || cp -r /tmp/node-install/lib/* /usr/local/lib/ 2>/dev/null
-          rm -rf /tmp/node-install
+          echo "⚠️ Unknown distro — using portable Node.js binary..."
+          _install_node_binary
         fi
 
+        # Final check
         if command -v node >/dev/null 2>&1; then
           echo "🎉 Node.js successfully installed: $(node -v)"
         else
-          echo "❌ Could not complete Node.js installation automatically."
-          exit 1
+          echo "❌ Could not install Node.js automatically. Trying portable binary fallback..."
+          _install_node_binary
+          if command -v node >/dev/null 2>&1; then
+            echo "🎉 Node.js portable binary installed: $(node -v)"
+          else
+            echo "❌ All installation methods failed."
+            exit 1
+          fi
         fi
       `;
 
@@ -230,18 +301,25 @@ export async function POST(request) {
             exit 1
           fi
 
-          # 2. Check or install tmux
+          # 2. Check or install tmux (cross-distro)
           if ! command -v tmux >/dev/null 2>&1; then
             echo "📦 tmux not found, attempting to install tmux..."
             if command -v apt-get >/dev/null 2>&1; then
-              sudo apt-get update -qq && sudo apt-get install -y -qq tmux || apt-get install -y -qq tmux
+              sudo apt-get update -qq 2>/dev/null && sudo apt-get install -y -qq tmux 2>/dev/null || apt-get install -y -qq tmux 2>/dev/null || true
             elif command -v dnf >/dev/null 2>&1; then
-              sudo dnf install -y -q tmux || dnf install -y -q tmux
+              sudo dnf install -y -q tmux 2>/dev/null || dnf install -y -q tmux 2>/dev/null || true
             elif command -v yum >/dev/null 2>&1; then
-              sudo yum install -y -q tmux || yum install -y -q tmux
+              sudo yum install -y -q tmux 2>/dev/null || yum install -y -q tmux 2>/dev/null || true
             elif command -v apk >/dev/null 2>&1; then
-              apk add --no-cache tmux
-                 # 3. Always download latest zero-dependency obfuscated monitor-agent
+              apk add --no-cache tmux 2>/dev/null || true
+            elif command -v zypper >/dev/null 2>&1; then
+              sudo zypper install -y tmux 2>/dev/null || true
+            elif command -v pacman >/dev/null 2>&1; then
+              sudo pacman -Sy --noconfirm tmux 2>/dev/null || true
+            fi
+          fi
+
+          # 3. Always download latest zero-dependency obfuscated monitor-agent
           echo "⬇️ Downloading Monitor Agent script..."
           curl -fsSL -H "Cache-Control: no-cache" "${origin}/monitor-agent.min.js" -o ~/.monitor-agent.js 2>/dev/null || \
           curl -fsSL -H "Cache-Control: no-cache" "${origin}/monitor-agent.js" -o ~/.monitor-agent.js 2>/dev/null || true
@@ -251,68 +329,69 @@ export async function POST(request) {
             exit 1
           fi
 
-          # 4. Detect exact Node.js binary location on target system
-          NODE_BIN="$(command -v node 2>/dev/null || which node 2>/dev/null || find /usr/local/bin /usr/bin /opt $HOME/.nvm -name node 2>/dev/null | head -1 || echo 'node')"
+          # 4. Detect Node.js binary location (bounded find to avoid deep traversal)
+          NODE_BIN="$(command -v node 2>/dev/null || which node 2>/dev/null || \
+            find /usr/local/bin /usr/bin -maxdepth 1 -name node 2>/dev/null | head -1 || \
+            find /opt -maxdepth 4 -name node 2>/dev/null | head -1 || \
+            find "$HOME/.nvm/versions" -maxdepth 3 -name node 2>/dev/null | sort -V | tail -1 || \
+            echo 'node')"
 
-          # 5. Create a robust launcher script with full environment setup
+          # 5. Write launcher — uses env vars for server/token to avoid quoting issues
           echo "📝 Creating launcher script..."
-          cat > ~/.monitor-agent-launcher.sh << LAUNCHER_EOF
+          cat > ~/.monitor-agent-launcher.sh << 'LAUNCHER_EOF'
 #!/bin/bash
-export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:\$PATH"
-[ -s "\$HOME/.nvm/nvm.sh" ] && source "\$HOME/.nvm/nvm.sh" 2>/dev/null || true
-[ -s "\$HOME/.bashrc" ] && source "\$HOME/.bashrc" 2>/dev/null || true
-cd "\$HOME"
-
-NODE_PATH="${NODE_BIN}"
-if ! command -v "\$NODE_PATH" >/dev/null 2>&1; then
-  NODE_PATH="\$(command -v node 2>/dev/null || which node 2>/dev/null || find /usr/local/bin /usr/bin /opt \$HOME/.nvm -name node 2>/dev/null | head -1 || echo 'node')"
-fi
-
-echo "[\$(date)] Starting monitor agent with \$NODE_PATH..." >> "\$HOME/.monitor-agent.log"
-exec "\$NODE_PATH" "\$HOME/.monitor-agent.js" --server "${origin}" --token "${token}"${connectionId ? ` --connection-id "${connectionId}"` : ''} >> "\$HOME/.monitor-agent.log" 2>&1
+export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
+[ -s "$HOME/.nvm/nvm.sh" ] && source "$HOME/.nvm/nvm.sh" 2>/dev/null || true
+cd "$HOME"
+NODE_BIN="$(command -v node 2>/dev/null || find /usr/local/bin /usr/bin -maxdepth 1 -name node 2>/dev/null | head -1 || find /opt -maxdepth 4 -name node 2>/dev/null | head -1 || echo 'node')"
+echo "[$(date)] Starting monitor agent with $NODE_BIN..." >> "$HOME/.monitor-agent.log"
+exec "$NODE_BIN" "$HOME/.monitor-agent.js" --server "$AGENT_SERVER" --token "$AGENT_TOKEN" ${connectionId ? `--connection-id "$AGENT_CONN_ID"` : ''} >> "$HOME/.monitor-agent.log" 2>&1
 LAUNCHER_EOF
           chmod +x ~/.monitor-agent-launcher.sh
 
-          # 6. Stop existing session
+          # 6. Stop any existing session
           tmux kill-session -t monitor-agent 2>/dev/null || true
           pkill -9 -f '[.]monitor-agent' 2>/dev/null || true
           pkill -9 -f '[m]onitor-agent.js' 2>/dev/null || true
           sleep 1
 
-          # 7. Launch in tmux using bash to ensure full environment inheritance
+          # 7. Launch in tmux — pass credentials as env vars (no quoting issues)
           echo "🚀 Launching Monitor Agent in detached tmux session [monitor-agent]..."
-          tmux new-session -d -s monitor-agent "bash $HOME/.monitor-agent-launcher.sh"
-          
-          # Give it a moment to initialize and load into memory
+          AGENT_SERVER="${origin}" AGENT_TOKEN="${token}" AGENT_CONN_ID="${connectionId || ''}" \
+            tmux new-session -d -s monitor-agent \
+              "AGENT_SERVER='${origin}' AGENT_TOKEN='${token}' AGENT_CONN_ID='${connectionId || ''}' bash $HOME/.monitor-agent-launcher.sh"
           sleep 2
 
-          # 8. Verify the session was created and clean up launcher files from disk
+          # 8. Verify and clean up
           if tmux has-session -t monitor-agent 2>/dev/null; then
             echo "✅ Monitor Agent is running in background tmux session!"
-            echo "📋 To view agent live logs: tmux attach -t monitor-agent"
-            echo "📋 To detach from logs: Press Ctrl+B then D"
-            # Clean up disk files — agent is running purely in memory
+            echo "📋 View live logs: tmux attach -t monitor-agent  (detach: Ctrl+B then D)"
             rm -f ~/.monitor-agent-launcher.sh ~/.monitor-agent.js 2>/dev/null || true
-            # Double-check process is actually running
-            if pgrep -f '[.]monitor-agent' >/dev/null 2>&1 || pgrep -f '[m]onitor-agent.js' >/dev/null 2>&1 || pgrep -f 'monitor-agent' >/dev/null 2>&1; then
-              echo "✅ Process confirmed running in memory"
+            # Give process 2s to start, then verify
+            sleep 2
+            if pgrep -f '[.]monitor-agent' >/dev/null 2>&1 || \
+               pgrep -f '[m]onitor-agent.js' >/dev/null 2>&1 || \
+               ps aux 2>/dev/null | grep -v grep | grep -q 'monitor-agent' 2>/dev/null; then
+              echo "✅ Process confirmed running"
             else
-              echo "⚠️ Process initializing..."
+              echo "⚠️ Process still initializing — check: tail -f ~/.monitor-agent.log"
             fi
           else
-            echo "⚠️ tmux session creation failed. Attempting nohup fallback..."
-            nohup bash $HOME/.monitor-agent-launcher.sh >/dev/null 2>&1 &
-            sleep 2
+            echo "⚠️ tmux session failed — falling back to nohup..."
+            AGENT_SERVER="${origin}" AGENT_TOKEN="${token}" AGENT_CONN_ID="${connectionId || ''}" \
+              nohup bash "$HOME/.monitor-agent-launcher.sh" >/dev/null 2>&1 &
+            sleep 3
             rm -f ~/.monitor-agent-launcher.sh ~/.monitor-agent.js 2>/dev/null || true
-            if pgrep -f '[.]monitor-agent' >/dev/null 2>&1 || pgrep -f '[m]onitor-agent.js' >/dev/null 2>&1 || pgrep -f 'monitor-agent' >/dev/null 2>&1; then
-              echo "✅ Monitor Agent running in background via nohup"
-              echo "📋 To view logs: tail -f ~/.monitor-agent.log"
+            if pgrep -f '[.]monitor-agent' >/dev/null 2>&1 || \
+               pgrep -f '[m]onitor-agent.js' >/dev/null 2>&1 || \
+               ps aux 2>/dev/null | grep -v grep | grep -q 'monitor-agent' 2>/dev/null; then
+              echo "✅ Monitor Agent running via nohup"
+              echo "📋 View logs: tail -f ~/.monitor-agent.log"
             else
-              echo "❌ Failed to start agent process. Check logs: tail ~/.monitor-agent.log"
+              echo "❌ Agent failed to start. Check: tail ~/.monitor-agent.log"
               exit 1
             fi
           fi
-          # Ensure source files are removed from disk
           rm -f ~/.monitor-agent-launcher.sh ~/.monitor-agent.js 2>/dev/null || true
         `;
       } else {
@@ -326,12 +405,22 @@ LAUNCHER_EOF
             exit 1
           fi
 
-          # Always download latest zero-dependency script
-          curl -fsSL -H "Cache-Control: no-cache" "${origin}/monitor-agent.js" -o ~/.monitor-agent.js 2>/dev/null || \\
-          curl -fsSL -H "Cache-Control: no-cache" "${origin}/monitor-agent.min.js" -o ~/.monitor-agent.js 2>/dev/null || true
+          # Download latest agent script
+          curl -fsSL -H "Cache-Control: no-cache" "${origin}/monitor-agent.min.js" -o ~/.monitor-agent.js 2>/dev/null || \
+          curl -fsSL -H "Cache-Control: no-cache" "${origin}/monitor-agent.js" -o ~/.monitor-agent.js 2>/dev/null || true
+
+          if [ ! -s ~/.monitor-agent.js ]; then
+            echo "❌ Failed to download monitor agent script from ${origin}"
+            exit 1
+          fi
 
           echo "🚀 Installing Monitor Agent as background system service..."
-          node ~/.monitor-agent.js --install --server '${origin}' --token '${token}'${connectionId ? ` --connection-id '${connectionId}'` : ''}
+          # Pass credentials as env vars to avoid shell quoting issues with special chars
+          AGENT_SERVER="${origin}" AGENT_TOKEN="${token}" AGENT_CONN_ID="${connectionId || ''}" \
+            node ~/.monitor-agent.js --install \
+              --server "${origin}" \
+              --token "${token}" \
+              ${connectionId ? `--connection-id "${connectionId}"` : ''}
         `;
       }
 
