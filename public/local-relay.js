@@ -2413,7 +2413,7 @@ function handleDockerCommand(ws, msg) {
       // List all containers + listening ports for conflict detection before swarm leave
       return runRawCmd(`sh -c 'echo "CONTAINERS:"; docker ps -a --format "{{json .}}" 2>/dev/null; echo "PORTS:"; { ss -tlnp 2>/dev/null || netstat -tlnp 2>/dev/null; } | grep -oE "[0-9]+\\$" | sort -un'`);
     } else if (action === 'swarm:leave') {
-      return runRawCmd(`sh -c 'docker swarm leave --force 2>&1; docker compose down --remove-orphans 2>/dev/null || true; docker container prune -f 2>/dev/null || true; docker network create proxy-net 2>/dev/null || true; echo "LEFT_SWARM"'`);
+      return runRawCmd(`sh -c 'docker swarm leave --force 2>&1; (docker compose down --remove-orphans 2>/dev/null || docker-compose down --remove-orphans 2>/dev/null || true); docker container prune -f 2>/dev/null || true; docker network create proxy-net 2>/dev/null || true; echo "LEFT_SWARM"'`);
     } else if (action === 'swarm:init') {
       // args[0] = optional advertise-addr (e.g. "192.168.1.10" or "eth0")
       const advertiseAddr = args && args[0] ? String(args[0]).replace(/[^a-zA-Z0-9.:_/-]/g, '') : '';
@@ -2486,7 +2486,7 @@ function handleDockerCommand(ws, msg) {
     } else if (action === 'swarm:remove' && args.length >= 1) {
       const serviceName = String(args[0] || '').replace(/[^a-zA-Z0-9._-]/g, '');
       if (!serviceName) return ws.send(JSON.stringify({ type: 'docker:error', connId, error: 'Invalid Service Name' }));
-      return runRawCmd(`sh -c 'docker service rm ${serviceName} 2>&1; docker compose down --remove-orphans 2>/dev/null || true; docker container prune -f 2>/dev/null || true'`);
+      return runRawCmd(`sh -c 'docker service rm ${serviceName} 2>&1; (docker compose down --remove-orphans 2>/dev/null || docker-compose down --remove-orphans 2>/dev/null || true); docker container prune -f 2>/dev/null || true'`);
     } else if (action === 'swarm:configure' && args.length >= 1) {
       const serviceName = String(args[0] || '').replace(/[^a-zA-Z0-9._-]/g, '');
       const image       = String(args[1] || '').replace(/[^a-zA-Z0-9.@/:-]/g, '');

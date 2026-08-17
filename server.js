@@ -1161,7 +1161,7 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
             } else if (action === 'swarm:remove' && args.length >= 1) {
               const serviceName = String(args[0] || '').replace(/[^a-zA-Z0-9._-]/g, '');
               if (!serviceName) return socket.emit('docker:error', 'Invalid Service Name');
-              cmdSuffix = `sh -c 'docker service rm ${serviceName} 2>&1; docker compose down --remove-orphans 2>/dev/null || true; docker container prune -f 2>/dev/null || true; echo "REMOVED"'`;
+              cmdSuffix = `sh -c 'docker service rm ${serviceName} 2>&1; (docker compose down --remove-orphans 2>/dev/null || docker-compose down --remove-orphans 2>/dev/null || true); docker container prune -f 2>/dev/null || true; echo "REMOVED"'`;
             } else if (action === 'swarm:create') {
               const svcName      = String(args[0] || '').replace(/[^a-zA-Z0-9._-]/g, '');
               const image        = String(args[1] || '').replace(/[^a-zA-Z0-9.@/:-]/g, '');
@@ -1894,7 +1894,7 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
               } else if (action === 'swarm:remove' && args.length >= 1) {
                  const serviceName = String(args[0] || '').replace(/[^a-zA-Z0-9._-]/g, '');
                  if (!serviceName) return socket.emit('docker:error', 'Invalid Service Name');
-                 cmdSuffix = `sh -c 'docker service rm ${serviceName} 2>&1; docker compose down --remove-orphans 2>/dev/null || true; docker container prune -f 2>/dev/null || true; echo "REMOVED"'`;
+                 cmdSuffix = `sh -c 'docker service rm ${serviceName} 2>&1; (docker compose down --remove-orphans 2>/dev/null || docker-compose down --remove-orphans 2>/dev/null || true); docker container prune -f 2>/dev/null || true; echo "REMOVED"'`;
               } else if (action === 'swarm:configure') {
                  const serviceName = String(args[0] || '').replace(/[^a-zA-Z0-9._-]/g, '');
                  const image = String(args[1] || '').replace(/[^a-zA-Z0-9.@/:-]/g, '');
