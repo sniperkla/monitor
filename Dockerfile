@@ -9,7 +9,7 @@ WORKDIR /app
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
 ENV NODE_OPTIONS="--max-old-space-size=2048"
-ENV ENCRYPTION_KEY=placeholder_build_key
+# ENV ENCRYPTION_KEY=placeholder_build_key
 
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .

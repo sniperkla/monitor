@@ -8,15 +8,12 @@ services:
     restart: unless-stopped
     stop_signal: SIGTERM
     stop_grace_period: 15s # Give server.js time to write interrupted status to DB on shutdown
-    depends_on:
-      - monitor-mongo
     env_file:
       - .env
     environment:
       NODE_ENV: production
       PORT: 3030
       MONGODB_URI: mongodb://monitor:AaBb1234!@monitor-mongo:27017/monitor?authSource=admin
-      ENCRYPTION_KEY: ${ENCRYPTION_KEY:-}
     networks:
       - proxy-net
 
