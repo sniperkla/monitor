@@ -5,6 +5,8 @@ import SystemSetting from '../models/SystemSetting.js';
 const runningMap = new Map();
 // Per-project lock to prevent concurrent deployment starts (race condition guard)
 const startingLocks = new Map();
+// Per-project queue: array of { config, runMeta, resolve, reject }
+const deployQueues = new Map();
 
 export function setRunning(projectId, info) {
   runningMap.set(projectId, info);
@@ -15,6 +17,27 @@ export function getRunning(projectId) {
 }
 
 export function clearRunning(projectId) {
+  runningMap.delete(projectId);
+  startingLocks.delete(projectId);
+}
+
+/**
+ * Forcefully kill any in-memory running process for a project, then clear it.
+ * Safe to call even if nothing is running.
+ */
+export function killRunning(projectId) {
+  const entry = runningMap.get(projectId);
+  if (entry) {
+    try {
+      if (entry.type === 'local' && entry.proc) {
+        // Kill the entire process group (detached child)
+        try { process.kill(-entry.proc.pid, 'SIGKILL'); } catch (_) {}
+        try { entry.proc.kill('SIGKILL'); } catch (_) {}
+      } else if (entry.type === 'ssh' && entry.conn) {
+        try { entry.conn.end(); } catch (_) {}
+      }
+    } catch (_) {}
+  }
   runningMap.delete(projectId);
   startingLocks.delete(projectId);
 }
@@ -36,6 +59,57 @@ export function tryAcquireStartLock(projectId) {
 
 export function releaseStartLock(projectId) {
   startingLocks.delete(projectId);
+}
+
+/**
+ * Enqueue a deployment if one is already running, or run it immediately if idle.
+ * Returns a promise that resolves when the deployment completes (or errors).
+ * This ensures rapid successive pushes are serialized instead of rejected.
+ */
+export function enqueueDeployment(projectId, runFn) {
+  return new Promise((resolve, reject) => {
+    if (!deployQueues.has(projectId)) {
+      deployQueues.set(projectId, []);
+    }
+    const queue = deployQueues.get(projectId);
+    
+    queue.push({ runFn, resolve, reject });
+    
+    // If this is the only item, start processing immediately
+    if (queue.length === 1) {
+      processQueue(projectId);
+    }
+  });
+}
+
+/**
+ * Process the queue for a project — run the next deployment, then continue.
+ */
+async function processQueue(projectId) {
+  const queue = deployQueues.get(projectId);
+  if (!queue || queue.length === 0) {
+    deployQueues.delete(projectId);
+    return;
+  }
+
+  const item = queue[0]; // peek, don't shift yet (shift after completion)
+  
+  try {
+    await item.runFn();
+    item.resolve();
+  } catch (err) {
+    item.reject(err);
+  } finally {
+    // Remove the completed item
+    queue.shift();
+    
+    // Process next in queue
+    if (queue.length > 0) {
+      setImmediate(() => processQueue(projectId));
+    } else {
+      deployQueues.delete(projectId);
+    }
+  }
 }
 
 /** Reset all in-memory state — called on server startup to clear stale entries from prior crashes. */

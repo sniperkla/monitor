@@ -1204,7 +1204,11 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
               const serviceName = String(args[0] || '').replace(/[^a-zA-Z0-9._-]/g, '');
               const image = String(args[1] || '').replace(/[^a-zA-Z0-9.@/:-]/g, '');
               if (!serviceName || !image) return socket.emit('docker:error', 'Invalid Swarm Service or Image');
-              cmdSuffix = `sh -c 'docker service update --image ${image} --update-order start-first --update-delay 5s ${serviceName} && (docker container prune -f 2>/dev/null || true)'`;
+              cmdSuffix = `sh -c 'docker service update --image ${image} --update-order start-first --update-parallelism 1 --update-delay 5s --update-monitor 15s --update-failure-action rollback --update-max-failure-ratio 0 --rollback-order start-first --rollback-parallelism 1 --rollback-delay 5s --rollback-monitor 15s ${serviceName} && (docker container prune -f 2>/dev/null || true)'`;
+            } else if (action === 'swarm:rollback' && args.length >= 1) {
+              const serviceName = String(args[0] || '').replace(/[^a-zA-Z0-9._-]/g, '');
+              if (!serviceName) return socket.emit('docker:error', 'Invalid Service Name');
+              cmdSuffix = `service rollback ${serviceName}`;
             } else if (action === 'swarm:scale' && args.length >= 2) {
               const serviceName = String(args[0] || '').replace(/[^a-zA-Z0-9._-]/g, '');
               const count = parseInt(args[1], 10);
@@ -1261,7 +1265,7 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
               if (!serviceName || !image) return socket.emit('docker:error', 'Invalid Service Name or Image');
 
               const pullStep = doPull ? 'git pull && ' : '';
-              const cmd = `cd "${dir}" && ${pullStep}${dockerSudo}docker build -t ${image} . && ${dockerSudo}docker service update --image ${image} --update-order start-first --update-delay 5s ${serviceName}`;
+              const cmd = `cd "${dir}" && ${pullStep}${dockerSudo}docker build -t ${image} . && ${dockerSudo}docker service update --image ${image} --update-order start-first --update-parallelism 1 --update-delay 5s --update-monitor 15s --update-failure-action rollback --update-max-failure-ratio 0 --rollback-order start-first --rollback-parallelism 1 --rollback-delay 5s --rollback-monitor 15s ${serviceName}`;
               const safeName = serviceName.replace(/[^a-z0-9]/gi, '_');
               cmdSuffix = `sh -c 'rm -f /tmp/deploy_${safeName}.log; touch /tmp/deploy_${safeName}.log; nohup sh -c "(${cmd}) > /tmp/deploy_${safeName}.log 2>&1; echo \\"---FINISHED---\\" >> /tmp/deploy_${safeName}.log" >/dev/null 2>&1 & echo STARTED'`;
             } else if (action === 'swarm:build-deploy:status') {
@@ -1874,7 +1878,11 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
                   const serviceName = String(args[0] || '').replace(/[^a-zA-Z0-9._-]/g, '');
                   const image = String(args[1] || '').replace(/[^a-zA-Z0-9.@/:-]/g, '');
                   if (!serviceName || !image) return socket.emit('docker:error', 'Invalid Swarm Service or Image');
-                  cmdSuffix = `sh -c 'docker service update --image ${image} --update-order start-first --update-delay 5s ${serviceName} && (docker container prune -f 2>/dev/null || true)'`;
+                  cmdSuffix = `sh -c 'docker service update --image ${image} --update-order start-first --update-parallelism 1 --update-delay 5s --update-monitor 15s --update-failure-action rollback --update-max-failure-ratio 0 --rollback-order start-first --rollback-parallelism 1 --rollback-delay 5s --rollback-monitor 15s ${serviceName} && (docker container prune -f 2>/dev/null || true)'`;
+              } else if (action === 'swarm:rollback' && args.length >= 1) {
+                  const serviceName = String(args[0] || '').replace(/[^a-zA-Z0-9._-]/g, '');
+                  if (!serviceName) return socket.emit('docker:error', 'Invalid Service Name');
+                  cmdSuffix = `service rollback ${serviceName}`;
               } else if (action === 'swarm:scale' && args.length >= 2) {
                  const serviceName = String(args[0] || '').replace(/[^a-zA-Z0-9._-]/g, '');
                  const count = parseInt(args[1], 10);

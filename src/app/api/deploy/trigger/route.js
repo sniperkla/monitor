@@ -5,7 +5,7 @@ import crypto from 'crypto';
 import connectDB from '@/lib/mongodb';
 import SystemSetting from "@/models/SystemSetting";
 import { runDeployment } from '../webhook/route';
-import { getRunning, tryAcquireStartLock, releaseStartLock } from '@/lib/deployProcesses';
+import { getRunning, enqueueDeployment } from '@/lib/deployProcesses';
 import { resolveUserIdQuery, normalizeUserId } from '@/lib/deployUserQuery';
 
 function timingSafeCompare(a, b) {
@@ -125,30 +125,23 @@ async function handleTrigger(request) {
             }
           }
         );
-      } else {
-        console.log(`[trigger] ❌ Deployment already running for project: ${projectId}`);
-        return NextResponse.json({ success: false, error: 'A deployment is already running for this project' }, { status: 409 });
       }
+      // No longer reject — let the queue handle it
     }
 
-    // 4. Trigger in background with race-condition lock
+    // 4. Trigger in background with rate limit check
     const rateCheck = checkTriggerRateLimit(projectId);
     if (!rateCheck.allowed) {
       return NextResponse.json({ success: false, error: `Rate limit exceeded. Try again in ${Math.ceil(rateCheck.resetIn / 1000)}s.` }, { status: 429 });
     }
 
-    if (!tryAcquireStartLock(projectId)) {
-      console.log(`[trigger] Deployment start already in progress for project: ${projectId}`);
-      return NextResponse.json({ success: false, error: 'A deployment is already starting for this project' }, { status: 409 });
-    }
-
     console.log(`[trigger] ✅ Launching deployment in background for project: ${projectId}`);
-    runDeployment(config, {
-      triggerSource: 'Direct Trigger URL (curl/script)'
+    enqueueDeployment(projectId, async () => {
+      await runDeployment(config, {
+        triggerSource: 'Direct Trigger URL (curl/script)'
+      });
     }).catch(err => {
-      console.error('[trigger] Unhandled background deployment error:', err.message);
-    }).finally(() => {
-      releaseStartLock(projectId);
+      console.error('[trigger] Queued deployment error:', err.message);
     });
 
     return NextResponse.json({ 

@@ -714,6 +714,27 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
     }
   };
 
+  const handleCleanZombies = async () => {
+    if (!confirm('Kill all stuck/zombie deploy processes across all projects and reset their status to idle?\n\nThis only kills the Node.js watcher processes — your Docker containers and services are NOT affected.')) return;
+    try {
+      const res = await apiFetch('/api/deploy/clean', { method: 'POST' });
+      const data = await res.json();
+      if (data.success) {
+        addNotification({ title: '🧹 Cleaned', message: data.message, type: 'info' });
+        // Refresh current project status from server
+        setDeployConfig(prev => ({ ...prev, status: 'idle', deployRunId: null, cancelRequested: false }));
+        // Force re-fetch project list so status dots update
+        const listRes = await apiFetch('/api/deploy/config');
+        const listData = await listRes.json();
+        if (listData.success && listData.projects) setDeployProjects(listData.projects);
+      } else {
+        addNotification({ title: 'Error', message: data.error || 'Failed to clean zombie deploys', type: 'error' });
+      }
+    } catch (err) {
+      addNotification({ title: 'Error', message: err.message || 'Failed to reach clean API', type: 'error' });
+    }
+  };
+
   const handleCancelDeploy = async () => {
     if (!confirm('Are you sure you want to cancel the running deployment?')) return;
     try {
@@ -2792,6 +2813,14 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
                     {t('deploy.deleteProject', 'Delete Project')}
                   </button>
                 )}
+                <button
+                  type="button"
+                  onClick={handleCleanZombies}
+                  title="Kill all stuck/zombie deploy processes across all projects and reset their status to idle. Does NOT stop Docker containers."
+                  className="px-3 py-1.5 bg-orange-500/10 hover:bg-orange-500/20 text-orange-400 rounded-xl text-xs font-bold transition-all border border-orange-500/20 flex items-center gap-1 cursor-pointer"
+                >
+                  🧹 {t('deploy.cleanZombies', 'Clean Zombies')}
+                </button>
               </div>
               
               <div className="flex items-center gap-2">

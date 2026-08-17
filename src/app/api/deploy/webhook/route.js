@@ -9,7 +9,7 @@ import SystemSetting from "@/models/SystemSetting";
 import { ConnectionRepository } from '@/lib/repositories/ConnectionRepository';
 import { decrypt } from '@/utils/encryption';
 import { broadcastDeploymentStatus } from '@/app/api/deploy/sse/route';
-import { setRunning, clearRunning, getRunning, tryAcquireStartLock, releaseStartLock } from '@/lib/deployProcesses';
+import { setRunning, clearRunning, killRunning, getRunning, tryAcquireStartLock, releaseStartLock, enqueueDeployment } from '@/lib/deployProcesses';
 import OpenAI from 'openai';
 import { resolveUserIdQuery, normalizeUserId } from '@/lib/deployUserQuery';
 
@@ -578,6 +578,25 @@ export async function runDeployment(config, runMeta = {}) {
   let isFinished = false;
   const commitSha = runMeta.commitSha || null;
 
+  // ── Zombie guard: kill any existing in-memory run for this project before starting ──
+  // This prevents stale bash/SSH watcher processes from a prior run from interfering.
+  // It does NOT affect actual Docker containers or Swarm services.
+  try {
+    if (getRunning(projectId)) {
+      console.log(`[deploy] ⚠️  Killing stale in-memory process for project "${projectId}" before starting new run.`);
+      killRunning(projectId);
+    }
+  } catch (_) {}
+
+  // Reset DB status to ensure we start clean (handles cases where status was stuck at 'running')
+  try {
+    await connectDB(process.env.MONGODB_URI, true);
+    await SystemSetting.findOneAndUpdate(
+      { key: dbKey, 'value.status': 'running' },
+      { $set: { 'value.status': 'idle', 'value.deployRunId': null, 'value.cancelRequested': false } }
+    );
+  } catch (_) {}
+
   let logOutput = `[${startedAt.toISOString()}] 🚀 Deployment started in the background for project "${config.name || projectId}"...\n`;
   logOutput += `Target: ${config.targetType.toUpperCase()}\n`;
   if (config.targetType === 'ssh') {
@@ -776,8 +795,13 @@ export async function runDeployment(config, runMeta = {}) {
         (match) => {
           let patched = match;
           if (!patched.includes('--update-failure-action')) patched += ' --update-failure-action rollback';
-          if (!patched.includes('--update-monitor')) patched += ' --update-monitor 10s';
+          if (!patched.includes('--update-monitor')) patched += ' --update-monitor 15s';
+          if (!patched.includes('--update-order')) patched += ' --update-order start-first';
+          if (!patched.includes('--update-parallelism')) patched += ' --update-parallelism 1';
+          if (!patched.includes('--update-delay')) patched += ' --update-delay 5s';
           if (!patched.includes('--rollback-order')) patched += ' --rollback-order start-first';
+          if (!patched.includes('--rollback-parallelism')) patched += ' --rollback-parallelism 1';
+          if (!patched.includes('--rollback-monitor')) patched += ' --rollback-monitor 15s';
           return patched;
         }
       );
@@ -788,6 +812,14 @@ export async function runDeployment(config, runMeta = {}) {
       }
       if (line.includes('docker service create') && line.includes('$IMAGE_NAME')) {
         return line.replace('$IMAGE_NAME', '"${SVC}:latest"').replace('|| docker compose up -d --build', '2>/dev/null || true');
+      }
+      // Patch --remove-orphans into docker compose up if missing
+      if (/docker\s+compose\s+up\b/.test(line) && !line.includes('--remove-orphans')) {
+        return line.replace(/docker\s+compose\s+up\b/, 'docker compose up --remove-orphans');
+      }
+      // Patch --remove-orphans into docker compose down if missing
+      if (/docker\s+compose\s+down\b/.test(line) && !line.includes('--remove-orphans')) {
+        return line.replace(/docker\s+compose\s+down\b/, 'docker compose down --remove-orphans');
       }
       return line;
     }).join('\n');
@@ -1045,6 +1077,19 @@ export async function runDeployment(config, runMeta = {}) {
           const remoteDeployPath = `/tmp/deploy_run_${projectId}_${runTimestamp}.sh`;
           const userCmdPath = `/tmp/deploy_cmd_${projectId}_${runTimestamp}.sh`;
 
+          // ── Kill any leftover tmux session from a previous deploy run ──
+          // This prevents zombie tmux sessions from piling up when a new push
+          // arrives before the previous deploy finished.
+          // Safe: only kills the deploy-specific session, not your other tmux sessions.
+          const prevTmuxSession = `deploy-${projectId.replace(/[^a-zA-Z0-9_-]/g, '-')}`.slice(0, 60);
+          conn.exec(
+            `tmux kill-session -t ${prevTmuxSession} 2>/dev/null || true; ` +
+            `rm -f /tmp/deploy_${prevTmuxSession}.log /tmp/deploy_${prevTmuxSession}.status /tmp/deploy_tmux_${projectId}.sh 2>/dev/null || true`,
+            (killErr, killStream) => {
+              if (killStream) killStream.resume(); // drain and ignore output
+            }
+          );
+
           // ── The actual deploy script ──────────────────────────
           const scriptLines = [
             '#!/bin/bash',
@@ -1145,6 +1190,29 @@ export async function runDeployment(config, runMeta = {}) {
           // Strip non-ASCII multibyte characters (like emojis) from bash script to prevent locale issues on Linux shells
           rawDeployCmd = rawDeployCmd.replace(/[^\x00-\x7F]/g, '');
           let cleanCmd = rawDeployCmd.replace(/^#!\/bin\/bash\s*\n?/, '').trim();
+
+          const isSwarmScript = /docker\s+(service|stack|swarm)/.test(cleanCmd);
+          if (isSwarmScript) {
+            // Remove set -e — swarm scripts handle failures explicitly
+            cleanCmd = cleanCmd.replace(/^set -e\s*$/m, '# set -e disabled for swarm (rollback exits non-zero by design)');
+            // Inject rollback flags into any service update command missing them
+            cleanCmd = cleanCmd.replace(
+              /docker service update(\s[^\n]+)/g,
+              (match) => {
+                let patched = match;
+                if (!patched.includes('--update-failure-action')) patched += ' --update-failure-action rollback';
+                if (!patched.includes('--update-monitor')) patched += ' --update-monitor 15s';
+                if (!patched.includes('--update-order')) patched += ' --update-order start-first';
+                if (!patched.includes('--update-parallelism')) patched += ' --update-parallelism 1';
+                if (!patched.includes('--update-delay')) patched += ' --update-delay 5s';
+                if (!patched.includes('--rollback-order')) patched += ' --rollback-order start-first';
+                if (!patched.includes('--rollback-parallelism')) patched += ' --rollback-parallelism 1';
+                if (!patched.includes('--rollback-monitor')) patched += ' --rollback-monitor 15s';
+                return patched;
+              }
+            );
+          }
+
           // Build the user command script content — written via SFTP directly (no echo/base64 which has shell length limits)
           // Auto-install git if not present, then proceed normally
           const gitShim = `
@@ -1183,6 +1251,16 @@ fi
           scriptLines.push(`rm -f "$USER_CMD_PATH" 2>/dev/null || true`);
           scriptLines.push(`if [ "$USER_CMD_EXIT" != "0" ]; then`);
           scriptLines.push(`  echo "[deploy] ❌ Deploy command failed with exit code $USER_CMD_EXIT"`);
+          scriptLines.push(`  if command -v docker >/dev/null 2>&1 && docker node ls >/dev/null 2>&1; then`);
+          scriptLines.push(`    echo "[deploy] 🔍 Checking for paused or crashing Swarm services to restore..."`);
+          scriptLines.push(`    for _svc in $(docker service ls --format '{{.Name}}' 2>/dev/null); do`);
+          scriptLines.push(`      _ST=$(docker service inspect "$_svc" --format '{{if .UpdateStatus}}{{.UpdateStatus.State}}{{end}}' 2>/dev/null || echo "")`);
+          scriptLines.push(`      if [ "$_ST" = "paused" ] || [ "$_ST" = "updating" ]; then`);
+          scriptLines.push(`        echo "[deploy] 🛡️ Auto-recovering Swarm service $_svc (status: $_ST)..."`);
+          scriptLines.push(`        docker service rollback "$_svc" 2>/dev/null || true`);
+          scriptLines.push(`      fi`);
+          scriptLines.push(`    done`);
+          scriptLines.push(`  fi`);
           scriptLines.push(`fi`);
 
           // Clean up credentials — always run regardless of exit code, never fail the script
@@ -1679,11 +1757,8 @@ export async function POST(request) {
     }
 
     // Acquire per-project start lock to prevent race conditions
-    if (!tryAcquireStartLock(projectId)) {
-      console.log(`[webhook] Deployment start already in progress for project: ${projectId}`);
-      return NextResponse.json({ success: false, error: 'A deployment is already starting for this project' }, { status: 409 });
-    }
-
+    // If a deploy is already running, this will queue the new one instead of rejecting.
+    // The queue ensures rapid pushes are serialized, not dropped.
     console.log(`[webhook] ✅ Triggering deployment for project: ${projectId}`);
 
     // Parse push payload for rich Telegram notifications (supports GitHub and Bitbucket)
@@ -1737,14 +1812,15 @@ export async function POST(request) {
       commitSha = gitInfo.commitId;
     }
 
-    runDeployment(config, {
-      gitInfo,
-      triggerSource,
-      commitSha
+    // Enqueue the deployment — if one is already running, this waits in queue
+    enqueueDeployment(projectId, async () => {
+      await runDeployment(config, {
+        gitInfo,
+        triggerSource,
+        commitSha
+      });
     }).catch(err => {
-      console.error('Unhandled background deployment error:', err.message);
-    }).finally(() => {
-      releaseStartLock(projectId);
+      console.error('[webhook] Queued deployment error:', err.message);
     });
 
     return NextResponse.json({

@@ -649,22 +649,22 @@ deploy_service() {
   if [ "$_IS_SWARM" = "1" ]; then
     # ── SWARM MODE ──
     if docker service inspect "$NAME" >/dev/null 2>&1; then
-      echo "[swarm] Updating $NAME..."
+      echo "[swarm] Updating $NAME with rolling update & rollback safety..."
       docker service update \\
         --image "$IMAGE" \\
         --force \\
         --update-order start-first \\
-        --update-parallelism 2 \\
-        --update-delay 0s \\
-        --update-monitor 3s \\
+        --update-parallelism 1 \\
+        --update-delay 5s \\
+        --update-monitor 15s \\
         --update-failure-action rollback \\
+        --update-max-failure-ratio 0 \\
         --rollback-order start-first \\
-        --rollback-parallelism 2 \\
-        --rollback-delay 0s \\
-        --rollback-monitor 3s \\
-        --stop-grace-period 10s \\
-        "$NAME" || echo "[swarm] WARNING: $NAME update exited non-zero — checking task state..."
-      docker service update --network-add "$SWARM_NET" "$NAME" 2>/dev/null || true
+        --rollback-parallelism 1 \\
+        --rollback-delay 5s \\
+        --rollback-monitor 15s \\
+        --stop-grace-period 15s \\
+        "$NAME" || echo "[swarm] WARNING: $NAME update command reported non-zero — verifying convergence / rollback..."
     else
       if docker inspect "$NAME" >/dev/null 2>&1; then
         echo "[swarm] Migrating $NAME: standalone container → Swarm service..."
@@ -684,15 +684,16 @@ deploy_service() {
         --detach \\
         --no-resolve-image \\
         --update-order start-first \\
-        --update-parallelism 2 \\
-        --update-delay 0s \\
-        --update-monitor 3s \\
+        --update-parallelism 1 \\
+        --update-delay 5s \\
+        --update-monitor 15s \\
         --update-failure-action rollback \\
+        --update-max-failure-ratio 0 \\
         --rollback-order start-first \\
-        --rollback-parallelism 2 \\
-        --rollback-delay 0s \\
-        --rollback-monitor 3s \\
-        --stop-grace-period 10s \\
+        --rollback-parallelism 1 \\
+        --rollback-delay 5s \\
+        --rollback-monitor 15s \\
+        --stop-grace-period 15s \\
         "$IMAGE"; then
         [ "$_HAD_CONTAINER" = "1" ] && docker rm "$NAME" 2>/dev/null || true
       else
@@ -702,21 +703,43 @@ deploy_service() {
       fi
     fi
 
-    echo "[swarm] Waiting for $NAME to be healthy..."
-    for _i in $(seq 1 10); do
-      _RUNNING=$(docker service ps "$NAME" --filter "desired-state=running" --format '{{.CurrentState}}' 2>/dev/null | grep -c "Running" || echo "0")
-      _FAILED=$(docker service ps "$NAME" --filter "desired-state=shutdown" --format '{{.CurrentState}}' 2>/dev/null | grep -c "Failed" || echo "0")
-      if [ "$_RUNNING" -ge 1 ] 2>/dev/null; then
-        echo "[swarm] $NAME is running ($_RUNNING replica(s) up)."
-        return 0
-      fi
-      if [ "$_FAILED" -ge 3 ] 2>/dev/null; then
-        echo "[swarm] ERROR: $NAME has $_FAILED failed tasks — container likely crashing."
-        docker service ps "$NAME" --no-trunc 2>/dev/null | tail -5
+    echo "[swarm] Monitoring health and convergence for $NAME..."
+    _CONVERGED=0
+    for _i in $(seq 1 30); do
+      _UPDATE_STATE=$(docker service inspect "$NAME" --format '{{if .UpdateStatus}}{{.UpdateStatus.State}}{{end}}' 2>/dev/null || echo "")
+      _FAILED_TASKS=$(docker service ps "$NAME" --filter "desired-state=shutdown" --format '{{.CurrentState}}' 2>/dev/null | grep -c "Failed" || echo "0")
+      _RUNNING_TASKS=$(docker service ps "$NAME" --filter "desired-state=running" --format '{{.CurrentState}}' 2>/dev/null | grep -c "Running" || echo "0")
+
+      # If update paused or failed, or new tasks are crashing, trigger / confirm rollback
+      if [ "$_UPDATE_STATE" = "paused" ] || [ "$_UPDATE_STATE" = "rollback_started" ] || [ "$_FAILED_TASKS" -ge 2 ]; then
+        if [ "$_UPDATE_STATE" != "rollback_started" ] && [ "$_UPDATE_STATE" != "rollback_completed" ]; then
+          echo "[swarm] ❌ ERROR: Detected update failure or crashing tasks for $NAME! Initiating automatic rollback..."
+          docker service rollback "$NAME" 2>/dev/null || true
+        fi
+        
+        echo "[swarm] ⏳ Waiting for rollback to complete to preserve website uptime..."
+        for _rb in $(seq 1 20); do
+          _RB_STATE=$(docker service inspect "$NAME" --format '{{if .UpdateStatus}}{{.UpdateStatus.State}}{{end}}' 2>/dev/null || echo "")
+          _RB_RUNNING=$(docker service ps "$NAME" --filter "desired-state=running" --format '{{.CurrentState}}' 2>/dev/null | grep -c "Running" || echo "0")
+          if [ "$_RB_STATE" = "rollback_completed" ] || [ "$_RB_RUNNING" -ge 1 ]; then
+            echo "[swarm] 🛡️ Automatic rollback completed! Previous stable version is active ($_RB_RUNNING replica(s) running)."
+            docker service ps "$NAME" --no-trunc 2>/dev/null | tail -5
+            return 1
+          fi
+          sleep 2
+        done
+        echo "[swarm] ⚠️ Rollback in progress. Current state: $_RB_STATE"
         return 1
       fi
-      echo "[swarm] Waiting for $NAME... ($_i/10)"
-      sleep 1
+
+      if [ "$_UPDATE_STATE" = "completed" ] && [ "$_RUNNING_TASKS" -ge 1 ]; then
+        echo "[swarm] ✅ $NAME deployment completed successfully ($_RUNNING_TASKS replica(s) running healthy)."
+        _CONVERGED=1
+        return 0
+      fi
+
+      echo "[swarm] Waiting for $NAME... ($_i/30) [Status: \${_UPDATE_STATE:-updating}, Running: $_RUNNING_TASKS, Failed: $_FAILED_TASKS]"
+      sleep 2
     done
     echo "[swarm] WARNING: $NAME not confirmed after 10s — service may still be converging."
     docker service ps "$NAME" --no-trunc 2>/dev/null | tail -5

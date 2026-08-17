@@ -2717,6 +2717,24 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
                                       <button
                                         onClick={() => {
                                           showConfirm(
+                                            `Rollback Swarm Service "${svcName}" to its previous version? Docker Swarm will restore the previous working image and configuration with zero downtime.`,
+                                            () => {
+                                              setIsLoading(true);
+                                              socketRef.current?.emit('docker:command', { action: 'swarm:rollback', args: [svcName] });
+                                            },
+                                            'Rollback Service',
+                                            'Rollback'
+                                          );
+                                        }}
+                                        className="py-1.5 px-2.5 rounded-lg bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/20 text-amber-300 text-[10px] font-bold transition-all flex items-center gap-1 cursor-pointer"
+                                        title="Rollback to previous working version"
+                                      >
+                                        <RotateCcw size={11} />
+                                        Rollback
+                                      </button>
+                                      <button
+                                        onClick={() => {
+                                          showConfirm(
                                             `Delete Swarm Service "${svcName}"? This will remove all service containers permanently.`,
                                             () => {
                                               setIsLoading(true);
