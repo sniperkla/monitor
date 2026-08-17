@@ -1,7 +1,10 @@
 import { getToken } from 'next-auth/jwt';
 import { randomUUID } from 'crypto';
+import connectDB from '@/lib/mongodb';
+import SystemSetting from '@/models/SystemSetting';
 
 const TOKEN_TTL = 365 * 24 * 60 * 60 * 1000; // 1 year — relay is a permanent background service
+const RELAY_TOKENS_DB_KEY = 'relay_tokens';
 
 /**
  * POST /api/relay/token — generate a relay token for the current user
@@ -16,20 +19,39 @@ export async function POST(request) {
 
     global.__relayTokens = global.__relayTokens || new Map();
 
-    // Clean up expired tokens for this user (but keep active ones)
-    for (const [t, e] of global.__relayTokens) {
-      if (e.userId === userId && e.expiresAt < Date.now()) {
-        global.__relayTokens.delete(t);
-      }
-    }
-
     const relayToken = randomUUID();
-    global.__relayTokens.set(relayToken, {
+    const entry = {
       userId,
       expiresAt: Date.now() + TOKEN_TTL,
-    });
+    };
 
-    if (typeof global.__persistRelayTokens === 'function') await global.__persistRelayTokens();
+    global.__relayTokens.set(relayToken, entry);
+
+    // Save directly to MongoDB so tokens survive rebuilds & multi-process setups
+    try {
+      await connectDB();
+      const existing = await SystemSetting.findOne({ key: RELAY_TOKENS_DB_KEY });
+      const tokensObj = existing?.value || {};
+      // Purge expired tokens
+      const now = Date.now();
+      const cleaned = {};
+      for (const [k, v] of Object.entries(tokensObj)) {
+        if (v && v.expiresAt > now) cleaned[k] = v;
+      }
+      cleaned[relayToken] = entry;
+      await SystemSetting.findOneAndUpdate(
+        { key: RELAY_TOKENS_DB_KEY },
+        { $set: { value: cleaned } },
+        { upsert: true }
+      );
+    } catch (dbErr) {
+      console.warn('⚠️ [Relay] Could not persist token to MongoDB in API route:', dbErr.message);
+    }
+
+    if (typeof global.__persistRelayTokens === 'function') {
+      try { await global.__persistRelayTokens(); } catch {}
+    }
+
     return Response.json({ success: true, token: relayToken });
   } catch (err) {
     return Response.json({ error: err.message }, { status: 500 });

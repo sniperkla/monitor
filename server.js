@@ -88,6 +88,9 @@ async function connectMongo() {
     await mongoose.connect(MONGODB_URI, { serverSelectionTimeoutMS: 8000 });
     mongoConnected = true;
     console.log('✅ MongoDB connected');
+    if (typeof global.__loadPersistedRelayTokens === 'function') {
+      global.__loadPersistedRelayTokens().catch(() => {});
+    }
   } catch (err) {
     // Throw so the bootloader can detect this and exit cleanly
     throw new Error(`Central MongoDB unreachable at boot: ${err.message}`);
@@ -4717,8 +4720,39 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
         if (changed) await persistRelayTokens();
       }, 24 * 60 * 60 * 1000);
 
-      // Expose persist function for use by API route
+      // Expose load and persist functions globally
+      global.__loadPersistedRelayTokens = loadPersistedRelayTokens;
       global.__persistRelayTokens = persistRelayTokens;
+
+      // ── Helper to resolve token from memory or MongoDB ─────────────────────────
+      async function resolveRelayToken(token) {
+        if (!token) return null;
+        let entry = global.__relayTokens.get(token);
+        if (entry && entry.expiresAt > Date.now()) return entry;
+
+        // Try reloading from MongoDB
+        await loadPersistedRelayTokens();
+        entry = global.__relayTokens.get(token);
+        if (entry && entry.expiresAt > Date.now()) return entry;
+
+        // Direct DB fallback query
+        try {
+          if (mongoose.connection.readyState === 1) {
+            const SystemSetting = mongoose.model('SystemSetting');
+            const doc = await SystemSetting.findOne({ key: RELAY_TOKENS_DB_KEY });
+            if (doc?.value && doc.value[token]) {
+              const dbEntry = doc.value[token];
+              if (dbEntry.expiresAt > Date.now()) {
+                global.__relayTokens.set(token, dbEntry);
+                return dbEntry;
+              }
+            }
+          }
+        } catch (e) {
+          console.warn('⚠️ [Relay] Direct DB token lookup error:', e.message);
+        }
+        return null;
+      }
 
       const relayWss = new WebSocketServer({ noServer: true });
       const agentWss = new WebSocketServer({ noServer: true });
@@ -4733,11 +4767,11 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
       });
 
       // ── Monitor Agent WebSocket Handler ────────────────────────────────────────
-      agentWss.on('connection', (ws, req) => {
+      agentWss.on('connection', async (ws, req) => {
         const url       = new URL(req.url, 'http://localhost');
         const token     = url.searchParams.get('token');
         const agentName = decodeURIComponent(url.searchParams.get('name') || 'unknown');
-        const entry     = global.__relayTokens.get(token);
+        const entry     = await resolveRelayToken(token);
 
         if (!entry || entry.expiresAt < Date.now()) {
           ws.send(JSON.stringify({ type: 'error', message: 'Invalid or expired token' }));
@@ -4830,10 +4864,10 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
       });
       // ── End Monitor Agent WebSocket Handler ────────────────────────────────────
 
-      relayWss.on('connection', (ws, req) => {
+      relayWss.on('connection', async (ws, req) => {
         const url    = new URL(req.url, 'http://localhost');
         const token  = url.searchParams.get('token');
-        const entry  = global.__relayTokens.get(token);
+        const entry  = await resolveRelayToken(token);
 
         if (!entry || entry.expiresAt < Date.now()) {
           ws.send(JSON.stringify({ type: 'error', message: 'Invalid or expired token' }));

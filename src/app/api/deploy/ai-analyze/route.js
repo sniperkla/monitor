@@ -661,22 +661,7 @@ deploy_service() {
 
     if docker service inspect "$NAME" >/dev/null 2>&1; then
       echo "[swarm] Updating $NAME with rolling update & rollback safety..."
-      docker service update \\
-        --image "$LOCAL_IMG_ID" \\
-        --no-resolve-image \\
-        --force \\
-        --update-order start-first \\
-        --update-parallelism 1 \\
-        --update-delay 5s \\
-        --update-monitor 15s \\
-        --update-failure-action rollback \\
-        --update-max-failure-ratio 0 \\
-        --rollback-order start-first \\
-        --rollback-parallelism 1 \\
-        --rollback-delay 5s \\
-        --rollback-monitor 15s \\
-        --stop-grace-period 15s \\
-        "$NAME" || echo "[swarm] WARNING: $NAME update command reported non-zero — verifying convergence / rollback..."
+      docker service update --image "$LOCAL_IMG_ID" --no-resolve-image --force --update-order start-first --update-parallelism 1 --update-delay 5s --update-monitor 15s --update-failure-action rollback --update-max-failure-ratio 0 --rollback-order start-first --rollback-parallelism 1 --rollback-delay 5s --rollback-monitor 15s --stop-grace-period 15s "$NAME" || echo "[swarm] WARNING: $NAME update command reported non-zero — verifying convergence / rollback..."
     else
       if docker inspect "$NAME" >/dev/null 2>&1; then
         echo "[swarm] Migrating $NAME: standalone container → Swarm service..."
@@ -688,30 +673,13 @@ deploy_service() {
       fi
       PUBLISH_FLAG=""
       [ -n "$PORT" ] && PUBLISH_FLAG="--publish $PORT"
-      if docker service create \\
-        --name "$NAME" \\
-        --network "$SWARM_NET" \\
-        $PUBLISH_FLAG \\
-        --replicas 2 \\
-        --detach \\
-        --no-resolve-image \\
-        --update-order start-first \\
-        --update-parallelism 1 \\
-        --update-delay 5s \\
-        --update-monitor 15s \\
-        --update-failure-action rollback \\
-        --update-max-failure-ratio 0 \\
-        --rollback-order start-first \\
-        --rollback-parallelism 1 \\
-        --rollback-delay 5s \\
-        --rollback-monitor 15s \\
-        --stop-grace-period 15s \\
-        "$LOCAL_IMG_ID"; then
+      if docker service create --name "$NAME" --network "$SWARM_NET" $PUBLISH_FLAG --replicas 2 --detach --no-resolve-image --update-order start-first --update-parallelism 1 --update-delay 5s --update-monitor 15s --update-failure-action rollback --update-max-failure-ratio 0 --rollback-order start-first --rollback-parallelism 1 --rollback-delay 5s --rollback-monitor 15s --stop-grace-period 15s "$LOCAL_IMG_ID"; then
         [ "$_HAD_CONTAINER" = "1" ] && docker rm "$NAME" 2>/dev/null || true
       else
         echo "[swarm] ERROR: Failed to create $NAME."
         [ "$_HAD_CONTAINER" = "1" ] && docker start "$NAME" 2>/dev/null || true
         return 1
+      fi
     fi
 
     echo "[swarm] Monitoring health and convergence for $NAME..."
