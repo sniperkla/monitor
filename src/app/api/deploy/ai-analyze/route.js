@@ -502,12 +502,18 @@ ${existingScript || '# No previous script set'}`;
       for (const svc of services) {
         const info = composeServices[svc] || {};
         const dir = info.buildDir || '';
+        const isDb = /mongo|redis|postgres|mysql|mariadb|memcached/i.test(svc) || /mongo|redis|postgres|mysql|mariadb|memcached/i.test(info.image || '');
         const guessedSubdir = svc.replace(/^aut|^app/i, '').toLowerCase() || svc;
 
+        // Skip build for prebuilt images without explicit build context
+        if (info.image && !dir && isDb) {
+          continue;
+        }
+
         if (dir) {
-          buildTasks.push({ svc, dir });
+          buildTasks.push({ svc, dir, varName: svc.toUpperCase().replace(/[^a-zA-Z0-9_]/g, '_') });
         } else {
-          buildTasks.push({ svc, guessedSubdir });
+          buildTasks.push({ svc, guessedSubdir, varName: svc.toUpperCase().replace(/[^a-zA-Z0-9_]/g, '_') });
         }
       }
 
@@ -519,6 +525,7 @@ echo "[$(date +%H:%M:%S)] Building ${buildTasks.length} image(s) in parallel..."
         
         // Background build jobs
         for (const task of buildTasks) {
+          const varName = task.varName;
           if (task.dir) {
             buildSection += `
 (
@@ -529,7 +536,7 @@ echo "[$(date +%H:%M:%S)] Building ${buildTasks.length} image(s) in parallel..."
     exit 1
   fi
 ) &
-${task.svc.toUpperCase()}_BUILD_PID=$!
+${varName}_BUILD_PID=$!
 `;
           } else {
             buildSection += `
@@ -552,7 +559,7 @@ ${task.svc.toUpperCase()}_BUILD_PID=$!
     echo "[$(date +%H:%M:%S)] ⚠️  ${task.svc}: No Dockerfile found" > /tmp/${task.svc}_build_result
   fi
 ) &
-${task.svc.toUpperCase()}_BUILD_PID=$!
+${varName}_BUILD_PID=$!
 `;
           }
         }
@@ -562,8 +569,8 @@ ${task.svc.toUpperCase()}_BUILD_PID=$!
 # Wait for all builds to complete
 `;
         for (const task of buildTasks) {
-          buildSection += `wait $${task.svc.toUpperCase()}_BUILD_PID
-${task.svc.toUpperCase()}_BUILD_EXIT=$?
+          buildSection += `wait $${task.varName}_BUILD_PID
+${task.varName}_BUILD_EXIT=$?
 `;
         }
 
@@ -576,7 +583,7 @@ ${task.svc.toUpperCase()}_BUILD_EXIT=$?
         buildSection += `
 # Abort if any build failed
 `;
-        const exitChecks = buildTasks.map(t => `[ $${t.svc.toUpperCase()}_BUILD_EXIT -ne 0 ]`).join(' || ');
+        const exitChecks = buildTasks.map(t => `[ $${t.varName}_BUILD_EXIT -ne 0 ]`).join(' || ');
         buildSection += `if ${exitChecks}; then
   echo "[deploy] ERROR: One or more builds failed — aborting."
   rm -f ${buildTasks.map(t => `/tmp/${t.svc}_build_result`).join(' ')}
@@ -591,12 +598,13 @@ echo "[$(date +%H:%M:%S)] ✅ All builds complete"
       for (const svc of services) {
         const info = composeServices[svc] || {};
         const port = (info.ports && info.ports[0]) ? info.ports[0] : (nginxPortMap[svc] || '');
+        const img = info.image || `${svc}:latest`;
         if (port) {
           console.log(`[ai-analyze] ${svc}: using port ${port}`);
         } else {
           console.log(`[ai-analyze] ${svc}: no port found — overlay network only`);
         }
-        svcSection += `deploy_service ${svc} ${svc}:latest ${port || ''}\n`;
+        svcSection += `deploy_service ${svc} ${img} ${port || ''}\n`;
       }
 
       swarmBlock = `
@@ -648,10 +656,14 @@ deploy_service() {
 
   if [ "$_IS_SWARM" = "1" ]; then
     # ── SWARM MODE ──
+    # Resolve local image ID if built locally so Swarm detects new build immediately
+    LOCAL_IMG_ID=$(docker image inspect --format '{{.Id}}' "$IMAGE" 2>/dev/null || echo "$IMAGE")
+
     if docker service inspect "$NAME" >/dev/null 2>&1; then
       echo "[swarm] Updating $NAME with rolling update & rollback safety..."
       docker service update \\
-        --image "$IMAGE" \\
+        --image "$LOCAL_IMG_ID" \\
+        --no-resolve-image \\
         --force \\
         --update-order start-first \\
         --update-parallelism 1 \\
@@ -694,13 +706,12 @@ deploy_service() {
         --rollback-delay 5s \\
         --rollback-monitor 15s \\
         --stop-grace-period 15s \\
-        "$IMAGE"; then
+        "$LOCAL_IMG_ID"; then
         [ "$_HAD_CONTAINER" = "1" ] && docker rm "$NAME" 2>/dev/null || true
       else
         echo "[swarm] ERROR: Failed to create $NAME."
         [ "$_HAD_CONTAINER" = "1" ] && docker start "$NAME" 2>/dev/null || true
         return 1
-      fi
     fi
 
     echo "[swarm] Monitoring health and convergence for $NAME..."

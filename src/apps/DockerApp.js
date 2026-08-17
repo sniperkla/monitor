@@ -2670,13 +2670,74 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
                                   <Globe size={12} /> Connect Nginx
                                 </button>
                                 <button
-                                  onClick={() => setCreateServiceModal({ isOpen: true, name: '', image: '', replicas: 2, port: '' })}
+                                  onClick={() => setCreateServiceModal({
+                                    isOpen: true,
+                                    name: 'monitor-mongo',
+                                    image: 'mongo:7.0',
+                                    replicas: 1,
+                                    port: '27021:27017',
+                                    network: 'swarm-net',
+                                    mounts: 'mongo_data:/data/db',
+                                    env: 'MONGO_INITDB_ROOT_USERNAME=monitor\nMONGO_INITDB_ROOT_PASSWORD=AaBb1234!\nMONGO_INITDB_DATABASE=monitor',
+                                    oldContainerId: '',
+                                    oldContainerName: '',
+                                    composeProject: 'monitor',
+                                    stopOld: false,
+                                    isDeploying: false,
+                                    logs: [],
+                                    statusText: '',
+                                    progress: 15,
+                                    isDone: false,
+                                    isError: false,
+                                    errorText: ''
+                                  })}
+                                  className="px-3 py-1.5 bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-500/40 text-emerald-300 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer"
+                                  title="Deploy MongoDB service to Swarm (1 replica)"
+                                >
+                                  🍃 Add Mongo DB
+                                </button>
+                                <button
+                                  onClick={() => setCreateServiceModal({ isOpen: true, name: '', image: '', replicas: 2, port: '', network: '', mounts: '', env: '', oldContainerId: '', oldContainerName: '', composeProject: '', stopOld: true, isDeploying: false, logs: [], statusText: '', progress: 15, isDone: false, isError: false, errorText: '' })}
                                   className="px-3 py-1.5 bg-purple-500/20 hover:bg-purple-500/30 border border-purple-500/30 text-purple-300 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer"
                                 >
                                   <Plus size={12} /> New Service
                                 </button>
                               </div>
                             </div>
+                            {!swarmServices.some(s => (s.Name || s.name || '').toLowerCase().includes('mongo')) && (
+                              <div className="p-3 bg-emerald-500/10 border border-emerald-500/20 rounded-xl flex items-center justify-between text-xs text-emerald-300">
+                                <div className="flex items-center gap-2">
+                                  <span className="text-base">🍃</span>
+                                  <span><strong>MongoDB Swarm service not found.</strong> Deploy Mongo so that the <code className="text-white bg-black/40 px-1 py-0.5 rounded font-mono">monitor</code> service can connect to database.</span>
+                                </div>
+                                <button
+                                  onClick={() => setCreateServiceModal({
+                                    isOpen: true,
+                                    name: 'monitor-mongo',
+                                    image: 'mongo:7.0',
+                                    replicas: 1,
+                                    port: '27021:27017',
+                                    network: 'swarm-net',
+                                    mounts: 'mongo_data:/data/db',
+                                    env: 'MONGO_INITDB_ROOT_USERNAME=monitor\nMONGO_INITDB_ROOT_PASSWORD=AaBb1234!\nMONGO_INITDB_DATABASE=monitor',
+                                    oldContainerId: '',
+                                    oldContainerName: '',
+                                    composeProject: 'monitor',
+                                    stopOld: false,
+                                    isDeploying: false,
+                                    logs: [],
+                                    statusText: '',
+                                    progress: 15,
+                                    isDone: false,
+                                    isError: false,
+                                    errorText: ''
+                                  })}
+                                  className="px-3 py-1 bg-emerald-500 hover:bg-emerald-600 text-white rounded-lg font-bold text-xs shadow-md transition-all cursor-pointer flex items-center gap-1 shrink-0"
+                                >
+                                  <Plus size={12} /> Deploy Mongo Swarm
+                                </button>
+                              </div>
+                            )}
                             <div className="grid grid-cols-1 xl:grid-cols-2 gap-3">
                               {swarmServices.map((svc, idx) => {
                                 const svcName = svc.Name || svc.name || 'unnamed-service';
