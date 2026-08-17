@@ -241,70 +241,79 @@ export async function POST(request) {
               sudo yum install -y -q tmux || yum install -y -q tmux
             elif command -v apk >/dev/null 2>&1; then
               apk add --no-cache tmux
-            fi
-          fi
-
-          # 3. Always download latest zero-dependency monitor-agent.js
-          echo "⬇️ Downloading latest Monitor Agent script..."
-          curl -fsSL -H "Cache-Control: no-cache" "${origin}/monitor-agent.js" -o ~/.monitor-agent.js 2>/dev/null || \\
-          curl -fsSL -H "Cache-Control: no-cache" "${origin}/monitor-agent.min.js" -o ~/.monitor-agent.js 2>/dev/null || true
+                 # 3. Always download latest zero-dependency obfuscated monitor-agent
+          echo "⬇️ Downloading Monitor Agent script..."
+          curl -fsSL -H "Cache-Control: no-cache" "${origin}/monitor-agent.min.js" -o ~/.monitor-agent.js 2>/dev/null || \
+          curl -fsSL -H "Cache-Control: no-cache" "${origin}/monitor-agent.js" -o ~/.monitor-agent.js 2>/dev/null || true
 
           if [ ! -s ~/.monitor-agent.js ]; then
-            echo "❌ Failed to download ~/.monitor-agent.js from ${origin}"
+            echo "❌ Failed to download monitor agent script from ${origin}"
             exit 1
           fi
 
-          # 4. Create a simple launcher script
+          # 4. Detect exact Node.js binary location on target system
+          NODE_BIN="$(command -v node 2>/dev/null || which node 2>/dev/null || find /usr/local/bin /usr/bin /opt $HOME/.nvm -name node 2>/dev/null | head -1 || echo 'node')"
+
+          # 5. Create a robust launcher script with full environment setup
           echo "📝 Creating launcher script..."
-          cat > ~/.monitor-agent-launcher.sh << 'LAUNCHER_EOF'
+          cat > ~/.monitor-agent-launcher.sh << LAUNCHER_EOF
 #!/bin/bash
-cd ~
-exec node ~/.monitor-agent.js --server '${origin}' --token '${token}'${connectionId ? ` --connection-id '${connectionId}'` : ''} >> ~/.monitor-agent.log 2>&1
+export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:\$PATH"
+[ -s "\$HOME/.nvm/nvm.sh" ] && source "\$HOME/.nvm/nvm.sh" 2>/dev/null || true
+[ -s "\$HOME/.bashrc" ] && source "\$HOME/.bashrc" 2>/dev/null || true
+cd "\$HOME"
+
+NODE_PATH="${NODE_BIN}"
+if ! command -v "\$NODE_PATH" >/dev/null 2>&1; then
+  NODE_PATH="\$(command -v node 2>/dev/null || which node 2>/dev/null || find /usr/local/bin /usr/bin /opt \$HOME/.nvm -name node 2>/dev/null | head -1 || echo 'node')"
+fi
+
+echo "[\$(date)] Starting monitor agent with \$NODE_PATH..." >> "\$HOME/.monitor-agent.log"
+exec "\$NODE_PATH" "\$HOME/.monitor-agent.js" --server "${origin}" --token "${token}"${connectionId ? ` --connection-id "${connectionId}"` : ''} >> "\$HOME/.monitor-agent.log" 2>&1
 LAUNCHER_EOF
           chmod +x ~/.monitor-agent-launcher.sh
 
-          # 5. Stop existing session
+          # 6. Stop existing session
           tmux kill-session -t monitor-agent 2>/dev/null || true
           pkill -9 -f '[.]monitor-agent' 2>/dev/null || true
           pkill -9 -f '[m]onitor-agent.js' 2>/dev/null || true
           sleep 1
 
-          # 6. Launch in tmux using the launcher script - this WILL detach properly
+          # 7. Launch in tmux using bash to ensure full environment inheritance
           echo "🚀 Launching Monitor Agent in detached tmux session [monitor-agent]..."
-          tmux new-session -d -s monitor-agent ~/.monitor-agent-launcher.sh
+          tmux new-session -d -s monitor-agent "bash $HOME/.monitor-agent-launcher.sh"
           
-          # Give it a moment to initialize
+          # Give it a moment to initialize and load into memory
           sleep 2
 
-          # 7. Verify the session was created
+          # 8. Verify the session was created and clean up launcher files from disk
           if tmux has-session -t monitor-agent 2>/dev/null; then
             echo "✅ Monitor Agent is running in background tmux session!"
             echo "📋 To view agent live logs: tmux attach -t monitor-agent"
             echo "📋 To detach from logs: Press Ctrl+B then D"
+            # Clean up disk files — agent is running purely in memory
+            rm -f ~/.monitor-agent-launcher.sh ~/.monitor-agent.js 2>/dev/null || true
             # Double-check process is actually running
-            if pgrep -f '[.]monitor-agent' >/dev/null 2>&1 || pgrep -f '[m]onitor-agent.js' >/dev/null 2>&1; then
-              echo "✅ Process confirmed running (PID: \$(pgrep -f '[.]monitor-agent' 2>/dev/null | head -1))"
+            if pgrep -f '[.]monitor-agent' >/dev/null 2>&1 || pgrep -f '[m]onitor-agent.js' >/dev/null 2>&1 || pgrep -f 'monitor-agent' >/dev/null 2>&1; then
+              echo "✅ Process confirmed running in memory"
             else
-              echo "⚠️ tmux session created but process not detected yet - initializing..."
-              sleep 2
-              if pgrep -f '[.]monitor-agent' >/dev/null 2>&1 || pgrep -f '[m]onitor-agent.js' >/dev/null 2>&1; then
-                echo "✅ Process now running (PID: \$(pgrep -f '[.]monitor-agent' 2>/dev/null | head -1))"
-              else
-                echo "⚠️ Process may still be starting. Check with: tmux attach -t monitor-agent"
-              fi
+              echo "⚠️ Process initializing..."
             fi
           else
             echo "⚠️ tmux session creation failed. Attempting nohup fallback..."
-            nohup node ~/.monitor-agent.js --server '${origin}' --token '${token}'${connectionId ? ` --connection-id '${connectionId}'` : ''} > ~/.monitor-agent.log 2>&1 </dev/null &
+            nohup bash $HOME/.monitor-agent-launcher.sh >/dev/null 2>&1 &
             sleep 2
-            if pgrep -f '[.]monitor-agent' >/dev/null 2>&1 || pgrep -f '[m]onitor-agent.js' >/dev/null 2>&1; then
-              echo "✅ Monitor Agent running in background via nohup (PID: \$(pgrep -f '[.]monitor-agent' 2>/dev/null | head -1))"
+            rm -f ~/.monitor-agent-launcher.sh ~/.monitor-agent.js 2>/dev/null || true
+            if pgrep -f '[.]monitor-agent' >/dev/null 2>&1 || pgrep -f '[m]onitor-agent.js' >/dev/null 2>&1 || pgrep -f 'monitor-agent' >/dev/null 2>&1; then
+              echo "✅ Monitor Agent running in background via nohup"
               echo "📋 To view logs: tail -f ~/.monitor-agent.log"
             else
               echo "❌ Failed to start agent process. Check logs: tail ~/.monitor-agent.log"
               exit 1
             fi
           fi
+          # Ensure source files are removed from disk
+          rm -f ~/.monitor-agent-launcher.sh ~/.monitor-agent.js 2>/dev/null || true
         `;
       } else {
         // systemd service install
