@@ -323,14 +323,24 @@ export function AppProvider({ children }) {
       // Relay agent required — store warning so UI can prompt the user
       if (data.relayRequired) {
         dispatch({ type: 'SET_RELAY_WARNING', payload: data.relayMessage || 'Local Relay Agent is required to access localhost databases.' });
-        dispatch({ type: 'SET_HEALTH_STATUS', payload: { relayDown: true } });
+
+        // Auto-switch to server mode if not already there
+        if (typeof window !== 'undefined') {
+          const currentMode = localStorage.getItem('ssh_monitor_ssh_mode');
+          if (currentMode !== 'server') {
+            console.warn('[AppContext] Relay required but not available — auto-switching to server mode');
+            localStorage.setItem('ssh_monitor_ssh_mode', 'server');
+            dispatch({ type: 'SET_HEALTH_STATUS', payload: { relayDown: true, autoSwitchedToServer: true } });
+            window.dispatchEvent(new Event('ssh-mode-changed'));
+          }
+        }
       }
     } catch (err) {
       console.error('Failed to fetch DB connections:', err);
       // If a newer request has started, ignore this error
       if (requestId !== latestRequestIdRef.current) return;
 
-      // Network/DB error — mark mongo as down
+      // Network/DB error — mark mongo as down and auto-switch to server mode
       const isDbError = err.message && (
         err.message.includes('ECONNREFUSED') ||
         err.message.includes('MongoNetworkError') ||
@@ -338,8 +348,16 @@ export function AppProvider({ children }) {
         err.message.includes('buffering timed out') ||
         err.message.includes('SERVER_ERROR')
       );
-      if (isDbError) {
-        dispatch({ type: 'SET_HEALTH_STATUS', payload: { mongoDown: true } });
+      if (isDbError && typeof window !== 'undefined') {
+        const currentMode = localStorage.getItem('ssh_monitor_ssh_mode');
+        if (currentMode !== 'server') {
+          console.warn('[AppContext] DB unreachable — auto-switching to server mode');
+          localStorage.setItem('ssh_monitor_ssh_mode', 'server');
+          dispatch({ type: 'SET_HEALTH_STATUS', payload: { mongoDown: true, autoSwitchedToServer: true } });
+          window.dispatchEvent(new Event('ssh-mode-changed'));
+        } else {
+          dispatch({ type: 'SET_HEALTH_STATUS', payload: { mongoDown: true } });
+        }
       }
     }
 

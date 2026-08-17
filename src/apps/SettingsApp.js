@@ -1169,8 +1169,26 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
           setRelayConnected(data.connected);
           const fetchedRelays = data.relays || [];
           setRelays(fetchedRelays);
-          consecutiveDisconnects = 0;
-          firstPoll = false;
+
+          // Auto-switch SSH mode to server when no relay is connected
+          // Skip on first poll if mode was 'local' — give relay agent time to reconnect
+          if (!data.connected && localStorage.getItem('ssh_monitor_ssh_mode') === 'local') {
+            if (firstPoll && wasLocalOnLoad) {
+              consecutiveDisconnects++;
+              firstPoll = false;
+            } else {
+              consecutiveDisconnects++;
+              // Require 4 consecutive failures (~20s apart = 80s grace) before switching
+              // to avoid brief relay blips from reconnecting all active SSH terminals
+              if (consecutiveDisconnects >= 4) {
+                localStorage.setItem('ssh_monitor_ssh_mode', 'server');
+                window.dispatchEvent(new Event('ssh-mode-changed'));
+              }
+            }
+          } else {
+            consecutiveDisconnects = 0;
+            firstPoll = false;
+          }
 
           if (fetchedRelays.length > 0) {
             const currentPreferred = localStorage.getItem('ssh_monitor_preferred_relay');
